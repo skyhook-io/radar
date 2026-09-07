@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 // A view over one durable, server-side investigation run. It SUBSCRIBES to the
 // run's event stream (replay + live) and reconstructs the transcript; it does not
 // own the run's lifetime — the server does. So closing the panel or navigating
@@ -71,6 +72,7 @@ import { useDiagnose } from "./DiagnoseContext";
 import {
   TurnView,
   ResultCard,
+  AssessmentSources,
   ApplyDialog,
   appendThinking,
   upsertTool,
@@ -83,7 +85,10 @@ import {
   projectInvestigationEvidence,
   resolveInvestigationRootCauseEvidence,
 } from "./investigationEvidence";
-import { InvestigationEvidencePane } from "./InvestigationEvidencePane";
+import {
+  InvestigationEvidencePane,
+  partitionInvestigationEvidence,
+} from "./InvestigationEvidencePane";
 import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 import { formatInvestigationTarget } from "./target";
 import { parseContextName } from "../../utils/context-name";
@@ -947,18 +952,28 @@ export function InvestigationView({
         : undefined,
     [currentAssessment, currentAssessmentIdx, projection],
   );
-  const evidenceStepIdsByTurn = useMemo(() => {
-    return investigationEvidenceStepIdsByTurn(
-      projection,
-      rootCauseEvidenceResolution,
-    );
-  }, [projection, rootCauseEvidenceResolution]);
+  const visibleEvidenceGroupIds = useMemo(
+    () =>
+      new Set(
+        partitionInvestigationEvidence(
+          projection.groups,
+          rootCauseEvidenceResolution,
+        ).collectionByGroup.keys(),
+      ),
+    [projection.groups, rootCauseEvidenceResolution],
+  );
+  const evidenceStepIdsByTurn = useMemo(
+    () =>
+      investigationEvidenceStepIdsByTurn(projection, visibleEvidenceGroupIds),
+    [projection, visibleEvidenceGroupIds],
+  );
 
   const animateEvidenceGroupIds = useMemo(() => {
     if (suppressEvidenceMotionRef.current) return new Set<string>();
     return new Set(
       projection.groups
         .filter((group) => {
+          if (!visibleEvidenceGroupIds.has(group.id)) return false;
           const seen = seenEvidenceGroupRevisionsRef.current.get(group.id) ?? 0;
           return (
             group.observations.length > seen &&
@@ -974,7 +989,7 @@ export function InvestigationView({
         })
         .map((group) => group.id),
     );
-  }, [projection.groups, turns]);
+  }, [projection.groups, turns, visibleEvidenceGroupIds]);
   useEffect(() => {
     for (const group of projection.groups) {
       seenEvidenceGroupRevisionsRef.current.set(
@@ -989,6 +1004,8 @@ export function InvestigationView({
   // Replayed sources are marked seen without pulsing the tab.
   useEffect(() => {
     const newLiveSources = projection.sources.filter((source) => {
+      if (!evidenceStepIdsByTurn.get(source.turnIndex)?.has(source.stepId))
+        return false;
       if (seenEvidenceSourceIdsRef.current.has(source.id)) return false;
       return (
         turns[source.turnIndex]?.timeline[source.timelineIndex]?.animate ===
@@ -1017,7 +1034,7 @@ export function InvestigationView({
     for (const source of projection.sources) {
       seenEvidenceSourceIdsRef.current.add(source.id);
     }
-  }, [projection.sources, turns, narrowPane]);
+  }, [projection.sources, turns, narrowPane, evidenceStepIdsByTurn]);
 
   // The projection can fold a fresh observation into an existing evidence
   // source. Keep the scrolled-away cue reliable for that in-place revision too.
@@ -1029,14 +1046,17 @@ export function InvestigationView({
       const latestChangedSource = projection.groups
         .filter((group) => animateEvidenceGroupIds.has(group.id))
         .map((group) => group.chronologicalLatest.source)
+        .filter((source) =>
+          evidenceStepIdsByTurn.get(source.turnIndex)?.has(source.stepId),
+        )
         .sort((left, right) => left.order - right.order)
         .at(-1);
       if (latestChangedSource) {
         latestEvidenceUpdateSourceIdRef.current = latestChangedSource.id;
+        setEvidenceUpdateAvailable(true);
       }
-      setEvidenceUpdateAvailable(true);
     }
-  }, [animateEvidenceGroupIds, projection.groups]);
+  }, [animateEvidenceGroupIds, projection.groups, evidenceStepIdsByTurn]);
 
   // Evidence is inserted into semantic tiers rather than blindly appended. Keep
   // the first card a user is reading fixed in place when a live result lands above
@@ -1044,6 +1064,7 @@ export function InvestigationView({
   // policy explicitly (and leaves the top of the story free to update when the
   // reader has not scrolled away from it).
   const evidenceLayoutRevision = `${projection.groups
+    .filter((group) => visibleEvidenceGroupIds.has(group.id))
     .map(
       (group) =>
         `${group.id}:${group.observations.length}:${group.latest.tier}:${group.historical ? 1 : 0}`,
@@ -1298,8 +1319,12 @@ export function InvestigationView({
   };
   const revealLatestEvidenceUpdate = () => {
     const sourceId = latestEvidenceUpdateSourceIdRef.current;
-    if (sourceId) {
-      viewEvidenceSource(sourceId);
+    const source = projection.sources.find((item) => item.id === sourceId);
+    if (
+      source &&
+      evidenceStepIdsByTurn.get(source.turnIndex)?.has(source.stepId)
+    ) {
+      viewEvidenceSource(source.id);
       return;
     }
     evidenceScrollRef.current?.scrollTo({
@@ -1901,6 +1926,14 @@ export function InvestigationView({
                           currentAssessmentIdx
                         }
                         diagnosis={currentAssessment.diagnosis}
+                        assessmentSources={
+                          rootCauseEvidenceResolution?.links.length ? (
+                            <AssessmentSources
+                              resolution={rootCauseEvidenceResolution}
+                              onViewSource={viewActivitySource}
+                            />
+                          ) : undefined
+                        }
                         assessmentAction={
                           hasNextSteps ? (
                             <button
@@ -1956,27 +1989,6 @@ export function InvestigationView({
                         </span>
                       </div>
                     )}
-                    {assessmentIndexes
-                      .filter(
-                        (index) =>
-                          index !== currentAssessmentIdx &&
-                          (index === initialAssessmentIdx ||
-                            (turns[index].diagnosis?.remediation?.length ?? 0) >
-                              0 ||
-                            turns.some(
-                              (turn) =>
-                                turn.explainAssessment ===
-                                turns[index].resultSequence,
-                            )),
-                      )
-                      .map((index) => (
-                        <PriorConclusion
-                          key={index}
-                          initial={index === initialAssessmentIdx}
-                          diagnosis={turns[index].diagnosis!}
-                          explanation={explanationFor(turns[index])}
-                        />
-                      ))}
                     {displayedStatusCheckError ? (
                       <div className="mt-2 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-theme-text-secondary">
                         <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-400" />
@@ -1998,6 +2010,42 @@ export function InvestigationView({
                       </div>
                     ) : null}
                   </section>
+
+                  <AssessmentHistory
+                    assessments={assessmentIndexes
+                      .filter(
+                        (index) =>
+                          index !== currentAssessmentIdx &&
+                          (index === initialAssessmentIdx ||
+                            (turns[index].diagnosis?.remediation?.length ?? 0) >
+                              0 ||
+                            turns.some(
+                              (turn) =>
+                                turn.explainAssessment ===
+                                turns[index].resultSequence,
+                            )),
+                      )
+                      .map((index) => ({
+                        sequence: turns[index].resultSequence ?? index,
+                        initial: index === initialAssessmentIdx,
+                        diagnosis: turns[index].diagnosis!,
+                        explanation: explanationFor(turns[index]),
+                        sources: (() => {
+                          const resolution =
+                            resolveInvestigationRootCauseEvidence(
+                              projection,
+                              turns[index].diagnosis!.rootCauseEvidence,
+                              index,
+                            );
+                          return resolution.links.length ? (
+                            <AssessmentSources
+                              resolution={resolution}
+                              onViewSource={viewActivitySource}
+                            />
+                          ) : undefined;
+                        })(),
+                      }))}
+                  />
 
                   <InvestigationEvidencePane
                     projection={projection}
@@ -2087,27 +2135,32 @@ export function InvestigationView({
   );
 }
 
-function PriorConclusion({
-  diagnosis,
-  explanation,
-  initial,
+function AssessmentHistory({
+  assessments,
 }: {
-  diagnosis: Diagnosis;
-  explanation?: AssessmentExplanation;
-  initial: boolean;
+  assessments: {
+    sequence: number;
+    diagnosis: Diagnosis;
+    explanation?: AssessmentExplanation;
+    initial: boolean;
+    sources?: ReactNode;
+  }[];
 }) {
   const reveal = useDisclosureReveal<HTMLDivElement>();
   const { revealAfterToggle } = reveal;
   const [open, setOpen] = useState(false);
   const regionId = useId();
+  const openRequest = assessments.find((item) => item.explanation?.openRequest)
+    ?.explanation?.openRequest;
   useEffect(() => {
-    if (explanation?.openRequest) {
+    if (openRequest) {
       setOpen(true);
       revealAfterToggle(true);
     }
-  }, [explanation?.openRequest, revealAfterToggle]);
+  }, [openRequest, revealAfterToggle]);
+  if (assessments.length === 0) return null;
   return (
-    <div className="mt-2 overflow-hidden rounded-lg border border-theme-border bg-theme-base/35">
+    <div data-investigation-assessment-history className="overflow-hidden">
       <button
         type="button"
         aria-expanded={open}
@@ -2116,41 +2169,60 @@ function PriorConclusion({
           setOpen(!open);
           reveal.revealAfterToggle(!open);
         }}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-theme-text-secondary hover:bg-theme-hover"
+        className="flex items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-secondary"
       >
         <CollapseChevron open={open} className="h-3.5 w-3.5" />
         <span className="font-medium">
-          {initial ? "Initial assessment" : "Earlier assessment"}
-        </span>
-        <span className="text-theme-text-tertiary">
-          before the latest status check
+          Previous assessments · {assessments.length}
         </span>
       </button>
       <div id={regionId} ref={reveal.elementRef}>
         <Collapse open={open}>
-          <div className="border-t border-theme-border/60 px-3 pb-3">
-            <ResultCard
-              diagnosis={diagnosis}
-              explanation={explanation}
-              section="conclusion"
-              showDisclaimer={false}
-            />
-            {(diagnosis.remediation?.length ?? 0) > 0 && (
-              <section
-                aria-label="Earlier proposed steps"
-                className="mt-3 border-t border-theme-border/60 pt-3"
-              >
-                <h3 className="text-sm font-medium text-theme-text-primary">
-                  Earlier proposed steps
-                </h3>
-                <ResultCard
-                  diagnosis={diagnosis}
-                  section="actions"
-                  compactActions
-                  actionNotice="From an earlier assessment, not the current recommendation."
-                  showDisclaimer={false}
-                />
-              </section>
+          <div className="mt-2 space-y-4 border-l border-theme-border pl-3 pb-2">
+            {assessments.map(
+              (
+                { sequence, diagnosis, explanation, initial, sources },
+                index,
+              ) => (
+                <section
+                  key={sequence}
+                  aria-label={
+                    initial
+                      ? "Initial assessment"
+                      : `Earlier assessment ${index + 1}`
+                  }
+                >
+                  <h3 className="text-sm font-medium text-theme-text-secondary">
+                    {initial
+                      ? "Initial assessment"
+                      : `Earlier assessment ${index + 1}`}
+                  </h3>
+                  <ResultCard
+                    diagnosis={diagnosis}
+                    explanation={explanation}
+                    assessmentSources={sources}
+                    section="conclusion"
+                    showDisclaimer={false}
+                  />
+                  {(diagnosis.remediation?.length ?? 0) > 0 && (
+                    <section
+                      aria-label="Earlier proposed steps"
+                      className="mt-3 border-t border-theme-border/60 pt-3"
+                    >
+                      <h3 className="text-sm font-medium text-theme-text-primary">
+                        Earlier proposed steps
+                      </h3>
+                      <ResultCard
+                        diagnosis={diagnosis}
+                        section="actions"
+                        compactActions
+                        actionNotice="From an earlier assessment, not the current recommendation."
+                        showDisclaimer={false}
+                      />
+                    </section>
+                  )}
+                </section>
+              ),
             )}
           </div>
         </Collapse>

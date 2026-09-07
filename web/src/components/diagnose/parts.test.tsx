@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import {
   AgentControls,
+  AssessmentSources,
   ConsentCard,
   ResultCard,
   Timeline,
@@ -46,6 +47,37 @@ it("keeps earlier remediation copyable without suggesting it is executable", () 
 });
 
 describe("explanation placement", () => {
+  it("gives analysis and explanation separate animated disclosure regions", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={
+          {
+            rootCause: "Missing Secret",
+            report: "Technical analysis",
+            remediation: [],
+          } as Diagnosis
+        }
+        section="conclusion"
+        explanation={{ status: "running" }}
+      />,
+    );
+    const controls = [...html.matchAll(/aria-controls="([^"]+)"/g)].map(
+      (match) => match[1],
+    );
+    const analysis = controls.find((id) => id.endsWith("-analysis"));
+    const explanation = controls.find((id) => id.endsWith("-explanation"));
+    expect(analysis).toBeDefined();
+    expect(explanation).toBeDefined();
+    expect(analysis).not.toBe(explanation);
+    expect(html).toContain(`id="${analysis}"`);
+    expect(html).toContain(`id="${explanation}"`);
+    expect(
+      html.match(/transition-\[grid-template-rows\]/g)?.length,
+    ).toBeGreaterThanOrEqual(2);
+    expect(html).not.toContain("Technical analysis");
+    expect(html).toContain("Explaining this assessment");
+  });
+
   it("shows local progress in the assessment's shared disclosure", () => {
     const html = renderToStaticMarkup(
       <ResultCard
@@ -413,7 +445,8 @@ describe("ResultCard conclusion states", () => {
     );
 
     expect(html).toContain("No problem identified in available evidence");
-    expect(html).toContain("Some evidence could not be summarized");
+    expect(html).toContain("Evidence coverage is limited.");
+    expect(html).not.toContain("Some evidence could not be summarized");
     expect(html).toContain("border-amber-500/30");
     expect(html).toContain("text-amber-500");
     expect(html).not.toContain("border-emerald-500/30");
@@ -856,4 +889,52 @@ describe("TurnView tool outcome truth", () => {
       expect(html).not.toContain("Couldn&#x27;t determine");
     },
   );
+});
+
+describe("assessment provenance disclosure", () => {
+  it.each([
+    { rootCause: "Missing configuration", remediation: [] },
+    { healthy: true, remediation: [] },
+    { inconclusive: true, remediation: [] },
+  ])("offers Assessment details with sources alone: %j", (diagnosis) => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={{ ...diagnosis, report: "" } as Diagnosis}
+        section="conclusion"
+        assessmentSources={<div>SOURCE_ONLY</div>}
+        explanation={{ status: "running" }}
+      />,
+    );
+    expect(html).toContain("Assessment details");
+    expect(html).not.toContain(">Full analysis<");
+  });
+  it("keeps separate assessments' exact source bindings without Evidence DOM anchors", () => {
+    const renderSources = (stepId: string) =>
+      renderToStaticMarkup(
+        <AssessmentSources
+          resolution={
+            {
+              status: "linked",
+              links: [
+                {
+                  source: {
+                    id: stepId,
+                    tool: "search",
+                    args: JSON.stringify({ query: stepId }),
+                  },
+                },
+              ],
+            } as Parameters<typeof AssessmentSources>[0]["resolution"]
+          }
+          onViewSource={noop}
+        />,
+      );
+    expect(renderSources("initial-source")).toContain("initial-source");
+    expect(renderSources("initial-source")).not.toContain("verified-source");
+    expect(renderSources("verified-source")).toContain("verified-source");
+    expect(renderSources("verified-source")).not.toContain("initial-source");
+    expect(renderSources("initial-source")).not.toContain(
+      'id="investigation-evidence-',
+    );
+  });
 });

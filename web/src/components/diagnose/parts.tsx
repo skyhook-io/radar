@@ -23,6 +23,7 @@ import {
   RefreshCw,
   Maximize2,
   HelpCircle,
+  FileSearch,
 } from "lucide-react";
 import { stringify as toYaml } from "yaml";
 import { codeToHtml } from "shiki";
@@ -48,6 +49,8 @@ import {
 import {
   investigationActivitySourceDomId,
   investigationEvidenceSourceId,
+  type InvestigationRootCauseEvidenceResolution,
+  type InvestigationEvidenceSource,
 } from "./investigationEvidence";
 
 import { useDisclosureReveal } from "./useDisclosureReveal";
@@ -1710,6 +1713,7 @@ export function ResultCard({
   evidenceConflict = false,
   compactActions = false,
   assessmentAction,
+  assessmentSources,
   actionNotice,
 }: {
   diagnosis: Diagnosis;
@@ -1723,6 +1727,7 @@ export function ResultCard({
   animate?: boolean;
   /** Additional navigation placed in the assessment action row. */
   assessmentAction?: ReactNode;
+  assessmentSources?: ReactNode;
   /** Hide the repeated disclaimer when the enclosing surface provides context. */
   showDisclaimer?: boolean;
   /** Qualifies a healthy assessment when structured evidence is absent or partial. */
@@ -1758,6 +1763,7 @@ export function ResultCard({
         coverageLimited={coverageLimited}
         evidenceConflict={evidenceConflict}
         assessmentAction={assessmentAction}
+        assessmentSources={assessmentSources}
       />
     );
   // Couldn't-determine is its own honest state — never a confident all-clear, never
@@ -1766,6 +1772,9 @@ export function ResultCard({
     return section === "actions" ? null : (
       <>
         <InconclusiveCard diagnosis={diagnosis} animate={animate} />
+        {assessmentSources ? (
+          <AssessmentSourceDetails>{assessmentSources}</AssessmentSourceDetails>
+        ) : null}
         {assessmentAction && (
           <div className="mt-2 flex justify-end">{assessmentAction}</div>
         )}
@@ -1780,6 +1789,9 @@ export function ResultCard({
     return (
       <>
         <FollowupAnswer diagnosis={diagnosis} animate={animate} />
+        {assessmentSources ? (
+          <AssessmentSourceDetails>{assessmentSources}</AssessmentSourceDetails>
+        ) : null}
         {assessmentAction && (
           <div className="mt-2 flex justify-end">{assessmentAction}</div>
         )}
@@ -1796,9 +1808,96 @@ export function ResultCard({
       showDisclaimer={showDisclaimer}
       compactActions={compactActions}
       assessmentAction={assessmentAction}
+      assessmentSources={assessmentSources}
       actionNotice={actionNotice}
     />
   );
+}
+
+export function AssessmentSources({
+  resolution,
+  onViewSource,
+}: {
+  resolution?: InvestigationRootCauseEvidenceResolution;
+  onViewSource: (sourceId: string) => void;
+}) {
+  if (resolution?.status !== "linked" || !resolution.links.length) return null;
+  return (
+    <div className="mt-3 border-t border-theme-border/60 pt-2">
+      <h4 className="text-xs font-medium text-theme-text-secondary">
+        Sources used for this assessment
+      </h4>
+      <ul className="mt-1 space-y-1">
+        {resolution.links.map((link) => (
+          <li key={link.source.id}>
+            <button
+              type="button"
+              aria-label={`View ${prettyTool(link.source.tool)} source used for this assessment`}
+              onClick={() => onViewSource(link.source.id)}
+              className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-accent-text hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+            >
+              <FileSearch className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              <span className="min-w-0 flex-1">
+                <span className="font-medium">
+                  {prettyTool(link.source.tool)}
+                </span>
+                <CitedSourceScope source={link.source} />
+              </span>
+              <span className="shrink-0">View source</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function AssessmentSourceDetails({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  const reveal = useDisclosureReveal<HTMLDivElement>();
+  return (
+    <div ref={reveal.elementRef}>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => {
+          setOpen(!open);
+          reveal.revealAfterToggle(!open);
+        }}
+        className="flex items-center gap-1.5 rounded-md py-2 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
+      >
+        <CollapseChevron open={open} className="h-3.5 w-3.5" />
+        Assessment details
+      </button>
+      <div id={id}>
+        <Collapse open={open}>{children}</Collapse>
+      </div>
+    </div>
+  );
+}
+
+function CitedSourceScope({ source }: { source: InvestigationEvidenceSource }) {
+  let input: unknown;
+  try {
+    input = JSON.parse(source.args ?? "");
+  } catch {
+    return null;
+  }
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const args = input as Record<string, unknown>;
+  const fields = ["query", "kind", "namespace", "name", "filter"].flatMap(
+    (key) =>
+      typeof args[key] === "string" && args[key].trim()
+        ? [`${key === "query" ? "" : `${key}: `}${args[key]}`]
+        : [],
+  );
+  return fields.length > 0 ? (
+    <span className="mt-0.5 block break-words text-theme-text-secondary [overflow-wrap:anywhere]">
+      {fields.join(" · ")}
+    </span>
+  ) : null;
 }
 
 export type AssessmentExplanation = {
@@ -1820,6 +1919,7 @@ function DiagnosisResult({
   showDisclaimer,
   compactActions,
   assessmentAction,
+  assessmentSources,
   actionNotice,
 }: {
   diagnosis: Diagnosis;
@@ -1830,6 +1930,7 @@ function DiagnosisResult({
   showDisclaimer: boolean;
   compactActions: boolean;
   assessmentAction?: ReactNode;
+  assessmentSources?: ReactNode;
   actionNotice?: string;
 }) {
   const [detail, setDetail] = useState<"analysis" | "explanation" | null>(
@@ -2057,17 +2158,20 @@ function DiagnosisResult({
         (diagnosis.report ||
           diagnosis.confidence != null ||
           explanation ||
-          assessmentAction) && (
+          assessmentAction ||
+          assessmentSources) && (
           <div>
             <div
               className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-2"
               data-assessment-actions
             >
-              {(diagnosis.report || diagnosis.confidence != null) && (
+              {(diagnosis.report ||
+                diagnosis.confidence != null ||
+                assessmentSources) && (
                 <button
                   type="button"
                   aria-expanded={showAnalysis}
-                  aria-controls={analysisId}
+                  aria-controls={`${analysisId}-analysis`}
                   onClick={() => {
                     setDetail(showAnalysis ? null : "analysis");
                     analysisReveal.revealAfterToggle(!showAnalysis);
@@ -2098,7 +2202,7 @@ function DiagnosisResult({
                   <button
                     type="button"
                     aria-expanded={detail === "explanation"}
-                    aria-controls={analysisId}
+                    aria-controls={`${analysisId}-explanation`}
                     disabled={
                       explanation.status === "idle" && !explanation.onGenerate
                     }
@@ -2121,10 +2225,27 @@ function DiagnosisResult({
               )}
             </div>
             <div id={analysisId} ref={analysisReveal.elementRef}>
-              <Collapse open={detail !== null}>
-                <div className="border-t border-theme-border/60 px-3 py-2">
-                  {detail === "explanation" ? (
-                    explanation?.status === "running" ? (
+              <div id={`${analysisId}-analysis`}>
+                <Collapse open={detail === "analysis"} mountLazily>
+                  <div className="border-t border-theme-border/60 px-3 py-2">
+                    <p className="mb-2 text-xs text-theme-text-tertiary">
+                      Agent confidence:{" "}
+                      {diagnosis.confidence != null
+                        ? confidenceLabel(diagnosis.confidence)
+                        : "not stated"}
+                      {diagnosis.confidence != null ? " · self-reported" : ""}
+                    </p>
+                    <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary">
+                      {diagnosis.report}
+                    </AIMarkdown>
+                    {assessmentSources}
+                  </div>
+                </Collapse>
+              </div>
+              <div id={`${analysisId}-explanation`}>
+                <Collapse open={detail === "explanation"} mountLazily>
+                  <div className="border-t border-theme-border/60 px-3 py-2">
+                    {explanation?.status === "running" ? (
                       <div
                         role="status"
                         className="flex items-center gap-2 py-2 text-sm text-theme-text-secondary"
@@ -2161,23 +2282,10 @@ function DiagnosisResult({
                           </button>
                         )}
                       </div>
-                    ) : null
-                  ) : (
-                    <>
-                      <p className="mb-2 text-xs text-theme-text-tertiary">
-                        Agent confidence:{" "}
-                        {diagnosis.confidence != null
-                          ? confidenceLabel(diagnosis.confidence)
-                          : "not stated"}
-                        {diagnosis.confidence != null ? " · self-reported" : ""}
-                      </p>
-                      <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary">
-                        {diagnosis.report}
-                      </AIMarkdown>
-                    </>
-                  )}
-                </div>
-              </Collapse>
+                    ) : null}
+                  </div>
+                </Collapse>
+              </div>
             </div>
           </div>
         )}
@@ -2199,6 +2307,7 @@ function AllClearCard({
   coverageLimited,
   evidenceConflict,
   assessmentAction,
+  assessmentSources,
 }: {
   diagnosis: Diagnosis;
   animate: boolean;
@@ -2206,6 +2315,7 @@ function AllClearCard({
   coverageLimited: boolean;
   evidenceConflict: boolean;
   assessmentAction?: ReactNode;
+  assessmentSources?: ReactNode;
 }) {
   const [showAnalysis, setShowAnalysis] = useState(false);
   const analysisReveal = useDisclosureReveal<HTMLDivElement>();
@@ -2260,19 +2370,18 @@ function AllClearCard({
           </p>
         ) : coverageLimited ? (
           <p className="mt-2 text-xs text-theme-text-secondary">
-            Some evidence could not be summarized or is unavailable. Review
-            Radar&apos;s observations and Activity before treating this as an
-            all-clear.
+            Evidence coverage is limited. Review the limitations in Evidence
+            before treating this as an all-clear.
           </p>
         ) : null}
       </div>
-      {detailed || assessmentAction ? (
+      {detailed || assessmentAction || assessmentSources ? (
         <div>
           <div
             className="flex flex-wrap items-center gap-3 pt-2"
             data-assessment-actions
           >
-            {detailed && (
+            {(detailed || assessmentSources) && (
               <button
                 type="button"
                 aria-expanded={showAnalysis}
@@ -2284,7 +2393,7 @@ function AllClearCard({
                 className="flex items-center gap-1.5 rounded-md py-2 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
               >
                 <CollapseChevron open={showAnalysis} className="h-3.5 w-3.5" />
-                Full analysis
+                {detailed ? "Full analysis" : "Assessment details"}
               </button>
             )}
             {assessmentAction && (
@@ -2295,8 +2404,9 @@ function AllClearCard({
             <Collapse open={showAnalysis}>
               <div className="border-t border-theme-border/60 px-3 py-2">
                 <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_p]:my-1.5 [&_p]:text-theme-text-secondary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
-                  {report}
+                  {detailed ? report : ""}
                 </AIMarkdown>
+                {assessmentSources}
               </div>
             </Collapse>
           </div>

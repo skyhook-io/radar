@@ -4,9 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   INVESTIGATION_DISCLOSURE_SETTLE_MS,
   InvestigationEvidencePane,
-  VISIBLE_ADDITIONAL_KEY_EVIDENCE,
   VISIBLE_LOG_EVIDENCE_LINES,
-  VISIBLE_SUPPORTING_SIGNALS,
+  partitionInvestigationEvidence,
   investigationDisclosureSettleDelay,
   investigationDisclosureScrollTop,
   investigationEvidenceFullRowFlags,
@@ -15,6 +14,7 @@ import {
 } from "./InvestigationEvidencePane";
 import {
   investigationEvidenceSourceDomId,
+  investigationEvidenceStepIdsByTurn,
   projectInvestigationEvidence,
   resolveInvestigationRootCauseEvidence,
   type InvestigationEvidenceProjection,
@@ -23,7 +23,7 @@ import {
 } from "./investigationEvidence";
 import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 import type { Diagnosis } from "../../api/diagnose";
-import { ResultCard } from "./parts";
+import { AssessmentSources, ResultCard } from "./parts";
 import { investigationEvidenceCoverageLimited } from "./investigationState";
 
 const onViewSource = vi.fn();
@@ -102,6 +102,294 @@ const criticalIssue = {
 };
 
 describe("InvestigationEvidencePane hierarchy and provenance", () => {
+  it("keeps the target issue from a cluster-wide response, not neighboring failures", () => {
+    const projection = project(
+      tool(
+        "cluster-issues",
+        "issues",
+        {
+          issues: [
+            criticalIssue,
+            {
+              ...criticalIssue,
+              id: "unrelated",
+              name: "unrelated",
+              reason: "UnrelatedFailure",
+            },
+          ],
+          total: 2,
+          total_matched: 2,
+        },
+        { summary: "{}" },
+      ),
+    );
+    const partition = partitionInvestigationEvidence(projection.groups);
+    expect(partition.main).toHaveLength(1);
+    const html = render(projection);
+    expect(html).toContain("CrashLoopBackOff");
+    expect(html).not.toContain("UnrelatedFailure");
+    expect(projection.groups).toHaveLength(2);
+    expect(
+      investigationEvidenceStepIdsByTurn(
+        projection,
+        new Set(partition.collectionByGroup.keys()),
+      )
+        .get(0)
+        ?.has("cluster-issues"),
+    ).toBe(true);
+  });
+
+  it("keeps coverage navigation when its primary broad card is omitted", () => {
+    const projection = project(
+      tool(
+        "limited-broad",
+        "issues",
+        {
+          issues: [{ ...criticalIssue, id: "other", name: "other" }],
+          total: 1,
+          total_matched: 2,
+        },
+        { summary: "{}" },
+      ),
+    );
+    const partition = partitionInvestigationEvidence(projection.groups);
+    const source = projection.sources[0];
+    expect(source.primaryGroupId).toBeDefined();
+    expect(partition.collectionByGroup.size).toBe(0);
+    expect(projection.limitations.length).toBeGreaterThan(0);
+    expect(
+      investigationEvidenceRevealCollection(projection, source.id, partition),
+    ).toBe("coverage");
+    const html = render(projection);
+    expect(
+      html.split(`id="${investigationEvidenceSourceDomId(source.id)}"`),
+    ).toHaveLength(2);
+    expect(html).not.toContain("<article");
+    expect(
+      investigationEvidenceStepIdsByTurn(projection, new Set())
+        .get(0)
+        ?.has("limited-broad"),
+    ).toBe(true);
+  });
+
+  it("does not promote namespace-wide change lists even when cited", () => {
+    const ref = evidenceRef("a", "b");
+    const projection = project(
+      tool(
+        "broad-changes",
+        "get_changes",
+        {
+          changes: [
+            {
+              kind: "Deployment",
+              namespace: "shop",
+              name: "other",
+              summary: "Unrelated rollout",
+              changeType: "update",
+              timestamp: "2026-09-07T00:00:00Z",
+            },
+          ],
+        },
+        { summary: JSON.stringify({ namespace: "shop" }), evidenceRef: ref },
+      ),
+    );
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+    expect(resolution.status).toBe("linked");
+    expect(projection.groups.length).toBeGreaterThan(0);
+    expect(render(projection, false, undefined, resolution)).not.toContain(
+      "Unrelated rollout",
+    );
+    expect(
+      partitionInvestigationEvidence(projection.groups, resolution)
+        .collectionByGroup.size,
+    ).toBe(0);
+  });
+
+  it("does not promote an arbitrary issue from a cited broad result", () => {
+    const ref = evidenceRef("a", "b");
+    const projection = project(
+      tool(
+        "broad",
+        "issues",
+        {
+          issues: ["db", "queue"].map((name) => ({
+            ...criticalIssue,
+            id: name,
+            name,
+            namespace: "other",
+          })),
+          total: 2,
+          total_matched: 2,
+        },
+        { summary: JSON.stringify({ namespace: "other" }), evidenceRef: ref },
+      ),
+    );
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+    const partition = partitionInvestigationEvidence(
+      projection.groups,
+      resolution,
+    );
+    expect(partition.main).toHaveLength(0);
+    expect(partition.collectionByGroup.size).toBe(0);
+    expect(
+      investigationEvidenceStepIdsByTurn(
+        projection,
+        new Set(partition.collectionByGroup.keys()),
+      ).size,
+    ).toBe(0);
+    expect(
+      investigationEvidenceRevealCollection(
+        projection,
+        projection.sources[0].id,
+        partition,
+      ),
+    ).toBeUndefined();
+    const html = render(projection, false, undefined, resolution);
+    expect(html).not.toContain("<article");
+    expect(html).not.toContain("other/");
+    expect(html).toContain("No relevant evidence to show yet");
+    expect(
+      html.split(
+        `id="${investigationEvidenceSourceDomId(projection.sources[0].id)}"`,
+      ),
+    ).toHaveLength(1);
+    projection.groups.forEach((group) => {
+      group.historical = true;
+    });
+    const history = partitionInvestigationEvidence(
+      projection.groups,
+      resolution,
+    );
+    expect(history.main).toHaveLength(0);
+    expect(history.collectionByGroup.size).toBe(0);
+    expect(history.earlier).toHaveLength(0);
+  });
+
+  it("keeps a selected focused fact but leaves unselected broader resources in Activity", () => {
+    const ref = evidenceRef("a", "b");
+    const projection = project(
+      tool(
+        "config",
+        "get_resource",
+        {
+          resource: {
+            apiVersion: "v1",
+            kind: "ConfigMap",
+            metadata: { namespace: "shop", name: "api" },
+            data: { HOST: "mongo" },
+          },
+          recentChanges: [],
+          recentChangesSaturated: false,
+          recentChangesCoverageLimited: false,
+        },
+        { evidenceRef: ref },
+      ),
+      tool("other", "get_resource", {
+        kind: "Secret",
+        namespace: "shop",
+        name: "api",
+        keys: ["PASSWORD"],
+      }),
+    );
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+    const partition = partitionInvestigationEvidence(
+      projection.groups,
+      resolution,
+    );
+    expect(partition.main.map((group) => group.id)).toEqual([
+      resolution.links[0].originalGroupId,
+    ]);
+    expect(partition.main[0].latest.tone).toBe("neutral");
+    expect(partition.workload).toHaveLength(0);
+    expect(partition.collectionByGroup.size).toBe(1);
+    expect(projection.groups).toHaveLength(3);
+    expect(render(projection, false, undefined, resolution)).not.toContain(
+      'aria-expanded="true"',
+    );
+  });
+
+  it("does not present collection timestamps as changed evidence", () => {
+    const ref = evidenceRef("a", "b");
+    const projection = project(
+      tool(
+        "first",
+        "issues",
+        {
+          issues: [{ ...criticalIssue, last_seen: "2026-09-07T08:00:00Z" }],
+          total: 1,
+          total_matched: 1,
+        },
+        { evidenceRef: ref },
+      ),
+      tool("again", "issues", {
+        issues: [{ ...criticalIssue, last_seen: "2026-09-07T08:05:00Z" }],
+        total: 1,
+        total_matched: 1,
+      }),
+    );
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+    const html = render(projection, false, undefined, resolution);
+    expect(html.match(/aria-label="CrashLoopBackOff evidence"/g)).toHaveLength(
+      1,
+    );
+    expect(html).not.toContain("Previous observations");
+    expect(projection.groups[0].observations).toHaveLength(2);
+  });
+
+  it("keeps different details behind a collapsed history even when summaries match", () => {
+    const projection = project(
+      tool("first", "issues", {
+        issues: [
+          {
+            ...criticalIssue,
+            cause: "The container failed",
+            message: "Exit code 1",
+          },
+        ],
+        total: 1,
+        total_matched: 1,
+      }),
+      tool("again", "issues", {
+        issues: [
+          {
+            ...criticalIssue,
+            cause: "The container failed",
+            message: "Exit code 2",
+          },
+        ],
+        total: 1,
+        total_matched: 1,
+      }),
+    );
+    const html = render(projection);
+    expect(html).toContain("Previous observations · 1");
+    expect(html).toContain("Exit code 1");
+    expect(html).toContain("Exit code 2");
+    expect(html).not.toContain("Changed since the previous observation");
+    expect(
+      investigationEvidenceShouldRevealHistory(
+        projection.groups[0],
+        projection.sources[0].id,
+      ),
+    ).toBe(true);
+  });
+
   it("folds unchanged uncited rechecks into the cited fact with every source accessible", () => {
     const ref = evidenceRef("a", "b");
     const projection = project(
@@ -122,8 +410,10 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
       { status: "linked", refs: [ref] },
       0,
     );
-    const group = resolution.links[0].group!;
-    expect(group.latest.source.stepId).toBe("cited");
+    const group = projection.groups.find(
+      (item) => item.id === resolution.links[0].originalGroupId,
+    )!;
+    expect(resolution.links[0].source.stepId).toBe("cited");
     expect(group.observations.map((item) => item.source.stepId)).toEqual([
       "cited",
       "recheck",
@@ -132,7 +422,8 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(html.match(/aria-label="CrashLoopBackOff evidence"/g)).toHaveLength(
       1,
     );
-    expect(html).toContain("Observation history");
+    expect(html).not.toContain("Previous observations");
+    expect(html).not.toContain("Changed since the previous observation");
     expect(html).not.toContain("Critical evidence");
     for (const source of projection.sources) {
       expect(
@@ -140,12 +431,8 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
       ).toHaveLength(2);
     }
     expect(
-      investigationEvidenceShouldRevealHistory(
-        group,
-        projection.sources[1].id,
-        true,
-      ),
-    ).toBe(true);
+      investigationEvidenceShouldRevealHistory(group, projection.sources[1].id),
+    ).toBe(false);
   });
 
   it("does not fold a changed intervening observation into an unchanged cited snapshot", () => {
@@ -173,9 +460,9 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
       { status: "linked", refs: [ref] },
       0,
     );
-    expect(resolution.links[0].group!.observations).toHaveLength(1);
+    expect(projection.groups[0].observations).toHaveLength(3);
     const html = render(projection, false, undefined, resolution);
-    expect(html).toContain("Observed after the cited evidence");
+    expect(html).not.toContain("Observed after the assessment’s source");
     expect(html).toContain("A different failure detail");
     for (const source of projection.sources) {
       expect(
@@ -248,13 +535,12 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
         { kind: "Endpoints", namespace: "shop", name: "api" },
       ]),
     );
-    const html = render(projection);
-    expect(html).toContain("Endpoints");
-    expect(html).not.toContain("Endpointses");
-    expect(html).not.toContain("signal needs review");
+    expect(projection.groups[0].latest.title).toContain("Endpoints");
+    expect(projection.groups[0].latest.title).not.toContain("Endpointses");
+    expect(render(projection)).not.toContain("<article");
   });
 
-  it("names inventory by its resources and scope, without expanding cited lists", () => {
+  it("keeps even cited inventories in Activity rather than promoting the whole list", () => {
     const ref = evidenceRef("a", "b");
     const projection = project(
       tool(
@@ -276,14 +562,16 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
       0,
     );
     const html = render(projection, false, undefined, resolution);
-    expect(html).toContain("Secrets in autopush");
-    expect(html).toContain("1 returned");
+    expect(projection.groups[0].latest.title).toContain("Secrets in autopush");
+    expect(html).not.toContain("Secrets in autopush");
+    const sources = renderToStaticMarkup(
+      <AssessmentSources resolution={resolution} onViewSource={onViewSource} />,
+    );
+    expect(sources).toContain("List Resources");
     expect(html).not.toContain("Resource inventory");
     expect(html).not.toContain("found in a broader search");
     expect(html).not.toContain('aria-expanded="true"');
-    expect(
-      html.match(/aria-label="View source for Secrets in autopush"/g),
-    ).toHaveLength(1);
+    expect(html).not.toContain("<article");
   });
 
   it("preserves the actual query under collapsed cited sources and puts actions after evidence", () => {
@@ -308,14 +596,17 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
       0,
     );
     const html = render(projection, false, "NEXT-STEPS-SENTINEL", resolution);
-    expect(html).toContain("kind:Secret project-infra");
-    expect(html).toContain("Cited sources in Activity");
+    const sources = renderToStaticMarkup(
+      <AssessmentSources resolution={resolution} onViewSource={onViewSource} />,
+    );
+    expect(sources).toContain("kind:Secret project-infra");
+    expect(sources).toContain("Sources used for this assessment");
+    expect(sources).not.toContain('id="investigation-evidence-');
+    expect(html).not.toContain("Cited sources in Activity");
     expect(html).not.toContain(
       "The assessment cites a result that could not be summarized",
     );
-    expect(html).toContain(
-      'aria-expanded="false" aria-controls="investigation-cited-sources"',
-    );
+    expect(html).not.toContain('aria-controls="investigation-cited-sources"');
     expect(html.indexOf("NEXT-STEPS-SENTINEL")).toBeGreaterThan(
       html.lastIndexOf("</section>"),
     );
@@ -356,17 +647,28 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
         },
         { evidenceRef: ref },
       ),
-      tool("events-other", "get_events", {
-        events: [
-          {
-            type: "Warning",
-            reason: "BackOff",
-            message: "Back-off restarting failed container",
-            count: 1,
-            lastTimestamp: "2026-09-02T10:00:00Z",
-          },
-        ],
-      }),
+      tool(
+        "events-other",
+        "get_events",
+        {
+          events: [
+            {
+              type: "Warning",
+              reason: "BackOff",
+              message: "Back-off restarting failed container",
+              count: 1,
+              lastTimestamp: "2026-09-02T10:00:00Z",
+            },
+          ],
+        },
+        {
+          summary: JSON.stringify({
+            kind: "Deployment",
+            namespace: "shop",
+            name: "api",
+          }),
+        },
+      ),
     );
     const resolution = resolveInvestigationRootCauseEvidence(
       projection,
@@ -374,19 +676,18 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
       0,
     );
     const originalGroupId = resolution.links[0].originalGroupId!;
-    const citedSnapshotId = resolution.links[0].group!.id;
     const before = render(projection);
     const html = render(projection, false, undefined, resolution);
     const anchor = `id="${investigationEvidenceSourceDomId(
       resolution.links[0].source.id,
     )}"`;
 
-    expect(html).toContain("Cited by the agent");
+    expect(html).not.toContain("Cited by the agent");
     expect(html).not.toContain("validated against this run");
     expect(html).not.toContain("Agent-selected check");
     expect(html).not.toContain("from this check below");
     expect(html).not.toContain("Additional Radar observations");
-    expect(html.indexOf("Cited by the agent")).toBeLessThan(
+    expect(html.indexOf("CrashLoopBackOff")).toBeLessThan(
       html.indexOf("Kubernetes events"),
     );
     expect(html.match(new RegExp(anchor, "g"))).toHaveLength(1);
@@ -398,7 +699,6 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(html.match(new RegExp(`id="${originalGroupId}"`, "g"))).toHaveLength(
       1,
     );
-    expect(html).not.toContain(`id="${citedSnapshotId}"`);
     expect(html).not.toContain("animate-transcript-enter");
   });
 
@@ -439,13 +739,10 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(projection.groups).toHaveLength(1);
     expect(html).toContain(citedMessage);
     expect(html).toContain(uncitedMessage);
-    expect(html.indexOf(citedMessage)).toBeLessThan(
-      html.indexOf("Critical evidence"),
+    expect(html.indexOf(uncitedMessage)).toBeLessThan(
+      html.indexOf(citedMessage),
     );
-    expect(html.indexOf(uncitedMessage)).toBeGreaterThan(
-      html.indexOf("Critical evidence"),
-    );
-    expect(html).toContain(`id="${resolution.links[0].group!.id}"`);
+    expect(html).toContain("Used for assessment");
     expect(
       html.match(new RegExp(`id="${projection.groups[0].id}"`, "g")),
     ).toHaveLength(1);
@@ -478,18 +775,18 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     );
     const html = render(projection, false, undefined, resolution);
 
-    expect(html).toContain("Cited sources in Activity");
-    expect(html).toContain("Query Prometheus");
-    expect(html).toContain('aria-controls="investigation-cited-sources"');
-    expect(html).toContain(
-      'aria-label="View cited Query Prometheus result in Activity"',
+    const sources = renderToStaticMarkup(
+      <AssessmentSources resolution={resolution} onViewSource={onViewSource} />,
     );
+    expect(sources).toContain("Query Prometheus");
+    expect(sources).toContain("Sources used for this assessment");
+    expect(html).not.toContain("Cited sources in Activity");
     expect(html).not.toContain("Agent-selected check");
     expect(html).not.toContain("View source");
     expect(html).toContain(">Evidence</h2>");
     expect(html).not.toContain("Evidence from cited results");
     expect(html).not.toContain("Additional Radar observations");
-    expect(html).not.toContain("No evidence could be summarized here");
+    expect(html).toContain("No relevant evidence to show yet");
   });
 
   it("does not frame unrelated structured evidence as other when the cited source is Activity-only", () => {
@@ -501,17 +798,28 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
         { results: [{ kind: "Pod", namespace: "shop", name: "api-123" }] },
         { evidenceRef: ref },
       ),
-      tool("events-uncited", "get_events", {
-        events: [
-          {
-            type: "Warning",
-            reason: "BackOff",
-            message: "Back-off restarting failed container",
-            count: 1,
-            lastTimestamp: "2026-09-02T10:00:00Z",
-          },
-        ],
-      }),
+      tool(
+        "events-uncited",
+        "get_events",
+        {
+          events: [
+            {
+              type: "Warning",
+              reason: "BackOff",
+              message: "Back-off restarting failed container",
+              count: 1,
+              lastTimestamp: "2026-09-02T10:00:00Z",
+            },
+          ],
+        },
+        {
+          summary: JSON.stringify({
+            kind: "Deployment",
+            namespace: "shop",
+            name: "api",
+          }),
+        },
+      ),
     );
     const resolution = resolveInvestigationRootCauseEvidence(
       projection,
@@ -520,12 +828,12 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     );
     const html = render(projection, false, undefined, resolution);
 
-    expect(resolution.links[0].group).toBeUndefined();
+    expect(resolution.links[0].originalGroupId).toBeUndefined();
     expect(html).toContain(">Evidence</h2>");
     expect(html).toContain("Kubernetes events");
     expect(html).not.toContain("Evidence from cited results");
     expect(html).not.toContain("Additional Radar observations");
-    expect(html).not.toContain("No evidence could be summarized here");
+    expect(html).not.toContain("No relevant evidence to show yet");
   });
 
   it("gives a promoted fallback check one source anchor while retaining its coverage limit", () => {
@@ -547,18 +855,24 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     const html = render(projection, false, undefined, resolution);
     const anchor = `id="${investigationEvidenceSourceDomId(source.id)}"`;
 
-    expect(resolution.links[0].group).toBeUndefined();
-    expect(html).toContain("Get Resource result");
+    expect(resolution.links[0].originalGroupId).toBeUndefined();
+    expect(html).toContain("Resource details");
     expect(html).not.toContain("Agent-selected check");
-    expect(html).toContain(
-      'aria-label="View cited Get Resource result in Activity"',
-    );
+    expect(
+      renderToStaticMarkup(
+        <AssessmentSources
+          resolution={resolution}
+          onViewSource={onViewSource}
+        />,
+      ),
+    ).toContain("View Get Resource source used for this assessment");
     expect(html).toContain("Evidence coverage is incomplete");
     expect(html).toContain("couldn&#x27;t summarize this investigation step");
     expect(html.match(new RegExp(anchor, "g"))).toHaveLength(1);
   });
 
   it("keeps inline log evidence compact and strips terminal color codes", () => {
+    const ref = evidenceRef("a", "b");
     const lines = Array.from(
       { length: VISIBLE_LOG_EVIDENCE_LINES + 3 },
       (_, index) =>
@@ -575,6 +889,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
           fallback: false,
         },
         {
+          evidenceRef: ref,
           summary: JSON.stringify({
             namespace: "shop",
             name: "api-pod",
@@ -583,7 +898,12 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
         },
       ),
     );
-    const html = render(projection);
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+    const html = render(projection, false, undefined, resolution);
 
     expect(html).toContain(
       `Selected log excerpt · last ${VISIBLE_LOG_EVIDENCE_LINES} of ${lines.length} lines`,
@@ -634,6 +954,64 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(render(projection, false, undefined, undefined, () => {})).toContain(
       "Open current Deployment shop/api in Radar",
     );
+  });
+
+  it("encloses evidence items in cards while keeping replica details unboxed", () => {
+    const html = render(
+      project(
+        tool("workload", "diagnose", {
+          resource: {
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: { namespace: "shop", name: "api" },
+          },
+          resourceContext: {
+            tier: "basic",
+            workloadSummary: {
+              replicas: { desired: 1, ready: 0, updated: 1, unavailable: 1 },
+            },
+            statusSummary: {
+              conditions: [
+                {
+                  type: "Available",
+                  status: "False",
+                  reason: "MinimumReplicasUnavailable",
+                },
+              ],
+            },
+          },
+          relatedIssues: [criticalIssue],
+        }),
+        tool("events", "get_events", {
+          events: [
+            {
+              type: "Warning",
+              reason: "BackOff",
+              message: "Back-off restarting failed container",
+              count: 2,
+              lastTimestamp: "2026-09-02T10:00:00Z",
+            },
+          ],
+        }),
+      ),
+    );
+    const articles = html.match(/<article\b[^>]*>/g) ?? [];
+    expect(articles.length).toBeGreaterThanOrEqual(3);
+    for (const article of articles) {
+      expect(article).toContain("rounded-lg border bg-theme-surface");
+      expect(article).not.toContain("border-b ");
+    }
+    expect(html).toContain("border-l-red-500");
+    expect(html).toContain("border-theme-border/70");
+    const replicaFacts = html.match(
+      /<dl[^>]*>\s*<div><dt[^>]*>Ready replicas[\s\S]*?<\/dl>/,
+    )?.[0];
+    expect(replicaFacts).toBeDefined();
+    expect(replicaFacts).not.toContain("border");
+    expect(replicaFacts).toContain("0/1");
+    expect(replicaFacts).toContain("Updated");
+    expect(replicaFacts).toContain("Unavailable");
+    expect(html).toContain("MinimumReplicasUnavailable");
   });
 
   it("links exact resources named inside change and DNS evidence", () => {
@@ -755,7 +1133,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     const html = render(projection);
     const source = projection.sources[0];
 
-    expect(html).toContain("Critical evidence");
+    expect(html).not.toContain("Critical evidence");
     expect(html).not.toContain("strongest");
     expect(html).not.toContain("main proof");
     expect(html).toContain("CrashLoopBackOff");
@@ -768,7 +1146,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     );
   });
 
-  it("labels an unmatched broad issue as context instead of an observed failure", () => {
+  it("omits an unmatched broad issue without deleting the raw evidence", () => {
     const projection = project(
       tool(
         "issues-broad",
@@ -791,11 +1169,12 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     const html = render(projection);
 
     expect(html).not.toContain("Critical evidence");
-    expect(html).toContain("Context");
-    expect(html).toContain("Broader-scope signals and direct relationships");
+    expect(html).not.toContain("Related resources and broader checks");
+    expect(html).not.toContain("DatabaseCrashLoop");
+    expect(projection.groups).toHaveLength(1);
   });
 
-  it("labels each revision's proof scope without replacing the lead source", () => {
+  it("keeps proof-scope provenance without surfacing identical evidence as history", () => {
     const podIssue = {
       ...criticalIssue,
       id: "issue-api-pod-crash",
@@ -829,92 +1208,199 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
         group,
         group.chronologicalLatest.source.id,
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       investigationEvidenceShouldRevealHistory(group, group.latest.source.id),
     ).toBe(false);
-    expect(html).toContain("Observation history");
+    expect(html).not.toContain("Previous observations");
     expect(group.latest.relevance).toBe("producer-related");
-    expect(html).toContain("Broader context");
+    expect(html).not.toContain("Broader context");
     expect(html).not.toContain("later broader observation retained");
   });
 
-  it("caps key and supporting evidence while preserving source navigation", () => {
-    const keyTools = Array.from(
-      { length: VISIBLE_ADDITIONAL_KEY_EVIDENCE + 2 },
-      (_, index) =>
-        tool(`key-${index}`, "issues", {
+  it.each(["critical", "warning"])(
+    "shows all distinct current %s headers, with bodies collapsed",
+    (severity) => {
+      const projection = project(
+        ...Array.from({ length: 7 }, (_, index) =>
+          tool(`failure-${index}`, "issues", {
+            issues: [
+              {
+                ...criticalIssue,
+                id: `failure-${index}`,
+                reason: `Failure${index}`,
+                severity,
+              },
+            ],
+            total: 1,
+            total_matched: 1,
+          }),
+        ),
+      );
+      const partition = partitionInvestigationEvidence(projection.groups);
+      expect(partition.main).toHaveLength(7);
+      expect(partition.workload).toHaveLength(0);
+      const html = render(projection);
+      expect(html.match(/<article\b/g)).toHaveLength(7);
+      expect(html).not.toContain('aria-expanded="true"');
+      expect(html).not.toContain("More critical evidence");
+      for (const source of projection.sources)
+        expect(
+          investigationEvidenceRevealCollection(projection, source.id),
+        ).toBeUndefined();
+    },
+  );
+
+  it("keeps neutral supporting observations reachable without an adverse preview", () => {
+    const projection = project(
+      tool("neutral", "issues", {
+        issues: [{ ...criticalIssue, severity: "warning" }],
+        total: 1,
+        total_matched: 1,
+      }),
+    );
+    projection.groups[0].latest.tone = "neutral";
+    const html = render(projection);
+    expect(html).toContain("More evidence about this workload");
+    expect(html).not.toContain("with warnings or errors");
+    expect(
+      investigationEvidenceRevealCollection(
+        projection,
+        projection.sources[0].id,
+      ),
+    ).toBe("workload");
+  });
+
+  it("keeps critical cards and overflow ahead of noncritical cited results", () => {
+    const ref = evidenceRef("a", "b");
+    const projection = project(
+      tool(
+        "cited-warning",
+        "issues",
+        {
+          issues: [
+            {
+              ...criticalIssue,
+              id: "warning",
+              severity: "warning",
+              reason: "CitedWarning",
+            },
+          ],
+          total: 1,
+          total_matched: 1,
+        },
+        { evidenceRef: ref },
+      ),
+      ...Array.from({ length: 4 }, (_, index) =>
+        tool(`critical-${index}`, "issues", {
           issues: [
             {
               ...criticalIssue,
               id: `critical-${index}`,
-              reason: `CriticalReason${index}`,
+              reason: `Critical${index}`,
+              message: `Critical detail ${index}`,
+              cause: "Brief critical summary",
             },
           ],
           total: 1,
           total_matched: 1,
         }),
-    );
-    const keyProjection = project(...keyTools);
-    const hiddenKeySource = keyProjection.sources.at(-1)!;
-    const keyHtml = render(keyProjection);
-
-    expect(
-      investigationEvidenceRevealCollection(keyProjection, hiddenKeySource.id),
-    ).toBe("more-key");
-    expect(keyHtml).toContain("More critical evidence");
-    expect(keyHtml).toContain(
-      'aria-controls="investigation-more-key-evidence"',
-    );
-    expect(keyHtml).toContain('style="grid-template-rows:0fr"');
-
-    const supportingTools = Array.from(
-      { length: VISIBLE_SUPPORTING_SIGNALS + 3 },
-      (_, index) =>
-        tool(`supporting-${index}`, "issues", {
-          issues: [
-            {
-              ...criticalIssue,
-              id: `warning-${index}`,
-              severity: "warning",
-              reason: `WarningReason${index}`,
-            },
-          ],
-          total: 1,
-          total_matched: 1,
-        }),
-    );
-    const supportingProjection = project(...supportingTools);
-    const hiddenSupportingSource = supportingProjection.sources.at(-1)!;
-    const finalOverflowGroup = supportingProjection.groups.find(
-      (group) => group.id === hiddenSupportingSource.primaryGroupId,
-    )!;
-    const supportingHtml = render(supportingProjection);
-
-    expect(
-      investigationEvidenceRevealCollection(
-        supportingProjection,
-        hiddenSupportingSource.id,
       ),
-    ).toBe("more-supporting");
-    expect(supportingHtml).toContain("Supporting evidence");
-    expect(supportingHtml).toContain("Signals to review");
-    expect(supportingHtml).toContain("3 signals need review");
-    expect(
-      investigationEvidenceRevealCollection(
-        supportingProjection,
-        supportingProjection.sources[0].id,
-      ),
-    ).toBeUndefined();
-    expect(supportingHtml).toContain(
-      'aria-expanded="false" aria-controls="investigation-more-supporting-evidence"',
     );
-    expect(
-      supportingHtml.match(
-        new RegExp(`<article[^>]*id="${finalOverflowGroup.id}"[^>]*>`),
-      )?.[0],
-    ).toContain("@min-[760px]/evidence:col-span-2");
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+    const html = render(projection, false, undefined, resolution);
+    expect(html).not.toContain("Critical evidence");
+    expect(html).not.toContain("Cited by the agent");
+    expect(html.indexOf('aria-label="Critical3 evidence"')).toBeLessThan(
+      html.indexOf('aria-label="CitedWarning evidence"'),
+    );
+    const firstCard = html.match(
+      /<article[^>]*aria-label="Critical0 evidence"[\s\S]*?<\/article>/,
+    )?.[0];
+    expect(firstCard).toContain('aria-expanded="false"');
+    for (const source of projection.sources) {
+      expect(
+        html.split(`id="${investigationEvidenceSourceDomId(source.id)}"`),
+      ).toHaveLength(2);
+    }
   });
+
+  it("orders critical cited cards first without mutating citation order", () => {
+    const refs = [evidenceRef("a", "b"), evidenceRef("a", "c")];
+    const projection = project(
+      ...["warning", "critical", "critical"].map((severity, index) =>
+        tool(
+          `ordered-${index}`,
+          "issues",
+          {
+            issues: [
+              {
+                ...criticalIssue,
+                id: `ordered-${index}`,
+                reason: `Ordered${index}`,
+                severity,
+                message: `Detail ${index}`,
+                cause: "Brief summary",
+              },
+            ],
+            total: 1,
+            total_matched: 1,
+          },
+          index < 2 ? { evidenceRef: refs[index] } : {},
+        ),
+      ),
+    );
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs },
+      0,
+    );
+    const html = render(projection, false, undefined, resolution);
+    expect(html).not.toContain("Cited by the agent");
+    expect(html.indexOf('aria-label="Ordered2 evidence"')).toBeLessThan(
+      html.indexOf('aria-label="Ordered0 evidence"'),
+    );
+    expect(html.indexOf('aria-label="Ordered1 evidence"')).toBeLessThan(
+      html.indexOf('aria-label="Ordered0 evidence"'),
+    );
+    expect(resolution.links[0].source.stepId).toBe("ordered-0");
+    expect(
+      html.match(
+        /<article[^>]*aria-label="Ordered1 evidence"[\s\S]*?<\/article>/,
+      )?.[0],
+    ).toContain('aria-expanded="false"');
+    expect(
+      html.match(
+        /<article[^>]*aria-label="Ordered2 evidence"[\s\S]*?<\/article>/,
+      )?.[0],
+    ).toContain('aria-expanded="false"');
+  });
+
+  it.each(["missing", "invalid"] as const)(
+    "keeps %s citation notice ahead of critical facts",
+    (status) => {
+      const projection = project(
+        tool("critical", "issues", {
+          issues: [criticalIssue],
+          total: 1,
+          total_matched: 1,
+        }),
+      );
+      const html = render(projection, false, undefined, { status, links: [] });
+      const notice =
+        status === "missing"
+          ? "Assessment does not cite specific Radar evidence"
+          : "Assessment references could not be matched";
+      expect(html.indexOf(notice)).toBeGreaterThan(-1);
+      expect(html.indexOf(notice)).toBeLessThan(
+        html.indexOf("CrashLoopBackOff"),
+      );
+    },
+  );
 
   it("routes source navigation through collapsed collections", () => {
     const projection = project(
@@ -1039,17 +1525,13 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(
       projection.groups.filter((group) => group.latest.tier === "key").length,
     ).toBeGreaterThan(1);
-    expect(html.split('id="investigation-key-evidence-heading"')).toHaveLength(
-      2,
-    );
+    expect(html).not.toContain('id="investigation-key-evidence-heading"');
     expect(html).not.toContain('id="investigation-evidence-tier-key"');
-    expect(html).toContain(
-      'aria-labelledby="investigation-key-evidence-heading"',
-    );
+    expect(html.match(/<article\b/g)).toHaveLength(projection.groups.length);
     expect(html).not.toContain("related to the investigated resource");
 
     const ordered = render(projection, false, "NEXT_STEP_MARKER");
-    expect(ordered.indexOf("Critical evidence")).toBeGreaterThan(
+    expect(ordered.indexOf("CrashLoopBackOff")).toBeGreaterThan(
       ordered.indexOf("Evidence coverage is incomplete"),
     );
     expect(ordered.indexOf("Evidence coverage is incomplete")).toBeLessThan(
@@ -1177,6 +1659,10 @@ describe("InvestigationEvidencePane honest result states", () => {
     const resources = projection.groups.filter(
       (group) => group.kind === "resource",
     );
+    // Body-rendering fixture: relationship eligibility is tested separately.
+    resources.forEach((group) => {
+      group.latest.relevance = "producer-related";
+    });
     const html = render(projection);
 
     expect(html).toContain("No key names in this result");
@@ -1200,6 +1686,7 @@ describe("InvestigationEvidencePane honest result states", () => {
     const warningResource = withWarning.groups.find(
       (group) => group.kind === "resource",
     )!;
+    warningResource.latest.relevance = "producer-related";
     const warningHtml = render(withWarning);
     expect(warningHtml).toContain(`${warningResource.id}-body`);
     expect(warningHtml).toContain(
@@ -1225,11 +1712,16 @@ describe("InvestigationEvidencePane honest result states", () => {
     const resource = projection.groups.find(
       (group) => group.kind === "resource",
     )!;
+    resource.latest.relevance = "producer-related";
     const html = render(projection);
 
     expect(resource.observations).toHaveLength(2);
     expect(html).toContain(`${resource.id}-body`);
-    expect(html).toContain("Observation history");
+    expect(html).toContain("Previous observations · 1");
+    expect(html).toMatch(
+      /aria-expanded="false"[^>]*>[^]*?Previous observations/,
+    );
+    expect(html).not.toContain("Changed since the previous observation");
     expect(html).not.toContain("2 observations");
   });
 
@@ -1251,9 +1743,9 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(receipt).toBeDefined();
 
     const html = render(projection);
-    expect(html).toContain('id="investigation-checked-heading"');
+    expect(html).toContain("More evidence about this workload");
     expect(html).toContain("No matching warning events");
-    expect(html).toContain("What Radar did not find");
+    expect(html).not.toContain("What Radar did not find");
     expect(html).not.toContain(`${receipt!.id}-body`);
   });
 
@@ -1331,6 +1823,9 @@ describe("InvestigationEvidencePane honest result states", () => {
         },
       }),
     );
+    projection.groups.forEach((group) => {
+      group.latest.relevance = "producer-related";
+    });
     const html = render(projection);
 
     expect(html.match(/ControllerError/g)).toHaveLength(1);
@@ -1347,6 +1842,141 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(html).not.toContain('id="investigation-checked-heading"');
     expect(html).not.toContain("No matching warning events");
     expect(html).toContain("Evidence coverage is incomplete");
+  });
+
+  it("puts the change age in the header and only raw evidence in the details", () => {
+    const evidence = "generation=2, observedGeneration=2, 2 owned ReplicaSets";
+    const projection = project(
+      tool("rollout", "diagnose", {
+        resource: {
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          metadata: { namespace: "shop", name: "api" },
+        },
+        changeContext: {
+          changed: true,
+          what: "pod_template",
+          when: "29d",
+          evidence,
+        },
+      }),
+    );
+    const group = projection.groups.find(
+      (item) => item.latest.data.type === "changes",
+    )!;
+    expect(group.latest.summary).toBe(
+      "Pod template changed; newest ReplicaSet created 29d ago",
+    );
+    const html = render(projection);
+    expect(html).toContain(evidence);
+    expect(html).toContain('aria-label="About change evidence"');
+    expect(html).not.toContain("Why this may matter");
+    expect(html).not.toContain("A recent change is context");
+    const body = html.split(`id="${group.id}-body"`)[1]?.split("</article>")[0];
+    expect(body).toBeDefined();
+    expect(body).not.toContain("Pod template changed");
+    expect(body).toContain(evidence);
+  });
+
+  it("does not offer an empty change disclosure when only the summary is available", () => {
+    const projection = project(
+      tool("rollout", "diagnose", {
+        resource: {
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          metadata: { namespace: "shop", name: "api" },
+        },
+        changeContext: { changed: true, what: "pod_template" },
+      }),
+    );
+    const group = projection.groups.find(
+      (item) => item.latest.data.type === "changes",
+    )!;
+    const html = render(projection);
+    expect(group.latest.summary).toBe("The workload's Pod template changed");
+    expect(html).not.toContain(`aria-controls="${group.id}-body"`);
+    expect(html).toContain('aria-label="About change evidence"');
+  });
+
+  it("presents qualified change history as a neutral note without repeating its details", () => {
+    const projection = project(
+      tool("empty-changes", "get_changes", { changes: [] }),
+      tool(
+        "limited-history",
+        "get_resource",
+        {
+          resource: {
+            apiVersion: "v1",
+            kind: "Secret",
+            metadata: { namespace: "shop", name: "api" },
+          },
+          recentChanges: [],
+          recentChangesSaturated: false,
+          recentChangesCoverageLimited: true,
+        },
+        {
+          summary: JSON.stringify({
+            kind: "secret",
+            namespace: "shop",
+            name: "api",
+          }),
+        },
+      ),
+    );
+    expect(projection.limitations).toHaveLength(2);
+    expect(
+      projection.limitations.every((item) => item.presentation === "history"),
+    ).toBe(true);
+    const html = render(projection);
+    expect(html).toContain("Change history is limited");
+    expect(html).not.toContain("Evidence coverage is incomplete");
+    expect(html).not.toContain("access restrictions");
+    const header = html.match(
+      /<button[^>]*aria-controls="investigation-evidence-coverage"[\s\S]*?<\/button>/,
+    )?.[0];
+    expect(header).toBeDefined();
+    expect(header).not.toContain("No changes were returned");
+    expect(header).not.toContain("text-amber");
+    expect(html).toContain("Change history for secret shop/api is incomplete.");
+    expect(investigationEvidenceCoverageLimited(projection)).toBe(true);
+    for (const source of projection.sources) {
+      expect(
+        html.split(`id="${investigationEvidenceSourceDomId(source.id)}"`),
+      ).toHaveLength(2);
+    }
+  });
+
+  it.each([
+    [
+      "failed read",
+      tool(
+        "failure",
+        "get_pod_logs",
+        { error: "pods/log is forbidden" },
+        { isError: true },
+      ),
+    ],
+    ["truncated result", tool("truncated", "issues", {}, { truncated: true })],
+    [
+      "malformed history",
+      tool("malformed", "get_resource", {
+        resource: {
+          apiVersion: "v1",
+          kind: "Secret",
+          metadata: { name: "api", namespace: "shop" },
+        },
+        recentChangesCoverageLimited: "yes",
+      }),
+    ],
+  ])("keeps %s prominent alongside a history note", (_label, failedTool) => {
+    const projection = project(
+      tool("empty-history", "get_changes", { changes: [] }),
+      failedTool,
+    );
+    const html = render(projection);
+    expect(html).toContain("Evidence coverage is incomplete");
+    expect(html).not.toContain("Change history is limited");
+    expect(investigationEvidenceCoverageLimited(projection)).toBe(true);
   });
 
   it("summarizes incomplete coverage and points to Activity for review", () => {
@@ -1404,7 +2034,13 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(projection.limitations.map((item) => item.source)).toEqual(
       originalOrder,
     );
-    expect(html).toContain("More limitations in details");
+    expect(html).toContain(
+      'aria-label="Evidence limitation for Container logs:',
+    );
+    expect(html).toContain('aria-label="Evidence limitation for Issue scan:');
+    expect(html).toContain(
+      'aria-label="Evidence limitation for Kubernetes events:',
+    );
   });
 
   it.each([
@@ -1477,10 +2113,10 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(collecting).toContain(
       "The Activity pane remains the live record while the agent investigates.",
     );
-    expect(collecting).not.toContain("No evidence could be summarized here");
+    expect(collecting).not.toContain("No relevant evidence to show yet");
 
     expect(finished).not.toContain(">collecting<");
-    expect(finished).toContain("No evidence could be summarized here");
+    expect(finished).toContain("No relevant evidence to show yet");
     expect(finished).toContain("This does not mean the resource is healthy.");
     expect(finished).not.toContain("Evidence will appear here");
   });
@@ -1527,10 +2163,8 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(
       projection.groups.find((group) => group.kind === "issue")?.historical,
     ).toBe(true);
-    expect(html).toContain("Earlier evidence");
-    expect(html).toContain(
-      "Retained for comparison; earlier does not mean resolved.",
-    );
+    expect(html).toContain("Previous observations");
+    expect(html).toContain("Earlier does not mean resolved.");
     expect(html).toContain("CrashLoopBackOff");
   });
 });

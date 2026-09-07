@@ -1,6 +1,8 @@
 import {
   createContext,
+  useCallback,
   useContext,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -41,14 +43,17 @@ import {
 } from "@skyhook-io/k8s-ui";
 import { apiVersionToGroup } from "../../utils/navigation";
 import { parseLogLine } from "../../utils/log-format";
+import {
+  evidenceDisplaySnapshot,
+  groupEvidenceCoverage,
+  type EvidenceCoverageGroup,
+} from "./investigationEvidencePresentation";
 
 import {
-  investigationEvidenceGroupWithoutSources,
   investigationEvidenceSubjectRef,
   investigationEvidenceSourceDomId,
   type InvestigationEvidenceData,
   type InvestigationEvidenceGroup,
-  type InvestigationEvidenceLimitation,
   type InvestigationEvidenceObservation,
   type InvestigationEvidenceProjection,
   type InvestigationRootCauseEvidenceResolution,
@@ -58,7 +63,6 @@ import {
 import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 import { InvestigationResourceEvidence } from "./InvestigationResourceEvidence";
 import { investigationResourceEvidenceHasDetails } from "./investigationResourceEvidenceModel";
-import { prettyTool } from "./parts";
 import type { InvestigationSourceExcerpt } from "./investigationSourceFocus";
 import { evidenceSourceExcerpt } from "./investigationSourceFocus";
 import { Tooltip } from "../ui/Tooltip";
@@ -73,15 +77,14 @@ export {
   investigationDisclosureSettleDelay,
   investigationDisclosureScrollTop,
 } from "./useDisclosureReveal";
-export const VISIBLE_ADDITIONAL_KEY_EVIDENCE = 2;
-export const VISIBLE_SUPPORTING_SIGNALS = 3;
 export const VISIBLE_LOG_EVIDENCE_LINES = 12;
 
 const EvidenceNavigationContext = createContext<{
   onOpenResource?: (ref: DiagnosisResourceRef) => void;
   revealSourceId?: string;
   revealRequestId?: number;
-  citedGroupIds?: ReadonlySet<string>;
+  expandedGroupIds?: ReadonlySet<string>;
+  onGroupOpenChange?: (id: string, open: boolean) => void;
   citedOrderByGroup?: ReadonlyMap<string, number>;
 }>({});
 
@@ -111,66 +114,92 @@ export function investigationEvidenceFullRowFlags(
   return fullRow;
 }
 
+type EvidenceCollection = "main" | "workload" | "earlier";
+
+export function partitionInvestigationEvidence(
+  groups: InvestigationEvidenceGroup[],
+  resolution?: InvestigationRootCauseEvidenceResolution,
+) {
+  const selected = new Set(
+    resolution?.status === "linked"
+      ? resolution.links.map((link) => link.originalGroupId)
+      : [],
+  );
+  const collections: Record<EvidenceCollection, InvestigationEvidenceGroup[]> =
+    {
+      main: [],
+      workload: [],
+      earlier: [],
+    };
+  const collectionByGroup = new Map<string, EvidenceCollection>();
+  const adverse = (group: InvestigationEvidenceGroup) =>
+    ["error", "alert", "warning"].includes(group.latest.tone);
+  for (const group of groups) {
+    const broader = group.latest.relevance === "broader";
+    // Citations select tool results, not individual rows in a broad search.
+    // Only a focused, unambiguous fact can be promoted by a source citation.
+    if (broader) {
+      const link = resolution?.links.find(
+        (item) => item.originalGroupId === group.id,
+      );
+      const focused = ["resource", "logs", "crash"].includes(
+        group.latest.data.type,
+      );
+      const sourceGroups = link
+        ? groups.filter(
+            (candidate) =>
+              ["resource", "logs", "crash"].includes(
+                candidate.latest.data.type,
+              ) &&
+              candidate.observations.some(
+                (observation) => observation.source.id === link.source.id,
+              ),
+          )
+        : [];
+      if (!selected.has(group.id) || !focused || sourceGroups.length !== 1)
+        continue;
+    }
+    const main =
+      !group.historical &&
+      (selected.has(group.id) ||
+        (!broader &&
+          (group.latest.tier === "key" ||
+            (group.latest.tier === "supporting" && adverse(group)))));
+    const collection = main
+      ? "main"
+      : group.historical
+        ? "earlier"
+        : "workload";
+    collections[collection].push(group);
+    collectionByGroup.set(group.id, collection);
+  }
+  collections.main.sort(
+    (left, right) =>
+      Number(right.latest.tier === "key") -
+        Number(left.latest.tier === "key") ||
+      Number(adverse(right)) - Number(adverse(left)) ||
+      left.firstOrder - right.firstOrder,
+  );
+  return { ...collections, collectionByGroup };
+}
+
 export function investigationEvidenceRevealCollection(
   projection: InvestigationEvidenceProjection,
   sourceId: string,
-):
-  | "more-key"
-  | "more-supporting"
-  | "earlier"
-  | "context"
-  | "coverage"
-  | "checked"
-  | undefined {
+  partition = partitionInvestigationEvidence(projection.groups),
+): Exclude<EvidenceCollection, "main"> | "coverage" | undefined {
   const source = projection.sources.find((item) => item.id === sourceId);
-  if (source?.primaryGroupId) {
-    const primaryGroup = projection.groups.find(
-      (group) => group.id === source.primaryGroupId,
-    );
-    if (primaryGroup?.historical) return "earlier";
-    if (primaryGroup?.latest.tier === "context") return "context";
-    if (primaryGroup?.latest.tier === "checked") return "checked";
-    if (primaryGroup?.latest.tier === "key") {
-      const keyIndex = projection.groups
-        .filter((group) => !group.historical && group.latest.tier === "key")
-        .findIndex((group) => group.id === primaryGroup.id);
-      if (keyIndex > VISIBLE_ADDITIONAL_KEY_EVIDENCE) return "more-key";
-    }
-    if (primaryGroup?.latest.tier === "supporting") {
-      if (
-        visibleSupportingSignals(projection.groups).some(
-          (group) => group.id === primaryGroup.id,
-        )
-      )
-        return undefined;
-      return "more-supporting";
-    }
-    // One bundled tool call can fan out into several semantic groups. Its sole
-    // DOM anchor lives on the ranked primary group, so secondary Context or
-    // Earlier observations must not redirect disclosure navigation elsewhere.
-    return undefined;
-  }
+  const collection = source?.primaryGroupId
+    ? partition.collectionByGroup.get(source.primaryGroupId)
+    : undefined;
+  if (collection) return collection === "main" ? undefined : collection;
   if (
     projection.limitations.some((limitation) =>
       limitation.sources.some((source) => source.id === sourceId),
     )
-  ) {
+  )
     return "coverage";
-  }
   return undefined;
-}
-
-function visibleSupportingSignals(
-  groups: InvestigationEvidenceGroup[],
-): InvestigationEvidenceGroup[] {
-  return groups
-    .filter(
-      (group) =>
-        !group.historical &&
-        group.latest.tier === "supporting" &&
-        ["error", "alert", "warning"].includes(group.latest.tone),
-    )
-    .slice(0, VISIBLE_SUPPORTING_SIGNALS);
 }
 
 export function InvestigationEvidencePane({
@@ -204,100 +233,35 @@ export function InvestigationEvidencePane({
   revealRequest?: { sourceId: string; requestId: number };
   onRevealReady?: (sourceId: string) => void;
 }) {
+  const [expandedGroupIds, setExpandedGroupIds] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
+  const onGroupOpenChange = useCallback((id: string, open: boolean) => {
+    setExpandedGroupIds((previous) => {
+      if (previous.has(id) === open) return previous;
+      const next = new Set(previous);
+      if (open) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
   const [coverageOpen, setCoverageOpen] = useState(false);
-  const [moreKeyOpen, setMoreKeyOpen] = useState(false);
-  const [moreSupportingOpen, setMoreSupportingOpen] = useState(false);
+  const [workloadOpen, setWorkloadOpen] = useState(false);
   const [earlierOpen, setEarlierOpen] = useState(false);
-  const [contextOpen, setContextOpen] = useState(false);
-  const [checkedOpen, setCheckedOpen] = useState(false);
-  const [citedSourcesOpen, setCitedSourcesOpen] = useState(false);
   const handledRevealRequestRef = useRef<number | undefined>(undefined);
   const openingForRevealRequestRef = useRef<number | undefined>(undefined);
-  const tiers = new Map<
-    InvestigationEvidenceTier,
-    InvestigationEvidenceGroup[]
-  >([
-    ["key", []],
-    ["supporting", []],
-    ["context", []],
-    ["checked", []],
-  ]);
-  const promotedSourceIds = new Set(
-    rootCauseEvidence?.links.flatMap((link) => [
-      link.source.id,
-      ...(link.group?.observations
-        .filter(
-          (observation) => observation.source.primaryGroupId === link.group!.id,
-        )
-        .map((observation) => observation.source.id) ?? []),
-    ]) ?? [],
+  const partition = partitionInvestigationEvidence(
+    projection.groups,
+    rootCauseEvidence,
   );
-  const promotedSourcesByGroup = new Map<string, Set<string>>();
-  for (const link of rootCauseEvidence?.links ?? []) {
-    if (!link.originalGroupId) continue;
-    const sourceIds =
-      promotedSourcesByGroup.get(link.originalGroupId) ?? new Set();
-    sourceIds.add(link.source.id);
-    for (const observation of link.group?.observations ?? [])
-      sourceIds.add(observation.source.id);
-    promotedSourcesByGroup.set(link.originalGroupId, sourceIds);
-  }
-  const historical: InvestigationEvidenceGroup[] = [];
-  const ordinaryGroups: InvestigationEvidenceGroup[] = [];
-  const relocatedSourceIds = new Set<string>();
-  for (const group of projection.groups) {
-    const excludedSources = promotedSourcesByGroup.get(group.id);
-    const ordinaryGroup = excludedSources
-      ? investigationEvidenceGroupWithoutSources(group, excludedSources)
-      : group;
-    if (!ordinaryGroup) {
-      // A terminal assessment can promote an already-rendered card without a
-      // new evidence revision. Retain that card's DOM id at its new location so
-      // InvestigationView's existing layout anchor can keep the reader's scroll
-      // position stable. Shared groups are split rather than relocated and keep
-      // separate ids to avoid duplicate DOM anchors.
-      // A bundled check can theoretically cite multiple revisions that shared
-      // one card. Only one destination may inherit the old id.
-      const owner = rootCauseEvidence?.links.find(
-        (link) => link.originalGroupId === group.id,
-      );
-      if (owner) relocatedSourceIds.add(owner.source.id);
-      continue;
-    }
-    ordinaryGroups.push(ordinaryGroup);
-    if (ordinaryGroup.historical) historical.push(ordinaryGroup);
-    else tiers.get(ordinaryGroup.latest.tier)!.push(ordinaryGroup);
-  }
   const hasCurrentEvidence =
-    rootCauseEvidence?.links.some((link) => Boolean(link.group)) === true ||
-    projection.groups.some((group) => !group.historical);
-  const hasStructuredCitedEvidence =
-    rootCauseEvidence?.status === "linked" &&
-    rootCauseEvidence.links.some((link) => Boolean(link.group));
-  const keyGroups = tiers.get("key")!;
-  const visibleKeyGroups = keyGroups.slice(
-    0,
-    1 + VISIBLE_ADDITIONAL_KEY_EVIDENCE,
-  );
-  const overflowKeyGroups = keyGroups.slice(
-    1 + VISIBLE_ADDITIONAL_KEY_EVIDENCE,
-  );
-  const supportingGroups = tiers.get("supporting")!;
-  const visibleSupportingGroups = visibleSupportingSignals(supportingGroups);
-  const remainingSupportingGroups = supportingGroups.filter(
-    (group) => !visibleSupportingGroups.includes(group),
-  );
+    partition.main.length + partition.workload.length > 0;
   const revealCollection = revealRequest
-    ? promotedSourceIds.has(revealRequest.sourceId)
-      ? rootCauseEvidence?.links.some(
-          (link) => link.source.id === revealRequest.sourceId && !link.group,
-        )
-        ? "cited-sources"
-        : undefined
-      : investigationEvidenceRevealCollection(
-          { ...projection, groups: ordinaryGroups },
-          revealRequest.sourceId,
-        )
+    ? investigationEvidenceRevealCollection(
+        projection,
+        revealRequest.sourceId,
+        partition,
+      )
     : undefined;
 
   // A source link is a navigation request, not a disclosure preference. Open
@@ -311,14 +275,12 @@ export function InvestigationEvidencePane({
       return;
     }
     const { sourceId, requestId } = revealRequest;
-    if (revealCollection === "checked" && !checkedOpen) {
+    if (
+      (revealCollection === "workload" || revealCollection === "earlier") &&
+      !workloadOpen
+    ) {
       openingForRevealRequestRef.current = requestId;
-      setCheckedOpen(true);
-      return;
-    }
-    if (revealCollection === "cited-sources" && !citedSourcesOpen) {
-      openingForRevealRequestRef.current = requestId;
-      setCitedSourcesOpen(true);
+      setWorkloadOpen(true);
       return;
     }
     if (revealCollection === "earlier" && !earlierOpen) {
@@ -326,27 +288,11 @@ export function InvestigationEvidencePane({
       setEarlierOpen(true);
       return;
     }
-    if (revealCollection === "context" && !contextOpen) {
-      openingForRevealRequestRef.current = requestId;
-      setContextOpen(true);
-      return;
-    }
     if (revealCollection === "coverage" && !coverageOpen) {
       openingForRevealRequestRef.current = requestId;
       setCoverageOpen(true);
       return;
     }
-    if (revealCollection === "more-key" && !moreKeyOpen) {
-      openingForRevealRequestRef.current = requestId;
-      setMoreKeyOpen(true);
-      return;
-    }
-    if (revealCollection === "more-supporting" && !moreSupportingOpen) {
-      openingForRevealRequestRef.current = requestId;
-      setMoreSupportingOpen(true);
-      return;
-    }
-
     const finishReveal = () => {
       if (handledRevealRequestRef.current === requestId) return;
       handledRevealRequestRef.current = requestId;
@@ -374,26 +320,14 @@ export function InvestigationEvidencePane({
     revealCollection,
     onRevealReady,
     earlierOpen,
-    contextOpen,
     coverageOpen,
-    moreKeyOpen,
-    moreSupportingOpen,
-    checkedOpen,
-    citedSourcesOpen,
+    workloadOpen,
   ]);
 
-  const limitationSummary =
-    [...projection.limitations]
-      // Keep an actual failed read visible when the strip signals an error.
-      // Detailed provenance below stays in collection order.
-      .sort(
-        (left, right) =>
-          Number(right.kind === "error") - Number(left.kind === "error"),
-      )
-      .slice(0, 2)
-      .map((limitation) => `${limitation.source}: ${limitation.message}`)
-      .join(" · ") +
-    (projection.limitations.length > 2 ? " · More limitations in details" : "");
+  const coverageGroups = groupEvidenceCoverage(projection.limitations);
+  const limitationSummary = coverageGroups
+    .map((group) => `${group.label}: ${group.summary}`)
+    .join(" · ");
   const content = (
     <section
       aria-labelledby="investigation-radar-evidence"
@@ -425,9 +359,9 @@ export function InvestigationEvidencePane({
 
       {projection.limitations.length > 0 ? (
         <CoverageStrip
-          limitations={projection.limitations}
+          groups={coverageGroups}
+          visibleGroupIds={new Set(partition.collectionByGroup.keys())}
           summary={limitationSummary}
-          excludedSourceIds={promotedSourceIds}
           onViewSource={onViewSource}
           open={coverageOpen}
           onOpenChange={setCoverageOpen}
@@ -435,99 +369,55 @@ export function InvestigationEvidencePane({
       ) : null}
 
       <div className="space-y-4">
-        {hasStructuredCitedEvidence ? (
-          <h3 className="text-sm font-medium text-theme-text-secondary">
-            Cited by the agent
-          </h3>
-        ) : null}
-        {rootCauseEvidence ? (
-          <RootCauseEvidenceLinks
+        {rootCauseEvidence && rootCauseEvidence.status !== "linked" ? (
+          <AssessmentEvidenceQualification
             resolution={rootCauseEvidence}
-            relocatedSourceIds={relocatedSourceIds}
-            animateGroupIds={animateGroupIds}
-            onViewSource={onViewSource}
             onViewActivity={onViewActivity}
-            sourcesOpen={citedSourcesOpen}
-            onSourcesOpenChange={setCitedSourcesOpen}
           />
         ) : null}
 
-        <EvidenceTier
-          headingId="investigation-key-evidence-heading"
-          tier="key"
-          title="Critical evidence"
-          groups={visibleKeyGroups}
-          expandFirst={!hasStructuredCitedEvidence}
-          animateGroupIds={animateGroupIds}
-          onViewSource={onViewSource}
-        />
-        <CollapsedEvidenceCollection
-          id="investigation-more-key-evidence"
-          title="More critical evidence"
-          description="Additional high-severity failures"
-          groups={overflowKeyGroups}
-          animateGroupIds={animateGroupIds}
-          onViewSource={onViewSource}
-          open={moreKeyOpen}
-          onOpenChange={setMoreKeyOpen}
-        />
+        <div className="grid items-start gap-2.5">
+          {partition.main.map((group) => (
+            <EvidenceCard
+              key={group.id}
+              group={group}
+              spanFullRow
+              animateArrival={animateGroupIds.has(group.id)}
+              onViewSource={onViewSource}
+            />
+          ))}
+        </div>
 
-        {!hasCurrentEvidence && !rootCauseEvidence?.links.length ? (
+        {!hasCurrentEvidence ? (
           <EmptyCollection
             collecting={collecting}
-            hasEarlierEvidence={historical.length > 0}
+            hasEarlierEvidence={partition.earlier.length > 0}
             onViewActivity={onViewActivity}
           />
         ) : null}
 
-        <EvidenceTier
-          headingId="investigation-supporting-signals"
-          tier="supporting"
-          title="Signals to review"
-          groups={visibleSupportingGroups}
-          expandFirst={false}
-          animateGroupIds={animateGroupIds}
-          onViewSource={onViewSource}
-        />
         <CollapsedEvidenceCollection
-          id="investigation-more-supporting-evidence"
-          title="Supporting evidence"
-          description="Additional observations about this workload"
-          groups={remainingSupportingGroups}
-          expandCards
+          id="investigation-workload-evidence"
+          title="More evidence about this workload"
+          description=""
+          groups={partition.workload}
+          totalCount={partition.workload.length + partition.earlier.length}
           animateGroupIds={animateGroupIds}
           onViewSource={onViewSource}
-          open={moreSupportingOpen}
-          onOpenChange={setMoreSupportingOpen}
-        />
-
-        <CheckedReceipts
-          groups={tiers.get("checked")!}
-          animateGroupIds={animateGroupIds}
-          onViewSource={onViewSource}
-          open={checkedOpen}
-          onOpenChange={setCheckedOpen}
-        />
-        <CollapsedEvidenceCollection
-          id="investigation-earlier-evidence"
-          title="Earlier evidence"
-          description="Retained for comparison; earlier does not mean resolved."
-          groups={historical}
-          animateGroupIds={animateGroupIds}
-          onViewSource={onViewSource}
-          open={earlierOpen}
-          onOpenChange={setEarlierOpen}
-        />
-        <CollapsedEvidenceCollection
-          id="investigation-context-evidence"
-          title="Context"
-          description="Broader-scope signals and direct relationships"
-          groups={tiers.get("context")!}
-          animateGroupIds={animateGroupIds}
-          onViewSource={onViewSource}
-          open={contextOpen}
-          onOpenChange={setContextOpen}
-        />
+          open={workloadOpen}
+          onOpenChange={setWorkloadOpen}
+        >
+          <CollapsedEvidenceCollection
+            id="investigation-earlier-evidence"
+            title="Previous observations"
+            description="Earlier does not mean resolved."
+            groups={partition.earlier}
+            animateGroupIds={animateGroupIds}
+            onViewSource={onViewSource}
+            open={earlierOpen}
+            onOpenChange={setEarlierOpen}
+          />
+        </CollapsedEvidenceCollection>
       </div>
     </section>
   );
@@ -536,13 +426,10 @@ export function InvestigationEvidencePane({
     <EvidenceNavigationContext.Provider
       value={{
         onOpenResource,
+        expandedGroupIds,
+        onGroupOpenChange,
         revealSourceId: revealRequest?.sourceId,
         revealRequestId: revealRequest?.requestId,
-        citedGroupIds: new Set(
-          rootCauseEvidence?.links.flatMap((link) =>
-            link.group ? [link.group.id] : [],
-          ) ?? [],
-        ),
         citedOrderByGroup: new Map(
           rootCauseEvidence?.links.flatMap((link) =>
             link.originalGroupId
@@ -558,159 +445,40 @@ export function InvestigationEvidencePane({
   );
 }
 
-function RootCauseEvidenceLinks({
+function AssessmentEvidenceQualification({
   resolution,
-  relocatedSourceIds,
-  animateGroupIds,
-  onViewSource,
   onViewActivity,
-  sourcesOpen,
-  onSourcesOpenChange,
 }: {
   resolution: InvestigationRootCauseEvidenceResolution;
-  relocatedSourceIds: ReadonlySet<string>;
-  animateGroupIds: ReadonlySet<string>;
-  onViewSource: (
-    sourceId: string,
-    excerpt?: InvestigationSourceExcerpt,
-  ) => void;
   onViewActivity: () => void;
-  sourcesOpen: boolean;
-  onSourcesOpenChange: (open: boolean) => void;
 }) {
-  const { elementRef, revealAfterToggle } =
-    useDisclosureReveal<HTMLDivElement>();
-  if (resolution.status !== "linked") {
-    return (
-      <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2.5">
-        <AlertTriangle
-          className="mt-0.5 h-4 w-4 shrink-0 text-amber-500"
-          aria-hidden
-        />
-        <div className="min-w-0 flex-1">
-          <p className="text-xs font-medium text-theme-text-primary">
-            {resolution.status === "invalid"
-              ? "Assessment references could not be matched"
-              : "Assessment does not cite specific Radar evidence"}
-          </p>
-          <p className="mt-0.5 text-xs leading-relaxed text-theme-text-tertiary">
-            {resolution.status === "invalid"
-              ? "Radar could not match the assessment’s references to this investigation. Review Activity before acting."
-              : "Review Activity and the Radar evidence below before acting on the agent’s conclusion."}
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onViewActivity}
-          className="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-        >
-          View Activity
-        </button>
-      </div>
-    );
-  }
-
-  const structuredLinks = resolution.links.filter((link) => link.group);
-  const activityOnlyLinks = resolution.links.filter((link) => !link.group);
-
   return (
-    <div className="space-y-2.5">
-      {structuredLinks.map((link, index) => (
-        <EvidenceCard
-          key={link.source.id}
-          group={link.group!}
-          domId={
-            link.originalGroupId && relocatedSourceIds.has(link.source.id)
-              ? link.originalGroupId
-              : undefined
-          }
-          initiallyOpen={index === 0 && link.group!.latest.tier === "key"}
-          animateArrival={
-            Boolean(link.originalGroupId) &&
-            animateGroupIds.has(link.originalGroupId!)
-          }
-          onViewSource={onViewSource}
-        />
-      ))}
-      {activityOnlyLinks.length > 0 ? (
-        <div
-          ref={elementRef}
-          className="rounded-lg border border-theme-border bg-theme-surface"
-        >
-          <button
-            type="button"
-            aria-expanded={sourcesOpen}
-            aria-controls="investigation-cited-sources"
-            onClick={() => {
-              onSourcesOpenChange(!sourcesOpen);
-              revealAfterToggle(!sourcesOpen);
-            }}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-theme-text-secondary hover:bg-theme-hover/50"
-          >
-            <Activity className="h-3.5 w-3.5" aria-hidden />
-            <span className="flex-1 font-medium">
-              {structuredLinks.length > 0
-                ? "Other cited sources"
-                : "Cited sources in Activity"}{" "}
-              · {activityOnlyLinks.length}
-            </span>
-            <CollapseChevron open={sourcesOpen} className="h-4 w-4" />
-          </button>
-          <div id="investigation-cited-sources">
-            <Collapse open={sourcesOpen}>
-              <div className="space-y-2 border-t border-theme-border px-3 py-2">
-                <p className="text-xs text-theme-text-secondary">
-                  The agent used these results in its assessment. Open the
-                  original results in Activity to inspect them.
-                </p>
-                {activityOnlyLinks.map((link) => (
-                  <button
-                    key={link.source.id}
-                    type="button"
-                    id={investigationEvidenceSourceDomId(link.source.id)}
-                    data-evidence-card
-                    aria-label={`View cited ${prettyTool(link.source.tool)} result in Activity`}
-                    onClick={() => onViewSource(link.source.id)}
-                    className="flex w-full min-w-0 items-start gap-2 rounded-md p-1 text-left text-xs text-accent-text outline-none hover:bg-theme-hover focus-visible:ring-2 focus-visible:ring-accent/50"
-                  >
-                    <span className="min-w-0 flex-1">
-                      <span className="block font-medium">
-                        {prettyTool(link.source.tool)}
-                      </span>
-                      <CitedSourceScope source={link.source} />
-                    </span>
-                    <span className="shrink-0">View in Activity</span>
-                  </button>
-                ))}
-              </div>
-            </Collapse>
-          </div>
-        </div>
-      ) : null}
+    <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2.5">
+      <AlertTriangle
+        className="mt-0.5 h-4 w-4 shrink-0 text-amber-500"
+        aria-hidden
+      />
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-medium text-theme-text-primary">
+          {resolution.status === "invalid"
+            ? "Assessment references could not be matched"
+            : "Assessment does not cite specific Radar evidence"}
+        </p>
+        <p className="mt-0.5 text-xs leading-relaxed text-theme-text-tertiary">
+          {resolution.status === "invalid"
+            ? "Radar could not match the assessment’s references to this investigation. Review Activity before acting."
+            : "Review Activity and the Radar evidence below before acting on the agent’s conclusion."}
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onViewActivity}
+        className="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      >
+        View Activity
+      </button>
     </div>
   );
-}
-
-function CitedSourceScope({ source }: { source: InvestigationEvidenceSource }) {
-  let input: unknown;
-  try {
-    input = JSON.parse(source.args ?? "");
-  } catch {
-    return null;
-  }
-  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
-  const args = input as Record<string, unknown>;
-  const fields = ["query", "kind", "namespace", "name", "filter"].flatMap(
-    (key) =>
-      typeof args[key] === "string" && args[key].trim()
-        ? [`${key === "query" ? "" : `${key}: `}${args[key]}`]
-        : [],
-  );
-  return fields.length > 0 ? (
-    <span className="mt-0.5 block break-words text-theme-text-secondary [overflow-wrap:anywhere]">
-      {fields.join(" · ")}
-    </span>
-  ) : null;
 }
 
 function EmptyCollection({
@@ -737,7 +505,7 @@ function EmptyCollection({
           ? "Evidence will appear here"
           : hasEarlierEvidence
             ? "No current evidence was captured during verification"
-            : "No evidence could be summarized here"}
+            : "No relevant evidence to show yet"}
       </p>
       <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-theme-text-tertiary">
         {collecting
@@ -766,7 +534,8 @@ function CollapsedEvidenceCollection({
   onViewSource,
   open,
   onOpenChange,
-  expandCards = false,
+  totalCount = groups.length,
+  children,
 }: {
   id: string;
   title: string;
@@ -779,19 +548,14 @@ function CollapsedEvidenceCollection({
   ) => void;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  expandCards?: boolean;
+  totalCount?: number;
+  children?: ReactNode;
 }) {
   const { elementRef, revealAfterToggle } = useDisclosureReveal<HTMLElement>();
-  if (groups.length === 0) return null;
+  if (totalCount === 0) return null;
   const fullRowFlags = investigationEvidenceFullRowFlags(
     groups.map((group) => group.latest.data.type),
   );
-  const attentionCount = groups.filter(
-    (group) =>
-      !group.historical &&
-      group.latest.tier !== "context" &&
-      ["error", "alert", "warning"].includes(group.latest.tone),
-  ).length;
   return (
     <section
       ref={elementRef}
@@ -802,41 +566,46 @@ function CollapsedEvidenceCollection({
         aria-expanded={open}
         aria-controls={id}
         onClick={() => {
-          const opening = !open;
-          onOpenChange(opening);
-          revealAfterToggle(opening);
+          onOpenChange(!open);
+          revealAfterToggle(!open);
         }}
-        className="flex w-full min-w-0 items-center gap-2 px-3 py-2.5 text-left hover:bg-theme-hover/60"
+        className="flex w-full min-w-0 items-center gap-2 px-3 py-2.5 text-left hover:bg-theme-hover/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
       >
         <span className="min-w-0 flex-1">
           <span className="block text-xs font-semibold text-theme-text-secondary">
             {title}
           </span>
-          <span className="block truncate text-xs text-theme-text-tertiary">
-            {attentionCount > 0
-              ? `${attentionCount} ${attentionCount === 1 ? "signal needs" : "signals need"} review · ${description}`
-              : description}
-          </span>
+          {description ? (
+            <span className="block text-xs text-theme-text-tertiary">
+              {description}
+            </span>
+          ) : null}
         </span>
         <span className="shrink-0 font-mono text-xs text-theme-text-tertiary">
-          {groups.length}
+          {totalCount}
         </span>
         <CollapseChevron open={open} className="h-4 w-4" />
       </button>
       <div id={id}>
         <Collapse open={open}>
-          <div className="grid gap-2 border-t border-theme-border/60 p-2.5 @min-[760px]/evidence:grid-cols-2">
+          <div
+            className={clsx(
+              "grid items-start gap-2.5 @min-[760px]/evidence:grid-cols-2",
+              "border-t border-theme-border/60 p-2.5",
+            )}
+          >
             {groups.map((group, index) => (
               <EvidenceCard
                 key={group.id}
                 group={group}
-                initiallyOpen={expandCards}
+
                 animateArrival={animateGroupIds.has(group.id)}
                 onViewSource={onViewSource}
                 spanFullRow={fullRowFlags[index]}
                 prominence="secondary"
               />
             ))}
+            {children ? <div className="col-span-full">{children}</div> : null}
           </div>
         </Collapse>
       </div>
@@ -845,17 +614,16 @@ function CollapsedEvidenceCollection({
 }
 
 function CoverageStrip({
-  limitations,
+  groups,
+  visibleGroupIds,
   summary,
-  excludedSourceIds,
   onViewSource,
   open,
   onOpenChange,
 }: {
-  limitations: InvestigationEvidenceLimitation[];
+  groups: EvidenceCoverageGroup[];
+  visibleGroupIds: ReadonlySet<string>;
   summary: string;
-  /** Sources promoted above already own the page's sole navigation anchor. */
-  excludedSourceIds: ReadonlySet<string>;
   onViewSource: (
     sourceId: string,
     excerpt?: InvestigationSourceExcerpt,
@@ -863,18 +631,12 @@ function CoverageStrip({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const hasError = limitations.some((item) => item.kind === "error");
+  const hasError = groups.some((group) => group.hasError);
+  const historyOnly = groups.every((group) => group.historyOnly);
   const { elementRef, revealAfterToggle } =
     useDisclosureReveal<HTMLDivElement>();
   const regionId = "investigation-evidence-coverage";
-  const anchorLimitationBySource = new Map<string, number>();
-  limitations.forEach((limitation, index) => {
-    for (const source of limitation.sources) {
-      if (!anchorLimitationBySource.has(source.id)) {
-        anchorLimitationBySource.set(source.id, index);
-      }
-    }
-  });
+  const anchoredSources = new Set<string>();
   return (
     <div
       ref={elementRef}
@@ -885,13 +647,17 @@ function CoverageStrip({
         aria-expanded={open}
         aria-controls={regionId}
         onClick={() => {
-          const opening = !open;
-          onOpenChange(opening);
-          revealAfterToggle(opening);
+          onOpenChange(!open);
+          revealAfterToggle(!open);
         }}
         className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left hover:bg-theme-hover/50"
       >
-        {hasError ? (
+        {historyOnly ? (
+          <Info
+            className="h-4 w-4 shrink-0 text-theme-text-tertiary"
+            aria-hidden
+          />
+        ) : hasError ? (
           <CircleAlert className="h-4 w-4 shrink-0 text-red-400" aria-hidden />
         ) : (
           <AlertTriangle
@@ -900,41 +666,128 @@ function CoverageStrip({
           />
         )}
         <span className="min-w-0 flex-1">
-          <span className="block text-xs font-semibold text-theme-text-primary">
-            Evidence coverage is incomplete
+          <span
+            className={clsx(
+              "block text-xs",
+              historyOnly
+                ? "font-medium text-theme-text-secondary"
+                : "font-semibold text-theme-text-primary",
+            )}
+          >
+            {historyOnly
+              ? "Change history is limited"
+              : "Evidence coverage is incomplete"}
           </span>
-          <span className="line-clamp-2 text-xs text-theme-text-tertiary [overflow-wrap:anywhere]">
-            {summary}
-          </span>
+          {!historyOnly && !open ? (
+            <span className="line-clamp-2 text-xs text-theme-text-tertiary [overflow-wrap:anywhere]">
+              {summary}
+            </span>
+          ) : null}
         </span>
         <CollapseChevron open={open} className="h-4 w-4" />
       </button>
       <div id={regionId}>
         <Collapse open={open}>
-          <ul className="space-y-2 border-t border-theme-border/60 px-3 py-2.5">
-            {limitations.map((limitation, index) => (
-              <li
-                key={`${limitation.kind}-${limitation.source}-${limitation.message}-${index}`}
-                data-evidence-source-container
-                tabIndex={-1}
-                aria-label={`Evidence limitation for ${limitation.source}: ${limitation.message}`}
-                className="flex min-w-0 items-start gap-2 rounded-md text-xs outline-none focus:relative focus:z-10 focus:ring-2 focus:ring-accent/40"
-              >
-                {limitation.sources
-                  .filter(
-                    (source) =>
-                      !source.primaryGroupId &&
-                      !excludedSourceIds.has(source.id) &&
-                      anchorLimitationBySource.get(source.id) === index,
+          <div className="divide-y divide-theme-border/60 border-t border-theme-border/60">
+            {groups.map((group) => {
+              const sourceIds = group.limitations
+                .flatMap((item) => item.sources)
+                .filter((source) => {
+                  if (
+                    (source.primaryGroupId &&
+                      visibleGroupIds.has(source.primaryGroupId)) ||
+                    anchoredSources.has(source.id)
                   )
-                  .map((source) => (
-                    <span
-                      key={source.id}
-                      id={investigationEvidenceSourceDomId(source.id)}
-                      className="sr-only scroll-mt-14"
-                      aria-hidden
-                    />
-                  ))}
+                    return false;
+                  anchoredSources.add(source.id);
+                  return true;
+                })
+                .map((source) => source.id);
+              return (
+                <CoverageGroupRow
+                  key={group.label}
+                  group={group}
+                  sourceIds={sourceIds}
+                  onViewSource={onViewSource}
+                />
+              );
+            })}
+          </div>
+        </Collapse>
+      </div>
+    </div>
+  );
+}
+
+function CoverageGroupRow({
+  group,
+  sourceIds,
+  onViewSource,
+}: {
+  group: EvidenceCoverageGroup;
+  sourceIds: string[];
+  onViewSource: (
+    sourceId: string,
+    excerpt?: InvestigationSourceExcerpt,
+  ) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const regionId = useId();
+  const { elementRef, revealAfterToggle } =
+    useDisclosureReveal<HTMLDivElement>();
+  return (
+    <div
+      ref={elementRef}
+      data-evidence-source-container
+      tabIndex={-1}
+      aria-label={`Evidence limitation for ${group.label}: ${group.summary}`}
+      className="outline-none focus:ring-2 focus:ring-accent/40"
+    >
+      {sourceIds.map((id) => (
+        <span
+          key={id}
+          id={investigationEvidenceSourceDomId(id)}
+          className="sr-only scroll-mt-14"
+          aria-hidden
+        />
+      ))}
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={regionId}
+        onClick={() => {
+          setOpen(!open);
+          revealAfterToggle(!open);
+        }}
+        className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-xs hover:bg-theme-hover/50"
+      >
+        {group.hasError ? (
+          <CircleAlert
+            className="h-3.5 w-3.5 shrink-0 text-red-400"
+            aria-hidden
+          />
+        ) : (
+          <Info
+            className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary"
+            aria-hidden
+          />
+        )}
+        <span className="min-w-0 flex-1 leading-relaxed text-theme-text-secondary">
+          <span className="font-medium text-theme-text-primary">
+            {group.label}:{" "}
+          </span>
+          {group.summary}
+        </span>
+        <CollapseChevron open={open} className="h-3.5 w-3.5 shrink-0" />
+      </button>
+      <div id={regionId}>
+        <Collapse open={open}>
+          <ul className="space-y-2 border-t border-theme-border/60 px-3 py-2.5">
+            {group.limitations.map((limitation, index) => (
+              <li
+                key={index}
+                className="flex min-w-0 items-start gap-2 text-xs"
+              >
                 {limitation.kind === "error" ? (
                   <CircleAlert
                     className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400"
@@ -977,103 +830,48 @@ function CoverageStrip({
   );
 }
 
-function EvidenceTier({
-  headingId,
-  tier,
-  title,
-  groups,
-  expandFirst = true,
-  animateGroupIds,
-  onViewSource,
-}: {
-  headingId: string;
-  tier: Exclude<InvestigationEvidenceTier, "checked">;
-  title: string;
-  groups: InvestigationEvidenceGroup[];
-  expandFirst?: boolean;
-  animateGroupIds: ReadonlySet<string>;
-  onViewSource: (
-    sourceId: string,
-    excerpt?: InvestigationSourceExcerpt,
-  ) => void;
-}) {
-  if (groups.length === 0) return null;
-  const fullRowFlags =
-    tier === "supporting"
-      ? investigationEvidenceFullRowFlags(
-          groups.map((group) => group.latest.data.type),
-        )
-      : [];
-  return (
-    <section aria-labelledby={headingId}>
-      <div className="mb-2 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3
-            id={headingId}
-            className="text-sm font-medium text-theme-text-secondary"
-          >
-            {title}
-          </h3>
-        </div>
-        <span className="font-mono text-xs text-theme-text-tertiary">
-          {groups.length}
-        </span>
-      </div>
-      <div
-        className={clsx(
-          "grid gap-2.5",
-          tier === "supporting" && "@min-[760px]/evidence:grid-cols-2",
-        )}
-      >
-        {groups.map((group, index) => (
-          <EvidenceCard
-            key={group.id}
-            group={group}
-            initiallyOpen={tier === "key" && expandFirst && index === 0}
-            animateArrival={animateGroupIds.has(group.id)}
-            onViewSource={onViewSource}
-            spanFullRow={fullRowFlags[index]}
-            prominence={tier === "key" ? "primary" : "supporting"}
-          />
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function investigationEvidenceHasMeaningfulHistory(
-  observations: InvestigationEvidenceObservation[],
-): boolean {
-  if (observations.length < 2) return false;
-  const firstRelevance = observations[0].relevance;
-  return observations
-    .slice(1)
-    .some(
-      (observation) =>
-        observation.changedFromPrevious ||
-        observation.relevance !== firstRelevance,
-    );
+function previousDifferentObservations(
+  group: InvestigationEvidenceGroup,
+  citedOrder?: number,
+) {
+  const seen = new Set([evidenceDisplaySnapshot(group.latest)]);
+  return [...group.observations].reverse().filter((observation) => {
+    if (
+      observation.source.order !== citedOrder &&
+      group.observations.some(
+        (other) =>
+          other.source.order === citedOrder &&
+          evidenceDisplaySnapshot(other) ===
+            evidenceDisplaySnapshot(observation),
+      )
+    )
+      return false;
+    const snapshot = evidenceDisplaySnapshot(observation);
+    if (seen.has(snapshot)) return false;
+    seen.add(snapshot);
+    return true;
+  });
 }
 
 export function investigationEvidenceShouldRevealHistory(
   group: InvestigationEvidenceGroup,
   sourceId?: string,
-  cited = false,
 ): boolean {
   return (
     Boolean(sourceId) &&
     group.latest.source.id !== sourceId &&
     group.observations.some(
-      (observation) => observation.source.id === sourceId,
-    ) &&
-    (cited || investigationEvidenceHasMeaningfulHistory(group.observations))
+      (observation) =>
+        observation.source.id === sourceId &&
+        evidenceDisplaySnapshot(observation) !==
+          evidenceDisplaySnapshot(group.latest),
+    )
   );
 }
 
 function EvidenceCard({
   group,
   domId = group.id,
-  initiallyOpen,
   animateArrival,
   onViewSource,
   spanFullRow = false,
@@ -1082,7 +880,6 @@ function EvidenceCard({
   group: InvestigationEvidenceGroup;
   /** Stable layout/scroll identity when an existing card changes section. */
   domId?: string;
-  initiallyOpen: boolean;
   animateArrival: boolean;
   onViewSource: (
     sourceId: string,
@@ -1096,21 +893,31 @@ function EvidenceCard({
     onOpenResource,
     revealSourceId,
     revealRequestId,
-    citedGroupIds,
     citedOrderByGroup,
+    expandedGroupIds,
+    onGroupOpenChange,
   } = useContext(EvidenceNavigationContext);
-  const [open, setOpen] = useState(initiallyOpen);
+  const open = expandedGroupIds?.has(group.id) ?? false;
+  const setOpen = useCallback(
+    (value: boolean) => onGroupOpenChange?.(group.id, value),
+    [onGroupOpenChange, group.id],
+  );
   const { elementRef, revealAfterToggle } = useDisclosureReveal<HTMLElement>();
   const observation = group.latest;
   const displaySummary =
     observation.data.type === "crash" && observation.summary
       ? parseLogLine(observation.summary).content
       : observation.summary;
-  const meaningfulHistory =
-    investigationEvidenceHasMeaningfulHistory(group.observations) ||
-    (citedGroupIds?.has(group.id) === true &&
-      new Set(group.observations.map((item) => item.source.id)).size > 1);
   const citedOrder = citedOrderByGroup?.get(group.id);
+  const previousObservations = previousDifferentObservations(group, citedOrder);
+  const meaningfulHistory = previousObservations.length > 0;
+  const citedObservation = group.observations.find(
+    (item) => item.source.order === citedOrder,
+  );
+  const differsFromAssessment =
+    citedObservation &&
+    evidenceDisplaySnapshot(citedObservation) !==
+      evidenceDisplaySnapshot(observation);
   const bodyId = `${domId}-body`;
   const hasEvidenceDetails = evidenceHasDetails(
     observation.data,
@@ -1120,7 +927,6 @@ function EvidenceCard({
   const revealHistory = investigationEvidenceShouldRevealHistory(
     group,
     revealSourceId,
-    citedGroupIds?.has(group.id),
   );
   useLayoutEffect(() => {
     const destination = revealSourceId
@@ -1133,9 +939,12 @@ function EvidenceCard({
       (destination && elementRef.current?.contains(destination))
     )
       setOpen(true);
-  }, [revealHistory, revealSourceId, revealRequestId, elementRef]);
+  }, [revealHistory, revealSourceId, revealRequestId, elementRef, setOpen]);
   const wide = spanFullRow || evidenceTypePrefersFullRow(observation.data.type);
   const resourceRef = investigationEvidenceSubjectRef(observation.data);
+  const resourceIdentity = resourceRef
+    ? `${resourceRef.namespace ? `${resourceRef.namespace}/` : ""}${resourceRef.name}`
+    : undefined;
   const primarySources = uniquePrimarySources(group);
   const inlineSecretKeys =
     observation.data.type === "resource" &&
@@ -1149,16 +958,15 @@ function EvidenceCard({
           <span className="text-sm font-semibold leading-snug text-theme-text-primary">
             {observation.title}
           </span>
-          {observation.changedFromPrevious ? (
-            <Badge
-              tone="note"
-              size="sm"
-              title="Changed since the previous observation"
-            >
-              changed
-            </Badge>
-          ) : null}
         </span>
+        {observation.relevance === "broader" &&
+        resourceRef &&
+        resourceIdentity &&
+        !observation.title.includes(resourceIdentity) ? (
+          <span className="mt-0.5 block text-xs text-theme-text-secondary">
+            {resourceIdentity} · {resourceRef.kind}
+          </span>
+        ) : null}
         {displaySummary ? (
           <span
             className={clsx(
@@ -1170,11 +978,17 @@ function EvidenceCard({
             {displaySummary}
           </span>
         ) : null}
-        {citedOrder != null ? (
+        {group.historical ? (
+          <span className="mt-0.5 block text-xs text-theme-text-tertiary">
+            Previous observation · not confirmed by the latest check
+          </span>
+        ) : differsFromAssessment &&
+          citedOrder != null &&
+          observation.source.order !== citedOrder ? (
           <span className="mt-0.5 block text-xs text-theme-text-tertiary">
             {observation.source.order > citedOrder
-              ? "Observed after the cited evidence"
-              : "Observed before the cited evidence"}
+              ? "Observed after the assessment’s source"
+              : "Earlier observation retained from a more direct source"}
           </span>
         ) : null}
       </span>
@@ -1193,9 +1007,7 @@ function EvidenceCard({
       aria-label={`${observation.title} evidence`}
       className={clsx(
         "@container/card scroll-mt-14 overflow-hidden outline-none focus:ring-2 focus:ring-accent/50 data-[source-related]:ring-2 data-[source-related]:ring-accent/35",
-        prominence === "primary"
-          ? "rounded-lg border bg-theme-surface"
-          : "border-b border-theme-border/60",
+        "rounded-lg border bg-theme-surface",
         toneBorder(observation.tone, observation.tier, prominence),
         wide && "@min-[760px]/evidence:col-span-2",
         animateArrival && "animate-transcript-enter",
@@ -1242,6 +1054,9 @@ function EvidenceCard({
           </div>
         )}
         <div className="flex shrink-0 items-center gap-0.5 px-2">
+          {observation.data.type === "changes" ? (
+            <EvidenceCaveat data={observation.data} />
+          ) : null}
           <SourceButton
             ariaLabel={`View source for ${observation.title}`}
             compact
@@ -1276,12 +1091,16 @@ function EvidenceCard({
               ) : null}
               {meaningfulHistory ? (
                 <RevisionHistory
-                  observations={group.observations}
-                  current={observation}
+                  observations={previousObservations}
+                  citedOrder={citedOrder}
+                  reveal={revealHistory}
+                  revealRequestId={revealRequestId}
                   onViewSource={onViewSource}
                 />
               ) : null}
-              <EvidenceCaveat data={observation.data} />
+              {observation.data.type !== "changes" ? (
+                <EvidenceCaveat data={observation.data} />
+              ) : null}
             </div>
           </Collapse>
         </div>
@@ -1324,107 +1143,6 @@ function OpenResourceButton({
         <SquareArrowOutUpRight className="h-3.5 w-3.5" aria-hidden />
       </button>
     </Tooltip>
-  );
-}
-
-function CheckedReceipts({
-  groups,
-  animateGroupIds,
-  onViewSource,
-  open,
-  onOpenChange,
-}: {
-  groups: InvestigationEvidenceGroup[];
-  animateGroupIds: ReadonlySet<string>;
-  onViewSource: (
-    sourceId: string,
-    excerpt?: InvestigationSourceExcerpt,
-  ) => void;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const { elementRef, revealAfterToggle } = useDisclosureReveal<HTMLElement>();
-  if (groups.length === 0) return null;
-  return (
-    <section
-      ref={elementRef}
-      aria-labelledby="investigation-checked-heading"
-      className="overflow-hidden rounded-lg border border-theme-border bg-theme-surface"
-    >
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls="investigation-checked-results"
-        onClick={() => {
-          onOpenChange(!open);
-          revealAfterToggle(!open);
-        }}
-        className="flex w-full items-center gap-2 px-3 py-2.5 text-left hover:bg-theme-hover/50"
-      >
-        <span
-          id="investigation-checked-heading"
-          className="flex-1 text-xs font-semibold text-theme-text-secondary"
-        >
-          What Radar did not find
-        </span>
-        <span className="font-mono text-xs text-theme-text-tertiary">
-          {groups.length}
-        </span>
-        <CollapseChevron open={open} className="h-4 w-4" />
-      </button>
-      <div id="investigation-checked-results">
-        <Collapse open={open}>
-          <div className="border-t border-theme-border">
-            {groups.map((group, index) => {
-              const item = group.latest;
-              const primarySources = uniquePrimarySources(group);
-              return (
-                <div
-                  key={group.id}
-                  id={group.id}
-                  data-evidence-card
-                  tabIndex={-1}
-                  className={clsx(
-                    "flex min-w-0 items-center gap-2 px-3 py-2 outline-none focus:ring-2 focus:ring-inset focus:ring-accent/50",
-                    index > 0 && "border-t border-theme-border/60",
-                    animateGroupIds.has(group.id) && "animate-transcript-enter",
-                  )}
-                >
-                  {primarySources.map((source) => (
-                    <span
-                      key={source.id}
-                      id={investigationEvidenceSourceDomId(source.id)}
-                      aria-hidden
-                    />
-                  ))}
-                  <CheckCircle2
-                    className="h-4 w-4 shrink-0 text-theme-text-tertiary"
-                    aria-hidden
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-xs font-medium text-theme-text-primary">
-                      {item.title}
-                    </span>
-                    <span className="block truncate text-xs text-theme-text-tertiary">
-                      {item.summary}
-                    </span>
-                  </span>
-                  <SourceButton
-                    ariaLabel={`View source for ${item.title}`}
-                    onClick={() =>
-                      onViewSource(
-                        item.source.id,
-                        evidenceSourceExcerpt(item.data),
-                      )
-                    }
-                  />
-                </div>
-              );
-            })}
-          </div>
-        </Collapse>
-      </div>
-    </section>
   );
 }
 
@@ -1512,7 +1230,7 @@ function evidenceHasDetails(
     case "logs":
       return (data.logs?.lines?.length ?? 0) > 0 || Boolean(data.error);
     case "changes":
-      return data.changes.length > 0 || Boolean(data.changeContext?.changed);
+      return data.changes.length > 0 || Boolean(data.changeContext?.evidence);
     default:
       return true;
   }
@@ -1623,10 +1341,6 @@ function ResourceBody({ data }: { data: EvidenceDataOf<"resource"> }) {
       : (data.resourceContext?.statusSummary?.conditions ?? []);
   const desired = replicas?.desired;
   const ready = replicas ? (replicas.ready ?? 0) : undefined;
-  const percentage =
-    desired && ready !== undefined
-      ? Math.min(100, Math.round((ready / desired) * 100))
-      : 0;
   const shortfall =
     desired !== undefined && ready !== undefined && ready < desired;
   return (
@@ -1636,39 +1350,26 @@ function ResourceBody({ data }: { data: EvidenceDataOf<"resource"> }) {
         <GitOpsStatusBody status={data.gitOpsDiagnosis} />
       ) : null}
       {desired !== undefined && ready !== undefined ? (
-        <div className="rounded-md border border-theme-border bg-theme-base/40 p-2.5">
-          <div className="flex items-center justify-between gap-3 text-xs">
-            <span className="font-medium text-theme-text-secondary">
-              Ready replicas
-            </span>
-            <span
+        <dl className="flex flex-wrap gap-x-6 gap-y-2 text-xs">
+          <div>
+            <dt className="text-theme-text-tertiary">Ready replicas</dt>
+            <dd
               className={clsx(
                 "font-mono font-semibold tabular-nums",
                 shortfall ? "text-warning-text" : "text-theme-text-primary",
               )}
             >
               {ready}/{desired}
-            </span>
+            </dd>
           </div>
-          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-theme-hover">
-            <div
-              className={clsx(
-                "h-full rounded-full",
-                shortfall ? "bg-amber-500" : "bg-theme-text-tertiary/60",
-              )}
-              style={{ width: `${percentage}%` }}
-            />
-          </div>
-          <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs @min-[560px]/evidence:grid-cols-4">
-            <ResourceFact label="Available" value={replicas?.available} />
-            <ResourceFact label="Updated" value={replicas?.updated} />
-            <ResourceFact label="Unavailable" value={replicas?.unavailable} />
-            <ResourceFact
-              label="Phase"
-              value={data.resourceContext?.statusSummary?.phase}
-            />
-          </dl>
-        </div>
+          <ResourceFact label="Available" value={replicas?.available} />
+          <ResourceFact label="Updated" value={replicas?.updated} />
+          <ResourceFact label="Unavailable" value={replicas?.unavailable} />
+          <ResourceFact
+            label="Phase"
+            value={data.resourceContext?.statusSummary?.phase}
+          />
+        </dl>
       ) : null}
       {conditions.length > 0 ? (
         <div>
@@ -1914,16 +1615,9 @@ function ChangesBody({ data }: { data: EvidenceDataOf<"changes"> }) {
   const { onOpenResource } = useContext(EvidenceNavigationContext);
   return (
     <div className="space-y-2.5">
-      {data.changeContext?.changed ? (
-        <p className="rounded-md border border-theme-border bg-theme-base/40 px-2.5 py-2 text-xs text-theme-text-secondary">
-          <span className="font-medium text-theme-text-primary">
-            Why this may matter:
-          </span>{" "}
-          {data.changeContext.what || "A related workload change was observed."}
-          {data.changeContext.when ? ` · ${data.changeContext.when}` : ""}
-          {data.changeContext.evidence
-            ? ` — ${data.changeContext.evidence}`
-            : ""}
+      {data.changeContext?.evidence ? (
+        <p className="text-xs leading-relaxed text-theme-text-secondary [overflow-wrap:anywhere]">
+          {data.changeContext.evidence}
         </p>
       ) : null}
       {data.changes.map((change, index) => (
@@ -2311,61 +2005,83 @@ function InventoryBody({ data }: { data: EvidenceDataOf<"inventory"> }) {
 
 function RevisionHistory({
   observations,
-  current,
+  citedOrder,
+  reveal,
+  revealRequestId,
   onViewSource,
 }: {
   observations: InvestigationEvidenceObservation[];
-  current: InvestigationEvidenceObservation;
+  citedOrder?: number;
+  reveal: boolean;
+  revealRequestId?: number;
   onViewSource: (
     sourceId: string,
     excerpt?: InvestigationSourceExcerpt,
   ) => void;
 }) {
-  const otherObservations = observations.filter(
-    (observation) =>
-      observation.source.id !== current.source.id ||
-      observation.revision !== current.revision,
-  );
-  if (otherObservations.length === 0) return null;
+  const [open, setOpen] = useState(false);
+  const regionId = useId();
+  const { elementRef, revealAfterToggle } =
+    useDisclosureReveal<HTMLDivElement>();
+  useLayoutEffect(() => {
+    if (reveal) setOpen(true);
+  }, [reveal, revealRequestId]);
   return (
-    <div className="border-t border-theme-border/60 pt-2">
-      <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
-        <FileClock className="h-3.5 w-3.5" aria-hidden />
-        Observation history
+    <div>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={regionId}
+        onClick={() => {
+          setOpen(!open);
+          revealAfterToggle(!open);
+        }}
+        className="flex items-center gap-1.5 rounded-md px-1 py-1 text-xs text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-secondary"
+      >
+        <CollapseChevron open={open} className="h-3.5 w-3.5" />
+        Previous observations · {observations.length}
+      </button>
+      <div id={regionId} ref={elementRef}>
+        <Collapse open={open}>
+          <ol className="space-y-3 pt-2">
+            {observations.map((observation) => (
+              <li
+                key={`${observation.source.id}-${observation.revision}`}
+                className="flex min-w-0 items-start gap-2 text-xs"
+              >
+                <span className="mt-0.5 shrink-0 text-theme-text-tertiary">
+                  <span className="font-medium text-theme-text-secondary">
+                    {observation.source.order === citedOrder
+                      ? "Used for assessment"
+                      : phaseLabel(observation.source.phase)}
+                  </span>
+                </span>
+                <div className="min-w-0 flex-1 space-y-1 text-theme-text-secondary">
+                  <p>{observation.summary || observation.title}</p>
+                  {evidenceHasDetails(
+                    observation.data,
+                    observation.summary,
+                  ) && (
+                    <EvidenceBody
+                      data={observation.data}
+                      cardSummary={observation.summary}
+                    />
+                  )}
+                </div>
+                <SourceButton
+                  ariaLabel={`View source for ${phaseLabel(observation.source.phase).toLowerCase()} observation of ${observation.title}`}
+                  onClick={() =>
+                    onViewSource(
+                      observation.source.id,
+                      evidenceSourceExcerpt(observation.data),
+                    )
+                  }
+                />
+              </li>
+            ))}
+          </ol>
+        </Collapse>
       </div>
-      <ol className="space-y-1.5">
-        {otherObservations.map((observation) => (
-          <li
-            key={`${observation.source.id}-${observation.revision}`}
-            className="flex min-w-0 items-start gap-2 text-xs"
-          >
-            <span className="mt-0.5 shrink-0 text-theme-text-tertiary">
-              <span className="font-medium text-theme-text-secondary">
-                {phaseLabel(observation.source.phase)}
-              </span>
-            </span>
-            <Badge severity="neutral" size="sm">
-              {observation.relevance === "target"
-                ? "Investigation target"
-                : observation.relevance === "producer-related"
-                  ? "Related resource"
-                  : "Broader context"}
-            </Badge>
-            <span className="min-w-0 flex-1 text-theme-text-secondary">
-              {observation.summary || observation.title}
-            </span>
-            <SourceButton
-              ariaLabel={`View source for ${phaseLabel(observation.source.phase).toLowerCase()} observation of ${observation.title}`}
-              onClick={() =>
-                onViewSource(
-                  observation.source.id,
-                  evidenceSourceExcerpt(observation.data),
-                )
-              }
-            />
-          </li>
-        ))}
-      </ol>
     </div>
   );
 }
@@ -2376,8 +2092,22 @@ function EvidenceCaveat({ data }: { data: InvestigationEvidenceData }) {
     text =
       "Events support the timeline; proximity alone does not establish cause.";
   } else if (data.type === "changes") {
-    text =
-      "A recent change is context unless Radar explicitly correlated it to the issue.";
+    return (
+      <Tooltip
+        content={`A change alone does not establish the cause.${data.changeContext?.when ? " The reported age is as of collection." : ""}`}
+        position="left"
+        className="pointer-events-none"
+        wrapperClassName="flex shrink-0"
+      >
+        <button
+          type="button"
+          aria-label="About change evidence"
+          className="flex h-7 w-7 items-center justify-center rounded-md text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+        >
+          <Info className="h-3.5 w-3.5" aria-hidden />
+        </button>
+      </Tooltip>
+    );
   } else if (data.type === "relationships" || data.type === "topology") {
     text =
       "This shows direct relationships Radar found, not an inferred blast radius.";
@@ -2513,7 +2243,7 @@ function toneBorder(
   tier: InvestigationEvidenceTier,
   prominence: "primary" | "supporting" | "secondary",
 ): string {
-  if (prominence !== "primary") return "";
+  if (prominence !== "primary") return "border-theme-border/70";
   if (tier !== "key") return "border-theme-border";
   if (tone === "error")
     return "border-l-[3px] border-l-red-500 border-theme-border";

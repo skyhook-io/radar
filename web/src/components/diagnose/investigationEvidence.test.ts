@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   investigationActivitySourceDomId,
-  investigationEvidenceGroupWithoutSources,
   investigationEvidenceStepIdsByTurn,
   investigationEvidenceSourceDomId,
   investigationEvidenceSourceId,
@@ -548,12 +547,7 @@ describe("root-cause evidence resolution", () => {
       "events-1",
       "diagnose-1",
     ]);
-    expect(resolution.links.every((link) => link.group)).toBe(true);
-    expect(
-      resolution.links[1].group?.observations.every(
-        (observation) => observation.source.stepId === "diagnose-1",
-      ),
-    ).toBe(true);
+    expect(resolution.links.every((link) => link.originalGroupId)).toBe(true);
     expect(resolution.links[1].originalGroupId).toBe(
       projection.sources.find((source) => source.stepId === "diagnose-1")
         ?.primaryGroupId,
@@ -580,12 +574,12 @@ describe("root-cause evidence resolution", () => {
     );
     expect(resolution).toMatchObject({
       status: "linked",
-      links: [{ source: { stepId: "metrics-1" }, additionalGroupCount: 0 }],
+      links: [{ source: { stepId: "metrics-1" } }],
     });
-    expect(resolution.links[0].group).toBeUndefined();
+    expect(resolution.links[0].originalGroupId).toBeUndefined();
     expect(
-      investigationEvidenceStepIdsByTurn(projection, resolution).get(0),
-    ).toEqual(new Set(["metrics-1"]));
+      investigationEvidenceStepIdsByTurn(projection).get(0),
+    ).toBeUndefined();
   });
 
   it("fails closed for malformed, unmatched, prior-turn, failed, or partial refs", () => {
@@ -1176,7 +1170,8 @@ describe("strict evidence adapters", () => {
       expect.objectContaining({
         source: "Recent changes",
         kind: "unknown",
-        message: expect.stringContaining("complete recent-change coverage"),
+        message: expect.stringContaining("Change history for"),
+        presentation: "history",
       }),
     ]);
 
@@ -1196,7 +1191,8 @@ describe("strict evidence adapters", () => {
       expect.objectContaining({
         source: "Recent changes",
         kind: "unknown",
-        message: expect.stringContaining("complete recent-change coverage"),
+        message: expect.stringContaining("Change history for"),
+        presentation: "history",
       }),
     ]);
 
@@ -1523,11 +1519,6 @@ describe("strict evidence adapters", () => {
       "read",
       "changed",
     ]);
-    const remaining = investigationEvidenceGroupWithoutSources(
-      group,
-      new Set([group.observations[2].source.id]),
-    );
-    expect(remaining?.observations[1].changedFromPrevious).toBe(false);
   });
 
   it("does not let a later broad query overwrite producer-established issue relevance", () => {
@@ -1948,26 +1939,12 @@ describe("strict evidence adapters", () => {
       target,
     );
     const group = groupsOf(result.groups, "issue")[0];
-    const verificationSource = result.sources.find(
-      (source) => source.stepId === "verification",
-    )!;
-    const residual = investigationEvidenceGroupWithoutSources(
-      group,
-      new Set([verificationSource.id]),
-    );
-
     expect(
       group.observations.map((observation) => observation.historical),
     ).toEqual([true, false]);
-    expect(residual).toMatchObject({
-      historical: true,
-      firstOrder: 0,
-      latest: {
-        revision: 1,
-        changedFromPrevious: false,
-        source: { stepId: "initial" },
-      },
-    });
+    expect(group.historical).toBe(false);
+    expect(group.latest.source.stepId).toBe("verification");
+    expect(group.observations[0].source.stepId).toBe("initial");
   });
 
   it("does not promote malformed change correlation or neutral DNS configuration", () => {

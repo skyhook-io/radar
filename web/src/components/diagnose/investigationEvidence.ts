@@ -357,6 +357,8 @@ export interface InvestigationEvidenceGroup {
 }
 
 export interface InvestigationEvidenceLimitation extends DiagnosisEvidenceLimitationBase {
+  /** A qualified history result, not a failed collection. */
+  presentation?: "history";
   firstOrder: number;
   sources: InvestigationEvidenceSource[];
 }
@@ -385,11 +387,8 @@ export interface InvestigationEvidenceProjection {
 
 export interface InvestigationRootCauseEvidenceLink {
   source: InvestigationEvidenceSource;
-  /** Exact-source snapshot of the source's primary typed observation. */
-  group?: InvestigationEvidenceGroup;
-  /** Original projection group removed from the ordinary hierarchy on promotion. */
+  /** Canonical semantic group containing this source’s primary observation. */
   originalGroupId?: string;
-  additionalGroupCount: number;
 }
 
 export interface InvestigationRootCauseEvidenceResolution {
@@ -570,124 +569,34 @@ export function resolveInvestigationRootCauseEvidence(
     const originalGroup = source.primaryGroupId
       ? projection.groups.find((group) => group.id === source.primaryGroupId)
       : undefined;
-    const group = originalGroup
-      ? citedGroupForSource(originalGroup, source)
-      : undefined;
-    const observedGroupCount = projection.groups.filter((candidate) =>
-      candidate.observations.some(
-        (observation) => observation.source.id === source.id,
-      ),
-    ).length;
     links.push({
       source,
-      group,
-      originalGroupId: group ? originalGroup?.id : undefined,
-      additionalGroupCount: Math.max(0, observedGroupCount - (group ? 1 : 0)),
+      originalGroupId: originalGroup?.observations.some(
+        (observation) => observation.source.id === source.id,
+      )
+        ? originalGroup.id
+        : undefined,
     });
-  }
-  const citedSourceIds = new Set(links.map((link) => link.source.id));
-  const groupsWithHistory = new Set<string>();
-  for (const link of links) {
-    const cited = link.group;
-    if (
-      !cited ||
-      !link.originalGroupId ||
-      groupsWithHistory.has(link.originalGroupId)
-    )
-      continue;
-    const original = projection.groups.find(
-      (group) => group.id === link.originalGroupId,
-    )!;
-    // Only fold a genuinely unchanged history. A changed intervening observation
-    // must stay in the ordinary timeline, even if the latest value changed back.
-    if (
-      !original.observations.every(
-        (observation) =>
-          evidenceSemanticSnapshot(observation) ===
-          evidenceSemanticSnapshot(cited.latest),
-      )
-    )
-      continue;
-    groupsWithHistory.add(original.id);
-    const observations = original.observations
-      .filter(
-        (observation) =>
-          observation.source.id === link.source.id ||
-          !citedSourceIds.has(observation.source.id),
-      )
-      .map((observation) => ({
-        ...observation,
-        source:
-          observation.source.primaryGroupId === original.id
-            ? { ...observation.source, primaryGroupId: cited.id }
-            : observation.source,
-      }));
-    link.group = {
-      ...cited,
-      observations,
-      chronologicalLatest: observations.at(-1)!,
-    };
   }
   return { status: "linked", links };
 }
 
-export function investigationEvidenceGroupWithoutSources(
-  group: InvestigationEvidenceGroup,
-  excludedSourceIds: ReadonlySet<string>,
-): InvestigationEvidenceGroup | undefined {
-  const observations = group.observations
-    .filter((observation) => !excludedSourceIds.has(observation.source.id))
-    .map((observation, index, remaining) => ({
-      ...observation,
-      revision: index + 1,
-      changedFromPrevious:
-        index > 0 &&
-        evidenceSemanticSnapshot(remaining[index - 1]) !==
-          evidenceSemanticSnapshot(observation),
-    }));
-  if (observations.length === 0) return undefined;
-  const relevanceRank: Record<InvestigationEvidenceRelevance, number> = {
-    target: 0,
-    "producer-related": 1,
-    broader: 2,
-  };
-  const latest = observations.reduce((authoritative, observation) =>
-    relevanceRank[observation.relevance] <=
-    relevanceRank[authoritative.relevance]
-      ? observation
-      : authoritative,
-  );
-  const latestRelevantObservation = [...observations]
-    .reverse()
-    .find((observation) => observation.relevance !== "broader");
-  return {
-    ...group,
-    historical: latestRelevantObservation?.historical ?? false,
-    firstOrder: Math.min(
-      ...observations.map((observation) => observation.source.order),
-    ),
-    observations,
-    latest,
-    chronologicalLatest: observations.at(-1)!,
-  };
-}
-
 export function investigationEvidenceStepIdsByTurn(
   projection: InvestigationEvidenceProjection,
-  rootCauseEvidence?: InvestigationRootCauseEvidenceResolution,
+  visibleGroupIds?: ReadonlySet<string>,
 ): Map<number, Set<string>> {
   const byTurn = new Map<number, Set<string>>();
   const linkedSourceIds = new Set<string>();
   for (const group of projection.groups) {
+    if (visibleGroupIds && !visibleGroupIds.has(group.id)) continue;
     for (const observation of group.observations) {
+      if (visibleGroupIds && observation.source.primaryGroupId !== group.id)
+        continue;
       linkedSourceIds.add(observation.source.id);
     }
   }
   for (const limitation of projection.limitations) {
     for (const source of limitation.sources) linkedSourceIds.add(source.id);
-  }
-  for (const link of rootCauseEvidence?.links ?? []) {
-    linkedSourceIds.add(link.source.id);
   }
   const navigableSources = new Map(
     [...projection.sources, ...projection.citableSources].map((source) => [
@@ -702,37 +611,6 @@ export function investigationEvidenceStepIdsByTurn(
     byTurn.set(source.turnIndex, stepIds);
   }
   return byTurn;
-}
-
-function citedGroupForSource(
-  original: InvestigationEvidenceGroup,
-  source: InvestigationEvidenceSource,
-): InvestigationEvidenceGroup | undefined {
-  const sourceObservations = original.observations.filter(
-    (observation) => observation.source.id === source.id,
-  );
-  if (sourceObservations.length === 0) return undefined;
-  const id = `assessment-${source.id}-${original.id}`;
-  const citedSource = { ...source, primaryGroupId: id };
-  const observations = sourceObservations.map((observation) => ({
-    ...observation,
-    source: citedSource,
-  }));
-  const latestSourceRevision =
-    original.latest.source.id === source.id
-      ? original.latest.revision
-      : observations.at(-1)!.revision;
-  const latest =
-    observations.find(
-      (observation) => observation.revision === latestSourceRevision,
-    ) ?? observations.at(-1)!;
-  return {
-    ...original,
-    id,
-    observations,
-    latest,
-    chronologicalLatest: observations.at(-1)!,
-  };
 }
 
 function stableHash(value: string): string {
@@ -1433,10 +1311,11 @@ class ProjectionBuilder {
     label: string,
     message: string | undefined,
     kind: DiagnosisEvidenceLimitationBase["kind"],
+    presentation?: InvestigationEvidenceLimitation["presentation"],
   ): void {
     if (!message?.trim()) return;
     const normalized = message.trim();
-    const key = `${kind}\u0000${label}\u0000${normalized}`;
+    const key = `${kind}\u0000${presentation ?? ""}\u0000${label}\u0000${normalized}`;
     const existing = this.limitationByIdentity.get(key);
     if (existing) {
       if (!existing.sources.some((item) => item.id === source.id)) {
@@ -1447,6 +1326,7 @@ class ProjectionBuilder {
         source: label,
         message: normalized,
         kind,
+        ...(presentation ? { presentation } : {}),
         firstOrder: source.order,
         sources: [source],
       };
@@ -1457,7 +1337,7 @@ class ProjectionBuilder {
   }
 }
 
-function evidenceSemanticSnapshot(
+export function evidenceSemanticSnapshot(
   observation: Pick<
     InvestigationEvidenceObservation,
     "tone" | "title" | "summary" | "data"
@@ -1475,7 +1355,18 @@ function evidenceSemanticSnapshot(
     observation.data.type === "issue"
       ? {
           type: observation.data.type,
-          issue: observation.data.issue,
+          // These are the finding and details shown in the evidence card.
+          // Collection timestamps and detector bookkeeping do not change it.
+          issue: {
+            kind: observation.data.issue.kind,
+            group: observation.data.issue.group,
+            namespace: observation.data.issue.namespace,
+            name: observation.data.issue.name,
+            reason: observation.data.issue.reason,
+            severity: observation.data.issue.severity,
+            cause: observation.data.issue.cause,
+            message: observation.data.issue.message,
+          },
         }
       : observation.data;
   return JSON.stringify({
@@ -1753,7 +1644,7 @@ function addEvents(
       builder.limit(
         source,
         "Events",
-        "Radar found no events, but it cannot tell whether none exist or access restrictions hid them.",
+        "No events were returned. This result does not establish that no events occurred.",
         "unknown",
       );
       return;
@@ -1807,8 +1698,9 @@ function addChanges(
       builder.limit(
         source,
         "Recent changes",
-        "Radar found no recent changes, but it cannot tell whether none exist or access restrictions hid them.",
+        `No changes were returned for ${scope}. This result does not establish a complete change history.`,
         "unknown",
+        "history",
       );
       return;
     }
@@ -1837,9 +1729,12 @@ function addChanges(
     relevance,
     tone: "info",
     title: "Recent changes",
-    summary:
-      changeContext?.what ||
-      `${values.length} change${values.length === 1 ? "" : "s"} · ${scope}`,
+    summary: changeContext?.changed
+      ? changeContext.what === "The workload's Pod template changed" &&
+        changeContext.when
+        ? `Pod template changed; newest ReplicaSet created ${changeContext.when} ago`
+        : `${changeContext.what || "A workload change was observed"}${changeContext.when ? ` · ${changeContext.when} ago` : ""}`
+      : `${values.length} change${values.length === 1 ? "" : "s"} · ${scope}`,
     data: {
       type: "changes",
       changes: values,
@@ -2954,8 +2849,9 @@ function adaptGetResource(
     builder.limit(
       source,
       "Recent changes",
-      "Radar does not have complete recent-change coverage for this resource, so this result cannot prove that no tracked changes exist.",
+      `Change history for ${scopeFromArgs(source)} is incomplete.`,
       "unknown",
+      "history",
     );
   }
 }
