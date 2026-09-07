@@ -1,6 +1,7 @@
 // Kyverno / Policy Report cell components for ResourcesView table
 
 import { clsx } from 'clsx'
+import { healthColors } from '../resource-utils'
 import {
   getPolicyReportScope,
   getPolicyReportStatus,
@@ -84,10 +85,10 @@ export function KyvernoPolicyCell({ resource, column }: { resource: any; column:
         <span className={clsx(
           'badge',
           blocks
-            ? 'bg-red-500/20 text-red-400'
+            ? healthColors.unhealthy
             : discrepancy
-              ? 'bg-orange-500/20 text-orange-400'
-              : 'bg-yellow-500/20 text-yellow-400',
+              ? healthColors.alert
+              : healthColors.degraded,
         )}>
           {label}
         </span>
