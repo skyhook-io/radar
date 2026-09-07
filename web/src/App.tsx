@@ -2482,10 +2482,16 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             navigateFromIssue(resource)
           }}
           onOpenTimeline={({ namespace, name }) => {
-            // `namespaces` is the app-wide scope the URL sync effect applies;
-            // the Timeline's own `scopeNamespaces` only acts alongside `app`.
+            // Scope state and URL move together, as the Timeline's own
+            // namespace prompt does: the URL-write effect would otherwise
+            // restore the previous scope over the destination's `namespaces`
+            // while the URL-read effect applies it, and the two would alternate.
             const params = new URLSearchParams({ q: name })
-            if (namespace) params.set('namespaces', namespace)
+            if (namespace) {
+              params.set('namespaces', namespace)
+              setNamespaces([namespace])
+              setActiveNamespace.mutate({ namespaces: [namespace] })
+            }
             navigate({ pathname: '/timeline', search: params.toString() })
           }}
         />
