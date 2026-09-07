@@ -43,8 +43,8 @@ export function NetworkPolicyRenderer({ data, staged = false }: NetworkPolicyRen
                   className={clsx(
                     'badge',
                     type === 'Ingress'
-                      ? 'bg-blue-500/20 text-blue-400 border-blue-500/30'
-                      : 'bg-purple-500/20 text-purple-400 border-purple-500/30'
+                      ? 'status-blue'
+                      : 'status-purple'
                   )}
                 >
                   {type}

@@ -58,10 +58,10 @@ export function SealedSecretRenderer({ data, onNavigate }: SealedSecretRendererP
               <span className={clsx(
                 'badge',
                 isSynced
-                  ? 'bg-green-500/20 text-green-400'
+                  ? 'status-healthy'
                   : isNotSynced
-                    ? 'bg-red-500/20 text-red-400'
-                    : 'bg-yellow-500/20 text-yellow-400'
+                    ? 'status-unhealthy'
+                    : 'status-degraded'
               )}>
                 {isSynced ? 'Synced' : isNotSynced ? 'Not Synced' : 'Unknown'}
               </span>

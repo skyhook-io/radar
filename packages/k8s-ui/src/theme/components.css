@@ -228,6 +228,14 @@
     border-color: transparent;
   }
 
+  /* Colour-named accents carry no health meaning — they exist so an
+     informational badge can pick a hue without borrowing a status semantic. */
+  .status-blue {
+    background-color: light-dark(rgba(59, 130, 246, 0.15), rgba(59, 130, 246, 0.2));
+    color: light-dark(#2563eb, #60a5fa);
+    border-color: transparent;
+  }
+
   .status-cyan {
     background-color: light-dark(rgba(6, 182, 212, 0.15), rgba(6, 182, 212, 0.2));
     color: light-dark(#0891b2, #22d3ee);

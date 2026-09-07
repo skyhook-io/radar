@@ -81,8 +81,8 @@ function IssuerRendererBase({ data, kind }: { data: any; kind: string }) {
               <span className={clsx(
                 'badge',
                 isReady
-                  ? 'bg-green-500/20 text-green-400'
-                  : 'bg-red-500/20 text-red-400'
+                  ? 'status-healthy'
+                  : 'status-unhealthy'
               )}>
                 {isReady ? 'Ready' : 'Not Ready'}
               </span>

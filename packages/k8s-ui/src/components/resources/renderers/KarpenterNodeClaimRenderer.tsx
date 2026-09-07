@@ -186,9 +186,9 @@ export function KarpenterNodeClaimRenderer({ data, onNavigate }: KarpenterNodeCl
                 <span
                   className={clsx(
                     'w-5 h-5 rounded-full flex items-center justify-center text-xs shrink-0',
-                    isComplete && 'bg-green-500/20 text-green-400',
-                    isCurrent && 'bg-blue-500/20 text-blue-400',
-                    isFailed && 'bg-red-500/20 text-red-400',
+                    isComplete && 'status-healthy',
+                    isCurrent && 'status-blue',
+                    isFailed && 'status-unhealthy',
                     isPending && !isCurrent && BADGE_INACTIVE
                   )}
                 >

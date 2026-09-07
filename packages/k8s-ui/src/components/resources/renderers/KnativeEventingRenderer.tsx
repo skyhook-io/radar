@@ -193,10 +193,10 @@ export function ChannelRenderer({ data }: RendererProps) {
               <div key={i} className="text-sm text-theme-text-secondary">
                 {sub.subscriberURI || sub.replyURI || `Subscriber ${i + 1}`}
                 {sub.ready === 'True' && (
-                  <span className="ml-2 px-1.5 py-0.5 bg-green-500/20 text-green-400 rounded text-[10px]">ready</span>
+                  <span className="ml-2 px-1.5 py-0.5 status-healthy rounded text-[10px]">ready</span>
                 )}
                 {sub.ready === 'False' && (
-                  <span className="ml-2 px-1.5 py-0.5 bg-red-500/20 text-red-400 rounded text-[10px]">not ready</span>
+                  <span className="ml-2 px-1.5 py-0.5 status-unhealthy rounded text-[10px]">not ready</span>
                 )}
               </div>
             ))}
