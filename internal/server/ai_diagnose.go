@@ -227,7 +227,7 @@ func mergeDetectedWithDrivable(detected, drivable []ai.AgentInfo) []ai.AgentInfo
 // disclosure for an execution profile. Doesn't require a connected cluster — consent can be
 // given while Radar is still connecting.
 func (s *Server) handleDiagnoseConsent(w http.ResponseWriter, r *http.Request) {
-	if !sameOriginOK(r) {
+	if !s.sameOriginOK(r) {
 		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
 		return
 	}
@@ -277,7 +277,7 @@ func validReasoningEffort(e string) bool {
 // handleDiagnoseStart begins an investigation (or focuses a live one for the same
 // target) and returns its run id. POST {kind, namespace, name}.
 func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
-	if !sameOriginOK(r) {
+	if !s.sameOriginOK(r) {
 		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
 		return
 	}
@@ -390,7 +390,7 @@ func (s *Server) handleDiagnoseGet(w http.ResponseWriter, r *http.Request) {
 // handleDiagnoseHistoryClear wipes the persisted investigation history (and
 // drops finished runs from memory). Live runs survive. POST, same-origin only.
 func (s *Server) handleDiagnoseHistoryClear(w http.ResponseWriter, r *http.Request) {
-	if !sameOriginOK(r) {
+	if !s.sameOriginOK(r) {
 		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
 		return
 	}
@@ -411,7 +411,7 @@ func (s *Server) handleDiagnoseHistoryClear(w http.ResponseWriter, r *http.Reque
 // handleDiagnoseTurn adds a follow-up or apply turn to a run. POST {question?,
 // apply?, fix?}. Apply enables write tools and binds to the confirmed fix text.
 func (s *Server) handleDiagnoseTurn(w http.ResponseWriter, r *http.Request) {
-	if !sameOriginOK(r) {
+	if !s.sameOriginOK(r) {
 		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
 		return
 	}
@@ -478,7 +478,7 @@ func (s *Server) handleDiagnoseTurn(w http.ResponseWriter, r *http.Request) {
 
 // handleDiagnoseStop cancels a run's in-flight agent.
 func (s *Server) handleDiagnoseStop(w http.ResponseWriter, r *http.Request) {
-	if !sameOriginOK(r) {
+	if !s.sameOriginOK(r) {
 		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
 		return
 	}

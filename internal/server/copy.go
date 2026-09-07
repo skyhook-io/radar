@@ -199,7 +199,7 @@ func (s *Server) handlePodFileSave(w http.ResponseWriter, r *http.Request) {
 	// Runs a command in a pod and writes a file to the user's disk, which is
 	// exactly what the same-origin check exists to keep a page on another site
 	// from triggering.
-	if !sameOriginOK(r) {
+	if !s.sameOriginOK(r) {
 		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
 		return
 	}

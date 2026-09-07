@@ -34,7 +34,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -811,7 +810,7 @@ func (s *Server) requireCloudConnectDriver(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, http.StatusNotFound, "Cloud connect is not available on this deployment")
 		return false
 	}
-	if mutating && !sameOriginOK(r) {
+	if mutating && !s.sameOriginOK(r) {
 		s.writeError(w, http.StatusForbidden, "cross-origin requests are not allowed")
 		return false
 	}
@@ -949,37 +948,23 @@ func (s *Server) cloudConnectCapability() *k8s.CloudConnectCapability {
 	}
 }
 
-// sameOriginOK is CSRF protection for the connect and AI-diagnose endpoints: a
-// page on another origin must not be able to drive an install or spawn an agent.
-// It compares the Origin scheme and authority against what the client actually
-// used, rather than an allowlist of loopback names — a loopback-only allowlist would 403 the
-// legitimate browser on a non-loopback listener (a supported deployment) while
-// still admitting a scripted caller that simply omits the header.
+// sameOriginOK is CSRF protection for state-changing browser endpoints. It
+// compares the Origin scheme and authority against what the client actually
+// used, rather than an allowlist of loopback names — a loopback-only allowlist
+// would 403 the legitimate browser on a non-loopback listener (a supported
+// deployment) while still admitting a scripted caller that simply omits the
+// header.
 //
 // Loopback-to-loopback is additionally allowed for the Vite dev proxy, which
 // forwards its own :9273 origin to the backend on :9280.
-func sameOriginOK(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return true // same-origin navigation or a non-browser client
+func (s *Server) sameOriginOK(r *http.Request) bool {
+	if allowed, decided := fetchMetadataOriginVerdict(r); decided {
+		return allowed
 	}
-	u, err := url.Parse(origin)
-	if err != nil || u.Host == "" {
-		return false
-	}
-	// A page served over HTTP is a different origin from the HTTPS site even
-	// when the host:port authority matches, so reject the scheme downgrade: an
-	// http://host page must not drive the https://host app. The request scheme
-	// is inferred from the TLS state or the X-Forwarded-Proto a terminating
-	// proxy sets, mirroring the WebSocket lane's sameAuthorityOriginOK.
-	if (r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")) &&
-		!strings.EqualFold(u.Scheme, "https") {
-		return false
-	}
-	if strings.EqualFold(u.Host, r.Host) {
+	if sameAuthorityOriginOK(r) {
 		return true
 	}
-	return browserLoopbackHostname(u.Hostname()) && requestHostIsLoopback(r)
+	return s.viteDevProxyOriginOK(r)
 }
 
 // redactCloudToken removes a cluster token that an upstream error may have

@@ -532,10 +532,12 @@ func TestPodFileSaveRejectsCrossOriginRequests(t *testing.T) {
 		rec := httptest.NewRecorder()
 		s.handlePodFileSave(rec, req)
 
-		if c.wantStatus == http.StatusForbidden && rec.Code != http.StatusForbidden {
-			t.Errorf("Origin %q got %d, want %d", c.origin, rec.Code, http.StatusForbidden)
+		blockedAsCrossOrigin := rec.Code == http.StatusForbidden &&
+			strings.Contains(rec.Body.String(), "cross-origin request rejected")
+		if c.wantStatus == http.StatusForbidden && !blockedAsCrossOrigin {
+			t.Errorf("Origin %q got status %d body %q, want the cross-origin rejection", c.origin, rec.Code, rec.Body.String())
 		}
-		if c.wantStatus == 0 && rec.Code == http.StatusForbidden {
+		if c.wantStatus == 0 && blockedAsCrossOrigin {
 			t.Errorf("Origin %q was rejected as cross-origin", c.origin)
 		}
 	}

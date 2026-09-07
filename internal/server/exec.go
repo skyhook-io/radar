@@ -32,18 +32,24 @@ func checkWebSocketOrigin(r *http.Request) bool {
 	if cloud.IsAuthenticatedTunnelRequest(r.Context()) {
 		return true
 	}
-	// Browser-generated Fetch Metadata survives reverse proxies that rewrite
-	// Host; page scripts cannot forge it, while non-browser clients can omit
-	// Origin already.
-	switch r.Header.Get("Sec-Fetch-Site") {
-	case "same-origin":
-		return true
-	case "same-site":
-		return sameAuthorityOriginOK(r)
-	case "cross-site":
-		return false
+	if allowed, decided := fetchMetadataOriginVerdict(r); decided {
+		return allowed
 	}
 	return sameAuthorityOriginOK(r)
+}
+
+// fetchMetadataOriginVerdict uses the browser-controlled relationship between
+// the initiating page and this request when it is conclusive. It survives
+// reverse proxies that rewrite Host and cannot be forged by page scripts.
+func fetchMetadataOriginVerdict(r *http.Request) (allowed, decided bool) {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin":
+		return true, true
+	case "cross-site":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 func sameAuthorityOriginOK(r *http.Request) bool {
@@ -64,10 +70,7 @@ func sameAuthorityOriginOK(r *http.Request) bool {
 	return originOK && requestOK && originAuthority == requestAuthority
 }
 
-func (s *Server) websocketOriginAllowed(r *http.Request) bool {
-	if checkWebSocketOrigin(r) {
-		return true
-	}
+func (s *Server) viteDevProxyOriginOK(r *http.Request) bool {
 	if !s.devMode || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
 		return false
 	}
@@ -77,6 +80,13 @@ func (s *Server) websocketOriginAllowed(r *http.Request) bool {
 		u.Port() == "9273" &&
 		browserLoopbackHostname(u.Hostname()) &&
 		requestHostIsLoopback(r)
+}
+
+func (s *Server) websocketOriginAllowed(r *http.Request) bool {
+	if checkWebSocketOrigin(r) {
+		return true
+	}
+	return s.viteDevProxyOriginOK(r)
 }
 
 func (s *Server) upgradeWebSocket(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {

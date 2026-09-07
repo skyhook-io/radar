@@ -581,14 +581,31 @@ func TestCloudInstallEndpointGating(t *testing.T) {
 		}
 	})
 
-	t.Run("cross-origin mutation is refused", func(t *testing.T) {
-		srv := newSrv("127.0.0.1")
-		req := httptest.NewRequest(http.MethodPost, "/api/cloud/install/prepare", strings.NewReader("{}"))
-		req.Header.Set("Origin", "https://evil.example")
-		w := httptest.NewRecorder()
-		srv.handleCloudInstallPrepare(w, req)
-		if w.Code != http.StatusForbidden {
-			t.Fatalf("status = %d", w.Code)
+	t.Run("cross-origin mutations are refused", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			path    string
+			handler func(*Server, http.ResponseWriter, *http.Request)
+		}{
+			{"prepare", "/api/cloud/install/prepare", (*Server).handleCloudInstallPrepare},
+			{"start", "/api/cloud/install/start", (*Server).handleCloudInstallStart},
+			{"cancel", "/api/cloud/install/cancel", (*Server).handleCloudInstallCancel},
+			{"dismiss", "/api/cloud/install/dismiss", (*Server).handleCloudInstallDismiss},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				srv := newSrv("127.0.0.1")
+				req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader("{}"))
+				req.Header.Set("Origin", "https://evil.example")
+				w := httptest.NewRecorder()
+				tt.handler(srv, w, req)
+				if w.Code != http.StatusForbidden {
+					t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+				}
+				if body := w.Body.String(); !strings.Contains(body, "cross-origin requests are not allowed") {
+					t.Fatalf("body = %q, want the cross-origin rejection", body)
+				}
+			})
 		}
 	})
 
@@ -800,20 +817,26 @@ func TestCloudInstallLoopbackNeedsNoSharedAcknowledgement(t *testing.T) {
 func TestSameOriginOKAcceptsTheServingAuthority(t *testing.T) {
 	cases := []struct {
 		name, host, origin string
+		devMode            bool
+		fetchSite          string
 		want               bool
 	}{
-		{"no origin (non-browser)", "10.0.0.5:9280", "", true},
-		{"same non-loopback authority", "10.0.0.5:9280", "http://10.0.0.5:9280", true},
-		{"hostname case is ignored", "Radar.Example.com:9280", "http://radar.example.com:9280", true},
-		{"same loopback authority", "127.0.0.1:9280", "http://127.0.0.1:9280", true},
-		{"vite dev proxy, loopback to loopback", "localhost:9280", "http://localhost:9273", true},
-		{"bracketed IPv6 loopback without request port", "[::1]", "http://[::1]:9273", true},
-		{"foreign origin", "10.0.0.5:9280", "https://evil.example", false},
-		{"lookalike hostname", "10.0.0.5:9280", "http://localhost.evil.com", false},
-		{"different port on the same non-loopback host", "10.0.0.5:9280", "http://10.0.0.5:9999", false},
-		{"loopback origin against a non-loopback host", "10.0.0.5:9280", "http://127.0.0.1:9280", false},
-		{"unparseable origin", "10.0.0.5:9280", "://nope", false},
-		{"opaque (null) origin", "10.0.0.5:9280", "null", false},
+		{name: "no origin (non-browser)", host: "10.0.0.5:9280", want: true},
+		{name: "same non-loopback authority", host: "10.0.0.5:9280", origin: "http://10.0.0.5:9280", want: true},
+		{name: "hostname case is ignored", host: "Radar.Example.com:9280", origin: "http://radar.example.com:9280", want: true},
+		{name: "same loopback authority", host: "127.0.0.1:9280", origin: "http://127.0.0.1:9280", want: true},
+		{name: "vite dev proxy, loopback to loopback", host: "localhost:9280", origin: "http://localhost:9273", devMode: true, want: true},
+		{name: "vite port outside dev mode", host: "localhost:9280", origin: "http://localhost:9273", want: false},
+		{name: "unrelated port in dev mode", host: "localhost:9280", origin: "http://localhost:9274", devMode: true, want: false},
+		{name: "bracketed IPv6 Vite proxy", host: "[::1]", origin: "http://[::1]:9273", devMode: true, want: true},
+		{name: "foreign origin", host: "10.0.0.5:9280", origin: "http://evil.example", want: false},
+		{name: "lookalike hostname", host: "10.0.0.5:9280", origin: "http://localhost.evil.com", want: false},
+		{name: "different port on the same non-loopback host", host: "10.0.0.5:9280", origin: "http://10.0.0.5:9999", want: false},
+		{name: "loopback origin against a non-loopback host", host: "10.0.0.5:9280", origin: "http://127.0.0.1:9280", want: false},
+		{name: "cross-site metadata without origin", host: "10.0.0.5:9280", fetchSite: "cross-site", want: false},
+		{name: "same-origin metadata survives rewritten host", host: "internal:9280", origin: "https://radar.example.com", fetchSite: "same-origin", want: true},
+		{name: "unparseable origin", host: "10.0.0.5:9280", origin: "://nope", want: false},
+		{name: "opaque (null) origin", host: "10.0.0.5:9280", origin: "null", want: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -822,21 +845,17 @@ func TestSameOriginOKAcceptsTheServingAuthority(t *testing.T) {
 			if tc.origin != "" {
 				r.Header.Set("Origin", tc.origin)
 			}
-			if got := sameOriginOK(r); got != tc.want {
+			if tc.fetchSite != "" {
+				r.Header.Set("Sec-Fetch-Site", tc.fetchSite)
+			}
+			s := &Server{devMode: tc.devMode}
+			if got := s.sameOriginOK(r); got != tc.want {
 				t.Fatalf("sameOriginOK(host=%q, origin=%q) = %v, want %v", tc.host, tc.origin, got, tc.want)
 			}
 		})
 	}
 }
 
-// An admission webhook can quote the Secret it denied, so a provisioning error
-// may carry the cluster token. It must not reach the status API — the wire
-// structs having no token FIELD is not enough when the value rides inside a
-// message string.
-// TestSameOriginOKRejectsSchemeDowngrade covers the HTTP-origin-on-HTTPS-request
-// case: when the request arrives over TLS (directly or via X-Forwarded-Proto),
-// an http:// Origin whose authority matches must still be rejected, because it is
-// a different origin from the https:// site.
 func TestSameOriginOKRejectsSchemeDowngrade(t *testing.T) {
 	cases := []struct {
 		name           string
@@ -862,13 +881,17 @@ func TestSameOriginOKRejectsSchemeDowngrade(t *testing.T) {
 				r.Header.Set("X-Forwarded-Proto", tc.forwardedProto)
 			}
 			r.Header.Set("Origin", tc.origin)
-			if got := sameOriginOK(r); got != tc.want {
+			if got := (&Server{}).sameOriginOK(r); got != tc.want {
 				t.Fatalf("sameOriginOK(tls=%v xfp=%q origin=%q) = %v, want %v", tc.tls, tc.forwardedProto, tc.origin, got, tc.want)
 			}
 		})
 	}
 }
 
+// An admission webhook can quote the Secret it denied, so a provisioning error
+// may carry the cluster token. It must not reach the status API — the wire
+// structs having no token FIELD is not enough when the value rides inside a
+// message string.
 func TestCloudInstallProvisionErrorNeverLeaksTokenIntoStatus(t *testing.T) {
 	fx := newManagerFixture(cloudinstall.ProvisionFresh, cloudinstall.InstallModeFresh, nil)
 	// The apiserver folds stringData into base64 `data` before admission runs,
