@@ -16,11 +16,9 @@ export function evidenceDisplaySnapshot(
   switch (data.type) {
     case "resource": {
       const { metadata, ...resource } = data.resource;
-      const {
-        resourceVersion: _version,
-        managedFields: _managedFields,
-        ...identity
-      } = metadata;
+      const identity = { ...metadata };
+      delete identity.resourceVersion;
+      delete identity.managedFields;
       const context = data.resourceContext;
       return JSON.stringify({
         type: data.type,
@@ -38,11 +36,15 @@ export function evidenceDisplaySnapshot(
       });
     }
     case "crash": {
-      const { logLine, logSource: _source, ...crash } = data.crash;
+      const { logLine, ...crash } = data.crash;
       return JSON.stringify({
         type: data.type,
         namespace: data.namespace,
-        crash: { ...crash, logLine: parseLogLine(logLine).content },
+        crash: {
+          ...crash,
+          logSource: undefined,
+          logLine: parseLogLine(logLine).content,
+        },
       });
     }
     case "events":
@@ -78,13 +80,11 @@ function statusWithoutObservationTimes(status: unknown): unknown {
         Array.isArray(condition)
       )
         return condition;
-      const {
-        lastTransitionTime: _transition,
-        lastUpdateTime: _update,
-        lastProbeTime: _probe,
-        lastHeartbeatTime: _heartbeat,
-        ...finding
-      } = condition as Record<string, unknown>;
+      const finding = { ...(condition as Record<string, unknown>) };
+      delete finding.lastTransitionTime;
+      delete finding.lastUpdateTime;
+      delete finding.lastProbeTime;
+      delete finding.lastHeartbeatTime;
       return finding;
     }),
   };
