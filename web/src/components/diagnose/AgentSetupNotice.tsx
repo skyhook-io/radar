@@ -109,8 +109,8 @@ export function AgentSetupNotice({
       </button>
 
       <p className="mt-4 text-xs text-theme-text-tertiary">
-        The agent reads this cluster through Radar and investigates the issue.
-        It never leaves your machine.
+        Your agent runs locally. Resource details and logs are sent to its model
+        provider under your account, not to Radar.
       </p>
     </div>
   );

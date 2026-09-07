@@ -102,6 +102,87 @@ const criticalIssue = {
 };
 
 describe("InvestigationEvidencePane hierarchy and provenance", () => {
+  it("folds unchanged uncited rechecks into the cited fact with every source accessible", () => {
+    const ref = evidenceRef("a", "b");
+    const projection = project(
+      tool(
+        "cited",
+        "issues",
+        { issues: [criticalIssue], total: 1, total_matched: 1 },
+        { evidenceRef: ref },
+      ),
+      tool("recheck", "issues", {
+        issues: [criticalIssue],
+        total: 1,
+        total_matched: 1,
+      }),
+    );
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+    const group = resolution.links[0].group!;
+    expect(group.latest.source.stepId).toBe("cited");
+    expect(group.observations.map((item) => item.source.stepId)).toEqual([
+      "cited",
+      "recheck",
+    ]);
+    const html = render(projection, false, undefined, resolution);
+    expect(html.match(/aria-label="CrashLoopBackOff evidence"/g)).toHaveLength(
+      1,
+    );
+    expect(html).toContain("Observation history");
+    expect(html).not.toContain("Critical evidence");
+    for (const source of projection.sources) {
+      expect(
+        html.split(`id="${investigationEvidenceSourceDomId(source.id)}"`),
+      ).toHaveLength(2);
+    }
+    expect(
+      investigationEvidenceShouldRevealHistory(
+        group,
+        projection.sources[1].id,
+        true,
+      ),
+    ).toBe(true);
+  });
+
+  it("does not fold a changed intervening observation into an unchanged cited snapshot", () => {
+    const ref = evidenceRef("a", "b");
+    const projection = project(
+      tool(
+        "cited",
+        "issues",
+        { issues: [criticalIssue], total: 1, total_matched: 1 },
+        { evidenceRef: ref },
+      ),
+      tool("changed", "issues", {
+        issues: [{ ...criticalIssue, message: "A different failure detail" }],
+        total: 1,
+        total_matched: 1,
+      }),
+      tool("again", "issues", {
+        issues: [criticalIssue],
+        total: 1,
+        total_matched: 1,
+      }),
+    );
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+    expect(resolution.links[0].group!.observations).toHaveLength(1);
+    const html = render(projection, false, undefined, resolution);
+    expect(html).toContain("Observed after the cited evidence");
+    expect(html).toContain("A different failure detail");
+    for (const source of projection.sources) {
+      expect(
+        html.split(`id="${investigationEvidenceSourceDomId(source.id)}"`),
+      ).toHaveLength(2);
+    }
+  });
   it("keeps detector guidance in the evidence data, not the Findings card or its disclosure", () => {
     const action = "Restore configuration or mark the reference optional.";
     const withGuidance = project(
@@ -304,9 +385,9 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(html).not.toContain("validated against this run");
     expect(html).not.toContain("Agent-selected check");
     expect(html).not.toContain("from this check below");
-    expect(html).toContain("Additional Radar observations");
+    expect(html).not.toContain("Additional Radar observations");
     expect(html.indexOf("Cited by the agent")).toBeLessThan(
-      html.indexOf("Additional Radar observations"),
+      html.indexOf("Kubernetes events"),
     );
     expect(html.match(new RegExp(anchor, "g"))).toHaveLength(1);
     expect(html).toContain('aria-label="CrashLoopBackOff evidence"');
@@ -359,10 +440,10 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(html).toContain(citedMessage);
     expect(html).toContain(uncitedMessage);
     expect(html.indexOf(citedMessage)).toBeLessThan(
-      html.indexOf("Additional Radar observations"),
+      html.indexOf("Critical evidence"),
     );
     expect(html.indexOf(uncitedMessage)).toBeGreaterThan(
-      html.indexOf("Additional Radar observations"),
+      html.indexOf("Critical evidence"),
     );
     expect(html).toContain(`id="${resolution.links[0].group!.id}"`);
     expect(
@@ -674,7 +755,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     const html = render(projection);
     const source = projection.sources[0];
 
-    expect(html).toContain("Critical signals");
+    expect(html).toContain("Critical evidence");
     expect(html).not.toContain("strongest");
     expect(html).not.toContain("main proof");
     expect(html).toContain("CrashLoopBackOff");
@@ -709,7 +790,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     );
     const html = render(projection);
 
-    expect(html).not.toContain("Critical signals");
+    expect(html).not.toContain("Critical evidence");
     expect(html).toContain("Context");
     expect(html).toContain("Broader-scope signals and direct relationships");
   });
@@ -781,7 +862,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(
       investigationEvidenceRevealCollection(keyProjection, hiddenKeySource.id),
     ).toBe("more-key");
-    expect(keyHtml).toContain("More critical signals");
+    expect(keyHtml).toContain("More critical evidence");
     expect(keyHtml).toContain(
       'aria-controls="investigation-more-key-evidence"',
     );
@@ -968,7 +1049,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(html).not.toContain("related to the investigated resource");
 
     const ordered = render(projection, false, "NEXT_STEP_MARKER");
-    expect(ordered.indexOf("Critical signals")).toBeLessThan(
+    expect(ordered.indexOf("Critical evidence")).toBeGreaterThan(
       ordered.indexOf("Evidence coverage is incomplete"),
     );
     expect(ordered.indexOf("Evidence coverage is incomplete")).toBeLessThan(
@@ -1281,7 +1362,8 @@ describe("InvestigationEvidencePane honest result states", () => {
     const source = projection.sources[0];
 
     expect(html).toContain("Evidence coverage is incomplete");
-    expect(html).toContain("1 investigation result needs review");
+    expect(html).not.toContain("1 investigation result needs review");
+    expect(html).toContain("Evidence coverage update: Issue scan:");
     expect(html).toContain(
       "Only part of this investigation result was saved, so Radar could not summarize it here.",
     );
@@ -1293,6 +1375,36 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(html).toContain("data-evidence-source-container");
     expect(html).toContain('aria-label="Evidence limitation for Issue scan:');
     expect(html).toContain("focus:ring-2");
+  });
+
+  it("prioritizes failed reads in the summary without reordering detailed provenance", () => {
+    const projection = project(
+      tool("cut-issues", "issues", {}, { truncated: true }),
+      tool("cut-events", "get_events", {}, { truncated: true }),
+      tool(
+        "denied-logs",
+        "get_pod_logs",
+        { error: "pods/log is forbidden" },
+        { isError: true },
+      ),
+    );
+    expect(projection.limitations).toHaveLength(3);
+    const originalOrder = projection.limitations.map((item) => item.source);
+    const failure = projection.limitations.find(
+      (item) => item.kind === "error",
+    )!;
+    const html = render(projection);
+    expect(html).toContain(
+      renderToStaticMarkup(
+        <>
+          Evidence coverage update: {failure.source}: {failure.message}
+        </>,
+      ),
+    );
+    expect(projection.limitations.map((item) => item.source)).toEqual(
+      originalOrder,
+    );
+    expect(html).toContain("More limitations in details");
   });
 
   it.each([

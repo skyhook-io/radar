@@ -585,6 +585,49 @@ export function resolveInvestigationRootCauseEvidence(
       additionalGroupCount: Math.max(0, observedGroupCount - (group ? 1 : 0)),
     });
   }
+  const citedSourceIds = new Set(links.map((link) => link.source.id));
+  const groupsWithHistory = new Set<string>();
+  for (const link of links) {
+    const cited = link.group;
+    if (
+      !cited ||
+      !link.originalGroupId ||
+      groupsWithHistory.has(link.originalGroupId)
+    )
+      continue;
+    const original = projection.groups.find(
+      (group) => group.id === link.originalGroupId,
+    )!;
+    // Only fold a genuinely unchanged history. A changed intervening observation
+    // must stay in the ordinary timeline, even if the latest value changed back.
+    if (
+      !original.observations.every(
+        (observation) =>
+          evidenceSemanticSnapshot(observation) ===
+          evidenceSemanticSnapshot(cited.latest),
+      )
+    )
+      continue;
+    groupsWithHistory.add(original.id);
+    const observations = original.observations
+      .filter(
+        (observation) =>
+          observation.source.id === link.source.id ||
+          !citedSourceIds.has(observation.source.id),
+      )
+      .map((observation) => ({
+        ...observation,
+        source:
+          observation.source.primaryGroupId === original.id
+            ? { ...observation.source, primaryGroupId: cited.id }
+            : observation.source,
+      }));
+    link.group = {
+      ...cited,
+      observations,
+      chronologicalLatest: observations.at(-1)!,
+    };
+  }
   return { status: "linked", links };
 }
 

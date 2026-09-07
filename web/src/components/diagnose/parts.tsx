@@ -27,6 +27,7 @@ import {
 import { stringify as toYaml } from "yaml";
 import { codeToHtml } from "shiki";
 import { DialogPortal } from "@skyhook-io/k8s-ui/components/ui/DialogPortal";
+import { parseContextName } from "../../utils/context-name";
 import { useTheme } from "../../context/ThemeContext";
 import { type DiagnoseConsentCopy } from "../../context/DiagnoseCustomization";
 import {
@@ -920,6 +921,7 @@ export function ApplyDialog({
   onConfirm,
   agentLabel,
   resourceLabel,
+  context,
   fix,
   managedBy,
   confidence,
@@ -929,6 +931,7 @@ export function ApplyDialog({
   onConfirm: () => void;
   agentLabel: string;
   resourceLabel: string;
+  context: string;
   fix?: string;
   managedBy?: string; // GitOps/Helm owner of the resource, if any
   confidence?: number;
@@ -947,8 +950,12 @@ export function ApplyDialog({
   }, [open]);
   const applyBlocked = !!managedBy && !acked;
   return (
-    <DialogPortal open={open} onClose={onClose} className="max-w-lg w-full">
-      <div className="flex items-start gap-3 border-b border-theme-border p-4">
+    <DialogPortal
+      open={open}
+      onClose={onClose}
+      className="flex max-h-[calc(100dvh-2rem)] w-full max-w-2xl flex-col overflow-hidden"
+    >
+      <div className="flex shrink-0 items-start gap-3 border-b border-theme-border p-4">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-500/20">
           <AlertTriangle className="h-5 w-5 text-amber-500" />
         </div>
@@ -963,22 +970,34 @@ export function ApplyDialog({
             </span>
             .
           </p>
+          <p className="mt-2 text-sm text-theme-text-secondary">
+            Cluster:{" "}
+            <span className="font-medium text-theme-text-primary">
+              {parseContextName(context).clusterName}
+            </span>
+          </p>
+          {context !== parseContextName(context).clusterName && (
+            <p className="mt-0.5 break-all font-mono text-xs text-theme-text-tertiary">
+              {context}
+            </p>
+          )}
         </div>
       </div>
 
-      {fixText && (
-        <div className="border-b border-theme-border p-4">
-          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-accent">
-            <Sparkles className="h-3.5 w-3.5" />
-            What will happen
+      <div className="min-h-0 overflow-y-auto">
+        {fixText && (
+          <div className="border-b border-theme-border p-4">
+            <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-accent">
+              <Sparkles className="h-3.5 w-3.5" />
+              Proposed change
+            </div>
+            <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary [&_pre]:my-1.5 [&_pre]:whitespace-pre-wrap [&_pre_code]:whitespace-pre-wrap">
+              {fixText}
+            </AIMarkdown>
           </div>
-          <AIMarkdown className="max-h-48 overflow-auto text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary [&_pre]:my-1.5">
-            {fixText}
-          </AIMarkdown>
-        </div>
-      )}
-
-      <div className="space-y-2 p-4">
+        )}
+      </div>
+      <div className="shrink-0 space-y-2 p-4">
         {/* The star warning: when we KNOW a controller owns this resource, a live
             change reverts on the next reconcile — say so authoritatively. */}
         {managedBy && (
@@ -1022,8 +1041,7 @@ export function ApplyDialog({
           </span>
         </div>
       </div>
-
-      <div className="flex items-center justify-end gap-3 border-t border-theme-border p-4">
+      <div className="flex shrink-0 items-center justify-end gap-3 border-t border-theme-border p-4">
         <button
           onClick={onClose}
           className="rounded-lg px-4 py-2 text-sm font-medium text-theme-text-secondary transition-colors hover:bg-theme-elevated hover:text-theme-text-primary"
@@ -1692,6 +1710,7 @@ export function ResultCard({
   evidenceConflict = false,
   compactActions = false,
   assessmentAction,
+  actionNotice,
 }: {
   diagnosis: Diagnosis;
   onApply?: (fix: string) => void;
@@ -1712,6 +1731,7 @@ export function ResultCard({
   evidenceConflict?: boolean;
   /** Show only the recommended (or first) action until the user asks for more. */
   compactActions?: boolean;
+  actionNotice?: string;
 }) {
   // Apply turns report mutation truth, not a diagnosis. The outcome-specific
   // card decides whether that truth is confirmed, failed, or still unknown.
@@ -1776,6 +1796,7 @@ export function ResultCard({
       showDisclaimer={showDisclaimer}
       compactActions={compactActions}
       assessmentAction={assessmentAction}
+      actionNotice={actionNotice}
     />
   );
 }
@@ -1799,6 +1820,7 @@ function DiagnosisResult({
   showDisclaimer,
   compactActions,
   assessmentAction,
+  actionNotice,
 }: {
   diagnosis: Diagnosis;
   onApply?: (fix: string) => void;
@@ -1808,6 +1830,7 @@ function DiagnosisResult({
   showDisclaimer: boolean;
   compactActions: boolean;
   assessmentAction?: ReactNode;
+  actionNotice?: string;
 }) {
   const [detail, setDetail] = useState<"analysis" | "explanation" | null>(
     explanation?.status === "running" ? "explanation" : null,
@@ -1832,8 +1855,7 @@ function DiagnosisResult({
       if (element && scroller) {
         const top = element.getBoundingClientRect().top;
         const viewport = scroller.getBoundingClientRect();
-        if (top >= viewport.top && top < viewport.bottom)
-          revealAnalysis(true);
+        if (top >= viewport.top && top < viewport.bottom) revealAnalysis(true);
       }
     }
   }, [explanation?.status, detail, analysisElementRef, revealAnalysis]);
@@ -1980,6 +2002,9 @@ function DiagnosisResult({
               Remediation
             </div>
           )}
+          {actionNotice && (
+            <p className="text-xs text-theme-text-secondary">{actionNotice}</p>
+          )}
           <div id={stepsId}>
             <ol>
               {remediationEntries.map((entry) => (
@@ -2017,7 +2042,7 @@ function DiagnosisResult({
                 : `Show ${hiddenStepCount} more ${hiddenStepCount === 1 ? "step" : "steps"}`}
             </button>
           ) : null}
-          {!recValid && (
+          {!actionNotice && !recValid && (
             <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-snug text-theme-text-tertiary">
               <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
               No one-click fix is available. Review these steps and apply them

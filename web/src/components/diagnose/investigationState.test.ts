@@ -453,8 +453,16 @@ describe("investigation action gating", () => {
       localApplyAttemptAssessmentIdx: -1,
       interactionsBlocked: false,
       hosted: false,
+      hasNewerEvidence: false,
     };
     expect(canOfferInvestigationApply(base)).toBe(true);
+    expect(
+      canOfferInvestigationApply({ ...base, hasNewerEvidence: true }),
+    ).toBe(false);
+    expect(canOfferInvestigationApply({ ...base, hosted: true })).toBe(false);
+    expect(
+      canOfferInvestigationApply({ ...base, interactionsBlocked: true }),
+    ).toBe(false);
     expect(
       canOfferInvestigationApply({
         ...base,

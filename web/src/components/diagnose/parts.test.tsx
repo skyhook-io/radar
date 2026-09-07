@@ -19,6 +19,32 @@ import { ThemeProvider } from "../../context/ThemeContext";
 
 const noop = vi.fn();
 
+it("keeps earlier remediation copyable without suggesting it is executable", () => {
+  const html = renderToStaticMarkup(
+    <ResultCard
+      diagnosis={
+        {
+          rootCause: "Missing configuration",
+          report: "Assessment",
+          remediation: ["Restore the required Secret"],
+          recommendedIndex: 1,
+        } as Diagnosis
+      }
+      section="actions"
+      compactActions
+      actionNotice="Proposed before the latest evidence. Reassess before applying."
+    />,
+  );
+  expect(html).toContain("Restore the required Secret");
+  expect(html).toContain("Copy remediation step 1");
+  expect(html).toContain("Reassess before applying");
+  expect(html).not.toContain("Apply…");
+  expect(html).not.toContain("ask the agent to continue");
+  expect(html.indexOf("Reassess before applying")).toBeLessThan(
+    html.indexOf("Restore the required Secret"),
+  );
+});
+
 describe("explanation placement", () => {
   it("shows local progress in the assessment's shared disclosure", () => {
     const html = renderToStaticMarkup(

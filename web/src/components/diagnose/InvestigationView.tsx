@@ -231,6 +231,9 @@ export function InvestigationView({
   }>();
   const scrollRef = useRef<HTMLDivElement>(null);
   const evidenceScrollRef = useRef<HTMLDivElement>(null);
+  // display:none reports scrollTop=0 even though the browser retains the pane's
+  // position. Keep the visible position for evidence arriving behind Activity.
+  const evidenceScrollTopRef = useRef(0);
   const evidenceContentRef = useRef<HTMLDivElement>(null);
   const nextStepsRef = useRef<HTMLElement>(null);
   const evidenceCardLayoutRef = useRef(
@@ -404,6 +407,7 @@ export function InvestigationView({
     setNarrowPane(initialInvestigationPane(run.status));
     setUnreadEvidence(false);
     setEvidenceUpdateAvailable(false);
+    evidenceScrollTopRef.current = 0;
     latestEvidenceUpdateSourceIdRef.current = undefined;
     setEvidenceRevealRequest(undefined);
     evidenceRevealRequestIdRef.current = 0;
@@ -1003,7 +1007,10 @@ export function InvestigationView({
     ) {
       setUnreadEvidence(true);
     }
-    if (hasNewLiveSource && (evidenceScrollRef.current?.scrollTop ?? 0) > 80) {
+    const scrollTop = evidenceScrollRef.current?.offsetParent
+      ? evidenceScrollRef.current.scrollTop
+      : evidenceScrollTopRef.current;
+    if (hasNewLiveSource && scrollTop > 80) {
       latestEvidenceUpdateSourceIdRef.current = newLiveSources.at(-1)?.id;
       setEvidenceUpdateAvailable(true);
     }
@@ -1015,10 +1022,10 @@ export function InvestigationView({
   // The projection can fold a fresh observation into an existing evidence
   // source. Keep the scrolled-away cue reliable for that in-place revision too.
   useEffect(() => {
-    if (
-      animateEvidenceGroupIds.size > 0 &&
-      (evidenceScrollRef.current?.scrollTop ?? 0) > 80
-    ) {
+    const scrollTop = evidenceScrollRef.current?.offsetParent
+      ? evidenceScrollRef.current.scrollTop
+      : evidenceScrollTopRef.current;
+    if (animateEvidenceGroupIds.size > 0 && scrollTop > 80) {
       const latestChangedSource = projection.groups
         .filter((group) => animateEvidenceGroupIds.has(group.id))
         .map((group) => group.chronologicalLatest.source)
@@ -1244,10 +1251,11 @@ export function InvestigationView({
     });
   const hasNextSteps = Boolean(
     currentAssessment?.diagnosis &&
-    !assessmentNeedsCurrentStateVerification &&
-    !hasEvidenceCollectedAfterAssessment &&
     (currentAssessment.diagnosis.remediation?.length ?? 0) > 0,
   );
+  const earlierPlan =
+    assessmentNeedsCurrentStateVerification ||
+    hasEvidenceCollectedAfterAssessment;
   const showSplitWorkspace = maximized;
   const splitGridClass = showSplitWorkspace
     ? "@min-[1000px]/investigation:grid-cols-[minmax(360px,520px)_minmax(0,1fr)]"
@@ -1263,21 +1271,10 @@ export function InvestigationView({
     : "";
 
   const selectPane = (pane: "activity" | "evidence") => {
-    const switchingToEvidence =
-      pane === "evidence" && narrowPane !== "evidence";
     paneSelectionTouchedRef.current = true;
     setNarrowPane(pane);
     if (pane === "evidence") {
       setUnreadEvidence(false);
-      // An ordinary switch starts at the beginning of the compiled story.
-      // Source links use viewEvidenceSource instead and retain exact-card focus.
-      if (switchingToEvidence) {
-        setEvidenceUpdateAvailable(false);
-        latestEvidenceUpdateSourceIdRef.current = undefined;
-        requestAnimationFrame(() => {
-          evidenceScrollRef.current?.scrollTo({ top: 0 });
-        });
-      }
     }
   };
   const viewActivity = () => {
@@ -1810,6 +1807,8 @@ export function InvestigationView({
             ref={evidenceScrollRef}
             data-investigation-findings-scroll
             onScroll={(event) => {
+              if (event.currentTarget.offsetParent === null) return;
+              evidenceScrollTopRef.current = event.currentTarget.scrollTop;
               if (event.currentTarget.scrollTop <= 40) {
                 setEvidenceUpdateAvailable(false);
                 latestEvidenceUpdateSourceIdRef.current = undefined;
@@ -1924,7 +1923,9 @@ export function InvestigationView({
                               }}
                               className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
                             >
-                              Next steps ↓
+                              {earlierPlan
+                                ? "Earlier proposed steps ↓"
+                                : "Next steps ↓"}
                             </button>
                           ) : null
                         }
@@ -1960,6 +1961,8 @@ export function InvestigationView({
                         (index) =>
                           index !== currentAssessmentIdx &&
                           (index === initialAssessmentIdx ||
+                            (turns[index].diagnosis?.remediation?.length ?? 0) >
+                              0 ||
                             turns.some(
                               (turn) =>
                                 turn.explainAssessment ===
@@ -2026,12 +2029,21 @@ export function InvestigationView({
                             id={`${workspaceId}-next-steps`}
                             className="text-lg font-semibold text-theme-text-primary"
                           >
-                            Next steps
+                            {earlierPlan
+                              ? "Earlier proposed steps"
+                              : "Next steps"}
                           </h2>
                           <ResultCard
                             diagnosis={currentAssessment.diagnosis}
                             section="actions"
                             compactActions
+                            actionNotice={
+                              earlierPlan
+                                ? assessmentNeedsCurrentStateVerification
+                                  ? "Proposed before the apply attempt. Current state has not been verified."
+                                  : "Proposed before the latest evidence. Reassess before applying."
+                                : undefined
+                            }
                             onApply={
                               canOfferInvestigationApply({
                                 currentAssessmentIdx,
@@ -2040,6 +2052,8 @@ export function InvestigationView({
                                 localApplyAttemptAssessmentIdx,
                                 interactionsBlocked,
                                 hosted,
+                                hasNewerEvidence:
+                                  hasEvidenceCollectedAfterAssessment,
                               })
                                 ? requestApply
                                 : undefined
@@ -2064,6 +2078,7 @@ export function InvestigationView({
         onConfirm={runApply}
         agentLabel={agentLabel}
         resourceLabel={formatInvestigationTarget(run)}
+        context={run.context}
         fix={pendingFix}
         managedBy={run.managedBy}
         confidence={turns[lastRemediationIdx]?.diagnosis?.confidence}
@@ -2120,6 +2135,23 @@ function PriorConclusion({
               section="conclusion"
               showDisclaimer={false}
             />
+            {(diagnosis.remediation?.length ?? 0) > 0 && (
+              <section
+                aria-label="Earlier proposed steps"
+                className="mt-3 border-t border-theme-border/60 pt-3"
+              >
+                <h3 className="text-sm font-medium text-theme-text-primary">
+                  Earlier proposed steps
+                </h3>
+                <ResultCard
+                  diagnosis={diagnosis}
+                  section="actions"
+                  compactActions
+                  actionNotice="From an earlier assessment, not the current recommendation."
+                  showDisclaimer={false}
+                />
+              </section>
+            )}
           </div>
         </Collapse>
       </div>

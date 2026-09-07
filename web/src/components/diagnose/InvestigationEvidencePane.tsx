@@ -36,7 +36,6 @@ import {
   displayKind,
   formatRelativeAgeTime,
   mapHealthToTone,
-  pluralize,
   ResourceLink,
   stripAnsi,
 } from "@skyhook-io/k8s-ui";
@@ -82,6 +81,8 @@ const EvidenceNavigationContext = createContext<{
   onOpenResource?: (ref: DiagnosisResourceRef) => void;
   revealSourceId?: string;
   revealRequestId?: number;
+  citedGroupIds?: ReadonlySet<string>;
+  citedOrderByGroup?: ReadonlyMap<string, number>;
 }>({});
 
 function evidenceTypePrefersFullRow(
@@ -222,7 +223,14 @@ export function InvestigationEvidencePane({
     ["checked", []],
   ]);
   const promotedSourceIds = new Set(
-    rootCauseEvidence?.links.map((link) => link.source.id) ?? [],
+    rootCauseEvidence?.links.flatMap((link) => [
+      link.source.id,
+      ...(link.group?.observations
+        .filter(
+          (observation) => observation.source.primaryGroupId === link.group!.id,
+        )
+        .map((observation) => observation.source.id) ?? []),
+    ]) ?? [],
   );
   const promotedSourcesByGroup = new Map<string, Set<string>>();
   for (const link of rootCauseEvidence?.links ?? []) {
@@ -230,6 +238,8 @@ export function InvestigationEvidencePane({
     const sourceIds =
       promotedSourcesByGroup.get(link.originalGroupId) ?? new Set();
     sourceIds.add(link.source.id);
+    for (const observation of link.group?.observations ?? [])
+      sourceIds.add(observation.source.id);
     promotedSourcesByGroup.set(link.originalGroupId, sourceIds);
   }
   const historical: InvestigationEvidenceGroup[] = [];
@@ -372,6 +382,18 @@ export function InvestigationEvidencePane({
     citedSourcesOpen,
   ]);
 
+  const limitationSummary =
+    [...projection.limitations]
+      // Keep an actual failed read visible when the strip signals an error.
+      // Detailed provenance below stays in collection order.
+      .sort(
+        (left, right) =>
+          Number(right.kind === "error") - Number(left.kind === "error"),
+      )
+      .slice(0, 2)
+      .map((limitation) => `${limitation.source}: ${limitation.message}`)
+      .join(" · ") +
+    (projection.limitations.length > 2 ? " · More limitations in details" : "");
   const content = (
     <section
       aria-labelledby="investigation-radar-evidence"
@@ -379,7 +401,7 @@ export function InvestigationEvidencePane({
     >
       <span className="sr-only" role="status" aria-live="polite">
         {projection.limitations.length > 0
-          ? `Evidence coverage update: ${pluralize(projection.coverage.limited, "Activity result")} ${projection.coverage.limited === 1 ? "needs" : "need"} review.`
+          ? `Evidence coverage update: ${limitationSummary}`
           : ""}
       </span>
       <div className="flex min-w-0 items-start justify-between gap-3">
@@ -401,6 +423,17 @@ export function InvestigationEvidencePane({
         </div>
       </div>
 
+      {projection.limitations.length > 0 ? (
+        <CoverageStrip
+          limitations={projection.limitations}
+          summary={limitationSummary}
+          excludedSourceIds={promotedSourceIds}
+          onViewSource={onViewSource}
+          open={coverageOpen}
+          onOpenChange={setCoverageOpen}
+        />
+      ) : null}
+
       <div className="space-y-4">
         {hasStructuredCitedEvidence ? (
           <h3 className="text-sm font-medium text-theme-text-secondary">
@@ -419,18 +452,10 @@ export function InvestigationEvidencePane({
           />
         ) : null}
 
-        {hasStructuredCitedEvidence && ordinaryGroups.length > 0 ? (
-          <div className="border-t border-theme-border/60 pt-3">
-            <h3 className="text-sm font-medium text-theme-text-secondary">
-              Additional Radar observations
-            </h3>
-          </div>
-        ) : null}
-
         <EvidenceTier
           headingId="investigation-key-evidence-heading"
           tier="key"
-          title="Critical signals"
+          title="Critical evidence"
           groups={visibleKeyGroups}
           expandFirst={!hasStructuredCitedEvidence}
           animateGroupIds={animateGroupIds}
@@ -438,7 +463,7 @@ export function InvestigationEvidencePane({
         />
         <CollapsedEvidenceCollection
           id="investigation-more-key-evidence"
-          title="More critical signals"
+          title="More critical evidence"
           description="Additional high-severity failures"
           groups={overflowKeyGroups}
           animateGroupIds={animateGroupIds}
@@ -446,17 +471,6 @@ export function InvestigationEvidencePane({
           open={moreKeyOpen}
           onOpenChange={setMoreKeyOpen}
         />
-
-        {projection.limitations.length > 0 ? (
-          <CoverageStrip
-            limitations={projection.limitations}
-            coverage={projection.coverage}
-            excludedSourceIds={promotedSourceIds}
-            onViewSource={onViewSource}
-            open={coverageOpen}
-            onOpenChange={setCoverageOpen}
-          />
-        ) : null}
 
         {!hasCurrentEvidence && !rootCauseEvidence?.links.length ? (
           <EmptyCollection
@@ -524,6 +538,18 @@ export function InvestigationEvidencePane({
         onOpenResource,
         revealSourceId: revealRequest?.sourceId,
         revealRequestId: revealRequest?.requestId,
+        citedGroupIds: new Set(
+          rootCauseEvidence?.links.flatMap((link) =>
+            link.group ? [link.group.id] : [],
+          ) ?? [],
+        ),
+        citedOrderByGroup: new Map(
+          rootCauseEvidence?.links.flatMap((link) =>
+            link.originalGroupId
+              ? [[link.originalGroupId, link.source.order] as const]
+              : [],
+          ) ?? [],
+        ),
       }}
     >
       {content}
@@ -820,14 +846,14 @@ function CollapsedEvidenceCollection({
 
 function CoverageStrip({
   limitations,
-  coverage,
+  summary,
   excludedSourceIds,
   onViewSource,
   open,
   onOpenChange,
 }: {
   limitations: InvestigationEvidenceLimitation[];
-  coverage: InvestigationEvidenceProjection["coverage"];
+  summary: string;
   /** Sources promoted above already own the page's sole navigation anchor. */
   excludedSourceIds: ReadonlySet<string>;
   onViewSource: (
@@ -877,9 +903,8 @@ function CoverageStrip({
           <span className="block text-xs font-semibold text-theme-text-primary">
             Evidence coverage is incomplete
           </span>
-          <span className="block truncate text-xs text-theme-text-tertiary">
-            {pluralize(coverage.limited, "investigation result")}{" "}
-            {coverage.limited === 1 ? "needs" : "need"} review
+          <span className="line-clamp-2 text-xs text-theme-text-tertiary [overflow-wrap:anywhere]">
+            {summary}
           </span>
         </span>
         <CollapseChevron open={open} className="h-4 w-4" />
@@ -1033,6 +1058,7 @@ function investigationEvidenceHasMeaningfulHistory(
 export function investigationEvidenceShouldRevealHistory(
   group: InvestigationEvidenceGroup,
   sourceId?: string,
+  cited = false,
 ): boolean {
   return (
     Boolean(sourceId) &&
@@ -1040,7 +1066,7 @@ export function investigationEvidenceShouldRevealHistory(
     group.observations.some(
       (observation) => observation.source.id === sourceId,
     ) &&
-    investigationEvidenceHasMeaningfulHistory(group.observations)
+    (cited || investigationEvidenceHasMeaningfulHistory(group.observations))
   );
 }
 
@@ -1066,9 +1092,13 @@ function EvidenceCard({
   spanFullRow?: boolean;
   prominence?: "primary" | "supporting" | "secondary";
 }) {
-  const { onOpenResource, revealSourceId, revealRequestId } = useContext(
-    EvidenceNavigationContext,
-  );
+  const {
+    onOpenResource,
+    revealSourceId,
+    revealRequestId,
+    citedGroupIds,
+    citedOrderByGroup,
+  } = useContext(EvidenceNavigationContext);
   const [open, setOpen] = useState(initiallyOpen);
   const { elementRef, revealAfterToggle } = useDisclosureReveal<HTMLElement>();
   const observation = group.latest;
@@ -1076,9 +1106,11 @@ function EvidenceCard({
     observation.data.type === "crash" && observation.summary
       ? parseLogLine(observation.summary).content
       : observation.summary;
-  const meaningfulHistory = investigationEvidenceHasMeaningfulHistory(
-    group.observations,
-  );
+  const meaningfulHistory =
+    investigationEvidenceHasMeaningfulHistory(group.observations) ||
+    (citedGroupIds?.has(group.id) === true &&
+      new Set(group.observations.map((item) => item.source.id)).size > 1);
+  const citedOrder = citedOrderByGroup?.get(group.id);
   const bodyId = `${domId}-body`;
   const hasEvidenceDetails = evidenceHasDetails(
     observation.data,
@@ -1088,6 +1120,7 @@ function EvidenceCard({
   const revealHistory = investigationEvidenceShouldRevealHistory(
     group,
     revealSourceId,
+    citedGroupIds?.has(group.id),
   );
   useLayoutEffect(() => {
     const destination = revealSourceId
@@ -1135,6 +1168,13 @@ function EvidenceCard({
             )}
           >
             {displaySummary}
+          </span>
+        ) : null}
+        {citedOrder != null ? (
+          <span className="mt-0.5 block text-xs text-theme-text-tertiary">
+            {observation.source.order > citedOrder
+              ? "Observed after the cited evidence"
+              : "Observed before the cited evidence"}
           </span>
         ) : null}
       </span>
