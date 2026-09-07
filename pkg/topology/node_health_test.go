@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -208,4 +209,41 @@ func TestHPANodeHealth(t *testing.T) {
 			t.Errorf("hpaNodeHealth(nil) = %q, want %q", got, StatusUnknown)
 		}
 	})
+}
+
+// Expanding a pod group must not re-derive health from the phase: a
+// crash-looping pod sits at Phase=Running, so the group has to carry the
+// verdict pkg/health already computed.
+func TestPodGroupCarriesComputedPodStatus(t *testing.T) {
+	crashing := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-1", Namespace: "prod"},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app"}}},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:         "app",
+				RestartCount: 9,
+				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+					Reason: "CrashLoopBackOff",
+				}},
+			}},
+		},
+	}
+	group := &PodGroup{Key: "prod/Deployment/api", GroupName: "api", Pods: []*corev1.Pod{crashing}}
+	node := CreatePodGroupNode(group, nil)
+
+	details, ok := node.Data["pods"].([]map[string]any)
+	if !ok || len(details) != 1 {
+		t.Fatalf("expected one pod detail, got %#v", node.Data["pods"])
+	}
+	status, _ := details[0]["status"].(string)
+	if status == "" {
+		t.Fatal("pod detail carries no status; the frontend would fall back to the phase")
+	}
+	if status == string(StatusHealthy) {
+		t.Errorf("crash-looping pod reported %q — Phase is Running, which is exactly what hides it", status)
+	}
+	if phase, _ := details[0]["phase"].(string); phase != string(corev1.PodRunning) {
+		t.Fatalf("fixture no longer reproduces the trap: phase = %q", phase)
+	}
 }
