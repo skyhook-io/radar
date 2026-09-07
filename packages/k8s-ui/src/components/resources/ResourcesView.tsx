@@ -984,6 +984,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'schedule', label: 'Schedule', width: 'w-32' },
+    { key: 'timeZone', label: 'Time Zone', width: 'w-36', tooltip: 'IANA zone the schedule is read in; unset follows the local zone of the KubeRay operator pod' },
     { key: 'lastSchedule', label: 'Last Schedule', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],

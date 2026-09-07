@@ -15,7 +15,7 @@ import { getPolicyReportStatus as _getPolicyReportStatus, getKyvernoPolicyStatus
 import { getResourceClaimStatus as _getResourceClaimStatus, getResourceClaimDeviceClasses as _getResourceClaimDeviceClasses, getResourceClaimTemplateDeviceClasses as _getResourceClaimTemplateDeviceClasses, getResourceClaimAllocation as _getResourceClaimAllocation, getResourceClaimReservedFor as _getResourceClaimReservedFor } from './resource-utils-dra'
 import { getNvidiaClusterPolicyStatus as _getNvidiaClusterPolicyStatus, getNvidiaClusterPolicyEnabledComponents as _getNvidiaClusterPolicyEnabledComponents, getNvidiaDriverStatus as _getNvidiaDriverStatus } from './resource-utils-nvidia'
 import { getClusterQueueStatus as _getClusterQueueStatus, getLocalQueueStatus as _getLocalQueueStatus, getKueueWorkloadStatus as _getKueueWorkloadStatus, getResourceFlavorStatus as _getResourceFlavorStatus, getAdmissionCheckStatus as _getAdmissionCheckStatus, getProvisioningRequestStatus as _getProvisioningRequestStatus } from './resource-utils-kueue'
-import { getRayClusterStatus as _getRayClusterStatus, getRayJobStatus as _getRayJobStatus, getRayServiceStatus as _getRayServiceStatus, getRayCronJobStatus as _getRayCronJobStatus } from './resource-utils-ray'
+import { getRayClusterStatus as _getRayClusterStatus, getRayJobStatus as _getRayJobStatus, getRayServiceStatus as _getRayServiceStatus, getRayCronJobStatus as _getRayCronJobStatus, getRayCronJobTimeZone as _getRayCronJobTimeZone } from './resource-utils-ray'
 import { getLeaderWorkerSetStatus as _getLeaderWorkerSetStatus, getJobSetStatus as _getJobSetStatus } from './resource-utils-jobset-lws'
 import { getInferenceServiceStatus as _getInferenceServiceStatus, getServingRuntimeStatus as _getServingRuntimeStatus, getInferenceGraphStatus as _getInferenceGraphStatus, getTrainedModelStatus as _getTrainedModelStatus, getLLMInferenceServiceStatus as _getLLMInferenceServiceStatus } from './resource-utils-kserve'
 import { getInferencePoolStatus as _getInferencePoolStatus, getInferenceObjectiveStatus as _getInferenceObjectiveStatus } from './resource-utils-inference-gateway'
@@ -2593,6 +2593,11 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       break
     case 'mig':
       if (kindLower === 'nvidiaclusterpolicies') return resource.spec?.mig?.strategy || ''
+      break
+    // The fallback would read spec.timeZone and yield '' for an undeclared
+    // zone, so those rows would drop out of a filter the cell shows a value for.
+    case 'timeZone':
+      if (kindLower === 'raycronjobs') return _getRayCronJobTimeZone(resource)
       break
   }
 

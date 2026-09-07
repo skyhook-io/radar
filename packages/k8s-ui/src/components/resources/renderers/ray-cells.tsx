@@ -15,6 +15,7 @@ import {
   getRayServiceClusters,
   getRayCronJobStatus,
   getRayCronJobSchedule,
+  getRayCronJobTimeZone,
   getRayCronJobLastSchedule,
 } from '../resource-utils-ray'
 
@@ -108,6 +109,18 @@ export function RayCronJobCell({ resource, column }: { resource: any; column: st
     case 'schedule': {
       const schedule = getRayCronJobSchedule(resource)
       return <span className="text-sm font-mono text-theme-text-secondary">{schedule}</span>
+    }
+    case 'timeZone': {
+      const zone = getRayCronJobTimeZone(resource)
+      const declared = Boolean(resource.spec?.timeZone)
+      return (
+        <span
+          className={clsx('text-sm truncate block', declared ? 'text-theme-text-secondary' : 'text-theme-text-tertiary')}
+          title={zone}
+        >
+          {zone}
+        </span>
+      )
     }
     case 'lastSchedule': {
       const lastSchedule = getRayCronJobLastSchedule(resource)
