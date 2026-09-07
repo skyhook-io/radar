@@ -1,7 +1,6 @@
 // Kyverno / Policy Report cell components for ResourcesView table
 
 import { clsx } from 'clsx'
-import { healthColors } from '../resource-utils'
 import {
   getPolicyReportScope,
   getPolicyReportStatus,
@@ -84,11 +83,13 @@ export function KyvernoPolicyCell({ resource, column }: { resource: any; column:
       return (
         <span className={clsx(
           'badge',
+          // Enforce/Audit is a configured posture, not evidence of a fault, so
+          // it takes colour-named accents rather than the health palette.
           blocks
-            ? healthColors.unhealthy
+            ? 'status-red'
             : discrepancy
-              ? healthColors.alert
-              : healthColors.degraded,
+              ? 'status-orange'
+              : 'status-amber',
         )}>
           {label}
         </span>
