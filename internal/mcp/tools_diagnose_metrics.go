@@ -21,7 +21,13 @@ const (
 	diagnoseMetricsDefaultSince = time.Hour
 	diagnoseMetricsMaxPods      = 50
 	diagnoseMetricsMaxPoints    = 60
-	diagnoseMetricsMaxBytes     = 8 * 1024
+	// diagnoseMetricsMaxBytes budgets the samples plus their envelope and
+	// sets the resolution; the query strings, which name every pod in the
+	// set, sit outside it and under the hard backstop instead.
+	diagnoseMetricsMaxBytes = 8 * 1024
+	// diagnoseMetricsHardMaxBytes bounds the entire serialized field,
+	// queries included.
+	diagnoseMetricsHardMaxBytes = 24 * 1024
 	// diagnoseMetricsValueDigits bounds each sample's serialized width so
 	// three full-resolution series fit the byte budget; four significant
 	// digits keep every chart-visible distinction.
@@ -124,7 +130,7 @@ func diagnoseMetricsForPodSet(budgetCtx context.Context, avail prometheus.Availa
 		names = names[:diagnoseMetricsMaxPods]
 	}
 	out.Pods = len(names)
-	step, _ := adjustStep(since, "", diagnoseMetricsPointBudget(out, namespace, names))
+	step, _ := adjustStep(since, "", diagnoseMetricsPointBudget(out))
 	out.Window.Step = step.String()
 
 	if avail.State != prometheus.AvailabilityConnected {
@@ -182,9 +188,9 @@ func diagnoseMetricsForPodSet(budgetCtx context.Context, avail prometheus.Availa
 		out.Error = fmt.Sprintf("metrics omitted: %v", err)
 		return out
 	}
-	if len(encoded) > diagnoseMetricsMaxBytes {
+	if len(encoded) > diagnoseMetricsHardMaxBytes {
 		out.Series = []diagnoseMetricSeries{}
-		out.Error = fmt.Sprintf("metrics omitted: %d bytes serialized exceeds the %d byte limit", len(encoded), diagnoseMetricsMaxBytes)
+		out.Error = fmt.Sprintf("metrics omitted: %d bytes serialized exceeds the %d byte backstop", len(encoded), diagnoseMetricsHardMaxBytes)
 		log.Printf("[mcp] diagnose: metrics for %d pods in %s dropped: %s", out.Pods, namespace, out.Error)
 	}
 	return out
@@ -198,10 +204,9 @@ func boundDiagnoseMetricsError(msg string) string {
 }
 
 // diagnoseMetricsPointBudget derives the per-series point cap from what the
-// byte budget leaves after the envelope. The three query strings name every
-// pod in the set, so a large set can take half the budget; lowering the
-// resolution keeps the chart where dropping it would lose the vitals.
-func diagnoseMetricsPointBudget(envelope *diagnoseMetrics, namespace string, pods []string) int {
+// sample budget leaves after the envelope, with the query strings left out
+// so the resolution does not depend on how many pods the set names.
+func diagnoseMetricsPointBudget(envelope *diagnoseMetrics) int {
 	probe := *envelope
 	probe.Window.Step = "10m0s"
 	probe.Series = make([]diagnoseMetricSeries, 0, len(diagnoseMetricsCategories))
@@ -209,7 +214,6 @@ func diagnoseMetricsPointBudget(envelope *diagnoseMetrics, namespace string, pod
 		probe.Series = append(probe.Series, diagnoseMetricSeries{
 			Category: string(cat),
 			Unit:     prom.CategoryUnit(cat),
-			Query:    prom.BuildPodSetQuery(namespace, pods, cat),
 			Series:   []prom.Series{{Labels: map[string]string{}, DataPoints: []prom.DataPoint{}}},
 		})
 	}

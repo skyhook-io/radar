@@ -51,9 +51,14 @@ func metricsMatrixForRequest(value string) func(params url.Values) string {
 	}
 }
 
+// fleetPodName is a 63-character pod name, the longest Kubernetes allows,
+// so the pod-set cap and the byte backstop see the worst-case query length.
+func fleetPodName(i int) string {
+	return fmt.Sprintf("fleet-%s-%05d", strings.Repeat("a", 51), i)
+}
+
 // setupFakeCacheWithPodFleet installs a Deployment in namespace alpha with
-// n Running pods named like real Deployment pods so the pod-set cap and the
-// byte budget see realistic query lengths.
+// n Running pods carrying the longest names Kubernetes allows.
 func setupFakeCacheWithPodFleet(t *testing.T, n int) {
 	t.Helper()
 	const ns = "alpha"
@@ -73,7 +78,7 @@ func setupFakeCacheWithPodFleet(t *testing.T, n int) {
 	}
 	for i := 0; i < n; i++ {
 		objs = append(objs, &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("fleet-7d9f8458c9-%05d", i), Namespace: ns, Labels: selector},
+			ObjectMeta: metav1.ObjectMeta{Name: fleetPodName(i), Namespace: ns, Labels: selector},
 			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "fleet"}}},
 			Status:     corev1.PodStatus{Phase: corev1.PodRunning},
 		})
@@ -190,9 +195,29 @@ func TestHandleDiagnoseMetricsCapturesThreeSeriesOverExactPodSet(t *testing.T) {
 			t.Errorf("range step = %q, want the reported %s", params.Get("step"), step)
 		}
 	}
-	if size := len(got["metrics"]); size > diagnoseMetricsMaxBytes {
-		t.Errorf("serialized metrics = %d bytes, exceeds the %d byte budget with three full series", size, diagnoseMetricsMaxBytes)
+	if size := metricsBytesWithoutQueries(t, m); size > diagnoseMetricsMaxBytes {
+		t.Errorf("samples and envelope = %d bytes, exceeds the %d byte budget with three full series", size, diagnoseMetricsMaxBytes)
 	}
+	if size := len(got["metrics"]); size > diagnoseMetricsHardMaxBytes {
+		t.Errorf("serialized metrics = %d bytes, exceeds the %d byte backstop", size, diagnoseMetricsHardMaxBytes)
+	}
+}
+
+// metricsBytesWithoutQueries measures what the sample budget governs: the
+// field with its query strings blanked.
+func metricsBytesWithoutQueries(t *testing.T, m *diagnoseMetrics) int {
+	t.Helper()
+	probe := *m
+	probe.Series = make([]diagnoseMetricSeries, len(m.Series))
+	copy(probe.Series, m.Series)
+	for i := range probe.Series {
+		probe.Series[i].Query = ""
+	}
+	encoded, err := json.Marshal(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(encoded)
 }
 
 func TestHandleDiagnoseMetricsHonorsSinceAndPodKind(t *testing.T) {
@@ -249,19 +274,26 @@ func TestHandleDiagnoseMetricsCapsPodSetByName(t *testing.T) {
 	if len(m.Series) != 3 {
 		t.Fatalf("series = %d entries, want 3", len(m.Series))
 	}
-	if size := len(got["metrics"]); size > diagnoseMetricsMaxBytes {
-		t.Errorf("serialized metrics = %d bytes, exceeds the %d byte budget", size, diagnoseMetricsMaxBytes)
+	size := len(got["metrics"])
+	if size > diagnoseMetricsHardMaxBytes {
+		t.Errorf("serialized metrics = %d bytes, exceeds the %d byte backstop", size, diagnoseMetricsHardMaxBytes)
 	}
-	// Fifty pod names in each query eat into the byte budget, which the
-	// resolution absorbs: fewer points, not a dropped chart.
-	if points := len(m.Series[0].Series[0].DataPoints); points >= 50 || points < 10 {
-		t.Errorf("series[0] has %d points, want the resolution lowered to fit the budget but still charted", points)
+	// Fifty 63-character names make the queries alone outgrow the sample
+	// budget; they sit outside it, so the chart keeps its resolution.
+	if size <= diagnoseMetricsMaxBytes {
+		t.Fatalf("serialized metrics = %d bytes, the fixture no longer exercises queries beyond the %d byte sample budget", size, diagnoseMetricsMaxBytes)
+	}
+	if points := len(m.Series[0].Series[0].DataPoints); points > diagnoseMetricsMaxPoints || points < 50 {
+		t.Errorf("series[0] has %d points, want between 50 and %d regardless of pod-name length", points, diagnoseMetricsMaxPoints)
+	}
+	if size := metricsBytesWithoutQueries(t, m); size > diagnoseMetricsMaxBytes {
+		t.Errorf("samples and envelope = %d bytes, exceeds the %d byte budget", size, diagnoseMetricsMaxBytes)
 	}
 	for _, s := range m.Series {
-		if !strings.Contains(s.Query, "(fleet-7d9f8458c9-00000|") || !strings.Contains(s.Query, "|fleet-7d9f8458c9-00049)") {
+		if !strings.Contains(s.Query, "("+fleetPodName(0)+"|") || !strings.Contains(s.Query, "|"+fleetPodName(49)+")") {
 			t.Errorf("%s query does not cover the first %d pods by name: %s", s.Category, diagnoseMetricsMaxPods, s.Query)
 		}
-		if strings.Contains(s.Query, "fleet-7d9f8458c9-00050") {
+		if strings.Contains(s.Query, fleetPodName(50)) {
 			t.Errorf("%s query names a pod past the cap: %s", s.Category, s.Query)
 		}
 	}
@@ -383,8 +415,8 @@ func TestHandleDiagnoseMetricsDropsSeriesOnSizeBudget(t *testing.T) {
 	if m == nil {
 		t.Fatal("diagnose omitted metrics on a size breach")
 	}
-	if len(m.Series) != 0 || !strings.Contains(m.Error, "byte limit") {
-		t.Fatalf("series=%d error=%q, want no series and a size explanation", len(m.Series), m.Error)
+	if len(m.Series) != 0 || !strings.Contains(m.Error, "byte backstop") {
+		t.Fatalf("series=%d error=%q, want no series and a backstop explanation", len(m.Series), m.Error)
 	}
 	if size := len(got["metrics"]); size > diagnoseMetricsMaxBytes {
 		t.Errorf("serialized metrics = %d bytes after dropping series, still over budget", size)
