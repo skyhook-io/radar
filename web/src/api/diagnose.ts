@@ -13,6 +13,8 @@ export interface AgentInfo {
   profiles?: ExecutionProfile[];
   consentSurfaces?: Partial<Record<ExecutionProfile, string>>;
   hosted?: boolean;
+  /** Hosted backends opt in only when they implement assessment-bound, tool-free explanations. */
+  assessmentExplanations?: boolean;
 }
 
 export interface AgentsResponse {

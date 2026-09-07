@@ -8,7 +8,10 @@ import {
   prefersReducedMotion,
   useDisclosureReveal,
 } from "./useDisclosureReveal";
-import { investigationExplanation } from "./investigationExplanation";
+import {
+  investigationExplanation,
+  supportsAssessmentExplanation,
+} from "./investigationExplanation";
 import {
   initialInvestigationPane,
   investigationEvidenceShouldMarkUnread,
@@ -160,8 +163,17 @@ export function InvestigationView({
   const { kind, namespace, name } = run;
   // Apply is off for hosted agents (read-only server-side). Keyed on the selected
   // agent, which matches run.agent unless a deployment mixes hosted + local agents.
-  const { refreshRuns, openInvestigation, startError, dismissError, hosted } =
-    useDiagnose();
+  const {
+    refreshRuns,
+    openInvestigation,
+    startError,
+    dismissError,
+    hosted,
+    agents,
+  } = useDiagnose();
+  const explanationEnabled = supportsAssessmentExplanation(
+    agents.find((agent) => agent.name === run.agent),
+  );
   // Investigate again means look again, so it asks for a new session explicitly and only
   // carries the issue forward — being handed the previous answer is the one
   // thing someone clicking this doesn't want.
@@ -754,15 +766,14 @@ export function InvestigationView({
     const sequence = assessment.resultSequence;
     if (!sequence || !assessment.diagnosis?.rootCause) return undefined;
     const saved = investigationExplanation(turns, sequence);
-    // This intent is implemented by the local run manager; hosted continuation
-    // alone does not imply support for assessment-bound explanation turns.
-    if ((readOnly || hosted) && saved.status === "idle") return undefined;
+    if ((readOnly || !explanationEnabled) && saved.status === "idle")
+      return undefined;
     const state =
       explanationRequest?.sequence === sequence ? explanationRequest : saved;
     return {
       ...state,
       onGenerate:
-        !hosted && !interactionsBlocked
+        explanationEnabled && !interactionsBlocked
           ? () => askExplanation(sequence)
           : undefined,
       openRequest:

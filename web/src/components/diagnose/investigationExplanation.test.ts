@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { investigationExplanation } from "./investigationExplanation";
+import {
+  investigationExplanation,
+  supportsAssessmentExplanation,
+} from "./investigationExplanation";
+import type { AgentInfo } from "../../api/diagnose";
 import type { Turn } from "./parts";
 
 const turn = (overrides: Partial<Turn> = {}): Turn => ({
@@ -10,6 +14,31 @@ const turn = (overrides: Partial<Turn> = {}): Turn => ({
   ...overrides,
 });
 describe("assessment-local explanation", () => {
+  it("requires explicit hosted support without enabling mutations or changing local support", () => {
+    const agent: AgentInfo = {
+      name: "hub",
+      label: "Managed agent",
+      path: "",
+      version: "",
+      supported: true,
+      present: true,
+      hosted: true,
+    };
+    expect(supportsAssessmentExplanation(undefined)).toBe(false);
+    expect(supportsAssessmentExplanation(agent)).toBe(false);
+    expect(
+      supportsAssessmentExplanation({
+        ...agent,
+        assessmentExplanations: false,
+      }),
+    ).toBe(false);
+    expect(
+      supportsAssessmentExplanation({ ...agent, assessmentExplanations: true }),
+    ).toBe(true);
+    expect(supportsAssessmentExplanation({ ...agent, hosted: false })).toBe(
+      true,
+    );
+  });
   it("does not mistake an ordinary answer for an explanation", () => {
     expect(
       investigationExplanation([turn({ question: "Explain simply" })], 2),

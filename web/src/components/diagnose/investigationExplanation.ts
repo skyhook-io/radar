@@ -1,4 +1,11 @@
 import type { AssessmentExplanation, Turn } from "./parts";
+import type { AgentInfo } from "../../api/diagnose";
+
+export function supportsAssessmentExplanation(
+  agent: AgentInfo | undefined,
+): boolean {
+  return !!agent && (!agent.hosted || agent.assessmentExplanations === true);
+}
 
 export function investigationExplanation(
   turns: readonly Turn[],
