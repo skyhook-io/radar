@@ -276,6 +276,7 @@ func TestCreatePodOwnerEdgesAddsScaledJobShortcut(t *testing.T) {
 		nil,
 		nil,
 		nil,
+		nil,
 		map[string]string{"demo/scaled-run": "job/demo/scaled-run"},
 		nil,
 		map[string]string{"demo/scaled-run": "scaledjob/demo/importer"},

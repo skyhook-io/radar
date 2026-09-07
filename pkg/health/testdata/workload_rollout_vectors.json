@@ -1,6 +1,51 @@
 {
   "vectors": [
     {
+      "name": "argo rollout experiment step names its templates",
+      "kind": "Rollout",
+      "phase": "paused",
+      "active": true,
+      "manual": false,
+      "label": "Rollout paused",
+      "detail": "Step 2 (Experiment: baseline, canary for 5m) · 2/4 updated · 4 available",
+      "desired": 4,
+      "updated": 2,
+      "ready": 4,
+      "available": 4,
+      "object": {
+        "apiVersion": "argoproj.io/v1alpha1",
+        "kind": "Rollout",
+        "spec": {
+          "replicas": 4,
+          "strategy": {
+            "canary": {
+              "steps": [
+                {
+                  "setWeight": 50
+                },
+                {
+                  "experiment": {
+                    "duration": "5m",
+                    "templates": [
+                      { "name": "baseline" },
+                      { "name": "canary" }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "status": {
+          "phase": "Paused",
+          "currentStepIndex": 1,
+          "updatedReplicas": 2,
+          "readyReplicas": 4,
+          "availableReplicas": 4
+        }
+      }
+    },
+    {
       "name": "deployment defaults replicas to one",
       "kind": "Deployment",
       "phase": "idle",
@@ -237,7 +282,7 @@
       "active": true,
       "manual": false,
       "label": "Rollout paused",
-      "detail": "Step 2 · 2/4 updated · 4 available",
+      "detail": "Step 2 (Pause: until promoted) · 2/4 updated · 4 available",
       "desired": 4,
       "updated": 2,
       "ready": 4,
@@ -422,7 +467,7 @@
       "active": true,
       "manual": false,
       "label": "Rolling out",
-      "detail": "Step 2 · 2/2 updated · 2 available",
+      "detail": "Step 2 (Pause: until promoted) · 2/2 updated · 2 available",
       "desired": 2,
       "updated": 2,
       "ready": 2,

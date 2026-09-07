@@ -16,6 +16,7 @@ import { ownershipOf } from '../../utils/topology-neighborhood'
 import { midTruncate } from '../../utils/format'
 import { getTopologyIcon } from '../../utils/resource-icons'
 import { Tooltip } from '../ui/Tooltip'
+import { Badge } from '../ui/Badge'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
 import { SEVERITY_TEXT_CLASS } from '../checks/severity'
 import argoCdLogo from '../../assets/gitops/argocd.png'
@@ -523,6 +524,11 @@ export const K8sResourceNode = memo(function K8sResourceNode({
   const policyStatus = nodeData.policyStatus as string | undefined
   const deploymentMembership = nodeData.deploymentMembership as 'runtime-only' | 'source-only' | undefined
   const deploymentSourceLabel = nodeData.deploymentSourceLabel as string | undefined
+  // Argo Rollouts canary/stable (or blue-green active/preview) traffic role,
+  // set server-side on Pod/ReplicaSet/Service nodes owned by or matched to a
+  // Rollout. canary/preview are the "being tested" side, stable/active the
+  // "serving" side — tone only tells the two apart, it carries no other meaning.
+  const trafficRole = nodeData.trafficRole as 'canary' | 'stable' | 'active' | 'preview' | undefined
 
   const Icon = getTopologyIcon(kind);
 
@@ -612,6 +618,15 @@ export const K8sResourceNode = memo(function K8sResourceNode({
                     {!isSmallNode && (deploymentMembership === 'runtime-only' ? 'Runtime only' : `${deploymentSourceLabel ?? 'Source'} only`)}
                   </span>
                 </Tooltip>
+              )}
+              {trafficRole && (
+                <Badge
+                  tone={trafficRole === 'canary' || trafficRole === 'preview' ? 'accent1' : 'accent2'}
+                  size="sm"
+                  className="!text-[9px] !px-1 !py-0.5 normal-case tracking-normal"
+                >
+                  {trafficRole[0].toUpperCase() + trafficRole.slice(1)}
+                </Badge>
               )}
               {onToggleReplicaSets && (
                 <Tooltip content={nodeData.replicaSetsCollapsed ? 'Show ReplicaSet' : 'Hide stable ReplicaSet'} position="right">
