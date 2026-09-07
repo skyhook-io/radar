@@ -3622,13 +3622,19 @@ function labelsNameTarget(
   return labels.pod !== undefined && targetPods.has(labels.pod);
 }
 
-/** The label set places the instance in another namespace outright. */
+/**
+ * The label set places the instance in another namespace outright. Only a
+ * namespaced target can be excluded this way; for a cluster-scoped target
+ * every namespace label is "different" and proves nothing.
+ */
 function labelsPlaceElsewhere(
   target: InvestigationEvidenceTarget,
   labels: Record<string, string>,
 ): boolean {
   return (
-    nonEmptyString(labels.namespace) && labels.namespace !== target.namespace
+    Boolean(target.namespace) &&
+    nonEmptyString(labels.namespace) &&
+    labels.namespace !== target.namespace
   );
 }
 
@@ -3745,6 +3751,7 @@ function adaptPrometheusRules(
   }
   const identity = targetIdentity(builder.target);
   const targetPods = producerEstablishedTargetPods(builder);
+  const seenRuleIdentities = new Map<string, number>();
   let namesTarget = false;
   let healthGap = false;
   let alertingCount = 0;
@@ -3769,11 +3776,16 @@ function adaptPrometheusRules(
     ) {
       everyInstanceElsewhere = false;
     }
-    // Rule names are not unique within a group; the expression and static
-    // labels are what make one rule the same rule across reads.
-    const ruleIdentity = `alerts:${rule.group}:${rule.name}:${stableHash(
+    // Rule names are not unique within a group, and group names are unique
+    // only per rule file, which the producer does not return. The expression
+    // and static labels distinguish rules; identical rows within one response
+    // are distinct rules told apart by their order, never successive reads.
+    const ruleDefinition = `alerts:${rule.group}:${rule.name}:${stableHash(
       JSON.stringify([rule.query, Object.entries(rule.labels).sort()]),
     )}`;
+    const ordinal = seenRuleIdentities.get(ruleDefinition) ?? 0;
+    seenRuleIdentities.set(ruleDefinition, ordinal + 1);
+    const ruleIdentity = `${ruleDefinition}:${ordinal}`;
     const previousRelevance = builder.latestRelevance("alerts", ruleIdentity);
     const relevance: InvestigationEvidenceRelevance = instances.some(
       (instance) => instance.namesTarget,
@@ -4124,12 +4136,30 @@ function permissionBinding(
   return candidate as unknown as InvestigationPermissionBinding;
 }
 
+// Kinds whose spec carries a PodSpec, by API group. Anything else with a
+// `spec.template.spec` (an ApplicationSet, for one) templates something that
+// is not a Pod and runs as no account at all.
+const POD_TEMPLATE_KINDS: Readonly<Record<string, readonly string[]>> = {
+  "": ["Pod"],
+  apps: ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"],
+  batch: ["Job", "CronJob"],
+  "argoproj.io": ["Rollout"],
+};
+
 function podSpecServiceAccount(
   resource: InvestigationKubernetesResource,
 ): string | undefined {
+  const group = apiVersionToGroup(resource.apiVersion);
+  if (!POD_TEMPLATE_KINDS[group]?.includes(resource.kind)) return undefined;
   const spec = record(resource.spec);
   const podSpec =
-    resource.kind === "Pod" ? spec : record(record(spec?.template)?.spec);
+    resource.kind === "Pod"
+      ? spec
+      : resource.kind === "CronJob"
+        ? record(
+            record(record(record(spec?.jobTemplate)?.spec)?.template)?.spec,
+          )
+        : record(record(spec?.template)?.spec);
   if (!podSpec) return undefined;
   // An unset serviceAccountName runs as the namespace's `default` account.
   return nonEmptyString(podSpec.serviceAccountName)
