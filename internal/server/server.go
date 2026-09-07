@@ -259,6 +259,13 @@ func New(cfg Config) *Server {
 				}
 			}
 			s.aiRuns = ai.NewRunManager(d, s.ActualPort, s.basePath, k8s.GetContextName, store)
+			s.aiRuns.MetricsAvailability = func(ctx context.Context) ai.MetricsAvailability {
+				state := prometheuspkg.Availability(ctx)
+				return ai.MetricsAvailability{
+					Connected: state.State == prometheuspkg.AvailabilityConnected,
+					Address:   state.Address,
+				}
+			}
 			if historyBroken {
 				// Persistence was requested but isn't working — the UI must say
 				// history won't survive a restart, not just a log line.

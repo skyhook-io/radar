@@ -35,3 +35,15 @@ export interface ReferenceLine {
   label: string
   kind: 'request' | 'limit'
 }
+
+/**
+ * Vertical marker on a chart at one instant. `kind` names what Radar recorded
+ * there; the chart draws the marker and its label and never implies that the
+ * marked instant explains the series around it.
+ */
+export interface ChartAnnotation {
+  /** Unix seconds, the same clock as {@link TimeSeriesPoint.timestamp}. */
+  timestamp: number
+  label: string
+  kind: 'change'
+}

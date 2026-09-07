@@ -10,6 +10,7 @@ import {
   type Topology,
 } from "@skyhook-io/k8s-ui";
 import { fnv1a32 } from "@skyhook-io/k8s-ui/utils/structure-hash";
+import type { TimeSeries } from "@skyhook-io/k8s-ui/components/charts";
 import { apiVersionToGroup } from "../../utils/navigation";
 
 import {
@@ -28,6 +29,7 @@ import {
 } from "./diagnoseEvidenceTypes";
 import type { RootCauseEvidence } from "../../api/diagnose";
 import { investigationResourceEvidenceSummary } from "./investigationResourceEvidenceModel";
+import { metricsUnitForExpression } from "./investigationMetrics";
 
 /**
  * The projection deliberately consumes only the small, structural portion of
@@ -92,7 +94,8 @@ export type InvestigationEvidenceKind =
   | "receipt"
   | "alerts"
   | "helm"
-  | "permissions";
+  | "permissions"
+  | "metrics";
 
 type InvestigationSemanticDomain = "issue" | "startup" | "crash" | "dns";
 
@@ -445,7 +448,40 @@ export type InvestigationEvidenceData =
       truncated?: boolean;
       usedByPods?: string[];
       podsTotal?: number;
-    };
+    }
+  | InvestigationMetricsEvidence;
+/** One PromQL vector selector as the producer tokenized it. */
+export interface InvestigationMetricsSelector {
+  metric: string;
+  matchers: Array<{ label: string; op: string; value: string }>;
+}
+
+/**
+ * A Prometheus result captured during the investigation. `origin` says which
+ * producer ran the query; the shape is shared so every metrics card renders
+ * the same way. `subject` is set only when the query's selectors are all
+ * scoped to the investigation target.
+ */
+export interface InvestigationMetricsEvidence {
+  type: "metrics";
+  origin: "query" | "diagnose";
+  query: string;
+  mode: "range" | "instant";
+  start?: string;
+  end?: string;
+  step?: string;
+  unit?: string;
+  label?: string;
+  series: TimeSeries[];
+  truncated: boolean;
+  summary?: unknown;
+  note?: string;
+  selectors?: InvestigationMetricsSelector[];
+  selectorsUnknown?: boolean;
+  subject?: DiagnosisResourceRef;
+  pods?: number;
+  partial?: boolean;
+}
 
 export interface InvestigationEvidenceObservation {
   source: InvestigationEvidenceSource;
@@ -635,6 +671,8 @@ export function investigationEvidenceSubjectRef(
           namespace: data.subject.namespace,
           name: data.subject.name,
         };
+      case "metrics":
+        return data.subject;
       default:
         return undefined;
     }
@@ -1270,6 +1308,7 @@ const INVESTIGATION_RESULT_LABELS: Readonly<Record<string, string>> = {
   get_prometheus_rules: "Alert rules",
   get_helm_release: "Helm release",
   get_subject_permissions: "Permissions",
+  query_prometheus: "Prometheus query",
 };
 
 function investigationResultLabel(source: InvestigationEvidenceSource): string {
@@ -4486,6 +4525,264 @@ function adaptSubjectPermissions(
   }
 }
 
+function timeSeries(value: unknown): TimeSeries | undefined {
+  const item = record(value);
+  if (!item || !Array.isArray(item.dataPoints)) return undefined;
+  const labels = record(item.labels) ?? {};
+  if (Object.values(labels).some((label) => typeof label !== "string")) {
+    return undefined;
+  }
+  const dataPoints: TimeSeries["dataPoints"] = [];
+  for (const raw of item.dataPoints) {
+    const point = record(raw);
+    if (!point || typeof point.timestamp !== "number") return undefined;
+    if (
+      point.value !== undefined &&
+      point.value !== null &&
+      typeof point.value !== "number"
+    ) {
+      return undefined;
+    }
+    dataPoints.push({
+      timestamp: point.timestamp,
+      value: typeof point.value === "number" ? point.value : null,
+    });
+  }
+  return { labels: labels as Record<string, string>, dataPoints };
+}
+
+function metricsSelector(
+  value: unknown,
+): InvestigationMetricsSelector | undefined {
+  const item = record(value);
+  if (!item || typeof item.metric !== "string" || !Array.isArray(item.matchers))
+    return undefined;
+  const matchers: InvestigationMetricsSelector["matchers"] = [];
+  for (const raw of item.matchers) {
+    const matcher = record(raw);
+    if (
+      !matcher ||
+      typeof matcher.label !== "string" ||
+      typeof matcher.op !== "string" ||
+      typeof matcher.value !== "string"
+    ) {
+      return undefined;
+    }
+    matchers.push({
+      label: matcher.label,
+      op: matcher.op,
+      value: matcher.value,
+    });
+  }
+  return { metric: item.metric, matchers };
+}
+
+const WORKLOAD_SELECTOR_LABELS: Readonly<Record<string, string | undefined>> =
+  {
+    deployment: "deployment",
+    statefulset: "statefulset",
+    daemonset: "daemonset",
+    workload: undefined,
+  };
+
+/**
+ * A regex matcher names the target only in the exact forms the plan admits,
+ * with the name's regex metacharacters (a dot in a Kubernetes name) escaped
+ * or absent. "api-?.*" also selects "apiworker-…" and an unescaped "api.v2"
+ * also selects "api-v2", so neither may claim the target.
+ */
+function regexNamesExactly(
+  value: string,
+  name: string,
+  suffix: string,
+): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return value === `${escaped}${suffix}`;
+}
+
+function selectorNamesTarget(
+  target: InvestigationEvidenceTarget,
+  matcher: InvestigationMetricsSelector["matchers"][number],
+): boolean {
+  const { label, op, value } = matcher;
+  if (label === "pod") {
+    if (op === "=~") return regexNamesExactly(value, target.name, "-.*");
+    if (op === "=") {
+      return target.kind.toLowerCase() === "pod"
+        ? value === target.name
+        : value.startsWith(`${target.name}-`);
+    }
+    return false;
+  }
+  if (!(label in WORKLOAD_SELECTOR_LABELS)) return false;
+  const requiredKind = WORKLOAD_SELECTOR_LABELS[label];
+  if (requiredKind && target.kind.toLowerCase() !== requiredKind) return false;
+  if (op === "=") return value === target.name;
+  if (op === "=~") return regexNamesExactly(value, target.name, "");
+  return false;
+}
+
+/**
+ * A metrics result is about the target only when every selector says so:
+ * the target namespace plus a pod or workload matcher naming it. A query with
+ * any bare or foreign selector (a cluster denominator, a sibling workload, an
+ * alternation) could be about anything, so it stays broader.
+ */
+export function metricsScope(
+  target: InvestigationEvidenceTarget,
+  selectors: readonly InvestigationMetricsSelector[],
+  selectorsUnknown: boolean,
+): InvestigationEvidenceRelevance {
+  if (selectorsUnknown || selectors.length === 0 || !target.namespace) {
+    return "broader";
+  }
+  let allNameTarget = true;
+  for (const selector of selectors) {
+    const inNamespace = selector.matchers.some(
+      (matcher) =>
+        matcher.label === "namespace" &&
+        matcher.op === "=" &&
+        matcher.value === target.namespace,
+    );
+    if (!inNamespace) return "broader";
+    if (!selector.matchers.some((matcher) => selectorNamesTarget(target, matcher)))
+      allNameTarget = false;
+  }
+  return allNameTarget ? "target" : "producer-related";
+}
+
+function metricsWindowLabel(data: {
+  mode: "range" | "instant";
+  start?: string;
+  end?: string;
+  step?: string;
+}): string | undefined {
+  if (data.mode !== "range" || !data.start || !data.end) return undefined;
+  const startMs = Date.parse(data.start);
+  const endMs = Date.parse(data.end);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs)
+    return undefined;
+  const minutes = Math.round((endMs - startMs) / 60_000);
+  const window =
+    minutes >= 60 * 24 * 2
+      ? `${Math.round(minutes / (60 * 24))}d`
+      : minutes >= 120
+        ? `${Math.round(minutes / 60)}h`
+        : `${minutes}m`;
+  return data.step ? `${window} window · ${data.step} step` : `${window} window`;
+}
+
+function adaptQueryPrometheus(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+  payload: unknown,
+): void {
+  const value = record(payload);
+  const mode = value?.type;
+  if (
+    !value ||
+    !nonEmptyString(value.query) ||
+    (mode !== "range" && mode !== "instant") ||
+    !Array.isArray(value.series) ||
+    !Array.isArray(value.selectors) ||
+    (value.selectorsUnknown !== undefined &&
+      typeof value.selectorsUnknown !== "boolean") ||
+    (value.truncated !== undefined && typeof value.truncated !== "boolean")
+  ) {
+    invalidPayload(builder, source, "Prometheus query");
+    return;
+  }
+  const series = value.series
+    .map(timeSeries)
+    .filter((item): item is TimeSeries => Boolean(item));
+  const selectors = value.selectors
+    .map(metricsSelector)
+    .filter((item): item is InvestigationMetricsSelector => Boolean(item));
+  if (
+    series.length !== value.series.length ||
+    selectors.length !== value.selectors.length
+  ) {
+    invalidPayload(builder, source, "Prometheus query");
+    return;
+  }
+  const selectorsUnknown = value.selectorsUnknown === true;
+  const relevance = metricsScope(builder.target, selectors, selectorsUnknown);
+  const start = nonEmptyString(value.start) ? value.start : undefined;
+  const end = nonEmptyString(value.end) ? value.end : undefined;
+  const step = nonEmptyString(value.step) ? value.step : undefined;
+  const note = nonEmptyString(value.note) ? value.note : undefined;
+  if (value.truncated === true) {
+    const summary = record(value.summary);
+    const cardinality = record(summary?.labelCardinality);
+    const widest = cardinality
+      ? Object.entries(cardinality).find(
+          ([, count]) => typeof count === "number",
+        )
+      : undefined;
+    const parts = [
+      typeof summary?.seriesCount === "number"
+        ? `${summary.seriesCount} series`
+        : undefined,
+      typeof summary?.totalDataPoints === "number"
+        ? `${summary.totalDataPoints} samples`
+        : undefined,
+      widest ? `${widest[1]} distinct ${widest[0]} values` : undefined,
+    ].filter((part): part is string => Boolean(part));
+    builder.limit(
+      source,
+      "Prometheus query",
+      `The result of \`${value.query}\` was too large to keep${parts.length ? ` (${parts.join(", ")})` : ""}, so Radar cannot chart it.${note ? ` ${note}` : ""}`,
+      "truncated",
+    );
+    return;
+  }
+  const windowLabel = metricsWindowLabel({ mode, start, end, step });
+  const data: InvestigationMetricsEvidence = {
+    type: "metrics",
+    origin: "query",
+    query: value.query,
+    mode,
+    start,
+    end,
+    step,
+    unit: metricsUnitForExpression(value.query, selectors),
+    series,
+    truncated: false,
+    note,
+    selectors,
+    selectorsUnknown,
+    subject:
+      relevance === "target"
+        ? {
+            kind: builder.target.kind,
+            ...(builder.target.group ? { group: builder.target.group } : {}),
+            namespace: builder.target.namespace,
+            name: builder.target.name,
+          }
+        : undefined,
+  };
+  builder.observe(
+    `metrics:${mode}:${value.query}:${start ?? ""}:${end ?? ""}:${step ?? ""}`,
+    "metrics",
+    source,
+    {
+      tier: evidenceTierForRelevance("supporting", relevance),
+      relevance,
+      tone: "neutral",
+      title: mode === "range" ? "Prometheus metrics" : "Prometheus values",
+      summary: [
+        series.length === 0
+          ? "No series matched"
+          : `${series.length} series`,
+        windowLabel,
+      ]
+        .filter((part): part is string => Boolean(part))
+        .join(" · "),
+      data,
+    },
+  );
+}
+
 const ADAPTERS: Record<
   string,
   (
@@ -4507,6 +4804,7 @@ const ADAPTERS: Record<
   get_prometheus_rules: adaptPrometheusRules,
   get_helm_release: adaptHelmRelease,
   get_subject_permissions: adaptSubjectPermissions,
+  query_prometheus: adaptQueryPrometheus,
 };
 
 export function projectInvestigationEvidence(
