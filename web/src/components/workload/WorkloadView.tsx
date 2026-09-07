@@ -1795,7 +1795,7 @@ function DiagnoseFromWorkloadHint({
 }) {
   if (services.length === 0) return null
   return (
-    <Section title="Diagnose network path">
+    <Section title="Trace network path">
       <div className="flex items-start gap-2 text-xs text-theme-text-secondary">
         <Stethoscope className="w-4 h-4 mt-0.5 shrink-0 text-theme-text-tertiary" aria-hidden />
         <div className="flex-1 min-w-0">

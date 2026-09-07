@@ -224,16 +224,52 @@ type cursorMCPCall struct {
 		ToolName string          `json:"toolName"`
 		Args     json.RawMessage `json:"args"`
 	} `json:"args"`
-	Result *struct {
-		Success *struct {
-			IsError bool `json:"isError"`
-			Content []struct {
-				Text struct {
-					Text string `json:"text"`
-				} `json:"text"`
-			} `json:"content"`
-		} `json:"success"`
-	} `json:"result"`
+	Result *cursorMCPResult `json:"result"`
+}
+
+// cursorMCPResult mirrors the McpResult protobuf oneof emitted by Cursor
+// 2026.08.25. The CLI JSON projection uses lowerCamelCase field names.
+type cursorMCPResult struct {
+	Success          *cursorMCPSuccess          `json:"success"`
+	Error            *cursorMCPError            `json:"error"`
+	Rejected         *cursorMCPRejected         `json:"rejected"`
+	PermissionDenied *cursorMCPPermissionDenied `json:"permissionDenied"`
+	ToolNotFound     *cursorMCPToolNotFound     `json:"toolNotFound"`
+	ServerNotFound   *cursorMCPServerNotFound   `json:"serverNotFound"`
+	Approved         *struct{}                  `json:"approved"`
+}
+
+type cursorMCPSuccess struct {
+	IsError bool `json:"isError"`
+	Content []struct {
+		Text struct {
+			Text string `json:"text"`
+		} `json:"text"`
+	} `json:"content"`
+}
+
+type cursorMCPError struct {
+	Error string `json:"error"`
+}
+
+type cursorMCPRejected struct {
+	Reason     string `json:"reason"`
+	IsReadonly bool   `json:"isReadonly"`
+}
+
+type cursorMCPPermissionDenied struct {
+	Error      string `json:"error"`
+	IsReadonly bool   `json:"isReadonly"`
+}
+
+type cursorMCPToolNotFound struct {
+	Name           string   `json:"name"`
+	AvailableTools []string `json:"availableTools"`
+}
+
+type cursorMCPServerNotFound struct {
+	Name             string   `json:"name"`
+	AvailableServers []string `json:"availableServers"`
 }
 
 func (a *cursorAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
@@ -306,12 +342,39 @@ func cursorToolCallEvent(e cursorEvent, onEvent func(StreamEvent)) {
 			Summary: cursorArgsText(m.Args.Args),
 		}})
 	case "completed":
-		res, trunc := capPayload(cursorMCPResultText(m))
+		resultText, evidenceRef := splitInvestigationEvidenceMarker(
+			cursorMCPResultText(m),
+		)
+		res, trunc := capPayload(resultText)
 		onEvent(StreamEvent{Type: "step", Step: &StepInfo{
 			ID: tc.ToolCallID, Tool: m.Args.ToolName, Status: "done",
-			Result: res, Truncated: trunc,
+			Result: res, EvidenceRef: evidenceRef,
+			IsError: cursorMCPResultErrorState(m.Result), Truncated: trunc,
+			producerResult: &resultText,
 		}})
 	}
+}
+
+func cursorMCPResultErrorState(result *cursorMCPResult) *bool {
+	if result == nil {
+		return nil
+	}
+	confirmed := false
+	switch {
+	case result.Success != nil:
+		confirmed = result.Success.IsError
+	case result.Approved != nil:
+		confirmed = false
+	case result.Error != nil,
+		result.Rejected != nil,
+		result.PermissionDenied != nil,
+		result.ToolNotFound != nil,
+		result.ServerNotFound != nil:
+		confirmed = true
+	default:
+		return nil
+	}
+	return &confirmed
 }
 
 func cursorArgsText(raw json.RawMessage) string {
@@ -327,12 +390,62 @@ func cursorArgsText(raw json.RawMessage) string {
 // nests the text one level deeper than Codex: content[].text.text. Capping happens
 // at the call site so the truncated flag can be surfaced.
 func cursorMCPResultText(m *cursorMCPCall) string {
-	if m.Result == nil || m.Result.Success == nil {
+	if m.Result == nil {
 		return ""
 	}
-	var b strings.Builder
-	for _, c := range m.Result.Success.Content {
-		b.WriteString(c.Text.Text)
+	result := m.Result
+	switch {
+	case result.Success != nil:
+		var b strings.Builder
+		for _, c := range result.Success.Content {
+			b.WriteString(c.Text.Text)
+		}
+		if b.Len() == 0 && result.Success.IsError {
+			return "Cursor reported an MCP tool error without details."
+		}
+		return b.String()
+	case result.Error != nil:
+		return cursorMCPFailureText("Cursor reported an MCP tool error", result.Error.Error)
+	case result.Rejected != nil:
+		return cursorMCPAccessFailureText("Cursor rejected the MCP tool call", result.Rejected.Reason, result.Rejected.IsReadonly)
+	case result.PermissionDenied != nil:
+		return cursorMCPAccessFailureText("Cursor denied permission for the MCP tool call", result.PermissionDenied.Error, result.PermissionDenied.IsReadonly)
+	case result.ToolNotFound != nil:
+		text := "Cursor could not find the requested MCP tool"
+		if result.ToolNotFound.Name != "" {
+			text = fmt.Sprintf("Cursor could not find MCP tool %q", result.ToolNotFound.Name)
+		}
+		if len(result.ToolNotFound.AvailableTools) > 0 {
+			text += "; available tools: " + strings.Join(result.ToolNotFound.AvailableTools, ", ")
+		}
+		return text
+	case result.ServerNotFound != nil:
+		text := "Cursor could not find the requested MCP server"
+		if result.ServerNotFound.Name != "" {
+			text = fmt.Sprintf("Cursor could not find MCP server %q", result.ServerNotFound.Name)
+		}
+		if len(result.ServerNotFound.AvailableServers) > 0 {
+			text += "; available servers: " + strings.Join(result.ServerNotFound.AvailableServers, ", ")
+		}
+		return text
+	case result.Approved != nil:
+		return "Cursor approved the MCP tool call."
+	default:
+		return ""
 	}
-	return b.String()
+}
+
+func cursorMCPFailureText(summary, detail string) string {
+	if detail == "" {
+		return summary + " without details."
+	}
+	return summary + ": " + detail
+}
+
+func cursorMCPAccessFailureText(summary, detail string, isReadonly bool) string {
+	text := cursorMCPFailureText(summary, detail)
+	if isReadonly {
+		text += " (read-only tool)"
+	}
+	return text
 }

@@ -34,7 +34,7 @@ import { GroupNode } from './GroupNode'
 import { NEUTRAL_OWNER, type WorkloadFocus } from '../../utils/workload-colors'
 import { ownershipOf } from '../../utils/topology-neighborhood'
 import { buildHierarchicalElkGraph, applyHierarchicalLayout, getGroupKey, isGroupEffectivelyCollapsed, type GroupDisplayLevel } from './layout'
-import type { Topology, TopologyNode, TopologyEdge, ViewMode, GroupingMode } from '../../types'
+import type { Topology, TopologyNode, TopologyEdge, ViewMode, GroupingMode, HealthStatus } from '../../types'
 import { pluralize } from '../../utils/pluralize'
 import { foldHash } from '../../utils/structure-hash'
 import { recordLayoutDuration, recordLayoutSkipped, recordStructureKeyDuration } from '../../perf'
@@ -408,6 +408,7 @@ export function TopologyGraph({
       phase: string
       restarts: number
       containers: number
+      status?: HealthStatus
     }>
 
     // Find edges pointing to this pod group
@@ -425,7 +426,11 @@ export function TopologyGraph({
         id: podId,
         kind: 'Pod',
         name: pod.name,
-        status: pod.phase === 'Running' ? 'healthy' : pod.phase === 'Pending' ? 'degraded' : 'unhealthy',
+        // The server computes pod health; pkg/health tracks a crash loop across
+        // the kubelet's Waiting->Running oscillation, which the phase alone
+        // hides — a crash-looping pod sits at Phase=Running. Deriving it here
+        // again would rebuild that logic in a second place and get it wrong.
+        status: pod.status ?? 'unknown',
         data: {
           ...podGroupNode.data,
           namespace: pod.namespace,

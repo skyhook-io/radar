@@ -1,5 +1,5 @@
 // Install metadata for the agent CLIs Radar can drive. Used by the setup notice
-// shown when AI diagnosis is eligible but no agent is installed. Names match the
+// shown when AI investigations are eligible but no agent is installed. Names match the
 // backend's supported set (see internal/ai/detect.go knownAgents + isSupportedAgent).
 export interface AgentInstall {
   name: string; // stable id, matches AgentInfo.name

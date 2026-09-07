@@ -1,5 +1,5 @@
 // The single controller for the AI assistant surface. One instance app-wide:
-// the per-resource "Diagnose" button and the global top-bar entry both dispatch
+// the per-resource "Investigate" button and the global top-bar entry both dispatch
 // here. Investigations are durable, server-side jobs (see internal/ai RunManager);
 // this provider lists them, tracks which one is focused, and owns the push-content
 // layout. The run lifetime is the server's, so closing/navigating never kills one.
@@ -17,19 +17,24 @@ import {
 } from "react";
 import {
   fetchAgents,
+  getRun,
   listRuns,
   createRun,
   recordConsent,
   DiagnoseError,
 } from "../../api/diagnose";
+import { getApiBase } from "../../api/config";
 import {
   type RunSummary,
   type AgentInfo,
   type ExecutionProfile,
 } from "../../api/diagnose";
+import { runTargetKey } from "./target";
 
 export interface Target {
   kind: string;
+  /** Kubernetes API group; empty means core. */
+  group: string;
   namespace: string;
   name: string;
   /** The issue this investigation is for, when it came from an issue. Hosts
@@ -43,7 +48,7 @@ export interface Target {
 }
 export type DiagnoseView = "home" | "investigation";
 
-// Setup readiness of the local AI-diagnosis feature, derived from the agents API:
+// Setup readiness of local AI investigations, derived from the agents API:
 //  - "ready":         an agent is installed and the engine is running (available)
 //  - "needs-install": the feature is supported here but no agent CLI is installed
 //  - "needs-restart": a supported agent is now on PATH but Radar booted before it
@@ -86,6 +91,7 @@ interface DiagnoseCtx {
   approveConsent: () => void;
   cancelConsent: () => void;
   refreshRuns: () => void;
+  updateRunSummary: (run: RunSummary) => void;
   dismissError: () => void;
 }
 
@@ -95,6 +101,7 @@ interface DiagnoseCtx {
 // churns the business context) doesn't re-render the whole shell.
 interface DiagnoseLayoutCtx {
   open: boolean;
+  close: () => void;
   contentGutter: number; // px right-gutter for the content area when docked (0 = overlay/closed)
   maximized: boolean;
   setMaximized: Dispatch<SetStateAction<boolean>>;
@@ -104,16 +111,6 @@ interface DiagnoseLayoutCtx {
   panelBounds: { min: number; max: number };
   panelWidthKey: string;
   runningKeys: ReadonlySet<string>; // resources with a live investigation (see runTargetKey)
-}
-
-// Stable key for "is THIS resource being investigated right now" — built the same way
-// from a run summary and from a button's target so the two always match.
-export function runTargetKey(
-  kind: string,
-  namespace: string,
-  name: string,
-): string {
-  return `${kind} ${namespace} ${name}`;
 }
 
 const Ctx = createContext<DiagnoseCtx | null>(null);
@@ -164,7 +161,7 @@ export function agentLabelFor(name: string, fallbackLabel?: string): string {
 }
 
 // openDiagnoseSettings opens the Settings dialog (App.tsx listens for this DOM
-// event) — the canonical home for AI-diagnosis config.
+// event) — the canonical home for AI investigation config.
 export function openDiagnoseSettings() {
   window.dispatchEvent(
     new CustomEvent("radar:open-settings", { detail: { section: "ai" } }),
@@ -186,7 +183,58 @@ function writeStored(key: string, value: string) {
   }
 }
 
-export function DiagnoseProvider({ children }: { children: ReactNode }) {
+function runIDFromLocation(browserURLState: boolean): string | null {
+  if (!diagnoseURLStateEnabled(browserURLState)) return null;
+  try {
+    return new URLSearchParams(window.location.search).get("ai-run");
+  } catch {
+    return null;
+  }
+}
+
+function writeRunIDToLocation(
+  id: string | null,
+  push: boolean,
+  browserURLState: boolean,
+) {
+  if (!diagnoseURLStateEnabled(browserURLState)) return;
+  try {
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set("ai-run", id);
+    else url.searchParams.delete("ai-run");
+    window.history[push ? "pushState" : "replaceState"](
+      window.history.state,
+      "",
+      `${url.pathname}${url.search}${url.hash}`,
+    );
+    // History API writes do not notify BrowserRouter. Replaying the new state as
+    // popstate keeps every later navigate/setSearchParams call on the same live
+    // query string instead of letting a stale router snapshot erase ai-run.
+    window.dispatchEvent(
+      new PopStateEvent("popstate", { state: window.history.state }),
+    );
+  } catch {
+    /* URL APIs unavailable — panel state still works for this session */
+  }
+}
+
+// Fleet pages host the panel against a cluster-scoped API while remaining on a
+// hub route such as /issues. Writing ?ai-run there would create a non-reloadable
+// pseudo-link. The embedded /c/:id Radar tree and local Radar own their route and
+// therefore keep the query as navigation state; Fleet copies run.radarUrl instead.
+function diagnoseURLStateEnabled(browserURLState: boolean): boolean {
+  if (!browserURLState) return false;
+  const clusterScopedAPI = /\/c\/[^/]+\/api\/?$/.test(getApiBase());
+  return !clusterScopedAPI || /^\/c\/[^/]+/.test(window.location.pathname);
+}
+
+export function DiagnoseProvider({
+  children,
+  browserURLState = true,
+}: {
+  children: ReactNode;
+  browserURLState?: boolean;
+}) {
   const [available, setAvailable] = useState(false);
   const [eligible, setEligible] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -206,6 +254,26 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<DiagnoseView>("home");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const activeRunIdRef = useRef(activeRunId);
+  activeRunIdRef.current = activeRunId;
+  // A missing/revoked durable link is terminal until the user explicitly
+  // navigates to it again. Keep polling the bounded history list (so a newly
+  // shared run can reappear), but do not hammer the exact 404 endpoint every
+  // four seconds while the unavailable state is already on screen.
+  const unavailableRunIDsRef = useRef(new Set<string>());
+  // Tracks whether the panel focus belongs to browser history. Fleet opens the
+  // same panel on /issues, where URL state is deliberately disabled; a generic
+  // panel launch must never be closed by the deep-link synchronization effect.
+  const urlRunIdRef = useRef(runIDFromLocation(browserURLState));
+  const writeFocusedRunID = useCallback(
+    (id: string | null, push: boolean) => {
+      // Set this before writeRunIDToLocation's synthetic popstate so our own
+      // listener can distinguish a programmatic close/home write from Back.
+      if (diagnoseURLStateEnabled(browserURLState)) urlRunIdRef.current = id;
+      writeRunIDToLocation(id, push, browserURLState);
+    },
+    [browserURLState],
+  );
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [runsLoaded, setRunsLoaded] = useState(false);
   const [runsLoadFailed, setRunsLoadFailed] = useState(false);
@@ -332,33 +400,86 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const refreshRuns = useCallback(() => {
+  const refreshRuns = useCallback(async () => {
     if (!available) return;
-    listRuns()
-      .then((r) => {
-        setRuns(r.runs);
-        setRunsLoaded(true);
-        setRunsLoadFailed(false);
-        setHistoryDegraded(!!r.historyDegraded);
-      })
-      .catch(() => {
-        // Leave runsLoaded false (a missing-run verdict needs a real list) but
-        // record the failure so the panel can say "retrying" instead of
-        // pretending nothing happened. The 4s poll keeps retrying while open.
-        setRunsLoadFailed(true);
-      });
-  }, [available]);
+    try {
+      const r = await listRuns();
+      const focusedID = activeRunIdRef.current;
+      let focusedRun: RunSummary | null = null;
+      let retainFocusedSnapshot = false;
+      const listedFocusedRun = focusedID
+        ? r.runs.find((run) => run.id === focusedID)
+        : undefined;
+      if (focusedID && listedFocusedRun) {
+        unavailableRunIDsRef.current.delete(focusedID);
+      } else if (focusedID && !unavailableRunIDsRef.current.has(focusedID)) {
+        try {
+          // A stable deep link can target a retained run older than the bounded
+          // history page. Refresh it directly too: its status and capabilities
+          // must not freeze at the first snapshot while the panel stays open.
+          focusedRun = await getRun(focusedID);
+        } catch (error) {
+          // The bounded list is still authoritative for everything else. A
+          // missing/revoked focused run falls out and renders unavailable;
+          // transient direct-fetch failures keep the last useful snapshot.
+          const unavailable =
+            error instanceof DiagnoseError && error.status === 404;
+          if (unavailable) unavailableRunIDsRef.current.add(focusedID);
+          retainFocusedSnapshot = !unavailable;
+        }
+      }
+      setRuns((prev) => {
+        let nextRuns = r.runs;
+        if (focusedRun) nextRuns = [focusedRun, ...nextRuns];
+        if (focusedID && retainFocusedSnapshot) {
+          const previous = prev.find((run) => run.id === focusedID);
+          if (previous) nextRuns = [previous, ...nextRuns];
+        }
 
-  // A content-stable signature of the resources with a live (running) investigation,
-  // so the per-resource Diagnose buttons can show a "running" indicator even with the
+        // openRun/start can focus and insert a run while the direct fetch above
+        // is in flight. Preserve that newer focus instead of replacing it with
+        // the snapshot for the run that was active when this refresh started.
+        const currentFocusedID = activeRunIdRef.current;
+        if (
+          currentFocusedID &&
+          currentFocusedID !== focusedID &&
+          !nextRuns.some((run) => run.id === currentFocusedID)
+        ) {
+          const current = prev.find((run) => run.id === currentFocusedID);
+          if (current) nextRuns = [current, ...nextRuns];
+        }
+        return nextRuns;
+      });
+      setRunsLoaded(true);
+      setRunsLoadFailed(false);
+      setHistoryDegraded(!!r.historyDegraded);
+    } catch {
+      // Leave runsLoaded false (a missing-run verdict needs a real list) but
+      // record the failure so the panel can say "retrying" instead of
+      // pretending nothing happened. The 4s poll keeps retrying while open.
+      setRunsLoadFailed(true);
+    }
+  }, [available]);
+  const updateRunSummary = useCallback((run: RunSummary) => {
+    setRuns((prev) =>
+      prev.some((item) => item.id === run.id)
+        ? prev.map((item) => (item.id === run.id ? run : item))
+        : [run, ...prev],
+    );
+  }, []);
+
+  // A content-stable signature of the resources with a live investigation,
+  // so the per-resource Investigate buttons can show a "running" indicator even with the
   // panel closed — and only re-render when the set actually changes, not every poll.
   const runningSig = runs
-    .filter((r) => r.status === "running")
-    .map((r) => runTargetKey(r.kind, r.namespace, r.name))
+    .filter((r) => r.status === "running" || r.status === "stopping")
+    .map((r) => runTargetKey(r.kind, r.namespace, r.name, r.group))
     .sort()
-    .join("|");
+    // resourceKey itself is pipe-delimited; newlines cannot occur in a
+    // Kubernetes group, Kind, namespace, or name.
+    .join("\n");
   const runningKeys = useMemo(
-    () => new Set(runningSig ? runningSig.split("|") : []),
+    () => new Set(runningSig ? runningSig.split("\n") : []),
     [runningSig],
   );
   const hasRunning = runningSig.length > 0;
@@ -397,6 +518,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
         if (seq !== startSeqRef.current) return;
         setActiveRunId(run.id);
         setView("investigation");
+        writeFocusedRunID(run.id, true);
       })
       .catch((e) => {
         if (seq !== startSeqRef.current) return;
@@ -431,52 +553,90 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     },
     [consentSurface, hosted],
   );
-  const openRun = useCallback((id: string) => {
-    setStartError(null);
-    setActiveRunId(id);
-    setView("investigation");
-    setOpen(true);
-  }, []);
+  const openRun = useCallback(
+    (id: string) => {
+      unavailableRunIDsRef.current.delete(id);
+      setStartError(null);
+      setActiveRunId(id);
+      setView("investigation");
+      setOpen(true);
+      writeFocusedRunID(id, true);
+      // A Fleet issue can point at a retained automatic run older than the
+      // bounded history page. Resolve the exact id instead of waiting for list.
+      getRun(id)
+        .then(updateRunSummary)
+        .catch((error) => {
+          if (error instanceof DiagnoseError && error.status === 404) {
+            unavailableRunIDsRef.current.add(id);
+          }
+          // The loaded-list state renders the durable unavailable message.
+        });
+    },
+    [updateRunSummary, writeFocusedRunID],
+  );
 
-  // Deep link: ?ai-run=<id> opens the panel focused on that investigation —
-  // the URL `radar diagnose --open` prints/opens. Consumed once (then stripped)
-  // so back/forward and copied URLs don't keep re-opening the panel.
+  // The run id is durable navigation state: direct loads and popstate focus the
+  // exact run, and the query remains in place so the address bar is copyable.
+  // Fetch by id rather than assuming the bounded recent list contains it.
   useEffect(() => {
-    if (!available) return;
-    let id: string | null = null;
-    try {
-      const params = new URLSearchParams(window.location.search);
-      id = params.get("ai-run");
-      if (id) {
-        params.delete("ai-run");
-        const qs = params.toString();
-        window.history.replaceState(
-          null,
-          "",
-          window.location.pathname +
-            (qs ? `?${qs}` : "") +
-            window.location.hash,
-        );
+    if (!available || !diagnoseURLStateEnabled(browserURLState)) return;
+    const focusFromLocation = (fromPopState: boolean) => {
+      const id = runIDFromLocation(browserURLState);
+      if (!id) {
+        // A missing id on first mount is ordinary. On popstate it means "back
+        // out of this investigation" only when the focused run was itself
+        // installed by URL history; unrelated synthetic popstate events must
+        // not tear down a panel opened by an in-app action.
+        if (fromPopState && urlRunIdRef.current) {
+          setActiveRunId(null);
+          setView("home");
+          setOpen(false);
+        }
+        urlRunIdRef.current = null;
+        return;
       }
-    } catch {
-      /* URL APIs unavailable — skip the deep link */
-    }
-    if (id) openRun(id);
-  }, [available, openRun]);
+      urlRunIdRef.current = id;
+      unavailableRunIDsRef.current.delete(id);
+      setStartError(null);
+      setActiveRunId(id);
+      setView("investigation");
+      setOpen(true);
+      getRun(id)
+        .then(updateRunSummary)
+        .catch((error) => {
+          if (error instanceof DiagnoseError && error.status === 404) {
+            unavailableRunIDsRef.current.add(id);
+          }
+          // The list load owns the final missing/degraded state and keeps retrying.
+        });
+    };
+    focusFromLocation(false);
+    const onPopState = () => focusFromLocation(true);
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [available, browserURLState, updateRunSummary]);
   // Leaving the detail pane drops the failure that belonged to it. startError
   // renders as the entire pane (maximized home still shows `detail`), where a
   // message about a resource you just navigated away from has nothing to attach
   // to and no way to be dismissed.
   const openHome = useCallback(() => {
+    unavailableRunIDsRef.current.clear();
     setView("home");
     setStartError(null);
     setOpen(true);
-  }, []);
+    writeFocusedRunID(null, false);
+  }, [writeFocusedRunID]);
   const goHome = useCallback(() => {
+    unavailableRunIDsRef.current.clear();
     setView("home");
     setStartError(null);
-  }, []);
-  const close = useCallback(() => setOpen(false), []);
+    writeFocusedRunID(null, false);
+  }, [writeFocusedRunID]);
+  const close = useCallback(() => {
+    unavailableRunIDsRef.current.clear();
+    setOpen(false);
+    writeFocusedRunID(null, false);
+  }, [writeFocusedRunID]);
   const consentBusyRef = useRef(false);
   const approveConsent = useCallback(() => {
     if (consentBusyRef.current) return;
@@ -557,6 +717,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     approveConsent,
     cancelConsent,
     refreshRuns,
+    updateRunSummary,
     dismissError,
   };
 
@@ -567,6 +728,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const layout = useMemo<DiagnoseLayoutCtx>(
     () => ({
       open,
+      close,
       contentGutter,
       maximized,
       setMaximized,
@@ -579,6 +741,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     }),
     [
       open,
+      close,
       contentGutter,
       maximized,
       width,

@@ -109,11 +109,12 @@ func lookupTypedBuiltinGVR(kind string) (schema.GroupVersionResource, bool) {
 	return gvr, ok
 }
 
-// builtinKindForResource returns the canonical CamelCase Kind for a built-in
+// BuiltinKindForResource returns the canonical CamelCase Kind for a built-in
 // plural resource name ("deployments" → "Deployment"). Used to stamp
 // apiVersion/kind on unstructured conversions of typed lister objects, which
-// carry no TypeMeta.
-func builtinKindForResource(resource string) (string, bool) {
+// carry no TypeMeta, and by API boundaries that canonicalize a user-supplied
+// kind alias without depending on live discovery.
+func BuiltinKindForResource(resource string) (string, bool) {
 	k, ok := builtinKindByResource[resource]
 	return k, ok
 }

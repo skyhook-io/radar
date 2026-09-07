@@ -1666,22 +1666,22 @@ func TestIsInternalGuardError(t *testing.T) {
 	}
 }
 
-// TestDiagnoseDoc_ProxyProbeAutoRunWording guards the honesty fix: the proxy
-// reachability probe auto-runs on Diagnose-tab mount (WorkloadView.tsx), so the
+// TestReachabilityDoc_ProxyProbeAutoRunWording guards the honesty fix: the proxy
+// reachability probe auto-runs on Reachability-tab mount (WorkloadView.tsx), so the
 // doc must not claim the active test "Runs only when the operator clicks Run
 // test" - that was true only of the in-cluster Job test. Pins the corrected
 // copy so the false claim can't be reintroduced.
-func TestDiagnoseDoc_ProxyProbeAutoRunWording(t *testing.T) {
+func TestReachabilityDoc_ProxyProbeAutoRunWording(t *testing.T) {
 	b, err := os.ReadFile("../../docs/reachability.md")
 	if err != nil {
-		t.Fatalf("read diagnose.md: %v", err)
+		t.Fatalf("read reachability.md: %v", err)
 	}
 	doc := string(b)
 	if strings.Contains(doc, "Runs only when the operator clicks") {
-		t.Errorf("diagnose.md still claims the active test runs only on click - proxy probe auto-runs on tab open")
+		t.Errorf("reachability.md still claims the active test runs only on click - proxy probe auto-runs on tab open")
 	}
-	if !strings.Contains(doc, "runs automatically once when the **Diagnose** tab opens") {
-		t.Errorf("diagnose.md should describe the proxy probe auto-running once on tab open")
+	if !strings.Contains(doc, "runs automatically once when the **Reachability** tab opens") {
+		t.Errorf("reachability.md should describe the proxy probe auto-running once on tab open")
 	}
 }
 

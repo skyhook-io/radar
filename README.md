@@ -51,7 +51,7 @@ curl -fsSL https://get.radarhq.io | sh && kubectl radar
 - **Airgapped-friendly** — runs as a single binary against the Kubernetes API and works in locked-down environments with outbound egress blocked
 - **Real-time** — watches your cluster via informers, pushes updates to the browser via SSE
 - **Works everywhere** — GKE, EKS, AKS, minikube, kind, k3s, or any conformant cluster
-- **AI-ready** — built-in [MCP server](docs/mcp.md) lets AI agents inspect, diagnose, and operate your cluster through Radar
+- **AI-ready** — built-in [MCP server](docs/mcp.md) lets AI agents inspect, investigate, and operate your cluster through Radar
 - **In-cluster option** — deploy with Helm for shared team access with RBAC-scoped permissions
 
 > "Have Radar deployed at work. As far as Kubernetes dashboards go, this is one of the best." — u/TheRealNetroxen
@@ -179,10 +179,10 @@ The table below covers common startup flags. See the [full CLI reference](https:
 | `--base-path` | | Serve Radar under a URL prefix such as `/radar`. Use when an ingress forwards a subpath without stripping it — everything, including `/api/health`, moves under the prefix. Not supported with `--cloud-url`. |
 | `--no-browser` | `false` | Don't auto-open browser |
 | `--browser` | | Browser to use when opening the UI, e.g. `firefox`, `google-chrome`, or `Google Chrome` on macOS |
-| `--timeline-storage` | `memory` | Timeline storage backend: `memory` or `sqlite` |
+| `--timeline-storage` | `memory` | Timeline storage backend: `memory`, `sqlite`, or `postgres` |
 | `--timeline-db` | `~/.radar/timeline.db` | Path to SQLite database (when using sqlite storage) |
 | `--timeline-max-size` | `1Gi` | Maximum SQLite DB + WAL size before pruning oldest events (e.g. `800Mi`, `8Gi`; `0` disables) |
-| `--history-limit` | `10000` | Maximum events to retain in timeline |
+| `--history-limit` | `10000` | Maximum events to retain in timeline (memory only) |
 | `--disable-exec` | `false` | Disable terminal and debug shell |
 | `--disable-helm-write` | `false` | Disable Helm write operations |
 | `--disable-local-terminal` | `false` | Disable the host local terminal |
@@ -465,7 +465,7 @@ Read-only visibility ships first; the considered follow-ups (RBAC audit checks, 
 
 ### AI Integration (MCP)
 
-Radar includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI agents — Claude, Cursor, Copilot, and others — inspect, diagnose, and operate your cluster through Radar.
+Radar includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI agents — Claude, Cursor, Copilot, and others — inspect, investigate, and operate your cluster through Radar.
 
 Instead of raw `kubectl` output (verbose YAML that burns through LLM context windows), your AI gets pre-processed, token-optimized data: topology graphs, health assessments, deduplicated events, and filtered logs. Diagnosis is read-only by default; optional in-cluster route probing uses short-lived, self-deleting probe pods. Write operations such as restart, scale, apply, and rollback are identified for client confirmation and enforced through Kubernetes RBAC.
 

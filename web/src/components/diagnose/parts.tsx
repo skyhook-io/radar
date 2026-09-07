@@ -2,7 +2,14 @@
 // persistence, no app/routing knowledge) so they lift cleanly into k8s-ui later
 // and Cloud can reuse them. The stateful controller lives in DiagnoseContext;
 // the run logic in InvestigationView.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Loader2,
   CheckCircle2,
@@ -10,28 +17,43 @@ import {
   Copy,
   Check,
   ShieldCheck,
-  ChevronRight,
   ChevronDown,
   Wrench,
   Sparkles,
   RefreshCw,
   Maximize2,
   HelpCircle,
+  FileSearch,
 } from "lucide-react";
 import { stringify as toYaml } from "yaml";
 import { codeToHtml } from "shiki";
 import { DialogPortal } from "@skyhook-io/k8s-ui/components/ui/DialogPortal";
+import { parseContextName } from "../../utils/context-name";
 import { useTheme } from "../../context/ThemeContext";
 import { type DiagnoseConsentCopy } from "../../context/DiagnoseCustomization";
 import {
   type Diagnosis,
   type DiagnoseStep,
   type AgentInfo,
+  type ApplyMutationOutcome,
   type ExecutionProfile,
-  type RunSummary,
 } from "../../api/diagnose";
-import { StatusDot } from "@skyhook-io/k8s-ui";
+import { Collapse, CollapseChevron } from "@skyhook-io/k8s-ui";
 import { Markdown } from "../ui/Markdown";
+import { Tooltip } from "../ui/Tooltip";
+import type { InvestigationSourceExcerpt } from "./investigationSourceFocus";
+import {
+  highlightRelatedEvidence,
+  locateSourceExcerpt,
+} from "./investigationSourceFocus";
+import {
+  investigationActivitySourceDomId,
+  investigationEvidenceSourceId,
+  type InvestigationRootCauseEvidenceResolution,
+  type InvestigationEvidenceSource,
+} from "./investigationEvidence";
+
+import { useDisclosureReveal } from "./useDisclosureReveal";
 
 const CURSOR_FULL_LOCAL_WARNING =
   "Radar passes Cursor --force, which auto-approves its built-in tools and every MCP server it loads, including your global servers. Cursor’s sandbox does not reliably confine those tools to Radar’s temporary workspace.";
@@ -232,7 +254,7 @@ function SelectMenu({
   );
 }
 
-// AgentControls is the full AI-diagnosis config block (agent, execution profile, model,
+// AgentControls is the full AI investigation config block (agent, execution profile, model,
 // effort) — pure + prop-driven. It lives in Settings, not the investigation panel,
 // since these are set-once preferences rather than per-run knobs.
 export function AgentControls({
@@ -309,9 +331,9 @@ export function AgentControls({
                   <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
                   <span>
                     Uses your agent&apos;s normal configuration and other
-                    configured tools and MCP servers. Radar cannot constrain that
-                    external tooling; it may access local files or the network
-                    and may be able to change your cluster.{" "}
+                    configured tools and MCP servers. Radar cannot constrain
+                    that external tooling; it may access local files or the
+                    network and may be able to change your cluster.{" "}
                     {isCursor
                       ? CURSOR_FULL_LOCAL_WARNING
                       : isClaude
@@ -341,12 +363,13 @@ export function AgentControls({
                 Radar must use this agent&apos;s normal setup. Radar cannot
                 constrain its external tools or MCP servers; they may access
                 local files or the network and may be able to change your
-                cluster. {isCursor ? (
+                cluster.{" "}
+                {isCursor ? (
                   CURSOR_FULL_LOCAL_WARNING
                 ) : (
                   <>
-                    Radar still enables the agent CLI&apos;s own sandbox, but that
-                    sandbox does not constrain external MCP servers.
+                    Radar still enables the agent CLI&apos;s own sandbox, but
+                    that sandbox does not constrain external MCP servers.
                   </>
                 )}
               </span>
@@ -404,7 +427,10 @@ export function AgentControls({
 // Turn is one round of the conversation: the initial investigation (no question)
 // or a follow-up, each with its own transcript + result.
 export type Turn = {
+  resultSequence?: number;
+  explainAssessment?: number;
   question?: string;
+  actor?: string;
   timeline: TimelineItem[];
   diagnosis: Diagnosis | null;
   error: string | null;
@@ -412,11 +438,21 @@ export type Turn = {
   // apply turns execute the recommended fix (write tools) — they report an
   // outcome, not a root cause, so the UI frames them differently.
   apply?: boolean;
+  // Set from the apply turn's terminal stream event. Green success is reserved
+  // for an explicit producer-confirmed mutation.
+  applyOutcome?: ApplyMutationOutcome;
+  // Verification turns are structurally a fresh health assessment, even though
+  // they carry a question. Keeping the bit explicit prevents the UI from
+  // misclassifying them as ordinary conversational follow-ups on replay.
+  verify?: boolean;
+  // Set from the replay/live boundary when the terminal event arrives. Historical
+  // conclusions render immediately; conclusions observed live enter smoothly.
+  animateResult?: boolean;
 };
 
 // TimelineItem is one ordered transcript entry: agent reasoning, or a tool call.
-type TimelineItem =
-  | { kind: "thinking"; text: string }
+export type TimelineItem =
+  | { kind: "thinking"; text: string; animate?: boolean }
   | {
       kind: "tool";
       id: string;
@@ -425,25 +461,66 @@ type TimelineItem =
       ms?: number;
       summary?: string;
       result?: string;
+      evidenceRef?: string;
+      radarEvidence?: boolean;
       truncated?: boolean;
+      // Tri-state by design: false = producer confirmed success, true = producer
+      // confirmed failure, undefined = this replay cannot establish the outcome.
+      isError?: boolean;
+      // Arrival motion is event-local so a replayed running turn can keep receiving
+      // live tool calls without reanimating the history reconstructed before it.
+      animate?: boolean;
     };
 
 export function appendThinking(
   prev: TimelineItem[],
   text: string,
+  animate = true,
 ): TimelineItem[] {
-  const last = prev[prev.length - 1];
-  if (last && last.kind === "thinking") {
-    const next = [...prev];
-    next[next.length - 1] = { ...last, text: (last.text + text).slice(-4000) };
-    return next;
+  const normalized = text.replace(/\*\*\r?\n(?=\*\*)/g, "**\n\n");
+  // Agent CLIs commonly emit each short bold planning update as a complete
+  // stream event. Preserve those as discrete chronological beats instead of
+  // producing invalid/run-on Markdown such as `**one****two**`. Ordinary token
+  // chunks still concatenate into their current beat exactly as emitted.
+  const blocks = normalized.split(/\n{2,}(?=\s*\*\*)/);
+  const next = [...prev];
+  for (const block of blocks) {
+    if (!block) continue;
+    const last = next[next.length - 1];
+    const beginsBeat = /^\s*\*\*/.test(block);
+    const priorBeatComplete =
+      last?.kind === "thinking" && /\*\*\s*$/.test(last.text);
+    // Some agents repeat a bold phase heading at stream boundaries. Suppress
+    // only that presentation artifact; identical ordinary lines can be real
+    // evidence/reasoning and must survive both replay and live chunking.
+    if (
+      last?.kind === "thinking" &&
+      beginsBeat &&
+      priorBeatComplete &&
+      last.text.trim() === block.trim()
+    )
+      continue;
+    if (last?.kind === "thinking" && !(beginsBeat && priorBeatComplete)) {
+      next[next.length - 1] = {
+        ...last,
+        text: (last.text + block).slice(-4000),
+        animate: last.animate === true || animate,
+      };
+      continue;
+    }
+    next.push({
+      kind: "thinking",
+      text: block.trimStart(),
+      animate,
+    });
   }
-  return [...prev, { kind: "thinking", text }];
+  return next;
 }
 
 export function upsertTool(
   prev: TimelineItem[],
   step: DiagnoseStep,
+  animate = true,
 ): TimelineItem[] {
   const i = prev.findIndex((it) => it.kind === "tool" && it.id === step.id);
   if (i >= 0) {
@@ -456,194 +533,171 @@ export function upsertTool(
       kind: "tool",
       tool: step.tool || cur.tool,
       summary: step.summary || cur.summary,
+      animate: cur.animate === true || animate,
     };
     return next;
   }
-  return [...prev, { kind: "tool", ...step }];
+  return [...prev, { kind: "tool", ...step, animate }];
 }
 
 export function TurnView({
   turn,
-  synthLabel,
-  reveal = "full",
   onApply,
-  onAsk,
+  onViewExplanation,
   onCheckStatus,
   onRetryDiagnosis,
-  hideVerdict = false,
+  hideConclusion = false,
+  turnIndex,
+  evidenceStepIds,
+  onViewEvidence,
+  sourceRevealRequest,
 }: {
   turn: Turn;
-  synthLabel?: string | null;
-  reveal?: "rca" | "full";
   onApply?: (fix: string) => void;
-  onAsk?: (question: string) => void;
+  onViewExplanation?: () => void;
   onCheckStatus?: () => void;
   onRetryDiagnosis?: () => void;
-  // In the maximized workspace the pinned turn's verdict renders in the side rail,
+  // In the maximized workspace the pinned turn's conclusion renders in the side rail,
   // so the transcript suppresses its own copy (reasoning + tool calls still show).
-  hideVerdict?: boolean;
+  hideConclusion?: boolean;
+  turnIndex?: number;
+  evidenceStepIds?: ReadonlySet<string>;
+  onViewEvidence?: (sourceId: string) => void;
+  sourceRevealRequest?: {
+    sourceId: string;
+    requestId: number;
+    excerpt?: InvestigationSourceExcerpt;
+  };
 }) {
   // A follow-up (a turn the user asked a question on) is a conversational reply,
   // not a fresh diagnosis — render it as a plain answer, never the root-cause
   // anchor or a remediation card.
-  const followup = !!turn.question && !turn.apply;
+  const followup = !!turn.question && !turn.apply && !turn.verify;
   // Whether the done turn has anything for ResultCard to render — mirrors its
   // branch order exactly (apply → followup → structured/healthy), since a followup
   // ONLY ever renders FollowupAnswer (report/rootCause), never the remediation list.
   // When false, TurnView shows the narration or an explicit empty note, not a blank.
   const dx = turn.diagnosis;
-  const hasVerdict = dx
-    ? turn.apply
-      ? true // ApplyOutcomeCard always renders an outcome
+  const hasResult = dx
+    ? followup
+      ? !!(dx.report?.trim() || dx.rootCause?.trim()) // FollowupAnswer
       : dx.healthy && !dx.rootCause
-        ? true // AllClearCard (checked before followup in ResultCard)
+        ? true // AllClearCard
         : dx.inconclusive && !dx.rootCause
           ? true // InconclusiveCard
-          : followup
-            ? !!(dx.report?.trim() || dx.rootCause?.trim()) // FollowupAnswer
-            : !!dx.rootCause ||
-              (dx.remediation?.length ?? 0) > 0 ||
-              !!dx.report?.trim()
+          : !!dx.rootCause ||
+            (dx.remediation?.length ?? 0) > 0 ||
+            !!dx.report?.trim()
     : false;
   return (
     <div className="space-y-2">
-      {turn.question && (
-        <div className="flex justify-end">
-          <div className="max-w-[85%] rounded-lg rounded-br-sm bg-accent/10 px-3 py-1.5 text-sm text-theme-text-primary [overflow-wrap:anywhere]">
-            {turn.question}
+      {turn.explainAssessment ? (
+        <button
+          type="button"
+          onClick={onViewExplanation}
+          className="flex items-center gap-1.5 rounded-md py-2 text-xs text-accent-text hover:underline"
+        >
+          <HelpCircle className="h-3.5 w-3.5" />
+          {turn.status === "running"
+            ? "Explaining assessment…"
+            : turn.status === "error"
+              ? "Explanation failed"
+              : "Plain-language explanation"}
+          <span className="text-theme-text-tertiary">· View in Findings</span>
+        </button>
+      ) : (
+        turn.question &&
+        (turn.verify ? (
+          <div className="flex items-center gap-2 rounded-md border border-theme-border/60 bg-theme-base/40 px-2.5 py-2 text-xs text-theme-text-secondary">
+            <RefreshCw className="h-3.5 w-3.5 shrink-0 text-accent" />
+            <span className="font-medium text-theme-text-primary">
+              Automatic verification
+            </span>
+            <span className="text-theme-text-tertiary">
+              Re-checking after apply
+            </span>
           </div>
-        </div>
+        ) : (
+          <div className="flex justify-end">
+            <div className="max-w-[85%]">
+              {turn.actor && (
+                <div className="mb-0.5 text-right text-[10px] text-theme-text-tertiary">
+                  {turn.actor}
+                </div>
+              )}
+              <div className="rounded-lg rounded-br-sm bg-accent/10 px-3 py-1.5 text-sm text-theme-text-primary [overflow-wrap:anywhere]">
+                {turn.question}
+              </div>
+            </div>
+          </div>
+        ))
       )}
       <Timeline
         items={turn.timeline}
         running={turn.status === "running"}
         applyMode={turn.apply}
         followup={followup}
-        synthLabel={synthLabel}
+        turnIndex={turnIndex}
+        evidenceStepIds={evidenceStepIds}
+        onViewEvidence={onViewEvidence}
+        sourceRevealRequest={sourceRevealRequest}
       />
-      {turn.status === "done" &&
-        (hideVerdict && hasVerdict ? null : hasVerdict ? (
+      {!turn.explainAssessment &&
+        turn.status === "done" &&
+        (turn.apply ? (
+          <ApplyOutcomeCard
+            diagnosis={turn.diagnosis}
+            applyOutcome={turn.applyOutcome}
+            onCheckStatus={onCheckStatus}
+            animate={turn.animateResult !== false}
+          />
+        ) : hideConclusion && hasResult ? null : hasResult ? (
           <ResultCard
             diagnosis={turn.diagnosis!}
             onApply={onApply}
-            onAsk={onAsk}
-            apply={turn.apply}
             followup={followup}
-            reveal={reveal}
             onCheckStatus={onCheckStatus}
+            animate={turn.animateResult !== false}
           />
         ) : (
-          <EmptyResult />
+          <EmptyResult animate={turn.animateResult !== false} />
         ))}
-      {turn.status === "error" && turn.error && (
+      {turn.explainAssessment ? null : turn.status === "error" && turn.apply ? (
+        <ApplyOutcomeCard
+          diagnosis={turn.diagnosis}
+          error={turn.error}
+          applyOutcome={turn.applyOutcome}
+          onCheckStatus={onCheckStatus}
+          animate={turn.animateResult !== false}
+        />
+      ) : turn.status === "error" && turn.error ? (
         <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
           <div className="flex min-w-0 flex-col gap-2">
-            <span className="whitespace-pre-wrap break-words">{turn.error}</span>
+            <span className="whitespace-pre-wrap break-words">
+              {turn.error}
+            </span>
             {onRetryDiagnosis && (
               <button
                 type="button"
                 onClick={onRetryDiagnosis}
                 className="btn-brand self-start px-3 py-1 text-xs"
               >
-                Retry diagnosis
+                Retry investigation
+              </button>
+            )}
+            {onCheckStatus && (
+              <button
+                type="button"
+                onClick={onCheckStatus}
+                className="btn-brand self-start px-3 py-1 text-xs"
+              >
+                Check current status
               </button>
             )}
           </div>
         </div>
-      )}
-    </div>
-  );
-}
-
-// RunContextCard opens every investigation with what RADAR already knows — the
-// health frame the server captured at run start. It renders instantly (no agent
-// round-trip), so the agent's boot time reads as "context, then deepening"
-// instead of dead air — and it anchors the verdict against Radar's own signal.
-function healthLineTone(severity?: string): "unhealthy" | "degraded" | "alert" {
-  if (severity === "critical") return "unhealthy";
-  if (severity === "warning") return "degraded";
-  return "alert";
-}
-
-export function RunContextCard({ run }: { run: RunSummary }) {
-  const h = run.health;
-  const issueCount = h?.issueCount ?? 0;
-  const issues = h?.issues ?? [];
-  const findings = h?.auditFindings ?? [];
-  const lines: ReactNode[] = [];
-  if (issues.length > 0) {
-    // The actual issue rows Radar's engine flagged — the reason bolded, the
-    // engine's own detail sentence after it. Concrete beats a count.
-    for (const [i, line] of issues.entries()) {
-      lines.push(
-        <div key={`issue-${i}`} className="flex items-start gap-1.5">
-          <StatusDot
-            tone={healthLineTone(line.severity)}
-            className="mt-1 shrink-0"
-          />
-          <span className="min-w-0">
-            <span className="font-medium text-theme-text-primary">
-              {line.reason}
-            </span>
-            {line.message ? <> — {line.message}</> : null}
-          </span>
-        </div>,
-      );
-    }
-    if (issueCount > issues.length) {
-      lines.push(
-        <div key="more" className="pl-3.5 text-theme-text-tertiary">
-          +{issueCount - issues.length} more active issue
-          {issueCount - issues.length === 1 ? "" : "s"}
-        </div>,
-      );
-    }
-  } else if (h?.health === "healthy") {
-    lines.push(
-      <div key="healthy" className="flex items-center gap-1.5">
-        <StatusDot tone="healthy" className="shrink-0" />
-        Reported healthy — 0 active issues
-      </div>,
-    );
-  } else if (h) {
-    lines.push(
-      <div key="none" className="flex items-center gap-1.5">
-        <StatusDot tone="unknown" className="shrink-0" />0 active issues
-        {h.health ? ` — status ${h.health}` : ""}
-      </div>,
-    );
-  }
-  for (const [i, f] of findings.entries()) {
-    lines.push(
-      <div key={`audit-${i}`} className="pl-3.5 text-theme-text-tertiary">
-        Audit: <span className="font-medium">{f.reason}</span>
-        {f.message ? <> — {f.message}</> : null}
-      </div>,
-    );
-  }
-  if ((h?.auditCount ?? 0) > findings.length && findings.length > 0) {
-    lines.push(
-      <div key="audit-more" className="pl-3.5 text-theme-text-tertiary">
-        +{h!.auditCount! - findings.length} more audit finding
-        {h!.auditCount! - findings.length === 1 ? "" : "s"}
-      </div>,
-    );
-  }
-  if (run.managedBy) {
-    lines.push(
-      <div key="managed" className="pl-3.5 text-theme-text-tertiary">
-        Managed by {run.managedBy}
-      </div>,
-    );
-  }
-  if (lines.length === 0) return null;
-  return (
-    <div className="rounded-md border border-theme-border/60 bg-theme-base/40 px-2.5 py-2">
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
-        Radar&apos;s read at start
-      </div>
-      <div className="space-y-1 text-xs text-theme-text-secondary">{lines}</div>
+      ) : null}
     </div>
   );
 }
@@ -697,7 +751,9 @@ function ConsentCardShell({
           {title}
         </div>
       </div>
-      <div className="text-sm leading-relaxed text-theme-text-secondary">{body}</div>
+      <div className="text-sm leading-relaxed text-theme-text-secondary">
+        {body}
+      </div>
       {bullets && bullets.length > 0 && (
         <ul className="mt-2 space-y-1 text-xs text-theme-text-tertiary">
           {bullets.map((b, i) => (
@@ -816,16 +872,16 @@ export function ConsentCard({
           ? [
               agent === "claude" ? (
                 <>
-                  Radar safeguards disable Claude&apos;s built-in tools and limit
-                  MCP access to Radar&apos;s read-only investigation tools. Your
-                  Claude settings, hooks, and CLAUDE.md instructions still apply
-                  and are outside Radar&apos;s control.
+                  Radar safeguards disable Claude&apos;s built-in tools and
+                  limit MCP access to Radar&apos;s read-only investigation
+                  tools. Your Claude settings, hooks, and CLAUDE.md instructions
+                  still apply and are outside Radar&apos;s control.
                 </>
               ) : agent === "codex" ? (
                 <>
-                  Radar safeguards exclude your Codex configuration and other MCP
-                  servers. Codex&apos;s sandboxed shell can still read files on
-                  this machine; it cannot write or reach the network.
+                  Radar safeguards exclude your Codex configuration and other
+                  MCP servers. Codex&apos;s sandboxed shell can still read files
+                  on this machine; it cannot write or reach the network.
                 </>
               ) : (
                 <>
@@ -837,9 +893,9 @@ export function ConsentCard({
             ]
           : [
               <>
-                Radar cannot constrain the agent&apos;s other configured tools or
-                MCP servers. They may access local files or the network and may
-                be able to change your cluster.
+                Radar cannot constrain the agent&apos;s other configured tools
+                or MCP servers. They may access local files or the network and
+                may be able to change your cluster.
               </>,
               agent === "cursor-agent" ? (
                 CURSOR_FULL_LOCAL_WARNING
@@ -868,6 +924,7 @@ export function ApplyDialog({
   onConfirm,
   agentLabel,
   resourceLabel,
+  context,
   fix,
   managedBy,
   confidence,
@@ -877,6 +934,7 @@ export function ApplyDialog({
   onConfirm: () => void;
   agentLabel: string;
   resourceLabel: string;
+  context: string;
   fix?: string;
   managedBy?: string; // GitOps/Helm owner of the resource, if any
   confidence?: number;
@@ -895,8 +953,12 @@ export function ApplyDialog({
   }, [open]);
   const applyBlocked = !!managedBy && !acked;
   return (
-    <DialogPortal open={open} onClose={onClose} className="max-w-lg w-full">
-      <div className="flex items-start gap-3 border-b border-theme-border p-4">
+    <DialogPortal
+      open={open}
+      onClose={onClose}
+      className="flex max-h-[calc(100dvh-2rem)] w-full max-w-2xl flex-col overflow-hidden"
+    >
+      <div className="flex shrink-0 items-start gap-3 border-b border-theme-border p-4">
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-500/20">
           <AlertTriangle className="h-5 w-5 text-amber-500" />
         </div>
@@ -911,22 +973,34 @@ export function ApplyDialog({
             </span>
             .
           </p>
+          <p className="mt-2 text-sm text-theme-text-secondary">
+            Cluster:{" "}
+            <span className="font-medium text-theme-text-primary">
+              {parseContextName(context).clusterName}
+            </span>
+          </p>
+          {context !== parseContextName(context).clusterName && (
+            <p className="mt-0.5 break-all font-mono text-xs text-theme-text-tertiary">
+              {context}
+            </p>
+          )}
         </div>
       </div>
 
-      {fixText && (
-        <div className="border-b border-theme-border p-4">
-          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-accent">
-            <Sparkles className="h-3.5 w-3.5" />
-            What will happen
+      <div className="min-h-0 overflow-y-auto">
+        {fixText && (
+          <div className="border-b border-theme-border p-4">
+            <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-accent">
+              <Sparkles className="h-3.5 w-3.5" />
+              Proposed change
+            </div>
+            <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary [&_pre]:my-1.5 [&_pre]:whitespace-pre-wrap [&_pre_code]:whitespace-pre-wrap">
+              {fixText}
+            </AIMarkdown>
           </div>
-          <AIMarkdown className="max-h-48 overflow-auto text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary [&_pre]:my-1.5">
-            {fixText}
-          </AIMarkdown>
-        </div>
-      )}
-
-      <div className="space-y-2 p-4">
+        )}
+      </div>
+      <div className="shrink-0 space-y-2 p-4">
         {/* The star warning: when we KNOW a controller owns this resource, a live
             change reverts on the next reconcile — say so authoritatively. */}
         {managedBy && (
@@ -956,7 +1030,7 @@ export function ApplyDialog({
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
             <span>
               The agent had <span className="font-medium">low confidence</span>{" "}
-              in this diagnosis — consider asking a follow-up to verify before
+              in this conclusion — consider asking a follow-up to verify before
               applying.
             </span>
           </div>
@@ -970,8 +1044,7 @@ export function ApplyDialog({
           </span>
         </div>
       </div>
-
-      <div className="flex items-center justify-end gap-3 border-t border-theme-border p-4">
+      <div className="flex shrink-0 items-center justify-end gap-3 border-t border-theme-border p-4">
         <button
           onClick={onClose}
           className="rounded-lg px-4 py-2 text-sm font-medium text-theme-text-secondary transition-colors hover:bg-theme-elevated hover:text-theme-text-primary"
@@ -996,13 +1069,23 @@ export function Timeline({
   running,
   applyMode,
   followup,
-  synthLabel,
+  turnIndex,
+  evidenceStepIds,
+  onViewEvidence,
+  sourceRevealRequest,
 }: {
   items: TimelineItem[];
   running: boolean;
   applyMode?: boolean;
   followup?: boolean;
-  synthLabel?: string | null;
+  turnIndex?: number;
+  evidenceStepIds?: ReadonlySet<string>;
+  onViewEvidence?: (sourceId: string) => void;
+  sourceRevealRequest?: {
+    sourceId: string;
+    requestId: number;
+    excerpt?: InvestigationSourceExcerpt;
+  };
 }) {
   const heading = applyMode
     ? "Applying fix"
@@ -1014,8 +1097,7 @@ export function Timeline({
   const activeTool = [...items]
     .reverse()
     .find((it) => it.kind === "tool" && it.status !== "done") as
-    | Extract<TimelineItem, { kind: "tool" }>
-    | undefined;
+    Extract<TimelineItem, { kind: "tool" }> | undefined;
   const runningLabel = applyMode
     ? "Applying the fix…"
     : activeTool
@@ -1032,26 +1114,115 @@ export function Timeline({
           {heading}
         </div>
       )}
-      {items.map((it, i) =>
-        it.kind === "thinking" ? (
-          // The model's reasoning between tool calls — muted + subordinate to the
-          // tool rows. Rendered as markdown so Codex's summary headers read cleanly.
-          <AIMarkdown
-            key={i}
-            className="animate-transcript-enter py-0.5 text-xs leading-relaxed text-theme-text-tertiary [overflow-wrap:anywhere] [&_li]:text-theme-text-tertiary [&_p]:my-0.5 [&_strong]:font-medium [&_strong]:text-theme-text-secondary"
-          >
-            {it.text}
+      {items.map((it, i) => {
+        if (it.kind === "thinking") {
+          return (
+            <ThinkingBlock
+              key={i}
+              text={it.text}
+              animate={it.animate !== false}
+              live={running && i === items.length - 1}
+            />
+          );
+        }
+        const sourceId =
+          turnIndex === undefined
+            ? undefined
+            : investigationEvidenceSourceId(turnIndex, it.id);
+        return (
+          <ToolRow
+            key={it.id}
+            step={it}
+            sourceId={sourceId}
+            hasEvidence={evidenceStepIds?.has(it.id) ?? false}
+            onViewEvidence={onViewEvidence}
+            revealRequestId={
+              sourceRevealRequest && sourceId === sourceRevealRequest.sourceId
+                ? sourceRevealRequest.requestId
+                : undefined
+            }
+            sourceExcerpt={
+              sourceRevealRequest && sourceRevealRequest.sourceId === sourceId
+                ? sourceRevealRequest.excerpt
+                : undefined
+            }
+            animate={it.animate !== false}
+          />
+        );
+      })}
+      {running && <RunningStatus label={runningLabel} />}
+    </div>
+  );
+}
+
+// The model's reasoning between tool calls — muted + subordinate to the tool
+// rows, and clamped once its beat is over so the chronology stays scannable.
+// The final beat remains fully visible while it is streaming; completed prose
+// is still available through an overflow-aware disclosure.
+function ThinkingBlock({
+  text,
+  animate,
+  live,
+}: {
+  text: string;
+  animate: boolean;
+  live: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [contentHeight, setContentHeight] = useState<number>();
+  const contentRef = useRef<HTMLDivElement>(null);
+  const contentId = useId();
+  const reveal = useDisclosureReveal<HTMLDivElement>();
+  // Two lines of 12px/19.5px prose plus 8px paragraph/container spacing. Unlike a disclosure
+  // this starts with a visible preview, so animate measured height using the
+  // same 200ms ease-out/reduced-motion treatment as Collapse.
+  const previewHeight = 47;
+  const clamped = !live && !expanded;
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    const measure = () => setContentHeight(content.scrollHeight);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [text]);
+
+  return (
+    <div
+      ref={reveal.elementRef}
+      className={animate ? "animate-transcript-enter" : ""}
+    >
+      <div
+        id={contentId}
+        className="overflow-hidden transition-[height] duration-200 ease-out motion-reduce:transition-none"
+        style={{
+          height: clamped
+            ? Math.min(contentHeight ?? previewHeight, previewHeight)
+            : contentHeight,
+        }}
+      >
+        <div ref={contentRef}>
+          <AIMarkdown className="py-0.5 text-xs leading-relaxed text-theme-text-tertiary [overflow-wrap:anywhere] [&_li]:text-theme-text-tertiary [&_p]:my-0.5 [&_strong]:font-medium [&_strong]:text-theme-text-secondary">
+            {text}
           </AIMarkdown>
-        ) : (
-          <ToolRow key={it.id} step={it} />
-        ),
-      )}
-      {running &&
-        (synthLabel ? (
-          <SynthBeat label={synthLabel} />
-        ) : (
-          <RunningStatus label={runningLabel} />
-        ))}
+        </div>
+      </div>
+      {!live && ((contentHeight ?? 0) > previewHeight || expanded) ? (
+        <button
+          type="button"
+          aria-controls={contentId}
+          aria-expanded={expanded}
+          onClick={() => {
+            setExpanded(!expanded);
+            reveal.revealAfterToggle(!expanded);
+          }}
+          className="text-[11px] font-medium text-theme-text-tertiary hover:text-accent-text"
+        >
+          {expanded ? "Show less" : "Show reasoning"}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -1099,17 +1270,6 @@ function RunningStatus({ label }: { label: string }) {
   );
 }
 
-// A staged "thinking" beat — a calm breathing dot + shimmering label. Used both in
-// the timeline (pre-verdict) and between the root-cause and remediation cards.
-function SynthBeat({ label }: { label: string }) {
-  return (
-    <div className="flex items-center gap-2 pt-1 text-xs animate-transcript-enter">
-      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent animate-synth-pulse" />
-      <span className="ai-shimmer font-medium">{label}…</span>
-    </div>
-  );
-}
-
 // Maps a running tool to a human verb so the status line reads as activity, not
 // machinery. Falls back to the prettified tool name for anything unmapped.
 function toolActivity(tool: string): string {
@@ -1126,69 +1286,194 @@ function toolActivity(tool: string): string {
   return `${prettyTool(tool)}…`;
 }
 
-function ToolRow({ step }: { step: Extract<TimelineItem, { kind: "tool" }> }) {
-  const [open, setOpen] = useState(false);
+function ToolRow({
+  step,
+  sourceId,
+  hasEvidence,
+  onViewEvidence,
+  revealRequestId,
+  sourceExcerpt,
+  animate,
+}: {
+  step: Extract<TimelineItem, { kind: "tool" }>;
+  sourceId?: string;
+  hasEvidence?: boolean;
+  onViewEvidence?: (sourceId: string) => void;
+  revealRequestId?: number;
+  sourceExcerpt?: InvestigationSourceExcerpt;
+  animate: boolean;
+}) {
+  const [open, setOpen] = useState(revealRequestId !== undefined);
   const [showFull, setShowFull] = useState(false);
+  const [argumentsOpen, setArgumentsOpen] = useState(false);
+  const toolReveal = useDisclosureReveal<HTMLDivElement>();
+  const argumentsReveal = useDisclosureReveal<HTMLDivElement>();
+  const argumentsId = useId();
+  const argumentsPreview = step.summary ? compactArgs(step.summary) : "";
+  const inlineArguments =
+    argumentsPreview.length <= 240 && !argumentsPreview.includes("\n");
+  const detailId = `investigation-tool-detail-${useId().replaceAll(":", "")}`;
   const hasDetail = !!(step.summary || step.result);
+  useEffect(() => {
+    if (revealRequestId !== undefined && hasDetail) setOpen(true);
+  }, [hasDetail, revealRequestId]);
   // Offer the rich dialog when the result is structured or non-trivial in size.
   const richResult =
     !!step.result && (isJsonPayload(step.result) || step.result.length > 200);
-  return (
-    <div className="animate-transcript-enter rounded-md border border-theme-border/60 bg-theme-base/40">
-      <button
-        onClick={() => hasDetail && setOpen((v) => !v)}
-        className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm ${
-          hasDetail ? "hover:bg-theme-hover" : "cursor-default"
-        }`}
-      >
-        {step.status === "done" ? (
-          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
-        ) : (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
-        )}
-        <span className="font-mono text-xs text-theme-text-secondary">
-          {prettyTool(step.tool)}
+  const done = step.status === "done";
+  const outcomeLabel = !done
+    ? "Running"
+    : step.isError === true
+      ? "Tool failed"
+      : step.isError === false
+        ? "Tool completed"
+        : "Tool finished; outcome not recorded";
+  const rowContent = (
+    <>
+      {!done ? (
+        <Loader2
+          aria-label={outcomeLabel}
+          className="h-3.5 w-3.5 shrink-0 animate-spin text-accent"
+        />
+      ) : step.isError === true ? (
+        <AlertTriangle
+          aria-label={outcomeLabel}
+          className="h-3.5 w-3.5 shrink-0 text-red-400"
+        />
+      ) : step.isError === false ? (
+        <CheckCircle2
+          aria-label={outcomeLabel}
+          className="h-3.5 w-3.5 shrink-0 text-emerald-400"
+        />
+      ) : (
+        <HelpCircle
+          aria-label={outcomeLabel}
+          className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary"
+        />
+      )}
+      <span className="shrink-0 font-mono text-xs text-theme-text-secondary">
+        {prettyTool(step.tool)}
+      </span>
+      {step.summary && !open && (
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-theme-text-tertiary">
+          {argumentsPreview}
         </span>
-        {step.summary && (
-          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-theme-text-tertiary">
-            {compactArgs(step.summary)}
-          </span>
-        )}
-        {step.ms != null && (
-          <span className="ml-auto shrink-0 text-[11px] text-theme-text-tertiary">
-            {step.ms}ms
-          </span>
-        )}
-        {hasDetail && (
-          <ChevronRight
-            className={`h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform ${open ? "rotate-90" : ""}`}
-          />
-        )}
-      </button>
-      {hasDetail && (
-        <Collapse open={open}>
-          <div className="space-y-2 border-t border-theme-border/60 px-2 py-2">
-            {step.summary && <PayloadBlock label="Input" text={step.summary} />}
-            {step.result && (
-              <PayloadBlock
-                label="Result"
-                text={step.result}
-                truncated={step.truncated}
-                action={
-                  richResult ? (
-                    <button
-                      onClick={() => setShowFull(true)}
-                      className="flex items-center gap-1 text-[11px] text-accent hover:underline"
-                    >
-                      <Maximize2 className="h-3 w-3" />
-                      View payload
-                    </button>
-                  ) : undefined
-                }
-              />
-            )}
+      )}
+      {step.ms != null && (
+        <span className="ml-auto shrink-0 text-[11px] text-theme-text-tertiary">
+          {step.ms}ms
+        </span>
+      )}
+      {hasDetail && <CollapseChevron open={open} className="h-3.5 w-3.5" />}
+    </>
+  );
+  return (
+    <div
+      onMouseEnter={(event) =>
+        highlightRelatedEvidence(event.currentTarget, sourceId)
+      }
+      onMouseLeave={(event) => highlightRelatedEvidence(event.currentTarget)}
+      ref={toolReveal.elementRef}
+      id={sourceId ? investigationActivitySourceDomId(sourceId) : undefined}
+      tabIndex={sourceId ? -1 : undefined}
+      role={sourceId ? "group" : undefined}
+      aria-label={
+        sourceId
+          ? `${prettyTool(step.tool)} ${outcomeLabel.toLowerCase()}`
+          : undefined
+      }
+      className={`${animate ? "animate-transcript-enter" : ""} scroll-mt-3 rounded-md border border-theme-border/60 bg-theme-base/40 outline-none focus:ring-2 focus:ring-accent/50`}
+    >
+      <div className="flex min-w-0 items-stretch">
+        {hasDetail ? (
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(!open);
+              toolReveal.revealAfterToggle(!open);
+            }}
+            aria-expanded={open}
+            aria-controls={detailId}
+            className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm hover:bg-theme-hover"
+          >
+            {rowContent}
+          </button>
+        ) : (
+          <div className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left text-sm">
+            {rowContent}
           </div>
-        </Collapse>
+        )}
+        {hasEvidence && sourceId && onViewEvidence ? (
+          <button
+            type="button"
+            onClick={() => onViewEvidence(sourceId)}
+            aria-label={`View evidence from ${prettyTool(step.tool)}`}
+            className="investigation-evidence-jump shrink-0 px-2 text-[11px] font-medium text-accent-text hover:bg-theme-hover"
+          >
+            Show evidence
+          </button>
+        ) : null}
+      </div>
+      {hasDetail && (
+        <div id={detailId}>
+          <Collapse open={open}>
+            <div className="space-y-2 border-t border-theme-border/60 px-2 py-2">
+              {step.summary &&
+                (inlineArguments ? (
+                  <div
+                    className="break-words font-mono text-[11px] leading-relaxed text-theme-text-secondary [overflow-wrap:anywhere]"
+                    aria-label="Tool arguments"
+                  >
+                    {argumentsPreview}
+                  </div>
+                ) : (
+                  <div ref={argumentsReveal.elementRef}>
+                    <button
+                      type="button"
+                      aria-expanded={argumentsOpen}
+                      aria-controls={argumentsId}
+                      onClick={() => {
+                        setArgumentsOpen(!argumentsOpen);
+                        argumentsReveal.revealAfterToggle(!argumentsOpen);
+                      }}
+                      className="flex items-center gap-1 py-1 text-xs text-theme-text-tertiary hover:text-theme-text-primary"
+                    >
+                      <CollapseChevron
+                        open={argumentsOpen}
+                        className="h-3.5 w-3.5"
+                      />
+                      {argumentsOpen ? "Hide arguments" : "Show arguments"}
+                    </button>
+                    <div id={argumentsId}>
+                      <Collapse open={argumentsOpen} mountLazily>
+                        <PayloadBlock label="Arguments" text={step.summary} />
+                      </Collapse>
+                    </div>
+                  </div>
+                ))}
+              {step.result && (
+                <PayloadBlock
+                  label="Original result"
+                  text={step.result}
+                  sourceExcerpt={sourceExcerpt}
+                  revealRequestId={revealRequestId}
+                  truncated={step.truncated}
+                  action={
+                    richResult ? (
+                      <button
+                        onClick={() => setShowFull(true)}
+                        className="flex items-center gap-1 text-[11px] text-accent hover:underline"
+                      >
+                        <Maximize2 className="h-3 w-3" />
+                        View payload
+                      </button>
+                    ) : undefined
+                  }
+                />
+              )}
+            </div>
+          </Collapse>
+        </div>
       )}
       {step.result && (
         <ToolResultDialog
@@ -1227,13 +1512,36 @@ function PayloadBlock({
   text,
   truncated,
   action,
+  sourceExcerpt,
+  revealRequestId,
 }: {
   label: string;
   text: string;
   truncated?: boolean;
   action?: ReactNode;
+  sourceExcerpt?: InvestigationSourceExcerpt;
+  revealRequestId?: number;
 }) {
   const json = formatJson(text);
+  const display = json ?? text;
+  const range = locateSourceExcerpt(display, sourceExcerpt);
+  const rangeStart = range?.start;
+  const rangeEnd = range?.end;
+  const preRef = useRef<HTMLPreElement>(null);
+  const markRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (rangeStart === undefined || revealRequestId === undefined) return;
+    const frame = requestAnimationFrame(() => {
+      const pre = preRef.current,
+        mark = markRef.current;
+      if (pre && mark)
+        pre.scrollTop +=
+          mark.getBoundingClientRect().top -
+          pre.getBoundingClientRect().top -
+          pre.clientHeight / 3;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [revealRequestId, rangeStart, rangeEnd]);
   return (
     <div>
       <div className="mb-0.5 flex items-center justify-between gap-2">
@@ -1242,13 +1550,30 @@ function PayloadBlock({
         </span>
         <div className="flex items-center gap-2">
           {action}
-          <CopyButton text={json ?? text} />
+          <CopyButton
+            text={json ?? text}
+            label={`Copy ${label.toLowerCase()}`}
+          />
         </div>
       </div>
       <pre
-        className={`max-h-64 overflow-auto rounded bg-theme-elevated p-1.5 font-mono text-[11px] text-theme-text-secondary ${json ? "" : "whitespace-pre-wrap [overflow-wrap:anywhere]"}`}
+        ref={preRef}
+        className={`max-h-64 overflow-auto rounded bg-theme-elevated p-1.5 font-mono text-[11px] text-theme-text-secondary ${json && !range ? "" : "whitespace-pre-wrap [overflow-wrap:anywhere]"}`}
       >
-        {json ?? text}
+        {range ? (
+          <>
+            {display.slice(0, range.start)}
+            <mark
+              ref={markRef}
+              className="bg-accent-muted text-theme-text-primary ring-1 ring-accent/40"
+            >
+              {display.slice(range.start, range.end)}
+            </mark>
+            {display.slice(range.end)}
+          </>
+        ) : (
+          display
+        )}
       </pre>
       {truncated && (
         <div className="mt-0.5 text-[10px] text-amber-500">
@@ -1337,7 +1662,7 @@ function ToolResultDialog({
               />
             </div>
           )}
-          <CopyButton text={display} />
+          <CopyButton text={display} label="Copy tool result" />
         </div>
       </div>
       {html ? (
@@ -1362,18 +1687,6 @@ function safeYaml(value: unknown): string {
   }
 }
 
-// Collapse — the Radar-standard expand/collapse motion (grid-template-rows
-// 0fr↔1fr) used across issue rows. Children stay mounted so close animates too.
-function Collapse({ open, children }: { open: boolean; children: ReactNode }) {
-  return (
-    <div
-      className={`issue-details-motion ${open ? "issue-details-motion-open" : ""}`}
-    >
-      <div className="overflow-hidden">{children}</div>
-    </div>
-  );
-}
-
 function compactArgs(raw: string): string {
   try {
     const o = JSON.parse(raw);
@@ -1388,71 +1701,271 @@ function compactArgs(raw: string): string {
 export function ResultCard({
   diagnosis,
   onApply,
-  onAsk,
+  explanation,
   apply,
+  applyOutcome,
   followup,
-  reveal = "full",
+  section = "full",
   onCheckStatus,
+  animate = true,
+  showDisclaimer = true,
+  coverageLimited = false,
+  evidenceConflict = false,
+  compactActions = false,
+  assessmentAction,
+  assessmentSources,
+  actionNotice,
 }: {
   diagnosis: Diagnosis;
   onApply?: (fix: string) => void;
-  onAsk?: (question: string) => void;
+  explanation?: AssessmentExplanation;
   apply?: boolean;
+  applyOutcome?: ApplyMutationOutcome;
   followup?: boolean;
-  reveal?: "rca" | "full";
+  section?: "full" | "conclusion" | "actions";
   onCheckStatus?: () => void;
+  animate?: boolean;
+  /** Additional navigation placed in the assessment action row. */
+  assessmentAction?: ReactNode;
+  assessmentSources?: ReactNode;
+  /** Hide the repeated disclaimer when the enclosing surface provides context. */
+  showDisclaimer?: boolean;
+  /** Qualifies a healthy assessment when structured evidence is absent or partial. */
+  coverageLimited?: boolean;
+  /** Marks a healthy agent assessment that conflicts with same-turn Key evidence. */
+  evidenceConflict?: boolean;
+  /** Show only the recommended (or first) action until the user asks for more. */
+  compactActions?: boolean;
+  actionNotice?: string;
 }) {
-  // Apply turns report what changed — an outcome, not a diagnosis. Frame as a
-  // success confirmation (emerald) rather than the amber root-cause anchor.
+  // Apply turns report mutation truth, not a diagnosis. The outcome-specific
+  // card decides whether that truth is confirmed, failed, or still unknown.
   if (apply)
     return (
-      <ApplyOutcomeCard diagnosis={diagnosis} onCheckStatus={onCheckStatus} />
+      <ApplyOutcomeCard
+        diagnosis={diagnosis}
+        applyOutcome={applyOutcome}
+        onCheckStatus={onCheckStatus}
+        animate={animate}
+      />
     );
+  // A question remains conversational even if the model happens to set a health
+  // flag in its structured envelope. Never promote an ordinary answer into an
+  // authoritative investigation conclusion.
+  if (followup)
+    return <FollowupAnswer diagnosis={diagnosis} animate={animate} />;
   if (diagnosis.healthy && !diagnosis.rootCause)
-    return <AllClearCard diagnosis={diagnosis} />;
+    return section === "actions" ? null : (
+      <AllClearCard
+        diagnosis={diagnosis}
+        animate={animate}
+        showDisclaimer={showDisclaimer}
+        coverageLimited={coverageLimited}
+        evidenceConflict={evidenceConflict}
+        assessmentAction={assessmentAction}
+        assessmentSources={assessmentSources}
+      />
+    );
   // Couldn't-determine is its own honest state — never a confident all-clear, never
   // the alarming root-cause anchor.
   if (diagnosis.inconclusive && !diagnosis.rootCause)
-    return <InconclusiveCard diagnosis={diagnosis} />;
-  // Follow-ups are conversational replies, not fresh diagnoses — plain answer.
-  if (followup) return <FollowupAnswer diagnosis={diagnosis} />;
-
+    return section === "actions" ? null : (
+      <>
+        <InconclusiveCard diagnosis={diagnosis} animate={animate} />
+        {assessmentSources ? (
+          <AssessmentSourceDetails>{assessmentSources}</AssessmentSourceDetails>
+        ) : null}
+        {assessmentAction && (
+          <div className="mt-2 flex justify-end">{assessmentAction}</div>
+        )}
+      </>
+    );
   // A turn with no structured root cause and no remediation (e.g. "looks healthy",
   // or a clarifying question) is not a diagnosis — render it neutrally rather than
   // forcing the alarming root-cause anchor onto a non-problem.
   const structured =
     !!diagnosis.rootCause || (diagnosis.remediation?.length ?? 0) > 0;
-  if (!structured) return <FollowupAnswer diagnosis={diagnosis} />;
+  if (!structured)
+    return (
+      <>
+        <FollowupAnswer diagnosis={diagnosis} animate={animate} />
+        {assessmentSources ? (
+          <AssessmentSourceDetails>{assessmentSources}</AssessmentSourceDetails>
+        ) : null}
+        {assessmentAction && (
+          <div className="mt-2 flex justify-end">{assessmentAction}</div>
+        )}
+      </>
+    );
 
   return (
     <DiagnosisResult
       diagnosis={diagnosis}
       onApply={onApply}
-      onAsk={onAsk}
-      reveal={reveal}
+      explanation={explanation}
+      section={section}
+      animate={animate}
+      showDisclaimer={showDisclaimer}
+      compactActions={compactActions}
+      assessmentAction={assessmentAction}
+      assessmentSources={assessmentSources}
+      actionNotice={actionNotice}
     />
   );
 }
 
-const EXPLAIN_SIMPLY_PROMPT =
-  "Explain this in plain language for someone who isn't a Kubernetes expert — what's broken, why it matters, and what each remediation step actually does. Gloss any k8s terms.";
+export function AssessmentSources({
+  resolution,
+  onViewSource,
+}: {
+  resolution?: InvestigationRootCauseEvidenceResolution;
+  onViewSource: (sourceId: string) => void;
+}) {
+  if (resolution?.status !== "linked" || !resolution.links.length) return null;
+  return (
+    <div className="mt-3 border-t border-theme-border/60 pt-2">
+      <h4 className="text-xs font-medium text-theme-text-secondary">
+        Sources used for this assessment
+      </h4>
+      <ul className="mt-1 space-y-1">
+        {resolution.links.map((link) => (
+          <li key={link.source.id}>
+            <button
+              type="button"
+              aria-label={`View ${prettyTool(link.source.tool)} source used for this assessment`}
+              onClick={() => onViewSource(link.source.id)}
+              className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-accent-text hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+            >
+              <FileSearch className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              <span className="min-w-0 flex-1">
+                <span className="font-medium">
+                  {prettyTool(link.source.tool)}
+                </span>
+                <CitedSourceScope source={link.source} />
+              </span>
+              <span className="shrink-0">View source</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
-// The diagnosis result: root cause + remediation (any step applyable) + the
+function AssessmentSourceDetails({ children }: { children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  const reveal = useDisclosureReveal<HTMLDivElement>();
+  return (
+    <div ref={reveal.elementRef}>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => {
+          setOpen(!open);
+          reveal.revealAfterToggle(!open);
+        }}
+        className="flex items-center gap-1.5 rounded-md py-2 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
+      >
+        <CollapseChevron open={open} className="h-3.5 w-3.5" />
+        Assessment details
+      </button>
+      <div id={id}>
+        <Collapse open={open}>{children}</Collapse>
+      </div>
+    </div>
+  );
+}
+
+function CitedSourceScope({ source }: { source: InvestigationEvidenceSource }) {
+  let input: unknown;
+  try {
+    input = JSON.parse(source.args ?? "");
+  } catch {
+    return null;
+  }
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const args = input as Record<string, unknown>;
+  const fields = ["query", "kind", "namespace", "name", "filter"].flatMap(
+    (key) =>
+      typeof args[key] === "string" && args[key].trim()
+        ? [`${key === "query" ? "" : `${key}: `}${args[key]}`]
+        : [],
+  );
+  return fields.length > 0 ? (
+    <span className="mt-0.5 block break-words text-theme-text-secondary [overflow-wrap:anywhere]">
+      {fields.join(" · ")}
+    </span>
+  ) : null;
+}
+
+export type AssessmentExplanation = {
+  status: "idle" | "running" | "done" | "error";
+  text?: string;
+  error?: string;
+  onGenerate?: () => void;
+  openRequest?: number;
+};
+
+// The diagnosis result: likely cause + remediation + the
 // agent's full analysis on demand.
 function DiagnosisResult({
   diagnosis,
   onApply,
-  onAsk,
-  reveal = "full",
+  explanation,
+  section = "full",
+  animate,
+  showDisclaimer,
+  compactActions,
+  assessmentAction,
+  assessmentSources,
+  actionNotice,
 }: {
   diagnosis: Diagnosis;
   onApply?: (fix: string) => void;
-  onAsk?: (question: string) => void;
-  reveal?: "rca" | "full";
+  explanation?: AssessmentExplanation;
+  section?: "full" | "conclusion" | "actions";
+  animate: boolean;
+  showDisclaimer: boolean;
+  compactActions: boolean;
+  assessmentAction?: ReactNode;
+  assessmentSources?: ReactNode;
+  actionNotice?: string;
 }) {
-  const [showAnalysis, setShowAnalysis] = useState(false);
-  // Only a real structured root cause anchors the amber card; the full prose lives
-  // in "Full analysis" (never relabel the report as a root cause).
+  const [detail, setDetail] = useState<"analysis" | "explanation" | null>(
+    explanation?.status === "running" ? "explanation" : null,
+  );
+  const showAnalysis = detail === "analysis";
+  const analysisReveal = useDisclosureReveal<HTMLDivElement>();
+  const { elementRef: analysisElementRef, revealAfterToggle: revealAnalysis } =
+    analysisReveal;
+  useEffect(() => {
+    if (explanation?.openRequest) {
+      setDetail("explanation");
+      revealAnalysis(true);
+    }
+  }, [explanation?.openRequest, revealAnalysis]);
+  useEffect(() => {
+    if (
+      detail === "explanation" &&
+      (explanation?.status === "done" || explanation?.status === "error")
+    ) {
+      const element = analysisElementRef.current;
+      const scroller = element?.closest("[data-investigation-findings-scroll]");
+      if (element && scroller) {
+        const top = element.getBoundingClientRect().top;
+        const viewport = scroller.getBoundingClientRect();
+        if (top >= viewport.top && top < viewport.bottom) revealAnalysis(true);
+      }
+    }
+  }, [explanation?.status, detail, analysisElementRef, revealAnalysis]);
+  const [showAllSteps, setShowAllSteps] = useState(false);
+  const stepsId = useId();
+  const stepsReveal = useDisclosureReveal<HTMLDivElement>();
+  const analysisId = useId();
+  // Only a real structured cause anchors the amber card; the full prose lives in
+  // "Full analysis" (never relabel the report as a causal assessment).
   const rootCause = diagnosis.rootCause;
   const remediation = diagnosis.remediation || [];
   const hasRemediation = remediation.length > 0;
@@ -1463,161 +1976,321 @@ function DiagnosisResult({
   // When it returns 0 / none ("needs human judgement"), we honor that and don't
   // offer one-click apply — the steps stay copy-only with a note.
   const canApply = !!onApply && recValid;
-  return (
-    <div className="mt-3 space-y-2 animate-result-in">
-      {/* Root cause — the anchor: distinct tone + heavier type so it pops. */}
-      {rootCause && (
-        <div
-          className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 animate-verdict-reveal"
-          style={{ "--glow": "rgb(245 158 11)" } as React.CSSProperties}
-        >
-          <div className="mb-1 flex items-center justify-between gap-2">
-            <div className="relative flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-500">
-              <AlertTriangle className="h-3.5 w-3.5" />
-              Root cause
-              <span className="absolute -bottom-0.5 left-0 right-0 h-px bg-amber-500/60 animate-underline-sweep" />
-            </div>
-            <div className="flex items-center gap-2">
-              {diagnosis.confidence != null ? (
-                <ConfidenceMeter value={diagnosis.confidence} />
-              ) : (
-                <ConfidenceUnstated />
-              )}
-              <CopyButton text={rootCause} />
-            </div>
+  const showConclusion = section !== "actions";
+  const showActions = section !== "conclusion";
+  const remediationEntries = remediation.map((text, index) => ({
+    text,
+    index,
+  }));
+  const primaryActionIndex = recValid ? recIdx! - 1 : 0;
+  const hiddenStepCount = remediationEntries.length - 1;
+  const renderRemediationStep = ({
+    text: r,
+    index: i,
+  }: {
+    text: string;
+    index: number;
+  }) => {
+    const isRec = recValid && i === recIdx! - 1;
+    return (
+      <div
+        key={i}
+        className={
+          isRec ? "rounded-lg border border-accent/40 bg-accent/5 p-2.5" : ""
+        }
+      >
+        <div className="flex items-start gap-2">
+          <span
+            className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] ${
+              isRec
+                ? "bg-accent/20 text-accent"
+                : "bg-theme-base text-theme-text-tertiary"
+            }`}
+          >
+            {i + 1}
+          </span>
+          <div className="min-w-0 flex-1">
+            {isRec && (
+              <div className="mb-1">
+                <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
+                  <Sparkles className="h-3 w-3" />
+                  Recommended
+                </div>
+                {diagnosis.recommendedReason && (
+                  <div className="mt-0.5 max-w-[100ch] text-[11px] leading-snug text-theme-text-tertiary">
+                    {diagnosis.recommendedReason}
+                  </div>
+                )}
+              </div>
+            )}
+            <AIMarkdown className="max-w-[100ch] text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_pre]:my-1.5">
+              {r}
+            </AIMarkdown>
           </div>
-          <AIMarkdown className="text-sm font-medium text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary">
-            {rootCause}
-          </AIMarkdown>
-          {onAsk && reveal === "full" && (
-            <button
-              onClick={() => onAsk(EXPLAIN_SIMPLY_PROMPT)}
-              className="mt-2 inline-flex items-center gap-1 rounded-md border border-theme-border px-2 py-1 text-[11px] font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
-            >
-              <HelpCircle className="h-3 w-3" />
-              Explain simply
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Between the root cause and the remediation, a beat lands where the steps
-          will appear — the verdict unfolds rather than dumping all at once. */}
-      {reveal === "rca" && hasRemediation && (
-        <SynthBeat label="Weighing remediation options" />
-      )}
-
-      {/* Remediation — copyable steps; the recommended one is highlighted as the
-          default, and any step can be applied (Apply binds to that step's text). */}
-      {reveal === "full" && hasRemediation && (
-        <div
-          className="rounded-lg border border-theme-border bg-theme-elevated p-3 animate-verdict-reveal"
-          style={{ "--glow": "var(--accent)" } as React.CSSProperties}
-        >
-          <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
-            <Wrench className="h-3.5 w-3.5 text-accent" />
-            Remediation
-          </div>
-          <ol className="space-y-2">
-            {remediation.map((r, i) => {
-              const isRec = recValid && i === recIdx! - 1;
-              return (
-                <li
-                  key={i}
-                  className={`animate-transcript-enter ${
-                    isRec
-                      ? "rounded-lg border border-accent/40 bg-accent/5 p-2.5"
-                      : ""
-                  }`}
-                  style={{ animationDelay: `${260 + i * 70}ms` }}
-                >
-                  <div className="flex items-start gap-2">
-                    <span
-                      className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] ${
-                        isRec
-                          ? "bg-accent/20 text-accent"
-                          : "bg-theme-base text-theme-text-tertiary"
-                      }`}
-                    >
-                      {i + 1}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      {isRec && (
-                        <div className="mb-1">
-                          <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
-                            <Sparkles className="h-3 w-3" />
-                            Recommended
-                          </div>
-                          {diagnosis.recommendedReason && (
-                            <div className="mt-0.5 text-[11px] leading-snug text-theme-text-tertiary">
-                              {diagnosis.recommendedReason}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_pre]:my-1.5">
-                        {r}
-                      </AIMarkdown>
-                    </div>
-                    {/* Action cluster: compact Apply (recommended = subtly
+          {/* Action cluster: compact Apply (recommended = subtly
                         filled, others = ghost) sits next to Copy so each row's
                         actions stay together. The ellipsis signals a confirm
                         dialog follows — it doesn't apply immediately. */}
-                    <div className="flex shrink-0 items-center gap-0.5">
-                      {canApply && (
-                        <button
-                          onClick={() => onApply!(r)}
-                          className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-accent transition-colors ${
-                            isRec
-                              ? "border border-accent/40 bg-accent/10 hover:bg-accent/20"
-                              : "hover:bg-accent/10"
-                          }`}
-                        >
-                          <Wrench className="h-3 w-3" />
-                          Apply…
-                        </button>
-                      )}
-                      <CopyButton text={r} />
-                    </div>
-                  </div>
+          <div className="flex shrink-0 items-center gap-0.5">
+            {canApply && isRec && (
+              <button
+                onClick={() => onApply!(r)}
+                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-accent transition-colors ${
+                  isRec
+                    ? "border border-accent/40 bg-accent/10 hover:bg-accent/20"
+                    : "hover:bg-accent/10"
+                }`}
+              >
+                <Wrench className="h-3 w-3" />
+                Apply…
+              </button>
+            )}
+            <CopyButton text={r} label={`Copy remediation step ${i + 1}`} />
+          </div>
+        </div>
+      </div>
+    );
+  };
+  return (
+    <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
+      {/* Likely cause — agent-authored, visually prominent without claiming proof. */}
+      {showConclusion && rootCause && (
+        <div
+          className={
+            section === "conclusion"
+              ? "grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2"
+              : "rounded-lg border border-theme-border bg-theme-surface p-3"
+          }
+        >
+          <div
+            className={
+              section === "conclusion"
+                ? "col-start-2 row-start-1"
+                : "mb-1 flex items-center justify-between gap-2"
+            }
+          >
+            {section !== "conclusion" && (
+              <div className="text-xs font-medium text-theme-text-secondary">
+                Likely cause
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <CopyButton text={rootCause} label="Copy likely cause" />
+            </div>
+          </div>
+          <AIMarkdown
+            className={`${section === "conclusion" ? "col-start-1 row-start-1 max-w-[100ch]" : "max-w-prose"} text-sm leading-relaxed text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary`}
+          >
+            {rootCause}
+          </AIMarkdown>
+        </div>
+      )}
+
+      {/* Remediation — every step is copyable. Only the explicitly recommended
+          step can be applied, and only when the caller enables apply. */}
+      {showActions && hasRemediation && (
+        <div
+          ref={stepsReveal.elementRef}
+          className={
+            section === "actions"
+              ? "space-y-2"
+              : "rounded-lg border border-theme-border bg-theme-surface p-3"
+          }
+        >
+          {section !== "actions" && (
+            <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-theme-text-secondary">
+              <Wrench className="h-3.5 w-3.5 text-accent" />
+              Remediation
+            </div>
+          )}
+          {actionNotice && (
+            <p className="text-xs text-theme-text-secondary">{actionNotice}</p>
+          )}
+          <div id={stepsId}>
+            <ol>
+              {remediationEntries.map((entry) => (
+                <li key={entry.index} value={entry.index + 1}>
+                  <Collapse
+                    open={
+                      !compactActions ||
+                      showAllSteps ||
+                      entry.index === primaryActionIndex
+                    }
+                    mountLazily
+                  >
+                    <div className="pt-2">{renderRemediationStep(entry)}</div>
+                  </Collapse>
                 </li>
-              );
-            })}
-          </ol>
-          {!recValid && (
+              ))}
+            </ol>
+          </div>
+          {compactActions && remediation.length > 1 ? (
+            <button
+              type="button"
+              aria-expanded={showAllSteps}
+              aria-controls={stepsId}
+              onClick={() => {
+                setShowAllSteps(!showAllSteps);
+                stepsReveal.revealAfterToggle(!showAllSteps);
+              }}
+              className="mt-2 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+            >
+              <CollapseChevron open={showAllSteps} className="h-3.5 w-3.5" />
+              {showAllSteps
+                ? recValid
+                  ? "Show only recommended step"
+                  : "Show only first step"
+                : `Show ${hiddenStepCount} more ${hiddenStepCount === 1 ? "step" : "steps"}`}
+            </button>
+          ) : null}
+          {!actionNotice && !recValid && (
             <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-snug text-theme-text-tertiary">
               <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
-              No safe one-click fix — the agent flagged this as needing your
-              judgement. Review the steps, or resume in your agent to apply them
-              interactively.
+              No one-click fix is available. Review these steps and apply them
+              manually, or ask the agent to continue.
             </p>
           )}
         </div>
       )}
 
       {/* Full analysis — the agent's detailed evidence, on demand. */}
-      {reveal === "full" && diagnosis.report && (
-        <div className="rounded-lg border border-theme-border bg-theme-elevated">
-          <button
-            onClick={() => setShowAnalysis((v) => !v)}
-            className="flex w-full items-center gap-1.5 px-3 py-2 text-xs font-medium uppercase tracking-wide text-theme-text-tertiary hover:text-theme-text-primary"
-          >
-            <ChevronRight
-              className={`h-3.5 w-3.5 transition-transform ${showAnalysis ? "rotate-90" : ""}`}
-            />
-            Full analysis
-          </button>
-          <Collapse open={showAnalysis}>
-            <div className="border-t border-theme-border/60 px-3 py-2">
-              <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary">
-                {diagnosis.report}
-              </AIMarkdown>
+      {showConclusion &&
+        (diagnosis.report ||
+          diagnosis.confidence != null ||
+          explanation ||
+          assessmentAction ||
+          assessmentSources) && (
+          <div>
+            <div
+              className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-2"
+              data-assessment-actions
+            >
+              {(diagnosis.report ||
+                diagnosis.confidence != null ||
+                assessmentSources) && (
+                <button
+                  type="button"
+                  aria-expanded={showAnalysis}
+                  aria-controls={`${analysisId}-analysis`}
+                  onClick={() => {
+                    setDetail(showAnalysis ? null : "analysis");
+                    analysisReveal.revealAfterToggle(!showAnalysis);
+                  }}
+                  className="flex items-center gap-1.5 rounded-md py-2 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
+                >
+                  <CollapseChevron
+                    open={showAnalysis}
+                    className="h-3.5 w-3.5"
+                  />
+                  {diagnosis.report ? "Full analysis" : "Assessment details"}
+                </button>
+              )}
+              {explanation && (
+                <Tooltip
+                  content={
+                    explanation.status === "idle"
+                      ? explanation.onGenerate
+                        ? "Ask the agent to explain this assessment and its proposed next steps in plain language."
+                        : "Wait for the current agent request to finish before requesting an explanation."
+                      : explanation.status === "running"
+                        ? "The agent is preparing an explanation. You can close this and return while it runs."
+                        : explanation.status === "error"
+                          ? "View the explanation error and retry when the agent is available."
+                          : "Show the saved plain-language explanation. No new request is needed."
+                  }
+                >
+                  <button
+                    type="button"
+                    aria-expanded={detail === "explanation"}
+                    aria-controls={`${analysisId}-explanation`}
+                    disabled={
+                      explanation.status === "idle" && !explanation.onGenerate
+                    }
+                    onClick={() => {
+                      const open = detail !== "explanation";
+                      setDetail(open ? "explanation" : null);
+                      analysisReveal.revealAfterToggle(open);
+                      if (open && explanation.status === "idle")
+                        explanation.onGenerate?.();
+                    }}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-xs font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary disabled:opacity-50"
+                  >
+                    <HelpCircle className="h-3 w-3" />
+                    Explain simply
+                  </button>
+                </Tooltip>
+              )}
+              {assessmentAction && (
+                <div className="ml-auto">{assessmentAction}</div>
+              )}
             </div>
-          </Collapse>
-        </div>
-      )}
+            <div id={analysisId} ref={analysisReveal.elementRef}>
+              <div id={`${analysisId}-analysis`}>
+                <Collapse open={detail === "analysis"} mountLazily>
+                  <div className="border-t border-theme-border/60 px-3 py-2">
+                    <p className="mb-2 text-xs text-theme-text-tertiary">
+                      Agent confidence:{" "}
+                      {diagnosis.confidence != null
+                        ? confidenceLabel(diagnosis.confidence)
+                        : "not stated"}
+                      {diagnosis.confidence != null ? " · self-reported" : ""}
+                    </p>
+                    <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary">
+                      {diagnosis.report}
+                    </AIMarkdown>
+                    {assessmentSources}
+                  </div>
+                </Collapse>
+              </div>
+              <div id={`${analysisId}-explanation`}>
+                <Collapse open={detail === "explanation"} mountLazily>
+                  <div className="border-t border-theme-border/60 px-3 py-2">
+                    {explanation?.status === "running" ? (
+                      <div
+                        role="status"
+                        className="flex items-center gap-2 py-2 text-sm text-theme-text-secondary"
+                      >
+                        <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+                        Explaining this assessment…
+                      </div>
+                    ) : explanation?.status === "done" ? (
+                      <div className="flex items-start gap-2">
+                        <AIMarkdown className="min-w-0 flex-1 text-sm text-theme-text-secondary [overflow-wrap:anywhere]">
+                          {explanation.text || ""}
+                        </AIMarkdown>
+                        <CopyButton
+                          text={explanation.text || ""}
+                          label="Copy explanation"
+                        />
+                      </div>
+                    ) : explanation?.status === "error" ? (
+                      <div
+                        role="alert"
+                        className="flex flex-wrap items-center gap-2 py-2 text-sm text-theme-text-secondary"
+                      >
+                        <span>
+                          {explanation.error ||
+                            "The agent did not return an explanation."}
+                        </span>
+                        {explanation.onGenerate && (
+                          <button
+                            type="button"
+                            onClick={explanation.onGenerate}
+                            className="rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
+                          >
+                            Try again
+                          </button>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                </Collapse>
+              </div>
+            </div>
+          </div>
+        )}
 
-      {reveal === "full" && (
+      {showConclusion && showDisclaimer && (
         <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
           <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
           <span>AI-generated — review before applying</span>
@@ -1627,30 +2300,124 @@ function DiagnosisResult({
   );
 }
 
-function AllClearCard({ diagnosis }: { diagnosis: Diagnosis }) {
-  const text =
-    diagnosis.report || "No active problem found for this resource.";
+function AllClearCard({
+  diagnosis,
+  animate,
+  showDisclaimer,
+  coverageLimited,
+  evidenceConflict,
+  assessmentAction,
+  assessmentSources,
+}: {
+  diagnosis: Diagnosis;
+  animate: boolean;
+  showDisclaimer: boolean;
+  coverageLimited: boolean;
+  evidenceConflict: boolean;
+  assessmentAction?: ReactNode;
+  assessmentSources?: ReactNode;
+}) {
+  const [showAnalysis, setShowAnalysis] = useState(false);
+  const analysisReveal = useDisclosureReveal<HTMLDivElement>();
+  const analysisId = useId();
+  const report =
+    diagnosis.report ||
+    "The agent did not identify a problem in the evidence it checked.";
+  const detailed = report.length > 320 || report.split("\n").length > 2;
+  const summary = detailed
+    ? "The agent found no active problem in the evidence it reviewed."
+    : report;
   return (
-    <div className="mt-3 space-y-2 animate-result-in">
+    <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
       <div
-        className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 animate-verdict-reveal"
-        style={{ "--glow": "rgb(16 185 129)" } as React.CSSProperties}
+        className={`rounded-lg border p-3 ${
+          evidenceConflict
+            ? "border-amber-500/40 bg-amber-500/5"
+            : coverageLimited
+              ? "border-amber-500/30 bg-amber-500/5"
+              : "border-emerald-500/30 bg-emerald-500/5"
+        }`}
       >
         <div className="mb-1 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-emerald-500">
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            No problems found
+          <div
+            className={`flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide ${
+              evidenceConflict || coverageLimited
+                ? "text-amber-500"
+                : "text-emerald-500"
+            }`}
+          >
+            {evidenceConflict || coverageLimited ? (
+              <AlertTriangle className="h-3.5 w-3.5" />
+            ) : (
+              <CheckCircle2 className="h-3.5 w-3.5" />
+            )}
+            {evidenceConflict
+              ? "Assessment conflicts with captured evidence"
+              : coverageLimited
+                ? "No problem identified in available evidence"
+                : "No problem found in checked evidence"}
           </div>
-          <CopyButton text={text} />
+          <CopyButton text={report} label="Copy assessment" />
         </div>
         <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
-          {text}
+          {summary}
         </AIMarkdown>
+        {evidenceConflict ? (
+          <p className="mt-2 text-xs text-theme-text-secondary">
+            Radar also captured evidence of an active problem. Review that
+            evidence before treating the agent&apos;s conclusion as an
+            all-clear.
+          </p>
+        ) : coverageLimited ? (
+          <p className="mt-2 text-xs text-theme-text-secondary">
+            Evidence coverage is limited. Review the limitations in Evidence
+            before treating this as an all-clear.
+          </p>
+        ) : null}
       </div>
-      <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
-        <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
-        <span>AI-generated — verify if symptoms persist</span>
-      </div>
+      {detailed || assessmentAction || assessmentSources ? (
+        <div>
+          <div
+            className="flex flex-wrap items-center gap-3 pt-2"
+            data-assessment-actions
+          >
+            {(detailed || assessmentSources) && (
+              <button
+                type="button"
+                aria-expanded={showAnalysis}
+                aria-controls={analysisId}
+                onClick={() => {
+                  setShowAnalysis(!showAnalysis);
+                  analysisReveal.revealAfterToggle(!showAnalysis);
+                }}
+                className="flex items-center gap-1.5 rounded-md py-2 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
+              >
+                <CollapseChevron open={showAnalysis} className="h-3.5 w-3.5" />
+                {detailed ? "Full analysis" : "Assessment details"}
+              </button>
+            )}
+            {assessmentAction && (
+              <div className="ml-auto">{assessmentAction}</div>
+            )}
+          </div>
+          <div id={analysisId} ref={analysisReveal.elementRef}>
+            <Collapse open={showAnalysis}>
+              <div className="border-t border-theme-border/60 px-3 py-2">
+                <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_p]:my-1.5 [&_p]:text-theme-text-secondary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
+                  {detailed ? report : ""}
+                </AIMarkdown>
+                {assessmentSources}
+              </div>
+            </Collapse>
+          </div>
+        </div>
+      ) : null}
+      {showDisclaimer ? (
+        <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
+          <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
+          <span>AI-generated — verify if symptoms persist</span>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1658,22 +2425,25 @@ function AllClearCard({ diagnosis }: { diagnosis: Diagnosis }) {
 // The agent investigated but couldn't determine an answer. A distinct, honest
 // state — neutral (not the alarming amber root cause, not the reassuring emerald
 // all-clear) — so "I couldn't tell" never reads as "you're fine."
-function InconclusiveCard({ diagnosis }: { diagnosis: Diagnosis }) {
+function InconclusiveCard({
+  diagnosis,
+  animate,
+}: {
+  diagnosis: Diagnosis;
+  animate: boolean;
+}) {
   const text =
     diagnosis.report ||
-    "The investigation couldn't reach a clear conclusion — some checks were blocked or the evidence was ambiguous.";
+    "The investigation couldn't reach a clear conclusion — some information was unavailable or the evidence was ambiguous.";
   return (
-    <div className="mt-3 space-y-2 animate-result-in">
-      <div
-        className="rounded-lg border border-theme-border bg-theme-elevated p-3 animate-verdict-reveal"
-        style={{ "--glow": "rgb(100 116 139)" } as React.CSSProperties}
-      >
+    <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
+      <div className="rounded-lg border border-theme-border bg-theme-elevated p-3">
         <div className="mb-1 flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-secondary">
             <HelpCircle className="h-3.5 w-3.5" />
             Couldn&apos;t determine
           </div>
-          <CopyButton text={text} />
+          <CopyButton text={text} label="Copy assessment" />
         </div>
         <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
           {text}
@@ -1682,7 +2452,8 @@ function InconclusiveCard({ diagnosis }: { diagnosis: Diagnosis }) {
       <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
         <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
         <span>
-          Try a follow-up with more detail, or re-run after granting access.
+          Try a follow-up with more context, or investigate again after
+          addressing any errors shown in Activity.
         </span>
       </div>
     </div>
@@ -1691,17 +2462,25 @@ function InconclusiveCard({ diagnosis }: { diagnosis: Diagnosis }) {
 
 // A follow-up reply: the agent answering a question, not re-diagnosing. Plain
 // neutral block — no root-cause anchor, no remediation/apply.
-function FollowupAnswer({ diagnosis }: { diagnosis: Diagnosis }) {
+function FollowupAnswer({
+  diagnosis,
+  animate,
+}: {
+  diagnosis: Diagnosis;
+  animate: boolean;
+}) {
   const text = diagnosis.report || diagnosis.rootCause;
   if (!text) return null;
   return (
-    <div className="mt-1 rounded-lg border border-theme-border bg-theme-elevated p-3">
+    <div
+      className={`mt-1 rounded-lg border border-theme-border bg-theme-elevated p-3 ${animate ? "animate-result-in" : ""}`}
+    >
       <div className="mb-1.5 flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
           <Sparkles className="h-3.5 w-3.5 text-accent" />
           Answer
         </div>
-        <CopyButton text={text} />
+        <CopyButton text={text} label="Copy answer" />
       </div>
       <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_code]:font-normal [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary [&_p:first-child]:mt-0">
         {text}
@@ -1710,88 +2489,149 @@ function FollowupAnswer({ diagnosis }: { diagnosis: Diagnosis }) {
   );
 }
 
-// A done turn that produced no renderable verdict at all (empty diagnosis, no
+// A done turn that produced no renderable result at all (empty diagnosis, no
 // narration). Without this the turn would render blank — which reads as "the tool
 // broke." Make the dead-end explicit and point at the recovery (a follow-up).
-function EmptyResult() {
+function EmptyResult({ animate }: { animate: boolean }) {
   return (
-    <div className="mt-1 flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated p-3 text-sm text-theme-text-secondary">
+    <div
+      className={`mt-1 flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated p-3 text-sm text-theme-text-secondary ${animate ? "animate-result-in" : ""}`}
+    >
       <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
       <span>
-        The investigation finished without a clear result. Try a follow-up
-        question, or re-run Diagnose.
+        The investigation finished without a clear conclusion. Try a follow-up
+        question, or investigate again.
       </span>
     </div>
   );
 }
 
-// The result of an apply turn: a success confirmation of what changed, not a
-// diagnosis. Emerald + checkmark so it reads as an outcome.
+// The result of an apply turn. Mutation truth comes from Radar write-tool
+// results, not the agent's prose or process exit. Missing outcome metadata is
+// therefore fail-closed as unknown; only explicit confirmation renders green.
 function ApplyOutcomeCard({
   diagnosis,
+  error,
+  applyOutcome,
   onCheckStatus,
+  animate,
 }: {
-  diagnosis: Diagnosis;
+  diagnosis: Diagnosis | null;
+  error?: string | null;
+  applyOutcome?: ApplyMutationOutcome;
   onCheckStatus?: () => void;
+  animate: boolean;
 }) {
-  const outcome = diagnosis.report || diagnosis.rootCause;
+  const outcome = diagnosis?.report || diagnosis?.rootCause;
+  const status = applyOutcome ?? "unknown";
+  const confirmed = status === "confirmed";
+  const failed = status === "failed";
+  const heading = confirmed
+    ? "Applied"
+    : failed
+      ? "Not applied"
+      : "Outcome unknown";
+  const detail = error || outcome;
+  const fallbackDetail = confirmed
+    ? "Radar confirmed that the change was applied. Check the current state to confirm its effect."
+    : failed
+      ? "Radar could not confirm that the change was applied. Review Activity before retrying."
+      : "Radar could not confirm whether the change was applied. Check the current state before retrying.";
+  const containerClass = confirmed
+    ? "border-emerald-500/30 bg-emerald-500/5"
+    : failed
+      ? "border-red-500/30 bg-red-500/5"
+      : "border-amber-500/40 bg-amber-500/10";
+  const accentClass = confirmed
+    ? "text-emerald-500"
+    : failed
+      ? "text-red-400"
+      : "text-amber-400";
+  const buttonClass = confirmed
+    ? "border-emerald-500/40 text-emerald-500 hover:bg-emerald-500/10"
+    : "border-amber-500/40 text-amber-400 hover:bg-amber-500/10";
+  const provenance = confirmed
+    ? error
+      ? "Radar confirmed the change — the agent report is incomplete"
+      : "Radar confirmed the change was applied"
+    : failed
+      ? "Radar did not confirm that the change was applied"
+      : "Radar cannot confirm whether the change was applied";
   return (
-    <div className="mt-3 space-y-2">
-      <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+    <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
+      <div className={`rounded-lg border p-3 ${containerClass}`}>
         <div className="mb-1 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-emerald-500">
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            Applied
+          <div
+            className={`flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide ${accentClass}`}
+          >
+            {confirmed ? (
+              <CheckCircle2 className="h-3.5 w-3.5" />
+            ) : (
+              <AlertTriangle className="h-3.5 w-3.5" />
+            )}
+            {heading}
           </div>
-          {outcome && <CopyButton text={outcome} />}
+          {detail && <CopyButton text={detail} label="Copy apply result" />}
         </div>
-        {outcome && (
-          <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
-            {outcome}
-          </AIMarkdown>
+        <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
+          {detail || fallbackDetail}
+        </AIMarkdown>
+        {!confirmed && !failed && (
+          <div className="mt-2 flex items-start gap-1.5 text-xs font-medium text-amber-300">
+            <RefreshCw className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              Check the current state before trying to apply this change again.
+            </span>
+          </div>
         )}
-        {onCheckStatus && (
+        {onCheckStatus && !failed && (
           <button
+            type="button"
             onClick={onCheckStatus}
-            className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 py-2 text-sm font-medium text-emerald-500 hover:bg-emerald-500/10"
+            className={`mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border py-2 text-sm font-medium ${buttonClass}`}
           >
             <RefreshCw className="h-4 w-4" />
-            Check status
+            Check current status
           </button>
         )}
       </div>
       <div className="flex items-center gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
         <ShieldCheck className="h-3 w-3 shrink-0" />
-        <span className="truncate">
-          Applied by AI — verify the change took effect
-        </span>
+        <span className="truncate">{provenance}</span>
       </div>
     </div>
   );
 }
 
-function CopyButton({ text }: { text: string }) {
+function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <button
-      onClick={() => {
-        navigator.clipboard?.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1200);
-      }}
-      className="shrink-0 rounded p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-      aria-label="Copy"
+    <Tooltip
+      content={copied ? "Copied" : label}
+      delay={100}
+      wrapperClassName="shrink-0"
     >
-      {copied ? (
-        <Check className="h-3.5 w-3.5 text-emerald-400" />
-      ) : (
-        <Copy className="h-3.5 w-3.5" />
-      )}
-    </button>
+      <button
+        onClick={() => {
+          navigator.clipboard?.writeText(text);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        }}
+        className="shrink-0 rounded p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+        aria-label={copied ? `${label} — copied` : label}
+        aria-live="polite"
+      >
+        {copied ? (
+          <Check className="h-3.5 w-3.5 text-emerald-400" />
+        ) : (
+          <Copy className="h-3.5 w-3.5" />
+        )}
+      </button>
+    </Tooltip>
   );
 }
 
-function prettyTool(tool: string): string {
+export function prettyTool(tool: string): string {
   return tool.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
@@ -1801,42 +2641,6 @@ function confidenceLabel(c: number): string {
   if (c >= 0.8) return "High";
   if (c >= 0.5) return "Medium";
   return "Low";
-}
-
-// Confidence shown as a band + three discrete pips (Low=1, Med=2, High=3 filled).
-// Deliberately discrete, NOT a continuous bar: a filled fraction reads as a precise
-// percentage, which is exactly the false calibration `confidenceLabel` exists to
-// avoid (an LLM's two-sig-fig confidence isn't that precise). Accent-toned so it
-// reads as "trust in the analysis," not problem severity.
-function ConfidenceMeter({ value }: { value: number }) {
-  const band = confidenceLabel(value);
-  const filled = band === "High" ? 3 : band === "Medium" ? 2 : 1;
-  return (
-    <span className="flex items-center gap-1.5">
-      <span className="text-[11px] text-theme-text-tertiary">
-        {band} confidence
-      </span>
-      <span className="flex items-center gap-0.5" aria-hidden>
-        {[0, 1, 2].map((i) => (
-          <span
-            key={i}
-            className={`h-1 w-2.5 rounded-full ${i < filled ? "bg-accent" : "bg-theme-base"}`}
-          />
-        ))}
-      </span>
-    </span>
-  );
-}
-
-// Shown when the model returned no confidence at all — so "unknown confidence"
-// is visible rather than silently absent (which looks identical to high confidence
-// minus the badge) on a trust-bearing surface.
-function ConfidenceUnstated() {
-  return (
-    <span className="text-[11px] text-theme-text-tertiary">
-      Confidence not stated
-    </span>
-  );
 }
 
 // LLMs occasionally open a ```fence mid-line ("run this: ```bash kubectl …") or

@@ -199,6 +199,7 @@ type PodDetail struct {
 	Restarts    int32  `json:"restarts"`
 	Containers  int    `json:"containers"`
 	StatusIssue string `json:"statusIssue"`
+	Status      string `json:"status"`
 }
 
 // CreatePodGroupNode creates a Node for a group of pods
@@ -239,6 +240,10 @@ func CreatePodGroupNode(group *PodGroup, provider ResourceProvider) Node {
 			"restarts":    restarts,
 			"containers":  len(pod.Spec.Containers),
 			"statusIssue": podIssue,
+			// Expanding a group must not re-derive health from the phase: a
+			// crash-looping pod stays Phase=Running, and pkg/health already
+			// tracks that across the kubelet's Waiting->Running oscillation.
+			"status": string(getPodStatus(pod)),
 		})
 	}
 

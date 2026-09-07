@@ -136,6 +136,51 @@ func TestSQLiteStore_Query_Names(t *testing.T) {
 	}
 }
 
+func TestSQLiteStore_Query_APIGroupsFiltersBeforeLimitAndKeepsUnknown(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	now := time.Now()
+	events := []TimelineEvent{
+		{ID: "matching", Timestamp: now.Add(-3 * time.Minute), APIVersion: "apps/v1", Kind: "Deployment", Namespace: "default", Name: "web", EventType: EventTypeUpdate, Source: SourceInformer},
+		{ID: "unknown", Timestamp: now.Add(-2 * time.Minute), Kind: "Deployment", Namespace: "default", Name: "web", EventType: EventTypeUpdate, Source: SourceInformer},
+		{ID: "wrong-core", Timestamp: now.Add(-time.Minute), APIVersion: "v1", Kind: "Deployment", Namespace: "default", Name: "web", EventType: EventTypeUpdate, Source: SourceInformer},
+	}
+	for i := 0; i < 5; i++ {
+		events = append(events, TimelineEvent{
+			ID: fmt.Sprintf("wrong-%d", i), Timestamp: now.Add(time.Duration(i) * time.Second),
+			APIVersion: "other.example/v1", Kind: "Deployment", Namespace: "default", Name: "web",
+			EventType: EventTypeUpdate, Source: SourceInformer,
+		})
+	}
+	if err := store.AppendBatch(ctx, events); err != nil {
+		t.Fatalf("AppendBatch failed: %v", err)
+	}
+
+	result, err := store.Query(ctx, QueryOptions{
+		Kinds: []string{"Deployment"}, Names: []string{"web"}, APIGroups: []string{"apps"},
+		Limit: 2, IncludeManaged: true,
+	})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(result) != 2 || result[0].ID != "unknown" || result[1].ID != "matching" {
+		t.Fatalf("group-filtered result = %+v, want unknown then matching", result)
+	}
+
+	core, err := store.Query(ctx, QueryOptions{
+		Kinds: []string{"Deployment"}, Names: []string{"web"}, APIGroups: []string{""},
+		Limit: 10, IncludeManaged: true,
+	})
+	if err != nil {
+		t.Fatalf("core Query failed: %v", err)
+	}
+	if len(core) != 2 || core[0].ID != "wrong-core" || core[1].ID != "unknown" {
+		t.Fatalf("core-group result = %+v, want core then unknown", core)
+	}
+}
+
 // The lifecycle candidate query (meaningfulchanges) depends on this filter:
 // a SQL-level regression here would silently re-import update churn or starve
 // deletes for sqlite-backed timelines.

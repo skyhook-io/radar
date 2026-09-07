@@ -2,9 +2,17 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/url"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/skyhook-io/radar/internal/investigationrefs"
 )
 
 func TestDiagnosisFromText_ParsesJSONBlock(t *testing.T) {
@@ -23,6 +31,309 @@ func TestDiagnosisFromText_ParsesJSONBlock(t *testing.T) {
 	}
 	if strings.Contains(d.Report, "```json") {
 		t.Errorf("report still has the json block: %q", d.Report)
+	}
+}
+
+func testEvidenceRef(scope, nonce byte) string {
+	return "ev_" + strings.Repeat(string(scope), 26) + "_" + strings.Repeat(string(nonce), 26)
+}
+
+func TestDiagnosisFromText_ParsesEvidenceRequestPrivatelyAndStrictly(t *testing.T) {
+	first := testEvidenceRef('a', 'b')
+	second := testEvidenceRef('c', 'd')
+	valid := "```json\n" +
+		`{"root_cause":"bad tag","root_cause_evidence_refs":["` + first + `","` + second + `"]}` +
+		"\n```"
+	diagnosis := diagnosisFromText(valid)
+	if diagnosis.RootCauseEvidence != nil {
+		t.Fatal("untrusted model refs must not enter the public diagnosis before run binding")
+	}
+	if !diagnosis.evidenceRequest.present || diagnosis.evidenceRequest.invalid {
+		t.Fatalf("valid request state = %+v", diagnosis.evidenceRequest)
+	}
+	if len(diagnosis.evidenceRequest.refs) != 2 || diagnosis.evidenceRequest.refs[0] != first || diagnosis.evidenceRequest.refs[1] != second {
+		t.Fatalf("evidence refs = %v", diagnosis.evidenceRequest.refs)
+	}
+
+	invalidFields := []string{
+		`null`,
+		`{"ref":"` + first + `"}`,
+		`["not-a-ref"]`,
+		`["` + first + `","` + first + `"]`,
+		`["` + first + `","` + second + `","` + testEvidenceRef('e', 'f') + `","` + testEvidenceRef('g', 'h') + `"]`,
+	}
+	for _, field := range invalidFields {
+		text := "```json\n" + `{"root_cause":"still preserved","root_cause_evidence_refs":` + field + `}` + "\n```"
+		got := diagnosisFromText(text)
+		if got.RootCause != "still preserved" {
+			t.Fatalf("malformed evidence discarded root cause for %s", field)
+		}
+		if !got.evidenceRequest.present || !got.evidenceRequest.invalid || len(got.evidenceRequest.refs) != 0 {
+			t.Errorf("field %s request = %+v, want invalid with no refs", field, got.evidenceRequest)
+		}
+	}
+
+	missing := diagnosisFromText("```json\n{\"root_cause\":\"old response\"}\n```")
+	if missing.evidenceRequest.present || missing.evidenceRequest.invalid {
+		t.Fatalf("omitted field = %+v, want missing", missing.evidenceRequest)
+	}
+	empty := diagnosisFromText("```json\n{\"root_cause\":\"uncited\",\"root_cause_evidence_refs\":[]}\n```")
+	if !empty.evidenceRequest.present || empty.evidenceRequest.invalid || len(empty.evidenceRequest.refs) != 0 {
+		t.Fatalf("empty field = %+v", empty.evidenceRequest)
+	}
+}
+
+func TestSplitInvestigationEvidenceMarker(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
+	marker := investigationEvidenceMarkerPrefix + ref + investigationEvidenceMarkerSuffix
+	clean, gotRef := splitInvestigationEvidenceMarker(marker + `[{"kind":"Pod"}]`)
+	if gotRef != ref || clean != `[{"kind":"Pod"}]` {
+		t.Fatalf("clean=%q ref=%q", clean, gotRef)
+	}
+	lookalike := `{"message":"[[radar:evidence-ref=` + ref + `]]"}`
+	if clean, gotRef := splitInvestigationEvidenceMarker(lookalike); clean != lookalike || gotRef != "" {
+		t.Fatalf("payload marker was trusted: clean=%q ref=%q", clean, gotRef)
+	}
+	malformed := investigationEvidenceMarkerPrefix + "ev_fake" + investigationEvidenceMarkerSuffix + "payload"
+	if clean, gotRef := splitInvestigationEvidenceMarker(malformed); clean != malformed || gotRef != "" {
+		t.Fatalf("malformed leading marker was trusted: clean=%q ref=%q", clean, gotRef)
+	}
+}
+
+func TestInvestigationEvidenceValidatorUsesAndClearsFullProducerResult(t *testing.T) {
+	scope := strings.Repeat("a", 26)
+	refs := investigationrefs.NewRegistry()
+	lease, err := refs.Begin(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	ref, issued := refs.Issue(scope, `{"kind":"Pod"}`)
+	if !issued {
+		t.Fatal("could not issue fixture reference")
+	}
+	largePayload := strings.Repeat("x", maxToolPayload+500)
+	largeRef, issued := refs.Issue(scope, largePayload)
+	if !issued {
+		t.Fatal("could not issue capped fixture reference")
+	}
+	validator := investigationEvidenceValidator{
+		registry: refs,
+		scope:    scope,
+		claimed:  make(map[string]struct{}),
+	}
+	event := func(ref, result string, producerResult *string, prefilled bool) StreamEvent {
+		return StreamEvent{Type: "step", Step: &StepInfo{
+			ID: "call", Tool: "get_resource", Status: "done",
+			EvidenceRef: ref, Result: result, RadarEvidence: prefilled,
+			producerResult: producerResult,
+		}}
+	}
+	validate := func(event StreamEvent) StreamEvent {
+		t.Helper()
+		validated := validator.validate(event)
+		if validated.Step != nil && validated.Step.producerResult != nil {
+			t.Fatal("uncapped producer result survived evidence validation")
+		}
+		return validated
+	}
+
+	podPayload := `{"kind":"Pod"}`
+	spoofed := validate(event("", podPayload, &podPayload, true))
+	if spoofed.Step.RadarEvidence {
+		t.Fatal("adapter-authored provenance survived without a private reference")
+	}
+	missingProducerResult := validate(event(ref, podPayload, nil, true))
+	if missingProducerResult.Step.RadarEvidence {
+		t.Fatal("retained result received Radar provenance without its transient producer result")
+	}
+	deploymentPayload := `{"kind":"Deployment"}`
+	substituted := validate(event(ref, deploymentPayload, &deploymentPayload, true))
+	if substituted.Step.RadarEvidence {
+		t.Fatal("substituted payload received Radar provenance")
+	}
+	cappedResult, truncated := capPayload(largePayload)
+	if !truncated {
+		t.Fatal("oversized fixture was not capped")
+	}
+	tamperedCappedEvent := event(largeRef, "tampered retained result", &largePayload, true)
+	tamperedCappedEvent.Step.Truncated = true
+	if got := validate(tamperedCappedEvent); got.Step.RadarEvidence {
+		t.Fatal("uncapped ledger match overrode a tampered retained result")
+	}
+	cappedEvent := event(largeRef, cappedResult, &largePayload, false)
+	cappedEvent.Step.Truncated = true
+	validatedCapped := validate(cappedEvent)
+	if !validatedCapped.Step.RadarEvidence {
+		t.Fatal("exact uncapped private result did not validate after its retained preview was capped")
+	}
+	legitimate := validate(event(ref, podPayload, &podPayload, false))
+	if !legitimate.Step.RadarEvidence {
+		t.Fatal("exact first private result did not receive Radar provenance")
+	}
+	replayed := validate(event(ref, podPayload, &podPayload, false))
+	if replayed.Step.RadarEvidence {
+		t.Fatal("a repeated marker was accepted by more than one step")
+	}
+
+	applyValidator := investigationEvidenceValidator{
+		registry: refs,
+		claimed:  make(map[string]struct{}),
+	}
+	applyEvent := applyValidator.validate(event(ref, podPayload, &podPayload, true))
+	if applyEvent.Step.RadarEvidence {
+		t.Fatal("adapter-authored provenance survived on a write-enabled apply turn")
+	}
+	if applyEvent.Step.producerResult != nil {
+		t.Fatal("uncapped producer result survived apply-turn validation")
+	}
+}
+
+type captureTurnAgent struct {
+	spec       turnSpec
+	refs       *investigationrefs.Registry
+	issuedRef  string
+	payload    string
+	commandErr error
+}
+
+func (*captureTurnAgent) Name() string      { return "claude" }
+func (*captureTurnAgent) Path() string      { return "printf" }
+func (*captureTurnAgent) SigninCmd() string { return "claude auth login" }
+func (agent *captureTurnAgent) command(ctx context.Context, spec turnSpec) (*exec.Cmd, func(), error) {
+	agent.spec = spec
+	u, err := url.Parse(spec.mcpURL)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	agent.payload = `{"kind":"Pod","status":"Running"}`
+	issuedRef, issued := agent.refs.Issue(u.Query().Get("scope"), agent.payload)
+	if !issued {
+		return nil, func() {}, fmt.Errorf("test agent could not issue evidence")
+	}
+	agent.issuedRef = issuedRef
+	if agent.commandErr != nil {
+		return nil, func() {}, agent.commandErr
+	}
+	content, _ := json.Marshal(
+		investigationEvidenceMarkerPrefix + issuedRef + investigationEvidenceMarkerSuffix + agent.payload,
+	)
+	stream := strings.Join([]string{
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"radar-read","name":"mcp__radar__get_resource","input":{"kind":"Pod","namespace":"shop","name":"api"}}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"radar-read","content":` + string(content) + `}]}}`,
+		`{"type":"result","result":"` + "```json\\n{\\\"root_cause\\\":\\\"bad tag\\\"}\\n```" + `"}`,
+	}, "\n")
+	return exec.CommandContext(ctx, "printf", "%s\n", stream), func() {}, nil
+}
+
+func TestDiagnoseStreamClosesEvidenceScopeOnEarlyAgentFailure(t *testing.T) {
+	scope := strings.Repeat("a", 26)
+	refs := investigationrefs.NewRegistry()
+	agent := &captureTurnAgent{refs: refs, commandErr: errors.New("fixture command failure")}
+	diagnoser := &Diagnoser{
+		agents:       map[string]Agent{"claude": agent},
+		defName:      "claude",
+		evidenceRefs: refs,
+	}
+	_, err := diagnoser.DiagnoseStream(context.Background(), Request{
+		Kind: "Pod", Namespace: "shop", Name: "api", MCPPort: 9280,
+		EvidenceScope: scope,
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "fixture command failure") {
+		t.Fatalf("error = %v, want fixture command failure", err)
+	}
+	if refs.Active(scope) {
+		t.Fatal("turn scope remained active after early agent failure")
+	}
+	if _, issued := refs.Issue(scope, "late payload"); issued {
+		t.Fatal("failed turn accepted late evidence issuance")
+	}
+}
+func (*captureTurnAgent) parseStream(reader io.Reader, onEvent func(StreamEvent)) Diagnosis {
+	return parseStream(reader, onEvent)
+}
+
+type adapterAuthoredEvidenceAgent struct {
+	event StreamEvent
+}
+
+func (*adapterAuthoredEvidenceAgent) Name() string      { return "claude" }
+func (*adapterAuthoredEvidenceAgent) Path() string      { return "printf" }
+func (*adapterAuthoredEvidenceAgent) SigninCmd() string { return "claude auth login" }
+func (*adapterAuthoredEvidenceAgent) command(ctx context.Context, _ turnSpec) (*exec.Cmd, func(), error) {
+	return exec.CommandContext(ctx, "printf", ""), func() {}, nil
+}
+func (agent *adapterAuthoredEvidenceAgent) parseStream(_ io.Reader, onEvent func(StreamEvent)) Diagnosis {
+	onEvent(agent.event)
+	return Diagnosis{RootCause: "apply completed"}
+}
+
+func TestDiagnoseStreamClearsAdapterProvenanceOnApplyTurn(t *testing.T) {
+	agent := &adapterAuthoredEvidenceAgent{event: StreamEvent{Type: "step", Step: &StepInfo{
+		ID: "foreign-write", Tool: "patch_resource", Status: "done",
+		Result: `{"patched":true}`, EvidenceRef: testEvidenceRef('a', 'b'), RadarEvidence: true,
+	}}}
+	diagnoser := &Diagnoser{
+		agents:  map[string]Agent{"claude": agent},
+		defName: "claude",
+	}
+	var delivered *StepInfo
+	_, err := diagnoser.DiagnoseStream(context.Background(), Request{
+		Kind: "Deployment", Namespace: "shop", Name: "api", MCPPort: 9280,
+		Apply: true,
+	}, func(event StreamEvent) {
+		if event.Step != nil {
+			delivered = event.Step
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delivered == nil || delivered.RadarEvidence {
+		t.Fatalf("apply event retained adapter-authored provenance: %+v", delivered)
+	}
+}
+
+func TestDiagnoseStreamUsesPerTurnScopedInvestigationMount(t *testing.T) {
+	refs := investigationrefs.NewRegistry()
+	agent := &captureTurnAgent{refs: refs}
+	diagnoser := &Diagnoser{
+		agents:       map[string]Agent{"claude": agent},
+		defName:      "claude",
+		evidenceRefs: refs,
+	}
+	scope := strings.Repeat("a", 26)
+	var evidenceStep *StepInfo
+	diagnosis, err := diagnoser.DiagnoseStream(context.Background(), Request{
+		Kind: "Pod", Namespace: "shop", Name: "api", MCPPort: 9280,
+		MCPBasePath: "/radar", EvidenceScope: scope,
+	}, func(event StreamEvent) {
+		if event.Step != nil && event.Step.Status == "done" {
+			evidenceStep = event.Step
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantURL := "http://localhost:9280/radar/mcp-investigation?scope=" + scope
+	if agent.spec.mcpURL != wantURL {
+		t.Fatalf("mcp URL = %q, want %q", agent.spec.mcpURL, wantURL)
+	}
+	if diagnosis.evidenceScope != scope {
+		t.Fatalf("diagnosis scope = %q, want %q", diagnosis.evidenceScope, scope)
+	}
+	if payload := diagnosis.issuedEvidence[agent.issuedRef]; payload != agent.payload {
+		t.Fatalf("issued payload = %q, want exact %q", payload, agent.payload)
+	}
+	if evidenceStep == nil || !evidenceStep.RadarEvidence ||
+		evidenceStep.EvidenceRef != agent.issuedRef || evidenceStep.Result != agent.payload {
+		t.Fatalf("validated evidence step = %+v", evidenceStep)
+	}
+	if refs.Active(scope) {
+		t.Fatal("turn scope remained active after DiagnoseStream returned")
+	}
+	if _, issued := refs.Issue(scope, "late payload"); issued {
+		t.Fatal("closed turn accepted late evidence issuance")
 	}
 }
 
@@ -62,10 +373,10 @@ func TestDiagnosisFromText_ParsesHealthyAllClear(t *testing.T) {
 	}
 }
 
-// Verdict precedence must never produce a self-contradictory object: a concrete
+// Conclusion precedence must never produce a self-contradictory object: a concrete
 // finding clears both flags; inconclusive clears healthy ("absence of evidence is
 // not health"); at most one of {finding, inconclusive, healthy} survives.
-func TestDiagnosisFromText_VerdictPrecedence(t *testing.T) {
+func TestDiagnosisFromText_ConclusionPrecedence(t *testing.T) {
 	block := func(j string) string { return "prose\n\n```json\n" + j + "\n```" }
 
 	// healthy + a real root cause → the finding wins; healthy cleared.
@@ -111,6 +422,27 @@ func TestApplyPrompt_BindsConfirmedFix(t *testing.T) {
 	}
 }
 
+func TestApplyPrompt_BindsImmutableAPIGroup(t *testing.T) {
+	grouped := applyPrompt(Request{Kind: "Rollout", Group: "argoproj.io", Namespace: "prod", Name: "checkout"})
+	for _, want := range []string{
+		`immutable target API group is "argoproj.io"`,
+		`Pass group="argoproj.io" to patch_resource`,
+		`manifest apiVersion must belong to "argoproj.io"`,
+		"Never mutate a same-named resource from another API group",
+	} {
+		if !strings.Contains(grouped, want) {
+			t.Errorf("group-qualified apply prompt missing %q:\n%s", want, grouped)
+		}
+	}
+
+	core := applyPrompt(Request{Kind: "Pod", Namespace: "prod", Name: "checkout"})
+	for _, want := range []string{"Kubernetes core API group", "omit group", "apiVersion must be v1"} {
+		if !strings.Contains(core, want) {
+			t.Errorf("core-group apply prompt missing %q:\n%s", want, core)
+		}
+	}
+}
+
 func TestTaskPrompt_HealthAwareOpening(t *testing.T) {
 	healthy := taskPrompt(Request{
 		Kind: "Deployment", Namespace: "prod", Name: "api",
@@ -120,6 +452,8 @@ func TestTaskPrompt_HealthAwareOpening(t *testing.T) {
 		"Radar currently reports Deployment prod/api as healthy",
 		"do not manufacture a problem",
 		`"healthy": boolean`,
+		`"root_cause_evidence_refs": [string]`,
+		"[[radar:evidence-ref=ev_...]]",
 	} {
 		if !strings.Contains(healthy, want) {
 			t.Errorf("healthy prompt missing %q:\n%s", want, healthy)
@@ -182,6 +516,14 @@ func TestTaskPrompt_HealthAwareOpening(t *testing.T) {
 	if strings.Contains(coexisting, "Verify quickly") {
 		t.Errorf("coexisting issue/audit prompt used audit-only healthy framing:\n%s", coexisting)
 	}
+
+	if !strings.Contains(broken, "Start with Radar's `diagnose` tool for this workload") {
+		t.Errorf("workload prompt should prefer semantic diagnose first:\n%s", broken)
+	}
+	nonWorkload := taskPrompt(Request{Kind: "ConfigMap", Namespace: "prod", Name: "api"})
+	if strings.Contains(nonWorkload, "`diagnose` tool") {
+		t.Errorf("unsupported resource prompt must not direct the agent to semantic diagnose:\n%s", nonWorkload)
+	}
 }
 
 func TestDiagnosisFromText_FreeTextIsReportNotRootCause(t *testing.T) {
@@ -199,15 +541,17 @@ func TestDiagnosisFromText_FreeTextIsReportNotRootCause(t *testing.T) {
 // TestParseStream_FormatPin locks the claude stream-json schema we depend on,
 // including the cost/turns fields on the terminal result event.
 func TestParseStream_FormatPin(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
 	stream := strings.Join([]string{
 		`{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"}]}}`,
 		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__radar__diagnose","input":{"name":"x"}}]}}`,
-		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"crashloop"}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"[[radar:evidence-ref=` + ref + `]]\ncrashloop"}]}}`,
 		`{"type":"result","result":"bad tag.\n\n` + "```json\\n" + `{\"root_cause\":\"bad tag\"}` + "\\n```" + `","num_turns":2,"total_cost_usd":0.42}`,
 	}, "\n")
 
 	var running, done bool
-	var thinking, doneResult string
+	var doneIsError *bool
+	var thinking, doneResult, doneEvidenceRef string
 	diag := parseStream(strings.NewReader(stream), func(ev StreamEvent) {
 		switch ev.Type {
 		case "thinking":
@@ -222,6 +566,8 @@ func TestParseStream_FormatPin(t *testing.T) {
 			if ev.Step != nil && ev.Step.Status == "done" {
 				done = true
 				doneResult = ev.Step.Result
+				doneEvidenceRef = ev.Step.EvidenceRef
+				doneIsError = ev.Step.IsError
 			}
 		}
 	})
@@ -234,6 +580,12 @@ func TestParseStream_FormatPin(t *testing.T) {
 	if doneResult == "" {
 		t.Errorf("expected tool result preview on done step")
 	}
+	if doneEvidenceRef != ref || strings.Contains(doneResult, "radar:evidence-ref") {
+		t.Errorf("marker extraction result=%q ref=%q", doneResult, doneEvidenceRef)
+	}
+	if doneIsError == nil || *doneIsError {
+		t.Errorf("Claude's omitted tool_result.is_error must be a confirmed success, got %v", doneIsError)
+	}
 	if diag.RootCause != "bad tag" {
 		t.Errorf("root cause not parsed: %q", diag.RootCause)
 	}
@@ -242,12 +594,99 @@ func TestParseStream_FormatPin(t *testing.T) {
 	}
 }
 
+func TestParseStreamPreservesUncappedProducerResultForValidation(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
+	payload := strings.Repeat("x", maxToolPayload+500)
+	marked, err := json.Marshal(
+		investigationEvidenceMarkerPrefix + ref + investigationEvidenceMarkerSuffix + payload,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"large","content":` + string(marked) + `}]}}`
+
+	var step *StepInfo
+	parseStream(strings.NewReader(stream), func(event StreamEvent) {
+		if event.Step != nil {
+			step = event.Step
+		}
+	})
+	if step == nil || !step.Truncated || step.EvidenceRef != ref {
+		t.Fatalf("oversized Claude result step = %+v", step)
+	}
+	if step.producerResult == nil || *step.producerResult != payload {
+		t.Fatal("Claude adapter did not retain the exact uncapped producer result for validation")
+	}
+	wantResult, _ := capPayload(payload)
+	if step.Result != wantResult {
+		t.Fatal("Claude adapter retained an unexpected capped result")
+	}
+}
+
+func TestStepInfoIsErrorJSON(t *testing.T) {
+	transient := "must-not-serialize"
+	confirmedFalse, confirmedTrue := false, true
+	cases := []struct {
+		name      string
+		isError   *bool
+		wantField string
+	}{
+		{name: "confirmed success", isError: &confirmedFalse, wantField: `"isError":false`},
+		{name: "confirmed failure", isError: &confirmedTrue, wantField: `"isError":true`},
+		{name: "unknown", isError: nil, wantField: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := json.Marshal(StepInfo{
+				ID: "t1", Status: "done", IsError: tc.isError,
+				producerResult: &transient,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := string(b)
+			if strings.Contains(got, transient) {
+				t.Fatalf("transient producer result leaked into JSON: %s", got)
+			}
+			if tc.wantField == "" {
+				if strings.Contains(got, `"isError"`) {
+					t.Fatalf("unknown result must omit isError: %s", got)
+				}
+				return
+			}
+			if !strings.Contains(got, tc.wantField) {
+				t.Fatalf("JSON = %s, want %s", got, tc.wantField)
+			}
+		})
+	}
+}
+
+func TestClaudeToolResultErrorState(t *testing.T) {
+	stream := strings.Join([]string{
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"ok","content":"ok"}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"bad","content":"denied","is_error":true}]}}`,
+	}, "\n")
+
+	got := map[string]*bool{}
+	parseStream(strings.NewReader(stream), func(ev StreamEvent) {
+		if ev.Step != nil {
+			got[ev.Step.ID] = ev.Step.IsError
+		}
+	})
+	if got["ok"] == nil || *got["ok"] {
+		t.Errorf("omitted is_error = %v, want confirmed false", got["ok"])
+	}
+	if got["bad"] == nil || !*got["bad"] {
+		t.Errorf("is_error:true = %v, want confirmed true", got["bad"])
+	}
+}
+
 // TestReadTools_ExcludeWrites is the fail-closed guard: the read allowlist must
 // never contain a Radar write tool.
 func TestReadTools_ExcludeWrites(t *testing.T) {
 	writes := map[string]bool{
 		"apply_resource": true, "patch_resource": true, "manage_workload": true,
-		"manage_cronjob": true, "manage_node": true, "manage_gitops": true,
+		"manage_rollout": true, "manage_cronjob": true, "manage_node": true, "manage_gitops": true,
 	}
 	for _, rt := range radarReadTools {
 		if writes[rt] {
@@ -326,6 +765,56 @@ func TestCapPayload(t *testing.T) {
 	}
 }
 
+func TestCapPayloadPreservesProducerBoundedDiagnoseEnvelope(t *testing.T) {
+	payloadBytes, err := json.Marshal(map[string]any{
+		"resource": map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]any{"namespace": "shop", "name": "api-config"},
+			"data":       map[string]string{"application.yaml": strings.Repeat("c", 16<<10)},
+		},
+		"resourceContext": map[string]any{
+			"tier": "basic",
+			"statusSummary": map[string]any{
+				"conditions": []map[string]string{{"type": "Available", "status": "False", "message": strings.Repeat("m", 4<<10)}},
+			},
+		},
+		"logsCurrent": []map[string]any{{
+			"pod":       "api-abc",
+			"container": "api",
+			"logs": map[string]any{
+				"lines":        []string{strings.Repeat("l", (32<<10)-1)},
+				"totalLines":   1,
+				"matchedLines": 1,
+				"fallback":     false,
+			},
+		}},
+		"events": []map[string]any{{
+			"reason":  "BackOff",
+			"message": strings.Repeat("e", 4<<10),
+			"type":    "Warning",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal diagnose envelope: %v", err)
+	}
+	payload := string(payloadBytes)
+	if len([]rune(payload)) <= 32<<10 {
+		t.Fatalf("fixture must exceed the former transcript cap, got %d runes", len([]rune(payload)))
+	}
+	if len([]rune(payload)) > maxToolPayload {
+		t.Fatalf("producer-bounded fixture exceeds transcript cap: %d > %d runes", len([]rune(payload)), maxToolPayload)
+	}
+
+	got, truncated := capPayload(payload)
+	if truncated {
+		t.Fatal("bounded diagnose evidence envelope was unexpectedly truncated")
+	}
+	if got != payload {
+		t.Fatal("bounded diagnose evidence envelope changed")
+	}
+}
+
 // TestParseStream_InterleavesNarration pins the Claude treatment: interim text
 // (followed by more activity) becomes an interleaved narration ("thinking") event;
 // the FINAL text (the report, equal to the result) is NOT emitted as narration —
@@ -366,7 +855,7 @@ func TestParseStream_InterleavesNarration(t *testing.T) {
 }
 
 // TestDiagnoseStream_NonzeroExit pins the failure-honesty contract: a nonzero
-// agent exit is forgiven only when a STRUCTURED verdict parsed (the trailing
+// agent exit is forgiven only when a STRUCTURED conclusion parsed (the trailing
 // JSON block) — free-text alone means the process died mid-stream and must
 // surface as an error, never as a calm "done".
 func TestDiagnoseStream_ProcessAndStreamErrors(t *testing.T) {
@@ -383,13 +872,20 @@ func TestDiagnoseStream_ProcessAndStreamErrors(t *testing.T) {
 	}
 	run := func(t *testing.T, bin string) (Diagnosis, error) {
 		t.Helper()
-		d, err := New(bin)
+		refs := investigationrefs.NewRegistry()
+		d, err := New(bin, refs)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return d.DiagnoseStream(context.Background(), Request{
+		scope := strings.Repeat("a", 26)
+		diagnosis, diagnoseErr := d.DiagnoseStream(context.Background(), Request{
 			Kind: "Pod", Namespace: "ns", Name: "p", MCPPort: 1,
+			EvidenceScope: scope,
 		}, nil)
+		if refs.Active(scope) {
+			t.Fatal("turn scope leaked after DiagnoseStream exit")
+		}
+		return diagnosis, diagnoseErr
 	}
 
 	freeText := `{"type":"result","result":"got halfway through checking the pod","num_turns":1}`
@@ -420,9 +916,9 @@ func TestDiagnoseStream_ProcessAndStreamErrors(t *testing.T) {
 	structured := "{\"type\":\"result\",\"result\":\"```json\\n{\\\"root_cause\\\":\\\"bad tag\\\",\\\"remediation\\\":[\\\"fix it\\\"]}\\n```\",\"num_turns\":1}"
 	diag, err := run(t, mkCLI(t, structured, "3"))
 	if err != nil {
-		t.Fatalf("nonzero exit with a complete structured verdict should be forgiven, got %v", err)
+		t.Fatalf("nonzero exit with a complete structured conclusion should be forgiven, got %v", err)
 	}
 	if diag.RootCause != "bad tag" {
-		t.Errorf("structured verdict not preserved: %q", diag.RootCause)
+		t.Errorf("structured conclusion not preserved: %q", diag.RootCause)
 	}
 }

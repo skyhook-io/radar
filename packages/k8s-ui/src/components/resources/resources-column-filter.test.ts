@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { getCellFilterValue } from './resource-utils'
 import { getCellFilterKind, hasCuratedColumns, isColumnFilterableByDistinctCount, normalizeKindToPlural, SKIP_FILTER_COLUMNS } from './ResourcesView'
 
 describe('isColumnFilterableByDistinctCount', () => {
@@ -96,5 +97,24 @@ describe('GPU ecosystem column routing', () => {
     expect(hasCuratedColumns('inferenceobjectives', 'llm-d.ai')).toBe(true)
     expect(hasCuratedColumns('inferenceobjectives', 'inference.networking.x-k8s.io')).toBe(true)
     expect(hasCuratedColumns('inferenceobjectives', 'example.io')).toBe(false)
+  })
+})
+
+describe('filter values for columns whose data sits outside spec/status', () => {
+  // getCellFilterValue's fallback probes status[key]/spec[key]. A column whose
+  // value lives elsewhere needs an explicit case, or the header reserves a
+  // filter button that can never populate.
+  it('reads the scanned image out of the Trivy report', () => {
+    const report = {
+      report: { registry: { server: 'ghcr.io' }, artifact: { repository: 'acme/api', tag: 'v2' } },
+    }
+    for (const kind of ['vulnerabilityreports', 'sbomreports', 'clustersbomreports']) {
+      expect(getCellFilterValue(report, 'image', kind)).toContain('acme/api')
+    }
+  })
+
+  it('reads Kyverno rule types out of the rules array', () => {
+    const policy = { spec: { rules: [{ validate: {} }, { mutate: {} }] } }
+    expect(getCellFilterValue(policy, 'ruleTypes', 'clusterpolicies')).toBe('validate, mutate')
   })
 })

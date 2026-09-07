@@ -359,6 +359,57 @@ export function argoStatusToGitOpsStatus(status: ArgoAppStatus): GitOpsStatus {
   }
 }
 
+/**
+ * Maps an Argo CD ApplicationSet's conditions to a GitOpsStatus.
+ *
+ * An ApplicationSet generates Applications; it does not apply declared state
+ * to a cluster itself. Sync answers "is the declared state applied", so there
+ * is no honest sync value here and it stays Unknown - the generated
+ * Applications each carry their own.
+ *
+ * Health answers whether the generator is doing its job, which its conditions
+ * do report, in a vocabulary of their own (ErrorOccurred / ParametersGenerated
+ * / ResourcesUpToDate - never Ready):
+ * - ErrorOccurred=True      → Degraded, carrying the controller's message
+ * - ResourcesUpToDate=True  → Healthy
+ * - neither                 → Unknown (status not populated yet)
+ *
+ * The Resources view renders the same three conditions through
+ * getArgoApplicationSetStatus for its own badge vocabulary. The two read the
+ * same signals and must agree on which condition wins.
+ */
+export function argoApplicationSetConditionsToGitOpsStatus(
+  conditions: FluxCondition[]
+): GitOpsStatus {
+  const error = conditions.find(c => c.type === 'ErrorOccurred' && c.status === 'True')
+  if (error) {
+    return {
+      sync: 'Unknown',
+      health: 'Degraded',
+      message: error.message || 'Generation failed',
+      lastSyncTime: error.lastTransitionTime,
+      suspended: false,
+    }
+  }
+
+  const upToDate = conditions.find(c => c.type === 'ResourcesUpToDate')
+  if (upToDate?.status === 'True') {
+    return {
+      sync: 'Unknown',
+      health: 'Healthy',
+      lastSyncTime: upToDate.lastTransitionTime,
+      suspended: false,
+    }
+  }
+
+  return {
+    sync: 'Unknown',
+    health: 'Unknown',
+    message: 'Status cannot be determined',
+    suspended: false,
+  }
+}
+
 // ============================================================================
 // INVENTORY PARSERS
 // ============================================================================

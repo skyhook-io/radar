@@ -106,10 +106,10 @@ export interface RadarAppProps {
    */
   documentTitleSuffix?: string;
   /**
-   * Injects a resource-level "Diagnose" action (e.g. a "Diagnose with AI"
+   * Injects a resource-level "Investigate" action (e.g. an "Investigate with AI"
    * button) into every resource detail action bar's right-aligned universal
    * actions. The host returns the node to render given the resource context.
-   * Standalone Radar omits this and renders no Diagnose button — OSS stays
+   * Standalone Radar omits this and renders no Investigate button — OSS stays
    * agent-free. See ./context/DiagnoseCustomization for the render-prop shape.
    */
   renderDiagnoseAction?: RenderDiagnoseAction;
@@ -228,7 +228,7 @@ export function RadarApp({
                   value={renderDiagnoseAction ?? defaultDiagnoseAction}
                   consentCopy={diagnoseConsent}
                 >
-                  <DiagnoseProvider>
+                  <DiagnoseProvider browserURLState={router !== "memory"}>
                     <App
                       manageDocumentTitle={manageDocumentTitle}
                       documentTitleSuffix={documentTitleSuffix}

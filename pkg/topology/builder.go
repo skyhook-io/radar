@@ -8,6 +8,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/karpenter"
 	"github.com/skyhook-io/radar/pkg/perfstats"
 )
@@ -3635,7 +3637,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			ID:     hpaID,
 			Kind:   KindHPA,
 			Name:   hpa.Name,
-			Status: StatusHealthy,
+			Status: hpaNodeHealth(hpa),
 			Data: map[string]any{
 				"namespace":   hpa.Namespace,
 				"minReplicas": hpa.Spec.MinReplicas,
@@ -5300,7 +5302,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					ID:     secretNodeID,
 					Kind:   KindSecret,
 					Name:   secretName,
-					Status: StatusHealthy,
+					Status: StatusUnknown,
 					Data: map[string]any{
 						"namespace": stNs,
 						"labels":    map[string]string{},
@@ -5338,7 +5340,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					ID:     secretNodeID,
 					Kind:   KindSecret,
 					Name:   secretName,
-					Status: StatusHealthy,
+					Status: StatusUnknown,
 					Data: map[string]any{
 						"namespace": ns,
 						"labels":    map[string]string{},
@@ -5377,7 +5379,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				ID:     secretNodeID,
 				Kind:   KindSecret,
 				Name:   secretName,
-				Status: StatusHealthy,
+				Status: StatusUnknown,
 				Data: map[string]any{
 					"namespace": ns,
 					"labels":    map[string]string{},
@@ -5489,7 +5491,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					ID:     secretNodeID,
 					Kind:   KindSecret,
 					Name:   tlsSecretName,
-					Status: StatusHealthy,
+					Status: StatusUnknown,
 					Data: map[string]any{
 						"namespace": resNs,
 						"labels":    map[string]string{},
@@ -7882,36 +7884,113 @@ func getGatewayHealth(gw *unstructured.Unstructured) HealthStatus {
 
 // getRouteHealth derives route health from status.parents[].conditions
 // All parents Accepted → healthy, some → degraded, none → unhealthy
+// An HPA that cannot scale is one of the most common real failures in a cluster,
+// and pkg/hpadiag already diagnoses it for the drawer. The graph only ever
+// downgrades on negative evidence: routine scaling is not a problem, and MCP
+// turns degraded nodes into reported problems (internal/mcp/tools.go), so
+// promoting normal autoscaling to amber would manufacture false ones.
+func hpaNodeHealth(hpa *autoscalingv2.HorizontalPodAutoscaler) HealthStatus {
+	// Analyze reports "ok" for an autoscaler the controller has never written a
+	// condition for, so without this an unreconciled HPA would read as healthy.
+	if hpa == nil || len(hpa.Status.Conditions) == 0 {
+		return StatusUnknown
+	}
+	diagnosis := hpadiag.Analyze(hpa)
+	if diagnosis == nil {
+		return StatusUnknown
+	}
+	switch diagnosis.State {
+	case hpadiag.StateUnableToScale, hpadiag.StateMetricsUnavailable:
+		return StatusUnhealthy
+	case hpadiag.StateLimitedMax, hpadiag.StateMetricsIncomplete:
+		return StatusDegraded
+	case hpadiag.StateLimitedMin, hpadiag.StateScaledToZero, hpadiag.StateDisabled,
+		hpadiag.StatePinned, hpadiag.StateStabilized:
+		// neutral is this vocabulary's "intentional/idle" (types.go), and the
+		// shipped TS mapping puts exactly these states there.
+		return StatusNeutral
+	case hpadiag.StateStale, hpadiag.StateUnknown:
+		return StatusUnknown
+	default:
+		return StatusHealthy
+	}
+}
+
 func getRouteHealth(route *unstructured.Unstructured) HealthStatus {
 	parents, _, _ := unstructured.NestedSlice(route.Object, "status", "parents")
 	if len(parents) == 0 {
 		return StatusUnknown
 	}
-	accepted := 0
+	generation, _, _ := unstructured.NestedInt64(route.Object, "metadata", "generation")
+
+	reporting, accepted, notAccepted, resolved, unresolved, unassessed := 0, 0, 0, 0, 0, 0
 	for _, p := range parents {
 		pMap, ok := p.(map[string]any)
 		if !ok {
 			continue
 		}
+		var acceptedStatus, resolvedStatus string
 		conditions, _, _ := unstructured.NestedSlice(pMap, "conditions")
 		for _, c := range conditions {
 			cMap, ok := c.(map[string]any)
 			if !ok {
 				continue
 			}
-			if cMap["type"] == "Accepted" && cMap["status"] == "True" {
-				accepted++
-				break
+			// A condition observed against an older spec does not describe the
+			// route as it stands now. The TS accessor does not check this; it is
+			// added here deliberately, not mirrored.
+			if og, found, err := unstructured.NestedInt64(cMap, "observedGeneration"); found && err == nil && generation != 0 && og != generation {
+				continue
+			}
+			switch cMap["type"] {
+			case "Accepted":
+				acceptedStatus, _ = cMap["status"].(string)
+			case "ResolvedRefs":
+				resolvedStatus, _ = cMap["status"].(string)
 			}
 		}
+		if acceptedStatus == "" && resolvedStatus == "" {
+			// A parent whose conditions are absent or all stale has not been
+			// assessed. Dropping it would let the parents that did report speak
+			// for one nothing has confirmed.
+			unassessed++
+			continue
+		}
+		reporting++
+		switch acceptedStatus {
+		case "True":
+			accepted++
+		case "False":
+			notAccepted++
+		}
+		// The gateway accepting the route says nothing about whether the
+		// backends it forwards to exist; an unresolved backendRef is the
+		// failure an operator actually opens the graph to find.
+		switch resolvedStatus {
+		case "True":
+			resolved++
+		case "False":
+			unresolved++
+		}
 	}
-	if accepted == len(parents) {
-		return StatusHealthy
+
+	if reporting == 0 {
+		return StatusUnknown
 	}
-	if accepted > 0 {
+	// A total failure is only established once every parent has spoken.
+	if notAccepted == reporting && unassessed == 0 {
+		return StatusUnhealthy
+	}
+	if notAccepted > 0 || unresolved > 0 {
 		return StatusDegraded
 	}
-	return StatusUnhealthy
+	// Accepted alone does not confirm the backends resolve. A parent that has
+	// not published ResolvedRefs has not resolved them yet, which is the whole
+	// reason this function reads the condition.
+	if accepted == reporting && resolved == reporting && unassessed == 0 {
+		return StatusHealthy
+	}
+	return StatusDegraded
 }
 
 func sealedSecretHealth(resource *unstructured.Unstructured) HealthStatus {

@@ -1,7 +1,7 @@
-// Client for the local AI-diagnose engine (OSS BYO-agent). The agent CLI runs
+// Client for local AI investigations (OSS BYO-agent). The agent CLI runs
 // on the user's own machine/subscription against Radar's MCP; this just starts
 // the investigation and consumes its SSE event stream.
-import { getApiBase, getCredentialsMode } from "./config";
+import { getApiBase, getAuthHeaders, getCredentialsMode } from "./config";
 
 export interface AgentInfo {
   name: string;
@@ -13,12 +13,14 @@ export interface AgentInfo {
   profiles?: ExecutionProfile[];
   consentSurfaces?: Partial<Record<ExecutionProfile, string>>;
   hosted?: boolean;
+  /** Hosted backends opt in only when they implement assessment-bound, tool-free explanations. */
+  assessmentExplanations?: boolean;
 }
 
 export interface AgentsResponse {
   agents: AgentInfo[];
   enabled: boolean;
-  // eligible: this run mode supports local BYO-agent diagnosis (no proxy/OIDC
+  // eligible: this run mode supports local BYO-agent investigations (no proxy/OIDC
   // auth, /mcp mounted) — true even when no agent is installed. Lets the UI tell
   // "install an agent to enable this" (eligible && !enabled) apart from "not
   // available here" (auth/cloud/--no-mcp). Absent on older servers / embed hosts.
@@ -37,13 +39,24 @@ export interface DiagnoseStep {
   ms?: number;
   summary?: string; // input args (on running)
   result?: string; // result text (on done), capped
+  evidenceRef?: string; // server-issued reference used to bind a root cause to this exact result
+  // Server validated Radar's uncapped producer result and this retained result
+  // as its exact capped derivative.
+  radarEvidence?: boolean;
+  isError?: boolean; // authoritative agent-host result; absent means unknown
   truncated?: boolean; // result was capped — payload shown/copied is partial
+}
+
+export interface RootCauseEvidence {
+  status: "linked" | "missing" | "invalid";
+  refs?: string[];
 }
 
 export interface Diagnosis {
   healthy?: boolean;
   inconclusive?: boolean; // investigated but couldn't determine — distinct from healthy
   rootCause: string;
+  rootCauseEvidence?: RootCauseEvidence;
   report: string;
   remediation: string[];
   recommendedIndex?: number; // 1-based index into remediation of the step Apply performs
@@ -72,8 +85,19 @@ export interface ResourceHealthSignal {
   auditFindings?: HealthLine[];
 }
 
+export type ApplyMutationOutcome = "confirmed" | "failed" | "unknown";
+
 export interface DiagnoseStreamEvent {
-  type: "turn" | "phase" | "step" | "thinking" | "done" | "error" | "closed";
+  type:
+    | "turn"
+    | "phase"
+    | "step"
+    | "thinking"
+    | "done"
+    | "error"
+    | "closed"
+    | "history_unavailable"
+    | "replay_complete";
   phase?: string;
   step?: DiagnoseStep;
   token?: string;
@@ -81,6 +105,17 @@ export interface DiagnoseStreamEvent {
   error?: string;
   question?: string; // on "turn"
   apply?: boolean; // on "turn"
+  verify?: boolean; // on "turn": explicit post-change re-check
+  explainAssessment?: number; // on "turn": originating assessment done-event sequence
+  // Evidence-backed mutation truth on an apply turn's terminal event. Only
+  // "confirmed" means a Radar write tool authoritatively reported success.
+  applyOutcome?: ApplyMutationOutcome;
+  // On an apply terminal event, the server durably queued the adjacent
+  // read-only verification turn. This prevents an idle control flash between
+  // the two SSE events without inferring lifecycle from copy.
+  verificationScheduled?: boolean;
+  retryable?: boolean; // on "history_unavailable": keep native EventSource reconnect alive
+  actor?: string; // human author on shared hosted transcripts
 }
 
 // A run is a durable, server-owned investigation. Its lifetime is independent of
@@ -89,6 +124,8 @@ export interface DiagnoseStreamEvent {
 export interface RunSummary {
   id: string;
   kind: string;
+  /** Kubernetes API group; empty means the core API group. */
+  group: string;
   namespace: string;
   name: string;
   /** The issue this session is for, on hosts that key sessions by issue. Always
@@ -101,11 +138,17 @@ export interface RunSummary {
   effort?: string;
   managedBy?: string; // GitOps/Helm owner of the target ("Argo CD"/"Flux"/"Helm"), for the Apply warning
   health?: ResourceHealthSignal;
-  status: "running" | "done" | "error" | "stopped" | "stale";
+  status: "running" | "stopping" | "done" | "error" | "stopped" | "stale";
   sessionId?: string;
   preview?: string;
   createdAt: string;
   updatedAt: string;
+  visibility?: "private" | "organization";
+  ownedByMe?: boolean;
+  canManageVisibility?: boolean;
+  canContinue?: boolean;
+  trigger?: "interactive" | "background";
+  radarUrl?: string;
 }
 
 export async function fetchAgents(
@@ -113,6 +156,7 @@ export async function fetchAgents(
 ): Promise<AgentsResponse> {
   const res = await fetch(`${getApiBase()}/agents`, {
     credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
     signal,
   });
   if (!res.ok) throw new Error(`agents: ${res.status}`);
@@ -145,6 +189,8 @@ const RUNS = () => `${getApiBase()}/diagnose/runs`;
 export async function createRun(
   target: {
     kind: string;
+    /** Kubernetes API group; empty means the core API group. */
+    group: string;
     namespace: string;
     name: string;
     // Associates the session with the issue it was started from, for hosts that
@@ -167,7 +213,7 @@ export async function createRun(
   const res = await fetch(RUNS(), {
     method: "POST",
     credentials: getCredentialsMode(),
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify({ ...target, ...opts }),
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
@@ -186,6 +232,7 @@ export interface RunsResponse {
 export async function listRuns(signal?: AbortSignal): Promise<RunsResponse> {
   const res = await fetch(RUNS(), {
     credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
     signal,
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
@@ -193,12 +240,41 @@ export async function listRuns(signal?: AbortSignal): Promise<RunsResponse> {
   return { runs: d.runs ?? [], historyDegraded: !!d.historyDegraded };
 }
 
+// getRun resolves a stable run id directly. Deep links use this rather than
+// relying on a bounded history page to happen to contain the target.
+export async function getRun(
+  id: string,
+  signal?: AbortSignal,
+): Promise<RunSummary> {
+  const res = await fetch(`${RUNS()}/${encodeURIComponent(id)}`, {
+    credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
+    signal,
+  });
+  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  return res.json();
+}
+
+export async function updateRunVisibility(
+  id: string,
+  visibility: "private" | "organization",
+): Promise<RunSummary> {
+  const res = await fetch(`${RUNS()}/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    credentials: getCredentialsMode(),
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+    body: JSON.stringify({ visibility }),
+  });
+  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  return res.json();
+}
+
 // recordConsent acknowledges the current disclosure for an execution profile, server-side.
 export async function recordConsent(surface: string): Promise<void> {
   const res = await fetch(`${getApiBase()}/diagnose/consent`, {
     method: "POST",
     credentials: getCredentialsMode(),
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify({ surface }),
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
@@ -210,6 +286,7 @@ export async function clearHistory(): Promise<void> {
   const res = await fetch(`${getApiBase()}/diagnose/history/clear`, {
     method: "POST",
     credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
 }
@@ -217,12 +294,18 @@ export async function clearHistory(): Promise<void> {
 // addTurn appends a follow-up (question) or an apply turn (apply + confirmed fix).
 export async function addTurn(
   id: string,
-  body: { question?: string; apply?: boolean; fix?: string },
+  body: {
+    question?: string;
+    apply?: boolean;
+    fix?: string;
+    verify?: boolean;
+    explainAssessment?: number;
+  },
 ): Promise<void> {
   const res = await fetch(`${RUNS()}/${id}/turns`, {
     method: "POST",
     credentials: getCredentialsMode(),
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
@@ -233,12 +316,16 @@ export async function stopRun(id: string): Promise<void> {
   await fetch(`${RUNS()}/${id}/stop`, {
     method: "POST",
     credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
   }).catch(() => {});
 }
 
 export interface SubscribeHandlers {
-  onEvent: (ev: DiagnoseStreamEvent) => void;
-  onClosed?: () => void; // the run can no longer produce events (stale/evicted)
+  onEvent: (ev: DiagnoseStreamEvent, sequence?: number) => void;
+  // EventSource fires open before each initial/reconnect replay. Together with
+  // replay_complete this brackets history so consumers can rebuild silently.
+  onReplayStart?: () => void;
+  onClosed?: (reason: "run_closed" | "unavailable") => void;
 }
 
 /**
@@ -262,6 +349,11 @@ export function subscribeRun(
     es.close();
   };
   const dispatch = (e: MessageEvent) => {
+    // close() can run while an earlier SSE callback is being dispatched. Ignore
+    // any already-queued trailing frame (notably the server's `closed` sentinel
+    // after a permanent history_unavailable) so it cannot replace the specific
+    // failure explanation with a generic eviction state.
+    if (closed) return;
     let ev: DiagnoseStreamEvent;
     try {
       ev = JSON.parse(e.data);
@@ -270,11 +362,21 @@ export function subscribeRun(
     }
     if (ev.type === "closed") {
       close();
-      handlers.onClosed?.();
+      handlers.onClosed?.("run_closed");
       return;
     }
-    handlers.onEvent(ev);
+    const sequence = Number(e.lastEventId);
+    handlers.onEvent(
+      ev,
+      Number.isSafeInteger(sequence) && sequence > 0 ? sequence : undefined,
+    );
+    // Hydration failures stay inside the SSE protocol. Retryable failures end
+    // this response and let native EventSource reconnect without advancing its
+    // cursor; a permanent failure must stop that reconnect loop after the UI
+    // receives the explanatory event.
+    if (ev.type === "history_unavailable" && ev.retryable !== true) close();
   };
+  es.onopen = () => handlers.onReplayStart?.();
   for (const t of [
     "turn",
     "phase",
@@ -283,10 +385,13 @@ export function subscribeRun(
     "done",
     "error",
     "closed",
+    "history_unavailable",
+    "replay_complete",
   ] as const) {
     es.addEventListener(t, dispatch);
   }
   es.onerror = () => {
+    if (closed) return;
     // A permanent failure (readyState CLOSED) means the run is gone — a 404 because
     // it was evicted (retention cap) or lost on a server restart. Surface it as
     // closed so the view shows a "no longer available" state instead of a silent
@@ -294,7 +399,7 @@ export function subscribeRun(
     // replays only what we missed), so leave those to EventSource.
     if (es.readyState === EventSource.CLOSED) {
       close();
-      handlers.onClosed?.();
+      handlers.onClosed?.("unavailable");
     }
   };
   return close;

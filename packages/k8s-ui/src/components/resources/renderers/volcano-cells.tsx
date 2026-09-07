@@ -16,7 +16,6 @@ import {
   getVolcanoPodGroupMinMember,
   getJobFlowStatus,
   getJobFlowFlowCount,
-  getJobTemplateStatus,
   getJobTemplateTaskCount,
 } from '../resource-utils-volcano'
 
@@ -122,14 +121,6 @@ export function JobFlowCell({ resource, column }: { resource: any; column: strin
 
 export function JobTemplateCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
-    case 'status': {
-      const status = getJobTemplateStatus(resource)
-      return (
-        <span className={clsx('badge', status.color)}>
-          {status.text}
-        </span>
-      )
-    }
     case 'tasks': {
       const count = getJobTemplateTaskCount(resource)
       return <span className="text-sm text-theme-text-secondary">{count > 0 ? count : '-'}</span>

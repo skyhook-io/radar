@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// Agent abstracts a coding CLI radar drives for AI diagnosis. Each backend knows
+// Agent abstracts a coding CLI Radar drives for AI investigations. Each backend knows
 // how to spawn its CLI for one turn (flags, MCP wiring, env, cwd) and how to parse
 // that CLI's event stream into radar's normalized StreamEvents + final Diagnosis.
 // The generic run loop (process group, stdout pipe, lifecycle) lives in Diagnoser.

@@ -107,12 +107,9 @@ export function getKyvernoPolicyStatus(resource: any): StatusBadge {
     return { text: readyCond.reason || 'Not Ready', color: healthColors.unhealthy, level: 'unhealthy' }
   }
 
-  // Fallback: if spec exists, likely active
-  if (resource.spec?.rules?.length > 0) {
-    return { text: 'Active', color: healthColors.healthy, level: 'healthy' }
-  }
-
-  return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+  // Reached when the controller has not written Ready, or wrote it as Unknown.
+  // Declaring rules is not the controller accepting them.
+  return { text: 'Not assessed', color: healthColors.unknown, level: 'unknown' }
 }
 
 /**

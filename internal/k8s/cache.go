@@ -1144,7 +1144,7 @@ func typedObjectToUnstructured(obj runtime.Object, gvr schema.GroupVersionResour
 			apiVersion = gvr.Group + "/" + gvr.Version
 		}
 		u.SetAPIVersion(apiVersion)
-		if kindName, ok := builtinKindForResource(gvr.Resource); ok {
+		if kindName, ok := BuiltinKindForResource(gvr.Resource); ok {
 			u.SetKind(kindName)
 		}
 	}

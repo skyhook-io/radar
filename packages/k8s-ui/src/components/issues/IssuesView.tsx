@@ -63,7 +63,7 @@ export interface IssuesViewProps {
   /** Empty-state CTA shown when there's no data. */
   emptyAction?: ReactNode;
   /** Per-row trailing action, rendered after the severity badge — e.g. the
-   *  "Diagnose with AI" button in OSS. Omit to render no per-row action. */
+   *  "Investigate with AI" button in OSS. Omit to render no per-row action. */
   renderActions?: (ctx: IssueRowSlotContext) => ReactNode;
 }
 

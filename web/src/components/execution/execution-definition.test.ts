@@ -48,6 +48,25 @@ describe('executionDefinitionSummary', () => {
     })
   })
 
+  describe.each(['Job', 'CronJob', 'ScaledJob'])('%s retention', (kind) => {
+    function resource(jobSpec: Record<string, unknown>) {
+      if (kind === 'CronJob') return { spec: { jobTemplate: { spec: jobSpec } } }
+      if (kind === 'ScaledJob') return { spec: { jobTargetRef: jobSpec } }
+      return { spec: jobSpec }
+    }
+
+    it.each([0, 300])('keeps a configured TTL of %i seconds separate from the execution deadline', (ttl) => {
+      expect(executionDefinitionSummary(kind, resource({
+        ttlSecondsAfterFinished: ttl,
+        activeDeadlineSeconds: 60,
+      }))).toMatchObject({ ttlAfterFinished: `${ttl}s`, deadline: '60s' })
+    })
+
+    it('does not invent a TTL when cleanup retention is unconfigured', () => {
+      expect(executionDefinitionSummary(kind, resource({}))).not.toHaveProperty('ttlAfterFinished')
+    })
+  })
+
   it('explains Argo DAG shape, executable templates, policy, and dependencies', () => {
     const summary = executionDefinitionSummary('WorkflowTemplate', {
       spec: {

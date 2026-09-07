@@ -60,9 +60,14 @@ type EventStore interface {
 // QueryOptions configures event queries
 type QueryOptions struct {
 	// Filters
-	Namespaces []string      // Filter by namespaces (empty = all)
-	Kinds      []string      // Filter by resource kinds (empty = all)
-	Names      []string      // Filter by resource names (empty = all)
+	Namespaces []string // Filter by namespaces (empty = all)
+	Kinds      []string // Filter by resource kinds (empty = all)
+	Names      []string // Filter by resource names (empty = all)
+	// APIGroups filters by the group parsed from APIVersion before pagination
+	// limits are applied. Use "" for the core group. Events whose APIVersion
+	// was not recorded are retained as unknown rather than treated as a known
+	// mismatch (empty slice = all groups).
+	APIGroups  []string
 	Since      time.Time     // Filter events after this time
 	Until      time.Time     // Filter events before this time
 	Sources    []EventSource // Filter by event source (empty = all)

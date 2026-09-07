@@ -12,6 +12,7 @@ import (
 
 	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/pkg/karpenter"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/scheduling"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -870,7 +871,7 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Detection
 		if !admissionTargetStillBlocked(cache, obj) {
 			continue
 		}
-		key := obj.Kind + "/" + obj.Namespace + "/" + obj.Name
+		key := admissionProblemKey(admissionObjectGroup(obj), obj.Kind, obj.Namespace, obj.Name)
 		if cur, exists := latest[key]; exists {
 			if eventLastTime(e).After(eventLastTime(cur.ev)) {
 				latest[key] = admCandidate{ev: e, reason: reason}
@@ -890,9 +891,13 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Detection
 		// usually the ReplicaSet. Stamp its owning Deployment so the admission row
 		// rolls up to the same subject as the workload_degraded/rollout_stalled
 		// rollup it explains; otherwise the rollup-over-cause fold misses the match.
-		ownerGroup, ownerKind, ownerName := workloadControllerOwner(cache, obj.Kind, obj.Namespace, obj.Name)
+		var ownerGroup, ownerKind, ownerName string
+		if admissionObjectGroup(obj) == resourceid.GroupForBuiltinKind(obj.Kind) {
+			ownerGroup, ownerKind, ownerName = workloadControllerOwner(cache, obj.Kind, obj.Namespace, obj.Name)
+		}
 		detection := Detection{
 			Kind:              obj.Kind,
+			Group:             admissionObjectGroup(obj),
 			Namespace:         obj.Namespace,
 			Name:              obj.Name,
 			Severity:          "critical",
@@ -913,7 +918,7 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Detection
 	}
 	seen := make(map[string]bool, len(problems))
 	for _, p := range problems {
-		seen[admissionProblemKey(p.Kind, p.Namespace, p.Name)] = true
+		seen[admissionProblemKey(p.Group, p.Kind, p.Namespace, p.Name)] = true
 	}
 	problems = append(problems, detectAdmissionConditionProblems(cache, namespace, seen)...)
 	return problems
@@ -940,32 +945,33 @@ func admissionTargetCreatedAt(cache *ResourceCache, obj corev1.ObjectReference) 
 	if cache == nil {
 		return time.Time{}
 	}
-	switch obj.Kind {
-	case "ReplicaSet":
+	group := admissionObjectGroup(obj)
+	switch {
+	case obj.Kind == "ReplicaSet" && group == "apps":
 		if l := cache.ReplicaSets(); l != nil {
 			if target, err := l.ReplicaSets(obj.Namespace).Get(obj.Name); err == nil {
 				return target.CreationTimestamp.Time
 			}
 		}
-	case "Deployment":
+	case obj.Kind == "Deployment" && group == "apps":
 		if l := cache.Deployments(); l != nil {
 			if target, err := l.Deployments(obj.Namespace).Get(obj.Name); err == nil {
 				return target.CreationTimestamp.Time
 			}
 		}
-	case "StatefulSet":
+	case obj.Kind == "StatefulSet" && group == "apps":
 		if l := cache.StatefulSets(); l != nil {
 			if target, err := l.StatefulSets(obj.Namespace).Get(obj.Name); err == nil {
 				return target.CreationTimestamp.Time
 			}
 		}
-	case "DaemonSet":
+	case obj.Kind == "DaemonSet" && group == "apps":
 		if l := cache.DaemonSets(); l != nil {
 			if target, err := l.DaemonSets(obj.Namespace).Get(obj.Name); err == nil {
 				return target.CreationTimestamp.Time
 			}
 		}
-	case "Job":
+	case obj.Kind == "Job" && group == "batch":
 		if l := cache.Jobs(); l != nil {
 			if target, err := l.Jobs(obj.Namespace).Get(obj.Name); err == nil {
 				return target.CreationTimestamp.Time
@@ -986,8 +992,9 @@ func admissionTargetStillBlocked(cache *ResourceCache, obj corev1.ObjectReferenc
 	// and is no longer admission-blocked. Deployments also need the updated
 	// replica count checked so rolling updates blocked on new-pod creation do
 	// not get masked by old replicas.
-	switch obj.Kind {
-	case "ReplicaSet":
+	group := admissionObjectGroup(obj)
+	switch {
+	case obj.Kind == "ReplicaSet" && group == "apps":
 		if l := cache.ReplicaSets(); l != nil {
 			rs, err := l.ReplicaSets(obj.Namespace).Get(obj.Name)
 			if err == nil {
@@ -997,7 +1004,7 @@ func admissionTargetStillBlocked(cache *ResourceCache, obj corev1.ObjectReferenc
 				return false
 			}
 		}
-	case "Deployment":
+	case obj.Kind == "Deployment" && group == "apps":
 		if l := cache.Deployments(); l != nil {
 			d, err := l.Deployments(obj.Namespace).Get(obj.Name)
 			if err == nil {
@@ -1007,7 +1014,7 @@ func admissionTargetStillBlocked(cache *ResourceCache, obj corev1.ObjectReferenc
 				return false
 			}
 		}
-	case "StatefulSet":
+	case obj.Kind == "StatefulSet" && group == "apps":
 		if l := cache.StatefulSets(); l != nil {
 			ss, err := l.StatefulSets(obj.Namespace).Get(obj.Name)
 			if err == nil {
@@ -1017,7 +1024,7 @@ func admissionTargetStillBlocked(cache *ResourceCache, obj corev1.ObjectReferenc
 				return false
 			}
 		}
-	case "DaemonSet":
+	case obj.Kind == "DaemonSet" && group == "apps":
 		if l := cache.DaemonSets(); l != nil {
 			ds, err := l.DaemonSets(obj.Namespace).Get(obj.Name)
 			if err == nil {
@@ -1027,7 +1034,7 @@ func admissionTargetStillBlocked(cache *ResourceCache, obj corev1.ObjectReferenc
 				return false
 			}
 		}
-	case "Job":
+	case obj.Kind == "Job" && group == "batch":
 		if l := cache.Jobs(); l != nil {
 			j, err := l.Jobs(obj.Namespace).Get(obj.Name)
 			if err == nil {
@@ -1068,7 +1075,7 @@ func detectAdmissionConditionProblems(cache *ResourceCache, namespace string, se
 			items, _ = l.List(labels.Everything())
 		}
 		for _, rs := range items {
-			key := admissionProblemKey("ReplicaSet", rs.Namespace, rs.Name)
+			key := admissionProblemKey("apps", "ReplicaSet", rs.Namespace, rs.Name)
 			if seen[key] || hasSeenDeploymentForReplicaSet(seen, rs) || rs.Status.Replicas >= schedDesiredReplicas(rs.Spec.Replicas) {
 				continue
 			}
@@ -1107,7 +1114,7 @@ func detectAdmissionConditionProblems(cache *ResourceCache, namespace string, se
 					continue
 				}
 				if p, ok := admissionConditionProblem("Deployment", d.Namespace, d.Name, c.Message, d.CreationTimestamp.Time, c.LastTransitionTime.Time, now); ok {
-					key := admissionProblemKey(p.Kind, p.Namespace, p.Name)
+					key := admissionProblemKey(p.Group, p.Kind, p.Namespace, p.Name)
 					if !seen[key] {
 						out = append(out, p)
 						seen[key] = true
@@ -1133,6 +1140,7 @@ func admissionConditionProblem(kind, namespace, name, message string, createdAt,
 	ageDur := now.Sub(createdAt)
 	detection := Detection{
 		Kind:              kind,
+		Group:             resourceid.GroupForBuiltinKind(kind),
 		Namespace:         namespace,
 		Name:              name,
 		Severity:          "critical",
@@ -1146,8 +1154,15 @@ func admissionConditionProblem(kind, namespace, name, message string, createdAt,
 	return detection, true
 }
 
-func admissionProblemKey(kind, namespace, name string) string {
-	return kind + "/" + namespace + "/" + name
+func admissionObjectGroup(obj corev1.ObjectReference) string {
+	if strings.TrimSpace(obj.APIVersion) == "" {
+		return resourceid.GroupForBuiltinKind(obj.Kind)
+	}
+	return GroupFromAPIVersion(obj.APIVersion)
+}
+
+func admissionProblemKey(group, kind, namespace, name string) string {
+	return resourceid.ResourceKey(group, kind, namespace, name)
 }
 
 func hasSeenReplicaSetForDeployment(cache *ResourceCache, seen map[string]bool, namespace, deployment string) bool {
@@ -1160,7 +1175,7 @@ func hasSeenReplicaSetForDeployment(cache *ResourceCache, seen map[string]bool, 
 	}
 	items, _ := l.ReplicaSets(namespace).List(labels.Everything())
 	for _, rs := range items {
-		if seen[admissionProblemKey("ReplicaSet", rs.Namespace, rs.Name)] && replicaSetOwnedByDeployment(rs, deployment) {
+		if seen[admissionProblemKey("apps", "ReplicaSet", rs.Namespace, rs.Name)] && replicaSetOwnedByDeployment(rs, deployment) {
 			return true
 		}
 	}
@@ -1172,7 +1187,7 @@ func hasSeenDeploymentForReplicaSet(seen map[string]bool, rs *appsv1.ReplicaSet)
 	if !ok {
 		return false
 	}
-	return seen[admissionProblemKey("Deployment", rs.Namespace, deployment)]
+	return seen[admissionProblemKey("apps", "Deployment", rs.Namespace, deployment)]
 }
 
 func replicaSetOwnedByDeployment(rs *appsv1.ReplicaSet, deployment string) bool {

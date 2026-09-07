@@ -3,6 +3,7 @@ package timeline
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -421,6 +422,16 @@ func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf
 	if len(opts.Kinds) > 0 {
 		found := slices.Contains(opts.Kinds, event.Kind)
 		if !found {
+			return false
+		}
+	}
+
+	if len(opts.APIGroups) > 0 && event.APIVersion != "" {
+		group := ""
+		if idx := strings.IndexByte(event.APIVersion, '/'); idx > 0 {
+			group = event.APIVersion[:idx]
+		}
+		if !slices.Contains(opts.APIGroups, group) {
 			return false
 		}
 	}

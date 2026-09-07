@@ -1,9 +1,6 @@
 import { Loader2, Sparkles } from "lucide-react";
-import {
-  useDiagnose,
-  useDiagnoseLayout,
-  runTargetKey,
-} from "./DiagnoseContext";
+import { useDiagnose, useDiagnoseLayout } from "./DiagnoseContext";
+import { runTargetKey } from "./target";
 import { Tooltip } from "../ui/Tooltip";
 import type { RenderDiagnoseAction } from "../../context/DiagnoseCustomization";
 
@@ -13,18 +10,20 @@ import type { RenderDiagnoseAction } from "../../context/DiagnoseCustomization";
 // this slot with their own action.
 //
 // Adaptive by health: on a resource with a live problem it reads as a prominent
-// "Diagnose" (find the root cause); when the resource is fine or health is unknown
-// it shrinks to a quiet colored-icon affordance ("ask my agent about this") — so it
-// never implies "something is wrong here" on a healthy resource. The tooltip leads
-// with the BYO framing (the user's OWN agent, locally) — unless the agent is
-// hosted, where those claims would be false.
+// "Investigate" action; when the resource is fine or health is unknown it shrinks
+// to a quiet colored-icon affordance ("ask my agent about this") — so it never
+// implies "something is wrong here" on a healthy resource. The tooltip leads with
+// the BYO framing (the user's OWN agent, locally) — unless the agent is hosted,
+// where those claims would be false.
 function DiagnoseResourceButton({
   kind,
+  group,
   namespace,
   name,
   health,
 }: {
   kind: string;
+  group?: string;
   namespace: string;
   name: string;
   health?: "problem" | "healthy" | "unknown";
@@ -37,17 +36,18 @@ function DiagnoseResourceButton({
   if (d.setupState === "off") return null;
   const ready = d.available;
   const problem = health === "problem";
-  const running = ready && runningKeys.has(runTargetKey(kind, namespace, name));
+  const running =
+    ready && runningKeys.has(runTargetKey(kind, namespace, name, group ?? ""));
   const tooltip = !ready
-    ? "Set up AI diagnosis to investigate this — runs your own agent locally."
+    ? "Set up AI investigations — runs your own agent locally."
     : running
       ? `${d.agentLabel} is investigating this resource — click to watch it live.`
       : d.hosted
         ? problem
-          ? `Diagnose with ${d.agentLabel} — reads this resource's spec, events & logs to find the root cause.`
+          ? `Investigate with ${d.agentLabel} — reads this resource's spec, events & logs to look for the cause.`
           : `Ask ${d.agentLabel} about this resource — reads its spec, events & logs.`
         : problem
-          ? `Diagnose with your own ${d.agentLabel} — runs locally, reads this resource's spec, events & logs to find the root cause.`
+          ? `Investigate with your own ${d.agentLabel} — runs locally and reads this resource's spec, events & logs.`
           : `Ask your own ${d.agentLabel} about this resource — runs locally, reads its spec, events & logs.`;
   // While an investigation is live, the button advertises it (and clicking focuses
   // the existing run rather than starting a new one — openInvestigation dedups).
@@ -56,15 +56,22 @@ function DiagnoseResourceButton({
     <Tooltip content={tooltip} position="bottom">
       <button
         onClick={() =>
-          ready ? d.openInvestigation({ kind, namespace, name }) : d.openHome()
+          ready
+            ? d.openInvestigation({
+                kind,
+                group: group ?? "",
+                namespace,
+                name,
+              })
+            : d.openHome()
         }
         aria-label={
           !ready
-            ? "Set up AI diagnosis"
+            ? "Set up AI investigations"
             : running
               ? "Investigation running — click to view"
               : problem
-                ? "Diagnose with AI"
+                ? "Investigate with AI"
                 : "Ask AI about this resource"
         }
         className={
@@ -78,7 +85,7 @@ function DiagnoseResourceButton({
         ) : (
           <Sparkles className="h-3.5 w-3.5 text-accent" />
         )}
-        {running ? "Investigating…" : problem && "Diagnose"}
+        {running ? "Investigating…" : problem && "Investigate"}
       </button>
     </Tooltip>
   );
@@ -86,27 +93,31 @@ function DiagnoseResourceButton({
 
 export const defaultDiagnoseAction: RenderDiagnoseAction = ({
   kind,
+  group,
   namespace,
   name,
   health,
 }) => (
   <DiagnoseResourceButton
     kind={kind}
+    group={group}
     namespace={namespace}
     name={name}
     health={health}
   />
 );
 
-// Compact per-issue "Diagnose" action for the Issues queue — launches an
+// Compact per-issue "Investigate" action for the Issues queue — launches an
 // investigation for the issue's subject from where the problem is surfaced.
 // stopPropagation so it doesn't toggle the issue row it lives in.
 export function IssueDiagnoseButton({
   kind,
+  group,
   namespace,
   name,
 }: {
   kind: string;
+  group?: string;
   namespace: string;
   name: string;
 }) {
@@ -117,25 +128,31 @@ export function IssueDiagnoseButton({
     <Tooltip
       content={
         d.setupState === "needs-restart"
-          ? "Restart Radar to enable AI diagnosis — a supported agent is installed"
+          ? "Restart Radar to enable AI investigations — a supported agent is installed"
           : !ready
-            ? "Set up AI diagnosis — install a local agent to investigate"
+            ? "Set up AI investigations — install a local agent"
             : d.hosted
-              ? `Sends this resource's context to ${d.agentLabel} to find the root cause`
-              : `Runs ${d.agentLabel} on your machine and sends it this resource's context to find the root cause`
+              ? `Sends this resource's context to ${d.agentLabel} for investigation`
+              : `Runs ${d.agentLabel} on your machine to investigate this resource`
       }
       position="left"
     >
       <button
         onClick={(e) => {
           e.stopPropagation();
-          if (ready) d.openInvestigation({ kind, namespace, name });
+          if (ready)
+            d.openInvestigation({
+              kind,
+              group: group ?? "",
+              namespace,
+              name,
+            });
           else d.openHome();
         }}
         className="flex shrink-0 items-center gap-1 rounded-md border border-theme-border px-2 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
       >
         <Sparkles className="h-3 w-3 text-accent" />
-        Diagnose
+        Investigate
       </button>
     </Tooltip>
   );

@@ -2,10 +2,31 @@ package context
 
 import (
 	"fmt"
+	"sort"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 )
+
+// secretKeyNames returns the stable union of data and stringData keys. Besides
+// deterministic MCP output, the union prevents an unusual duplicate key from
+// looking like two independently present values in summaries.
+func secretKeyNames(secret *corev1.Secret) []string {
+	keySet := make(map[string]struct{}, len(secret.Data)+len(secret.StringData))
+	for key := range secret.Data {
+		keySet[key] = struct{}{}
+	}
+	for key := range secret.StringData {
+		keySet[key] = struct{}{}
+	}
+	keys := make([]string, 0, len(keySet))
+	for key := range keySet {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
 
 // VerbosityLevel controls how much detail is retained when minifying resources.
 type VerbosityLevel int

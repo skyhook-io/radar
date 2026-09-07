@@ -73,12 +73,12 @@ type Config struct {
 	// auto-discovery token. Authorization relies on this field rather than the
 	// mutable display context.
 	ArgoCDTokenBinding string `json:"argoCdTokenBinding,omitempty"`
-	// AIHistory persists AI investigations (transcripts + verdicts) to a local
+	// AIHistory persists AI investigations (transcripts + conclusions) to a local
 	// SQLite file so they survive restarts. nil = default (true), false = off.
 	AIHistory *bool `json:"aiHistory,omitempty"`
 	// AIHistoryDBPath overrides the history DB location (default ~/.radar/ai-runs.db).
 	AIHistoryDBPath string `json:"aiHistoryDbPath,omitempty"`
-	// AIConsent records the acknowledged AI-diagnosis disclosure version per
+	// AIConsent records the acknowledged AI-investigation disclosure version per
 	// agent execution profile. Machine-scoped on purpose: consent gates a
 	// machine-scoped action (spawn this machine's agent CLI, persist transcripts
 	// to this machine's disk), so one acknowledgment covers the web panel and
@@ -86,7 +86,7 @@ type Config struct {
 	AIConsent map[string]string `json:"aiConsent,omitempty"`
 }
 
-// AI-diagnosis consent disclosure versions, per surface. THE single source of
+// AI-investigation consent disclosure versions, per surface. THE single source of
 // truth for the server endpoint and the CLI's standalone path alike — bump when
 // the consent copy's claims change materially, and prior acknowledgments stop
 // counting everywhere at once.

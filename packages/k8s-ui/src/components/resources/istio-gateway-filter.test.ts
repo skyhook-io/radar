@@ -13,13 +13,15 @@ describe('Istio Gateway filter values', () => {
     const tls = gateway({ servers: [{ port: { number: 443 }, tls: { mode: 'SIMPLE' } }] })
     const plain = gateway({ servers: [{ port: { number: 80 } }] })
     const none = gateway({ servers: [] })
-    expect(getCellFilterValue(tls, 'status', 'istiogateways')).toBe('TLS')
-    expect(getCellFilterValue(plain, 'status', 'istiogateways')).toBe('Active')
+    // TLS and plain share a verdict: neither says whether the gateway's
+    // selector resolves to a running pod, which is what a status column claims.
+    expect(getCellFilterValue(tls, 'status', 'istiogateways')).toBe('Defined')
+    expect(getCellFilterValue(plain, 'status', 'istiogateways')).toBe('Defined')
     expect(getCellFilterValue(none, 'status', 'istiogateways')).toBe('No Servers')
   })
 
   // Read as a Gateway API Gateway instead, the same object filters as
-  // "Unknown" — a value that appears on no row, since the cell shows Active.
+  // "Unknown" — a value that appears on no row, since the cell shows Defined.
   // That divergence is what routing the normalized key fixes.
   it('diverges from the row when read under the Gateway API key', () => {
     const g = gateway({ servers: [{ port: { number: 80 } }] })

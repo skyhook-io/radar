@@ -8,6 +8,7 @@ import {
   getKyvernoPolicyStatus,
   getKyvernoEnforcement,
   getKyvernoPolicyRuleCount,
+  getKyvernoPolicyRuleTypes,
 } from '../resource-utils-kyverno'
 import {
   getKyvernoRequestState,
@@ -73,7 +74,7 @@ export function KyvernoPolicyCell({ resource, column }: { resource: any; column:
     case 'status': {
       const status = getKyvernoPolicyStatus(resource)
       return (
-        <span className={clsx('badge', status.color)}>
+        <span className={clsx('badge truncate max-w-full', status.color)} title={status.text}>
           {status.text}
         </span>
       )
@@ -91,6 +92,12 @@ export function KyvernoPolicyCell({ resource, column }: { resource: any; column:
         )}>
           {label}
         </span>
+      )
+    }
+    case 'ruleTypes': {
+      const types = getKyvernoPolicyRuleTypes(resource)
+      return (
+        <span className="text-sm text-theme-text-secondary truncate block" title={types}>{types}</span>
       )
     }
     case 'rules': {

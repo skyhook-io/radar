@@ -15,7 +15,6 @@ import {
   getKueueWorkloadQueueName,
   getKueueWorkloadAdmittedBy,
   getKueueWorkloadPriority,
-  getResourceFlavorStatus,
   getResourceFlavorNodeLabelCount,
   getResourceFlavorTaintCount,
   getAdmissionCheckStatus,
@@ -112,14 +111,6 @@ export function KueueWorkloadCell({ resource, column }: { resource: any; column:
 
 export function ResourceFlavorCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
-    case 'status': {
-      const status = getResourceFlavorStatus(resource)
-      return (
-        <span className={clsx('badge', status.color)}>
-          {status.text}
-        </span>
-      )
-    }
     case 'nodeLabels': {
       const count = getResourceFlavorNodeLabelCount(resource)
       return <span className="text-sm text-theme-text-secondary">{count > 0 ? count : '-'}</span>

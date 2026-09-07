@@ -58,7 +58,7 @@ func TestRevisionCapableKind(t *testing.T) {
 // reports it as an unknown include alongside the data it just attached.
 func TestRevisionsIsAKnownIncludeToken(t *testing.T) {
 	result := map[string]any{}
-	attachResourceExtras(t.Context(), nil, result, map[string]bool{"revisions": true}, "pod", "default", "web")
+	attachResourceExtras(t.Context(), nil, result, map[string]bool{"revisions": true}, "pod", "", "default", "web")
 
 	if msg, present := result["includeError"]; present {
 		t.Errorf("revisions reported as unknown include: %v", msg)

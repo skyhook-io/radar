@@ -31,7 +31,7 @@ export type {
   DiagnoseConsentCopy,
 } from './context/DiagnoseCustomization';
 
-// Standalone AI-diagnose surface — mount the investigation panel outside a
+// Standalone AI investigation surface — mount the investigation panel outside a
 // full <RadarApp>. No router dependency, no client-side cluster state: the
 // backend set via setApiBase() picks the cluster, so hosts remount
 // <DiagnoseProvider key={cluster}> to switch. Mount order: ThemeProvider >

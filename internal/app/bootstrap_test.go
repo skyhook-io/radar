@@ -4,14 +4,111 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/settings"
+	"github.com/skyhook-io/radar/internal/timeline"
 )
+
+func TestBuildTimelineStoreConfig(t *testing.T) {
+	t.Run("memory preserves history limit", func(t *testing.T) {
+		got, err := BuildTimelineStoreConfig(AppConfig{
+			TimelineStorage:      "memory",
+			HistoryLimit:         321,
+			TimelineRetention:    48 * time.Hour,
+			TimelineMaxSizeBytes: 12345,
+		})
+		if err != nil {
+			t.Fatalf("BuildTimelineStoreConfig: %v", err)
+		}
+		if got.Type != timeline.StoreTypeMemory || got.MaxSize != 321 {
+			t.Fatalf("memory config = %+v, want type=memory maxSize=321", got)
+		}
+		if got.RetentionAge != 0 || got.MaxStorageBytes != 0 {
+			t.Fatalf("memory config applied SQLite cleanup settings: %+v", got)
+		}
+	})
+
+	t.Run("empty storage keeps memory default", func(t *testing.T) {
+		got, err := BuildTimelineStoreConfig(AppConfig{HistoryLimit: 123})
+		if err != nil {
+			t.Fatalf("BuildTimelineStoreConfig: %v", err)
+		}
+		if got.Type != timeline.StoreTypeMemory || got.MaxSize != 123 {
+			t.Fatalf("default config = %+v, want type=memory maxSize=123", got)
+		}
+	})
+
+	t.Run("sqlite preserves path and cleanup settings", func(t *testing.T) {
+		got, err := BuildTimelineStoreConfig(AppConfig{
+			TimelineStorage:      "sqlite",
+			TimelineDBPath:       "/tmp/radar-test.db",
+			TimelineRetention:    72 * time.Hour,
+			TimelineMaxSizeBytes: 8 << 20,
+		})
+		if err != nil {
+			t.Fatalf("BuildTimelineStoreConfig: %v", err)
+		}
+		if got.Type != timeline.StoreTypeSQLite || got.Path != "/tmp/radar-test.db" {
+			t.Fatalf("sqlite config = %+v, want explicit SQLite path", got)
+		}
+		if got.RetentionAge != 72*time.Hour || got.MaxStorageBytes != 8<<20 {
+			t.Fatalf("sqlite cleanup config = %+v, want retention and max bytes preserved", got)
+		}
+	})
+
+	t.Run("sqlite uses home directory default path", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+
+		got, err := BuildTimelineStoreConfig(AppConfig{TimelineStorage: "sqlite"})
+		if err != nil {
+			t.Fatalf("BuildTimelineStoreConfig: %v", err)
+		}
+		wantPath := filepath.Join(home, ".radar", "timeline.db")
+		if got.Path != wantPath {
+			t.Fatalf("sqlite default path = %q, want %q", got.Path, wantPath)
+		}
+	})
+
+	t.Run("postgres carries runtime DSN", func(t *testing.T) {
+		const dsn = "postgres://radar:secret@example.test/radar"
+		got, err := BuildTimelineStoreConfig(AppConfig{
+			TimelineStorage:     "postgres",
+			TimelinePostgresDSN: dsn,
+			TimelineRetention:   72 * time.Hour,
+		})
+		if err != nil {
+			t.Fatalf("BuildTimelineStoreConfig: %v", err)
+		}
+		if got.Type != timeline.StoreTypePostgres || got.DSN != dsn {
+			t.Fatalf("postgres config = %+v, want type=postgres with runtime DSN", got)
+		}
+		if got.RetentionAge != 72*time.Hour {
+			t.Fatalf("postgres retention = %s, want 72h", got.RetentionAge)
+		}
+	})
+
+	t.Run("postgres requires DSN", func(t *testing.T) {
+		_, err := BuildTimelineStoreConfig(AppConfig{TimelineStorage: "postgres"})
+		if err == nil || !strings.Contains(err.Error(), "requires a DSN") {
+			t.Fatalf("BuildTimelineStoreConfig error = %v, want missing DSN error", err)
+		}
+	})
+
+	t.Run("unknown storage is rejected", func(t *testing.T) {
+		_, err := BuildTimelineStoreConfig(AppConfig{TimelineStorage: "mystery"})
+		if err == nil || !strings.Contains(err.Error(), "unknown timeline storage") {
+			t.Fatalf("BuildTimelineStoreConfig error = %v, want unknown storage error", err)
+		}
+	})
+}
 
 func TestValidateNamespaceScopeTarget(t *testing.T) {
 	cases := []struct {

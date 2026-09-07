@@ -6,12 +6,12 @@ The **Reachability** tab in the resource detail view answers one question for a 
 
 Available in Radar **v1.9.1+** (the in-cluster probe test also requires the probe image from v1.9.1+).
 
-Naming note: this is NOT the [AI Diagnose feature](https://radarhq.io/docs/features/diagnose) - Reachability is deterministic path tracing and live probing, no AI involved. The general-purpose MCP `diagnose` tool (whose primary job is workload root-cause bundles: logs, events, crash evidence) returns this reachability trace as its answer when pointed at a network entry kind - see [MCP](#mcp).
+Naming note: this is NOT the [AI Investigations feature](https://radarhq.io/docs/features/diagnose) - Reachability is deterministic path tracing and live probing, no AI involved. The general-purpose MCP `diagnose` tool returns a bounded, point-in-time evidence bundle for a narrowed workload or reconciler, and returns this reachability trace when pointed at a network entry kind - see [MCP](#mcp).
 
 The trace has two layers:
 
 1. **Static** - is the path wired correctly in config + current pod state? Pure functions over the in-memory informer cache, no per-call API requests. Always on.
-2. **Active reachability test** (optional, one-shot) - send DNS / TCP / TLS / HTTP probes along the declared path and report what came back. HTTP-shaped ports get an HTTP request; explicitly non-HTTP ports stop at TCP rather than sending an unrelated protocol. The proxy probe runs automatically once when the **Diagnose** tab opens (re-runnable via **Run test**); only the in-cluster Job test stays a manual click.
+2. **Active reachability test** (optional, one-shot) - send DNS / TCP / TLS / HTTP probes along the declared path and report what came back. HTTP-shaped ports get an HTTP request; explicitly non-HTTP ports stop at TCP rather than sending an unrelated protocol. The proxy probe runs automatically once when the **Reachability** tab opens (re-runnable via **Run test**); only the in-cluster Job test stays a manual click.
 
 The active layer can escalate the static verdict when probes give clear evidence of a real failure on a hop (every non-skipped probe failed → that hop counts toward broken; over half failed → counts toward degraded). It never softens a static verdict: a critical static finding outranks probe state, and an unverifiable path stays unverifiable.
 
@@ -176,7 +176,7 @@ The UI shows the verdict at the top of the panel with a one-sentence reason. Tre
 
 ## MCP
 
-The general-purpose `diagnose` MCP tool - primarily a workload root-cause tool (logs, Warning events, crash evidence in one call) - returns the reachability trace for network entry kinds instead of the pod-log fan-out it does for workloads. An agent that calls `diagnose(kind=service, ...)` gets the path-shaped answer in one call, along with `relatedIssues` for raw-issue follow-up. Pass `probe: true` to add the active reachability test from Radar's vantage. Pass `in_cluster: true` to run the probe from inside the cluster - Radar creates up to 5 short-lived, self-destructing probe pods (one per intended route) under the active Kubernetes identity's RBAC to test the real dataplane the API-server-proxy vantage can't reach (e.g. to confirm a route that came back `indirect`). This is the only mutating `diagnose` option; it needs `create jobs`, `list pods`, and `get pods/log`, and falls back to a copyable command when any permission is missing.
+The general-purpose `diagnose` MCP tool collects a bounded, point-in-time evidence bundle for a narrowed target; it does not run an agent or promise a root-cause verdict. For network entry kinds it returns this reachability trace instead of the pod-log fan-out used for workloads. An agent that calls `diagnose(kind=service, ...)` gets the path-shaped answer in one call, along with `relatedIssues` for raw-issue follow-up. Pass `probe: true` to add the active reachability test from Radar's vantage. Pass `in_cluster: true` to run the probe from inside the cluster - Radar creates up to 5 short-lived, self-destructing probe pods (one per intended route) under the active Kubernetes identity's RBAC to test the real dataplane the API-server-proxy vantage can't reach (e.g. to confirm a route that came back `indirect`). This is the only mutating `diagnose` option; it needs `create jobs`, `list pods`, and `get pods/log`, and falls back to a copyable command when any permission is missing.
 
 ## In-cluster probe image
 

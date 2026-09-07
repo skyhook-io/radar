@@ -18,6 +18,7 @@ import (
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/investigationrefs"
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	internalopencost "github.com/skyhook-io/radar/internal/opencost"
@@ -61,6 +62,7 @@ type AppConfig struct {
 	NamespaceScope            bool
 	TimelineStorage           string
 	TimelineDBPath            string
+	TimelinePostgresDSN       string
 	TimelineRetention         time.Duration
 	TimelineMaxSizeBytes      int64
 	PrometheusURL             string
@@ -214,12 +216,16 @@ func seedNamespaceScopePick(ctxName, ns string) {
 }
 
 // BuildTimelineStoreConfig creates the timeline store configuration from app config.
-func BuildTimelineStoreConfig(cfg AppConfig) timeline.StoreConfig {
+func BuildTimelineStoreConfig(cfg AppConfig) (timeline.StoreConfig, error) {
 	storeCfg := timeline.StoreConfig{
 		Type:    timeline.StoreTypeMemory,
 		MaxSize: cfg.HistoryLimit,
 	}
-	if cfg.TimelineStorage == "sqlite" {
+
+	switch cfg.TimelineStorage {
+	case "", "memory":
+		return storeCfg, nil
+	case "sqlite":
 		storeCfg.Type = timeline.StoreTypeSQLite
 		dbPath := cfg.TimelineDBPath
 		if dbPath == "" {
@@ -229,8 +235,18 @@ func BuildTimelineStoreConfig(cfg AppConfig) timeline.StoreConfig {
 		storeCfg.Path = dbPath
 		storeCfg.RetentionAge = cfg.TimelineRetention
 		storeCfg.MaxStorageBytes = cfg.TimelineMaxSizeBytes
+		return storeCfg, nil
+	case "postgres":
+		if cfg.TimelinePostgresDSN == "" {
+			return timeline.StoreConfig{}, fmt.Errorf("PostgreSQL timeline storage requires a DSN")
+		}
+		storeCfg.Type = timeline.StoreTypePostgres
+		storeCfg.DSN = cfg.TimelinePostgresDSN
+		storeCfg.RetentionAge = cfg.TimelineRetention
+		return storeCfg, nil
+	default:
+		return timeline.StoreConfig{}, fmt.Errorf("unknown timeline storage %q", cfg.TimelineStorage)
 	}
-	return storeCfg
 }
 
 // RegisterCallbacks registers Helm, timeline, traffic, and Prometheus reset/reinit
@@ -247,7 +263,19 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 		timeline.ResetStore()
 		timeline.ResetMetricsForContextSwitch()
 	}, func() error {
-		return timeline.ReinitStore(timelineStoreCfg)
+		if err := timeline.ReinitStore(timelineStoreCfg); err != nil {
+			// PostgreSQL deliberately does not degrade to memory: an operator who
+			// pointed Radar at an external database must not silently get an
+			// in-memory timeline that vanishes on restart. Every other backend
+			// keeps the historical behaviour — warn and continue degraded rather
+			// than fail the whole subsystem bring-up, which would also take down
+			// cluster browsing.
+			if timelineStoreCfg.Type == timeline.StoreTypePostgres {
+				return err
+			}
+			log.Printf("Warning: timeline init failed, continuing degraded: %v", err)
+		}
+		return nil
 	})
 
 	// Initialize Prometheus metrics client (must come before SetManualURL)
@@ -420,8 +448,14 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 
 	if cfg.MCPEnabled {
+		// The same in-memory registry must back both ends of Radar's private
+		// evidence protocol: DiagnoseStream owns active turn scopes, while the MCP
+		// handler records exactly what Radar returned inside those scopes.
+		evidenceRefs := investigationrefs.NewRegistry()
+		serverCfg.InvestigationRefs = evidenceRefs
 		serverCfg.MCPHandler = mcppkg.NewHandler()
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
+		serverCfg.MCPInvestigationHandler = mcppkg.NewInvestigationHandler(evidenceRefs)
 	}
 
 	return server.New(serverCfg)
