@@ -1296,14 +1296,16 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'action', label: 'Action', width: 'w-36', tooltip: 'Enforcement at admission — Enforce blocks, Audit reports; Background only or Inactive when admission is disabled' },
-    { key: 'rules', label: 'Rules', width: 'w-20' },
+    { key: 'ruleTypes', label: 'Types', width: 'w-40', tooltip: 'Rule kinds this policy declares. A policy can carry several, and the mix decides what it can do to a request.' },
+    { key: 'rules', label: 'Rules', width: 'w-20', defaultVisible: false },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   clusterpolicies: [
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'action', label: 'Action', width: 'w-36', tooltip: 'Enforcement at admission — Enforce blocks, Audit reports; Background only or Inactive when admission is disabled' },
-    { key: 'rules', label: 'Rules', width: 'w-20' },
+    { key: 'ruleTypes', label: 'Types', width: 'w-40', tooltip: 'Rule kinds this policy declares. A policy can carry several, and the mix decides what it can do to a request.' },
+    { key: 'rules', label: 'Rules', width: 'w-20', defaultVisible: false },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // Kyverno modern CEL family (policies.kyverno.io). "Enforcement" is the
@@ -1410,12 +1412,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'schedule', label: 'Schedule', width: 'w-32' },
+    { key: 'lastRun', label: 'Last Run', width: 'w-28', tooltip: 'Time since the controller last recorded an execution. A dash means it has not recorded one.' },
     { key: 'appliesTo', label: 'Deletes', width: 'min-w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   clustercleanuppolicies: [
     { key: 'name', label: 'Name' },
     { key: 'schedule', label: 'Schedule', width: 'w-32' },
+    { key: 'lastRun', label: 'Last Run', width: 'w-28', tooltip: 'Time since the controller last recorded an execution. A dash means it has not recorded one.' },
     { key: 'appliesTo', label: 'Deletes', width: 'min-w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1797,6 +1801,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   sbomreports: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'image', label: 'Image', width: 'w-48', tooltip: 'Image the SBOM describes. The container name alone does not identify what was scanned.' },
     { key: 'container', label: 'Container', width: 'w-28' },
     { key: 'components', label: 'Components', width: 'w-24', tooltip: 'Packages and libraries found in the image' },
     { key: 'status', label: 'Status', width: 'w-28' },
@@ -1804,6 +1809,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   ],
   clustersbomreports: [
     { key: 'name', label: 'Name' },
+    { key: 'image', label: 'Image', width: 'w-48', tooltip: 'Image the SBOM describes. The container name alone does not identify what was scanned.' },
     { key: 'components', label: 'Components', width: 'w-24' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-16' },
@@ -1912,6 +1918,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'repositoryType', label: 'Type', width: 'w-24', tooltip: 'kopia or restic. Restic is deprecated — Velero 1.17 stopped creating restic backups and 1.19 drops restic restore.' },
+    { key: 'volumeNamespace', label: 'Volume NS', width: 'w-36', tooltip: 'Namespace whose volumes this repository stores. Distinct from the namespace the repository object lives in.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   backupstoragelocations: [
@@ -2269,6 +2276,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'dnsNames', label: 'DNS Names', width: 'w-56' },
     { key: 'secretName', label: 'Secret', width: 'w-44' },
+    { key: 'expires', label: 'Expires', width: 'w-28', tooltip: 'Expiry of the certificate in the named Secret, as the controller reported it.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   serverlessservices: [
@@ -2374,6 +2382,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'cluster', label: 'Cluster', width: 'w-32 shrink-0' },
     { key: 'ready', label: 'Ready', width: 'w-20 shrink-0', tooltip: 'Ready replicas / desired' },
+    { key: 'upToDate', label: 'Up-to-date', width: 'w-24', tooltip: 'Machines already running the current spec. Fewer than Ready means a rollout is still in progress.' },
     { key: 'phase', label: 'Phase', width: 'w-28 shrink-0' },
     { key: 'version', label: 'Version', width: 'w-24 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
@@ -5078,8 +5087,10 @@ export function ResourcesView({
         // DaemonSet: numberAvailable, others: availableReplicas
         return status.numberAvailable ?? status.availableReplicas ?? 0
       case 'upToDate':
-        // DaemonSet: updatedNumberScheduled, others: updatedReplicas
-        return status.updatedNumberScheduled ?? status.updatedReplicas ?? 0
+        // DaemonSet: updatedNumberScheduled; CAPI v1beta2: upToDateReplicas;
+        // others: updatedReplicas. Same precedence the cells display, or a row
+        // sorts as zero while showing a real count.
+        return status.updatedNumberScheduled ?? status.upToDateReplicas ?? status.updatedReplicas ?? 0
       case 'restarts':
         if (kindLower === 'jobsets') return getJobSetRestarts(resource)
         return getPodRestarts(resource)

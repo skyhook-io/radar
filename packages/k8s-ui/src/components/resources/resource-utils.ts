@@ -11,7 +11,8 @@ import { getNodePoolStatus, getNodeClaimStatus } from './resource-utils-karpente
 import { getScaledObjectStatus, getScaledJobStatus } from './resource-utils-keda'
 import { getGitRepositoryStatus, getOCIRepositoryStatus, getHelmRepositoryStatus, getHelmRepositoryType, getKustomizationStatus, getFluxHelmReleaseStatus, getFluxAlertStatus } from './resource-utils-flux'
 import { getArgoApplicationStatus, getArgoApplicationSetStatus, getArgoApplicationSync, getArgoApplicationHealth, getArgoApplicationProject } from './resource-utils-argo'
-import { getPolicyReportStatus as _getPolicyReportStatus, getKyvernoPolicyStatus as _getKyvernoPolicyStatus } from './resource-utils-kyverno'
+import { getVulnerabilityReportImage as _getVulnerabilityReportImage } from './resource-utils-trivy'
+import { getKyvernoPolicyRuleTypes as _getKyvernoPolicyRuleTypes, getPolicyReportStatus as _getPolicyReportStatus, getKyvernoPolicyStatus as _getKyvernoPolicyStatus } from './resource-utils-kyverno'
 import { getResourceClaimStatus as _getResourceClaimStatus, getResourceClaimDeviceClasses as _getResourceClaimDeviceClasses, getResourceClaimTemplateDeviceClasses as _getResourceClaimTemplateDeviceClasses, getResourceClaimAllocation as _getResourceClaimAllocation, getResourceClaimReservedFor as _getResourceClaimReservedFor } from './resource-utils-dra'
 import { getNvidiaClusterPolicyStatus as _getNvidiaClusterPolicyStatus, getNvidiaClusterPolicyEnabledComponents as _getNvidiaClusterPolicyEnabledComponents, getNvidiaDriverStatus as _getNvidiaDriverStatus } from './resource-utils-nvidia'
 import { getClusterQueueStatus as _getClusterQueueStatus, getLocalQueueStatus as _getLocalQueueStatus, getKueueWorkloadStatus as _getKueueWorkloadStatus, getResourceFlavorStatus as _getResourceFlavorStatus, getAdmissionCheckStatus as _getAdmissionCheckStatus, getProvisioningRequestStatus as _getProvisioningRequestStatus } from './resource-utils-kueue'
@@ -2594,6 +2595,20 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
     case 'mig':
       if (kindLower === 'nvidiaclusterpolicies') return resource.spec?.mig?.strategy || ''
       break
+    // Trivy keeps the scanned image under report.artifact, so the generic
+    // spec/status probe finds nothing and the header would offer a filter
+    // button that never populates.
+    case 'image':
+      if (kindLower === 'vulnerabilityreports' || kindLower === 'sbomreports'
+        || kindLower === 'clustersbomreports' || kindLower === 'exposedsecretreports') {
+        return _getVulnerabilityReportImage(resource)
+      }
+      break
+    case 'ruleTypes':
+      if (kindLower === 'kyvernopolicies' || kindLower === 'clusterpolicies') {
+        return _getKyvernoPolicyRuleTypes(resource)
+      }
+      break
     // The fallback would read spec.timeZone and yield '' for an undeclared
     // zone, so those rows would drop out of a filter the cell shows a value for.
     case 'timeZone':
@@ -2622,6 +2637,7 @@ export {
   getVulnerabilityReportSummary,
   getVulnerabilityReportStatus,
   getVulnerabilityReportImage,
+  getSbomReportImage,
   getVulnerabilityReportContainer,
   getConfigAuditReportSummary,
   getConfigAuditReportStatus,

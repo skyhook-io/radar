@@ -28,6 +28,9 @@ import {
   getDomainMappingUrl,
   getServerlessServiceMode,
 } from '../resource-utils-knative'
+// Knative's Certificate reports status.notAfter like any other TLS certificate,
+// so it shares the expiry formatter rather than re-deriving the thresholds.
+import { getCertificateExpiry, healthColors } from '../resource-utils'
 
 function StatusCell({ resource, getStatus }: { resource: any; getStatus: (r: any) => { text: string; color: string } }) {
   const status = getStatus(resource)
@@ -366,6 +369,16 @@ export function KnativeCertificateCell({ resource, column }: { resource: any; co
     }
     case 'secretName':
       return <TextCell value={resource?.spec?.secretName || '-'} />
+    case 'expires': {
+      const expiry = getCertificateExpiry(resource)
+      // "Expired 365d ago" is far wider than the column; bound it like the
+      // other status badges that carry arbitrary-length text.
+      return (
+        <span className={clsx('badge truncate max-w-full', healthColors[expiry.level])} title={expiry.text}>
+          {expiry.text}
+        </span>
+      )
+    }
     default:
       return <DefaultCell />
   }

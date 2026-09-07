@@ -8,6 +8,7 @@ import {
   getKyvernoPolicyStatus,
   getKyvernoEnforcement,
   getKyvernoPolicyRuleCount,
+  getKyvernoPolicyRuleTypes,
 } from '../resource-utils-kyverno'
 import {
   getKyvernoRequestState,
@@ -91,6 +92,12 @@ export function KyvernoPolicyCell({ resource, column }: { resource: any; column:
         )}>
           {label}
         </span>
+      )
+    }
+    case 'ruleTypes': {
+      const types = getKyvernoPolicyRuleTypes(resource)
+      return (
+        <span className="text-sm text-theme-text-secondary truncate block" title={types}>{types}</span>
       )
     }
     case 'rules': {
