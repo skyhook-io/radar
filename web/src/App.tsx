@@ -2491,6 +2491,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               params.set('namespaces', namespace)
               setNamespaces([namespace])
               setActiveNamespace.mutate({ namespaces: [namespace] })
+            } else {
+              // A cluster-scoped subject changes nothing about scope, so the
+              // destination keeps the current one for the same reason.
+              const globalNamespaces = searchParams.get('namespaces')
+              if (globalNamespaces) params.set('namespaces', globalNamespaces)
             }
             navigate({ pathname: '/timeline', search: params.toString() })
           }}

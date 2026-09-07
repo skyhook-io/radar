@@ -3889,6 +3889,80 @@ describe("prometheus rules adapter", () => {
     expect(distinct.every((group) => group.observations.length === 1)).toBe(
       true,
     );
+
+    // Identical definitions from different rule files arrive as identical
+    // rows; within one response they are two rules, and a second read aligns
+    // each with its own predecessor.
+    const twin = () => alertingRule({ alerts: [], state: "inactive" });
+    const twins = groupsOf(
+      project(
+        [
+          diagnoseWithPods("api-68c7b766dc-fmphn"),
+          tool(
+            "rules-1",
+            "get_prometheus_rules",
+            { count: 2, rules: [alertingRule(), twin()] },
+            { summary: rulesArgs },
+          ),
+        ],
+        [
+          tool(
+            "rules-2",
+            "get_prometheus_rules",
+            { count: 2, rules: [alertingRule(), twin()] },
+            { summary: rulesArgs },
+          ),
+        ],
+      ).groups,
+      "alerts",
+    );
+    expect(twins).toHaveLength(2);
+    expect(twins.map((group) => group.observations.length)).toEqual([2, 2]);
+    expect(twins.map((group) => group.latest.relevance)).toEqual([
+      "target",
+      "broader",
+    ]);
+    expect(twins[0].latest.title).toBe("KubePodCrashLooping firing");
+  });
+
+  it("never proves absence by namespace for a cluster-scoped target", () => {
+    const node = { kind: "Node", group: "", name: "worker-1" };
+    const run = (rules: Record<string, unknown>[]) =>
+      groupsOf(
+        projectInvestigationEvidence(
+          [
+            {
+              timeline: [
+                tool(
+                  "rules",
+                  "get_prometheus_rules",
+                  { count: rules.length, rules },
+                  { summary: rulesArgs },
+                ),
+              ],
+            },
+          ],
+          node,
+        ).groups,
+        "receipt",
+      );
+    expect(
+      run([
+        alertingRule({
+          name: "KubeNodeNotReady",
+          alerts: [
+            {
+              state: "firing",
+              labels: { node: "worker-1", namespace: "kube-system" },
+            },
+          ],
+        }),
+      ]),
+    ).toHaveLength(0);
+    expect(run([])).toHaveLength(1);
+    expect(run([])[0].latest.title).toBe(
+      "No firing alert rules name this Node",
+    );
   });
 
   it("keeps recording rules off the card list and flags truncation and evaluation health", () => {
@@ -4455,6 +4529,60 @@ describe("subject permissions adapter", () => {
         (group) => group.latest.relevance,
       ),
     ).toEqual(["broader", "target"]);
+  });
+
+  it("reads a PodSpec only from kinds that carry one", () => {
+    const check = (name: string) => ({
+      subject: { kind: "ServiceAccount", namespace: "shop", name },
+      accessCheck: {
+        verb: "get",
+        resource: "secrets",
+        namespace: "shop",
+        allowed: false,
+      },
+    });
+    const applicationSet = project([
+      tool("resource", "get_resource", {
+        apiVersion: "argoproj.io/v1alpha1",
+        kind: "ApplicationSet",
+        metadata: { namespace: "shop", name: "api" },
+        spec: { template: { spec: { project: "default" } } },
+      }),
+      tool("perm", "get_subject_permissions", check("default"), {
+        summary: permissionsArgs,
+      }),
+    ]);
+    expect(
+      groupsOf(applicationSet.groups, "permissions")[0].latest.relevance,
+    ).toBe("broader");
+
+    const cronJob = projectInvestigationEvidence(
+      [
+        {
+          timeline: [
+            tool("resource", "get_resource", {
+              apiVersion: "batch/v1",
+              kind: "CronJob",
+              metadata: { namespace: "shop", name: "api" },
+              spec: {
+                jobTemplate: {
+                  spec: {
+                    template: { spec: { serviceAccountName: "cron-sa" } },
+                  },
+                },
+              },
+            }),
+            tool("perm", "get_subject_permissions", check("cron-sa"), {
+              summary: permissionsArgs,
+            }),
+          ],
+        },
+      ],
+      { kind: "CronJob", group: "batch", namespace: "shop", name: "api" },
+    );
+    expect(groupsOf(cronJob.groups, "permissions")[0].latest.relevance).toBe(
+      "target",
+    );
   });
 
   it("keeps a denial for an unrelated principal out of the lead evidence", () => {
