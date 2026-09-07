@@ -205,6 +205,8 @@ One call combines cached Kubernetes resource state, historical events/changes, a
 
 These public MCP fields are available to consumers running the updated Radar server. The OSS local AI investigation additionally uses its own evidence ledger, citations, and Findings integration. Hosted/Cloud consumers need corresponding backend provenance and investigation integration; upgrading a frontend package alone does not establish parity.
 
+See the [Cloud investigation integration handoff](cloud-investigations.md) for the host contract, package-release gates, existing test examples, and acceptance checklist.
+
 ## Available Tools
 
 ### Read Tools
