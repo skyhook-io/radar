@@ -8,11 +8,14 @@ import {
   Timeline,
   TurnView,
   appendThinking,
+  upsertTool,
+  type TimelineItem,
   type Turn,
 } from "./parts";
 import type {
   AgentInfo,
   Diagnosis,
+  DiagnoseStep,
   ExecutionProfile,
 } from "../../api/diagnose";
 import { investigationEvidenceSourceId } from "./investigationEvidence";
@@ -190,6 +193,96 @@ describe("appendThinking", () => {
       },
     ]);
   });
+});
+
+describe("upsertTool", () => {
+  const running: DiagnoseStep = {
+    id: "tool-1",
+    tool: "get_resource",
+    status: "running",
+    summary: "kind=deployment namespace=dev name=api",
+  };
+  const completion: DiagnoseStep = {
+    id: running.id,
+    tool: "",
+    status: "done",
+    ms: 83,
+    result: '{"readyReplicas":1}',
+    evidenceRef: "ev-1",
+    radarEvidence: true,
+    isError: false,
+    truncated: false,
+  };
+
+  it("appends a new call with its identity and input without changing earlier entries", () => {
+    const previous: TimelineItem[] = [
+      { kind: "thinking", text: "Checking the workload" },
+    ];
+    const next = upsertTool(previous, running);
+
+    expect(next).toEqual([
+      previous[0],
+      { kind: "tool", ...running, animate: true },
+    ]);
+    expect(next[0]).toBe(previous[0]);
+    expect(previous).toHaveLength(1);
+  });
+
+  it.each([undefined, ""])(
+    "merges completion in place, preserving running input when summary is %s",
+    (summary) => {
+      const previous = upsertTool([], running, false);
+      previous.push({ kind: "tool", ...running, id: "tool-2", animate: false });
+      const next = upsertTool(previous, { ...completion, summary }, false);
+
+      expect(next).toEqual([
+        {
+          kind: "tool",
+          ...completion,
+          tool: running.tool,
+          summary: running.summary,
+          animate: false,
+        },
+        previous[1],
+      ]);
+      expect(next[1]).toBe(previous[1]);
+      expect(previous[0]).toEqual({ kind: "tool", ...running, animate: false });
+      expect(upsertTool(next, completion, false)).toEqual(next);
+    },
+  );
+
+  it("replaces result and provenance metadata, including explicit false values", () => {
+    const previous = upsertTool([], completion, false);
+    const failed: DiagnoseStep = {
+      ...completion,
+      result: "Permission denied",
+      evidenceRef: "ev-2",
+      radarEvidence: false,
+      isError: true,
+      truncated: true,
+    };
+    const next = upsertTool(previous, failed, false);
+
+    expect(next).toEqual([{ kind: "tool", ...failed, animate: false }]);
+    expect(upsertTool(next, completion, false)).toEqual(previous);
+    expect(previous[0]).toMatchObject(completion);
+  });
+
+  it.each([
+    { arrival: false, update: false, expected: false },
+    { arrival: false, update: true, expected: true },
+    { arrival: true, update: false, expected: true },
+    { arrival: true, update: true, expected: true },
+  ])(
+    "keeps animation $expected for arrival=$arrival and update=$update",
+    ({ arrival, update, expected }) => {
+      const previous = upsertTool([], running, arrival);
+      const next = upsertTool(previous, completion, update);
+
+      expect(previous[0]).toMatchObject({ animate: arrival });
+      expect(next[0]).toMatchObject({ animate: expected });
+    },
+  );
 });
 
 describe("Timeline reasoning density", () => {

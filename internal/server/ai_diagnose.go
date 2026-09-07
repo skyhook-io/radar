@@ -513,6 +513,10 @@ func (s *Server) handleDiagnoseStop(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, map[string]any{"ok": true})
 }
 
+// historyUnavailableRetryMillis is the EventSource reconnect delay sent with a
+// retryable hydration failure.
+const historyUnavailableRetryMillis = 10000
+
 // handleDiagnoseRunStream streams a run's events over SSE: a replay of everything
 // after Last-Event-ID (or ?after=), then the live tail. Disconnecting does NOT
 // stop the run — that's the whole point of server-side jobs.
@@ -561,6 +565,11 @@ func (s *Server) handleDiagnoseRunStream(w http.ResponseWriter, r *http.Request)
 	backlog, ch, alreadyFinalized, cancel, err := run.Subscribe(afterSeq)
 	if err != nil {
 		retryable := !errors.Is(err, ai.ErrHistoryCorrupt)
+		if retryable {
+			// EventSource's default reconnect delay is a few seconds, and every
+			// retry re-reads the transcript; a store outage does not clear that fast.
+			fmt.Fprintf(w, "retry: %d\n", historyUnavailableRetryMillis)
+		}
 		sendSSEEvent(w, flusher, "history_unavailable", map[string]any{
 			"type":      "history_unavailable",
 			"error":     err.Error(),

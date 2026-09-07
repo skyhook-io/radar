@@ -106,6 +106,7 @@ func TestHandleDiagnoseRunStreamReturnsRetryableSSEWhenHydrationFails(t *testing
 	}
 	body := recorder.Body.String()
 	for _, want := range []string{
+		"retry: 10000\n",
 		"event: history_unavailable",
 		`"type":"history_unavailable"`,
 		`"retryable":true`,

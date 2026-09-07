@@ -492,6 +492,44 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 			"match", "other-ns", "other-kind", "other-name", "other-source")
 	})
 
+	// APIGroups narrows on the group parsed from APIVersion before the limit
+	// applies, so same-kind rows from another group cannot crowd out the
+	// requested resource's history. Rows with no recorded APIVersion are
+	// unknown rather than mismatches and stay visible under every group filter.
+	t.Run("api group filter runs before the limit and keeps unknown versions", func(t *testing.T) {
+		store := newStore(t)
+		web := func(id string, offset time.Duration, apiVersion string) timeline.TimelineEvent {
+			e := informer(id, offset)
+			e.Name, e.APIVersion = "web", apiVersion
+			return e
+		}
+		mustAppend(t, store, web("matching", 0, "apps/v1"))
+		mustAppend(t, store, web("unknown", time.Minute, ""))
+		mustAppend(t, store, web("wrong-core", 2*time.Minute, "v1"))
+		for i := 0; i < 5; i++ {
+			mustAppend(t, store, web(fmt.Sprintf("wrong-%d", i), 3*time.Minute+time.Duration(i)*time.Second, "other.example/v1"))
+		}
+
+		query := func(name string, groups []string, limit int) []string {
+			t.Helper()
+			got, err := store.Query(ctx, timeline.QueryOptions{
+				Kinds: []string{"Deployment"}, Names: []string{"web"}, APIGroups: groups,
+				Limit: limit, IncludeManaged: true,
+			})
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			return idsOfEvents(got)
+		}
+
+		if got := query("apps", []string{"apps"}, 2); fmt.Sprint(got) != "[unknown matching]" {
+			t.Errorf("apps group with limit 2: got %v, want [unknown matching]", got)
+		}
+		if got := query("core", []string{""}, 10); fmt.Sprint(got) != "[wrong-core unknown]" {
+			t.Errorf("core group: got %v, want [wrong-core unknown]", got)
+		}
+	})
+
 	// Time-range narrowing is separate from arrival-order narrowing: Since/Until
 	// bound the event's own timestamp, which for a k8s Event is when the cluster
 	// says it happened, not when Radar saw it.
