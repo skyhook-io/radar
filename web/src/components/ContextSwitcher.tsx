@@ -5,7 +5,7 @@ import {
   type ClusterSwitcherItem,
   pluralize,
 } from '@skyhook-io/k8s-ui'
-import { useContexts, useSwitchContext, useClusterInfo, fetchSessionCounts, type SessionCounts } from '../api/client'
+import { useContexts, useSwitchContext, useClusterInfo, fetchSessionCounts, openContextTab, type SessionCounts } from '../api/client'
 import { useContextSwitch } from '../context/ContextSwitchContext'
 import { useToast } from '../components/ui/Toast'
 import { useDock } from '../components/dock'
@@ -166,6 +166,30 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
     setSessionCounts(null)
   }
 
+  const handleOpenTab = async (parsed: ParsedContext) => {
+    // Reserve the tab synchronously from the click gesture; waiting for the
+    // backend response before calling window.open would trigger popup
+    // blockers in browsers that require a direct user action.
+    // Do not pass `noopener` to window.open here. Browsers are allowed to
+    // return null for that feature even when the popup was opened, which
+    // makes a permitted popup look blocked to the caller. Detach the opener
+    // after reserving the tab instead.
+    const tab = window.open('about:blank', '_blank')
+    if (!tab) {
+      showError('Could not open context tab', 'Allow pop-ups for Radar and try again.')
+      return
+    }
+    tab.opener = null
+    try {
+      const result = await openContextTab(parsed.context.name)
+      tab.location.href = result.url
+    } catch (error) {
+      tab.close()
+      const message = error instanceof Error ? error.message : 'Could not open an isolated context tab'
+      showError('Could not open context tab', message)
+    }
+  }
+
   // In-cluster mode renders a static badge instead of a switcher (only one
   // synthetic context, no kubeconfig to choose from).
   const isInClusterMode = contexts?.length === 1 && contexts[0].name === 'in-cluster'
@@ -209,6 +233,10 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
         disabled={contextsLoading}
         searchable={items.length > 1}
         showGroupHeaders={hasMultipleAccounts}
+        onOpenInNewTab={clusterInfo?.contextTabsEnabled ? item => {
+          const parsed = parsedById.get(item.id)
+          if (parsed) void handleOpenTab(parsed)
+        } : undefined}
         errorSlot={
           switchContext.isError ? (
             <span className="text-xs text-red-400">{switchContext.error?.message}</span>

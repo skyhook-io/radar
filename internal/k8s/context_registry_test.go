@@ -465,6 +465,88 @@ func TestGetContextSourceDirectModeUsesResolvedPath(t *testing.T) {
 	}
 }
 
+func TestGetContextSourceDirectModeResolvesNonCurrentContext(t *testing.T) {
+	dir := t.TempDir()
+	path := writeKubeconfig(t, dir, "config", "prod", []kubeEntry{
+		{ctxName: "prod", userName: "u1", clusterName: "c1"},
+		{ctxName: "jp", userName: "u2", clusterName: "c2"},
+	})
+
+	clientMu.Lock()
+	prevRegistry := contextRegistry
+	prevPath := kubeconfigPath
+	prevName := contextName
+	prevActiveFile := activeSourceFile
+	prevActiveName := activeSourceName
+	contextRegistry = nil
+	kubeconfigPath = path
+	contextName = "prod"
+	activeSourceFile = ""
+	activeSourceName = ""
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = prevRegistry
+		kubeconfigPath = prevPath
+		contextName = prevName
+		activeSourceFile = prevActiveFile
+		activeSourceName = prevActiveName
+		clientMu.Unlock()
+	})
+
+	sourceFile, inFileName, ok := GetContextSource("jp")
+	if !ok || sourceFile != path || inFileName != "jp" {
+		t.Fatalf("context source = (%q, %q, %t)", sourceFile, inFileName, ok)
+	}
+}
+
+func TestGetContextSourceDirectModeConcurrentContextChange(t *testing.T) {
+	dir := t.TempDir()
+	path := writeKubeconfig(t, dir, "config", "prod", []kubeEntry{
+		{ctxName: "prod", userName: "u1", clusterName: "c1"},
+	})
+
+	clientMu.Lock()
+	prevRegistry := contextRegistry
+	prevPath := kubeconfigPath
+	prevName := contextName
+	prevActiveFile := activeSourceFile
+	prevActiveName := activeSourceName
+	contextRegistry = nil
+	kubeconfigPath = path
+	contextName = "prod"
+	activeSourceFile = ""
+	activeSourceName = ""
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = prevRegistry
+		kubeconfigPath = prevPath
+		contextName = prevName
+		activeSourceFile = prevActiveFile
+		activeSourceName = prevActiveName
+		clientMu.Unlock()
+	})
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 100; i++ {
+			clientMu.Lock()
+			if i%2 == 0 {
+				contextName = "prod"
+			} else {
+				contextName = "other"
+			}
+			clientMu.Unlock()
+		}
+	}()
+	for i := 0; i < 100; i++ {
+		GetContextSource("missing")
+	}
+	<-done
+}
+
 func TestActiveContextSourceSurvivesRegistryRefresh(t *testing.T) {
 	dir := t.TempDir()
 	primary := writeKubeconfig(t, dir, "primary.yaml", "primary", []kubeEntry{

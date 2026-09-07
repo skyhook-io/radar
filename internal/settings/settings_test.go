@@ -10,6 +10,15 @@ import (
 	"testing"
 )
 
+func TestPathUsesEnvironmentOverride(t *testing.T) {
+	want := filepath.Join(t.TempDir(), "child-settings.json")
+	t.Setenv(pathEnv, want)
+
+	if got := Path(); got != want {
+		t.Fatalf("Path() = %q, want %q", got, want)
+	}
+}
+
 func TestLoadMissing(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("HOME", tmpDir)

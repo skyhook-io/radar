@@ -36,6 +36,13 @@ var clusterConnectionProbe = k8s.TestClusterConnection
 type AppConfig struct {
 	Kubeconfig     string
 	KubeconfigDirs []string
+	// ContextTabs enables the Explorer-only isolated browser-tab launcher.
+	// Other entrypoints may share CreateServer but do not accept Explorer's
+	// child-process flags.
+	ContextTabs bool
+	// PreferredContext selects the context for this process. It is used by
+	// isolated browser tabs so each tab can run its own Radar backend.
+	PreferredContext k8s.ContextRef
 	// Zero value is the deliberate one: an entrypoint that never sets this
 	// starts on the kubeconfig's current-context. Only cmd/desktop opts in.
 	RestoreLastDesktopContext bool
@@ -120,7 +127,11 @@ func validateNamespaceFanout(namespaces []string, ctxNs string, maxCandidates in
 
 // InitializeK8s creates and configures the Kubernetes client.
 func InitializeK8s(cfg AppConfig) error {
-	preferredContext, err := startupContextPreference(cfg)
+	preferredContext := cfg.PreferredContext
+	var err error
+	if preferredContext.Empty() {
+		preferredContext, err = startupContextPreference(cfg)
+	}
 	if err != nil {
 		log.Printf("[context] failed to read the remembered Desktop context: %v", err)
 		errorlog.Record("k8s-init", "warning",
@@ -403,6 +414,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 
 	serverCfg := server.Config{
 		Port:             cfg.Port,
+		ContextTabs:      cfg.ContextTabs,
 		ListenAddress:    cfg.ListenAddress,
 		BasePath:         cfg.BasePath,
 		StartupLog:       true,

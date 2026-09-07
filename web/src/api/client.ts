@@ -6097,6 +6097,36 @@ export async function fetchSessionCounts(): Promise<SessionCounts> {
   return fetchJSON("/sessions");
 }
 
+export interface ContextTabResponse {
+  context: string;
+  port: number;
+  url: string;
+}
+
+// Ask the standalone backend to start an isolated Radar process for a
+// different kubeconfig context. The returned URL is intentionally local-only;
+// authenticated and in-cluster deployments report a clear 501 instead.
+export async function openContextTab(name: string): Promise<ContextTabResponse> {
+  const response = await apiFetch(
+    apiUrl(`/contexts/${encodeURIComponent(name)}/tab`),
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    const body = await response.text();
+    let message = body.trim();
+    try {
+      const error = JSON.parse(body) as { error?: string };
+      if (error.error) message = error.error;
+    } catch {
+      // Some failures (including a stale backend without this route) are
+      // emitted as text/plain. Preserve that response instead of replacing
+      // the useful error with "Unknown error".
+    }
+    throw new Error(message || `HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
 // Context switch timeout in milliseconds (should be longer than backend timeout)
 const CONTEXT_SWITCH_TIMEOUT = 45000; // 45 seconds
 
