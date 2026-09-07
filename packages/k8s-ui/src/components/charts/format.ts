@@ -4,6 +4,7 @@
 
 export function formatMetricValue(value: number, unit: string): string {
   if (value === 0) return '0'
+  if (value < 0) return `-${formatMetricValue(-value, unit)}`
 
   switch (unit) {
     case 'cores': {
@@ -25,6 +26,13 @@ export function formatMetricValue(value: number, unit: string): string {
       if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB/s`
       if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MiB/s`
       return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GiB/s`
+    }
+    case 'seconds': {
+      if (value < 0.001) return `${(value * 1_000_000).toFixed(0)}µs`
+      if (value < 1) return `${(value * 1000).toFixed(value < 0.01 ? 2 : 0)}ms`
+      if (value < 60) return `${value.toFixed(value < 10 ? 2 : 1)}s`
+      if (value < 3600) return `${(value / 60).toFixed(1)}m`
+      return `${(value / 3600).toFixed(1)}h`
     }
     default:
       if (value < 0.01) return value.toExponential(1)

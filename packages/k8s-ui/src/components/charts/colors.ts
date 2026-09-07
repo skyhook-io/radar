@@ -22,6 +22,29 @@ export function seriesFill(index: number, fallback: string): string {
   return (SERIES_COLORS[index % SERIES_COLORS.length] ?? fallback) + '22'
 }
 
+const PREFERRED_SERIES_LABELS = ['pod', 'instance', 'node'] as const
+
+function allLabels(labels: Record<string, string>): string {
+  return Object.entries(labels).map(([key, value]) => `${key}=${value}`).join(', ')
+}
+
+/**
+ * One display name per series. A pod, instance or node label is the name
+ * operators recognise, but an aggregation may drop it or two series may
+ * share it (one per container); then every label is shown so no two series
+ * become indistinguishable.
+ */
+export function seriesDisplayLabels(series: readonly { labels: Record<string, string> }[]): string[] {
+  const preferred = series.map((s, i) => {
+    for (const key of PREFERRED_SERIES_LABELS) {
+      if (s.labels[key]) return s.labels[key]
+    }
+    return Object.keys(s.labels).length > 0 ? allLabels(s.labels) : `series-${i}`
+  })
+  if (new Set(preferred).size === preferred.length) return preferred
+  return series.map((s, i) => (Object.keys(s.labels).length > 0 ? allLabels(s.labels) : `series-${i}`))
+}
+
 /**
  * Strip the shared prefix from a set of labels so the differentiating suffix
  * is what's shown. Example:

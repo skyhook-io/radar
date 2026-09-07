@@ -29,6 +29,8 @@ export function evidenceSourceExcerpt(
         ? keys[0]
         : undefined;
     }
+    case "metrics":
+      return data.query;
     default:
       return undefined;
   }

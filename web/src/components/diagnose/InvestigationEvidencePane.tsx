@@ -14,6 +14,7 @@ import {
   AlertTriangle,
   Boxes,
   Bug,
+  ChartLine,
   CheckCircle2,
   CircleAlert,
   Clock3,
@@ -41,8 +42,19 @@ import {
   ResourceLink,
   stripAnsi,
 } from "@skyhook-io/k8s-ui";
+import {
+  AreaChart,
+  SERIES_COLORS,
+  SeriesLegend,
+  formatMetricValue,
+  seriesDisplayLabels,
+  seriesFill,
+  type ChartAnnotation,
+  type TimeSeries,
+} from "@skyhook-io/k8s-ui/components/charts";
 import { apiVersionToGroup } from "../../utils/navigation";
 import { parseLogLine } from "../../utils/log-format";
+import { metricsChangeMarkers, metricsDomain } from "./investigationMetrics";
 import {
   evidenceDisplaySnapshot,
   groupEvidenceCoverage,
@@ -86,12 +98,14 @@ const EvidenceNavigationContext = createContext<{
   expandedGroupIds?: ReadonlySet<string>;
   onGroupOpenChange?: (id: string, open: boolean) => void;
   citedOrderByGroup?: ReadonlyMap<string, number>;
+  /** Change markers for each metrics observation, keyed by its source id. */
+  metricsMarkersBySource?: ReadonlyMap<string, ChartAnnotation[]>;
 }>({});
 
 function evidenceTypePrefersFullRow(
   type: InvestigationEvidenceData["type"],
 ): boolean {
-  return type === "logs" || type === "events";
+  return type === "logs" || type === "events" || type === "metrics";
 }
 
 // Supporting evidence becomes a two-column grid when the pane is wide enough.
@@ -134,6 +148,10 @@ export function partitionInvestigationEvidence(
   const collectionByGroup = new Map<string, EvidenceCollection>();
   const adverse = (group: InvestigationEvidenceGroup) =>
     ["error", "alert", "warning"].includes(group.latest.tone);
+  // Broader metrics are facts about something other than the target. They are
+  // withheld unless cited, and the pane says how many were withheld so a
+  // reader knows the agent ran queries it did not build its case on.
+  let hiddenMetrics = 0;
   for (const group of groups) {
     const broader = group.latest.relevance === "broader";
     // Citations select tool results, not individual rows in a broad search.
@@ -142,13 +160,13 @@ export function partitionInvestigationEvidence(
       const link = resolution?.links.find(
         (item) => item.originalGroupId === group.id,
       );
-      const focused = ["resource", "logs", "crash"].includes(
+      const focused = ["resource", "logs", "crash", "metrics"].includes(
         group.latest.data.type,
       );
       const sourceGroups = link
         ? groups.filter(
             (candidate) =>
-              ["resource", "logs", "crash"].includes(
+              ["resource", "logs", "crash", "metrics"].includes(
                 candidate.latest.data.type,
               ) &&
               candidate.observations.some(
@@ -156,8 +174,11 @@ export function partitionInvestigationEvidence(
               ),
           )
         : [];
-      if (!selected.has(group.id) || !focused || sourceGroups.length !== 1)
+      if (!selected.has(group.id) || !focused || sourceGroups.length !== 1) {
+        if (group.latest.data.type === "metrics" && !group.historical)
+          hiddenMetrics += 1;
         continue;
+      }
     }
     const main =
       !group.historical &&
@@ -180,7 +201,7 @@ export function partitionInvestigationEvidence(
       Number(adverse(right)) - Number(adverse(left)) ||
       left.firstOrder - right.firstOrder,
   );
-  return { ...collections, collectionByGroup };
+  return { ...collections, collectionByGroup, hiddenMetrics };
 }
 
 export function investigationEvidenceRevealCollection(
@@ -388,6 +409,17 @@ export function InvestigationEvidencePane({
           ))}
         </div>
 
+        {partition.hiddenMetrics > 0 ? (
+          <p
+            className="text-xs text-theme-text-tertiary"
+            data-testid="investigation-hidden-metrics"
+          >
+            {partition.hiddenMetrics === 1
+              ? "1 broader metric result is not shown; it appears here when the assessment cites it."
+              : `${partition.hiddenMetrics} broader metric results are not shown; they appear here when the assessment cites them.`}
+          </p>
+        ) : null}
+
         {!hasCurrentEvidence ? (
           <EmptyCollection
             collecting={collecting}
@@ -430,6 +462,20 @@ export function InvestigationEvidencePane({
         onGroupOpenChange,
         revealSourceId: revealRequest?.sourceId,
         revealRequestId: revealRequest?.requestId,
+        metricsMarkersBySource: new Map(
+          projection.groups.flatMap((group) =>
+            group.observations.flatMap((observation) =>
+              observation.data.type === "metrics"
+                ? [
+                    [
+                      observation.source.id,
+                      metricsChangeMarkers(projection.groups, observation),
+                    ] as const,
+                  ]
+                : [],
+            ),
+          ),
+        ),
         citedOrderByGroup: new Map(
           rootCauseEvidence?.links.flatMap((link) =>
             link.originalGroupId
@@ -896,6 +942,7 @@ function EvidenceCard({
     citedOrderByGroup,
     expandedGroupIds,
     onGroupOpenChange,
+    metricsMarkersBySource,
   } = useContext(EvidenceNavigationContext);
   const open = expandedGroupIds?.has(group.id) ?? false;
   const setOpen = useCallback(
@@ -1087,6 +1134,9 @@ function EvidenceCard({
                 <EvidenceBody
                   data={observation.data}
                   cardSummary={observation.summary}
+                  annotations={metricsMarkersBySource?.get(
+                    observation.source.id,
+                  )}
                 />
               ) : null}
               {meaningfulHistory ? (
@@ -1164,9 +1214,12 @@ function uniquePrimarySources(
 function EvidenceBody({
   data,
   cardSummary,
+  annotations,
 }: {
   data: InvestigationEvidenceData;
   cardSummary?: string;
+  /** Change markers for a metrics chart; derived by the pane, never by data. */
+  annotations?: ChartAnnotation[];
 }) {
   switch (data.type) {
     case "issue":
@@ -1197,6 +1250,8 @@ function EvidenceBody({
       return (
         <p className="text-xs text-theme-text-secondary">{data.message}</p>
       );
+    case "metrics":
+      return <MetricsBody data={data} annotations={annotations} />;
   }
 }
 
@@ -1958,6 +2013,175 @@ function TopologyStat({ label, value }: { label: string; value: number }) {
   );
 }
 
+const METRICS_AXIS_LABEL_MAX_CHARS = 72;
+
+function finiteSamples(series: TimeSeries): TimeSeries["dataPoints"] {
+  return series.dataPoints.filter((point) => typeof point.value === "number");
+}
+
+function MetricsValueTable({
+  series,
+  unit,
+  withTime,
+}: {
+  series: TimeSeries[];
+  unit: string;
+  withTime: boolean;
+}) {
+  const labels = seriesDisplayLabels(series);
+  return (
+    <table className="w-full text-xs">
+      <tbody>
+        {series.map((item, index) => {
+          const sample = finiteSamples(item).at(-1);
+          return (
+            <tr
+              key={`${labels[index]}-${index}`}
+              className="border-b border-theme-border/60 last:border-b-0"
+            >
+              <td className="py-1 pr-3 font-mono text-theme-text-secondary [overflow-wrap:anywhere]">
+                {labels[index]}
+              </td>
+              {withTime ? (
+                <td className="py-1 pr-3 text-right text-theme-text-tertiary tabular-nums">
+                  {sample
+                    ? new Date(sample.timestamp * 1000).toLocaleTimeString()
+                    : ""}
+                </td>
+              ) : null}
+              <td className="py-1 text-right font-mono tabular-nums text-theme-text-primary">
+                {sample && typeof sample.value === "number"
+                  ? formatMetricValue(sample.value, unit)
+                  : "no value"}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+function MetricsBody({
+  data,
+  annotations,
+}: {
+  data: EvidenceDataOf<"metrics">;
+  annotations?: ChartAnnotation[];
+}) {
+  const unit = data.unit ?? "";
+  const axisLabel = data.label ?? data.query;
+  const axisTruncated = axisLabel.length > METRICS_AXIS_LABEL_MAX_CHARS;
+  const axisText = axisTruncated
+    ? `${axisLabel.slice(0, METRICS_AXIS_LABEL_MAX_CHARS - 1)}…`
+    : axisLabel;
+  const domain = metricsDomain(data);
+  const windowText = domain
+    ? `${new Date(domain.start * 1000).toLocaleString()} to ${new Date(domain.end * 1000).toLocaleString()}`
+    : undefined;
+  if (data.series.length === 0) {
+    return (
+      <div className="space-y-2">
+        <p className="text-xs text-theme-text-secondary">
+          No series matched this query
+          {data.mode === "range" ? " in the window" : ""}.
+        </p>
+        <pre className="whitespace-pre-wrap break-all rounded-md border border-theme-border/70 bg-theme-base/30 p-2 font-mono text-xs text-theme-text-secondary">
+          {data.query}
+        </pre>
+        {data.note ? (
+          <p className="text-xs text-theme-text-tertiary">{data.note}</p>
+        ) : null}
+      </div>
+    );
+  }
+  if (data.mode === "instant") {
+    return (
+      <div className="space-y-2">
+        <MetricsValueTable series={data.series} unit={unit} withTime={false} />
+        <pre className="whitespace-pre-wrap break-all rounded-md border border-theme-border/70 bg-theme-base/30 p-2 font-mono text-xs text-theme-text-secondary">
+          {data.query}
+        </pre>
+        {data.note ? (
+          <p className="text-xs text-theme-text-tertiary">{data.note}</p>
+        ) : null}
+      </div>
+    );
+  }
+  // A series with one finite sample has no line to draw. Listing it keeps the
+  // captured measurement readable instead of leaving an axis with nothing on it.
+  const charted = data.series.filter((item) => finiteSamples(item).length >= 2);
+  const sparse = data.series.filter((item) => finiteSamples(item).length < 2);
+  return (
+    <div className="space-y-2">
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs">
+        <Tooltip
+          content={axisLabel}
+          delay={200}
+          position="top"
+          disabled={!axisTruncated}
+        >
+          <span
+            className="min-w-0 truncate font-mono text-theme-text-secondary"
+            data-testid="investigation-metrics-axis-label"
+          >
+            {axisText}
+          </span>
+        </Tooltip>
+        {unit ? (
+          <span className="text-theme-text-tertiary">({unit})</span>
+        ) : null}
+        {windowText ? (
+          <span className="ml-auto text-theme-text-tertiary">{windowText}</span>
+        ) : null}
+      </div>
+      {charted.length > 0 ? (
+        <div className="space-y-1.5 rounded-md border border-theme-border/70 bg-theme-base/30 p-2">
+          <AreaChart
+            series={charted}
+            color={SERIES_COLORS[0]}
+            fillColor={seriesFill(0, SERIES_COLORS[0])}
+            unit={unit}
+            annotations={annotations}
+            domain={domain}
+          />
+          {charted.length > 1 ? (
+            <SeriesLegend series={charted} color={SERIES_COLORS[0]} />
+          ) : null}
+        </div>
+      ) : null}
+      {sparse.length > 0 ? (
+        <div
+          className="space-y-1"
+          data-testid="investigation-metrics-sparse-series"
+        >
+          <p className="text-xs text-theme-text-tertiary">
+            {sparse.length === 1
+              ? "1 series has a single sample in this window, listed with its time:"
+              : `${sparse.length} series have a single sample in this window, listed with their times:`}
+          </p>
+          <MetricsValueTable series={sparse} unit={unit} withTime />
+        </div>
+      ) : null}
+      {annotations?.length && charted.length > 0 ? (
+        <p className="text-xs text-theme-text-tertiary">
+          {annotations.length === 1
+            ? "1 change recorded in this window is marked on the chart."
+            : `${annotations.length} changes recorded in this window are marked on the chart.`}
+        </p>
+      ) : null}
+      {axisTruncated ? (
+        <pre className="whitespace-pre-wrap break-all rounded-md border border-theme-border/70 bg-theme-base/30 p-2 font-mono text-xs text-theme-text-secondary">
+          {data.query}
+        </pre>
+      ) : null}
+      {data.note ? (
+        <p className="text-xs text-theme-text-tertiary">{data.note}</p>
+      ) : null}
+    </div>
+  );
+}
+
 function InventoryBody({ data }: { data: EvidenceDataOf<"inventory"> }) {
   return (
     <div className="max-h-72 overflow-y-auto rounded-md border border-theme-border">
@@ -2021,6 +2245,7 @@ function RevisionHistory({
 }) {
   const [open, setOpen] = useState(false);
   const regionId = useId();
+  const { metricsMarkersBySource } = useContext(EvidenceNavigationContext);
   const { elementRef, revealAfterToggle } =
     useDisclosureReveal<HTMLDivElement>();
   useLayoutEffect(() => {
@@ -2065,6 +2290,9 @@ function RevisionHistory({
                     <EvidenceBody
                       data={observation.data}
                       cardSummary={observation.summary}
+                      annotations={metricsMarkersBySource?.get(
+                        observation.source.id,
+                      )}
                     />
                   )}
                 </div>
@@ -2210,6 +2438,8 @@ function evidenceIcon(type: InvestigationEvidenceData["type"]) {
       return ListTree;
     case "receipt":
       return CheckCircle2;
+    case "metrics":
+      return ChartLine;
   }
 }
 
