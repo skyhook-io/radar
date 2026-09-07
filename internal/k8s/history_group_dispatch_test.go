@@ -153,6 +153,55 @@ func TestRecordToTimelineStore_CollidingCRDUpdateSurvives(t *testing.T) {
 	}
 }
 
+func TestRecordToTimelineStore_StampsTypedAPIVersionWithoutOverwritingDynamicIdentity(t *testing.T) {
+	timeline.ResetStore()
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	t.Cleanup(timeline.ResetStore)
+
+	typedOld := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+		Name: "typed", Namespace: "gpu-demo", UID: types.UID("typed-job-uid"), ResourceVersion: "1",
+	}, Status: batchv1.JobStatus{Active: 1}}
+	typedNew := typedOld.DeepCopy()
+	typedNew.ResourceVersion = "2"
+	typedNew.Status.Active = 2
+	recordToTimelineStore(
+		ActiveClusterContext(), "Job", "gpu-demo", "typed", "typed-job-uid", "update",
+		typedOld, typedNew, ComputeDiff("Job", typedOld, typedNew), true,
+	)
+
+	dynamicOld := collisionObject("batch.volcano.sh/v1alpha1", "Job", map[string]any{
+		"status": map[string]any{"state": map[string]any{"phase": "Pending"}},
+	})
+	dynamicNew := dynamicOld.DeepCopy()
+	dynamicNew.SetResourceVersion("2")
+	if err := unstructured.SetNestedField(dynamicNew.Object, "Running", "status", "state", "phase"); err != nil {
+		t.Fatalf("set dynamic phase: %v", err)
+	}
+	recordToTimelineStore(
+		ActiveClusterContext(), "Job", "gpu-demo", "collision-demo", "volcano-job-uid", "update",
+		dynamicOld, dynamicNew, ComputeDiff("Job", dynamicOld, dynamicNew), true,
+	)
+
+	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
+		Kinds: []string{"Job"}, Namespaces: []string{"gpu-demo"},
+	})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	versionsByName := map[string]string{}
+	for _, event := range events {
+		versionsByName[event.Name] = event.APIVersion
+	}
+	if got := versionsByName["typed"]; got != "batch/v1" {
+		t.Fatalf("typed Job apiVersion = %q, want batch/v1", got)
+	}
+	if got := versionsByName["collision-demo"]; got != "batch.volcano.sh/v1alpha1" {
+		t.Fatalf("dynamic Job apiVersion = %q, want batch.volcano.sh/v1alpha1", got)
+	}
+}
+
 func collisionObject(apiVersion, kind string, body map[string]any) *unstructured.Unstructured {
 	object := map[string]any{
 		"apiVersion": apiVersion,

@@ -37,18 +37,18 @@ type EventStore interface {
 	// store, so current-cluster callers must pass it.
 	GetChangesForOwner(ctx context.Context, ownerKind, ownerNamespace, ownerName, clusterContext string, since time.Time, limit int) ([]TimelineEvent, error)
 
-	// MarkResourceSeen records that a resource has been seen (for dedup on
-	// restart). clusterContext scopes the key — the store outlives kubeconfig
-	// context switches, so a same-named resource in another cluster must not
-	// read as already-seen.
-	MarkResourceSeen(clusterContext, kind, namespace, name string)
+	// MarkResourceSeen records that an exact resource identity has been seen (for
+	// dedup on restart). clusterContext and apiGroup are both part of the key: the
+	// store outlives kubeconfig context switches, and Kubernetes kinds may collide
+	// across API groups.
+	MarkResourceSeen(clusterContext, apiGroup, kind, namespace, name string)
 
 	// IsResourceSeen checks if a resource has been seen before in the given
 	// cluster context.
-	IsResourceSeen(clusterContext, kind, namespace, name string) bool
+	IsResourceSeen(clusterContext, apiGroup, kind, namespace, name string) bool
 
 	// ClearResourceSeen removes a resource from the seen set (on delete)
-	ClearResourceSeen(clusterContext, kind, namespace, name string)
+	ClearResourceSeen(clusterContext, apiGroup, kind, namespace, name string)
 
 	// Stats returns storage statistics
 	Stats() StoreStats
@@ -259,12 +259,11 @@ func ResourceKey(kind, namespace, name string) string {
 	return kind + "/" + namespace + "/" + name
 }
 
-// SeenResourceKey qualifies the seen-tracking key with the cluster context.
-// The NUL separator can't appear in a kubeconfig context name, so it can't
-// collide with the resource portion. Rows written before this qualification
-// (bare kind/namespace/name) simply never match, which is correct: their
-// cluster is unknowable, so the resource is re-extracted once per cluster
-// after upgrade rather than being wrongly suppressed.
-func SeenResourceKey(clusterContext, kind, namespace, name string) string {
-	return clusterContext + "\x00" + ResourceKey(kind, namespace, name)
+// SeenResourceKey qualifies the seen-tracking key with cluster context and API
+// group. NUL cannot appear in either Kubernetes API groups or kubeconfig context
+// names, so the fields cannot collide. Older keys lack one or both qualifiers
+// and deliberately never match: their exact identity is unknowable, so the
+// resource is re-extracted once after upgrade rather than wrongly suppressed.
+func SeenResourceKey(clusterContext, apiGroup, kind, namespace, name string) string {
+	return clusterContext + "\x00" + apiGroup + "\x00" + ResourceKey(kind, namespace, name)
 }

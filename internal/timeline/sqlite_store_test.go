@@ -463,23 +463,23 @@ func TestSQLiteStore_ResourceSeen(t *testing.T) {
 	defer cleanup()
 
 	// Initially not seen
-	if store.IsResourceSeen("ctx", "Pod", "default", "test-pod") {
+	if store.IsResourceSeen("ctx", "", "Pod", "default", "test-pod") {
 		t.Error("Resource should not be seen initially")
 	}
 
 	// Mark as seen
-	store.MarkResourceSeen("ctx", "Pod", "default", "test-pod")
+	store.MarkResourceSeen("ctx", "", "Pod", "default", "test-pod")
 
 	// Now should be seen
-	if !store.IsResourceSeen("ctx", "Pod", "default", "test-pod") {
+	if !store.IsResourceSeen("ctx", "", "Pod", "default", "test-pod") {
 		t.Error("Resource should be seen after marking")
 	}
 
 	// Clear seen
-	store.ClearResourceSeen("ctx", "Pod", "default", "test-pod")
+	store.ClearResourceSeen("ctx", "", "Pod", "default", "test-pod")
 
 	// Should not be seen again
-	if store.IsResourceSeen("ctx", "Pod", "default", "test-pod") {
+	if store.IsResourceSeen("ctx", "", "Pod", "default", "test-pod") {
 		t.Error("Resource should not be seen after clearing")
 	}
 }
@@ -675,8 +675,8 @@ func TestSQLiteStore_SeenResources_PersistAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	store1.MarkResourceSeen("ctx", "Pod", "default", "p1")
-	store1.MarkResourceSeen("ctx", "Deployment", "kube-system", "d1")
+	store1.MarkResourceSeen("ctx", "", "Pod", "default", "p1")
+	store1.MarkResourceSeen("ctx", "apps", "Deployment", "kube-system", "d1")
 	store1.Close()
 
 	store2, err := NewSQLiteStore(dbPath)
@@ -685,13 +685,13 @@ func TestSQLiteStore_SeenResources_PersistAcrossRestart(t *testing.T) {
 	}
 	defer store2.Close()
 
-	if !store2.IsResourceSeen("ctx", "Pod", "default", "p1") {
+	if !store2.IsResourceSeen("ctx", "", "Pod", "default", "p1") {
 		t.Error("expected Pod default/p1 to be seen after restart")
 	}
-	if !store2.IsResourceSeen("ctx", "Deployment", "kube-system", "d1") {
+	if !store2.IsResourceSeen("ctx", "apps", "Deployment", "kube-system", "d1") {
 		t.Error("expected Deployment kube-system/d1 to be seen after restart")
 	}
-	if store2.IsResourceSeen("ctx", "Pod", "default", "never-marked") {
+	if store2.IsResourceSeen("ctx", "", "Pod", "default", "never-marked") {
 		t.Error("did not expect unmarked resource to be seen")
 	}
 }

@@ -267,23 +267,23 @@ func TestMemoryStore_ResourceSeen(t *testing.T) {
 	store := NewMemoryStore(100)
 
 	// Initially not seen
-	if store.IsResourceSeen("cluster-a", "Pod", "default", "test-pod") {
+	if store.IsResourceSeen("cluster-a", "", "Pod", "default", "test-pod") {
 		t.Error("Resource should not be seen initially")
 	}
 
 	// Mark as seen
-	store.MarkResourceSeen("cluster-a", "Pod", "default", "test-pod")
+	store.MarkResourceSeen("cluster-a", "", "Pod", "default", "test-pod")
 
 	// Now should be seen
-	if !store.IsResourceSeen("cluster-a", "Pod", "default", "test-pod") {
+	if !store.IsResourceSeen("cluster-a", "", "Pod", "default", "test-pod") {
 		t.Error("Resource should be seen after marking")
 	}
 
 	// Clear seen
-	store.ClearResourceSeen("cluster-a", "Pod", "default", "test-pod")
+	store.ClearResourceSeen("cluster-a", "", "Pod", "default", "test-pod")
 
 	// Should not be seen again
-	if store.IsResourceSeen("cluster-a", "Pod", "default", "test-pod") {
+	if store.IsResourceSeen("cluster-a", "", "Pod", "default", "test-pod") {
 		t.Error("Resource should not be seen after clearing")
 	}
 }
@@ -294,13 +294,30 @@ func TestMemoryStore_ResourceSeen(t *testing.T) {
 func TestMemoryStore_ResourceSeen_ClusterScoped(t *testing.T) {
 	store := NewMemoryStore(100)
 
-	store.MarkResourceSeen("cluster-a", "Deployment", "team-a", "web")
+	store.MarkResourceSeen("cluster-a", "apps", "Deployment", "team-a", "web")
 
-	if !store.IsResourceSeen("cluster-a", "Deployment", "team-a", "web") {
+	if !store.IsResourceSeen("cluster-a", "apps", "Deployment", "team-a", "web") {
 		t.Error("cluster-a/web should be seen after marking")
 	}
-	if store.IsResourceSeen("cluster-b", "Deployment", "team-a", "web") {
+	if store.IsResourceSeen("cluster-b", "apps", "Deployment", "team-a", "web") {
 		t.Error("cluster-b/web must NOT be suppressed by cluster-a's seen entry")
+	}
+}
+
+// API group is part of Kubernetes resource identity. A CRD can legitimately
+// reuse a built-in kind/name, and its add/delete lifecycle must not suppress or
+// clear the built-in resource's seen marker.
+func TestMemoryStore_ResourceSeen_APIGroupScoped(t *testing.T) {
+	store := NewMemoryStore(100)
+
+	store.MarkResourceSeen("cluster-a", "", "Service", "shop", "api")
+	if store.IsResourceSeen("cluster-a", "serving.knative.dev", "Service", "shop", "api") {
+		t.Fatal("Knative Service must not inherit the core Service seen marker")
+	}
+	store.MarkResourceSeen("cluster-a", "serving.knative.dev", "Service", "shop", "api")
+	store.ClearResourceSeen("cluster-a", "", "Service", "shop", "api")
+	if !store.IsResourceSeen("cluster-a", "serving.knative.dev", "Service", "shop", "api") {
+		t.Fatal("clearing the core Service must not clear the Knative Service marker")
 	}
 }
 

@@ -753,8 +753,8 @@ func (s *SQLiteStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNa
 // cluster-qualified: this store outlives kubeconfig context switches, so a bare
 // kind/namespace/name would let a same-named resource in another cluster read
 // as already-seen and drop its add.
-func (s *SQLiteStore) MarkResourceSeen(clusterContext, kind, namespace, name string) {
-	key := SeenResourceKey(clusterContext, kind, namespace, name)
+func (s *SQLiteStore) MarkResourceSeen(clusterContext, apiGroup, kind, namespace, name string) {
+	key := SeenResourceKey(clusterContext, apiGroup, kind, namespace, name)
 
 	s.seenMu.Lock()
 	s.seenResources[key] = true
@@ -766,15 +766,15 @@ func (s *SQLiteStore) MarkResourceSeen(clusterContext, kind, namespace, name str
 
 // IsResourceSeen checks if a resource has been seen before in the given cluster
 // context.
-func (s *SQLiteStore) IsResourceSeen(clusterContext, kind, namespace, name string) bool {
+func (s *SQLiteStore) IsResourceSeen(clusterContext, apiGroup, kind, namespace, name string) bool {
 	s.seenMu.RLock()
 	defer s.seenMu.RUnlock()
-	return s.seenResources[SeenResourceKey(clusterContext, kind, namespace, name)]
+	return s.seenResources[SeenResourceKey(clusterContext, apiGroup, kind, namespace, name)]
 }
 
 // ClearResourceSeen removes a resource from the seen set
-func (s *SQLiteStore) ClearResourceSeen(clusterContext, kind, namespace, name string) {
-	key := SeenResourceKey(clusterContext, kind, namespace, name)
+func (s *SQLiteStore) ClearResourceSeen(clusterContext, apiGroup, kind, namespace, name string) {
+	key := SeenResourceKey(clusterContext, apiGroup, kind, namespace, name)
 
 	s.seenMu.Lock()
 	delete(s.seenResources, key)

@@ -502,8 +502,8 @@ func (s *PostgresStore) GetChangesForOwner(ctx context.Context, ownerKind, owner
 }
 
 // MarkResourceSeen records that a resource has been seen.
-func (s *PostgresStore) MarkResourceSeen(clusterContext, kind, namespace, name string) {
-	key := SeenResourceKey(clusterContext, kind, namespace, name)
+func (s *PostgresStore) MarkResourceSeen(clusterContext, apiGroup, kind, namespace, name string) {
+	key := SeenResourceKey(clusterContext, apiGroup, kind, namespace, name)
 
 	s.seenMu.Lock()
 	s.seenResources[key] = true
@@ -514,15 +514,15 @@ func (s *PostgresStore) MarkResourceSeen(clusterContext, kind, namespace, name s
 
 // IsResourceSeen checks if a resource has been seen before in the given cluster
 // context.
-func (s *PostgresStore) IsResourceSeen(clusterContext, kind, namespace, name string) bool {
+func (s *PostgresStore) IsResourceSeen(clusterContext, apiGroup, kind, namespace, name string) bool {
 	s.seenMu.RLock()
 	defer s.seenMu.RUnlock()
-	return s.seenResources[SeenResourceKey(clusterContext, kind, namespace, name)]
+	return s.seenResources[SeenResourceKey(clusterContext, apiGroup, kind, namespace, name)]
 }
 
 // ClearResourceSeen removes a resource from the seen set.
-func (s *PostgresStore) ClearResourceSeen(clusterContext, kind, namespace, name string) {
-	key := SeenResourceKey(clusterContext, kind, namespace, name)
+func (s *PostgresStore) ClearResourceSeen(clusterContext, apiGroup, kind, namespace, name string) {
+	key := SeenResourceKey(clusterContext, apiGroup, kind, namespace, name)
 
 	s.seenMu.Lock()
 	delete(s.seenResources, key)

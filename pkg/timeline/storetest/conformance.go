@@ -678,18 +678,18 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 	// two clusters is two distinct sightings.
 	t.Run("seen resources are tracked per cluster and can be cleared", func(t *testing.T) {
 		store := newStore(t)
-		if store.IsResourceSeen("cluster-a", "Deployment", "default", "api") {
+		if store.IsResourceSeen("cluster-a", "", "Deployment", "default", "api") {
 			t.Fatal("resource reported seen before it was marked")
 		}
-		store.MarkResourceSeen("cluster-a", "Deployment", "default", "api")
-		if !store.IsResourceSeen("cluster-a", "Deployment", "default", "api") {
+		store.MarkResourceSeen("cluster-a", "", "Deployment", "default", "api")
+		if !store.IsResourceSeen("cluster-a", "", "Deployment", "default", "api") {
 			t.Fatal("resource not reported seen after MarkResourceSeen")
 		}
-		if store.IsResourceSeen("cluster-b", "Deployment", "default", "api") {
+		if store.IsResourceSeen("cluster-b", "", "Deployment", "default", "api") {
 			t.Fatal("seen state leaked across cluster contexts")
 		}
-		store.ClearResourceSeen("cluster-a", "Deployment", "default", "api")
-		if store.IsResourceSeen("cluster-a", "Deployment", "default", "api") {
+		store.ClearResourceSeen("cluster-a", "", "Deployment", "default", "api")
+		if store.IsResourceSeen("cluster-a", "", "Deployment", "default", "api") {
 			t.Fatal("resource still reported seen after ClearResourceSeen")
 		}
 	})

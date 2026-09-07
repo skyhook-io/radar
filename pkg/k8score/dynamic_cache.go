@@ -641,6 +641,10 @@ func (d *DynamicResourceCache) enqueueDynamicChange(kind string, gvr schema.Grou
 			if !ok {
 				return
 			}
+			// Callbacks consume the resource object, not client-go's delivery
+			// wrapper. Keeping the wrapper here silently drops dynamic deletes in
+			// Radar's timeline callback even though identity was resolved above.
+			obj = u
 		} else {
 			return
 		}

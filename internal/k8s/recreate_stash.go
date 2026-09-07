@@ -69,13 +69,13 @@ var (
 	recreateStash   = map[string]recreateEntry{}
 )
 
-func recreateKey(kind, namespace, name string) string {
-	return kind + "/" + namespace + "/" + name
+func recreateKey(apiGroup, kind, namespace, name string) string {
+	return apiGroup + "\x00" + kind + "\x00" + namespace + "\x00" + name
 }
 
 // stashDeletedForRecreate records a deleted object for a potential
 // recreate-join. No-op for kinds outside the allowlist.
-func stashDeletedForRecreate(kind, namespace, name, uid string, obj any) {
+func stashDeletedForRecreate(apiGroup, kind, namespace, name, uid string, obj any) {
 	if obj == nil || !recreateStashKinds[kind] {
 		return
 	}
@@ -84,7 +84,7 @@ func stashDeletedForRecreate(kind, namespace, name, uid string, obj any) {
 	if len(recreateStash) >= recreateStashCap {
 		evictRecreateStashLocked()
 	}
-	recreateStash[recreateKey(kind, namespace, name)] = recreateEntry{
+	recreateStash[recreateKey(apiGroup, kind, namespace, name)] = recreateEntry{
 		obj:       obj,
 		uid:       uid,
 		deletedAt: time.Now(),
@@ -94,13 +94,13 @@ func stashDeletedForRecreate(kind, namespace, name, uid string, obj any) {
 // takeRecreateMatch returns the stashed predecessor of kind/ns/name when the
 // new UID differs and the delete is within the join TTL. The entry is
 // consumed (or discarded, if stale or same-UID) either way.
-func takeRecreateMatch(kind, namespace, name, newUID string) (any, bool) {
+func takeRecreateMatch(apiGroup, kind, namespace, name, newUID string) (any, bool) {
 	if !recreateStashKinds[kind] {
 		return nil, false
 	}
 	recreateStashMu.Lock()
 	defer recreateStashMu.Unlock()
-	key := recreateKey(kind, namespace, name)
+	key := recreateKey(apiGroup, kind, namespace, name)
 	entry, ok := recreateStash[key]
 	if !ok {
 		return nil, false

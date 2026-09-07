@@ -686,8 +686,15 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 		return
 	}
 
+	obj := newObj
+	if obj == nil {
+		obj = oldObj
+	}
+	apiVersion := timelineAPIVersion(kind, obj)
+	apiGroup := GroupFromAPIVersion(apiVersion)
+
 	if op == "add" {
-		if store.IsResourceSeen(clusterContext, kind, namespace, name) {
+		if store.IsResourceSeen(clusterContext, apiGroup, kind, namespace, name) {
 			timeline.RecordDrop(kind, namespace, name, timeline.DropReasonAlreadySeen, op, clusterContext)
 			if DebugEvents {
 				log.Printf("[DEBUG] Already seen, skipping: %s/%s/%s", kind, namespace, name)
@@ -695,12 +702,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 			return
 		}
 	} else if op == "delete" {
-		store.ClearResourceSeen(clusterContext, kind, namespace, name)
-	}
-
-	obj := newObj
-	if obj == nil {
-		obj = oldObj
+		store.ClearResourceSeen(clusterContext, apiGroup, kind, namespace, name)
 	}
 
 	resourceVersion := ""
@@ -711,7 +713,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	}
 
 	if op == "delete" {
-		stashDeletedForRecreate(kind, namespace, name, uid, obj)
+		stashDeletedForRecreate(apiGroup, kind, namespace, name, uid, obj)
 	}
 
 	// One extraction of owner/labels/createdAt, reused for both the event and
@@ -722,7 +724,6 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	labels := entry.Labels
 	createdAt := entry.CreatedAt
 	healthState := classifyTimelineHealth(kind, obj, time.Now())
-	apiVersion := extractAPIVersion(obj)
 
 	// Feed the tombstone on every add/update/delete. While the object is live
 	// this mirrors its enrichment; once it is gone (delete, or a late K8s event
@@ -792,7 +793,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	recreated := false
 	if op == "add" && newObj != nil && initialSyncComplete {
 		if meta, ok := newObj.(metav1.Object); ok && time.Since(meta.GetCreationTimestamp().Time) <= 30*time.Second {
-			if stashed, ok := takeRecreateMatch(kind, namespace, name, uid); ok {
+			if stashed, ok := takeRecreateMatch(apiGroup, kind, namespace, name, uid); ok {
 				if localDiff := ComputeDiff(kind, stripStatusForRecreateDiff(stashed), stripStatusForRecreateDiff(newObj)); localDiff != nil && len(localDiff.Fields) > 0 {
 					diff = &timeline.DiffInfo{
 						Fields:  make([]timeline.FieldChange, len(localDiff.Fields)),
@@ -866,7 +867,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 					return
 				}
 			}
-			store.MarkResourceSeen(clusterContext, kind, namespace, name)
+			store.MarkResourceSeen(clusterContext, apiGroup, kind, namespace, name)
 			return
 		}
 	}
@@ -883,7 +884,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	timeline.IncrementRecorded(kind)
 
 	if op == "add" {
-		store.MarkResourceSeen(clusterContext, kind, namespace, name)
+		store.MarkResourceSeen(clusterContext, apiGroup, kind, namespace, name)
 	}
 }
 
@@ -893,15 +894,33 @@ func isUnstructuredUpdate(oldObj, newObj any) bool {
 	return oldOK && newOK
 }
 
-// extractAPIVersion returns the resource's apiVersion (e.g. "cluster.x-k8s.io/v1beta1")
-// for unstructured/CRD objects. Typed informer objects strip kind/apiVersion, so they
-// fall through to "" — the navigation layer treats an empty group as "core/typed kind",
-// which is correct since core kinds don't collide.
+// extractAPIVersion returns the resource's apiVersion (e.g.
+// "cluster.x-k8s.io/v1beta1") for unstructured/CRD objects. Typed informer
+// objects strip kind/apiVersion and are completed by timelineAPIVersion.
 func extractAPIVersion(obj any) string {
 	if u, ok := obj.(*unstructured.Unstructured); ok {
 		return u.GetAPIVersion()
 	}
 	return ""
+}
+
+// timelineAPIVersion returns the exact version written into new informer
+// timeline rows. Dynamic objects already carry their discovered apiVersion and
+// must win even when their Kind shadows a built-in. Typed informer objects have
+// empty TypeMeta, so use the same canonical typed GVR table as resource fetches
+// rather than persisting an identity-ambiguous row.
+func timelineAPIVersion(kind string, obj any) string {
+	if apiVersion := extractAPIVersion(obj); apiVersion != "" {
+		return apiVersion
+	}
+	if _, dynamic := obj.(*unstructured.Unstructured); dynamic {
+		return ""
+	}
+	gvr, ok := lookupTypedBuiltinGVR(kind)
+	if !ok {
+		return ""
+	}
+	return gvr.GroupVersion().String()
 }
 
 // extractTimelineHistoricalEvents extracts historical events from resource metadata/status

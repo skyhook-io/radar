@@ -95,8 +95,8 @@ func CompileFilter(preset *FilterPreset) (*CompiledFilter, error) {
 func ResourceKey(kind, namespace, name string) string {
 	return pkgtimeline.ResourceKey(kind, namespace, name)
 }
-func SeenResourceKey(clusterContext, kind, namespace, name string) string {
-	return pkgtimeline.SeenResourceKey(clusterContext, kind, namespace, name)
+func SeenResourceKey(clusterContext, apiGroup, kind, namespace, name string) string {
+	return pkgtimeline.SeenResourceKey(clusterContext, apiGroup, kind, namespace, name)
 }
 
 // Converter functions.

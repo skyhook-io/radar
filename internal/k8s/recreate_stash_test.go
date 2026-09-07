@@ -132,13 +132,13 @@ func TestTakeRecreateMatch_TTLExpiry(t *testing.T) {
 	defer resetRecreateStash()
 
 	recreateStashMu.Lock()
-	recreateStash[recreateKey("Deployment", "shop", "web")] = recreateEntry{
+	recreateStash[recreateKey("apps", "Deployment", "shop", "web")] = recreateEntry{
 		obj: testDeployment("uid-1", "nginx:1.0", time.Now()), uid: "uid-1",
 		deletedAt: time.Now().Add(-recreateJoinTTL - time.Minute),
 	}
 	recreateStashMu.Unlock()
 
-	if _, ok := takeRecreateMatch("Deployment", "shop", "web", "uid-2"); ok {
+	if _, ok := takeRecreateMatch("apps", "Deployment", "shop", "web", "uid-2"); ok {
 		t.Fatal("expired stash entry must not join")
 	}
 	recreateStashMu.Lock()
@@ -153,15 +153,30 @@ func TestRecreateStash_KindGateAndReset(t *testing.T) {
 	resetRecreateStash()
 	defer resetRecreateStash()
 
-	stashDeletedForRecreate("Pod", "shop", "p", "uid-1", &corev1.Pod{})
-	if _, ok := takeRecreateMatch("Pod", "shop", "p", "uid-2"); ok {
+	stashDeletedForRecreate("", "Pod", "shop", "p", "uid-1", &corev1.Pod{})
+	if _, ok := takeRecreateMatch("", "Pod", "shop", "p", "uid-2"); ok {
 		t.Fatal("Pod is outside the stash allowlist")
 	}
 
-	stashDeletedForRecreate("Deployment", "shop", "web", "uid-1", testDeployment("uid-1", "nginx:1.0", time.Now()))
+	stashDeletedForRecreate("apps", "Deployment", "shop", "web", "uid-1", testDeployment("uid-1", "nginx:1.0", time.Now()))
 	resetRecreateStash()
-	if _, ok := takeRecreateMatch("Deployment", "shop", "web", "uid-2"); ok {
+	if _, ok := takeRecreateMatch("apps", "Deployment", "shop", "web", "uid-2"); ok {
 		t.Fatal("reset must clear the stash")
+	}
+}
+
+func TestRecreateStash_APIGroupScoped(t *testing.T) {
+	resetRecreateStash()
+	defer resetRecreateStash()
+
+	old := testDeployment("uid-1", "nginx:1.0", time.Now())
+	stashDeletedForRecreate("apps", "Deployment", "shop", "web", "uid-1", old)
+	if _, ok := takeRecreateMatch("example.io", "Deployment", "shop", "web", "uid-2"); ok {
+		t.Fatal("a same-named resource from another API group must not consume the recreate predecessor")
+	}
+	got, ok := takeRecreateMatch("apps", "Deployment", "shop", "web", "uid-2")
+	if !ok || got != old {
+		t.Fatal("the exact API-group identity should still retrieve its predecessor")
 	}
 }
 
@@ -170,7 +185,7 @@ func TestRecreateStash_CapEviction(t *testing.T) {
 	defer resetRecreateStash()
 
 	for i := 0; i < recreateStashCap+100; i++ {
-		stashDeletedForRecreate("ConfigMap", "shop", fmt.Sprintf("cm-%d", i), fmt.Sprintf("uid-%d", i), &corev1.ConfigMap{})
+		stashDeletedForRecreate("", "ConfigMap", "shop", fmt.Sprintf("cm-%d", i), fmt.Sprintf("uid-%d", i), &corev1.ConfigMap{})
 	}
 	recreateStashMu.Lock()
 	size := len(recreateStash)
@@ -180,7 +195,7 @@ func TestRecreateStash_CapEviction(t *testing.T) {
 	}
 	// The newest entries must have survived eviction — recreates that matter
 	// happen seconds after the delete.
-	if _, ok := takeRecreateMatch("ConfigMap", "shop", fmt.Sprintf("cm-%d", recreateStashCap+99), "other-uid"); !ok {
+	if _, ok := takeRecreateMatch("", "ConfigMap", "shop", fmt.Sprintf("cm-%d", recreateStashCap+99), "other-uid"); !ok {
 		t.Fatal("newest entry was evicted; eviction must drop oldest first")
 	}
 }
