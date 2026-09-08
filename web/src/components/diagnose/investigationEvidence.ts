@@ -4747,8 +4747,13 @@ function adaptQueryPrometheus(
   const windowLabel = metricsWindowLabel({ mode, start, end, step });
   // One metric names the card; the title is Radar's reading of the query,
   // never the agent's, so a wrong claim cannot become the card's identity.
+  // A bare matcher block such as `{namespace="shop"}` names no metric.
   const metricNames = [
-    ...new Set(selectors.map((selector) => selector.metric)),
+    ...new Set(
+      selectors.flatMap((selector) =>
+        selector.metric.trim() ? [selector.metric.trim()] : [],
+      ),
+    ),
   ];
   const title =
     metricNames.length === 1
