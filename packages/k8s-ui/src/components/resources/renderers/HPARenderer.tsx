@@ -55,7 +55,7 @@ function formatReasonID(id: string): string {
 }
 
 function isReasonMessageRedundant(state: HPADiagnosisState, reason: NonNullable<HPADiagnosis['reasons']>[number]): boolean {
-  return state === 'limited_max' && reason.id === 'limited_max'
+  return reason.id === state
 }
 
 export function HPARenderer({ data, onNavigate, hpaDiagnosis, extraSections }: HPARendererProps) {
