@@ -91,7 +91,16 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
   // Layout constants. marginLeft sized for the widest expected Y-tick label
   // ("422.4 MiB" etc.) — narrow grid panels squeeze the X axis so labels
   // need extra viewBox-space to survive the down-scale.
-  const { width, height, marginLeft, marginRight, marginTop, marginBottom, fontSize, yIntervals, xIntervals } = chartLayout(compact)
+  const base = chartLayout(compact)
+  const { width, height, marginRight, marginTop, marginBottom, fontSize, yIntervals, xIntervals } = base
+  const yValues = chartData ? yAxisValues(chartData.yMin, chartData.yMax, yIntervals, countAxis) : []
+  const yLabels = yValues.map(val => formatMetricValue(val, unit))
+  // The compact layout's larger text makes a label like "161.5 MiB" wider
+  // than the fixed margin, and SVG clips it; grow the margin to the widest
+  // label there. The full layout keeps its fixed margin for existing callers.
+  const marginLeft = compact
+    ? Math.max(base.marginLeft, Math.ceil(Math.max(0, ...yLabels.map(label => label.length)) * fontSize * 0.62 + 12))
+    : base.marginLeft
   const plotWidth = width - marginLeft - marginRight
   const plotHeight = height - marginTop - marginBottom
 
@@ -109,11 +118,8 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
 
   const yTicks = useMemo(() => {
     if (!chartData) return []
-    const { yMax, yMin } = chartData
-    return yAxisValues(yMin, yMax, yIntervals, countAxis).map(val => ({
-      val, y: toY(val), label: formatMetricValue(val, unit),
-    }))
-  }, [chartData, unit, yIntervals, countAxis])
+    return yValues.map((val, i) => ({ val, y: toY(val), label: yLabels[i] }))
+  }, [chartData, yValues, yLabels])
 
   const xTicks = useMemo(() => {
     if (!chartData) return []

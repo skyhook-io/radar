@@ -135,6 +135,15 @@ describe('AreaChart compact layout and count axes', () => {
     expect(html).toContain(`>${formatTimestamp(t0 + 1800)}<`)
   })
 
+  it('widens the compact left margin so a long Y label is not clipped', () => {
+    const html = render({ series: [series([[0, 100 * 1024 * 1024], [600, 161.5 * 1024 * 1024]])], unit: 'bytes', layout: 'compact' })
+    expect(html).toContain('177.7 MiB')
+    const yLabelX = Math.min(...attrs(html, 'text', 'x').map(Number).filter(x => x > 0))
+    expect(yLabelX).toBeGreaterThan(70)
+    const compactSmall = render({ series: [series([[0, 1], [600, 2]])], layout: 'compact' })
+    expect(Math.min(...attrs(compactSmall, 'text', 'x').map(Number).filter(x => x > 0))).toBe(52)
+  })
+
   it('uses integer ticks with a nice step for count series', () => {
     const zero = render({ series: [series([[0, 0], [600, 0], [1200, 0]])], unit: 'count' })
     expect(zero).toContain('>0<')
