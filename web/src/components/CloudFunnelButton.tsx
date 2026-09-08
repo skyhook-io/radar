@@ -371,8 +371,8 @@ function ModalFooter({
   driverEscapeUrl: string
   prepareFailed: boolean
   // Non-null while Radar has no connected cluster: the in-app connect has
-  // nothing to inspect, so the browser path takes its place and this line
-  // explains why.
+  // nothing to inspect, so the browser path takes its place and this text
+  // explains why on hover.
   connectUnavailableNote: string | null
   // Live copy from the Hub; undefined until (or unless) it arrives.
   assurances?: string[]
@@ -437,23 +437,21 @@ function ModalFooter({
       {notice && (
         <div className="mb-3.5 card-inner p-3 text-[12px] leading-relaxed text-theme-text-secondary">{notice}</div>
       )}
-      {lane === 'driver' && connectUnavailableNote && (
-        <div className="mb-3.5 card-inner p-3 text-[12px] leading-relaxed text-theme-text-secondary">
-          {connectUnavailableNote}
-        </div>
-      )}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2.5">
         {lane === 'driver' && connectUnavailableNote ? (
           // No cluster to inspect, so the browser wizard is the only path and
-          // takes the primary slot; the note above says why.
-          <a
-            href={driverEscapeUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={PRIMARY_ACTION_CLASS}
-          >
-            Set up in the browser
-          </a>
+          // takes the primary slot. The reason lives in a tooltip: a visible
+          // note here competed with the pitch above it for attention.
+          <Tooltip content={connectUnavailableNote} delay={100} position="top">
+            <a
+              href={driverEscapeUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={PRIMARY_ACTION_CLASS}
+            >
+              Set up in the browser
+            </a>
+          </Tooltip>
         ) : lane === 'driver' ? (
           <>
             <button
