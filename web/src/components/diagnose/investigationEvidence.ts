@@ -2797,6 +2797,21 @@ function adaptDiagnose(
   if (nonEmptyString(value.recentChangesError)) {
     builder.limit(source, "Recent changes", value.recentChangesError, "error");
   }
+
+  addDiagnoseMetrics(
+    builder,
+    source,
+    value.metrics,
+    {
+      kind: resource.kind,
+      ...(apiVersionToGroup(resource.apiVersion)
+        ? { group: apiVersionToGroup(resource.apiVersion) }
+        : {}),
+      namespace: resource.metadata.namespace,
+      name: resource.metadata.name,
+    },
+    bundleRelevance,
+  );
   if (value.recentChangesSaturated === true) {
     builder.limit(
       source,
@@ -4595,6 +4610,121 @@ function metricsWindowLabel(data: {
   return data.step
     ? `${window} window · ${data.step} step`
     : `${window} window`;
+}
+
+const DIAGNOSE_METRICS_LABELS: Record<string, string> = {
+  cpu: "CPU usage",
+  memory: "Memory working set",
+  restarts: "Restarts",
+};
+
+/**
+ * The vitals `diagnose` captured inside the same call: one chart per category
+ * over the exact pods the bundle covers. They take the bundle's relevance, so a
+ * neighbour's diagnose never charts as evidence for the target, and they carry
+ * the diagnosed resource as their subject so recorded changes can be marked
+ * on them. An absent field means Prometheus was not available or the read was
+ * not permitted, which is not a collection failure the producer reported.
+ */
+function addDiagnoseMetrics(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+  raw: unknown,
+  subject: DiagnosisResourceRef,
+  relevance: InvestigationEvidenceRelevance,
+): void {
+  if (raw === undefined) return;
+  const value = record(raw);
+  const window = record(value?.window);
+  if (
+    !value ||
+    !window ||
+    !nonEmptyString(window.start) ||
+    !nonEmptyString(window.end) ||
+    !nonEmptyString(window.step) ||
+    !(Date.parse(window.end) > Date.parse(window.start)) ||
+    !nonNegativeInteger(value.pods) ||
+    (value.partial !== undefined && typeof value.partial !== "boolean") ||
+    (value.omittedPods !== undefined &&
+      !nonNegativeInteger(value.omittedPods)) ||
+    (value.error !== undefined && typeof value.error !== "string") ||
+    !Array.isArray(value.series)
+  ) {
+    invalidPayload(builder, source, "Workload metrics");
+    return;
+  }
+  const scope = scopeFromArgs(source);
+  const partial = value.partial === true;
+  const podsLabel = partial
+    ? `first ${value.pods} of ${typeof value.omittedPods === "number" ? value.pods + value.omittedPods : "the"} pods`
+    : `${value.pods} pod${value.pods === 1 ? "" : "s"}`;
+  const windowLabel = metricsWindowLabel({
+    mode: "range",
+    start: window.start,
+    end: window.end,
+    step: window.step,
+  });
+  for (const rawEntry of value.series) {
+    const entry = record(rawEntry);
+    const rawSeries = entry?.series;
+    const series = Array.isArray(rawSeries)
+      ? rawSeries
+          .map(timeSeries)
+          .filter((item): item is TimeSeries => Boolean(item))
+      : undefined;
+    if (
+      !entry ||
+      !nonEmptyString(entry.category) ||
+      !(entry.category in DIAGNOSE_METRICS_LABELS) ||
+      !nonEmptyString(entry.query) ||
+      !nonEmptyString(entry.unit) ||
+      !Array.isArray(rawSeries) ||
+      !series ||
+      series.length !== rawSeries.length
+    ) {
+      invalidPayload(builder, source, "Workload metrics");
+      continue;
+    }
+    const label = DIAGNOSE_METRICS_LABELS[entry.category];
+    const data: InvestigationMetricsEvidence = {
+      type: "metrics",
+      origin: "diagnose",
+      query: entry.query,
+      mode: "range",
+      start: window.start,
+      end: window.end,
+      step: window.step,
+      unit: entry.unit,
+      label,
+      series,
+      truncated: false,
+      subject,
+      pods: value.pods,
+      partial,
+    };
+    builder.observe(
+      `metrics:diagnose:${scope}:${entry.category}`,
+      "metrics",
+      source,
+      {
+        tier: evidenceTierForRelevance("supporting", relevance),
+        relevance,
+        tone: "neutral",
+        title: `${label} · ${scope}`,
+        summary: [
+          series.length === 0 ? "No samples in the window" : podsLabel,
+          windowLabel,
+          partial ? "partial pod set" : undefined,
+        ]
+          .filter((part): part is string => Boolean(part))
+          .join(" · "),
+        data,
+      },
+    );
+  }
+  if (nonEmptyString(value.error)) {
+    builder.limit(source, "Workload metrics", value.error, "error");
+  }
 }
 
 function adaptQueryPrometheus(
