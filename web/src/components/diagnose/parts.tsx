@@ -2990,16 +2990,16 @@ const COMMAND_BINARIES = new Set([
  */
 export function remediationCommands(step: string): string[] {
   const commands: string[] = [];
-  const fenced = /```[a-zA-Z]*\n([\s\S]*?)```/g;
+  // One pass in reading order, so button N is the Nth command in the text.
+  const code = /```[a-zA-Z]*\n([\s\S]*?)```|`([^`\n]+)`/g;
   let match: RegExpExecArray | null;
-  while ((match = fenced.exec(step))) {
-    const body = match[1].trim();
-    if (body) commands.push(body);
-  }
-  const inline = /`([^`\n]+)`/g;
-  const withoutFences = step.replace(fenced, "");
-  while ((match = inline.exec(withoutFences))) {
-    const span = match[1].trim();
+  while ((match = code.exec(step))) {
+    if (match[1] !== undefined) {
+      const body = match[1].trim();
+      if (body) commands.push(body);
+      continue;
+    }
+    const span = match[2].trim();
     if (looksLikeCommand(span)) commands.push(span);
   }
   return commands;

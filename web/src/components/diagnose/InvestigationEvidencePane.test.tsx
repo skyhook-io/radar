@@ -3486,3 +3486,32 @@ describe("cited broader cards and coverage rows", () => {
     expect(render(twoRows)).toContain('aria-expanded="false"');
   });
 });
+
+describe("grouped startup cards", () => {
+  it("opens to the pod names when several pods share one blocker", () => {
+    const blocker = (name: string) => ({
+      kind: "Pod",
+      name,
+      reason: "Unschedulable",
+      severity: "critical",
+      message: "1 node(s) no free host ports",
+    });
+    const projection = project(
+      tool("diagnose", "diagnose", {
+        resource: {
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          metadata: { namespace: "shop", name: "api" },
+        },
+        resourceContext: { tier: "basic" },
+        pods: 2,
+        startupBlockers: [blocker("api-abc"), blocker("api-def")],
+      }),
+    );
+    const html = render(projection);
+    expect(html).toContain("2 pods · 1 node(s) no free host ports");
+    expect(html).toContain(">api-abc<");
+    expect(html).toContain(">api-def<");
+    expect(html).toContain('aria-expanded="false"');
+  });
+});
