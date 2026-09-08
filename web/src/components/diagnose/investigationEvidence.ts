@@ -1974,6 +1974,7 @@ function addChanges(
   emptyIsAuthoritative = false,
   relevance: InvestigationEvidenceRelevance = "broader",
   subject?: { kind?: string; namespace?: string; name: string },
+  window?: string,
 ): void {
   const scope = scopeFromArgs(source);
   if (values.length === 0 && !changeContext?.changed) {
@@ -2012,7 +2013,7 @@ function addChanges(
     ),
     relevance,
     tone: "info",
-    title: "Recent changes",
+    title: `Recent changes${window ? ` · last ${window}` : ""}`,
     summary: changeContext?.changed
       ? changeContext.what === "The workload's Pod template changed" &&
         changeContext.when
@@ -3246,14 +3247,16 @@ function adaptEvents(
   payload: unknown,
 ): void {
   const value = record(payload);
-  if (!value || !Array.isArray(value.events)) {
+  // The producer serializes an empty result as a nil slice, which is null.
+  const eventsRaw = value?.events === null ? [] : value?.events;
+  if (!value || !Array.isArray(eventsRaw)) {
     invalidPayload(builder, source);
     return;
   }
-  const events = value.events
+  const events = eventsRaw
     .map(event)
     .filter((item): item is InvestigationEventEvidence => Boolean(item));
-  if (events.length !== value.events.length) {
+  if (events.length !== eventsRaw.length) {
     invalidPayload(builder, source);
     return;
   }
@@ -3304,14 +3307,16 @@ function adaptChanges(
   payload: unknown,
 ): void {
   const value = record(payload);
-  if (!value || !Array.isArray(value.changes)) {
+  // The producer serializes an empty result as a nil slice, which is null.
+  const changesRaw = value?.changes === null ? [] : value?.changes;
+  if (!value || !Array.isArray(changesRaw)) {
     invalidPayload(builder, source, "Recent changes");
     return;
   }
-  const changes = value.changes
+  const changes = changesRaw
     .map(recentChange)
     .filter((item): item is IssueRecentChange => Boolean(item));
-  if (changes.length !== value.changes.length) {
+  if (changes.length !== changesRaw.length) {
     invalidPayload(builder, source, "Recent changes");
     return;
   }
@@ -3327,16 +3332,20 @@ function adaptChanges(
   } else if (value.sourcesErrored !== undefined) {
     invalidPayload(builder, source, "Recent changes source coverage");
   }
+  // Reads of one resource's history are revisions of one card however the
+  // window or cap differs; the window is stated in the title instead.
+  const args = record(source.args ? parseJSON(source.args) : undefined);
   addChanges(
     builder,
     source,
     changes,
-    `changes:${source.args ?? scopeFromArgs(source)}`,
+    `changes:${scopeFromArgs(source)}`,
     undefined,
     !nonEmptyString(value.narrowHint) && sourceErrors === 0,
     false,
     sourceArgsRelevance(builder, source),
     changesSubjectFromArgs(source),
+    nonEmptyString(args?.since) ? args.since : undefined,
   );
 }
 

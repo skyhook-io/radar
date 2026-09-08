@@ -29,6 +29,7 @@ import {
   investigationEvidenceCoverageLimited,
 } from "./investigationState";
 import { metricsChangeMarkers } from "./investigationMetrics";
+import { groupEvidenceCoverage } from "./investigationEvidencePresentation";
 
 const onViewSource = vi.fn();
 const target = {
@@ -2212,7 +2213,7 @@ describe("InvestigationEvidencePane metrics cards", () => {
     const partition = partitionInvestigationEvidence(projection.groups);
     expect(partition.main).toHaveLength(0);
     expect(partition.workload.map((group) => group.kind)).toEqual(["metrics"]);
-    expect(partition.hiddenMetrics).toBe(0);
+    expect(partition.hiddenBroader).toBe(0);
     const html = render(projection);
     expect(html).toContain("Prometheus metrics");
     expect(html).not.toContain("metric result");
@@ -2229,10 +2230,10 @@ describe("InvestigationEvidencePane metrics cards", () => {
     );
     const partition = partitionInvestigationEvidence(projection.groups);
     expect(partition.collectionByGroup.size).toBe(0);
-    expect(partition.hiddenMetrics).toBe(2);
+    expect(partition.hiddenBroader).toBe(2);
     const html = render(projection);
     expect(html).toContain(
-      "2 broader metric results are not shown; they appear here when the assessment cites them.",
+      "2 results about other resources are not shown; they appear here when the assessment cites them.",
     );
     expect(html).not.toContain("Prometheus metrics");
   });
@@ -2257,7 +2258,7 @@ describe("InvestigationEvidencePane metrics cards", () => {
       resolution,
     );
     expect(partition.main.map((group) => group.kind)).toEqual(["metrics"]);
-    expect(partition.hiddenMetrics).toBe(0);
+    expect(partition.hiddenBroader).toBe(0);
     const html = render(projection, false, undefined, resolution);
     expect(html).toContain("Prometheus metrics");
     expect(html).toContain("1 series · 2h window · 60s step");
@@ -2477,7 +2478,7 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
     const partition = partitionInvestigationEvidence(projection.groups);
     expect(partition.main.map((group) => group.kind)).not.toContain("metrics");
     expect(partition.workload.map((group) => group.kind)).toContain("metrics");
-    expect(partition.hiddenMetrics).toBe(0);
+    expect(partition.hiddenBroader).toBe(0);
     // The vitals lead the collection; the absence receipts follow in their
     // own order, so a healthy workload does not open on four empty tiles.
     const kinds = partition.workload.map((group) => group.kind);
@@ -3211,5 +3212,179 @@ describe("supporting adverse cards are visibly marked", () => {
         /border-l-(2 border-l-semantic-(warning|error)|\[3px\])/,
       );
     }
+  });
+});
+
+describe("cited broader cards and coverage rows", () => {
+  const helmPayload = {
+    name: "prometheus",
+    namespace: "opencost",
+    chart: "prometheus",
+    chartVersion: "25.8.0",
+    status: "failed",
+    revision: 1,
+    updated: "2026-09-07T07:00:00Z",
+    healthIssue: "6/12 pods Unschedulable",
+    resources: [],
+  };
+  const permissionsPayload = {
+    subject: { kind: "ServiceAccount", namespace: "other", name: "worker" },
+    accessCheck: {
+      verb: "get",
+      resource: "secrets",
+      namespace: "other",
+      allowed: true,
+      reason: 'RBAC: allowed by ClusterRoleBinding "worker"',
+    },
+  };
+  const rulesPayload = {
+    count: 1,
+    rules: [
+      {
+        group: "general",
+        type: "alerting",
+        name: "TargetDown",
+        query: "up == 0",
+        state: "firing",
+        health: "ok",
+        labels: { severity: "warning" },
+        alerts: [
+          {
+            state: "firing",
+            labels: { namespace: "monitoring", job: "node-exporter" },
+          },
+        ],
+      },
+    ],
+  };
+
+  it("admits a cited helm, permissions or alerts card and counts the rest as withheld", () => {
+    const helmRef = evidenceRef("a", "b");
+    const permRef = evidenceRef("a", "c");
+    const rulesRef = evidenceRef("a", "d");
+    const projection = project(
+      tool("helm", "get_helm_release", helmPayload, {
+        summary: JSON.stringify({ namespace: "opencost", name: "prometheus" }),
+        evidenceRef: helmRef,
+      }),
+      tool("perm", "get_subject_permissions", permissionsPayload, {
+        summary: JSON.stringify({
+          kind: "ServiceAccount",
+          namespace: "other",
+          name: "worker",
+        }),
+        evidenceRef: permRef,
+      }),
+      tool("rules", "get_prometheus_rules", rulesPayload, {
+        summary: JSON.stringify({}),
+        evidenceRef: rulesRef,
+      }),
+      tool("cm", "get_resource", {
+        apiVersion: "v1",
+        kind: "ConfigMap",
+        metadata: { namespace: "shop", name: "vars" },
+      }),
+    );
+    const uncited = partitionInvestigationEvidence(projection.groups);
+    expect(uncited.main).toHaveLength(0);
+    expect(uncited.workload).toHaveLength(0);
+    expect(uncited.hiddenBroader).toBe(4);
+    expect(render(projection)).toContain(
+      "4 results about other resources are not shown; they appear here when the assessment cites them.",
+    );
+
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [helmRef, permRef, rulesRef] },
+      0,
+    );
+    const cited = partitionInvestigationEvidence(projection.groups, resolution);
+    expect(cited.main.map((group) => group.latest.title).sort()).toEqual([
+      "Helm release opencost/prometheus",
+      "Service Account other/worker can get secrets",
+      "TargetDown firing",
+    ]);
+    expect(cited.hiddenBroader).toBe(1);
+    const html = render(projection, false, undefined, resolution);
+    expect(html).toContain("6/12 pods Unschedulable");
+    expect(html).toContain(
+      "1 result about another resource is not shown; it appears here when the assessment cites it.",
+    );
+  });
+
+  it("renders a single-limitation coverage group once, with its source link", () => {
+    const projection = project(
+      tool(
+        "events-a",
+        "get_events",
+        { events: null },
+        {
+          summary: JSON.stringify({
+            kind: "Pod",
+            namespace: "shop",
+            name: "api-a",
+          }),
+        },
+      ),
+      tool(
+        "events-b",
+        "get_events",
+        { events: null },
+        {
+          summary: JSON.stringify({
+            kind: "Pod",
+            namespace: "shop",
+            name: "api-b",
+          }),
+        },
+      ),
+      tool(
+        "events-c",
+        "get_events",
+        { events: null },
+        {
+          summary: JSON.stringify({
+            kind: "Pod",
+            namespace: "shop",
+            name: "api-c",
+          }),
+        },
+      ),
+    );
+    expect(projection.limitations).toHaveLength(1);
+    expect(projection.limitations[0].sources).toHaveLength(3);
+    const html = render(projection);
+    const message =
+      "No events were returned. This result does not establish that no events occurred.";
+    // Live region, strip summary, the group row's label and its text: never
+    // a second identical detail row beneath it.
+    expect(
+      html.match(
+        new RegExp(message.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g"),
+      ),
+    ).toHaveLength(4);
+    expect(html).toContain("View latest in Activity");
+    expect(html).not.toContain('aria-controls=":r');
+
+    const twoRows = project(
+      tool(
+        "changes-err",
+        "get_changes",
+        { changes: [], sourcesErrored: ["timeline: permission denied"] },
+        { summary: JSON.stringify({ namespace: "shop" }) },
+      ),
+      tool(
+        "changes-hint",
+        "get_changes",
+        { changes: [], narrowHint: "narrow with since=" },
+        { summary: JSON.stringify({ namespace: "shop" }) },
+      ),
+    );
+    const grouped = groupEvidenceCoverage(twoRows.limitations);
+    expect(
+      grouped.find((group) => group.label === "Recent changes")?.limitations
+        .length,
+    ).toBeGreaterThan(1);
+    expect(render(twoRows)).toContain('aria-expanded="false"');
   });
 });
