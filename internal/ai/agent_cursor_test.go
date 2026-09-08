@@ -96,10 +96,14 @@ func TestCursorParseStream_FormatPin(t *testing.T) {
 
 	var running, done bool
 	var doneIsError *bool
-	var thinking, doneResult, doneEvidenceRef, runningSummary string
+	var thinking, doneResult, doneEvidenceRef, runningSummary, readyModel string
 	agent := &cursorAgent{bin: "cursor-agent"}
 	diag := agent.parseStream(strings.NewReader(stream), func(ev StreamEvent) {
 		switch ev.Type {
+		case "phase":
+			if ev.Phase == "ready" {
+				readyModel = ev.Model
+			}
 		case "thinking":
 			thinking += ev.Token
 		case "step":
@@ -145,6 +149,9 @@ func TestCursorParseStream_FormatPin(t *testing.T) {
 	}
 	if diag.SessionID != "sess-abc" {
 		t.Errorf("session id (system/init) not captured: %q", diag.SessionID)
+	}
+	if readyModel != "GPT-5.5" {
+		t.Errorf("ready phase model (system/init) = %q, want GPT-5.5", readyModel)
 	}
 }
 

@@ -8,6 +8,9 @@ import {
   Timeline,
   TurnView,
   appendThinking,
+  mergeStartupSignal,
+  toolDurationLabel,
+  toolErrorReason,
   upsertTool,
   type TimelineItem,
   type Turn,
@@ -16,6 +19,7 @@ import type {
   AgentInfo,
   Diagnosis,
   DiagnoseStep,
+  DiagnoseStreamEvent,
   ExecutionProfile,
 } from "../../api/diagnose";
 import { investigationEvidenceSourceId } from "./investigationEvidence";
@@ -329,6 +333,259 @@ describe("Timeline reasoning density", () => {
     );
 
     expect(html).toContain("height:47px");
+  });
+});
+
+describe("Timeline startup signals", () => {
+  const readyEvent: Pick<
+    DiagnoseStreamEvent,
+    "phase" | "model" | "toolCount" | "mcpServers"
+  > = {
+    phase: "ready",
+    model: "claude-opus-5",
+    toolCount: 24,
+    mcpServers: [{ name: "radar", status: "connected" }],
+  };
+
+  it("reports each startup phase in place of the generic pending label", () => {
+    const before = renderToStaticMarkup(
+      <Timeline items={[]} running agentLabel="Claude Code" />,
+    );
+    expect(before).toContain("Starting investigation…");
+
+    const starting = mergeStartupSignal(undefined, { phase: "investigating" });
+    expect(
+      renderToStaticMarkup(
+        <Timeline
+          items={[]}
+          running
+          agentLabel="Claude Code"
+          startup={starting}
+        />,
+      ),
+    ).toContain("Claude Code starting…");
+
+    const connected = mergeStartupSignal(starting, { phase: "connected" });
+    expect(
+      renderToStaticMarkup(
+        <Timeline
+          items={[]}
+          running
+          agentLabel="Claude Code"
+          startup={connected}
+        />,
+      ),
+    ).toContain("Connected to Radar&#x27;s tools");
+
+    const ready = mergeStartupSignal(connected, readyEvent);
+    const html = renderToStaticMarkup(
+      <Timeline items={[]} running agentLabel="Claude Code" startup={ready} />,
+    );
+    expect(html).toContain(
+      "Claude Code ready · claude-opus-5 · 24 Radar tools",
+    );
+    expect(html).not.toContain("Starting investigation…");
+    expect(html).not.toContain("MCP server");
+  });
+
+  it("keeps the furthest phase when the handshake lands after the init line", () => {
+    const ready = mergeStartupSignal(undefined, readyEvent);
+    const late = mergeStartupSignal(ready, { phase: "connected" });
+    expect(late).toEqual({
+      phase: "ready",
+      model: "claude-opus-5",
+      toolCount: 24,
+      mcpServers: [{ name: "radar", status: "connected" }],
+    });
+    expect(mergeStartupSignal(ready, { phase: "investigating" })).toBe(late);
+    expect(mergeStartupSignal(undefined, { phase: "unknown" })).toBeUndefined();
+  });
+
+  it("yields to the tool activity once the transcript has items", () => {
+    const html = renderToStaticMarkup(
+      <Timeline
+        items={[
+          {
+            kind: "tool",
+            id: "tool-1",
+            tool: "get_logs",
+            status: "running",
+            animate: false,
+          },
+        ]}
+        running
+        agentLabel="Claude Code"
+        startup={mergeStartupSignal(undefined, readyEvent)}
+      />,
+    );
+    expect(html).toContain("Reading logs…");
+    expect(html).not.toContain("Claude Code ready");
+  });
+
+  it("shows no startup label on a replayed finished turn", () => {
+    const html = renderToStaticMarkup(
+      <Timeline
+        items={[]}
+        running={false}
+        agentLabel="Claude Code"
+        startup={mergeStartupSignal(undefined, readyEvent)}
+      />,
+    );
+    expect(html).not.toContain("Claude Code ready");
+    expect(html).not.toContain("Starting investigation…");
+    expect(html).not.toContain("Connected to Radar");
+  });
+
+  it("warns when the CLI reports an MCP server that is not connected", () => {
+    const startup = mergeStartupSignal(undefined, {
+      phase: "ready",
+      model: "claude-opus-5",
+      toolCount: 0,
+      mcpServers: [{ name: "radar", status: "failed" }],
+    });
+    const live = renderToStaticMarkup(
+      <Timeline
+        items={[]}
+        running
+        agentLabel="Claude Code"
+        startup={startup}
+      />,
+    );
+    expect(live).toContain("Claude Code ready · claude-opus-5 · 0 Radar tools");
+    expect(live).toContain("failed to connect");
+    expect(live).toContain("had no Radar tools this turn");
+
+    // The warning is a fact of the run and survives replay; the label does not.
+    const replayed = renderToStaticMarkup(
+      <Timeline
+        items={[{ kind: "thinking", text: "done", animate: false }]}
+        running={false}
+        agentLabel="Claude Code"
+        startup={startup}
+      />,
+    );
+    expect(replayed).toContain("failed to connect");
+    expect(replayed).not.toContain("Claude Code ready");
+  });
+});
+
+describe("tool row duration and failure reason", () => {
+  const doneStep = (
+    overrides: Partial<Extract<TimelineItem, { kind: "tool" }>>,
+  ): TimelineItem => ({
+    kind: "tool",
+    id: "tool-1",
+    tool: "get_events",
+    status: "done",
+    summary: '{"namespace":"dev"}',
+    result: '{"events":[]}',
+    isError: false,
+    animate: false,
+    ...overrides,
+  });
+
+  it("hides sub-threshold durations and shows whole seconds above it", () => {
+    expect(toolDurationLabel(undefined)).toBeUndefined();
+    expect(toolDurationLabel(125)).toBeUndefined();
+    expect(toolDurationLabel(1999)).toBeUndefined();
+    expect(toolDurationLabel(2000)).toBe("2s");
+    expect(toolDurationLabel(3400)).toBe("3s");
+    expect(toolDurationLabel(12600)).toBe("13s");
+
+    const quick = renderToStaticMarkup(
+      <ThemeProvider>
+        <Timeline items={[doneStep({ ms: 125 })]} running={false} />
+      </ThemeProvider>,
+    );
+    // The only millisecond figure is the expanded result header, not the row.
+    expect(quick.match(/125ms/g)).toHaveLength(1);
+    expect(quick.indexOf("125ms")).toBeGreaterThan(
+      quick.indexOf("Original result"),
+    );
+    expect(quick).not.toMatch(/>\d+s</);
+
+    const slow = renderToStaticMarkup(
+      <ThemeProvider>
+        <Timeline items={[doneStep({ ms: 3400 })]} running={false} />
+      </ThemeProvider>,
+    );
+    expect(slow).toContain(">3s<");
+    expect(slow.indexOf(">3s<")).toBeLessThan(slow.indexOf("Original result"));
+    expect(slow.match(/3400ms/g)).toHaveLength(1);
+  });
+
+  it("keeps the exact milliseconds in the expanded result header", () => {
+    const sourceId = investigationEvidenceSourceId(0, "tool-1");
+    const html = renderToStaticMarkup(
+      <ThemeProvider>
+        <Timeline
+          items={[doneStep({ ms: 3400 })]}
+          running={false}
+          turnIndex={0}
+          sourceRevealRequest={{ sourceId, requestId: 1 }}
+        />
+      </ThemeProvider>,
+    );
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain("Original result");
+    expect(html).toContain("3400ms");
+  });
+
+  it("extracts a one-line reason from the producer's error text", () => {
+    expect(
+      toolErrorReason('\ninvalid duration "30d": time: unknown unit "d"\nmore'),
+    ).toBe('invalid duration "30d": time: unknown unit "d"');
+    expect(
+      toolErrorReason(JSON.stringify({ error: 'resource not found: pod "x"' })),
+    ).toBe('resource not found: pod "x"');
+    expect(toolErrorReason("")).toBeUndefined();
+    expect(toolErrorReason("  \n ")).toBeUndefined();
+    expect(toolErrorReason('{"error":""}')).toBeUndefined();
+  });
+
+  it("shows the failure reason inline on a failed row only when the producer gave one", () => {
+    const failed = renderToStaticMarkup(
+      <ThemeProvider>
+        <Timeline
+          items={[
+            doneStep({
+              isError: true,
+              result:
+                '\nfailed to get logs for dev/api: container "api" is waiting to start: CreateContainerConfigError',
+            }),
+          ]}
+          running={false}
+        />
+      </ThemeProvider>,
+    );
+    expect(failed).toContain("investigation-tool-reason");
+    expect(failed).toContain(
+      "failed to get logs for dev/api: container &quot;api&quot; is waiting to start",
+    );
+    expect(failed.indexOf("investigation-tool-reason")).toBeGreaterThan(
+      failed.indexOf("namespace=dev"),
+    );
+
+    const silent = renderToStaticMarkup(
+      <ThemeProvider>
+        <Timeline
+          items={[doneStep({ isError: true, result: undefined })]}
+          running={false}
+        />
+      </ThemeProvider>,
+    );
+    expect(silent).toContain('aria-label="Tool failed"');
+    expect(silent).not.toContain("investigation-tool-reason");
+
+    const succeeded = renderToStaticMarkup(
+      <ThemeProvider>
+        <Timeline
+          items={[doneStep({ isError: false, result: "plain text result" })]}
+          running={false}
+        />
+      </ThemeProvider>,
+    );
+    expect(succeeded).not.toContain("investigation-tool-reason");
   });
 });
 

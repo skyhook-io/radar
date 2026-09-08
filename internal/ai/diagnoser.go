@@ -239,8 +239,13 @@ type Diagnosis struct {
 // "turn" marks the start of a new turn (carries Question/Apply) so a connecting
 // or reconnecting client can reconstruct turn boundaries from the event log.
 type StreamEvent struct {
-	Type              string               `json:"type"` // "turn"|"phase"|"step"|"thinking"|"done"|"error"|"closed"
-	Phase             string               `json:"phase,omitempty"`
+	Type  string `json:"type"`            // "turn"|"phase"|"step"|"thinking"|"done"|"error"|"closed"
+	Phase string `json:"phase,omitempty"` // "investigating"|"connected"|"ready"
+	// Startup facts reported by the agent CLI on the "ready" phase: the model it
+	// resolved, how many Radar tools it registered, and each MCP server's status.
+	Model             string               `json:"model,omitempty"`
+	ToolCount         *int                 `json:"toolCount,omitempty"`
+	MCPServers        []MCPServerStatus    `json:"mcpServers,omitempty"`
 	Step              *StepInfo            `json:"step,omitempty"`
 	Token             string               `json:"token,omitempty"`
 	Diag              *Diagnosis           `json:"diagnosis,omitempty"`
@@ -266,6 +271,13 @@ const (
 	ApplyMutationFailed    ApplyMutationOutcome = "failed"
 	ApplyMutationUnknown   ApplyMutationOutcome = "unknown"
 )
+
+// MCPServerStatus is one MCP server's connection state as the agent CLI
+// reported it at startup. Only "connected" means the server's tools are usable.
+type MCPServerStatus struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
 
 // StepInfo describes one tool invocation (running → done).
 type StepInfo struct {
@@ -599,16 +611,49 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 		return Diagnosis{}, fmt.Errorf("ai: start %s: %w", agent.Name(), err)
 	}
 
-	onEvent(StreamEvent{Type: "phase", Phase: "investigating"})
+	// The handshake watcher and the stream parser both report to the caller;
+	// serialize them so callback consumers never see interleaved events.
+	var emitMu sync.Mutex
+	emit := func(event StreamEvent) {
+		emitMu.Lock()
+		defer emitMu.Unlock()
+		onEvent(event)
+	}
+	emit(StreamEvent{Type: "phase", Phase: "investigating"})
 	validator := investigationEvidenceValidator{
 		registry: d.evidenceRefs,
 		scope:    evidenceScope,
 		claimed:  make(map[string]struct{}),
 	}
 	streamEvent := func(event StreamEvent) {
-		onEvent(validator.validate(event))
+		emit(validator.validate(event))
+	}
+	streamDone := make(chan struct{})
+	var handshake sync.WaitGroup
+	if evidenceLease != nil {
+		// The private mount marks the scope connected on the agent's MCP
+		// handshake, which happens before its first message. Report it once.
+		handshake.Add(1)
+		go func() {
+			defer handshake.Done()
+			connected := evidenceLease.Connected()
+			select {
+			case <-connected:
+			case <-streamDone:
+				// Both may be ready when a short turn ends right after its
+				// handshake; select picks arbitrarily, so re-check before giving up.
+				select {
+				case <-connected:
+				default:
+					return
+				}
+			}
+			emit(StreamEvent{Type: "phase", Phase: "connected"})
+		}()
 	}
 	diag := agent.parseStream(stdout, streamEvent)
+	close(streamDone)
+	handshake.Wait()
 	diag.evidenceScope = evidenceScope
 
 	waitErr := cmd.Wait()
@@ -934,6 +979,26 @@ type cliEvent struct {
 	TotalCostUSD *float64 `json:"total_cost_usd"`
 	NumTurns     int      `json:"num_turns"`
 	SessionID    string   `json:"session_id"`
+	// system/init only.
+	Model      string            `json:"model"`
+	Tools      []string          `json:"tools"`
+	MCPServers []MCPServerStatus `json:"mcp_servers"`
+}
+
+// agentReadyEvent reports the CLI's init message as a startup phase. Radar
+// tools are counted by their MCP prefix so the count reflects what the model can
+// actually call, not what Radar offered.
+func agentReadyEvent(model string, tools []string, servers []MCPServerStatus) StreamEvent {
+	count := 0
+	for _, tool := range tools {
+		if strings.HasPrefix(tool, "mcp__radar__") {
+			count++
+		}
+	}
+	return StreamEvent{
+		Type: "phase", Phase: "ready",
+		Model: model, ToolCount: &count, MCPServers: servers,
+	}
 }
 
 func parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
@@ -972,6 +1037,10 @@ func parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 			continue
 		}
 		switch ev.Type {
+		case "system":
+			if ev.Subtype == "init" {
+				onEvent(agentReadyEvent(ev.Model, ev.Tools, ev.MCPServers))
+			}
 		case "assistant":
 			if ev.Message == nil {
 				continue

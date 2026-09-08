@@ -241,7 +241,17 @@ func TestInvestigationHandlerAnnotatesRealToolCallWithoutChangingPublicContract(
 		t.Fatalf("public producer payload = %#v, want %q", publicResult.Content[0], payload)
 	}
 
+	select {
+	case <-lease.Connected():
+		t.Fatal("public mount handshake marked the private scope connected")
+	default:
+	}
 	privateResult := callFixture(httpServer.URL + "/mcp-investigation?scope=" + scope)
+	select {
+	case <-lease.Connected():
+	default:
+		t.Fatal("private mount handshake did not mark the scope connected")
+	}
 	if len(privateResult.Content) != 2 {
 		t.Fatalf("private content blocks = %d, want marker + producer payload", len(privateResult.Content))
 	}
@@ -260,5 +270,48 @@ func TestInvestigationHandlerAnnotatesRealToolCallWithoutChangingPublicContract(
 	}
 	if issuedPayload := lease.Close()[ref]; issuedPayload != payload {
 		t.Fatalf("issued payload = %q, want %q", issuedPayload, payload)
+	}
+}
+
+func TestInvestigationMiddlewareMarksScopeConnectedOnHandshake(t *testing.T) {
+	scope := strings.Repeat("a", 26)
+	validCtx := context.WithValue(context.Background(), investigationEvidenceScopeKey{}, scope)
+	for _, test := range []struct {
+		name      string
+		ctx       context.Context
+		method    string
+		connected bool
+	}{
+		{name: "initialize", ctx: validCtx, method: "initialize", connected: true},
+		{name: "tools/list", ctx: validCtx, method: "tools/list", connected: true},
+		{name: "tools/call is not a handshake", ctx: validCtx, method: "tools/call"},
+		{name: "missing scope", ctx: context.Background(), method: "initialize"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			refs := investigationrefs.NewRegistry()
+			lease, err := refs.Begin(scope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lease.Close()
+			wrapped := investigationEvidenceReferenceMiddleware(refs)(
+				func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
+					return &mcpsdk.CallToolResult{}, nil
+				},
+			)
+			if _, err := wrapped(test.ctx, test.method, nil); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-lease.Connected():
+				if !test.connected {
+					t.Fatal("scope marked connected")
+				}
+			default:
+				if test.connected {
+					t.Fatal("scope not marked connected")
+				}
+			}
+		})
 	}
 }
