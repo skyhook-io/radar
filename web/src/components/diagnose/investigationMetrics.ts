@@ -19,9 +19,10 @@ function metricUnitSuffix(metric: string): "bytes" | "seconds" | undefined {
 }
 
 // Functions whose result is a count, a flag or a time, whatever the input
-// metric measured.
+// metric measured. Aggregations may put their grouping clause before the
+// parenthesis: `count by (pod) (...)`.
 const QUANTITY_DISCARDING_FUNCTIONS =
-  /\b(?:count|count_values|count_over_time|absent|absent_over_time|present_over_time|changes|resets|timestamp)\s*\(/;
+  /\b(?:count|count_values|count_over_time|absent|absent_over_time|present_over_time|changes|resets|timestamp)\s*(?:\(|by\b|without\b)/;
 
 /**
  * The unit is what every metric in the expression states through its name,
