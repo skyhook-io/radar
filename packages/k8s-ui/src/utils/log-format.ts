@@ -356,41 +356,6 @@ export function parseLogRange(logRange: string): { tailLines?: number; sinceSeco
   return { tailLines: Number(logRange) }
 }
 
-/** Minimal shape `formatEntriesForCopy` needs — keeps the helper testable without a full LogEntry. */
-export interface CopyableLogEntry {
-  timestamp: string
-  content: string
-  container?: string
-  pod?: string
-}
-
-export interface CopyFormatOptions {
-  /** Mirrors the viewer's timestamp toggle. The value emitted is always the raw
-   *  RFC3339 timestamp, never the display format: the paste target is a chat or
-   *  an incident log where a bare `14:23:07` — or `12s ago` — cannot be correlated. */
-  showTimestamps: boolean
-  /** Mirrors the viewer's pod-attribution toggle (workload views). */
-  showPodName: boolean
-}
-
-/**
- * Render log entries for the clipboard. Content is emitted raw — full JSON, stack
- * continuations the viewer collapsed, full pod names — because the reader is a
- * person or a model in a chat window, not the screen the lines came from.
- */
-export function formatEntriesForCopy(
-  entries: readonly CopyableLogEntry[],
-  { showTimestamps, showPodName }: CopyFormatOptions,
-): string {
-  return entries.map(e => {
-    const parts: string[] = []
-    if (showTimestamps && e.timestamp) parts.push(e.timestamp)
-    if (showPodName && e.pod) parts.push(e.container ? `[${e.pod}/${e.container}]` : `[${e.pod}]`)
-    parts.push(stripAnsi(e.content))
-    return parts.join(' ')
-  }).join('\n')
-}
-
 // Syntax highlight colors shared between JSON and logfmt rendering
 export const SYNTAX_COLOR_KEY = '#7cacf8'
 export const SYNTAX_COLOR_STRING = '#73c991'

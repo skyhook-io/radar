@@ -9,7 +9,6 @@ import { Input } from '../ui/Input'
 import { showApiError, showApiSuccess } from '../ui/Toast'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import {
-  formatEntriesForCopy,
   formatLogTimestamp,
   highlightSearchMatches,
   stripAnsi,
@@ -19,8 +18,16 @@ import {
 } from '../../utils/log-format'
 import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
 import { copyText } from '../../utils/clipboard'
+import {
+  LOG_EXPORT_FORMAT_LABELS,
+  previewLogExport,
+  serializeLogEntries,
+  type LogExportFormat,
+  type LogExportPayload,
+} from '../../utils/log-export'
 
-export type DownloadFormat = 'txt' | 'json' | 'csv'
+/** Retained for consumers that already import it; the export module owns the definition. */
+export type DownloadFormat = LogExportFormat
 
 /**
  * `toolbarExtra` may be a plain ReactNode, or a function that receives the
@@ -37,7 +44,8 @@ interface LogCoreProps {
   onStartStream?: () => void
   onStopStream: () => void
   onRefresh: () => void
-  onDownload: (format: DownloadFormat) => void
+  /** Receives a finished payload — the viewer owns serialization so copy and download cannot diverge. */
+  onDownload: (payload: LogExportPayload) => void
   onClear?: () => void
   toolbarExtra?: ToolbarExtraRenderer
   showPodName?: boolean
@@ -187,6 +195,15 @@ export function LogCore({
     new Set(['error', 'warn', 'info', 'debug'])
   )
   const [showDownloadMenu, setShowDownloadMenu] = useState(false)
+  // Format is a standing preference; scope is a property of the filters in play
+  // right now, so it deliberately resets to the safer "what you see" each time.
+  const [exportScope, setExportScope] = useState<'visible' | 'all'>('visible')
+  const [exportFormat, setExportFormat] = useState<DownloadFormat>(() => {
+    try {
+      const v = localStorage.getItem('radar-logs-export-format') as DownloadFormat | null
+      return v === 'txt' || v === 'json' || v === 'csv' ? v : 'txt'
+    } catch { return 'txt' }
+  })
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [showTsMenu, setShowTsMenu] = useState(false)
   const [showStructuredMenu, setShowStructuredMenu] = useState(false)
@@ -245,18 +262,32 @@ export function LogCore({
     return () => window.removeEventListener('click', handleClick)
   }, [showDownloadMenu])
 
-  // Scoped to the lines the current filters allow, unlike the downloads below it.
-  const handleCopyVisible = useCallback(() => {
+  // Scope and format are the only export decisions the viewer cannot already
+  // express on screen: everything else (timestamps, ANSI, level, search) has a
+  // toolbar control, and the popover's preview shows where those land.
+  const exportEntries = exportScope === 'all' ? entries : displayEntries
+  const exportOptions = useMemo(
+    () => ({ format: exportFormat, showTimestamps, showPodName }),
+    [exportFormat, showTimestamps, showPodName],
+  )
+  const exportPreview = useMemo(() => previewLogExport(exportEntries, exportOptions), [exportEntries, exportOptions])
+  // Offering a scope that resolves to the same lines is a choice about nothing.
+  const scopeIsMeaningful = displayEntries.length !== entries.length
+
+  const handleExportCopy = useCallback(() => {
     setShowDownloadMenu(false)
-    const count = displayEntries.length
-    copyText(formatEntriesForCopy(displayEntries, { showTimestamps, showPodName })).then(
-      ok => {
-        if (ok) showApiSuccess('Copied to clipboard', `${count} log line${count === 1 ? '' : 's'} copied.`)
-        else showApiError('Failed to copy logs', 'The browser blocked clipboard access.')
-      },
-      () => showApiError('Failed to copy logs', 'The browser blocked clipboard access.'),
+    const count = exportEntries.length
+    const failed = () => showApiError('Failed to copy logs', 'The browser blocked clipboard access.')
+    copyText(serializeLogEntries(exportEntries, exportOptions).content).then(
+      ok => ok ? showApiSuccess('Copied to clipboard', `${count} log line${count === 1 ? '' : 's'} copied.`) : failed(),
+      failed,
     )
-  }, [displayEntries, showTimestamps, showPodName])
+  }, [exportEntries, exportOptions])
+
+  const handleExportDownload = useCallback(() => {
+    setShowDownloadMenu(false)
+    onDownload(serializeLogEntries(exportEntries, exportOptions))
+  }, [onDownload, exportEntries, exportOptions])
 
   // Same close-on-outside-click for the timestamp format menu.
   const tsMenuRef = useRef<HTMLDivElement>(null)
@@ -280,6 +311,11 @@ export function LogCore({
     window.addEventListener('click', handleClick)
     return () => window.removeEventListener('click', handleClick)
   }, [showStructuredMenu])
+
+  const pickExportFormat = useCallback((fmt: DownloadFormat) => {
+    setExportFormat(fmt)
+    try { localStorage.setItem('radar-logs-export-format', fmt) } catch {}
+  }, [])
 
   const pickStructuredMode = useCallback((mode: StructuredMode) => {
     setStructuredMode(mode)
@@ -471,6 +507,12 @@ export function LogCore({
   const iconBtnInactiveTertiary = isDark
     ? 'p-1.5 rounded transition-colors text-slate-500 hover:text-slate-100 hover:bg-slate-800'
     : 'p-1.5 rounded transition-colors text-slate-400 hover:text-slate-900 hover:bg-slate-200'
+  // Export popover: house style for a group label, plus the two equal-weight
+  // actions the scope and format rows above them both apply to.
+  const exportLabelCls = `w-12 shrink-0 text-[10px] font-semibold uppercase tracking-wide ${palette.textTertiary}`
+  const exportActionCls = isDark
+    ? 'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium transition-colors border border-slate-700 text-slate-200 hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none'
+    : 'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium transition-colors border border-slate-300 text-slate-700 hover:bg-slate-200 disabled:opacity-40 disabled:pointer-events-none'
   // "disabled → tertiary on hover" for inactive level filter chips.
   const levelChipInactive = isDark
     ? 'border-transparent text-slate-600 hover:text-slate-500'
@@ -712,31 +754,62 @@ export function LogCore({
             </button>
           </Tooltip>
           {showDownloadMenu && (
-            <div className={`absolute top-full right-0 mt-1 w-72 ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50`}>
-              <button
-                onClick={handleCopyVisible}
-                disabled={displayEntries.length === 0}
-                className={`w-full flex items-center gap-2 text-left px-3 py-2 text-xs ${palette.textPrimary} rounded-t-lg ${displayEntries.length === 0 ? 'opacity-40 cursor-not-allowed' : palette.hoverBg}`}
-              >
-                <Copy className={`w-3.5 h-3.5 ${palette.textTertiary}`} />
-                Copy visible lines
-              </button>
-              <div className={`border-t ${palette.border}`} />
-              {/* Say the scope where the choice is made: a hover tooltip arrives too
-                  late for someone who has already filtered and is reaching to click. */}
-              <div className={`px-3 pt-2 pb-1 text-[10px] whitespace-nowrap ${palette.textTertiary}`}>
-                Downloads ignore level &amp; search filters
+            <div className={`absolute top-full right-0 mt-1 w-[23rem] ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50 p-3 space-y-2.5`}>
+              <div className="flex items-center gap-3">
+                <span className={exportLabelCls}>Lines</span>
+                {scopeIsMeaningful ? (
+                  <div className="flex items-center gap-1">
+                    <ExportChoice active={exportScope === 'visible'} onClick={() => setExportScope('visible')} palette={palette}>
+                      Filtered {displayEntries.length.toLocaleString()}
+                    </ExportChoice>
+                    <ExportChoice active={exportScope === 'all'} onClick={() => setExportScope('all')} palette={palette}>
+                      All {entries.length.toLocaleString()}
+                    </ExportChoice>
+                  </div>
+                ) : (
+                  <span className={`text-[11px] ${palette.textSecondary}`}>
+                    {entries.length.toLocaleString()} line{entries.length === 1 ? '' : 's'}
+                  </span>
+                )}
               </div>
-              {(['txt', 'json', 'csv'] as DownloadFormat[]).map(fmt => (
+
+              <div className="flex items-center gap-3">
+                <span className={exportLabelCls}>Format</span>
+                <div className="flex items-center gap-1">
+                  {(['txt', 'json', 'csv'] as DownloadFormat[]).map(fmt => (
+                    <ExportChoice key={fmt} active={exportFormat === fmt} onClick={() => pickExportFormat(fmt)} palette={palette}>
+                      {LOG_EXPORT_FORMAT_LABELS[fmt]}
+                    </ExportChoice>
+                  ))}
+                </div>
+              </div>
+
+              {/* Shows the shape of the real output, so no caption has to claim
+                  which fields ride along or that the toolbar toggles reach it. */}
+              <div className={`rounded border ${palette.border} ${palette.toolbarBg} px-2 py-1.5 font-mono text-[10px] leading-relaxed min-h-[44px] ${palette.textSecondary}`}>
+                {exportPreview.length > 0
+                  ? exportPreview.map((line, i) => <div key={i} className="truncate">{line}</div>)
+                  : <div className={palette.textTertiary}>Nothing to export.</div>}
+              </div>
+
+              <div className="flex items-center gap-2">
                 <button
-                  key={fmt}
-                  onClick={() => { onDownload(fmt); setShowDownloadMenu(false) }}
-                  className={`w-full flex items-center gap-2 text-left px-3 py-2 text-xs ${palette.textPrimary} ${palette.hoverBg} last:rounded-b-lg`}
+                  onClick={handleExportCopy}
+                  disabled={exportEntries.length === 0}
+                  className={exportActionCls}
                 >
-                  <FileDown className={`w-3.5 h-3.5 ${palette.textTertiary}`} />
-                  Download {fmt.toUpperCase()}
+                  <Copy className="w-3.5 h-3.5" />
+                  Copy
                 </button>
-              ))}
+                <button
+                  onClick={handleExportDownload}
+                  disabled={exportEntries.length === 0}
+                  className={exportActionCls}
+                >
+                  <FileDown className="w-3.5 h-3.5" />
+                  Download
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -945,6 +1018,24 @@ export function LogCore({
         />
       )}
     </div>
+  )
+}
+
+/** One pill in the export popover's scope and format rows. */
+function ExportChoice({ active, onClick, palette, children }: {
+  active: boolean
+  onClick: () => void
+  palette: LogPalette
+  children: ReactNode
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={active}
+      className={`px-2 py-1 rounded text-[11px] transition-colors ${active ? palette.toolbarActive : `${palette.textSecondary} ${palette.hoverBg}`}`}
+    >
+      {children}
+    </button>
   )
 }
 
