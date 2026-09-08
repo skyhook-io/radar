@@ -626,6 +626,15 @@ describe("ResultCard conclusion states", () => {
     expect(html).not.toContain("border-emerald-500/30");
   });
 
+  it("lists a step's commands in reading order across inline and fenced code", () => {
+    const step =
+      "Roll it with `kubectl -n dev rollout restart deploy/api`, then verify:\n```bash\nkubectl -n dev rollout status deploy/api\n```";
+    expect(remediationCommands(step)).toEqual([
+      "kubectl -n dev rollout restart deploy/api",
+      "kubectl -n dev rollout status deploy/api",
+    ]);
+  });
+
   it("keeps a follow-up framed as an answer rather than a new conclusion", () => {
     const html = renderToStaticMarkup(
       <ResultCard

@@ -1346,10 +1346,12 @@ function evidenceHasDetails(
       const message = data.issue.message?.trim();
       return Boolean(
         (cause && cause !== summary) ||
-        (message && message !== summary && message !== cause),
+        (message && message !== summary && message !== cause) ||
+        data.pods?.length,
       );
     }
     case "startup":
+      return (data.pods?.length ?? 0) > 1;
     case "receipt":
       return false;
     case "resource": {
