@@ -176,6 +176,31 @@ describe("metricsUnitForExpression", () => {
     expect(metricsUnitForExpression("1 / 2", [])).toBe("");
   });
 
+  it("drops the unit when a function counts or flags instead of measuring", () => {
+    for (const query of [
+      'count(container_memory_working_set_bytes{namespace="shop"})',
+      "count_over_time(container_memory_working_set_bytes[1h])",
+      "absent(container_memory_working_set_bytes)",
+      "changes(http_request_duration_seconds[10m])",
+      "resets(container_network_receive_bytes_total[1h])",
+      "timestamp(container_memory_working_set_bytes)",
+    ]) {
+      expect(
+        metricsUnitForExpression(
+          query,
+          selector(query.match(/[a-z_]+_(?:bytes|seconds)(?:_total)?/)![0]),
+        ),
+        query,
+      ).toBe("");
+    }
+    expect(
+      metricsUnitForExpression(
+        "topk(3, container_memory_working_set_bytes)",
+        selector("container_memory_working_set_bytes"),
+      ),
+    ).toBe("bytes");
+  });
+
   it("does not turn a matcher value containing a slash into a ratio", () => {
     expect(
       metricsUnitForExpression(

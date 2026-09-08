@@ -18,13 +18,19 @@ function metricUnitSuffix(metric: string): "bytes" | "seconds" | undefined {
   return undefined;
 }
 
+// Functions whose result is a count, a flag or a time, whatever the input
+// metric measured.
+const QUANTITY_DISCARDING_FUNCTIONS =
+  /\b(?:count|count_values|count_over_time|absent|absent_over_time|present_over_time|changes|resets|timestamp)\s*\(/;
+
 /**
  * The unit is what every metric in the expression states through its name,
  * as the producer's selector inventory lists them. Aggregations keep a unit;
  * a rate turns bytes into bytes per second and seconds into a ratio; a
- * division is a ratio; metrics that disagree, or say nothing, leave the axis
- * unitless. Matcher values and string literals are ignored when looking for
- * operators, so a label value containing "/" cannot demote the unit.
+ * division, or a function that counts or flags rather than measures, is
+ * unitless; metrics that disagree, or say nothing, leave the axis unitless.
+ * Matcher values and string literals are ignored when looking for operators,
+ * so a label value containing "/" cannot demote the unit.
  */
 export function metricsUnitForExpression(
   query: string,
@@ -41,7 +47,8 @@ export function metricsUnitForExpression(
     .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')
     .replace(/\{[^{}]*\}/g, "")
     .replace(/\[[^\]]*\]/g, "");
-  if (operators.includes("/")) return "";
+  if (operators.includes("/") || QUANTITY_DISCARDING_FUNCTIONS.test(operators))
+    return "";
   if (/\b(?:rate|irate|deriv)\s*\(/.test(operators)) {
     return unit === "bytes" ? "bytes/s" : "";
   }
