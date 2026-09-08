@@ -1851,10 +1851,17 @@ export function assessmentSourceRows(
 export function AssessmentSources({
   resolution,
   investigationCase,
+  readOnly = false,
   onViewSource,
 }: {
   resolution?: InvestigationRootCauseEvidenceResolution;
   investigationCase?: InvestigationCaseResolution;
+  /**
+   * An earlier assessment no longer annotates the Evidence pane, so its
+   * card- and revision-placed claims are listed here with the observation
+   * they were bound to instead of being lost.
+   */
+  readOnly?: boolean;
   onViewSource: (sourceId: string) => void;
 }) {
   const rows = assessmentSourceRows(resolution, investigationCase);
@@ -1867,8 +1874,8 @@ export function AssessmentSources({
       <ul className="mt-1 space-y-1">
         {rows.map(({ source, items }) => {
           const roles = [...new Set(items.map((item) => item.role))];
-          const unplaced = items.filter(
-            (item) => item.placement === "source" && item.claim,
+          const shown = items.filter(
+            (item) => item.claim && (readOnly || item.placement === "source"),
           );
           return (
             <li key={source.id}>
@@ -1880,24 +1887,34 @@ export function AssessmentSources({
               >
                 <FileSearch className="h-3.5 w-3.5 shrink-0" aria-hidden />
                 <span className="min-w-0 flex-1">
-                  <span className="flex flex-wrap items-center gap-1.5">
+                  {roles.length > 0 ? (
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-medium">
+                        {prettyTool(source.tool)}
+                      </span>
+                      {roles.map((role) => (
+                        <AgentRoleChip key={role} role={role} />
+                      ))}
+                    </span>
+                  ) : (
                     <span className="font-medium">
                       {prettyTool(source.tool)}
                     </span>
-                    {roles.map((role) => (
-                      <AgentRoleChip key={role} role={role} />
-                    ))}
-                  </span>
+                  )}
                   <CitedSourceScope source={source} />
                 </span>
                 <span className="shrink-0">View source</span>
               </button>
-              {unplaced.length > 0 ? (
+              {shown.length > 0 ? (
                 <div className="mx-2 mb-1 space-y-1" data-source-placed-claims>
-                  {unplaced.map((item) => (
+                  {shown.map((item) => (
                     <AgentClaimNote
                       key={item.index}
-                      claim={item.claim}
+                      claim={
+                        item.placement === "source" || !item.observation
+                          ? item.claim
+                          : `${item.observation.title}: ${item.claim}`
+                      }
                       role={roles.length > 1 ? item.role : undefined}
                       className="pt-1"
                     />

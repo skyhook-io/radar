@@ -14,7 +14,6 @@ import {
   type InvestigationEvidenceProjection,
   type InvestigationEvidenceSource,
 } from "./investigationEvidence";
-import { evidenceDisplaySnapshot } from "./investigationEvidencePresentation";
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value !== "";
@@ -133,19 +132,17 @@ export function resolveInvestigationCase(
       const { group, observation } = candidates[0];
       item.groupId = group.id;
       item.observation = observation;
-      // An earlier read whose display content equals the card's latest is the
-      // same fact; only a superseded, different observation gets its own row.
-      item.placement =
-        observation === group.latest ||
-        evidenceDisplaySnapshot(observation) ===
-          evidenceDisplaySnapshot(group.latest)
-          ? "card"
-          : "revision";
+      // The claim stays bound to the exact observation the agent cited. Only
+      // the card's authoritative observation carries it on the card head; a
+      // superseded read keeps its own revision row even when it displays the
+      // same, because display equivalence ignores counts and times.
+      item.placement = observation === group.latest ? "card" : "revision";
     }
     items.push(item);
     byIndex.set(index, item);
   });
   const ruledOut: InvestigationCaseRuledOut[] = [];
+  const seenRuledOut = new Set<string>();
   for (const entry of diagnosis?.ruledOut ?? []) {
     if (
       typeof entry.hypothesis !== "string" ||
@@ -156,7 +153,11 @@ export function resolveInvestigationCase(
     }
     const item = byIndex.get(entry.evidenceIndex);
     if (!item || item.placement === "source") continue;
-    ruledOut.push({ hypothesis: entry.hypothesis.trim(), item });
+    const hypothesis = entry.hypothesis.trim();
+    const dedupeKey = `${entry.evidenceIndex}\u0000${hypothesis}`;
+    if (seenRuledOut.has(dedupeKey)) continue;
+    seenRuledOut.add(dedupeKey);
+    ruledOut.push({ hypothesis, item });
   }
   return { items, ruledOut };
 }
@@ -184,7 +185,9 @@ function validCaseSubject(
 
 interface ObservationSubjectIdentity {
   kind: string;
+  /** Empty string is a known core group; undefined means the producer did not say. */
   group?: string;
+  /** Empty string is known cluster scope; undefined means the producer did not say. */
   namespace?: string;
   name: string;
   container?: string;
@@ -196,6 +199,10 @@ interface ObservationSubjectIdentity {
  * state no resource of their own (events, changes without a subject, receipts)
  * inherit the resource their producing call was asked about, so a claim can
  * name "the events of Deployment api" inside a diagnose bundle.
+ *
+ * A stated resource identity knows its API group and scope: a core resource
+ * has group "" and a cluster-scoped one has namespace "". Only args-derived
+ * identities leave those undefined, and only then do they act as wildcards.
  */
 function observationSubjectIdentity(
   observation: InvestigationEvidenceObservation,
@@ -203,8 +210,21 @@ function observationSubjectIdentity(
   const { data } = observation;
   const stated = investigationEvidenceSubjectRef(data);
   if (stated) {
+    // Producers that state a resource from its own object know the group
+    // exactly; a subject ref copied from another producer's payload may not.
+    const groupKnown =
+      data.type === "resource" ||
+      data.type === "issue" ||
+      data.type === "logs" ||
+      data.type === "crash" ||
+      data.type === "startup" ||
+      data.type === "helm" ||
+      data.type === "permissions";
     return {
-      ...stated,
+      kind: stated.kind,
+      group: stated.group ?? (groupKnown ? "" : undefined),
+      namespace: stated.namespace ?? "",
+      name: stated.name,
       ...(data.type === "logs"
         ? {
             container: data.container,
@@ -236,8 +256,9 @@ function sameKind(left: string, right: string): boolean {
 }
 
 /**
- * Every optional discriminator the agent omits is a wildcard; uniqueness of
- * the match, not completeness of the subject, is what places a claim.
+ * A discriminator the agent omits is a wildcard, and so is one the producer
+ * did not state; every discriminator both sides supply must match. Uniqueness
+ * of the match, not completeness of the subject, is what places a claim.
  */
 function observationMatchesSubject(
   observation: InvestigationEvidenceObservation,
@@ -254,15 +275,15 @@ function observationMatchesSubject(
   if (!sameKind(identity.kind, subject.kind) || identity.name !== subject.name)
     return false;
   if (
-    subject.group &&
-    identity.group &&
+    subject.group !== undefined &&
+    identity.group !== undefined &&
     subject.group.toLowerCase() !== identity.group.toLowerCase()
   ) {
     return false;
   }
   if (
-    subject.namespace &&
-    identity.namespace &&
+    subject.namespace !== undefined &&
+    identity.namespace !== undefined &&
     subject.namespace !== identity.namespace
   ) {
     return false;
