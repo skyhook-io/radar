@@ -106,3 +106,55 @@ describe('AreaChart domain and axes', () => {
     expect(render({ series: [] })).toBe('')
   })
 })
+
+describe('AreaChart compact layout and count axes', () => {
+  const base = [series([[0, 1], [600, 2], [1200, 3], [1800, 2]])]
+
+  it('keeps the full layout for existing callers', () => {
+    const html = render({ series: base })
+    expect(html).toContain('viewBox="0 0 1000 300"')
+    expect(html).toContain('data-chart-layout="full"')
+    expect(attrs(html, 'text', 'text-anchor').filter(a => a === 'end')).toHaveLength(5)
+  })
+
+  it('draws two ticks per axis, larger text and a taller plot when compact', () => {
+    const html = render({
+      series: base,
+      layout: 'compact',
+      annotations: [{ timestamp: t0 + 600, label: 'ConfigMap api-config', kind: 'change' }],
+    })
+    expect(html).toContain('viewBox="0 0 400 260"')
+    expect(html).toContain('data-chart-layout="compact"')
+    // Two Y labels plus the right-aligned last X label.
+    expect(attrs(html, 'text', 'text-anchor').filter(a => a === 'end')).toHaveLength(3)
+    expect(attrs(html, 'text', 'text-anchor').filter(a => a === 'start')).toHaveLength(1)
+    expect(attrs(html, 'text', 'text-anchor').filter(a => a === 'middle')).toHaveLength(0)
+    expect(html).toContain('font-size="14"')
+    expect(html).toContain('data-chart-annotation-label="hidden"')
+    expect(html).toContain(`>${formatTimestamp(t0)}<`)
+    expect(html).toContain(`>${formatTimestamp(t0 + 1800)}<`)
+  })
+
+  it('widens the compact left margin so a long Y label is not clipped', () => {
+    const html = render({ series: [series([[0, 100 * 1024 * 1024], [600, 161.5 * 1024 * 1024]])], unit: 'bytes', layout: 'compact' })
+    expect(html).toContain('177.7 MiB')
+    const yLabelX = Math.min(...attrs(html, 'text', 'x').map(Number).filter(x => x > 0))
+    expect(yLabelX).toBeGreaterThan(70)
+    const compactSmall = render({ series: [series([[0, 1], [600, 2]])], layout: 'compact' })
+    expect(Math.min(...attrs(compactSmall, 'text', 'x').map(Number).filter(x => x > 0))).toBe(52)
+  })
+
+  it('uses integer ticks with a nice step for count series', () => {
+    const zero = render({ series: [series([[0, 0], [600, 0], [1200, 0]])], unit: 'count' })
+    expect(zero).toContain('>0<')
+    expect(zero).toContain('>1<')
+    expect(zero).not.toContain('1.10')
+    const restarts = render({ series: [series([[0, 6], [600, 12], [1200, 18]])], unit: 'count' })
+    for (const tick of ['0', '5', '10', '15', '20']) expect(restarts).toContain(`>${tick}<`)
+    expect(restarts).not.toContain('6.05')
+    const compactCount = render({ series: [series([[0, 6], [600, 18]])], unit: 'count', layout: 'compact' })
+    expect(attrs(compactCount, 'text', 'text-anchor').filter(a => a === 'end')).toHaveLength(3)
+    expect(compactCount).toContain('>20<')
+    expect(compactCount).not.toContain('>10<')
+  })
+})

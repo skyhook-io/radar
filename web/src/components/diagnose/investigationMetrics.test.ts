@@ -42,7 +42,8 @@ const window = { start: "2026-09-06T07:00:00Z", end: "2026-09-06T09:00:00Z" };
 
 function rangeResult(selectors: unknown[]) {
   return {
-    query: 'sum(container_memory_working_set_bytes{namespace="shop",pod=~"api-.*"})',
+    query:
+      'sum(container_memory_working_set_bytes{namespace="shop",pod=~"api-.*"})',
     type: "range",
     ...window,
     step: "60s",
@@ -95,7 +96,9 @@ const diagnoseBundle = {
   resourceContext: {
     tier: "diagnostic",
     uses: {
-      configMaps: [{ kind: "ConfigMap", namespace: "shop", name: "api-config" }],
+      configMaps: [
+        { kind: "ConfigMap", namespace: "shop", name: "api-config" },
+      ],
       secrets: [{ kind: "Secret", namespace: "shop", name: "api-secret" }],
     },
   },
@@ -118,8 +121,98 @@ const diagnoseBundle = {
 };
 
 describe("metricsUnitForExpression", () => {
-  it("names a unit only for a single bare metric with a unit suffix", () => {
-    const selector = (metric: string) => [{ metric, matchers: [] }];
+  const selector = (metric: string) => [{ metric, matchers: [] }];
+
+  it("keeps the unit every metric states through aggregations and wrappers", () => {
+    expect(
+      metricsUnitForExpression(
+        'sum(max by (pod,namespace,container) (container_memory_working_set_bytes{namespace="shop", pod=~"api-.*"}))',
+        selector("container_memory_working_set_bytes"),
+      ),
+    ).toBe("bytes");
+    expect(
+      metricsUnitForExpression(
+        'sum(rate(container_network_receive_bytes_total{namespace="shop"}[5m])) by (pod)',
+        selector("container_network_receive_bytes_total"),
+      ),
+    ).toBe("bytes/s");
+    expect(
+      metricsUnitForExpression(
+        "increase(container_network_receive_bytes_total[1h])",
+        selector("container_network_receive_bytes_total"),
+      ),
+    ).toBe("bytes");
+    expect(
+      metricsUnitForExpression(
+        "max_over_time(http_request_duration_seconds[10m])",
+        selector("http_request_duration_seconds"),
+      ),
+    ).toBe("seconds");
+  });
+
+  it("stays unitless for ratios, mixed metrics and bare numbers", () => {
+    expect(
+      metricsUnitForExpression('a_bytes / b_bytes{path="/api/v1"}', [
+        ...selector("a_bytes"),
+        ...selector("b_bytes"),
+      ]),
+    ).toBe("");
+    expect(
+      metricsUnitForExpression("a_bytes + b_seconds", [
+        ...selector("a_bytes"),
+        ...selector("b_seconds"),
+      ]),
+    ).toBe("");
+    expect(
+      metricsUnitForExpression(
+        "container_memory_working_set_bytes + kube_pod_info",
+        [
+          ...selector("container_memory_working_set_bytes"),
+          ...selector("kube_pod_info"),
+        ],
+      ),
+    ).toBe("");
+    expect(metricsUnitForExpression("42", [])).toBe("");
+    expect(metricsUnitForExpression("1 / 2", [])).toBe("");
+  });
+
+  it("drops the unit when a function counts or flags instead of measuring", () => {
+    for (const query of [
+      'count(container_memory_working_set_bytes{namespace="shop"})',
+      'count by (pod) (container_memory_working_set_bytes{namespace="shop"})',
+      "count without (container) (container_memory_working_set_bytes)",
+      "count_over_time(container_memory_working_set_bytes[1h])",
+      "absent(container_memory_working_set_bytes)",
+      "changes(http_request_duration_seconds[10m])",
+      "resets(container_network_receive_bytes_total[1h])",
+      "timestamp(container_memory_working_set_bytes)",
+    ]) {
+      expect(
+        metricsUnitForExpression(
+          query,
+          selector(query.match(/[a-z_]+_(?:bytes|seconds)(?:_total)?/)![0]),
+        ),
+        query,
+      ).toBe("");
+    }
+    expect(
+      metricsUnitForExpression(
+        "topk(3, container_memory_working_set_bytes)",
+        selector("container_memory_working_set_bytes"),
+      ),
+    ).toBe("bytes");
+  });
+
+  it("does not turn a matcher value containing a slash into a ratio", () => {
+    expect(
+      metricsUnitForExpression(
+        'container_memory_working_set_bytes{image="ghcr.io/example/api"}',
+        selector("container_memory_working_set_bytes"),
+      ),
+    ).toBe("bytes");
+  });
+
+  it("names a unit for a bare metric with a unit suffix", () => {
     expect(
       metricsUnitForExpression(
         'container_memory_working_set_bytes{namespace="shop"}',
@@ -139,13 +232,16 @@ describe("metricsUnitForExpression", () => {
       ),
     ).toBe("");
     expect(
-      metricsUnitForExpression(
-        "a_bytes / b_bytes",
-        [...selector("a_bytes"), ...selector("b_bytes")],
-      ),
+      metricsUnitForExpression("a_bytes / b_bytes", [
+        ...selector("a_bytes"),
+        ...selector("b_bytes"),
+      ]),
     ).toBe("");
     expect(
-      metricsUnitForExpression("kube_pod_container_status_restarts_total", selector("kube_pod_container_status_restarts_total")),
+      metricsUnitForExpression(
+        "kube_pod_container_status_restarts_total",
+        selector("kube_pod_container_status_restarts_total"),
+      ),
     ).toBe("");
   });
 });
@@ -221,7 +317,12 @@ describe("metricsChangeMarkers", () => {
             "get_changes",
             {
               changes: [
-                change("Deployment", "worker", "2026-09-06T08:20:00Z", "apps/v1"),
+                change(
+                  "Deployment",
+                  "worker",
+                  "2026-09-06T08:20:00Z",
+                  "apps/v1",
+                ),
                 change("Deployment", "api", "2026-09-06T08:10:00Z", "apps/v1"),
               ],
             },
