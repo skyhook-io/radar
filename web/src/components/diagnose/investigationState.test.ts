@@ -21,6 +21,7 @@ import {
   investigationInteractionsBlocked,
   investigationIsReadOnly,
   investigationPaneCenteredScrollTop,
+  investigationLiveCaseTurnIndex,
 } from "./investigationState";
 
 describe("investigation terminal presentation", () => {
@@ -691,5 +692,87 @@ describe("investigation action gating", () => {
         localApplyRequestPending: true,
       }),
     ).toBe(true);
+  });
+});
+
+describe("investigationLiveCaseTurnIndex", () => {
+  const linkedItem = {
+    status: "linked" as const,
+    ref: "ev_x",
+    role: "context" as const,
+    claim: "c",
+  };
+  const assessment = {
+    status: "done" as const,
+    diagnosis: { healthy: true, rootCause: "", report: "", remediation: [] },
+  };
+  it("keeps the assessment when no later turn cites evidence", () => {
+    const answer = {
+      status: "done" as const,
+      question: "why?",
+      diagnosis: { rootCause: "", report: "because", remediation: [] },
+    };
+    expect(investigationLiveCaseTurnIndex([assessment, answer], 0)).toBe(0);
+  });
+  it("moves to an answer turn that carries a bound case or linked root-cause refs", () => {
+    const cited = {
+      status: "done" as const,
+      question: "chart it and cite it",
+      diagnosis: {
+        rootCause: "",
+        report: "",
+        remediation: [],
+        evidence: [linkedItem],
+      },
+    };
+    expect(investigationLiveCaseTurnIndex([assessment, cited], 0)).toBe(1);
+    const legacy = {
+      status: "done" as const,
+      question: "what broke?",
+      diagnosis: {
+        rootCause: "x",
+        report: "",
+        remediation: [],
+        rootCauseEvidence: { status: "linked" as const, refs: ["ev_x"] },
+      },
+    };
+    expect(investigationLiveCaseTurnIndex([assessment, legacy], 0)).toBe(1);
+    const unlinkedOnly = {
+      ...cited,
+      diagnosis: {
+        ...cited.diagnosis,
+        evidence: [{ status: "unlinked" as const }],
+      },
+    };
+    expect(investigationLiveCaseTurnIndex([assessment, unlinkedOnly], 0)).toBe(
+      0,
+    );
+  });
+  it("ignores apply, explanation, running, and superseded turns", () => {
+    const cited = {
+      status: "done" as const,
+      question: "cite",
+      diagnosis: {
+        rootCause: "",
+        report: "",
+        remediation: [],
+        evidence: [linkedItem],
+      },
+    };
+    expect(
+      investigationLiveCaseTurnIndex(
+        [
+          assessment,
+          { ...cited, apply: true },
+          { ...cited, explainAssessment: 2 },
+          { ...cited, status: "running" as const },
+        ],
+        0,
+      ),
+    ).toBe(0);
+    // A newer assessment after the cited answer is the current one.
+    expect(
+      investigationLiveCaseTurnIndex([assessment, cited, assessment], 2),
+    ).toBe(2);
   });
 });
