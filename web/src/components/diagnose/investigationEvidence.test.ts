@@ -5692,6 +5692,60 @@ describe("diagnose metrics evidence", () => {
     }
   });
 
+  it("keeps same-named workloads in different API groups on separate charts", () => {
+    const rollout = {
+      ...deployment,
+      apiVersion: "argoproj.io/v1alpha1",
+      kind: "Rollout",
+    };
+    const projection = project([
+      tool(
+        "diag-deployment",
+        "diagnose",
+        { resource: deployment, pods: 2, metrics: vitals() },
+        { summary: JSON.stringify(args) },
+      ),
+      tool(
+        "diag-rollout",
+        "diagnose",
+        { resource: rollout, pods: 2, metrics: vitals() },
+        { summary: JSON.stringify(args) },
+      ),
+    ]);
+    const groups = groupsOf(projection.groups, "metrics");
+    expect(groups).toHaveLength(6);
+    expect(groups.every((group) => group.observations.length === 1)).toBe(
+      true,
+    );
+    expect(new Set(groups.map((group) => group.identity)).size).toBe(6);
+  });
+
+  it("rejects inherited object keys posing as categories", () => {
+    for (const category of ["__proto__", "constructor", "toString"]) {
+      const projection = project([
+        tool(
+          "diag",
+          "diagnose",
+          {
+            resource: deployment,
+            pods: 2,
+            metrics: vitals({
+              series: [{ ...vitals().series[0], category }],
+            }),
+          },
+          { summary: JSON.stringify(args) },
+        ),
+      ]);
+      expect(groupsOf(projection.groups, "metrics")).toHaveLength(0);
+      expect(
+        projection.limitations.some(
+          (item) =>
+            item.source === "Workload metrics" && item.kind === "unknown",
+        ),
+      ).toBe(true);
+    }
+  });
+
   it("rejects a category outside the contract or a series without a unit", () => {
     const projection = project([
       tool(
