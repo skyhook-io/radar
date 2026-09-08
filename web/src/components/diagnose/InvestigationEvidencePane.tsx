@@ -425,9 +425,11 @@ export function InvestigationEvidencePane({
   const [caseReveal, setCaseReveal] = useState<
     { sourceId: string; requestId: number } | undefined
   >(undefined);
+  // A ruled-out reveal belongs to the case that produced it; a new parent
+  // request or a new assessment's case supersedes it.
   useEffect(() => {
     setCaseReveal(undefined);
-  }, [revealRequest?.requestId]);
+  }, [revealRequest?.requestId, investigationCase]);
   const collectionByGroup = partition.collectionByGroup;
   // A placed item can still sit on a withheld broader card; a link to it
   // would have nowhere to go.
