@@ -3155,8 +3155,10 @@ describe("query_prometheus evidence", () => {
     expect(group.latest.relevance).toBe("target");
     expect(group.latest.tier).toBe("supporting");
     expect(group.latest.tone).toBe("neutral");
-    expect(group.latest.title).toBe("Prometheus metrics");
-    expect(group.latest.summary).toBe("1 series · 2h window · 25s step");
+    expect(group.latest.title).toBe("container_memory_working_set_bytes");
+    expect(group.latest.summary).toBe(
+      "Prometheus · 1 series · 2h window · 25s step",
+    );
     const data = group.latest.data;
     if (data.type !== "metrics") throw new Error("expected metrics");
     expect(data.mode).toBe("range");
@@ -3225,8 +3227,8 @@ describe("query_prometheus evidence", () => {
       ),
     ]);
     const [group] = groupsOf(projection.groups, "metrics");
-    expect(group.latest.title).toBe("Prometheus values");
-    expect(group.latest.summary).toBe("1 series");
+    expect(group.latest.title).toBe("container_memory_working_set_bytes");
+    expect(group.latest.summary).toBe("Prometheus · 1 series");
     expect(group.latest.data.type === "metrics" && group.latest.data.mode).toBe(
       "instant",
     );
@@ -3267,7 +3269,7 @@ describe("query_prometheus evidence", () => {
     ]);
     const [group] = groupsOf(projection.groups, "metrics");
     expect(group.latest.summary).toBe(
-      "No series matched · 2h window · 25s step",
+      "Prometheus · No series matched · 2h window · 25s step",
     );
   });
 
