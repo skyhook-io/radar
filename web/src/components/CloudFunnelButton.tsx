@@ -5,7 +5,7 @@ import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Coll
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { Tooltip } from './ui/Tooltip'
 import { CloudConnectFlow } from './CloudConnectFlow'
-import { driverConnectUnavailableNote, driverEscapeContent, effectiveConnectionState } from './cloudFunnelState'
+import { driverConnectAvailable, driverEscapeContent, effectiveConnectionState } from './cloudFunnelState'
 import { showApiError } from './ui/Toast'
 import { useConnection } from '../context/ConnectionContext'
 import {
@@ -297,7 +297,7 @@ export function CloudFunnelButton() {
               {/* With no cluster to install into, the pitch must not promise
                   that setup runs here: describe the Cloud-side path instead. */}
               <PitchBody
-                lane={lane === 'driver' && driverConnectUnavailableNote(connectionState) ? 'wizard' : lane}
+                lane={lane === 'driver' && !driverConnectAvailable(connectionState) ? 'wizard' : lane}
                 freeTier={connectInfo.data?.freeTier}
               />
             </div>
@@ -306,7 +306,7 @@ export function CloudFunnelButton() {
               signupUrl={signupUrl}
               driverEscapeUrl={signupUrlFor(driverEscapeContent(connectionState, prepareFailed))}
               prepareFailed={prepareFailed}
-              connectUnavailableNote={driverConnectUnavailableNote(connectionState)}
+              connectAvailable={driverConnectAvailable(connectionState)}
               assurances={connectInfo.data?.assurances}
               notice={connectInfo.data?.notice}
               self={inCluster ? self.data : undefined}
@@ -360,7 +360,7 @@ function ModalFooter({
   signupUrl,
   driverEscapeUrl,
   prepareFailed,
-  connectUnavailableNote,
+  connectAvailable,
   assurances,
   notice,
   self,
@@ -375,10 +375,9 @@ function ModalFooter({
   // cluster to attempt against.
   driverEscapeUrl: string
   prepareFailed: boolean
-  // Non-null while Radar has no connected cluster: the in-app connect has
-  // nothing to inspect, so the browser path takes its place and this text
-  // explains why on hover.
-  connectUnavailableNote: string | null
+  // False while Radar has no connected cluster: the in-app connect has
+  // nothing to inspect, so the Cloud path takes its place.
+  connectAvailable: boolean
   // Live copy from the Hub; undefined until (or unless) it arrives.
   assurances?: string[]
   notice?: string
@@ -443,20 +442,18 @@ function ModalFooter({
         <div className="mb-3.5 card-inner p-3 text-[12px] leading-relaxed text-theme-text-secondary">{notice}</div>
       )}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2.5">
-        {lane === 'driver' && connectUnavailableNote ? (
-          // No cluster to inspect, so the browser wizard is the only path and
-          // takes the primary slot. The reason lives in a tooltip: a visible
-          // note here competed with the pitch above it for attention.
-          <Tooltip content={connectUnavailableNote} delay={100} position="top">
-            <a
-              href={driverEscapeUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={PRIMARY_ACTION_CLASS}
-            >
-              Continue in Radar Cloud
-            </a>
-          </Tooltip>
+        {lane === 'driver' && !connectAvailable ? (
+          // No cluster to inspect, so the Cloud wizard is the only path and
+          // takes the primary slot. No explanation: someone with no cluster
+          // connected is not expecting Radar to install into one.
+          <a
+            href={driverEscapeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={PRIMARY_ACTION_CLASS}
+          >
+            Continue in Radar Cloud
+          </a>
         ) : lane === 'driver' ? (
           <>
             <button
@@ -497,7 +494,7 @@ function ModalFooter({
       </div>
       {/* Mechanics, not marketing: a falsifiable claim the plan card then
           fulfills. Sits next to the button whose click it de-risks. */}
-      {lane === 'driver' && !connectUnavailableNote && (
+      {lane === 'driver' && connectAvailable && (
         <p className="mt-2.5 text-[11px] leading-relaxed text-theme-text-tertiary">
           Nothing installs on click. Radar inspects the cluster and shows you a plan; you approve it in
           the browser before anything changes.

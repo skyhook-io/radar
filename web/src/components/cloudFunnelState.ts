@@ -24,16 +24,8 @@ export function driverEscapeContent(connectionState: ConnectionStateType, prepar
 }
 
 // The in-app connect inspects the live cluster, so it has nothing to do until
-// Radar is connected to one. Until then the browser path is the only way
-// forward, and this text (shown on hover) says why instead of offering a
-// button that would only produce an error.
-export function driverConnectUnavailableNote(connectionState: ConnectionStateType): string | null {
-  switch (connectionState) {
-    case 'connected':
-      return null
-    case 'connecting':
-      return 'Still connecting to this cluster. Once it is ready, you can connect it from here.'
-    case 'disconnected':
-      return 'No cluster is connected. Radar Cloud walks you through connecting one.'
-  }
+// Radar is connected to one. Until then the Cloud wizard is the only way
+// forward, offered in place of a button that would only produce an error.
+export function driverConnectAvailable(connectionState: ConnectionStateType): boolean {
+  return connectionState === 'connected'
 }
