@@ -4786,7 +4786,7 @@ function addDiagnoseMetrics(
     if (
       !entry ||
       !nonEmptyString(entry.category) ||
-      !(entry.category in DIAGNOSE_METRICS_LABELS) ||
+      !Object.hasOwn(DIAGNOSE_METRICS_LABELS, entry.category) ||
       !nonEmptyString(entry.query) ||
       !nonEmptyString(entry.unit) ||
       !Array.isArray(rawSeries) ||
@@ -4814,7 +4814,7 @@ function addDiagnoseMetrics(
       partial,
     };
     builder.observe(
-      `metrics:diagnose:${scope}:${entry.category}`,
+      `metrics:diagnose:${subject.group ?? ""}:${subject.kind}:${subject.namespace ?? ""}:${subject.name}:${entry.category}`,
       "metrics",
       source,
       {
