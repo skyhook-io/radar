@@ -1045,6 +1045,8 @@ describe("ResultCard conclusion states", () => {
     expect(unexplained).toContain(
       "Assessment conflicts with captured evidence",
     );
+  });
+
   it("lists a step's commands in reading order across inline and fenced code", () => {
     const step =
       "Roll it with `kubectl -n dev rollout restart deploy/api`, then verify:\n```bash\nkubectl -n dev rollout status deploy/api\n```";
