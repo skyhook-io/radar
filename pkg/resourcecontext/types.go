@@ -588,9 +588,11 @@ type HPAReplicaBounds struct {
 }
 
 type HPAReasonSummary struct {
-	ID      string `json:"id"`
-	Message string `json:"message"`
-	Detail  string `json:"detail,omitempty"`
+	ID              string `json:"id"`
+	Message         string `json:"message"`
+	Detail          string `json:"detail,omitempty"`
+	ConditionType   string `json:"conditionType,omitempty"`
+	ConditionReason string `json:"conditionReason,omitempty"`
 }
 
 type HPAMetricSummary struct {
