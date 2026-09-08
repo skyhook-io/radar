@@ -81,13 +81,36 @@ function refKey(ref: {
   ].join("/");
 }
 
-function changeKey(change: IssueRecentChange): string {
-  return refKey({
-    kind: change.kind,
-    group: change.apiVersion ? apiVersionToGroup(change.apiVersion) : "",
-    namespace: change.namespace,
-    name: change.name,
-  });
+function looseKey(ref: {
+  kind: string;
+  namespace?: string;
+  name: string;
+}): string {
+  return [ref.kind.toLowerCase(), ref.namespace ?? "", ref.name].join("/");
+}
+
+/**
+ * A change names its resource exactly when it carries an apiVersion. Helm
+ * history rows and older stores omit it, so those match on kind, namespace
+ * and name alone, which is unambiguous only against the subject and its
+ * producer-established relatives.
+ */
+function changeMatchesRelative(
+  change: IssueRecentChange,
+  strictKeys: ReadonlySet<string>,
+  looseKeys: ReadonlySet<string>,
+): boolean {
+  if (change.apiVersion) {
+    return strictKeys.has(
+      refKey({
+        kind: change.kind,
+        group: apiVersionToGroup(change.apiVersion),
+        namespace: change.namespace,
+        name: change.name,
+      }),
+    );
+  }
+  return looseKeys.has(looseKey(change));
 }
 
 function sameResource(
@@ -180,9 +203,9 @@ export function metricsChangeMarkers(
   const domain = metricsDomain(data);
   if (!domain) return [];
   const turnIndex = observation.source.turnIndex;
-  const relativeKeys = new Set(
-    producerRelatives(groups, data.subject, turnIndex).map(refKey),
-  );
+  const relatives = producerRelatives(groups, data.subject, turnIndex);
+  const strictKeys = new Set(relatives.map(refKey));
+  const looseKeys = new Set(relatives.map(looseKey));
   const seen = new Set<string>();
   const markers: ChartAnnotation[] = [];
   for (const group of groups) {
@@ -200,7 +223,7 @@ export function metricsChangeMarkers(
           !Number.isFinite(timestamp) ||
           timestamp < domain.start ||
           timestamp > domain.end ||
-          !relativeKeys.has(changeKey(change))
+          !changeMatchesRelative(change, strictKeys, looseKeys)
         ) {
           continue;
         }
