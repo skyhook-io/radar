@@ -195,3 +195,25 @@ func TestBindCaseFailsClosedWithoutScopeAndClearsOnExplanation(t *testing.T) {
 		t.Fatalf("no request must leave the case absent: %+v", empty)
 	}
 }
+
+func TestExplanationPromptCarriesCaseNotesReadOnly(t *testing.T) {
+	prompt := explanationPrompt(Diagnosis{
+		RootCause: "stale password",
+		Evidence: []DiagnosisEvidenceItem{
+			{Status: EvidenceLinked, Role: EvidenceRoleCause, Claim: "Atlas rejects this password."},
+			{Status: EvidenceUnlinked},
+			{Status: EvidenceLinked, Role: EvidenceRoleContext},
+		},
+		RuledOut: []DiagnosisRuledOut{{Hypothesis: "Account locked", EvidenceIndex: 0}},
+	})
+	if !strings.Contains(prompt, `"cause: Atlas rejects this password."`) || !strings.Contains(prompt, `"Account locked"`) {
+		t.Fatalf("prompt lacks case notes: %s", prompt)
+	}
+	if !strings.Contains(prompt, "must not add, change, or reassign") {
+		t.Fatalf("prompt does not forbid new roles: %s", prompt)
+	}
+	bare := explanationPrompt(Diagnosis{RootCause: "x"})
+	if strings.Contains(bare, `"evidenceNotes"`) || strings.Contains(bare, `"ruledOut"`) {
+		t.Fatalf("empty case must not appear in the prompt: %s", bare)
+	}
+}
