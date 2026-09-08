@@ -8,6 +8,7 @@ import {
   Timeline,
   TurnView,
   appendThinking,
+  remediationCommands,
   upsertTool,
   type TimelineItem,
   type Turn,
@@ -40,13 +41,57 @@ it("keeps earlier remediation copyable without suggesting it is executable", () 
     />,
   );
   expect(html).toContain("Restore the required Secret");
-  expect(html).toContain("Copy remediation step 1");
+  // Prose has nothing worth copying; only a command gets a copy button.
+  expect(html).not.toContain("Copy remediation step");
+  expect(html).not.toContain("Copy command");
   expect(html).toContain("Reassess before applying");
   expect(html).not.toContain("Apply…");
   expect(html).not.toContain("ask the agent to continue");
   expect(html.indexOf("Reassess before applying")).toBeLessThan(
     html.indexOf("Restore the required Secret"),
   );
+});
+
+describe("remediation commands", () => {
+  it("extracts shell commands from inline code and fenced blocks, not identifiers", () => {
+    expect(
+      remediationCommands(
+        "Run `kubectl rollout undo deployment/api -n dev --to-revision=7` to revert; the `MONGO_PASSWORD` key in `Secret/api` stays.",
+      ),
+    ).toEqual(["kubectl rollout undo deployment/api -n dev --to-revision=7"]);
+    expect(
+      remediationCommands(
+        "Then:\n```bash\nhelm rollback prometheus 1 -n opencost\nkubectl -n opencost get pods\n```\nand check `mongosh --host nonprod-boxer.ax6bh.mongodb.net`.",
+      ),
+    ).toEqual([
+      "helm rollback prometheus 1 -n opencost\nkubectl -n opencost get pods",
+      "mongosh --host nonprod-boxer.ax6bh.mongodb.net",
+    ]);
+    expect(
+      remediationCommands("Pin the image to a digest instead of `latest`."),
+    ).toEqual([]);
+  });
+
+  it("offers one copy button per command in a step", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={
+          {
+            rootCause: "Stale credential",
+            report: "Assessment",
+            remediation: [
+              "Roll back with `kubectl rollout undo deployment/api -n dev` and then verify with `kubectl -n dev get pods`.",
+            ],
+          } as Diagnosis
+        }
+        section="actions"
+        compactActions
+      />,
+    );
+    expect(html).toContain("Copy command 1 of step 1");
+    expect(html).toContain("Copy command 2 of step 1");
+    expect(html).not.toContain("Copy remediation step");
+  });
 });
 
 describe("explanation placement", () => {

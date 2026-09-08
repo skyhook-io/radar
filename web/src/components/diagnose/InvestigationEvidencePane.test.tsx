@@ -2745,42 +2745,27 @@ describe("cited broader cards and coverage rows", () => {
       narrowHint: "Pass a name to narrow the query.",
     };
     const projection = project(
-      tool(
-        "events-a",
-        "get_events",
-        narrowed,
-        {
-          summary: JSON.stringify({
-            kind: "Pod",
-            namespace: "shop",
-            name: "api-a",
-          }),
-        },
-      ),
-      tool(
-        "events-b",
-        "get_events",
-        narrowed,
-        {
-          summary: JSON.stringify({
-            kind: "Pod",
-            namespace: "shop",
-            name: "api-b",
-          }),
-        },
-      ),
-      tool(
-        "events-c",
-        "get_events",
-        narrowed,
-        {
-          summary: JSON.stringify({
-            kind: "Pod",
-            namespace: "shop",
-            name: "api-c",
-          }),
-        },
-      ),
+      tool("events-a", "get_events", narrowed, {
+        summary: JSON.stringify({
+          kind: "Pod",
+          namespace: "shop",
+          name: "api-a",
+        }),
+      }),
+      tool("events-b", "get_events", narrowed, {
+        summary: JSON.stringify({
+          kind: "Pod",
+          namespace: "shop",
+          name: "api-b",
+        }),
+      }),
+      tool("events-c", "get_events", narrowed, {
+        summary: JSON.stringify({
+          kind: "Pod",
+          namespace: "shop",
+          name: "api-c",
+        }),
+      }),
     );
     expect(projection.limitations).toHaveLength(1);
     expect(projection.limitations[0].sources).toHaveLength(3);
