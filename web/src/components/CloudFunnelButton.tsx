@@ -160,7 +160,7 @@ export function CloudFunnelButton() {
       if (err instanceof ApiError && err.status === 503) {
         setServerReportedNoCluster(true)
         exitFlow(false)
-        showApiError("Radar isn't connected to a cluster yet", 'Connect a cluster first, or set up Radar Cloud in the browser.')
+        showApiError("Radar isn't connected to a cluster yet", 'Connect a cluster first, or continue in Radar Cloud.')
         return
       }
       // Anything else failed before a flow existed. Return to the pitch rather
@@ -449,7 +449,7 @@ function ModalFooter({
               rel="noopener noreferrer"
               className={PRIMARY_ACTION_CLASS}
             >
-              Set up in the browser
+              Continue in Radar Cloud
             </a>
           </Tooltip>
         ) : lane === 'driver' ? (
@@ -471,7 +471,7 @@ function ModalFooter({
               rel="noopener noreferrer"
               className="whitespace-nowrap text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary hover:underline underline-offset-2 transition-colors"
             >
-              or set up in the browser
+              or set up in Radar Cloud
             </a>
           </>
         ) : cliOnly ? null : (
