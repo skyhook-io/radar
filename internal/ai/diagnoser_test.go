@@ -9,8 +9,11 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/investigationrefs"
 )
@@ -920,5 +923,188 @@ func TestDiagnoseStream_ProcessAndStreamErrors(t *testing.T) {
 	}
 	if diag.RootCause != "bad tag" {
 		t.Errorf("structured conclusion not preserved: %q", diag.RootCause)
+	}
+}
+
+// TestParseStream_InitReportsAgentReady pins the Claude Code system/init line:
+// the resolved model, the Radar tool count by MCP prefix, and every MCP
+// server's status, including a failed one the UI must surface as a warning.
+func TestParseStream_InitReportsAgentReady(t *testing.T) {
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"hook_started","hook_name":"SessionStart:startup","session_id":"s1"}`,
+		`{"type":"system","subtype":"init","session_id":"s1","tools":["Bash","mcp__radar__diagnose","mcp__radar__get_resource","mcp__other__ping"],"mcp_servers":[{"name":"radar","status":"connected"},{"name":"other","status":"failed"}],"model":"claude-opus-5[1m]"}`,
+		`{"type":"result","result":"done","num_turns":1}`,
+	}, "\n")
+	var ready []StreamEvent
+	parseStream(strings.NewReader(stream), func(ev StreamEvent) {
+		if ev.Type == "phase" {
+			ready = append(ready, ev)
+		}
+	})
+	if len(ready) != 1 || ready[0].Phase != "ready" {
+		t.Fatalf("phase events = %+v, want exactly one ready phase", ready)
+	}
+	got := ready[0]
+	if got.Model != "claude-opus-5[1m]" {
+		t.Errorf("model = %q", got.Model)
+	}
+	if got.ToolCount == nil || *got.ToolCount != 2 {
+		t.Errorf("radar tool count = %v, want 2", got.ToolCount)
+	}
+	want := []MCPServerStatus{{Name: "radar", Status: "connected"}, {Name: "other", Status: "failed"}}
+	if len(got.MCPServers) != len(want) {
+		t.Fatalf("mcp servers = %+v, want %+v", got.MCPServers, want)
+	}
+	for i := range want {
+		if got.MCPServers[i] != want[i] {
+			t.Errorf("mcp server %d = %+v, want %+v", i, got.MCPServers[i], want[i])
+		}
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"toolCount":2`, `"mcpServers":[`, `"model":"claude-opus-5[1m]"`} {
+		if !strings.Contains(string(raw), field) {
+			t.Errorf("serialized ready phase %s lacks %s", raw, field)
+		}
+	}
+	zero := agentReadyEvent("m", nil, nil)
+	if raw, _ := json.Marshal(zero); !strings.Contains(string(raw), `"toolCount":0`) {
+		t.Errorf("a zero Radar tool count must serialize, got %s", raw)
+	}
+}
+
+// TestDiagnoseStreamReportsHandshakeOnce pins the agent-agnostic "connected"
+// phase: the private mount's handshake produces exactly one event per turn, no
+// matter how many times the scope is marked, and it lands before the stream ends.
+func TestDiagnoseStreamReportsHandshakeOnce(t *testing.T) {
+	dir := t.TempDir()
+	flag := filepath.Join(dir, "handshake-observed")
+	bin := filepath.Join(dir, "claude")
+	resultLine := `{"type":"result","result":"` + "```json\\n{\\\"healthy\\\":true}\\n```" + `","num_turns":1}`
+	script := "#!/bin/sh\nwhile [ ! -f '" + flag + "' ]; do sleep 0.02; done\n" +
+		"printf '%s\\n' '" + resultLine + "'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	refs := investigationrefs.NewRegistry()
+	d, err := New(bin, refs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := strings.Repeat("d", 26)
+	started := make(chan struct{})
+	var mu sync.Mutex
+	var phases []string
+	type outcome struct {
+		diag Diagnosis
+		err  error
+	}
+	finished := make(chan outcome, 1)
+	go func() {
+		diag, err := d.DiagnoseStream(context.Background(), Request{
+			Kind: "Pod", Namespace: "ns", Name: "p", MCPPort: 1, EvidenceScope: scope,
+		}, func(ev StreamEvent) {
+			if ev.Type != "phase" {
+				return
+			}
+			mu.Lock()
+			phases = append(phases, ev.Phase)
+			mu.Unlock()
+			if ev.Phase == "investigating" {
+				close(started)
+			}
+		})
+		finished <- outcome{diag, err}
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("agent never started")
+	}
+	if !refs.MarkConnected(scope) || !refs.MarkConnected(scope) {
+		t.Fatal("live turn scope rejected its handshake")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		seen := len(phases) >= 2
+		mu.Unlock()
+		if seen || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := os.WriteFile(flag, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var result outcome
+	select {
+	case result = <-finished:
+	case <-time.After(10 * time.Second):
+		t.Fatal("DiagnoseStream did not finish")
+	}
+	if result.err != nil || !result.diag.Healthy {
+		t.Fatalf("diagnosis = %+v, err = %v", result.diag, result.err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(phases, ",") != "investigating,connected" {
+		t.Fatalf("phases = %v, want investigating then exactly one connected", phases)
+	}
+}
+
+// handshakeAgent completes the private-mount handshake from inside command()
+// and exits at once, so the stream can end in the same instant the scope is
+// marked connected.
+type handshakeAgent struct {
+	refs *investigationrefs.Registry
+}
+
+func (*handshakeAgent) Name() string      { return "claude" }
+func (*handshakeAgent) Path() string      { return "printf" }
+func (*handshakeAgent) SigninCmd() string { return "claude auth login" }
+func (a *handshakeAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
+	return parseStream(r, onEvent)
+}
+func (a *handshakeAgent) command(ctx context.Context, spec turnSpec) (*exec.Cmd, func(), error) {
+	u, err := url.Parse(spec.mcpURL)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	if !a.refs.MarkConnected(u.Query().Get("scope")) {
+		return nil, func() {}, fmt.Errorf("test agent could not mark the scope connected")
+	}
+	stream := `{"type":"result","result":"` + "```json\\n{\\\"healthy\\\":true}\\n```" + `","num_turns":1}`
+	return exec.CommandContext(ctx, "printf", "%s\n", stream), func() {}, nil
+}
+
+// TestDiagnoseStreamReportsHandshakeOnShortTurn pins that a handshake which
+// lands as the stream ends is still reported exactly once, before the turn
+// returns, rather than lost to a select that happens to observe the end first.
+func TestDiagnoseStreamReportsHandshakeOnShortTurn(t *testing.T) {
+	refs := investigationrefs.NewRegistry()
+	diagnoser := &Diagnoser{
+		agents:       map[string]Agent{"claude": &handshakeAgent{refs: refs}},
+		defName:      "claude",
+		evidenceRefs: refs,
+	}
+	for i := 0; i < 20; i++ {
+		var phases []string
+		diag, err := diagnoser.DiagnoseStream(context.Background(), Request{
+			Kind: "Pod", Namespace: "ns", Name: "p", MCPPort: 1,
+			EvidenceScope: strings.Repeat("e", 26),
+		}, func(ev StreamEvent) {
+			if ev.Type == "phase" {
+				phases = append(phases, ev.Phase)
+			}
+		})
+		if err != nil || !diag.Healthy {
+			t.Fatalf("diagnosis = %+v, err = %v", diag, err)
+		}
+		if strings.Join(phases, ",") != "investigating,connected" {
+			t.Fatalf("run %d phases = %v, want investigating then exactly one connected", i, phases)
+		}
 	}
 }

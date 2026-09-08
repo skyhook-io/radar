@@ -91,3 +91,32 @@ func TestRegistryBoundsIssuedRecordsPerActiveScope(t *testing.T) {
 		t.Fatalf("closed records = %d, want %d", len(records), maxIssuedRefsPerScope)
 	}
 }
+
+func TestRegistryMarksHandshakeOncePerActiveScope(t *testing.T) {
+	registry := NewRegistry()
+	scope := strings.Repeat("c", 26)
+	if registry.MarkConnected(scope) {
+		t.Fatal("inactive scope reported a handshake")
+	}
+	lease, err := registry.Begin(scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-lease.Connected():
+		t.Fatal("scope reported connected before any handshake")
+	default:
+	}
+	if !registry.MarkConnected(scope) || !registry.MarkConnected(scope) {
+		t.Fatal("active scope rejected its handshake")
+	}
+	select {
+	case <-lease.Connected():
+	default:
+		t.Fatal("handshake did not close Connected")
+	}
+	lease.Close()
+	if registry.MarkConnected(scope) {
+		t.Fatal("closed scope reported a handshake")
+	}
+}
