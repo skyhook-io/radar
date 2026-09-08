@@ -24,7 +24,10 @@ import {
 import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 import type { Diagnosis } from "../../api/diagnose";
 import { AssessmentSources, ResultCard } from "./parts";
-import { investigationEvidenceCoverageLimited } from "./investigationState";
+import {
+  investigationEvidenceConflictsWithHealthy,
+  investigationEvidenceCoverageLimited,
+} from "./investigationState";
 import { metricsChangeMarkers } from "./investigationMetrics";
 
 const onViewSource = vi.fn();
@@ -2236,7 +2239,8 @@ describe("InvestigationEvidencePane metrics cards", () => {
 
   it("promotes a cited broader chart into main with its expression as the axis label", () => {
     const ref = evidenceRef("a", "b");
-    const query = "sum(rate(container_cpu_usage_seconds_total[5m])) by (namespace)";
+    const query =
+      "sum(rate(container_cpu_usage_seconds_total[5m])) by (namespace)";
     const projection = project(
       tool("prom", "query_prometheus", rangeResult([], query), {
         evidenceRef: ref,
@@ -2307,7 +2311,9 @@ describe("InvestigationEvidencePane metrics cards", () => {
       "1 series has a single sample in this window, listed with its time:",
     );
     expect(html).toContain("container=init");
-    expect(html.match(/data-testid="investigation-metrics-sparse-series"/g)).toHaveLength(2);
+    expect(
+      html.match(/data-testid="investigation-metrics-sparse-series"/g),
+    ).toHaveLength(2);
     expect(html).toContain("api-7f6-abc");
   });
 
@@ -2392,7 +2398,13 @@ describe("InvestigationEvidencePane metrics cards", () => {
       tool("prom", "query_prometheus", rangeResult(targetSelectors)),
     );
     const onOpenResource = vi.fn();
-    const html = render(projection, false, undefined, undefined, onOpenResource);
+    const html = render(
+      projection,
+      false,
+      undefined,
+      undefined,
+      onOpenResource,
+    );
     expect(html).toContain('data-chart-annotation="change"');
     expect(html.match(/data-chart-annotation="change"/g)).toHaveLength(1);
     expect(html).toContain("ConfigMap api-config");
@@ -2467,7 +2479,13 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
     expect(partition.workload.map((group) => group.kind)).toContain("metrics");
     expect(partition.hiddenMetrics).toBe(0);
     const onOpenResource = vi.fn();
-    const html = render(projection, false, undefined, undefined, onOpenResource);
+    const html = render(
+      projection,
+      false,
+      undefined,
+      undefined,
+      onOpenResource,
+    );
     expect(html).toContain("CPU usage · shop/api");
     expect(html).toContain("1 pod · 60m window · 1m2s step");
     expect(html).toContain("(cores)");
@@ -2573,7 +2591,8 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
           window,
           pods: 1,
           series: [],
-          error: "metrics omitted: 3s budget exceeded before all queries answered",
+          error:
+            "metrics omitted: 3s budget exceeded before all queries answered",
         },
       }),
     );
@@ -3095,5 +3114,84 @@ describe("InvestigationEvidencePane scaled-by section", () => {
       ),
     );
     expect(html).not.toContain("Scaled by");
+  });
+});
+
+describe("supporting adverse cards are visibly marked", () => {
+  const ref = evidenceRef("a", "b");
+  const bundle = {
+    resource: {
+      apiVersion: "apps/v1",
+      kind: "Deployment",
+      metadata: { namespace: "shop", name: "api" },
+      status: { readyReplicas: 1, replicas: 1 },
+    },
+    pods: 1,
+    logsCurrent: [
+      {
+        pod: "api-abc",
+        container: "api",
+        logs: {
+          lines: ["ERROR failed to resolve backend service"],
+          totalLines: 1,
+          matchedLines: 1,
+          fallback: false,
+        },
+      },
+      {
+        pod: "api-abc",
+        container: "proxy",
+        logs: {
+          lines: ["proxy ready"],
+          totalLines: 1,
+          matchedLines: 0,
+          fallback: true,
+        },
+      },
+    ],
+  };
+
+  it("draws a thin warning rule on a supporting warning card and none on neutral or context cards", () => {
+    const projection = project(
+      tool("diag", "diagnose", bundle, { evidenceRef: ref }),
+    );
+    const logs = projection.groups.filter((group) => group.kind === "logs");
+    const [errorLogs, proxyLogs] = logs;
+    expect(errorLogs.latest.tier).toBe("supporting");
+    expect(errorLogs.latest.tone).toBe("warning");
+    expect(proxyLogs.latest.tier).toBe("context");
+    expect(proxyLogs.latest.tone).toBe("neutral");
+    const html = render(projection);
+    const card = (id: string) =>
+      html.slice(html.indexOf(`id="${id}"`), html.indexOf(`id="${id}"`) + 900);
+    expect(card(errorLogs.id)).toContain(
+      "border-l-2 border-l-semantic-warning",
+    );
+    expect(card(errorLogs.id)).not.toContain("border-l-[3px]");
+    expect(card(proxyLogs.id)).not.toContain("border-l-");
+    const resource = projection.groups.find(
+      (group) => group.kind === "resource",
+    )!;
+    expect(resource.latest.tier).toBe("context");
+    expect(card(resource.id)).not.toContain("border-l-");
+  });
+
+  it("marks every card that triggers the healthy-conflict banner", () => {
+    const projection = project(
+      tool("diag", "diagnose", bundle, { evidenceRef: ref }),
+    );
+    expect(investigationEvidenceConflictsWithHealthy(projection)).toBe(true);
+    const html = render(projection);
+    const triggering = projection.groups.filter((group) =>
+      investigationEvidenceConflictsWithHealthy({ groups: [group] }),
+    );
+    expect(triggering.length).toBeGreaterThan(0);
+    for (const group of triggering) {
+      const start = html.indexOf(`id="${group.id}"`);
+      expect(start).toBeGreaterThan(-1);
+      expect(html.slice(start, start + 900)).toMatch(
+        /border-l-(2 border-l-semantic-(warning|error)|\[3px\])/,
+      );
+    }
   });
 });
