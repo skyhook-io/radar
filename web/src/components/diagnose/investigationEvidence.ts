@@ -347,6 +347,8 @@ export type InvestigationEvidenceData =
        * that they explain the resource under investigation.
        */
       relevance: "target" | "producer-related" | "broader";
+      /** Pods whose startup blocker repeats this issue word for word. */
+      pods?: string[];
     }
   | {
       type: "startup";
@@ -1757,6 +1759,7 @@ function addIssueObservation(
   source: InvestigationEvidenceSource,
   value: Issue,
   producerRelevance: InvestigationEvidenceRelevance = "broader",
+  pods?: string[],
 ): void {
   const matchesTarget = resourceMatchesTarget(builder.target, {
     kind: value.kind,
@@ -1776,7 +1779,12 @@ function addIssueObservation(
     relevance,
     title: value.reason,
     summary: value.cause || value.message,
-    data: { type: "issue", issue: value, relevance },
+    data: {
+      type: "issue",
+      issue: value,
+      relevance,
+      ...(pods && pods.length > 0 ? { pods } : {}),
+    },
   });
   addIssueLimitations(builder, source, value);
 }
@@ -2298,11 +2306,57 @@ function adaptDiagnose(
   if (!relatedValid) {
     invalidPayload(builder, source, "Classified issues");
   }
+  const blockersRaw = value.startupBlockers;
+  let blockersValid = blockersRaw === undefined || Array.isArray(blockersRaw);
+  // Pods of one workload usually share a blocker word for word. Merge those
+  // into one finding with the pod list; anything else keeps its own card and
+  // its own identity so saved runs match as before.
+  const blockerGroups: Array<{
+    blocker: DiagnosisStartupBlocker;
+    pods: string[];
+    foldedInto?: Issue;
+  }> = [];
+  if (Array.isArray(blockersRaw)) {
+    const merged = new Map<string, (typeof blockerGroups)[number]>();
+    for (const raw of blockersRaw) {
+      const blocker = startupBlocker(raw);
+      if (!blocker) {
+        blockersValid = false;
+        invalidPayload(builder, source, "Startup evidence");
+        continue;
+      }
+      const key =
+        blocker.kind === "Pod"
+          ? `${blocker.reason} ${blocker.severity} ${blocker.message}`
+          : undefined;
+      const existing = key ? merged.get(key) : undefined;
+      if (existing) {
+        if (!existing.pods.includes(blocker.name)) {
+          existing.pods.push(blocker.name);
+        }
+        continue;
+      }
+      const entry = { blocker, pods: [blocker.name] };
+      if (key) merged.set(key, entry);
+      blockerGroups.push(entry);
+    }
+  }
   for (const item of related) {
     // `diagnose` is itself scoped to one resource and declares these rows as
     // related evidence. That producer contract is stronger than a broad
     // `issues` query, even when the related row is a child Pod.
-    addIssueObservation(builder, source, item, relatedRelevance);
+    // A classified issue and the pods' startup blocker are the same fact
+    // seen from the workload and from its pods; one card carries both.
+    const folded = blockerGroups.find(
+      (group) =>
+        !group.foldedInto &&
+        group.blocker.kind === "Pod" &&
+        group.blocker.reason === item.reason &&
+        (group.blocker.message === item.message ||
+          group.blocker.message === item.cause),
+    );
+    if (folded) folded.foldedInto = item;
+    addIssueObservation(builder, source, item, relatedRelevance, folded?.pods);
   }
 
   const context = contextFrom(value.resourceContext);
@@ -2350,41 +2404,9 @@ function adaptDiagnose(
     bundleRelevance,
   );
 
-  const blockersRaw = value.startupBlockers;
-  let blockersValid = blockersRaw === undefined || Array.isArray(blockersRaw);
   if (Array.isArray(blockersRaw)) {
-    // Pods of one workload usually share a blocker word for word. Merge those
-    // into one finding with the pod list; anything else keeps its own card and
-    // its own identity so saved runs match as before.
-    const merged = new Map<
-      string,
-      { blocker: DiagnosisStartupBlocker; pods: string[] }
-    >();
-    const ordered: Array<{ blocker: DiagnosisStartupBlocker; pods: string[] }> =
-      [];
-    for (const raw of blockersRaw) {
-      const blocker = startupBlocker(raw);
-      if (!blocker) {
-        blockersValid = false;
-        invalidPayload(builder, source, "Startup evidence");
-        continue;
-      }
-      const key =
-        blocker.kind === "Pod"
-          ? `${blocker.reason} ${blocker.severity} ${blocker.message}`
-          : undefined;
-      const existing = key ? merged.get(key) : undefined;
-      if (existing) {
-        if (!existing.pods.includes(blocker.name)) {
-          existing.pods.push(blocker.name);
-        }
-        continue;
-      }
-      const entry = { blocker, pods: [blocker.name] };
-      if (key) merged.set(key, entry);
-      ordered.push(entry);
-    }
-    for (const { blocker, pods } of ordered) {
+    for (const { blocker, pods, foldedInto } of blockerGroups) {
+      if (foldedInto) continue;
       const grouped = blocker.kind === "Pod" && pods.length > 1;
       builder.observe(
         grouped
