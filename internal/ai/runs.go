@@ -938,33 +938,37 @@ func (r *Run) finishTurnWithBarrier(diag Diagnosis, turnErr error, apply bool, t
 // is correlation data, not authority. The method scans canonical retained events
 // while r.mu is held, so a callback rejected after Stop/context-switch can never
 // become proof. Radar's read-tool allowlist is retained as defense in depth.
+//
+// The same match table binds the agent's case (Evidence, RuledOut) for every
+// assessment, healthy and inconclusive included; a failed item is dropped on
+// its own, never the whole case.
 func (r *Run) bindRootCauseEvidenceLocked(diag *Diagnosis) {
 	// These fields exist only long enough to authorize this binding. Clear them
 	// on every branch so the terminal in-memory event does not retain duplicate
 	// producer payloads or untrusted model requests after public provenance exists.
 	defer func() {
 		diag.evidenceRequest = evidenceReferenceRequest{}
+		diag.caseRequest = caseRequest{}
 		diag.evidenceScope = ""
 		diag.issuedEvidence = nil
 	}()
-	if diag.RootCause == "" {
-		diag.RootCauseEvidence = nil
-		return
+	matches := r.turnEvidenceMatchesLocked(diag)
+	scopeValid := evidenceScopeRe.MatchString(diag.evidenceScope)
+	scopePrefix := "ev_" + diag.evidenceScope + "_"
+	refLinked := func(ref string) bool {
+		candidate := matches[ref]
+		return scopeValid && strings.HasPrefix(ref, scopePrefix) && candidate.count == 1 && candidate.valid
 	}
-	request := diag.evidenceRequest
-	if request.invalid {
-		diag.RootCauseEvidence = &RootCauseEvidence{Status: EvidenceInvalid}
-		return
-	}
-	if !request.present || len(request.refs) == 0 {
-		diag.RootCauseEvidence = &RootCauseEvidence{Status: EvidenceMissing}
-		return
-	}
-	if !evidenceScopeRe.MatchString(diag.evidenceScope) {
-		diag.RootCauseEvidence = &RootCauseEvidence{Status: EvidenceInvalid}
-		return
-	}
+	bindRootCauseRefs(diag, refLinked)
+	bindCase(diag, refLinked)
+}
 
+type evidenceMatch struct {
+	count int
+	valid bool
+}
+
+func (r *Run) turnEvidenceMatchesLocked(diag *Diagnosis) map[string]evidenceMatch {
 	turnStart := len(r.events)
 	for i := len(r.events) - 1; i >= 0; i-- {
 		if r.events[i].Event.Type == "turn" {
@@ -999,11 +1003,7 @@ func (r *Run) bindRootCauseEvidenceLocked(diag *Diagnosis) {
 		toolsByStepID[step.ID] = identity
 	}
 
-	type match struct {
-		count int
-		valid bool
-	}
-	matches := make(map[string]match, len(request.refs))
+	matches := make(map[string]evidenceMatch)
 	for _, retained := range r.events[turnStart:] {
 		step := retained.Event.Step
 		if retained.Event.Type != "step" || step == nil || step.EvidenceRef == "" {
@@ -1022,11 +1022,25 @@ func (r *Run) bindRootCauseEvidenceLocked(diag *Diagnosis) {
 			!step.Truncated && strings.TrimSpace(step.Result) != ""
 		matches[step.EvidenceRef] = candidate
 	}
+	return matches
+}
 
-	scopePrefix := "ev_" + diag.evidenceScope + "_"
+func bindRootCauseRefs(diag *Diagnosis, refLinked func(string) bool) {
+	if diag.RootCause == "" {
+		diag.RootCauseEvidence = nil
+		return
+	}
+	request := diag.evidenceRequest
+	if request.invalid {
+		diag.RootCauseEvidence = &RootCauseEvidence{Status: EvidenceInvalid}
+		return
+	}
+	if !request.present || len(request.refs) == 0 {
+		diag.RootCauseEvidence = &RootCauseEvidence{Status: EvidenceMissing}
+		return
+	}
 	for _, ref := range request.refs {
-		candidate := matches[ref]
-		if !strings.HasPrefix(ref, scopePrefix) || candidate.count != 1 || !candidate.valid {
+		if !refLinked(ref) {
 			diag.RootCauseEvidence = &RootCauseEvidence{Status: EvidenceInvalid}
 			return
 		}
@@ -1034,6 +1048,47 @@ func (r *Run) bindRootCauseEvidenceLocked(diag *Diagnosis) {
 	diag.RootCauseEvidence = &RootCauseEvidence{
 		Status: EvidenceLinked,
 		Refs:   append([]string(nil), request.refs...),
+	}
+}
+
+// bindCase keeps every item at its parsed index so ruled_out indexes stay
+// meaningful; an item that fails validation becomes unlinked and a ruled-out
+// entry pointing at an unlinked or missing item is dropped.
+func bindCase(diag *Diagnosis, refLinked func(string) bool) {
+	request := diag.caseRequest
+	diag.Evidence = nil
+	diag.RuledOut = nil
+	if len(request.items) == 0 {
+		return
+	}
+	items := make([]DiagnosisEvidenceItem, len(request.items))
+	for i, item := range request.items {
+		if !item.valid || !refLinked(item.ref) {
+			items[i] = DiagnosisEvidenceItem{Status: EvidenceUnlinked}
+			continue
+		}
+		items[i] = DiagnosisEvidenceItem{
+			Status: EvidenceLinked, Ref: item.ref, Role: item.role, Claim: item.claim,
+		}
+		if item.subject != nil {
+			subject := *item.subject
+			if subject.Group != nil {
+				group := *subject.Group
+				subject.Group = &group
+			}
+			if subject.Namespace != nil {
+				namespace := *subject.Namespace
+				subject.Namespace = &namespace
+			}
+			items[i].Subject = &subject
+		}
+	}
+	diag.Evidence = items
+	for _, entry := range request.ruledOut {
+		if entry.EvidenceIndex >= len(items) || items[entry.EvidenceIndex].Status != EvidenceLinked {
+			continue
+		}
+		diag.RuledOut = append(diag.RuledOut, entry)
 	}
 }
 

@@ -705,6 +705,16 @@ export function investigationEvidenceSourceDomId(sourceId: string): string {
 
 const investigationEvidenceRefRe = /^ev_[a-z2-7]{26,128}_[a-z2-7]{26,128}$/;
 
+export function isInvestigationEvidenceRef(value: string): boolean {
+  return investigationEvidenceRefRe.test(value);
+}
+
+export function investigationSourceArgs(
+  source: InvestigationEvidenceSource,
+): Record<string, unknown> | undefined {
+  return record(source.args ? parseJSON(source.args) : undefined);
+}
+
 export function resolveInvestigationRootCauseEvidence(
   projection: InvestigationEvidenceProjection,
   evidence: RootCauseEvidence | undefined,
@@ -4499,13 +4509,12 @@ function metricsSelector(
   return { metric: item.metric, matchers };
 }
 
-const WORKLOAD_SELECTOR_LABELS: Readonly<Record<string, string | undefined>> =
-  {
-    deployment: "deployment",
-    statefulset: "statefulset",
-    daemonset: "daemonset",
-    workload: undefined,
-  };
+const WORKLOAD_SELECTOR_LABELS: Readonly<Record<string, string | undefined>> = {
+  deployment: "deployment",
+  statefulset: "statefulset",
+  daemonset: "daemonset",
+  workload: undefined,
+};
 
 /**
  * A regex matcher names the target only in the exact forms the plan admits,
@@ -4572,7 +4581,9 @@ export function metricsScope(
             regexNamesExactly(matcher.value, target.namespace ?? "", ""))),
     );
     if (!inNamespace) return "broader";
-    if (!selector.matchers.some((matcher) => selectorNamesTarget(target, matcher)))
+    if (
+      !selector.matchers.some((matcher) => selectorNamesTarget(target, matcher))
+    )
       allNameTarget = false;
   }
   return allNameTarget ? "target" : "producer-related";
@@ -4596,7 +4607,9 @@ function metricsWindowLabel(data: {
       : minutes >= 120
         ? `${Math.round(minutes / 60)}h`
         : `${minutes}m`;
-  return data.step ? `${window} window · ${data.step} step` : `${window} window`;
+  return data.step
+    ? `${window} window · ${data.step} step`
+    : `${window} window`;
 }
 
 const DIAGNOSE_METRICS_LABELS: Record<string, string> = {
@@ -4813,9 +4826,7 @@ function adaptQueryPrometheus(
       tone: "neutral",
       title: mode === "range" ? "Prometheus metrics" : "Prometheus values",
       summary: [
-        series.length === 0
-          ? "No series matched"
-          : `${series.length} series`,
+        series.length === 0 ? "No series matched" : `${series.length} series`,
         windowLabel,
       ]
         .filter((part): part is string => Boolean(part))

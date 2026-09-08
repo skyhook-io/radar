@@ -54,6 +54,11 @@ import {
   type InvestigationRootCauseEvidenceResolution,
   type InvestigationEvidenceSource,
 } from "./investigationEvidence";
+import type {
+  InvestigationCaseItem,
+  InvestigationCaseResolution,
+} from "./investigationCase";
+import { AgentClaimNote, AgentRoleChip } from "./AgentCase";
 
 import { useDisclosureReveal } from "./useDisclosureReveal";
 
@@ -1982,39 +1987,111 @@ export function ResultCard({
   );
 }
 
+/**
+ * Sources the assessment cites: root-cause links first, then every source an
+ * agent item cites. Each row shows the roles the agent gave that source; a
+ * claim the pane could not pin to one observation is shown here in full.
+ */
+export function assessmentSourceRows(
+  resolution: InvestigationRootCauseEvidenceResolution | undefined,
+  investigationCase: InvestigationCaseResolution | undefined,
+): Array<{
+  source: InvestigationEvidenceSource;
+  items: InvestigationCaseItem[];
+}> {
+  const rows = new Map<
+    string,
+    { source: InvestigationEvidenceSource; items: InvestigationCaseItem[] }
+  >();
+  if (resolution?.status === "linked") {
+    for (const link of resolution.links) {
+      rows.set(link.source.id, { source: link.source, items: [] });
+    }
+  }
+  for (const item of investigationCase?.items ?? []) {
+    const row = rows.get(item.source.id) ?? { source: item.source, items: [] };
+    row.items.push(item);
+    rows.set(item.source.id, row);
+  }
+  return [...rows.values()];
+}
+
 export function AssessmentSources({
   resolution,
+  investigationCase,
+  readOnly = false,
   onViewSource,
 }: {
   resolution?: InvestigationRootCauseEvidenceResolution;
+  investigationCase?: InvestigationCaseResolution;
+  /**
+   * An earlier assessment no longer annotates the Evidence pane, so its
+   * card- and revision-placed claims are listed here with the observation
+   * they were bound to instead of being lost.
+   */
+  readOnly?: boolean;
   onViewSource: (sourceId: string) => void;
 }) {
-  if (resolution?.status !== "linked" || !resolution.links.length) return null;
+  const rows = assessmentSourceRows(resolution, investigationCase);
+  if (rows.length === 0) return null;
   return (
     <div className="mt-3 border-t border-theme-border/60 pt-2">
       <h4 className="text-xs font-medium text-theme-text-secondary">
         Sources used for this assessment
       </h4>
       <ul className="mt-1 space-y-1">
-        {resolution.links.map((link) => (
-          <li key={link.source.id}>
-            <button
-              type="button"
-              aria-label={`View ${prettyTool(link.source.tool)} source used for this assessment`}
-              onClick={() => onViewSource(link.source.id)}
-              className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-accent-text hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-            >
-              <FileSearch className="h-3.5 w-3.5 shrink-0" aria-hidden />
-              <span className="min-w-0 flex-1">
-                <span className="font-medium">
-                  {prettyTool(link.source.tool)}
+        {rows.map(({ source, items }) => {
+          const roles = [...new Set(items.map((item) => item.role))];
+          const shown = items.filter(
+            (item) => item.claim && (readOnly || item.placement === "source"),
+          );
+          return (
+            <li key={source.id}>
+              <button
+                type="button"
+                aria-label={`View ${prettyTool(source.tool)} source used for this assessment`}
+                onClick={() => onViewSource(source.id)}
+                className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-accent-text hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+              >
+                <FileSearch className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                <span className="min-w-0 flex-1">
+                  {roles.length > 0 ? (
+                    <span className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-medium">
+                        {prettyTool(source.tool)}
+                      </span>
+                      {roles.map((role) => (
+                        <AgentRoleChip key={role} role={role} />
+                      ))}
+                    </span>
+                  ) : (
+                    <span className="font-medium">
+                      {prettyTool(source.tool)}
+                    </span>
+                  )}
+                  <CitedSourceScope source={source} />
                 </span>
-                <CitedSourceScope source={link.source} />
-              </span>
-              <span className="shrink-0">View source</span>
-            </button>
-          </li>
-        ))}
+                <span className="shrink-0">View source</span>
+              </button>
+              {shown.length > 0 ? (
+                <div className="mx-2 mb-1 space-y-1" data-source-placed-claims>
+                  {shown.map((item) => (
+                    <AgentClaimNote
+                      key={item.index}
+                      claim={
+                        item.placement === "source" || !item.observation
+                          ? item.claim
+                          : `${item.observation.title}: ${item.claim}`
+                      }
+                      role={roles.length > 1 ? item.role : undefined}
+                      className="pt-1"
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
