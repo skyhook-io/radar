@@ -276,16 +276,20 @@ func TestInvestigationHandlerAnnotatesRealToolCallWithoutChangingPublicContract(
 func TestInvestigationMiddlewareMarksScopeConnectedOnHandshake(t *testing.T) {
 	scope := strings.Repeat("a", 26)
 	validCtx := context.WithValue(context.Background(), investigationEvidenceScopeKey{}, scope)
+	handshakeErr := errors.New("handshake rejected")
 	for _, test := range []struct {
 		name      string
 		ctx       context.Context
 		method    string
+		err       error
 		connected bool
 	}{
 		{name: "initialize", ctx: validCtx, method: "initialize", connected: true},
 		{name: "tools/list", ctx: validCtx, method: "tools/list", connected: true},
 		{name: "tools/call is not a handshake", ctx: validCtx, method: "tools/call"},
 		{name: "missing scope", ctx: context.Background(), method: "initialize"},
+		{name: "rejected initialize", ctx: validCtx, method: "initialize", err: handshakeErr},
+		{name: "failed tools/list", ctx: validCtx, method: "tools/list", err: handshakeErr},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			refs := investigationrefs.NewRegistry()
@@ -296,11 +300,11 @@ func TestInvestigationMiddlewareMarksScopeConnectedOnHandshake(t *testing.T) {
 			defer lease.Close()
 			wrapped := investigationEvidenceReferenceMiddleware(refs)(
 				func(context.Context, string, mcpsdk.Request) (mcpsdk.Result, error) {
-					return &mcpsdk.CallToolResult{}, nil
+					return &mcpsdk.CallToolResult{}, test.err
 				},
 			)
-			if _, err := wrapped(test.ctx, test.method, nil); err != nil {
-				t.Fatal(err)
+			if _, err := wrapped(test.ctx, test.method, nil); !errors.Is(err, test.err) {
+				t.Fatalf("error = %v, want %v", err, test.err)
 			}
 			select {
 			case <-lease.Connected():

@@ -1194,6 +1194,9 @@ export function Timeline({
     (server) => server.status !== "connected",
   );
   const radarServer = failedServers.find((server) => server.name === "radar");
+  const allDefiniteFailures = failedServers.every((server) =>
+    mcpStatusIsFailure(server.status),
+  );
   return (
     <div className="space-y-1.5">
       {items.length > 0 && (
@@ -1204,9 +1207,9 @@ export function Timeline({
       {failedServers.length > 0 && (
         <div
           role="status"
-          className="flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] leading-snug text-theme-text-secondary"
+          className="flex items-start gap-1.5 rounded border border-semantic-warning/40 bg-semantic-warning/10 p-2 text-[11px] leading-snug text-theme-text-secondary"
         >
-          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-semantic-warning" />
           <span>
             {failedServers.map((server, i) => (
               <span key={server.name}>
@@ -1222,7 +1225,9 @@ export function Timeline({
               ? mcpStatusIsFailure(radarServer.status)
                 ? ` at startup — ${agentLabel} had no Radar tools this turn, so it could not use Radar's cluster evidence.`
                 : ` at startup — Radar's tools may not have been available to ${agentLabel} this turn.`
-              : ` at startup — ${agentLabel} ran this turn without those tools.`}
+              : allDefiniteFailures
+                ? ` at startup — ${agentLabel} ran this turn without those tools.`
+                : ` at startup — those tools may not have been available to ${agentLabel} this turn.`}
           </span>
         </div>
       )}
@@ -1366,20 +1371,30 @@ function RunningStatus({ label }: { label: string }) {
   }, []);
   const sinceChange = elapsed - lastChangeRef.current;
   const stalled = elapsed >= 30 && sinceChange >= 30;
+  const counter = runningElapsedLabel(elapsed);
   return (
     <div className="flex items-center gap-2 pt-1 text-xs">
       <Loader2 className="h-3 w-3 shrink-0 animate-spin text-accent" />
-      <span className="ai-shimmer">{label}</span>
-      {elapsed >= 3 && (
-        <span className="shrink-0 text-theme-text-tertiary">· {elapsed}s</span>
-      )}
+      <span className="ai-shimmer min-w-0 truncate">{label}</span>
       {stalled && (
         <span className="shrink-0 text-theme-text-tertiary">
           · still working — no update for {sinceChange}s
         </span>
       )}
+      {counter && (
+        <span className="ml-auto shrink-0 tabular-nums text-theme-text-tertiary">
+          {counter}
+        </span>
+      )}
     </div>
   );
+}
+
+// The wait the operator feels is the whole turn's, so the counter is a
+// row-level figure set apart from the label: "Connected to Radar's tools"
+// followed by "10s" read as if the handshake took that long.
+export function runningElapsedLabel(elapsed: number): string | undefined {
+  return elapsed >= 3 ? `${elapsed}s elapsed` : undefined;
 }
 
 // Claude Code reports each MCP server as connected, failed, needs-auth, or
@@ -1483,15 +1498,15 @@ function ToolRow({
         {prettyTool(step.tool)}
       </span>
       {step.summary && !open && (
-        <span
-          className={`min-w-0 truncate font-mono text-[11px] text-theme-text-tertiary ${errorReason ? "max-w-[40%]" : "flex-1"}`}
-        >
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-theme-text-tertiary">
           {argumentsPreview}
         </span>
       )}
       {errorReason && !open && (
-        <span className="investigation-tool-reason min-w-0 flex-1 truncate text-[11px] text-red-400">
-          {errorReason}
+        // The arguments give way first: they are still readable expanded,
+        // while the reason is the one thing this row exists to say.
+        <span className="investigation-tool-reason max-w-full shrink-0 truncate text-[11px] text-semantic-error">
+          {middleTruncate(errorReason)}
         </span>
       )}
       {durationLabel && (
@@ -1634,10 +1649,13 @@ export function toolDurationLabel(ms: number | undefined): string | undefined {
 
 // The producer's own words for a failed call, reduced to one line. Radar's MCP
 // errors are plain text; a JSON envelope with an `error` field is unwrapped.
+// Radar's not-found errors append retry hints for the agent after an em dash;
+// only the clause before it says what failed, so the hints are dropped.
 export function toolErrorReason(
   result: string | undefined,
 ): string | undefined {
   if (!result) return undefined;
+  let text = result;
   try {
     const parsed: unknown = JSON.parse(result);
     if (
@@ -1645,17 +1663,33 @@ export function toolErrorReason(
       typeof parsed === "object" &&
       typeof (parsed as { error?: unknown }).error === "string"
     ) {
-      const reason = (parsed as { error: string }).error.trim();
-      return reason || undefined;
+      text = (parsed as { error: string }).error;
     }
   } catch {
     // plain text
   }
-  const line = result
+  const line = text
     .split("\n")
     .map((part) => part.trim())
     .find((part) => part.length > 0);
-  return line || undefined;
+  if (!line) return undefined;
+  const clause = line.split(" — ")[0].trim();
+  return clause || line;
+}
+
+const COLLAPSED_REASON_MAX = 100;
+const COLLAPSED_REASON_TAIL = 36;
+
+// Keeps both ends of a long reason: the leading words say what failed and the
+// tail usually carries the identifier, which a plain end-truncation would lose.
+export function middleTruncate(
+  text: string,
+  max = COLLAPSED_REASON_MAX,
+  tail = COLLAPSED_REASON_TAIL,
+): string {
+  if (text.length <= max) return text;
+  const head = Math.max(1, max - tail - 1);
+  return `${text.slice(0, head).trimEnd()}…${text.slice(-tail).trimStart()}`;
 }
 
 // isJsonPayload / formatJson — a tool result is "structured" if it parses as JSON.

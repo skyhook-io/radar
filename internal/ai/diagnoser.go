@@ -729,11 +729,13 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 		}()
 	}
 	diag := agent.parseStream(stdout, streamEvent)
-	close(streamDone)
-	handshake.Wait()
 	diag.evidenceScope = evidenceScope
 
 	waitErr := cmd.Wait()
+	// The watcher outlives stdout so a handshake that lands between EOF and
+	// process exit is still reported, and always before this method returns.
+	close(streamDone)
+	handshake.Wait()
 	if evidenceLease != nil {
 		// Closing before the diagnosis leaves this method prevents any late private
 		// MCP call from minting evidence for a completed turn. The deferred close
