@@ -1306,9 +1306,11 @@ func buildHPASummary(obj runtime.Object) *HPASummary {
 	}
 	for _, reason := range diagnosis.Reasons {
 		out.Reasons = append(out.Reasons, HPAReasonSummary{
-			ID:      string(reason.ID),
-			Message: reason.Message,
-			Detail:  reason.Detail,
+			ID:              string(reason.ID),
+			Message:         reason.Message,
+			Detail:          reason.Detail,
+			ConditionType:   reason.ConditionType,
+			ConditionReason: reason.ConditionReason,
 		})
 	}
 	return out
