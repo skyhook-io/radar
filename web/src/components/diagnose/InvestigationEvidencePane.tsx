@@ -3556,6 +3556,13 @@ function toneBorder(
   prominence: "primary" | "supporting" | "secondary",
 ): string {
   if (prominence !== "primary") return "border-theme-border/70";
+  // A supporting adverse card is what the healthy-conflict banner points at,
+  // so it must be tellable from its neutral neighbours: a thin rule, lighter
+  // than the Key tier's.
+  if (tier === "supporting" && tone === "error")
+    return "border-l-2 border-l-semantic-error border-theme-border";
+  if (tier === "supporting" && (tone === "warning" || tone === "alert"))
+    return "border-l-2 border-l-semantic-warning border-theme-border";
   if (tier !== "key") return "border-theme-border";
   if (tone === "error")
     return "border-l-[3px] border-l-red-500 border-theme-border";
