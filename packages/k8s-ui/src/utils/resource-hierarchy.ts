@@ -727,9 +727,19 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       }
 
       // Exact topology ownership supersedes the persisted group-less owner ref.
-      // This matters when two controller API groups share kind/namespace/name.
+      // This matters when two controller API groups share kind/namespace/name
+      // (a real Kubernetes ownerReference chain, e.g. Deployment->RS->Pod or a
+      // collision-prone controller like Volcano's Job).
+      //
+      // A FluxCD source (GitRepository/OCIRepository/HelmRepository) also
+      // reaches its Kustomization/HelmRelease through a 'manages' edge, but
+      // that's spec.sourceRef, not an ownerReference the source controls --
+      // applying the same override here would nest an app-group root under a
+      // materialized, event-less source lane and hide it from the top level.
+      const sourceKind = parseLaneId(sourceId)?.kind
+      const sourceIsGitOpsSource = sourceKind === 'GitRepository' || sourceKind === 'OCIRepository' || sourceKind === 'HelmRepository'
       if (edge.type === 'manages') {
-        if (targetExists && !sameAppMembers(targetId, sourceId)) {
+        if (targetExists && !sourceIsGitOpsSource && !sameAppMembers(targetId, sourceId)) {
           laneParent.set(targetId, ensureTopologyLane(sourceId))
         }
         continue

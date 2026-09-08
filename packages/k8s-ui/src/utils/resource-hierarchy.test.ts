@@ -1253,6 +1253,33 @@ describe('group-qualified lane identity', () => {
       .toEqual(['Pod/ml/train-worker'])
   })
 
+  it('does not nest a Kustomization under its GitRepository source via a manages edge', () => {
+    // GitRepository->Kustomization is spec.sourceRef, not an ownerReference the
+    // source controls. Applying the same "exact topology edge wins" override used
+    // for real ownership chains would nest the Kustomization -- which has its own
+    // events and should render as a top-level app-group root -- under a
+    // materialized, event-less GitRepository lane, hiding it from the top level.
+    const topology = {
+      nodes: [
+        { id: 'gitrepository/flux-system/app', kind: 'GitRepository', name: 'app', status: 'healthy', data: { namespace: 'flux-system', apiVersion: 'source.toolkit.fluxcd.io/v1' } },
+        { id: 'kustomization/flux-system/app', kind: 'Kustomization', name: 'app', status: 'healthy', data: { namespace: 'flux-system', apiVersion: 'kustomize.toolkit.fluxcd.io/v1' } },
+      ],
+      edges: [
+        { id: 'sources', source: 'gitrepository/flux-system/app', target: 'kustomization/flux-system/app', type: 'manages' },
+      ],
+    } as unknown as Topology
+    const lanes = buildResourceHierarchy({
+      events: [
+        changeEvent('Kustomization', 'flux-system', 'app', { apiVersion: 'kustomize.toolkit.fluxcd.io/v1' }),
+      ],
+      topology,
+      grouping: 'owner',
+    })
+
+    const kustomizationLane = lanes.find((lane) => lane.name === 'app' && lane.kind === 'Kustomization')
+    expect(kustomizationLane).toBeDefined()
+  })
+
   it('leaves a historical group-less owner unresolved when live identities collide', () => {
     const lanes = buildResourceHierarchy({
       events: [
