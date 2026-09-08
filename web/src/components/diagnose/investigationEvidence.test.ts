@@ -4900,3 +4900,98 @@ describe("card leads and deep-link subjects", () => {
     ]);
   });
 });
+
+describe("live-run follow-ups", () => {
+  it("reads the producer's nil-slice null as an empty events or changes result", () => {
+    const projection = project([
+      tool(
+        "events-none",
+        "get_events",
+        { events: null },
+        {
+          summary: JSON.stringify({
+            kind: "Pod",
+            namespace: "shop",
+            name: "api",
+          }),
+        },
+      ),
+      tool(
+        "changes-none",
+        "get_changes",
+        { changes: null },
+        {
+          summary: JSON.stringify({
+            kind: "Deployment",
+            namespace: "shop",
+            name: "api",
+            since: "24h",
+          }),
+        },
+      ),
+    ]);
+    expect(projection.groups).toHaveLength(0);
+    expect(
+      projection.limitations.map((limitation) => [
+        limitation.source,
+        limitation.kind,
+      ]),
+    ).toEqual([
+      ["Events", "unknown"],
+      ["Recent changes", "unknown"],
+    ]);
+    expect(projection.limitations[0].message).toContain(
+      "No events were returned",
+    );
+  });
+
+  it("keeps repeated change reads of one resource on one card and names the window", () => {
+    const change = {
+      kind: "Deployment",
+      apiVersion: "apps/v1",
+      namespace: "shop",
+      name: "api",
+      changeType: "update",
+      timestamp: "2026-09-02T09:00:00Z",
+    };
+    const older = { ...change, timestamp: "2026-09-01T09:00:00Z" };
+    const read = (
+      id: string,
+      args: Record<string, unknown>,
+      changes: unknown[],
+    ) =>
+      tool(id, "get_changes", { changes }, { summary: JSON.stringify(args) });
+    const projection = project([
+      read(
+        "changes-24h",
+        { namespace: "shop", name: "api", since: "24h", kind: "Deployment" },
+        [change],
+      ),
+      read(
+        "changes-48h",
+        {
+          kind: "Deployment",
+          namespace: "shop",
+          name: "api",
+          since: "48h",
+          limit: 30,
+        },
+        [change, older],
+      ),
+      read("changes-ns", { namespace: "shop", since: "24h" }, [change]),
+    ]);
+    const changes = groupsOf(projection.groups, "changes");
+    expect(changes.map((group) => group.identity)).toEqual([
+      "changes:Deployment shop/api",
+      "changes:namespace shop",
+    ]);
+    expect(changes[0].observations).toHaveLength(2);
+    expect(changes[0].observations.map((o) => o.title)).toEqual([
+      "Recent changes · last 24h",
+      "Recent changes · last 48h",
+    ]);
+    expect(changes[0].latest.title).toBe("Recent changes · last 48h");
+    expect(changes[0].latest.summary).toBe("2 changes · Deployment shop/api");
+    expect(changes[1].latest.title).toBe("Recent changes · last 24h");
+  });
+});

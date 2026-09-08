@@ -144,6 +144,10 @@ export function partitionInvestigationEvidence(
   const collectionByGroup = new Map<string, EvidenceCollection>();
   const adverse = (group: InvestigationEvidenceGroup) =>
     ["error", "alert", "warning"].includes(group.latest.tone);
+  // Broader cards are facts about something other than the target. They are
+  // withheld unless cited, and the pane says how many were withheld so a
+  // reader knows the agent looked at things it did not build its case on.
+  let hiddenBroader = 0;
   for (const group of groups) {
     const broader = group.latest.relevance === "broader";
     // Citations select tool results, not individual rows in a broad search.
@@ -152,22 +156,20 @@ export function partitionInvestigationEvidence(
       const link = resolution?.links.find(
         (item) => item.originalGroupId === group.id,
       );
-      const focused = ["resource", "logs", "crash"].includes(
-        group.latest.data.type,
-      );
+      const focused = FOCUSED_EVIDENCE_TYPES.includes(group.latest.data.type);
       const sourceGroups = link
         ? groups.filter(
             (candidate) =>
-              ["resource", "logs", "crash"].includes(
-                candidate.latest.data.type,
-              ) &&
+              FOCUSED_EVIDENCE_TYPES.includes(candidate.latest.data.type) &&
               candidate.observations.some(
                 (observation) => observation.source.id === link.source.id,
               ),
           )
         : [];
-      if (!selected.has(group.id) || !focused || sourceGroups.length !== 1)
+      if (!selected.has(group.id) || !focused || sourceGroups.length !== 1) {
+        if (!group.historical) hiddenBroader += 1;
         continue;
+      }
     }
     const main =
       !group.historical &&
@@ -190,8 +192,20 @@ export function partitionInvestigationEvidence(
       Number(adverse(right)) - Number(adverse(left)) ||
       left.firstOrder - right.firstOrder,
   );
-  return { ...collections, collectionByGroup };
+  return { ...collections, collectionByGroup, hiddenBroader };
 }
+
+// Kinds whose card is one unambiguous subject, so a citation of their source
+// can promote exactly that fact. A broad search (issues, inventory, events)
+// yields many rows per source; a citation cannot pick one of those.
+const FOCUSED_EVIDENCE_TYPES: readonly InvestigationEvidenceData["type"][] = [
+  "resource",
+  "logs",
+  "crash",
+  "helm",
+  "alerts",
+  "permissions",
+];
 
 export function investigationEvidenceRevealCollection(
   projection: InvestigationEvidenceProjection,
@@ -400,6 +414,17 @@ export function InvestigationEvidencePane({
             />
           ))}
         </div>
+
+        {partition.hiddenBroader > 0 ? (
+          <p
+            className="text-xs text-theme-text-tertiary"
+            data-testid="investigation-hidden-evidence"
+          >
+            {partition.hiddenBroader === 1
+              ? "1 result about another resource is not shown; it appears here when the assessment cites it."
+              : `${partition.hiddenBroader} results about other resources are not shown; they appear here when the assessment cites them.`}
+          </p>
+        ) : null}
 
         {!hasCurrentEvidence ? (
           <EmptyCollection
@@ -749,6 +774,65 @@ function CoverageGroupRow({
   const regionId = useId();
   const { elementRef, revealAfterToggle } =
     useDisclosureReveal<HTMLDivElement>();
+  // One limitation whose message is the whole summary would repeat itself as
+  // its own detail row; show its source link on the summary row instead.
+  const single =
+    group.limitations.length === 1 &&
+    group.limitations[0].message === group.summary
+      ? group.limitations[0]
+      : undefined;
+  const anchors = sourceIds.map((id) => (
+    <span
+      key={id}
+      id={investigationEvidenceSourceDomId(id)}
+      className="sr-only scroll-mt-14"
+      aria-hidden
+    />
+  ));
+  if (single) {
+    return (
+      <div
+        ref={elementRef}
+        data-evidence-source-container
+        tabIndex={-1}
+        aria-label={`Evidence limitation for ${group.label}: ${group.summary}`}
+        className="flex items-center gap-2 px-3 py-2.5 text-xs outline-none focus:ring-2 focus:ring-accent/40"
+      >
+        {anchors}
+        {group.hasError ? (
+          <CircleAlert
+            className="h-3.5 w-3.5 shrink-0 text-red-400"
+            aria-hidden
+          />
+        ) : single.kind === "truncated" ? (
+          <AlertTriangle
+            className="h-3.5 w-3.5 shrink-0 text-amber-500"
+            aria-hidden
+          />
+        ) : (
+          <Info
+            className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary"
+            aria-hidden
+          />
+        )}
+        <p className="min-w-0 flex-1 leading-relaxed text-theme-text-secondary">
+          <span className="font-medium text-theme-text-primary">
+            {group.label}:
+          </span>{" "}
+          {group.summary}
+        </p>
+        {single.sources.at(-1) ? (
+          <SourceButton
+            ariaLabel={`View source for ${group.label}`}
+            buttonLabel={
+              single.sources.length > 1 ? "View latest in Activity" : undefined
+            }
+            onClick={() => onViewSource(single.sources.at(-1)!.id)}
+          />
+        ) : null}
+      </div>
+    );
+  }
   return (
     <div
       ref={elementRef}
@@ -757,14 +841,7 @@ function CoverageGroupRow({
       aria-label={`Evidence limitation for ${group.label}: ${group.summary}`}
       className="outline-none focus:ring-2 focus:ring-accent/40"
     >
-      {sourceIds.map((id) => (
-        <span
-          key={id}
-          id={investigationEvidenceSourceDomId(id)}
-          className="sr-only scroll-mt-14"
-          aria-hidden
-        />
-      ))}
+      {anchors}
       <button
         type="button"
         aria-expanded={open}
