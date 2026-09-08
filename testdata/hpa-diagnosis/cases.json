@@ -296,7 +296,7 @@
     "name": "min limited",
     "expectedState": "limited_min",
     "expectedReasons": ["limited_min"],
-    "expectedSummary": "HPA is holding at minReplicas=2",
+    "expectedSummary": "HPA wants fewer replicas but is held at minReplicas=2",
     "expectedTableState": "ok",
     "hpa": {
       "apiVersion": "autoscaling/v2",

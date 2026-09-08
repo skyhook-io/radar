@@ -1463,6 +1463,15 @@ function ScaledBySection({
         {scalers.map((scaler) => {
           const summary = scaler.hpaSummary;
           const bounds = summary.bounds;
+          // The reason that named the state is the summary in other words;
+          // only the controller's own sentence behind it adds anything.
+          const stateReasons = (summary.reasons ?? []).filter(
+            (reason) =>
+              reason.id === summary.state || reason.message === summary.summary,
+          );
+          const otherReasons = (summary.reasons ?? []).filter(
+            (reason) => !stateReasons.includes(reason),
+          );
           return (
             <div
               key={`${scaler.namespace ?? ""}/${scaler.name}`}
@@ -1503,21 +1512,34 @@ function ScaledBySection({
                 ) : null}
               </div>
               <p className="text-theme-text-secondary">{summary.summary}</p>
-              {summary.reasons?.length ? (
+              {stateReasons.map((reason) =>
+                reason.detail ? (
+                  <p
+                    key={`${reason.id}-${reason.detail}`}
+                    className="text-theme-text-tertiary"
+                  >
+                    Kubernetes
+                    {reason.conditionType ? ` ${reason.conditionType}` : ""}
+                    {reason.conditionReason
+                      ? ` · ${reason.conditionReason}`
+                      : ""}
+                    : &ldquo;{reason.detail}&rdquo;
+                  </p>
+                ) : null,
+              )}
+              {otherReasons.length > 0 ? (
                 <ul className="list-disc space-y-0.5 pl-4 text-theme-text-secondary marker:text-theme-text-tertiary">
-                  {summary.reasons
-                    .filter((reason) => reason.message !== summary.summary)
-                    .map((reason) => (
-                      <li key={`${reason.id}-${reason.message}`}>
-                        {reason.message}
-                        {reason.detail ? (
-                          <span className="text-theme-text-tertiary">
-                            {" "}
-                            · {reason.detail}
-                          </span>
-                        ) : null}
-                      </li>
-                    ))}
+                  {otherReasons.map((reason) => (
+                    <li key={`${reason.id}-${reason.message}`}>
+                      {reason.message}
+                      {reason.detail ? (
+                        <span className="text-theme-text-tertiary">
+                          {" "}
+                          · {reason.detail}
+                        </span>
+                      ) : null}
+                    </li>
+                  ))}
                 </ul>
               ) : null}
             </div>
