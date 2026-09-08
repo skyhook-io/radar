@@ -1423,15 +1423,18 @@ function IssueBody({
 
 function StartupBody({ data }: { data: EvidenceDataOf<"startup"> }) {
   const blocker = data.blocker;
+  const pods = data.pods && data.pods.length > 1 ? data.pods : [blocker.name];
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-1.5">
         <Badge tone="structural" size="sm">
-          {blocker.kind}
+          {pods.length > 1 ? `${pods.length} ${blocker.kind}s` : blocker.kind}
         </Badge>
-        <Badge tone="structural" size="sm">
-          {blocker.name}
-        </Badge>
+        {pods.map((pod) => (
+          <Badge key={pod} tone="structural" size="sm">
+            {pod}
+          </Badge>
+        ))}
         <Badge severity={severityBadge(blocker.severity)} size="sm">
           {blocker.severity}
         </Badge>

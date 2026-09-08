@@ -353,6 +353,12 @@ export type InvestigationEvidenceData =
       blocker: DiagnosisStartupBlocker;
       /** Exact blocker object when the diagnosis producer established it. */
       subject?: DiagnosisResourceRef;
+      /**
+       * Every pod the producer reported with this exact blocker. A DaemonSet
+       * with seven pending pods is one finding, not seven; the card carries the
+       * pod list instead of repeating itself.
+       */
+      pods?: string[];
     }
   | {
       type: "crash";
@@ -2347,6 +2353,15 @@ function adaptDiagnose(
   const blockersRaw = value.startupBlockers;
   let blockersValid = blockersRaw === undefined || Array.isArray(blockersRaw);
   if (Array.isArray(blockersRaw)) {
+    // Pods of one workload usually share a blocker word for word. Merge those
+    // into one finding with the pod list; anything else keeps its own card and
+    // its own identity so saved runs match as before.
+    const merged = new Map<
+      string,
+      { blocker: DiagnosisStartupBlocker; pods: string[] }
+    >();
+    const ordered: Array<{ blocker: DiagnosisStartupBlocker; pods: string[] }> =
+      [];
     for (const raw of blockersRaw) {
       const blocker = startupBlocker(raw);
       if (!blocker) {
@@ -2354,8 +2369,27 @@ function adaptDiagnose(
         invalidPayload(builder, source, "Startup evidence");
         continue;
       }
+      const key =
+        blocker.kind === "Pod"
+          ? `${blocker.reason} ${blocker.severity} ${blocker.message}`
+          : undefined;
+      const existing = key ? merged.get(key) : undefined;
+      if (existing) {
+        if (!existing.pods.includes(blocker.name)) {
+          existing.pods.push(blocker.name);
+        }
+        continue;
+      }
+      const entry = { blocker, pods: [blocker.name] };
+      if (key) merged.set(key, entry);
+      ordered.push(entry);
+    }
+    for (const { blocker, pods } of ordered) {
+      const grouped = blocker.kind === "Pod" && pods.length > 1;
       builder.observe(
-        `startup:${blocker.kind}:${blocker.name}:${blocker.reason}`,
+        grouped
+          ? `startup:Pod:${blocker.reason}:${fnv1a32(blocker.message).toString(36)}`
+          : `startup:${blocker.kind}:${blocker.name}:${blocker.reason}`,
         "startup",
         source,
         {
@@ -2366,30 +2400,35 @@ function adaptDiagnose(
           relevance: bundledRowRelevance(blocker.kind, blocker.name),
           tone: diagnosisSeverityTone(blocker.severity),
           title: blocker.reason,
-          summary: blocker.message,
+          summary: grouped
+            ? `${pods.length} pods · ${blocker.message}`
+            : blocker.message,
           data: {
             type: "startup",
             blocker,
-            subject: (() => {
-              const namespace = resource.metadata.namespace;
-              if (!namespace) return undefined;
-              const rootGroup = apiVersionToGroup(resource.apiVersion);
-              const group =
-                blocker.kind === resource.kind
-                  ? rootGroup
-                  : blocker.kind === "Pod"
-                    ? ""
-                    : blocker.kind === "ReplicaSet"
-                      ? "apps"
-                      : undefined;
-              if (group === undefined) return undefined;
-              return {
-                kind: blocker.kind,
-                ...(group ? { group } : {}),
-                namespace,
-                name: blocker.name,
-              };
-            })(),
+            ...(grouped ? { pods } : {}),
+            subject: grouped
+              ? undefined
+              : (() => {
+                  const namespace = resource.metadata.namespace;
+                  if (!namespace) return undefined;
+                  const rootGroup = apiVersionToGroup(resource.apiVersion);
+                  const group =
+                    blocker.kind === resource.kind
+                      ? rootGroup
+                      : blocker.kind === "Pod"
+                        ? ""
+                        : blocker.kind === "ReplicaSet"
+                          ? "apps"
+                          : undefined;
+                  if (group === undefined) return undefined;
+                  return {
+                    kind: blocker.kind,
+                    ...(group ? { group } : {}),
+                    namespace,
+                    name: blocker.name,
+                  };
+                })(),
           },
         },
       );

@@ -2045,7 +2045,17 @@ function DiagnosisResult({
                 Apply…
               </button>
             )}
-            <CopyButton text={r} label={`Copy remediation step ${i + 1}`} />
+            {remediationCommands(r).map((command, c, all) => (
+              <CopyButton
+                key={c}
+                text={command}
+                label={
+                  all.length > 1
+                    ? `Copy command ${c + 1} of step ${i + 1}`
+                    : `Copy command from step ${i + 1}`
+                }
+              />
+            ))}
           </div>
         </div>
       </div>
@@ -2601,6 +2611,63 @@ function ApplyOutcomeCard({
       </div>
     </div>
   );
+}
+
+const COMMAND_BINARIES = new Set([
+  "kubectl",
+  "helm",
+  "argocd",
+  "flux",
+  "kustomize",
+  "docker",
+  "gcloud",
+  "aws",
+  "az",
+  "mongosh",
+  "psql",
+  "redis-cli",
+  "curl",
+  "git",
+  "istioctl",
+  "velero",
+  "cilium",
+  "calicoctl",
+  "terraform",
+  "kn",
+  "oc",
+  "k9s",
+  "skyhook",
+]);
+
+/**
+ * The commands inside a remediation step, in order: every fenced block and
+ * every inline code span that reads as a shell invocation. A step's prose is
+ * never worth copying; a command is. The prompt asks the agent to wrap
+ * commands in backticks, so this is the seam to read them from.
+ */
+export function remediationCommands(step: string): string[] {
+  const commands: string[] = [];
+  const fenced = /```[a-zA-Z]*\n([\s\S]*?)```/g;
+  let match: RegExpExecArray | null;
+  while ((match = fenced.exec(step))) {
+    const body = match[1].trim();
+    if (body) commands.push(body);
+  }
+  const inline = /`([^`\n]+)`/g;
+  const withoutFences = step.replace(fenced, "");
+  while ((match = inline.exec(withoutFences))) {
+    const span = match[1].trim();
+    if (looksLikeCommand(span)) commands.push(span);
+  }
+  return commands;
+}
+
+function looksLikeCommand(span: string): boolean {
+  if (!/\s/.test(span)) return false;
+  const first = span.split(/\s+/)[0];
+  if (COMMAND_BINARIES.has(first)) return true;
+  // An unknown binary still reads as a command when it takes flags.
+  return /^[a-z][a-z0-9._-]*$/.test(first) && /(^|\s)--?[a-zA-Z]/.test(span);
 }
 
 function CopyButton({ text, label }: { text: string; label: string }) {
