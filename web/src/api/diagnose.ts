@@ -87,6 +87,13 @@ export interface ResourceHealthSignal {
 
 export type ApplyMutationOutcome = "confirmed" | "failed" | "unknown";
 
+// One MCP server's connection state as the agent CLI reported it at startup.
+// Only "connected" means its tools are usable.
+export interface MCPServerStatus {
+  name: string;
+  status: string;
+}
+
 export interface DiagnoseStreamEvent {
   type:
     | "turn"
@@ -98,7 +105,11 @@ export interface DiagnoseStreamEvent {
     | "closed"
     | "history_unavailable"
     | "replay_complete";
-  phase?: string;
+  phase?: string; // "investigating" | "connected" | "ready"
+  // Startup facts the agent CLI reported on the "ready" phase.
+  model?: string;
+  toolCount?: number; // Radar tools the agent registered
+  mcpServers?: MCPServerStatus[];
   step?: DiagnoseStep;
   token?: string;
   diagnosis?: Diagnosis;

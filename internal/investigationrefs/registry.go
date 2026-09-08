@@ -24,6 +24,10 @@ type Records map[string]string
 
 type scopeState struct {
 	records Records
+	// connected closes once the agent has completed the MCP handshake on the
+	// private mount, so the runner can report progress before any tool call.
+	connected chan struct{}
+	connect   sync.Once
 }
 
 // Registry holds only currently active turn scopes. A private MCP request
@@ -41,10 +45,11 @@ func NewRegistry() *Registry {
 // Scope owns one active registry entry. Close is idempotent and returns the
 // same point-in-time records on every call.
 type Scope struct {
-	registry *Registry
-	id       string
-	once     sync.Once
-	records  Records
+	registry  *Registry
+	id        string
+	connected <-chan struct{}
+	once      sync.Once
+	records   Records
 }
 
 // Begin reserves a caller-generated turn scope. Reusing a live scope fails
@@ -58,8 +63,25 @@ func (r *Registry) Begin(scope string) (*Scope, error) {
 	if _, exists := r.scopes[scope]; exists {
 		return nil, ErrScopeActive
 	}
-	r.scopes[scope] = &scopeState{records: make(Records)}
-	return &Scope{registry: r, id: scope}, nil
+	state := &scopeState{records: make(Records), connected: make(chan struct{})}
+	r.scopes[scope] = state
+	return &Scope{registry: r, id: scope, connected: state.connected}, nil
+}
+
+// MarkConnected records that the agent completed the MCP handshake for a live
+// scope. It is idempotent and reports whether the scope was active.
+func (r *Registry) MarkConnected(scope string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	state, active := r.scopes[scope]
+	if !active {
+		return false
+	}
+	state.connect.Do(func() { close(state.connected) })
+	return true
 }
 
 // Active reports whether the AI runner currently owns scope. It is used to
@@ -113,6 +135,12 @@ func (r *Registry) Matches(scope, ref, payload string) bool {
 	}
 	issuedPayload, issued := state.records[ref]
 	return issued && issuedPayload == payload
+}
+
+// Connected is closed the first time MarkConnected observes this scope's
+// handshake. It never closes for a scope that ends without one.
+func (s *Scope) Connected() <-chan struct{} {
+	return s.connected
 }
 
 func (s *Scope) Close() Records {

@@ -197,6 +197,7 @@ type cursorEvent struct {
 	Type      string          `json:"type"`    // system|user|assistant|thinking|tool_call|result
 	Subtype   string          `json:"subtype"` // init | delta | started | completed | success | ...
 	SessionID string          `json:"session_id"`
+	Model     string          `json:"model"`   // on system/init
 	Text      string          `json:"text"`    // on thinking/delta
 	Message   *cursorMessage  `json:"message"` // on assistant/user
 	ToolCall  *cursorToolCall `json:"tool_call"`
@@ -292,6 +293,11 @@ func (a *cursorAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagno
 			sessionID = e.SessionID
 		}
 		switch e.Type {
+		case "system":
+			// Cursor's init names the model but not its MCP servers or tools.
+			if e.Subtype == "init" {
+				onEvent(StreamEvent{Type: "phase", Phase: "ready", Model: e.Model})
+			}
 		case "thinking":
 			if e.Subtype == "delta" && e.Text != "" {
 				onEvent(StreamEvent{Type: "thinking", Token: e.Text})

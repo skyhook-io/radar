@@ -78,6 +78,7 @@ import {
   AssessmentSources,
   ApplyDialog,
   appendThinking,
+  mergeStartupSignal,
   upsertTool,
   type Turn,
 } from "./parts";
@@ -476,6 +477,14 @@ export function InvestigationView({
                 verify: ev.verify,
               },
             ]);
+            break;
+          case "phase":
+            // Startup phases only feed the pending status line; a replayed
+            // finished turn is not running, so nothing shows for it.
+            updateLast((t) => {
+              const startup = mergeStartupSignal(t.startup, ev);
+              return startup === t.startup ? t : { ...t, startup };
+            });
             break;
           case "thinking":
             if (ev.token) {
@@ -1680,6 +1689,7 @@ export function InvestigationView({
                       <Fragment key={index}>
                         <TurnView
                           turn={turn}
+                          agentLabel={agentLabel}
                           turnIndex={index}
                           evidenceStepIds={evidenceStepIdsByTurn.get(index)}
                           onViewEvidence={viewEvidenceSource}

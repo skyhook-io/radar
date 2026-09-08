@@ -37,6 +37,8 @@ import {
   type AgentInfo,
   type ApplyMutationOutcome,
   type ExecutionProfile,
+  type DiagnoseStreamEvent,
+  type MCPServerStatus,
 } from "../../api/diagnose";
 import { Collapse, CollapseChevron } from "@skyhook-io/k8s-ui";
 import { Markdown } from "../ui/Markdown";
@@ -448,7 +450,68 @@ export type Turn = {
   // Set from the replay/live boundary when the terminal event arrives. Historical
   // conclusions render immediately; conclusions observed live enter smoothly.
   animateResult?: boolean;
+  // The latest startup phase the server reported before the agent's first
+  // message. It drives the pending status line only; it is never a transcript item.
+  startup?: StartupSignal;
 };
+
+export type StartupSignal = {
+  phase: "investigating" | "connected" | "ready";
+  model?: string;
+  toolCount?: number;
+  mcpServers?: MCPServerStatus[];
+};
+
+const STARTUP_PHASE_RANK: Record<StartupSignal["phase"], number> = {
+  investigating: 0,
+  connected: 1,
+  ready: 2,
+};
+
+// Folds a phase event into the turn's startup signal. The handshake and the
+// CLI's init line are reported by different goroutines, so a later event can
+// name an earlier phase; the furthest phase wins and the init facts are kept.
+export function mergeStartupSignal(
+  prev: StartupSignal | undefined,
+  event: Pick<
+    DiagnoseStreamEvent,
+    "phase" | "model" | "toolCount" | "mcpServers"
+  >,
+): StartupSignal | undefined {
+  const phase = event.phase;
+  if (phase !== "investigating" && phase !== "connected" && phase !== "ready")
+    return prev;
+  const facts =
+    phase === "ready"
+      ? {
+          model: event.model,
+          toolCount: event.toolCount,
+          mcpServers: event.mcpServers,
+        }
+      : {};
+  if (prev && STARTUP_PHASE_RANK[prev.phase] >= STARTUP_PHASE_RANK[phase]) {
+    return phase === "ready" ? { ...prev, ...facts } : prev;
+  }
+  return { ...prev, ...facts, phase };
+}
+
+function startupLabel(startup: StartupSignal, agentLabel: string): string {
+  switch (startup.phase) {
+    case "investigating":
+      return `${agentLabel} starting…`;
+    case "connected":
+      return "Connected to Radar's tools";
+    case "ready": {
+      const parts = [`${agentLabel} ready`];
+      if (startup.model) parts.push(startup.model);
+      if (startup.toolCount !== undefined)
+        parts.push(
+          `${startup.toolCount} Radar ${startup.toolCount === 1 ? "tool" : "tools"}`,
+        );
+      return parts.join(" · ");
+    }
+  }
+}
 
 // TimelineItem is one ordered transcript entry: agent reasoning, or a tool call.
 export type TimelineItem =
@@ -542,6 +605,7 @@ export function upsertTool(
 
 export function TurnView({
   turn,
+  agentLabel,
   onApply,
   onViewExplanation,
   onCheckStatus,
@@ -553,6 +617,7 @@ export function TurnView({
   sourceRevealRequest,
 }: {
   turn: Turn;
+  agentLabel?: string;
   onApply?: (fix: string) => void;
   onViewExplanation?: () => void;
   onCheckStatus?: () => void;
@@ -637,6 +702,8 @@ export function TurnView({
         running={turn.status === "running"}
         applyMode={turn.apply}
         followup={followup}
+        startup={turn.startup}
+        agentLabel={agentLabel}
         turnIndex={turnIndex}
         evidenceStepIds={evidenceStepIds}
         onViewEvidence={onViewEvidence}
@@ -1069,6 +1136,8 @@ export function Timeline({
   running,
   applyMode,
   followup,
+  startup,
+  agentLabel = "Agent",
   turnIndex,
   evidenceStepIds,
   onViewEvidence,
@@ -1078,6 +1147,8 @@ export function Timeline({
   running: boolean;
   applyMode?: boolean;
   followup?: boolean;
+  startup?: StartupSignal;
+  agentLabel?: string;
   turnIndex?: number;
   evidenceStepIds?: ReadonlySet<string>;
   onViewEvidence?: (sourceId: string) => void;
@@ -1093,7 +1164,8 @@ export function Timeline({
       ? "Working"
       : "Investigation";
   // The live status verb tracks the running tool ("Reading logs…") so the wait is
-  // informative, not a generic spinner; falls back to a phase-appropriate label.
+  // informative, not a generic spinner; before the first item it reports the
+  // startup phases the server actually observed, never a timer-based guess.
   const activeTool = [...items]
     .reverse()
     .find((it) => it.kind === "tool" && it.status !== "done") as
@@ -1104,14 +1176,45 @@ export function Timeline({
       ? toolActivity(activeTool.tool)
       : items.length > 0
         ? "Working…"
-        : followup
-          ? "Thinking…"
-          : "Starting investigation…";
+        : startup
+          ? startupLabel(startup, agentLabel)
+          : followup
+            ? "Thinking…"
+            : "Starting investigation…";
+  const failedServers = (startup?.mcpServers ?? []).filter(
+    (server) => server.status !== "connected",
+  );
+  const radarServer = failedServers.find((server) => server.name === "radar");
   return (
     <div className="space-y-1.5">
       {items.length > 0 && (
         <div className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
           {heading}
+        </div>
+      )}
+      {failedServers.length > 0 && (
+        <div
+          role="status"
+          className="flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] leading-snug text-theme-text-secondary"
+        >
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
+          <span>
+            {failedServers.map((server, i) => (
+              <span key={server.name}>
+                {i > 0 ? "; " : ""}
+                MCP server{" "}
+                <span className="font-medium text-theme-text-primary">
+                  {server.name}
+                </span>{" "}
+                {mcpStatusPhrase(server.status)}
+              </span>
+            ))}
+            {radarServer
+              ? mcpStatusIsFailure(radarServer.status)
+                ? ` at startup — ${agentLabel} had no Radar tools this turn, so it could not use Radar's cluster evidence.`
+                : ` at startup — Radar's tools may not have been available to ${agentLabel} this turn.`
+              : ` at startup — ${agentLabel} ran this turn without those tools.`}
+          </span>
         </div>
       )}
       {items.map((it, i) => {
@@ -1270,6 +1373,19 @@ function RunningStatus({ label }: { label: string }) {
   );
 }
 
+// Claude Code reports each MCP server as connected, failed, needs-auth, or
+// pending. Only the first two are definite outcomes; anything else is left as
+// the CLI's own word so the warning never claims more than it knows.
+function mcpStatusIsFailure(status: string): boolean {
+  return status === "failed" || status === "needs-auth";
+}
+
+function mcpStatusPhrase(status: string): string {
+  if (status === "failed") return "failed to connect";
+  if (status === "needs-auth") return "needs authentication";
+  return `is ${status}`;
+}
+
 // Maps a running tool to a human verb so the status line reads as activity, not
 // machinery. Falls back to the prettified tool name for anything unmapped.
 function toolActivity(tool: string): string {
@@ -1321,6 +1437,9 @@ function ToolRow({
   const richResult =
     !!step.result && (isJsonPayload(step.result) || step.result.length > 200);
   const done = step.status === "done";
+  const durationLabel = toolDurationLabel(step.ms);
+  const errorReason =
+    step.isError === true ? toolErrorReason(step.result) : undefined;
   const outcomeLabel = !done
     ? "Running"
     : step.isError === true
@@ -1355,13 +1474,20 @@ function ToolRow({
         {prettyTool(step.tool)}
       </span>
       {step.summary && !open && (
-        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-theme-text-tertiary">
+        <span
+          className={`min-w-0 truncate font-mono text-[11px] text-theme-text-tertiary ${errorReason ? "max-w-[40%]" : "flex-1"}`}
+        >
           {argumentsPreview}
         </span>
       )}
-      {step.ms != null && (
+      {errorReason && !open && (
+        <span className="investigation-tool-reason min-w-0 flex-1 truncate text-[11px] text-red-400">
+          {errorReason}
+        </span>
+      )}
+      {durationLabel && (
         <span className="ml-auto shrink-0 text-[11px] text-theme-text-tertiary">
-          {step.ms}ms
+          {durationLabel}
         </span>
       )}
       {hasDetail && <CollapseChevron open={open} className="h-3.5 w-3.5" />}
@@ -1454,6 +1580,7 @@ function ToolRow({
               {step.result && (
                 <PayloadBlock
                   label="Original result"
+                  detail={step.ms != null ? `${step.ms}ms` : undefined}
                   text={step.result}
                   sourceExcerpt={sourceExcerpt}
                   revealRequestId={revealRequestId}
@@ -1488,6 +1615,40 @@ function ToolRow({
   );
 }
 
+// Only outliers carry information on the collapsed row: a slow log fetch or a
+// probe that hung. Sub-second calls stay silent; the exact figure lives in the
+// expanded result header.
+export function toolDurationLabel(ms: number | undefined): string | undefined {
+  if (ms == null || ms < 2000) return undefined;
+  return `${Math.round(ms / 1000)}s`;
+}
+
+// The producer's own words for a failed call, reduced to one line. Radar's MCP
+// errors are plain text; a JSON envelope with an `error` field is unwrapped.
+export function toolErrorReason(
+  result: string | undefined,
+): string | undefined {
+  if (!result) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(result);
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      typeof (parsed as { error?: unknown }).error === "string"
+    ) {
+      const reason = (parsed as { error: string }).error.trim();
+      return reason || undefined;
+    }
+  } catch {
+    // plain text
+  }
+  const line = result
+    .split("\n")
+    .map((part) => part.trim())
+    .find((part) => part.length > 0);
+  return line || undefined;
+}
+
 // isJsonPayload / formatJson — a tool result is "structured" if it parses as JSON.
 function isJsonPayload(text: string): boolean {
   try {
@@ -1509,6 +1670,7 @@ function formatJson(text: string): string | null {
 // to keep indentation) or wrapped text (logs/prose), with copy + optional action.
 function PayloadBlock({
   label,
+  detail,
   text,
   truncated,
   action,
@@ -1516,6 +1678,7 @@ function PayloadBlock({
   revealRequestId,
 }: {
   label: string;
+  detail?: string;
   text: string;
   truncated?: boolean;
   action?: ReactNode;
@@ -1547,6 +1710,11 @@ function PayloadBlock({
       <div className="mb-0.5 flex items-center justify-between gap-2">
         <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">
           {label}
+          {detail && (
+            <span className="ml-1.5 normal-case tracking-normal">
+              · {detail}
+            </span>
+          )}
         </span>
         <div className="flex items-center gap-2">
           {action}
