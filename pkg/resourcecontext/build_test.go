@@ -70,6 +70,7 @@ type mockResourceProvider struct {
 	statefulSets []*appsv1.StatefulSet
 	jobs         []*batchv1.Job
 	cronJobs     []*batchv1.CronJob
+	hpas         []*autoscalingv2.HorizontalPodAutoscaler
 }
 
 func (m mockResourceProvider) Pods() ([]*corev1.Pod, error)               { return m.pods, nil }
@@ -92,7 +93,7 @@ func (m mockResourceProvider) PersistentVolumes() ([]*corev1.PersistentVolume, e
 	return nil, nil
 }
 func (m mockResourceProvider) HorizontalPodAutoscalers() ([]*autoscalingv2.HorizontalPodAutoscaler, error) {
-	return nil, nil
+	return m.hpas, nil
 }
 func (m mockResourceProvider) PodDisruptionBudgets() ([]*policyv1.PodDisruptionBudget, error) {
 	return nil, nil
@@ -1658,5 +1659,168 @@ func TestBuild_SchedulingSummaryDeepCopiesNestedData(t *testing.T) {
 		want.Kueue.PodSetAssignments[0].Resources[0].FlavorRef.Name != "a10" ||
 		*want.Kueue.RequeueState.Count != 4 || want.Kueue.ConcurrentAdmission.ParentRef.Name != "parent" {
 		t.Fatalf("filtered copy aliases caller-owned scheduling data: %+v", summary)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ScaledBy: HPA diagnosis attached to the workload
+// ---------------------------------------------------------------------------
+
+func scaledByFixture(scalerKind topology.NodeKind, scalerID string) (*appsv1.Deployment, *topology.Topology, *autoscalingv2.HorizontalPodAutoscaler) {
+	deploy := &appsv1.Deployment{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod"},
+	}
+	minReplicas := int32(1)
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "autoscaling/v2", Kind: "HorizontalPodAutoscaler"},
+		ObjectMeta: metav1.ObjectMeta{Name: "api-hpa", Namespace: "prod", Generation: 3},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			MinReplicas: &minReplicas,
+			MaxReplicas: 5,
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+				APIVersion: "apps/v1", Kind: "Deployment", Name: "api",
+			},
+		},
+		Status: autoscalingv2.HorizontalPodAutoscalerStatus{
+			ObservedGeneration: func() *int64 { g := int64(3); return &g }(),
+			CurrentReplicas:    5,
+			DesiredReplicas:    5,
+			Conditions: []autoscalingv2.HorizontalPodAutoscalerCondition{
+				{Type: autoscalingv2.AbleToScale, Status: corev1.ConditionTrue, Reason: "ReadyForNewScale"},
+				{Type: autoscalingv2.ScalingActive, Status: corev1.ConditionTrue, Reason: "ValidMetricFound"},
+				{Type: autoscalingv2.ScalingLimited, Status: corev1.ConditionTrue, Reason: "TooManyReplicas",
+					Message: "the desired replica count is more than the maximum replica count"},
+			},
+		},
+	}
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			{ID: "deployment/prod/api", Kind: topology.KindDeployment, Name: "api"},
+		},
+		Edges: nil,
+	}
+	if scalerID != "" {
+		topo.Nodes = append(topo.Nodes, topology.Node{ID: scalerID, Kind: scalerKind, Name: strings.Split(scalerID, "/")[2]})
+		topo.Edges = append(topo.Edges, topology.Edge{Source: scalerID, Target: "deployment/prod/api", Type: topology.EdgeUses})
+	}
+	return deploy, topo, hpa
+}
+
+func TestBuild_Deployment_ScaledByHPA_AttachesSummary(t *testing.T) {
+	deploy, topo, hpa := scaledByFixture(topology.KindHPA, "horizontalpodautoscaler/prod/api-hpa")
+	rc := Build(context.Background(), deploy, Options{
+		Tier:          TierBasic,
+		AccessChecker: allowAllChecker{},
+		Topology:      topo,
+		Provider:      mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
+	})
+	if rc == nil || len(rc.ScaledBy) != 1 {
+		t.Fatalf("ScaledBy: got %+v want one entry", rc)
+	}
+	entry := rc.ScaledBy[0]
+	if entry.Kind != "HorizontalPodAutoscaler" || entry.Namespace != "prod" || entry.Name != "api-hpa" {
+		t.Fatalf("ScaledBy[0] ref: got %+v", entry.ContextRef)
+	}
+	if entry.HPASummary == nil {
+		t.Fatal("ScaledBy[0].HPASummary: got nil, want the HPA's diagnosis")
+	}
+	if entry.HPASummary.State != "limited_max" {
+		t.Errorf("HPASummary.State: got %q want limited_max (%+v)", entry.HPASummary.State, entry.HPASummary)
+	}
+	if entry.HPASummary.Bounds == nil || entry.HPASummary.Bounds.Max != 5 || entry.HPASummary.Bounds.Current != 5 {
+		t.Errorf("HPASummary.Bounds: got %+v", entry.HPASummary.Bounds)
+	}
+	if entry.HPASummary.Target == nil || entry.HPASummary.Target.Name != "api" || entry.HPASummary.Target.Group != "apps" {
+		t.Errorf("HPASummary.Target: got %+v want apps/Deployment api", entry.HPASummary.Target)
+	}
+	if rc.HPASummary != nil {
+		t.Errorf("top-level HPASummary belongs to HPA subjects only; got %+v", rc.HPASummary)
+	}
+
+	b, err := json.Marshal(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"scaledBy":[{"kind":"HorizontalPodAutoscaler","namespace":"prod","name":"api-hpa","hpaSummary":{`) {
+		t.Errorf("scaledBy entry should serialize as the flat ref plus hpaSummary; got %s", b)
+	}
+}
+
+func TestBuild_Deployment_ScaledByHPA_DeniedHPAIsOmittedWithoutLeak(t *testing.T) {
+	deploy, topo, hpa := scaledByFixture(topology.KindHPA, "horizontalpodautoscaler/prod/api-hpa")
+	rc := Build(context.Background(), deploy, Options{
+		Tier:          TierBasic,
+		AccessChecker: denyChecker{group: "", kind: "HorizontalPodAutoscaler", namespace: "prod"},
+		Topology:      topo,
+		Provider:      mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
+	})
+	if len(rc.ScaledBy) != 0 {
+		t.Fatalf("ScaledBy: got %+v want none for a denied HPA", rc.ScaledBy)
+	}
+	var omittedScaledBy bool
+	for _, o := range rc.Omitted {
+		if o.Field == "scaledBy" && o.Reason == OmittedRBACDenied {
+			omittedScaledBy = true
+		}
+	}
+	if !omittedScaledBy {
+		t.Errorf("Omitted: got %+v want scaledBy rbac_denied", rc.Omitted)
+	}
+	b, err := json.Marshal(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"hpaSummary", "limited_max", "api-hpa", "TooManyReplicas"} {
+		if strings.Contains(string(b), leak) {
+			t.Errorf("denied HPA leaked %q into the context: %s", leak, b)
+		}
+	}
+}
+
+func TestBuild_Deployment_NoScaler_HasNoScaledBy(t *testing.T) {
+	deploy, topo, hpa := scaledByFixture(topology.KindHPA, "")
+	rc := Build(context.Background(), deploy, Options{
+		Tier:          TierBasic,
+		AccessChecker: allowAllChecker{},
+		Topology:      topo,
+		Provider:      mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
+	})
+	if rc.ScaledBy != nil {
+		t.Fatalf("ScaledBy: got %+v want nil", rc.ScaledBy)
+	}
+	b, err := json.Marshal(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "scaledBy") || strings.Contains(string(b), "hpaSummary") {
+		t.Errorf("unscaled workload must not carry scaledBy: %s", b)
+	}
+}
+
+func TestBuild_Deployment_ScaledByKEDA_CarriesRefOnly(t *testing.T) {
+	deploy, topo, hpa := scaledByFixture(topology.KindScaledObject, "scaledobject/prod/api-scaler")
+	rc := Build(context.Background(), deploy, Options{
+		Tier:          TierBasic,
+		AccessChecker: allowAllChecker{},
+		Topology:      topo,
+		Provider:      mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
+	})
+	if len(rc.ScaledBy) != 1 {
+		t.Fatalf("ScaledBy: got %+v want one entry", rc.ScaledBy)
+	}
+	entry := rc.ScaledBy[0]
+	if entry.Kind != "ScaledObject" || entry.Name != "api-scaler" {
+		t.Fatalf("ScaledBy[0] ref: got %+v", entry.ContextRef)
+	}
+	if entry.HPASummary != nil {
+		t.Errorf("KEDA scaler must not carry an HPA summary: %+v", entry.HPASummary)
+	}
+	b, err := json.Marshal(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"scaledBy":[{"kind":"ScaledObject","namespace":"prod","name":"api-scaler"}]`) {
+		t.Errorf("KEDA scaledBy entry should serialize exactly as before: %s", b)
 	}
 }

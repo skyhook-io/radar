@@ -131,7 +131,7 @@ func TestResourceContextFieldOrdering(t *testing.T) {
 		SelectedBy: []ContextRef{{Kind: "NetworkPolicy", Name: "default-deny"}},
 		Uses:       &UsesBlock{},
 		RunsOn:     &ContextRef{Kind: "Node", Name: "node-1"},
-		ScaledBy:   []ContextRef{{Kind: "HorizontalPodAutoscaler", Name: "api-hpa"}},
+		ScaledBy:   []ScalerRef{{ContextRef: ContextRef{Kind: "HorizontalPodAutoscaler", Name: "api-hpa"}}},
 		Scheduling: &SchedulingSummary{Observations: []SchedulingObservation{{
 			Source: SchedulingSourceKueue, Domain: SchedulingDomainAdmission,
 			Subject: ContextRef{Kind: "Workload", Name: "trainer"}, Decision: SchedulingDecisionUnsatisfied,
@@ -208,10 +208,18 @@ func TestResourceContextRoundTrip(t *testing.T) {
 			PVCs:           []ContextRef{{Kind: "PersistentVolumeClaim", Name: "data"}},
 		},
 		RunsOn: &ContextRef{Kind: "Node", Name: "node-1"},
-		ScaledBy: []ContextRef{{
-			Kind:  "HorizontalPodAutoscaler",
-			Group: "autoscaling",
-			Name:  "api-hpa",
+		ScaledBy: []ScalerRef{{
+			ContextRef: ContextRef{
+				Kind:  "HorizontalPodAutoscaler",
+				Group: "autoscaling",
+				Name:  "api-hpa",
+			},
+			HPASummary: &HPASummary{
+				State:   "limited_max",
+				Summary: "At max replicas",
+				Bounds:  &HPAReplicaBounds{Min: 1, Max: 5, Current: 5, Desired: 5},
+				Reasons: []HPAReasonSummary{{ID: "limited_max", Message: "desired exceeds max"}},
+			},
 		}},
 		Scheduling: &SchedulingSummary{Observations: []SchedulingObservation{{
 			Source:            SchedulingSourceKueue,
