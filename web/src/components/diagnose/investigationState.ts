@@ -352,18 +352,22 @@ const HEALTH_CONFLICT_EVIDENCE_KINDS = new Set([
  * recent changes are deliberately excluded: they are useful context, not proof
  * that the investigated resource is unhealthy.
  */
-export function investigationEvidenceConflictsWithHealthy(projection: {
-  groups: readonly {
-    historical: boolean;
-    kind: string;
-    latest: {
-      relevance: "target" | "producer-related" | "broader";
-      tier: "key" | "supporting" | "context" | "checked";
-      tone: string;
-    };
-  }[];
-}): boolean {
-  return projection.groups.some(
+interface HealthConflictGroup {
+  id?: string;
+  historical: boolean;
+  kind: string;
+  latest: {
+    relevance: "target" | "producer-related" | "broader";
+    tier: "key" | "supporting" | "context" | "checked";
+    tone: string;
+    title?: string;
+  };
+}
+
+export function investigationHealthConflictGroups<
+  G extends HealthConflictGroup,
+>(projection: { groups: readonly G[] }): G[] {
+  return projection.groups.filter(
     (group) =>
       !group.historical &&
       group.latest.relevance !== "broader" &&
@@ -371,6 +375,46 @@ export function investigationEvidenceConflictsWithHealthy(projection: {
       (group.latest.tone === "warning" || group.latest.tone === "error") &&
       HEALTH_CONFLICT_EVIDENCE_KINDS.has(group.kind),
   );
+}
+
+export function investigationEvidenceConflictsWithHealthy(projection: {
+  groups: readonly HealthConflictGroup[];
+}): boolean {
+  return investigationHealthConflictGroups(projection).length > 0;
+}
+
+/**
+ * The banner over a healthy verdict points at adverse Radar evidence. When the
+ * agent placed a "less relevant" or "rules out" note on every such card, the
+ * evidence is still shown but the reader has the agent's reason next to it,
+ * so the banner can say that instead of accusing evidence the agent addressed.
+ * Returns the titles of the explained cards, or null when any conflict is
+ * unexplained (or there is no conflict).
+ */
+export function investigationHealthConflictExplainedBy(
+  projection: { groups: readonly HealthConflictGroup[] },
+  caseItems:
+    | readonly {
+        role: string;
+        placement: "card" | "revision" | "source";
+        groupId?: string;
+      }[]
+    | undefined,
+): string[] | null {
+  const conflicting = investigationHealthConflictGroups(projection);
+  if (conflicting.length === 0 || !caseItems) return null;
+  const titles: string[] = [];
+  for (const group of conflicting) {
+    const explained = caseItems.some(
+      (item) =>
+        item.placement !== "source" &&
+        item.groupId === group.id &&
+        (item.role === "demoted" || item.role === "rules_out"),
+    );
+    if (!explained) return null;
+    titles.push(group.latest.title ?? group.kind);
+  }
+  return titles;
 }
 
 export function investigationEndedBeforeConclusion(

@@ -16,6 +16,7 @@ import {
   investigationEvidenceInputsEqual,
   investigationEvidenceCoverageLimited,
   investigationEvidenceConflictsWithHealthy,
+  investigationHealthConflictExplainedBy,
   investigationEndedBeforeConclusion,
   investigationHistoryUnavailablePresentation,
   investigationInteractionsBlocked,
@@ -290,6 +291,60 @@ describe("investigation evidence projection stability", () => {
       }),
     ).toBe(false);
   });
+  it("names the explained cards only when the agent addressed every conflict", () => {
+    const group = (id: string, title: string, tone = "warning") => ({
+      id,
+      kind: "issue",
+      historical: false,
+      latest: {
+        tier: "supporting" as const,
+        relevance: "target" as const,
+        tone,
+        title,
+      },
+    });
+    const projection = {
+      groups: [group("g1", "CrashLoopBackOff"), group("g2", "OOMKilled")],
+    };
+    const note = (
+      groupId: string,
+      role: string,
+      placement: "card" | "revision" | "source" = "card",
+    ) => ({ role, placement, groupId });
+
+    expect(investigationHealthConflictExplainedBy(projection, undefined)).toBe(
+      null,
+    );
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "demoted"),
+      ]),
+    ).toBe(null);
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "demoted"),
+        note("g2", "cause"),
+      ]),
+    ).toBe(null);
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "demoted"),
+        note("g2", "rules_out", "source"),
+      ]),
+    ).toBe(null);
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "demoted"),
+        note("g2", "rules_out", "revision"),
+      ]),
+    ).toEqual(["CrashLoopBackOff", "OOMKilled"]);
+    expect(
+      investigationHealthConflictExplainedBy({ groups: [] }, [
+        note("g1", "demoted"),
+      ]),
+    ).toBe(null);
+  });
+
   it("ignores reasoning-only transcript updates while retaining completed tool identity", () => {
     const completedTool = {
       kind: "tool" as const,

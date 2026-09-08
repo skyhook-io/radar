@@ -23,7 +23,7 @@ export function AgentRoleChip({ role }: { role: DiagnosisEvidenceRole }) {
   return (
     <Tooltip
       content={`The agent labelled this evidence "${AGENT_ROLE_LABELS[role]}". Radar recorded the fact; the label is the agent's reading of it.`}
-      wrapperClassName="shrink-0"
+      wrapperClassName="shrink-0 align-middle"
     >
       <Badge tone="agent" size="sm">
         {AGENT_ROLE_LABELS[role]}
@@ -33,17 +33,22 @@ export function AgentRoleChip({ role }: { role: DiagnosisEvidenceRole }) {
 }
 
 /**
- * One sentence from the agent about a Radar fact. The dashed rule, the sparkle
- * and the "Agent's note:" lead-in keep the register distinct from the card's
- * own content: the fact above is Radar's, the sentence is the agent's reading.
+ * One sentence from the agent about a Radar fact. The sparkle and the
+ * "Agent's note:" lead-in keep the register distinct from the card's own
+ * content: the fact above is Radar's, the sentence is the agent's reading.
+ * The role chip, when shown, sits inline at the start of the sentence so the
+ * whole note shares one baseline.
  */
 export function AgentClaimNote({
   claim,
   role,
+  subject,
   className,
 }: {
   claim: string;
   role?: DiagnosisEvidenceRole;
+  /** The observation the note was bound to, when it is not on that card. */
+  subject?: string;
   className?: string;
 }) {
   if (!claim) return null;
@@ -55,10 +60,17 @@ export function AgentClaimNote({
         className,
       )}
     >
-      <Sparkles className="mt-0.5 h-3 w-3 shrink-0 text-accent" aria-hidden />
-      {role ? <AgentRoleChip role={role} /> : null}
+      <Sparkles className="mt-[3px] h-3 w-3 shrink-0 text-accent" aria-hidden />
       <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+        {role ? (
+          <>
+            <AgentRoleChip role={role} />{" "}
+          </>
+        ) : null}
         <span className="font-semibold text-accent-text">Agent's note:</span>{" "}
+        {subject ? (
+          <span className="text-theme-text-tertiary">{subject} · </span>
+        ) : null}
         {claim}
       </span>
     </p>
