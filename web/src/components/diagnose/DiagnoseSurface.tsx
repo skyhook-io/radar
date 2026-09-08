@@ -40,6 +40,7 @@ import {
 } from "./DiagnoseContext";
 import { useDiagnoseCustomization } from "../../context/DiagnoseCustomization";
 import { InvestigationView } from "./InvestigationView";
+import type { InvestigationTimelineScope } from "./InvestigationEvidencePane";
 import { RecentList, absoluteTime, statusWord } from "./Home";
 import { AgentSetupNotice } from "./AgentSetupNotice";
 import { ConsentCard } from "./parts";
@@ -473,10 +474,23 @@ export function openInvestigationEvidenceResource(
   closeDiagnose: () => void,
   dockedPanelWouldOverlay: boolean,
 ) {
-  // A resource destination must be visible after the handoff. On a wide canvas,
-  // restoring the docked panel leaves Radar and the investigation side by side.
-  // At tighter widths that same panel overlays the host content, so close it
-  // before navigating instead of making the click appear to do nothing.
+  revealInvestigationDestination(
+    setMaximized,
+    closeDiagnose,
+    dockedPanelWouldOverlay,
+  );
+  onOpenResource(ref);
+}
+
+// A destination must be visible after the handoff. On a wide canvas, restoring
+// the docked panel leaves Radar and the investigation side by side. At tighter
+// widths that same panel overlays the host content, so close it before
+// navigating instead of making the click appear to do nothing.
+function revealInvestigationDestination(
+  setMaximized: (maximized: boolean) => void,
+  closeDiagnose: () => void,
+  dockedPanelWouldOverlay: boolean,
+) {
   if (dockedPanelWouldOverlay) {
     // Closing already exposes the destination; retain the user's maximized
     // preference for the next time they open investigations.
@@ -484,16 +498,18 @@ export function openInvestigationEvidenceResource(
   } else {
     setMaximized(false);
   }
-  onOpenResource(ref);
 }
 
 export function DiagnoseSurface({
   topInset = 0,
   onOpenResource,
+  onOpenTimeline,
 }: {
   topInset?: number;
   /** Resolves an evidence subject into the embedding Radar surface. */
   onOpenResource?: (ref: DiagnosisResourceRef) => void;
+  /** Opens the embedding Radar Timeline for one resource's change history. */
+  onOpenTimeline?: (scope: InvestigationTimelineScope) => void;
 }) {
   const d = useDiagnose();
   const { data: contexts } = useContexts();
@@ -563,6 +579,14 @@ export function DiagnoseSurface({
       );
     },
     [d.close, narrow, onOpenResource, setMaximized],
+  );
+  const openEvidenceTimeline = useCallback(
+    (scope: InvestigationTimelineScope) => {
+      if (!onOpenTimeline) return;
+      revealInvestigationDestination(setMaximized, d.close, narrow);
+      onOpenTimeline(scope);
+    },
+    [d.close, narrow, onOpenTimeline, setMaximized],
   );
 
   const startResize = (e: React.MouseEvent) => {
@@ -660,6 +684,7 @@ export function DiagnoseSurface({
       agentLabel={activeAgentLabel}
       maximized={maximized}
       onOpenResource={onOpenResource ? openEvidenceResource : undefined}
+      onOpenTimeline={onOpenTimeline ? openEvidenceTimeline : undefined}
     />
   ) : d.activeRunId && !d.runsLoaded ? (
     // Deep-linked to a run before the list has ever loaded: show the load

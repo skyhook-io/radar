@@ -12,6 +12,7 @@ import { clsx } from "clsx";
 import {
   Activity,
   AlertTriangle,
+  BellRing,
   Boxes,
   Bug,
   CheckCircle2,
@@ -20,8 +21,10 @@ import {
   FileClock,
   FileSearch,
   Info,
+  KeyRound,
   ListTree,
   Network,
+  Package,
   ScrollText,
   SearchCheck,
   ShieldAlert,
@@ -79,8 +82,15 @@ export {
 } from "./useDisclosureReveal";
 export const VISIBLE_LOG_EVIDENCE_LINES = 12;
 
+/** The Timeline scope a changes card can open: one resource name in one namespace. */
+export interface InvestigationTimelineScope {
+  namespace?: string;
+  name: string;
+}
+
 const EvidenceNavigationContext = createContext<{
   onOpenResource?: (ref: DiagnosisResourceRef) => void;
+  onOpenTimeline?: (scope: InvestigationTimelineScope) => void;
   revealSourceId?: string;
   revealRequestId?: number;
   expandedGroupIds?: ReadonlySet<string>;
@@ -91,7 +101,7 @@ const EvidenceNavigationContext = createContext<{
 function evidenceTypePrefersFullRow(
   type: InvestigationEvidenceData["type"],
 ): boolean {
-  return type === "logs" || type === "events";
+  return type === "logs" || type === "events" || type === "alerts";
 }
 
 // Supporting evidence becomes a two-column grid when the pane is wide enough.
@@ -210,6 +220,7 @@ export function InvestigationEvidencePane({
   onViewSource,
   onViewActivity,
   onOpenResource,
+  onOpenTimeline,
   afterEvidence,
   revealRequest,
   onRevealReady,
@@ -227,6 +238,8 @@ export function InvestigationEvidencePane({
   onViewActivity: () => void;
   /** Opens an evidence subject in Radar when the producer identified it exactly. */
   onOpenResource?: (ref: DiagnosisResourceRef) => void;
+  /** Opens Radar's Timeline filtered to the resource a changes card is about. */
+  onOpenTimeline?: (scope: InvestigationTimelineScope) => void;
   /** Actions follow the complete evidence section, including its disclosures. */
   afterEvidence?: ReactNode;
   /** Explicit Activity → Findings navigation, including repeat clicks. */
@@ -426,6 +439,7 @@ export function InvestigationEvidencePane({
     <EvidenceNavigationContext.Provider
       value={{
         onOpenResource,
+        onOpenTimeline,
         expandedGroupIds,
         onGroupOpenChange,
         revealSourceId: revealRequest?.sourceId,
@@ -891,6 +905,7 @@ function EvidenceCard({
 }) {
   const {
     onOpenResource,
+    onOpenTimeline,
     revealSourceId,
     revealRequestId,
     citedOrderByGroup,
@@ -1072,6 +1087,12 @@ function EvidenceCard({
             onOpenResource={onOpenResource}
             compact
           />
+          {observation.data.type === "changes" && observation.data.subject ? (
+            <OpenTimelineButton
+              scope={observation.data.subject}
+              onOpenTimeline={onOpenTimeline}
+            />
+          ) : null}
         </div>
       </div>
       {canExpand ? (
@@ -1146,6 +1167,36 @@ function OpenResourceButton({
   );
 }
 
+function OpenTimelineButton({
+  scope,
+  onOpenTimeline,
+}: {
+  scope: InvestigationTimelineScope;
+  onOpenTimeline?: (scope: InvestigationTimelineScope) => void;
+}) {
+  if (!onOpenTimeline) return null;
+  const identity = `${scope.namespace ? `${scope.namespace}/` : ""}${scope.name}`;
+  const label = `Open the Timeline for ${identity}`;
+  return (
+    <Tooltip
+      content={label}
+      delay={350}
+      position="left"
+      wrapperClassName="flex shrink-0"
+    >
+      <button
+        type="button"
+        aria-label={label}
+        onClick={() => onOpenTimeline(scope)}
+        className="flex h-7 shrink-0 items-center justify-center gap-1 rounded px-2 text-xs font-medium text-theme-text-tertiary transition-colors hover:bg-theme-hover hover:text-accent-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        <FileClock className="h-3.5 w-3.5" aria-hidden />
+        <span className="hidden @min-[540px]/card:inline">Timeline</span>
+      </button>
+    </Tooltip>
+  );
+}
+
 function uniquePrimarySources(
   group: InvestigationEvidenceGroup,
 ): InvestigationEvidenceSource[] {
@@ -1197,6 +1248,12 @@ function EvidenceBody({
       return (
         <p className="text-xs text-theme-text-secondary">{data.message}</p>
       );
+    case "alerts":
+      return <AlertsBody data={data} />;
+    case "helm":
+      return <HelmBody data={data} />;
+    case "permissions":
+      return <PermissionsBody data={data} />;
   }
 }
 
@@ -1585,7 +1642,11 @@ function EventsBody({ data }: { data: EvidenceDataOf<"events"> }) {
               <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
                 <span className="text-xs font-semibold text-theme-text-primary">
                   {event.reason}
-                  {event.count > 1 ? ` ×${event.count}` : ""}
+                  {event.count > 1 ? (
+                    <span className="ml-1.5 font-mono text-[11px] font-normal text-theme-text-tertiary">
+                      ×{event.count}
+                    </span>
+                  ) : null}
                 </span>
                 <Tooltip
                   content={new Date(event.lastTimestamp).toLocaleString()}
@@ -2003,6 +2064,444 @@ function InventoryBody({ data }: { data: EvidenceDataOf<"inventory"> }) {
   );
 }
 
+const VISIBLE_ALERT_LABELS = 6;
+
+function alertStateSeverity(state: string | undefined) {
+  switch ((state ?? "").toLowerCase()) {
+    case "firing":
+      return "error" as const;
+    case "pending":
+      return "warning" as const;
+    case "inactive":
+      return "success" as const;
+    default:
+      return "neutral" as const;
+  }
+}
+
+function AlertsBody({ data }: { data: EvidenceDataOf<"alerts"> }) {
+  const { rule, instances, annotations } = data;
+  const health = rule.health?.toLowerCase();
+  // Target instances lead; the rest stay visible in producer order.
+  const ordered = [...instances].sort(
+    (left, right) => Number(right.namesTarget) - Number(left.namesTarget),
+  );
+  const annotationEntries = Object.entries(annotations);
+  return (
+    <div className="space-y-2.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {rule.state ? (
+          <Badge severity={alertStateSeverity(rule.state)} size="sm">
+            {rule.state}
+          </Badge>
+        ) : null}
+        {rule.labels.severity ? (
+          <Badge severity={severityBadge(rule.labels.severity)} size="sm">
+            severity {rule.labels.severity}
+          </Badge>
+        ) : null}
+        <Badge tone="structural" size="sm">
+          {rule.group}
+        </Badge>
+        {health && health !== "ok" ? (
+          <Badge severity={health === "err" ? "error" : "neutral"} size="sm">
+            health {health}
+          </Badge>
+        ) : null}
+      </div>
+      {ordered.length > 0 ? (
+        <ol className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
+          {ordered.map((instance, index) => {
+            const labels = Object.entries(instance.labels).filter(
+              ([key]) => key !== "alertname" && key !== "severity",
+            );
+            const hidden = labels.length - VISIBLE_ALERT_LABELS;
+            return (
+              <li
+                key={`${instance.state}-${index}-${labels.map(([k, v]) => `${k}=${v}`).join(",")}`}
+                className="rounded-md border border-theme-border/70 bg-theme-base/30 px-2.5 py-2"
+              >
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge
+                    severity={alertStateSeverity(instance.state)}
+                    size="sm"
+                  >
+                    {instance.state}
+                  </Badge>
+                  {instance.namesTarget ? (
+                    <Badge severity="info" size="sm">
+                      names this resource
+                    </Badge>
+                  ) : null}
+                  {instance.value ? (
+                    <span className="font-mono text-xs text-theme-text-secondary">
+                      value {instance.value}
+                    </span>
+                  ) : null}
+                  {instance.activeAt ? (
+                    <Tooltip
+                      content={new Date(instance.activeAt).toLocaleString()}
+                      delay={150}
+                      position="left"
+                      wrapperClassName="ml-auto"
+                    >
+                      <time
+                        dateTime={instance.activeAt}
+                        className="text-xs text-theme-text-tertiary"
+                      >
+                        active {formatRelativeAgeTime(instance.activeAt)}
+                      </time>
+                    </Tooltip>
+                  ) : null}
+                </div>
+                {labels.length > 0 ? (
+                  <div className="mt-1.5 flex flex-wrap gap-1 font-mono text-[11px] text-theme-text-secondary">
+                    {labels
+                      .slice(0, VISIBLE_ALERT_LABELS)
+                      .map(([key, value]) => (
+                        <span
+                          key={key}
+                          className="rounded bg-theme-base px-1.5 py-0.5 [overflow-wrap:anywhere]"
+                        >
+                          {key}={value}
+                        </span>
+                      ))}
+                    {hidden > 0 ? (
+                      <span className="px-1 py-0.5 text-theme-text-tertiary">
+                        +{hidden} more
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <p className="text-xs italic text-theme-text-tertiary">
+          No active instances were reported for this rule.
+        </p>
+      )}
+      {annotationEntries.length > 0 ? (
+        <dl className="space-y-1 text-xs">
+          {annotationEntries.map(([key, value]) => (
+            <div key={key} className="flex min-w-0 gap-2">
+              <dt className="shrink-0 text-theme-text-tertiary">{key}</dt>
+              <dd className="min-w-0 leading-relaxed text-theme-text-secondary [overflow-wrap:anywhere]">
+                {value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      {rule.query ? (
+        <TerminalBlock label="Rule expression">{rule.query}</TerminalBlock>
+      ) : null}
+    </div>
+  );
+}
+
+function helmStatusSeverity(status: string) {
+  const normalized = status.toLowerCase();
+  if (normalized === "deployed") return "success" as const;
+  if (normalized.includes("failed")) return "error" as const;
+  if (normalized.startsWith("pending") || normalized === "uninstalling")
+    return "info" as const;
+  return "warning" as const;
+}
+
+function HelmBody({ data }: { data: EvidenceDataOf<"helm"> }) {
+  const { onOpenResource } = useContext(EvidenceNavigationContext);
+  const { release } = data;
+  const operation = release.lastOperation;
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Badge severity={helmStatusSeverity(release.status)} size="sm">
+          {release.status}
+        </Badge>
+        <Badge tone="structural" size="sm">
+          {release.chart}
+          {release.chartVersion ? ` ${release.chartVersion}` : ""}
+        </Badge>
+        <Badge tone="structural" size="sm">
+          revision {release.revision}
+        </Badge>
+        {release.appVersion ? (
+          <Badge tone="note" size="sm">
+            app {release.appVersion}
+          </Badge>
+        ) : null}
+        {release.resourceHealth ? (
+          <Badge
+            severity={
+              mapHealthToTone(release.resourceHealth) === "healthy"
+                ? "success"
+                : mapHealthToTone(release.resourceHealth) === "unhealthy"
+                  ? "error"
+                  : "warning"
+            }
+            size="sm"
+          >
+            resources {release.resourceHealth}
+          </Badge>
+        ) : null}
+        <Tooltip
+          content={new Date(release.updated).toLocaleString()}
+          delay={150}
+          position="left"
+          wrapperClassName="ml-auto"
+        >
+          <time
+            dateTime={release.updated}
+            className="text-xs text-theme-text-tertiary"
+          >
+            updated {formatRelativeAgeTime(release.updated)}
+          </time>
+        </Tooltip>
+      </div>
+      {release.healthIssue ? (
+        <p className="text-xs leading-relaxed text-warning-text">
+          {release.healthIssue}
+        </p>
+      ) : null}
+      {release.healthSummary &&
+      release.healthSummary !== release.healthIssue ? (
+        <p className="text-xs leading-relaxed text-theme-text-secondary">
+          {release.healthSummary}
+        </p>
+      ) : null}
+      {operation ? (
+        <div className="rounded-md border border-theme-border bg-theme-base/40 px-2.5 py-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
+              Last operation
+            </span>
+            <Badge tone="note" size="sm">
+              {operation.kind.replaceAll("_", " ")}
+            </Badge>
+            <Badge
+              severity={
+                operation.status === "completed"
+                  ? "success"
+                  : operation.status === "failed"
+                    ? "error"
+                    : "warning"
+              }
+              size="sm"
+            >
+              {operation.status.replaceAll("_", " ")}
+            </Badge>
+          </div>
+          {operation.message ? (
+            <p className="mt-1 text-xs leading-relaxed text-theme-text-secondary [overflow-wrap:anywhere]">
+              {operation.message}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {release.description ? (
+        <p className="text-xs text-theme-text-tertiary [overflow-wrap:anywhere]">
+          {release.description}
+        </p>
+      ) : null}
+      {release.storageNamespace &&
+      release.storageNamespace !== release.namespace ? (
+        <p className="text-xs text-theme-text-tertiary">
+          Release metadata stored in namespace {release.storageNamespace}
+        </p>
+      ) : null}
+      {release.managedByFluxHelmRelease ? (
+        <p className="text-xs text-theme-text-tertiary">
+          Managed by Flux HelmRelease {release.managedByFluxHelmRelease}
+        </p>
+      ) : null}
+      {release.resources.length > 0 ? (
+        <div className="max-h-52 overflow-y-auto rounded-md border border-theme-border">
+          {release.resources.map((owned, index) => (
+            <div
+              key={`${owned.kind}-${owned.namespace}-${owned.name}`}
+              className={clsx(
+                "flex min-w-0 items-center gap-2 px-2.5 py-1.5",
+                index > 0 && "border-t border-theme-border/60",
+              )}
+            >
+              <StatusDot
+                tone={mapHealthToTone(
+                  owned.issue ? "unhealthy" : (owned.status ?? ""),
+                )}
+                className="shrink-0"
+              />
+              <Badge tone="structural" size="sm">
+                {owned.kind}
+              </Badge>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-mono text-xs">
+                  <ResourceLink
+                    name={owned.name}
+                    kind={owned.kind}
+                    namespace={owned.namespace}
+                    group={
+                      owned.apiVersion
+                        ? apiVersionToGroup(owned.apiVersion)
+                        : undefined
+                    }
+                    label={`${owned.namespace ? `${owned.namespace}/` : ""}${owned.name}`}
+                    onNavigate={
+                      owned.apiVersion && onOpenResource
+                        ? (ref) => onOpenResource(ref)
+                        : undefined
+                    }
+                  />
+                </span>
+                {owned.issue ? (
+                  <span className="block truncate text-xs text-warning-text">
+                    {owned.issue}
+                  </span>
+                ) : owned.summary || owned.message ? (
+                  <span className="block truncate text-xs text-theme-text-tertiary">
+                    {owned.summary || owned.message}
+                  </span>
+                ) : null}
+              </span>
+              {owned.ready || owned.status ? (
+                <span className="ml-auto shrink-0 font-mono text-xs text-theme-text-tertiary">
+                  {owned.ready || owned.status}
+                </span>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PermissionsBody({ data }: { data: EvidenceDataOf<"permissions"> }) {
+  const { subject, accessCheck } = data;
+  const subjectBadges = (
+    <>
+      <Badge tone="structural" size="sm">
+        {subject.kind}
+      </Badge>
+      <span className="font-mono text-xs text-theme-text-secondary">
+        {subject.namespace ? `${subject.namespace}/` : ""}
+        {subject.name}
+      </span>
+    </>
+  );
+  if (accessCheck) {
+    const facts = [
+      ["Verb", accessCheck.verb],
+      ["Resource", accessCheck.resource],
+      ["Subresource", accessCheck.subresource],
+      ["API group", accessCheck.group || "core"],
+      ["Namespace", accessCheck.namespace || "cluster-wide"],
+      ["Name", accessCheck.resourceName],
+    ] as const;
+    return (
+      <div className="space-y-2.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {subjectBadges}
+          <Badge
+            severity={accessCheck.allowed ? "success" : "warning"}
+            size="sm"
+          >
+            {accessCheck.allowed
+              ? "allowed"
+              : accessCheck.denied
+                ? "denied"
+                : "not allowed"}
+          </Badge>
+        </div>
+        <dl className="flex flex-wrap gap-x-6 gap-y-2 text-xs">
+          {facts.map(([label, value]) => (
+            <ResourceFact key={label} label={label} value={value} />
+          ))}
+        </dl>
+        {accessCheck.reason ? (
+          <p className="text-xs leading-relaxed text-theme-text-secondary [overflow-wrap:anywhere]">
+            {accessCheck.reason}
+          </p>
+        ) : null}
+        {accessCheck.evaluationError ? (
+          <p className="text-xs leading-relaxed text-semantic-error">
+            {accessCheck.evaluationError}
+          </p>
+        ) : null}
+      </div>
+    );
+  }
+  const bindings = data.bindings ?? [];
+  const usedByPods = data.usedByPods ?? [];
+  return (
+    <div className="space-y-2.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {subjectBadges}
+        <Badge tone="note" size="sm">
+          {data.flatRulesCount ?? 0}
+          {data.truncated ? "+" : ""} effective rules
+        </Badge>
+        {data.truncated ? (
+          <Badge severity="warning" size="sm">
+            rule list truncated
+          </Badge>
+        ) : null}
+      </div>
+      {bindings.length > 0 ? (
+        <div className="max-h-52 overflow-y-auto rounded-md border border-theme-border">
+          {bindings.map((binding, index) => (
+            <div
+              key={`${binding.bindingKind}-${binding.bindingNamespace ?? ""}-${binding.bindingName}`}
+              className={clsx(
+                "flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-2.5 py-1.5 text-xs",
+                index > 0 && "border-t border-theme-border/60",
+              )}
+            >
+              <Badge tone="structural" size="sm">
+                {binding.bindingKind}
+              </Badge>
+              <span className="min-w-0 truncate font-mono text-theme-text-secondary">
+                {binding.bindingNamespace ? `${binding.bindingNamespace}/` : ""}
+                {binding.bindingName}
+              </span>
+              <span className="text-theme-text-tertiary">→</span>
+              <Badge tone="structural" size="sm">
+                {binding.roleKind}
+              </Badge>
+              <span className="min-w-0 truncate font-mono text-theme-text-primary">
+                {binding.roleNamespace ? `${binding.roleNamespace}/` : ""}
+                {binding.roleName}
+              </span>
+              <span className="ml-auto shrink-0 font-mono text-theme-text-tertiary">
+                {binding.rulesCount} rule{binding.rulesCount === 1 ? "" : "s"}
+              </span>
+              {binding.inheritedFromGroup ? (
+                <Badge tone="note" size="sm">
+                  via {binding.inheritedFromGroup}
+                </Badge>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs italic text-theme-text-tertiary">
+          No RoleBinding or ClusterRoleBinding grants this subject anything.
+        </p>
+      )}
+      {usedByPods.length > 0 ? (
+        <p className="text-xs leading-relaxed text-theme-text-secondary [overflow-wrap:anywhere]">
+          <span className="text-theme-text-tertiary">Used by pods: </span>
+          <span className="font-mono">{usedByPods.join(", ")}</span>
+          {data.podsTotal && data.podsTotal > usedByPods.length
+            ? ` and ${data.podsTotal - usedByPods.length} more`
+            : ""}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function RevisionHistory({
   observations,
   citedOrder,
@@ -2111,6 +2610,12 @@ function EvidenceCaveat({ data }: { data: InvestigationEvidenceData }) {
   } else if (data.type === "relationships" || data.type === "topology") {
     text =
       "This shows direct relationships Radar found, not an inferred blast radius.";
+  } else if (data.type === "alerts") {
+    text =
+      "Instances are matched to this investigation by their Prometheus labels; a firing rule alone does not establish the cause.";
+  } else if (data.type === "permissions") {
+    text =
+      "This is what RBAC grants the subject, not what the workload has exercised.";
   }
   if (!text) return null;
   return (
@@ -2210,6 +2715,12 @@ function evidenceIcon(type: InvestigationEvidenceData["type"]) {
       return ListTree;
     case "receipt":
       return CheckCircle2;
+    case "alerts":
+      return BellRing;
+    case "helm":
+      return Package;
+    case "permissions":
+      return KeyRound;
   }
 }
 

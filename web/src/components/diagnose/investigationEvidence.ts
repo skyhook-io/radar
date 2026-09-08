@@ -89,7 +89,10 @@ export type InvestigationEvidenceKind =
   | "relationships"
   | "topology"
   | "inventory"
-  | "receipt";
+  | "receipt"
+  | "alerts"
+  | "helm"
+  | "permissions";
 
 type InvestigationSemanticDomain = "issue" | "startup" | "crash" | "dns";
 
@@ -240,6 +243,100 @@ export interface InvestigationNetworkEvidence {
   routes: InvestigationNetworkRoute[];
 }
 
+/** One Prometheus rule as `get_prometheus_rules` flattens it (group stamped on). */
+export interface InvestigationAlertRule {
+  group: string;
+  name: string;
+  type: string;
+  state?: string;
+  health?: string;
+  query?: string;
+  labels: Record<string, string>;
+}
+
+/** One active instance of an alerting rule, with its own label set. */
+export interface InvestigationAlertInstance {
+  state: string;
+  activeAt?: string;
+  value?: string;
+  labels: Record<string, string>;
+  /** The instance's labels name the investigated resource. */
+  namesTarget: boolean;
+}
+
+export interface InvestigationHelmOperation {
+  kind: string;
+  status: string;
+  message: string;
+  revision?: number;
+  failedRevision?: number;
+  rollbackRevision?: number;
+  updated?: string;
+}
+
+export interface InvestigationHelmOwnedResource {
+  kind: string;
+  apiVersion?: string;
+  name: string;
+  namespace: string;
+  status?: string;
+  ready?: string;
+  message?: string;
+  summary?: string;
+  issue?: string;
+}
+
+export interface InvestigationHelmRelease {
+  name: string;
+  namespace: string;
+  /** Set only when Helm stores the release metadata elsewhere. */
+  storageNamespace?: string;
+  chart: string;
+  chartVersion: string;
+  appVersion?: string;
+  status: string;
+  revision: number;
+  updated: string;
+  description?: string;
+  resourceHealth?: string;
+  healthIssue?: string;
+  healthSummary?: string;
+  managedByFluxHelmRelease?: string;
+  lastOperation?: InvestigationHelmOperation;
+  resources: InvestigationHelmOwnedResource[];
+}
+
+export interface InvestigationPermissionSubject {
+  kind: string;
+  namespace?: string;
+  name: string;
+}
+
+export interface InvestigationAccessCheck {
+  verb: string;
+  group?: string;
+  resource: string;
+  subresource?: string;
+  /** Empty means a cluster-scoped resource or cluster-wide request. */
+  namespace: string;
+  resourceName?: string;
+  allowed: boolean;
+  denied: boolean;
+  reason?: string;
+  evaluationError?: string;
+}
+
+export interface InvestigationPermissionBinding {
+  bindingKind: string;
+  bindingNamespace?: string;
+  bindingName: string;
+  roleKind: string;
+  roleNamespace?: string;
+  roleName: string;
+  rulesCount: number;
+  inheritedFromGroup?: string;
+}
+
 export type InvestigationEvidenceData =
   | {
       type: "issue";
@@ -291,6 +388,8 @@ export type InvestigationEvidenceData =
       changes: IssueRecentChange[];
       scope: string;
       changeContext?: DiagnosisChangeContext;
+      /** The resource whose change history the producer read, when it named one. */
+      subject?: { kind?: string; namespace?: string; name: string };
     }
   | { type: "dns"; dns: DiagnosisDNSContext }
   | { type: "network"; network: InvestigationNetworkEvidence }
@@ -315,9 +414,29 @@ export type InvestigationEvidenceData =
     }
   | {
       type: "receipt";
-      checked: "issues" | "events" | "changes" | "inventory" | "logs";
+      checked:
+        "issues" | "events" | "changes" | "inventory" | "logs" | "alerts";
       scope: string;
       message: string;
+    }
+  | {
+      type: "alerts";
+      rule: InvestigationAlertRule;
+      instances: InvestigationAlertInstance[];
+      annotations: Record<string, string>;
+    }
+  | { type: "helm"; release: InvestigationHelmRelease }
+  | {
+      type: "permissions";
+      subject: InvestigationPermissionSubject;
+      /** Present for the access-check response shape. */
+      accessCheck?: InvestigationAccessCheck;
+      /** Present for the subject-permissions response shape. */
+      bindings?: InvestigationPermissionBinding[];
+      flatRulesCount?: number;
+      truncated?: boolean;
+      usedByPods?: string[];
+      podsTotal?: number;
     };
 
 export interface InvestigationEvidenceObservation {
@@ -485,6 +604,29 @@ export function investigationEvidenceSubjectRef(
         return data.network.subject;
       case "relationships":
         return data.root;
+      case "helm":
+        // A resource ref cannot carry the storage namespace, and opening the
+        // release by name alone would read the wrong storage.
+        if (
+          data.release.storageNamespace !== undefined &&
+          data.release.storageNamespace !== data.release.namespace
+        ) {
+          return undefined;
+        }
+        return {
+          kind: "HelmRelease",
+          group: "helm.sh",
+          namespace: data.release.namespace,
+          name: data.release.name,
+        };
+      case "permissions":
+        // Users and Groups are principals, not Kubernetes objects.
+        if (data.subject.kind !== "ServiceAccount") return undefined;
+        return {
+          kind: "ServiceAccount",
+          namespace: data.subject.namespace,
+          name: data.subject.name,
+        };
       default:
         return undefined;
     }
@@ -1116,6 +1258,10 @@ const INVESTIGATION_RESULT_LABELS: Readonly<Record<string, string>> = {
   get_changes: "Recent changes",
   get_neighborhood: "Relationships",
   get_topology: "Topology",
+  get_workload_logs: "Workload logs",
+  get_prometheus_rules: "Alert rules",
+  get_helm_release: "Helm release",
+  get_subject_permissions: "Permissions",
 };
 
 function investigationResultLabel(source: InvestigationEvidenceSource): string {
@@ -1254,11 +1400,13 @@ class ProjectionBuilder {
       kind === "startup" ||
       kind === "crash" ||
       (kind === "receipt" && identity.startsWith("previous-log-absence:"));
-    const mapKey = `${kind}\u0000${identity}${
+    const mapKey = groupKey(
+      kind,
+      identity,
       partitionByRelevance
-        ? `\u0000${observation.relevance}\u0000${scopeFromArgs(source)}`
-        : ""
-    }`;
+        ? `${observation.relevance}\u0000${scopeFromArgs(source)}`
+        : undefined,
+    );
     let group = this.groupByIdentity.get(mapKey);
     const previousObservation = group?.observations.at(-1);
     const changedFromPrevious = previousObservation
@@ -1297,13 +1445,24 @@ class ProjectionBuilder {
     // target was already established by a scoped producer. Keep the broad read
     // in revision history, but never let weaker provenance replace the card's
     // authoritative observation. Equal provenance still advances normally.
+    // An alert rule's relevance is derived from its live instances, so a later
+    // read of the same rule is a state transition, not weaker provenance.
     if (
+      kind === "alerts" ||
       relevanceRank[next.relevance] <= relevanceRank[group.latest.relevance]
     ) {
       group.latest = next;
     }
     this.projectedSources.add(source.id);
     if (next.tier === "checked") this.checkedSources.add(source.id);
+  }
+
+  /** Relevance of the current card for an unpartitioned identity, if observed. */
+  latestRelevance(
+    kind: InvestigationEvidenceKind,
+    identity: string,
+  ): InvestigationEvidenceRelevance | undefined {
+    return this.groupByIdentity.get(groupKey(kind, identity))?.latest.relevance;
   }
 
   limit(
@@ -1337,6 +1496,18 @@ class ProjectionBuilder {
   }
 }
 
+/**
+ * The one place a group's map key is built. NUL separates the parts so no
+ * kind or identity text can collide with another kind's key.
+ */
+function groupKey(
+  kind: InvestigationEvidenceKind,
+  identity: string,
+  partition?: string,
+): string {
+  return `${kind}\u0000${identity}${partition === undefined ? "" : `\u0000${partition}`}`;
+}
+
 export function evidenceSemanticSnapshot(
   observation: Pick<
     InvestigationEvidenceObservation,
@@ -1352,23 +1523,35 @@ export function evidenceSemanticSnapshot(
     });
   }
   const data =
-    observation.data.type === "issue"
+    observation.data.type === "alerts"
       ? {
           type: observation.data.type,
-          // These are the finding and details shown in the evidence card.
-          // Collection timestamps and detector bookkeeping do not change it.
-          issue: {
-            kind: observation.data.issue.kind,
-            group: observation.data.issue.group,
-            namespace: observation.data.issue.namespace,
-            name: observation.data.issue.name,
-            reason: observation.data.issue.reason,
-            severity: observation.data.issue.severity,
-            cause: observation.data.issue.cause,
-            message: observation.data.issue.message,
-          },
+          // An instance's sampled value and activation time move on every
+          // evaluation; the finding is which instances exist and their state.
+          rule: observation.data.rule,
+          instances: observation.data.instances.map((instance) => ({
+            state: instance.state,
+            labels: instance.labels,
+          })),
+          annotations: observation.data.annotations,
         }
-      : observation.data;
+      : observation.data.type === "issue"
+        ? {
+            type: observation.data.type,
+            // These are the finding and details shown in the evidence card.
+            // Collection timestamps and detector bookkeeping do not change it.
+            issue: {
+              kind: observation.data.issue.kind,
+              group: observation.data.issue.group,
+              namespace: observation.data.issue.namespace,
+              name: observation.data.issue.name,
+              reason: observation.data.issue.reason,
+              severity: observation.data.issue.severity,
+              cause: observation.data.issue.cause,
+              message: observation.data.issue.message,
+            },
+          }
+        : observation.data;
   return JSON.stringify({
     tone: observation.tone,
     title: observation.title,
@@ -1664,6 +1847,7 @@ function addEvents(
     });
     return;
   }
+  const lead = leadEvent(values);
   builder.observe(identity, "events", source, {
     tier: evidenceTierForRelevance(
       values.some((item) => item.type.toLowerCase() === "warning")
@@ -1676,9 +1860,30 @@ function addEvents(
       ? "warning"
       : "info",
     title: "Kubernetes events",
-    summary: `${values.length} event group${values.length === 1 ? "" : "s"} · ${scope}`,
+    summary: `${lead.reason}: ${lead.message}${
+      values.length > 1 ? ` · ${values.length} event groups` : ""
+    } · ${scope}`,
     data: { type: "events", events: values, scope },
   });
+}
+
+/**
+ * The newest warning, else the newest event. The card lead must be what
+ * happened, not how many groups the producer returned.
+ */
+function leadEvent(
+  values: InvestigationEventEvidence[],
+): InvestigationEventEvidence {
+  const newest = (items: InvestigationEventEvidence[]) =>
+    items.reduce((best, item) =>
+      Date.parse(item.lastTimestamp) > Date.parse(best.lastTimestamp)
+        ? item
+        : best,
+    );
+  const warnings = values.filter(
+    (item) => item.type.toLowerCase() === "warning",
+  );
+  return newest(warnings.length > 0 ? warnings : values);
 }
 
 function addChanges(
@@ -1690,6 +1895,7 @@ function addChanges(
   complete = true,
   emptyIsAuthoritative = false,
   relevance: InvestigationEvidenceRelevance = "broader",
+  subject?: { kind?: string; namespace?: string; name: string },
 ): void {
   const scope = scopeFromArgs(source);
   if (values.length === 0 && !changeContext?.changed) {
@@ -1740,8 +1946,21 @@ function addChanges(
       changes: values,
       scope,
       changeContext,
+      subject,
     },
   });
+}
+
+function changesSubjectFromArgs(
+  source: InvestigationEvidenceSource,
+): { kind?: string; namespace?: string; name: string } | undefined {
+  const args = record(source.args ? parseJSON(source.args) : undefined);
+  if (!nonEmptyString(args?.name)) return undefined;
+  return {
+    ...(nonEmptyString(args.kind) ? { kind: args.kind } : {}),
+    ...(nonEmptyString(args.namespace) ? { namespace: args.namespace } : {}),
+    name: args.name,
+  };
 }
 
 function addLogs(
@@ -2450,6 +2669,11 @@ function adaptDiagnose(
   if (value.changeContext !== undefined && !changeContext) {
     invalidPayload(builder, source, "Change correlation");
   }
+  const diagnoseChangesSubject = {
+    kind: resource.kind,
+    namespace: resource.metadata.namespace,
+    name: resource.metadata.name,
+  };
   if (Array.isArray(changesRaw)) {
     const changes = changesRaw
       .map(recentChange)
@@ -2466,6 +2690,7 @@ function adaptDiagnose(
           changesCoverageLimitedValid,
         true,
         relatedRelevance,
+        diagnoseChangesSubject,
       );
     } else {
       invalidPayload(builder, source, "Recent changes");
@@ -2486,6 +2711,7 @@ function adaptDiagnose(
         changesCoverageLimitedValid,
       true,
       relatedRelevance,
+      diagnoseChangesSubject,
     );
   } else if (changesRaw !== undefined) {
     invalidPayload(builder, source, "Recent changes");
@@ -2784,6 +3010,11 @@ function adaptGetResource(
       invalidPayload(builder, source, "Events");
     }
   }
+  const resourceChangesSubject = {
+    kind: resource.kind,
+    namespace: resource.metadata.namespace,
+    name: resource.metadata.name,
+  };
   const recentChangesRaw = value.recentChanges;
   const recentChangesSaturatedRaw = value.recentChangesSaturated;
   const recentChangesCoverageLimitedRaw = value.recentChangesCoverageLimited;
@@ -2814,6 +3045,7 @@ function adaptGetResource(
           !nonEmptyString(value.recentChangesError),
         true,
         relevance,
+        resourceChangesSubject,
       );
     } else {
       invalidPayload(builder, source, "Recent changes");
@@ -2833,6 +3065,7 @@ function adaptGetResource(
         recentChangesCoverageLimitedRaw === false,
       true,
       relevance,
+      resourceChangesSubject,
     );
   } else if (recentChangesRaw !== undefined) {
     invalidPayload(builder, source, "Recent changes");
@@ -3010,6 +3243,7 @@ function adaptChanges(
     !nonEmptyString(value.narrowHint) && sourceErrors === 0,
     false,
     sourceArgsRelevance(builder, source),
+    changesSubjectFromArgs(source),
   );
 }
 
@@ -3199,6 +3433,937 @@ function adaptTopology(
   );
 }
 
+const WORKLOAD_LOG_KINDS: Readonly<Record<string, string>> = {
+  deployments: "Deployment",
+  statefulsets: "StatefulSet",
+  daemonsets: "DaemonSet",
+  rollouts: "Rollout",
+  jobs: "Job",
+  workflows: "Workflow",
+};
+
+/** `get_workload_logs` states what it read as `<plural>/<namespace>/<name>`. */
+function workloadLogsSubject(
+  value: string,
+): { kind: string; namespace: string; name: string } | undefined {
+  const parts = value.split("/");
+  if (parts.length !== 3) return undefined;
+  const kind = WORKLOAD_LOG_KINDS[parts[0]];
+  if (!kind || !parts[1] || !parts[2]) return undefined;
+  return { kind, namespace: parts[1], name: parts[2] };
+}
+
+function adaptWorkloadLogs(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+  payload: unknown,
+): void {
+  const value = record(payload);
+  const workload = nonEmptyString(value?.workload)
+    ? workloadLogsSubject(value.workload)
+    : undefined;
+  if (!value || !workload || !nonNegativeInteger(value.pods)) {
+    invalidPayload(builder, source);
+    return;
+  }
+  // The producer names the workload without an API group; as with other
+  // group-less producers, the investigation target supplies that dimension.
+  const workloadRelevance = relevanceForResource(builder, {
+    ...workload,
+    group: builder.target.group,
+  });
+  const scope = `${displayKind(workload.kind)} ${workload.namespace}/${workload.name}`;
+  const previous = previousFromArgs(source);
+  addNarrowHint(builder, source, value);
+  if (nonEmptyString(value.logsError)) {
+    builder.limit(source, "Workload logs", value.logsError, "error");
+    return;
+  }
+  if (value.pods === 0) {
+    // The producer replaces the stream list with a message when it resolved
+    // no pods; any other shape is not this response.
+    if (
+      typeof value.logs !== "string" ||
+      (value.emptyMessage !== undefined &&
+        typeof value.emptyMessage !== "string") ||
+      value.narrowHint !== undefined
+    ) {
+      invalidPayload(builder, source);
+      return;
+    }
+    if (!source.confirmedSuccess) return;
+    const message = nonEmptyString(value.emptyMessage)
+      ? value.emptyMessage
+      : nonEmptyString(value.logs)
+        ? value.logs
+        : "The workload resolved no pods, so there were no log streams to read.";
+    builder.observe(
+      `workload-logs:${previous ? "previous" : "current"}:${scope}`,
+      "receipt",
+      source,
+      {
+        tier: evidenceTierForRelevance("checked", workloadRelevance),
+        relevance: workloadRelevance,
+        tone: "neutral",
+        title: "No pods to read logs from",
+        summary: scope,
+        data: { type: "receipt", checked: "logs", scope, message },
+      },
+    );
+    return;
+  }
+  const logsRaw = value.logs;
+  const noStreams = `No log streams were returned for the ${value.pods} resolved pod${value.pods === 1 ? "" : "s"}, so Radar could not evaluate them.`;
+  if (!Array.isArray(logsRaw)) {
+    if (logsRaw === undefined || logsRaw === null) {
+      builder.limit(source, "Workload logs", noStreams, "unknown");
+    } else {
+      invalidPayload(builder, source);
+    }
+    return;
+  }
+  const warnings = stringArray(value.warnings) ?? [];
+  for (const raw of logsRaw) {
+    const entry = parseLogEntry(raw);
+    if (!entry) {
+      invalidPayload(
+        builder,
+        source,
+        previous ? "Previous logs" : "Current logs",
+      );
+      continue;
+    }
+    // A Pod target is named exactly by its own row; a workload target relates
+    // to its rows the way diagnose relates to the pods it resolved.
+    const rowRelevance: InvestigationEvidenceRelevance = resourceMatchesTarget(
+      builder.target,
+      {
+        kind: "Pod",
+        group: "",
+        namespace: workload.namespace,
+        name: entry.pod,
+      },
+    )
+      ? "target"
+      : workloadRelevance === "target"
+        ? "producer-related"
+        : "broader";
+    addLogs(
+      builder,
+      source,
+      entry,
+      previous,
+      warnings,
+      rowRelevance,
+      workload.namespace,
+    );
+  }
+  if (logsRaw.length === 0) {
+    builder.limit(source, "Workload logs", noStreams, "unknown");
+  }
+}
+
+function stringRecord(value: unknown): Record<string, string> | undefined {
+  const candidate = record(value);
+  if (!candidate) return undefined;
+  return Object.values(candidate).every((item) => typeof item === "string")
+    ? (candidate as Record<string, string>)
+    : undefined;
+}
+
+/**
+ * Pods a producer has already tied to the investigated workload in this
+ * projection: the streams diagnose or a workload-logs read resolved for it,
+ * its crash candidates, and its Pod startup blockers. A pod name matched
+ * against this set is producer-established membership, never inference from
+ * a name prefix, which a sibling such as `api-worker` would also satisfy.
+ */
+function producerEstablishedTargetPods(
+  builder: ProjectionBuilder,
+): Set<string> {
+  const pods = new Set<string>();
+  const namespace = builder.target.namespace;
+  if (!namespace) return pods;
+  for (const group of builder.groups) {
+    for (const observation of group.observations) {
+      if (observation.relevance === "broader") continue;
+      const data = observation.data;
+      if (data.type === "logs" && data.namespace === namespace) {
+        pods.add(data.pod);
+      } else if (data.type === "crash" && data.namespace === namespace) {
+        for (const pod of data.crash.pods) pods.add(pod);
+      } else if (
+        data.type === "startup" &&
+        data.subject?.kind === "Pod" &&
+        data.subject.namespace === namespace
+      ) {
+        pods.add(data.subject.name);
+      }
+    }
+  }
+  return pods;
+}
+
+// kube-state-metrics label names for the owning workload.
+const WORKLOAD_LABEL_BY_KIND: Readonly<Record<string, string>> = {
+  deployment: "deployment",
+  statefulset: "statefulset",
+  daemonset: "daemonset",
+  rollout: "rollout",
+  job: "job_name",
+  cronjob: "cronjob",
+};
+
+/**
+ * Whether a Prometheus label set names the investigated resource: the target
+ * namespace plus a label identifying it directly, or a `pod` label naming a
+ * pod a producer already tied to it.
+ */
+function labelsNameTarget(
+  target: InvestigationEvidenceTarget,
+  labels: Record<string, string>,
+  targetPods: ReadonlySet<string>,
+): boolean {
+  if (!target.namespace || labels.namespace !== target.namespace) return false;
+  const kind = target.kind.toLowerCase();
+  if (kind === "pod") return labels.pod === target.name;
+  const workloadLabel = WORKLOAD_LABEL_BY_KIND[kind];
+  if (workloadLabel && labels[workloadLabel] === target.name) return true;
+  if (
+    labels.workload === target.name &&
+    (labels.workload_type === undefined ||
+      labels.workload_type.toLowerCase() === kind)
+  ) {
+    return true;
+  }
+  return labels.pod !== undefined && targetPods.has(labels.pod);
+}
+
+/**
+ * The label set places the instance in another namespace outright. Only a
+ * namespaced target can be excluded this way; for a cluster-scoped target
+ * every namespace label is "different" and proves nothing.
+ */
+function labelsPlaceElsewhere(
+  target: InvestigationEvidenceTarget,
+  labels: Record<string, string>,
+): boolean {
+  return (
+    Boolean(target.namespace) &&
+    nonEmptyString(labels.namespace) &&
+    labels.namespace !== target.namespace
+  );
+}
+
+function alertRule(value: unknown):
+  | {
+      rule: InvestigationAlertRule;
+      instances: Omit<InvestigationAlertInstance, "namesTarget">[];
+      annotations: Record<string, string>;
+    }
+  | undefined {
+  const candidate = record(value);
+  if (
+    !candidate ||
+    !nonEmptyString(candidate.group) ||
+    !nonEmptyString(candidate.name) ||
+    !nonEmptyString(candidate.type) ||
+    typeof candidate.query !== "string"
+  ) {
+    return undefined;
+  }
+  for (const field of ["state", "health"] as const) {
+    if (candidate[field] !== undefined && typeof candidate[field] !== "string")
+      return undefined;
+  }
+  const labels =
+    candidate.labels === undefined ? {} : stringRecord(candidate.labels);
+  const annotations =
+    candidate.annotations === undefined
+      ? {}
+      : stringRecord(candidate.annotations);
+  if (!labels || !annotations) return undefined;
+  const alertsRaw = candidate.alerts === undefined ? [] : candidate.alerts;
+  if (!Array.isArray(alertsRaw)) return undefined;
+  const instances: Omit<InvestigationAlertInstance, "namesTarget">[] = [];
+  for (const raw of alertsRaw) {
+    const instance = record(raw);
+    const instanceLabels =
+      instance?.labels === undefined ? {} : stringRecord(instance.labels);
+    if (
+      !instance ||
+      !nonEmptyString(instance.state) ||
+      !instanceLabels ||
+      (instance.activeAt !== undefined &&
+        typeof instance.activeAt !== "string") ||
+      (instance.value !== undefined && typeof instance.value !== "string")
+    ) {
+      return undefined;
+    }
+    instances.push({
+      state: instance.state,
+      activeAt: instance.activeAt as string | undefined,
+      value: instance.value as string | undefined,
+      labels: instanceLabels,
+    });
+  }
+  return {
+    rule: {
+      group: candidate.group,
+      name: candidate.name,
+      type: candidate.type,
+      state: candidate.state as string | undefined,
+      health: candidate.health as string | undefined,
+      query: candidate.query,
+      labels,
+    },
+    instances,
+    annotations,
+  };
+}
+
+function targetIdentity(target: InvestigationEvidenceTarget): string {
+  return `${displayKind(target.kind)} ${target.namespace ? `${target.namespace}/` : ""}${target.name}`;
+}
+
+function adaptPrometheusRules(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+  payload: unknown,
+): void {
+  const value = record(payload);
+  if (
+    !value ||
+    !Array.isArray(value.rules) ||
+    typeof value.count !== "number" ||
+    value.count !== value.rules.length ||
+    (value.truncated !== undefined && typeof value.truncated !== "boolean") ||
+    (value.note !== undefined && typeof value.note !== "string")
+  ) {
+    invalidPayload(builder, source);
+    return;
+  }
+  const rules = value.rules
+    .map(alertRule)
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+  if (rules.length !== value.rules.length) {
+    invalidPayload(builder, source);
+    return;
+  }
+  const args = record(source.args ? parseJSON(source.args) : undefined);
+  const stateFilter = nonEmptyString(args?.state)
+    ? args.state.toLowerCase()
+    : undefined;
+  const typeFilter = nonEmptyString(args?.type)
+    ? args.type.toLowerCase()
+    : undefined;
+  const truncated = value.truncated === true;
+  if (truncated) {
+    builder.limit(
+      source,
+      "Alert rules",
+      `The rule list was capped, so additional matching rules may exist${nonEmptyString(value.note) ? `; ${value.note}` : ""}.`,
+      "truncated",
+    );
+  }
+  const identity = targetIdentity(builder.target);
+  const targetPods = producerEstablishedTargetPods(builder);
+  // Rule names are not unique within a group, and group names are unique
+  // only per rule file, which the producer does not return. The expression
+  // and static labels distinguish rules; identical rows within one response
+  // cannot be told apart at all, so they stay scoped to this read rather
+  // than inherit each other's history in whatever order they arrive.
+  const ruleDefinition = (rule: InvestigationAlertRule) =>
+    `alerts:${rule.group}:${rule.name}:${stableHash(
+      JSON.stringify([rule.query, Object.entries(rule.labels).sort()]),
+    )}`;
+  const definitionCounts = new Map<string, number>();
+  for (const { rule } of rules) {
+    const definition = ruleDefinition(rule);
+    definitionCounts.set(
+      definition,
+      (definitionCounts.get(definition) ?? 0) + 1,
+    );
+  }
+  const seenRuleIdentities = new Map<string, number>();
+  let namesTarget = false;
+  let healthGap = false;
+  let alertingCount = 0;
+  let everyInstanceElsewhere = true;
+  for (const { rule, instances: rawInstances, annotations } of rules) {
+    // Recording rules carry no state and never describe a resource.
+    if (rule.type.toLowerCase() !== "alerting") continue;
+    alertingCount += 1;
+    const instances = rawInstances.map((instance) => ({
+      ...instance,
+      namesTarget: labelsNameTarget(
+        builder.target,
+        instance.labels,
+        targetPods,
+      ),
+    }));
+    if (
+      instances.length === 0 ||
+      instances.some(
+        (instance) => !labelsPlaceElsewhere(builder.target, instance.labels),
+      )
+    ) {
+      everyInstanceElsewhere = false;
+    }
+    const definition = ruleDefinition(rule);
+    const ambiguous = (definitionCounts.get(definition) ?? 0) > 1;
+    const ordinal = seenRuleIdentities.get(definition) ?? 0;
+    seenRuleIdentities.set(definition, ordinal + 1);
+    const ruleIdentity = ambiguous
+      ? `${definition}:${source.id}:${ordinal}`
+      : definition;
+    const previousRelevance = ambiguous
+      ? undefined
+      : builder.latestRelevance("alerts", ruleIdentity);
+    const relevance: InvestigationEvidenceRelevance = instances.some(
+      (instance) => instance.namesTarget,
+    )
+      ? "target"
+      : labelsNameTarget(builder.target, rule.labels, targetPods)
+        ? "producer-related"
+        : // The same rule read again with no instances left has resolved for
+          // the target it named before; keep that provenance so the
+          // resolution stays visible instead of the stale firing card.
+          instances.length === 0 &&
+            previousRelevance !== undefined &&
+            previousRelevance !== "broader"
+          ? previousRelevance
+          : "broader";
+    if (relevance !== "broader") namesTarget = true;
+    const state = (rule.state ?? "").toLowerCase();
+    const active = state === "firing" || state === "pending";
+    const severity = (rule.labels.severity ?? "").toLowerCase();
+    const targetInstances = instances.filter(
+      (instance) => instance.namesTarget,
+    ).length;
+    builder.observe(ruleIdentity, "alerts", source, {
+      tier: evidenceTierForRelevance(
+        active ? "supporting" : "context",
+        relevance,
+      ),
+      relevance,
+      tone:
+        state === "firing"
+          ? severity === "critical"
+            ? "error"
+            : "alert"
+          : state === "pending"
+            ? "warning"
+            : "neutral",
+      title: `${rule.name}${state ? ` ${state}` : ""}`,
+      summary:
+        instances.length === 0
+          ? `No active instances · ${rule.group}`
+          : `${instances.length} active instance${instances.length === 1 ? "" : "s"}${
+              targetInstances > 0
+                ? `, ${targetInstances} naming ${identity}`
+                : ""
+            } · ${rule.group}`,
+      data: { type: "alerts", rule, instances, annotations },
+    });
+    const health = (rule.health ?? "").toLowerCase();
+    if (health === "err") {
+      healthGap = true;
+      builder.limit(
+        source,
+        `Alert rule ${rule.name}`,
+        "Prometheus reported an evaluation error for this rule, so its state may be stale or missing.",
+        "error",
+      );
+    } else if (health !== "ok") {
+      // Anything but a reported "ok" evaluation, including an unrecognized
+      // value, is an unevaluated rule for the purpose of a negative.
+      healthGap = true;
+      builder.limit(
+        source,
+        `Alert rule ${rule.name}`,
+        "Prometheus has not reported a successful evaluation for this rule, so its state is unknown.",
+        "unknown",
+      );
+    }
+  }
+  // A negative is only as strong as the query: an active-state filter over
+  // every alerting rule (a name or group filter never looked at the rest), a
+  // complete list, every rule evaluated, and every returned instance placed
+  // in another namespace outright. An instance this projection merely fails
+  // to recognize is not evidence of absence.
+  if (
+    source.confirmedSuccess &&
+    !truncated &&
+    !namesTarget &&
+    !healthGap &&
+    typeFilter !== "record" &&
+    !nonEmptyString(args?.name) &&
+    !nonEmptyString(args?.group) &&
+    (stateFilter === "firing" || stateFilter === "pending") &&
+    (alertingCount === 0 || everyInstanceElsewhere)
+  ) {
+    const filter = `state=${stateFilter}`;
+    builder.observe(`alerts:receipt:${filter}`, "receipt", source, {
+      tier: "checked",
+      relevance: "target",
+      tone: "neutral",
+      title: `No ${stateFilter} alert rules name this ${displayKind(builder.target.kind)}`,
+      summary: identity,
+      data: {
+        type: "receipt",
+        checked: "alerts",
+        scope: identity,
+        message:
+          alertingCount === 0
+            ? `0 alerting rules returned (filter: ${filter}).`
+            : `${alertingCount} alerting rule${alertingCount === 1 ? "" : "s"} returned (filter: ${filter}), every instance in another namespace; none names ${identity}.`,
+      },
+    });
+  }
+}
+
+function helmOwnedResource(
+  value: unknown,
+): InvestigationHelmOwnedResource | undefined {
+  const candidate = record(value);
+  if (
+    !candidate ||
+    !nonEmptyString(candidate.kind) ||
+    !nonEmptyString(candidate.name) ||
+    typeof candidate.namespace !== "string"
+  ) {
+    return undefined;
+  }
+  for (const field of [
+    "apiVersion",
+    "status",
+    "ready",
+    "message",
+    "summary",
+    "issue",
+  ] as const) {
+    if (candidate[field] !== undefined && typeof candidate[field] !== "string")
+      return undefined;
+  }
+  return candidate as unknown as InvestigationHelmOwnedResource;
+}
+
+function helmOperation(value: unknown): InvestigationHelmOperation | undefined {
+  const candidate = record(value);
+  if (
+    !candidate ||
+    !nonEmptyString(candidate.kind) ||
+    !nonEmptyString(candidate.status) ||
+    typeof candidate.message !== "string"
+  ) {
+    return undefined;
+  }
+  for (const field of [
+    "revision",
+    "failedRevision",
+    "rollbackRevision",
+  ] as const) {
+    if (candidate[field] !== undefined && typeof candidate[field] !== "number")
+      return undefined;
+  }
+  if (candidate.updated !== undefined && typeof candidate.updated !== "string")
+    return undefined;
+  return candidate as unknown as InvestigationHelmOperation;
+}
+
+function adaptHelmRelease(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+  payload: unknown,
+): void {
+  const value = record(payload);
+  if (
+    !value ||
+    !nonEmptyString(value.name) ||
+    !nonEmptyString(value.namespace) ||
+    typeof value.chart !== "string" ||
+    typeof value.chartVersion !== "string" ||
+    !nonEmptyString(value.status) ||
+    typeof value.revision !== "number" ||
+    typeof value.updated !== "string"
+  ) {
+    invalidPayload(builder, source);
+    return;
+  }
+  for (const field of [
+    "appVersion",
+    "description",
+    "storageNamespace",
+    "resourceHealth",
+    "healthIssue",
+    "healthSummary",
+    "managedByFluxHelmRelease",
+  ] as const) {
+    if (value[field] !== undefined && typeof value[field] !== "string") {
+      invalidPayload(builder, source);
+      return;
+    }
+  }
+  const resourcesRaw =
+    value.resources === undefined || value.resources === null
+      ? []
+      : value.resources;
+  if (!Array.isArray(resourcesRaw)) {
+    invalidPayload(builder, source, "Helm resources");
+    return;
+  }
+  const resources = resourcesRaw
+    .map(helmOwnedResource)
+    .filter((item): item is InvestigationHelmOwnedResource => Boolean(item));
+  if (resources.length !== resourcesRaw.length) {
+    invalidPayload(builder, source, "Helm resources");
+    return;
+  }
+  const lastOperation =
+    value.lastOperation === undefined
+      ? undefined
+      : helmOperation(value.lastOperation);
+  if (value.lastOperation !== undefined && !lastOperation) {
+    invalidPayload(builder, source, "Helm operation");
+    return;
+  }
+  const release: InvestigationHelmRelease = {
+    name: value.name,
+    namespace: value.namespace,
+    chart: value.chart,
+    chartVersion: value.chartVersion,
+    appVersion: value.appVersion as string | undefined,
+    status: value.status,
+    revision: value.revision,
+    updated: value.updated,
+    description: value.description as string | undefined,
+    ...(nonEmptyString(value.storageNamespace)
+      ? { storageNamespace: value.storageNamespace }
+      : {}),
+    resourceHealth: value.resourceHealth as string | undefined,
+    healthIssue: value.healthIssue as string | undefined,
+    healthSummary: value.healthSummary as string | undefined,
+    managedByFluxHelmRelease: value.managedByFluxHelmRelease as
+      string | undefined,
+    lastOperation,
+    resources,
+  };
+  // The release manages the target when the target is among the resources
+  // Helm rendered for it; a release is never the investigated object itself.
+  // Without an API version the owned row cannot tell colliding kinds apart
+  // (CNPG vs CAPI Cluster), so it establishes nothing.
+  const relevance: InvestigationEvidenceRelevance = resources.some(
+    (owned) =>
+      owned.apiVersion !== undefined &&
+      resourceMatchesTarget(builder.target, {
+        kind: owned.kind,
+        group: apiVersionToGroup(owned.apiVersion),
+        namespace: owned.namespace || undefined,
+        name: owned.name,
+      }),
+  )
+    ? "producer-related"
+    : "broader";
+  const status = release.status.toLowerCase();
+  const operationFailed =
+    lastOperation?.status === "failed" ||
+    lastOperation?.status === "stuck_pending";
+  const adverse =
+    status !== "deployed" || Boolean(release.healthIssue) || operationFailed;
+  const chartLabel = `${release.chart}${release.chartVersion ? ` ${release.chartVersion}` : ""}`;
+  // Helm keys a release by where its metadata is stored; two releases with
+  // one name and namespace can live in different storage namespaces.
+  const storage = release.storageNamespace ?? release.namespace;
+  builder.observe(
+    `helm:${storage}:${release.namespace}:${release.name}`,
+    "helm",
+    source,
+    {
+      tier: evidenceTierForRelevance(
+        adverse ? "supporting" : "context",
+        relevance,
+      ),
+      relevance,
+      tone:
+        status.includes("failed") || lastOperation?.status === "failed"
+          ? "error"
+          : adverse
+            ? "warning"
+            : "info",
+      title: `Helm release ${release.namespace}/${release.name}`,
+      summary: release.healthIssue
+        ? `${release.status} · ${release.healthIssue}`
+        : `${chartLabel} · ${release.status} · revision ${release.revision}`,
+      data: { type: "helm", release },
+    },
+  );
+  if (nonEmptyString(value.valuesError)) {
+    builder.limit(source, "Helm values", value.valuesError, "error");
+  }
+}
+
+function permissionSubject(
+  value: unknown,
+): InvestigationPermissionSubject | undefined {
+  const candidate = record(value);
+  if (
+    !candidate ||
+    !nonEmptyString(candidate.kind) ||
+    !nonEmptyString(candidate.name) ||
+    (candidate.namespace !== undefined &&
+      typeof candidate.namespace !== "string")
+  ) {
+    return undefined;
+  }
+  return {
+    kind: candidate.kind,
+    name: candidate.name,
+    ...(nonEmptyString(candidate.namespace)
+      ? { namespace: candidate.namespace }
+      : {}),
+  };
+}
+
+function accessCheck(value: unknown): InvestigationAccessCheck | undefined {
+  const candidate = record(value);
+  if (
+    !candidate ||
+    !nonEmptyString(candidate.verb) ||
+    !nonEmptyString(candidate.resource) ||
+    typeof candidate.namespace !== "string" ||
+    typeof candidate.allowed !== "boolean" ||
+    (candidate.denied !== undefined && typeof candidate.denied !== "boolean")
+  ) {
+    return undefined;
+  }
+  for (const field of [
+    "group",
+    "subresource",
+    "resourceName",
+    "reason",
+    "evaluationError",
+  ] as const) {
+    if (candidate[field] !== undefined && typeof candidate[field] !== "string")
+      return undefined;
+  }
+  return {
+    ...(candidate as unknown as InvestigationAccessCheck),
+    denied: candidate.denied === true,
+  };
+}
+
+function permissionBinding(
+  value: unknown,
+): InvestigationPermissionBinding | undefined {
+  const candidate = record(value);
+  if (
+    !candidate ||
+    !nonEmptyString(candidate.bindingKind) ||
+    !nonEmptyString(candidate.bindingName) ||
+    !nonEmptyString(candidate.roleKind) ||
+    !nonEmptyString(candidate.roleName) ||
+    !nonNegativeInteger(candidate.rulesCount)
+  ) {
+    return undefined;
+  }
+  for (const field of [
+    "bindingNamespace",
+    "roleNamespace",
+    "inheritedFromGroup",
+  ] as const) {
+    if (candidate[field] !== undefined && typeof candidate[field] !== "string")
+      return undefined;
+  }
+  return candidate as unknown as InvestigationPermissionBinding;
+}
+
+// Kinds whose spec carries a PodSpec, by API group. Anything else with a
+// `spec.template.spec` (an ApplicationSet, for one) templates something that
+// is not a Pod and runs as no account at all.
+const POD_TEMPLATE_KINDS: Readonly<Record<string, readonly string[]>> = {
+  "": ["Pod"],
+  apps: ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"],
+  batch: ["Job", "CronJob"],
+  "argoproj.io": ["Rollout"],
+};
+
+function podSpecServiceAccount(
+  resource: InvestigationKubernetesResource,
+): string | undefined {
+  const group = apiVersionToGroup(resource.apiVersion);
+  if (!POD_TEMPLATE_KINDS[group]?.includes(resource.kind)) return undefined;
+  const spec = record(resource.spec);
+  const podSpec =
+    resource.kind === "Pod"
+      ? spec
+      : resource.kind === "CronJob"
+        ? record(
+            record(record(record(spec?.jobTemplate)?.spec)?.template)?.spec,
+          )
+        : record(record(spec?.template)?.spec);
+  if (!podSpec) return undefined;
+  // An unset serviceAccountName runs as the namespace's `default` account.
+  return nonEmptyString(podSpec.serviceAccountName)
+    ? podSpec.serviceAccountName
+    : "default";
+}
+
+/**
+ * The ServiceAccount the target runs as, read from a resource observation of
+ * the target in the same turn. Only the captured resource can state this; the
+ * permission subject is never assumed related by name alone.
+ */
+function targetServiceAccountName(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+): string | undefined {
+  let newest: InvestigationEvidenceObservation | undefined;
+  for (const group of builder.groups) {
+    if (group.kind !== "resource") continue;
+    for (const observation of group.observations) {
+      if (
+        observation.source.turnIndex !== source.turnIndex ||
+        observation.relevance !== "target" ||
+        observation.data.type !== "resource" ||
+        (newest && observation.source.order < newest.source.order)
+      ) {
+        continue;
+      }
+      newest = observation;
+    }
+  }
+  if (!newest || newest.data.type !== "resource") return undefined;
+  return (
+    newest.data.resourceContext?.uses?.serviceAccount?.name ??
+    podSpecServiceAccount(newest.data.resource)
+  );
+}
+
+function adaptSubjectPermissions(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+  payload: unknown,
+): void {
+  const value = record(payload);
+  const subject = value ? permissionSubject(value.subject) : undefined;
+  if (!value || !subject) {
+    invalidPayload(builder, source);
+    return;
+  }
+  // Only a captured resource can tie a principal to the target. Any other
+  // subject the agent chose to check is context, however adverse the answer.
+  const relevance: InvestigationEvidenceRelevance =
+    subject.kind === "ServiceAccount" &&
+    subject.namespace !== undefined &&
+    subject.namespace === builder.target.namespace &&
+    targetServiceAccountName(builder, source) === subject.name
+      ? "target"
+      : "broader";
+  const subjectLabel = `${displayKind(subject.kind)} ${subject.namespace ? `${subject.namespace}/` : ""}${subject.name}`;
+  const subjectKey = `${subject.kind}:${subject.namespace ?? ""}:${subject.name}`;
+
+  if (value.accessCheck !== undefined) {
+    const check = accessCheck(value.accessCheck);
+    if (!check) {
+      invalidPayload(builder, source, "Access check");
+      return;
+    }
+    const resourceLabel = `${check.resource}${check.subresource ? `/${check.subresource}` : ""}${check.group ? `.${check.group}` : ""}`;
+    const denied = !check.allowed;
+    const verdict =
+      check.reason ||
+      (check.allowed
+        ? "Allowed by RBAC"
+        : check.denied
+          ? "Explicitly denied"
+          : "No RBAC rule allows it");
+    builder.observe(
+      `permissions:check:${subjectKey}:${check.verb}:${check.group ?? ""}:${check.resource}:${check.subresource ?? ""}:${check.namespace}:${check.resourceName ?? ""}`,
+      "permissions",
+      source,
+      {
+        tier: evidenceTierForRelevance(
+          denied ? "supporting" : "context",
+          relevance,
+        ),
+        relevance,
+        tone: denied ? "warning" : "info",
+        title: `${subjectLabel} ${denied ? "cannot" : "can"} ${check.verb} ${resourceLabel}`,
+        summary: `${verdict} · ${check.namespace ? `namespace ${check.namespace}` : "cluster-wide"}${check.resourceName ? ` · ${check.resourceName}` : ""}`,
+        data: { type: "permissions", subject, accessCheck: check },
+      },
+    );
+    if (nonEmptyString(check.evaluationError)) {
+      builder.limit(source, "Permissions", check.evaluationError, "error");
+    }
+    return;
+  }
+
+  const bindingsRaw = value.bindings;
+  if (!Array.isArray(bindingsRaw)) {
+    invalidPayload(builder, source);
+    return;
+  }
+  const bindings = bindingsRaw
+    .map(permissionBinding)
+    .filter((item): item is InvestigationPermissionBinding => Boolean(item));
+  if (
+    bindings.length !== bindingsRaw.length ||
+    !Array.isArray(value.flatRules) ||
+    !value.flatRules.every((rule) => stringArray(record(rule)?.verbs)) ||
+    (value.truncated !== undefined && typeof value.truncated !== "boolean") ||
+    (value.podsTotal !== undefined && !nonNegativeInteger(value.podsTotal)) ||
+    (value.usedByPods !== undefined && !stringArray(value.usedByPods))
+  ) {
+    invalidPayload(builder, source);
+    return;
+  }
+  const truncated = value.truncated === true;
+  const flatRulesCount = value.flatRules.length;
+  const usedByPods = stringArray(value.usedByPods) ?? [];
+  builder.observe(`permissions:subject:${subjectKey}`, "permissions", source, {
+    tier: evidenceTierForRelevance("context", relevance),
+    relevance,
+    tone: "info",
+    title: `Permissions of ${subjectLabel}`,
+    summary: `${bindings.length} binding${bindings.length === 1 ? "" : "s"} · ${flatRulesCount}${truncated ? "+" : ""} effective rule${flatRulesCount === 1 && !truncated ? "" : "s"}`,
+    data: {
+      type: "permissions",
+      subject,
+      bindings,
+      flatRulesCount,
+      truncated,
+      usedByPods,
+      podsTotal: value.podsTotal as number | undefined,
+    },
+  });
+  if (truncated) {
+    builder.limit(
+      source,
+      "Permissions",
+      nonEmptyString(value.narrowHint)
+        ? value.narrowHint
+        : "The effective rule list was truncated; it is not the subject's complete permission set.",
+      "truncated",
+    );
+  }
+  if (nonEmptyString(value.subjectWarning)) {
+    builder.limit(source, "Permissions", value.subjectWarning, "unknown");
+  }
+  if (
+    typeof value.podsTotal === "number" &&
+    value.podsTotal > usedByPods.length
+  ) {
+    builder.limit(
+      source,
+      "Permissions",
+      `Only ${usedByPods.length} of ${value.podsTotal} pods running as this subject were listed.`,
+      "truncated",
+    );
+  }
+}
+
 const ADAPTERS: Record<
   string,
   (
@@ -3216,6 +4381,10 @@ const ADAPTERS: Record<
   get_changes: adaptChanges,
   get_neighborhood: adaptNeighborhood,
   get_topology: adaptTopology,
+  get_workload_logs: adaptWorkloadLogs,
+  get_prometheus_rules: adaptPrometheusRules,
+  get_helm_release: adaptHelmRelease,
+  get_subject_permissions: adaptSubjectPermissions,
 };
 
 export function projectInvestigationEvidence(
@@ -3430,6 +4599,7 @@ export function projectInvestigationEvidence(
               }
               break;
             case "inventory":
+            case "alerts":
               break;
           }
           continue;
