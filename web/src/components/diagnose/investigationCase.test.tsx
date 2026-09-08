@@ -1522,6 +1522,16 @@ describe("the agent's contribution is one attributed row", () => {
     expect(html).not.toContain("OOMKilled");
   });
 
+  it("says the notes were unreadable when they were not a list at all", () => {
+    // There is no count to give here, so the pane states the fact instead of
+    // inventing a number.
+    const html = renderToStaticMarkup(
+      <AssessmentSources evidenceMalformed onViewSource={onViewSource} />,
+    );
+    expect(html).toContain("could not be read, so none are shown");
+    expect(html).not.toContain("could not be linked");
+  });
+
   it("labels the role that says an adverse result is not a live problem", () => {
     const html = renderToStaticMarkup(<AgentRoleChip role="benign" />);
     expect(html).toContain("Not a problem");

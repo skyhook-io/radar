@@ -103,6 +103,8 @@ export interface Diagnosis {
   evidence?: DiagnosisEvidenceItem[];
   /** How many of the agent's evidence entries never reached the UI, including ones cut before they got a slot in `evidence`. */
   unlinkedEvidence?: number;
+  /** The agent's evidence field was not a list, so none of it could be read. */
+  evidenceMalformed?: boolean;
   ruledOut?: DiagnosisRuledOut[];
   report: string;
   remediation: string[];

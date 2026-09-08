@@ -2086,6 +2086,7 @@ export function AssessmentSources({
   resolution,
   investigationCase,
   unlinkedEvidence = 0,
+  evidenceMalformed = false,
   readOnly = false,
   renderedGroupIds,
   onViewSource,
@@ -2099,6 +2100,11 @@ export function AssessmentSources({
    * deciding what the agent meant, so it says how many were lost instead.
    */
   unlinkedEvidence?: number;
+  /**
+   * The agent's notes were not a list at all, so none of them could be read
+   * and no count describes how many were lost.
+   */
+  evidenceMalformed?: boolean;
   readOnly?: boolean;
   /**
    * Groups the Evidence pane actually rendered. A card-placed note whose card
@@ -2110,7 +2116,8 @@ export function AssessmentSources({
   onViewSource: (sourceId: string) => void;
 }) {
   const rows = assessmentSourceRows(resolution, investigationCase);
-  if (rows.length === 0 && unlinkedEvidence === 0) return null;
+  if (rows.length === 0 && unlinkedEvidence === 0 && !evidenceMalformed)
+    return null;
   return (
     <div className="mt-3 border-t border-theme-border/60 pt-2">
       <h4 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
@@ -2188,6 +2195,11 @@ export function AssessmentSources({
           );
         })}
       </ul>
+      {evidenceMalformed ? (
+        <p className="mt-2 text-[11px] text-theme-text-tertiary">
+          The agent&apos;s notes could not be read, so none are shown.
+        </p>
+      ) : null}
       {unlinkedEvidence > 0 ? (
         <p className="mt-2 text-[11px] text-theme-text-tertiary">
           {unlinkedEvidence === 1

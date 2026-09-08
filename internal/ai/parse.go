@@ -14,7 +14,11 @@ var (
 	// The ref reaches the model inside a marker wrapper, so a model that
 	// copies the whole marker instead of its payload is quoting Radar
 	// correctly. Unwrapping is transcription, not interpretation.
-	wrappedEvidenceRefRe = regexp.MustCompile(`\[\[radar:evidence-ref=(ev_[a-z2-7]{26,128}_[a-z2-7]{26,128})\]\]`)
+	// Anchored, and one marker only: a field holding two markers, or a marker
+	// inside prose, is the agent meaning something this cannot read, and
+	// picking the first would be choosing an interpretation rather than
+	// removing a wrapper.
+	wrappedEvidenceRefRe = regexp.MustCompile(`^\[\[radar:evidence-ref=(ev_[a-z2-7]{26,128}_[a-z2-7]{26,128})\]\]$`)
 )
 
 const (
@@ -136,6 +140,13 @@ func parseEvidenceReferenceRequest(raw json.RawMessage) evidenceReferenceRequest
 func parseCaseRequest(evidenceRaw, ruledOutRaw json.RawMessage) caseRequest {
 	var request caseRequest
 	var rawItems []json.RawMessage
+	if len(evidenceRaw) > 0 && string(evidenceRaw) != "null" &&
+		json.Unmarshal(evidenceRaw, &rawItems) != nil {
+		// The agent sent something for evidence that is not a list of items.
+		// There is no honest count of what it meant to say, so the loss is
+		// reported as a fact rather than a number.
+		request.malformed = true
+	}
 	if len(evidenceRaw) > 0 && json.Unmarshal(evidenceRaw, &rawItems) == nil {
 		if len(rawItems) > maxDiagnosisEvidenceItems {
 			// Items past the cap get no slot in Evidence at all, so their loss
@@ -232,7 +243,7 @@ func parseCaseItem(raw json.RawMessage) caseItemRequest {
 }
 
 // unwrapEvidenceRef returns the ref inside a marker wrapper the model pasted
-// whole, or the value unchanged when there is no wrapper to strip.
+// whole, or the value unchanged when the field is not exactly one wrapper.
 func unwrapEvidenceRef(ref string) string {
 	ref = strings.TrimSpace(ref)
 	if m := wrappedEvidenceRefRe.FindStringSubmatch(ref); m != nil {

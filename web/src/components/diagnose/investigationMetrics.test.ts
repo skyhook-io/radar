@@ -543,6 +543,21 @@ describe("units only survive expressions that keep the meaning", () => {
     ] as const) {
       expect(metricsUnitForExpression(query, selectors), query).toBe("");
     }
+    // A `#` inside a label value is not a comment. Reading comments before
+    // strings let it swallow the rest of the query, so a dimensionless 0/1
+    // and a ratio both came back in bytes.
+    expect(
+      metricsUnitForExpression(
+        'container_memory_working_set_bytes{note="#"} > bool 0',
+        bytesOf("container_memory_working_set_bytes"),
+      ),
+    ).toBe("");
+    expect(
+      metricsUnitForExpression(
+        'container_memory_working_set_bytes{note="#"} / container_memory_working_set_bytes',
+        bytesOf("container_memory_working_set_bytes"),
+      ),
+    ).toBe("");
     // A comment is not a call: stripping it leaves a plain metric in bytes.
     expect(
       metricsUnitForExpression(

@@ -69,6 +69,42 @@ const UNIT_PRESERVING_FUNCTIONS = new Set([
 const RATE_FUNCTIONS = new Set(["rate", "irate", "deriv"]);
 
 /**
+ * Blanks string literals and comments in one left-to-right pass, so neither
+ * can be read as the other. Scanning for comments first lets a `#` inside a
+ * label value swallow the rest of the query, which once left `a_bytes{note="#"}
+ * > bool 0` looking like a plain metric and gave a dimensionless 0/1 a bytes
+ * axis. PromQL strings come in three quotes; only the first two take
+ * backslash escapes.
+ */
+function withoutStringsAndComments(query: string): string {
+  let out = "";
+  let quote: string | undefined;
+  for (let index = 0; index < query.length; index += 1) {
+    const char = query[index];
+    if (quote) {
+      if (char === "\\" && quote !== "`") {
+        index += 1;
+        continue;
+      }
+      if (char === quote) quote = undefined;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char;
+      out += '""';
+      continue;
+    }
+    if (char === "#") {
+      while (index < query.length && query[index] !== "\n") index += 1;
+      out += " ";
+      continue;
+    }
+    out += char;
+  }
+  return out;
+}
+
+/**
  * The unit is what every metric in the expression states through its name, as
  * the producer's selector inventory lists them, and it only survives the
  * operations that leave that meaning intact.
@@ -94,9 +130,7 @@ export function metricsUnitForExpression(
   if (units.size !== 1) return "";
   const [unit] = units;
   if (!unit) return "";
-  const expression = query
-    .replace(/#[^\n]*/g, " ")
-    .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[^`]*`/g, '""')
+  const expression = withoutStringsAndComments(query)
     .replace(/\{[^{}]*\}/g, "")
     .replace(/\[[^\]]*\]/g, "");
   // Arithmetic, comparison and the set operators all produce something the

@@ -1061,6 +1061,7 @@ func bindCase(diag *Diagnosis, refLinked func(string) bool) {
 	diag.Evidence = nil
 	diag.RuledOut = nil
 	diag.UnlinkedEvidence = request.dropped
+	diag.EvidenceMalformed = request.malformed
 	if len(request.items) == 0 {
 		return
 	}

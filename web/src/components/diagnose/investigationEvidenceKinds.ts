@@ -22,13 +22,18 @@ import type { InvestigationEvidenceKind } from "./investigationEvidence";
 /**
  * Everything the pane needs to know about a kind of evidence, in one place.
  *
- * These decisions used to live in eight unrelated lists across four files, and
- * adding a kind meant remembering all eight: the round that added alerts and
- * Helm cards missed the one that decides whether a card can contradict a
- * model's all-clear, so a firing alert naming the workload sat under a green
- * "no problem found" banner. Because this is a `Record` over the kind union,
- * the compiler now refuses a new kind until every decision below is made for
- * it.
+ * These five decisions used to live in five unrelated lists across four
+ * files, and adding a kind meant remembering all five: the round that added
+ * alerts and Helm cards missed the one that decides whether a card can
+ * contradict a model's all-clear, so a firing alert naming the workload sat
+ * under a green "no problem found" banner. Because this is a `Record` over the
+ * kind union with no optional fields, the compiler now refuses a new kind
+ * until each of them is decided.
+ *
+ * Not everything per-kind lives here. Rendering the card body, whether it can
+ * expand, how a subject is read off it and what a source excerpt shows are
+ * still dispatched where they are used, because each needs the observation's
+ * data rather than a constant.
  */
 export interface InvestigationEvidenceKindTraits {
   /**
@@ -53,25 +58,50 @@ export interface InvestigationEvidenceKindTraits {
    * shown under the card. `changes` has its own tooltip instead, because its
    * wording depends on whether the age was collected.
    */
-  caveat?: string;
+  caveat: string | undefined;
 }
 
 export const EVIDENCE_KIND_TRAITS: Readonly<
   Record<InvestigationEvidenceKind, InvestigationEvidenceKindTraits>
 > = {
   // Radar classified a live problem on the resource.
-  issue: { adverse: true, focused: false, fullRow: false, icon: CircleAlert },
+  issue: {
+    adverse: true,
+    focused: false,
+    fullRow: false,
+    icon: CircleAlert,
+    caveat: undefined,
+  },
   // A pod of the workload cannot start.
-  startup: { adverse: true, focused: false, fullRow: false, icon: ShieldAlert },
+  startup: {
+    adverse: true,
+    focused: false,
+    fullRow: false,
+    icon: ShieldAlert,
+    caveat: undefined,
+  },
   // A container exited or is restarting.
-  crash: { adverse: true, focused: true, fullRow: false, icon: Bug },
+  crash: {
+    adverse: true,
+    focused: true,
+    fullRow: false,
+    icon: Bug,
+    caveat: undefined,
+  },
   // The object's own status: unready replicas, a failed condition.
-  resource: { adverse: true, focused: true, fullRow: false, icon: Boxes },
+  resource: {
+    adverse: true,
+    focused: true,
+    fullRow: false,
+    icon: Boxes,
+    caveat: undefined,
+  },
   logs: {
     adverse: true,
     focused: true,
     fullRow: true,
     icon: ScrollText,
+    caveat: undefined,
   },
   events: {
     adverse: true,
@@ -82,9 +112,27 @@ export const EVIDENCE_KIND_TRAITS: Readonly<
       "Events support the timeline; proximity alone does not establish cause.",
   },
   // A change is a thing that happened, not a thing that is wrong.
-  changes: { adverse: false, focused: false, fullRow: false, icon: FileClock },
-  dns: { adverse: true, focused: false, fullRow: false, icon: Activity },
-  network: { adverse: true, focused: false, fullRow: false, icon: Network },
+  changes: {
+    adverse: false,
+    focused: false,
+    fullRow: false,
+    icon: FileClock,
+    caveat: undefined,
+  },
+  dns: {
+    adverse: true,
+    focused: false,
+    fullRow: false,
+    icon: Activity,
+    caveat: undefined,
+  },
+  network: {
+    adverse: true,
+    focused: false,
+    fullRow: false,
+    icon: Network,
+    caveat: undefined,
+  },
   relationships: {
     adverse: false,
     focused: false,
@@ -101,13 +149,20 @@ export const EVIDENCE_KIND_TRAITS: Readonly<
     caveat:
       "This shows direct relationships Radar found, not an inferred blast radius.",
   },
-  inventory: { adverse: false, focused: false, fullRow: false, icon: ListTree },
+  inventory: {
+    adverse: false,
+    focused: false,
+    fullRow: false,
+    icon: ListTree,
+    caveat: undefined,
+  },
   // A receipt records a check that found nothing, so it can never contradict.
   receipt: {
     adverse: false,
     focused: false,
     fullRow: false,
     icon: CheckCircle2,
+    caveat: undefined,
   },
   // A rule firing about this workload is the most literal statement Radar
   // holds that something is wrong with it.
@@ -121,7 +176,13 @@ export const EVIDENCE_KIND_TRAITS: Readonly<
   },
   // A failed or stuck release is a live problem with the thing that owns the
   // workload, not background colour.
-  helm: { adverse: true, focused: true, fullRow: false, icon: Package },
+  helm: {
+    adverse: true,
+    focused: true,
+    fullRow: false,
+    icon: Package,
+    caveat: undefined,
+  },
   // A permission verdict describes a grant, not a runtime failure: a
   // ServiceAccount that cannot read Secrets may be exactly as intended.
   permissions: {
@@ -133,7 +194,13 @@ export const EVIDENCE_KIND_TRAITS: Readonly<
       "This is what RBAC grants the subject, not what the workload has exercised.",
   },
   // A chart is a measurement; the reading, not the kind, is what alarms.
-  metrics: { adverse: false, focused: true, fullRow: true, icon: ChartLine },
+  metrics: {
+    adverse: false,
+    focused: true,
+    fullRow: true,
+    icon: ChartLine,
+    caveat: undefined,
+  },
 };
 
 /** Kinds whose card can contradict a model's all-clear. */
