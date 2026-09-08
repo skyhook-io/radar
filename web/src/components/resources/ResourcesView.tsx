@@ -315,10 +315,13 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // from. Two list calls per page beat one lookup per row, and the column shows
   // nothing rather than guessing when a store is unreadable or absent.
   const viewingExternalSecrets = selectedKind?.name === 'externalsecrets'
-  const { data: secretStores } = useResources<any>('secretstores', undefined, undefined, { enabled: viewingExternalSecrets })
-  const { data: clusterSecretStores } = useResources<any>('clustersecretstores', undefined, undefined, { enabled: viewingExternalSecrets })
+  const { data: secretStores, isPending: secretStoresPending } = useResources<any>('secretstores', undefined, undefined, { enabled: viewingExternalSecrets })
+  const { data: clusterSecretStores, isPending: clusterSecretStoresPending } = useResources<any>('clustersecretstores', undefined, undefined, { enabled: viewingExternalSecrets })
   const storeProviders = useMemo(() => {
-    if (!viewingExternalSecrets) return undefined
+    // Undefined until both lists have settled. An empty map would be
+    // indistinguishable from "every store is unreadable", and the column says
+    // that out loud.
+    if (!viewingExternalSecrets || secretStoresPending || clusterSecretStoresPending) return undefined
     const map: Record<string, string> = {}
     for (const store of secretStores ?? []) {
       const ns = store?.metadata?.namespace
@@ -330,7 +333,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       if (name) map[name] = getSecretStoreProviderType(store)
     }
     return map
-  }, [viewingExternalSecrets, secretStores, clusterSecretStores])
+  }, [viewingExternalSecrets, secretStoresPending, clusterSecretStoresPending, secretStores, clusterSecretStores])
 
   // Pinned kinds
   const { pinned, togglePin, isPinned } = usePinnedKinds()

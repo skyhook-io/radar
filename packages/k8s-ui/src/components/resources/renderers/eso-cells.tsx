@@ -38,12 +38,15 @@ export function ExternalSecretCell({ resource, column, storeProviders }: {
       )
     }
     case 'provider': {
-      // The provider lives on the referenced store, not on this object. Without
-      // the store resolved, say nothing rather than repeating the store name.
-      const provider = storeProviders?.[getExternalSecretStoreKey(resource)]
+      // The provider lives on the referenced store, not on this object. Three
+      // states, and the middle one matters: no map yet means the stores are
+      // still loading, which is not the same as a store we looked for and could
+      // not read.
+      if (!storeProviders) return <span className="text-sm text-theme-text-tertiary">…</span>
+      const provider = storeProviders[getExternalSecretStoreKey(resource)]
       return provider
         ? <span className="text-sm text-theme-text-secondary truncate block" title={provider}>{provider}</span>
-        : <span className="text-sm text-theme-text-tertiary">-</span>
+        : <span className="text-sm text-theme-text-tertiary" title="The referenced store could not be read">-</span>
     }
     case 'refreshInterval': {
       const interval = getExternalSecretRefreshInterval(resource)
