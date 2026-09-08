@@ -39,7 +39,9 @@ export function formatMetricValue(value: number, unit: string): string {
       if (value < 1) return value.toFixed(3)
       if (value < 100) return value.toFixed(2)
       if (value < 10000) return value.toFixed(0)
-      return `${(value / 1000).toFixed(1)}k`
+      if (value < 1e6) return `${(value / 1e3).toFixed(1)}k`
+      if (value < 1e9) return `${(value / 1e6).toFixed(1)}M`
+      return `${(value / 1e9).toFixed(2)}G`
   }
 }
 
