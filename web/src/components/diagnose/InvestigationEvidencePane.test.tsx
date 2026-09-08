@@ -2480,12 +2480,15 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
       partition.workload
         .filter((group) => group.kind === "receipt")
         .map((group) => group.latest.title),
-    ).toEqual([
-      "No classified workload issues",
-      "No matching warning events",
-    ]);
+    ).toEqual(["No classified workload issues", "No matching warning events"]);
     const onOpenResource = vi.fn();
-    const html = render(projection, false, undefined, undefined, onOpenResource);
+    const html = render(
+      projection,
+      false,
+      undefined,
+      undefined,
+      onOpenResource,
+    );
     expect(html).toContain("CPU usage · shop/api");
     expect(html).toContain("1 pod · 60m window · 1m2s step");
     expect(html).toContain("(cores)");
@@ -2591,7 +2594,8 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
           window,
           pods: 1,
           series: [],
-          error: "metrics omitted: 3s budget exceeded before all queries answered",
+          error:
+            "metrics omitted: 3s budget exceeded before all queries answered",
         },
       }),
     );
