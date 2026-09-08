@@ -3155,8 +3155,29 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
     expect(partition.main.map((group) => group.kind)).not.toContain("metrics");
     expect(partition.workload.map((group) => group.kind)).toContain("metrics");
     expect(partition.hiddenMetrics).toBe(0);
+    // The vitals lead the collection; the absence receipts follow in their
+    // own order, so a healthy workload does not open on four empty tiles.
+    const kinds = partition.workload.map((group) => group.kind);
+    const firstReceipt = kinds.indexOf("receipt");
+    expect(firstReceipt).toBeGreaterThan(0);
+    expect(kinds.slice(firstReceipt).every((kind) => kind === "receipt")).toBe(
+      true,
+    );
+    expect(kinds.indexOf("metrics")).toBeLessThan(firstReceipt);
+    expect(kinds.indexOf("resource")).toBeLessThan(kinds.indexOf("metrics"));
+    expect(
+      partition.workload
+        .filter((group) => group.kind === "receipt")
+        .map((group) => group.latest.title),
+    ).toEqual(["No classified workload issues", "No matching warning events"]);
     const onOpenResource = vi.fn();
-    const html = render(projection, false, undefined, undefined, onOpenResource);
+    const html = render(
+      projection,
+      false,
+      undefined,
+      undefined,
+      onOpenResource,
+    );
     expect(html).toContain("CPU usage · shop/api");
     expect(html).toContain("1 pod · 60m window · 1m2s step");
     expect(html).toContain("(cores)");
@@ -3262,7 +3283,8 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
           window,
           pods: 1,
           series: [],
-          error: "metrics omitted: 3s budget exceeded before all queries answered",
+          error:
+            "metrics omitted: 3s budget exceeded before all queries answered",
         },
       }),
     );

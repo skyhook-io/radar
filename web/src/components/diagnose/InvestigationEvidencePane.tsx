@@ -227,6 +227,13 @@ export function partitionInvestigationEvidence(
       Number(adverse(right)) - Number(adverse(left)) ||
       left.firstOrder - right.firstOrder,
   );
+  // A healthy workload's collection opens with several "nothing here"
+  // receipts; the cards that carry facts (its vitals above all) come first,
+  // and the receipts keep their order among themselves.
+  collections.workload.sort(
+    (left, right) =>
+      Number(left.kind === "receipt") - Number(right.kind === "receipt"),
+  );
   return { ...collections, collectionByGroup, hiddenBroader, hiddenMetrics };
 }
 
