@@ -33,6 +33,8 @@ export function evidenceSourceExcerpt(
       return data.release.healthIssue;
     case "permissions":
       return data.accessCheck?.reason;
+    case "metrics":
+      return data.query;
     default:
       return undefined;
   }

@@ -35,6 +35,12 @@ type RunManager struct {
 	mcpBasePath string        // --base-path prefix the MCP mounts sit under ("" at the root)
 	ctxLabel    func() string // current kube-context label, for the run's baseline
 
+	// MetricsAvailability probes the metrics backend before a read-only
+	// investigation turn so the prompt can say Prometheus is reachable. nil
+	// means never mention metrics. The probe runs under metricsProbeTimeout so
+	// a slow discovery cannot hold a turn back.
+	MetricsAvailability func(context.Context) MetricsAvailability
+
 	baseCtx    context.Context // parent of every run ctx; cancelled on Shutdown
 	baseCancel context.CancelFunc
 
@@ -654,6 +660,21 @@ func (m *RunManager) launchTurn(r *Run, turn runTurn) {
 	go m.executeTurns(r, turn)
 }
 
+const metricsProbeTimeout = 2 * time.Second
+
+// metricsForTurn probes the metrics backend for a read-only investigation
+// turn. Apply turns act on a confirmed fix, explanation turns restate a saved
+// assessment, and verification turns check that fix against current state;
+// none of them should be sent looking for new evidence.
+func (m *RunManager) metricsForTurn(turn runTurn) MetricsAvailability {
+	if m.MetricsAvailability == nil || turn.apply || turn.verify || turn.explanation != nil {
+		return MetricsAvailability{}
+	}
+	ctx, cancel := context.WithTimeout(turn.ctx, metricsProbeTimeout)
+	defer cancel()
+	return m.MetricsAvailability(ctx)
+}
+
 // executeTurns runs one ordinary turn, or the two-step apply→verify compound
 // job. The continuation stays inside this goroutine and never re-enters public
 // AddTurn, so it neither releases nor re-reserves the concurrency slot.
@@ -685,6 +706,7 @@ func (m *RunManager) executeTurns(r *Run, turn runTurn) {
 			Explanation: turn.explanation,
 			Agent:       r.Agent, Profile: r.Profile, Model: r.Model, Effort: r.Effort,
 			Health: r.Health, WorkDir: r.WorkDir,
+			Metrics: m.metricsForTurn(turn),
 		}, func(ev StreamEvent) {
 			if turn.apply {
 				mutation.observe(ev)

@@ -14,13 +14,14 @@ export type {
   MetricCategoryDef,
   PrometheusResourceMetricsResult,
 } from './PrometheusChartsView'
-export { SERIES_COLORS, seriesColor, seriesFill, computeShortLabels } from './colors'
+export { SERIES_COLORS, seriesColor, seriesFill, computeShortLabels, seriesDisplayLabels } from './colors'
 export { formatMetricValue, formatTimestamp } from './format'
 export { computeSaturation } from './saturation'
 export type {
   TimeSeriesPoint,
   TimeSeries,
   ReferenceLine,
+  ChartAnnotation,
   // Deprecated Prom-prefixed aliases — see types.ts.
   PrometheusDataPoint,
   PrometheusSeries,

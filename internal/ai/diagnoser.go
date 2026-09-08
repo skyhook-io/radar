@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -91,6 +92,61 @@ type Request struct {
 	// across the run's turns). Backends that need filesystem-scoped session state
 	// use it (Cursor's --resume is workspace-scoped); others ignore it.
 	WorkDir string
+	// Metrics is the RunManager's probe of the metrics backend for this turn.
+	// Only a confirmed connection reaches the prompt; the zero value says nothing.
+	Metrics MetricsAvailability
+}
+
+// MetricsAvailability is what the investigation prompt needs to know about
+// Prometheus: whether a probe just succeeded and, if so, where. It carries no
+// failure detail because the agent is never told about an unreachable backend.
+type MetricsAvailability struct {
+	Connected bool
+	Address   string
+}
+
+// metricsNudge tells the agent Prometheus is reachable so it queries instead
+// of guessing. The sentence names one bounded query shape and asks for a
+// citation so the result lands in Findings as evidence.
+func metricsNudge(m MetricsAvailability) string {
+	if !m.Connected {
+		return ""
+	}
+	return fmt.Sprintf("Prometheus is connected at %s; for resource, restart, throttling or latency questions run one `query_prometheus` range query over the failure window and cite it.", promptSafeAddress(m.Address))
+}
+
+// promptSafeAddress drops any credentials embedded in a configured URL: the
+// prompt is model-visible and the agent only needs to know where the backend is.
+func promptSafeAddress(address string) string {
+	u, err := url.Parse(address)
+	if err != nil || u.User == nil {
+		return address
+	}
+	u.User = nil
+	return u.String()
+}
+
+// turnPrompt selects the prompt for a turn. Apply and explanation turns are
+// exact scripts; read-only investigation turns (initial and follow-up) may
+// additionally learn that metrics are available.
+func turnPrompt(req Request) string {
+	if req.Apply {
+		return applyPrompt(req) // explicit, user-confirmed remediation turn
+	}
+	if req.Explanation != nil {
+		return explanationPrompt(*req.Explanation)
+	}
+	prompt := taskPrompt(req)
+	if strings.TrimSpace(req.Question) != "" {
+		// Restate the structured/citation contract on every read-only turn. Some
+		// agent hosts compress resumed context, and verification must never silently
+		// lose the exact evidence links established on the opening turn.
+		prompt = req.Question + "\n\n" + diagnosisJSONInstruction
+	}
+	if nudge := metricsNudge(req.Metrics); nudge != "" {
+		prompt += "\n\n" + nudge
+	}
+	return prompt
 }
 
 // ResourceHealthSignal is the compact server-side health frame captured when a
@@ -511,17 +567,7 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 		sessionID = ""
 	}
 
-	prompt := taskPrompt(req)
-	if req.Apply {
-		prompt = applyPrompt(req) // explicit, user-confirmed remediation turn
-	} else if req.Explanation != nil {
-		prompt = explanationPrompt(*req.Explanation)
-	} else if strings.TrimSpace(req.Question) != "" {
-		// Restate the structured/citation contract on every read-only turn. Some
-		// agent hosts compress resumed context, and verification must never silently
-		// lose the exact evidence links established on the opening turn.
-		prompt = req.Question + "\n\n" + diagnosisJSONInstruction
-	}
+	prompt := turnPrompt(req)
 	sys := ""
 	if sessionID == "" {
 		sys = systemPrompt // a fresh session establishes the SRE + security framing

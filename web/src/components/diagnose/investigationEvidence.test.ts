@@ -6,6 +6,7 @@ import {
   investigationEvidenceSourceDomId,
   investigationEvidenceSourceId,
   investigationEvidenceSubjectRef,
+  metricsScope,
   projectInvestigationEvidence,
   resolveInvestigationRootCauseEvidence,
   type InvestigationEvidenceGroup,
@@ -560,7 +561,7 @@ describe("root-cause evidence resolution", () => {
     const projection = project([
       tool(
         "metrics-1",
-        "query_prometheus",
+        "discover_metrics",
         { result: [1] },
         { evidenceRef: ref },
       ),
@@ -2595,7 +2596,7 @@ describe("strict evidence adapters", () => {
 
   it("keeps unknown tools in Activity and limits invalid known contracts", () => {
     const result = project([
-      tool("other", "query_prometheus", { data: "ignored" }),
+      tool("other", "discover_metrics", { data: "ignored" }),
       tool("bad-events", "get_events", { events: [{ nope: true }] }),
     ]);
     expect(result.sources.map((source) => source.stepId)).toEqual([
@@ -4898,5 +4899,463 @@ describe("card leads and deep-link subjects", () => {
       { kind: "Deployment", namespace: "shop", name: "api" },
       { kind: "Deployment", namespace: "shop", name: "web" },
     ]);
+  });
+});
+
+describe("query_prometheus evidence", () => {
+  const rangeSeries = [
+    {
+      labels: { pod: "api-7f6-abc" },
+      dataPoints: [
+        { timestamp: 1_788_679_043, value: 169_377_792 },
+        { timestamp: 1_788_679_068, value: 171_401_216 },
+      ],
+    },
+  ];
+  const targetSelectors = [
+    {
+      metric: "container_memory_working_set_bytes",
+      matchers: [
+        { label: "namespace", op: "=", value: "shop" },
+        { label: "pod", op: "=~", value: "api-.*" },
+      ],
+    },
+  ];
+  function promResult(patch: Record<string, unknown> = {}) {
+    return {
+      query:
+        'sum(container_memory_working_set_bytes{namespace="shop",pod=~"api-.*"})',
+      type: "range",
+      start: "2026-09-06T07:17:23Z",
+      end: "2026-09-06T09:17:23Z",
+      step: "25s",
+      resultType: "matrix",
+      seriesCount: 1,
+      series: rangeSeries,
+      selectors: targetSelectors,
+      ...patch,
+    };
+  }
+
+  it("charts a range query scoped to the target as target evidence", () => {
+    const projection = project([
+      tool("prom", "query_prometheus", promResult(), {
+        summary: JSON.stringify({ query: "sum(...)", type: "range" }),
+      }),
+    ]);
+    const [group] = groupsOf(projection.groups, "metrics");
+    expect(group).toBeDefined();
+    expect(group.latest.relevance).toBe("target");
+    expect(group.latest.tier).toBe("supporting");
+    expect(group.latest.tone).toBe("neutral");
+    expect(group.latest.title).toBe("Prometheus metrics");
+    expect(group.latest.summary).toBe("1 series · 2h window · 25s step");
+    const data = group.latest.data;
+    if (data.type !== "metrics") throw new Error("expected metrics");
+    expect(data.mode).toBe("range");
+    expect(data.origin).toBe("query");
+    expect(data.subject).toEqual({
+      kind: "Deployment",
+      group: "apps",
+      namespace: "shop",
+      name: "api",
+    });
+    expect(data.unit).toBe("");
+    expect(data.series).toEqual(rangeSeries);
+    expect(investigationEvidenceSubjectRef(data)).toEqual(data.subject);
+    expect(projection.coverage.projected).toBe(1);
+  });
+
+  it("claims a unit only for a single bare metric that states one", () => {
+    const projection = project([
+      tool(
+        "bare",
+        "query_prometheus",
+        promResult({
+          query:
+            'container_memory_working_set_bytes{namespace="shop",pod=~"api-.*"}',
+        }),
+      ),
+      tool(
+        "rate",
+        "query_prometheus",
+        promResult({
+          query:
+            'rate(container_cpu_usage_seconds_total{namespace="shop",pod=~"api-.*"}[5m])',
+          selectors: [
+            {
+              metric: "container_cpu_usage_seconds_total",
+              matchers: targetSelectors[0].matchers,
+            },
+          ],
+        }),
+      ),
+    ]);
+    const units = groupsOf(projection.groups, "metrics").map((group) =>
+      group.latest.data.type === "metrics" ? group.latest.data.unit : "?",
+    );
+    expect(units).toEqual(["bytes", ""]);
+  });
+
+  it("renders an instant query as values, not a chart", () => {
+    const projection = project([
+      tool(
+        "instant",
+        "query_prometheus",
+        promResult({
+          type: "instant",
+          start: undefined,
+          end: undefined,
+          step: undefined,
+          resultType: "vector",
+          series: [
+            {
+              labels: { pod: "api-7f6-abc" },
+              dataPoints: [{ timestamp: 1_788_679_068, value: 3 }],
+            },
+          ],
+        }),
+      ),
+    ]);
+    const [group] = groupsOf(projection.groups, "metrics");
+    expect(group.latest.title).toBe("Prometheus values");
+    expect(group.latest.summary).toBe("1 series");
+    expect(group.latest.data.type === "metrics" && group.latest.data.mode).toBe(
+      "instant",
+    );
+  });
+
+  it("reports a truncated result as a limitation with its cardinality, never as a chart", () => {
+    const projection = project([
+      tool(
+        "big",
+        "query_prometheus",
+        promResult({
+          series: [],
+          truncated: true,
+          summary: {
+            seriesCount: 812,
+            totalDataPoints: 194_880,
+            labelCardinality: { pod: 812, container: 3 },
+            suggestion: "topk(5, ...)",
+          },
+          note: "Result exceeded the 96 KiB cap.",
+        }),
+      ),
+    ]);
+    expect(groupsOf(projection.groups, "metrics")).toHaveLength(0);
+    expect(projection.limitations).toHaveLength(1);
+    expect(projection.limitations[0].kind).toBe("truncated");
+    expect(projection.limitations[0].message).toContain("812 series");
+    expect(projection.limitations[0].message).toContain(
+      "812 distinct pod values",
+    );
+    expect(projection.limitations[0].message).toContain("Result exceeded");
+    expect(projection.coverage.limited).toBe(1);
+  });
+
+  it("keeps a query that matched nothing as a fact about the window", () => {
+    const projection = project([
+      tool("none", "query_prometheus", promResult({ series: [] })),
+    ]);
+    const [group] = groupsOf(projection.groups, "metrics");
+    expect(group.latest.summary).toBe(
+      "No series matched · 2h window · 25s step",
+    );
+  });
+
+  it("classifies scope from the producer's selectors, never from the expression text", () => {
+    const withNamespace = (
+      metric: string,
+      extra: Array<{ label: string; op: string; value: string }> = [],
+    ) => ({
+      metric,
+      matchers: [{ label: "namespace", op: "=", value: "shop" }, ...extra],
+    });
+    const cases: Array<[string, Record<string, unknown>, string]> = [
+      [
+        "namespace only",
+        { selectors: [withNamespace("up")] },
+        "producer-related",
+      ],
+      [
+        "workload label",
+        {
+          selectors: [
+            withNamespace("kube_deployment_status_replicas_available", [
+              { label: "deployment", op: "=", value: "api" },
+            ]),
+          ],
+        },
+        "target",
+      ],
+      [
+        "exact pod name prefix",
+        {
+          selectors: [
+            withNamespace("kube_pod_container_status_restarts_total", [
+              { label: "pod", op: "=", value: "api-7f6-abc" },
+            ]),
+          ],
+        },
+        "target",
+      ],
+      [
+        "container alone",
+        {
+          selectors: [
+            withNamespace("container_memory_working_set_bytes", [
+              { label: "container", op: "=", value: "api" },
+            ]),
+          ],
+        },
+        "producer-related",
+      ],
+      [
+        "sibling workload",
+        {
+          selectors: [
+            withNamespace("kube_deployment_status_replicas_available", [
+              { label: "deployment", op: "=", value: "worker" },
+            ]),
+          ],
+        },
+        "producer-related",
+      ],
+      [
+        "pod regex with an optional dash",
+        {
+          selectors: [
+            withNamespace("kube_pod_container_status_restarts_total", [
+              { label: "pod", op: "=~", value: "api-?.*" },
+            ]),
+          ],
+        },
+        "producer-related",
+      ],
+      [
+        "pod regex alternation behind the target prefix",
+        {
+          selectors: [
+            withNamespace("kube_pod_container_status_restarts_total", [
+              { label: "pod", op: "=~", value: "api-.*|worker-.*" },
+            ]),
+          ],
+        },
+        "producer-related",
+      ],
+      [
+        "workload alternation",
+        {
+          selectors: [
+            withNamespace("kube_deployment_status_replicas_available", [
+              { label: "deployment", op: "=~", value: "api|worker" },
+            ]),
+          ],
+        },
+        "producer-related",
+      ],
+      [
+        "statefulset label on a deployment target",
+        {
+          selectors: [
+            withNamespace("kube_statefulset_status_replicas_ready", [
+              { label: "statefulset", op: "=", value: "api" },
+            ]),
+          ],
+        },
+        "producer-related",
+      ],
+      [
+        "braced target numerator over a bare cluster denominator",
+        {
+          query:
+            'sum(container_memory_working_set_bytes{namespace="shop",pod=~"api-.*"}) / scalar(sum(machine_memory_bytes))',
+          selectors: [
+            ...targetSelectors,
+            { metric: "machine_memory_bytes", matchers: [] },
+          ],
+        },
+        "broader",
+      ],
+      ["other namespace", {
+        selectors: [
+          {
+            metric: "up",
+            matchers: [
+              { label: "namespace", op: "=", value: "other" },
+              { label: "pod", op: "=~", value: "api-.*" },
+            ],
+          },
+        ],
+      }, "broader"],
+      ["empty selectors", { selectors: [] }, "broader"],
+      [
+        "unknown selectors",
+        { selectors: targetSelectors, selectorsUnknown: true },
+        "broader",
+      ],
+    ];
+    for (const [name, patch, expected] of cases) {
+      const projection = project([
+        tool(`case-${name}`, "query_prometheus", promResult(patch)),
+      ]);
+      const [group] = groupsOf(projection.groups, "metrics");
+      expect(group?.latest.relevance, name).toBe(expected);
+      expect(
+        group?.latest.data.type === "metrics"
+          ? group.latest.data.subject
+          : "missing",
+        name,
+      ).toEqual(expected === "target" ? {
+        kind: "Deployment",
+        group: "apps",
+        namespace: "shop",
+        name: "api",
+      } : undefined);
+      expect(group?.latest.tier, name).toBe(
+        expected === "broader" ? "context" : "supporting",
+      );
+    }
+  });
+
+  it("treats an unescaped dot in a workload regex as naming more than the target", () => {
+    const dotted = { ...target, name: "api.v2" };
+    const selector = (value: string) => [
+      {
+        metric: "kube_deployment_status_replicas_available",
+        matchers: [
+          { label: "namespace", op: "=", value: "shop" },
+          { label: "deployment", op: "=~", value },
+        ],
+      },
+    ];
+    expect(metricsScope(dotted, selector("api.v2"), false)).toBe(
+      "producer-related",
+    );
+    expect(metricsScope(dotted, selector("api\\.v2"), false)).toBe("target");
+    expect(
+      metricsScope(
+        dotted,
+        [
+          {
+            metric: "up",
+            matchers: [
+              { label: "namespace", op: "=", value: "shop" },
+              { label: "pod", op: "=~", value: "api\\.v2-.*" },
+            ],
+          },
+        ],
+        false,
+      ),
+    ).toBe("target");
+    expect(
+      metricsScope(
+        dotted,
+        [
+          {
+            metric: "up",
+            matchers: [
+              { label: "namespace", op: "=", value: "shop" },
+              { label: "pod", op: "=~", value: "api.v2-.*" },
+            ],
+          },
+        ],
+        false,
+      ),
+    ).toBe("producer-related");
+  });
+
+  it("names a Pod target only by its exact name and accepts an anchored namespace regex", () => {
+    const pod = { ...target, kind: "Pod", group: "", name: "api-7f6-abc" };
+    const selector = (
+      namespace: { op: string; value: string },
+      podMatcher: { op: string; value: string },
+    ) => [
+      {
+        metric: "container_memory_working_set_bytes",
+        matchers: [
+          { label: "namespace", ...namespace },
+          { label: "pod", ...podMatcher },
+        ],
+      },
+    ];
+    const exactNs = { op: "=", value: "shop" };
+    expect(
+      metricsScope(pod, selector(exactNs, { op: "=~", value: "api-7f6-abc-.*" }), false),
+    ).toBe("producer-related");
+    expect(
+      metricsScope(pod, selector(exactNs, { op: "=", value: "api-7f6-abc" }), false),
+    ).toBe("target");
+    expect(
+      metricsScope(pod, selector(exactNs, { op: "=~", value: "api-7f6-abc" }), false),
+    ).toBe("target");
+    expect(
+      metricsScope(pod, selector(exactNs, { op: "=", value: "api-7f6-abc-extra" }), false),
+    ).toBe("producer-related");
+    expect(
+      metricsScope(
+        target,
+        selector({ op: "=~", value: "shop" }, { op: "=~", value: "api-.*" }),
+        false,
+      ),
+    ).toBe("target");
+    expect(
+      metricsScope(
+        target,
+        selector({ op: "=~", value: "shop|other" }, { op: "=~", value: "api-.*" }),
+        false,
+      ),
+    ).toBe("broader");
+    expect(
+      metricsScope(
+        target,
+        selector({ op: "!=", value: "kube-system" }, { op: "=~", value: "api-.*" }),
+        false,
+      ),
+    ).toBe("broader");
+  });
+
+  it("rejects a result without the producer's selector inventory", () => {
+    const projection = project([
+      tool("old", "query_prometheus", promResult({ selectors: undefined })),
+      tool(
+        "bad-series",
+        "query_prometheus",
+        promResult({
+          series: [{ labels: {}, dataPoints: [{ timestamp: "x", value: 1 }] }],
+        }),
+      ),
+    ]);
+    expect(groupsOf(projection.groups, "metrics")).toHaveLength(0);
+    expect(projection.limitations.map((item) => item.kind)).toEqual([
+      "unknown",
+    ]);
+    expect(projection.limitations[0].source).toBe("Prometheus query");
+    expect(projection.limitations[0].sources).toHaveLength(2);
+  });
+
+  it("merges the same query into one card with revisions", () => {
+    const projection = project(
+      [tool("first", "query_prometheus", promResult())],
+      [
+        tool(
+          "second",
+          "query_prometheus",
+          promResult({
+            series: [
+              {
+                labels: { pod: "api-7f6-abc" },
+                dataPoints: [{ timestamp: 1_788_679_043, value: 1 }],
+              },
+            ],
+          }),
+        ),
+      ],
+    );
+    const groups = groupsOf(projection.groups, "metrics");
+    expect(groups).toHaveLength(1);
+    expect(groups[0].observations).toHaveLength(2);
+    expect(groups[0].observations[1].changedFromPrevious).toBe(true);
   });
 });

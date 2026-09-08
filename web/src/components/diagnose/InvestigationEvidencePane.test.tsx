@@ -763,7 +763,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     const projection = project(
       tool(
         "metrics-cited",
-        "query_prometheus",
+        "discover_metrics",
         { result: [1] },
         { evidenceRef: ref },
       ),
@@ -778,7 +778,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     const sources = renderToStaticMarkup(
       <AssessmentSources resolution={resolution} onViewSource={onViewSource} />,
     );
-    expect(sources).toContain("Query Prometheus");
+    expect(sources).toContain("Discover Metrics");
     expect(sources).toContain("Sources used for this assessment");
     expect(html).not.toContain("Cited sources in Activity");
     expect(html).not.toContain("Agent-selected check");
@@ -2166,6 +2166,240 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(html).toContain("Previous observations");
     expect(html).toContain("Earlier does not mean resolved.");
     expect(html).toContain("CrashLoopBackOff");
+  });
+});
+
+describe("InvestigationEvidencePane metrics cards", () => {
+  const window = { start: "2026-09-06T07:00:00Z", end: "2026-09-06T09:00:00Z" };
+  const targetSelectors = [
+    {
+      metric: "container_memory_working_set_bytes",
+      matchers: [
+        { label: "namespace", op: "=", value: "shop" },
+        { label: "pod", op: "=~", value: "api-.*" },
+      ],
+    },
+  ];
+  function rangeResult(selectors: unknown[], query?: string) {
+    return {
+      query:
+        query ??
+        'sum(container_memory_working_set_bytes{namespace="shop",pod=~"api-.*"})',
+      type: "range",
+      ...window,
+      step: "60s",
+      series: [
+        {
+          labels: {},
+          dataPoints: [
+            { timestamp: Date.parse(window.start) / 1000, value: 1 },
+            { timestamp: Date.parse(window.end) / 1000, value: 2 },
+          ],
+        },
+      ],
+      selectors,
+    };
+  }
+
+  it("keeps an uncited target-scoped chart in the workload collection", () => {
+    const projection = project(
+      tool("prom", "query_prometheus", rangeResult(targetSelectors)),
+    );
+    const partition = partitionInvestigationEvidence(projection.groups);
+    expect(partition.main).toHaveLength(0);
+    expect(partition.workload.map((group) => group.kind)).toEqual(["metrics"]);
+    expect(partition.hiddenMetrics).toBe(0);
+    const html = render(projection);
+    expect(html).toContain("Prometheus metrics");
+    expect(html).not.toContain("metric result");
+  });
+
+  it("withholds an uncited broader chart and says so", () => {
+    const projection = project(
+      tool("prom", "query_prometheus", rangeResult([])),
+      tool(
+        "prom-2",
+        "query_prometheus",
+        rangeResult([], "sum(machine_memory_bytes)"),
+      ),
+    );
+    const partition = partitionInvestigationEvidence(projection.groups);
+    expect(partition.collectionByGroup.size).toBe(0);
+    expect(partition.hiddenMetrics).toBe(2);
+    const html = render(projection);
+    expect(html).toContain(
+      "2 broader metric results are not shown; they appear here when the assessment cites them.",
+    );
+    expect(html).not.toContain("Prometheus metrics");
+  });
+
+  it("promotes a cited broader chart into main with its expression as the axis label", () => {
+    const ref = evidenceRef("a", "b");
+    const query = "sum(rate(container_cpu_usage_seconds_total[5m])) by (namespace)";
+    const projection = project(
+      tool("prom", "query_prometheus", rangeResult([], query), {
+        evidenceRef: ref,
+      }),
+    );
+    const resolution = resolveInvestigationRootCauseEvidence(
+      projection,
+      { status: "linked", refs: [ref] },
+      0,
+    );
+    expect(resolution.status).toBe("linked");
+    const partition = partitionInvestigationEvidence(
+      projection.groups,
+      resolution,
+    );
+    expect(partition.main.map((group) => group.kind)).toEqual(["metrics"]);
+    expect(partition.hiddenMetrics).toBe(0);
+    const html = render(projection, false, undefined, resolution);
+    expect(html).toContain("Prometheus metrics");
+    expect(html).toContain("1 series · 2h window · 60s step");
+    expect(html).not.toContain("metric result");
+  });
+
+  it("lists single-sample series with their time instead of an empty chart, and names aggregated series", () => {
+    const start = Date.parse(window.start) / 1000;
+    const projection = project(
+      tool("prom", "query_prometheus", {
+        ...rangeResult(
+          targetSelectors,
+          "sum by (container) (rate(container_cpu_usage_seconds_total[5m]))",
+        ),
+        series: [
+          {
+            labels: { container: "api" },
+            dataPoints: [
+              { timestamp: start, value: 0.2 },
+              { timestamp: start + 60, value: 0.4 },
+            ],
+          },
+          {
+            labels: { container: "envoy" },
+            dataPoints: [
+              { timestamp: start, value: 0.1 },
+              { timestamp: start + 60, value: 0.1 },
+            ],
+          },
+          {
+            labels: { container: "init" },
+            dataPoints: [{ timestamp: start + 120, value: 0.05 }],
+          },
+        ],
+      }),
+      tool("sparse", "query_prometheus", {
+        ...rangeResult(targetSelectors, "up"),
+        series: [
+          {
+            labels: { pod: "api-7f6-abc" },
+            dataPoints: [{ timestamp: start + 30, value: 1 }],
+          },
+        ],
+      }),
+    );
+    const html = render(projection);
+    expect(html).toContain("container=api");
+    expect(html).toContain("container=envoy");
+    expect(html).not.toContain("series-0");
+    expect(html).toContain(
+      "1 series has a single sample in this window, listed with its time:",
+    );
+    expect(html).toContain("container=init");
+    expect(html.match(/data-testid="investigation-metrics-sparse-series"/g)).toHaveLength(2);
+    expect(html).toContain("api-7f6-abc");
+  });
+
+  it("keeps series that differ only by a hidden label distinguishable across chart and table, and names null-only series honestly", () => {
+    const start = Date.parse(window.start) / 1000;
+    const projection = project(
+      tool("prom", "query_prometheus", {
+        ...rangeResult(
+          targetSelectors,
+          'rate(container_cpu_usage_seconds_total{namespace="shop",pod=~"api-.*"}[5m])',
+        ),
+        series: [
+          {
+            labels: { pod: "api-7f6-abc", container: "api" },
+            dataPoints: [
+              { timestamp: start, value: 0.2 },
+              { timestamp: start + 60, value: 0.4 },
+            ],
+          },
+          {
+            labels: { pod: "api-7f6-abc", container: "envoy" },
+            dataPoints: [{ timestamp: start + 120, value: 0.05 }],
+          },
+          {
+            labels: { pod: "api-7f6-abc", container: "init" },
+            dataPoints: [
+              { timestamp: start, value: null },
+              { timestamp: start + 60, value: null },
+            ],
+          },
+        ],
+      }),
+    );
+    const html = render(projection);
+    expect(html).toContain("pod=api-7f6-abc, container=envoy");
+    expect(html).toContain(
+      "1 series has a single sample in this window, listed with its time:",
+    );
+    expect(html).toContain(
+      "1 series returned no finite values in this window: ",
+    );
+    expect(html).toContain("pod=api-7f6-abc, container=init");
+    expect(html).not.toContain("2 series have a single sample");
+  });
+
+  it("draws same-turn changes to the subject on the chart and links the subject", () => {
+    const projection = project(
+      tool("diag", "diagnose", {
+        resource: {
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          metadata: { namespace: "shop", name: "api" },
+        },
+        resourceContext: {
+          tier: "diagnostic",
+          uses: {
+            configMaps: [
+              { kind: "ConfigMap", namespace: "shop", name: "api-config" },
+            ],
+          },
+        },
+        recentChanges: [
+          {
+            kind: "ConfigMap",
+            apiVersion: "v1",
+            namespace: "shop",
+            name: "api-config",
+            changeType: "update",
+            timestamp: "2026-09-06T07:30:00Z",
+          },
+          {
+            kind: "Deployment",
+            apiVersion: "apps/v1",
+            namespace: "shop",
+            name: "worker",
+            changeType: "update",
+            timestamp: "2026-09-06T08:00:00Z",
+          },
+        ],
+        pods: 1,
+      }),
+      tool("prom", "query_prometheus", rangeResult(targetSelectors)),
+    );
+    const onOpenResource = vi.fn();
+    const html = render(projection, false, undefined, undefined, onOpenResource);
+    expect(html).toContain('data-chart-annotation="change"');
+    expect(html.match(/data-chart-annotation="change"/g)).toHaveLength(1);
+    expect(html).toContain("ConfigMap api-config");
+    expect(html).not.toContain("Deployment worker");
+    expect(html).toContain(
+      "1 change recorded in this window is marked on the chart.",
+    );
+    expect(html).toContain("Open current Deployment shop/api in Radar");
   });
 });
 
