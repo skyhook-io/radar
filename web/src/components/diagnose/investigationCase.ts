@@ -10,6 +10,7 @@ import {
   investigationEvidenceSubjectRef,
   investigationSourceArgs,
   isInvestigationEvidenceRef,
+  type InvestigationEvidenceGroup,
   type InvestigationEvidenceObservation,
   type InvestigationEvidenceProjection,
   type InvestigationEvidenceSource,
@@ -124,7 +125,8 @@ export function resolveInvestigationCase(
         .filter(
           (observation) =>
             observation.source.id === source.id &&
-            (!subject || observationMatchesSubject(observation, subject)),
+            (!subject ||
+              observationMatchesSubject(group, observation, subject)),
         )
         .map((observation) => ({ group, observation })),
     );
@@ -263,14 +265,25 @@ function sameKind(left: string, right: string): boolean {
  * of the match, not completeness of the subject, is what places a claim.
  */
 function observationMatchesSubject(
+  group: InvestigationEvidenceGroup,
   observation: InvestigationEvidenceObservation,
   subject: DiagnosisEvidenceSubject,
 ): boolean {
-  if (
-    subject.observation !== undefined &&
-    subject.observation.toLowerCase() !== observation.data.type
-  ) {
-    return false;
+  if (subject.observation !== undefined) {
+    // A diagnose bundle captures several vitals charts for one resource, so
+    // "metrics" alone cannot name one; "metrics:<category>" picks the chart
+    // whose identity ends in that category.
+    const [kind, qualifier] = subject.observation.toLowerCase().split(":", 2);
+    if (kind !== observation.data.type) return false;
+    if (
+      qualifier !== undefined &&
+      !(
+        observation.data.type === "metrics" &&
+        group.identity.endsWith(`:${qualifier}`)
+      )
+    ) {
+      return false;
+    }
   }
   const identity = observationSubjectIdentity(observation);
   if (!identity) return false;
