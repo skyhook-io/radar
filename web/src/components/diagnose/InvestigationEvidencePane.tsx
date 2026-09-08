@@ -261,15 +261,23 @@ export function partitionInvestigationEvidence(
     collections[collection].push(group);
     collectionByGroup.set(group.id, collection);
   }
+  // A group takes its strongest role (lowest rank); within one role the
+  // agent's own item order decides. Unlabelled and ruled-out groups keep
+  // Radar's order among themselves.
   const roleOrder = (group: InvestigationEvidenceGroup) => {
-    let rank = UNLABELLED_RANK;
+    let rank: number | undefined;
     let itemIndex = Number.POSITIVE_INFINITY;
     for (const item of caseByGroup.get(group.id) ?? []) {
       const itemRank = EVIDENCE_ROLE_RANK[item.role];
-      if (itemRank < rank || (itemRank === rank && item.index < itemIndex)) {
+      if (rank === undefined || itemRank < rank) {
         rank = itemRank;
-        itemIndex = itemRank === UNLABELLED_RANK ? itemIndex : item.index;
+        itemIndex = item.index;
+      } else if (itemRank === rank) {
+        itemIndex = Math.min(itemIndex, item.index);
       }
+    }
+    if (rank === undefined || rank === UNLABELLED_RANK) {
+      return { rank: UNLABELLED_RANK, itemIndex: Number.POSITIVE_INFINITY };
     }
     return { rank, itemIndex };
   };
