@@ -3111,8 +3111,8 @@ describe("honest zero and partial-result states", () => {
   });
 });
 
-// Shape taken from a saved cloud-provisioner investigation (run-1f386db525),
-// where the agent read workload logs four times and Findings showed none.
+// The get_workload_logs response shape, with the stream rows fetchPodLogs
+// emits per pod and container.
 const workloadLogsPayload = {
   workload: "deployments/shop/api",
   pods: 2,
@@ -3226,6 +3226,36 @@ describe("workload logs adapter", () => {
       projection.limitations.map((limitation) => limitation.source),
     ).toEqual(["Workload logs"]);
     expect(projection.limitations[0].kind).toBe("truncated");
+  });
+
+  it("accepts every workload kind the producer resolves, including Rollouts", () => {
+    const rollout = projectInvestigationEvidence(
+      [
+        {
+          timeline: [
+            tool(
+              "wl-rollout",
+              "get_workload_logs",
+              { ...workloadLogsPayload, workload: "rollouts/shop/api" },
+              {
+                summary: JSON.stringify({
+                  namespace: "shop",
+                  name: "api",
+                  kind: "rollout",
+                }),
+              },
+            ),
+          ],
+        },
+      ],
+      { kind: "Rollout", group: "argoproj.io", namespace: "shop", name: "api" },
+    );
+    expect(
+      groupsOf(rollout.groups, "logs").map((group) => group.latest.relevance),
+    ).toEqual(["producer-related", "producer-related", "producer-related"]);
+    expect(rollout.limitations.map((limitation) => limitation.kind)).toEqual([
+      "truncated",
+    ]);
   });
 
   it("scopes a sibling workload's logs as broader and a Pod target's own row as target", () => {

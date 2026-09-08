@@ -281,6 +281,8 @@ export interface InvestigationHelmOwnedResource {
   namespace: string;
   status?: string;
   ready?: string;
+  message?: string;
+  summary?: string;
   issue?: string;
 }
 
@@ -1398,11 +1400,13 @@ class ProjectionBuilder {
       kind === "startup" ||
       kind === "crash" ||
       (kind === "receipt" && identity.startsWith("previous-log-absence:"));
-    const mapKey = `${kind}\u0000${identity}${
+    const mapKey = groupKey(
+      kind,
+      identity,
       partitionByRelevance
-        ? `\u0000${observation.relevance}\u0000${scopeFromArgs(source)}`
-        : ""
-    }`;
+        ? `${observation.relevance}\u0000${scopeFromArgs(source)}`
+        : undefined,
+    );
     let group = this.groupByIdentity.get(mapKey);
     const previousObservation = group?.observations.at(-1);
     const changedFromPrevious = previousObservation
@@ -1458,7 +1462,7 @@ class ProjectionBuilder {
     kind: InvestigationEvidenceKind,
     identity: string,
   ): InvestigationEvidenceRelevance | undefined {
-    return this.groupByIdentity.get(`${kind} ${identity}`)?.latest.relevance;
+    return this.groupByIdentity.get(groupKey(kind, identity))?.latest.relevance;
   }
 
   limit(
@@ -1490,6 +1494,18 @@ class ProjectionBuilder {
     }
     this.limitedSources.add(source.id);
   }
+}
+
+/**
+ * The one place a group's map key is built. NUL separates the parts so no
+ * kind or identity text can collide with another kind's key.
+ */
+function groupKey(
+  kind: InvestigationEvidenceKind,
+  identity: string,
+  partition?: string,
+): string {
+  return `${kind}\u0000${identity}${partition === undefined ? "" : `\u0000${partition}`}`;
 }
 
 export function evidenceSemanticSnapshot(
@@ -3421,6 +3437,7 @@ const WORKLOAD_LOG_KINDS: Readonly<Record<string, string>> = {
   deployments: "Deployment",
   statefulsets: "StatefulSet",
   daemonsets: "DaemonSet",
+  rollouts: "Rollout",
   jobs: "Job",
   workflows: "Workflow",
 };
@@ -3900,7 +3917,14 @@ function helmOwnedResource(
   ) {
     return undefined;
   }
-  for (const field of ["apiVersion", "status", "ready", "issue"] as const) {
+  for (const field of [
+    "apiVersion",
+    "status",
+    "ready",
+    "message",
+    "summary",
+    "issue",
+  ] as const) {
     if (candidate[field] !== undefined && typeof candidate[field] !== "string")
       return undefined;
   }
