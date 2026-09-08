@@ -356,6 +356,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   return (
     <LogCore
       entries={filteredEntries}
+      allEntries={entries}
       isLoading={isLoading || isConnecting}
       isStreaming={isStreaming}
       onStartStream={createStream ? handleStartStreaming : undefined}

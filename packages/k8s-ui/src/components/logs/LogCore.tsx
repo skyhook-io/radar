@@ -40,6 +40,12 @@ export type ToolbarExtraRenderer =
 
 interface LogCoreProps {
   entries: LogEntry[]
+  /**
+   * The unfiltered buffer, when the host filters `entries` before passing them
+   * (the workload viewer's pod picker). Export's "All" and the clear-confirm
+   * both describe the real buffer, not the slice currently on screen.
+   */
+  allEntries?: LogEntry[]
   isLoading: boolean
   isStreaming: boolean
   onStartStream?: () => void
@@ -131,6 +137,7 @@ const TIP_DELAY = 150
 
 export function LogCore({
   entries,
+  allEntries,
   isLoading,
   isStreaming,
   onStartStream,
@@ -249,6 +256,12 @@ export function LogCore({
     ? search.filteredEntries
     : levelFilteredEntries
 
+  const exportTriggerRef = useRef<HTMLButtonElement>(null)
+  const closeExportMenu = useCallback(() => {
+    setShowDownloadMenu(false)
+    exportTriggerRef.current?.focus()
+  }, [])
+
   // Close download menu on next click anywhere (deferred so current click doesn't trigger it)
   const downloadMenuRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -261,10 +274,27 @@ export function LogCore({
     return () => window.removeEventListener('click', handleClick)
   }, [showDownloadMenu])
 
+  useEffect(() => {
+    if (!showDownloadMenu) return
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      // Capture phase + stopImmediatePropagation: the host's drawer listens for
+      // Escape on window too, and a bubble-phase stopPropagation would not stop
+      // a sibling listener on the same target — dismissing the popover would
+      // close the drawer behind it in the same keystroke.
+      e.stopImmediatePropagation()
+      e.preventDefault()
+      closeExportMenu()
+    }
+    window.addEventListener('keydown', handleKey, true)
+    return () => window.removeEventListener('keydown', handleKey, true)
+  }, [showDownloadMenu, closeExportMenu])
+
   // Scope and format are the only export decisions the viewer cannot already
   // express on screen: everything else (timestamps, ANSI, level, search) has a
   // toolbar control, and the popover's preview shows where those land.
-  const exportEntries = exportScope === 'all' ? entries : displayEntries
+  const bufferEntries = allEntries ?? entries
+  const exportEntries = exportScope === 'all' ? bufferEntries : displayEntries
   const exportOptions = useMemo(
     () => ({ format: exportFormat, showTimestamps, showPodName }),
     [exportFormat, showTimestamps, showPodName],
@@ -274,7 +304,7 @@ export function LogCore({
     [showDownloadMenu, exportEntries, exportOptions],
   )
   // Offering a scope that resolves to the same lines is a choice about nothing.
-  const scopeIsMeaningful = displayEntries.length !== entries.length
+  const scopeIsMeaningful = displayEntries.length !== bufferEntries.length
 
   // Scope describes the filters in play at the moment of asking, not a lasting
   // intent, so it starts over at the narrower option every time rather than
@@ -285,19 +315,19 @@ export function LogCore({
   }, [])
 
   const handleExportCopy = useCallback(() => {
-    setShowDownloadMenu(false)
+    closeExportMenu()
     const count = exportEntries.length
     const failed = () => showApiError('Failed to copy logs', 'The browser blocked clipboard access.')
     copyText(serializeLogEntries(exportEntries, exportOptions).content).then(
       ok => ok ? showApiSuccess('Copied to clipboard', `${count} log line${count === 1 ? '' : 's'} copied.`) : failed(),
       failed,
     )
-  }, [exportEntries, exportOptions])
+  }, [closeExportMenu, exportEntries, exportOptions])
 
   const handleExportDownload = useCallback(() => {
-    setShowDownloadMenu(false)
+    closeExportMenu()
     onDownload(serializeLogEntries(exportEntries, exportOptions))
-  }, [onDownload, exportEntries, exportOptions])
+  }, [closeExportMenu, onDownload, exportEntries, exportOptions])
 
   // Same close-on-outside-click for the timestamp format menu.
   const tsMenuRef = useRef<HTMLDivElement>(null)
@@ -384,12 +414,12 @@ export function LogCore({
   }, [onClear, isStreaming])
 
   const handleClearClick = useCallback(() => {
-    if (hasStreamed.current && entries.length > 0) {
+    if (hasStreamed.current && bufferEntries.length > 0) {
       setShowClearConfirm(true)
       return
     }
     clearBuffer()
-  }, [clearBuffer, entries.length])
+  }, [clearBuffer, bufferEntries.length])
 
   const handleFollowOutput = useCallback((isAtBottom: boolean) => {
     if (isAtBottom) return 'smooth' as const
@@ -757,35 +787,39 @@ export function LogCore({
         <div className="relative flex items-center" ref={downloadMenuRef}>
           <Tooltip content="Export logs" delay={TIP_DELAY} position="bottom" disabled={showDownloadMenu} preserveWrapperWhenDisabled>
             <button
+              ref={exportTriggerRef}
               onClick={toggleExportMenu}
+              aria-label="Export logs"
+              aria-haspopup="dialog"
+              aria-expanded={showDownloadMenu}
               className={iconBtnInactive}
             >
               <Download className="w-4 h-4" />
             </button>
           </Tooltip>
           {showDownloadMenu && (
-            <div className={`absolute top-full right-0 mt-1 w-[23rem] ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50 p-3 space-y-2.5`}>
+            <div role="dialog" aria-label="Export logs" className={`absolute top-full right-0 mt-1 w-[23rem] ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50 p-3 space-y-2.5`}>
               <div className="flex items-center gap-3">
-                <span className={exportLabelCls}>Lines</span>
+                <span id="log-export-scope-label" className={exportLabelCls}>Lines</span>
                 {scopeIsMeaningful ? (
-                  <div className="flex items-center gap-1">
+                  <div role="radiogroup" aria-labelledby="log-export-scope-label" className="flex items-center gap-1">
                     <ExportChoice active={exportScope === 'visible'} onClick={() => setExportScope('visible')} palette={palette}>
                       Filtered {displayEntries.length.toLocaleString()}
                     </ExportChoice>
                     <ExportChoice active={exportScope === 'all'} onClick={() => setExportScope('all')} palette={palette}>
-                      All {entries.length.toLocaleString()}
+                      All {bufferEntries.length.toLocaleString()}
                     </ExportChoice>
                   </div>
                 ) : (
                   <span className={`text-[11px] ${palette.textSecondary}`}>
-                    {entries.length.toLocaleString()} line{entries.length === 1 ? '' : 's'}
+                    {bufferEntries.length.toLocaleString()} line{bufferEntries.length === 1 ? '' : 's'}
                   </span>
                 )}
               </div>
 
               <div className="flex items-center gap-3">
-                <span className={exportLabelCls}>Format</span>
-                <div className="flex items-center gap-1">
+                <span id="log-export-format-label" className={exportLabelCls}>Format</span>
+                <div role="radiogroup" aria-labelledby="log-export-format-label" className="flex items-center gap-1">
                   {LOG_EXPORT_FORMATS.map(fmt => (
                     <ExportChoice key={fmt} active={exportFormat === fmt} onClick={() => pickExportFormat(fmt)} palette={palette}>
                       {LOG_EXPORT_FORMAT_LABELS[fmt]}
@@ -1041,7 +1075,8 @@ function ExportChoice({ active, onClick, palette, children }: {
   return (
     <button
       onClick={onClick}
-      aria-pressed={active}
+      role="radio"
+      aria-checked={active}
       className={`px-2 py-1 rounded text-[11px] transition-colors ${active ? palette.toolbarActive : `${palette.textSecondary} ${palette.hoverBg}`}`}
     >
       {children}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  LOG_EXPORT_FORMATS,
   previewLogExport,
   serializeLogEntries,
   type ExportableLogEntry,
@@ -91,12 +92,17 @@ describe('serializeLogEntries — structured formats', () => {
       container: 'app',
       content: 'connection refused',
     }])
-    expect(mime).toBe('application/json')
+    expect(mime).toBe('application/json;charset=utf-8')
     expect(extension).toBe('json')
   })
 
-  it('drops the pod key from JSON when pod attribution is off', () => {
+  it('keeps the pod key in JSON even when pod attribution is off, since the display toggle is not a schema', () => {
     const { content } = serializeLogEntries([entry()], opts({ format: 'json', showPodName: false }))
+    expect(Object.keys(JSON.parse(content)[0])).toEqual(['timestamp', 'pod', 'container', 'content'])
+  })
+
+  it('omits the pod key only for entries that genuinely have no pod', () => {
+    const { content } = serializeLogEntries([entry({ pod: undefined })], opts({ format: 'json' }))
     expect(Object.keys(JSON.parse(content)[0])).toEqual(['timestamp', 'container', 'content'])
   })
 
@@ -114,25 +120,68 @@ describe('serializeLogEntries — structured formats', () => {
       'timestamp,pod,container,content',
       '"2024-01-20T10:30:00.123456789Z","api-7d9f","app","connection refused"',
     ])
-    expect(mime).toBe('text/csv')
+    expect(mime).toBe('text/csv;charset=utf-8')
   })
 
-  it('drops the CSV pod column when pod attribution is off', () => {
+  it('keeps the CSV pod column when pod attribution is off but the data has pods', () => {
     const { content } = serializeLogEntries([entry()], opts({ format: 'csv', showPodName: false }))
-    expect(content.split('\n')[0]).toBe('timestamp,container,content')
+    expect(content.split('\n')[0]).toBe('timestamp,pod,container,content')
+  })
+
+  it('drops the CSV pod column only when no entry has a pod', () => {
+    const { content } = serializeLogEntries([entry({ pod: undefined })], opts({ format: 'csv' }))
+    expect(content.split('\n')).toEqual([
+      'timestamp,container,content',
+      '"2024-01-20T10:30:00.123456789Z","app","connection refused"',
+    ])
+  })
+
+  it('keeps the column count aligned when only some entries carry a pod', () => {
+    const { content } = serializeLogEntries(
+      [entry({ pod: undefined }), entry()],
+      opts({ format: 'csv' }),
+    )
+    const [header, ...rows] = content.split('\n')
+    expect(header.split(',').length).toBe(4)
+    for (const row of rows) expect(row.split('","').length).toBe(4)
+  })
+
+  it('neutralizes cells a spreadsheet would evaluate as a formula', () => {
+    const { content } = serializeLogEntries(
+      [entry({ content: '=cmd|\' /c calc\'!A1' }), entry({ content: '+1' }), entry({ content: '-rf /' }), entry({ content: '@SUM(A1)' })],
+      opts({ format: 'csv', showPodName: false }),
+    )
+    const cells = content.split('\n').slice(1).map(r => r.split(',').pop())
+    expect(cells).toEqual([
+      '"\'=cmd|\' /c calc\'!A1"',
+      '"\'+1"',
+      '"\'-rf /"',
+      '"\'@SUM(A1)"',
+    ])
+  })
+
+  it('leaves ordinary content unprefixed', () => {
+    const { content } = serializeLogEntries([entry()], opts({ format: 'csv', showPodName: false }))
+    expect(content).toContain('"connection refused"')
   })
 
   it('doubles quotes inside a CSV cell', () => {
     const { content } = serializeLogEntries(
-      [entry({ content: 'said "hello"' })],
-      opts({ format: 'csv', showPodName: false }),
+      [entry({ content: 'said "hello"', pod: undefined })],
+      opts({ format: 'csv' }),
     )
     expect(content.split('\n')[1]).toBe('"2024-01-20T10:30:00.123456789Z","app","said ""hello"""')
   })
 
   it('emits a header-only CSV and an empty JSON array for no entries', () => {
-    expect(serializeLogEntries([], opts({ format: 'csv' })).content).toBe('timestamp,pod,container,content')
+    expect(serializeLogEntries([], opts({ format: 'csv' })).content).toBe('timestamp,container,content')
     expect(serializeLogEntries([], opts({ format: 'json' })).content).toBe('[]')
+  })
+
+  it('declares a charset so non-ASCII content survives a spreadsheet import', () => {
+    for (const format of LOG_EXPORT_FORMATS) {
+      expect(serializeLogEntries([], opts({ format })).mime).toContain('charset=utf-8')
+    }
   })
 })
 

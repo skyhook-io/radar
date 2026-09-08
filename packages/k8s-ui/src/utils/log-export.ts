@@ -25,7 +25,12 @@ export interface LogExportOptions {
    * ignore, not the visual noise the toggle exists to suppress.
    */
   showTimestamps: boolean
-  /** Mirrors the viewer's pod attribution, which is set by context (workload views have it, single-pod views don't). */
+  /**
+   * Mirrors the viewer's pod attribution, and — like `showTimestamps` — applies
+   * to `txt` only. JSON and CSV carry `pod` whenever the entry has one: a
+   * display preference must not silently strip the column that makes a
+   * multi-pod export attributable.
+   */
   showPodName: boolean
 }
 
@@ -35,10 +40,12 @@ export interface LogExportPayload {
   extension: LogExportFormat
 }
 
+// Charset is explicit: log content is arbitrary UTF-8, and Excel on Windows
+// falls back to a legacy code page without it.
 const MIME: Record<LogExportFormat, string> = {
-  txt: 'text/plain',
-  json: 'application/json',
-  csv: 'text/csv',
+  txt: 'text/plain;charset=utf-8',
+  json: 'application/json;charset=utf-8',
+  csv: 'text/csv;charset=utf-8',
 }
 
 /** Display order for the format picker. */
@@ -63,27 +70,37 @@ function textLine(entry: ExportableLogEntry, { showTimestamps, showPodName }: Lo
   return parts.join(' ')
 }
 
-function jsonEntry(entry: ExportableLogEntry, { showPodName }: LogExportOptions): Record<string, string> {
+function jsonEntry(entry: ExportableLogEntry): Record<string, string> {
   return {
     timestamp: entry.timestamp,
-    ...(showPodName && entry.pod ? { pod: entry.pod } : {}),
+    ...(entry.pod ? { pod: entry.pod } : {}),
     ...(entry.container ? { container: entry.container } : {}),
     content: stripAnsi(entry.content),
   }
 }
 
-function csvColumns({ showPodName }: LogExportOptions): string[] {
-  return showPodName ? ['timestamp', 'pod', 'container', 'content'] : ['timestamp', 'container', 'content']
+/** Columns follow the data, not a display toggle, so a row can never carry a field the header doesn't name. */
+function csvColumns(entries: readonly ExportableLogEntry[]): string[] {
+  return entries.some(e => e.pod)
+    ? ['timestamp', 'pod', 'container', 'content']
+    : ['timestamp', 'container', 'content']
 }
+
+// A cell opening with one of these is a formula to Excel and Sheets, and quoting
+// does not stop it — the quotes are stripped before evaluation. Log content is
+// whatever a pod chose to print, so the leading apostrophe (which spreadsheets
+// consume on import) is the difference between a CSV and an execution vector.
+const SPREADSHEET_FORMULA_START = /^[=+\-@\t\r]/
 
 function csvCell(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`
+  const escaped = (SPREADSHEET_FORMULA_START.test(value) ? `'${value}` : value).replace(/"/g, '""')
+  return `"${escaped}"`
 }
 
-function csvRow(entry: ExportableLogEntry, opts: LogExportOptions): string {
+function csvRow(entry: ExportableLogEntry, columns: readonly string[]): string {
   const cells = [
     entry.timestamp,
-    ...(opts.showPodName ? [entry.pod ?? ''] : []),
+    ...(columns.includes('pod') ? [entry.pod ?? ''] : []),
     entry.container ?? '',
     stripAnsi(entry.content),
   ]
@@ -97,9 +114,11 @@ export function serializeLogEntries(
   const base = { mime: MIME[opts.format], extension: opts.format }
   switch (opts.format) {
     case 'json':
-      return { ...base, content: JSON.stringify(entries.map(e => jsonEntry(e, opts)), null, 2) }
-    case 'csv':
-      return { ...base, content: [csvColumns(opts).join(','), ...entries.map(e => csvRow(e, opts))].join('\n') }
+      return { ...base, content: JSON.stringify(entries.map(jsonEntry), null, 2) }
+    case 'csv': {
+      const columns = csvColumns(entries)
+      return { ...base, content: [columns.join(','), ...entries.map(e => csvRow(e, columns))].join('\n') }
+    }
     default:
       return { ...base, content: entries.map(e => textLine(e, opts)).join('\n') }
   }
@@ -119,9 +138,11 @@ export function previewLogExport(
   if (entries.length === 0) return []
   switch (opts.format) {
     case 'json':
-      return [JSON.stringify(jsonEntry(entries[0], opts))]
-    case 'csv':
-      return [csvColumns(opts).join(','), csvRow(entries[0], opts)]
+      return [JSON.stringify(jsonEntry(entries[0]))]
+    case 'csv': {
+      const columns = csvColumns(entries)
+      return [columns.join(','), csvRow(entries[0], columns)]
+    }
     default:
       return entries.slice(0, 2).map(e => textLine(e, opts))
   }
