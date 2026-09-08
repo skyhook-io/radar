@@ -51,6 +51,35 @@ export interface InvestigationCaseResolution {
   ruledOut: InvestigationCaseRuledOut[];
 }
 
+/**
+ * Notes the agent put on cards in earlier assessments stay on those cards
+ * when a later turn takes over the pane's case, unless the later turn
+ * addressed the same card; a follow-up about one chart must not strip the
+ * initial assessment's reading from everything else. Ordering and the
+ * ruled-out list follow the live turn alone, and source-placed notes stay
+ * listed under their own assessment. `earlier` is newest first.
+ */
+export function mergeInvestigationCases(
+  live: InvestigationCaseResolution | undefined,
+  earlier: readonly (InvestigationCaseResolution | undefined)[],
+): InvestigationCaseResolution | undefined {
+  const liveItems = live?.items ?? [];
+  const covered = new Set(
+    liveItems.flatMap((item) => (item.groupId ? [item.groupId] : [])),
+  );
+  const carried: InvestigationCaseItem[] = [];
+  for (const resolution of earlier) {
+    for (const item of resolution?.items ?? []) {
+      if (item.placement === "source" || !item.groupId) continue;
+      if (covered.has(item.groupId)) continue;
+      covered.add(item.groupId);
+      carried.push(item);
+    }
+  }
+  if (carried.length === 0) return live;
+  return { items: [...liveItems, ...carried], ruledOut: live?.ruledOut ?? [] };
+}
+
 export const EVIDENCE_ROLES: ReadonlySet<string> =
   new Set<DiagnosisEvidenceRole>([
     "cause",
