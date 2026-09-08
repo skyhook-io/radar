@@ -2875,7 +2875,9 @@ describe("InvestigationEvidencePane metrics cards", () => {
     expect(partition.workload.map((group) => group.kind)).toEqual(["metrics"]);
     expect(partition.hiddenMetrics).toBe(0);
     const html = render(projection);
-    expect(html).toContain("Prometheus metrics");
+    expect(html).toContain("container_memory_working_set_bytes");
+    expect(html).toContain("Prometheus · 1 series");
+    expect(html).not.toContain("Prometheus metrics");
     expect(html).not.toContain("metric result");
   });
 
@@ -2896,6 +2898,7 @@ describe("InvestigationEvidencePane metrics cards", () => {
       "2 broader metric results are not shown; they appear here when the assessment cites them.",
     );
     expect(html).not.toContain("Prometheus metrics");
+    expect(html).not.toContain("container_memory_working_set_bytes");
   });
 
   it("promotes a cited broader chart into main with its expression as the axis label", () => {

@@ -4745,6 +4745,17 @@ function adaptQueryPrometheus(
     return;
   }
   const windowLabel = metricsWindowLabel({ mode, start, end, step });
+  // One metric names the card; the title is Radar's reading of the query,
+  // never the agent's, so a wrong claim cannot become the card's identity.
+  const metricNames = [
+    ...new Set(selectors.map((selector) => selector.metric)),
+  ];
+  const title =
+    metricNames.length === 1
+      ? metricNames[0]
+      : mode === "range"
+        ? "Prometheus metrics"
+        : "Prometheus values";
   const data: InvestigationMetricsEvidence = {
     type: "metrics",
     origin: "query",
@@ -4777,8 +4788,9 @@ function adaptQueryPrometheus(
       tier: evidenceTierForRelevance("supporting", relevance),
       relevance,
       tone: "neutral",
-      title: mode === "range" ? "Prometheus metrics" : "Prometheus values",
+      title,
       summary: [
+        metricNames.length === 1 ? "Prometheus" : undefined,
         series.length === 0 ? "No series matched" : `${series.length} series`,
         windowLabel,
       ]
