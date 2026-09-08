@@ -1839,7 +1839,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'store', label: 'Store', width: 'w-36' },
-    { key: 'provider', label: 'Provider', width: 'w-40', tooltip: 'Backend the referenced store reads from. A dash means the store could not be read — it may not exist, or may be outside your access; an ellipsis means the stores are still loading.' },
+    { key: 'provider', label: 'Provider', width: 'w-48', tooltip: 'Backend the referenced store reads from. A dash means the store could not be read — it may not exist, or may be outside your access; an ellipsis means the stores are still loading.' },
     { key: 'refreshInterval', label: 'Refresh', width: 'w-24', tooltip: 'How often the value is re-pulled from the provider. A zero interval means it is fetched once and not updated afterward.' },
     { key: 'lastSync', label: 'Last Sync', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
