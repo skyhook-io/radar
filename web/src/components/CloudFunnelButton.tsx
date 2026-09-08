@@ -5,7 +5,7 @@ import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Coll
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { Tooltip } from './ui/Tooltip'
 import { CloudConnectFlow } from './CloudConnectFlow'
-import { driverConnectUnavailableNote, driverEscapeContent } from './cloudFunnelState'
+import { driverConnectUnavailableNote, driverEscapeContent, effectiveConnectionState } from './cloudFunnelState'
 import { showApiError } from './ui/Toast'
 import { useConnection } from '../context/ConnectionContext'
 import {
@@ -50,6 +50,12 @@ const DEFAULT_ASSURANCES = [
   '3 clusters free, no card required',
 ]
 const SIGNUP_QUERY = '?utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal'
+
+// The footer's primary action, whichever element fills that slot. Emerald is
+// this dialog's Cloud accent (eyebrow, sweep, check marks), not a generic
+// surface, so it stays literal here rather than a theme token.
+const PRIMARY_ACTION_CLASS =
+  'whitespace-nowrap px-6 py-2.5 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[14px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all'
 const ABOUT_URL = 'https://radarhq.io/about'
 const PRICING_URL = 'https://radarhq.io/pricing'
 const SELF_HOSTED_DOCS_URL = 'https://radarhq.io/docs/cloud/self-hosted/'
@@ -93,7 +99,14 @@ export function CloudFunnelButton() {
   // The driver lane inspects the live cluster, so it has nothing to offer
   // until Radar is connected to one. The header shows this button from the
   // first paint, before that connection exists.
-  const connectionState = useConnection().connection.state
+  const liveConnectionState = useConnection().connection.state
+  // Set when prepare answered 503: the server has no cluster even if the
+  // connection feed still says otherwise. Cleared once that feed moves.
+  const [serverReportedNoCluster, setServerReportedNoCluster] = useState(false)
+  useEffect(() => {
+    setServerReportedNoCluster(false)
+  }, [liveConnectionState])
+  const connectionState = effectiveConnectionState(liveConnectionState, serverReportedNoCluster)
   const appUrl = capabilities.data?.cloudConnect?.appUrl || FALLBACK_APP_URL
   // utm_content distinguishes the lane that opened the Hub — measured Hub-side
   // only when the user actually navigates there; Radar transmits nothing.
@@ -142,6 +155,7 @@ export function CloudFunnelButton() {
       // between render and click). Nothing about the install path broke, so
       // the pitch must not come back reading "Try again".
       if (err instanceof ApiError && err.status === 503) {
+        setServerReportedNoCluster(true)
         exitFlow(false)
         showApiError("Radar isn't connected to a cluster yet", 'Connect a cluster first, or set up Radar Cloud in the browser.')
         return
@@ -194,6 +208,7 @@ export function CloudFunnelButton() {
   const contextName = useClusterInfo().data?.context
   useEffect(() => {
     setPrepareFailed(false)
+    setServerReportedNoCluster(false)
   }, [contextName])
 
   // The server owns the "nothing to pitch" decision: an already-tunneled
@@ -426,7 +441,7 @@ function ModalFooter({
             href={driverEscapeUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="whitespace-nowrap px-6 py-2.5 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[14px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all"
+            className={PRIMARY_ACTION_CLASS}
           >
             Set up in the browser
           </a>
@@ -434,7 +449,7 @@ function ModalFooter({
           <>
             <button
               onClick={onConnect}
-              className="whitespace-nowrap px-6 py-2.5 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[14px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all"
+              className={PRIMARY_ACTION_CLASS}
             >
               {/* Trailing ellipsis: further input follows the click — the
                   inspect step and a plan the user approves in the browser. */}

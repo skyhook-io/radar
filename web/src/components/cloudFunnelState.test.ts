@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { driverConnectUnavailableNote, driverEscapeContent } from './cloudFunnelState'
+import { driverConnectUnavailableNote, driverEscapeContent, effectiveConnectionState } from './cloudFunnelState'
+
+describe('effectiveConnectionState', () => {
+  it('trusts the render-time state when the server has not contradicted it', () => {
+    expect(effectiveConnectionState('connected', false)).toBe('connected')
+    expect(effectiveConnectionState('connecting', false)).toBe('connecting')
+  })
+
+  it('lets a prepare 503 override a stale connected state', () => {
+    expect(effectiveConnectionState('connected', true)).toBe('disconnected')
+    expect(driverEscapeContent(effectiveConnectionState('connected', true), false)).toBe('driver-unconnected')
+    expect(driverConnectUnavailableNote(effectiveConnectionState('connected', true))).not.toBeNull()
+  })
+})
 
 describe('driverEscapeContent', () => {
   it('reads as a preference when the cluster is connected and nothing failed', () => {
