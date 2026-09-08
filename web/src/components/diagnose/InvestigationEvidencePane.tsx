@@ -2358,6 +2358,10 @@ function HelmBody({ data }: { data: EvidenceDataOf<"helm"> }) {
                   <span className="block truncate text-xs text-warning-text">
                     {owned.issue}
                   </span>
+                ) : owned.summary || owned.message ? (
+                  <span className="block truncate text-xs text-theme-text-tertiary">
+                    {owned.summary || owned.message}
+                  </span>
                 ) : null}
               </span>
               {owned.ready || owned.status ? (

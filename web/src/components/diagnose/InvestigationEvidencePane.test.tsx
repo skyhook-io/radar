@@ -2385,6 +2385,14 @@ describe("Track A evidence bodies and deep links", () => {
               ready: "0/1",
               issue: "0/1 ready",
             },
+            {
+              kind: "Job",
+              apiVersion: "batch/v1",
+              name: "shop-migrate",
+              namespace: "shop",
+              status: "Complete",
+              summary: "1/1 succeeded",
+            },
           ],
         },
         { summary: JSON.stringify({ namespace: "shop", name: "shop" }) },
@@ -2409,6 +2417,7 @@ describe("Track A evidence bodies and deep links", () => {
     expect(html).toContain("Revision 8 has been pending-upgrade for 42m");
     expect(html).toContain("Deployment shop/api has 0/1 ready replicas");
     expect(html).toContain("0/1 ready");
+    expect(html).toContain("1/1 succeeded");
     expect(html).toContain("Open current HelmRelease shop/shop in Radar");
   });
 
