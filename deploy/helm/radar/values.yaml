@@ -68,11 +68,10 @@ rbac:
 
   # Allow reading secrets (shows secrets in resource list).
   # Auto-enabled regardless of this flag by rbac.helm (Helm release storage is
-  # Secrets), when auth is on (auth.mode != none), or in cloud mode — there the
-  # Helm releases view reaches release Secrets that a user holding only the K8s
-  # 'view' role cannot list. Under any of those, setting this to false does NOT
-  # narrow the ClusterRole, and the grant is cluster-wide get/list/watch on all
-  # Secrets: check the rendered ClusterRole, not this value.
+  # Secrets), when auth is on (auth.mode != none), or in cloud mode. Under any
+  # of those, setting this to false does NOT narrow the ClusterRole, and the
+  # grant is cluster-wide get/list/watch on all Secrets: check the rendered
+  # ClusterRole, not this value.
   secrets: false
 
   # Allow reading RBAC objects (Roles, RoleBindings, ClusterRoles, ClusterRoleBindings)

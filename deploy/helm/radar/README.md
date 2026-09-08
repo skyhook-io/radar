@@ -287,7 +287,7 @@ Disabled by default for security:
 
 | Feature | Value | Description |
 |---------|-------|-------------|
-| Secrets | `rbac.secrets: true` | View secrets in resource list. Auto-enabled by `rbac.helm` (release storage is Secrets), under auth, and in cloud mode, so the Helm releases view can reach release Secrets a `view`-only identity cannot list. In those configurations `rbac.secrets: false` does not narrow the ClusterRole — the grant is cluster-wide `get/list/watch` on all Secrets. |
+| Secrets | `rbac.secrets: true` | View secrets in resource list. Auto-enabled by `rbac.helm` (Helm release storage is Secrets), by auth (`auth.mode` other than `none`), and in cloud mode. In those configurations `rbac.secrets: false` does not narrow the ClusterRole — the grant is cluster-wide `get/list/watch` on all Secrets. |
 | Terminal | `rbac.podExec: true` | Shell access to pods |
 | Port Forward | `rbac.portForward: true` | Port forwarding to pods. Also the fallback for traffic sources (Hubble/Caretta) — Radar dials the relay/metrics Service directly first, so in-cluster installs only need this when a NetworkPolicy or routing blocks Radar's namespace from reaching the service |
 | Logs | `rbac.podLogs: true` | View pod logs (**enabled by default**) |
