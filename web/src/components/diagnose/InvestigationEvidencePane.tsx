@@ -70,6 +70,7 @@ import {
 import {
   investigationEvidenceSubjectRef,
   investigationEvidenceSourceDomId,
+  investigationSourceArgs,
   type InvestigationEvidenceData,
   type InvestigationEvidenceGroup,
   type InvestigationEvidenceObservation,
@@ -138,6 +139,16 @@ const EVIDENCE_ROLE_RANK: Readonly<Record<DiagnosisEvidenceRole, number>> = {
 };
 const UNLABELLED_RANK = 2;
 
+function sourceNamesOneResource(source: InvestigationEvidenceSource): boolean {
+  const args = investigationSourceArgs(source);
+  return (
+    typeof args?.kind === "string" &&
+    args.kind !== "" &&
+    typeof args.name === "string" &&
+    args.name !== ""
+  );
+}
+
 export function investigationCaseByGroup(
   investigationCase?: InvestigationCaseResolution,
 ): Map<string, InvestigationCaseItem[]> {
@@ -190,8 +201,9 @@ export function partitionInvestigationEvidence(
   investigationCase?: InvestigationCaseResolution,
 ) {
   // Selection: legacy root-cause links plus every placed agent item, of any
-  // role. Ordering below is the only place roles act, and no role can remove
-  // a group from a collection.
+  // role (placement promotes a group into main the way a citation does; the
+  // role does not matter here). Ordering below is the only place roles act,
+  // and nothing the agent sends can remove a group from a collection.
   const caseByGroup = investigationCaseByGroup(investigationCase);
   const selected = new Set([
     ...(resolution?.status === "linked"
@@ -220,19 +232,24 @@ export function partitionInvestigationEvidence(
     const broader = group.latest.relevance === "broader";
     // Citations select tool results, not individual rows in a broad search.
     // Only a focused, unambiguous fact can be promoted by a source citation.
-    // A placed agent item already names exactly one observation, so it needs
-    // no further focus gate.
-    if (broader && !caseByGroup.has(group.id)) {
-      const link = resolution?.links.find(
-        (item) => item.originalGroupId === group.id,
-      );
+    // An agent item names this observation when its subject does, or when the
+    // call it cites was itself scoped to one resource; a subject-less item on
+    // a broad query only proves the query returned one row and is gated like
+    // a citation of its source.
+    const namedByAgent = (caseByGroup.get(group.id) ?? []).some(
+      (item) => item.subject || sourceNamesOneResource(item.source),
+    );
+    if (broader && !namedByAgent) {
+      const citingSource =
+        resolution?.links.find((item) => item.originalGroupId === group.id)
+          ?.source ?? caseByGroup.get(group.id)?.[0]?.source;
       const focused = FOCUSED_EVIDENCE_TYPES.includes(group.latest.data.type);
-      const sourceGroups = link
+      const sourceGroups = citingSource
         ? groups.filter(
             (candidate) =>
               FOCUSED_EVIDENCE_TYPES.includes(candidate.latest.data.type) &&
               candidate.observations.some(
-                (observation) => observation.source.id === link.source.id,
+                (observation) => observation.source.id === citingSource.id,
               ),
           )
         : [];
@@ -411,13 +428,23 @@ export function InvestigationEvidencePane({
   useEffect(() => {
     setCaseReveal(undefined);
   }, [revealRequest?.requestId]);
+  const collectionByGroup = partition.collectionByGroup;
   const revealCaseItem = useCallback(
     (item: InvestigationCaseItem) => {
       const { groupId, observation } = item;
       if (!groupId || !observation) return;
+      // A placed group is normally in main, but a historical one lives in the
+      // nested "Previous observations" collection; open the way to it first.
+      const collection = collectionByGroup.get(groupId);
+      let settle = 0;
+      if (collection === "workload" || collection === "earlier") {
+        setWorkloadOpen(true);
+        settle = investigationDisclosureSettleDelay(prefersReducedMotion());
+      }
+      if (collection === "earlier") setEarlierOpen(true);
       onGroupOpenChange(groupId, true);
       setCaseReveal({ sourceId: observation.source.id, requestId: Date.now() });
-      window.requestAnimationFrame(() =>
+      window.setTimeout(() => {
         window.requestAnimationFrame(() => {
           const element = document.getElementById(groupId);
           element?.scrollIntoView({
@@ -425,10 +452,10 @@ export function InvestigationEvidencePane({
             behavior: prefersReducedMotion() ? "auto" : "smooth",
           });
           element?.focus({ preventScroll: true });
-        }),
-      );
+        });
+      }, settle);
     },
-    [onGroupOpenChange],
+    [onGroupOpenChange, collectionByGroup],
   );
   const revealCollection = revealRequest
     ? investigationEvidenceRevealCollection(
@@ -693,14 +720,14 @@ function RuledOutBlock({
         </span>
       </h3>
       <ul className="mt-1.5 space-y-1.5">
-        {entries.map((entry) => {
+        {entries.map((entry, position) => {
           const observation = entry.item.observation!;
           return (
             <li
-              key={`${entry.item.index}-${entry.hypothesis}`}
+              key={position}
               className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs"
             >
-              <span className="min-w-0 text-theme-text-primary [overflow-wrap:anywhere]">
+              <span className="min-w-0 text-theme-text-secondary [overflow-wrap:anywhere]">
                 {entry.hypothesis}
               </span>
               <button
@@ -1161,17 +1188,26 @@ function CoverageGroupRow({
 
 function previousDifferentObservations(
   group: InvestigationEvidenceGroup,
-  pinnedOrders: ReadonlySet<number>,
+  citedOrder?: number,
+  boundOrders: ReadonlySet<number> = new Set(),
 ) {
   const seen = new Set([evidenceDisplaySnapshot(group.latest)]);
+  const pinned = (observation: InvestigationEvidenceObservation) =>
+    observation.source.order === citedOrder ||
+    boundOrders.has(observation.source.order);
   return [...group.observations].reverse().filter((observation) => {
-    // A pinned observation (cited for the root cause, or bound to an agent
-    // item) wins over an unpinned twin with the same display content.
+    if (observation === group.latest) return false;
+    // An observation bound to an agent item always keeps its own row: display
+    // equivalence is a folding rule for unpinned rechecks, never a reason to
+    // move a claim onto different content.
+    if (boundOrders.has(observation.source.order)) return true;
+    // A pinned observation wins over an unpinned twin with the same display
+    // content.
     if (
-      !pinnedOrders.has(observation.source.order) &&
+      !pinned(observation) &&
       group.observations.some(
         (other) =>
-          pinnedOrders.has(other.source.order) &&
+          pinned(other) &&
           evidenceDisplaySnapshot(other) ===
             evidenceDisplaySnapshot(observation),
       )
@@ -1251,10 +1287,8 @@ function EvidenceCard({
   const cardRoles = [...new Set(cardItems.map((item) => item.role))];
   const previousObservations = previousDifferentObservations(
     group,
-    new Set([
-      ...(citedOrder === undefined ? [] : [citedOrder]),
-      ...revisionItems.map((item) => item.observation!.source.order),
-    ]),
+    citedOrder,
+    new Set(revisionItems.map((item) => item.observation!.source.order)),
   );
   const meaningfulHistory = previousObservations.length > 0;
   const citedObservation = group.observations.find(
@@ -3284,19 +3318,22 @@ function RevisionHistory({
                 >
                   <span className="mt-0.5 shrink-0 text-theme-text-tertiary">
                     <span className="font-medium text-theme-text-secondary">
-                      {observation.source.order === citedOrder ||
-                      rowItems.length > 0
+                      {observation.source.order === citedOrder
                         ? "Used for assessment"
                         : phaseLabel(observation.source.phase)}
                     </span>
                   </span>
                   <div className="min-w-0 flex-1 space-y-1 text-theme-text-secondary">
-                    <p className="flex flex-wrap items-center gap-1.5">
-                      <span>{observation.summary || observation.title}</span>
-                      {rowRoles.map((role) => (
-                        <AgentRoleChip key={role} role={role} />
-                      ))}
-                    </p>
+                    {rowRoles.length > 0 ? (
+                      <p className="flex flex-wrap items-center gap-1.5">
+                        <span>{observation.summary || observation.title}</span>
+                        {rowRoles.map((role) => (
+                          <AgentRoleChip key={role} role={role} />
+                        ))}
+                      </p>
+                    ) : (
+                      <p>{observation.summary || observation.title}</p>
+                    )}
                     {rowItems
                       .filter((item) => item.claim)
                       .map((item) => (

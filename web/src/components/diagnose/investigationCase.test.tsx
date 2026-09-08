@@ -330,11 +330,12 @@ describe("agent case placement (D-1, D-1b)", () => {
     const history = card.slice(card.indexOf("Previous observations"));
     expect(history).toContain("At first read no replica was ready.");
     expect(history).toContain(">Cause<");
-    expect(history).toContain("Used for assessment");
+    expect(history).toContain(">Initial<");
+    expect(history).not.toContain("Used for assessment");
     expect(html).toContain("(earlier observation)");
   });
 
-  it("keeps an identical earlier read on the card because the fact is unchanged", () => {
+  it("keeps an identical earlier read on its own revision row, never folded into the card", () => {
     const first = evidenceRef("a", "c");
     const twice = project(
       tool("read-1", "get_resource", deployment, { evidenceRef: first }),
@@ -345,7 +346,112 @@ describe("agent case placement (D-1, D-1b)", () => {
       { evidence: [linked(first, "context", "Same both times.")] },
       0,
     );
-    expect(resolved.items[0].placement).toBe("card");
+    expect(resolved.items[0].placement).toBe("revision");
+    const html = render(twice, resolved);
+    expect(html).toContain("Previous observations · 1");
+    expect(html).toContain("Same both times.");
+    expect(html).not.toContain("Used for assessment");
+  });
+
+  it("keeps every pinned duplicate read as its own row with its own claim", () => {
+    const first = evidenceRef("a", "c");
+    const second = evidenceRef("a", "d");
+    const reads = project(
+      tool("read-1", "get_resource", deployment, { evidenceRef: first }),
+      tool("read-2", "get_resource", deployment, { evidenceRef: second }),
+      tool("read-3", "get_resource", {
+        ...deployment,
+        status: { readyReplicas: 1, replicas: 1 },
+      }),
+    );
+    const resolved = resolveInvestigationCase(
+      reads,
+      {
+        evidence: [
+          linked(first, "symptom", "First read: nothing ready."),
+          linked(second, "symptom", "Second read: still nothing ready."),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items.map((item) => item.placement)).toEqual([
+      "revision",
+      "revision",
+    ]);
+    const html = render(reads, resolved);
+    expect(html).toContain("Previous observations · 2");
+    expect(html).toContain("First read: nothing ready.");
+    expect(html).toContain("Second read: still nothing ready.");
+  });
+
+  it("requires every discriminator both sides state to agree", () => {
+    const cases: Array<[DiagnosisEvidenceItem["subject"], string]> = [
+      [{ kind: "Deployment", group: "apps", name: "api" }, "card"],
+      [{ kind: "Deployment", group: "", name: "api" }, "source"],
+      [{ kind: "Deployment", group: "extensions", name: "api" }, "source"],
+      [{ kind: "Deployment", namespace: "shop", name: "api" }, "card"],
+      [{ kind: "Deployment", namespace: "other", name: "api" }, "source"],
+      [{ kind: "Deployment", name: "nope" }, "source"],
+    ];
+    const single = project(
+      tool("read", "get_resource", deployment, { evidenceRef: ref }),
+    );
+    for (const [subject, placement] of cases) {
+      const resolved = resolveInvestigationCase(
+        single,
+        { evidence: [linked(ref, "context", "c", subject)] },
+        0,
+      );
+      expect([subject, resolved.items[0].placement]).toEqual([
+        subject,
+        placement,
+      ]);
+    }
+    // A core Service must not accept a Knative Service subject.
+    const service = project(
+      tool(
+        "svc",
+        "get_resource",
+        {
+          apiVersion: "v1",
+          kind: "Service",
+          metadata: { namespace: "shop", name: "api" },
+        },
+        { evidenceRef: ref },
+      ),
+    );
+    expect(
+      resolveInvestigationCase(
+        service,
+        {
+          evidence: [
+            linked(ref, "cause", "knative", {
+              kind: "Service",
+              group: "serving.knative.dev",
+              namespace: "shop",
+              name: "api",
+            }),
+          ],
+        },
+        0,
+      ).items[0].placement,
+    ).toBe("source");
+    // Omitting the container on a multi-container pod is ambiguous.
+    expect(
+      resolveInvestigationCase(
+        projection,
+        {
+          evidence: [
+            linked(ref, "context", "which container?", {
+              kind: "Pod",
+              name: "api-abc",
+              stream: "current",
+            }),
+          ],
+        },
+        0,
+      ).items[0].placement,
+    ).toBe("source");
   });
 });
 
@@ -493,6 +599,57 @@ describe("agent case visibility and ordering (D-2, D-5)", () => {
     expect(html).toContain(">Less relevant<");
   });
 
+  it("promotes a broader row only when the agent's subject named it", () => {
+    const broadRef = evidenceRef("a", "f");
+    const projection = project(
+      tool(
+        "broad",
+        "issues",
+        {
+          issues: [
+            { ...criticalIssue, id: "db", name: "db", namespace: "other" },
+          ],
+          total: 1,
+          total_matched: 1,
+        },
+        {
+          summary: JSON.stringify({ namespace: "other" }),
+          evidenceRef: broadRef,
+        },
+      ),
+    );
+    const subjectless = resolveInvestigationCase(
+      projection,
+      { evidence: [linked(broadRef, "cause", "The one row in this query.")] },
+      0,
+    );
+    expect(subjectless.items[0].placement).toBe("card");
+    expect(
+      partitionInvestigationEvidence(projection.groups, undefined, subjectless)
+        .collectionByGroup.size,
+    ).toBe(0);
+    const named = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(broadRef, "cause", "db in other is the upstream failure.", {
+            kind: "Deployment",
+            namespace: "other",
+            name: "db",
+          }),
+        ],
+      },
+      0,
+    );
+    const partition = partitionInvestigationEvidence(
+      projection.groups,
+      undefined,
+      named,
+    );
+    expect(partition.main.map((group) => group.kind)).toEqual(["issue"]);
+    expect(render(projection, named)).toContain("other/db");
+  });
+
   it("selects placed groups of any role alongside legacy links", () => {
     const eventsRef = evidenceRef("a", "e");
     const projection = project(
@@ -610,6 +767,13 @@ describe("agent case robustness", () => {
         resolved,
       ).main.map((group) => group.id),
     );
+    const legacySources = renderToStaticMarkup(
+      <AssessmentSources resolution={resolution} onViewSource={onViewSource} />,
+    );
+    expect(legacySources).toContain(
+      '<span class="min-w-0 flex-1"><span class="font-medium">Diagnose</span>',
+    );
+    expect(legacySources).not.toContain("flex-wrap");
     expect(
       renderToStaticMarkup(
         <AssessmentSources
@@ -685,6 +849,24 @@ describe("agent case robustness", () => {
     expect(resolved.ruledOut.map((entry) => entry.hypothesis)).toEqual([
       "Kept",
     ]);
+    const duplicated = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(ref, "rules_out", "Once.", {
+            kind: "Deployment",
+            name: "api",
+            observation: "issue",
+          }),
+        ],
+        ruledOut: [
+          { hypothesis: "Twice", evidenceIndex: 0 },
+          { hypothesis: "Twice", evidenceIndex: 0 },
+        ],
+      },
+      1,
+    );
+    expect(duplicated.ruledOut).toHaveLength(1);
     const html = render(projection, resolved);
     expect(html).toContain('data-testid="investigation-ruled-out"');
     expect(html).toContain("Kept");
@@ -718,6 +900,40 @@ describe("agent case robustness", () => {
     expect(html).toContain(">Rules out<");
     expect(html).toContain("data-source-placed-claims");
     expect(render(projection, resolved)).not.toContain("points at DNS");
+  });
+
+  it("lists an earlier assessment's placed claims read-only with their observation", () => {
+    const projection = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+    );
+    const resolved = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(ref, "cause", "Was the cause back then.", {
+            kind: "Deployment",
+            name: "api",
+            observation: "issue",
+          }),
+        ],
+      },
+      0,
+    );
+    const current = renderToStaticMarkup(
+      <AssessmentSources
+        investigationCase={resolved}
+        onViewSource={onViewSource}
+      />,
+    );
+    expect(current).not.toContain("Was the cause back then.");
+    const earlier = renderToStaticMarkup(
+      <AssessmentSources
+        investigationCase={resolved}
+        readOnly
+        onViewSource={onViewSource}
+      />,
+    );
+    expect(earlier).toContain("CrashLoopBackOff: Was the cause back then.");
   });
 
   it("lists an unpinnable ruled-out hypothesis nowhere", () => {

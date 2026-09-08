@@ -2091,6 +2091,7 @@ export function InvestigationView({
                             <AssessmentSources
                               resolution={resolution}
                               investigationCase={earlierCase}
+                              readOnly
                               onViewSource={viewActivitySource}
                             />
                           ) : undefined;
