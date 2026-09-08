@@ -30,6 +30,7 @@ export function evidenceDisplaySnapshot(
         // These summaries can carry live state even when the raw object is cached.
         status: statusWithoutObservationTimes(context?.statusSummary),
         workload: context?.workloadSummary,
+        scalers: context?.scaledBy,
         issues: context?.issueSummary,
         gitOps: data.gitOpsDiagnosis,
         warnings: data.warnings.map(warningWithoutElapsedTime),

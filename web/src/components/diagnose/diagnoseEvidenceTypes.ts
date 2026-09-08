@@ -3,6 +3,8 @@
  * investigation projection. These deliberately exclude any presentation or
  * transport envelope so the live Diagnose UI is not coupled to another route.
  */
+import type { HPADiagnosisState } from "@skyhook-io/k8s-ui";
+
 export interface DiagnosisFilteredLogs {
   lines: string[] | null;
   totalLines: number;
@@ -53,6 +55,34 @@ export interface DiagnosisResourceRef {
   name: string;
 }
 
+/** The HPA diagnosis Radar computes for the scaler itself, attached to the workload it scales. */
+export interface DiagnosisHPASummary {
+  state: HPADiagnosisState;
+  summary: string;
+  target?: DiagnosisResourceRef;
+  bounds?: {
+    min: number;
+    max: number;
+    current: number;
+    desired: number;
+    observedGeneration?: number;
+    generation?: number;
+  };
+  metrics?: Array<{
+    type: string;
+    name: string;
+    current?: string;
+    target?: string;
+    status: string;
+  }>;
+  reasons?: Array<{ id: string; message: string; detail?: string }>;
+}
+
+export interface DiagnosisScalerRef extends DiagnosisResourceRef {
+  /** Present only for an HPA the caller may read; KEDA scalers carry the ref alone. */
+  hpaSummary?: DiagnosisHPASummary;
+}
+
 export interface DiagnosisResourceContext {
   tier: "basic" | "diagnostic";
   owner?: DiagnosisResourceRef;
@@ -71,7 +101,7 @@ export interface DiagnosisResourceContext {
     pvcs?: DiagnosisResourceRef[];
   };
   runsOn?: DiagnosisResourceRef;
-  scaledBy?: DiagnosisResourceRef[];
+  scaledBy?: DiagnosisScalerRef[];
   statusSummary?: {
     phase?: string;
     conditions?: Array<{

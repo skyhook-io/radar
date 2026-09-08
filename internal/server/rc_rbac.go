@@ -82,6 +82,12 @@ func lookupResourceName(kind, group string) string {
 	if g, r, ok := k8s.ClusterOnlyKindGVR(kind); ok && (group == "" || group == g) {
 		return r
 	}
+	// Builtin namespaced kinds resolve statically so the unknown-kind
+	// passthrough below never applies to them while discovery is cold or
+	// partial: the typed informers serve those objects regardless of discovery.
+	if g, r, ok := k8s.NamespacedBuiltinGVR(kind); ok && (group == "" || group == g) {
+		return r
+	}
 	if disc := k8s.GetResourceDiscovery(); disc != nil {
 		if ar, ok := disc.GetResourceWithGroup(kind, group); ok {
 			return ar.Name

@@ -3,8 +3,11 @@ import {
   defaultConditionTone,
   displayKind,
   englishPlural,
+  hpaStateLabel,
+  hpaStateLevel,
   kindToPlural,
   stripAnsi,
+  type HPADiagnosisState,
   type Issue,
   type IssueRecentChange,
   type Topology,
@@ -1470,11 +1473,16 @@ function resourceObservationSummary(
   if (gitOps?.sync) return `Sync ${gitOps.sync}`;
   if (gitOps?.suspended) return "Reconciliation suspended";
   const replicas = context?.workloadSummary?.replicas;
+  const adverseScaler = adverseScalerStates(context)[0];
   if (replicas?.desired !== undefined) {
     const desired = replicas.desired;
     const ready = replicas.ready ?? 0;
-    return `${ready}/${desired} replicas ready`;
+    const readiness = `${ready}/${desired} replicas ready`;
+    return adverseScaler
+      ? `${readiness} · HPA: ${hpaStateLabel(adverseScaler)}`
+      : readiness;
   }
+  if (adverseScaler) return `HPA: ${hpaStateLabel(adverseScaler)}`;
   if (context?.statusSummary?.phase) return context.statusSummary.phase;
   if (context?.issueSummary?.topReason) return context.issueSummary.topReason;
   return (
@@ -1482,6 +1490,22 @@ function resourceObservationSummary(
     warnings[0] ||
     resource.metadata.namespace
   );
+}
+
+// A scaler that cannot act (no metrics, cannot read the target) or is pinned
+// at its ceiling is a captured Radar fact about the workload, so it lifts the
+// card the way an adverse condition does. Ordinary scale-ups and scale-downs
+// are the autoscaler working and stay as detail.
+function adverseScalerStates(
+  context: InvestigationResourceContext | undefined,
+): HPADiagnosisState[] {
+  return (context?.scaledBy ?? []).flatMap((scaler) => {
+    const state = scaler.hpaSummary?.state;
+    if (!state) return [];
+    return hpaStateLevel(state) === "unhealthy" || state === "limited_max"
+      ? [state]
+      : [];
+  });
 }
 
 function addResourceObservation(
@@ -1521,7 +1545,11 @@ function addResourceObservation(
         gitOpsDiagnosis.operationPhase?.toLowerCase() ?? "",
       )),
   );
-  const hasAdverseState = replicaShortfall || adverseCondition || gitOpsAdverse;
+  const hasAdverseState =
+    replicaShortfall ||
+    adverseCondition ||
+    gitOpsAdverse ||
+    adverseScalerStates(context).length > 0;
   const intendedTier: InvestigationEvidenceTier =
     critical && !hasDetailedCriticalIssue
       ? "key"
