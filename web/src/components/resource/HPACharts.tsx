@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import { LineChart, Lock } from 'lucide-react'
+import { AlertBanner } from '@skyhook-io/k8s-ui'
 import { usePrometheusHPAMetrics, usePrometheusStatus, useAutoPromConnect, isForbiddenError, type PrometheusSeries } from '../../api/client'
 
 /**
@@ -54,15 +55,12 @@ export function HPACharts({ data }: { data: any }) {
           <LineChart className="w-4 h-4 text-theme-text-tertiary" />
           Activity (last 1h)
         </div>
-        <div className="flex items-start gap-2 text-xs text-theme-text-secondary">
-          <Lock className="w-3.5 h-3.5 mt-0.5 shrink-0 text-theme-text-tertiary" />
-          <div>
-            <div className="font-medium text-theme-text-primary">You don't have access to metrics for this resource</div>
-            <div className="mt-0.5 text-theme-text-tertiary">
-              Replica history is available to users who can read this HorizontalPodAutoscaler.
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="info"
+          icon={Lock}
+          title="You don't have access to metrics for this resource"
+          message="Replica history is available to users who can read this HorizontalPodAutoscaler."
+        />
       </section>
     )
   }

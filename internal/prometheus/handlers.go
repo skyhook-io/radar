@@ -497,7 +497,6 @@ func boundRawResult(result *prom.QueryResult, query string, isRange bool) RawQue
 	return resp
 }
 
-// HPAMetricsResponse is the response shape for an HPA's replica history.
 type HPAMetricsResponse struct {
 	Namespace string            `json:"namespace"`
 	Name      string            `json:"name"`
