@@ -1839,6 +1839,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'store', label: 'Store', width: 'w-36' },
+    { key: 'provider', label: 'Provider', width: 'w-40', tooltip: 'Backend the referenced store reads from. A dash means the store could not be read — it may not exist, or may be outside your access.' },
     { key: 'refreshInterval', label: 'Refresh', width: 'w-24', tooltip: 'How often the value is re-pulled from the provider. A zero interval means it is fetched once and not updated afterward.' },
     { key: 'lastSync', label: 'Last Sync', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -3270,6 +3271,10 @@ interface ResourcesViewData {
   onNavigate?: (path: string, options?: { replace?: boolean }) => void
   certExpiry?: Record<string, { expired?: boolean; daysLeft: number }>
   certExpiryError?: boolean
+  // Provider type per SecretStore, keyed 'ns/name' and 'name' for the
+  // cluster-scoped kind. An ExternalSecret names a store; only the store
+  // knows which backend it reads from.
+  storeProviders?: Record<string, string>
   /** Cluster Audit findings keyed by "namespace/name". Raw compatibility
    *  counts render danger as High and warning as Medium. */
   auditBadges?: Record<string, { danger: number; warning: number; messages?: AuditBadgeMessage[] }>
@@ -3330,6 +3335,10 @@ interface ResourcesViewProps {
   topNodeMetrics?: TopNodeMetrics[]
   certExpiry?: Record<string, { expired?: boolean; daysLeft: number }>
   certExpiryError?: boolean
+  // Provider type per SecretStore, keyed 'ns/name' and 'name' for the
+  // cluster-scoped kind. An ExternalSecret names a store; only the store
+  // knows which backend it reads from.
+  storeProviders?: Record<string, string>
   /** Cluster Audit findings keyed by "namespace/name". Raw compatibility
    *  counts render danger as High and warning as Medium. */
   auditBadges?: Record<string, { danger: number; warning: number; messages?: AuditBadgeMessage[] }>
@@ -3579,6 +3588,7 @@ export function ResourcesView({
   topNodeMetrics,
   certExpiry,
   certExpiryError,
+  storeProviders,
   auditBadges,
   pinned = [],
   togglePin = () => {},
@@ -6621,6 +6631,7 @@ export function ResourcesView({
                     isChecked={checkedResources.has(resourceKey)}
                     showCheckbox={isCheckboxMode}
                     majorityNodeMinorVersion={majorityNodeMinorVersion}
+                    storeProviders={storeProviders}
                     onRowClick={handleRowClick}
                     onRowMouseEnter={handleRowMouseEnter}
                     compareMode={compareMode}
@@ -6776,6 +6787,7 @@ interface ResourceRowCellsProps {
   isChecked?: boolean
   showCheckbox?: boolean
   majorityNodeMinorVersion?: string
+  storeProviders?: Record<string, string>
   // Row callbacks receive the resource so the parent can pass referentially
   // stable handlers — per-row closures would defeat React.memo and re-render
   // every visible row on each SSE-driven refetch.
@@ -6810,7 +6822,7 @@ function rowHighlightClass(
   return 'group-hover/row:bg-theme-surface/50'
 }
 
-const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, isChecked, showCheckbox, majorityNodeMinorVersion, onRowClick, onRowMouseEnter, compareMode, comparePickIndex = -1, rowHref, onRowCheckToggle }: ResourceRowCellsProps) {
+const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, isChecked, showCheckbox, majorityNodeMinorVersion, storeProviders, onRowClick, onRowMouseEnter, compareMode, comparePickIndex = -1, rowHref, onRowCheckToggle }: ResourceRowCellsProps) {
   const rowHighlight = rowHighlightClass(compareMode, comparePickIndex, isSelected, isHighlighted, isChecked)
   const pickedSide = comparePickIndex === 0 ? 'a' : comparePickIndex === 1 ? 'b' : null
   const onClick = onRowClick ? () => onRowClick(resource, !!isSelected) : undefined
@@ -6877,6 +6889,7 @@ const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, 
             group={group}
             column={col.key}
             majorityNodeMinorVersion={majorityNodeMinorVersion}
+            storeProviders={storeProviders}
             extraColumn={extraColumnsByKey?.get(col.key)}
             nameHref={col.key === 'name' ? rowHref : undefined}
           />
@@ -6920,6 +6933,7 @@ interface CellContentProps {
   column: string
   group?: string
   majorityNodeMinorVersion?: string
+  storeProviders?: Record<string, string>
   /** When provided, the parent has injected an ExtraColumn for this
    *  column key. Render via the extra's render() and short-circuit
    *  the built-in cell logic. */
@@ -6929,7 +6943,7 @@ interface CellContentProps {
   nameHref?: string
 }
 
-function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, extraColumn, nameHref }: CellContentProps) {
+function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, storeProviders, extraColumn, nameHref }: CellContentProps) {
   const { auditBadges } = useContext(ResourcesViewDataContext)
   // Parent-injected extra columns short-circuit the built-in switch.
   // Used by hosts that inject leading columns (e.g. a multi-cluster Cluster column).
@@ -7317,7 +7331,7 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <SbomReportCell resource={resource} column={column} />
     // External Secrets Operator
     case 'externalsecrets':
-      return <ExternalSecretCell resource={resource} column={column} />
+      return <ExternalSecretCell resource={resource} column={column} storeProviders={storeProviders} />
     case 'clusterexternalsecrets':
       return <ClusterExternalSecretCell resource={resource} column={column} />
     case 'secretstores':

@@ -235,6 +235,19 @@ export function getExternalSecretStore(resource: any): { name: string; kind: str
   }
 }
 
+/**
+ * Key for looking this ExternalSecret's store up in a provider map.
+ *
+ * A ClusterSecretStore is cluster-scoped and referenceable from any namespace,
+ * so it keys by name alone; a SecretStore only resolves within the
+ * ExternalSecret's own namespace.
+ */
+export function getExternalSecretStoreKey(resource: any): string {
+  const store = getExternalSecretStore(resource)
+  if (store.kind === 'ClusterSecretStore') return store.name
+  return `${resource?.metadata?.namespace ?? ''}/${store.name}`
+}
+
 export function getExternalSecretRefreshInterval(resource: any): string {
   return resource.spec?.refreshInterval || '-'
 }

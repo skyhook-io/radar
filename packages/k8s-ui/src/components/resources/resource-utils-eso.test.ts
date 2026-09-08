@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getSecretStoreProviderType, getSecretStoreProviderKey } from './resource-utils-eso'
+import { getSecretStoreProviderType, getSecretStoreProviderKey, getExternalSecretStoreKey } from './resource-utils-eso'
 
 // The provider label answers "which backend holds these secrets?", so it has to
 // track the upstream `spec.provider` field names rather than plausible ones.
@@ -52,5 +52,30 @@ describe('getSecretStoreProviderKey', () => {
       getSecretStoreProviderKey({ spec: { provider: { aws: { service } } } })
     expect(key('SecretsManager')).toBe('aws')
     expect(key('ParameterStore')).toBe('aws')
+  })
+})
+
+describe('getExternalSecretStoreKey', () => {
+  // A ClusterSecretStore is referenceable from any namespace, so keying it by
+  // namespace would miss every ExternalSecret outside the store's own.
+  it('keys a ClusterSecretStore by name alone', () => {
+    expect(getExternalSecretStoreKey({
+      metadata: { namespace: 'prod' },
+      spec: { secretStoreRef: { name: 'vault-global', kind: 'ClusterSecretStore' } },
+    })).toBe('vault-global')
+  })
+
+  it('scopes a SecretStore to the ExternalSecret namespace', () => {
+    expect(getExternalSecretStoreKey({
+      metadata: { namespace: 'prod' },
+      spec: { secretStoreRef: { name: 'aws', kind: 'SecretStore' } },
+    })).toBe('prod/aws')
+  })
+
+  it('treats an omitted kind as a SecretStore, as the CRD defaults it', () => {
+    expect(getExternalSecretStoreKey({
+      metadata: { namespace: 'prod' },
+      spec: { secretStoreRef: { name: 'aws' } },
+    })).toBe('prod/aws')
   })
 })

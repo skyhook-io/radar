@@ -1,13 +1,13 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, useCapabilities, useNamespaceCapabilities, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit } from '../../api/client'
+import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit } from '../../api/client'
 import { isBadgeWorthy } from '../../utils/auditBadges'
 import type { AuditBadgeMessage } from '@skyhook-io/k8s-ui'
 import { apiUrl, getAuthHeaders, getCredentialsMode, stripBasename } from '../../api/config'
 import { useAPIResources } from '../../api/apiResources'
 import { useConnection } from '../../context/ConnectionContext'
-import { initNavigationMap } from '@skyhook-io/k8s-ui'
+import { initNavigationMap, getSecretStoreProviderType } from '@skyhook-io/k8s-ui'
 import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import {
@@ -311,6 +311,27 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // Certificate expiry
   const { data: certExpiry, isError: certExpiryError } = useSecretCertExpiry()
 
+  // An ExternalSecret names a store; only the store says which backend it reads
+  // from. Two list calls per page beat one lookup per row, and the column shows
+  // nothing rather than guessing when a store is unreadable or absent.
+  const viewingExternalSecrets = selectedKind?.name === 'externalsecrets'
+  const { data: secretStores } = useResources<any>('secretstores', undefined, undefined, { enabled: viewingExternalSecrets })
+  const { data: clusterSecretStores } = useResources<any>('clustersecretstores', undefined, undefined, { enabled: viewingExternalSecrets })
+  const storeProviders = useMemo(() => {
+    if (!viewingExternalSecrets) return undefined
+    const map: Record<string, string> = {}
+    for (const store of secretStores ?? []) {
+      const ns = store?.metadata?.namespace
+      const name = store?.metadata?.name
+      if (ns && name) map[`${ns}/${name}`] = getSecretStoreProviderType(store)
+    }
+    for (const store of clusterSecretStores ?? []) {
+      const name = store?.metadata?.name
+      if (name) map[name] = getSecretStoreProviderType(store)
+    }
+    return map
+  }, [viewingExternalSecrets, secretStores, clusterSecretStores])
+
   // Pinned kinds
   const { pinned, togglePin, isPinned } = usePinnedKinds()
 
@@ -380,6 +401,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       topPodMetrics={topPodMetrics}
       topNodeMetrics={topNodeMetrics}
       certExpiry={certExpiry}
+      storeProviders={storeProviders}
       certExpiryError={certExpiryError}
       auditBadges={auditBadges}
       // Pinned kinds
