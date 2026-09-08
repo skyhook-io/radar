@@ -51,7 +51,7 @@ func (c *requestScopedChecker) CanRead(_ context.Context, group, kind, namespace
 		return v
 	}
 
-	resource := lookupResourceName(kind, group)
+	gvrGroup, resource := lookupResourceGVR(kind, group)
 	if resource == "" {
 		c.cache[key] = true
 		return true
@@ -61,7 +61,7 @@ func (c *requestScopedChecker) CanRead(_ context.Context, group, kind, namespace
 	if namespace == "" {
 		allowed = canReadClusterScopedKind(c.ctx, kind, group, "get")
 	} else {
-		allowed = canReadInNamespace(c.ctx, group, resource, namespace, "get")
+		allowed = canReadInNamespace(c.ctx, gvrGroup, resource, namespace, "get")
 	}
 	c.cache[key] = allowed
 	return allowed
@@ -70,25 +70,32 @@ func (c *requestScopedChecker) CanRead(_ context.Context, group, kind, namespace
 // Compile-time assertion that requestScopedChecker satisfies the contract.
 var _ resourcecontext.RefAccessChecker = (*requestScopedChecker)(nil)
 
-// lookupResourceName resolves a (kind, group) pair to the canonical plural
+// lookupResourceGVR resolves a (kind, group) pair to the canonical group and plural
 // resource name used by SubjectAccessReview. Tries the static cluster-only
 // catalogue first (covers Nodes / ClusterRoles / etc.), then discovery for
 // everything else including CRDs. Returns "" when neither path knows the
-// kind. Mirrors internal/server/rc_rbac.go's helper of the same name.
-func lookupResourceName(kind, group string) string {
+// kind. Mirrors internal/server/rc_rbac.go's helper of the same name; the
+// group comes back resolved for the same reason it does there.
+func lookupResourceGVR(kind, group string) (gvrGroup, resource string) {
 	if kind == "" {
-		return ""
+		return "", ""
 	}
-	if clusterScoped, _, resource := k8s.ClassifyKindScope(kind, group); clusterScoped {
-		return resource
+	if clusterScoped, g, r := k8s.ClassifyKindScope(kind, group); clusterScoped {
+		return g, r
 	}
 	if g, r, ok := k8s.ClusterOnlyKindGVR(kind); ok && (group == "" || group == g) {
-		return r
+		return g, r
+	}
+	// Builtin namespaced kinds resolve statically so the unknown-kind
+	// passthrough below never applies to them while discovery is cold or
+	// partial: the typed informers serve those objects regardless of discovery.
+	if g, r, ok := k8s.NamespacedBuiltinGVR(kind); ok && (group == "" || group == g) {
+		return g, r
 	}
 	if disc := k8s.GetResourceDiscovery(); disc != nil {
 		if ar, ok := disc.GetResourceWithGroup(kind, group); ok {
-			return ar.Name
+			return ar.Group, ar.Name
 		}
 	}
-	return ""
+	return "", ""
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { HPADiagnosisState } from "@skyhook-io/k8s-ui";
 import {
   evidenceDisplaySnapshot,
   groupEvidenceCoverage,
@@ -443,5 +444,35 @@ describe("coverage presentation", () => {
       ])[0].summary,
     ).toBe("No reliable coverage");
     expect(groupEvidenceCoverage([])).toEqual([]);
+  });
+});
+
+describe("evidenceDisplaySnapshot scaler diagnosis", () => {
+  const scaledBy = (state: HPADiagnosisState) => [
+    {
+      kind: "HorizontalPodAutoscaler",
+      namespace: "dev",
+      name: "api-hpa",
+      hpaSummary: {
+        state,
+        summary: "summary",
+        bounds: { min: 1, max: 5, current: 5, desired: 5 },
+      },
+    },
+  ];
+  const withScaler = (state: HPADiagnosisState): InvestigationEvidenceData => ({
+    type: "resource",
+    resource,
+    resourceContext: { tier: "basic", scaledBy: scaledBy(state) },
+    warnings: [],
+  });
+
+  it("treats a change in the HPA's state as a new observation", () => {
+    expect(
+      evidenceDisplaySnapshot(observation(withScaler("limited_max"))),
+    ).not.toBe(evidenceDisplaySnapshot(observation(withScaler("ok"))));
+    expect(
+      evidenceDisplaySnapshot(observation(withScaler("limited_max"))),
+    ).toBe(evidenceDisplaySnapshot(observation(withScaler("limited_max"))));
   });
 });

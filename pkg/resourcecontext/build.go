@@ -235,9 +235,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 			toContextRefs(selected),
 			"selectedBy", omitted)
 
-		rc.ScaledBy = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(rel.Scalers),
-			"scaledBy", omitted)
+		rc.ScaledBy = buildScaledBy(ctx, rel.Scalers, opts.Provider, opts.AccessChecker, omitted)
 	}
 
 	// 3. Pod-specific: RunsOn (Node) + Uses (ConfigMap/Secret/PVC/SA).
@@ -1200,6 +1198,48 @@ func buildCronJobSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 	}
 	out.ActiveJobs = filterRefs(ctx, ac, active, "cronJobSummary.activeJobs", omitted)
 	return out
+}
+
+// buildScaledBy gates the scaler refs first and only then looks up the HPA
+// object, so a scaler the caller cannot read never reaches the diagnosis and
+// nothing about it (state, bounds, metric names) can leak through the summary.
+func buildScaledBy(ctx context.Context, scalers []topology.ResourceRef, provider topology.ResourceProvider, ac RefAccessChecker, omitted *omittedTracker) []ScalerRef {
+	refs := filterRefs(ctx, ac, toContextRefs(scalers), "scaledBy", omitted)
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]ScalerRef, 0, len(refs))
+	var hpas []*autoscalingv2.HorizontalPodAutoscaler
+	hpasLoaded := false
+	for _, ref := range refs {
+		entry := ScalerRef{ContextRef: ref}
+		if isHPARef(ref) && provider != nil {
+			if !hpasLoaded {
+				hpas, _ = provider.HorizontalPodAutoscalers()
+				hpasLoaded = true
+			}
+			if hpa := findHPA(hpas, ref.Namespace, ref.Name); hpa != nil {
+				entry.HPASummary = buildHPASummary(hpa)
+			}
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// Topology refs carry the autoscaling group only when discovery resolved it;
+// without a dynamic provider the group is empty, as it is for core kinds.
+func isHPARef(ref ContextRef) bool {
+	return ref.Kind == "HorizontalPodAutoscaler" && (ref.Group == "" || ref.Group == "autoscaling")
+}
+
+func findHPA(hpas []*autoscalingv2.HorizontalPodAutoscaler, namespace, name string) *autoscalingv2.HorizontalPodAutoscaler {
+	for _, hpa := range hpas {
+		if hpa != nil && hpa.Namespace == namespace && hpa.Name == name {
+			return hpa
+		}
+	}
+	return nil
 }
 
 func buildHPASummary(obj runtime.Object) *HPASummary {

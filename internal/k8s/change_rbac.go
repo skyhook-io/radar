@@ -34,10 +34,10 @@ var namespacedBuiltinKinds = map[string]ClusterOnlyKindInfo{
 	"rolebinding":             {"rbac.authorization.k8s.io", "rolebindings"},
 }
 
-// namespacedBuiltinGVR returns the canonical (group, resource) for a well-known
+// NamespacedBuiltinGVR returns the canonical (group, resource) for a well-known
 // namespaced builtin kind. The bool is false for CRDs / unknown kinds (callers
 // fall through to discovery).
-func namespacedBuiltinGVR(kind string) (group, resource string, ok bool) {
+func NamespacedBuiltinGVR(kind string) (group, resource string, ok bool) {
 	info, exists := namespacedBuiltinKinds[strings.ToLower(kind)]
 	if !exists {
 		return "", "", false
@@ -76,7 +76,7 @@ func ResolveChangeGVR(kind, group string) (gvrGroup, gvrResource string, cluster
 	// Namespaced builtins resolve from the static catalogue — discovery-free and
 	// collision-guarded (a disagreeing group hint means a CRD collision → fall
 	// through to discovery for the real GVR).
-	if g, r, found := namespacedBuiltinGVR(kind); found && (group == "" || group == g) {
+	if g, r, found := NamespacedBuiltinGVR(kind); found && (group == "" || group == g) {
 		return g, r, false, true
 	}
 	disc := GetResourceDiscovery()

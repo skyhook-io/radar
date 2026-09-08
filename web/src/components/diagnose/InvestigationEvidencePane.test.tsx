@@ -2843,3 +2843,74 @@ describe("Track A evidence bodies and deep links", () => {
     expect(html).toMatch(/BackOff<span[^>]*>×4<\/span>/);
   });
 });
+
+describe("InvestigationEvidencePane scaled-by section", () => {
+  const scaledDeployment = (scaledBy: unknown) =>
+    tool("workload", "diagnose", {
+      resource: {
+        apiVersion: "apps/v1",
+        kind: "Deployment",
+        metadata: { namespace: "shop", name: "api" },
+      },
+      resourceContext: {
+        tier: "basic",
+        workloadSummary: { replicas: { desired: 5, ready: 5 } },
+        scaledBy,
+      },
+    });
+
+  it("shows the HPA's own diagnosis on the workload card", () => {
+    const html = render(
+      project(
+        scaledDeployment([
+          {
+            kind: "HorizontalPodAutoscaler",
+            namespace: "shop",
+            name: "api-hpa",
+            hpaSummary: {
+              state: "limited_max",
+              summary: "Wants 8 replicas but is capped at maxReplicas=5",
+              target: { kind: "Deployment", group: "apps", name: "api" },
+              bounds: { min: 1, max: 5, current: 5, desired: 5 },
+              reasons: [
+                {
+                  id: "limited_max",
+                  message: "ScalingLimited=True (TooManyReplicas)",
+                  detail: "cpu 95% of 70%",
+                },
+              ],
+            },
+          },
+        ]),
+      ),
+    );
+    expect(html).toContain("Scaled by");
+    expect(html).toContain("api-hpa");
+    expect(html).toContain("Maxed");
+    expect(html).toContain("Wants 8 replicas but is capped at maxReplicas=5");
+    expect(html).toContain("5/5 replicas · bounds 1-5");
+    expect(html).toContain("ScalingLimited=True (TooManyReplicas)");
+    expect(html).toContain("cpu 95% of 70%");
+  });
+
+  it("stays quiet for scalers Radar did not diagnose", () => {
+    const html = render(
+      project(
+        scaledDeployment([
+          {
+            kind: "ScaledObject",
+            group: "keda.sh",
+            namespace: "shop",
+            name: "api-scaler",
+          },
+          {
+            kind: "HorizontalPodAutoscaler",
+            namespace: "shop",
+            name: "api-hpa",
+          },
+        ]),
+      ),
+    );
+    expect(html).not.toContain("Scaled by");
+  });
+});

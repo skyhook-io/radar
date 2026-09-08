@@ -356,6 +356,12 @@ func TestHandleDiagnose_PodNotFound(t *testing.T) {
 func TestHandleDiagnose_DeploymentResolvesPods(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	// The stale-Secret FYI is attached only when the caller can read the
+	// ConfigMap and Secret the Pod references; builtin kinds resolve without
+	// discovery, so the grant has to be explicit rather than fall open.
+	perms := getPermCache().Get("admin", nil)
+	perms.SetCanI("get", "", "configmaps", "alpha", true)
+	perms.SetCanI("get", "", "secrets", "alpha", true)
 
 	result, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("deployment", "alpha", "cart"))
 	if err != nil {
