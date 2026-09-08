@@ -122,6 +122,7 @@ named by intent so a future retune moves exactly the right ones):
 | a neutral **attention/FYI** marker (cross-namespace, wildcard, default, immutable) | `tone="note"` | `<Badge tone="note">cross-namespace</Badge>` |
 | **local** categorical distinction (rw/ro, spot/on-demand, control-plane/worker) — hue has no global meaning, just "tell siblings apart" | `tone="accent1"`/`"accent2"`/`"accent3"` | `<Badge tone="accent1">rw</Badge>` |
 | a **structural** data fragment (port, path, host, weight, name, count) | `tone="structural"` | `<Badge tone="structural" size="sm">:8080</Badge>` |
+| words an **AI agent** attached to a Radar fact (evidence role chips: Cause, Symptom, Rules out) — muted accent, never a severity hue, so agent framing can't pass for a Radar finding | `tone="agent"` | `<Badge tone="agent" size="sm">Cause</Badge>` |
 | genuinely one-off (last resort) | `colorClass=` | `<Badge colorClass="…">Custom</Badge>` |
 
 ```tsx

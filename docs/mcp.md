@@ -209,6 +209,8 @@ One call combines cached Kubernetes resource state, historical events/changes, a
 
 These public MCP fields are available to consumers running the updated Radar server. The OSS local AI investigation additionally uses its own evidence ledger, citations, and Findings integration. Hosted/Cloud consumers need corresponding backend provenance and investigation integration; upgrading a frontend package alone does not establish parity.
 
+The local investigation's final JSON also carries the agent's case: `evidence` (up to 8 items of `ref`, `role`, one-sentence `claim`, optional `subject`) and `ruled_out` (up to 5 hypotheses pointing at an evidence item by index). The server binds each item's ref against the turn ledger exactly like `root_cause_evidence_refs`, drops a failing item on its own as `unlinked`, and emits server-authored `evidence` / `ruledOut` on the diagnosis for every assessment, healthy and inconclusive included. Findings uses roles only to order cards and to attach an "Agent" note; no role can hide, collapse, or recolor a card, and a claim that cannot be pinned to exactly one observation shows beside its source in Assessment details instead. A hosted backend that sends no `evidence` renders exactly as before.
+
 ## Available Tools
 
 ### Read Tools

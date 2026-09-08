@@ -52,11 +52,49 @@ export interface RootCauseEvidence {
   refs?: string[];
 }
 
+/** How the agent frames one cited Radar result. Roles order cards; they never hide one. */
+export type DiagnosisEvidenceRole =
+  "cause" | "symptom" | "context" | "demoted" | "rules_out";
+
+/**
+ * Which observation inside one tool result a claim is about. Agent text
+ * copied verbatim by the server; the UI resolves it against captured evidence
+ * and places the claim only on an exact, unique match.
+ */
+export interface DiagnosisEvidenceSubject {
+  group?: string;
+  kind: string;
+  namespace?: string;
+  name: string;
+  container?: string;
+  stream?: "current" | "previous";
+  /** Evidence kind (resource, logs, events, changes, metrics, …). */
+  observation?: string;
+}
+
+/** One server-bound item of the agent's case. Unlinked items are never rendered. */
+export interface DiagnosisEvidenceItem {
+  status: "linked" | "unlinked";
+  ref?: string;
+  role?: DiagnosisEvidenceRole;
+  claim?: string;
+  subject?: DiagnosisEvidenceSubject;
+}
+
+export interface DiagnosisRuledOut {
+  hypothesis: string;
+  /** Index into Diagnosis.evidence of the item whose result contradicted it. */
+  evidenceIndex: number;
+}
+
 export interface Diagnosis {
   healthy?: boolean;
   inconclusive?: boolean; // investigated but couldn't determine — distinct from healthy
   rootCause: string;
   rootCauseEvidence?: RootCauseEvidence;
+  /** The agent's case over Radar's evidence; absent from hosted backends and older runs. */
+  evidence?: DiagnosisEvidenceItem[];
+  ruledOut?: DiagnosisRuledOut[];
   report: string;
   remediation: string[];
   recommendedIndex?: number; // 1-based index into remediation of the step Apply performs
