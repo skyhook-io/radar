@@ -88,6 +88,7 @@ import {
   projectInvestigationEvidence,
   resolveInvestigationRootCauseEvidence,
 } from "./investigationEvidence";
+import { resolveInvestigationCase } from "./investigationCase";
 import {
   InvestigationEvidencePane,
   partitionInvestigationEvidence,
@@ -967,15 +968,29 @@ export function InvestigationView({
         : undefined,
     [currentAssessment, currentAssessmentIdx, projection],
   );
+  // The agent's case binds for every assessment, healthy and inconclusive
+  // included, so it is resolved independently of the root cause.
+  const investigationCase = useMemo(
+    () =>
+      currentAssessment?.diagnosis
+        ? resolveInvestigationCase(
+            projection,
+            currentAssessment.diagnosis,
+            currentAssessmentIdx,
+          )
+        : undefined,
+    [currentAssessment, currentAssessmentIdx, projection],
+  );
   const visibleEvidenceGroupIds = useMemo(
     () =>
       new Set(
         partitionInvestigationEvidence(
           projection.groups,
           rootCauseEvidenceResolution,
+          investigationCase,
         ).collectionByGroup.keys(),
       ),
-    [projection.groups, rootCauseEvidenceResolution],
+    [projection.groups, rootCauseEvidenceResolution, investigationCase],
   );
   const evidenceStepIdsByTurn = useMemo(
     () =>
@@ -1942,9 +1957,11 @@ export function InvestigationView({
                         }
                         diagnosis={currentAssessment.diagnosis}
                         assessmentSources={
-                          rootCauseEvidenceResolution?.links.length ? (
+                          rootCauseEvidenceResolution?.links.length ||
+                          investigationCase?.items.length ? (
                             <AssessmentSources
                               resolution={rootCauseEvidenceResolution}
+                              investigationCase={investigationCase}
                               onViewSource={viewActivitySource}
                             />
                           ) : undefined
@@ -2046,15 +2063,24 @@ export function InvestigationView({
                         diagnosis: turns[index].diagnosis!,
                         explanation: explanationFor(turns[index]),
                         sources: (() => {
+                          // Each earlier assessment owns its own items; they
+                          // render read-only here and never annotate cards.
                           const resolution =
                             resolveInvestigationRootCauseEvidence(
                               projection,
                               turns[index].diagnosis!.rootCauseEvidence,
                               index,
                             );
-                          return resolution.links.length ? (
+                          const earlierCase = resolveInvestigationCase(
+                            projection,
+                            turns[index].diagnosis,
+                            index,
+                          );
+                          return resolution.links.length ||
+                            earlierCase.items.length ? (
                             <AssessmentSources
                               resolution={resolution}
+                              investigationCase={earlierCase}
                               onViewSource={viewActivitySource}
                             />
                           ) : undefined;
@@ -2065,6 +2091,7 @@ export function InvestigationView({
                   <InvestigationEvidencePane
                     projection={projection}
                     rootCauseEvidence={rootCauseEvidenceResolution}
+                    investigationCase={investigationCase}
                     collecting={
                       explanationRequest?.status !== "running" &&
                       (requestPending ||

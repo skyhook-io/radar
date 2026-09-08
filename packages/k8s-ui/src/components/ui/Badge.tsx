@@ -23,7 +23,10 @@ export type BadgeSize = 'sm' | 'default'
 //   "tell these sibling options apart". The only place sharing is intended.
 // - structural: ports/paths/hosts/weights/names — neutral data fragments, not a
 //   status. Its own name so it can diverge from severity-neutral later.
-export type BadgeTone = 'note' | 'accent1' | 'accent2' | 'accent3' | 'structural'
+// - agent:    words an AI agent attached to a Radar fact (evidence roles such
+//   as "Cause" / "Rules out"). Muted brand accent on purpose: never a severity
+//   hue, so an agent's framing can never be mistaken for a Radar finding.
+export type BadgeTone = 'note' | 'accent1' | 'accent2' | 'accent3' | 'structural' | 'agent'
 
 interface BadgeProps {
   /** Severity-based coloring (status badges) */
@@ -231,6 +234,7 @@ const TONE: Record<BadgeTone, string> = {
   accent3:    'bg-teal-100 text-teal-800 border-teal-300 dark:bg-teal-950/50 dark:text-teal-400 dark:border-teal-700/40',
   // neutral data fragment (ports/paths/hosts/names)
   structural: 'bg-theme-elevated text-theme-text-secondary border-theme-border',
+  agent:      'bg-accent-muted text-accent-text border-accent/30',
 }
 
 // Structure classes

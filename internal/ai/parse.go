@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 var (
@@ -12,7 +13,23 @@ var (
 	evidenceRefRe   = regexp.MustCompile(`^ev_[a-z2-7]{26,128}_[a-z2-7]{26,128}$`)
 )
 
-const maxDiagnosisEvidenceRefs = 3
+const (
+	maxDiagnosisEvidenceRefs = 3
+	// Case caps are constants to revisit after real runs.
+	maxDiagnosisEvidenceItems  = 8
+	maxDiagnosisRuledOut       = 5
+	maxDiagnosisClaimChars     = 200
+	maxDiagnosisSubjectChars   = 253
+	maxDiagnosisHypothesisRune = 200
+)
+
+var evidenceRoles = map[EvidenceRole]struct{}{
+	EvidenceRoleCause:    {},
+	EvidenceRoleSymptom:  {},
+	EvidenceRoleContext:  {},
+	EvidenceRoleDemoted:  {},
+	EvidenceRoleRulesOut: {},
+}
 
 // diagnosisFromText assembles the Diagnosis from the CLI's final text. The
 // prompt asks for a trailing fenced json block {root_cause, remediation,
@@ -27,6 +44,8 @@ func diagnosisFromText(text string) Diagnosis {
 			Inconclusive      *bool           `json:"inconclusive"`
 			RootCause         string          `json:"root_cause"`
 			EvidenceRefs      json.RawMessage `json:"root_cause_evidence_refs"`
+			Evidence          json.RawMessage `json:"evidence"`
+			RuledOut          json.RawMessage `json:"ruled_out"`
 			Remediation       []string        `json:"remediation"`
 			RecommendedIndex  *int            `json:"recommended_index"`
 			RecommendedReason string          `json:"recommended_reason"`
@@ -41,6 +60,7 @@ func diagnosisFromText(text string) Diagnosis {
 			}
 			d.RootCause = parsed.RootCause
 			d.evidenceRequest = parseEvidenceReferenceRequest(parsed.EvidenceRefs)
+			d.caseRequest = parseCaseRequest(parsed.Evidence, parsed.RuledOut)
 			d.Remediation = parsed.Remediation
 			d.Confidence = parsed.Confidence
 			d.Report = strings.TrimSpace(jsonBlockRe.ReplaceAllString(text, ""))
@@ -97,4 +117,83 @@ func parseEvidenceReferenceRequest(raw json.RawMessage) evidenceReferenceRequest
 	}
 	request.refs = refs
 	return request
+}
+
+// parseCaseRequest reads the agent's evidence items and ruled-out hypotheses.
+// A malformed item is kept at its index as invalid so ruled_out indexes still
+// point where the agent meant; it never invalidates its siblings or the legacy
+// root_cause_evidence_refs. Over-cap arrays are cut, not rejected.
+func parseCaseRequest(evidenceRaw, ruledOutRaw json.RawMessage) caseRequest {
+	var request caseRequest
+	var rawItems []json.RawMessage
+	if len(evidenceRaw) > 0 && json.Unmarshal(evidenceRaw, &rawItems) == nil {
+		if len(rawItems) > maxDiagnosisEvidenceItems {
+			rawItems = rawItems[:maxDiagnosisEvidenceItems]
+		}
+		for _, raw := range rawItems {
+			request.items = append(request.items, parseCaseItem(raw))
+		}
+	}
+	var rawRuledOut []struct {
+		Hypothesis    string `json:"hypothesis"`
+		EvidenceIndex *int   `json:"evidence_index"`
+	}
+	if len(ruledOutRaw) > 0 && json.Unmarshal(ruledOutRaw, &rawRuledOut) == nil {
+		for _, entry := range rawRuledOut {
+			if len(request.ruledOut) == maxDiagnosisRuledOut {
+				break
+			}
+			hypothesis := strings.TrimSpace(entry.Hypothesis)
+			if hypothesis == "" || utf8.RuneCountInString(hypothesis) > maxDiagnosisHypothesisRune ||
+				entry.EvidenceIndex == nil || *entry.EvidenceIndex < 0 {
+				continue
+			}
+			request.ruledOut = append(request.ruledOut, DiagnosisRuledOut{
+				Hypothesis: hypothesis, EvidenceIndex: *entry.EvidenceIndex,
+			})
+		}
+	}
+	return request
+}
+
+func parseCaseItem(raw json.RawMessage) caseItemRequest {
+	var parsed struct {
+		Ref     string          `json:"ref"`
+		Role    string          `json:"role"`
+		Claim   string          `json:"claim"`
+		Subject json.RawMessage `json:"subject"`
+	}
+	if json.Unmarshal(raw, &parsed) != nil || !evidenceRefRe.MatchString(parsed.Ref) {
+		return caseItemRequest{}
+	}
+	role := EvidenceRole(strings.ToLower(strings.TrimSpace(parsed.Role)))
+	if _, known := evidenceRoles[role]; !known {
+		return caseItemRequest{}
+	}
+	claim := strings.TrimSpace(parsed.Claim)
+	if utf8.RuneCountInString(claim) > maxDiagnosisClaimChars {
+		return caseItemRequest{}
+	}
+	item := caseItemRequest{valid: true, ref: parsed.Ref, role: role, claim: claim}
+	if len(parsed.Subject) == 0 || string(parsed.Subject) == "null" {
+		return item
+	}
+	var subject DiagnosisEvidenceSubject
+	if json.Unmarshal(parsed.Subject, &subject) != nil {
+		return caseItemRequest{}
+	}
+	for _, field := range []string{
+		subject.Group, subject.Kind, subject.Namespace, subject.Name,
+		subject.Container, subject.Stream, subject.Observation,
+	} {
+		if utf8.RuneCountInString(field) > maxDiagnosisSubjectChars {
+			return caseItemRequest{}
+		}
+	}
+	if subject.Kind == "" || subject.Name == "" ||
+		(subject.Stream != "" && subject.Stream != "current" && subject.Stream != "previous") {
+		return caseItemRequest{}
+	}
+	item.subject = &subject
+	return item
 }
