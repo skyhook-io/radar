@@ -179,6 +179,8 @@ describe("metricsUnitForExpression", () => {
   it("drops the unit when a function counts or flags instead of measuring", () => {
     for (const query of [
       'count(container_memory_working_set_bytes{namespace="shop"})',
+      'count by (pod) (container_memory_working_set_bytes{namespace="shop"})',
+      "count without (container) (container_memory_working_set_bytes)",
       "count_over_time(container_memory_working_set_bytes[1h])",
       "absent(container_memory_working_set_bytes)",
       "changes(http_request_duration_seconds[10m])",
