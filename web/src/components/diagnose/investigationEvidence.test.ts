@@ -3167,7 +3167,7 @@ describe("query_prometheus evidence", () => {
       namespace: "shop",
       name: "api",
     });
-    expect(data.unit).toBe("");
+    expect(data.unit).toBe("bytes");
     expect(data.series).toEqual(rangeSeries);
     expect(investigationEvidenceSubjectRef(data)).toEqual(data.subject);
     expect(projection.coverage.projected).toBe(1);
@@ -3385,17 +3385,21 @@ describe("query_prometheus evidence", () => {
         },
         "broader",
       ],
-      ["other namespace", {
-        selectors: [
-          {
-            metric: "up",
-            matchers: [
-              { label: "namespace", op: "=", value: "other" },
-              { label: "pod", op: "=~", value: "api-.*" },
-            ],
-          },
-        ],
-      }, "broader"],
+      [
+        "other namespace",
+        {
+          selectors: [
+            {
+              metric: "up",
+              matchers: [
+                { label: "namespace", op: "=", value: "other" },
+                { label: "pod", op: "=~", value: "api-.*" },
+              ],
+            },
+          ],
+        },
+        "broader",
+      ],
       ["empty selectors", { selectors: [] }, "broader"],
       [
         "unknown selectors",
@@ -3414,12 +3418,16 @@ describe("query_prometheus evidence", () => {
           ? group.latest.data.subject
           : "missing",
         name,
-      ).toEqual(expected === "target" ? {
-        kind: "Deployment",
-        group: "apps",
-        namespace: "shop",
-        name: "api",
-      } : undefined);
+      ).toEqual(
+        expected === "target"
+          ? {
+              kind: "Deployment",
+              group: "apps",
+              namespace: "shop",
+              name: "api",
+            }
+          : undefined,
+      );
       expect(group?.latest.tier, name).toBe(
         expected === "broader" ? "context" : "supporting",
       );
@@ -3489,16 +3497,32 @@ describe("query_prometheus evidence", () => {
     ];
     const exactNs = { op: "=", value: "shop" };
     expect(
-      metricsScope(pod, selector(exactNs, { op: "=~", value: "api-7f6-abc-.*" }), false),
+      metricsScope(
+        pod,
+        selector(exactNs, { op: "=~", value: "api-7f6-abc-.*" }),
+        false,
+      ),
     ).toBe("producer-related");
     expect(
-      metricsScope(pod, selector(exactNs, { op: "=", value: "api-7f6-abc" }), false),
+      metricsScope(
+        pod,
+        selector(exactNs, { op: "=", value: "api-7f6-abc" }),
+        false,
+      ),
     ).toBe("target");
     expect(
-      metricsScope(pod, selector(exactNs, { op: "=~", value: "api-7f6-abc" }), false),
+      metricsScope(
+        pod,
+        selector(exactNs, { op: "=~", value: "api-7f6-abc" }),
+        false,
+      ),
     ).toBe("target");
     expect(
-      metricsScope(pod, selector(exactNs, { op: "=", value: "api-7f6-abc-extra" }), false),
+      metricsScope(
+        pod,
+        selector(exactNs, { op: "=", value: "api-7f6-abc-extra" }),
+        false,
+      ),
     ).toBe("producer-related");
     expect(
       metricsScope(
@@ -3510,14 +3534,20 @@ describe("query_prometheus evidence", () => {
     expect(
       metricsScope(
         target,
-        selector({ op: "=~", value: "shop|other" }, { op: "=~", value: "api-.*" }),
+        selector(
+          { op: "=~", value: "shop|other" },
+          { op: "=~", value: "api-.*" },
+        ),
         false,
       ),
     ).toBe("broader");
     expect(
       metricsScope(
         target,
-        selector({ op: "!=", value: "kube-system" }, { op: "=~", value: "api-.*" }),
+        selector(
+          { op: "!=", value: "kube-system" },
+          { op: "=~", value: "api-.*" },
+        ),
         false,
       ),
     ).toBe("broader");

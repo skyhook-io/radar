@@ -2235,7 +2235,8 @@ describe("InvestigationEvidencePane metrics cards", () => {
 
   it("promotes a cited broader chart into main with its expression as the axis label", () => {
     const ref = evidenceRef("a", "b");
-    const query = "sum(rate(container_cpu_usage_seconds_total[5m])) by (namespace)";
+    const query =
+      "sum(rate(container_cpu_usage_seconds_total[5m])) by (namespace)";
     const projection = project(
       tool("prom", "query_prometheus", rangeResult([], query), {
         evidenceRef: ref,
@@ -2306,7 +2307,9 @@ describe("InvestigationEvidencePane metrics cards", () => {
       "1 series has a single sample in this window, listed with its time:",
     );
     expect(html).toContain("container=init");
-    expect(html.match(/data-testid="investigation-metrics-sparse-series"/g)).toHaveLength(2);
+    expect(
+      html.match(/data-testid="investigation-metrics-sparse-series"/g),
+    ).toHaveLength(2);
     expect(html).toContain("api-7f6-abc");
   });
 
@@ -2391,7 +2394,13 @@ describe("InvestigationEvidencePane metrics cards", () => {
       tool("prom", "query_prometheus", rangeResult(targetSelectors)),
     );
     const onOpenResource = vi.fn();
-    const html = render(projection, false, undefined, undefined, onOpenResource);
+    const html = render(
+      projection,
+      false,
+      undefined,
+      undefined,
+      onOpenResource,
+    );
     expect(html).toContain('data-chart-annotation="change"');
     expect(html.match(/data-chart-annotation="change"/g)).toHaveLength(1);
     expect(html).toContain("ConfigMap api-config");

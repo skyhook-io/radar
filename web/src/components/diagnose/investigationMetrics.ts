@@ -9,24 +9,43 @@ import type {
   InvestigationMetricsSelector,
 } from "./investigationEvidence";
 
-const BARE_METRIC_EXPRESSION = /^([a-zA-Z_:][a-zA-Z0-9_:]*)\s*(\{[^{}]*\})?$/;
+function metricUnitSuffix(metric: string): "bytes" | "seconds" | undefined {
+  const base = metric.endsWith("_total")
+    ? metric.slice(0, -"_total".length)
+    : metric;
+  if (base.endsWith("_bytes")) return "bytes";
+  if (base.endsWith("_seconds")) return "seconds";
+  return undefined;
+}
 
 /**
- * A unit is only claimed for a single bare metric whose name states it. Any
- * function, arithmetic or aggregation changes what the value means (a rate of
- * bytes is bytes per second; a ratio is unitless), so the axis stays unitless.
+ * The unit is what every metric in the expression states through its name,
+ * as the producer's selector inventory lists them. Aggregations keep a unit;
+ * a rate turns bytes into bytes per second and seconds into a ratio; a
+ * division is a ratio; metrics that disagree, or say nothing, leave the axis
+ * unitless. Matcher values and string literals are ignored when looking for
+ * operators, so a label value containing "/" cannot demote the unit.
  */
 export function metricsUnitForExpression(
   query: string,
   selectors: readonly InvestigationMetricsSelector[],
 ): string {
-  const match = BARE_METRIC_EXPRESSION.exec(query.trim());
-  if (!match || selectors.length !== 1 || selectors[0].metric !== match[1]) {
-    return "";
+  if (selectors.length === 0) return "";
+  const units = new Set(
+    selectors.map((selector) => metricUnitSuffix(selector.metric)),
+  );
+  if (units.size !== 1) return "";
+  const [unit] = units;
+  if (!unit) return "";
+  const operators = query
+    .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')
+    .replace(/\{[^{}]*\}/g, "")
+    .replace(/\[[^\]]*\]/g, "");
+  if (operators.includes("/")) return "";
+  if (/\b(?:rate|irate|deriv)\s*\(/.test(operators)) {
+    return unit === "bytes" ? "bytes/s" : "";
   }
-  if (match[1].endsWith("_bytes")) return "bytes";
-  if (match[1].endsWith("_seconds")) return "seconds";
-  return "";
+  return unit;
 }
 
 export function metricsDomain(
@@ -122,7 +141,11 @@ function producerRelatives(
         case "crash":
           if (data.namespace) {
             for (const pod of data.crash.pods) {
-              relatives.push({ kind: "Pod", namespace: data.namespace, name: pod });
+              relatives.push({
+                kind: "Pod",
+                namespace: data.namespace,
+                name: pod,
+              });
             }
           }
           break;
