@@ -26,6 +26,7 @@ import type { Diagnosis } from "../../api/diagnose";
 import { AssessmentSources, ResultCard } from "./parts";
 import { investigationEvidenceCoverageLimited } from "./investigationState";
 import { groupEvidenceCoverage } from "./investigationEvidencePresentation";
+import { metricsChangeMarkers } from "./investigationMetrics";
 
 const onViewSource = vi.fn();
 const target = {
@@ -3089,6 +3090,188 @@ describe("InvestigationEvidencePane metrics cards", () => {
       "1 change recorded in this window is marked on the chart.",
     );
     expect(html).toContain("Open current Deployment shop/api in Radar");
+  });
+});
+
+describe("InvestigationEvidencePane diagnose vitals", () => {
+  const window = {
+    start: "2026-09-06T07:00:00Z",
+    end: "2026-09-06T08:00:00Z",
+    step: "1m2s",
+  };
+  const vitals = {
+    window,
+    pods: 1,
+    series: [
+      {
+        category: "cpu",
+        unit: "cores",
+        query:
+          "sum(rate(container_cpu_usage_seconds_total{container!='',namespace='shop',pod=~'^(api-abc)$'}[5m]))",
+        series: [
+          {
+            labels: {},
+            dataPoints: [
+              { timestamp: Date.parse(window.start) / 1000, value: 0.12 },
+              { timestamp: Date.parse(window.end) / 1000, value: 0.25 },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  it("keeps an uncited diagnose chart in the workload collection and marks the same-turn change on it", () => {
+    const projection = project(
+      tool("diag", "diagnose", {
+        resource: {
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          metadata: { namespace: "shop", name: "api" },
+        },
+        pods: 1,
+        recentChanges: [
+          {
+            kind: "Deployment",
+            apiVersion: "apps/v1",
+            namespace: "shop",
+            name: "api",
+            changeType: "update",
+            timestamp: "2026-09-06T07:30:00Z",
+          },
+          {
+            kind: "Deployment",
+            apiVersion: "apps/v1",
+            namespace: "shop",
+            name: "worker",
+            changeType: "update",
+            timestamp: "2026-09-06T07:40:00Z",
+          },
+        ],
+        metrics: vitals,
+      }),
+    );
+    const partition = partitionInvestigationEvidence(projection.groups);
+    expect(partition.main.map((group) => group.kind)).not.toContain("metrics");
+    expect(partition.workload.map((group) => group.kind)).toContain("metrics");
+    expect(partition.hiddenMetrics).toBe(0);
+    const onOpenResource = vi.fn();
+    const html = render(projection, false, undefined, undefined, onOpenResource);
+    expect(html).toContain("CPU usage · shop/api");
+    expect(html).toContain("1 pod · 60m window · 1m2s step");
+    expect(html).toContain("(cores)");
+    expect(html.match(/data-chart-annotation="change"/g)).toHaveLength(1);
+    expect(html).toContain("Deployment api");
+    expect(html).not.toContain("Deployment worker");
+    expect(html).toContain(
+      "1 change recorded in this window is marked on the chart.",
+    );
+    expect(html).toContain("Open current Deployment shop/api in Radar");
+  });
+
+  it("never marks the target's changes on a neighbour's chart", () => {
+    const projection = project(
+      tool("diag", "diagnose", {
+        resource: {
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          metadata: { namespace: "shop", name: "api" },
+        },
+        pods: 1,
+        logsCurrent: [
+          {
+            pod: "api-abc",
+            container: "api",
+            logs: {
+              lines: ["ERROR boom"],
+              totalLines: 1,
+              matchedLines: 1,
+              fallback: false,
+            },
+          },
+        ],
+        recentChanges: [
+          {
+            kind: "Pod",
+            apiVersion: "v1",
+            namespace: "shop",
+            name: "api-abc",
+            changeType: "update",
+            timestamp: "2026-09-06T07:30:00Z",
+          },
+        ],
+      }),
+      tool(
+        "diag-worker",
+        "diagnose",
+        {
+          resource: {
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: { namespace: "shop", name: "worker" },
+          },
+          pods: 1,
+          metrics: vitals,
+        },
+        { summary: JSON.stringify({ namespace: "shop", name: "worker" }) },
+      ),
+    );
+    const chart = projection.groups.find(
+      (group) =>
+        group.kind === "metrics" && group.latest.relevance === "broader",
+    );
+    expect(chart).toBeDefined();
+    expect(metricsChangeMarkers(projection.groups, chart!.latest)).toEqual([]);
+    const targetChart = project(
+      tool("diag", "diagnose", {
+        resource: {
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          metadata: { namespace: "shop", name: "api" },
+        },
+        pods: 1,
+        recentChanges: [
+          {
+            kind: "Deployment",
+            apiVersion: "apps/v1",
+            namespace: "shop",
+            name: "api",
+            changeType: "update",
+            timestamp: "2026-09-06T07:30:00Z",
+          },
+        ],
+        metrics: vitals,
+      }),
+    );
+    const target = targetChart.groups.find((group) => group.kind === "metrics");
+    expect(
+      metricsChangeMarkers(targetChart.groups, target!.latest),
+    ).toHaveLength(1);
+  });
+
+  it("shows a workload metrics limitation for a reported producer error", () => {
+    const projection = project(
+      tool("diag", "diagnose", {
+        resource: {
+          apiVersion: "apps/v1",
+          kind: "Deployment",
+          metadata: { namespace: "shop", name: "api" },
+        },
+        pods: 1,
+        metrics: {
+          window,
+          pods: 1,
+          series: [],
+          error: "metrics omitted: 3s budget exceeded before all queries answered",
+        },
+      }),
+    );
+    const html = render(projection);
+    expect(html).toContain("Workload metrics");
+    expect(html).toContain(
+      "metrics omitted: 3s budget exceeded before all queries answered",
+    );
+    expect(html).not.toContain("CPU usage");
   });
 });
 
