@@ -17,6 +17,7 @@ import {
   TIMESTAMP_FORMAT_LABELS,
 } from '../../utils/log-format'
 import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
+import { copyText } from '../../utils/clipboard'
 
 export type DownloadFormat = 'txt' | 'json' | 'csv'
 
@@ -117,28 +118,6 @@ interface LogGroup {
 }
 
 const TIP_DELAY = 150
-
-// navigator.clipboard only exists in secure contexts; Radar is often served
-// over plain http from a LAN address or jumpbox, so fall back to execCommand.
-function copyToClipboard(text: string): Promise<void> {
-  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text)
-  return new Promise((resolve, reject) => {
-    const ta = document.createElement('textarea')
-    ta.value = text
-    ta.style.position = 'fixed'
-    ta.style.opacity = '0'
-    document.body.appendChild(ta)
-    ta.select()
-    try {
-      if (document.execCommand('copy')) resolve()
-      else reject(new Error('copy command failed'))
-    } catch (err) {
-      reject(err)
-    } finally {
-      ta.remove()
-    }
-  })
-}
 
 export function LogCore({
   entries,
@@ -265,8 +244,10 @@ export function LogCore({
     return () => window.removeEventListener('click', handleClick)
   }, [showDownloadMenu])
 
-  // Copies the lines currently on screen (level filter + search filter applied),
-  // formatted as displayed, so "filter to errors → copy → paste into a chat" works.
+  // Copies the lines the current filters allow (level filter + search filter),
+  // with timestamps and pod attribution mirroring the display toggles. Content
+  // stays raw (full JSON, collapsed stack continuations, full pod names) — the
+  // paste target is a chat or an LLM, where raw beats screen-literal.
   const handleCopyVisible = useCallback(() => {
     setShowDownloadMenu(false)
     if (displayEntries.length === 0) {
@@ -280,10 +261,9 @@ export function LogCore({
       parts.push(stripAnsi(e.content))
       return parts.join(' ')
     }).join('\n')
-    copyToClipboard(text).then(() => {
-      showApiSuccess('Copied to clipboard', `${displayEntries.length} log line${displayEntries.length === 1 ? '' : 's'} copied.`)
-    }).catch(() => {
-      showApiError('Failed to copy logs', 'The browser blocked clipboard access.')
+    copyText(text).then(ok => {
+      if (ok) showApiSuccess('Copied to clipboard', `${displayEntries.length} log line${displayEntries.length === 1 ? '' : 's'} copied.`)
+      else showApiError('Failed to copy logs', 'The browser blocked clipboard access.')
     })
   }, [displayEntries, showTimestamps, tsFormat, showPodName])
 
@@ -706,7 +686,7 @@ export function LogCore({
 
         {/* Export: copy to clipboard + download */}
         <div className="relative flex items-center" ref={downloadMenuRef}>
-          <Tooltip content="Export logs" delay={TIP_DELAY} position="bottom" disabled={showDownloadMenu}>
+          <Tooltip content="Export logs" delay={TIP_DELAY} position="bottom" disabled={showDownloadMenu} preserveWrapperWhenDisabled>
             <button
               onClick={() => setShowDownloadMenu(prev => !prev)}
               className={iconBtnInactive}
@@ -869,7 +849,7 @@ export function LogCore({
           <Terminal className="w-8 h-8" />
           <span>{emptyMessage}</span>
           {emptyCommand && (
-            <button type="button" onClick={() => copyToClipboard(emptyCommand).catch(() => {})} className={`mt-2 inline-flex max-w-[80%] items-center gap-2 rounded border px-3 py-2 font-mono text-xs ${palette.border} ${palette.toolbarBg}`} title="Copy recovery command">
+            <button type="button" onClick={() => { void copyText(emptyCommand) }} className={`mt-2 inline-flex max-w-[80%] items-center gap-2 rounded border px-3 py-2 font-mono text-xs ${palette.border} ${palette.toolbarBg}`} title="Copy recovery command">
               <code className="truncate">{emptyCommand}</code>
               <Copy className="h-3.5 w-3.5 shrink-0" />
             </button>
@@ -935,7 +915,7 @@ export function LogCore({
           onClose={() => setShowClearConfirm(false)}
           onConfirm={() => { onClear(); setShowClearConfirm(false) }}
           title="Clear logs?"
-          message={`Removes the ${entries.length.toLocaleString()} loaded log line${entries.length === 1 ? '' : 's'} from this viewer. ${isStreaming ? 'The stream stays connected and new lines keep arriving.' : 'Refresh to load them again.'}`}
+          message={`Removes all loaded log lines from this viewer. ${isStreaming ? 'The stream stays connected and new lines keep arriving.' : 'Refresh to load them again.'}`}
           confirmLabel="Clear"
           variant="warning"
           showWarning={false}
@@ -1038,8 +1018,7 @@ function LogLine({
   }
 
   const handleCopy = () => {
-    const raw = stripAnsi(entry.content)
-    copyToClipboard(raw).catch(() => {})
+    void copyText(stripAnsi(entry.content))
   }
 
   return (
