@@ -1406,7 +1406,12 @@ function ResourceBody({ data }: { data: EvidenceDataOf<"resource"> }) {
           </div>
         </div>
       ) : null}
-      {scalers.length > 0 ? <ScaledBySection scalers={scalers} /> : null}
+      {scalers.length > 0 ? (
+        <ScaledBySection
+          scalers={scalers}
+          allScalers={data.resourceContext?.scaledBy ?? []}
+        />
+      ) : null}
       {data.warnings.length > 0 ? (
         <ul className="space-y-1 text-xs text-theme-text-secondary">
           {data.warnings.map((warning) => (
@@ -1432,7 +1437,23 @@ function diagnosedScalers(
   );
 }
 
-function ScaledBySection({ scalers }: { scalers: DiagnosedScaler[] }) {
+function ScaledBySection({
+  scalers,
+  allScalers,
+}: {
+  scalers: DiagnosedScaler[];
+  allScalers: DiagnosisScalerRef[];
+}) {
+  const { onOpenResource } = useContext(EvidenceNavigationContext);
+  // The ScaledObject is only a link when Radar listed it as a scaler too; a
+  // name read off the HPA's owner reference alone is not a resource we hold.
+  const listedScaler = (ref: DiagnosisResourceRef) =>
+    allScalers.some(
+      (scaler) =>
+        scaler.kind === ref.kind &&
+        scaler.name === ref.name &&
+        (scaler.namespace ?? "") === (ref.namespace ?? ""),
+    );
   return (
     <div>
       <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
@@ -1451,6 +1472,22 @@ function ScaledBySection({ scalers }: { scalers: DiagnosedScaler[] }) {
                 <span className="font-medium text-theme-text-primary">
                   {displayKind(scaler.kind)} {scaler.name}
                 </span>
+                {scaler.managedBy ? (
+                  <span className="text-theme-text-tertiary">
+                    managed by KEDA {displayKind(scaler.managedBy.kind)}{" "}
+                    <ResourceLink
+                      name={scaler.managedBy.name}
+                      kind={scaler.managedBy.kind}
+                      namespace={scaler.managedBy.namespace ?? ""}
+                      group={scaler.managedBy.group}
+                      onNavigate={
+                        onOpenResource && listedScaler(scaler.managedBy)
+                          ? (ref) => onOpenResource(ref)
+                          : undefined
+                      }
+                    />
+                  </span>
+                ) : null}
                 <span className="inline-flex items-center gap-1.5 text-theme-text-secondary">
                   <StatusDot
                     tone={mapHealthToTone(hpaStateLevel(summary.state))}

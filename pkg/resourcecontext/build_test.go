@@ -1824,3 +1824,49 @@ func TestBuild_Deployment_ScaledByKEDA_CarriesRefOnly(t *testing.T) {
 		t.Errorf("KEDA scaledBy entry should serialize exactly as before: %s", b)
 	}
 }
+
+func TestBuild_Deployment_ScaledByKEDAManagedHPA_NamesTheScaledObject(t *testing.T) {
+	deploy, topo, hpa := scaledByFixture(topology.KindHPA, "horizontalpodautoscaler/prod/keda-hpa-api")
+	hpa.Name = "keda-hpa-api"
+	hpa.OwnerReferences = []metav1.OwnerReference{{APIVersion: "keda.sh/v1alpha1", Kind: "ScaledObject", Name: "api"}}
+	rc := Build(context.Background(), deploy, Options{
+		Tier: TierBasic, AccessChecker: allowAllChecker{}, Topology: topo,
+		Provider: mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
+	})
+	if len(rc.ScaledBy) != 1 || rc.ScaledBy[0].ManagedBy == nil {
+		t.Fatalf("ScaledBy: got %+v want a managedBy pointer", rc.ScaledBy)
+	}
+	if got := *rc.ScaledBy[0].ManagedBy; got != (ContextRef{Kind: "ScaledObject", Group: "keda.sh", Namespace: "prod", Name: "api"}) {
+		t.Errorf("ManagedBy: got %+v", got)
+	}
+
+	hpa.OwnerReferences = nil
+	hpa.Labels = map[string]string{"scaledobject.keda.sh/name": "api"}
+	rc = Build(context.Background(), deploy, Options{
+		Tier: TierBasic, AccessChecker: allowAllChecker{}, Topology: topo,
+		Provider: mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
+	})
+	if rc.ScaledBy[0].ManagedBy == nil || rc.ScaledBy[0].ManagedBy.Name != "api" {
+		t.Errorf("label-only attribution: got %+v", rc.ScaledBy[0].ManagedBy)
+	}
+
+	rc = Build(context.Background(), deploy, Options{
+		Tier: TierBasic, AccessChecker: denyChecker{group: "keda.sh", kind: "ScaledObject", namespace: "prod"}, Topology: topo,
+		Provider: mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
+	})
+	if rc.ScaledBy[0].ManagedBy != nil {
+		t.Errorf("denied ScaledObject must not be named: %+v", rc.ScaledBy[0].ManagedBy)
+	}
+	var omittedManagedBy bool
+	for _, o := range rc.Omitted {
+		if o.Field == "scaledBy.managedBy" && o.Reason == OmittedRBACDenied {
+			omittedManagedBy = true
+		}
+	}
+	if !omittedManagedBy {
+		t.Errorf("Omitted: got %+v want scaledBy.managedBy rbac_denied", rc.Omitted)
+	}
+	if rc.ScaledBy[0].HPASummary == nil {
+		t.Errorf("the HPA's own diagnosis still belongs on the ref: %+v", rc.ScaledBy[0])
+	}
+}
