@@ -245,6 +245,23 @@ interface TopologyGraphProps {
   children?: ReactNode
 }
 
+// A pod group's children normally carry the health the server computed. Without
+// it, the phase is honest for every state except Running: a crash-looping pod
+// sits at Phase=Running with its container restarting, so that one case says
+// unknown rather than repeating the bug this fallback exists behind.
+export function phaseOnlyHealth(phase: string | undefined): HealthStatus {
+  switch (phase) {
+    case 'Failed':
+      return 'unhealthy'
+    case 'Pending':
+      return 'degraded'
+    case 'Succeeded':
+      return 'neutral'
+    default:
+      return 'unknown'
+  }
+}
+
 export function TopologyGraph({
   topology,
   viewMode,
@@ -430,7 +447,7 @@ export function TopologyGraph({
         // the kubelet's Waiting->Running oscillation, which the phase alone
         // hides — a crash-looping pod sits at Phase=Running. Deriving it here
         // again would rebuild that logic in a second place and get it wrong.
-        status: pod.status ?? 'unknown',
+        status: pod.status ?? phaseOnlyHealth(pod.phase),
         data: {
           ...podGroupNode.data,
           namespace: pod.namespace,
