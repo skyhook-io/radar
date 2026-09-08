@@ -251,14 +251,14 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 		return nil, nil, errNotConnected()
 	}
 
-	// Get the workload's label selector
-	selector, err := k8s.GetWorkloadSelector(cache, kind, input.Namespace, input.Name)
+	// The workload's own pods, by controller ownership: a label selector also
+	// matches a bare debug pod or, during a Rollout workloadRef migration,
+	// the referenced Deployment's pods, and their logs would then read as
+	// this workload's.
+	pods, err := k8s.WorkloadPods(cache, kind, input.Namespace, input.Name)
 	if err != nil {
 		return nil, nil, workloadSelectorMCPError(ctx, err, kind, input.Namespace, input.Name)
 	}
-
-	// Get pods matching the workload
-	pods := cache.GetPodsForWorkload(input.Namespace, selector)
 	if len(pods) == 0 {
 		empty := describeMCPWorkloadLogEmpty(ctx, kind, input.Namespace, input.Name)
 		response := map[string]any{
@@ -467,12 +467,8 @@ func schedulingBlockerWarnings(kind, namespace, name string) []string {
 	if cache == nil {
 		return nil
 	}
-	selector, err := k8s.GetWorkloadSelector(cache, kind, namespace, name)
-	if err != nil {
-		return nil
-	}
-	pods := cache.GetPodsForWorkload(namespace, selector)
-	if len(pods) == 0 {
+	pods, err := k8s.WorkloadPods(cache, kind, namespace, name)
+	if err != nil || len(pods) == 0 {
 		return nil
 	}
 

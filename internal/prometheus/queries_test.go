@@ -20,7 +20,7 @@ func TestMemoryQueriesDedupeScrapeJobsBeforeSumming(t *testing.T) {
 		},
 		{
 			name:  "workload",
-			query: prom.BuildQuery("StatefulSet", "dify-new", "dify-new-postgresql-primary", prom.CategoryMemory),
+			query: prom.BuildScopedQuery(prom.SelectPods("dify-new", []string{"dify-new-postgresql-primary-0"}), prom.CategoryMemory, prom.AggregatePerPod, true),
 			want:  "sum by (pod,namespace) (max by (pod,namespace,container)",
 		},
 		{

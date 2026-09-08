@@ -15,7 +15,9 @@ func TestTurnPrompt_MetricsNudgeOnlyOnReadOnlyTurnsWhenConnected(t *testing.T) {
 	initial := base
 	initial.Metrics = connected
 	if p := turnPrompt(initial); !strings.Contains(p, "Prometheus is connected at http://prometheus.monitoring:9090") ||
-		!strings.Contains(p, "`query_prometheus` range query") || !strings.HasSuffix(strings.TrimSpace(p), "cite it.") {
+		!strings.Contains(p, "`query_prometheus` range query") ||
+		!strings.Contains(p, "never a name prefix") ||
+		!strings.HasSuffix(strings.TrimSpace(p), "which also matches sibling workloads.") {
 		t.Fatalf("initial turn lacks the metrics nudge after the task prompt:\n%s", p)
 	}
 	if p := turnPrompt(initial); strings.Index(p, diagnosisJSONInstruction) > strings.Index(p, "Prometheus is connected") {

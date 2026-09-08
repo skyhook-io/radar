@@ -63,8 +63,15 @@ func setupFakeCacheWithPodFleet(t *testing.T, n int) {
 	t.Helper()
 	const ns = "alpha"
 	selector := map[string]string{"app": "fleet"}
+	isController := true
+	rsOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "fleet", Controller: &isController}
+	podOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "fleet-rs", Controller: &isController}
 	objs := []runtime.Object{
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
+		&appsv1.ReplicaSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "fleet-rs", Namespace: ns, Labels: selector, OwnerReferences: []metav1.OwnerReference{rsOwner}},
+			Spec:       appsv1.ReplicaSetSpec{Selector: &metav1.LabelSelector{MatchLabels: selector}},
+		},
 		&appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: "fleet", Namespace: ns},
 			Spec: appsv1.DeploymentSpec{
@@ -78,7 +85,7 @@ func setupFakeCacheWithPodFleet(t *testing.T, n int) {
 	}
 	for i := 0; i < n; i++ {
 		objs = append(objs, &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: fleetPodName(i), Namespace: ns, Labels: selector},
+			ObjectMeta: metav1.ObjectMeta{Name: fleetPodName(i), Namespace: ns, Labels: selector, OwnerReferences: []metav1.OwnerReference{podOwner}},
 			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "fleet"}}},
 			Status:     corev1.PodStatus{Phase: corev1.PodRunning},
 		})
@@ -562,5 +569,90 @@ func TestRoundSignificant(t *testing.T) {
 	}
 	if b, _ := json.Marshal(roundSignificant(123456789.123, 4)); string(b) != "123500000" {
 		t.Errorf("rounded value serializes as %s, want 123500000", b)
+	}
+}
+
+// setupFakeCacheWithOwnershipHistory installs the Deployment → ReplicaSet →
+// Pod chain the vitals resolve membership through.
+func TestHandleDiagnoseMetricsReportsPodCoverage(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	f := setupFakeProm(t)
+	f.rangeBodyFunc = metricsMatrixForRequest("1")
+	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseDeploymentRead(t, "admin")
+
+	// No kube-state-metrics ownership series: the charts cover the pods
+	// running now and say so.
+	got, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
+	if m == nil {
+		t.Fatal("diagnose omitted metrics")
+	}
+	if m.Coverage != prometheus.OwnerCoverageCurrentPods || m.ObservedPods != 0 {
+		t.Fatalf("coverage = %q observed = %d, want current_pods/0", m.Coverage, m.ObservedPods)
+	}
+	if m.Pods != 1 {
+		t.Fatalf("pods = %d, want the single owned pod", m.Pods)
+	}
+	for _, s := range m.Series {
+		if !strings.Contains(s.Query, `pod=~'^(cart-abc123)$'`) {
+			t.Errorf("%s query should name the owned pod set: %s", s.Category, s.Query)
+		}
+		if strings.Contains(s.Query, "cart-.*") {
+			t.Errorf("%s query uses a name prefix: %s", s.Category, s.Query)
+		}
+	}
+	var bundle struct {
+		PodNames          []string `json:"podNames"`
+		PodNamesTruncated bool     `json:"podNamesTruncated"`
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &bundle); err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.PodNames) != 1 || bundle.PodNames[0] != "cart-abc123" || bundle.PodNamesTruncated {
+		t.Fatalf("bundle podNames = %v truncated=%v, want the owned pod", bundle.PodNames, bundle.PodNamesTruncated)
+	}
+}
+
+func TestHandleDiagnoseMetricsJoinsOwnershipHistoryWhenKubeStateMetricsHasIt(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	f := setupFakeProm(t)
+	f.rangeBodyFunc = metricsMatrixForRequest("1")
+	// kube-state-metrics attributed three pods to the Deployment across the
+	// window, two of them already replaced.
+	f.queryBodyFunc = func(params url.Values) string {
+		if strings.Contains(params.Get("query"), "kube_pod_owner") {
+			return `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1700000000,"3"]}]}}`
+		}
+		return ""
+	}
+	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseDeploymentRead(t, "admin")
+
+	_, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
+	if m == nil {
+		t.Fatal("diagnose omitted metrics")
+	}
+	if m.Coverage != prometheus.OwnerCoverageKSMHistory || m.ObservedPods != 3 {
+		t.Fatalf("coverage = %q observed = %d, want ksm_history/3", m.Coverage, m.ObservedPods)
+	}
+	if m.Pods != 1 {
+		t.Fatalf("pods = %d, want the one pod running now", m.Pods)
+	}
+	for _, s := range m.Series {
+		if !strings.Contains(s.Query, "kube_replicaset_owner{namespace='alpha',owner_kind='Deployment',owner_name='cart'") ||
+			!strings.Contains(s.Query, "* on (namespace,pod) group_left()") {
+			t.Errorf("%s query should join through the ReplicaSet edge: %s", s.Category, s.Query)
+		}
+		if strings.Contains(s.Query, "cart-abc123") {
+			t.Errorf("%s query pinned the current pod instead of the owner: %s", s.Category, s.Query)
+		}
 	}
 }

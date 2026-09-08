@@ -282,6 +282,15 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 	}
 }
 
+// DiscoveryGeneration identifies the current connection configuration. It
+// moves on Reset, a manual URL change and a header change, so callers that
+// cache anything derived from the connected endpoint can key on it.
+func (c *Client) DiscoveryGeneration() uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.discoveryGen
+}
+
 // GetStatus returns the current Prometheus connection status.
 func (c *Client) GetStatus() prom.Status {
 	c.mu.RLock()

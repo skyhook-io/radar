@@ -18,7 +18,6 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -48,13 +47,6 @@ const (
 	ConfidenceLow    RightsizingConfidence = "low"
 	ConfidenceMedium RightsizingConfidence = "medium"
 	ConfidenceHigh   RightsizingConfidence = "high"
-)
-
-type OwnerCoverage string
-
-const (
-	OwnerCoverageKSMHistory  OwnerCoverage = "ksm_history"
-	OwnerCoverageCurrentPods OwnerCoverage = "current_pods"
 )
 
 type ObservedStatistic struct {
@@ -257,42 +249,23 @@ func loadRightsizingWorkload(kind, namespace, name string) (rightsizingWorkload,
 		hpaAvailable:  hpaAvailable,
 		scaledToZero:  scaledToZero,
 	}
-	if cache.Pods() == nil {
-		return workload, nil
-	}
-	pods, err := cache.Pods().Pods(namespace).List(labels.Everything())
+	pods, err := k8s.WorkloadPods(cache, kind, namespace, name)
 	if err != nil {
+		// Rightsizing deliberately ignores the denial: its recommendation
+		// comes from seven days of kube-state-metrics ownership, which does
+		// not need the pod list, and the current-pod fallback simply finds
+		// nothing. Nothing in the response distinguishes that from a workload
+		// with no pods, which is a gap worth closing when the response gains
+		// a field for it.
 		return workload, nil
 	}
 	for _, pod := range pods {
-		if !podOwnedByWorkload(cache, pod, kind, name) {
-			continue
-		}
 		workload.podNames = append(workload.podNames, pod.Name)
 		collectCurrentPodOOM(workload.currentPodOOM, pod.Status.ContainerStatuses)
 		collectCurrentPodOOM(workload.currentPodOOM, pod.Status.InitContainerStatuses)
 	}
 	sort.Strings(workload.podNames)
 	return workload, nil
-}
-
-func podOwnedByWorkload(cache *k8s.ResourceCache, pod *corev1.Pod, kind, name string) bool {
-	owner := metav1.GetControllerOf(pod)
-	if owner == nil {
-		return false
-	}
-	if strings.EqualFold(owner.Kind, kind) {
-		return owner.Name == name
-	}
-	if !strings.EqualFold(kind, "Deployment") || owner.Kind != "ReplicaSet" || cache.ReplicaSets() == nil {
-		return false
-	}
-	rs, err := cache.ReplicaSets().ReplicaSets(pod.Namespace).Get(owner.Name)
-	if err != nil {
-		return false
-	}
-	rsOwner := metav1.GetControllerOf(rs)
-	return rsOwner != nil && rsOwner.Kind == "Deployment" && rsOwner.Name == name
 }
 
 func collectCurrentPodOOM(dst map[string]bool, statuses []corev1.ContainerStatus) {

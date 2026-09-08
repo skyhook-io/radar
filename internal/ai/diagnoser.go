@@ -112,7 +112,7 @@ func metricsNudge(m MetricsAvailability) string {
 	if !m.Connected {
 		return ""
 	}
-	return fmt.Sprintf("Prometheus is connected at %s; for resource, restart, throttling or latency questions run one `query_prometheus` range query over the failure window and cite it.", promptSafeAddress(m.Address))
+	return fmt.Sprintf("Prometheus is connected at %s; for resource, restart, throttling or latency questions run one `query_prometheus` range query over the failure window and cite it. Scope pod-level series to the workload's own pods with the diagnose bundle's `podNames` as pod=~\"^(a|b)$\", or with the workload identity labels on kube-state-metrics series; never a name prefix like pod=~\"api-.*\", which also matches sibling workloads.", promptSafeAddress(m.Address))
 }
 
 // promptSafeAddress drops any credentials embedded in a configured URL: the

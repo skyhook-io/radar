@@ -3105,6 +3105,12 @@ export interface PrometheusResourceMetrics {
   result: PrometheusQueryResult;
   query?: string; // PromQL query (included when result is empty, for diagnostics)
   hint?: string; // Contextual hint when results are empty (e.g. cri-docker label issues)
+  // Workload kinds only: how the charted pods were established.
+  coverage?: "ksm_history" | "current_pods" | "none";
+  pods?: number;
+  podsTotal?: number;
+  observedPods?: number;
+  scopeError?: string;
 }
 
 export type PrometheusMetricCategory =
