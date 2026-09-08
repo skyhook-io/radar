@@ -53,6 +53,7 @@ import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
 import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
+import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
 import { routePath, apiUrl, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts, useSuppressBaseShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
@@ -1585,8 +1586,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     // Filter by namespace (client-side) and by visible kinds
     const nsSet = namespaces.length > 0 ? new Set(namespaces) : null
     const filteredNodes = displayedTopology.nodes.filter(node =>
-      effectiveKinds.has(node.kind) &&
-      (!nsSet || nsSet.has(node.data.namespace as string) || !(node.data.namespace as string))
+      effectiveKinds.has(node.kind) && isInNamespaceScope(node, nsSet)
     )
     const filteredNodeIds = new Set(filteredNodes.map(n => n.id))
 
@@ -1610,6 +1610,24 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       edges: filteredEdges,
     }
   }, [displayedTopology, visibleKinds, namespaces, topologyMode])
+
+  // Nodes for the filter sidebar: namespace-scoped, but NOT kind-filtered.
+  //
+  // The sidebar derives both its kind list and its visible/hidden footer counts
+  // from this prop, so it needs the full scoped set: handing it
+  // filteredTopology.nodes would drop every hidden kind out of the list instead
+  // of showing it with a count, and "hidden" would always read zero. It was
+  // previously given the raw topology.nodes, so the counts described the whole
+  // cluster rather than the namespaces on the canvas.
+  //
+  // Reads displayedTopology, not topology, so the counts freeze with the graph
+  // while paused. Nodes with no namespace are cluster-scoped (Node,
+  // PersistentVolume, Namespace, ...) and stay visible in every scope, matching
+  // the carve-out in filteredTopology above.
+  const filterSidebarNodes = useMemo(() => {
+    if (!displayedTopology) return []
+    return scopeNodesToNamespaces(displayedTopology.nodes, namespaces)
+  }, [displayedTopology, namespaces])
 
   // Cluster Audit findings, joined onto topology nodes by the audit key the
   // backend stamps on each node (data.auditKey). Only badge-worthy findings
@@ -2163,14 +2181,14 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               <>
                 {/* Filter sidebar */}
                 <TopologyFilterSidebar
-                  nodes={topology?.nodes || []}
+                  nodes={filterSidebarNodes}
                   visibleKinds={visibleKinds}
                   onToggleKind={handleToggleKind}
                   onShowAll={handleShowAllKinds}
                   onHideAll={handleHideAllKinds}
                   collapsed={filterSidebarCollapsed}
                   onToggleCollapse={() => setFilterSidebarCollapsed(prev => !prev)}
-                  hiddenKinds={topology?.hiddenKinds}
+                  hiddenKinds={displayedTopology?.hiddenKinds}
                   onEnableHiddenKind={(kind) => {
                     setVisibleKinds(prev => new Set(prev).add(kind as NodeKind))
                     console.log(`[topology] User requested to show hidden kind: ${kind}`)
