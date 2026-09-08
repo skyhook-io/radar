@@ -30,7 +30,7 @@ func TestBuildPodSetQueryReusesCategoryExpressions(t *testing.T) {
 	cases := map[MetricCategory]string{
 		CategoryCPU:      `sum(rate(container_cpu_usage_seconds_total{container!='',namespace='ns',pod=~'^(web-0)$'}[5m]))`,
 		CategoryMemory:   `sum(max by (pod,namespace,container) (container_memory_working_set_bytes{container!='',namespace='ns',pod=~'^(web-0)$'}))`,
-		CategoryRestarts: `sum(changes(kube_pod_container_status_restarts_total{namespace='ns',pod=~'^(web-0)$'}[1h]))`,
+		CategoryRestarts: `sum(round(increase(kube_pod_container_status_restarts_total{namespace='ns',pod=~'^(web-0)$'}[1h])))`,
 	}
 	for cat, want := range cases {
 		if got := BuildPodSetQuery("ns", pods, cat); got != want {
@@ -43,6 +43,16 @@ func TestBuildPodSetQueryReusesCategoryExpressions(t *testing.T) {
 	}
 	if BuildPodSetQueryNoContainerFilter("ns", pods, CategoryRestarts) != cases[CategoryRestarts] {
 		t.Error("restarts query should not change without the container filter")
+	}
+}
+
+func TestBuildPodSetQueryRestartsReadCounterIncrease(t *testing.T) {
+	q := BuildPodSetQuery("ns", []string{"web-0"}, CategoryRestarts)
+	if strings.Contains(q, "changes(") {
+		t.Fatalf("restarts query counts sample transitions, undercounting bursts between scrapes: %s", q)
+	}
+	if !strings.Contains(q, "round(increase(kube_pod_container_status_restarts_total") {
+		t.Fatalf("restarts query should read the rounded counter increase: %s", q)
 	}
 }
 
