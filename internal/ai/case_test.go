@@ -20,7 +20,7 @@ func TestDiagnosisFromText_ParsesCaseWithoutTouchingLegacyRefs(t *testing.T) {
 		`"evidence":[` +
 		`{"ref":"` + first + `","role":"cause","claim":"The image tag does not exist.","subject":{"kind":"Deployment","group":"apps","namespace":"shop","name":"api","observation":"resource"}},` +
 		`{"ref":"` + second + `","role":"Rules_Out","claim":"  Same host, same user, connects fine.  "},` +
-		`{"ref":"` + second + `","role":"symptom","claim":"","subject":{"kind":"Pod","name":"api-1","container":"app","stream":"previous"}}` +
+		`{"ref":"` + second + `","role":"symptom","claim":"The previous container exited on OOM.","subject":{"kind":"Pod","name":"api-1","container":"app","stream":"previous"}}` +
 		`],"ruled_out":[{"hypothesis":"Atlas account locked","evidence_index":1}]`)
 	d := diagnosisFromText(text)
 	if d.RootCause != "bad tag" || len(d.evidenceRequest.refs) != 1 || d.evidenceRequest.refs[0] != first {
@@ -104,6 +104,9 @@ func TestDiagnosisFromText_CaseCapsAndMalformedArrays(t *testing.T) {
 	if len(d.caseRequest.ruledOut) != maxDiagnosisRuledOut {
 		t.Fatalf("ruled out = %d, want cap %d", len(d.caseRequest.ruledOut), maxDiagnosisRuledOut)
 	}
+	if d.caseRequest.dropped != 3 {
+		t.Fatalf("dropped = %d, want the 3 items the cap cut", d.caseRequest.dropped)
+	}
 	for _, field := range []string{`null`, `"text"`, `{"ref":"` + ref + `"}`} {
 		d := diagnosisFromText(caseJSON(`"root_cause":"still","evidence":` + field + `,"ruled_out":` + field))
 		if d.RootCause != "still" || len(d.caseRequest.items) != 0 || len(d.caseRequest.ruledOut) != 0 {
@@ -113,6 +116,64 @@ func TestDiagnosisFromText_CaseCapsAndMalformedArrays(t *testing.T) {
 	missing := diagnosisFromText(caseJSON(`"root_cause":"old response"`))
 	if len(missing.caseRequest.items) != 0 || len(missing.caseRequest.ruledOut) != 0 {
 		t.Fatalf("omitted case = %+v", missing.caseRequest)
+	}
+}
+
+// The parser must reject what it cannot understand without inventing a
+// reading of it: no truncated claims, no unknown role mapped onto a known
+// one, and an empty claim treated as the non-answer it is. Only the marker
+// wrapper is unwrapped, because that text is Radar's own, quoted back.
+func TestDiagnosisFromText_CaseRejectsEmptyClaimAndUnwrapsMarkerRef(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
+	long := strings.Repeat("x", maxDiagnosisClaimChars+1)
+	d := diagnosisFromText(caseJSON(`"root_cause":"x","evidence":[` +
+		`{"ref":"` + ref + `","role":"cause","claim":""},` +
+		`{"ref":"` + ref + `","role":"cause","claim":"   "},` +
+		`{"ref":"[[radar:evidence-ref=` + ref + `]]","role":"cause","claim":"Pasted the whole marker."},` +
+		`{"ref":"` + ref + `","role":"cause","claim":"` + long + `"},` +
+		`{"ref":"` + ref + `","role":"verdict","claim":"An unknown role."}` +
+		`]`))
+	items := d.caseRequest.items
+	if len(items) != 5 {
+		t.Fatalf("items = %d, want 5 positions", len(items))
+	}
+	if items[0].valid || items[1].valid {
+		t.Errorf("an empty claim must be rejected: %+v %+v", items[0], items[1])
+	}
+	if !items[2].valid || items[2].ref != ref {
+		t.Errorf("a marker-wrapped ref must be unwrapped, got %+v", items[2])
+	}
+	if items[3].valid {
+		t.Errorf("an over-long claim must be dropped, not truncated: %+v", items[3])
+	}
+	if items[4].valid {
+		t.Errorf("an unknown role must be dropped, not mapped: %+v", items[4])
+	}
+}
+
+// Every entry the case loses is counted, whether it was rejected at parse
+// time, failed to bind, or was cut by the cap before it could get a slot.
+func TestBindCaseCountsUnlinkedEvidence(t *testing.T) {
+	scope := strings.Repeat("a", 26)
+	good := "ev_" + scope + "_" + strings.Repeat("b", 26)
+	foreign := "ev_" + strings.Repeat("z", 26) + "_" + strings.Repeat("d", 26)
+	events := []RunEvent{{Event: StreamEvent{Type: "turn"}}, evidenceStep(good, nil)}
+	got := bindCaseForTest(events, Diagnosis{RootCause: "x", caseRequest: caseRequest{
+		dropped: 3,
+		items: []caseItemRequest{
+			{valid: true, ref: good, role: EvidenceRoleCause, claim: "kept"},
+			{valid: false},
+			{valid: true, ref: foreign, role: EvidenceRoleCause, claim: "other scope"},
+		},
+	}}, scope)
+	if got.UnlinkedEvidence != 5 {
+		t.Fatalf("unlinked evidence = %d, want 3 cut by the cap plus 2 that failed", got.UnlinkedEvidence)
+	}
+	clean := bindCaseForTest(events, Diagnosis{RootCause: "x", caseRequest: caseRequest{
+		items: []caseItemRequest{{valid: true, ref: good, role: EvidenceRoleCause, claim: "kept"}},
+	}}, scope)
+	if clean.UnlinkedEvidence != 0 {
+		t.Fatalf("a fully linked case must report no loss, got %d", clean.UnlinkedEvidence)
 	}
 }
 

@@ -1,5 +1,6 @@
 // Pure presentation decisions over the durable transcript and evidence projection.
 // Keep React/DOM orchestration in InvestigationView; these rules have no UI runtime.
+import { evidenceKindIsAdverse } from "./investigationEvidenceKinds";
 import {
   DiagnoseError,
   type DiagnoseStreamEvent,
@@ -335,17 +336,6 @@ export function investigationEvidenceCoverageLimited(
   );
 }
 
-const HEALTH_CONFLICT_EVIDENCE_KINDS = new Set([
-  "issue",
-  "startup",
-  "crash",
-  "resource",
-  "logs",
-  "events",
-  "dns",
-  "network",
-]);
-
 /**
  * A model-authored all-clear must not overrule active adverse Radar evidence.
  * Context-only warnings (for example a Helm ownership advisory) and ordinary
@@ -372,8 +362,13 @@ export function investigationHealthConflictGroups<
       !group.historical &&
       group.latest.relevance !== "broader" &&
       (group.latest.tier === "key" || group.latest.tier === "supporting") &&
-      (group.latest.tone === "warning" || group.latest.tone === "error") &&
-      HEALTH_CONFLICT_EVIDENCE_KINDS.has(group.kind),
+      // Radar's adverse tones run warning → alert → error; "high" severity
+      // from the Go side lands on alert, so leaving it out silently excused
+      // every high-severity finding.
+      (group.latest.tone === "warning" ||
+        group.latest.tone === "alert" ||
+        group.latest.tone === "error") &&
+      evidenceKindIsAdverse(group.kind),
   );
 }
 
@@ -396,8 +391,10 @@ export function investigationHealthConflictExplainedBy(
   caseItems:
     | readonly {
         role: string;
+        claim?: string;
         placement: "card" | "revision" | "source";
         groupId?: string;
+        carried?: boolean;
       }[]
     | undefined,
 ): string[] | null {
@@ -407,7 +404,13 @@ export function investigationHealthConflictExplainedBy(
   for (const group of conflicting) {
     const explained = caseItems.some(
       (item) =>
-        item.placement !== "source" &&
+        // The note has to be on the card as it stands now and has to say
+        // something: a note on a superseded revision of the card, or an empty
+        // claim, leaves the reader nothing to read while quietly softening
+        // the banner. The caller passes the displayed assessment's own items,
+        // so a different turn's note cannot explain this verdict either.
+        item.placement === "card" &&
+        (item.claim ?? "").trim() !== "" &&
         item.groupId === group.id &&
         (item.role === "demoted" || item.role === "rules_out"),
     );

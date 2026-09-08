@@ -52,7 +52,14 @@ export interface RootCauseEvidence {
   refs?: string[];
 }
 
-/** How the agent frames one cited Radar result. Roles order cards; they never hide one. */
+/**
+ * How the agent frames one cited Radar result. Roles order cards; they never
+ * hide one.
+ *
+ * One half of a Go↔TS contract: `evidenceRoles` in internal/ai/parse.go and
+ * EVIDENCE_ROLES in components/diagnose/investigationCase.ts must list exactly
+ * these roles. Change all three together.
+ */
 export type DiagnosisEvidenceRole =
   "cause" | "symptom" | "context" | "demoted" | "rules_out";
 
@@ -94,6 +101,8 @@ export interface Diagnosis {
   rootCauseEvidence?: RootCauseEvidence;
   /** The agent's case over Radar's evidence; absent from hosted backends and older runs. */
   evidence?: DiagnosisEvidenceItem[];
+  /** How many of the agent's evidence entries never reached the UI, including ones cut before they got a slot in `evidence`. */
+  unlinkedEvidence?: number;
   ruledOut?: DiagnosisRuledOut[];
   report: string;
   remediation: string[];

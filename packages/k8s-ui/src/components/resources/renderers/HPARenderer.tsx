@@ -2,11 +2,11 @@ import type { ReactNode } from 'react'
 import { Activity, Cpu } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, ResourceLink, type ConditionTone } from '../../ui/drawer-components'
-import { Badge, type BadgeSeverity } from '../../ui/Badge'
+import { Badge } from '../../ui/Badge'
 import { kindToPlural } from '../../../utils/navigation'
 import { formatAge } from '../resource-utils'
-import { hpaStateLabel, hpaStateLevel } from '../resource-utils-hpa'
-import type { HPADiagnosis, HPADiagnosisState } from '../../../types'
+import { HPADiagnosisSummary } from '../HPADiagnosisSummary'
+import type { HPADiagnosis } from '../../../types'
 
 interface HPARendererProps {
   data: any
@@ -14,23 +14,6 @@ interface HPARendererProps {
   hpaDiagnosis?: HPADiagnosis
   /** Optional host-provided section rendered after Conditions — used to inject Prometheus-backed charts. */
   extraSections?: ReactNode
-}
-
-function hpaBadgeSeverity(state: HPADiagnosisState): BadgeSeverity {
-  switch (hpaStateLevel(state)) {
-    case 'healthy':
-      return 'success'
-    case 'unhealthy':
-      return 'error'
-    case 'degraded':
-      return 'warning'
-    case 'alert':
-      return 'alert'
-    case 'neutral':
-      return 'info'
-    default:
-      return 'neutral'
-  }
 }
 
 function hpaConditionTone(condition: any): ConditionTone | undefined {
@@ -50,14 +33,6 @@ function hpaConditionTone(condition: any): ConditionTone | undefined {
   return 'warning'
 }
 
-function formatReasonID(id: string): string {
-  return id.replace(/_/g, ' ')
-}
-
-function isReasonMessageRedundant(state: HPADiagnosisState, reason: NonNullable<HPADiagnosis['reasons']>[number]): boolean {
-  return reason.id === state
-}
-
 export function HPARenderer({ data, onNavigate, hpaDiagnosis, extraSections }: HPARendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
@@ -67,35 +42,7 @@ export function HPARenderer({ data, onNavigate, hpaDiagnosis, extraSections }: H
     <>
       {hpaDiagnosis && (
         <Section title="Diagnosis" icon={Activity}>
-          <div className="card-inner space-y-3">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div className="min-w-0">
-                <div className="text-sm font-medium text-theme-text-primary">{hpaDiagnosis.summary}</div>
-                <div className="mt-1 text-xs text-theme-text-secondary">
-                  {hpaDiagnosis.bounds.current}/{hpaDiagnosis.bounds.desired} replicas, bounds {hpaDiagnosis.bounds.min}-{hpaDiagnosis.bounds.max}
-                </div>
-              </div>
-              <Badge severity={hpaBadgeSeverity(hpaDiagnosis.state)}>{hpaStateLabel(hpaDiagnosis.state)}</Badge>
-            </div>
-            {hpaDiagnosis.reasons && hpaDiagnosis.reasons.length > 0 && (
-              <div className="space-y-2">
-                {hpaDiagnosis.reasons.map((reason) => (
-                  <div key={`${reason.id}-${reason.message}`} className="rounded border border-theme-border bg-theme-surface p-2">
-                    <div className="flex flex-wrap items-center gap-2 text-xs">
-                      <span className="font-medium text-theme-text-primary">Evidence</span>
-                      <span className="text-theme-text-tertiary">{formatReasonID(reason.id)}</span>
-                      {reason.conditionType && <span className="text-theme-text-tertiary">{reason.conditionType}</span>}
-                      {reason.conditionReason && <span className="text-theme-text-tertiary">{reason.conditionReason}</span>}
-                      {reason.detail && <span className="text-theme-text-tertiary">{reason.detail}</span>}
-                    </div>
-                    {!isReasonMessageRedundant(hpaDiagnosis.state, reason) && (
-                      <div className="mt-1 text-xs text-theme-text-secondary">{reason.message}</div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <HPADiagnosisSummary diagnosis={hpaDiagnosis} variant="detail" />
         </Section>
       )}
 

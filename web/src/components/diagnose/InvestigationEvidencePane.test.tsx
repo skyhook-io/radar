@@ -1749,7 +1749,7 @@ describe("InvestigationEvidencePane honest result states", () => {
 
     const html = render(projection);
     expect(html).toContain("More evidence about this workload");
-    expect(html).toContain("No matching warning events");
+    expect(html).toContain("No warning events");
     expect(html).not.toContain("What Radar did not find");
     expect(html).not.toContain(`${receipt!.id}-body`);
   });
@@ -1845,7 +1845,7 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(projection.coverage.checked).toBe(0);
     expect(projection.groups).toHaveLength(0);
     expect(html).not.toContain('id="investigation-checked-heading"');
-    expect(html).not.toContain("No matching warning events");
+    expect(html).not.toContain("No warning events");
     expect(html).toContain("Evidence coverage is incomplete");
   });
 
@@ -2357,9 +2357,7 @@ describe("InvestigationEvidencePane metrics cards", () => {
     expect(html).toContain(
       "1 series has a single sample in this window, listed with its time:",
     );
-    expect(html).toContain(
-      "1 series returned no finite values in this window: ",
-    );
+    expect(html).toContain("1 series had no usable samples in this window: ");
     expect(html).toContain("pod=api-7f6-abc, container=init");
     expect(html).not.toContain("2 series have a single sample");
   });
@@ -2497,7 +2495,7 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
       partition.workload
         .filter((group) => group.kind === "receipt")
         .map((group) => group.latest.title),
-    ).toEqual(["No classified workload issues", "No matching warning events"]);
+    ).toEqual(["No live issues for this resource", "No warning events"]);
     const onOpenResource = vi.fn();
     const html = render(
       projection,
@@ -3411,7 +3409,7 @@ describe("cited broader cards and coverage rows", () => {
       (group) => group.latest.data.type === "receipt",
     );
     expect(receipts.map((group) => group.latest.title)).toEqual([
-      "No events matched",
+      "No events in this window",
     ]);
     expect(receipts[0].latest.data).toMatchObject({
       type: "receipt",
@@ -3454,7 +3452,7 @@ describe("cited broader cards and coverage rows", () => {
     expect(projection.limitations[0].sources).toHaveLength(3);
     const html = render(projection);
     const message =
-      "Kubernetes events was narrowed to keep this investigation bounded. Additional matching evidence may exist.";
+      "Kubernetes events returned part of the matching results to keep this investigation fast. More may exist.";
     // Live region, strip summary, the group row's label and its text: never
     // a second identical detail row beneath it.
     expect(

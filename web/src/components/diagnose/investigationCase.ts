@@ -38,6 +38,14 @@ export interface InvestigationCaseItem {
   placement: InvestigationCasePlacement;
   groupId?: string;
   observation?: InvestigationEvidenceObservation;
+  /**
+   * Written by the assessment on screen and kept on its card while a
+   * follow-up answer drives the case. It substantiates the verdict the reader
+   * is looking at, so it still orders and promotes that card; it takes no
+   * part in the live turn's ruled-out list, and the explained-conflict check
+   * reads the assessment's own items rather than this merged set.
+   */
+  carried?: boolean;
 }
 
 export interface InvestigationCaseRuledOut {
@@ -52,34 +60,43 @@ export interface InvestigationCaseResolution {
 }
 
 /**
- * Notes the agent put on cards in earlier assessments stay on those cards
- * when a later turn takes over the pane's case, unless the later turn
- * addressed the same card; a follow-up about one chart must not strip the
- * initial assessment's reading from everything else. Ordering and the
- * ruled-out list follow the live turn alone, and source-placed notes stay
- * listed under their own assessment. `earlier` is newest first.
+ * When a follow-up answer takes over the pane's case, the notes the displayed
+ * assessment put on other cards stay on them: a follow-up about one chart must
+ * not strip the assessment's reading from everything else the reader is
+ * looking at.
+ *
+ * Only that one assessment's notes carry, and only onto cards the follow-up
+ * did not itself address. Turns before the displayed assessment are a
+ * different argument about a state that has since been re-read, and their
+ * notes stay in their own turn. Carried items keep the `carried` mark so a
+ * caller can tell an annotation from a claim the live turn made; the
+ * ruled-out list belongs to the live turn alone.
  */
 export function mergeInvestigationCases(
   live: InvestigationCaseResolution | undefined,
-  earlier: readonly (InvestigationCaseResolution | undefined)[],
+  displayedAssessment: InvestigationCaseResolution | undefined,
 ): InvestigationCaseResolution | undefined {
   const liveItems = live?.items ?? [];
   const covered = new Set(
     liveItems.flatMap((item) => (item.groupId ? [item.groupId] : [])),
   );
   const carried: InvestigationCaseItem[] = [];
-  for (const resolution of earlier) {
-    for (const item of resolution?.items ?? []) {
-      if (item.placement === "source" || !item.groupId) continue;
-      if (covered.has(item.groupId)) continue;
-      covered.add(item.groupId);
-      carried.push(item);
-    }
+  for (const item of displayedAssessment?.items ?? []) {
+    if (item.placement === "source" || !item.groupId) continue;
+    if (covered.has(item.groupId)) continue;
+    covered.add(item.groupId);
+    carried.push({ ...item, carried: true });
   }
   if (carried.length === 0) return live;
   return { items: [...liveItems, ...carried], ruledOut: live?.ruledOut ?? [] };
 }
 
+/**
+ * One half of a Go↔TS contract: `evidenceRoles` in internal/ai/parse.go and the
+ * DiagnosisEvidenceRole union in api/diagnose.ts must list exactly these roles.
+ * A role the parser accepts but this set omits is bound server-side and then
+ * silently dropped here. Change all three together.
+ */
 export const EVIDENCE_ROLES: ReadonlySet<string> =
   new Set<DiagnosisEvidenceRole>([
     "cause",

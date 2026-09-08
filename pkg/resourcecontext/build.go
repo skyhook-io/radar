@@ -1209,16 +1209,16 @@ func buildScaledBy(ctx context.Context, scalers []topology.ResourceRef, provider
 		return nil
 	}
 	out := make([]ScalerRef, 0, len(refs))
-	var hpas []*autoscalingv2.HorizontalPodAutoscaler
+	var hpas map[string]*autoscalingv2.HorizontalPodAutoscaler
 	hpasLoaded := false
 	for _, ref := range refs {
 		entry := ScalerRef{ContextRef: ref}
 		if isHPARef(ref) && provider != nil {
 			if !hpasLoaded {
-				hpas, _ = provider.HorizontalPodAutoscalers()
+				hpas = indexHPAs(provider)
 				hpasLoaded = true
 			}
-			if hpa := findHPA(hpas, ref.Namespace, ref.Name); hpa != nil {
+			if hpa := hpas[hpaKey(ref.Namespace, ref.Name)]; hpa != nil {
 				entry.HPASummary = buildHPASummary(hpa)
 				entry.ManagedBy = kedaScaledObjectRef(ctx, hpa, ac, omitted)
 			}
@@ -1259,13 +1259,28 @@ func kedaScaledObjectRef(ctx context.Context, hpa *autoscalingv2.HorizontalPodAu
 	return ref
 }
 
-func findHPA(hpas []*autoscalingv2.HorizontalPodAutoscaler, namespace, name string) *autoscalingv2.HorizontalPodAutoscaler {
-	for _, hpa := range hpas {
-		if hpa != nil && hpa.Namespace == namespace && hpa.Name == name {
-			return hpa
+// indexHPAs keys the provider's HPAs so each scaler ref is one map lookup.
+// A workload can name several scalers and the cluster can hold thousands of
+// HPAs, so scanning the list per ref makes a context build quadratic in the
+// worst case. The list itself is the provider's only read API.
+func indexHPAs(provider topology.ResourceProvider) map[string]*autoscalingv2.HorizontalPodAutoscaler {
+	list, _ := provider.HorizontalPodAutoscalers()
+	byKey := make(map[string]*autoscalingv2.HorizontalPodAutoscaler, len(list))
+	for _, hpa := range list {
+		if hpa == nil {
+			continue
+		}
+		// First writer wins, matching the linear scan this replaced.
+		key := hpaKey(hpa.Namespace, hpa.Name)
+		if _, seen := byKey[key]; !seen {
+			byKey[key] = hpa
 		}
 	}
-	return nil
+	return byKey
+}
+
+func hpaKey(namespace, name string) string {
+	return namespace + "\x00" + name
 }
 
 func buildHPASummary(obj runtime.Object) *HPASummary {

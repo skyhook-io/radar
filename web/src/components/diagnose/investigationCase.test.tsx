@@ -1016,7 +1016,7 @@ describe("follow-up answers that cite evidence", () => {
   });
 });
 
-describe("carrying earlier assessments' card notes", () => {
+describe("carrying the displayed assessment's card notes", () => {
   const item = (
     index: number,
     groupId: string | undefined,
@@ -1032,7 +1032,7 @@ describe("carrying earlier assessments' card notes", () => {
       groupId,
     }) as unknown as InvestigationCaseItem;
 
-  it("keeps an earlier turn's note on a card the live turn did not address", () => {
+  it("keeps the displayed assessment's note on a card the live turn did not address", () => {
     const live = {
       items: [item(0, "chart", "card")],
       ruledOut: [],
@@ -1046,16 +1046,23 @@ describe("carrying earlier assessments' card notes", () => {
       ],
       ruledOut: [{ hypothesis: "x" }],
     } as unknown as InvestigationCaseResolution;
-    const merged = mergeInvestigationCases(live, [first]);
+    const merged = mergeInvestigationCases(live, first);
     expect(merged?.items.map((entry) => [entry.groupId, entry.role])).toEqual([
       ["chart", "context"],
       ["logs", "demoted"],
       ["deploy", "context"],
     ]);
+    // Carried notes annotate; they are marked so a caller can tell them from
+    // the live turn's own claims.
+    expect(merged?.items.map((entry) => entry.carried === true)).toEqual([
+      false,
+      true,
+      true,
+    ]);
     expect(merged?.ruledOut).toEqual([]);
   });
 
-  it("lets the newer earlier turn win a card and leaves a lone live case untouched", () => {
+  it("carries only the displayed assessment and leaves a lone live case untouched", () => {
     const live = {
       items: [],
       ruledOut: [],
@@ -1068,13 +1075,15 @@ describe("carrying earlier assessments' card notes", () => {
       items: [item(0, "logs", "card", "demoted"), item(1, "pod", "card")],
       ruledOut: [],
     } as unknown as InvestigationCaseResolution;
-    const merged = mergeInvestigationCases(live, [newer, older]);
+    // Only the assessment on screen carries; an older turn's argument is
+    // about a state that has since been re-read.
+    const merged = mergeInvestigationCases(live, newer);
     expect(merged?.items.map((entry) => [entry.groupId, entry.role])).toEqual([
       ["logs", "context"],
-      ["pod", "context"],
     ]);
-    expect(mergeInvestigationCases(live, [])).toBe(live);
-    expect(mergeInvestigationCases(undefined, [])).toBeUndefined();
+    expect(mergeInvestigationCases(live, older)?.items.length).toBe(2);
+    expect(mergeInvestigationCases(live, undefined)).toBe(live);
+    expect(mergeInvestigationCases(undefined, undefined)).toBeUndefined();
   });
 });
 
@@ -1352,5 +1361,63 @@ describe("agent case robustness", () => {
     );
     expect(resolved.ruledOut).toEqual([]);
     expect(render(projection, resolved)).not.toContain("DNS is broken");
+  });
+});
+
+describe("notes the agent wrote that could not be linked", () => {
+  it("says how many were lost rather than repairing them", () => {
+    const html = renderToStaticMarkup(
+      <AssessmentSources unlinkedEvidence={2} onViewSource={onViewSource} />,
+    );
+    expect(html).toContain(
+      "2 agent notes could not be linked to Radar results and are not shown.",
+    );
+    const one = renderToStaticMarkup(
+      <AssessmentSources unlinkedEvidence={1} onViewSource={onViewSource} />,
+    );
+    expect(one).toContain("1 agent note could not be linked");
+    // Nothing lost, nothing said.
+    expect(
+      renderToStaticMarkup(
+        <AssessmentSources unlinkedEvidence={0} onViewSource={onViewSource} />,
+      ),
+    ).toBe("");
+  });
+});
+
+describe("what a carried note may and may not do", () => {
+  it("keeps the displayed assessment's cards in the argument but not its ruled-out list", () => {
+    const item = (
+      index: number,
+      groupId: string,
+      role: "cause" | "context" | "demoted",
+    ) =>
+      ({
+        index,
+        role,
+        claim: `claim ${index}`,
+        source: { id: `s${index}` },
+        placement: "card",
+        groupId,
+      }) as unknown as InvestigationCaseItem;
+    const assessment = {
+      items: [item(0, "logs", "cause"), item(1, "secret", "demoted")],
+      ruledOut: [{ hypothesis: "a decryption failure" }],
+    } as unknown as InvestigationCaseResolution;
+    const followUp = {
+      items: [item(0, "chart", "context")],
+      ruledOut: [],
+    } as unknown as InvestigationCaseResolution;
+
+    const merged = mergeInvestigationCases(followUp, assessment);
+    // Every card the reader's assessment argued from is still in the case, so
+    // a follow-up about one chart does not empty the list behind it.
+    expect(merged?.items.map((entry) => entry.groupId)).toEqual([
+      "chart",
+      "logs",
+      "secret",
+    ]);
+    // The ruled-out block belongs to the turn that is speaking.
+    expect(merged?.ruledOut).toEqual([]);
   });
 });

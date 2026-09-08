@@ -310,7 +310,8 @@ describe("investigation evidence projection stability", () => {
       groupId: string,
       role: string,
       placement: "card" | "revision" | "source" = "card",
-    ) => ({ role, placement, groupId });
+      claim = "why it is not the cause",
+    ) => ({ role, placement, groupId, claim });
 
     expect(investigationHealthConflictExplainedBy(projection, undefined)).toBe(
       null,
@@ -332,10 +333,25 @@ describe("investigation evidence projection stability", () => {
         note("g2", "rules_out", "source"),
       ]),
     ).toBe(null);
+    // A note on a superseded revision of the card is not an explanation of
+    // the card as it now stands.
     expect(
       investigationHealthConflictExplainedBy(projection, [
         note("g1", "demoted"),
         note("g2", "rules_out", "revision"),
+      ]),
+    ).toBe(null);
+    // Nor is a note that says nothing.
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "demoted"),
+        note("g2", "rules_out", "card", "   "),
+      ]),
+    ).toBe(null);
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "demoted"),
+        note("g2", "rules_out"),
       ]),
     ).toEqual(["CrashLoopBackOff", "OOMKilled"]);
     expect(
@@ -829,5 +845,75 @@ describe("investigationLiveCaseTurnIndex", () => {
     expect(
       investigationLiveCaseTurnIndex([assessment, cited, assessment], 2),
     ).toBe(2);
+  });
+});
+
+describe("adverse evidence and the healthy-conflict banner", () => {
+  const group = (kind: string, tone: string) => ({
+    id: `${kind}-1`,
+    kind,
+    historical: false,
+    latest: { tier: "supporting" as const, relevance: "target" as const, tone },
+  });
+
+  it("counts every kind Radar can capture a live problem in", () => {
+    // The round that added alerts and Helm cards forgot this rule, so a
+    // firing alert naming the workload sat under a green banner.
+    for (const kind of [
+      "issue",
+      "startup",
+      "crash",
+      "resource",
+      "logs",
+      "events",
+      "dns",
+      "network",
+      "alerts",
+      "helm",
+    ]) {
+      expect(
+        investigationEvidenceConflictsWithHealthy({
+          groups: [group(kind, "error")],
+        }),
+        kind,
+      ).toBe(true);
+    }
+    // A change, a receipt, a chart or a permission grant describe the world,
+    // not a problem in it.
+    for (const kind of [
+      "changes",
+      "receipt",
+      "metrics",
+      "permissions",
+      "relationships",
+      "topology",
+      "inventory",
+    ]) {
+      expect(
+        investigationEvidenceConflictsWithHealthy({
+          groups: [group(kind, "error")],
+        }),
+        kind,
+      ).toBe(false);
+    }
+  });
+
+  it("counts the intermediate alert tone, which carries every high severity", () => {
+    for (const tone of ["warning", "alert", "error"]) {
+      expect(
+        investigationEvidenceConflictsWithHealthy({
+          groups: [group("issue", tone)],
+        }),
+        tone,
+      ).toBe(true);
+    }
+    for (const tone of ["neutral", "info", "success"]) {
+      expect(
+        investigationEvidenceConflictsWithHealthy({
+          groups: [group("issue", tone)],
+        }),
+        tone,
+      ).toBe(false);
+    }
   });
 });

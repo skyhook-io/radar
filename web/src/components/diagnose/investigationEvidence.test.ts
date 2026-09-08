@@ -859,10 +859,10 @@ describe("semantic diagnose evidence projection", () => {
     expect(limitationText).toContain("selected 2 of 5");
     expect(limitationText).toContain("includes 2 of 8 selected log lines");
     expect(limitationText).toContain("not the container's full log history");
-    expect(limitationText).toContain("Additional crash-cause");
+    expect(limitationText).toContain("part of the crash-cause candidates");
     expect(limitationText).toContain("received 1 of 3 event groups");
     expect(limitationText).toContain("rbac denied");
-    expect(limitationText).toContain("Referenced-by relationships");
+    expect(limitationText).toContain("referenced-by relationships");
     expect(limitationText).toContain("recent-change result limit");
     expect(result.coverage).toEqual({
       attempted: 1,
@@ -2849,7 +2849,7 @@ describe("honest zero and partial-result states", () => {
           group.latest.data.checked === "events",
       )?.latest,
     ).toMatchObject({
-      title: "No matching warning events",
+      title: "No warning events",
       data: {
         message: "The warning-event query completed and returned no groups.",
       },
@@ -3428,7 +3428,9 @@ describe("workload logs adapter", () => {
     expect(malformed.limitations[0].message).toContain(
       "couldn't summarize this investigation step",
     );
-    expect(malformed.limitations[2].message).toContain("3 resolved pods");
+    expect(malformed.limitations[2].message).toContain(
+      "Radar found 3 pods but got no logs from them",
+    );
   });
 });
 
@@ -3743,7 +3745,7 @@ describe("prometheus rules adapter", () => {
     expect(firing[0].latest).toMatchObject({
       tier: "checked",
       relevance: "target",
-      title: "No firing alert rules name this Deployment",
+      title: "No firing alerts matched this Deployment",
       summary: "Deployment shop/api",
       data: {
         type: "receipt",
@@ -4010,9 +4012,7 @@ describe("prometheus rules adapter", () => {
       ]),
     ).toHaveLength(0);
     expect(run([])).toHaveLength(1);
-    expect(run([])[0].latest.title).toBe(
-      "No firing alert rules name this Node",
-    );
+    expect(run([])[0].latest.title).toBe("No firing alerts matched this Node");
   });
 
   it("keeps recording rules off the card list and flags truncation and evaluation health", () => {
@@ -6099,13 +6099,61 @@ describe("live-run follow-ups", () => {
         group.latest.data.type,
         group.latest.title,
       ]),
-    ).toEqual([["receipt", "No events matched"]]);
+    ).toEqual([["receipt", "No events in this window"]]);
     expect(
       projection.limitations.map((limitation) => [
         limitation.source,
         limitation.kind,
       ]),
     ).toEqual([["Recent changes", "unknown"]]);
+  });
+
+  it("keeps one identity for a blocker whether one pod holds it or several", () => {
+    const blocker = (name: string) => ({
+      kind: "Pod",
+      name,
+      reason: "Unschedulable",
+      severity: "critical",
+      message: "1 node(s) no free host ports",
+    });
+    const bundle = (pods: string[]) => ({
+      resource: {
+        apiVersion: "apps/v1",
+        kind: "DaemonSet",
+        metadata: { namespace: "opencost", name: "node-exporter" },
+      },
+      resourceContext: { tier: "basic" },
+      pods: pods.length,
+      startupBlockers: pods.map(blocker),
+    });
+    // Two pods recover to one between diagnoses. The blocker is the same
+    // finding, so it must update its card rather than open a second one
+    // beside it saying the same thing.
+    const projection = projectInvestigationEvidence(
+      [
+        {
+          status: "done",
+          timeline: [tool("first", "diagnose", bundle(["a", "b"]))],
+        },
+        {
+          status: "done",
+          verify: true,
+          timeline: [tool("second", "diagnose", bundle(["a"]))],
+        },
+      ],
+      {
+        kind: "DaemonSet",
+        group: "apps",
+        namespace: "opencost",
+        name: "node-exporter",
+      },
+    );
+    const startup = projection.groups.filter(
+      (group) => group.latest.data.type === "startup",
+    );
+    expect(startup).toHaveLength(1);
+    expect(startup[0].observations).toHaveLength(2);
+    expect(startup[0].latest.summary).toBe("1 node(s) no free host ports");
   });
 
   it("merges identical startup blockers across pods into one card with the pod list", () => {
@@ -6148,9 +6196,11 @@ describe("live-run follow-ups", () => {
         "2 pods · 1 node(s) no free host ports",
         ["node-exporter-a", "node-exporter-b"],
       ],
-      ["0/10 nodes: insufficient memory", undefined],
+      // A blocker only one pod holds still carries that pod, so the pods a
+      // later Prometheus query is proved against do not depend on how many
+      // happened to share a reason.
+      ["0/10 nodes: insufficient memory", ["node-exporter-c"]],
     ]);
-    // A single pod keeps the per-pod identity so saved runs still match.
     expect(startup[1].id).not.toBe(startup[0].id);
   });
 
@@ -6224,6 +6274,54 @@ describe("live-run follow-ups", () => {
     expect(projection.limitations[0].message).toContain(
       "not readable with your permissions",
     );
+  });
+
+  it("keeps a cluster-wide events read that was narrowed to readable namespaces from reading as a clean cluster", () => {
+    const empty = project([
+      tool(
+        "events-partial-empty",
+        "get_events",
+        { events: [], partialScope: true, scopeNamespaces: ["alpha", "beta"] },
+        { summary: JSON.stringify({}) },
+      ),
+    ]);
+    const [receipt] = groupsOf(empty.groups, "receipt");
+    expect(receipt.latest.title).toBe(
+      "No events in the namespaces you can read",
+    );
+    expect(
+      receipt.latest.data.type === "receipt" && receipt.latest.data.message,
+    ).toContain("alpha, beta");
+    expect(empty.limitations).toHaveLength(0);
+
+    const found = project([
+      tool(
+        "events-partial",
+        "get_events",
+        {
+          events: [
+            {
+              type: "Warning",
+              reason: "BackOff",
+              message: "back-off restarting",
+              count: 3,
+              lastTimestamp: "2026-09-02T09:00:00Z",
+              involvedObject: { kind: "Pod", namespace: "alpha", name: "api" },
+            },
+          ],
+          partialScope: true,
+          scopeNamespaces: ["alpha", "beta"],
+        },
+        { summary: JSON.stringify({}) },
+      ),
+    ]);
+    expect(
+      found.limitations.map((limitation) => [
+        limitation.source,
+        limitation.kind,
+      ]),
+    ).toEqual([["Events", "unknown"]]);
+    expect(found.limitations[0].message).toContain("alpha, beta");
   });
 
   it("keeps repeated change reads of one resource on one card and names the window", () => {

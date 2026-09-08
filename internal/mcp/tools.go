@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -1901,6 +1902,10 @@ func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input events
 	// Always wrap into the response struct so capped + uncapped agree on
 	// wire shape ({events: [...], narrowHint?: "..."}).
 	resp := getEventsResponseMCP{Events: deduplicated}
+	if input.Namespace == "" && len(allowed) > 0 {
+		resp.PartialScope = true
+		resp.ScopeNamespaces = slices.Sorted(slices.Values(allowed))
+	}
 	if totalGroups > len(deduplicated) {
 		hint := fmt.Sprintf(
 			"returned %d of %d deduplicated event groups — narrow with namespace=, kind=, or name=",
@@ -1920,6 +1925,12 @@ type getEventsResponseMCP struct {
 	// AccessDenied is set when the requested namespace is outside the caller's
 	// allowed set, so an empty Events list is a denial rather than an absence.
 	AccessDenied bool `json:"accessDenied,omitempty"`
+	// PartialScope is set when a cluster-wide request was narrowed to the
+	// namespaces the caller may read. Without it an empty Events list from a
+	// narrowed read would pass as a clean bill of health for the whole cluster.
+	// ScopeNamespaces names what was actually read.
+	PartialScope    bool     `json:"partialScope,omitempty"`
+	ScopeNamespaces []string `json:"scopeNamespaces,omitempty"`
 }
 
 func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLogsInput) (*mcp.CallToolResult, any, error) {

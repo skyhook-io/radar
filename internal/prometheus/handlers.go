@@ -1,7 +1,6 @@
 package prometheus
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -262,9 +261,14 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, query = retryWithoutContainerFilter(r.Context(), client, result, query, category, start, end, step,
+	result, query, err = QueryWithContainerFilterFallback(r.Context(), client, result, query, category, start, end, step,
 		func() string { return fallback },
 		fmt.Sprintf("Primary query empty for %q/%q/%q (%q)", kind, namespace, name, category))
+	if err != nil {
+		errorlog.Record("prometheus", "error", "fallback query failed for %q/%q/%q (%q): %v", kind, namespace, name, category, err)
+		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
+		return
+	}
 
 	resp := ResourceMetricsResponse{
 		Kind:      kind,
@@ -412,9 +416,14 @@ func handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, _ = retryWithoutContainerFilter(r.Context(), client, result, query, category, start, end, step,
+	result, _, err = QueryWithContainerFilterFallback(r.Context(), client, result, query, category, start, end, step,
 		func() string { return prom.BuildNamespaceQueryNoContainerFilter(namespace, category) },
 		fmt.Sprintf("Namespace query empty for %q (%q)", namespace, category))
+	if err != nil {
+		errorlog.Record("prometheus", "error", "namespace fallback query failed for %q (%q): %v", namespace, category, err)
+		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
+		return
+	}
 
 	writeJSON(w, http.StatusOK, NamespaceMetricsResponse{
 		Namespace: namespace,
@@ -468,9 +477,14 @@ func handleClusterMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, _ = retryWithoutContainerFilter(r.Context(), client, result, query, category, start, end, step,
+	result, _, err = QueryWithContainerFilterFallback(r.Context(), client, result, query, category, start, end, step,
 		func() string { return prom.BuildClusterQueryNoContainerFilter(category) },
 		fmt.Sprintf("Cluster query empty (%q)", category))
+	if err != nil {
+		errorlog.Record("prometheus", "error", "cluster fallback query failed (%q): %v", category, err)
+		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
+		return
+	}
 
 	writeJSON(w, http.StatusOK, ClusterMetricsResponse{
 		Category: category,
@@ -604,30 +618,6 @@ func handleHPAMetrics(w http.ResponseWriter, r *http.Request) {
 		Current:   current,
 		Desired:   desired,
 	})
-}
-
-// retryWithoutContainerFilter re-runs the query without the container!=” filter
-// when the primary result is empty and the category uses that filter. This handles
-// cri-docker and other setups where cAdvisor metrics lack the container label.
-// Returns the updated result (original or fallback) and the query that produced it.
-func retryWithoutContainerFilter(ctx context.Context, client *Client, result *prom.QueryResult, query string, category prom.MetricCategory, start, end time.Time, step time.Duration, buildFallback func() string, logPrefix string) (*prom.QueryResult, string) {
-	if len(result.Series) > 0 || !prom.CategoryUsesContainerFilter(category) {
-		return result, query
-	}
-	fallbackQuery := buildFallback()
-	if fallbackQuery == "" || fallbackQuery == query {
-		return result, query
-	}
-	fallbackResult, err := client.QueryRange(ctx, fallbackQuery, start, end, step)
-	if err != nil {
-		log.Printf("[prometheus] %s, fallback query also failed: %v", logPrefix, err)
-		return result, query
-	}
-	if len(fallbackResult.Series) == 0 {
-		return result, query
-	}
-	log.Printf("[prometheus] %s, fallback without container filter succeeded", logPrefix)
-	return fallbackResult, fallbackQuery
 }
 
 const criDockerHint = "This pod's node uses the Docker container runtime (cri-docker), which is known to cause missing pod and namespace labels in cAdvisor metrics. " +

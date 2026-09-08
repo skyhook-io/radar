@@ -94,7 +94,6 @@ import {
 import {
   resolveInvestigationCase,
   mergeInvestigationCases,
-  type InvestigationCaseResolution,
 } from "./investigationCase";
 import {
   InvestigationEvidencePane,
@@ -1028,13 +1027,12 @@ export function InvestigationView({
           turns[liveCaseTurnIdx]?.diagnosis,
           liveCaseTurnIdx,
         );
-    const earlier: InvestigationCaseResolution[] = [];
-    for (let i = turns.length - 1; i >= 0; i -= 1) {
-      const diagnosis = turns[i]?.diagnosis;
-      if (i === liveCaseTurnIdx || !diagnosis) continue;
-      earlier.push(resolveInvestigationCase(projection, diagnosis, i));
-    }
-    return mergeInvestigationCases(live, earlier);
+    // The assessment on screen keeps its notes when a follow-up takes over
+    // the case. Turns before it are a different argument and stay in theirs.
+    return mergeInvestigationCases(
+      live,
+      liveCaseIsCurrentAssessment ? undefined : investigationCase,
+    );
   }, [
     liveCaseIsCurrentAssessment,
     investigationCase,
@@ -1352,12 +1350,14 @@ export function InvestigationView({
   const currentAssessmentEvidenceConflictExplainedBy = useMemo(
     () =>
       currentAssessmentEvidenceConflict
-        ? (investigationHealthConflictExplainedBy(
+        ? // The banner is about the displayed assessment's verdict, so only
+          // that assessment's own notes can explain it.
+          (investigationHealthConflictExplainedBy(
             projection,
-            paneCase?.items,
+            investigationCase?.items,
           ) ?? undefined)
         : undefined,
-    [currentAssessmentEvidenceConflict, projection, paneCase],
+    [currentAssessmentEvidenceConflict, projection, investigationCase],
   );
   const hasEvidenceCollectedAfterAssessment =
     currentAssessmentIdx >= 0 &&
@@ -1820,6 +1820,9 @@ export function InvestigationView({
                               <AssessmentSources
                                 resolution={answerResolution}
                                 investigationCase={answerCase}
+                                unlinkedEvidence={
+                                  turn.diagnosis?.unlinkedEvidence
+                                }
                                 readOnly={index !== liveCaseTurnIdx}
                                 onViewSource={viewActivitySource}
                               />
@@ -2068,6 +2071,9 @@ export function InvestigationView({
                             <AssessmentSources
                               resolution={rootCauseEvidenceResolution}
                               investigationCase={investigationCase}
+                              unlinkedEvidence={
+                                currentAssessment.diagnosis?.unlinkedEvidence
+                              }
                               readOnly={!liveCaseIsCurrentAssessment}
                               onViewSource={viewActivitySource}
                             />
