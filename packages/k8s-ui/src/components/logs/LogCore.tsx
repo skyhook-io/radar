@@ -701,7 +701,7 @@ export function LogCore({
                 className={`w-full flex items-center gap-2 text-left px-3 py-2 text-xs ${palette.textPrimary} ${palette.hoverBg} rounded-t-lg`}
               >
                 <Copy className={`w-3.5 h-3.5 ${palette.textTertiary}`} />
-                Copy to clipboard
+                Copy visible lines
               </button>
               <div className={`border-t ${palette.border}`} />
               {(['txt', 'json', 'csv'] as DownloadFormat[]).map(fmt => (
