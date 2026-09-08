@@ -2162,6 +2162,7 @@ function MetricsBody({
             unit={unit}
             annotations={annotations}
             domain={domain}
+            layout="auto"
           />
           {charted.length > 1 ? (
             <SeriesLegend
