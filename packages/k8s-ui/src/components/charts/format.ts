@@ -27,6 +27,12 @@ export function formatMetricValue(value: number, unit: string): string {
       if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MiB/s`
       return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GiB/s`
     }
+    case 'count':
+    case 'restarts': {
+      if (value < 10000) return value.toFixed(0)
+      if (value < 1e6) return `${(value / 1e3).toFixed(1)}k`
+      return `${(value / 1e6).toFixed(1)}M`
+    }
     case 'seconds': {
       if (value < 0.001) return `${(value * 1_000_000).toFixed(0)}µs`
       if (value < 1) return `${(value * 1000).toFixed(value < 0.01 ? 2 : 0)}ms`

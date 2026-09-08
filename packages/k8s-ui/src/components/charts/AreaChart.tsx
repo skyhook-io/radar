@@ -3,6 +3,7 @@ import type * as React from 'react'
 import { seriesColor, seriesFill, computeShortLabels, seriesDisplayLabels } from './colors'
 import { formatMetricValue, formatTimestamp } from './format'
 import { layoutAnnotations } from './annotations'
+import { chartLayout, integerAxisTop, isCountUnit, yAxisValues } from './axis'
 import type { TimeSeries, ReferenceLine, ChartAnnotation } from './types'
 
 // Below this rendered width the annotation label pills would cover most of the
@@ -11,7 +12,7 @@ import type { TimeSeries, ReferenceLine, ChartAnnotation } from './types'
 export const ANNOTATION_LABEL_MIN_WIDTH_PX = 420
 const ANNOTATION_HOVER_TOLERANCE = 8
 
-export function AreaChart({ series, color, fillColor, unit, referenceLines, annotations, domain, seriesLabels }: {
+export function AreaChart({ series, color, fillColor, unit, referenceLines, annotations, domain, seriesLabels, layout = 'full' }: {
   series: TimeSeries[]
   color: string
   fillColor: string
@@ -27,12 +28,21 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
    * the whole result; defaults to names derived from the labels given.
    */
   seriesLabels?: string[]
+  /**
+   * 'full' is the fixed wide layout every existing caller gets. 'auto' switches
+   * to the compact layout (two ticks per axis, larger text, taller plot) when
+   * the rendered chart is narrower than ANNOTATION_LABEL_MIN_WIDTH_PX;
+   * 'compact' forces it.
+   */
+  layout?: 'full' | 'auto' | 'compact'
 }) {
   const svgRef = useRef<SVGSVGElement>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
   const [hoverX, setHoverX] = useState<number | null>(null)
   const [labelsFit, setLabelsFit] = useState(true)
   const multiSeries = series.length > 1
+  const compact = layout === 'compact' || (layout === 'auto' && !labelsFit)
+  const countAxis = isCountUnit(unit)
 
   const chartData = useMemo(() => {
     if (!series.length) return null
@@ -70,21 +80,18 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
     }
 
     const padding = Math.max(maxVal, -minVal) * 0.1
-    const yMax = maxVal + padding
+    // A count axis ends on a whole step so its ticks are integers; other
+    // units keep headroom above the maximum.
+    const yMax = countAxis && minVal >= 0 ? integerAxisTop(maxVal, compact ? 1 : 4) : maxVal + padding
     const yMin = minVal < 0 ? minVal - padding : 0
 
     return { minTs, maxTs, yMax, yMin, series }
-  }, [series, unit, referenceLines, domain])
+  }, [series, unit, referenceLines, domain, countAxis, compact])
 
   // Layout constants. marginLeft sized for the widest expected Y-tick label
   // ("422.4 MiB" etc.) — narrow grid panels squeeze the X axis so labels
   // need extra viewBox-space to survive the down-scale.
-  const width = 1000
-  const height = 300
-  const marginLeft = 84
-  const marginRight = 40
-  const marginTop = 10
-  const marginBottom = 30
+  const { width, height, marginLeft, marginRight, marginTop, marginBottom, fontSize, yIntervals, xIntervals } = chartLayout(compact)
   const plotWidth = width - marginLeft - marginRight
   const plotHeight = height - marginTop - marginBottom
 
@@ -103,22 +110,22 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
   const yTicks = useMemo(() => {
     if (!chartData) return []
     const { yMax, yMin } = chartData
-    const count = 4
-    return Array.from({ length: count + 1 }, (_, i) => {
-      const val = yMin + ((yMax - yMin) / count) * i
-      return { val, y: toY(val), label: formatMetricValue(val, unit) }
-    })
-  }, [chartData, unit])
+    return yAxisValues(yMin, yMax, yIntervals, countAxis).map(val => ({
+      val, y: toY(val), label: formatMetricValue(val, unit),
+    }))
+  }, [chartData, unit, yIntervals, countAxis])
 
   const xTicks = useMemo(() => {
     if (!chartData) return []
     const { minTs, maxTs } = chartData
-    const count = 6
-    return Array.from({ length: count + 1 }, (_, i) => {
-      const ts = minTs + ((maxTs - minTs) / count) * i
-      return { ts, x: toX(ts), label: formatTimestamp(ts) }
+    return Array.from({ length: xIntervals + 1 }, (_, i) => {
+      const ts = minTs + ((maxTs - minTs) / xIntervals) * i
+      // In the compact layout the two labels sit at the plot edges and would
+      // otherwise spill past the viewBox.
+      const anchor: 'start' | 'middle' | 'end' = !compact ? 'middle' : i === 0 ? 'start' : 'end'
+      return { ts, x: toX(ts), label: formatTimestamp(ts), anchor }
     })
-  }, [chartData])
+  }, [chartData, xIntervals, compact])
 
   const paths = useMemo(() => {
     if (!chartData) return []
@@ -186,13 +193,13 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
 
   useEffect(() => {
     const el = wrapperRef.current
-    if (!el || placedAnnotations.length === 0 || typeof ResizeObserver === 'undefined') return
+    if (!el || (placedAnnotations.length === 0 && layout !== 'auto') || typeof ResizeObserver === 'undefined') return
     const update = () => setLabelsFit(el.getBoundingClientRect().width >= ANNOTATION_LABEL_MIN_WIDTH_PX)
     update()
     const observer = new ResizeObserver(update)
     observer.observe(el)
     return () => observer.disconnect()
-  }, [placedAnnotations.length])
+  }, [placedAnnotations.length, layout])
 
   // Hover: only emit a tooltip row when the hovered timestamp lies within
   // the series' actual sample range (with 2× median-step tolerance). Without
@@ -274,6 +281,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
         viewBox={`0 0 ${width} ${height}`}
         className="w-full h-full"
         preserveAspectRatio="xMidYMid meet"
+        data-chart-layout={compact ? 'compact' : 'full'}
       >
         {/* Grid lines */}
         {yTicks.map((tick, i) => (
@@ -311,7 +319,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
             y={tick.y + 4}
             textAnchor="end"
             className="fill-theme-text-secondary"
-            fontSize="11"
+            fontSize={fontSize}
             fontFamily="ui-monospace, monospace"
           >
             {tick.label}
@@ -324,9 +332,9 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
             key={`xlabel-${i}`}
             x={tick.x}
             y={height - 4}
-            textAnchor="middle"
+            textAnchor={tick.anchor}
             className="fill-theme-text-secondary"
-            fontSize="11"
+            fontSize={fontSize}
             fontFamily="ui-monospace, monospace"
           >
             {tick.label}
@@ -407,7 +415,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
             in stacked rows at the top of the plot. */}
         {placedAnnotations.map((placed, i) => {
           const labelY = marginTop + placed.row * (annotationLabelHeight + 2)
-          const showLabel = labelsFit && !placed.labelHidden
+          const showLabel = labelsFit && !compact && !placed.labelHidden
           return (
             <g
               key={`annotation-${i}`}
