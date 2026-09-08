@@ -227,11 +227,14 @@ const (
 // cannot place a claim. Every field is agent text copied verbatim; the frontend
 // resolves it against the captured evidence and never trusts it as a fact.
 type DiagnosisEvidenceSubject struct {
-	Group     string `json:"group,omitempty"`
-	Kind      string `json:"kind"`
-	Namespace string `json:"namespace,omitempty"`
-	Name      string `json:"name"`
-	Container string `json:"container,omitempty"`
+	// Group and Namespace are pointers because an explicit empty string is a
+	// statement (core group, cluster scope) that must reach the frontend
+	// distinct from the agent saying nothing.
+	Group     *string `json:"group,omitempty"`
+	Kind      string  `json:"kind"`
+	Namespace *string `json:"namespace,omitempty"`
+	Name      string  `json:"name"`
+	Container string  `json:"container,omitempty"`
 	// Stream is "current" or "previous" for a container log excerpt.
 	Stream string `json:"stream,omitempty"`
 	// Observation is the evidence kind (resource, logs, events, changes,

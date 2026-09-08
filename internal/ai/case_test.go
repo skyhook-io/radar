@@ -1,6 +1,8 @@
 package ai
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -32,14 +34,24 @@ func TestDiagnosisFromText_ParsesCaseWithoutTouchingLegacyRefs(t *testing.T) {
 		t.Fatalf("items = %d, want 3", len(items))
 	}
 	if !items[0].valid || items[0].role != EvidenceRoleCause || items[0].subject == nil ||
-		items[0].subject.Group != "apps" || items[0].subject.Observation != "resource" {
+		items[0].subject.Group == nil || *items[0].subject.Group != "apps" || items[0].subject.Observation != "resource" {
 		t.Fatalf("item 0 = %+v", items[0])
 	}
 	if !items[1].valid || items[1].role != EvidenceRoleRulesOut || items[1].claim != "Same host, same user, connects fine." || items[1].subject != nil {
 		t.Fatalf("item 1 = %+v", items[1])
 	}
-	if !items[2].valid || items[2].subject == nil || items[2].subject.Stream != "previous" || items[2].subject.Container != "app" {
+	if !items[2].valid || items[2].subject == nil || items[2].subject.Stream != "previous" || items[2].subject.Container != "app" ||
+		items[2].subject.Group != nil || items[2].subject.Namespace != nil {
 		t.Fatalf("item 2 = %+v", items[2])
+	}
+	explicitCore := diagnosisFromText(caseJSON(`"root_cause":"x","evidence":[{"ref":"` + first + `","role":"cause","claim":"c","subject":{"kind":"Service","group":"","namespace":"","name":"api"}}]`))
+	subject := explicitCore.caseRequest.items[0].subject
+	if subject == nil || subject.Group == nil || *subject.Group != "" || subject.Namespace == nil || *subject.Namespace != "" {
+		t.Fatalf("explicit empty group/namespace must survive parsing: %+v", subject)
+	}
+	wire, _ := json.Marshal(DiagnosisEvidenceItem{Status: EvidenceLinked, Subject: subject})
+	if !strings.Contains(string(wire), `"group":""`) || !strings.Contains(string(wire), `"namespace":""`) {
+		t.Fatalf("explicit empty group/namespace must reach the wire: %s", wire)
 	}
 	if len(d.caseRequest.ruledOut) != 1 || d.caseRequest.ruledOut[0].EvidenceIndex != 1 {
 		t.Fatalf("ruled out = %+v", d.caseRequest.ruledOut)
@@ -56,7 +68,7 @@ func TestDiagnosisFromText_CaseDropsBadItemsIndividually(t *testing.T) {
 		`{"ref":"` + ref + `","role":"cause","claim":"a","subject":{"kind":"Pod"}},` +
 		`{"ref":"` + ref + `","role":"cause","claim":"a","subject":{"kind":"Pod","name":"p","stream":"older"}},` +
 		`{"ref":"` + ref + `","role":"context","claim":"fine"}` +
-		`],"ruled_out":[{"hypothesis":"","evidence_index":5},{"hypothesis":"h","evidence_index":-1},{"hypothesis":"h"},{"hypothesis":"kept","evidence_index":5}]`)
+		`],"ruled_out":[{"hypothesis":"","evidence_index":5},{"hypothesis":"h","evidence_index":-1},{"hypothesis":"h"},"not-an-object",{"hypothesis":"kept","evidence_index":5}]`)
 	d := diagnosisFromText(text)
 	items := d.caseRequest.items
 	if len(items) != 6 {
@@ -133,7 +145,8 @@ func TestBindCaseLinksItemsIndividuallyAndKeepsIndexes(t *testing.T) {
 			step.IsError = boolPointer(true)
 		}),
 	}
-	subject := &DiagnosisEvidenceSubject{Kind: "Pod", Namespace: "shop", Name: "api-1", Container: "app", Stream: "current"}
+	namespace := "shop"
+	subject := &DiagnosisEvidenceSubject{Kind: "Pod", Namespace: &namespace, Name: "api-1", Container: "app", Stream: "current"}
 	got := bindCaseForTest(events, Diagnosis{
 		Healthy: true,
 		caseRequest: caseRequest{
@@ -167,7 +180,8 @@ func TestBindCaseLinksItemsIndividuallyAndKeepsIndexes(t *testing.T) {
 			t.Errorf("unlinked item %d leaked request data: %+v", i, item)
 		}
 	}
-	if got.Evidence[0].Subject == nil || *got.Evidence[0].Subject != *subject || got.Evidence[0].Subject == subject {
+	if got.Evidence[0].Subject == nil || !reflect.DeepEqual(*got.Evidence[0].Subject, *subject) ||
+		got.Evidence[0].Subject == subject || got.Evidence[0].Subject.Namespace == subject.Namespace {
 		t.Fatalf("subject must be copied verbatim: %+v", got.Evidence[0].Subject)
 	}
 	if got.Evidence[4].Role != EvidenceRoleRulesOut || got.Evidence[4].Ref != good {

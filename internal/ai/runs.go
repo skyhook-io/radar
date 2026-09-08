@@ -1072,6 +1072,14 @@ func bindCase(diag *Diagnosis, refLinked func(string) bool) {
 		}
 		if item.subject != nil {
 			subject := *item.subject
+			if subject.Group != nil {
+				group := *subject.Group
+				subject.Group = &group
+			}
+			if subject.Namespace != nil {
+				namespace := *subject.Namespace
+				subject.Namespace = &namespace
+			}
 			items[i].Subject = &subject
 		}
 	}

@@ -429,6 +429,11 @@ export function InvestigationEvidencePane({
     setCaseReveal(undefined);
   }, [revealRequest?.requestId]);
   const collectionByGroup = partition.collectionByGroup;
+  // A placed item can still sit on a withheld broader card; a link to it
+  // would have nowhere to go.
+  const visibleRuledOut = (investigationCase?.ruledOut ?? []).filter(
+    (entry) => entry.item.groupId && collectionByGroup.has(entry.item.groupId),
+  );
   const revealCaseItem = useCallback(
     (item: InvestigationCaseItem) => {
       const { groupId, observation } = item;
@@ -589,11 +594,8 @@ export function InvestigationEvidencePane({
           ))}
         </div>
 
-        {investigationCase && investigationCase.ruledOut.length > 0 ? (
-          <RuledOutBlock
-            entries={investigationCase.ruledOut}
-            onReveal={revealCaseItem}
-          />
+        {visibleRuledOut.length > 0 ? (
+          <RuledOutBlock entries={visibleRuledOut} onReveal={revealCaseItem} />
         ) : null}
 
         {partition.hiddenBroader > 0 ? (
@@ -1223,6 +1225,8 @@ function previousDifferentObservations(
 export function investigationEvidenceShouldRevealHistory(
   group: InvestigationEvidenceGroup,
   sourceId?: string,
+  /** Sources whose observation carries an agent item and so always has a row. */
+  boundSourceIds: ReadonlySet<string> = new Set(),
 ): boolean {
   return (
     Boolean(sourceId) &&
@@ -1230,8 +1234,9 @@ export function investigationEvidenceShouldRevealHistory(
     group.observations.some(
       (observation) =>
         observation.source.id === sourceId &&
-        evidenceDisplaySnapshot(observation) !==
-          evidenceDisplaySnapshot(group.latest),
+        (boundSourceIds.has(observation.source.id) ||
+          evidenceDisplaySnapshot(observation) !==
+            evidenceDisplaySnapshot(group.latest)),
     )
   );
 }
@@ -1307,6 +1312,7 @@ function EvidenceCard({
   const revealHistory = investigationEvidenceShouldRevealHistory(
     group,
     revealSourceId,
+    new Set(revisionItems.map((item) => item.observation!.source.id)),
   );
   useLayoutEffect(() => {
     const destination = revealSourceId

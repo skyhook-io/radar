@@ -716,7 +716,6 @@ export function isInvestigationEvidenceRef(value: string): boolean {
   return investigationEvidenceRefRe.test(value);
 }
 
-/** The parsed tool input of a source, when it was a JSON object. */
 export function investigationSourceArgs(
   source: InvestigationEvidenceSource,
 ): Record<string, unknown> | undefined {

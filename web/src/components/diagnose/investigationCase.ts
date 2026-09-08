@@ -210,8 +210,9 @@ function observationSubjectIdentity(
   const { data } = observation;
   const stated = investigationEvidenceSubjectRef(data);
   if (stated) {
-    // Producers that state a resource from its own object know the group
-    // exactly; a subject ref copied from another producer's payload may not.
+    // Producers that state a resource from its own object, or from the
+    // investigation target, know the group exactly; a subject ref copied from
+    // another producer's payload may not.
     const groupKnown =
       data.type === "resource" ||
       data.type === "issue" ||
@@ -219,7 +220,8 @@ function observationSubjectIdentity(
       data.type === "crash" ||
       data.type === "startup" ||
       data.type === "helm" ||
-      data.type === "permissions";
+      data.type === "permissions" ||
+      data.type === "metrics";
     return {
       kind: stated.kind,
       group: stated.group ?? (groupKnown ? "" : undefined),

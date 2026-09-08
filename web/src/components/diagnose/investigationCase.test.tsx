@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   InvestigationEvidencePane,
   investigationCaseByGroup,
+  investigationEvidenceShouldRevealHistory,
   partitionInvestigationEvidence,
 } from "./InvestigationEvidencePane";
 import {
@@ -351,6 +352,19 @@ describe("agent case placement (D-1, D-1b)", () => {
     expect(html).toContain("Previous observations · 1");
     expect(html).toContain("Same both times.");
     expect(html).not.toContain("Used for assessment");
+    // A reveal aimed at the identical earlier read must open the history that
+    // holds its row, which display equivalence alone would keep closed.
+    const sourceId = resolved.items[0].observation!.source.id;
+    expect(
+      investigationEvidenceShouldRevealHistory(twice.groups[0], sourceId),
+    ).toBe(false);
+    expect(
+      investigationEvidenceShouldRevealHistory(
+        twice.groups[0],
+        sourceId,
+        new Set([sourceId]),
+      ),
+    ).toBe(true);
   });
 
   it("keeps every pinned duplicate read as its own row with its own claim", () => {
@@ -620,7 +634,10 @@ describe("agent case visibility and ordering (D-2, D-5)", () => {
     );
     const subjectless = resolveInvestigationCase(
       projection,
-      { evidence: [linked(broadRef, "cause", "The one row in this query.")] },
+      {
+        evidence: [linked(broadRef, "cause", "The one row in this query.")],
+        ruledOut: [{ hypothesis: "Dead link otherwise", evidenceIndex: 0 }],
+      },
       0,
     );
     expect(subjectless.items[0].placement).toBe("card");
@@ -628,6 +645,9 @@ describe("agent case visibility and ordering (D-2, D-5)", () => {
       partitionInvestigationEvidence(projection.groups, undefined, subjectless)
         .collectionByGroup.size,
     ).toBe(0);
+    expect(render(projection, subjectless)).not.toContain(
+      "Dead link otherwise",
+    );
     const named = resolveInvestigationCase(
       projection,
       {
