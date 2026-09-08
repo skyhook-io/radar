@@ -535,8 +535,16 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
     if (groups.size === 1) groupByKey.set(rk, groups.values().next().value ?? '')
     else ambiguousResourceKeys.add(rk)
   }
+  // Reserved pseudo-group for a genuinely ambiguous key (2+ groups collide on
+  // this kind/ns/name and the reference itself carries no apiVersion to pick
+  // one). No real Kubernetes API group can equal this string, so laneId()
+  // always group-qualifies it — the synthesized lane can never coincide with
+  // a real group's canonical id, including a built-in's bare `Kind/ns/name`
+  // form (an empty-string fallback would silently collapse into that).
+  const AMBIGUOUS_GROUP = ' ambiguous'
   // The group for a resource key when the reference itself carries none.
-  const fallbackGroup = (rk: string): string => groupByKey.get(rk) ?? ''
+  const fallbackGroup = (rk: string): string =>
+    ambiguousResourceKeys.has(rk) ? AMBIGUOUS_GROUP : (groupByKey.get(rk) ?? '')
 
   // Group-less resource key → canonical (possibly group-qualified) lane id. Lets
   // owner refs and K8s-event involvedObjects reconcile onto the real lane instead
@@ -546,10 +554,17 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
   const registerLaneKey = (rk: string, id: string): void => {
     if (!laneIdByKey.has(rk)) laneIdByKey.set(rk, id)
   }
+  // The lane id an ambiguous key resolves to — same computation ensureRefLane
+  // and resolveId use to create one, so a lookup here always agrees with a
+  // subsequent get-or-create.
+  const ambiguousLaneId = (rk: string): string => {
+    const p = parseLaneId(rk)!
+    return laneId(p.kind, AMBIGUOUS_GROUP, p.namespace, p.name)
+  }
   // Get-or-create the lane for a group-less reference, returning its canonical id.
   const ensureRefLane = (rk: string, seedEvent?: TimelineEvent): string => {
     const existing = ambiguousResourceKeys.has(rk)
-      ? (laneMap.has(rk) ? rk : undefined)
+      ? (laneMap.has(ambiguousLaneId(rk)) ? ambiguousLaneId(rk) : undefined)
       : laneIdByKey.get(rk)
     if (existing) {
       if (seedEvent) laneMap.get(existing)!.events.push(seedEvent)
@@ -595,7 +610,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
   // agrees with ensureRefLane so guards keyed by canonical id line up.
   const resolveId = (rk: string): string => {
     const existing = ambiguousResourceKeys.has(rk)
-      ? (laneMap.has(rk) ? rk : undefined)
+      ? (laneMap.has(ambiguousLaneId(rk)) ? ambiguousLaneId(rk) : undefined)
       : laneIdByKey.get(rk)
     if (existing) return existing
     const p = parseLaneId(rk)!
@@ -1196,10 +1211,18 @@ function indexLanesByIdentity(allLanes: ResourceLane[]): LaneIdentityIndex {
 function resolvePinnedResourceLane(ref: PinnedResourceRef, index: LaneIdentityIndex): ResourceLane | undefined {
   const key = laneResourceKey(ref.kind, ref.namespace, ref.name)
   const candidates = index.byUnqualified.get(key) ?? []
-  if (ref.group !== undefined) {
-    const canonical = laneId(ref.kind, ref.group, ref.namespace, ref.name)
+  // A pin's `group` field is a later addition (PinnedResourceRef's own
+  // comment: "Older localStorage records legitimately omit it"), but its
+  // persisted `id` — the canonical lane id at save time — already carries a
+  // CRD group in its `.group` suffix, if it had one. Recovering that instead
+  // of treating an absent field as "group unknown" is what stops an old
+  // qualified pin from resolving onto a same-named lane in the WRONG group
+  // once its own group's lane goes away.
+  const group = ref.group ?? (parseLaneId(ref.id)?.group || undefined)
+  if (group !== undefined) {
+    const canonical = laneId(ref.kind, group, ref.namespace, ref.name)
     const exact = index.byId.get(canonical)
-    const refGroup = canonicalResourceGroup(ref.kind, ref.group)
+    const refGroup = canonicalResourceGroup(ref.kind, group)
     if (exact && canonicalResourceGroup(exact.kind, exact.group) === refGroup) return exact
     const matching = candidates.filter((candidate) => canonicalResourceGroup(candidate.kind, candidate.group) === refGroup)
     return matching.length === 1 ? matching[0] : undefined
@@ -1231,8 +1254,13 @@ export function pinnedLaneRefMatches(stored: PinnedLaneRef, incoming: PinnedLane
     return stored.type === 'appGroup' && incoming.type === 'appGroup' && stored.appKey === incoming.appKey
   }
   if (stored.kind !== incoming.kind || stored.namespace !== incoming.namespace || stored.name !== incoming.name) return false
-  if (stored.group === undefined) return true
-  return canonicalResourceGroup(stored.kind, stored.group) === canonicalResourceGroup(incoming.kind, incoming.group)
+  // A group-less `stored.group` is a wildcard ONLY when the stored id itself
+  // never encoded a group either — an old id that already carries a CRD
+  // group (`Cluster.postgresql.cnpg.io/...`) must not be treated as matching
+  // every group, or a CNPG pin would report a match against a CAPI ref.
+  const storedGroup = stored.group ?? (parseLaneId(stored.id)?.group || undefined)
+  if (storedGroup === undefined) return true
+  return canonicalResourceGroup(stored.kind, storedGroup) === canonicalResourceGroup(incoming.kind, incoming.group)
 }
 
 /** Ensure a lane carries a merged allEventsSorted (own + descendants). Roots and
@@ -1249,7 +1277,7 @@ function synthesizeEmptyPinnedLane(ref: PinnedResourceRef): ResourceLane {
     id: ref.id,
     kind: ref.kind,
     group: ref.group ?? parseLaneId(ref.id)?.group ?? '',
-    identityResolved: ref.group !== undefined,
+    identityResolved: (ref.group ?? (parseLaneId(ref.id)?.group || undefined)) !== undefined,
     namespace: ref.namespace,
     name: ref.name,
     events: [],

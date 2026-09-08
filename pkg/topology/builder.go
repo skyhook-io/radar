@@ -76,6 +76,25 @@ func targetRefMatchesTopologyKind(kind, apiVersion string) bool {
 	return APIVersionGroup(apiVersion) == group
 }
 
+// ownerGroupMatches reports whether an owner reference's group is consistent
+// with kind's canonical built-in group, so a CRD that shadows a typed Kind
+// (Volcano's Job, say) is never joined to a same-named typed workload. An
+// owner ref with no recorded apiVersion is unknown, not mismatched -- many
+// call sites (tests included) construct references without it -- so it is
+// treated permissively, the same way targetRefMatchesTopologyKind treats an
+// empty apiVersion. Kinds outside resourceid.BuiltinGroup's table have no
+// single canonical group to check against and are permissive too.
+func ownerGroupMatches(kind, apiVersion string) bool {
+	if apiVersion == "" {
+		return true
+	}
+	expected, known := resourceid.BuiltinGroup(kind)
+	if !known {
+		return true
+	}
+	return gitops.GroupFromAPIVersion(apiVersion) == expected
+}
+
 // Build constructs a topology based on the given options
 func (b *Builder) Build(opts BuildOptions) (*Topology, error) {
 	if b.provider == nil {
@@ -2866,6 +2885,12 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 		// Track owner for shortcut edges regardless of visibility
 		for _, ownerRef := range rs.OwnerReferences {
+			// A CRD can shadow "Deployment" (no canonical group table entry
+			// exists for Rollout, which is itself a CRD kind, so it stays
+			// unguarded here as before).
+			if ownerRef.Kind == "Deployment" && !ownerGroupMatches(ownerRef.Kind, ownerRef.APIVersion) {
+				continue
+			}
 			ownerKey := rs.Namespace + "/" + ownerRef.Name
 			rsKey := rs.Namespace + "/" + rs.Name
 			if ownerRef.Kind == "Deployment" {
@@ -2902,6 +2927,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			// Connect to owner Deployment or Rollout
 			for _, ownerRef := range rs.OwnerReferences {
+				if ownerRef.Kind == "Deployment" && !ownerGroupMatches(ownerRef.Kind, ownerRef.APIVersion) {
+					continue
+				}
 				ownerKey := rs.Namespace + "/" + ownerRef.Name
 				var ownerID string
 				var found bool
@@ -7149,6 +7177,13 @@ func (b *Builder) resolvePodWorkloadID(
 		if ownerRef.Controller == nil || !*ownerRef.Controller {
 			continue
 		}
+		// A CRD can shadow a typed owner Kind (Volcano's Job, say). These maps
+		// are keyed by bare namespace/name with no group component, so an
+		// unverified match would attribute the pod to a same-named typed
+		// workload it does not belong to.
+		if !ownerGroupMatches(ownerRef.Kind, ownerRef.APIVersion) {
+			continue
+		}
 		ownerKey := pod.Namespace + "/" + ownerRef.Name
 		switch ownerRef.Kind {
 		case "ReplicaSet":
@@ -7269,6 +7304,13 @@ func (b *Builder) createPodOwnerEdges(
 	}
 
 	for _, ownerRef := range pod.OwnerReferences {
+		// A CRD can shadow a typed owner Kind (Volcano's Job, say). These maps
+		// are keyed by bare namespace/name with no group component, so an
+		// unverified match would attribute the pod to a same-named typed
+		// workload it does not belong to.
+		if !ownerGroupMatches(ownerRef.Kind, ownerRef.APIVersion) {
+			continue
+		}
 		ownerKey := pod.Namespace + "/" + ownerRef.Name
 		switch ownerRef.Kind {
 		case "ReplicaSet":

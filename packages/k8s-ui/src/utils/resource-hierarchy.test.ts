@@ -1146,7 +1146,7 @@ describe('group-qualified lane identity', () => {
     expect(lanes.find(lane => lane.id === 'Job.batch.volcano.sh/ml/train')?.structuralMember).toBe(true)
   })
 
-  it('keeps a persisted group-less event bare when topology reveals a collision', () => {
+  it('gives a persisted group-less event its own identity, distinct from the built-in lane, when topology reveals a collision', () => {
     const topology = {
       nodes: [
         { id: 'job/ml/train', kind: 'Job', name: 'train', status: 'healthy', data: { namespace: 'ml', apiVersion: 'batch/v1' } },
@@ -1162,11 +1162,14 @@ describe('group-qualified lane identity', () => {
       topology,
       grouping: 'flat',
     })
-    expect(lanes.map((lane) => lane.id).sort()).toEqual([
-      'Job.batch.volcano.sh/ml/train',
-      'Job/ml/train',
-    ])
-    expect(lanes.find((lane) => lane.id === 'Job/ml/train')?.events.map((event) => event.id)).toEqual(['persisted'])
+    // The unresolved event must NOT land on 'Job/ml/train' -- that is the
+    // real core Job's own canonical (bare) id, and merging onto it would
+    // silently attribute unknown-group activity to the core Job.
+    const ids = lanes.map((lane) => lane.id).sort()
+    expect(ids).toContain('Job.batch.volcano.sh/ml/train')
+    expect(ids).not.toContain('Job/ml/train')
+    const ambiguousLane = lanes.find((lane) => lane.id !== 'Job.batch.volcano.sh/ml/train')
+    expect(ambiguousLane?.events.map((event) => event.id)).toEqual(['persisted'])
   })
 
   it('joins collision-labeled topology nodes to their real Kubernetes kind', () => {
