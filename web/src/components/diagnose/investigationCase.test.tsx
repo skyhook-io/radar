@@ -18,6 +18,8 @@ import {
 import {
   resolveInvestigationCase,
   type InvestigationCaseResolution,
+  mergeInvestigationCases,
+  type InvestigationCaseItem,
 } from "./investigationCase";
 import { AssessmentSources, ResultCard, assessmentSourceRows } from "./parts";
 import type { Diagnosis, DiagnosisEvidenceItem } from "../../api/diagnose";
@@ -1011,6 +1013,68 @@ describe("follow-up answers that cite evidence", () => {
     expect(html).toContain("Sources used for this assessment");
     expect(html).toContain("1 agent note on an evidence card");
     expect(html).not.toContain(">Context<");
+  });
+});
+
+describe("carrying earlier assessments' card notes", () => {
+  const item = (
+    index: number,
+    groupId: string | undefined,
+    placement: "card" | "revision" | "source",
+    role: "cause" | "context" | "demoted" = "context",
+  ) =>
+    ({
+      index,
+      role,
+      claim: `claim ${index}`,
+      source: { id: `s${index}` },
+      placement,
+      groupId,
+    }) as unknown as InvestigationCaseItem;
+
+  it("keeps an earlier turn's note on a card the live turn did not address", () => {
+    const live = {
+      items: [item(0, "chart", "card")],
+      ruledOut: [],
+    } as unknown as InvestigationCaseResolution;
+    const first = {
+      items: [
+        item(0, "logs", "card", "demoted"),
+        item(1, "chart", "card", "cause"),
+        item(2, undefined, "source"),
+        item(3, "deploy", "revision"),
+      ],
+      ruledOut: [{ hypothesis: "x" }],
+    } as unknown as InvestigationCaseResolution;
+    const merged = mergeInvestigationCases(live, [first]);
+    expect(merged?.items.map((entry) => [entry.groupId, entry.role])).toEqual([
+      ["chart", "context"],
+      ["logs", "demoted"],
+      ["deploy", "context"],
+    ]);
+    expect(merged?.ruledOut).toEqual([]);
+  });
+
+  it("lets the newer earlier turn win a card and leaves a lone live case untouched", () => {
+    const live = {
+      items: [],
+      ruledOut: [],
+    } as unknown as InvestigationCaseResolution;
+    const newer = {
+      items: [item(0, "logs", "card", "context")],
+      ruledOut: [],
+    } as unknown as InvestigationCaseResolution;
+    const older = {
+      items: [item(0, "logs", "card", "demoted"), item(1, "pod", "card")],
+      ruledOut: [],
+    } as unknown as InvestigationCaseResolution;
+    const merged = mergeInvestigationCases(live, [newer, older]);
+    expect(merged?.items.map((entry) => [entry.groupId, entry.role])).toEqual([
+      ["logs", "context"],
+      ["pod", "context"],
+    ]);
+    expect(mergeInvestigationCases(live, [])).toBe(live);
+    expect(mergeInvestigationCases(undefined, [])).toBeUndefined();
   });
 });
 

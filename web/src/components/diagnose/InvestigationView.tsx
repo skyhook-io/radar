@@ -91,7 +91,11 @@ import {
   projectInvestigationEvidence,
   resolveInvestigationRootCauseEvidence,
 } from "./investigationEvidence";
-import { resolveInvestigationCase } from "./investigationCase";
+import {
+  resolveInvestigationCase,
+  mergeInvestigationCases,
+  type InvestigationCaseResolution,
+} from "./investigationCase";
 import {
   InvestigationEvidencePane,
   partitionInvestigationEvidence,
@@ -1016,23 +1020,28 @@ export function InvestigationView({
     liveCaseTurnIdx,
     projection,
   ]);
-  const paneCase = useMemo(
-    () =>
-      liveCaseIsCurrentAssessment
-        ? investigationCase
-        : resolveInvestigationCase(
-            projection,
-            turns[liveCaseTurnIdx]?.diagnosis,
-            liveCaseTurnIdx,
-          ),
-    [
-      liveCaseIsCurrentAssessment,
-      investigationCase,
-      projection,
-      turns,
-      liveCaseTurnIdx,
-    ],
-  );
+  const paneCase = useMemo(() => {
+    const live = liveCaseIsCurrentAssessment
+      ? investigationCase
+      : resolveInvestigationCase(
+          projection,
+          turns[liveCaseTurnIdx]?.diagnosis,
+          liveCaseTurnIdx,
+        );
+    const earlier: InvestigationCaseResolution[] = [];
+    for (let i = turns.length - 1; i >= 0; i -= 1) {
+      const diagnosis = turns[i]?.diagnosis;
+      if (i === liveCaseTurnIdx || !diagnosis) continue;
+      earlier.push(resolveInvestigationCase(projection, diagnosis, i));
+    }
+    return mergeInvestigationCases(live, earlier);
+  }, [
+    liveCaseIsCurrentAssessment,
+    investigationCase,
+    projection,
+    turns,
+    liveCaseTurnIdx,
+  ]);
   const visibleEvidenceGroupIds = useMemo(
     () =>
       new Set(
