@@ -75,7 +75,13 @@ export interface DiagnosisHPASummary {
     target?: string;
     status: string;
   }>;
-  reasons?: Array<{ id: string; message: string; detail?: string }>;
+  reasons?: Array<{
+    id: string;
+    message: string;
+    detail?: string;
+    conditionType?: string;
+    conditionReason?: string;
+  }>;
 }
 
 export interface DiagnosisScalerRef extends DiagnosisResourceRef {

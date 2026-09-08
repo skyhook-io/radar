@@ -3093,8 +3093,16 @@ describe("InvestigationEvidencePane scaled-by section", () => {
               reasons: [
                 {
                   id: "limited_max",
-                  message: "ScalingLimited=True (TooManyReplicas)",
-                  detail: "cpu 95% of 70%",
+                  message: "HPA is capped at maxReplicas=5",
+                  detail:
+                    "the desired replica count is more than the maximum replica count",
+                  conditionType: "ScalingLimited",
+                  conditionReason: "TooManyReplicas",
+                },
+                {
+                  id: "missing_current_metric",
+                  message: "HPA is missing current metric values",
+                  detail: "cpu",
                 },
               ],
             },
@@ -3107,8 +3115,12 @@ describe("InvestigationEvidencePane scaled-by section", () => {
     expect(html).toContain("Maxed");
     expect(html).toContain("Wants 8 replicas but is capped at maxReplicas=5");
     expect(html).toContain("5/5 replicas · bounds 1-5");
-    expect(html).toContain("ScalingLimited=True (TooManyReplicas)");
-    expect(html).toContain("cpu 95% of 70%");
+    expect(html).not.toContain("HPA is capped at maxReplicas=5");
+    expect(html).toContain(
+      "Kubernetes ScalingLimited · TooManyReplicas: “the desired replica count is more than the maximum replica count”",
+    );
+    expect(html).toContain("HPA is missing current metric values");
+    expect(html).toContain("· cpu");
   });
 
   it("names the KEDA ScaledObject that owns the HPA and links it only when listed", () => {
@@ -3134,6 +3146,8 @@ describe("InvestigationEvidencePane scaled-by section", () => {
                 message: "HPA is held at minReplicas=2",
                 detail:
                   "the desired replica count is less than the minimum replica count",
+                conditionType: "ScalingLimited",
+                conditionReason: "TooFewReplicas",
               },
             ],
           },
@@ -3158,7 +3172,11 @@ describe("InvestigationEvidencePane scaled-by section", () => {
       open,
     );
     expect(linked).toContain("managed by KEDA ScaledObject");
-    expect(linked).toContain("HPA is held at minReplicas=2");
+    expect(linked).toContain("HPA is holding at minReplicas=2");
+    expect(linked).not.toContain("HPA is held at minReplicas=2");
+    expect(linked).toContain(
+      "Kubernetes ScalingLimited · TooFewReplicas: “the desired replica count is less than the minimum replica count”",
+    );
     expect(linked).toMatch(/<button[^>]*>api<\/button>/);
     const unlisted = render(
       project(kedaHPA(false)),

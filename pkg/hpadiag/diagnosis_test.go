@@ -226,4 +226,7 @@ func TestConditionReasonsLeadWithRadarPhrasing(t *testing.T) {
 	if reason.Detail != "the desired replica count is less than the minimum replica count" {
 		t.Errorf("Detail = %q, want the controller's sentence", reason.Detail)
 	}
+	if got.Summary != "HPA wants fewer replicas but is held at minReplicas=2" {
+		t.Errorf("Summary = %q, want the controller's clamp explained", got.Summary)
+	}
 }

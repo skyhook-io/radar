@@ -295,6 +295,9 @@ func summarizeState(d *Diagnosis) string {
 		}
 		return "HPA is configured for a fixed replica count"
 	case StateLimitedMin:
+		if controllerReportedMinLimit(d) {
+			return fmt.Sprintf("HPA wants fewer replicas but is held at minReplicas=%d", d.Bounds.Min)
+		}
 		return fmt.Sprintf("HPA is holding at minReplicas=%d", d.Bounds.Min)
 	case StateStale:
 		return "HPA has not observed the latest spec generation yet"
@@ -367,6 +370,20 @@ func controllerReportedMaxLimit(d *Diagnosis) bool {
 		conditionReason := strings.ToLower(reason.ConditionReason)
 		message := strings.ToLower(reason.Detail)
 		if strings.Contains(conditionReason, "toomany") || strings.Contains(message, "maximum") {
+			return true
+		}
+	}
+	return false
+}
+
+func controllerReportedMinLimit(d *Diagnosis) bool {
+	for _, reason := range d.Reasons {
+		if reason.ID != ReasonLimitedMin {
+			continue
+		}
+		conditionReason := strings.ToLower(reason.ConditionReason)
+		message := strings.ToLower(reason.Detail)
+		if strings.Contains(conditionReason, "toofew") || strings.Contains(message, "minimum") {
 			return true
 		}
 	}
