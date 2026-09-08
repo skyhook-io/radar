@@ -134,26 +134,34 @@ func parseCaseRequest(evidenceRaw, ruledOutRaw json.RawMessage) caseRequest {
 			request.items = append(request.items, parseCaseItem(raw))
 		}
 	}
-	var rawRuledOut []struct {
-		Hypothesis    string `json:"hypothesis"`
-		EvidenceIndex *int   `json:"evidence_index"`
-	}
+	var rawRuledOut []json.RawMessage
 	if len(ruledOutRaw) > 0 && json.Unmarshal(ruledOutRaw, &rawRuledOut) == nil {
-		for _, entry := range rawRuledOut {
+		for _, raw := range rawRuledOut {
 			if len(request.ruledOut) == maxDiagnosisRuledOut {
 				break
 			}
-			hypothesis := strings.TrimSpace(entry.Hypothesis)
-			if hypothesis == "" || utf8.RuneCountInString(hypothesis) > maxDiagnosisHypothesisRune ||
-				entry.EvidenceIndex == nil || *entry.EvidenceIndex < 0 {
-				continue
+			if entry, ok := parseRuledOut(raw); ok {
+				request.ruledOut = append(request.ruledOut, entry)
 			}
-			request.ruledOut = append(request.ruledOut, DiagnosisRuledOut{
-				Hypothesis: hypothesis, EvidenceIndex: *entry.EvidenceIndex,
-			})
 		}
 	}
 	return request
+}
+
+func parseRuledOut(raw json.RawMessage) (DiagnosisRuledOut, bool) {
+	var parsed struct {
+		Hypothesis    string `json:"hypothesis"`
+		EvidenceIndex *int   `json:"evidence_index"`
+	}
+	if json.Unmarshal(raw, &parsed) != nil {
+		return DiagnosisRuledOut{}, false
+	}
+	hypothesis := strings.TrimSpace(parsed.Hypothesis)
+	if hypothesis == "" || utf8.RuneCountInString(hypothesis) > maxDiagnosisHypothesisRune ||
+		parsed.EvidenceIndex == nil || *parsed.EvidenceIndex < 0 {
+		return DiagnosisRuledOut{}, false
+	}
+	return DiagnosisRuledOut{Hypothesis: hypothesis, EvidenceIndex: *parsed.EvidenceIndex}, true
 }
 
 func parseCaseItem(raw json.RawMessage) caseItemRequest {
@@ -183,10 +191,14 @@ func parseCaseItem(raw json.RawMessage) caseItemRequest {
 		return caseItemRequest{}
 	}
 	for _, field := range []string{
-		subject.Group, subject.Kind, subject.Namespace, subject.Name,
-		subject.Container, subject.Stream, subject.Observation,
+		subject.Kind, subject.Name, subject.Container, subject.Stream, subject.Observation,
 	} {
 		if utf8.RuneCountInString(field) > maxDiagnosisSubjectChars {
+			return caseItemRequest{}
+		}
+	}
+	for _, field := range []*string{subject.Group, subject.Namespace} {
+		if field != nil && utf8.RuneCountInString(*field) > maxDiagnosisSubjectChars {
 			return caseItemRequest{}
 		}
 	}
