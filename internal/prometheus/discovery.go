@@ -16,6 +16,13 @@ import (
 
 var ErrPrometheusNotFound = errors.New("no Prometheus service found in cluster")
 
+// errPrometheusUnreachable is ErrPrometheusNotFound for the case where
+// discovery enumerated a candidate and could not reach it. It wraps the
+// sentinel with an identical message so every errors.Is caller and every
+// message a user sees stay the same, while Availability can tell an
+// unreachable installation from a cluster that has none.
+var errPrometheusUnreachable = fmt.Errorf("%w", ErrPrometheusNotFound)
+
 // errDiscoverySuperseded is returned when a configuration change (Reset /
 // SetManualURL / SetHeaders) invalidated a discovery mid-flight. The result is
 // dropped rather than published; the next request rediscovers under the new
@@ -171,7 +178,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		if !discoveryDiagnosticsSuppressed(ctx) {
 			errorlog.Record("prometheus", "warning", "no Prometheus service reachable in cluster")
 		}
-		return "", "", ErrPrometheusNotFound
+		return "", "", errPrometheusUnreachable
 	}
 
 	log.Printf("[prometheus] no candidate reachable via direct probe (%s); falling back to port-forward", took(directStart))
@@ -283,7 +290,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 	if lastErr != nil {
 		return "", "", lastErr
 	}
-	return "", "", ErrPrometheusNotFound
+	return "", "", errPrometheusUnreachable
 }
 
 // logDiscoveryEnded logs a discovery that ended on a context error, telling a

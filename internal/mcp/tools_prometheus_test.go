@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -1270,5 +1271,44 @@ func TestHandleGetPrometheusRules_HTTPErrorNoLeak(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "http://") || strings.Contains(err.Error(), "127.0.0.1") {
 		t.Errorf("rules 503 leaked the internal backend URL: %v", err)
+	}
+}
+
+func TestHandleQueryPrometheus_SelectorInventory(t *testing.T) {
+	f := setupFakeProm(t)
+	f.queryBody = `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"pod":"api-1"},"value":[1700000000,"1"]}]}}`
+
+	result, _, err := handleQueryPrometheus(context.Background(), nil, queryPrometheusInput{
+		Query: `sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="payments", pod=~"api-.*"}[5m]))`,
+	})
+	if err != nil {
+		t.Fatalf("handleQueryPrometheus: %v", err)
+	}
+	resp := decodeQueryResponse(t, extractText(t, result))
+	if resp.SelectorsUnknown {
+		t.Fatalf("selectorsUnknown set for a plain query: %s", extractText(t, result))
+	}
+	want := []prometheus.Selector{{
+		Metric: "container_cpu_usage_seconds_total",
+		Matchers: []prometheus.Matcher{
+			{Label: "namespace", Op: "=", Value: "payments"},
+			{Label: "pod", Op: "=~", Value: "api-.*"},
+		},
+	}}
+	if !reflect.DeepEqual(resp.Selectors, want) {
+		t.Fatalf("selectors = %#v, want %#v", resp.Selectors, want)
+	}
+
+	result, _, err = handleQueryPrometheus(context.Background(), nil, queryPrometheusInput{Query: "rate(foo[$__interval])"})
+	if err != nil {
+		t.Fatalf("handleQueryPrometheus: %v", err)
+	}
+	body := extractText(t, result)
+	resp = decodeQueryResponse(t, body)
+	if !resp.SelectorsUnknown {
+		t.Fatalf("expected selectorsUnknown for a templated range, body: %s", body)
+	}
+	if !strings.Contains(body, `"selectors":[]`) {
+		t.Fatalf("selectors must be an empty array when unknown, body: %s", body)
 	}
 }
