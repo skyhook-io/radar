@@ -465,6 +465,24 @@ describe("agent case visibility and ordering (D-2, D-5)", () => {
         partitionInvestigationEvidence(projection.groups, undefined, resolved),
       ),
     ).toEqual(["logs", "events", "issue"]);
+    // Unlabelled and ruled-out cards sit between symptom and context; a
+    // demoted Key card goes last even though Radar would lead with it.
+    const framed = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(issueRef, "demoted", "Downstream of the auth failure."),
+          linked(logsRef, "context", "Checked the previous instance too."),
+          linked(eventsRef, "rules_out", "No image pull or scheduling event."),
+        ],
+      },
+      0,
+    );
+    expect(
+      kinds(
+        partitionInvestigationEvidence(projection.groups, undefined, framed),
+      ),
+    ).toEqual(["events", "logs", "issue"]);
     const html = render(projection, resolved);
     expect(html.indexOf("The password is rejected.")).toBeLessThan(
       html.indexOf("Kubelet backs off"),
