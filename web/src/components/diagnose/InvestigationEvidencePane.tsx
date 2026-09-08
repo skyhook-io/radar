@@ -919,6 +919,7 @@ function CoverageStrip({
 }) {
   const hasError = groups.some((group) => group.hasError);
   const historyOnly = groups.every((group) => group.historyOnly);
+  const quiet = historyOnly;
   const { elementRef, revealAfterToggle } =
     useDisclosureReveal<HTMLDivElement>();
   const regionId = "investigation-evidence-coverage";
@@ -938,7 +939,7 @@ function CoverageStrip({
         }}
         className="flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left hover:bg-theme-hover/50"
       >
-        {historyOnly ? (
+        {quiet ? (
           <Info
             className="h-4 w-4 shrink-0 text-theme-text-tertiary"
             aria-hidden
@@ -955,7 +956,7 @@ function CoverageStrip({
           <span
             className={clsx(
               "block text-xs",
-              historyOnly
+              quiet
                 ? "font-medium text-theme-text-secondary"
                 : "font-semibold text-theme-text-primary",
             )}
@@ -1728,15 +1729,18 @@ function IssueBody({
 
 function StartupBody({ data }: { data: EvidenceDataOf<"startup"> }) {
   const blocker = data.blocker;
+  const pods = data.pods && data.pods.length > 1 ? data.pods : [blocker.name];
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-1.5">
         <Badge tone="structural" size="sm">
-          {blocker.kind}
+          {pods.length > 1 ? `${pods.length} ${blocker.kind}s` : blocker.kind}
         </Badge>
-        <Badge tone="structural" size="sm">
-          {blocker.name}
-        </Badge>
+        {pods.map((pod) => (
+          <Badge key={pod} tone="structural" size="sm">
+            {pod}
+          </Badge>
+        ))}
         <Badge severity={severityBadge(blocker.severity)} size="sm">
           {blocker.severity}
         </Badge>

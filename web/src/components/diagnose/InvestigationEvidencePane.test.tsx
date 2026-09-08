@@ -3369,10 +3369,10 @@ describe("cited broader cards and coverage rows", () => {
     );
   });
 
-  it("renders a single-limitation coverage group once, with its source link", () => {
+  it("files a complete, empty events query as a checked receipt, not a coverage gap", () => {
     const projection = project(
       tool(
-        "events-a",
+        "events-empty",
         "get_events",
         { events: null },
         {
@@ -3383,36 +3383,56 @@ describe("cited broader cards and coverage rows", () => {
           }),
         },
       ),
-      tool(
-        "events-b",
-        "get_events",
-        { events: null },
-        {
-          summary: JSON.stringify({
-            kind: "Pod",
-            namespace: "shop",
-            name: "api-b",
-          }),
-        },
-      ),
-      tool(
-        "events-c",
-        "get_events",
-        { events: null },
-        {
-          summary: JSON.stringify({
-            kind: "Pod",
-            namespace: "shop",
-            name: "api-c",
-          }),
-        },
-      ),
+    );
+    expect(projection.limitations).toHaveLength(0);
+    const receipts = projection.groups.filter(
+      (group) => group.latest.data.type === "receipt",
+    );
+    expect(receipts.map((group) => group.latest.title)).toEqual([
+      "No events matched",
+    ]);
+    expect(receipts[0].latest.data).toMatchObject({
+      type: "receipt",
+      checked: "events",
+    });
+    const html = render(projection);
+    expect(html).not.toContain("Evidence coverage is incomplete");
+    expect(html).not.toContain("does not establish that no events occurred");
+  });
+
+  it("renders a single-limitation coverage group once, with its source link", () => {
+    const narrowed = {
+      events: null,
+      narrowHint: "Pass a name to narrow the query.",
+    };
+    const projection = project(
+      tool("events-a", "get_events", narrowed, {
+        summary: JSON.stringify({
+          kind: "Pod",
+          namespace: "shop",
+          name: "api-a",
+        }),
+      }),
+      tool("events-b", "get_events", narrowed, {
+        summary: JSON.stringify({
+          kind: "Pod",
+          namespace: "shop",
+          name: "api-b",
+        }),
+      }),
+      tool("events-c", "get_events", narrowed, {
+        summary: JSON.stringify({
+          kind: "Pod",
+          namespace: "shop",
+          name: "api-c",
+        }),
+      }),
     );
     expect(projection.limitations).toHaveLength(1);
     expect(projection.limitations[0].sources).toHaveLength(3);
     const html = render(projection);
     const message =
-      "No events were returned. This result does not establish that no events occurred.";
+      "Kubernetes events was narrowed to keep this investigation bounded. Additional matching evidence may exist.";
     // Live region, strip summary, the group row's label and its text: never
     // a second identical detail row beneath it.
     expect(

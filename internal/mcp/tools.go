@@ -1823,7 +1823,9 @@ func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input events
 	allowed := filterNamespacesForUser(ctx, requested)
 	if allowed != nil && len(allowed) == 0 {
 		// Wrap the empty result so capped + uncapped + denied agree on wire shape.
-		return toJSONResult(getEventsResponseMCP{Events: []aicontext.DeduplicatedEvent{}})
+		// The marker lets a consumer tell "nothing recorded" from "not readable";
+		// without it an empty list would pass as a checked negative.
+		return toJSONResult(getEventsResponseMCP{Events: []aicontext.DeduplicatedEvent{}, AccessDenied: true})
 	}
 
 	var events []*corev1.Event
@@ -1915,6 +1917,9 @@ func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input events
 type getEventsResponseMCP struct {
 	Events     []aicontext.DeduplicatedEvent `json:"events"`
 	NarrowHint string                        `json:"narrowHint,omitempty"`
+	// AccessDenied is set when the requested namespace is outside the caller's
+	// allowed set, so an empty Events list is a denial rather than an absence.
+	AccessDenied bool `json:"accessDenied,omitempty"`
 }
 
 func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLogsInput) (*mcp.CallToolResult, any, error) {

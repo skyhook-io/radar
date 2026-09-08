@@ -464,6 +464,18 @@ func TestHandleGetEvents_RestrictedAggregatesAllowed(t *testing.T) {
 	if !strings.Contains(body, "[]") {
 		t.Errorf("expected empty result for denied namespace, got: %s", body)
 	}
+	// A consumer must be able to tell "nothing recorded" from "not readable":
+	// the denied path carries the marker, an ordinary empty read does not.
+	if !strings.Contains(body, `"accessDenied":true`) {
+		t.Errorf("expected accessDenied marker for denied namespace, got: %s", body)
+	}
+	allowedResult, _, err := handleGetEvents(ctx, nil, eventsInput{Namespace: "alpha"})
+	if err != nil {
+		t.Fatalf("handleGetEvents allowed: %v", err)
+	}
+	if allowedBody := extractText(t, allowedResult); strings.Contains(allowedBody, "accessDenied") {
+		t.Errorf("allowed namespace must not carry the accessDenied marker: %s", allowedBody)
+	}
 }
 
 // --- Per-namespace Secret RBAC ---

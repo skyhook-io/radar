@@ -359,6 +359,12 @@ export type InvestigationEvidenceData =
       blocker: DiagnosisStartupBlocker;
       /** Exact blocker object when the diagnosis producer established it. */
       subject?: DiagnosisResourceRef;
+      /**
+       * Every pod the producer reported with this exact blocker. A DaemonSet
+       * with seven pending pods is one finding, not seven; the card carries the
+       * pod list instead of repeating itself.
+       */
+      pods?: string[];
     }
   | {
       type: "crash";
@@ -1897,6 +1903,10 @@ function addEvents(
   complete = true,
   emptyIsAuthoritative = false,
   relevance: InvestigationEvidenceRelevance = "broader",
+  emptyReceipt: { title: string; message: string } = {
+    title: "No matching warning events",
+    message: "The warning-event query completed and returned no groups.",
+  },
 ): void {
   const scope = scopeFromArgs(source);
   if (values.length === 0) {
@@ -1914,13 +1924,13 @@ function addEvents(
       tier: evidenceTierForRelevance("checked", relevance),
       relevance,
       tone: "neutral",
-      title: "No matching warning events",
+      title: emptyReceipt.title,
       summary: scope,
       data: {
         type: "receipt",
         checked: "events",
         scope,
-        message: "The warning-event query completed and returned no groups.",
+        message: emptyReceipt.message,
       },
     });
     return;
@@ -2421,6 +2431,15 @@ function adaptDiagnose(
   const blockersRaw = value.startupBlockers;
   let blockersValid = blockersRaw === undefined || Array.isArray(blockersRaw);
   if (Array.isArray(blockersRaw)) {
+    // Pods of one workload usually share a blocker word for word. Merge those
+    // into one finding with the pod list; anything else keeps its own card and
+    // its own identity so saved runs match as before.
+    const merged = new Map<
+      string,
+      { blocker: DiagnosisStartupBlocker; pods: string[] }
+    >();
+    const ordered: Array<{ blocker: DiagnosisStartupBlocker; pods: string[] }> =
+      [];
     for (const raw of blockersRaw) {
       const blocker = startupBlocker(raw);
       if (!blocker) {
@@ -2428,8 +2447,27 @@ function adaptDiagnose(
         invalidPayload(builder, source, "Startup evidence");
         continue;
       }
+      const key =
+        blocker.kind === "Pod"
+          ? `${blocker.reason} ${blocker.severity} ${blocker.message}`
+          : undefined;
+      const existing = key ? merged.get(key) : undefined;
+      if (existing) {
+        if (!existing.pods.includes(blocker.name)) {
+          existing.pods.push(blocker.name);
+        }
+        continue;
+      }
+      const entry = { blocker, pods: [blocker.name] };
+      if (key) merged.set(key, entry);
+      ordered.push(entry);
+    }
+    for (const { blocker, pods } of ordered) {
+      const grouped = blocker.kind === "Pod" && pods.length > 1;
       builder.observe(
-        `startup:${blocker.kind}:${blocker.name}:${blocker.reason}`,
+        grouped
+          ? `startup:Pod:${blocker.reason}:${fnv1a32(blocker.message).toString(36)}`
+          : `startup:${blocker.kind}:${blocker.name}:${blocker.reason}`,
         "startup",
         source,
         {
@@ -2440,30 +2478,35 @@ function adaptDiagnose(
           relevance: bundledRowRelevance(blocker.kind, blocker.name),
           tone: diagnosisSeverityTone(blocker.severity),
           title: blocker.reason,
-          summary: blocker.message,
+          summary: grouped
+            ? `${pods.length} pods · ${blocker.message}`
+            : blocker.message,
           data: {
             type: "startup",
             blocker,
-            subject: (() => {
-              const namespace = resource.metadata.namespace;
-              if (!namespace) return undefined;
-              const rootGroup = apiVersionToGroup(resource.apiVersion);
-              const group =
-                blocker.kind === resource.kind
-                  ? rootGroup
-                  : blocker.kind === "Pod"
-                    ? ""
-                    : blocker.kind === "ReplicaSet"
-                      ? "apps"
-                      : undefined;
-              if (group === undefined) return undefined;
-              return {
-                kind: blocker.kind,
-                ...(group ? { group } : {}),
-                namespace,
-                name: blocker.name,
-              };
-            })(),
+            ...(grouped ? { pods } : {}),
+            subject: grouped
+              ? undefined
+              : (() => {
+                  const namespace = resource.metadata.namespace;
+                  if (!namespace) return undefined;
+                  const rootGroup = apiVersionToGroup(resource.apiVersion);
+                  const group =
+                    blocker.kind === resource.kind
+                      ? rootGroup
+                      : blocker.kind === "Pod"
+                        ? ""
+                        : blocker.kind === "ReplicaSet"
+                          ? "apps"
+                          : undefined;
+                  if (group === undefined) return undefined;
+                  return {
+                    kind: blocker.kind,
+                    ...(group ? { group } : {}),
+                    namespace,
+                    name: blocker.name,
+                  };
+                })(),
           },
         },
       );
@@ -3261,14 +3304,34 @@ function adaptEvents(
     return;
   }
   addNarrowHint(builder, source, value);
+  // The producer answers a namespace the caller cannot read with an empty
+  // list and marks it. Only that case is a coverage gap. Any other complete,
+  // successful empty read answers the question it asked and is filed as a
+  // checked receipt; a gap there would contradict an events card from another
+  // call in the same turn. The receipt names the one remaining ambiguity for
+  // producers that predate the marker.
+  if (value.accessDenied === true) {
+    builder.limit(
+      source,
+      "Events",
+      `Events in ${scopeFromArgs(source)} are not readable with your permissions.`,
+      "error",
+    );
+    return;
+  }
   addEvents(
     builder,
     source,
     events,
     `events:${source.args ?? scopeFromArgs(source)}`,
     !nonEmptyString(value.narrowHint),
-    false,
+    true,
     sourceArgsRelevance(builder, source),
+    {
+      title: "No events matched",
+      message:
+        "The events query completed and returned nothing for this scope. Events outside its window or filters are not covered; a namespace you cannot read also returns nothing.",
+    },
   );
 }
 

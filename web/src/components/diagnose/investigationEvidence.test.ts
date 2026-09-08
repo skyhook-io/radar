@@ -2819,7 +2819,8 @@ describe("honest zero and partial-result states", () => {
     );
     // list_resources uses [] for some RBAC-filtered reads, so its emptiness is
     // never a positive receipt even when the transport itself succeeded. The
-    // narrow event/change producers have the same ambiguity today; the targeted
+    // events producer marks a denied namespace explicitly, so its empty result
+    // is a receipt; the changes producer still has the ambiguity. The targeted
     // semantic diagnose bundle is authoritative because access is checked before
     // that workload path runs.
     expect(
@@ -2830,16 +2831,15 @@ describe("honest zero and partial-result states", () => {
       ),
     ).toBe(false);
     expect(result.limitations.map((item) => item.source)).toEqual(
-      expect.arrayContaining([
-        "Events",
-        "Recent changes",
-        "Resource inventory",
-      ]),
+      expect.arrayContaining(["Recent changes", "Resource inventory"]),
+    );
+    expect(result.limitations.map((item) => item.source)).not.toContain(
+      "Events",
     );
     expect(result.coverage).toEqual({
       attempted: 5,
-      projected: 2,
-      limited: 3,
+      projected: 3,
+      limited: 2,
       checked: 1,
     });
     expect(
@@ -5834,18 +5834,88 @@ describe("live-run follow-ups", () => {
         },
       ),
     ]);
+    // A complete, successful events query that returned nothing is a checked
+    // receipt for its scope; the producer marks a denied namespace separately.
+    expect(
+      projection.groups.map((group) => [
+        group.latest.data.type,
+        group.latest.title,
+      ]),
+    ).toEqual([["receipt", "No events matched"]]);
+    expect(
+      projection.limitations.map((limitation) => [
+        limitation.source,
+        limitation.kind,
+      ]),
+    ).toEqual([["Recent changes", "unknown"]]);
+  });
+
+  it("merges identical startup blockers across pods into one card with the pod list", () => {
+    const blocker = (
+      name: string,
+      message = "1 node(s) no free host ports",
+    ) => ({
+      kind: "Pod",
+      name,
+      reason: "Unschedulable",
+      severity: "critical",
+      message,
+    });
+    const projection = project([
+      tool("diagnose", "diagnose", {
+        resource: {
+          apiVersion: "apps/v1",
+          kind: "DaemonSet",
+          metadata: { namespace: "opencost", name: "node-exporter" },
+        },
+        resourceContext: { tier: "basic" },
+        pods: 3,
+        startupBlockers: [
+          blocker("node-exporter-a"),
+          blocker("node-exporter-b"),
+          blocker("node-exporter-c", "0/10 nodes: insufficient memory"),
+        ],
+      }),
+    ]);
+    const startup = projection.groups.filter(
+      (group) => group.latest.data.type === "startup",
+    );
+    expect(
+      startup.map((group) => [
+        group.latest.summary,
+        group.latest.data.type === "startup" ? group.latest.data.pods : null,
+      ]),
+    ).toEqual([
+      [
+        "2 pods · 1 node(s) no free host ports",
+        ["node-exporter-a", "node-exporter-b"],
+      ],
+      ["0/10 nodes: insufficient memory", undefined],
+    ]);
+    // A single pod keeps the per-pod identity so saved runs still match.
+    expect(startup[1].id).not.toBe(startup[0].id);
+  });
+
+  it("files a denied events namespace as an access limitation, not a receipt", () => {
+    const projection = project([
+      tool(
+        "events-denied",
+        "get_events",
+        { events: [], accessDenied: true },
+        {
+          summary: JSON.stringify({ namespace: "locked", kind: "Pod" }),
+        },
+      ),
+    ]);
     expect(projection.groups).toHaveLength(0);
     expect(
       projection.limitations.map((limitation) => [
         limitation.source,
         limitation.kind,
       ]),
-    ).toEqual([
-      ["Events", "unknown"],
-      ["Recent changes", "unknown"],
-    ]);
+    ).toEqual([["Events", "error"]]);
     expect(projection.limitations[0].message).toContain(
-      "No events were returned",
+      "not readable with your permissions",
     );
   });
 
