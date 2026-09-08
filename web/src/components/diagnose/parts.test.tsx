@@ -1020,6 +1020,42 @@ describe("ResultCard conclusion states", () => {
     ]);
   });
 
+  it("reframes the conflict banner when the agent explained every adverse card", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          healthy: true,
+          report: "The workload appears ready.",
+        })}
+        evidenceConflict
+        evidenceConflictExplainedBy={["CrashLoopBackOff", "Error logs"]}
+      />,
+    );
+
+    expect(html).toContain(
+      "No active problem found; warning-level evidence explained",
+    );
+    expect(html).toContain("see the note on CrashLoopBackOff and Error logs");
+    expect(html).not.toContain("Assessment conflicts with captured evidence");
+    expect(html).not.toContain("border-amber-500/40");
+    expect(html).not.toContain("border-emerald-500/30");
+    expect(html).toContain("border-accent/30");
+
+    const unexplained = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          healthy: true,
+          report: "The workload appears ready.",
+        })}
+        evidenceConflict
+        evidenceConflictExplainedBy={[]}
+      />,
+    );
+    expect(unexplained).toContain(
+      "Assessment conflicts with captured evidence",
+    );
+  });
+
   it("keeps a follow-up framed as an answer rather than a new conclusion", () => {
     const html = renderToStaticMarkup(
       <ResultCard

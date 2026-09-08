@@ -1008,7 +1008,8 @@ describe("follow-up answers that cite evidence", () => {
     );
     expect(html).toContain("Assessment details");
     expect(html).toContain("Sources used for this assessment");
-    expect(html).toContain(">Context<");
+    expect(html).toContain("1 agent note on an evidence card");
+    expect(html).not.toContain(">Context<");
   });
 });
 
@@ -1051,7 +1052,8 @@ describe("agent case robustness", () => {
       />,
     );
     expect(sources).toContain("Sources used for this assessment");
-    expect(sources).toContain(">Context<");
+    expect(sources).toContain("1 agent note on an evidence card");
+    expect(sources).not.toContain(">Context<");
     expect(sources).not.toContain("One replica, ready, no restarts.");
   });
 
@@ -1090,9 +1092,10 @@ describe("agent case robustness", () => {
       <AssessmentSources resolution={resolution} onViewSource={onViewSource} />,
     );
     expect(legacySources).toContain(
-      '<span class="min-w-0 flex-1"><span class="font-medium">Diagnose</span>',
+      '<div class="font-medium text-theme-text-primary">Diagnose</div>',
     );
-    expect(legacySources).not.toContain("flex-wrap");
+    expect(legacySources).not.toContain("agent note");
+    expect(legacySources).not.toContain("data-source-placed-claims");
     expect(
       renderToStaticMarkup(
         <AssessmentSources
@@ -1252,7 +1255,12 @@ describe("agent case robustness", () => {
         onViewSource={onViewSource}
       />,
     );
-    expect(earlier).toContain("CrashLoopBackOff: Was the cause back then.");
+    expect(earlier).toContain("Notes from this assessment");
+    expect(earlier).toContain(
+      "CrashLoopBackOff · </span>Was the cause back then.",
+    );
+    expect(earlier).toContain(">Cause<");
+    expect(earlier).toContain("Agent&#x27;s note:");
   });
 
   it("lists an unpinnable ruled-out hypothesis nowhere", () => {
