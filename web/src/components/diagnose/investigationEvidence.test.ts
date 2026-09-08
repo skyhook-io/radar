@@ -5563,9 +5563,7 @@ describe("diagnose metrics evidence", () => {
     );
     const groups = groupsOf(projection.groups, "metrics");
     expect(groups).toHaveLength(3);
-    expect(groups.every((group) => group.observations.length === 2)).toBe(
-      true,
-    );
+    expect(groups.every((group) => group.observations.length === 2)).toBe(true);
     const data = groups[0].latest.data;
     if (data.type !== "metrics") throw new Error("expected metrics");
     expect(data.end).toBe("2026-09-06T08:30:00Z");
@@ -5581,7 +5579,8 @@ describe("diagnose metrics evidence", () => {
           pods: 2,
           metrics: vitals({
             series: [vitals().series[1]],
-            error: "cpu: prom: query error from prometheus: cpu exploded (execution)",
+            error:
+              "cpu: prom: query error from prometheus: cpu exploded (execution)",
           }),
         },
         { summary: JSON.stringify(args) },
@@ -5605,7 +5604,8 @@ describe("diagnose metrics evidence", () => {
           pods: 2,
           metrics: vitals({
             series: [],
-            error: "prometheus unreachable: dial tcp 10.0.0.9:9090: connection refused",
+            error:
+              "prometheus unreachable: dial tcp 10.0.0.9:9090: connection refused",
           }),
         },
         { summary: JSON.stringify(args) },
@@ -5744,9 +5744,7 @@ describe("diagnose metrics evidence", () => {
     ]);
     const groups = groupsOf(projection.groups, "metrics");
     expect(groups).toHaveLength(6);
-    expect(groups.every((group) => group.observations.length === 1)).toBe(
-      true,
-    );
+    expect(groups.every((group) => group.observations.length === 1)).toBe(true);
     expect(new Set(groups.map((group) => group.identity)).size).toBe(6);
   });
 
@@ -5801,8 +5799,7 @@ describe("diagnose metrics evidence", () => {
     ]);
     expect(
       projection.limitations.some(
-        (item) =>
-          item.source === "Workload metrics" && item.kind === "unknown",
+        (item) => item.source === "Workload metrics" && item.kind === "unknown",
       ),
     ).toBe(true);
   });

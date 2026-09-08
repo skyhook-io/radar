@@ -2493,10 +2493,7 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
       partition.workload
         .filter((group) => group.kind === "receipt")
         .map((group) => group.latest.title),
-    ).toEqual([
-      "No classified workload issues",
-      "No matching warning events",
-    ]);
+    ).toEqual(["No classified workload issues", "No matching warning events"]);
     const onOpenResource = vi.fn();
     const html = render(
       projection,
