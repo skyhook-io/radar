@@ -2872,7 +2872,8 @@ describe("InvestigationEvidencePane metrics cards", () => {
       metric: "container_memory_working_set_bytes",
       matchers: [
         { label: "namespace", op: "=", value: "shop" },
-        { label: "pod", op: "=~", value: "api-.*" },
+        { label: "workload", op: "=", value: "api" },
+        { label: "workload_type", op: "=", value: "deployment" },
       ],
     },
   ];
@@ -2880,7 +2881,7 @@ describe("InvestigationEvidencePane metrics cards", () => {
     return {
       query:
         query ??
-        'sum(container_memory_working_set_bytes{namespace="shop",pod=~"api-.*"})',
+        'sum(container_memory_working_set_bytes{namespace="shop",workload="api",workload_type="deployment"})',
       type: "range",
       ...window,
       step: "60s",
@@ -3030,7 +3031,7 @@ describe("InvestigationEvidencePane metrics cards", () => {
       tool("prom", "query_prometheus", {
         ...rangeResult(
           targetSelectors,
-          'rate(container_cpu_usage_seconds_total{namespace="shop",pod=~"api-.*"}[5m])',
+          'rate(container_cpu_usage_seconds_total{namespace="shop",workload="api"}[5m])',
         ),
         series: [
           {
@@ -3209,7 +3210,7 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
       onOpenResource,
     );
     expect(html).toContain("CPU usage · shop/api");
-    expect(html).toContain("1 pod · 60m window · 1m2s step");
+    expect(html).toContain("1 current pod · 60m window · 1m2s step");
     expect(html).toContain("(cores)");
     expect(html.match(/data-chart-annotation="change"/g)).toHaveLength(1);
     expect(html).toContain("Deployment api");

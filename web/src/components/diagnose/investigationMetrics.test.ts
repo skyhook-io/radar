@@ -43,7 +43,7 @@ const window = { start: "2026-09-06T07:00:00Z", end: "2026-09-06T09:00:00Z" };
 function rangeResult(selectors: unknown[]) {
   return {
     query:
-      'sum(container_memory_working_set_bytes{namespace="shop",pod=~"api-.*"})',
+      'sum(container_memory_working_set_bytes{namespace="shop",workload="api",workload_type="deployment"})',
     type: "range",
     ...window,
     step: "60s",
@@ -65,7 +65,8 @@ const targetSelectors = [
     metric: "container_memory_working_set_bytes",
     matchers: [
       { label: "namespace", op: "=", value: "shop" },
-      { label: "pod", op: "=~", value: "api-.*" },
+      { label: "workload", op: "=", value: "api" },
+      { label: "workload_type", op: "=", value: "deployment" },
     ],
   },
 ];
@@ -126,7 +127,7 @@ describe("metricsUnitForExpression", () => {
   it("keeps the unit every metric states through aggregations and wrappers", () => {
     expect(
       metricsUnitForExpression(
-        'sum(max by (pod,namespace,container) (container_memory_working_set_bytes{namespace="shop", pod=~"api-.*"}))',
+        'sum(max by (pod,namespace,container) (container_memory_working_set_bytes{namespace="shop", workload="api"}))',
         selector("container_memory_working_set_bytes"),
       ),
     ).toBe("bytes");

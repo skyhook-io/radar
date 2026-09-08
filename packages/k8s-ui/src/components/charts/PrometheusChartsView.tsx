@@ -58,6 +58,43 @@ export interface PrometheusResourceMetricsResult {
   result?: { series?: TimeSeries[] }
   query?: string
   hint?: string
+  /**
+   * For workload kinds, how the charted pods were established: kube-state-metrics
+   * ownership over the window (replaced pods included, observedPods counts them)
+   * or only the pods controlled now (pods, podsTotal when capped).
+   */
+  coverage?: 'ksm_history' | 'current_pods' | 'none'
+  pods?: number
+  podsTotal?: number
+  observedPods?: number
+  scopeError?: string
+}
+
+/** One line under a workload chart saying which pods it covers. */
+export function describePodCoverage(metrics: PrometheusResourceMetricsResult): string | undefined {
+  // A failed ownership read is why a chart fell back to current pods, so it
+  // belongs in the same sentence rather than in a log nobody reads.
+  const note = metrics.scopeError
+    ? ` Radar could not read this workload's ownership history (${metrics.scopeError}).`
+    : ''
+  switch (metrics.coverage) {
+    case 'ksm_history':
+      return (
+        (metrics.observedPods
+          ? `${metrics.observedPods} pod${metrics.observedPods === 1 ? '' : 's'} attributed to this workload in the window (kube-state-metrics)`
+          : 'Pods attributed to this workload in the window (kube-state-metrics)') + note
+      )
+    case 'current_pods': {
+      const pods = metrics.pods ?? 0
+      const total = metrics.podsTotal ?? pods
+      const count = total > pods ? `first ${pods} of ${total}` : `${pods}`
+      return `${count} current pod${total === 1 ? '' : 's'}; pods replaced during the window are not included` + note
+    }
+    case 'none':
+      return 'No pods could be attributed to this workload' + note
+    default:
+      return note.trim() || undefined
+  }
 }
 
 export interface PrometheusChartsViewProps {
@@ -103,6 +140,7 @@ export function PrometheusChartsView({
   const isSupported = SUPPORTED_KINDS.has(kind)
   const activeCategoryDef = categories.find((c) => c.key === category) || categories[0]
   const series = metrics?.result?.series ?? []
+  const coverageNote = metrics ? describePodCoverage(metrics) : undefined
 
   if (!isSupported) return null
 
@@ -197,6 +235,7 @@ export function PrometheusChartsView({
               />
             </div>
             {series.length > 1 && <SeriesLegend series={series} color={activeCategoryDef.chartColor} />}
+            {coverageNote && <p className="text-xs text-theme-text-tertiary">{coverageNote}</p>}
           </div>
         ) : (
           <div className="flex h-full flex-col items-center justify-center text-theme-text-tertiary">

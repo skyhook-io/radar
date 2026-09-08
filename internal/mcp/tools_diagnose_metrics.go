@@ -3,16 +3,17 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
@@ -70,12 +71,21 @@ var diagnoseMetricsCategories = []prom.MetricCategory{prom.CategoryCPU, prom.Cat
 // missing Series (unreachable backend, a failed query, or a breached budget)
 // and is never set for "no samples in the window".
 type diagnoseMetrics struct {
-	Window      diagnoseMetricsWindow  `json:"window"`
-	Pods        int                    `json:"pods"`
-	Partial     bool                   `json:"partial,omitempty"`
-	OmittedPods int                    `json:"omittedPods,omitempty"`
-	Series      []diagnoseMetricSeries `json:"series"`
-	Error       string                 `json:"error,omitempty"`
+	Window      diagnoseMetricsWindow `json:"window"`
+	Pods        int                   `json:"pods"`
+	Partial     bool                  `json:"partial,omitempty"`
+	OmittedPods int                   `json:"omittedPods,omitempty"`
+	// Coverage says which source established the pods the queries cover:
+	// ksm_history when kube-state-metrics attributed pods to the workload over
+	// the window (ObservedPods counts them, and replaced pods are included),
+	// current_pods when only the pods controlled now could be named. Pods
+	// always counts the current pods the bundle resolved. ScopeError reports a
+	// failed ownership probe, so current_pods may be a fallback.
+	Coverage     prometheus.OwnerCoverage `json:"coverage,omitempty"`
+	ObservedPods int                      `json:"observedPods,omitempty"`
+	ScopeError   string                   `json:"scopeError,omitempty"`
+	Series       []diagnoseMetricSeries   `json:"series"`
+	Error        string                   `json:"error,omitempty"`
 }
 
 type diagnoseMetricsWindow struct {
@@ -106,26 +116,20 @@ func diagnoseMetricsSince(sinceSeconds *int64) time.Duration {
 }
 
 // diagnoseWorkloadMetrics returns nil when there is nothing to report (vitals
-// are switched off, no pods to name, the caller cannot get the diagnosed
-// resource, or Prometheus is absent) so the caller omits the field. The per-kind gate runs inside
-// the budget: a slow SubjectAccessReview counts against the branch, not
-// against the rest of diagnose, and a gate that does not answer in time
-// denies.
-func diagnoseWorkloadMetrics(ctx context.Context, group, resource, namespace string, pods []*corev1.Pod, since time.Duration, now time.Time) *diagnoseMetrics {
+// are switched off, no pod could be established, the caller cannot get the
+// diagnosed resource, or Prometheus is absent) so the caller omits the field.
+// The per-kind gate runs inside the budget: a slow SubjectAccessReview counts
+// against the branch, not against the rest of diagnose, and a gate that does
+// not answer in time denies.
+//
+// A workload with no pods right now is not a workload with no metrics: one
+// scaled to zero, or whose pods were all replaced, still has an hour of
+// history if kube-state-metrics recorded who owned them. The resolver
+// decides that, so the pod list is not a precondition here.
+func diagnoseWorkloadMetrics(ctx context.Context, group, resource, namespace, name string, pods []*corev1.Pod, since time.Duration, now time.Time) *diagnoseMetrics {
 	if !DiagnoseMetricsEnabled {
 		return nil
 	}
-	names := make([]string, 0, len(pods))
-	for _, p := range pods {
-		if p != nil && p.Name != "" {
-			names = append(names, p.Name)
-		}
-	}
-	if len(names) == 0 {
-		return nil
-	}
-	sort.Strings(names)
-
 	budgetCtx, cancel := context.WithTimeout(ctx, diagnoseMetricsBudget)
 	defer cancel()
 
@@ -134,27 +138,64 @@ func diagnoseWorkloadMetrics(ctx context.Context, group, resource, namespace str
 	}
 	avail := prometheus.Availability(budgetCtx)
 	if avail.State == prometheus.AvailabilityAbsent {
+		if avail.Err != nil && (errors.Is(avail.Err, context.DeadlineExceeded) || errors.Is(avail.Err, context.Canceled)) {
+			// Discovery did not answer in time. That is not "no Prometheus",
+			// and the field must say so rather than vanish.
+			return &diagnoseMetrics{
+				Window: diagnoseMetricsWindow{Start: now.Add(-since).UTC().Format(time.RFC3339), End: now.UTC().Format(time.RFC3339), Step: "0s"},
+				Pods:   len(pods),
+				Series: []diagnoseMetricSeries{},
+				Error:  fmt.Sprintf("prometheus probe did not answer within %s", diagnoseMetricsBudget),
+			}
+		}
 		return nil
 	}
-	return diagnoseMetricsForPodSet(budgetCtx, avail, namespace, names, since, now)
+	var querier interface {
+		Query(context.Context, string) (*prom.QueryResult, error)
+	}
+	if client := prometheus.GetClient(); client != nil && avail.State == prometheus.AvailabilityConnected {
+		querier = client
+	}
+	scope, err := prometheus.ResolvePodScope(budgetCtx, querier, k8s.GetResourceCache(), resource, namespace, name, since, diagnoseMetricsMaxPods)
+	if err != nil {
+		log.Printf("[mcp] diagnose: pod scope for %s %s/%s failed: %v", resource, namespace, name, err)
+		// Prometheus is there and the caller may read the resource; the pods
+		// could not be established. Say so rather than omit the field, which
+		// reads as "this workload has no metrics".
+		return &diagnoseMetrics{
+			Window: diagnoseMetricsWindow{Start: now.Add(-since).UTC().Format(time.RFC3339), End: now.UTC().Format(time.RFC3339), Step: "0s"},
+			Pods:   len(pods),
+			Series: []diagnoseMetricSeries{},
+			Error:  boundDiagnoseMetricsError(fmt.Sprintf("metrics omitted: the workload's pods could not be established: %v", err)),
+		}
+	}
+	if scope.Selection.IsEmpty() {
+		// Neither source named a pod: nothing to chart and nothing to say.
+		return nil
+	}
+	return diagnoseMetricsForScope(budgetCtx, avail, scope, since, now)
 }
 
-func diagnoseMetricsForPodSet(budgetCtx context.Context, avail prometheus.AvailabilityState, namespace string, names []string, since time.Duration, now time.Time) *diagnoseMetrics {
-
+func diagnoseMetricsForScope(budgetCtx context.Context, avail prometheus.AvailabilityState, scope prometheus.PodScope, since time.Duration, now time.Time) *diagnoseMetrics {
+	namespace := scope.Namespace
 	start := now.Add(-since)
 	out := &diagnoseMetrics{
 		Window: diagnoseMetricsWindow{
 			Start: start.UTC().Format(time.RFC3339),
 			End:   now.UTC().Format(time.RFC3339),
 		},
-		Series: []diagnoseMetricSeries{},
+		Pods:         len(scope.CurrentPods),
+		Coverage:     scope.Coverage,
+		ObservedPods: scope.ObservedPods,
+		Series:       []diagnoseMetricSeries{},
 	}
-	if len(names) > diagnoseMetricsMaxPods {
+	if scope.Partial() {
 		out.Partial = true
-		out.OmittedPods = len(names) - diagnoseMetricsMaxPods
-		names = names[:diagnoseMetricsMaxPods]
+		out.OmittedPods = scope.CurrentTotal - len(scope.CurrentPods)
 	}
-	out.Pods = len(names)
+	if scope.ProbeErr != nil {
+		out.ScopeError = boundDiagnoseMetricsError(scope.ProbeErr.Error())
+	}
 	step, _ := adjustStep(since, "", diagnoseMetricsPointBudget(out))
 	out.Window.Step = step.String()
 
@@ -171,6 +212,10 @@ func diagnoseMetricsForPodSet(budgetCtx context.Context, avail prometheus.Availa
 		out.Error = "prometheus unreachable: connection was reset"
 		return out
 	}
+	if scope.Selection.IsEmpty() {
+		out.Error = "metrics omitted: no pods could be attributed to the workload"
+		return out
+	}
 
 	type categoryResult struct {
 		series diagnoseMetricSeries
@@ -182,7 +227,7 @@ func diagnoseMetricsForPodSet(budgetCtx context.Context, avail prometheus.Availa
 		wg.Add(1)
 		go func(i int, cat prom.MetricCategory) {
 			defer wg.Done()
-			s, err := queryPodSetCategory(budgetCtx, p, namespace, names, cat, start, now, step)
+			s, err := queryPodSetCategory(budgetCtx, p, scope.Selection, cat, start, now, step)
 			results[i] = categoryResult{series: s, err: err}
 		}(i, cat)
 	}
@@ -259,15 +304,15 @@ func diagnoseMetricsPointBudget(envelope *diagnoseMetrics) int {
 // queryPodSetCategory runs one category over the pod set, retrying without
 // the container filter when the filtered query finds nothing, as the curated
 // HTTP metrics handler does for clusters whose cAdvisor lacks the label.
-func queryPodSetCategory(ctx context.Context, p *prom.Client, namespace string, pods []string, cat prom.MetricCategory, start, end time.Time, step time.Duration) (diagnoseMetricSeries, error) {
+func queryPodSetCategory(ctx context.Context, p *prom.Client, sel prom.PodSelection, cat prom.MetricCategory, start, end time.Time, step time.Duration) (diagnoseMetricSeries, error) {
 	out := diagnoseMetricSeries{Category: string(cat), Unit: prom.CategoryUnit(cat)}
-	query := prom.BuildPodSetQuery(namespace, pods, cat)
+	query := prom.BuildScopedQuery(sel, cat, prom.AggregateTotal, true)
 	result, err := p.QueryRange(ctx, query, start, end, step)
 	if err != nil {
 		return out, err
 	}
 	if len(result.Series) == 0 && prom.CategoryUsesContainerFilter(cat) {
-		fallback := prom.BuildPodSetQueryNoContainerFilter(namespace, pods, cat)
+		fallback := prom.BuildScopedQuery(sel, cat, prom.AggregateTotal, false)
 		// On a cluster whose cAdvisor lacks the container label the retry is
 		// the query that carries the data, so its failure is the category's
 		// failure rather than an empty window.

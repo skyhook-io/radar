@@ -484,6 +484,13 @@ export interface InvestigationMetricsEvidence {
   subject?: DiagnosisResourceRef;
   pods?: number;
   partial?: boolean;
+  /**
+   * How the vitals' pods were established: kube-state-metrics ownership over
+   * the window (replaced pods included; observedPods counts them) or only
+   * the pods controlled at collection time.
+   */
+  coverage?: "ksm_history" | "current_pods" | "none";
+  observedPods?: number;
 }
 
 export interface InvestigationEvidenceObservation {
@@ -1414,6 +1421,13 @@ class ProjectionBuilder {
     string,
     Set<InvestigationSemanticDomain>
   >();
+
+  /**
+   * Pods a target-scoped diagnose bundle listed as the workload's own, by
+   * controller ownership. Membership for an agent's pod-level Prometheus
+   * query is proved against this set, never inferred from a name.
+   */
+  readonly establishedTargetPods = new Set<string>();
 
   private readonly groupByIdentity = new Map<
     string,
@@ -2349,6 +2363,7 @@ function adaptDiagnose(
   });
   const relatedRelevance: InvestigationEvidenceRelevance =
     bundleRelevance === "target" ? "producer-related" : "broader";
+
   const bundledRowRelevance = (
     kind: string,
     name: string,
@@ -3767,7 +3782,7 @@ function stringRecord(value: unknown): Record<string, string> | undefined {
 function producerEstablishedTargetPods(
   builder: ProjectionBuilder,
 ): Set<string> {
-  const pods = new Set<string>();
+  const pods = new Set<string>(builder.establishedTargetPods);
   const namespace = builder.target.namespace;
   if (!namespace) return pods;
   for (const group of builder.groups) {
@@ -4630,11 +4645,21 @@ function metricsSelector(
   return { metric: item.metric, matchers };
 }
 
-const WORKLOAD_SELECTOR_LABELS: Readonly<Record<string, string | undefined>> = {
-  deployment: "deployment",
-  statefulset: "statefulset",
-  daemonset: "daemonset",
-  workload: undefined,
+/**
+ * How one selector relates to the investigated resource. "target": it names
+ * the target itself (an identity label, or pods a producer established as
+ * the target's own). "related": it mentions the target's namespace and
+ * something in it the target cannot be proved to own (a pod named by prefix,
+ * a sibling workload, an owner series). "namespace": only the namespace.
+ * "foreign": another namespace or none.
+ */
+type SelectorVerdict = "target" | "related" | "namespace" | "foreign";
+
+const VERDICT_RANK: Record<SelectorVerdict, number> = {
+  foreign: 3,
+  target: 2,
+  related: 1,
+  namespace: 0,
 };
 
 /**
@@ -4652,62 +4677,143 @@ function regexNamesExactly(
   return value === `${escaped}${suffix}`;
 }
 
-function selectorNamesTarget(
-  target: InvestigationEvidenceTarget,
-  matcher: InvestigationMetricsSelector["matchers"][number],
-): boolean {
-  const { label, op, value } = matcher;
-  if (label === "pod") {
-    // A Pod target is named only by its own exact name: its "<name>-" prefix
-    // selects other pods, never itself.
-    if (target.kind.toLowerCase() === "pod") {
-      if (op === "=") return value === target.name;
-      if (op === "=~") return regexNamesExactly(value, target.name, "");
-      return false;
-    }
-    if (op === "=~") return regexNamesExactly(value, target.name, "-.*");
-    if (op === "=") return value.startsWith(`${target.name}-`);
-    return false;
-  }
-  if (!(label in WORKLOAD_SELECTOR_LABELS)) return false;
-  const requiredKind = WORKLOAD_SELECTOR_LABELS[label];
-  if (requiredKind && target.kind.toLowerCase() !== requiredKind) return false;
-  if (op === "=") return value === target.name;
-  if (op === "=~") return regexNamesExactly(value, target.name, "");
-  return false;
+/**
+ * The pod names an exact-set regex `^(a|b)$` (or the unanchored `a|b`, which
+ * Prometheus anchors) lists. A dot must be escaped to count: `^(api.v2-0)$`
+ * also selects `api-v2-0`, so it names more than the pod it appears to and
+ * cannot prove membership. Undefined for any other shape.
+ */
+function exactPodSet(value: string): string[] | undefined {
+  const body =
+    value.startsWith("^(") && value.endsWith(")$") ? value.slice(2, -2) : value;
+  if (body === "" || /[^A-Za-z0-9\-|\\.]/.test(body)) return undefined;
+  // Every dot has to arrive escaped; an unescaped one is a wildcard.
+  if (/(^|[^\\])\./.test(body.replace(/\\\\/g, ""))) return undefined;
+  const names = body.split("|").map((name) => name.replace(/\\\./g, "."));
+  return names.every((name) => /^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/.test(name))
+    ? names
+    : undefined;
 }
 
 /**
- * A metrics result is about the target only when every selector says so:
- * the target namespace plus a pod or workload matcher naming it. A query with
- * any bare or foreign selector (a cluster denominator, a sibling workload, an
- * alternation) could be about anything, so it stays broader.
+ * Whether a workload identity label names the target: the label
+ * kube-state-metrics uses for the kind (`deployment`, `job_name`, …) or a
+ * generic `workload` label, with the exact name.
+ */
+function identityLabelNamesTarget(
+  target: InvestigationEvidenceTarget,
+  label: string,
+  value: string,
+  exact: boolean,
+): boolean {
+  const kind = target.kind.toLowerCase();
+  const workloadLabel = WORKLOAD_LABEL_BY_KIND[kind];
+  // `deployment=api` states the kind in the label itself; `workload=api` does
+  // not, so a `workload_type` naming another kind vetoes it in
+  // classifySelector, which is the only place that sees the whole selector.
+  if (label !== workloadLabel && label !== "workload") return false;
+  return exact
+    ? value === target.name
+    : regexNamesExactly(value, target.name, "");
+}
+
+function classifyMatcher(
+  target: InvestigationEvidenceTarget,
+  matcher: InvestigationMetricsSelector["matchers"][number],
+  establishedPods: ReadonlySet<string>,
+): SelectorVerdict {
+  const { label, op, value } = matcher;
+  const kind = target.kind.toLowerCase();
+  if (label === "pod") {
+    if (kind === "pod") {
+      if (op === "=") return value === target.name ? "target" : "related";
+      if (op === "=~")
+        return regexNamesExactly(value, target.name, "") ? "target" : "related";
+      return "related";
+    }
+    if (op === "=") return establishedPods.has(value) ? "target" : "related";
+    if (op === "=~") {
+      const names = exactPodSet(value);
+      if (names && names.every((name) => establishedPods.has(name))) {
+        return "target";
+      }
+      return "related";
+    }
+    return "related";
+  }
+  if (label === "namespace" || label === "container") return "namespace";
+  if (op === "=" && identityLabelNamesTarget(target, label, value, true)) {
+    return "target";
+  }
+  if (op === "=~" && identityLabelNamesTarget(target, label, value, false)) {
+    return "target";
+  }
+  // Owner series (kube_pod_owner, kube_replicaset_owner) and every other
+  // label in the namespace: about the namespace's things, not proved to be
+  // the target's.
+  return "related";
+}
+
+function classifySelector(
+  target: InvestigationEvidenceTarget,
+  selector: InvestigationMetricsSelector,
+  establishedPods: ReadonlySet<string>,
+): SelectorVerdict {
+  // `workload` is generic, so a `workload_type` naming another kind means
+  // the series is about a different workload that happens to share a name.
+  const workloadType = selector.matchers.find(
+    (matcher) => matcher.label === "workload_type" && matcher.op === "=",
+  );
+  const workloadTypeConflicts =
+    workloadType !== undefined &&
+    workloadType.value.toLowerCase() !== target.kind.toLowerCase();
+  // Prometheus anchors regex matchers, so namespace=~"shop" is exact too.
+  const inNamespace = selector.matchers.some(
+    (matcher) =>
+      matcher.label === "namespace" &&
+      ((matcher.op === "=" && matcher.value === target.namespace) ||
+        (matcher.op === "=~" &&
+          regexNamesExactly(matcher.value, target.namespace ?? "", ""))),
+  );
+  if (!inNamespace) return "foreign";
+  let verdict: SelectorVerdict = "namespace";
+  for (const matcher of selector.matchers) {
+    if (workloadTypeConflicts && matcher.label === "workload") continue;
+    const candidate = classifyMatcher(target, matcher, establishedPods);
+    if (candidate === "foreign") return "foreign";
+    if (VERDICT_RANK[candidate] > VERDICT_RANK[verdict]) verdict = candidate;
+  }
+  return verdict;
+}
+
+/**
+ * A metrics result is about the target only when every selector names it:
+ * the target namespace plus pods a producer established as the target's own
+ * or an identity label with its exact name. A selector that only mentions
+ * something in the namespace the target cannot be proved to own (a pod
+ * prefix, a sibling, an owner join) makes the result producer-related: kept,
+ * not promoted, no change markers. A namespace-only query, a bare or foreign
+ * selector, or an inventory the producer could not extract is broader.
  */
 export function metricsScope(
   target: InvestigationEvidenceTarget,
   selectors: readonly InvestigationMetricsSelector[],
   selectorsUnknown: boolean,
+  establishedPods: ReadonlySet<string> = new Set(),
 ): InvestigationEvidenceRelevance {
   if (selectorsUnknown || selectors.length === 0 || !target.namespace) {
     return "broader";
   }
-  let allNameTarget = true;
+  let allTarget = true;
+  let anyRelated = false;
   for (const selector of selectors) {
-    // Prometheus anchors regex matchers, so namespace=~"shop" is exact too.
-    const inNamespace = selector.matchers.some(
-      (matcher) =>
-        matcher.label === "namespace" &&
-        ((matcher.op === "=" && matcher.value === target.namespace) ||
-          (matcher.op === "=~" &&
-            regexNamesExactly(matcher.value, target.namespace ?? "", ""))),
-    );
-    if (!inNamespace) return "broader";
-    if (
-      !selector.matchers.some((matcher) => selectorNamesTarget(target, matcher))
-    )
-      allNameTarget = false;
+    const verdict = classifySelector(target, selector, establishedPods);
+    if (verdict === "foreign") return "broader";
+    if (verdict !== "target") allTarget = false;
+    if (verdict === "related") anyRelated = true;
   }
-  return allNameTarget ? "target" : "producer-related";
+  if (allTarget) return "target";
+  return anyRelated ? "producer-related" : "broader";
 }
 
 function metricsWindowLabel(data: {
@@ -4769,6 +4875,13 @@ function addDiagnoseMetrics(
     (value.omittedPods !== undefined &&
       !nonNegativeInteger(value.omittedPods)) ||
     (value.error !== undefined && typeof value.error !== "string") ||
+    (value.coverage !== undefined &&
+      value.coverage !== "ksm_history" &&
+      value.coverage !== "current_pods" &&
+      value.coverage !== "none") ||
+    (value.observedPods !== undefined &&
+      !nonNegativeInteger(value.observedPods)) ||
+    (value.scopeError !== undefined && typeof value.scopeError !== "string") ||
     !Array.isArray(value.series)
   ) {
     invalidPayload(builder, source, "Workload metrics");
@@ -4776,9 +4889,19 @@ function addDiagnoseMetrics(
   }
   const scope = scopeFromArgs(source);
   const partial = value.partial === true;
-  const podsLabel = partial
-    ? `first ${value.pods} of ${typeof value.omittedPods === "number" ? value.pods + value.omittedPods : "the"} pods`
-    : `${value.pods} pod${value.pods === 1 ? "" : "s"}`;
+  const coverage = value.coverage as
+    "ksm_history" | "current_pods" | "none" | undefined;
+  const observedPods =
+    typeof value.observedPods === "number" ? value.observedPods : undefined;
+  // The pods the chart covers: with ownership history every pod
+  // kube-state-metrics attributed in the window, otherwise the pods running
+  // at collection time, which a rollout during the window can miss.
+  const podsLabel =
+    coverage === "ksm_history" && observedPods !== undefined && observedPods > 0
+      ? `${observedPods} pod${observedPods === 1 ? "" : "s"} in window`
+      : partial
+        ? `first ${value.pods} of ${typeof value.omittedPods === "number" ? value.pods + value.omittedPods : "the"} current pods`
+        : `${value.pods} current pod${value.pods === 1 ? "" : "s"}`;
   const windowLabel = metricsWindowLabel({
     mode: "range",
     start: window.start,
@@ -4822,6 +4945,8 @@ function addDiagnoseMetrics(
       subject,
       pods: value.pods,
       partial,
+      ...(coverage ? { coverage } : {}),
+      ...(observedPods !== undefined ? { observedPods } : {}),
     };
     builder.observe(
       `metrics:diagnose:${subject.group ?? ""}:${subject.kind}:${subject.namespace ?? ""}:${subject.name}:${entry.category}`,
@@ -4845,6 +4970,14 @@ function addDiagnoseMetrics(
   }
   if (nonEmptyString(value.error)) {
     builder.limit(source, "Workload metrics", value.error, "error");
+  }
+  if (nonEmptyString(value.scopeError)) {
+    builder.limit(
+      source,
+      "Workload metrics",
+      `Pod ownership history could not be read (${value.scopeError}); the charts cover the pods running at collection time.`,
+      "unknown",
+    );
   }
 }
 
@@ -4882,7 +5015,12 @@ function adaptQueryPrometheus(
     return;
   }
   const selectorsUnknown = value.selectorsUnknown === true;
-  const relevance = metricsScope(builder.target, selectors, selectorsUnknown);
+  const relevance = metricsScope(
+    builder.target,
+    selectors,
+    selectorsUnknown,
+    producerEstablishedTargetPods(builder),
+  );
   const start = nonEmptyString(value.start) ? value.start : undefined;
   const end = nonEmptyString(value.end) ? value.end : undefined;
   const step = nonEmptyString(value.step) ? value.step : undefined;
@@ -4998,11 +5136,55 @@ const ADAPTERS: Record<
   query_prometheus: adaptQueryPrometheus,
 };
 
+/**
+ * The pods every diagnose of the target listed as its own, gathered before
+ * anything is classified. A metrics query is target evidence when it names
+ * pods a producer established, and that must not depend on whether the agent
+ * happened to run diagnose before or after the query: the same investigation
+ * would otherwise read differently for the same facts.
+ */
+function collectEstablishedTargetPods(
+  builder: ProjectionBuilder,
+  turns: readonly InvestigationEvidenceTurn[],
+): void {
+  for (const turn of turns) {
+    for (const item of turn.timeline) {
+      if (
+        item.kind !== "tool" ||
+        item.tool !== "diagnose" ||
+        item.radarEvidence !== true ||
+        item.status !== "done" ||
+        item.isError === true ||
+        !nonEmptyString(item.result)
+      ) {
+        continue;
+      }
+      const value = record(parseJSON(item.result));
+      const resource = kubernetesResource(value?.resource);
+      if (!value || !resource || !Array.isArray(value.podNames)) continue;
+      if (
+        relevanceForResource(builder, {
+          kind: resource.kind,
+          group: apiVersionToGroup(resource.apiVersion),
+          namespace: resource.metadata.namespace,
+          name: resource.metadata.name,
+        }) !== "target"
+      ) {
+        continue;
+      }
+      for (const pod of value.podNames) {
+        if (nonEmptyString(pod)) builder.establishedTargetPods.add(pod);
+      }
+    }
+  }
+}
+
 export function projectInvestigationEvidence(
   turns: readonly InvestigationEvidenceTurn[],
   target: InvestigationEvidenceTarget,
 ): InvestigationEvidenceProjection {
   const builder = new ProjectionBuilder(target);
+  collectEstablishedTargetPods(builder, turns);
   const evidenceRefSources: InvestigationEvidenceSource[] = [];
   const citableSources: InvestigationEvidenceSource[] = [];
   let order = 0;

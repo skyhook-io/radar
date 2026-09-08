@@ -9,6 +9,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/settings"
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
 )
@@ -182,6 +183,9 @@ func (s *Server) invalidatePostContextSwitchCaches() {
 	s.yamlSchemaCacheBytes = 0
 	s.yamlSchemaMu.Unlock()
 	s.vitalsMetrics.clear()
+	// Pod membership is per cluster: a resolved scope names the previous
+	// cluster's pods and its ownership answer does not apply to the new one.
+	prometheus.ResetPodScopeCache()
 	gitopstree.ResetUnknownKindLogDedup()
 }
 

@@ -5212,7 +5212,21 @@ describe("query_prometheus evidence", () => {
       ],
     },
   ];
+  // The pods a diagnose bundle established as the target's own, so an agent
+  // query naming exactly them is target evidence. A prefix over the same
+  // namespace is not: "api-.*" also selects api-worker's pods.
+  const establishedPods = ["api-7f6-abc", "api-7f6-def"];
+  const podSetPattern = `^(${establishedPods.join("|")})$`;
   const targetSelectors = [
+    {
+      metric: "container_memory_working_set_bytes",
+      matchers: [
+        { label: "namespace", op: "=", value: "shop" },
+        { label: "pod", op: "=~", value: podSetPattern },
+      ],
+    },
+  ];
+  const prefixSelectors = [
     {
       metric: "container_memory_working_set_bytes",
       matchers: [
@@ -5221,10 +5235,25 @@ describe("query_prometheus evidence", () => {
       ],
     },
   ];
+  // A diagnose of the target that lists its pods, so a later query can be
+  // proved to be about them.
+  function podsBundle() {
+    return tool(
+      "diag-pods",
+      "diagnose",
+      { resource: deployment, pods: 2, podNames: establishedPods },
+      {
+        summary: JSON.stringify({
+          kind: "Deployment",
+          namespace: "shop",
+          name: "api",
+        }),
+      },
+    );
+  }
   function promResult(patch: Record<string, unknown> = {}) {
     return {
-      query:
-        'sum(container_memory_working_set_bytes{namespace="shop",pod=~"api-.*"})',
+      query: `sum(container_memory_working_set_bytes{namespace="shop",pod=~"${podSetPattern}"})`,
       type: "range",
       start: "2026-09-06T07:17:23Z",
       end: "2026-09-06T09:17:23Z",
@@ -5260,6 +5289,7 @@ describe("query_prometheus evidence", () => {
 
   it("charts a range query scoped to the target as target evidence", () => {
     const projection = project([
+      podsBundle(),
       tool("prom", "query_prometheus", promResult(), {
         summary: JSON.stringify({ query: "sum(...)", type: "range" }),
       }),
@@ -5286,7 +5316,8 @@ describe("query_prometheus evidence", () => {
     expect(data.unit).toBe("bytes");
     expect(data.series).toEqual(rangeSeries);
     expect(investigationEvidenceSubjectRef(data)).toEqual(data.subject);
-    expect(projection.coverage.projected).toBe(1);
+    // The chart and the diagnose bundle that established its pods.
+    expect(projection.coverage.projected).toBe(2);
   });
 
   it("claims a unit only for a single bare metric that states one", () => {
@@ -5396,11 +5427,7 @@ describe("query_prometheus evidence", () => {
       matchers: [{ label: "namespace", op: "=", value: "shop" }, ...extra],
     });
     const cases: Array<[string, Record<string, unknown>, string]> = [
-      [
-        "namespace only",
-        { selectors: [withNamespace("up")] },
-        "producer-related",
-      ],
+      ["namespace only", { selectors: [withNamespace("up")] }, "broader"],
       [
         "workload label",
         {
@@ -5413,7 +5440,7 @@ describe("query_prometheus evidence", () => {
         "target",
       ],
       [
-        "exact pod name prefix",
+        "pod named by the workload's prefix, never established",
         {
           selectors: [
             withNamespace("kube_pod_container_status_restarts_total", [
@@ -5421,7 +5448,19 @@ describe("query_prometheus evidence", () => {
             ]),
           ],
         },
-        "target",
+        "producer-related",
+      ],
+      [
+        "owner join over the namespace",
+        {
+          selectors: [
+            withNamespace("kube_pod_owner", [
+              { label: "owner_kind", op: "=", value: "ReplicaSet" },
+              { label: "owner_name", op: "=~", value: "^(api-7f6)$" },
+            ]),
+          ],
+        },
+        "producer-related",
       ],
       [
         "container alone",
@@ -5432,7 +5471,7 @@ describe("query_prometheus evidence", () => {
             ]),
           ],
         },
-        "producer-related",
+        "broader",
       ],
       [
         "sibling workload",
@@ -5579,7 +5618,7 @@ describe("query_prometheus evidence", () => {
         ],
         false,
       ),
-    ).toBe("target");
+    ).toBe("producer-related");
     expect(
       metricsScope(
         dotted,
@@ -5646,6 +5685,20 @@ describe("query_prometheus evidence", () => {
         selector({ op: "=~", value: "shop" }, { op: "=~", value: "api-.*" }),
         false,
       ),
+    ).toBe("producer-related");
+    expect(
+      metricsScope(
+        target,
+        selector(
+          { op: "=~", value: "shop" },
+          {
+            op: "=~",
+            value: "^(api-7f6-abc)$",
+          },
+        ),
+        false,
+        new Set(["api-7f6-abc"]),
+      ),
     ).toBe("target");
     expect(
       metricsScope(
@@ -5667,6 +5720,156 @@ describe("query_prometheus evidence", () => {
         false,
       ),
     ).toBe("broader");
+  });
+
+  it("proves pod membership from the bundle instead of the workload's name", () => {
+    const withBundle = project([
+      podsBundle(),
+      tool("prom", "query_prometheus", promResult()),
+    ]);
+    expect(groupsOf(withBundle.groups, "metrics")[0].latest.relevance).toBe(
+      "target",
+    );
+
+    // The same exact set with no bundle to establish it, and the prefix that
+    // would also select a sibling workload's pods: kept, never promoted.
+    const unproven = project([tool("prom", "query_prometheus", promResult())]);
+    expect(groupsOf(unproven.groups, "metrics")[0].latest.relevance).toBe(
+      "producer-related",
+    );
+    const prefixed = project([
+      podsBundle(),
+      tool(
+        "prom",
+        "query_prometheus",
+        promResult({ selectors: prefixSelectors }),
+      ),
+    ]);
+    const prefixGroup = groupsOf(prefixed.groups, "metrics")[0];
+    expect(prefixGroup.latest.relevance).toBe("producer-related");
+    expect(
+      prefixGroup.latest.data.type === "metrics" &&
+        prefixGroup.latest.data.subject,
+    ).toBeUndefined();
+
+    // A subset of the established pods is still about the target.
+    const subset = project([
+      podsBundle(),
+      tool(
+        "prom",
+        "query_prometheus",
+        promResult({
+          selectors: [
+            {
+              metric: "container_memory_working_set_bytes",
+              matchers: [
+                { label: "namespace", op: "=", value: "shop" },
+                { label: "pod", op: "=", value: "api-7f6-abc" },
+              ],
+            },
+          ],
+        }),
+      ),
+    ]);
+    expect(groupsOf(subset.groups, "metrics")[0].latest.relevance).toBe(
+      "target",
+    );
+  });
+
+  it("proves membership whatever order the agent ran its tools in", () => {
+    // The agent may know the pod names from an earlier turn and chart them
+    // before it calls diagnose. The same facts must read the same way.
+    const queryFirst = project([
+      tool("prom", "query_prometheus", promResult()),
+      podsBundle(),
+    ]);
+    expect(groupsOf(queryFirst.groups, "metrics")[0].latest.relevance).toBe(
+      "target",
+    );
+  });
+
+  it("does not let a generic workload label claim another kind's series", () => {
+    const workloadSelectors = (type?: string) => [
+      {
+        metric: "container_cpu_usage_seconds_total",
+        matchers: [
+          { label: "namespace", op: "=", value: "shop" },
+          { label: "workload", op: "=", value: "api" },
+          ...(type ? [{ label: "workload_type", op: "=", value: type }] : []),
+        ],
+      },
+    ];
+    const asDeployment = project([
+      tool(
+        "prom",
+        "query_prometheus",
+        promResult({ selectors: workloadSelectors("deployment") }),
+      ),
+    ]);
+    expect(groupsOf(asDeployment.groups, "metrics")[0].latest.relevance).toBe(
+      "target",
+    );
+    // A StatefulSet also called api in the same namespace is a different
+    // workload, and the series says so.
+    const asStatefulSet = project([
+      tool(
+        "prom",
+        "query_prometheus",
+        promResult({ selectors: workloadSelectors("statefulset") }),
+      ),
+    ]);
+    expect(groupsOf(asStatefulSet.groups, "metrics")[0].latest.relevance).toBe(
+      "producer-related",
+    );
+  });
+
+  it("refuses an unescaped dot as proof that a pod set names the target", () => {
+    const dotted = ["api.v2-0"];
+    const bundle = tool(
+      "diag-dotted",
+      "diagnose",
+      { resource: deployment, pods: 1, podNames: dotted },
+      {
+        summary: JSON.stringify({
+          kind: "Deployment",
+          namespace: "shop",
+          name: "api",
+        }),
+      },
+    );
+    const podSelector = (value: string) => [
+      {
+        metric: "container_memory_working_set_bytes",
+        matchers: [
+          { label: "namespace", op: "=", value: "shop" },
+          { label: "pod", op: "=~", value },
+        ],
+      },
+    ];
+    // `^(api.v2-0)$` also selects api-v2-0, so it names more than the pod it
+    // appears to and cannot prove membership.
+    const wildcard = project([
+      bundle,
+      tool(
+        "prom",
+        "query_prometheus",
+        promResult({ selectors: podSelector("^(api.v2-0)$") }),
+      ),
+    ]);
+    expect(groupsOf(wildcard.groups, "metrics")[0].latest.relevance).toBe(
+      "producer-related",
+    );
+    const escaped = project([
+      bundle,
+      tool(
+        "prom",
+        "query_prometheus",
+        promResult({ selectors: podSelector("^(api\\.v2-0)$") }),
+      ),
+    ]);
+    expect(groupsOf(escaped.groups, "metrics")[0].latest.relevance).toBe(
+      "target",
+    );
   });
 
   it("rejects a result without the producer's selector inventory", () => {
@@ -5845,7 +6048,7 @@ describe("diagnose metrics evidence", () => {
       expect(investigationEvidenceSubjectRef(data)).toEqual(data.subject);
     }
     const [cpu, , restarts] = groups;
-    expect(cpu.latest.summary).toBe("2 pods · 60m window · 1m2s step");
+    expect(cpu.latest.summary).toBe("2 current pods · 60m window · 1m2s step");
     const cpuData = cpu.latest.data;
     if (cpuData.type !== "metrics") throw new Error("expected metrics");
     expect(cpuData.unit).toBe("cores");
@@ -5974,7 +6177,7 @@ describe("diagnose metrics evidence", () => {
     ]);
     const [cpu] = groupsOf(projection.groups, "metrics");
     expect(cpu.latest.summary).toBe(
-      "first 50 of 55 pods · 60m window · 1m2s step · partial pod set",
+      "first 50 of 55 current pods · 60m window · 1m2s step · partial pod set",
     );
     const data = cpu.latest.data;
     if (data.type !== "metrics") throw new Error("expected metrics");
