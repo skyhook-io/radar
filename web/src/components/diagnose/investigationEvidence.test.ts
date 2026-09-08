@@ -3473,6 +3473,56 @@ describe("query_prometheus evidence", () => {
     ).toBe("producer-related");
   });
 
+  it("names a Pod target only by its exact name and accepts an anchored namespace regex", () => {
+    const pod = { ...target, kind: "Pod", group: "", name: "api-7f6-abc" };
+    const selector = (
+      namespace: { op: string; value: string },
+      podMatcher: { op: string; value: string },
+    ) => [
+      {
+        metric: "container_memory_working_set_bytes",
+        matchers: [
+          { label: "namespace", ...namespace },
+          { label: "pod", ...podMatcher },
+        ],
+      },
+    ];
+    const exactNs = { op: "=", value: "shop" };
+    expect(
+      metricsScope(pod, selector(exactNs, { op: "=~", value: "api-7f6-abc-.*" }), false),
+    ).toBe("producer-related");
+    expect(
+      metricsScope(pod, selector(exactNs, { op: "=", value: "api-7f6-abc" }), false),
+    ).toBe("target");
+    expect(
+      metricsScope(pod, selector(exactNs, { op: "=~", value: "api-7f6-abc" }), false),
+    ).toBe("target");
+    expect(
+      metricsScope(pod, selector(exactNs, { op: "=", value: "api-7f6-abc-extra" }), false),
+    ).toBe("producer-related");
+    expect(
+      metricsScope(
+        target,
+        selector({ op: "=~", value: "shop" }, { op: "=~", value: "api-.*" }),
+        false,
+      ),
+    ).toBe("target");
+    expect(
+      metricsScope(
+        target,
+        selector({ op: "=~", value: "shop|other" }, { op: "=~", value: "api-.*" }),
+        false,
+      ),
+    ).toBe("broader");
+    expect(
+      metricsScope(
+        target,
+        selector({ op: "!=", value: "kube-system" }, { op: "=~", value: "api-.*" }),
+        false,
+      ),
+    ).toBe("broader");
+  });
+
   it("rejects a result without the producer's selector inventory", () => {
     const projection = project([
       tool("old", "query_prometheus", promResult({ selectors: undefined })),

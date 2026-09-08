@@ -2310,6 +2310,48 @@ describe("InvestigationEvidencePane metrics cards", () => {
     expect(html).toContain("api-7f6-abc");
   });
 
+  it("keeps series that differ only by a hidden label distinguishable across chart and table, and names null-only series honestly", () => {
+    const start = Date.parse(window.start) / 1000;
+    const projection = project(
+      tool("prom", "query_prometheus", {
+        ...rangeResult(
+          targetSelectors,
+          'rate(container_cpu_usage_seconds_total{namespace="shop",pod=~"api-.*"}[5m])',
+        ),
+        series: [
+          {
+            labels: { pod: "api-7f6-abc", container: "api" },
+            dataPoints: [
+              { timestamp: start, value: 0.2 },
+              { timestamp: start + 60, value: 0.4 },
+            ],
+          },
+          {
+            labels: { pod: "api-7f6-abc", container: "envoy" },
+            dataPoints: [{ timestamp: start + 120, value: 0.05 }],
+          },
+          {
+            labels: { pod: "api-7f6-abc", container: "init" },
+            dataPoints: [
+              { timestamp: start, value: null },
+              { timestamp: start + 60, value: null },
+            ],
+          },
+        ],
+      }),
+    );
+    const html = render(projection);
+    expect(html).toContain("pod=api-7f6-abc, container=envoy");
+    expect(html).toContain(
+      "1 series has a single sample in this window, listed with its time:",
+    );
+    expect(html).toContain(
+      "1 series returned no finite values in this window: ",
+    );
+    expect(html).toContain("pod=api-7f6-abc, container=init");
+    expect(html).not.toContain("2 series have a single sample");
+  });
+
   it("draws same-turn changes to the subject on the chart and links the subject", () => {
     const projection = project(
       tool("diag", "diagnose", {

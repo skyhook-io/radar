@@ -53,6 +53,13 @@ func TestTurnPrompt_MetricsNudgeOnlyOnReadOnlyTurnsWhenConnected(t *testing.T) {
 	if p := turnPrompt(apply); strings.Contains(p, "Prometheus") {
 		t.Fatalf("an apply turn must not be sent to gather metrics:\n%s", p)
 	}
+
+	withCredentials := base
+	withCredentials.Metrics = MetricsAvailability{Connected: true, Address: "https://admin:s3cret@prom.example.com:9090"}
+	if p := turnPrompt(withCredentials); strings.Contains(p, "s3cret") || strings.Contains(p, "admin") ||
+		!strings.Contains(p, "https://prom.example.com:9090") {
+		t.Fatalf("credentials in a configured URL reached the prompt:\n%s", p)
+	}
 }
 
 // TestRunManagerProbesMetricsOnlyForReadOnlyTurns pins that the RunManager
@@ -128,6 +135,17 @@ func TestRunManagerProbesMetricsOnlyForReadOnlyTurns(t *testing.T) {
 	waitDone(t)
 	if got := probes.Load(); got != 1 {
 		t.Fatalf("apply turn ran the probe (probes = %d)", got)
+	}
+
+	if err := m.AddTurn(r.ID, "Verify the fix", false, "", true); err != nil {
+		t.Fatalf("AddTurn(verify): %v", err)
+	}
+	if call := next(t); !call.request.Verify || call.request.Metrics.Connected {
+		t.Fatalf("verification request must not carry a probe result: %+v", call.request.Metrics)
+	}
+	waitDone(t)
+	if got := probes.Load(); got != 1 {
+		t.Fatalf("verification turn ran the probe (probes = %d)", got)
 	}
 }
 
