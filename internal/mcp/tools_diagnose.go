@@ -118,6 +118,11 @@ type diagnoseResponse struct {
 	// GitOpsDiagnosis is set only for GitOps reconcilers (Argo Application /
 	// Flux Kustomization / HelmRelease), which have no pods — see gitopsDiagnosis.
 	GitOpsDiagnosis *gitopsDiagnosis `json:"gitopsDiagnosis,omitempty"`
+	// Metrics is the workload's cpu/memory/restarts over the diagnose window
+	// for the same pod set the rest of the bundle covers. Omitted when no
+	// Prometheus is configured, the pod set is empty, or the caller cannot get
+	// the diagnosed resource — see diagnoseMetrics.
+	Metrics *diagnoseMetrics `json:"metrics,omitempty"`
 }
 
 // diagnoseLogCoverage is structured collection metadata shared by agent and UI
@@ -341,6 +346,19 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		return nil, nil, err
 	}
 
+	// Vitals run beside the log fan-out under their own budget, gated per
+	// kind: the namespace check above only proves the caller may see the
+	// namespace, while the pod set and the object came from the shared cache.
+	var (
+		metrics   *diagnoseMetrics
+		metricsWG sync.WaitGroup
+	)
+	metricsWG.Add(1)
+	go func() {
+		defer metricsWG.Done()
+		metrics = diagnoseWorkloadMetrics(ctx, input.Group, kindNorm, input.Namespace, pods, diagnoseMetricsSince(sinceSeconds), time.Now())
+	}()
+
 	resp := diagnoseResponse{
 		Resource:        minified,
 		ResourceContext: resCtx,
@@ -481,6 +499,8 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 			resp.NarrowHint = capHint
 		}
 	}
+	metricsWG.Wait()
+	resp.Metrics = metrics
 	return toJSONResult(resp)
 }
 

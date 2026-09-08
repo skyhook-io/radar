@@ -51,6 +51,8 @@ type fakeProm struct {
 	queryBody      string
 	rangeStatus    int
 	rangeBody      string
+	rangeDelay     time.Duration                  // sleep before answering /api/v1/query_range, outside the lock so concurrent callers are not serialized
+	rangeBodyFunc  func(params url.Values) string // when set, renders the range body from the request (wins over rangeBody)
 	labelStatus    int
 	labelBody      string
 	labelDelay     time.Duration
@@ -62,6 +64,9 @@ type fakeProm struct {
 }
 
 func (f *fakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api/v1/query_range" && f.rangeDelay > 0 {
+		time.Sleep(f.rangeDelay)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -77,7 +82,11 @@ func (f *fakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeFakeBody(w, f.queryStatus, orDefault(f.queryBody, emptyVectorBody))
 	case path == "/api/v1/query_range":
 		f.rangeParams = append(f.rangeParams, q)
-		writeFakeBody(w, f.rangeStatus, orDefault(f.rangeBody, defaultMatrixBody))
+		body := f.rangeBody
+		if f.rangeBodyFunc != nil {
+			body = f.rangeBodyFunc(q)
+		}
+		writeFakeBody(w, f.rangeStatus, orDefault(body, defaultMatrixBody))
 	case strings.HasPrefix(path, "/api/v1/label/") && strings.HasSuffix(path, "/values"):
 		label := strings.TrimSuffix(strings.TrimPrefix(path, "/api/v1/label/"), "/values")
 		f.labelCalls = append(f.labelCalls, labelCall{label: label, params: q})
