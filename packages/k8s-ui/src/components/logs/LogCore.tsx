@@ -20,6 +20,7 @@ import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
 import { copyText } from '../../utils/clipboard'
 import {
   LOG_EXPORT_FORMAT_LABELS,
+  LOG_EXPORT_FORMATS,
   previewLogExport,
   serializeLogEntries,
   type LogExportFormat,
@@ -195,12 +196,10 @@ export function LogCore({
     new Set(['error', 'warn', 'info', 'debug'])
   )
   const [showDownloadMenu, setShowDownloadMenu] = useState(false)
-  // Format is a standing preference; scope is a property of the filters in play
-  // right now, so it deliberately resets to the safer "what you see" each time.
   const [exportScope, setExportScope] = useState<'visible' | 'all'>('visible')
-  const [exportFormat, setExportFormat] = useState<DownloadFormat>(() => {
+  const [exportFormat, setExportFormat] = useState<LogExportFormat>(() => {
     try {
-      const v = localStorage.getItem('radar-logs-export-format') as DownloadFormat | null
+      const v = localStorage.getItem('radar-logs-export-format') as LogExportFormat | null
       return v === 'txt' || v === 'json' || v === 'csv' ? v : 'txt'
     } catch { return 'txt' }
   })
@@ -270,9 +269,20 @@ export function LogCore({
     () => ({ format: exportFormat, showTimestamps, showPodName }),
     [exportFormat, showTimestamps, showPodName],
   )
-  const exportPreview = useMemo(() => previewLogExport(exportEntries, exportOptions), [exportEntries, exportOptions])
+  const exportPreview = useMemo(
+    () => showDownloadMenu ? previewLogExport(exportEntries, exportOptions) : [],
+    [showDownloadMenu, exportEntries, exportOptions],
+  )
   // Offering a scope that resolves to the same lines is a choice about nothing.
   const scopeIsMeaningful = displayEntries.length !== entries.length
+
+  // Scope describes the filters in play at the moment of asking, not a lasting
+  // intent, so it starts over at the narrower option every time rather than
+  // silently exporting the whole buffer on a later visit.
+  const toggleExportMenu = useCallback(() => {
+    setShowDownloadMenu(prev => !prev)
+    setExportScope('visible')
+  }, [])
 
   const handleExportCopy = useCallback(() => {
     setShowDownloadMenu(false)
@@ -312,7 +322,7 @@ export function LogCore({
     return () => window.removeEventListener('click', handleClick)
   }, [showStructuredMenu])
 
-  const pickExportFormat = useCallback((fmt: DownloadFormat) => {
+  const pickExportFormat = useCallback((fmt: LogExportFormat) => {
     setExportFormat(fmt)
     try { localStorage.setItem('radar-logs-export-format', fmt) } catch {}
   }, [])
@@ -747,7 +757,7 @@ export function LogCore({
         <div className="relative flex items-center" ref={downloadMenuRef}>
           <Tooltip content="Export logs" delay={TIP_DELAY} position="bottom" disabled={showDownloadMenu} preserveWrapperWhenDisabled>
             <button
-              onClick={() => setShowDownloadMenu(prev => !prev)}
+              onClick={toggleExportMenu}
               className={iconBtnInactive}
             >
               <Download className="w-4 h-4" />
@@ -776,7 +786,7 @@ export function LogCore({
               <div className="flex items-center gap-3">
                 <span className={exportLabelCls}>Format</span>
                 <div className="flex items-center gap-1">
-                  {(['txt', 'json', 'csv'] as DownloadFormat[]).map(fmt => (
+                  {LOG_EXPORT_FORMATS.map(fmt => (
                     <ExportChoice key={fmt} active={exportFormat === fmt} onClick={() => pickExportFormat(fmt)} palette={palette}>
                       {LOG_EXPORT_FORMAT_LABELS[fmt]}
                     </ExportChoice>

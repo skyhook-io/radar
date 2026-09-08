@@ -41,6 +41,9 @@ const MIME: Record<LogExportFormat, string> = {
   csv: 'text/csv',
 }
 
+/** Display order for the format picker. */
+export const LOG_EXPORT_FORMATS: readonly LogExportFormat[] = ['txt', 'json', 'csv']
+
 export const LOG_EXPORT_FORMAT_LABELS: Record<LogExportFormat, string> = {
   txt: 'Text',
   json: 'JSON',
