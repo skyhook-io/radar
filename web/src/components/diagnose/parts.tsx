@@ -1185,6 +1185,9 @@ export function Timeline({
     (server) => server.status !== "connected",
   );
   const radarServer = failedServers.find((server) => server.name === "radar");
+  const allDefiniteFailures = failedServers.every((server) =>
+    mcpStatusIsFailure(server.status),
+  );
   return (
     <div className="space-y-1.5">
       {items.length > 0 && (
@@ -1195,9 +1198,9 @@ export function Timeline({
       {failedServers.length > 0 && (
         <div
           role="status"
-          className="flex items-start gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 p-2 text-[11px] leading-snug text-theme-text-secondary"
+          className="flex items-start gap-1.5 rounded border border-semantic-warning/40 bg-semantic-warning/10 p-2 text-[11px] leading-snug text-theme-text-secondary"
         >
-          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" />
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-semantic-warning" />
           <span>
             {failedServers.map((server, i) => (
               <span key={server.name}>
@@ -1213,7 +1216,9 @@ export function Timeline({
               ? mcpStatusIsFailure(radarServer.status)
                 ? ` at startup — ${agentLabel} had no Radar tools this turn, so it could not use Radar's cluster evidence.`
                 : ` at startup — Radar's tools may not have been available to ${agentLabel} this turn.`
-              : ` at startup — ${agentLabel} ran this turn without those tools.`}
+              : allDefiniteFailures
+                ? ` at startup — ${agentLabel} ran this turn without those tools.`
+                : ` at startup — those tools may not have been available to ${agentLabel} this turn.`}
           </span>
         </div>
       )}
@@ -1481,7 +1486,7 @@ function ToolRow({
         </span>
       )}
       {errorReason && !open && (
-        <span className="investigation-tool-reason min-w-0 flex-1 truncate text-[11px] text-red-400">
+        <span className="investigation-tool-reason min-w-0 flex-1 truncate text-[11px] text-semantic-error">
           {errorReason}
         </span>
       )}
