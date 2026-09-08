@@ -30,6 +30,7 @@ import {
   investigationEvidenceInputsEqual,
   investigationEvidenceCoverageLimited,
   investigationEvidenceConflictsWithHealthy,
+  investigationHealthConflictExplainedBy,
   investigationLiveCaseTurnIndex,
   investigationEndedBeforeConclusion,
   type InvestigationHistoryUnavailableState,
@@ -1330,6 +1331,16 @@ export function InvestigationView({
   const currentAssessmentEvidenceConflict =
     currentAssessment?.diagnosis?.healthy === true &&
     investigationEvidenceConflictsWithHealthy(projection);
+  const currentAssessmentEvidenceConflictExplainedBy = useMemo(
+    () =>
+      currentAssessmentEvidenceConflict
+        ? (investigationHealthConflictExplainedBy(
+            projection,
+            paneCase?.items,
+          ) ?? undefined)
+        : undefined,
+    [currentAssessmentEvidenceConflict, projection, paneCase],
+  );
   const hasEvidenceCollectedAfterAssessment =
     currentAssessmentIdx >= 0 &&
     projection.sources.some(
@@ -2077,6 +2088,9 @@ export function InvestigationView({
                         showDisclaimer={false}
                         coverageLimited={currentAssessmentCoverageLimited}
                         evidenceConflict={currentAssessmentEvidenceConflict}
+                        evidenceConflictExplainedBy={
+                          currentAssessmentEvidenceConflictExplainedBy
+                        }
                       />
                     ) : (
                       <div className="mt-2 flex items-center gap-2 rounded-md bg-theme-surface/60 px-2.5 py-2 text-xs text-theme-text-tertiary">
