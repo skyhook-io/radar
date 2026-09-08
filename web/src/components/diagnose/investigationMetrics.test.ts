@@ -365,6 +365,64 @@ describe("metricsChangeMarkers", () => {
     expect(markers).toEqual([]);
   });
 
+  it("marks a Helm change without an apiVersion on the subject's own kind, never on an unrelated kind", () => {
+    const helmChange = {
+      source: "helm",
+      kind: "Deployment",
+      namespace: "shop",
+      name: "api",
+      changeType: "upgrade",
+      summary: "Helm release api upgraded to 2.4.1",
+      timestamp: "2026-09-06T08:00:00Z",
+    };
+    const markers = markersFor(
+      [
+        [
+          tool("diag", "diagnose", {
+            ...diagnoseBundle,
+            recentChanges: [
+              helmChange,
+              { ...helmChange, kind: "Service", changeType: "update" },
+              { ...helmChange, name: "worker" },
+            ],
+          }),
+          tool("prom", "query_prometheus", rangeResult(targetSelectors)),
+        ],
+      ],
+      "prom",
+    );
+    expect(markers).toEqual([
+      {
+        timestamp: Date.parse("2026-09-06T08:00:00Z") / 1000,
+        label: "Deployment api",
+        kind: "change",
+      },
+    ]);
+  });
+
+  it("keeps the strict identity when a change carries an apiVersion", () => {
+    const markers = markersFor(
+      [
+        [
+          tool("diag", "diagnose", {
+            ...diagnoseBundle,
+            recentChanges: [
+              change(
+                "Deployment",
+                "api",
+                "2026-09-06T08:00:00Z",
+                "example.io/v1",
+              ),
+            ],
+          }),
+          tool("prom", "query_prometheus", rangeResult(targetSelectors)),
+        ],
+      ],
+      "prom",
+    );
+    expect(markers).toEqual([]);
+  });
+
   it("never marks a chart that is not about the target", () => {
     const markers = markersFor(
       [
