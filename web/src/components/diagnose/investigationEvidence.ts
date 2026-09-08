@@ -3768,6 +3768,23 @@ function adaptPrometheusRules(
   }
   const identity = targetIdentity(builder.target);
   const targetPods = producerEstablishedTargetPods(builder);
+  // Rule names are not unique within a group, and group names are unique
+  // only per rule file, which the producer does not return. The expression
+  // and static labels distinguish rules; identical rows within one response
+  // cannot be told apart at all, so they stay scoped to this read rather
+  // than inherit each other's history in whatever order they arrive.
+  const ruleDefinition = (rule: InvestigationAlertRule) =>
+    `alerts:${rule.group}:${rule.name}:${stableHash(
+      JSON.stringify([rule.query, Object.entries(rule.labels).sort()]),
+    )}`;
+  const definitionCounts = new Map<string, number>();
+  for (const { rule } of rules) {
+    const definition = ruleDefinition(rule);
+    definitionCounts.set(
+      definition,
+      (definitionCounts.get(definition) ?? 0) + 1,
+    );
+  }
   const seenRuleIdentities = new Map<string, number>();
   let namesTarget = false;
   let healthGap = false;
@@ -3793,17 +3810,16 @@ function adaptPrometheusRules(
     ) {
       everyInstanceElsewhere = false;
     }
-    // Rule names are not unique within a group, and group names are unique
-    // only per rule file, which the producer does not return. The expression
-    // and static labels distinguish rules; identical rows within one response
-    // are distinct rules told apart by their order, never successive reads.
-    const ruleDefinition = `alerts:${rule.group}:${rule.name}:${stableHash(
-      JSON.stringify([rule.query, Object.entries(rule.labels).sort()]),
-    )}`;
-    const ordinal = seenRuleIdentities.get(ruleDefinition) ?? 0;
-    seenRuleIdentities.set(ruleDefinition, ordinal + 1);
-    const ruleIdentity = `${ruleDefinition}:${ordinal}`;
-    const previousRelevance = builder.latestRelevance("alerts", ruleIdentity);
+    const definition = ruleDefinition(rule);
+    const ambiguous = (definitionCounts.get(definition) ?? 0) > 1;
+    const ordinal = seenRuleIdentities.get(definition) ?? 0;
+    seenRuleIdentities.set(definition, ordinal + 1);
+    const ruleIdentity = ambiguous
+      ? `${definition}:${source.id}:${ordinal}`
+      : definition;
+    const previousRelevance = ambiguous
+      ? undefined
+      : builder.latestRelevance("alerts", ruleIdentity);
     const relevance: InvestigationEvidenceRelevance = instances.some(
       (instance) => instance.namesTarget,
     )
@@ -3859,12 +3875,14 @@ function adaptPrometheusRules(
         "Prometheus reported an evaluation error for this rule, so its state may be stale or missing.",
         "error",
       );
-    } else if (health === "unknown") {
+    } else if (health !== "ok") {
+      // Anything but a reported "ok" evaluation, including an unrecognized
+      // value, is an unevaluated rule for the purpose of a negative.
       healthGap = true;
       builder.limit(
         source,
         `Alert rule ${rule.name}`,
-        "Prometheus has not evaluated this rule yet, so its state is unknown.",
+        "Prometheus has not reported a successful evaluation for this rule, so its state is unknown.",
         "unknown",
       );
     }

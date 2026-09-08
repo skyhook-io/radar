@@ -3839,6 +3839,18 @@ describe("prometheus rules adapter", () => {
         { state: "firing" },
       ),
     ).toHaveLength(0);
+    expect(
+      receipt(
+        { count: 1, rules: [{ ...unrelated, health: "degraded" }] },
+        { state: "firing" },
+      ),
+    ).toHaveLength(0);
+    expect(
+      receipt(
+        { count: 1, rules: [{ ...unrelated, health: undefined }] },
+        { state: "firing" },
+      ),
+    ).toHaveLength(0);
   });
 
   it("advances the card through alert state transitions and keeps distinct rules apart", () => {
@@ -3921,8 +3933,8 @@ describe("prometheus rules adapter", () => {
     );
 
     // Identical definitions from different rule files arrive as identical
-    // rows; within one response they are two rules, and a second read aligns
-    // each with its own predecessor.
+    // rows: two rules this read cannot tell apart, so neither inherits the
+    // other's history on a later read.
     const twin = () => alertingRule({ alerts: [], state: "inactive" });
     const twins = groupsOf(
       project(
@@ -3946,13 +3958,20 @@ describe("prometheus rules adapter", () => {
       ).groups,
       "alerts",
     );
-    expect(twins).toHaveLength(2);
-    expect(twins.map((group) => group.observations.length)).toEqual([2, 2]);
+    expect(twins).toHaveLength(4);
+    expect(twins.every((group) => group.observations.length === 1)).toBe(true);
     expect(twins.map((group) => group.latest.relevance)).toEqual([
       "target",
       "broader",
+      "target",
+      "broader",
     ]);
-    expect(twins[0].latest.title).toBe("KubePodCrashLooping firing");
+    expect(twins.map((group) => group.latest.title)).toEqual([
+      "KubePodCrashLooping firing",
+      "KubePodCrashLooping inactive",
+      "KubePodCrashLooping firing",
+      "KubePodCrashLooping inactive",
+    ]);
   });
 
   it("never proves absence by namespace for a cluster-scoped target", () => {
