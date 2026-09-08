@@ -2818,7 +2818,8 @@ describe("honest zero and partial-result states", () => {
     );
     // list_resources uses [] for some RBAC-filtered reads, so its emptiness is
     // never a positive receipt even when the transport itself succeeded. The
-    // narrow event/change producers have the same ambiguity today; the targeted
+    // events producer marks a denied namespace explicitly, so its empty result
+    // is a receipt; the changes producer still has the ambiguity. The targeted
     // semantic diagnose bundle is authoritative because access is checked before
     // that workload path runs.
     expect(
@@ -2829,16 +2830,15 @@ describe("honest zero and partial-result states", () => {
       ),
     ).toBe(false);
     expect(result.limitations.map((item) => item.source)).toEqual(
-      expect.arrayContaining([
-        "Events",
-        "Recent changes",
-        "Resource inventory",
-      ]),
+      expect.arrayContaining(["Recent changes", "Resource inventory"]),
+    );
+    expect(result.limitations.map((item) => item.source)).not.toContain(
+      "Events",
     );
     expect(result.coverage).toEqual({
       attempted: 5,
-      projected: 2,
-      limited: 3,
+      projected: 3,
+      limited: 2,
       checked: 1,
     });
     expect(
@@ -4930,18 +4930,42 @@ describe("live-run follow-ups", () => {
         },
       ),
     ]);
+    // A complete, successful events query that returned nothing is a checked
+    // receipt for its scope; the producer marks a denied namespace separately.
+    expect(
+      projection.groups.map((group) => [
+        group.latest.data.type,
+        group.latest.title,
+      ]),
+    ).toEqual([["receipt", "No events matched"]]);
+    expect(
+      projection.limitations.map((limitation) => [
+        limitation.source,
+        limitation.kind,
+      ]),
+    ).toEqual([["Recent changes", "unknown"]]);
+  });
+
+  it("files a denied events namespace as an access limitation, not a receipt", () => {
+    const projection = project([
+      tool(
+        "events-denied",
+        "get_events",
+        { events: [], accessDenied: true },
+        {
+          summary: JSON.stringify({ namespace: "locked", kind: "Pod" }),
+        },
+      ),
+    ]);
     expect(projection.groups).toHaveLength(0);
     expect(
       projection.limitations.map((limitation) => [
         limitation.source,
         limitation.kind,
       ]),
-    ).toEqual([
-      ["Events", "unknown"],
-      ["Recent changes", "unknown"],
-    ]);
+    ).toEqual([["Events", "error"]]);
     expect(projection.limitations[0].message).toContain(
-      "No events were returned",
+      "not readable with your permissions",
     );
   });
 

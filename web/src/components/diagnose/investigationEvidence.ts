@@ -1819,6 +1819,10 @@ function addEvents(
   complete = true,
   emptyIsAuthoritative = false,
   relevance: InvestigationEvidenceRelevance = "broader",
+  emptyReceipt: { title: string; message: string } = {
+    title: "No matching warning events",
+    message: "The warning-event query completed and returned no groups.",
+  },
 ): void {
   const scope = scopeFromArgs(source);
   if (values.length === 0) {
@@ -1836,13 +1840,13 @@ function addEvents(
       tier: evidenceTierForRelevance("checked", relevance),
       relevance,
       tone: "neutral",
-      title: "No matching warning events",
+      title: emptyReceipt.title,
       summary: scope,
       data: {
         type: "receipt",
         checked: "events",
         scope,
-        message: "The warning-event query completed and returned no groups.",
+        message: emptyReceipt.message,
       },
     });
     return;
@@ -3168,14 +3172,34 @@ function adaptEvents(
     return;
   }
   addNarrowHint(builder, source, value);
+  // The producer answers a namespace the caller cannot read with an empty
+  // list and marks it. Only that case is a coverage gap. Any other complete,
+  // successful empty read answers the question it asked and is filed as a
+  // checked receipt; a gap there would contradict an events card from another
+  // call in the same turn. The receipt names the one remaining ambiguity for
+  // producers that predate the marker.
+  if (value.accessDenied === true) {
+    builder.limit(
+      source,
+      "Events",
+      `Events in ${scopeFromArgs(source)} are not readable with your permissions.`,
+      "error",
+    );
+    return;
+  }
   addEvents(
     builder,
     source,
     events,
     `events:${source.args ?? scopeFromArgs(source)}`,
     !nonEmptyString(value.narrowHint),
-    false,
+    true,
     sourceArgsRelevance(builder, source),
+    {
+      title: "No events matched",
+      message:
+        "The events query completed and returned nothing for this scope. Events outside its window or filters are not covered; a namespace you cannot read also returns nothing.",
+    },
   );
 }
 
