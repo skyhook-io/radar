@@ -294,7 +294,12 @@ export function CloudFunnelButton() {
         ) : (
           <>
             <div className="min-h-0 overflow-y-auto">
-              <PitchBody lane={lane} freeTier={connectInfo.data?.freeTier} />
+              {/* With no cluster to install into, the pitch must not promise
+                  that setup runs here: describe the Cloud-side path instead. */}
+              <PitchBody
+                lane={lane === 'driver' && driverConnectUnavailableNote(connectionState) ? 'wizard' : lane}
+                freeTier={connectInfo.data?.freeTier}
+              />
             </div>
             <ModalFooter
               lane={lane}
