@@ -3144,6 +3144,27 @@ describe("query_prometheus evidence", () => {
     };
   }
 
+  it("keeps the generic title when the selectors name no metric", () => {
+    const projection = project([
+      tool(
+        "prom",
+        "query_prometheus",
+        promResult({
+          query: 'sum({namespace="shop"})',
+          selectors: [
+            {
+              metric: "",
+              matchers: [{ label: "namespace", op: "=", value: "shop" }],
+            },
+          ],
+        }),
+      ),
+    ]);
+    const [group] = groupsOf(projection.groups, "metrics");
+    expect(group.latest.title).toBe("Prometheus metrics");
+    expect(group.latest.summary).toBe("1 series · 2h window · 25s step");
+  });
+
   it("charts a range query scoped to the target as target evidence", () => {
     const projection = project([
       tool("prom", "query_prometheus", promResult(), {
