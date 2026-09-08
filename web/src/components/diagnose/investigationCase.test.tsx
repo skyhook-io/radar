@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { AgentClaimNote } from "./AgentCase";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -1256,6 +1257,16 @@ describe("agent case robustness", () => {
       />,
     );
     expect(earlier).toContain("Notes from this assessment");
+    const withCode = renderToStaticMarkup(
+      <AgentClaimNote claim="The `REDIS_PASSWORD` key is unset; `envFrom` still mounts it." />,
+    );
+    expect(withCode).toContain('<code class="inline-code');
+    expect(withCode).toContain(">REDIS_PASSWORD</code>");
+    expect(withCode).toContain(">envFrom</code>");
+    expect(withCode).not.toContain("`");
+    expect(
+      renderToStaticMarkup(<AgentClaimNote claim="Unbalanced `tick here." />),
+    ).toContain("Unbalanced `tick here.");
     expect(earlier).toContain(
       "CrashLoopBackOff · </span>Was the cause back then.",
     );

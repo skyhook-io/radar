@@ -71,8 +71,31 @@ export function AgentClaimNote({
         {subject ? (
           <span className="text-theme-text-tertiary">{subject} · </span>
         ) : null}
-        {claim}
+        {renderClaim(claim)}
       </span>
     </p>
+  );
+}
+
+/**
+ * Claims are one sentence of prose in which the agent marks identifiers with
+ * backticks. Only that inline-code span is honoured: a full Markdown render
+ * would wrap the sentence in a block and break the shared baseline with the
+ * role chip and the lead-in.
+ */
+function renderClaim(claim: string) {
+  const parts = claim.split("`");
+  if (parts.length < 3) return claim;
+  return parts.map((part, i) =>
+    i % 2 === 1 && i < parts.length - 1 ? (
+      <code
+        key={i}
+        className="inline-code rounded border border-theme-border/60 bg-theme-base px-1 py-px font-mono text-[11px] font-normal text-theme-text-primary"
+      >
+        {part}
+      </code>
+    ) : (
+      part
+    ),
   );
 }
