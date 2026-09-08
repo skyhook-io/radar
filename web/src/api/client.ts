@@ -3516,21 +3516,35 @@ export function useRightsizingScan(namespaces: string[], context = "") {
   };
 }
 
-// Raw PromQL query (range). Used by HPA charts for status_current_replicas etc.
-export function usePromQLRange(
-  query: string,
+// An HPA's replica history: the count it currently observes and the count it
+// has decided on. Curated server-side so reading the HPA is the only grant
+// the chart needs; raw PromQL requires cluster-wide access.
+export interface PrometheusHPAMetrics {
+  namespace: string;
+  name: string;
+  range: string;
+  current: PrometheusQueryResult;
+  desired: PrometheusQueryResult;
+}
+
+export function usePrometheusHPAMetrics(
+  namespace: string,
+  name: string,
   range: PrometheusTimeRange = "1h",
   enabled = true,
 ) {
-  return useQuery<PrometheusQueryResult>({
-    queryKey: ["promql-range", query, range],
+  return useQuery<PrometheusHPAMetrics>({
+    queryKey: ["prometheus-hpa-metrics", namespace, name, range],
     queryFn: () =>
-      fetchJSON(
-        `/prometheus/query?query=${encodeURIComponent(query)}&range=${range}`,
-      ),
-    enabled: enabled && Boolean(query),
+      fetchJSON(`/prometheus/hpa/${namespace}/${name}?range=${range}`),
+    enabled: enabled && Boolean(namespace && name),
     staleTime: 30000,
-    refetchInterval: 60000,
+    // A denial is a standing RBAC fact, not a blip: show the access state at
+    // once and stop polling for it.
+    refetchInterval: (query) =>
+      isForbiddenError(query.state.error) ? false : 60000,
+    retry: (failureCount, error) =>
+      !isForbiddenError(error) && failureCount < 1,
   });
 }
 

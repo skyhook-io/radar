@@ -122,7 +122,21 @@ type discoverMetricsResponse struct {
 	Usage     string           `json:"usage,omitempty"`
 }
 
+// requireClusterWideMetrics gates the tools whose queries are unbounded by a
+// resource on the any-namespace list-pods SubjectAccessReview, the same
+// grant the REST raw-query and cluster-aggregate routes require. Passes
+// through when no user is on the context (auth-mode=none).
+func requireClusterWideMetrics(ctx context.Context) error {
+	if !canReadInNamespace(ctx, "", "pods", "", "list") {
+		return errors.New(prometheus.ClusterWideMetricsDeniedMessage)
+	}
+	return nil
+}
+
 func handleQueryPrometheus(ctx context.Context, req *mcp.CallToolRequest, input queryPrometheusInput) (*mcp.CallToolResult, any, error) {
+	if err := requireClusterWideMetrics(ctx); err != nil {
+		return nil, nil, err
+	}
 	if strings.TrimSpace(input.Query) == "" {
 		return nil, nil, fmt.Errorf("query is required — a PromQL expression, e.g. topk(5, rate(container_cpu_usage_seconds_total[5m]))")
 	}
@@ -213,6 +227,9 @@ func handleQueryPrometheus(ctx context.Context, req *mcp.CallToolRequest, input 
 }
 
 func handleDiscoverMetrics(ctx context.Context, req *mcp.CallToolRequest, input discoverMetricsInput) (*mcp.CallToolResult, any, error) {
+	if err := requireClusterWideMetrics(ctx); err != nil {
+		return nil, nil, err
+	}
 	if input.Label == "" && strings.TrimSpace(input.Match) == "" {
 		return nil, nil, errors.New("match is required when listing metric names — unbounded listing returns thousands of entries; " +
 			`use a selector like {__name__=~"node_cpu.*"} or {namespace="payments"}`)
@@ -413,6 +430,9 @@ func withoutPromStringLiterals(query string) string {
 }
 
 func handleGetPrometheusRules(ctx context.Context, req *mcp.CallToolRequest, input getPrometheusRulesInput) (*mcp.CallToolResult, any, error) {
+	if err := requireClusterWideMetrics(ctx); err != nil {
+		return nil, nil, err
+	}
 	if input.Type != "" && input.Type != "alert" && input.Type != "record" {
 		return nil, nil, fmt.Errorf("type must be alert or record, got %q", input.Type)
 	}
