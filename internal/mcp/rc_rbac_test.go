@@ -6,18 +6,19 @@ import "testing"
 // the unknown-kind passthrough never covers them.
 func TestLookupResourceNameResolvesBuiltinsWithoutDiscovery(t *testing.T) {
 	cases := []struct {
-		kind, group, want string
+		kind, group, wantGroup, want string
 	}{
-		{"HorizontalPodAutoscaler", "autoscaling", "horizontalpodautoscalers"},
-		{"HorizontalPodAutoscaler", "", "horizontalpodautoscalers"},
-		{"Secret", "", "secrets"},
-		{"Node", "", "nodes"},
-		{"HorizontalPodAutoscaler", "vendor.example.com", ""},
-		{"ScaledObject", "keda.sh", ""},
+		{"HorizontalPodAutoscaler", "autoscaling", "autoscaling", "horizontalpodautoscalers"},
+		{"HorizontalPodAutoscaler", "", "autoscaling", "horizontalpodautoscalers"},
+		{"Secret", "", "", "secrets"},
+		{"Node", "", "", "nodes"},
+		{"HorizontalPodAutoscaler", "vendor.example.com", "", ""},
+		{"ScaledObject", "keda.sh", "", ""},
 	}
 	for _, tc := range cases {
-		if got := lookupResourceName(tc.kind, tc.group); got != tc.want {
-			t.Errorf("lookupResourceName(%q, %q) = %q, want %q", tc.kind, tc.group, got, tc.want)
+		gotGroup, got := lookupResourceGVR(tc.kind, tc.group)
+		if got != tc.want || gotGroup != tc.wantGroup {
+			t.Errorf("lookupResourceGVR(%q, %q) = (%q, %q), want (%q, %q)", tc.kind, tc.group, gotGroup, got, tc.wantGroup, tc.want)
 		}
 	}
 }

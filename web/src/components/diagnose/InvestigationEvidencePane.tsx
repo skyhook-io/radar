@@ -1683,24 +1683,18 @@ function ScaledBySection({ scalers }: { scalers: DiagnosedScaler[] }) {
               </div>
               <p className="text-theme-text-secondary">{summary.summary}</p>
               {summary.reasons?.length ? (
-                <ul className="space-y-0.5 text-theme-text-secondary">
+                <ul className="list-disc space-y-0.5 pl-4 text-theme-text-secondary marker:text-theme-text-tertiary">
                   {summary.reasons
                     .filter((reason) => reason.message !== summary.summary)
                     .map((reason) => (
-                      <li
-                        key={`${reason.id}-${reason.message}`}
-                        className="flex items-start gap-1.5"
-                      >
-                        <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-theme-text-tertiary" />
-                        <span>
-                          {reason.message}
-                          {reason.detail ? (
-                            <span className="text-theme-text-tertiary">
-                              {" "}
-                              · {reason.detail}
-                            </span>
-                          ) : null}
-                        </span>
+                      <li key={`${reason.id}-${reason.message}`}>
+                        {reason.message}
+                        {reason.detail ? (
+                          <span className="text-theme-text-tertiary">
+                            {" "}
+                            · {reason.detail}
+                          </span>
+                        ) : null}
                       </li>
                     ))}
                 </ul>
