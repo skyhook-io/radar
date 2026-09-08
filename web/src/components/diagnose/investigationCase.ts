@@ -38,6 +38,14 @@ export interface InvestigationCaseItem {
   placement: InvestigationCasePlacement;
   groupId?: string;
   observation?: InvestigationEvidenceObservation;
+  /**
+   * Written by the assessment on screen and kept on its card while a
+   * follow-up answer drives the case. It substantiates the verdict the reader
+   * is looking at, so it still orders and promotes that card; it takes no
+   * part in the live turn's ruled-out list, and the explained-conflict check
+   * reads the assessment's own items rather than this merged set.
+   */
+  carried?: boolean;
 }
 
 export interface InvestigationCaseRuledOut {
@@ -110,6 +118,12 @@ export function investigationCaseItemsStillRendered(
   return assessmentItems.filter((item) => rendered.has(key(item)));
 }
 
+/**
+ * One half of a Go↔TS contract: `evidenceRoles` in internal/ai/parse.go and the
+ * DiagnosisEvidenceRole union in api/diagnose.ts must list exactly these roles.
+ * A role the parser accepts but this set omits is bound server-side and then
+ * silently dropped here. Change all three together.
+ */
 export const EVIDENCE_ROLES: ReadonlySet<string> =
   new Set<DiagnosisEvidenceRole>([
     "cause",

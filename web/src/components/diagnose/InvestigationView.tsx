@@ -1877,6 +1877,9 @@ export function InvestigationView({
                                 renderedGroupIds={visibleEvidenceGroupIds}
                                 resolution={answerResolution}
                                 investigationCase={answerCase}
+                                unlinkedEvidence={
+                                  turn.diagnosis?.unlinkedEvidence
+                                }
                                 readOnly={index !== liveCaseTurnIdx}
                                 onViewSource={viewActivitySource}
                               />
@@ -2126,6 +2129,9 @@ export function InvestigationView({
                               renderedGroupIds={visibleEvidenceGroupIds}
                               resolution={rootCauseEvidenceResolution}
                               investigationCase={investigationCase}
+                              unlinkedEvidence={
+                                currentAssessment.diagnosis?.unlinkedEvidence
+                              }
                               readOnly={!liveCaseIsCurrentAssessment}
                               onViewSource={viewActivitySource}
                             />

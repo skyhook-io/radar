@@ -280,6 +280,9 @@ type caseItemRequest struct {
 type caseRequest struct {
 	items    []caseItemRequest
 	ruledOut []DiagnosisRuledOut
+	// dropped counts entries cut by the per-case cap. Those get no slot in
+	// items, so nothing downstream could otherwise see them go.
+	dropped int
 }
 
 // Diagnosis is the engine's final result.
@@ -296,12 +299,18 @@ type Diagnosis struct {
 	// Evidence is the agent's case over Radar's facts: role + one-sentence claim
 	// per cited result, bound server-side for every assessment including
 	// healthy and inconclusive ones. RootCauseEvidence is unchanged by it.
-	Evidence    []DiagnosisEvidenceItem `json:"evidence,omitempty"`
-	RuledOut    []DiagnosisRuledOut     `json:"ruledOut,omitempty"`
-	Remediation []string                `json:"remediation"`
-	Confidence  *float64                `json:"confidence"`
-	CostUSD     *float64                `json:"costUsd"`
-	Turns       int                     `json:"turns"`
+	Evidence []DiagnosisEvidenceItem `json:"evidence,omitempty"`
+	// UnlinkedEvidence rolls up every agent evidence entry that did not reach
+	// the UI: items the parser rejected or the binder could not link (each an
+	// EvidenceUnlinked slot in Evidence) plus entries cut by the per-case cap,
+	// which get no slot at all. A consumer states the loss instead of showing
+	// a case that silently shrank.
+	UnlinkedEvidence int                 `json:"unlinkedEvidence,omitempty"`
+	RuledOut         []DiagnosisRuledOut `json:"ruledOut,omitempty"`
+	Remediation      []string            `json:"remediation"`
+	Confidence       *float64            `json:"confidence"`
+	CostUSD          *float64            `json:"costUsd"`
+	Turns            int                 `json:"turns"`
 	// RecommendedIndex is the 1-based index into Remediation of the single step the
 	// agent recommends applying (what an Apply action performs). 0/nil = no safe
 	// automatic fix. Pointing into the list (vs restating the fix) keeps the UI

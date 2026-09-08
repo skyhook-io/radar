@@ -388,6 +388,11 @@ func TestMetricsKindResourceCoversSupportedKinds(t *testing.T) {
 	if canReadMetricsResource(httptest.NewRequest(http.MethodGet, "/", nil), "Widget", "alpha") {
 		t.Error("an unmapped kind must be denied even when the gate allows everything")
 	}
+	// A builtin Radar does not chart resolves in the shared GVR catalogues but
+	// is not chartable, so the supported-kind allowlist must still refuse it.
+	if _, _, _, ok := metricsKindResource("Secret"); ok {
+		t.Error("a builtin kind outside prom.SupportedKinds must not map")
+	}
 }
 
 // The workload chart reports how its pods were established, and never falls

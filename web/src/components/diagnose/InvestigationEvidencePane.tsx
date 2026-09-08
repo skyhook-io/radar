@@ -11,25 +11,17 @@ import {
 } from "react";
 import { clsx } from "clsx";
 import {
+  EVIDENCE_KIND_TRAITS,
+  evidenceKindIsFocused,
+} from "./investigationEvidenceKinds";
+import {
   Activity,
   AlertTriangle,
-  BellRing,
-  Boxes,
-  Bug,
-  ChartLine,
-  CheckCircle2,
   CircleAlert,
-  Clock3,
   FileClock,
   FileSearch,
   Info,
-  KeyRound,
-  ListTree,
-  Network,
-  Package,
-  ScrollText,
   SearchCheck,
-  ShieldAlert,
   SquareArrowOutUpRight,
 } from "lucide-react";
 import {
@@ -42,8 +34,7 @@ import {
   defaultConditionTone,
   displayKind,
   formatRelativeAgeTime,
-  hpaStateLabel,
-  hpaStateLevel,
+  HPADiagnosisSummary,
   mapHealthToTone,
   ResourceLink,
   stripAnsi,
@@ -173,12 +164,7 @@ export function investigationCaseByGroup(
 function evidenceTypePrefersFullRow(
   type: InvestigationEvidenceData["type"],
 ): boolean {
-  return (
-    type === "logs" ||
-    type === "events" ||
-    type === "alerts" ||
-    type === "metrics"
-  );
+  return EVIDENCE_KIND_TRAITS[type].fullRow;
 }
 
 // Supporting evidence becomes a two-column grid when the pane is wide enough.
@@ -265,11 +251,11 @@ export function partitionInvestigationEvidence(
           ?.source ??
         caseByGroup.get(group.id)?.[0]?.source ??
         alsoSelected?.find((entry) => entry.groupId === group.id)?.source;
-      const focused = FOCUSED_EVIDENCE_TYPES.includes(group.latest.data.type);
+      const focused = evidenceKindIsFocused(group.latest.data.type);
       const sourceGroups = citingSource
         ? groups.filter(
             (candidate) =>
-              FOCUSED_EVIDENCE_TYPES.includes(candidate.latest.data.type) &&
+              evidenceKindIsFocused(candidate.latest.data.type) &&
               candidate.observations.some(
                 (observation) => observation.source.id === citingSource.id,
               ),
@@ -346,19 +332,6 @@ export function partitionInvestigationEvidence(
   );
   return { ...collections, collectionByGroup, hiddenBroader, hiddenMetrics };
 }
-
-// Kinds whose card is one unambiguous subject, so a citation of their source
-// can promote exactly that fact. A broad search (issues, inventory, events)
-// yields many rows per source; a citation cannot pick one of those.
-const FOCUSED_EVIDENCE_TYPES: readonly InvestigationEvidenceData["type"][] = [
-  "resource",
-  "logs",
-  "crash",
-  "helm",
-  "alerts",
-  "permissions",
-  "metrics",
-];
 
 export function investigationEvidenceRevealCollection(
   projection: InvestigationEvidenceProjection,
@@ -1974,24 +1947,13 @@ function ScaledBySection({
         Scaled by
       </div>
       <div className="space-y-2">
-        {scalers.map((scaler) => {
-          const summary = scaler.hpaSummary;
-          const bounds = summary.bounds;
-          // The reason that named the state is the summary in other words;
-          // only the controller's own sentence behind it adds anything.
-          const stateReasons = (summary.reasons ?? []).filter(
-            (reason) =>
-              reason.id === summary.state || reason.message === summary.summary,
-          );
-          const otherReasons = (summary.reasons ?? []).filter(
-            (reason) => !stateReasons.includes(reason),
-          );
-          return (
-            <div
-              key={`${scaler.namespace ?? ""}/${scaler.name}`}
-              className="space-y-1 text-xs"
-            >
-              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        {scalers.map((scaler) => (
+          <HPADiagnosisSummary
+            key={`${scaler.namespace ?? ""}/${scaler.name}`}
+            diagnosis={scaler.hpaSummary}
+            variant="inline"
+            header={
+              <>
                 <span className="font-medium text-theme-text-primary">
                   {displayKind(scaler.kind)} {scaler.name}
                 </span>
@@ -2011,54 +1973,10 @@ function ScaledBySection({
                     />
                   </span>
                 ) : null}
-                <span className="inline-flex items-center gap-1.5 text-theme-text-secondary">
-                  <StatusDot
-                    tone={mapHealthToTone(hpaStateLevel(summary.state))}
-                    className="shrink-0"
-                  />
-                  {hpaStateLabel(summary.state)}
-                </span>
-                {bounds ? (
-                  <span className="font-mono tabular-nums text-theme-text-tertiary">
-                    {bounds.current}/{bounds.desired} replicas · bounds{" "}
-                    {bounds.min}-{bounds.max}
-                  </span>
-                ) : null}
-              </div>
-              <p className="text-theme-text-secondary">{summary.summary}</p>
-              {stateReasons.map((reason) =>
-                reason.detail ? (
-                  <p
-                    key={`${reason.id}-${reason.detail}`}
-                    className="text-theme-text-tertiary"
-                  >
-                    Kubernetes
-                    {reason.conditionType ? ` ${reason.conditionType}` : ""}
-                    {reason.conditionReason
-                      ? ` · ${reason.conditionReason}`
-                      : ""}
-                    : &ldquo;{reason.detail}&rdquo;
-                  </p>
-                ) : null,
-              )}
-              {otherReasons.length > 0 ? (
-                <ul className="list-disc space-y-0.5 pl-4 text-theme-text-secondary marker:text-theme-text-tertiary">
-                  {otherReasons.map((reason) => (
-                    <li key={`${reason.id}-${reason.message}`}>
-                      {reason.message}
-                      {reason.detail ? (
-                        <span className="text-theme-text-tertiary">
-                          {" "}
-                          · {reason.detail}
-                        </span>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </div>
-          );
-        })}
+              </>
+            }
+          />
+        ))}
       </div>
     </div>
   );
@@ -2798,8 +2716,8 @@ function MetricsBody({
           data-testid="investigation-metrics-empty-series"
         >
           {empty.length === 1
-            ? "1 series returned no finite values in this window: "
-            : `${empty.length} series returned no finite values in this window: `}
+            ? "1 series had no usable samples in this window: "
+            : `${empty.length} series had no usable samples in this window: `}
           <span className="font-mono">
             {empty.map((entry) => entry.label).join("; ")}
           </span>
@@ -3427,11 +3345,9 @@ function RevisionHistory({
 }
 
 function EvidenceCaveat({ data }: { data: InvestigationEvidenceData }) {
-  let text: string | undefined;
-  if (data.type === "events") {
-    text =
-      "Events support the timeline; proximity alone does not establish cause.";
-  } else if (data.type === "changes") {
+  // Changes get a tooltip rather than a sentence because the wording depends
+  // on whether the reported age was collected with the change.
+  if (data.type === "changes") {
     return (
       <Tooltip
         content={`A change alone does not establish the cause.${data.changeContext?.when ? " The reported age is as of collection." : ""}`}
@@ -3448,16 +3364,8 @@ function EvidenceCaveat({ data }: { data: InvestigationEvidenceData }) {
         </button>
       </Tooltip>
     );
-  } else if (data.type === "relationships" || data.type === "topology") {
-    text =
-      "This shows direct relationships Radar found, not an inferred blast radius.";
-  } else if (data.type === "alerts") {
-    text =
-      "Instances are matched to this investigation by their Prometheus labels; a firing rule alone does not establish the cause.";
-  } else if (data.type === "permissions") {
-    text =
-      "This is what RBAC grants the subject, not what the workload has exercised.";
   }
+  const text = EVIDENCE_KIND_TRAITS[data.type].caveat;
   if (!text) return null;
   return (
     <p className="flex items-start gap-1.5 text-xs leading-relaxed text-theme-text-tertiary">
@@ -3530,41 +3438,7 @@ function SourceButton({
 }
 
 function evidenceIcon(type: InvestigationEvidenceData["type"]) {
-  switch (type) {
-    case "issue":
-      return CircleAlert;
-    case "startup":
-      return ShieldAlert;
-    case "crash":
-      return Bug;
-    case "resource":
-      return Boxes;
-    case "logs":
-      return ScrollText;
-    case "events":
-      return Clock3;
-    case "changes":
-      return FileClock;
-    case "dns":
-      return Activity;
-    case "network":
-      return Network;
-    case "relationships":
-    case "topology":
-      return Network;
-    case "inventory":
-      return ListTree;
-    case "receipt":
-      return CheckCircle2;
-    case "alerts":
-      return BellRing;
-    case "helm":
-      return Package;
-    case "permissions":
-      return KeyRound;
-    case "metrics":
-      return ChartLine;
-  }
+  return EVIDENCE_KIND_TRAITS[type].icon;
 }
 
 function severityBadge(value: string) {

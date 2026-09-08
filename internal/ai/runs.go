@@ -1053,11 +1053,14 @@ func bindRootCauseRefs(diag *Diagnosis, refLinked func(string) bool) {
 
 // bindCase keeps every item at its parsed index so ruled_out indexes stay
 // meaningful; an item that fails validation becomes unlinked and a ruled-out
-// entry pointing at an unlinked or missing item is dropped.
+// entry pointing at an unlinked or missing item is dropped. UnlinkedEvidence
+// rolls those losses up with the entries the cap cut before parsing, which
+// have no slot to carry a status.
 func bindCase(diag *Diagnosis, refLinked func(string) bool) {
 	request := diag.caseRequest
 	diag.Evidence = nil
 	diag.RuledOut = nil
+	diag.UnlinkedEvidence = request.dropped
 	if len(request.items) == 0 {
 		return
 	}
@@ -1065,6 +1068,7 @@ func bindCase(diag *Diagnosis, refLinked func(string) bool) {
 	for i, item := range request.items {
 		if !item.valid || !refLinked(item.ref) {
 			items[i] = DiagnosisEvidenceItem{Status: EvidenceUnlinked}
+			diag.UnlinkedEvidence++
 			continue
 		}
 		items[i] = DiagnosisEvidenceItem{

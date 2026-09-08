@@ -10,28 +10,78 @@ import type {
 } from "./investigationEvidence";
 
 function metricUnitSuffix(metric: string): "bytes" | "seconds" | undefined {
-  const base = metric.endsWith("_total")
-    ? metric.slice(0, -"_total".length)
-    : metric;
+  // _sum is the sum of the observed values, so it measures what the histogram
+  // measures. _bucket and _count are counts of observations: only the `le`
+  // boundary carries the unit, and nothing here reads it, so a bucket series
+  // has no unit this can print.
+  if (metric.endsWith("_bucket") || metric.endsWith("_count")) return undefined;
+  let base = metric;
+  for (const suffix of ["_total", "_sum"]) {
+    if (base.endsWith(suffix)) base = base.slice(0, -suffix.length);
+  }
   if (base.endsWith("_bytes")) return "bytes";
   if (base.endsWith("_seconds")) return "seconds";
   return undefined;
 }
 
-// Functions whose result is a count, a flag or a time, whatever the input
-// metric measured. Aggregations may put their grouping clause before the
-// parenthesis: `count by (pod) (...)`.
-const QUANTITY_DISCARDING_FUNCTIONS =
-  /\b(?:count|count_values|count_over_time|absent|absent_over_time|present_over_time|changes|resets|timestamp)\s*(?:\(|by\b|without\b)/;
+/**
+ * PromQL an axis label can survive. Anything outside this list leaves the axis
+ * unitless, because a unit is a claim about what the numbers mean and only the
+ * expression can support it.
+ *
+ * Aggregation operators and the `_over_time` functions that return one of the
+ * samples keep the metric's unit; so does the change in a counter. Everything
+ * else either produces a different quantity (a count, a ratio, a variance, a
+ * boolean) or is something this has not reasoned about, and both are better
+ * unlabelled than labelled wrong.
+ */
+const UNIT_PRESERVING_FUNCTIONS = new Set([
+  "sum",
+  "min",
+  "max",
+  "avg",
+  "by",
+  "without",
+  "abs",
+  "ceil",
+  "floor",
+  "round",
+  "clamp",
+  "clamp_max",
+  "clamp_min",
+  "label_replace",
+  "label_join",
+  "topk",
+  "bottomk",
+  "quantile",
+  "min_over_time",
+  "max_over_time",
+  "avg_over_time",
+  "sum_over_time",
+  "last_over_time",
+  "quantile_over_time",
+  "increase",
+  "delta",
+  "idelta",
+]);
+
+/** The functions that divide a quantity by time. */
+const RATE_FUNCTIONS = new Set(["rate", "irate", "deriv"]);
 
 /**
- * The unit is what every metric in the expression states through its name,
- * as the producer's selector inventory lists them. Aggregations keep a unit;
- * a rate turns bytes into bytes per second and seconds into a ratio; a
- * division, or a function that counts or flags rather than measures, is
- * unitless; metrics that disagree, or say nothing, leave the axis unitless.
- * Matcher values and string literals are ignored when looking for operators,
- * so a label value containing "/" cannot demote the unit.
+ * The unit is what every metric in the expression states through its name, as
+ * the producer's selector inventory lists them, and it only survives the
+ * operations that leave that meaning intact.
+ *
+ * `sum(x_bytes)` is bytes. `rate(x_bytes[5m])` is bytes per second, and a rate
+ * of seconds is a ratio with no unit worth printing. Everything else is barred
+ * rather than guessed: arithmetic and comparisons produce a quantity the
+ * metric's name no longer describes (`x_bytes > bool 0` is a 0 or a 1,
+ * `stdvar(x_bytes)` is bytes squared), a set operator mixes two expressions
+ * whose units may differ, a second rate divides by time twice, and an
+ * unlisted function is simply unknown. Strings, comments, label matchers and
+ * range selectors are blanked before the expression is read, so nothing
+ * inside them can be mistaken for an operator or a call.
  */
 export function metricsUnitForExpression(
   query: string,
@@ -44,15 +94,32 @@ export function metricsUnitForExpression(
   if (units.size !== 1) return "";
   const [unit] = units;
   if (!unit) return "";
-  const operators = query
-    .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""')
+  const expression = query
+    .replace(/#[^\n]*/g, " ")
+    .replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`[^`]*`/g, '""')
     .replace(/\{[^{}]*\}/g, "")
     .replace(/\[[^\]]*\]/g, "");
-  if (operators.includes("/") || QUANTITY_DISCARDING_FUNCTIONS.test(operators))
+  // Arithmetic, comparison and the set operators all produce something the
+  // metric's name no longer describes, or mix two things that disagree.
+  if (/[-+/*%^]|[<>!=]=|[<>]|\b(?:bool|and|or|unless)\b/.test(expression)) {
     return "";
-  if (/\b(?:rate|irate|deriv)\s*\(/.test(operators)) {
-    return unit === "bytes" ? "bytes/s" : "";
   }
+  // An aggregation may put its grouping clause before the parenthesis, as in
+  // `count by (pod) (...)`, so the name is not always adjacent to it.
+  const functions = [
+    ...expression.matchAll(
+      /([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:(?:by|without)\s*\([^()]*\)\s*)?\(/g,
+    ),
+  ]
+    .map((match) => match[1])
+    .filter((name) => !selectors.some((selector) => selector.metric === name));
+  const rates = functions.filter((name) => RATE_FUNCTIONS.has(name)).length;
+  if (rates > 1) return "";
+  for (const name of functions) {
+    if (RATE_FUNCTIONS.has(name)) continue;
+    if (!UNIT_PRESERVING_FUNCTIONS.has(name)) return "";
+  }
+  if (rates === 1) return unit === "bytes" ? "bytes/s" : "";
   return unit;
 }
 

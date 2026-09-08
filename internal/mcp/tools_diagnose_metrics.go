@@ -60,6 +60,12 @@ var DiagnoseMetricsEnabled = true
 // included. A var so tests can exercise the breach path.
 var diagnoseMetricsBudget = 3 * time.Second
 
+// diagnoseMetricsCategories is one half of a Go↔TS contract:
+// DIAGNOSE_METRICS_LABELS in
+// web/src/components/diagnose/investigationEvidence.ts keys off these exact
+// category names and discards a series whose category it does not know, so a
+// category added here without a label there is captured and never charted.
+// Change both together.
 var diagnoseMetricsCategories = []prom.MetricCategory{prom.CategoryCPU, prom.CategoryMemory, prom.CategoryRestarts}
 
 // diagnoseMetrics is the vitals snapshot diagnose captures alongside the
@@ -282,9 +288,9 @@ func diagnoseMetricsPointBudget(envelope *diagnoseMetrics) int {
 	return points
 }
 
-// queryPodSetCategory runs one category over the pod set, retrying without
-// the container filter when the filtered query finds nothing, as the curated
-// HTTP metrics handler does for clusters whose cAdvisor lacks the label.
+// queryPodSetCategory runs one category over the pod set, sharing the curated
+// HTTP metrics handler's container-filter fallback for clusters whose cAdvisor
+// lacks the label.
 func queryPodSetCategory(ctx context.Context, p *prom.Client, sel prom.PodSelection, cat prom.MetricCategory, start, end time.Time, step time.Duration) (diagnoseMetricSeries, error) {
 	out := diagnoseMetricSeries{Category: string(cat), Unit: prom.CategoryUnit(cat)}
 	query := prom.BuildScopedQuery(sel, cat, prom.AggregateTotal, true)
@@ -292,16 +298,11 @@ func queryPodSetCategory(ctx context.Context, p *prom.Client, sel prom.PodSelect
 	if err != nil {
 		return out, err
 	}
-	if len(result.Series) == 0 && prom.CategoryUsesContainerFilter(cat) {
-		fallback := prom.BuildScopedQuery(sel, cat, prom.AggregateTotal, false)
-		// On a cluster whose cAdvisor lacks the container label the retry is
-		// the query that carries the data, so its failure is the category's
-		// failure rather than an empty window.
-		if fallbackResult, fallbackErr := p.QueryRange(ctx, fallback, start, end, step); fallbackErr != nil {
-			return out, fallbackErr
-		} else if len(fallbackResult.Series) > 0 {
-			result, query = fallbackResult, fallback
-		}
+	result, query, err = prometheus.QueryWithContainerFilterFallback(ctx, p, result, query, cat, start, end, step,
+		func() string { return prom.BuildScopedQuery(sel, cat, prom.AggregateTotal, false) },
+		fmt.Sprintf("diagnose metrics empty for %q", cat))
+	if err != nil {
+		return out, err
 	}
 	out.Query = query
 	out.Series = result.Series

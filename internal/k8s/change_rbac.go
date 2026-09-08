@@ -97,6 +97,43 @@ func ResolveChangeGVR(kind, group string) (gvrGroup, gvrResource string, cluster
 	return "", "", false, false
 }
 
+// LookupResourceGVR resolves a (kind, group) pair to the canonical group and
+// plural resource name used by SubjectAccessReview for a resource-context ref.
+// Tries the static cluster-only catalogue (covers Nodes / ClusterRoles / etc.),
+// then the namespaced-builtin catalogue, then discovery for everything else
+// including CRDs. Returns "" when neither path knows the kind, which callers
+// treat as an unknown kind rather than a denial.
+//
+// The group comes back resolved because topology refs carry an empty group for
+// builtins while discovery is cold, and a SAR against the core group for a
+// non-core resource answers a question nobody asked. Resolving builtins
+// statically also keeps the caller's unknown-kind passthrough from ever
+// covering them: the typed informers serve those objects regardless of
+// discovery.
+//
+// Unlike ResolveChangeGVR this does not report scope — its callers gate a
+// namespaced ref and a cluster-scoped one through different checks already.
+func LookupResourceGVR(kind, group string) (gvrGroup, resource string) {
+	if kind == "" {
+		return "", ""
+	}
+	if clusterScoped, g, r := ClassifyKindScope(kind, group); clusterScoped {
+		return g, r
+	}
+	if g, r, ok := ClusterOnlyKindGVR(kind); ok && (group == "" || group == g) {
+		return g, r
+	}
+	if g, r, ok := NamespacedBuiltinGVR(kind); ok && (group == "" || group == g) {
+		return g, r
+	}
+	if disc := GetResourceDiscovery(); disc != nil {
+		if ar, ok := disc.GetResourceWithGroup(kind, group); ok {
+			return ar.Group, ar.Name
+		}
+	}
+	return "", ""
+}
+
 // GroupFromAPIVersion extracts the API group from an apiVersion string
 // ("apps/v1" → "apps", "v1" → "", "cluster.x-k8s.io/v1beta1" → "cluster.x-k8s.io").
 func GroupFromAPIVersion(apiVersion string) string {
