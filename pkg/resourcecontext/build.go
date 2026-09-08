@@ -1220,6 +1220,7 @@ func buildScaledBy(ctx context.Context, scalers []topology.ResourceRef, provider
 			}
 			if hpa := findHPA(hpas, ref.Namespace, ref.Name); hpa != nil {
 				entry.HPASummary = buildHPASummary(hpa)
+				entry.ManagedBy = kedaScaledObjectRef(ctx, hpa, ac, omitted)
 			}
 		}
 		out = append(out, entry)
@@ -1231,6 +1232,31 @@ func buildScaledBy(ctx context.Context, scalers []topology.ResourceRef, provider
 // without a dynamic provider the group is empty, as it is for core kinds.
 func isHPARef(ref ContextRef) bool {
 	return ref.Kind == "HorizontalPodAutoscaler" && (ref.Group == "" || ref.Group == "autoscaling")
+}
+
+// KEDA owns the HPAs it creates and also labels them with the ScaledObject
+// name; either is enough to attribute the HPA. The pointer is gated like any
+// other ref so a ScaledObject the caller cannot read is not named.
+func kedaScaledObjectRef(ctx context.Context, hpa *autoscalingv2.HorizontalPodAutoscaler, ac RefAccessChecker, omitted *omittedTracker) *ContextRef {
+	name := ""
+	for _, owner := range hpa.OwnerReferences {
+		if owner.Kind == "ScaledObject" && groupFromAPIVersion(owner.APIVersion) == "keda.sh" {
+			name = owner.Name
+			break
+		}
+	}
+	if name == "" {
+		name = hpa.Labels["scaledobject.keda.sh/name"]
+	}
+	if name == "" {
+		return nil
+	}
+	ref := &ContextRef{Kind: "ScaledObject", Group: "keda.sh", Namespace: hpa.Namespace, Name: name}
+	if !checkRef(ctx, ac, ref) {
+		omitted.add("scaledBy.managedBy", OmittedRBACDenied)
+		return nil
+	}
+	return ref
 }
 
 func findHPA(hpas []*autoscalingv2.HorizontalPodAutoscaler, namespace, name string) *autoscalingv2.HorizontalPodAutoscaler {

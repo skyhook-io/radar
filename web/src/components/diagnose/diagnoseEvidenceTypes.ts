@@ -79,6 +79,8 @@ export interface DiagnosisHPASummary {
 }
 
 export interface DiagnosisScalerRef extends DiagnosisResourceRef {
+  /** The KEDA ScaledObject that owns this HPA, when KEDA created it. */
+  managedBy?: DiagnosisResourceRef;
   /** Present only for an HPA the caller may read; KEDA scalers carry the ref alone. */
   hpaSummary?: DiagnosisHPASummary;
 }

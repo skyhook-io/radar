@@ -190,3 +190,40 @@ func reasonIDs(d *Diagnosis) []ReasonID {
 	}
 	return out
 }
+
+func TestConditionReasonsLeadWithRadarPhrasing(t *testing.T) {
+	minReplicas := int32(2)
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			MinReplicas:    &minReplicas,
+			MaxReplicas:    10,
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "api"},
+		},
+		Status: autoscalingv2.HorizontalPodAutoscalerStatus{
+			CurrentReplicas: 2,
+			DesiredReplicas: 2,
+			Conditions: []autoscalingv2.HorizontalPodAutoscalerCondition{
+				{Type: autoscalingv2.AbleToScale, Status: corev1.ConditionTrue, Reason: "ReadyForNewScale"},
+				{Type: autoscalingv2.ScalingActive, Status: corev1.ConditionTrue, Reason: "ValidMetricFound"},
+				{Type: autoscalingv2.ScalingLimited, Status: corev1.ConditionTrue, Reason: "TooFewReplicas",
+					Message: "the desired replica count is less than the minimum replica count"},
+			},
+		},
+	}
+	got := Analyze(hpa)
+	var reason *Reason
+	for i := range got.Reasons {
+		if got.Reasons[i].ID == ReasonLimitedMin {
+			reason = &got.Reasons[i]
+		}
+	}
+	if reason == nil {
+		t.Fatalf("no limited_min reason: %+v", got.Reasons)
+	}
+	if reason.Message != "HPA is held at minReplicas=2" {
+		t.Errorf("Message = %q, want Radar's phrasing", reason.Message)
+	}
+	if reason.Detail != "the desired replica count is less than the minimum replica count" {
+		t.Errorf("Detail = %q, want the controller's sentence", reason.Detail)
+	}
+}
