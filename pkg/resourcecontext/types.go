@@ -85,6 +85,9 @@ type ContextRef struct {
 // ScaledObject/ScaledJob) carry the identity alone.
 type ScalerRef struct {
 	ContextRef
+	// ManagedBy names the KEDA ScaledObject that owns this HPA, when the HPA
+	// is one KEDA created rather than one a person wrote.
+	ManagedBy  *ContextRef `json:"managedBy,omitempty"`
 	HPASummary *HPASummary `json:"hpaSummary,omitempty"`
 }
 

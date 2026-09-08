@@ -3114,6 +3114,66 @@ describe("InvestigationEvidencePane scaled-by section", () => {
     expect(html).toContain("cpu 95% of 70%");
   });
 
+  it("names the KEDA ScaledObject that owns the HPA and links it only when listed", () => {
+    const kedaHPA = (listed: boolean) =>
+      scaledDeployment([
+        {
+          kind: "HorizontalPodAutoscaler",
+          namespace: "shop",
+          name: "keda-hpa-api",
+          managedBy: {
+            kind: "ScaledObject",
+            group: "keda.sh",
+            namespace: "shop",
+            name: "api",
+          },
+          hpaSummary: {
+            state: "limited_min",
+            summary: "HPA is holding at minReplicas=2",
+            bounds: { min: 2, max: 10, current: 2, desired: 2 },
+            reasons: [
+              {
+                id: "limited_min",
+                message: "HPA is held at minReplicas=2",
+                detail:
+                  "the desired replica count is less than the minimum replica count",
+              },
+            ],
+          },
+        },
+        ...(listed
+          ? [
+              {
+                kind: "ScaledObject",
+                group: "keda.sh",
+                namespace: "shop",
+                name: "api",
+              },
+            ]
+          : []),
+      ]);
+    const open = () => {};
+    const linked = render(
+      project(kedaHPA(true)),
+      false,
+      undefined,
+      undefined,
+      open,
+    );
+    expect(linked).toContain("managed by KEDA ScaledObject");
+    expect(linked).toContain("HPA is held at minReplicas=2");
+    expect(linked).toMatch(/<button[^>]*>api<\/button>/);
+    const unlisted = render(
+      project(kedaHPA(false)),
+      false,
+      undefined,
+      undefined,
+      open,
+    );
+    expect(unlisted).toContain("managed by KEDA ScaledObject");
+    expect(unlisted).not.toMatch(/<button[^>]*>api<\/button>/);
+  });
+
   it("stays quiet for scalers Radar did not diagnose", () => {
     const html = render(
       project(

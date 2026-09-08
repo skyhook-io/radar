@@ -209,14 +209,15 @@ func isPinned(min, max int32) bool {
 	return max > 0 && min == max
 }
 
-func (d *Diagnosis) addConditionReason(id ReasonID, cond autoscalingv2.HorizontalPodAutoscalerCondition, fallback string) {
-	message := cond.Message
-	if message == "" {
-		message = fallback
-	}
+// The reason leads with Radar's reading of the condition and keeps the
+// controller's own sentence as detail: the raw text ("the desired replica
+// count is less than the minimum replica count") names neither the bound nor
+// the number, which is what a reader scanning a card needs.
+func (d *Diagnosis) addConditionReason(id ReasonID, cond autoscalingv2.HorizontalPodAutoscalerCondition, message string) {
 	d.Reasons = append(d.Reasons, Reason{
 		ID:              id,
 		Message:         message,
+		Detail:          cond.Message,
 		ConditionType:   string(cond.Type),
 		ConditionReason: cond.Reason,
 	})
@@ -329,7 +330,7 @@ func firstReasonDetail(d *Diagnosis, id ReasonID) string {
 }
 
 func missingRequestMetric(d *Diagnosis) string {
-	message := strings.ToLower(firstReasonMessage(d, ReasonMetricsUnavailable, ""))
+	message := strings.ToLower(firstReasonDetail(d, ReasonMetricsUnavailable))
 	const marker = "missing request for "
 	idx := strings.Index(message, marker)
 	if idx < 0 {
@@ -364,7 +365,7 @@ func controllerReportedMaxLimit(d *Diagnosis) bool {
 			continue
 		}
 		conditionReason := strings.ToLower(reason.ConditionReason)
-		message := strings.ToLower(reason.Message)
+		message := strings.ToLower(reason.Detail)
 		if strings.Contains(conditionReason, "toomany") || strings.Contains(message, "maximum") {
 			return true
 		}
