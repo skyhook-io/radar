@@ -722,7 +722,7 @@ export function LogCore({
         {onClear && (
           <Tooltip content="Clear logs" delay={TIP_DELAY} position="bottom">
             <button
-              onClick={() => { if (entries.length > 0) setShowClearConfirm(true) }}
+              onClick={() => setShowClearConfirm(true)}
               className={iconBtnInactive}
             >
               <Trash2 className="w-4 h-4" />
