@@ -1,11 +1,12 @@
 import { useRef, useCallback, useState, useMemo, useEffect, type ReactNode } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { Play, Square, Download, Search, X, Terminal, RotateCcw, ChevronUp, ChevronDown, ChevronRight, CaseSensitive, Regex, WrapText, Clock, Copy, Trash2, Filter, Braces, Palette, ListCollapse, Sun, Moon } from 'lucide-react'
+import { Play, Square, Download, FileDown, Search, X, Terminal, RotateCcw, ChevronUp, ChevronDown, ChevronRight, CaseSensitive, Regex, WrapText, Clock, Copy, Trash2, Filter, Braces, Palette, ListCollapse, Sun, Moon } from 'lucide-react'
 import type { LogEntry, LogLevel } from './useLogBuffer'
 import { useLogSearch } from './useLogSearch'
 import { StructuredLogLine } from './StructuredLogLine'
 import { Tooltip } from '../ui/Tooltip'
 import { Input } from '../ui/Input'
+import { showApiError, showApiSuccess } from '../ui/Toast'
 import {
   formatLogTimestamp,
   highlightSearchMatches,
@@ -115,6 +116,28 @@ interface LogGroup {
 }
 
 const TIP_DELAY = 150
+
+// navigator.clipboard only exists in secure contexts; Radar is often served
+// over plain http from a LAN address or jumpbox, so fall back to execCommand.
+function copyToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text)
+  return new Promise((resolve, reject) => {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    try {
+      if (document.execCommand('copy')) resolve()
+      else reject(new Error('copy command failed'))
+    } catch (err) {
+      reject(err)
+    } finally {
+      ta.remove()
+    }
+  })
+}
 
 export function LogCore({
   entries,
@@ -239,6 +262,28 @@ export function LogCore({
     window.addEventListener('click', handleClick)
     return () => window.removeEventListener('click', handleClick)
   }, [showDownloadMenu])
+
+  // Copies the lines currently on screen (level filter + search filter applied),
+  // formatted as displayed, so "filter to errors → copy → paste into a chat" works.
+  const handleCopyVisible = useCallback(() => {
+    setShowDownloadMenu(false)
+    if (displayEntries.length === 0) {
+      showApiError('Nothing to copy', 'No log lines are currently visible.')
+      return
+    }
+    const text = displayEntries.map(e => {
+      const parts: string[] = []
+      if (showTimestamps && e.timestamp) parts.push(formatLogTimestamp(e.timestamp, tsFormat))
+      if (showPodName && e.pod) parts.push(`[${e.pod}]`)
+      parts.push(stripAnsi(e.content))
+      return parts.join(' ')
+    }).join('\n')
+    copyToClipboard(text).then(() => {
+      showApiSuccess('Copied to clipboard', `${displayEntries.length} log line${displayEntries.length === 1 ? '' : 's'} copied.`)
+    }).catch(() => {
+      showApiError('Failed to copy logs', 'The browser blocked clipboard access.')
+    })
+  }, [displayEntries, showTimestamps, tsFormat, showPodName])
 
   // Same close-on-outside-click for the timestamp format menu.
   const tsMenuRef = useRef<HTMLDivElement>(null)
@@ -657,9 +702,9 @@ export function LogCore({
           </Tooltip>
         )}
 
-        {/* Download */}
+        {/* Export: copy to clipboard + download */}
         <div className="relative flex items-center" ref={downloadMenuRef}>
-          <Tooltip content="Download logs" delay={TIP_DELAY} position="bottom">
+          <Tooltip content="Export logs" delay={TIP_DELAY} position="bottom">
             <button
               onClick={() => setShowDownloadMenu(prev => !prev)}
               className={iconBtnInactive}
@@ -668,14 +713,23 @@ export function LogCore({
             </button>
           </Tooltip>
           {showDownloadMenu && (
-            <div className={`absolute top-full right-0 mt-1 w-32 ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50`}>
+            <div className={`absolute top-full right-0 mt-1 w-44 ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50`}>
+              <button
+                onClick={handleCopyVisible}
+                className={`w-full flex items-center gap-2 text-left px-3 py-2 text-xs ${palette.textPrimary} ${palette.hoverBg} rounded-t-lg`}
+              >
+                <Copy className={`w-3.5 h-3.5 ${palette.textTertiary}`} />
+                Copy to clipboard
+              </button>
+              <div className={`border-t ${palette.border}`} />
               {(['txt', 'json', 'csv'] as DownloadFormat[]).map(fmt => (
                 <button
                   key={fmt}
                   onClick={() => { onDownload(fmt); setShowDownloadMenu(false) }}
-                  className={`w-full text-left px-3 py-2 text-xs ${palette.textPrimary} ${palette.hoverBg} first:rounded-t-lg last:rounded-b-lg`}
+                  className={`w-full flex items-center gap-2 text-left px-3 py-2 text-xs ${palette.textPrimary} ${palette.hoverBg} last:rounded-b-lg`}
                 >
-                  {fmt.toUpperCase()}
+                  <FileDown className={`w-3.5 h-3.5 ${palette.textTertiary}`} />
+                  Download {fmt.toUpperCase()}
                 </button>
               ))}
             </div>
@@ -970,7 +1024,7 @@ function LogLine({
 
   const handleCopy = () => {
     const raw = stripAnsi(entry.content)
-    navigator.clipboard.writeText(raw).catch(() => {})
+    copyToClipboard(raw).catch(() => {})
   }
 
   return (
