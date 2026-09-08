@@ -101,7 +101,10 @@ export function CloudFunnelButton() {
   // first paint, before that connection exists.
   const liveConnectionState = useConnection().connection.state
   // Set when prepare answered 503: the server has no cluster even if the
-  // connection feed still says otherwise. Cleared once that feed moves.
+  // connection feed still says otherwise. Cleared once that feed moves and
+  // whenever the dialog opens or closes, so a blip the feed never surfaced
+  // (it holds 'connected' across short reconnects) cannot hide the in-app
+  // connect for good.
   const [serverReportedNoCluster, setServerReportedNoCluster] = useState(false)
   useEffect(() => {
     setServerReportedNoCluster(false)
@@ -171,9 +174,15 @@ export function CloudFunnelButton() {
     // a running install. Toast explicitly on the paths that are failures.
   })
 
+  const closeModal = () => {
+    setOpen(false)
+    setServerReportedNoCluster(false)
+  }
+
   const openModal = () => {
     setOpen(true)
     setSeen(true)
+    setServerReportedNoCluster(false)
     markSeen()
     // Re-open lands on a live flow if one is running.
     if (lane === 'driver' && flowLive) setInFlowView(true)
@@ -255,11 +264,11 @@ export function CloudFunnelButton() {
 
       <DialogPortal
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={closeModal}
         className="w-[580px] max-w-full max-h-[calc(100vh-2rem)] overflow-hidden flex flex-col"
       >
         <button
-          onClick={() => setOpen(false)}
+          onClick={closeModal}
           aria-label="Close"
           className="absolute top-3.5 right-3.5 z-10 p-1.5 rounded-md text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover transition-colors"
         >
@@ -301,7 +310,7 @@ export function CloudFunnelButton() {
               // in-cluster, so the CTA would escape before classification.
               selfLoading={inCluster && self.isPending}
               onConnect={startConnect}
-              onLater={() => setOpen(false)}
+              onLater={closeModal}
             />
           </>
         )}
