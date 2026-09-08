@@ -1816,12 +1816,17 @@ export function InvestigationView({
                                 ? paneResolution
                                 : undefined;
                             return answerCase?.items.length ||
-                              answerResolution?.links.length ? (
+                              answerResolution?.links.length ||
+                              turn.diagnosis?.unlinkedEvidence ||
+                              turn.diagnosis?.evidenceMalformed ? (
                               <AssessmentSources
                                 resolution={answerResolution}
                                 investigationCase={answerCase}
                                 unlinkedEvidence={
                                   turn.diagnosis?.unlinkedEvidence
+                                }
+                                evidenceMalformed={
+                                  turn.diagnosis?.evidenceMalformed
                                 }
                                 readOnly={index !== liveCaseTurnIdx}
                                 onViewSource={viewActivitySource}
@@ -2066,13 +2071,21 @@ export function InvestigationView({
                         }
                         diagnosis={currentAssessment.diagnosis}
                         assessmentSources={
+                          // An assessment whose every note was rejected has no
+                          // items and no links, and the loss is the only thing
+                          // there is to say about it.
                           rootCauseEvidenceResolution?.links.length ||
-                          investigationCase?.items.length ? (
+                          investigationCase?.items.length ||
+                          currentAssessment.diagnosis.unlinkedEvidence ||
+                          currentAssessment.diagnosis.evidenceMalformed ? (
                             <AssessmentSources
                               resolution={rootCauseEvidenceResolution}
                               investigationCase={investigationCase}
                               unlinkedEvidence={
                                 currentAssessment.diagnosis?.unlinkedEvidence
+                              }
+                              evidenceMalformed={
+                                currentAssessment.diagnosis?.evidenceMalformed
                               }
                               readOnly={!liveCaseIsCurrentAssessment}
                               onViewSource={viewActivitySource}

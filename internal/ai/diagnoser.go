@@ -268,6 +268,9 @@ type caseRequest struct {
 	// dropped counts entries cut by the per-case cap. Those get no slot in
 	// items, so nothing downstream could otherwise see them go.
 	dropped int
+	// malformed is set when the agent sent an evidence field that is not a
+	// list, so the whole case was unreadable and no count describes it.
+	malformed bool
 }
 
 // Diagnosis is the engine's final result.
@@ -290,12 +293,16 @@ type Diagnosis struct {
 	// EvidenceUnlinked slot in Evidence) plus entries cut by the per-case cap,
 	// which get no slot at all. A consumer states the loss instead of showing
 	// a case that silently shrank.
-	UnlinkedEvidence int                 `json:"unlinkedEvidence,omitempty"`
-	RuledOut         []DiagnosisRuledOut `json:"ruledOut,omitempty"`
-	Remediation      []string            `json:"remediation"`
-	Confidence       *float64            `json:"confidence"`
-	CostUSD          *float64            `json:"costUsd"`
-	Turns            int                 `json:"turns"`
+	UnlinkedEvidence int `json:"unlinkedEvidence,omitempty"`
+	// EvidenceMalformed reports an evidence field that was not a list of
+	// items at all. Nothing in it could be read, and no count would describe
+	// how much was lost.
+	EvidenceMalformed bool                `json:"evidenceMalformed,omitempty"`
+	RuledOut          []DiagnosisRuledOut `json:"ruledOut,omitempty"`
+	Remediation       []string            `json:"remediation"`
+	Confidence        *float64            `json:"confidence"`
+	CostUSD           *float64            `json:"costUsd"`
+	Turns             int                 `json:"turns"`
 	// RecommendedIndex is the 1-based index into Remediation of the single step the
 	// agent recommends applying (what an Apply action performs). 0/nil = no safe
 	// automatic fix. Pointing into the list (vs restating the fix) keeps the UI

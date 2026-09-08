@@ -1383,6 +1383,16 @@ describe("notes the agent wrote that could not be linked", () => {
       ),
     ).toBe("");
   });
+
+  it("says the notes were unreadable when they were not a list at all", () => {
+    // There is no count to give here, so the pane states the fact instead of
+    // inventing a number.
+    const html = renderToStaticMarkup(
+      <AssessmentSources evidenceMalformed onViewSource={onViewSource} />,
+    );
+    expect(html).toContain("could not be read, so none are shown");
+    expect(html).not.toContain("could not be linked");
+  });
 });
 
 describe("what a carried note may and may not do", () => {

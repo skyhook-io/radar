@@ -292,3 +292,47 @@ func TestExplanationPromptCarriesCaseNotesReadOnly(t *testing.T) {
 		t.Fatalf("empty case must not appear in the prompt: %s", bare)
 	}
 }
+
+// A ref field is unwrapped only when it is exactly one marker. Two markers,
+// or a marker inside prose, is the agent meaning something the parser cannot
+// read, and picking one would be choosing an interpretation.
+func TestUnwrapEvidenceRefTakesOnlyAWholeMarker(t *testing.T) {
+	ref := "ev_" + strings.Repeat("a", 26) + "_" + strings.Repeat("b", 26)
+	other := "ev_" + strings.Repeat("c", 26) + "_" + strings.Repeat("d", 26)
+	if got := unwrapEvidenceRef("[[radar:evidence-ref=" + ref + "]]"); got != ref {
+		t.Fatalf("whole marker: got %q", got)
+	}
+	if got := unwrapEvidenceRef("  [[radar:evidence-ref=" + ref + "]]  "); got != ref {
+		t.Fatalf("padded marker: got %q", got)
+	}
+	if got := unwrapEvidenceRef(ref); got != ref {
+		t.Fatalf("bare ref: got %q", got)
+	}
+	two := "[[radar:evidence-ref=" + ref + "]] or [[radar:evidence-ref=" + other + "]]"
+	if got := unwrapEvidenceRef(two); got != two {
+		t.Fatalf("two markers should not resolve to one: got %q", got)
+	}
+	prose := "see [[radar:evidence-ref=" + ref + "]] for this"
+	if got := unwrapEvidenceRef(prose); got != prose {
+		t.Fatalf("a marker in prose should not be unwrapped: got %q", got)
+	}
+}
+
+// An evidence field that is not a list carries no items and no count that
+// would describe what was lost, so it is reported as a fact of its own.
+func TestParseCaseRequestReportsAMalformedEvidenceEnvelope(t *testing.T) {
+	object := parseCaseRequest(json.RawMessage(`{"ref":"x","role":"cause","claim":"y"}`), nil)
+	if !object.malformed || len(object.items) != 0 || object.dropped != 0 {
+		t.Fatalf("object envelope: %+v", object)
+	}
+	list := parseCaseRequest(json.RawMessage(`[]`), nil)
+	if list.malformed {
+		t.Fatal("an empty list is a readable case, not a malformed one")
+	}
+	if null := parseCaseRequest(json.RawMessage(`null`), nil); null.malformed {
+		t.Fatal("an absent case is not a malformed one")
+	}
+	if absent := parseCaseRequest(nil, nil); absent.malformed {
+		t.Fatal("no evidence field at all is not a malformed one")
+	}
+}
