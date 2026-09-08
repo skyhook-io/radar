@@ -7,7 +7,6 @@ import { StructuredLogLine } from './StructuredLogLine'
 import { Tooltip } from '../ui/Tooltip'
 import { Input } from '../ui/Input'
 import { showApiError, showApiSuccess } from '../ui/Toast'
-import { ConfirmDialog } from '../ui/ConfirmDialog'
 import {
   formatLogTimestamp,
   highlightSearchMatches,
@@ -42,8 +41,8 @@ interface LogCoreProps {
   entries: LogEntry[]
   /**
    * The unfiltered buffer, when the host filters `entries` before passing them
-   * (the workload viewer's pod picker). Export's "All" and the clear-confirm
-   * both describe the real buffer, not the slice currently on screen.
+   * (the workload viewer's pod picker), so that export's "All" describes the
+   * real buffer rather than the slice currently on screen.
    */
   allEntries?: LogEntry[]
   isLoading: boolean
@@ -210,7 +209,6 @@ export function LogCore({
       return v === 'txt' || v === 'json' || v === 'csv' ? v : 'txt'
     } catch { return 'txt' }
   })
-  const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [showTsMenu, setShowTsMenu] = useState(false)
   const [showStructuredMenu, setShowStructuredMenu] = useState(false)
   const [structuredMode, setStructuredMode] = useState<StructuredMode>(() => {
@@ -378,7 +376,6 @@ export function LogCore({
   // hijack search input or other text entry.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (showClearConfirm) return
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         e.preventDefault()
         search.open()
@@ -394,32 +391,7 @@ export function LogCore({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [search.open, onStartStream, onStopStream, isStreaming, showClearConfirm])
-
-  // A refresh refetches whatever the API still holds, but lines that arrived over
-  // the stream are gone for good — so a confirm is only worth asking for once the
-  // buffer has held streamed lines, including after the stream was stopped.
-  const hasStreamed = useRef(false)
-  useEffect(() => {
-    if (isStreaming) hasStreamed.current = true
-  }, [isStreaming])
-
-  const clearBuffer = useCallback(() => {
-    onClear?.()
-    // The emptied buffer refills from the stream only while it is still running;
-    // resetting to `false` would leave the flag stale, since the effect above
-    // re-runs on a change of `isStreaming`, not on a clear.
-    hasStreamed.current = isStreaming
-    setShowClearConfirm(false)
-  }, [onClear, isStreaming])
-
-  const handleClearClick = useCallback(() => {
-    if (hasStreamed.current && bufferEntries.length > 0) {
-      setShowClearConfirm(true)
-      return
-    }
-    clearBuffer()
-  }, [clearBuffer, bufferEntries.length])
+  }, [search.open, onStartStream, onStopStream, isStreaming])
 
   const handleFollowOutput = useCallback((isAtBottom: boolean) => {
     if (isAtBottom) return 'smooth' as const
@@ -862,7 +834,7 @@ export function LogCore({
         {onClear && (
           <Tooltip content="Clear logs" delay={TIP_DELAY} position="bottom">
             <button
-              onClick={handleClearClick}
+              onClick={onClear}
               className={iconBtnInactive}
             >
               <Trash2 className="w-4 h-4" />
@@ -1048,19 +1020,6 @@ export function LogCore({
         <Shortcut keys="Shift+Enter" label="Prev match" palette={palette} />
         <Shortcut keys="Esc" label="Close search" palette={palette} />
       </div>
-
-      {onClear && (
-        <ConfirmDialog
-          open={showClearConfirm}
-          onClose={() => setShowClearConfirm(false)}
-          onConfirm={clearBuffer}
-          title="Clear logs?"
-          message={`Removes every line loaded so far. Lines that arrived over the stream are not re-fetched by a refresh, so this cannot be undone.${isStreaming ? ' The stream stays connected and new lines keep arriving.' : ''}`}
-          confirmLabel="Clear"
-          variant="warning"
-          showWarning={false}
-        />
-      )}
     </div>
   )
 }
