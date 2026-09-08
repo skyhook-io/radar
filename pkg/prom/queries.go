@@ -345,8 +345,12 @@ func buildPodSetQueryInner(namespace string, pods []string, category MetricCateg
 
 	switch category {
 	case CategoryRestarts:
+		// increase() reads the counter delta, so several restarts between two
+		// scrapes count as several; changes() would report one. Its
+		// extrapolation yields fractions, which round() settles per pod
+		// before the set is summed.
 		return fmt.Sprintf(
-			`sum(changes(kube_pod_container_status_restarts_total{namespace='%s',pod=~'%s'}[1h]))`,
+			`sum(round(increase(kube_pod_container_status_restarts_total{namespace='%s',pod=~'%s'}[1h])))`,
 			ns, podPattern)
 	case CategoryCPU:
 		return fmt.Sprintf(
