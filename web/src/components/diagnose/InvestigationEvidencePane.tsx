@@ -1712,6 +1712,18 @@ function IssueBody({
           {issue.namespace ? `${issue.namespace}/` : ""}
           {issue.name}
         </Badge>
+        {data.pods && data.pods.length > 0 ? (
+          <>
+            <Badge tone="structural" size="sm">
+              {data.pods.length === 1 ? "1 Pod" : `${data.pods.length} Pods`}
+            </Badge>
+            {data.pods.map((pod) => (
+              <Badge key={pod} tone="structural" size="sm">
+                {pod}
+              </Badge>
+            ))}
+          </>
+        ) : null}
       </div>
       {showCause ? (
         <p className="text-sm font-medium leading-relaxed text-theme-text-primary">

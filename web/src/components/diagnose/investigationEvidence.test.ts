@@ -5898,6 +5898,55 @@ describe("live-run follow-ups", () => {
     expect(startup[1].id).not.toBe(startup[0].id);
   });
 
+  it("folds pods' startup blocker into the classified issue that repeats it", () => {
+    const blocker = (name: string) => ({
+      kind: "Pod",
+      name,
+      reason: "Unschedulable",
+      severity: "critical",
+      message: "1 node(s) no free host ports",
+    });
+    const projection = project([
+      tool("diagnose", "diagnose", {
+        resource: {
+          apiVersion: "apps/v1",
+          kind: "DaemonSet",
+          metadata: { namespace: "opencost", name: "node-exporter" },
+        },
+        resourceContext: { tier: "basic" },
+        pods: 2,
+        relatedIssues: [
+          {
+            id: "issue-unsched",
+            severity: "critical",
+            source: "scheduling",
+            category: "unschedulable",
+            category_group: "startup",
+            grouping_scope: "workload",
+            kind: "DaemonSet",
+            namespace: "opencost",
+            name: "node-exporter",
+            reason: "Unschedulable",
+            message: "1 node(s) no free host ports",
+          },
+        ],
+        startupBlockers: [
+          blocker("node-exporter-a"),
+          blocker("node-exporter-b"),
+        ],
+      }),
+    ]);
+    expect(
+      projection.groups.filter((group) => group.latest.data.type === "startup"),
+    ).toHaveLength(0);
+    const [issue] = projection.groups.filter(
+      (group) => group.latest.data.type === "issue",
+    );
+    expect(
+      issue.latest.data.type === "issue" && issue.latest.data.pods,
+    ).toEqual(["node-exporter-a", "node-exporter-b"]);
+  });
+
   it("files a denied events namespace as an access limitation, not a receipt", () => {
     const projection = project([
       tool(
