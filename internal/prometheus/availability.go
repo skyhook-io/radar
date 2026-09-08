@@ -28,7 +28,8 @@ const (
 	AvailabilityAbsent AvailabilityStatus = "absent"
 )
 
-// AvailabilityState is the result of Availability.
+// AvailabilityState pairs the state with the endpoint it refers to, when one
+// is known, and with the error behind a state other than connected.
 type AvailabilityState struct {
 	State   AvailabilityStatus
 	Address string

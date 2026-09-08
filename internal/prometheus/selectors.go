@@ -40,11 +40,15 @@ func ExtractSelectors(query string) (selectors []Selector, unknown bool) {
 }
 
 // promModifierKeywords never name a metric: PromQL's grammar does not admit
-// them as metric identifiers. inf/nan are number literals.
+// them as metric identifiers.
 var promModifierKeywords = map[string]bool{
 	"on": true, "ignoring": true, "group_left": true, "group_right": true,
-	"bool": true, "inf": true, "nan": true,
+	"bool": true,
 }
+
+// promNumberWords are number literals spelled as words; they complete an
+// operand like any other number.
+var promNumberWords = map[string]bool{"inf": true, "nan": true}
 
 // promLabelListKeywords take an optional parenthesised label list whose
 // entries are label names, not selectors.
@@ -104,11 +108,31 @@ func (s *selectorScanner) skipSpace() {
 	}
 }
 
-func (s *selectorScanner) peekNonSpace() byte {
-	i := s.pos
-	for i < len(s.src) && isPromSpace(s.src[i]) {
-		i++
+// afterSpaceAndComments returns the offset of the next token from i at
+// expression level, where a "#" comment is whitespace. Inside braces and
+// label lists comments are not skipped, so they fail closed there.
+func (s *selectorScanner) afterSpaceAndComments(i int) int {
+	for i < len(s.src) {
+		switch {
+		case isPromSpace(s.src[i]):
+			i++
+		case s.src[i] == '#':
+			for i < len(s.src) && s.src[i] != '\n' && s.src[i] != '\r' {
+				i++
+			}
+		default:
+			return i
+		}
 	}
+	return i
+}
+
+func (s *selectorScanner) skipSpaceAndComments() {
+	s.pos = s.afterSpaceAndComments(s.pos)
+}
+
+func (s *selectorScanner) peekNonSpace() byte {
+	i := s.afterSpaceAndComments(s.pos)
 	if i >= len(s.src) {
 		return 0
 	}
@@ -116,11 +140,8 @@ func (s *selectorScanner) peekNonSpace() byte {
 }
 
 func (s *selectorScanner) peekWord() string {
-	i := s.pos
-	for i < len(s.src) && isPromSpace(s.src[i]) {
-		i++
-	}
-	start := i
+	start := s.afterSpaceAndComments(s.pos)
+	i := start
 	for i < len(s.src) && isPromMetricChar(s.src[i]) {
 		i++
 	}
@@ -198,7 +219,7 @@ func (s *selectorScanner) identifier() bool {
 	s.prev = prevNone
 
 	if next == '{' {
-		s.skipSpace()
+		s.skipSpaceAndComments()
 		m, ok := s.matchers()
 		if !ok {
 			return false
@@ -210,9 +231,12 @@ func (s *selectorScanner) identifier() bool {
 
 	lower := strings.ToLower(word)
 	switch {
+	case promNumberWords[lower]:
+		s.prev = prevOperand
+		return true
 	case promModifierKeywords[lower]:
 		if promLabelListKeywords[lower] && next == '(' {
-			s.skipSpace()
+			s.skipSpaceAndComments()
 			return s.labelList()
 		}
 		return true
@@ -221,7 +245,7 @@ func (s *selectorScanner) identifier() bool {
 		// a prefix clause keeps waiting for the aggregator's argument.
 		s.prev = prev
 		if next == '(' {
-			s.skipSpace()
+			s.skipSpaceAndComments()
 			return s.labelList()
 		}
 		return true
