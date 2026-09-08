@@ -86,7 +86,9 @@ func reasonText(reason hpadiag.Reason) string {
 }
 
 func hpaCannotScaleDiagnosis(reason hpadiag.Reason, namespace string) (string, string) {
-	text := strings.ToLower(reason.ConditionReason + " " + reason.Message)
+	// The controller's own sentence ("missing request for cpu") is the detail;
+	// the message is Radar's reading of the condition.
+	text := strings.ToLower(reason.ConditionReason + " " + reason.Message + " " + reason.Detail)
 	switch {
 	case hasHPAConditionReason(reason, "FailedGetResourceMetric") || hasHPAConditionReason(reason, "FailedGetContainerResourceMetric"):
 		if metric, ok := missingHPARequestMetric(text); ok {
