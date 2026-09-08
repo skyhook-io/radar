@@ -684,7 +684,7 @@ export function LogCore({
           </Tooltip>
         )}
 
-        {/* Export: copy to clipboard + download */}
+        {/* Export */}
         <div className="relative flex items-center" ref={downloadMenuRef}>
           <Tooltip content="Export logs" delay={TIP_DELAY} position="bottom" disabled={showDownloadMenu} preserveWrapperWhenDisabled>
             <button
