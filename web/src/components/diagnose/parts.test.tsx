@@ -10,6 +10,8 @@ import {
   appendThinking,
   remediationCommands,
   mergeStartupSignal,
+  middleTruncate,
+  runningElapsedLabel,
   toolDurationLabel,
   toolErrorReason,
   upsertTool,
@@ -571,6 +573,27 @@ describe("Timeline startup signals", () => {
   });
 });
 
+describe("running status elapsed counter", () => {
+  it("is a row-level figure, never part of the phase label", () => {
+    expect(runningElapsedLabel(0)).toBeUndefined();
+    expect(runningElapsedLabel(2)).toBeUndefined();
+    expect(runningElapsedLabel(3)).toBe("3s elapsed");
+    expect(runningElapsedLabel(19)).toBe("19s elapsed");
+
+    const html = renderToStaticMarkup(
+      <Timeline
+        items={[]}
+        running
+        agentLabel="Claude Code"
+        startup={mergeStartupSignal(undefined, { phase: "connected" })}
+      />,
+    );
+    const label = html.match(/<span class="ai-shimmer[^"]*">([^<]*)</);
+    expect(label?.[1]).toBe("Connected to Radar&#x27;s tools");
+    expect(label?.[1]).not.toMatch(/\d+s/);
+  });
+});
+
 describe("tool row duration and failure reason", () => {
   const doneStep = (
     overrides: Partial<Extract<TimelineItem, { kind: "tool" }>>,
@@ -643,6 +666,54 @@ describe("tool row duration and failure reason", () => {
     expect(toolErrorReason("")).toBeUndefined();
     expect(toolErrorReason("  \n ")).toBeUndefined();
     expect(toolErrorReason('{"error":""}')).toBeUndefined();
+    // Radar's not-found hints are for the agent; the row keeps what failed.
+    expect(
+      toolErrorReason(
+        'resource not found: secret "project-infra" not found — found Deployment autopush/project-infra — retry with kind=deployment; or use search',
+      ),
+    ).toBe('resource not found: secret "project-infra" not found');
+  });
+
+  it("middle-truncates a long reason so its identifier tail survives", () => {
+    const short = 'resource not found: secret "dev/does-not-exist" not found';
+    expect(middleTruncate(short)).toBe(short);
+    const long =
+      "failed to get logs for autopush/project-infra-68c7b766dc-g2xlg: container is waiting to start: CreateContainerConfigError for pod project-infra-68c7b766dc-g2xlg";
+    const cut = middleTruncate(long);
+    expect(cut.length).toBeLessThanOrEqual(100);
+    expect(cut).toContain("…");
+    expect(cut.startsWith("failed to get logs for autopush")).toBe(true);
+    expect(cut.endsWith("project-infra-68c7b766dc-g2xlg")).toBe(true);
+    expect(middleTruncate("abcdefghij", 6, 2)).toBe("abc…ij");
+  });
+
+  it("lets the arguments give way before the reason on a collapsed failed row", () => {
+    const html = renderToStaticMarkup(
+      <ThemeProvider>
+        <Timeline
+          items={[
+            doneStep({
+              isError: true,
+              summary:
+                '{"kind":"Secret","namespace":"dev","name":"does-not-exist"}',
+              result:
+                'resource not found: secret "dev/does-not-exist" not found — found Deployment dev/api — retry with kind=deployment',
+            }),
+          ]}
+          running={false}
+        />
+      </ThemeProvider>,
+    );
+    const args = html.match(/<span class="([^"]*)">kind=Secret/);
+    expect(args?.[1]).toContain("flex-1");
+    expect(args?.[1]).toContain("truncate");
+    const reason = html.match(
+      /<span class="investigation-tool-reason ([^"]*)">([^<]*)</,
+    );
+    expect(reason?.[1]).toContain("shrink-0");
+    expect(reason?.[2]).toBe(
+      "resource not found: secret &quot;dev/does-not-exist&quot; not found",
+    );
   });
 
   it("shows the failure reason inline on a failed row only when the producer gave one", () => {
