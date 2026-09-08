@@ -145,7 +145,16 @@ export function metricsChangeMarkers(
   observation: InvestigationEvidenceObservation,
 ): ChartAnnotation[] {
   const { data } = observation;
-  if (data.type !== "metrics" || !data.subject) return [];
+  // A broader chart's subject is a neighbour; the turn's non-broader relatives
+  // and changes all belong to the target, so marking them there would
+  // attribute the target's changes to the neighbour.
+  if (
+    data.type !== "metrics" ||
+    !data.subject ||
+    observation.relevance === "broader"
+  ) {
+    return [];
+  }
   const domain = metricsDomain(data);
   if (!domain) return [];
   const turnIndex = observation.source.turnIndex;

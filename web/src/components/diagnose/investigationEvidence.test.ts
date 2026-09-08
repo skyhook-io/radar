@@ -5411,3 +5411,315 @@ describe("resource cards scaled by an HPA", () => {
     expect(card.summary).toBe("5/5 replicas ready");
   });
 });
+
+describe("diagnose metrics evidence", () => {
+  const window = {
+    start: "2026-09-06T07:00:00Z",
+    end: "2026-09-06T08:00:00Z",
+    step: "1m2s",
+  };
+  const samples = [
+    { timestamp: Date.parse(window.start) / 1000, value: 0.003457 },
+    { timestamp: Date.parse(window.end) / 1000, value: 0.004 },
+  ];
+  function vitals(patch: Record<string, unknown> = {}) {
+    return {
+      window,
+      pods: 2,
+      series: [
+        {
+          category: "cpu",
+          unit: "cores",
+          query:
+            "sum(rate(container_cpu_usage_seconds_total{container!='',namespace='shop',pod=~'^(api-a|api-b)$'}[5m]))",
+          series: [{ labels: {}, dataPoints: samples }],
+        },
+        {
+          category: "memory",
+          unit: "bytes",
+          query:
+            "sum(max by (pod,namespace,container) (container_memory_working_set_bytes{container!='',namespace='shop',pod=~'^(api-a|api-b)$'}))",
+          series: [{ labels: {}, dataPoints: samples }],
+        },
+        {
+          category: "restarts",
+          unit: "count",
+          query:
+            "sum(round(increase(kube_pod_container_status_restarts_total{namespace='shop',pod=~'^(api-a|api-b)$'}[1h])))",
+          series: [],
+        },
+      ],
+      ...patch,
+    };
+  }
+  const args = { kind: "Deployment", namespace: "shop", name: "api" };
+
+  it("charts each captured category as target evidence with the diagnosed resource as subject", () => {
+    const projection = project([
+      tool(
+        "diag",
+        "diagnose",
+        { resource: deployment, pods: 2, metrics: vitals() },
+        { summary: JSON.stringify(args) },
+      ),
+    ]);
+    const groups = groupsOf(projection.groups, "metrics");
+    expect(groups.map((group) => group.latest.title)).toEqual([
+      "CPU usage · Deployment shop/api",
+      "Memory working set · Deployment shop/api",
+      "Restarts · Deployment shop/api",
+    ]);
+    for (const group of groups) {
+      expect(group.latest.relevance).toBe("target");
+      expect(group.latest.tier).toBe("supporting");
+      expect(group.latest.tone).toBe("neutral");
+      const data = group.latest.data;
+      if (data.type !== "metrics") throw new Error("expected metrics");
+      expect(data.origin).toBe("diagnose");
+      expect(data.mode).toBe("range");
+      expect(data.start).toBe(window.start);
+      expect(data.end).toBe(window.end);
+      expect(data.step).toBe(window.step);
+      expect(data.pods).toBe(2);
+      expect(data.partial).toBe(false);
+      expect(data.truncated).toBe(false);
+      expect(data.subject).toEqual({
+        kind: "Deployment",
+        group: "apps",
+        namespace: "shop",
+        name: "api",
+      });
+      expect(investigationEvidenceSubjectRef(data)).toEqual(data.subject);
+    }
+    const [cpu, , restarts] = groups;
+    expect(cpu.latest.summary).toBe("2 pods · 60m window · 1m2s step");
+    const cpuData = cpu.latest.data;
+    if (cpuData.type !== "metrics") throw new Error("expected metrics");
+    expect(cpuData.unit).toBe("cores");
+    expect(cpuData.label).toBe("CPU usage");
+    expect(cpuData.query).toContain("pod=~'^(api-a|api-b)$'");
+    expect(cpuData.series).toEqual([{ labels: {}, dataPoints: samples }]);
+    expect(restarts.latest.summary).toBe(
+      "No samples in the window · 60m window · 1m2s step",
+    );
+    expect(
+      projection.limitations.filter(
+        (item) => item.source === "Workload metrics",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("merges a re-diagnose of the same workload into the same chart per category", () => {
+    const later = vitals({
+      window: { ...window, end: "2026-09-06T08:30:00Z" },
+    });
+    const projection = project(
+      [
+        tool(
+          "diag-1",
+          "diagnose",
+          { resource: deployment, pods: 2, metrics: vitals() },
+          { summary: JSON.stringify(args) },
+        ),
+      ],
+      [
+        tool(
+          "diag-2",
+          "diagnose",
+          { resource: deployment, pods: 2, metrics: later },
+          { summary: JSON.stringify(args) },
+        ),
+      ],
+    );
+    const groups = groupsOf(projection.groups, "metrics");
+    expect(groups).toHaveLength(3);
+    expect(groups.every((group) => group.observations.length === 2)).toBe(
+      true,
+    );
+    const data = groups[0].latest.data;
+    if (data.type !== "metrics") throw new Error("expected metrics");
+    expect(data.end).toBe("2026-09-06T08:30:00Z");
+  });
+
+  it("reports a producer error as a limitation and still charts what answered", () => {
+    const projection = project([
+      tool(
+        "diag",
+        "diagnose",
+        {
+          resource: deployment,
+          pods: 2,
+          metrics: vitals({
+            series: [vitals().series[1]],
+            error: "cpu: prom: query error from prometheus: cpu exploded (execution)",
+          }),
+        },
+        { summary: JSON.stringify(args) },
+      ),
+    ]);
+    expect(groupsOf(projection.groups, "metrics")).toHaveLength(1);
+    const limitation = projection.limitations.find(
+      (item) => item.source === "Workload metrics",
+    );
+    expect(limitation?.kind).toBe("error");
+    expect(limitation?.message).toContain("cpu exploded");
+  });
+
+  it("reports an unreachable Prometheus without inventing a chart", () => {
+    const projection = project([
+      tool(
+        "diag",
+        "diagnose",
+        {
+          resource: deployment,
+          pods: 2,
+          metrics: vitals({
+            series: [],
+            error: "prometheus unreachable: dial tcp 10.0.0.9:9090: connection refused",
+          }),
+        },
+        { summary: JSON.stringify(args) },
+      ),
+    ]);
+    expect(groupsOf(projection.groups, "metrics")).toHaveLength(0);
+    const limitation = projection.limitations.find(
+      (item) => item.source === "Workload metrics",
+    );
+    expect(limitation?.kind).toBe("error");
+    expect(limitation?.message).toBe(
+      "prometheus unreachable: dial tcp 10.0.0.9:9090: connection refused",
+    );
+  });
+
+  it("says nothing when diagnose carried no metrics field", () => {
+    const projection = project([
+      tool(
+        "diag",
+        "diagnose",
+        { resource: deployment, pods: 2 },
+        { summary: JSON.stringify(args) },
+      ),
+    ]);
+    expect(groupsOf(projection.groups, "metrics")).toHaveLength(0);
+    expect(
+      projection.limitations.some((item) => item.source === "Workload metrics"),
+    ).toBe(false);
+  });
+
+  it("notes a partial pod set in the summary and keeps the cap on the card", () => {
+    const projection = project([
+      tool(
+        "diag",
+        "diagnose",
+        {
+          resource: deployment,
+          pods: 55,
+          metrics: vitals({ pods: 50, partial: true, omittedPods: 5 }),
+        },
+        { summary: JSON.stringify(args) },
+      ),
+    ]);
+    const [cpu] = groupsOf(projection.groups, "metrics");
+    expect(cpu.latest.summary).toBe(
+      "first 50 of 55 pods · 60m window · 1m2s step · partial pod set",
+    );
+    const data = cpu.latest.data;
+    if (data.type !== "metrics") throw new Error("expected metrics");
+    expect(data.pods).toBe(50);
+    expect(data.partial).toBe(true);
+  });
+
+  it("keeps a neighbour's vitals broader with the neighbour as subject", () => {
+    const worker = {
+      ...deployment,
+      metadata: { namespace: "shop", name: "worker" },
+    };
+    const projection = project([
+      tool(
+        "diag-worker",
+        "diagnose",
+        { resource: worker, pods: 2, metrics: vitals() },
+        {
+          summary: JSON.stringify({
+            kind: "Deployment",
+            namespace: "shop",
+            name: "worker",
+          }),
+        },
+      ),
+    ]);
+    const groups = groupsOf(projection.groups, "metrics");
+    expect(groups).toHaveLength(3);
+    for (const group of groups) {
+      expect(group.latest.relevance).toBe("broader");
+      expect(group.latest.tier).toBe("context");
+      const data = group.latest.data;
+      if (data.type !== "metrics") throw new Error("expected metrics");
+      expect(data.subject).toEqual({
+        kind: "Deployment",
+        group: "apps",
+        namespace: "shop",
+        name: "worker",
+      });
+    }
+  });
+
+  it("rejects a malformed metrics field instead of charting it", () => {
+    const malformed: Record<string, unknown>[] = [
+      { window: { start: window.start }, pods: "two", series: [] },
+      { window: { ...window, end: "not a date" }, pods: 2, series: [] },
+      { window: { ...window, end: window.start }, pods: 2, series: [] },
+      { window, pods: -1, series: [] },
+      { window, pods: 1.5, series: [] },
+      { window, pods: 2, omittedPods: -3, series: [] },
+    ];
+    for (const metrics of malformed) {
+      const projection = project([
+        tool(
+          "diag",
+          "diagnose",
+          { resource: deployment, pods: 2, metrics },
+          { summary: JSON.stringify(args) },
+        ),
+      ]);
+      expect(groupsOf(projection.groups, "metrics")).toHaveLength(0);
+      expect(
+        projection.limitations.some(
+          (item) =>
+            item.source === "Workload metrics" && item.kind === "unknown",
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects a category outside the contract or a series without a unit", () => {
+    const projection = project([
+      tool(
+        "diag",
+        "diagnose",
+        {
+          resource: deployment,
+          pods: 2,
+          metrics: vitals({
+            series: [
+              { ...vitals().series[0], category: "latency" },
+              { ...vitals().series[1], unit: undefined },
+              vitals().series[2],
+            ],
+          }),
+        },
+        { summary: JSON.stringify(args) },
+      ),
+    ]);
+    const groups = groupsOf(projection.groups, "metrics");
+    expect(groups.map((group) => group.latest.title)).toEqual([
+      "Restarts · Deployment shop/api",
+    ]);
+    expect(
+      projection.limitations.some(
+        (item) =>
+          item.source === "Workload metrics" && item.kind === "unknown",
+      ),
+    ).toBe(true);
+  });
+});
