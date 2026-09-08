@@ -481,6 +481,63 @@ describe("Timeline startup signals", () => {
     expect(html).not.toContain("Connected to Radar");
   });
 
+  it("renders a bare ready label when the init facts are absent", () => {
+    // Hosted transports may forward only the phase name; the label and the
+    // warning must degrade to exactly what was reported.
+    const startup = mergeStartupSignal(undefined, { phase: "ready" });
+    const html = renderToStaticMarkup(
+      <Timeline
+        items={[]}
+        running
+        agentLabel="Claude Code"
+        startup={startup}
+      />,
+    );
+    expect(html).toContain("Claude Code ready</span>");
+    expect(html).not.toContain("Radar tools");
+    expect(html).not.toContain("MCP server");
+  });
+
+  it("uses conditional wording for servers whose startup state is not final", () => {
+    const startup = mergeStartupSignal(undefined, {
+      phase: "ready",
+      model: "claude-opus-5",
+      toolCount: 24,
+      mcpServers: [
+        { name: "radar", status: "connected" },
+        { name: "github", status: "pending" },
+      ],
+    });
+    const pending = renderToStaticMarkup(
+      <Timeline
+        items={[]}
+        running
+        agentLabel="Claude Code"
+        startup={startup}
+      />,
+    );
+    expect(pending).toContain("is pending");
+    expect(pending).toContain("may not have been available");
+    expect(pending).not.toContain("ran this turn without");
+
+    const failed = renderToStaticMarkup(
+      <Timeline
+        items={[]}
+        running
+        agentLabel="Claude Code"
+        startup={mergeStartupSignal(undefined, {
+          phase: "ready",
+          mcpServers: [
+            { name: "radar", status: "connected" },
+            { name: "github", status: "failed" },
+          ],
+        })}
+      />,
+    );
+    expect(failed).toContain("failed to connect");
+    expect(failed).toContain("ran this turn without those tools");
+  });
+
   it("warns when the CLI reports an MCP server that is not connected", () => {
     const startup = mergeStartupSignal(undefined, {
       phase: "ready",
