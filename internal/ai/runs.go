@@ -663,10 +663,11 @@ func (m *RunManager) launchTurn(r *Run, turn runTurn) {
 const metricsProbeTimeout = 2 * time.Second
 
 // metricsForTurn probes the metrics backend for a read-only investigation
-// turn. Apply turns act on a confirmed fix and explanation turns restate a
-// saved assessment; neither should be sent looking for new evidence.
+// turn. Apply turns act on a confirmed fix, explanation turns restate a saved
+// assessment, and verification turns check that fix against current state;
+// none of them should be sent looking for new evidence.
 func (m *RunManager) metricsForTurn(turn runTurn) MetricsAvailability {
-	if m.MetricsAvailability == nil || turn.apply || turn.explanation != nil {
+	if m.MetricsAvailability == nil || turn.apply || turn.verify || turn.explanation != nil {
 		return MetricsAvailability{}
 	}
 	ctx, cancel := context.WithTimeout(turn.ctx, metricsProbeTimeout)

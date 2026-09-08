@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -111,7 +112,18 @@ func metricsNudge(m MetricsAvailability) string {
 	if !m.Connected {
 		return ""
 	}
-	return fmt.Sprintf("Prometheus is connected at %s; for resource, restart, throttling or latency questions run one `query_prometheus` range query over the failure window and cite it.", m.Address)
+	return fmt.Sprintf("Prometheus is connected at %s; for resource, restart, throttling or latency questions run one `query_prometheus` range query over the failure window and cite it.", promptSafeAddress(m.Address))
+}
+
+// promptSafeAddress drops any credentials embedded in a configured URL: the
+// prompt is model-visible and the agent only needs to know where the backend is.
+func promptSafeAddress(address string) string {
+	u, err := url.Parse(address)
+	if err != nil || u.User == nil {
+		return address
+	}
+	u.User = nil
+	return u.String()
 }
 
 // turnPrompt selects the prompt for a turn. Apply and explanation turns are

@@ -11,7 +11,7 @@ import type { TimeSeries, ReferenceLine, ChartAnnotation } from './types'
 export const ANNOTATION_LABEL_MIN_WIDTH_PX = 420
 const ANNOTATION_HOVER_TOLERANCE = 8
 
-export function AreaChart({ series, color, fillColor, unit, referenceLines, annotations, domain }: {
+export function AreaChart({ series, color, fillColor, unit, referenceLines, annotations, domain, seriesLabels }: {
   series: TimeSeries[]
   color: string
   fillColor: string
@@ -21,6 +21,12 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
   annotations?: ChartAnnotation[]
   /** X axis window in unix seconds. Defaults to the sample extent. */
   domain?: { start: number; end: number }
+  /**
+   * Display name per series, parallel to `series`. Pass it when the chart
+   * shows a subset of a larger result so names stay distinguishable across
+   * the whole result; defaults to names derived from the labels given.
+   */
+  seriesLabels?: string[]
 }) {
   const svgRef = useRef<SVGSVGElement>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
@@ -202,8 +208,8 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
       .map((s, i) => ({ s, i }))
       .filter(({ s }) => s.dataPoints.filter(dp => dp.value != null).length >= 2)
 
-    const allLabels = seriesDisplayLabels(chartData.series)
-    const fullLabels = validSeries.map(({ i }) => allLabels[i])
+    const allLabels = seriesLabels ?? seriesDisplayLabels(chartData.series)
+    const fullLabels = validSeries.map(({ i }) => allLabels[i] ?? `series-${i}`)
     const shortLabels = computeShortLabels(fullLabels)
 
     const points = validSeries.map(({ s, i }, vi) => {
@@ -244,7 +250,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
     )
 
     return { ts, x: clampedX, points, nearbyAnnotations }
-  }, [hoverX, chartData, placedAnnotations])
+  }, [hoverX, chartData, placedAnnotations, seriesLabels])
 
   const handleMouseMove = useCallback((e: React.MouseEvent<SVGRectElement>) => {
     const svg = svgRef.current
@@ -284,7 +290,6 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
           />
         ))}
 
-        {/* Zero line when the axis extends below zero */}
         {zeroLineY !== null && (
           <line
             data-chart-zero-line

@@ -4606,12 +4606,15 @@ function selectorNamesTarget(
 ): boolean {
   const { label, op, value } = matcher;
   if (label === "pod") {
-    if (op === "=~") return regexNamesExactly(value, target.name, "-.*");
-    if (op === "=") {
-      return target.kind.toLowerCase() === "pod"
-        ? value === target.name
-        : value.startsWith(`${target.name}-`);
+    // A Pod target is named only by its own exact name: its "<name>-" prefix
+    // selects other pods, never itself.
+    if (target.kind.toLowerCase() === "pod") {
+      if (op === "=") return value === target.name;
+      if (op === "=~") return regexNamesExactly(value, target.name, "");
+      return false;
     }
+    if (op === "=~") return regexNamesExactly(value, target.name, "-.*");
+    if (op === "=") return value.startsWith(`${target.name}-`);
     return false;
   }
   if (!(label in WORKLOAD_SELECTOR_LABELS)) return false;
@@ -4638,11 +4641,13 @@ export function metricsScope(
   }
   let allNameTarget = true;
   for (const selector of selectors) {
+    // Prometheus anchors regex matchers, so namespace=~"shop" is exact too.
     const inNamespace = selector.matchers.some(
       (matcher) =>
         matcher.label === "namespace" &&
-        matcher.op === "=" &&
-        matcher.value === target.namespace,
+        ((matcher.op === "=" && matcher.value === target.namespace) ||
+          (matcher.op === "=~" &&
+            regexNamesExactly(matcher.value, target.namespace ?? "", ""))),
     );
     if (!inNamespace) return "broader";
     if (!selector.matchers.some((matcher) => selectorNamesTarget(target, matcher)))

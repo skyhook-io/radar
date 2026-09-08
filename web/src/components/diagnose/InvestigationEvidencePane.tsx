@@ -2182,14 +2182,16 @@ function finiteSamples(series: TimeSeries): TimeSeries["dataPoints"] {
 
 function MetricsValueTable({
   series,
+  labels,
   unit,
   withTime,
 }: {
   series: TimeSeries[];
+  /** Display name per series, derived from the complete result. */
+  labels: string[];
   unit: string;
   withTime: boolean;
 }) {
-  const labels = seriesDisplayLabels(series);
   return (
     <table className="w-full text-xs">
       <tbody>
@@ -2259,7 +2261,12 @@ function MetricsBody({
   if (data.mode === "instant") {
     return (
       <div className="space-y-2">
-        <MetricsValueTable series={data.series} unit={unit} withTime={false} />
+        <MetricsValueTable
+          series={data.series}
+          labels={seriesDisplayLabels(data.series)}
+          unit={unit}
+          withTime={false}
+        />
         <pre className="whitespace-pre-wrap break-all rounded-md border border-theme-border/70 bg-theme-base/30 p-2 font-mono text-xs text-theme-text-secondary">
           {data.query}
         </pre>
@@ -2269,10 +2276,20 @@ function MetricsBody({
       </div>
     );
   }
-  // A series with one finite sample has no line to draw. Listing it keeps the
-  // captured measurement readable instead of leaving an axis with nothing on it.
-  const charted = data.series.filter((item) => finiteSamples(item).length >= 2);
-  const sparse = data.series.filter((item) => finiteSamples(item).length < 2);
+  // Names come from the whole result so two series that differ only by a
+  // label the chart would hide stay distinguishable wherever they are listed.
+  const labels = seriesDisplayLabels(data.series);
+  const indexed = data.series.map((item, index) => ({
+    item,
+    label: labels[index],
+    finite: finiteSamples(item).length,
+  }));
+  // A series with one finite sample has no line to draw, and one with none
+  // (Prometheus serializes NaN and infinities as gaps) has nothing to show.
+  // Listing both keeps what was captured readable and states what was not.
+  const charted = indexed.filter((entry) => entry.finite >= 2);
+  const single = indexed.filter((entry) => entry.finite === 1);
+  const empty = indexed.filter((entry) => entry.finite === 0);
   return (
     <div className="space-y-2">
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-xs">
@@ -2299,7 +2316,8 @@ function MetricsBody({
       {charted.length > 0 ? (
         <div className="space-y-1.5 rounded-md border border-theme-border/70 bg-theme-base/30 p-2">
           <AreaChart
-            series={charted}
+            series={charted.map((entry) => entry.item)}
+            seriesLabels={charted.map((entry) => entry.label)}
             color={SERIES_COLORS[0]}
             fillColor={seriesFill(0, SERIES_COLORS[0])}
             unit={unit}
@@ -2307,22 +2325,44 @@ function MetricsBody({
             domain={domain}
           />
           {charted.length > 1 ? (
-            <SeriesLegend series={charted} color={SERIES_COLORS[0]} />
+            <SeriesLegend
+              series={charted.map((entry) => entry.item)}
+              seriesLabels={charted.map((entry) => entry.label)}
+              color={SERIES_COLORS[0]}
+            />
           ) : null}
         </div>
       ) : null}
-      {sparse.length > 0 ? (
+      {single.length > 0 ? (
         <div
           className="space-y-1"
           data-testid="investigation-metrics-sparse-series"
         >
           <p className="text-xs text-theme-text-tertiary">
-            {sparse.length === 1
+            {single.length === 1
               ? "1 series has a single sample in this window, listed with its time:"
-              : `${sparse.length} series have a single sample in this window, listed with their times:`}
+              : `${single.length} series have a single sample in this window, listed with their times:`}
           </p>
-          <MetricsValueTable series={sparse} unit={unit} withTime />
+          <MetricsValueTable
+            series={single.map((entry) => entry.item)}
+            labels={single.map((entry) => entry.label)}
+            unit={unit}
+            withTime
+          />
         </div>
+      ) : null}
+      {empty.length > 0 ? (
+        <p
+          className="text-xs text-theme-text-tertiary [overflow-wrap:anywhere]"
+          data-testid="investigation-metrics-empty-series"
+        >
+          {empty.length === 1
+            ? "1 series returned no finite values in this window: "
+            : `${empty.length} series returned no finite values in this window: `}
+          <span className="font-mono">
+            {empty.map((entry) => entry.label).join("; ")}
+          </span>
+        </p>
       ) : null}
       {annotations?.length && charted.length > 0 ? (
         <p className="text-xs text-theme-text-tertiary">
