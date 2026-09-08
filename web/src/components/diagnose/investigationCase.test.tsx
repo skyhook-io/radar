@@ -713,6 +713,145 @@ describe("agent case visibility and ordering (D-2, D-5)", () => {
   });
 });
 
+describe("diagnose-bundled metrics placement (D-5 with D1)", () => {
+  const ref = evidenceRef("a", "m");
+  const window = {
+    start: "2026-09-06T07:00:00Z",
+    end: "2026-09-06T08:00:00Z",
+    step: "1m",
+  };
+  const samples = [
+    { timestamp: Date.parse(window.start) / 1000, value: 1 },
+    { timestamp: Date.parse(window.end) / 1000, value: 2 },
+  ];
+  const vital = (category: string) => ({
+    category,
+    unit: category === "cpu" ? "cores" : "bytes",
+    query: `sum(${category}{namespace='shop',pod=~'^(api-abc)$'})`,
+    series: [{ labels: {}, dataPoints: samples }],
+  });
+  const bundleWith = (categories: string[]) =>
+    project(
+      tool(
+        "diag",
+        "diagnose",
+        {
+          ...diagnoseBundle,
+          metrics: {
+            window,
+            pods: 1,
+            series: categories.map(vital),
+          },
+        },
+        { evidenceRef: ref },
+      ),
+    );
+
+  it("promotes a diagnose-origin chart into main only through a subject that names it", () => {
+    const projection = bundleWith(["cpu", "memory"]);
+    const metrics = projection.groups.filter(
+      (group) => group.kind === "metrics",
+    );
+    expect(metrics).toHaveLength(2);
+    expect(metrics[0].latest.data).toMatchObject({
+      type: "metrics",
+      origin: "diagnose",
+    });
+    const uncited = partitionInvestigationEvidence(projection.groups);
+    expect(uncited.main.map((group) => group.kind)).not.toContain("metrics");
+    expect(
+      uncited.workload.filter((group) => group.kind === "metrics"),
+    ).toHaveLength(2);
+
+    const ambiguous = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(ref, "symptom", "Memory climbs until the restart.", {
+            kind: "Deployment",
+            namespace: "shop",
+            name: "api",
+            observation: "metrics",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(ambiguous.items[0].placement).toBe("source");
+
+    const named = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(ref, "symptom", "Memory climbs until the restart.", {
+            kind: "Deployment",
+            group: "apps",
+            namespace: "shop",
+            name: "api",
+            observation: "metrics:memory",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(named.items[0].placement).toBe("card");
+    expect(named.items[0].groupId).toBe(
+      metrics.find((group) => group.identity.endsWith(":memory"))!.id,
+    );
+    const partition = partitionInvestigationEvidence(
+      projection.groups,
+      undefined,
+      named,
+    );
+    expect(partition.collectionByGroup.get(named.items[0].groupId!)).toBe(
+      "main",
+    );
+    // The chart is now in main and, as the only symptom item, leads the
+    // unlabelled Radar cards; the other chart stays where Radar had it.
+    expect(partition.main[0].kind).toBe("metrics");
+    expect(
+      partition.main.filter((group) => group.kind === "metrics"),
+    ).toHaveLength(1);
+    expect(partition.main.map((group) => group.kind)).toContain("issue");
+    const html = render(projection, named);
+    expect(html).toContain("Memory working set · deployment shop/api");
+    expect(html).toContain("Memory climbs until the restart.");
+  });
+
+  it("needs no category when the bundle captured one chart", () => {
+    const projection = bundleWith(["cpu"]);
+    const resolved = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(ref, "context", "CPU is flat.", {
+            kind: "Deployment",
+            name: "api",
+            observation: "metrics",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items[0].placement).toBe("card");
+    expect(
+      resolveInvestigationCase(
+        projection,
+        {
+          evidence: [
+            linked(ref, "context", "Wrong chart.", {
+              kind: "Deployment",
+              name: "api",
+              observation: "metrics:restarts",
+            }),
+          ],
+        },
+        0,
+      ).items[0].placement,
+    ).toBe("source");
+  });
+});
+
 describe("agent case robustness", () => {
   const ref = evidenceRef("a", "b");
 
