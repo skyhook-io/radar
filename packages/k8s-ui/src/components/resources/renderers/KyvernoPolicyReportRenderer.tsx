@@ -278,7 +278,7 @@ export function KyvernoPolicyRenderer({ data, coverage, queued }: KyvernoPolicyR
               enforcement.blocks
                 ? 'status-red'
                 : enforcement.discrepancy
-                  ? 'status-orange'
+                  ? 'status-alert'
                   : 'status-amber',
             )}>
               {enforcement.label}

@@ -83,8 +83,10 @@ export function KyvernoPolicyCell({ resource, column }: { resource: any; column:
       return (
         <span className={clsx(
           'badge',
-          // Enforce/Audit is a configured posture, not evidence of a fault, so
-          // it takes colour-named accents rather than the health palette.
+          // Enforce and Audit are configured postures, so they take colour-named
+          // accents. A discrepancy is not a posture — the policy declares Enforce
+          // while admission evaluation is off, so it blocks nothing it claims to
+          // — and that is a fault, which is what the alert tier is for.
           blocks
             ? 'status-red'
             : discrepancy
