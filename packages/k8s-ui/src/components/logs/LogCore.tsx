@@ -7,6 +7,7 @@ import { StructuredLogLine } from './StructuredLogLine'
 import { Tooltip } from '../ui/Tooltip'
 import { Input } from '../ui/Input'
 import { showApiError, showApiSuccess } from '../ui/Toast'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
 import {
   formatLogTimestamp,
   highlightSearchMatches,
@@ -206,6 +207,7 @@ export function LogCore({
     new Set(['error', 'warn', 'info', 'debug'])
   )
   const [showDownloadMenu, setShowDownloadMenu] = useState(false)
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [showTsMenu, setShowTsMenu] = useState(false)
   const [showStructuredMenu, setShowStructuredMenu] = useState(false)
   const [structuredMode, setStructuredMode] = useState<StructuredMode>(() => {
@@ -704,7 +706,7 @@ export function LogCore({
 
         {/* Export: copy to clipboard + download */}
         <div className="relative flex items-center" ref={downloadMenuRef}>
-          <Tooltip content="Export logs" delay={TIP_DELAY} position="bottom">
+          <Tooltip content="Export logs" delay={TIP_DELAY} position="bottom" disabled={showDownloadMenu}>
             <button
               onClick={() => setShowDownloadMenu(prev => !prev)}
               className={iconBtnInactive}
@@ -740,7 +742,7 @@ export function LogCore({
         {onClear && (
           <Tooltip content="Clear logs" delay={TIP_DELAY} position="bottom">
             <button
-              onClick={onClear}
+              onClick={() => { if (entries.length > 0) setShowClearConfirm(true) }}
               className={iconBtnInactive}
             >
               <Trash2 className="w-4 h-4" />
@@ -867,7 +869,7 @@ export function LogCore({
           <Terminal className="w-8 h-8" />
           <span>{emptyMessage}</span>
           {emptyCommand && (
-            <button type="button" onClick={() => navigator.clipboard.writeText(emptyCommand).catch(() => {})} className={`mt-2 inline-flex max-w-[80%] items-center gap-2 rounded border px-3 py-2 font-mono text-xs ${palette.border} ${palette.toolbarBg}`} title="Copy recovery command">
+            <button type="button" onClick={() => copyToClipboard(emptyCommand).catch(() => {})} className={`mt-2 inline-flex max-w-[80%] items-center gap-2 rounded border px-3 py-2 font-mono text-xs ${palette.border} ${palette.toolbarBg}`} title="Copy recovery command">
               <code className="truncate">{emptyCommand}</code>
               <Copy className="h-3.5 w-3.5 shrink-0" />
             </button>
@@ -926,6 +928,19 @@ export function LogCore({
         <Shortcut keys="Shift+Enter" label="Prev match" palette={palette} />
         <Shortcut keys="Esc" label="Close search" palette={palette} />
       </div>
+
+      {onClear && (
+        <ConfirmDialog
+          open={showClearConfirm}
+          onClose={() => setShowClearConfirm(false)}
+          onConfirm={() => { onClear(); setShowClearConfirm(false) }}
+          title="Clear logs?"
+          message={`Removes the ${entries.length.toLocaleString()} loaded log line${entries.length === 1 ? '' : 's'} from this viewer. ${isStreaming ? 'The stream stays connected and new lines keep arriving.' : 'Refresh to load them again.'}`}
+          confirmLabel="Clear"
+          variant="warning"
+          showWarning={false}
+        />
+      )}
     </div>
   )
 }
