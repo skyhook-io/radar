@@ -272,21 +272,62 @@ function observationMatchesSubject(
   if (subject.observation !== undefined) {
     // A diagnose bundle captures several vitals charts for one resource, so
     // "metrics" alone cannot name one; "metrics:<category>" picks the chart
-    // whose identity ends in that category.
+    // whose identity ends in that category. An agent-run query is one chart,
+    // so a qualifier on it carries no meaning.
     const [kind, qualifier] = subject.observation.toLowerCase().split(":", 2);
     if (kind !== observation.data.type) return false;
     if (
       qualifier !== undefined &&
-      !(
-        observation.data.type === "metrics" &&
-        group.identity.endsWith(`:${qualifier}`)
-      )
+      observation.data.type === "metrics" &&
+      observation.data.origin === "diagnose" &&
+      !group.identity.endsWith(`:${qualifier}`)
     ) {
       return false;
     }
   }
-  const identity = observationSubjectIdentity(observation);
-  if (!identity) return false;
+  const identities = observationIdentities(observation);
+  // An observation that states no resource of its own (an agent-run query
+  // whose selectors do not name the target exactly, a topology summary) can
+  // only be named by its evidence kind; the ref and the uniqueness rule do
+  // the rest.
+  if (identities.length === 0) return subject.observation !== undefined;
+  return identities.some((identity) =>
+    identityMatchesSubject(identity, observation, subject),
+  );
+}
+
+/**
+ * A log stream is identified by its pod, and also by the workload its
+ * producing call was asked about: an agent naming "the Deployment's
+ * container logs" means the stream a diagnose bundle read for that
+ * Deployment, and uniqueness still decides whether that names one.
+ */
+function observationIdentities(
+  observation: InvestigationEvidenceObservation,
+): ObservationSubjectIdentity[] {
+  const stated = observationSubjectIdentity(observation);
+  const identities = stated ? [stated] : [];
+  if (observation.data.type === "logs" && stated) {
+    const args = investigationSourceArgs(observation.source);
+    if (args && nonEmptyString(args.kind) && nonEmptyString(args.name)) {
+      identities.push({
+        kind: args.kind,
+        group: nonEmptyString(args.group) ? args.group : undefined,
+        namespace: nonEmptyString(args.namespace) ? args.namespace : undefined,
+        name: args.name,
+        container: stated.container,
+        stream: stated.stream,
+      });
+    }
+  }
+  return identities;
+}
+
+function identityMatchesSubject(
+  identity: ObservationSubjectIdentity,
+  observation: InvestigationEvidenceObservation,
+  subject: DiagnosisEvidenceSubject,
+): boolean {
   if (!sameKind(identity.kind, subject.kind) || identity.name !== subject.name)
     return false;
   if (
@@ -303,12 +344,22 @@ function observationMatchesSubject(
   ) {
     return false;
   }
+  // Container and stream are log-stream dimensions. Without an observation
+  // kind they say "a log stream"; with one stated for another kind (a
+  // container-scoped metrics query, say) they are descriptive only.
+  const streamDimensions =
+    observation.data.type === "logs" || subject.observation === undefined;
   if (
+    streamDimensions &&
     subject.container !== undefined &&
     identity.container !== subject.container
   )
     return false;
-  if (subject.stream !== undefined && identity.stream !== subject.stream)
+  if (
+    streamDimensions &&
+    subject.stream !== undefined &&
+    identity.stream !== subject.stream
+  )
     return false;
   return true;
 }

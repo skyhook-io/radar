@@ -556,12 +556,15 @@ export function TurnView({
   evidenceStepIds,
   onViewEvidence,
   sourceRevealRequest,
+  assessmentSources,
 }: {
   turn: Turn;
   onApply?: (fix: string) => void;
   onViewExplanation?: () => void;
   onCheckStatus?: () => void;
   onRetryDiagnosis?: () => void;
+  /** Sources and agent items an answer turn cited; answers otherwise show none. */
+  assessmentSources?: ReactNode;
   // In the maximized workspace the pinned turn's conclusion renders in the side rail,
   // so the transcript suppresses its own copy (reasoning + tool calls still show).
   hideConclusion?: boolean;
@@ -663,6 +666,7 @@ export function TurnView({
             followup={followup}
             onCheckStatus={onCheckStatus}
             animate={turn.animateResult !== false}
+            assessmentSources={assessmentSources}
           />
         ) : (
           <EmptyResult animate={turn.animateResult !== false} />
@@ -1758,7 +1762,14 @@ export function ResultCard({
   // flag in its structured envelope. Never promote an ordinary answer into an
   // authoritative investigation conclusion.
   if (followup)
-    return <FollowupAnswer diagnosis={diagnosis} animate={animate} />;
+    return (
+      <>
+        <FollowupAnswer diagnosis={diagnosis} animate={animate} />
+        {assessmentSources ? (
+          <AssessmentSourceDetails>{assessmentSources}</AssessmentSourceDetails>
+        ) : null}
+      </>
+    );
   if (diagnosis.healthy && !diagnosis.rootCause)
     return section === "actions" ? null : (
       <AllClearCard

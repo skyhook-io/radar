@@ -30,6 +30,7 @@ import {
   investigationEvidenceInputsEqual,
   investigationEvidenceCoverageLimited,
   investigationEvidenceConflictsWithHealthy,
+  investigationLiveCaseTurnIndex,
   investigationEndedBeforeConclusion,
   type InvestigationHistoryUnavailableState,
   investigationHistoryUnavailablePresentation,
@@ -981,16 +982,57 @@ export function InvestigationView({
         : undefined,
     [currentAssessment, currentAssessmentIdx, projection],
   );
+  // A follow-up answer that cites evidence takes over the pane's case; the
+  // assessment's own items are then listed read-only under it.
+  const liveCaseTurnIdx = investigationLiveCaseTurnIndex(
+    turns,
+    currentAssessmentIdx,
+  );
+  const liveCaseIsCurrentAssessment = liveCaseTurnIdx === currentAssessmentIdx;
+  const paneResolution = useMemo(() => {
+    if (liveCaseIsCurrentAssessment) return rootCauseEvidenceResolution;
+    const diagnosis = turns[liveCaseTurnIdx]?.diagnosis;
+    return diagnosis?.rootCause
+      ? resolveInvestigationRootCauseEvidence(
+          projection,
+          diagnosis.rootCauseEvidence,
+          liveCaseTurnIdx,
+        )
+      : undefined;
+  }, [
+    liveCaseIsCurrentAssessment,
+    rootCauseEvidenceResolution,
+    turns,
+    liveCaseTurnIdx,
+    projection,
+  ]);
+  const paneCase = useMemo(
+    () =>
+      liveCaseIsCurrentAssessment
+        ? investigationCase
+        : resolveInvestigationCase(
+            projection,
+            turns[liveCaseTurnIdx]?.diagnosis,
+            liveCaseTurnIdx,
+          ),
+    [
+      liveCaseIsCurrentAssessment,
+      investigationCase,
+      projection,
+      turns,
+      liveCaseTurnIdx,
+    ],
+  );
   const visibleEvidenceGroupIds = useMemo(
     () =>
       new Set(
         partitionInvestigationEvidence(
           projection.groups,
-          rootCauseEvidenceResolution,
-          investigationCase,
+          paneResolution,
+          paneCase,
         ).collectionByGroup.keys(),
       ),
-    [projection.groups, rootCauseEvidenceResolution, investigationCase],
+    [projection.groups, paneResolution, paneCase],
   );
   const evidenceStepIdsByTurn = useMemo(
     () =>
@@ -1719,6 +1761,40 @@ export function InvestigationView({
                               : undefined
                           }
                           hideConclusion={assessmentIndexes.includes(index)}
+                          assessmentSources={(() => {
+                            // Answer turns show what they cited; the live
+                            // one also drives Findings, earlier ones are
+                            // read-only.
+                            if (
+                              !turn.question ||
+                              turn.verify ||
+                              turn.apply ||
+                              turn.status !== "done" ||
+                              !turn.diagnosis
+                            )
+                              return undefined;
+                            const answerCase =
+                              index === liveCaseTurnIdx
+                                ? paneCase
+                                : resolveInvestigationCase(
+                                    projection,
+                                    turn.diagnosis,
+                                    index,
+                                  );
+                            const answerResolution =
+                              index === liveCaseTurnIdx
+                                ? paneResolution
+                                : undefined;
+                            return answerCase?.items.length ||
+                              answerResolution?.links.length ? (
+                              <AssessmentSources
+                                resolution={answerResolution}
+                                investigationCase={answerCase}
+                                readOnly={index !== liveCaseTurnIdx}
+                                onViewSource={viewActivitySource}
+                              />
+                            ) : undefined;
+                          })()}
                         />
                         {showSplitWorkspace &&
                         index === currentAssessmentIdx &&
@@ -1962,6 +2038,7 @@ export function InvestigationView({
                             <AssessmentSources
                               resolution={rootCauseEvidenceResolution}
                               investigationCase={investigationCase}
+                              readOnly={!liveCaseIsCurrentAssessment}
                               onViewSource={viewActivitySource}
                             />
                           ) : undefined
@@ -2091,8 +2168,8 @@ export function InvestigationView({
 
                   <InvestigationEvidencePane
                     projection={projection}
-                    rootCauseEvidence={rootCauseEvidenceResolution}
-                    investigationCase={investigationCase}
+                    rootCauseEvidence={paneResolution}
+                    investigationCase={paneCase}
                     collecting={
                       explanationRequest?.status !== "running" &&
                       (requestPending ||

@@ -271,6 +271,35 @@ export function investigationEvidenceInputsEqual(
   return true;
 }
 
+/**
+ * The turn whose agent case annotates the Evidence pane. A follow-up answer
+ * that cites evidence ("chart this and cite it") must reach Findings, so the
+ * newest completed non-apply, non-explanation turn carrying a bound case or
+ * linked root-cause refs wins; earlier turns keep their case read-only.
+ */
+export function investigationLiveCaseTurnIndex(
+  turns: readonly Pick<
+    Turn,
+    "status" | "apply" | "explainAssessment" | "diagnosis"
+  >[],
+  currentAssessmentIdx: number,
+): number {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+    if (turn.status !== "done" || turn.apply || turn.explainAssessment)
+      continue;
+    const diagnosis = turn.diagnosis;
+    if (!diagnosis) continue;
+    if (
+      diagnosis.evidence?.some((item) => item.status === "linked") ||
+      (diagnosis.rootCause && diagnosis.rootCauseEvidence?.status === "linked")
+    ) {
+      return Math.max(index, currentAssessmentIdx);
+    }
+  }
+  return currentAssessmentIdx;
+}
+
 export function investigationEvidenceCoverageLimited(
   projection: Pick<
     InvestigationEvidenceProjection,

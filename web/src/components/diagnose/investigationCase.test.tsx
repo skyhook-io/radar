@@ -18,7 +18,7 @@ import {
   resolveInvestigationCase,
   type InvestigationCaseResolution,
 } from "./investigationCase";
-import { AssessmentSources, assessmentSourceRows } from "./parts";
+import { AssessmentSources, ResultCard, assessmentSourceRows } from "./parts";
 import type { Diagnosis, DiagnosisEvidenceItem } from "../../api/diagnose";
 
 const onViewSource = vi.fn();
@@ -849,6 +849,166 @@ describe("diagnose-bundled metrics placement (D-5 with D1)", () => {
         0,
       ).items[0].placement,
     ).toBe("source");
+  });
+});
+
+describe("follow-up answers that cite evidence", () => {
+  const first = evidenceRef("a", "b");
+  const second = evidenceRef("c", "d");
+  const window = { start: "2026-09-06T07:00:00Z", end: "2026-09-06T09:00:00Z" };
+  const chart = {
+    query:
+      "sum(container_memory_working_set_bytes{namespace='shop',pod=~'^api-.*',container='api'})",
+    type: "range",
+    ...window,
+    step: "60s",
+    series: [
+      {
+        labels: {},
+        dataPoints: [
+          { timestamp: Date.parse(window.start) / 1000, value: 1 },
+          { timestamp: Date.parse(window.end) / 1000, value: 2 },
+        ],
+      },
+    ],
+    selectors: [
+      {
+        metric: "container_memory_working_set_bytes",
+        matchers: [
+          { label: "namespace", op: "=", value: "shop" },
+          { label: "pod", op: "=~", value: "^api-.*" },
+          { label: "container", op: "=", value: "api" },
+        ],
+      },
+    ],
+  };
+  const projection = projectInvestigationEvidence(
+    [
+      {
+        timeline: [
+          tool("diag", "diagnose", diagnoseBundle, { evidenceRef: first }),
+        ],
+      },
+      {
+        timeline: [
+          tool("prom", "query_prometheus", chart, {
+            summary: JSON.stringify({ query: chart.query }),
+            evidenceRef: second,
+          }),
+        ],
+        question:
+          "chart this workload's memory over the last 2 hours and cite it",
+      },
+    ],
+    target,
+  );
+
+  it("lets the answer turn's placed chart select into main with its chip", () => {
+    const chartGroup = projection.groups.find(
+      (group) => group.kind === "metrics",
+    )!;
+    expect(chartGroup.latest.source.turnIndex).toBe(1);
+    expect(
+      partitionInvestigationEvidence(projection.groups).collectionByGroup.get(
+        chartGroup.id,
+      ),
+    ).toBe("workload");
+    const answerCase = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(second, "context", "Memory is flat across the window.", {
+            kind: "Deployment",
+            group: "apps",
+            namespace: "shop",
+            name: "api",
+            container: "api",
+            observation: "metrics:memory",
+          }),
+        ],
+      },
+      1,
+    );
+    expect(answerCase.items[0].placement).toBe("card");
+    expect(answerCase.items[0].groupId).toBe(chartGroup.id);
+    // The chart states no resource (its selectors only pattern-match the
+    // pods), so a subject without an evidence kind cannot name it.
+    expect(
+      resolveInvestigationCase(
+        projection,
+        {
+          evidence: [
+            linked(second, "context", "No kind given.", {
+              kind: "Deployment",
+              name: "api",
+            }),
+          ],
+        },
+        1,
+      ).items[0].placement,
+    ).toBe("source");
+    const partition = partitionInvestigationEvidence(
+      projection.groups,
+      undefined,
+      answerCase,
+    );
+    expect(partition.collectionByGroup.get(chartGroup.id)).toBe("main");
+    const html = render(projection, answerCase);
+    expect(html).toContain("Memory is flat across the window.");
+    expect(html).toContain(">Context<");
+  });
+
+  it("places a log claim that names the diagnosed workload and its container", () => {
+    const assessmentCase = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(first, "demoted", "The ERROR lines are routes elsewhere.", {
+            kind: "Deployment",
+            group: "apps",
+            namespace: "shop",
+            name: "api",
+            container: "api",
+            stream: "current",
+            observation: "logs",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(assessmentCase.items[0].placement).toBe("card");
+    expect(
+      projection.groups.find(
+        (group) => group.id === assessmentCase.items[0].groupId,
+      )?.identity,
+    ).toBe("logs:current:api-abc:api");
+  });
+
+  it("lists an answer turn's sources under the answer", () => {
+    const answerCase = resolveInvestigationCase(
+      projection,
+      { evidence: [linked(second, "context", "Flat.")] },
+      1,
+    );
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={{
+          rootCause: "",
+          report: "Memory is flat.",
+          remediation: [],
+        }}
+        followup
+        assessmentSources={
+          <AssessmentSources
+            investigationCase={answerCase}
+            onViewSource={onViewSource}
+          />
+        }
+      />,
+    );
+    expect(html).toContain("Assessment details");
+    expect(html).toContain("Sources used for this assessment");
+    expect(html).toContain(">Context<");
   });
 });
 
