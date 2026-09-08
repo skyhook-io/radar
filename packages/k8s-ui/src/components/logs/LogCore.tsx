@@ -9,6 +9,7 @@ import { Input } from '../ui/Input'
 import { showApiError, showApiSuccess } from '../ui/Toast'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import {
+  formatEntriesForCopy,
   formatLogTimestamp,
   highlightSearchMatches,
   stripAnsi,
@@ -244,28 +245,18 @@ export function LogCore({
     return () => window.removeEventListener('click', handleClick)
   }, [showDownloadMenu])
 
-  // Copies the lines the current filters allow (level filter + search filter),
-  // with timestamps and pod attribution mirroring the display toggles. Content
-  // stays raw (full JSON, collapsed stack continuations, full pod names) — the
-  // paste target is a chat or an LLM, where raw beats screen-literal.
+  // Scoped to the lines the current filters allow, unlike the downloads below it.
   const handleCopyVisible = useCallback(() => {
     setShowDownloadMenu(false)
-    if (displayEntries.length === 0) {
-      showApiError('Nothing to copy', 'No log lines are currently visible.')
-      return
-    }
-    const text = displayEntries.map(e => {
-      const parts: string[] = []
-      if (showTimestamps && e.timestamp) parts.push(formatLogTimestamp(e.timestamp, tsFormat))
-      if (showPodName && e.pod) parts.push(`[${e.pod}]`)
-      parts.push(stripAnsi(e.content))
-      return parts.join(' ')
-    }).join('\n')
-    copyText(text).then(ok => {
-      if (ok) showApiSuccess('Copied to clipboard', `${displayEntries.length} log line${displayEntries.length === 1 ? '' : 's'} copied.`)
-      else showApiError('Failed to copy logs', 'The browser blocked clipboard access.')
-    })
-  }, [displayEntries, showTimestamps, tsFormat, showPodName])
+    const count = displayEntries.length
+    copyText(formatEntriesForCopy(displayEntries, { showTimestamps, showPodName })).then(
+      ok => {
+        if (ok) showApiSuccess('Copied to clipboard', `${count} log line${count === 1 ? '' : 's'} copied.`)
+        else showApiError('Failed to copy logs', 'The browser blocked clipboard access.')
+      },
+      () => showApiError('Failed to copy logs', 'The browser blocked clipboard access.'),
+    )
+  }, [displayEntries, showTimestamps, showPodName])
 
   // Same close-on-outside-click for the timestamp format menu.
   const tsMenuRef = useRef<HTMLDivElement>(null)
@@ -311,6 +302,7 @@ export function LogCore({
   // hijack search input or other text entry.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (showClearConfirm) return
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         e.preventDefault()
         search.open()
@@ -326,7 +318,32 @@ export function LogCore({
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [search.open, onStartStream, onStopStream, isStreaming])
+  }, [search.open, onStartStream, onStopStream, isStreaming, showClearConfirm])
+
+  // A refresh refetches whatever the API still holds, but lines that arrived over
+  // the stream are gone for good — so a confirm is only worth asking for once the
+  // buffer has held streamed lines, including after the stream was stopped.
+  const hasStreamed = useRef(false)
+  useEffect(() => {
+    if (isStreaming) hasStreamed.current = true
+  }, [isStreaming])
+
+  const clearBuffer = useCallback(() => {
+    onClear?.()
+    // The emptied buffer refills from the stream only while it is still running;
+    // resetting to `false` would leave the flag stale, since the effect above
+    // re-runs on a change of `isStreaming`, not on a clear.
+    hasStreamed.current = isStreaming
+    setShowClearConfirm(false)
+  }, [onClear, isStreaming])
+
+  const handleClearClick = useCallback(() => {
+    if (hasStreamed.current && entries.length > 0) {
+      setShowClearConfirm(true)
+      return
+    }
+    clearBuffer()
+  }, [clearBuffer, entries.length])
 
   const handleFollowOutput = useCallback((isAtBottom: boolean) => {
     if (isAtBottom) return 'smooth' as const
@@ -695,15 +712,21 @@ export function LogCore({
             </button>
           </Tooltip>
           {showDownloadMenu && (
-            <div className={`absolute top-full right-0 mt-1 w-44 ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50`}>
+            <div className={`absolute top-full right-0 mt-1 w-72 ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50`}>
               <button
                 onClick={handleCopyVisible}
-                className={`w-full flex items-center gap-2 text-left px-3 py-2 text-xs ${palette.textPrimary} ${palette.hoverBg} rounded-t-lg`}
+                disabled={displayEntries.length === 0}
+                className={`w-full flex items-center gap-2 text-left px-3 py-2 text-xs ${palette.textPrimary} rounded-t-lg ${displayEntries.length === 0 ? 'opacity-40 cursor-not-allowed' : palette.hoverBg}`}
               >
                 <Copy className={`w-3.5 h-3.5 ${palette.textTertiary}`} />
                 Copy visible lines
               </button>
               <div className={`border-t ${palette.border}`} />
+              {/* Say the scope where the choice is made: a hover tooltip arrives too
+                  late for someone who has already filtered and is reaching to click. */}
+              <div className={`px-3 pt-2 pb-1 text-[10px] whitespace-nowrap ${palette.textTertiary}`}>
+                Downloads ignore level &amp; search filters
+              </div>
               {(['txt', 'json', 'csv'] as DownloadFormat[]).map(fmt => (
                 <button
                   key={fmt}
@@ -722,7 +745,7 @@ export function LogCore({
         {onClear && (
           <Tooltip content="Clear logs" delay={TIP_DELAY} position="bottom">
             <button
-              onClick={() => setShowClearConfirm(true)}
+              onClick={handleClearClick}
               className={iconBtnInactive}
             >
               <Trash2 className="w-4 h-4" />
@@ -913,9 +936,9 @@ export function LogCore({
         <ConfirmDialog
           open={showClearConfirm}
           onClose={() => setShowClearConfirm(false)}
-          onConfirm={() => { onClear(); setShowClearConfirm(false) }}
+          onConfirm={clearBuffer}
           title="Clear logs?"
-          message={`Removes all loaded log lines from this viewer. ${isStreaming ? 'The stream stays connected and new lines keep arriving.' : 'Refresh to load them again.'}`}
+          message={`Removes every line loaded so far. Lines that arrived over the stream are not re-fetched by a refresh, so this cannot be undone.${isStreaming ? ' The stream stays connected and new lines keep arriving.' : ''}`}
           confirmLabel="Clear"
           variant="warning"
           showWarning={false}
