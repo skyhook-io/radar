@@ -32,8 +32,8 @@ export function driverConnectUnavailableNote(connectionState: ConnectionStateTyp
     case 'connected':
       return null
     case 'connecting':
-      return 'Radar is still connecting to this cluster. The in-app connect appears once it is ready, or continue in Radar Cloud now.'
+      return 'Still connecting to this cluster. Once it is ready, you can connect it from here.'
     case 'disconnected':
-      return "Radar isn't connected to a cluster, so it can't install the connection for you. Connect a cluster first, or continue in Radar Cloud."
+      return 'No cluster is connected. Radar Cloud walks you through connecting one.'
   }
 }

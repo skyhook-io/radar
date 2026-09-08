@@ -40,10 +40,10 @@ describe('driverConnectUnavailableNote', () => {
   })
 
   it('explains the wait while connecting', () => {
-    expect(driverConnectUnavailableNote('connecting')).toMatch(/still connecting/)
+    expect(driverConnectUnavailableNote('connecting')).toMatch(/Still connecting/)
   })
 
   it('explains the missing cluster when disconnected', () => {
-    expect(driverConnectUnavailableNote('disconnected')).toMatch(/isn't connected to a cluster/)
+    expect(driverConnectUnavailableNote('disconnected')).toMatch(/No cluster is connected/)
   })
 })
