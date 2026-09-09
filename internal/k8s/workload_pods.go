@@ -102,12 +102,8 @@ func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string) (
 		if rsLister == nil {
 			return nil, fmt.Errorf("%w: list replicasets", ErrWorkloadAccessDenied)
 		}
-		// ReplicaSets sync in the deferred phase, and the lister is non-nil the
-		// whole time it is filling. Every ownership lookup would miss and the
-		// workload would report no pods at all, so refuse to answer until the
-		// deferred informers have finished rather than call a warming cache empty.
-		if !cache.IsDeferredSynced() {
-			return nil, fmt.Errorf("%w: replicasets", ErrWorkloadCacheWarming)
+		if err := requireSynced(cache, "replicasets"); err != nil {
+			return nil, err
 		}
 		return func(pod *corev1.Pod) bool {
 			owner := metav1.GetControllerOf(pod)
@@ -126,6 +122,9 @@ func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string) (
 		if jobLister == nil {
 			return nil, fmt.Errorf("%w: list jobs", ErrWorkloadAccessDenied)
 		}
+		if err := requireSynced(cache, "jobs"); err != nil {
+			return nil, err
+		}
 		return func(pod *corev1.Pod) bool {
 			owner := metav1.GetControllerOf(pod)
 			if owner == nil || owner.Kind != "Job" {
@@ -141,4 +140,17 @@ func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string) (
 	default:
 		return direct, nil
 	}
+}
+
+// requireSynced refuses a hop through an informer that has not finished its
+// initial sync. Its lister is non-nil the whole time it fills, so every
+// ownership lookup would miss and the workload would come back with no pods at
+// all — an empty answer indistinguishable from a workload that has none. A
+// kind this cache never watched is not an error here: the caller reached a
+// lister for it, and only the sync state is in question.
+func requireSynced(cache *ResourceCache, key string) error {
+	if synced, known := cache.InformerSynced(key); known && !synced {
+		return fmt.Errorf("%w: %s", ErrWorkloadCacheWarming, key)
+	}
+	return nil
 }
