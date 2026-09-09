@@ -86,6 +86,30 @@ export function mergeInvestigationCases(
   return { items: [...liveItems, ...carried], ruledOut: live?.ruledOut ?? [] };
 }
 
+/**
+ * The subset of one assessment's items that survived into the case the pane
+ * actually renders. Matching is by value, not object identity: the merge is
+ * fed freshly resolved copies of every turn, so an identity test would report
+ * that an assessment's own note had vanished the moment any other turn was
+ * re-resolved.
+ */
+export function investigationCaseItemsStillRendered(
+  assessmentItems: readonly InvestigationCaseItem[] | undefined,
+  renderedItems: readonly InvestigationCaseItem[] | undefined,
+): InvestigationCaseItem[] {
+  if (!assessmentItems?.length || !renderedItems?.length) return [];
+  const key = (item: InvestigationCaseItem) =>
+    [
+      item.index,
+      item.source.id,
+      item.placement,
+      item.groupId ?? "",
+      item.observation ? investigationCaseObservationKey(item.observation) : "",
+    ].join("\u0000");
+  const rendered = new Set(renderedItems.map(key));
+  return assessmentItems.filter((item) => rendered.has(key(item)));
+}
+
 export const EVIDENCE_ROLES: ReadonlySet<string> =
   new Set<DiagnosisEvidenceRole>([
     "cause",

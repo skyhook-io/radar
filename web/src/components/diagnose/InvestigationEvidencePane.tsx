@@ -200,11 +200,16 @@ export function partitionInvestigationEvidence(
   resolution?: InvestigationRootCauseEvidenceResolution,
   investigationCase?: InvestigationCaseResolution,
   /**
-   * Groups a later turn cited. A follow-up adds to what the displayed
-   * assessment selected; it must never take a selection away, or the
-   * assessment's own cited evidence falls back into the withheld set.
+   * What a later turn cited, with the source that cited it. A follow-up adds
+   * to what the displayed assessment selected and never takes a selection
+   * away. The source travels with it because promoting a broader card needs
+   * one: an id alone selects the group but leaves the broader gate below
+   * unable to find who cited it, and the card stays withheld.
    */
-  alsoSelected?: readonly string[],
+  alsoSelected?: readonly {
+    groupId: string;
+    source: InvestigationEvidenceSource;
+  }[],
 ) {
   // Selection: legacy root-cause links plus every placed agent item, of any
   // role (placement promotes a group into main the way a citation does; the
@@ -216,7 +221,7 @@ export function partitionInvestigationEvidence(
       ? resolution.links.map((link) => link.originalGroupId)
       : []),
     ...caseByGroup.keys(),
-    ...(alsoSelected ?? []),
+    ...(alsoSelected ?? []).map((entry) => entry.groupId),
   ]);
   const collections: Record<EvidenceCollection, InvestigationEvidenceGroup[]> =
     {
@@ -249,7 +254,9 @@ export function partitionInvestigationEvidence(
     if (broader && !namedByAgent) {
       const citingSource =
         resolution?.links.find((item) => item.originalGroupId === group.id)
-          ?.source ?? caseByGroup.get(group.id)?.[0]?.source;
+          ?.source ??
+        caseByGroup.get(group.id)?.[0]?.source ??
+        alsoSelected?.find((entry) => entry.groupId === group.id)?.source;
       const focused = FOCUSED_EVIDENCE_TYPES.includes(group.latest.data.type);
       const sourceGroups = citingSource
         ? groups.filter(
@@ -382,8 +389,11 @@ export function InvestigationEvidencePane({
   projection: InvestigationEvidenceProjection;
   /** Server-validated links for the current root cause; absent without one. */
   rootCauseEvidence?: InvestigationRootCauseEvidenceResolution;
-  /** Groups a later turn cited; they add to the assessment's selection. */
-  alsoSelectedGroupIds?: readonly string[];
+  /** What a later turn cited; adds to the assessment's selection. */
+  alsoSelectedGroupIds?: readonly {
+    groupId: string;
+    source: InvestigationEvidenceSource;
+  }[];
   /** The current assessment's agent case, resolved against this projection. */
   investigationCase?: InvestigationCaseResolution;
   collecting: boolean;

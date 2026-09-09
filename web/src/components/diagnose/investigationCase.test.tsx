@@ -18,6 +18,7 @@ import {
 import {
   resolveInvestigationCase,
   type InvestigationCaseResolution,
+  investigationCaseItemsStillRendered,
   mergeInvestigationCases,
   type InvestigationCaseItem,
 } from "./investigationCase";
@@ -1075,6 +1076,35 @@ describe("carrying earlier assessments' card notes", () => {
     ]);
     expect(mergeInvestigationCases(live, [])).toBe(live);
     expect(mergeInvestigationCases(undefined, [])).toBeUndefined();
+  });
+
+  it("recognises its own surviving notes across a re-resolved merge", () => {
+    // The pane feeds the merge freshly resolved copies of every turn, so the
+    // assessment's own items arrive equal but not identical. An identity test
+    // reported them as gone, which silently retired the conflict banner's
+    // reframing whenever any unrelated follow-up arrived.
+    const assessmentItems = [
+      item(0, "logs", "card", "demoted"),
+      item(1, "crash", "card", "demoted"),
+    ];
+    const reResolved = assessmentItems.map(
+      (entry) => ({ ...entry }) as InvestigationCaseItem,
+    );
+    expect(reResolved[0]).not.toBe(assessmentItems[0]);
+    expect(
+      investigationCaseItemsStillRendered(assessmentItems, reResolved).map(
+        (entry) => entry.groupId,
+      ),
+    ).toEqual(["logs", "crash"]);
+    // A note the merge dropped is correctly reported as gone.
+    expect(
+      investigationCaseItemsStillRendered(assessmentItems, [reResolved[0]]).map(
+        (entry) => entry.groupId,
+      ),
+    ).toEqual(["logs"]);
+    expect(investigationCaseItemsStillRendered(assessmentItems, [])).toEqual(
+      [],
+    );
   });
 
   it("carries every note the winning assessment left on a card, not just the first", () => {

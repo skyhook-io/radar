@@ -93,6 +93,7 @@ import {
 } from "./investigationEvidence";
 import {
   resolveInvestigationCase,
+  investigationCaseItemsStillRendered,
   mergeInvestigationCases,
   type InvestigationCaseResolution,
 } from "./investigationCase";
@@ -1032,7 +1033,9 @@ export function InvestigationView({
     if (liveCaseIsCurrentAssessment) return undefined;
     if (liveTurnResolution?.status !== "linked") return undefined;
     return liveTurnResolution.links.flatMap((link) =>
-      link.originalGroupId ? [link.originalGroupId] : [],
+      link.originalGroupId
+        ? [{ groupId: link.originalGroupId, source: link.source }]
+        : [],
     );
   }, [liveCaseIsCurrentAssessment, liveTurnResolution]);
   const paneCase = useMemo(() => {
@@ -1047,12 +1050,20 @@ export function InvestigationView({
     for (let i = turns.length - 1; i >= 0; i -= 1) {
       const diagnosis = turns[i]?.diagnosis;
       if (i === liveCaseTurnIdx || !diagnosis) continue;
-      earlier.push(resolveInvestigationCase(projection, diagnosis, i));
+      // Reuse the assessment's own resolution rather than resolving it a
+      // second time: same projection, same result, and it keeps the items the
+      // conflict banner reasons about the ones the merge received.
+      earlier.push(
+        i === currentAssessmentIdx && investigationCase
+          ? investigationCase
+          : resolveInvestigationCase(projection, diagnosis, i),
+      );
     }
     return mergeInvestigationCases(live, earlier);
   }, [
     liveCaseIsCurrentAssessment,
     investigationCase,
+    currentAssessmentIdx,
     projection,
     turns,
     liveCaseTurnIdx,
@@ -1377,9 +1388,9 @@ export function InvestigationView({
     // about this verdict. And it must survive into the case the pane actually
     // renders: the merge lets a later turn take over a group, and a banner
     // that points at a note the reader cannot find is worse than no banner.
-    const rendered = new Set(paneCase?.items ?? []);
-    const qualifying = (investigationCase?.items ?? []).filter((item) =>
-      rendered.has(item),
+    const qualifying = investigationCaseItemsStillRendered(
+      investigationCase?.items,
+      paneCase?.items,
     );
     return (
       investigationHealthConflictExplainedBy(projection, qualifying) ??
