@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { curateError, detectLanguage } from './PodFilePreviewModal'
+import { curateError, detectLanguage, isPodFilePreviewOpen } from './PodFilePreviewModal'
 
 // Every backend error code becomes a curated screen. What matters here is
 // that each code carries the right action affordances (Download vs Retry)
@@ -126,5 +126,16 @@ describe('curated shapes render on the server', () => {
     const shape = curateError({ ok: false, code: 'binary_file', message: 'x', mimeType: 'application/octet-stream' })
     const html = renderToStaticMarkup(<span>{shape.title}</span>)
     expect(html).toContain('Binary')
+  })
+})
+
+// The filesystem browser consults isPodFilePreviewOpen() to decide whether
+// an ESC keypress belongs to a nested preview modal. Both modals register a
+// capture-phase keydown on document, and stopPropagation does not stop the
+// parent's listener on the same target — so this counter is the only thing
+// preventing ESC from closing both dialogs.
+describe('isPodFilePreviewOpen — coordinates ESC across nested modals', () => {
+  it('reports closed by default so the filesystem browser owns ESC', () => {
+    expect(isPodFilePreviewOpen()).toBe(false)
   })
 })

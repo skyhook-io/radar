@@ -1,17 +1,47 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import Editor from '@monaco-editor/react'
-import { X, AlertTriangle, Download, FileText, RotateCw } from 'lucide-react'
+import { X, AlertTriangle, Download, FileText, FolderOpen, RotateCw } from 'lucide-react'
 import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { formatBytes } from '../../utils/format'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { downloadBlob } from './file-browser-utils'
+import { isDesktopApp } from '../../utils/desktop-download'
+import { openFile, openFolder } from '../../utils/desktop-open-folder'
 import { useToast } from '../ui/Toast'
 
 // A curated inline viewer for text files inside a pod container. Deliberately
 // read-only for v1 — the download button is the only mutation-adjacent action.
 // Every error path is a named `code` from the backend so this file switches on
 // intent, not on stderr wording.
+
+// The desktop-save route streams a pod file straight to disk from the backend,
+// bypassing the webview round-trip that fails on large files. The download
+// route goes through the webview and is fine in the browser. The preview
+// offers Download precisely for the "file too large" case, so it MUST take
+// the same desktop path as the file browser or that case is broken there too.
+async function savePodFileToDisk(
+  namespace: string,
+  podName: string,
+  container: string,
+  filePath: string,
+): Promise<string> {
+  const params = new URLSearchParams()
+  params.set('container', container)
+  params.set('path', filePath)
+  const response = await fetch(apiUrl(`/pods/${namespace}/${podName}/files/save?${params.toString()}`), {
+    method: 'POST',
+    credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
+  })
+  if (response.status === 204) throw new Error('cancelled')
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Save failed' }))
+    throw new Error(error.error || `HTTP ${response.status}`)
+  }
+  const body = await response.json()
+  return body.path as string
+}
 
 // Wire-side codes. Kept in sync with internal/server/copy.go.
 export type PreviewErrorCode =
@@ -122,6 +152,17 @@ export function detectLanguage(fileName: string): string {
   return 'plaintext'
 }
 
+// Shared open counter for the preview modal. The filesystem browser reads it
+// to know whether an ESC keypress belongs to a nested preview — capture-phase
+// listeners on `document` see every event, and `stopPropagation()` does not
+// stop other listeners on the same target, so the parent has to opt out
+// explicitly. A module-level counter avoids threading state through props.
+let previewOpenCount = 0
+
+export function isPodFilePreviewOpen(): boolean {
+  return previewOpenCount > 0
+}
+
 function useMonacoTheme() {
   const [dark, setDark] = useState(() =>
     typeof document !== 'undefined' && document.documentElement.classList.contains('dark'),
@@ -161,7 +202,7 @@ export function PodFilePreviewModal({
   const [loading, setLoading] = useState(false)
   const [reloadCount, setReloadCount] = useState(0)
   const theme = useMonacoTheme()
-  const { showError } = useToast()
+  const { showError, showSuccess } = useToast()
 
   useEffect(() => {
     if (!open) return
@@ -184,6 +225,7 @@ export function PodFilePreviewModal({
 
   useEffect(() => {
     if (!open) return
+    previewOpenCount += 1
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.stopPropagation()
@@ -191,7 +233,10 @@ export function PodFilePreviewModal({
       }
     }
     document.addEventListener('keydown', handleKeyDown, true)
-    return () => document.removeEventListener('keydown', handleKeyDown, true)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown, true)
+      previewOpenCount -= 1
+    }
   }, [open, onClose])
 
   useEffect(() => {
@@ -202,6 +247,21 @@ export function PodFilePreviewModal({
 
   const handleDownload = useCallback(async () => {
     try {
+      if (await isDesktopApp()) {
+        const savedPath = await savePodFileToDisk(namespace, podName, container, filePath)
+        showSuccess(
+          'File saved',
+          savedPath,
+          {
+            label: 'Show in Finder',
+            icon: createElement(FolderOpen, { className: 'w-3.5 h-3.5' }),
+            onClick: () => openFolder(savedPath),
+          },
+          () => openFile(savedPath),
+        )
+        return
+      }
+
       const params = new URLSearchParams()
       params.set('container', container)
       params.set('path', filePath)
@@ -224,7 +284,7 @@ export function PodFilePreviewModal({
         showError(`Could not download ${fileName}`, message)
       }
     }
-  }, [namespace, podName, container, filePath, fileName, showError])
+  }, [namespace, podName, container, filePath, fileName, showError, showSuccess])
 
   if (!open) return null
 
@@ -234,12 +294,16 @@ export function PodFilePreviewModal({
     <div className="fixed inset-0 z-[110] flex items-center justify-center">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
 
+      {/*
+        The dialog carries a definite h-[85vh] rather than only max-h so the
+        Monaco editor (whose default height is 100%) resolves to a positive
+        pixel value. A body sized by content collapses the editor to zero.
+      */}
       <div
         ref={dialogRef}
         tabIndex={-1}
-        className="relative dialog w-full max-w-5xl mx-4 max-h-[85vh] flex flex-col outline-none"
+        className="relative dialog w-full max-w-5xl mx-4 h-[85vh] flex flex-col outline-none"
       >
-        {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
@@ -272,7 +336,6 @@ export function PodFilePreviewModal({
           </div>
         </div>
 
-        {/* Body */}
         <div className="flex-1 min-h-0 flex flex-col">
           {loading && <PaneLoader label="Reading file…" className="flex-1" />}
 

@@ -11,7 +11,7 @@ import { isDesktopApp } from '../../utils/desktop-download'
 import { openFile, openFolder } from '../../utils/desktop-open-folder'
 import { useToast } from '../ui/Toast'
 import { Tooltip } from '../ui/Tooltip'
-import { PodFilePreviewModal } from './PodFilePreviewModal'
+import { PodFilePreviewModal, isPodFilePreviewOpen } from './PodFilePreviewModal'
 
 interface PodFilesystem {
   root: FileNode
@@ -129,11 +129,17 @@ export function PodFilesystemModal({
     }
   }, [open, initialContainer, containers])
 
-  // Handle ESC key
+  // Handle ESC key. Both this modal and the nested PodFilePreviewModal
+  // register capture-phase listeners on `document`, and stopPropagation does
+  // not stop other listeners on the same target — so ESC would close both.
+  // isPodFilePreviewOpen() lets the preview claim the keypress for itself.
   useEffect(() => {
     if (!open) return
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); onClose() }
+      if (e.key === 'Escape' && !isPodFilePreviewOpen()) {
+        e.stopPropagation()
+        onClose()
+      }
     }
     document.addEventListener('keydown', handleKeyDown, true)
     return () => document.removeEventListener('keydown', handleKeyDown, true)

@@ -1110,9 +1110,12 @@ func classifyPreviewBytes(data []byte) previewClassification {
 		mimeBase == "application/yaml"
 
 	// http.DetectContentType calls plain config files (nginx.conf, dockerfile
-	// snippets, .env) application/octet-stream. NUL bytes in the first 8 KiB
-	// are what actually separate binary from oddly-formatted text.
-	if !looksTextual {
+	// snippets, .env) application/octet-stream — a NUL-byte scan rescues these
+	// as text/plain. The fallback is deliberately narrow: rescuing every
+	// non-textual MIME would let known binaries (PDF, ZIP, ELF) through
+	// whenever their first 8 KiB happen to lack a NUL, which is common in
+	// ASCII-headered formats and is not a defence.
+	if !looksTextual && mimeBase == "application/octet-stream" {
 		if bytes.IndexByte(head, 0) == -1 {
 			mimeType = "text/plain; charset=utf-8"
 			looksTextual = true
@@ -1229,17 +1232,19 @@ func (s *Server) handlePodFilePreview(w http.ResponseWriter, r *http.Request) {
 		if status >= 500 {
 			// Only the truly-unexpected shapes log — the operator-facing ones
 			// (not found, permission denied, no shell) are noise in the log.
-			log.Printf("[copy] preview open failed: %v, stderr: %s", openErr.err, openErr.stderr)
-			errorlog.Record("copy", "error", "preview open failed: %v", openErr.err)
+			log.Printf("[copy] Failed to open preview: %v, stderr: %s", openErr.err, openErr.stderr)
+			errorlog.Record("copy", "error", "Failed to open preview: %v", openErr.err)
 		}
 		s.writePodFilePreviewError(w, status, code, openErr.message, 0, "")
 		return
 	}
-	defer src.Close()
 
 	// Size gate BEFORE any body read. Reject up front so the tar/cat drain
 	// guard is closed cleanly without pulling megabytes we would throw away.
 	if src.size > podFilePreviewByteCap {
+		if closeErr := src.Close(); closeErr != nil {
+			log.Printf("[copy] Failed to close preview stream after oversize %s/%s path=%s: %v", src.namespace, src.podName, src.filePath, closeErr)
+		}
 		s.writePodFilePreviewError(w, http.StatusRequestEntityTooLarge, previewCodeFileTooLarge,
 			fmt.Sprintf("File is %d bytes; preview is limited to %d bytes. Download to view.", src.size, podFilePreviewByteCap),
 			src.size, "")
@@ -1250,17 +1255,31 @@ func (s *Server) handlePodFilePreview(w http.ResponseWriter, r *http.Request) {
 	// read strictly more than we were promised, the file changed under us.
 	// A short read is caught downstream by podFileStream.Read.
 	body, readErr := io.ReadAll(io.LimitReader(src, src.size+1))
+	// Close before answering — mirror the download handler, which learns
+	// whether the command actually finished from Close(). Preview has already
+	// buffered the whole body, so there is no wire-shape reason to defer.
+	closeErr := src.Close()
 	if readErr != nil {
-		log.Printf("[copy] preview read failed for %s/%s path=%s: %v", src.namespace, src.podName, src.filePath, readErr)
-		errorlog.Record("copy", "error", "preview read failed for %s/%s path=%s: %v", src.namespace, src.podName, src.filePath, readErr)
+		log.Printf("[copy] Failed to read preview %s/%s path=%s: %v", src.namespace, src.podName, src.filePath, readErr)
+		errorlog.Record("copy", "error", "Failed to read preview %s/%s path=%s: %v", src.namespace, src.podName, src.filePath, readErr)
 		s.writePodFilePreviewError(w, http.StatusInternalServerError, previewCodeReadFailed,
 			fmt.Sprintf("Failed to read file: %v", readErr), 0, "")
 		return
 	}
 	if int64(len(body)) > src.size {
+		log.Printf("[copy] Failed to bound preview %s/%s path=%s: read %d bytes for a declared size of %d", src.namespace, src.podName, src.filePath, len(body), src.size)
+		errorlog.Record("copy", "error", "Failed to bound preview %s/%s path=%s: read %d bytes for a declared size of %d", src.namespace, src.podName, src.filePath, len(body), src.size)
 		s.writePodFilePreviewError(w, http.StatusInternalServerError, previewCodeReadFailed,
 			"The file grew while it was being read; try again.", 0, "")
 		return
+	}
+	if closeErr != nil {
+		// Every declared byte arrived, so the buffered body still stands; the
+		// command reported trouble on the way out (an unreadable region, a
+		// file rewritten under the read), which belongs in the log next to
+		// the download handler's equivalent, not squashed as JSON success.
+		log.Printf("[copy] Failed to close preview stream after full read %s/%s path=%s: %v", src.namespace, src.podName, src.filePath, closeErr)
+		errorlog.Record("copy", "warning", "reading %s/%s path=%s ended with an error after the file arrived in full: %v", src.namespace, src.podName, src.filePath, closeErr)
 	}
 
 	classification := classifyPreviewBytes(body)

@@ -95,6 +95,23 @@ func TestClassifyPreviewMarksEmptyFile(t *testing.T) {
 	}
 }
 
+// A file whose first 8 KiB happen to contain no NUL byte is not text just
+// because http.DetectContentType didn't call it octet-stream. A recognised
+// binary type (PDF, ZIP, gzip, ELF) keeps its identity and reaches the
+// binary fallback — the NUL rescue only saves genuinely ambiguous inputs.
+func TestClassifyPreviewKeepsKnownBinaryEvenWithoutNULBytes(t *testing.T) {
+	// The %PDF-1.x magic is ASCII with no NUL bytes; a bug in the NUL fallback
+	// would have re-labelled it text/plain.
+	pdfHead := append([]byte("%PDF-1.7\n"), bytes.Repeat([]byte("garbageA"), 512)...)
+	got := classifyPreviewBytes(pdfHead)
+	if got.code != previewCodeBinaryFile {
+		t.Errorf("PDF magic classified as %q with mime %q, want binary_file", got.code, got.mimeType)
+	}
+	if !strings.HasPrefix(got.mimeType, "application/pdf") {
+		t.Errorf("expected the PDF mime to be preserved in the error, got %q", got.mimeType)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Handler-level tests — drive the real handler through the fake exec seam
 // ---------------------------------------------------------------------------
