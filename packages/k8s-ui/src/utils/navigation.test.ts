@@ -326,3 +326,13 @@ describe('lane identity helpers', () => {
     expect(parseLaneId('bogus')).toBeNull()
   })
 })
+
+describe('pluralToKind on absent input', () => {
+  // A saved investigation can carry an empty kind. This runs over every row of
+  // the run list, so throwing here took the whole investigations panel down and
+  // made every other run unopenable — one bad row, no panel.
+  test('returns the empty string instead of throwing', () => {
+    expect(() => pluralToKind('')).not.toThrow()
+    expect(pluralToKind('')).toBe('')
+  })
+})

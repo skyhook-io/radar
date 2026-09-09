@@ -147,6 +147,10 @@ export function kindToPluralWithGroup(kind: string, group: string): string {
  * singular PascalCase form for internal logic (health checks, badge colors, hierarchy matching).
  */
 export function pluralToKind(plural: string): string {
+  // A saved investigation can carry an empty kind, and this runs over every
+  // row of the run list — indexing [0] of "" threw and took the whole panel
+  // down with it, making every other run unopenable.
+  if (!plural) return plural
   const lower = plural.toLowerCase()
   const pluralToKindMap = getPluralToKind()
 
