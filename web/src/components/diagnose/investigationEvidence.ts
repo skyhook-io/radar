@@ -4192,8 +4192,19 @@ function adaptHelmRelease(
       data: { type: "helm", release },
     },
   );
-  if (nonEmptyString(value.valuesError)) {
-    builder.limit(source, "Helm values", value.valuesError, "error");
+  // Every comparison the producer attempted and could not finish, not just the
+  // values read. Three of these are Cloud-role denials, so dropping them let a
+  // reader see a release card whose diff was withheld and take it for complete.
+  for (const [field, label] of [
+    ["valuesError", "Helm values"],
+    ["diffError", "Helm values diff"],
+    ["notesDiffError", "Helm notes diff"],
+    ["resourceDiffError", "Helm resource diff"],
+  ] as const) {
+    const message = value[field];
+    if (nonEmptyString(message)) {
+      builder.limit(source, label, message, "error");
+    }
   }
 }
 

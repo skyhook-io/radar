@@ -4314,6 +4314,10 @@ describe("helm release adapter", () => {
           },
           valuesError:
             'Radar Cloud role "viewer" cannot view Helm release values (requires member or higher)',
+          diffError:
+            'Radar Cloud role "viewer" cannot view Helm release diffs (requires member or higher)',
+          notesDiffError: "notes diff failed",
+          resourceDiffError: "resource diff failed",
         },
         { summary: JSON.stringify({ namespace: "shop", name: "shop-jobs" }) },
       ),
@@ -4335,8 +4339,14 @@ describe("helm release adapter", () => {
         lastOperation: { kind: "pending", status: "stuck_pending" },
       },
     });
+    // Every comparison the producer could not finish has to reach the reader:
+    // three of these are role denials, and a release card that omits a withheld
+    // diff without saying so reads as a complete one.
     expect(projection.limitations).toEqual([
       expect.objectContaining({ source: "Helm values", kind: "error" }),
+      expect.objectContaining({ source: "Helm values diff", kind: "error" }),
+      expect.objectContaining({ source: "Helm notes diff", kind: "error" }),
+      expect.objectContaining({ source: "Helm resource diff", kind: "error" }),
     ]);
   });
 

@@ -2492,10 +2492,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               setNamespaces([namespace])
               setActiveNamespace.mutate({ namespaces: [namespace] })
             } else {
-              // A cluster-scoped subject changes nothing about scope, so the
-              // destination keeps the current one for the same reason.
-              const globalNamespaces = searchParams.get('namespaces')
-              if (globalNamespaces) params.set('namespaces', globalNamespaces)
+              // A cluster-scoped subject has no namespace, and the Timeline
+              // drops every event whose namespace is not in the filter — so
+              // carrying the current scope opens a view the cited change
+              // cannot appear in, which reads as "nothing happened". Widen to
+              // all namespaces, moving scope and URL together as above.
+              setNamespaces([])
+              setActiveNamespace.mutate({ namespaces: [] })
             }
             navigate({ pathname: '/timeline', search: params.toString() })
           }}
