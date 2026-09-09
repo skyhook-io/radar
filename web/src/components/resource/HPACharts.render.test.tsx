@@ -1,16 +1,21 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderToString } from 'react-dom/server'
 
-// The access state is what is under test, so the fetch is stubbed rather than run.
-const forbidden = Object.assign(new Error('forbidden'), { status: 403 })
+// The access state is what is under test, so the fetch is stubbed rather than
+// run. isForbiddenError is deliberately NOT stubbed: a looser stand-in would
+// pass while the real predicate sent a denial down the silent-hide path, which
+// is the failure this component exists to prevent.
+import { ApiError } from '../../api/client'
+
+const forbidden = new ApiError('forbidden', 403)
 let metricsResult: { data?: unknown; error?: unknown } = {}
 let connected = true
 
-vi.mock('../../api/client', () => ({
+vi.mock('../../api/client', async (importActual) => ({
+  ...(await importActual<typeof import('../../api/client')>()),
   usePrometheusHPAMetrics: () => metricsResult,
   usePrometheusStatus: () => ({ data: { connected } }),
   useAutoPromConnect: () => undefined,
-  isForbiddenError: (e: any) => e?.status === 403,
 }))
 
 const { HPACharts } = await import('./HPACharts')
