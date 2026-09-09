@@ -658,6 +658,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 			// Pod file browser
 			r.Get("/pods/{namespace}/{name}/files", s.handlePodFileList)
+			r.Get("/pods/{namespace}/{name}/file", s.handlePodFilePreview)
 
 			// Metrics (from metrics.k8s.io API)
 			r.Get("/metrics/pods/{namespace}/{name}", s.handlePodMetrics)

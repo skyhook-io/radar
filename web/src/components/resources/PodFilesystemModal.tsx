@@ -1,6 +1,6 @@
 import { createElement, useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { X, File, Link2, ChevronRight, AlertTriangle, Loader2, Search, Download, FolderOpen } from 'lucide-react'
+import { X, File, Link2, ChevronRight, AlertTriangle, Loader2, Search, Download, FolderOpen, Eye } from 'lucide-react'
 import { PaneLoader, Input } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import type { FileNode } from '../../types'
@@ -11,6 +11,7 @@ import { isDesktopApp } from '../../utils/desktop-download'
 import { openFile, openFolder } from '../../utils/desktop-open-folder'
 import { useToast } from '../ui/Toast'
 import { Tooltip } from '../ui/Tooltip'
+import { PodFilePreviewModal } from './PodFilePreviewModal'
 
 interface PodFilesystem {
   root: FileNode
@@ -342,10 +343,16 @@ interface PodFileTreeNodeProps {
 
 function PodFileTreeNode({ node, namespace, podName, container, onNavigate }: PodFileTreeNodeProps) {
   const [downloading, setDownloading] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
   const { showSuccess, showError } = useToast()
   const isDir = node.type === 'dir'
   const isSymlink = node.type === 'symlink'
   const isDownloadable = !isDir // files and symlinks can be downloaded
+  // Preview only for regular files. Symlinks are download-only for parity with
+  // the existing behaviour: the tar `-h` resolves them for download, but the
+  // preview endpoint's classifier reads the target's bytes, which is a policy
+  // decision better deferred until users ask for it.
+  const isPreviewable = node.type === 'file'
 
   const handleDownload = async (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -435,6 +442,20 @@ function PodFileTreeNode({ node, namespace, podName, container, onNavigate }: Po
         </span>
       )}
 
+      {isPreviewable && (
+        <Tooltip content="Preview file" wrapperClassName="ml-1">
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              setPreviewOpen(true)
+            }}
+            className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-theme-elevated rounded"
+          >
+            <Eye className="w-3.5 h-3.5" />
+          </button>
+        </Tooltip>
+      )}
+
       {isDownloadable && (
         <Tooltip content="Download file" wrapperClassName="ml-1">
         <button
@@ -449,6 +470,18 @@ function PodFileTreeNode({ node, namespace, podName, container, onNavigate }: Po
           )}
         </button>
         </Tooltip>
+      )}
+
+      {isPreviewable && previewOpen && (
+        <PodFilePreviewModal
+          open={previewOpen}
+          onClose={() => setPreviewOpen(false)}
+          namespace={namespace}
+          podName={podName}
+          container={container}
+          filePath={node.path}
+          fileName={node.name}
+        />
       )}
     </div>
   )

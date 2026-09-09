@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	corev1 "k8s.io/api/core/v1"
@@ -999,4 +1001,282 @@ func isCommandNotFound(errMsg string) bool {
 		}
 	}
 	return false
+}
+
+// Pod file preview — an inline read-only viewer for the filesystem browser.
+// Backed by the same tar/cat plumbing as download; the shape below is what
+// keeps the two apart: preview refuses oversized and non-text files up front
+// so the UI can present a curated fallback instead of streaming binary bytes
+// into a text editor.
+
+const (
+	// podFilePreviewByteCap bounds the buffered read. A file larger than this
+	// is rejected before any body arrives — never truncated silently.
+	podFilePreviewByteCap = 1 << 20 // 1 MiB
+
+	// podFilePreviewSniffBytes is how much of the head goes through
+	// http.DetectContentType and the NUL scan. Enough to catch every real-world
+	// config format and cheap enough to run on every request.
+	podFilePreviewSniffBytes = 8 << 10 // 8 KiB
+)
+
+// Error codes for the preview endpoint. The frontend switches on these to
+// render curated fallback UI (Download button, retry, container-switch hint).
+// Never renamed casually — they are wire contract.
+const (
+	previewCodeFileTooLarge         = "file_too_large"
+	previewCodeBinaryFile           = "binary_file"
+	previewCodeEmptyFile            = "empty_file"
+	previewCodeNotARegularFile      = "not_a_regular_file"
+	previewCodeNotFound             = "not_found"
+	previewCodePermissionDenied     = "permission_denied"
+	previewCodeNoShell              = "no_shell"
+	previewCodeContainerMissingTools = "container_missing_tools"
+	previewCodeReadFailed           = "read_failed"
+)
+
+// podFilePreviewResponse is the success shape. `code` is set on the empty-file
+// success (empty_file) so the frontend can render an explicit empty state
+// instead of a blank editor that looks like a failed load.
+type podFilePreviewResponse struct {
+	Content   string `json:"content"`
+	Size      int64  `json:"size"`
+	Truncated bool   `json:"truncated"`
+	MimeType  string `json:"mimeType"`
+	Encoding  string `json:"encoding"`
+	Code      string `json:"code,omitempty"`
+}
+
+// podFilePreviewErrorResponse is the curated-error shape. `size` and
+// `mimeType` are emitted when known so the UI can say "12.3 MiB, too large"
+// or "detected type: application/x-executable" without reparsing the message.
+type podFilePreviewErrorResponse struct {
+	Error    string `json:"error"`
+	Code     string `json:"code"`
+	Size     int64  `json:"size,omitempty"`
+	MimeType string `json:"mimeType,omitempty"`
+}
+
+// writePodFilePreviewError is writeError plus the preview error shape. Kept
+// in one place so a wire change never requires chasing every handler branch.
+func (s *Server) writePodFilePreviewError(w http.ResponseWriter, status int, code, message string, size int64, mimeType string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	payload := podFilePreviewErrorResponse{Error: message, Code: code, Size: size, MimeType: mimeType}
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		log.Printf("Failed to encode preview error response: %v", err)
+	}
+}
+
+// previewClassification is the outcome of the sniff. `code` is empty on a
+// clean text hit; when set, the file is not previewable and the caller
+// forwards the code and mime type to the client.
+type previewClassification struct {
+	code     string // empty on success
+	mimeType string
+	message  string
+}
+
+// classifyPreviewBytes decides whether a byte slice may be shown in the
+// inline viewer. Layered so the common cases end early:
+//
+//  1. Empty → the caller renders an explicit "empty file" state.
+//  2. DetectContentType hit on text/*, application/json/xml/x-yaml, etc.
+//  3. NUL-byte scan of the first 8 KiB — catches YAML/nginx-conf-shaped
+//     files whose head sniffs as application/octet-stream but which are
+//     obviously text.
+//  4. UTF-8 validation — non-UTF-8 falls to the binary fallback rather than
+//     rendering mojibake.
+func classifyPreviewBytes(data []byte) previewClassification {
+	if len(data) == 0 {
+		return previewClassification{code: previewCodeEmptyFile, mimeType: "text/plain; charset=utf-8"}
+	}
+
+	head := data
+	if len(head) > podFilePreviewSniffBytes {
+		head = data[:podFilePreviewSniffBytes]
+	}
+
+	mimeType := http.DetectContentType(head)
+	mimeBase := mimeType
+	if i := strings.IndexByte(mimeBase, ';'); i >= 0 {
+		mimeBase = strings.TrimSpace(mimeBase[:i])
+	}
+
+	looksTextual := strings.HasPrefix(mimeBase, "text/") ||
+		mimeBase == "application/json" ||
+		mimeBase == "application/xml" ||
+		mimeBase == "application/x-yaml" ||
+		mimeBase == "application/yaml"
+
+	// http.DetectContentType calls plain config files (nginx.conf, dockerfile
+	// snippets, .env) application/octet-stream. NUL bytes in the first 8 KiB
+	// are what actually separate binary from oddly-formatted text.
+	if !looksTextual {
+		if bytes.IndexByte(head, 0) == -1 {
+			mimeType = "text/plain; charset=utf-8"
+			looksTextual = true
+		}
+	}
+
+	if !looksTextual {
+		return previewClassification{
+			code:     previewCodeBinaryFile,
+			mimeType: mimeType,
+			message:  fmt.Sprintf("This file appears to be binary (detected type: %s). Download to view its contents.", mimeType),
+		}
+	}
+
+	if !utf8.Valid(data) {
+		return previewClassification{
+			code:     previewCodeBinaryFile,
+			mimeType: mimeType,
+			message:  "This file is not valid UTF-8 and cannot be previewed. Download to view.",
+		}
+	}
+
+	return previewClassification{mimeType: mimeType}
+}
+
+// openPodFileForPreview is the preview-side parallel to openPodFileForRequest.
+// It returns the tar/cat plumbing verbatim; the difference is that error
+// classification is handed back to the handler so it can be rendered as a
+// curated code plus a message, not squashed to a plain-text writeError.
+//
+// nil error → src is non-nil and callable; non-nil error → src is nil.
+func (s *Server) openPodFileForPreview(r *http.Request) (*podFileSource, *podFileOpenError, int, string) {
+	namespace := chi.URLParam(r, "namespace")
+	podName := chi.URLParam(r, "name")
+	container := r.URL.Query().Get("container")
+	filePath := r.URL.Query().Get("path")
+	if filePath == "" {
+		return nil, nil, http.StatusBadRequest, "path parameter is required"
+	}
+
+	filePath = path.Clean(filePath)
+	if !isDownloadablePath(filePath) {
+		return nil, nil, http.StatusBadRequest, fmt.Sprintf("Not a file: %s", filePath)
+	}
+
+	client := s.getClientForRequest(r)
+	config := s.getConfigForRequest(r)
+	if client == nil || config == nil {
+		return nil, nil, http.StatusServiceUnavailable, "cluster client not available — check cluster connection"
+	}
+
+	src := &podFileSource{
+		namespace: namespace,
+		podName:   podName,
+		filePath:  filePath,
+		name:      path.Base(filePath),
+	}
+
+	stream, openErr := s.openPodFileWithTar(r.Context(), client, config, namespace, podName, container, filePath)
+	if openErr != nil && openErr.commandMissing && !openErr.shellMissing {
+		stream, openErr = s.openPodFileWithCat(r.Context(), client, config, namespace, podName, container, filePath)
+	}
+	if openErr == nil {
+		src.stream = stream
+		src.size = stream.size
+		return src, nil, 0, ""
+	}
+
+	// commandMissing at this point means BOTH tar and cat are unavailable
+	// through /bin/sh. The download handler falls back to a bare `cat`
+	// invocation; for preview we surface the shape instead — a container
+	// without tools is a curated end state, not a silent degradation.
+	return nil, openErr, 0, ""
+}
+
+// classifyOpenErrorForPreview maps the tar/cat classifier to a preview
+// error code and HTTP status. Message text is taken from openErr.message,
+// which the classifier already wrote in operator-facing language.
+func classifyOpenErrorForPreview(openErr *podFileOpenError) (int, string) {
+	switch {
+	case openErr.notFound:
+		return http.StatusNotFound, previewCodeNotFound
+	case openErr.notAFile:
+		return http.StatusBadRequest, previewCodeNotARegularFile
+	case openErr.shellMissing:
+		return http.StatusNotImplemented, previewCodeNoShell
+	case openErr.commandMissing:
+		return http.StatusNotImplemented, previewCodeContainerMissingTools
+	}
+	// The classifier writes "Permission denied: ..." into message for both
+	// tar and cat variants; matching on the shared prefix keeps the two
+	// callers aligned without a second parse of the stderr blob.
+	if strings.HasPrefix(openErr.message, "Permission denied") {
+		return http.StatusForbidden, previewCodePermissionDenied
+	}
+	return http.StatusInternalServerError, previewCodeReadFailed
+}
+
+// handlePodFilePreview reads a size-bounded text file out of a container
+// and returns it in a JSON envelope for the inline viewer.
+// GET /api/pods/{ns}/{name}/file?container=X&path=/some/file
+func (s *Server) handlePodFilePreview(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+
+	src, openErr, badStatus, badMsg := s.openPodFileForPreview(r)
+	if badStatus != 0 {
+		s.writePodFilePreviewError(w, badStatus, previewCodeReadFailed, badMsg, 0, "")
+		return
+	}
+	if openErr != nil {
+		status, code := classifyOpenErrorForPreview(openErr)
+		if status >= 500 {
+			// Only the truly-unexpected shapes log — the operator-facing ones
+			// (not found, permission denied, no shell) are noise in the log.
+			log.Printf("[copy] preview open failed: %v, stderr: %s", openErr.err, openErr.stderr)
+			errorlog.Record("copy", "error", "preview open failed: %v", openErr.err)
+		}
+		s.writePodFilePreviewError(w, status, code, openErr.message, 0, "")
+		return
+	}
+	defer src.Close()
+
+	// Size gate BEFORE any body read. Reject up front so the tar/cat drain
+	// guard is closed cleanly without pulling megabytes we would throw away.
+	if src.size > podFilePreviewByteCap {
+		s.writePodFilePreviewError(w, http.StatusRequestEntityTooLarge, previewCodeFileTooLarge,
+			fmt.Sprintf("File is %d bytes; preview is limited to %d bytes. Download to view.", src.size, podFilePreviewByteCap),
+			src.size, "")
+		return
+	}
+
+	// LimitReader with size+1 is how a lying tar/cat header is caught: if we
+	// read strictly more than we were promised, the file changed under us.
+	// A short read is caught downstream by podFileStream.Read.
+	body, readErr := io.ReadAll(io.LimitReader(src, src.size+1))
+	if readErr != nil {
+		log.Printf("[copy] preview read failed for %s/%s path=%s: %v", src.namespace, src.podName, src.filePath, readErr)
+		errorlog.Record("copy", "error", "preview read failed for %s/%s path=%s: %v", src.namespace, src.podName, src.filePath, readErr)
+		s.writePodFilePreviewError(w, http.StatusInternalServerError, previewCodeReadFailed,
+			fmt.Sprintf("Failed to read file: %v", readErr), 0, "")
+		return
+	}
+	if int64(len(body)) > src.size {
+		s.writePodFilePreviewError(w, http.StatusInternalServerError, previewCodeReadFailed,
+			"The file grew while it was being read; try again.", 0, "")
+		return
+	}
+
+	classification := classifyPreviewBytes(body)
+	if classification.code == previewCodeBinaryFile {
+		s.writePodFilePreviewError(w, http.StatusUnsupportedMediaType, previewCodeBinaryFile,
+			classification.message, int64(len(body)), classification.mimeType)
+		return
+	}
+
+	resp := podFilePreviewResponse{
+		Content:   string(body),
+		Size:      int64(len(body)),
+		Truncated: false,
+		MimeType:  classification.mimeType,
+		Encoding:  "utf-8",
+		Code:      classification.code, // empty on normal text, "empty_file" on 0-byte
+	}
+	s.writeJSON(w, resp)
 }
