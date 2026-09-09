@@ -2733,7 +2733,10 @@ function MetricsBody({
             ? "1 change recorded in this window is marked on the chart."
             : annotations?.length
               ? `${annotations.length} changes recorded in this window are marked on the chart.`
-              : "No changes recorded in this window."}
+              : // Only that the changes Radar read miss this window — not that
+                // the window was fully covered. The change lookup has its own
+                // window, which need not span the chart's.
+                "None of the changes Radar read fall in this window."}
         </p>
       ) : null}
       {axisTruncated ? (
