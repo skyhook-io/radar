@@ -14,6 +14,12 @@ import (
 )
 
 var ErrWorkloadAccessDenied = errors.New("workload access denied")
+
+// ErrWorkloadCacheWarming separates "not loaded yet" from "not permitted".
+// Both leave the pod set unknown, but only one of them is the caller's
+// permissions, and reporting a warming cache as a denial sends an operator
+// (or the agent) after an RBAC problem that does not exist.
+var ErrWorkloadCacheWarming = errors.New("workload cache is still loading")
 var ErrWorkloadSelectorUnavailable = errors.New("workload selector unavailable")
 
 // GetWorkloadSelector returns the label selector for a workload from cache.

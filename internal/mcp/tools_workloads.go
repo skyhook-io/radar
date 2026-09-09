@@ -351,6 +351,9 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 }
 
 func workloadSelectorMCPError(ctx context.Context, err error, kind, namespace, name string) error {
+	if errors.Is(err, k8s.ErrWorkloadCacheWarming) {
+		return fmt.Errorf("%s %s/%s is not readable yet: %w. Retry in a moment", kind, namespace, name, err)
+	}
 	if errors.Is(err, k8s.ErrWorkloadAccessDenied) || apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
 		return fmt.Errorf("forbidden: cannot access %s %s/%s: %w", kind, namespace, name, err)
 	}

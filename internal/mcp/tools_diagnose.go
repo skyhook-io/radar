@@ -327,7 +327,8 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 
 	pods, err := resolveDiagnosePods(cache, kindNorm, input.Namespace, input.Name, obj)
 	podsNotListable := errors.Is(err, errPodsNotListable)
-	if err != nil && !podsNotListable {
+	podsCacheWarming := errors.Is(err, errPodsCacheWarming)
+	if err != nil && !podsNotListable && !podsCacheWarming {
 		return nil, nil, err
 	}
 	resCtx := buildMCPResourceContextWithStaleChecks(
@@ -493,6 +494,9 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		// Say it plainly: everything pod-derived is empty because the pods
 		// could not be listed, not because the workload has none.
 		resp.Warnings = append(resp.Warnings, "Radar cannot list pods in this namespace, so pod logs, pod events and workload metrics are missing from this bundle.")
+	}
+	if podsCacheWarming {
+		resp.Warnings = append(resp.Warnings, "Radar is still loading this cluster's ReplicaSets, so pod logs, pod events and workload metrics are missing from this bundle. Retry in a moment.")
 	}
 	capped, capStats := capMultiPodLogBundles(resp.LogsCurrent, resp.LogsPrevious)
 	resp.LogsCurrent = capped[0]
@@ -834,6 +838,9 @@ func resolveDiagnosePods(cache *k8s.ResourceCache, kindNorm, namespace, name str
 	// same pods; a selector would also match bare pods and a sibling
 	// controller's pods during a Rollout migration.
 	pods, err := k8s.WorkloadPods(cache, kindNorm, namespace, name)
+	if errors.Is(err, k8s.ErrWorkloadCacheWarming) {
+		return nil, errPodsCacheWarming
+	}
 	if errors.Is(err, k8s.ErrWorkloadAccessDenied) {
 		// The rest of the bundle — resource context, issues, events, changes —
 		// does not depend on listing pods, so an install that cannot list them
@@ -846,6 +853,11 @@ func resolveDiagnosePods(cache *k8s.ResourceCache, kindNorm, namespace, name str
 // errPodsNotListable marks the one pod-resolution failure the bundle can
 // carry rather than fail on.
 var errPodsNotListable = errors.New("pods are not listable with the current permissions")
+
+// errPodsCacheWarming is the same degradation for a cache that has not
+// finished loading. It is kept apart from errPodsNotListable so the bundle
+// never blames permissions for a wait.
+var errPodsCacheWarming = errors.New("the pod cache is still loading")
 
 // fetchEventsForResource returns up to `limit` recent dedup'd events
 // involving this resource. When pods is non-empty, also matches pod-level

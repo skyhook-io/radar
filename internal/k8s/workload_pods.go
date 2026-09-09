@@ -102,6 +102,13 @@ func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string) (
 		if rsLister == nil {
 			return nil, fmt.Errorf("%w: list replicasets", ErrWorkloadAccessDenied)
 		}
+		// ReplicaSets sync in the deferred phase, and the lister is non-nil the
+		// whole time it is filling. Every ownership lookup would miss and the
+		// workload would report no pods at all, so refuse to answer until the
+		// deferred informers have finished rather than call a warming cache empty.
+		if !cache.IsDeferredSynced() {
+			return nil, fmt.Errorf("%w: replicasets", ErrWorkloadCacheWarming)
+		}
 		return func(pod *corev1.Pod) bool {
 			owner := metav1.GetControllerOf(pod)
 			if owner == nil || owner.Kind != "ReplicaSet" {
