@@ -575,6 +575,38 @@ describe("units only survive expressions that keep the meaning", () => {
     ).toBe("bytes");
   });
 
+  it("keeps the unit through ordering, and drops it for an angle", () => {
+    const bytesOf = (metric: string) => [
+      {
+        metric,
+        matchers: [{ label: "namespace", op: "=", value: "shop" }],
+      },
+    ];
+    // Sorting reorders samples without touching their values.
+    for (const fn of ["sort", "sort_desc"]) {
+      expect(
+        metricsUnitForExpression(
+          `${fn}(container_memory_working_set_bytes)`,
+          bytesOf("container_memory_working_set_bytes"),
+        ),
+      ).toBe("bytes");
+    }
+    expect(
+      metricsUnitForExpression(
+        'sort_by_label(container_memory_working_set_bytes, "pod")',
+        bytesOf("container_memory_working_set_bytes"),
+      ),
+    ).toBe("bytes");
+    // atan2 is spelled as a word but is a binary operator, and returns an
+    // angle however many bytes went into it.
+    expect(
+      metricsUnitForExpression(
+        "container_memory_working_set_bytes atan2 container_memory_working_set_bytes",
+        bytesOf("container_memory_working_set_bytes"),
+      ),
+    ).toBe("");
+  });
+
   it("still turns a rate of bytes into bytes per second and a rate of seconds into nothing", () => {
     expect(
       metricsUnitForExpression(
