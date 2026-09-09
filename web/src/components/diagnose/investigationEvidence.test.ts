@@ -4316,6 +4316,7 @@ describe("helm release adapter", () => {
             'Radar Cloud role "viewer" cannot view Helm release values (requires member or higher)',
           diffError:
             'Radar Cloud role "viewer" cannot view Helm release diffs (requires member or higher)',
+          valuesDiffError: "values diff failed",
           notesDiffError: "notes diff failed",
           resourceDiffError: "resource diff failed",
         },
@@ -4345,6 +4346,7 @@ describe("helm release adapter", () => {
     expect(projection.limitations).toEqual([
       expect.objectContaining({ source: "Helm values", kind: "error" }),
       expect.objectContaining({ source: "Helm values diff", kind: "error" }),
+      expect.objectContaining({ source: "Helm manifest diff", kind: "error" }),
       expect.objectContaining({ source: "Helm notes diff", kind: "error" }),
       expect.objectContaining({ source: "Helm resource diff", kind: "error" }),
     ]);

@@ -4193,11 +4193,15 @@ function adaptHelmRelease(
     },
   );
   // Every comparison the producer attempted and could not finish, not just the
-  // values read. Three of these are Cloud-role denials, so dropping them let a
-  // reader see a release card whose diff was withheld and take it for complete.
+  // values read. Four of these are Cloud-role denials, so dropping any of them
+  // lets a reader see a release card whose comparison was withheld and take it
+  // for complete. The labels follow the producer's own fields: `diff` is the
+  // manifest, `valuesDiff` the values — naming one for the other sends a reader
+  // to the wrong thing.
   for (const [field, label] of [
     ["valuesError", "Helm values"],
-    ["diffError", "Helm values diff"],
+    ["valuesDiffError", "Helm values diff"],
+    ["diffError", "Helm manifest diff"],
     ["notesDiffError", "Helm notes diff"],
     ["resourceDiffError", "Helm resource diff"],
   ] as const) {
