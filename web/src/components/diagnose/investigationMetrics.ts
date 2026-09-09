@@ -291,14 +291,21 @@ function producerRelatives(
 
 /**
  * Changes Radar recorded for the chart's subject inside the chart window,
- * taken only from the same turn's change observations that producers related
- * to the target. Each marker says a change was recorded at that instant and
- * nothing more.
+ * paired with whether that lookup was possible at all. An empty marker list
+ * means "none were recorded" only when `checked` is true; otherwise the chart
+ * had no subject to look changes up for, or the turn captured no changes to
+ * look through, and the chart must not claim a clean window.
  */
-export function metricsChangeMarkers(
+export type MetricsChangeCoverage = {
+  markers: ChartAnnotation[];
+  /** False when no change lookup was possible, so an empty list proves nothing. */
+  checked: boolean;
+};
+
+export function metricsChangeCoverage(
   groups: readonly InvestigationEvidenceGroup[],
   observation: InvestigationEvidenceObservation,
-): ChartAnnotation[] {
+): MetricsChangeCoverage {
   const { data } = observation;
   // A broader chart's subject is a neighbour; the turn's non-broader relatives
   // and changes all belong to the target, so marking them there would
@@ -308,25 +315,38 @@ export function metricsChangeMarkers(
     !data.subject ||
     observation.relevance === "broader"
   ) {
-    return [];
+    return { markers: [], checked: false };
   }
   const domain = metricsDomain(data);
-  if (!domain) return [];
+  if (!domain) return { markers: [], checked: false };
   const turnIndex = observation.source.turnIndex;
   const relatives = producerRelatives(groups, data.subject, turnIndex);
   const strictKeys = new Set(relatives.map(refKey));
   const looseKeys = new Set(relatives.map(looseKey));
   const seen = new Set<string>();
   const markers: ChartAnnotation[] = [];
+  let checked = false;
   for (const group of groups) {
     for (const candidate of group.observations) {
       if (
-        candidate.data.type !== "changes" ||
         candidate.source.turnIndex !== turnIndex ||
         candidate.relevance === "broader"
       ) {
         continue;
       }
+      // An authoritative empty change window is filed as a receipt, and counts
+      // as a check just as a change list does. A window the producer could not
+      // vouch for becomes a limitation instead, never a receipt, so it leaves
+      // `checked` false.
+      if (
+        candidate.data.type === "receipt" &&
+        candidate.data.checked === "changes"
+      ) {
+        checked = true;
+        continue;
+      }
+      if (candidate.data.type !== "changes") continue;
+      checked = true;
       for (const change of candidate.data.changes) {
         const timestamp = Date.parse(change.timestamp) / 1000;
         if (
@@ -348,5 +368,20 @@ export function metricsChangeMarkers(
       }
     }
   }
-  return markers.sort((left, right) => left.timestamp - right.timestamp);
+  return {
+    markers: markers.sort((left, right) => left.timestamp - right.timestamp),
+    checked,
+  };
+}
+
+/**
+ * Changes Radar recorded for the chart's subject inside the chart window.
+ * Callers that need to tell "none recorded" from "not looked up" want
+ * {@link metricsChangeCoverage} instead.
+ */
+export function metricsChangeMarkers(
+  groups: readonly InvestigationEvidenceGroup[],
+  observation: InvestigationEvidenceObservation,
+): ChartAnnotation[] {
+  return metricsChangeCoverage(groups, observation).markers;
 }

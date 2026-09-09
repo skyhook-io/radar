@@ -650,6 +650,23 @@ function metricsWindowLabel(data: {
  * captures, and a series whose category is missing here is discarded. Change
  * both together.
  */
+// Radar's reading of a metric name, so an agent-written query gets a title a
+// reader can scan instead of the raw series name. Deliberately small and exact:
+// an unrecognised metric keeps its own name rather than being handed a meaning
+// Radar cannot derive from it.
+const METRIC_FAMILY_LABELS: Record<string, string> = {
+  container_cpu_usage_seconds_total: "CPU usage",
+  container_cpu_cfs_throttled_seconds_total: "CPU throttling",
+  container_memory_working_set_bytes: "Memory working set",
+  container_memory_usage_bytes: "Memory usage",
+  container_memory_rss: "Memory RSS",
+  kube_pod_container_status_restarts_total: "Restarts",
+  container_network_receive_bytes_total: "Network received",
+  container_network_transmit_bytes_total: "Network transmitted",
+  container_fs_usage_bytes: "Filesystem usage",
+  up: "Scrape target up",
+};
+
 const DIAGNOSE_METRICS_LABELS: Record<string, string> = {
   cpu: "CPU usage",
   memory: "Memory working set",
@@ -872,8 +889,22 @@ export function adaptQueryPrometheus(
       ),
     ),
   ];
-  const title =
+  // A recognised family names the card; the scope is added only when Radar
+  // already decided the query is about the target, so the title never widens
+  // or narrows what the relevance check concluded.
+  const family =
     metricNames.length === 1
+      ? METRIC_FAMILY_LABELS[metricNames[0]]
+      : undefined;
+  const scope =
+    relevance === "target"
+      ? `${displayKind(builder.target.kind)} ${builder.target.namespace ? `${builder.target.namespace}/` : ""}${builder.target.name}`
+      : undefined;
+  const title = family
+    ? scope
+      ? `${family} · ${scope}`
+      : family
+    : metricNames.length === 1
       ? metricNames[0]
       : mode === "range"
         ? "Prometheus metrics"
@@ -912,7 +943,13 @@ export function adaptQueryPrometheus(
       tone: "neutral",
       title,
       summary: [
-        metricNames.length === 1 ? "Prometheus" : undefined,
+        // When a family named the card, the metric name moves here so it stays
+        // visible; otherwise it is already the title.
+        family
+          ? metricNames[0]
+          : metricNames.length === 1
+            ? "Prometheus"
+            : undefined,
         series.length === 0 ? "No series matched" : `${series.length} series`,
         windowLabel,
       ]

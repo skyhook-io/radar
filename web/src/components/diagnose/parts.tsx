@@ -14,7 +14,6 @@ import {
   Loader2,
   CheckCircle2,
   AlertTriangle,
-  Info,
   Copy,
   Check,
   ShieldCheck,
@@ -1224,11 +1223,11 @@ export function Timeline({
             ))}
             {radarServer
               ? mcpStatusIsFailure(radarServer.status)
-                ? ` at startup — ${agentLabel} had no Radar tools this turn, so it could not use Radar's cluster evidence.`
-                : ` at startup — Radar's tools may not have been available to ${agentLabel} this turn.`
+                ? ` at startup. ${agentLabel} had no Radar tools this turn, so it could not use Radar's cluster evidence.`
+                : ` at startup. Radar's tools may not have been available to ${agentLabel} this turn.`
               : allDefiniteFailures
-                ? ` at startup — ${agentLabel} ran this turn without those tools.`
-                : ` at startup — those tools may not have been available to ${agentLabel} this turn.`}
+                ? ` at startup. ${agentLabel} ran this turn without those tools.`
+                : ` at startup. Those tools may not have been available to ${agentLabel} this turn.`}
           </span>
         </div>
       )}
@@ -2699,34 +2698,28 @@ function AllClearCard({
         className={`rounded-lg border p-3 ${
           unexplainedConflict
             ? "border-amber-500/40 bg-amber-500/5"
-            : explained
-              ? "border-accent/30 bg-accent/5"
-              : coverageLimited
-                ? "border-amber-500/30 bg-amber-500/5"
-                : "border-emerald-500/30 bg-emerald-500/5"
+            : explained || coverageLimited
+              ? "border-amber-500/30 bg-amber-500/5"
+              : "border-emerald-500/30 bg-emerald-500/5"
         }`}
       >
         <div className="mb-1 flex items-center justify-between gap-2">
           <div
             className={`flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide ${
-              unexplainedConflict || (coverageLimited && !explained)
+              unexplainedConflict || explained || coverageLimited
                 ? "text-amber-500"
-                : explained
-                  ? "text-accent-text"
-                  : "text-emerald-500"
+                : "text-emerald-500"
             }`}
           >
-            {unexplainedConflict || (coverageLimited && !explained) ? (
+            {unexplainedConflict || explained || coverageLimited ? (
               <AlertTriangle className="h-3.5 w-3.5" />
-            ) : explained ? (
-              <Info className="h-3.5 w-3.5" />
             ) : (
               <CheckCircle2 className="h-3.5 w-3.5" />
             )}
             {unexplainedConflict
               ? "Assessment conflicts with captured evidence"
               : explained
-                ? "No active problem found; warning-level evidence explained"
+                ? "Agent reports no active problem; adverse evidence remains"
                 : coverageLimited
                   ? "No problem identified in available evidence"
                   : "No problem found in checked evidence"}
@@ -2744,9 +2737,8 @@ function AllClearCard({
           </p>
         ) : explained ? (
           <p className="mt-2 text-xs text-theme-text-secondary">
-            Radar recorded warning-level evidence and the agent explained it;
-            see the note on {joinTitles(evidenceConflictExplainedBy!)}. The
-            evidence stays in the list below.
+            The agent explains its interpretation in the note on{" "}
+            {joinTitles(evidenceConflictExplainedBy!)}.
           </p>
         ) : coverageLimited ? (
           <p className="mt-2 text-xs text-theme-text-secondary">

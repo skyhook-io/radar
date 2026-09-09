@@ -1024,13 +1024,17 @@ describe("ResultCard conclusion states", () => {
     );
 
     expect(html).toContain(
-      "No active problem found; warning-level evidence explained",
+      "Agent reports no active problem; adverse evidence remains",
     );
-    expect(html).toContain("see the note on CrashLoopBackOff and Error logs");
+    expect(html).toContain(
+      "The agent explains its interpretation in the note on CrashLoopBackOff and Error logs",
+    );
     expect(html).not.toContain("Assessment conflicts with captured evidence");
+    // Explained keeps a warning tone: the note shows the agent addressed the
+    // card, not that the adverse observation stopped being adverse.
     expect(html).not.toContain("border-amber-500/40");
     expect(html).not.toContain("border-emerald-500/30");
-    expect(html).toContain("border-accent/30");
+    expect(html).toContain("border-amber-500/30");
 
     const unexplained = renderToStaticMarkup(
       <ResultCard

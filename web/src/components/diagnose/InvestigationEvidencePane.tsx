@@ -46,12 +46,15 @@ import {
   formatMetricValue,
   seriesDisplayLabels,
   seriesFill,
-  type ChartAnnotation,
   type TimeSeries,
 } from "@skyhook-io/k8s-ui/components/charts";
 import { apiVersionToGroup } from "../../utils/navigation";
 import { parseLogLine } from "../../utils/log-format";
-import { metricsChangeMarkers, metricsDomain } from "./investigationMetrics";
+import {
+  metricsChangeCoverage,
+  metricsDomain,
+  type MetricsChangeCoverage,
+} from "./investigationMetrics";
 import {
   evidenceDisplaySnapshot,
   groupEvidenceCoverage,
@@ -115,7 +118,7 @@ const EvidenceNavigationContext = createContext<{
   onGroupOpenChange?: (id: string, open: boolean) => void;
   citedOrderByGroup?: ReadonlyMap<string, number>;
   /** Change markers for each metrics observation, keyed by its source id. */
-  metricsMarkersBySource?: ReadonlyMap<string, ChartAnnotation[]>;
+  metricsMarkersBySource?: ReadonlyMap<string, MetricsChangeCoverage>;
   /** Card- and revision-placed agent items, keyed by group id. */
   caseByGroup?: ReadonlyMap<string, InvestigationCaseItem[]>;
 }>({});
@@ -625,7 +628,7 @@ export function InvestigationEvidencePane({
                 ? [
                     [
                       observation.source.id,
-                      metricsChangeMarkers(projection.groups, observation),
+                      metricsChangeCoverage(projection.groups, observation),
                     ] as const,
                   ]
                 : [],
@@ -1455,7 +1458,7 @@ function EvidenceCard({
                 <EvidenceBody
                   data={observation.data}
                   cardSummary={observation.summary}
-                  annotations={metricsMarkersBySource?.get(
+                  changeCoverage={metricsMarkersBySource?.get(
                     observation.source.id,
                   )}
                 />
@@ -1566,12 +1569,12 @@ function uniquePrimarySources(
 function EvidenceBody({
   data,
   cardSummary,
-  annotations,
+  changeCoverage,
 }: {
   data: InvestigationEvidenceData;
   cardSummary?: string;
   /** Change markers for a metrics chart; derived by the pane, never by data. */
-  annotations?: ChartAnnotation[];
+  changeCoverage?: MetricsChangeCoverage;
 }) {
   switch (data.type) {
     case "issue":
@@ -1609,7 +1612,7 @@ function EvidenceBody({
     case "permissions":
       return <PermissionsBody data={data} />;
     case "metrics":
-      return <MetricsBody data={data} annotations={annotations} />;
+      return <MetricsBody data={data} changeCoverage={changeCoverage} />;
   }
 }
 
@@ -2522,11 +2525,12 @@ function MetricsValueTable({
 
 function MetricsBody({
   data,
-  annotations,
+  changeCoverage,
 }: {
   data: EvidenceDataOf<"metrics">;
-  annotations?: ChartAnnotation[];
+  changeCoverage?: MetricsChangeCoverage;
 }) {
+  const annotations = changeCoverage?.markers;
   const unit = data.unit ?? "";
   const axisLabel = data.label ?? data.query;
   const axisTruncated = axisLabel.length > METRICS_AXIS_LABEL_MAX_CHARS;
@@ -2660,11 +2664,13 @@ function MetricsBody({
           </span>
         </p>
       ) : null}
-      {annotations?.length && charted.length > 0 ? (
+      {changeCoverage?.checked && charted.length > 0 ? (
         <p className="text-xs text-theme-text-tertiary">
-          {annotations.length === 1
+          {annotations?.length === 1
             ? "1 change recorded in this window is marked on the chart."
-            : `${annotations.length} changes recorded in this window are marked on the chart.`}
+            : annotations?.length
+              ? `${annotations.length} changes recorded in this window are marked on the chart.`
+              : "No changes recorded in this window."}
         </p>
       ) : null}
       {axisTruncated ? (
@@ -3256,7 +3262,7 @@ function RevisionHistory({
                       <EvidenceBody
                         data={observation.data}
                         cardSummary={observation.summary}
-                        annotations={metricsMarkersBySource?.get(
+                        changeCoverage={metricsMarkersBySource?.get(
                           observation.source.id,
                         )}
                       />

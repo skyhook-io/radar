@@ -2216,8 +2216,8 @@ describe("InvestigationEvidencePane metrics cards", () => {
     expect(partition.workload.map((group) => group.kind)).toEqual(["metrics"]);
     expect(partition.hiddenBroader).toBe(0);
     const html = render(projection);
-    expect(html).toContain("container_memory_working_set_bytes");
-    expect(html).toContain("Prometheus · 1 series");
+    expect(html).toContain("Memory working set");
+    expect(html).toContain("container_memory_working_set_bytes · 1 series");
     expect(html).not.toContain("Prometheus metrics");
     expect(html).not.toContain("metric result");
   });
@@ -2594,6 +2594,58 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
     expect(
       metricsChangeMarkers(targetChart.groups, target!.latest),
     ).toHaveLength(1);
+  });
+
+  it("says a window is clean only when changes were actually looked up", () => {
+    const withChanges = render(
+      project(
+        tool("diag", "diagnose", {
+          resource: {
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: { namespace: "shop", name: "api" },
+          },
+          pods: 1,
+          recentChanges: [],
+          metrics: vitals,
+        }),
+      ),
+    );
+    expect(withChanges).toContain("No changes recorded in this window.");
+
+    // The same chart with no change lookup in the turn must stay silent: an
+    // empty marker list there means nobody looked, not that nothing happened.
+    const withoutChanges = render(
+      project(
+        tool("prom", "query_prometheus", {
+          query:
+            'sum(container_memory_working_set_bytes{namespace="shop",workload="api",workload_type="deployment"})',
+          type: "range",
+          ...window,
+          step: "60s",
+          series: [
+            {
+              labels: {},
+              dataPoints: [
+                { timestamp: Date.parse(window.start) / 1000, value: 1 },
+                { timestamp: Date.parse(window.end) / 1000, value: 2 },
+              ],
+            },
+          ],
+          selectors: [
+            {
+              metric: "container_memory_working_set_bytes",
+              matchers: [
+                { label: "namespace", op: "=", value: "shop" },
+                { label: "workload", op: "=", value: "api" },
+                { label: "workload_type", op: "=", value: "deployment" },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+    expect(withoutChanges).not.toContain("No changes recorded in this window.");
   });
 
   it("shows a workload metrics limitation for a reported producer error", () => {
