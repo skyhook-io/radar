@@ -40,6 +40,21 @@ const (
 	diagnoseMetricsMaxErrorBytes = 1024
 )
 
+// DiagnoseMetricsEnabled decides whether diagnose collects workload vitals at
+// all, and is the single place to change that decision in a release: set it
+// false and the field is omitted, with the rest of the bundle and
+// query_prometheus untouched.
+//
+// Collecting them is the default because an agent that has to ask for
+// resource data can silently never ask, and a healthy verdict reached without
+// looking is indistinguishable from one where the numbers were fine. The cost
+// is one Prometheus round trip on every diagnose of a pod-backed workload:
+// against a healthy backend that is roughly 130ms becoming roughly 650ms,
+// because nothing else diagnose does takes long enough to hide it. Turning it
+// off leaves query_prometheus in place, so the data stays reachable when the
+// agent goes looking for it.
+var DiagnoseMetricsEnabled = true
+
 // diagnoseMetricsBudget bounds the whole metrics branch, availability probe
 // included. A var so tests can exercise the breach path.
 var diagnoseMetricsBudget = 3 * time.Second
@@ -70,10 +85,17 @@ type diagnoseMetricsWindow struct {
 }
 
 type diagnoseMetricSeries struct {
-	Category string        `json:"category"`
-	Unit     string        `json:"unit"`
-	Query    string        `json:"query"`
-	Series   []prom.Series `json:"series"`
+	Category string `json:"category"`
+	Unit     string `json:"unit"`
+	Query    string `json:"query"`
+	// ObservedSamples is how many points Prometheus actually returned across
+	// this category's series, before the flat stretches were compressed away.
+	// Without it a two-point series is ambiguous: it could be an hour of
+	// agreeing samples or two lonely ones, and the window and step cannot
+	// settle it because a range query returns nothing for an evaluation with
+	// no data.
+	ObservedSamples int           `json:"observedSamples,omitempty"`
+	Series          []prom.Series `json:"series"`
 }
 
 func diagnoseMetricsSince(sinceSeconds *int64) time.Duration {
@@ -83,13 +105,16 @@ func diagnoseMetricsSince(sinceSeconds *int64) time.Duration {
 	return time.Duration(*sinceSeconds) * time.Second
 }
 
-// diagnoseWorkloadMetrics returns nil when there is nothing to report (no
-// pods to name, the caller cannot get the diagnosed resource, or Prometheus
-// is absent) so the caller omits the field. The per-kind gate runs inside
+// diagnoseWorkloadMetrics returns nil when there is nothing to report (vitals
+// are switched off, no pods to name, the caller cannot get the diagnosed
+// resource, or Prometheus is absent) so the caller omits the field. The per-kind gate runs inside
 // the budget: a slow SubjectAccessReview counts against the branch, not
 // against the rest of diagnose, and a gate that does not answer in time
 // denies.
 func diagnoseWorkloadMetrics(ctx context.Context, group, resource, namespace string, pods []*corev1.Pod, since time.Duration, now time.Time) *diagnoseMetrics {
+	if !DiagnoseMetricsEnabled {
+		return nil
+	}
 	names := make([]string, 0, len(pods))
 	for _, p := range pods {
 		if p != nil && p.Name != "" {
@@ -261,8 +286,60 @@ func queryPodSetCategory(ctx context.Context, p *prom.Client, namespace string, 
 		for j := range out.Series[i].DataPoints {
 			out.Series[i].DataPoints[j].Value = roundSignificant(out.Series[i].DataPoints[j].Value, diagnoseMetricsValueDigits)
 		}
+		out.ObservedSamples += len(out.Series[i].DataPoints)
+		out.Series[i].DataPoints = collapseConstantRuns(out.Series[i].DataPoints)
 	}
 	return out, nil
+}
+
+// collapseConstantRuns drops the interior of an evenly spaced run of equal
+// values, keeping the point that opens it and the point that closes it. A flat
+// hour costs two points instead of sixty, so what the field costs follows what
+// it says rather than how long the window is.
+//
+// This is a tolerance, not a lossless transform: values are compared after
+// rounding, so movement too small to reach four significant digits — movement
+// no chart would draw and no reader could see — is treated as flat. The count
+// of what was observed survives on ObservedSamples.
+//
+// Two properties the rule depends on:
+//
+//   - Points are compared against their neighbours in the ORIGINAL slice.
+//     Deciding from the output as it is built lets an already-kept boundary be
+//     dropped by the point after it.
+//   - A run must be evenly spaced. Prometheus returns nothing for an
+//     evaluation with no data, so equal values either side of a gap are not
+//     adjacent, and merging them would erase the only evidence the gap
+//     happened. (No chart draws that gap today — pkg/prom never inserts a null
+//     and AreaChart only breaks a path on one — but the timestamps that would
+//     let it are kept.)
+//
+// Non-finite values are never collapsed: NaN is unequal to itself, and two
+// equal infinities are a boundary worth keeping rather than a flat stretch.
+func collapseConstantRuns(points []prom.DataPoint) []prom.DataPoint {
+	if len(points) < 3 {
+		return points
+	}
+	kept := make([]prom.DataPoint, 0, len(points))
+	for i, p := range points {
+		if i == 0 || i == len(points)-1 {
+			kept = append(kept, p)
+			continue
+		}
+		prev, next := points[i-1], points[i+1]
+		flat := finite(prev.Value) && finite(p.Value) && finite(next.Value) &&
+			prev.Value == p.Value && p.Value == next.Value
+		even := p.Timestamp-prev.Timestamp == next.Timestamp-p.Timestamp
+		if flat && even {
+			continue
+		}
+		kept = append(kept, p)
+	}
+	return kept
+}
+
+func finite(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0)
 }
 
 // roundSignificant rounds v to the given number of significant digits,

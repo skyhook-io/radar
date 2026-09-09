@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 // metricsMatrixBody renders a one-series matrix with the given number of
@@ -37,17 +39,53 @@ func metricsMatrixBody(points int, value string) string {
 	return b.String()
 }
 
+// metricsMatrixBodyAt is metricsMatrixBody with a per-sample value, so a test
+// can choose whether its fixture is flat. A flat fixture now compresses to two
+// points, which is the right shape for the compression tests and the wrong one
+// for anything measuring point counts or serialized size.
+func metricsMatrixBodyAt(points int, valueAt func(i int) string) string {
+	var b strings.Builder
+	b.WriteString(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[`)
+	for i := 0; i < points; i++ {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, `[%d,"%s"]`, 1700000000+int64(i)*60, valueAt(i))
+	}
+	b.WriteString(`]}]}}`)
+	return b.String()
+}
+
+// metricsVaryingValue scales `base` by a per-sample factor so consecutive
+// samples differ within four significant digits and therefore survive both the
+// rounding and the constant-run compression. Walking a trailing digit is not
+// enough: rounding flattens movement below the reported precision, which is
+// the point of comparing after it.
+func metricsVaryingValue(base string) func(i int) string {
+	v, err := strconv.ParseFloat(base, 64)
+	if err != nil {
+		panic("metricsVaryingValue: " + base)
+	}
+	return func(i int) string {
+		return strconv.FormatFloat(v*(1+float64(i%97)/100), 'g', 17, 64)
+	}
+}
+
 // metricsMatrixForRequest answers a range query the way Prometheus does:
 // floor((end-start)/step)+1 samples at the requested step.
 func metricsMatrixForRequest(value string) func(params url.Values) string {
+	return metricsMatrixForRequestAt(func(int) string { return value })
+}
+
+func metricsMatrixForRequestAt(valueAt func(i int) string) func(params url.Values) string {
 	return func(params url.Values) string {
 		start, _ := strconv.ParseFloat(params.Get("start"), 64)
 		end, _ := strconv.ParseFloat(params.Get("end"), 64)
 		step, _ := strconv.ParseFloat(params.Get("step"), 64)
 		if step <= 0 || end <= start {
-			return metricsMatrixBody(1, value)
+			return metricsMatrixBodyAt(1, valueAt)
 		}
-		return metricsMatrixBody(int((end-start)/step)+1, value)
+		return metricsMatrixBodyAt(int((end-start)/step)+1, valueAt)
 	}
 }
 
@@ -127,7 +165,7 @@ func TestHandleDiagnoseMetricsCapturesThreeSeriesOverExactPodSet(t *testing.T) {
 	timeline.ResetStore()
 	t.Cleanup(timeline.ResetStore)
 	f := setupFakeProm(t)
-	f.rangeBodyFunc = metricsMatrixForRequest("-0.0000345678912345678")
+	f.rangeBodyFunc = metricsMatrixForRequestAt(metricsVaryingValue("-0.0000345678912345678"))
 	ctx := withClusterAdmin(t, "admin")
 	grantDiagnoseDeploymentRead(t, "admin")
 
@@ -257,7 +295,7 @@ func TestHandleDiagnoseMetricsCapsPodSetByName(t *testing.T) {
 	timeline.ResetStore()
 	t.Cleanup(timeline.ResetStore)
 	f := setupFakeProm(t)
-	f.rangeBodyFunc = metricsMatrixForRequest("123456789.123")
+	f.rangeBodyFunc = metricsMatrixForRequestAt(metricsVaryingValue("123456789.123"))
 	ctx := withClusterAdmin(t, "admin")
 	grantDiagnoseDeploymentRead(t, "admin")
 
@@ -407,7 +445,7 @@ func TestHandleDiagnoseMetricsDropsSeriesOnSizeBudget(t *testing.T) {
 	timeline.ResetStore()
 	t.Cleanup(timeline.ResetStore)
 	f := setupFakeProm(t)
-	f.rangeBody = metricsMatrixBody(600, "123456789.123")
+	f.rangeBody = metricsMatrixBodyAt(600, metricsVaryingValue("123456789.123"))
 	ctx := withClusterAdmin(t, "admin")
 	grantDiagnoseDeploymentRead(t, "admin")
 
@@ -562,5 +600,142 @@ func TestRoundSignificant(t *testing.T) {
 	}
 	if b, _ := json.Marshal(roundSignificant(123456789.123, 4)); string(b) != "123500000" {
 		t.Errorf("rounded value serializes as %s, want 123500000", b)
+	}
+}
+
+// A flat stretch is worth two points and a count, not sixty. What the field
+// costs should follow what it says, not how long the window is.
+func TestCollapseConstantRuns(t *testing.T) {
+	at := func(ts int64, v float64) prom.DataPoint { return prom.DataPoint{Timestamp: ts, Value: v} }
+	flat := func(n int, start int64, step int64, v float64) []prom.DataPoint {
+		out := make([]prom.DataPoint, 0, n)
+		for i := 0; i < n; i++ {
+			out = append(out, at(start+int64(i)*step, v))
+		}
+		return out
+	}
+
+	t.Run("a constant run keeps only its ends", func(t *testing.T) {
+		got := collapseConstantRuns(flat(56, 1000, 60, 512000))
+		want := []prom.DataPoint{at(1000, 512000), at(1000+55*60, 512000)}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("a step change keeps both boundaries", func(t *testing.T) {
+		in := append(flat(4, 0, 60, 1), flat(4, 240, 60, 2)...)
+		got := collapseConstantRuns(in)
+		want := []prom.DataPoint{at(0, 1), at(180, 1), at(240, 2), at(420, 2)}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("equal values across a gap are not one run", func(t *testing.T) {
+		// Prometheus returns nothing for an evaluation with no data, so these
+		// two stretches are not adjacent. Merging them would erase the only
+		// evidence the gap happened.
+		in := append(flat(5, 0, 60, 7), flat(5, 900, 60, 7)...)
+		got := collapseConstantRuns(in)
+		want := []prom.DataPoint{at(0, 7), at(240, 7), at(900, 7), at(1140, 7)}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("gap boundaries lost: got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("a varying series is untouched", func(t *testing.T) {
+		in := []prom.DataPoint{at(0, 1), at(60, 2), at(120, 3), at(180, 4)}
+		got := collapseConstantRuns(in)
+		if !reflect.DeepEqual(got, in) {
+			t.Fatalf("got %v, want %v", got, in)
+		}
+	})
+
+	t.Run("non-finite values never collapse", func(t *testing.T) {
+		// NaN is unequal to itself, but equal infinities would otherwise look
+		// like a flat stretch. Both serialize as null and mark a gap.
+		for _, v := range []float64{math.Inf(1), math.Inf(-1), math.NaN()} {
+			in := flat(5, 0, 60, v)
+			if got := collapseConstantRuns(in); len(got) != len(in) {
+				t.Fatalf("value %v: collapsed %d points to %d", v, len(in), len(got))
+			}
+		}
+	})
+
+	t.Run("short inputs pass through", func(t *testing.T) {
+		for _, n := range []int{0, 1, 2} {
+			in := flat(n, 0, 60, 3)
+			if got := collapseConstantRuns(in); len(got) != n {
+				t.Fatalf("%d points became %d", n, len(got))
+			}
+		}
+	})
+}
+
+// The compression has to pay for itself on the case that motivates it — a
+// workload whose pods report a flat line — and it must not cost the reader the
+// knowledge that the flat line was actually observed.
+func TestHandleDiagnoseMetricsCompressesFlatSeriesAndKeepsTheObservedCount(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	f := setupFakeProm(t)
+	f.rangeBodyFunc = metricsMatrixForRequest("512000")
+	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseDeploymentRead(t, "admin")
+
+	_, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
+	if m == nil {
+		t.Fatal("diagnose omitted metrics with Prometheus connected")
+	}
+	for _, s := range m.Series {
+		if len(s.Series) != 1 {
+			t.Fatalf("%s: %d series, want one", s.Category, len(s.Series))
+		}
+		if points := len(s.Series[0].DataPoints); points != 2 {
+			t.Fatalf("%s: a flat series kept %d points, want 2", s.Category, points)
+		}
+		if s.ObservedSamples < 50 {
+			t.Fatalf("%s: observedSamples = %d, want the count actually returned", s.Category, s.ObservedSamples)
+		}
+		for _, dp := range s.Series[0].DataPoints {
+			if dp.Value != 512000 {
+				t.Fatalf("%s: endpoint value %v, want the observed 512000", s.Category, dp.Value)
+			}
+		}
+	}
+	flat, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(flat) > 2*1024 {
+		t.Fatalf("a flat three-category field serialized to %d bytes, want it well under the %d byte sample budget", len(flat), diagnoseMetricsMaxBytes)
+	}
+}
+
+// Whether diagnose collects vitals at all is a deployment decision, so it has
+// to be switchable without the rest of the bundle noticing.
+func TestDiagnoseMetricsCanBeSwitchedOff(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	f := setupFakeProm(t)
+	f.rangeBodyFunc = metricsMatrixForRequest("512000")
+	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseDeploymentRead(t, "admin")
+
+	DiagnoseMetricsEnabled = false
+	t.Cleanup(func() { DiagnoseMetricsEnabled = true })
+
+	got, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
+	if m != nil {
+		t.Fatalf("vitals are off but diagnose returned a metrics field: %+v", m)
+	}
+	// Everything else the bundle carries is unaffected.
+	for _, key := range []string{"resource", "pods", "resourceContext"} {
+		if _, ok := got[key]; !ok {
+			t.Errorf("bundle lost %q when vitals were switched off", key)
+		}
 	}
 }
