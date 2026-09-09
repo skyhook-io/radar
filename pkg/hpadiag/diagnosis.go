@@ -116,6 +116,12 @@ func Analyze(hpa *autoscalingv2.HorizontalPodAutoscaler) *Diagnosis {
 	}
 
 	conditions := mapConditions(hpa.Status.Conditions)
+	// The controller has not caught up with the spec in front of us. An unset
+	// observedGeneration means the same thing only when the controller has
+	// written no conditions either: some controllers reconcile without ever
+	// setting the field, and a live HPA with real conditions is not stale.
+	stale := hpa.Generation > 0 &&
+		(observedGeneration < hpa.Generation && (observedGeneration > 0 || len(conditions) == 0))
 	if cond, ok := conditions[autoscalingv2.ScaledToZero]; ok && cond.Status == corev1.ConditionTrue && min == 0 && hpa.Status.DesiredReplicas == 0 {
 		d.addConditionReason(ReasonScaledToZero, cond, "HPA intentionally scaled the target to zero replicas")
 	}
@@ -136,6 +142,13 @@ func Analyze(hpa *autoscalingv2.HorizontalPodAutoscaler) *Diagnosis {
 		reason := strings.ToLower(cond.Reason)
 		message := strings.ToLower(cond.Message)
 		switch {
+		case stale:
+			// The condition was recorded against the previous spec. Raising
+			// maxReplicas from 5 to 10 would otherwise read as "capped at
+			// maxReplicas=10" and send someone to change a limit that is
+			// already changed, so the reason states the fact without the
+			// numbers it cannot vouch for.
+			d.addConditionReason(ReasonStaleStatus, cond, "HPA reported a scaling limit before the current spec was applied")
 		case isPinned(min, hpa.Spec.MaxReplicas) && (strings.Contains(reason, "toomany") || strings.Contains(reason, "toofew") || strings.Contains(message, "maximum") || strings.Contains(message, "minimum")):
 			d.addConditionReason(ReasonPinned, cond, fmt.Sprintf("HPA is pinned at %d replicas", hpa.Spec.MaxReplicas))
 		case strings.Contains(reason, "toomany") || strings.Contains(message, "maximum"):
@@ -147,11 +160,15 @@ func Analyze(hpa *autoscalingv2.HorizontalPodAutoscaler) *Diagnosis {
 		}
 	}
 
-	if hpa.Generation > 0 && observedGeneration > 0 && observedGeneration < hpa.Generation {
+	if stale {
+		detail := fmt.Sprintf("observed generation %d, current generation %d", observedGeneration, hpa.Generation)
+		if observedGeneration == 0 {
+			detail = fmt.Sprintf("the controller has recorded no status for generation %d", hpa.Generation)
+		}
 		d.Reasons = append(d.Reasons, Reason{
 			ID:      ReasonStaleStatus,
 			Message: "HPA status has not observed the latest spec generation yet",
-			Detail:  fmt.Sprintf("observed generation %d, current generation %d", observedGeneration, hpa.Generation),
+			Detail:  detail,
 		})
 	}
 

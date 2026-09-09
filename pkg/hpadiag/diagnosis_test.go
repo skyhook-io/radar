@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -228,5 +229,66 @@ func TestConditionReasonsLeadWithRadarPhrasing(t *testing.T) {
 	}
 	if got.Summary != "HPA wants fewer replicas but is held at minReplicas=2" {
 		t.Errorf("Summary = %q, want the controller's clamp explained", got.Summary)
+	}
+}
+
+// An HPA the controller has not reconciled has established nothing. Reporting
+// it as OK renders "Stable · 0/0 replicas" over a controller that has not run.
+func TestAnalyzeDoesNotCallAnUnreconciledHPAStable(t *testing.T) {
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Name: "fresh", Namespace: "default", Generation: 1},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			MaxReplicas:    5,
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "fresh"},
+		},
+	}
+	got := Analyze(hpa)
+	if got.State != StateStale {
+		t.Fatalf("state = %q, want %q; diagnosis=%+v", got.State, StateStale, got)
+	}
+
+	// The inverse: some controllers reconcile without ever setting
+	// observedGeneration. One that has written conditions has clearly run, and
+	// calling every such HPA stale would be noise on a healthy cluster.
+	reconciled := hpa.DeepCopy()
+	reconciled.Status.Conditions = []autoscalingv2.HorizontalPodAutoscalerCondition{
+		{Type: autoscalingv2.AbleToScale, Status: corev1.ConditionTrue, Reason: "ReadyForNewScale"},
+	}
+	reconciled.Status.CurrentReplicas = 3
+	reconciled.Status.DesiredReplicas = 3
+	if got := Analyze(reconciled); got.State == StateStale {
+		t.Fatalf("an HPA with live conditions must not be stale; diagnosis=%+v", got)
+	}
+}
+
+// A ScalingLimited condition observed against the previous spec must not be
+// read against the bounds in front of us: "capped at maxReplicas=10" from a
+// condition recorded when the cap was 5 sends someone to change a limit that
+// has already been changed.
+func TestAnalyzeDoesNotReadStaleLimitsAgainstNewBounds(t *testing.T) {
+	observedGeneration := int64(1)
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "default", Generation: 2},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			MaxReplicas:    10,
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "api"},
+		},
+		Status: autoscalingv2.HorizontalPodAutoscalerStatus{
+			ObservedGeneration: &observedGeneration,
+			CurrentReplicas:    5,
+			DesiredReplicas:    5,
+			Conditions: []autoscalingv2.HorizontalPodAutoscalerCondition{
+				{Type: autoscalingv2.ScalingLimited, Status: corev1.ConditionTrue, Reason: "TooManyReplicas", Message: "the desired replica count is more than the maximum replica count"},
+			},
+		},
+	}
+	got := Analyze(hpa)
+	for _, reason := range got.Reasons {
+		if strings.Contains(reason.Message, "maxReplicas=") {
+			t.Fatalf("a stale limit quoted the current bound: %q; diagnosis=%+v", reason.Message, got)
+		}
+	}
+	if got.State != StateStale {
+		t.Fatalf("state = %q, want %q; diagnosis=%+v", got.State, StateStale, got)
 	}
 }
