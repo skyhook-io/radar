@@ -496,7 +496,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		resp.Warnings = append(resp.Warnings, "Radar cannot list pods in this namespace, so pod logs, pod events and workload metrics are missing from this bundle.")
 	}
 	if podsCacheWarming {
-		resp.Warnings = append(resp.Warnings, "Radar is still loading this cluster's ReplicaSets, so pod logs, pod events and workload metrics are missing from this bundle. Retry in a moment.")
+		resp.Warnings = append(resp.Warnings, "Radar is still loading the caches this workload's pods are resolved through, so pod logs, pod events and workload metrics are missing from this bundle. Retry in a moment.")
 	}
 	capped, capStats := capMultiPodLogBundles(resp.LogsCurrent, resp.LogsPrevious)
 	resp.LogsCurrent = capped[0]

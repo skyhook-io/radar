@@ -170,17 +170,24 @@ func diagnoseWorkloadMetrics(ctx context.Context, group, resource, namespace, na
 		}
 	}
 	if scope.Selection.IsEmpty() {
-		if querier == nil {
-			// Prometheus is configured but not answering, so ownership history
-			// was never consulted — only the empty current-pod list was. For a
-			// workload scaled to zero or freshly replaced that is the source
-			// that would have had the answer, and omitting the field reads as
-			// "this workload has no metrics" rather than "Radar could not look".
+		// Ownership history is the source that answers for a workload scaled to
+		// zero or freshly replaced. If it was never consulted — Prometheus not
+		// answering — or it was consulted and failed, the empty current-pod list
+		// is all that is left, and omitting the field reads as "this workload
+		// has no metrics" rather than "Radar could not look".
+		var why string
+		switch {
+		case querier == nil:
+			why = fmt.Sprintf("Prometheus is %s", avail.State)
+		case scope.ProbeErr != nil:
+			why = fmt.Sprintf("the ownership history read failed: %v", scope.ProbeErr)
+		}
+		if why != "" {
 			return &diagnoseMetrics{
 				Window: diagnoseMetricsWindow{Start: now.Add(-since).UTC().Format(time.RFC3339), End: now.UTC().Format(time.RFC3339), Step: "0s"},
 				Pods:   len(pods),
 				Series: []diagnoseMetricSeries{},
-				Error:  boundDiagnoseMetricsError(fmt.Sprintf("metrics omitted: Prometheus is %s, so the workload's pods could not be established from ownership history", avail.State)),
+				Error:  boundDiagnoseMetricsError(fmt.Sprintf("metrics omitted: %s, so the workload's pods could not be established from ownership history", why)),
 			}
 		}
 		// Both sources were consulted and neither named a pod.
