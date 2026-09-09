@@ -14,7 +14,6 @@ import {
   Loader2,
   CheckCircle2,
   AlertTriangle,
-  Info,
   Copy,
   Check,
   ShieldCheck,
@@ -2087,11 +2086,19 @@ export function AssessmentSources({
   resolution,
   investigationCase,
   readOnly = false,
+  renderedGroupIds,
   onViewSource,
 }: {
   resolution?: InvestigationRootCauseEvidenceResolution;
   investigationCase?: InvestigationCaseResolution;
   readOnly?: boolean;
+  /**
+   * Groups the Evidence pane actually rendered. A card-placed note whose card
+   * was withheld is shown here instead of being counted as visible elsewhere;
+   * without this the note renders in neither place. Omitted by hosts that do
+   * not know, which keeps the original counting.
+   */
+  renderedGroupIds?: ReadonlySet<string>;
   onViewSource: (sourceId: string) => void;
 }) {
   const rows = assessmentSourceRows(resolution, investigationCase);
@@ -2106,11 +2113,14 @@ export function AssessmentSources({
       </h4>
       <ul className="mt-1 divide-y divide-theme-border/50">
         {rows.map(({ source, items }) => {
-          const onCards = items.filter(
-            (item) => item.claim && item.placement !== "source",
-          ).length;
+          const shownOnCard = (item: InvestigationCaseItem) =>
+            !!item.claim &&
+            item.placement !== "source" &&
+            (!renderedGroupIds ||
+              (!!item.groupId && renderedGroupIds.has(item.groupId)));
+          const onCards = items.filter(shownOnCard).length;
           const notes = items.filter(
-            (item) => item.claim && (readOnly || item.placement === "source"),
+            (item) => item.claim && (readOnly || !shownOnCard(item)),
           );
           return (
             <li key={source.id} className="py-1.5">
@@ -2670,36 +2680,30 @@ function AllClearCard({
     <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
       <div
         className={`rounded-lg border p-3 ${
-          unexplainedConflict
+          unexplainedConflict || explained
             ? "border-amber-500/40 bg-amber-500/5"
-            : explained
-              ? "border-accent/30 bg-accent/5"
-              : coverageLimited
-                ? "border-amber-500/30 bg-amber-500/5"
-                : "border-emerald-500/30 bg-emerald-500/5"
+            : coverageLimited
+              ? "border-amber-500/30 bg-amber-500/5"
+              : "border-emerald-500/30 bg-emerald-500/5"
         }`}
       >
         <div className="mb-1 flex items-center justify-between gap-2">
           <div
             className={`flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide ${
-              unexplainedConflict || (coverageLimited && !explained)
+              unexplainedConflict || explained || coverageLimited
                 ? "text-amber-500"
-                : explained
-                  ? "text-accent-text"
-                  : "text-emerald-500"
+                : "text-emerald-500"
             }`}
           >
-            {unexplainedConflict || (coverageLimited && !explained) ? (
+            {unexplainedConflict || explained || coverageLimited ? (
               <AlertTriangle className="h-3.5 w-3.5" />
-            ) : explained ? (
-              <Info className="h-3.5 w-3.5" />
             ) : (
               <CheckCircle2 className="h-3.5 w-3.5" />
             )}
             {unexplainedConflict
               ? "Assessment conflicts with captured evidence"
               : explained
-                ? "No active problem found; warning-level evidence explained"
+                ? "Agent reports no active problem; adverse evidence remains"
                 : coverageLimited
                   ? "No problem identified in available evidence"
                   : "No problem found in checked evidence"}
@@ -2717,9 +2721,13 @@ function AllClearCard({
           </p>
         ) : explained ? (
           <p className="mt-2 text-xs text-theme-text-secondary">
-            Radar recorded warning-level evidence and the agent explained it;
-            see the note on {joinTitles(evidenceConflictExplainedBy!)}. The
-            evidence stays in the list below.
+            Radar captured evidence of an active problem. The agent explains its
+            interpretation in the note on{" "}
+            {joinTitles(evidenceConflictExplainedBy!)}; the evidence itself
+            stays in the list below, unchanged.
+            {coverageLimited
+              ? " Evidence coverage is also limited — review the limitations in Evidence."
+              : ""}
           </p>
         ) : coverageLimited ? (
           <p className="mt-2 text-xs text-theme-text-secondary">

@@ -310,7 +310,8 @@ describe("investigation evidence projection stability", () => {
       groupId: string,
       role: string,
       placement: "card" | "revision" | "source" = "card",
-    ) => ({ role, placement, groupId });
+      claim = "the agent's reading of this card",
+    ) => ({ role, placement, claim, groupId });
 
     expect(investigationHealthConflictExplainedBy(projection, undefined)).toBe(
       null,
@@ -332,12 +333,36 @@ describe("investigation evidence projection stability", () => {
         note("g2", "rules_out", "source"),
       ]),
     ).toBe(null);
+    // A note pinned to a superseded read addressed the card as it was then,
+    // not the card the banner is qualifying now.
     expect(
       investigationHealthConflictExplainedBy(projection, [
         note("g1", "demoted"),
         note("g2", "rules_out", "revision"),
       ]),
+    ).toBe(null);
+    // An empty claim renders nothing, so the banner would be pointing at a
+    // note the reader cannot find.
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "demoted"),
+        note("g2", "rules_out", "card", "   "),
+      ]),
+    ).toBe(null);
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "demoted"),
+        note("g2", "rules_out"),
+      ]),
     ).toEqual(["CrashLoopBackOff", "OOMKilled"]);
+    // The agent contradicting itself on the same card is not an explanation.
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "demoted"),
+        note("g2", "rules_out"),
+        note("g2", "cause"),
+      ]),
+    ).toBe(null);
     expect(
       investigationHealthConflictExplainedBy({ groups: [] }, [
         note("g1", "demoted"),

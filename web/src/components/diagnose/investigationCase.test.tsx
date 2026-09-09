@@ -1076,6 +1076,39 @@ describe("carrying earlier assessments' card notes", () => {
     expect(mergeInvestigationCases(live, [])).toBe(live);
     expect(mergeInvestigationCases(undefined, [])).toBeUndefined();
   });
+
+  it("carries every note the winning assessment left on a card, not just the first", () => {
+    // A card note and a note pinned to a superseded read are two readings of
+    // one group by the same assessment. Taking coverage per item dropped the
+    // second, so a visible Cause note could vanish behind a revision note.
+    const live = {
+      items: [item(0, "other", "card", "context")],
+      ruledOut: [],
+    } as unknown as InvestigationCaseResolution;
+    const winner = {
+      items: [
+        item(1, "logs", "revision", "context"),
+        item(2, "logs", "card", "cause"),
+      ],
+      ruledOut: [],
+    } as unknown as InvestigationCaseResolution;
+    const older = {
+      items: [item(3, "logs", "card", "demoted")],
+      ruledOut: [],
+    } as unknown as InvestigationCaseResolution;
+    const merged = mergeInvestigationCases(live, [winner, older]);
+    expect(
+      merged?.items.map((entry) => [
+        entry.groupId,
+        entry.placement,
+        entry.role,
+      ]),
+    ).toEqual([
+      ["other", "card", "context"],
+      ["logs", "revision", "context"],
+      ["logs", "card", "cause"],
+    ]);
+  });
 });
 
 describe("agent case robustness", () => {

@@ -2705,6 +2705,27 @@ describe("cited broader cards and coverage rows", () => {
       "TargetDown firing",
     ]);
     expect(cited.hiddenBroader).toBe(1);
+
+    // A later turn's citations widen the selection; they never take one away.
+    // Replacing the assessment's resolution with a follow-up's used to push
+    // the assessment's own cited evidence back into the withheld count.
+    const withheld = projection.groups.find(
+      (group) => !cited.collectionByGroup.has(group.id),
+    );
+    expect(withheld).toBeDefined();
+    const widened = partitionInvestigationEvidence(
+      projection.groups,
+      resolution,
+      undefined,
+      [withheld!.id],
+    );
+    // Everything the assessment placed is still placed. (A broader card also
+    // needs a citing source to be promoted, so the extra id alone does not
+    // pull this one into main — it must never remove one either.)
+    for (const group of cited.main) {
+      expect(widened.main).toContain(group);
+    }
+    expect(widened.hiddenBroader).toBeLessThanOrEqual(cited.hiddenBroader);
     const html = render(projection, false, undefined, resolution);
     expect(html).toContain("6/12 pods Unschedulable");
     expect(html).toContain(

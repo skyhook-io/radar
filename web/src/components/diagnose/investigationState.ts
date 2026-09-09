@@ -397,6 +397,7 @@ export function investigationHealthConflictExplainedBy(
     | readonly {
         role: string;
         placement: "card" | "revision" | "source";
+        claim: string;
         groupId?: string;
       }[]
     | undefined,
@@ -405,10 +406,25 @@ export function investigationHealthConflictExplainedBy(
   if (conflicting.length === 0 || !caseItems) return null;
   const titles: string[] = [];
   for (const group of conflicting) {
-    const explained = caseItems.some(
+    const onGroup = caseItems.filter((item) => item.groupId === group.id);
+    // The agent contradicting itself is not an explanation. If it also called
+    // this card a cause or a symptom, it is asserting the problem, and the
+    // reader must see the unqualified warning.
+    if (
+      onGroup.some((item) => item.role === "cause" || item.role === "symptom")
+    )
+      return null;
+    const explained = onGroup.some(
       (item) =>
-        item.placement !== "source" &&
-        item.groupId === group.id &&
+        // Only a note the reader can actually see on the card in front of
+        // them addresses it. A `source` item renders away from the card and a
+        // `revision` item addressed a superseded read of it, so neither
+        // speaks to the state the banner is qualifying; an empty claim shows
+        // nothing at all, and the banner would be citing a note that is not
+        // there. None of this judges whether the agent is right — that is why
+        // the banner stays a warning either way.
+        item.placement === "card" &&
+        item.claim.trim() !== "" &&
         (item.role === "demoted" || item.role === "rules_out"),
     );
     if (!explained) return null;

@@ -69,12 +69,18 @@ export function mergeInvestigationCases(
   );
   const carried: InvestigationCaseItem[] = [];
   for (const resolution of earlier) {
+    // The newest assessment that spoke about a group wins it outright, and it
+    // wins with everything it said: a card note and a pinned revision note are
+    // two readings of one group, not rivals. Coverage is therefore taken after
+    // the whole resolution, not as each of its items is carried.
+    const takenHere = new Set<string>();
     for (const item of resolution?.items ?? []) {
       if (item.placement === "source" || !item.groupId) continue;
       if (covered.has(item.groupId)) continue;
-      covered.add(item.groupId);
+      takenHere.add(item.groupId);
       carried.push(item);
     }
+    for (const groupId of takenHere) covered.add(groupId);
   }
   if (carried.length === 0) return live;
   return { items: [...liveItems, ...carried], ruledOut: live?.ruledOut ?? [] };

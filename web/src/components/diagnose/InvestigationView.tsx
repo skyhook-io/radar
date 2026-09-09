@@ -1003,7 +1003,15 @@ export function InvestigationView({
     currentAssessmentIdx,
   );
   const liveCaseIsCurrentAssessment = liveCaseTurnIdx === currentAssessmentIdx;
-  const paneResolution = useMemo(() => {
+  // The qualification banner and the "Used for assessment" markers describe the
+  // assessment on screen, so they always read its own resolution. A later turn's
+  // citations only widen the selection (below): replacing the resolution would
+  // drop the assessment's qualification and push its cited evidence back into
+  // the withheld set.
+  const paneResolution = rootCauseEvidenceResolution;
+  // The live turn's own resolution stays available for the live turn's own
+  // receipt: its sources are its, not the assessment's.
+  const liveTurnResolution = useMemo(() => {
     if (liveCaseIsCurrentAssessment) return rootCauseEvidenceResolution;
     const diagnosis = turns[liveCaseTurnIdx]?.diagnosis;
     return diagnosis?.rootCause
@@ -1020,6 +1028,13 @@ export function InvestigationView({
     liveCaseTurnIdx,
     projection,
   ]);
+  const followUpSelectedGroupIds = useMemo(() => {
+    if (liveCaseIsCurrentAssessment) return undefined;
+    if (liveTurnResolution?.status !== "linked") return undefined;
+    return liveTurnResolution.links.flatMap((link) =>
+      link.originalGroupId ? [link.originalGroupId] : [],
+    );
+  }, [liveCaseIsCurrentAssessment, liveTurnResolution]);
   const paneCase = useMemo(() => {
     const live = liveCaseIsCurrentAssessment
       ? investigationCase
@@ -1049,9 +1064,10 @@ export function InvestigationView({
           projection.groups,
           paneResolution,
           paneCase,
+          followUpSelectedGroupIds,
         ).collectionByGroup.keys(),
       ),
-    [projection.groups, paneResolution, paneCase],
+    [projection.groups, paneResolution, paneCase, followUpSelectedGroupIds],
   );
   const evidenceStepIdsByTurn = useMemo(
     () =>
@@ -1349,16 +1365,32 @@ export function InvestigationView({
   const currentAssessmentEvidenceConflict =
     currentAssessment?.diagnosis?.healthy === true &&
     investigationEvidenceConflictsWithHealthy(projection);
-  const currentAssessmentEvidenceConflictExplainedBy = useMemo(
-    () =>
-      currentAssessmentEvidenceConflict
-        ? (investigationHealthConflictExplainedBy(
-            projection,
-            paneCase?.items,
-          ) ?? undefined)
-        : undefined,
-    [currentAssessmentEvidenceConflict, projection, paneCase],
-  );
+  // The banner qualifies THIS assessment, so only this assessment's own case
+  // may reframe it. `paneCase` also carries a later answer's items and notes
+  // inherited from superseded assessments; neither of those spoke about this
+  // verdict, and letting them soften it would let an unrelated follow-up
+  // retire a warning the reader still needs.
+  const currentAssessmentEvidenceConflictExplainedBy = useMemo(() => {
+    if (!currentAssessmentEvidenceConflict) return undefined;
+    // Two conditions, and both are required. The note must belong to THIS
+    // assessment — a later answer or a superseded assessment did not speak
+    // about this verdict. And it must survive into the case the pane actually
+    // renders: the merge lets a later turn take over a group, and a banner
+    // that points at a note the reader cannot find is worse than no banner.
+    const rendered = new Set(paneCase?.items ?? []);
+    const qualifying = (investigationCase?.items ?? []).filter((item) =>
+      rendered.has(item),
+    );
+    return (
+      investigationHealthConflictExplainedBy(projection, qualifying) ??
+      undefined
+    );
+  }, [
+    currentAssessmentEvidenceConflict,
+    projection,
+    investigationCase,
+    paneCase,
+  ]);
   const hasEvidenceCollectedAfterAssessment =
     currentAssessmentIdx >= 0 &&
     projection.sources.some(
@@ -1813,11 +1845,12 @@ export function InvestigationView({
                                   );
                             const answerResolution =
                               index === liveCaseTurnIdx
-                                ? paneResolution
+                                ? liveTurnResolution
                                 : undefined;
                             return answerCase?.items.length ||
                               answerResolution?.links.length ? (
                               <AssessmentSources
+                                renderedGroupIds={visibleEvidenceGroupIds}
                                 resolution={answerResolution}
                                 investigationCase={answerCase}
                                 readOnly={index !== liveCaseTurnIdx}
@@ -2066,6 +2099,7 @@ export function InvestigationView({
                           rootCauseEvidenceResolution?.links.length ||
                           investigationCase?.items.length ? (
                             <AssessmentSources
+                              renderedGroupIds={visibleEvidenceGroupIds}
                               resolution={rootCauseEvidenceResolution}
                               investigationCase={investigationCase}
                               readOnly={!liveCaseIsCurrentAssessment}
@@ -2189,6 +2223,7 @@ export function InvestigationView({
                           return resolution.links.length ||
                             earlierCase.items.length ? (
                             <AssessmentSources
+                              renderedGroupIds={visibleEvidenceGroupIds}
                               resolution={resolution}
                               investigationCase={earlierCase}
                               readOnly
@@ -2202,6 +2237,7 @@ export function InvestigationView({
                   <InvestigationEvidencePane
                     projection={projection}
                     rootCauseEvidence={paneResolution}
+                    alsoSelectedGroupIds={followUpSelectedGroupIds}
                     investigationCase={paneCase}
                     collecting={
                       explanationRequest?.status !== "running" &&

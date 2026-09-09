@@ -199,6 +199,12 @@ export function partitionInvestigationEvidence(
   groups: InvestigationEvidenceGroup[],
   resolution?: InvestigationRootCauseEvidenceResolution,
   investigationCase?: InvestigationCaseResolution,
+  /**
+   * Groups a later turn cited. A follow-up adds to what the displayed
+   * assessment selected; it must never take a selection away, or the
+   * assessment's own cited evidence falls back into the withheld set.
+   */
+  alsoSelected?: readonly string[],
 ) {
   // Selection: legacy root-cause links plus every placed agent item, of any
   // role (placement promotes a group into main the way a citation does; the
@@ -210,6 +216,7 @@ export function partitionInvestigationEvidence(
       ? resolution.links.map((link) => link.originalGroupId)
       : []),
     ...caseByGroup.keys(),
+    ...(alsoSelected ?? []),
   ]);
   const collections: Record<EvidenceCollection, InvestigationEvidenceGroup[]> =
     {
@@ -360,6 +367,7 @@ export function investigationEvidenceRevealCollection(
 export function InvestigationEvidencePane({
   projection,
   rootCauseEvidence,
+  alsoSelectedGroupIds,
   investigationCase,
   collecting,
   animateGroupIds,
@@ -374,6 +382,8 @@ export function InvestigationEvidencePane({
   projection: InvestigationEvidenceProjection;
   /** Server-validated links for the current root cause; absent without one. */
   rootCauseEvidence?: InvestigationRootCauseEvidenceResolution;
+  /** Groups a later turn cited; they add to the assessment's selection. */
+  alsoSelectedGroupIds?: readonly string[];
   /** The current assessment's agent case, resolved against this projection. */
   investigationCase?: InvestigationCaseResolution;
   collecting: boolean;
@@ -415,6 +425,7 @@ export function InvestigationEvidencePane({
     projection.groups,
     rootCauseEvidence,
     investigationCase,
+    alsoSelectedGroupIds,
   );
   const hasCurrentEvidence =
     partition.main.length + partition.workload.length > 0;
