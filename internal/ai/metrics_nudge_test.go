@@ -54,11 +54,31 @@ func TestTurnPrompt_MetricsNudgeOnlyOnReadOnlyTurnsWhenConnected(t *testing.T) {
 		t.Fatalf("an apply turn must not be sent to gather metrics:\n%s", p)
 	}
 
-	withCredentials := base
-	withCredentials.Metrics = MetricsAvailability{Connected: true, Address: "https://admin:s3cret@prom.example.com:9090"}
-	if p := turnPrompt(withCredentials); strings.Contains(p, "s3cret") || strings.Contains(p, "admin") ||
-		!strings.Contains(p, "https://prom.example.com:9090") {
-		t.Fatalf("credentials in a configured URL reached the prompt:\n%s", p)
+	// The prompt is model-visible and leaves the machine, so every place a
+	// configured URL can carry a credential has to be gone: userinfo, the
+	// query string an auth proxy commonly uses, and the fragment.
+	for _, tc := range []struct {
+		name, address, secret, want string
+	}{
+		{"userinfo", "https://admin:s3cret@prom.example.com:9090", "s3cret", "https://prom.example.com:9090"},
+		{"query", "https://prom.example.com/api?token=s3cret", "s3cret", "https://prom.example.com/api"},
+		{"fragment", "https://prom.example.com/api#s3cret", "s3cret", "https://prom.example.com/api"},
+		{"all three", "https://admin:p@prom.example.com/api?token=s3cret#f", "s3cret", "https://prom.example.com/api"},
+	} {
+		withCredentials := base
+		withCredentials.Metrics = MetricsAvailability{Connected: true, Address: tc.address}
+		p := turnPrompt(withCredentials)
+		if strings.Contains(p, tc.secret) {
+			t.Fatalf("%s: the secret reached the prompt:\n%s", tc.name, p)
+		}
+		if !strings.Contains(p, tc.want) {
+			t.Fatalf("%s: prompt lost the address %q:\n%s", tc.name, tc.want, p)
+		}
+	}
+	withUser := base
+	withUser.Metrics = MetricsAvailability{Connected: true, Address: "https://admin:s3cret@prom.example.com:9090"}
+	if p := turnPrompt(withUser); strings.Contains(p, "admin") {
+		t.Fatalf("the username reached the prompt:\n%s", p)
 	}
 }
 

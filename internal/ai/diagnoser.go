@@ -115,14 +115,24 @@ func metricsNudge(m MetricsAvailability) string {
 	return fmt.Sprintf("Prometheus is connected at %s; for resource, restart, throttling or latency questions run one `query_prometheus` range query over the failure window and cite it.", promptSafeAddress(m.Address))
 }
 
-// promptSafeAddress drops any credentials embedded in a configured URL: the
-// prompt is model-visible and the agent only needs to know where the backend is.
+// promptSafeAddress reduces a configured URL to where the backend is: scheme,
+// host and path. The prompt is model-visible and leaves the machine, and a
+// Prometheus behind an auth proxy is commonly configured with the credential
+// in the query string (`?token=…`) rather than in userinfo, so stripping
+// userinfo alone still discloses it. The fragment goes for the same reason.
 func promptSafeAddress(address string) string {
 	u, err := url.Parse(address)
-	if err != nil || u.User == nil {
+	if err != nil {
+		return address
+	}
+	if u.User == nil && u.RawQuery == "" && u.Fragment == "" {
 		return address
 	}
 	u.User = nil
+	u.RawQuery = ""
+	u.ForceQuery = false
+	u.Fragment = ""
+	u.RawFragment = ""
 	return u.String()
 }
 
