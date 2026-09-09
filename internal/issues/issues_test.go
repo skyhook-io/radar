@@ -2852,6 +2852,24 @@ func TestAPIServiceHPA_MissingRequestNotAttributed(t *testing.T) {
 	}
 }
 
+func TestAPIServiceHPA_MissingRequestNotAttributedWhenRadarLeadsTheReason(t *testing.T) {
+	// The same case as above in the shape the workload detector now produces:
+	// Radar's reading of the condition leads the message and the controller's
+	// own sentence no longer appears in it. The guard has to recognise this
+	// spelling too, or a workload whose pods lack resource requests gets blamed
+	// on a metrics API outage.
+	apisvc := Issue{Kind: "APIService", Group: "apiregistration.k8s.io", Name: "v1beta1.metrics.k8s.io", Category: issuesapi.CategoryAPIServiceUnavailable, Severity: SeverityCritical, Reason: "FailedDiscoveryCheck"}
+	noReq := Issue{ID: "hpa-r2", Kind: "HorizontalPodAutoscaler", Namespace: "prod", Name: "web", Category: issuesapi.CategoryHPALimitedOrFailed, Severity: SeverityWarning,
+		Reason:  "FailedGetResourceMetric: HPA controller cannot read scaling metrics",
+		Message: "HPA controller cannot read scaling metrics",
+		Cause:   "Target pods do not declare cpu resource requests, so the HPA cannot compute utilization."}
+	p := &fakeProvider{}
+	out := enrichDiagnosticContext([]Issue{apisvc}, []Issue{apisvc, noReq}, nil, p)
+	if out[0].DiagnosticContext != nil {
+		t.Fatalf("a missing-request HPA failure must not be attributed to the metrics API, got %+v", out[0].DiagnosticContext)
+	}
+}
+
 func TestAPIServiceHPA_ContainerResourceMetric(t *testing.T) {
 	// ContainerResource HPA metrics fail with FailedGetContainerResourceMetric and
 	// are also served by metrics.k8s.io — they must link under the resource family.

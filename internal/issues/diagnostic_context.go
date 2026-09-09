@@ -791,8 +791,14 @@ func hpaBlockedOnMetricFamily(i Issue, family string) bool {
 	if i.Kind != "HorizontalPodAutoscaler" || i.Category != issuesapi.CategoryHPALimitedOrFailed {
 		return false
 	}
-	text := strings.ToLower(i.Reason + " " + i.Message)
-	if strings.Contains(text, "missing request") {
+	// Two spellings of the same fact, because two producers write it. The
+	// controller says "missing request for cpu"; Radar's own reading of that
+	// condition says the pods "do not declare ... resource requests" and lands
+	// in Cause. Matching only the controller's wording missed the case as soon
+	// as Radar started leading with its own.
+	text := strings.ToLower(i.Reason + " " + i.Message + " " + i.Cause)
+	if strings.Contains(text, "missing request") ||
+		strings.Contains(text, "resource requests") {
 		return false // pod lacks resource requests — not an API-server outage
 	}
 	switch family {
