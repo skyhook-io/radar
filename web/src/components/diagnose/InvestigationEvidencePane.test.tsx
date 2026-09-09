@@ -2611,7 +2611,9 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
         }),
       ),
     );
-    expect(withChanges).toContain("No changes recorded in this window.");
+    expect(withChanges).toContain(
+      "None of the changes Radar read fall in this window.",
+    );
 
     // The same chart with no change lookup in the turn must stay silent: an
     // empty marker list there means nobody looked, not that nothing happened.
@@ -2645,7 +2647,9 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
         }),
       ),
     );
-    expect(withoutChanges).not.toContain("No changes recorded in this window.");
+    expect(withoutChanges).not.toContain(
+      "None of the changes Radar read fall in this window.",
+    );
   });
 
   it("shows a workload metrics limitation for a reported producer error", () => {
