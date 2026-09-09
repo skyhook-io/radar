@@ -190,9 +190,13 @@ export function partitionInvestigationEvidence(
           )
         : [];
       if (!selected.has(group.id) || !focused || sourceGroups.length !== 1) {
-        if (!group.historical) hiddenBroader += 1;
-        if (group.latest.data.type === "metrics" && !group.historical)
-          hiddenMetrics += 1;
+        // The two counts head separate lines in the pane, so they have to be
+        // disjoint: a withheld chart announced by both would read as two
+        // withheld results.
+        if (!group.historical) {
+          if (group.latest.data.type === "metrics") hiddenMetrics += 1;
+          else hiddenBroader += 1;
+        }
         continue;
       }
     }

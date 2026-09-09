@@ -2881,6 +2881,18 @@ describe("InvestigationEvidencePane metrics cards", () => {
     expect(html).not.toContain("metric result");
   });
 
+  it("counts a withheld chart once, not in both lines", () => {
+    // The pane heads two separate lines with these counts — "results about
+    // other resources" and "broader metric results" — so a chart counted in
+    // both announces one withheld result as two, and the numbers stop summing.
+    const projection = project(
+      tool("prom", "query_prometheus", rangeResult([])),
+    );
+    const partition = partitionInvestigationEvidence(projection.groups);
+    expect(partition.hiddenMetrics).toBe(1);
+    expect(partition.hiddenBroader).toBe(0);
+  });
+
   it("withholds an uncited broader chart and says so", () => {
     const projection = project(
       tool("prom", "query_prometheus", rangeResult([])),
