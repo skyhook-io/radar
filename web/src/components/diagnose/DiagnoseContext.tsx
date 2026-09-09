@@ -16,6 +16,12 @@ import {
   type SetStateAction,
 } from "react";
 import {
+  BrowserRouter,
+  useInRouterContext,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
+import {
   fetchAgents,
   getRun,
   listRuns,
@@ -86,8 +92,12 @@ interface DiagnoseCtx {
   openInvestigation: (t: Target) => void;
   openRun: (id: string) => void;
   openHome: () => void;
+  openWorkspace: () => void;
+  restoreWorkspace: () => void;
+  canRestoreWorkspace: boolean;
   goHome: () => void;
   close: () => void;
+  dismissForNavigation: () => void;
   approveConsent: () => void;
   cancelConsent: () => void;
   refreshRuns: () => void;
@@ -102,6 +112,7 @@ interface DiagnoseCtx {
 interface DiagnoseLayoutCtx {
   open: boolean;
   close: () => void;
+  dismissForNavigation: () => void;
   contentGutter: number; // px right-gutter for the content area when docked (0 = overlay/closed)
   maximized: boolean;
   setMaximized: Dispatch<SetStateAction<boolean>>;
@@ -183,39 +194,100 @@ function writeStored(key: string, value: string) {
   }
 }
 
-function runIDFromLocation(browserURLState: boolean): string | null {
-  if (!diagnoseURLStateEnabled(browserURLState)) return null;
+const WORKSPACE_RETURN_STATE = "investigationWorkspaceReturn";
+const WORKSPACE_RETURN_HISTORY_STEPS_STATE = "investigationReturnHistorySteps";
+const WORKSPACE_RESTORE_HISTORY_STEPS_STATE = "investigationRestoreHistorySteps";
+const WORKSPACE_PREFERRED_RUN_STATE = "preferredInvestigationRunID";
+const INVALID_WORKSPACE_RUN_ID = "__invalid_workspace_run__";
+
+function runIDFromSearch(search: string): string | null {
   try {
-    return new URLSearchParams(window.location.search).get("ai-run");
+    return new URLSearchParams(search).get("ai-run");
   } catch {
     return null;
   }
 }
 
-function writeRunIDToLocation(
-  id: string | null,
-  push: boolean,
-  browserURLState: boolean,
-) {
-  if (!diagnoseURLStateEnabled(browserURLState)) return;
+export function workspaceRunIDFromPath(pathname: string): string | null {
+  const match = pathname.match(/^\/investigations\/([^/]+)\/?$/);
+  if (!match) return null;
   try {
-    const url = new URL(window.location.href);
-    if (id) url.searchParams.set("ai-run", id);
-    else url.searchParams.delete("ai-run");
-    window.history[push ? "pushState" : "replaceState"](
-      window.history.state,
-      "",
-      `${url.pathname}${url.search}${url.hash}`,
-    );
-    // History API writes do not notify BrowserRouter. Replaying the new state as
-    // popstate keeps every later navigate/setSearchParams call on the same live
-    // query string instead of letting a stale router snapshot erase ai-run.
-    window.dispatchEvent(
-      new PopStateEvent("popstate", { state: window.history.state }),
-    );
+    const id = decodeURIComponent(match[1]);
+    return id && !id.includes("/") ? id : null;
   } catch {
-    /* URL APIs unavailable — panel state still works for this session */
+    return null;
   }
+}
+
+export function isInvestigationWorkspacePath(pathname: string): boolean {
+  return /^\/investigations(?:\/.*)?$/.test(pathname);
+}
+
+function workspacePath(runID: string | null): string {
+  return runID
+    ? `/investigations/${encodeURIComponent(runID)}`
+    : "/investigations";
+}
+
+export function investigationWorkspaceSearch(search: string): string {
+  const current = new URLSearchParams(search);
+  const next = new URLSearchParams();
+  const org = current.get("org");
+  if (org) next.set("org", org);
+  const namespaces = current.get("namespaces");
+  if (namespaces) next.set("namespaces", namespaces);
+  const value = next.toString();
+  return value ? `?${value}` : "";
+}
+
+function safeWorkspaceReturn(state: unknown): string | null {
+  if (!state || typeof state !== "object") return null;
+  const value = (state as Record<string, unknown>)[WORKSPACE_RETURN_STATE];
+  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//")
+    ? value
+    : null;
+}
+
+function preferredWorkspaceRunID(state: unknown): string | null {
+  if (!state || typeof state !== "object") return null;
+  const value = (state as Record<string, unknown>)[WORKSPACE_PREFERRED_RUN_STATE];
+  return typeof value === "string" && value.length > 0 && !value.includes("/")
+    ? value
+    : null;
+}
+
+export function investigationWorkspaceNavigationState(
+  preferredRunID?: string | null,
+  options?: {
+    returnPath?: string | null;
+    drawerOrigin?: boolean;
+    closeHistorySteps?: number;
+  },
+): Record<string, string> | undefined {
+  const state: Record<string, string> = {};
+  if (preferredRunID) state[WORKSPACE_PREFERRED_RUN_STATE] = preferredRunID;
+  if (options?.returnPath) state[WORKSPACE_RETURN_STATE] = options.returnPath;
+  if (options?.drawerOrigin) state[WORKSPACE_RESTORE_HISTORY_STEPS_STATE] = "1";
+  if (options?.closeHistorySteps && options.closeHistorySteps > 0) {
+    state[WORKSPACE_RETURN_HISTORY_STEPS_STATE] = String(options.closeHistorySteps);
+  }
+  return Object.keys(state).length > 0 ? state : undefined;
+}
+
+function workspaceReturnHistorySteps(state: unknown): number | null {
+  if (!state || typeof state !== "object") return null;
+  const raw = (state as Record<string, unknown>)[WORKSPACE_RETURN_HISTORY_STEPS_STATE];
+  if (typeof raw !== "string" || !/^\d+$/.test(raw)) return null;
+  const steps = Number(raw);
+  return steps > 0 ? steps : null;
+}
+
+function workspaceRestoreHistorySteps(state: unknown): number | null {
+  if (!state || typeof state !== "object") return null;
+  const raw = (state as Record<string, unknown>)[WORKSPACE_RESTORE_HISTORY_STEPS_STATE];
+  if (typeof raw !== "string" || !/^\d+$/.test(raw)) return null;
+  const steps = Number(raw);
+  return steps > 0 ? steps : null;
 }
 
 // Fleet pages host the panel against a cluster-scoped API while remaining on a
@@ -228,13 +300,25 @@ function diagnoseURLStateEnabled(browserURLState: boolean): boolean {
   return !clusterScopedAPI || /^\/c\/[^/]+/.test(window.location.pathname);
 }
 
-export function DiagnoseProvider({
-  children,
-  browserURLState = true,
-}: {
+interface DiagnoseProviderProps {
   children: ReactNode;
   browserURLState?: boolean;
-}) {
+  forceRouterURLState?: boolean;
+  onFocusedRun?: (runID: string) => void;
+}
+
+function RoutedDiagnoseProvider({
+  children,
+  browserURLState = true,
+  forceRouterURLState = false,
+  onFocusedRun,
+}: DiagnoseProviderProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const locationRef = useRef(location);
+  useEffect(() => {
+    locationRef.current = location;
+  }, [location]);
   const [available, setAvailable] = useState(false);
   const [eligible, setEligible] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -264,15 +348,60 @@ export function DiagnoseProvider({
   // Tracks whether the panel focus belongs to browser history. Fleet opens the
   // same panel on /issues, where URL state is deliberately disabled; a generic
   // panel launch must never be closed by the deep-link synchronization effect.
-  const urlRunIdRef = useRef(runIDFromLocation(browserURLState));
+  const urlRunIdRef = useRef<string | null>(null);
+  const workspaceRouteRef = useRef(false);
   const writeFocusedRunID = useCallback(
     (id: string | null, push: boolean) => {
-      // Set this before writeRunIDToLocation's synthetic popstate so our own
-      // listener can distinguish a programmatic close/home write from Back.
-      if (diagnoseURLStateEnabled(browserURLState)) urlRunIdRef.current = id;
-      writeRunIDToLocation(id, push, browserURLState);
+      if (!forceRouterURLState && !diagnoseURLStateEnabled(browserURLState)) return;
+      const current = locationRef.current;
+      urlRunIdRef.current = id;
+      if (isInvestigationWorkspacePath(current.pathname)) {
+        const restoreSteps = workspaceRestoreHistorySteps(current.state);
+        const returnSteps = workspaceReturnHistorySteps(current.state);
+        const state = push && (restoreSteps || returnSteps)
+          ? {
+              ...(current.state && typeof current.state === "object"
+                ? current.state
+                : {}),
+              ...(restoreSteps
+                ? {
+                    [WORKSPACE_RESTORE_HISTORY_STEPS_STATE]: String(
+                      restoreSteps + 1,
+                    ),
+                  }
+                : {}),
+              ...(returnSteps
+                ? {
+                    [WORKSPACE_RETURN_HISTORY_STEPS_STATE]: String(
+                      returnSteps + 1,
+                    ),
+                  }
+                : {}),
+            }
+          : current.state;
+        navigate(
+          {
+            pathname: workspacePath(id),
+            search: investigationWorkspaceSearch(current.search),
+            hash: current.hash,
+          },
+          { replace: !push, state },
+        );
+        return;
+      }
+      const params = new URLSearchParams(current.search);
+      if (id) params.set("ai-run", id);
+      else params.delete("ai-run");
+      navigate(
+        {
+          pathname: current.pathname,
+          search: params.toString(),
+          hash: current.hash,
+        },
+        { replace: !push, state: current.state },
+      );
     },
-    [browserURLState],
+    [browserURLState, forceRouterURLState, navigate],
   );
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [runsLoaded, setRunsLoaded] = useState(false);
@@ -468,6 +597,23 @@ export function DiagnoseProvider({
     );
   }, []);
 
+  // Hosts may need to bridge the focused run into chrome outside RadarApp's
+  // router. Notify only after the server has returned a real run summary — a
+  // URL-shaped id alone is not evidence that the run exists or is readable.
+  const lastNotifiedRunIDRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      !onFocusedRun ||
+      !activeRunId ||
+      lastNotifiedRunIDRef.current === activeRunId ||
+      !runs.some((run) => run.id === activeRunId)
+    ) {
+      return;
+    }
+    lastNotifiedRunIDRef.current = activeRunId;
+    onFocusedRun(activeRunId);
+  }, [activeRunId, onFocusedRun, runs]);
+
   // A content-stable signature of the resources with a live investigation,
   // so the per-resource Investigate buttons can show a "running" indicator even with the
   // panel closed — and only re-render when the set actually changes, not every poll.
@@ -575,46 +721,133 @@ export function DiagnoseProvider({
     [updateRunSummary, writeFocusedRunID],
   );
 
-  // The run id is durable navigation state: direct loads and popstate focus the
-  // exact run, and the query remains in place so the address bar is copyable.
-  // Fetch by id rather than assuming the bounded recent list contains it.
+  // Browser navigation is the source of truth for presentation: a dedicated
+  // /investigations route is the full workspace, while ?ai-run keeps the
+  // contextual drawer on its underlying page. Fetch exact ids rather than
+  // assuming the bounded recent list contains them.
   useEffect(() => {
-    if (!available || !diagnoseURLStateEnabled(browserURLState)) return;
-    const focusFromLocation = (fromPopState: boolean) => {
-      const id = runIDFromLocation(browserURLState);
-      if (!id) {
-        // A missing id on first mount is ordinary. On popstate it means "back
-        // out of this investigation" only when the focused run was itself
-        // installed by URL history; unrelated synthetic popstate events must
-        // not tear down a panel opened by an in-app action.
-        if (fromPopState && urlRunIdRef.current) {
-          setActiveRunId(null);
-          setView("home");
-          setOpen(false);
-        }
-        urlRunIdRef.current = null;
-        return;
+    if (!forceRouterURLState && !diagnoseURLStateEnabled(browserURLState)) return;
+    const workspace = isInvestigationWorkspacePath(location.pathname);
+    const id = workspace
+      ? workspaceRunIDFromPath(location.pathname)
+      : runIDFromSearch(location.search);
+    const invalidWorkspaceRun =
+      workspace &&
+      !id &&
+      location.pathname.replace(/\/+$/, "") !== "/investigations";
+    const previouslyURLFocused = urlRunIdRef.current;
+    const wasWorkspace = workspaceRouteRef.current;
+    workspaceRouteRef.current = workspace;
+
+    setMaximized(workspace);
+    const workspaceChanged = wasWorkspace !== workspace;
+    if (id && id === previouslyURLFocused && !workspaceChanged) return;
+    if (!id) {
+      urlRunIdRef.current = null;
+      if (invalidWorkspaceRun) {
+        setActiveRunId(INVALID_WORKSPACE_RUN_ID);
+        setView("investigation");
+        setOpen(true);
+      } else if (workspace) {
+        setActiveRunId(null);
+        setView("home");
+        setOpen(true);
+      } else if (previouslyURLFocused || wasWorkspace) {
+        setActiveRunId(null);
+        setView("home");
+        setOpen(false);
       }
-      urlRunIdRef.current = id;
-      unavailableRunIDsRef.current.delete(id);
-      setStartError(null);
-      setActiveRunId(id);
-      setView("investigation");
+      return;
+    }
+
+    if (!available) {
+      urlRunIdRef.current = null;
+      setActiveRunId(null);
+      setView("home");
       setOpen(true);
-      getRun(id)
-        .then(updateRunSummary)
-        .catch((error) => {
-          if (error instanceof DiagnoseError && error.status === 404) {
-            unavailableRunIDsRef.current.add(id);
-          }
-          // The list load owns the final missing/degraded state and keeps retrying.
-        });
+      return;
+    }
+
+    urlRunIdRef.current = id;
+    unavailableRunIDsRef.current.delete(id);
+    setStartError(null);
+    setActiveRunId(id);
+    setView("investigation");
+    setOpen(true);
+    getRun(id)
+      .then(updateRunSummary)
+      .catch((error) => {
+        if (error instanceof DiagnoseError && error.status === 404) {
+          unavailableRunIDsRef.current.add(id);
+        }
+        // The list load owns the final missing/degraded state and keeps retrying.
+      });
+  }, [
+    available,
+    browserURLState,
+    forceRouterURLState,
+    location.pathname,
+    location.search,
+    updateRunSummary,
+    writeFocusedRunID,
+  ]);
+
+  // The base workspace is a stable entry point. Once server history lands,
+  // canonicalize it to the newest readable run. Empty history deliberately
+  // stays at /investigations with no synthetic "nothing selected" URL state.
+  useEffect(() => {
+    if (
+      (!forceRouterURLState && !diagnoseURLStateEnabled(browserURLState)) ||
+      location.pathname.replace(/\/+$/, "") !== "/investigations" ||
+      !runsLoaded ||
+      runs.length === 0
+    ) {
+      return;
+    }
+    let cancelled = false;
+    const focus = (runID: string) => {
+      if (cancelled) return;
+      setActiveRunId(runID);
+      setView("investigation");
+      urlRunIdRef.current = runID;
+      navigate(
+        {
+          pathname: workspacePath(runID),
+          search: investigationWorkspaceSearch(location.search),
+          hash: location.hash,
+        },
+        { replace: true, state: location.state },
+      );
     };
-    focusFromLocation(false);
-    const onPopState = () => focusFromLocation(true);
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, [available, browserURLState, updateRunSummary]);
+    const preferredID = preferredWorkspaceRunID(location.state);
+    const listedPreferred = runs.find((run) => run.id === preferredID);
+    if (listedPreferred) {
+      focus(listedPreferred.id);
+    } else if (preferredID) {
+      getRun(preferredID)
+        .then((run) => {
+          updateRunSummary(run);
+          focus(run.id);
+        })
+        .catch(() => focus(runs[0].id));
+    } else {
+      focus(runs[0].id);
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    browserURLState,
+    forceRouterURLState,
+    location.hash,
+    location.pathname,
+    location.search,
+    location.state,
+    navigate,
+    runs,
+    runsLoaded,
+    updateRunSummary,
+  ]);
   // Leaving the detail pane drops the failure that belonged to it. startError
   // renders as the entire pane (maximized home still shows `detail`), where a
   // message about a resource you just navigated away from has nothing to attach
@@ -626,17 +859,96 @@ export function DiagnoseProvider({
     setOpen(true);
     writeFocusedRunID(null, false);
   }, [writeFocusedRunID]);
+  const openWorkspace = useCallback(() => {
+    setOpen(true);
+    setStartError(null);
+    if (!forceRouterURLState && !diagnoseURLStateEnabled(browserURLState)) {
+      setMaximized(true);
+      return;
+    }
+    const current = locationRef.current;
+    // The global entry remains visible in the workspace. Treat clicking it
+    // there as an idempotent reveal rather than pushing another workspace
+    // entry and replacing the page that Close should return to.
+    if (isInvestigationWorkspacePath(current.pathname)) {
+      setMaximized(true);
+      return;
+    }
+    const drawerRunID = runIDFromSearch(current.search);
+    // Without a URL-backed drawer selection, enter through the base route and
+    // let server history choose the newest readable run. React state can still
+    // contain a run the user just dismissed or learned was unavailable.
+    const runID = drawerRunID;
+    const state = {
+      ...(current.state && typeof current.state === "object"
+        ? current.state
+        : {}),
+      [WORKSPACE_RETURN_STATE]: `${current.pathname}${current.search}${current.hash}`,
+      ...(drawerRunID
+        ? { [WORKSPACE_RESTORE_HISTORY_STEPS_STATE]: "1" }
+        : {}),
+    };
+    navigate(
+      {
+        pathname: workspacePath(runID),
+        search: investigationWorkspaceSearch(current.search),
+      },
+      { state },
+    );
+  }, [browserURLState, forceRouterURLState, navigate]);
+  const routerURLStateEnabled =
+    forceRouterURLState || diagnoseURLStateEnabled(browserURLState);
+  const canRestoreWorkspace = routerURLStateEnabled
+    ? isInvestigationWorkspacePath(location.pathname) &&
+      !!safeWorkspaceReturn(location.state) &&
+      !!workspaceRestoreHistorySteps(location.state)
+    : maximized;
+  const restoreWorkspace = useCallback(() => {
+    if (!routerURLStateEnabled) {
+      setMaximized(false);
+      return;
+    }
+    const current = locationRef.current;
+    const target = safeWorkspaceReturn(current.state);
+    if (!target) return;
+    const steps = workspaceRestoreHistorySteps(current.state);
+    if (steps) navigate(-steps);
+    else navigate(target, { replace: true });
+  }, [navigate, routerURLStateEnabled]);
   const goHome = useCallback(() => {
     unavailableRunIDsRef.current.clear();
     setView("home");
     setStartError(null);
     writeFocusedRunID(null, false);
   }, [writeFocusedRunID]);
+  const dismissForNavigation = useCallback(() => {
+    unavailableRunIDsRef.current.clear();
+    setOpen(false);
+    setView("home");
+    setStartError(null);
+  }, []);
   const close = useCallback(() => {
     unavailableRunIDsRef.current.clear();
     setOpen(false);
+    const current = locationRef.current;
+    if (isInvestigationWorkspacePath(current.pathname)) {
+      const returnPath = safeWorkspaceReturn(current.state);
+      const historySteps = workspaceReturnHistorySteps(current.state);
+      if (returnPath && historySteps) {
+        navigate(-historySteps);
+        return;
+      }
+      if (returnPath) {
+        const url = new URL(returnPath, window.location.origin);
+        url.searchParams.delete("ai-run");
+        navigate(`${url.pathname}${url.search}${url.hash}`, { replace: true });
+      } else {
+        navigate("/", { replace: true });
+      }
+      return;
+    }
     writeFocusedRunID(null, false);
-  }, [writeFocusedRunID]);
+  }, [navigate, writeFocusedRunID]);
   const consentBusyRef = useRef(false);
   const approveConsent = useCallback(() => {
     if (consentBusyRef.current) return;
@@ -675,7 +987,8 @@ export function DiagnoseProvider({
   const cancelConsent = useCallback(() => {
     setPendingTarget(null);
     setConsentError(null);
-    setOpen(false);
+    setOpen(true);
+    if (!activeRunIdRef.current) setView("home");
   }, []);
   const dismissError = useCallback(() => setStartError(null), []);
 
@@ -712,8 +1025,12 @@ export function DiagnoseProvider({
     openInvestigation,
     openRun,
     openHome,
+    openWorkspace,
+    restoreWorkspace,
+    canRestoreWorkspace,
     goHome,
     close,
+    dismissForNavigation,
     approveConsent,
     cancelConsent,
     refreshRuns,
@@ -729,6 +1046,7 @@ export function DiagnoseProvider({
     () => ({
       open,
       close,
+      dismissForNavigation,
       contentGutter,
       maximized,
       setMaximized,
@@ -742,6 +1060,7 @@ export function DiagnoseProvider({
     [
       open,
       close,
+      dismissForNavigation,
       contentGutter,
       maximized,
       width,
@@ -756,5 +1075,17 @@ export function DiagnoseProvider({
     <Ctx.Provider value={value}>
       <LayoutCtx.Provider value={layout}>{children}</LayoutCtx.Provider>
     </Ctx.Provider>
+  );
+}
+
+// Standalone consumers may not have a router, while full-app hosts already do.
+// Supply one only when there is no surrounding routing context.
+export function DiagnoseProvider(props: DiagnoseProviderProps) {
+  const inRouter = useInRouterContext();
+  if (inRouter) return <RoutedDiagnoseProvider {...props} />;
+  return (
+    <BrowserRouter>
+      <RoutedDiagnoseProvider {...props} />
+    </BrowserRouter>
   );
 }

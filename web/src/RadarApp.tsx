@@ -136,6 +136,12 @@ export interface RadarAppProps {
    */
   onClusterLoadStateChange?: (state: ClusterLoadState) => void;
   /**
+   * Called after a focused investigation has been resolved by the server.
+   * Embedders whose chrome lives outside RadarApp's router can use this as a
+   * navigation hint without treating an unverified URL id as durable state.
+   */
+  onInvestigationFocus?: (runID: string) => void;
+  /**
    * Selects the store backing the event timeline. Omit for the local event
    * store the Radar binary keeps (default, standalone behavior). Set
    * `{ mode: 'retained' }` when embedding behind a proxy that serves a
@@ -199,6 +205,7 @@ export function RadarApp({
   diagnoseConsent,
   initialPath,
   onClusterLoadStateChange,
+  onInvestigationFocus,
   timelineSource,
 }: RadarAppProps): React.ReactElement {
   // Apply runtime config during render so module-level singletons are set
@@ -228,7 +235,11 @@ export function RadarApp({
                   value={renderDiagnoseAction ?? defaultDiagnoseAction}
                   consentCopy={diagnoseConsent}
                 >
-                  <DiagnoseProvider browserURLState={router !== "memory"}>
+                  <DiagnoseProvider
+                    browserURLState={router !== "memory"}
+                    forceRouterURLState={router === "memory"}
+                    onFocusedRun={onInvestigationFocus}
+                  >
                     <App
                       manageDocumentTitle={manageDocumentTitle}
                       documentTitleSuffix={documentTitleSuffix}

@@ -120,7 +120,7 @@ const FLEET_MODE_KINDS = new Set<NodeKind>([
 
 // Convert API resource name back to topology node ID prefix
 // Extended MainView type that includes traffic and cost
-type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications'
+type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
@@ -140,6 +140,7 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'applications') return 'applications'
   if (path === 'compare') return 'compare'
   if (path === 'issues') return 'issues'
+  if (path === 'investigations') return 'investigations'
   return 'home'
 }
 
@@ -325,7 +326,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // static. contentGutter is the docked panel width (0 when closed/overlay/maximized).
   const {
     open: diagnoseOpen,
-    close: closeDiagnose,
+    dismissForNavigation: dismissDiagnoseForNavigation,
     contentGutter,
     maximized: diagnoseMaximized,
   } = useDiagnoseLayout()
@@ -475,10 +476,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     const path = view === 'home' ? '/' : `/${view}`
 
     // Start fresh — keep only cross-view params, discard view-specific ones.
-    // Read the live location because Diagnose owns `ai-run` through the History
-    // API; React Router's searchParams snapshot does not update for that write.
+    // React Router owns navigation state. In embedded MemoryRouter mode the
+    // browser URL intentionally does not change, so window.location is stale.
     const newParams = new URLSearchParams()
-    const currentParams = new URLSearchParams(window.location.search)
+    const currentParams = new URLSearchParams(location.search)
     const globalNamespaces = currentParams.get('namespaces')
     if (globalNamespaces) {
       newParams.set('namespaces', globalNamespaces)
@@ -496,7 +497,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     }
 
     navigate({ pathname: path, search: newParams.toString() })
-  }, [navigate, takeover, goHost])
+  }, [location.search, navigate, takeover, goHost])
 
   // The standalone rail expresses intent to leave the full-width investigation
   // workspace. Close it before routing so the destination is immediately visible;
@@ -504,10 +505,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const handlePrimaryNavigate = useCallback((view: ExtendedMainView) => {
     navigateFromPrimaryRail(
       diagnoseOpen && diagnoseMaximized,
-      closeDiagnose,
+      dismissDiagnoseForNavigation,
       () => setMainView(view),
     )
-  }, [diagnoseOpen, diagnoseMaximized, closeDiagnose, setMainView])
+  }, [diagnoseOpen, diagnoseMaximized, dismissDiagnoseForNavigation, setMainView])
 
   // Cloud (embedded) takes over the "fleet-shaped" per-cluster views with its
   // own fleet pages scoped to this cluster — owned by the host's left rail — so
@@ -730,7 +731,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // duplicated verbatim at each render site. Encodes the opened resource in the
   // URL (?resource=ns/name) — the same deep-link shape the resources view
   // round-trips — so refresh/share keeps the drawer open instead of dropping it.
-  const navigateToResourceList = useCallback((resource: SelectedResource) => {
+  const navigateToResourceList = useCallback((resource: SelectedResource, investigationRunID?: string | null) => {
     const pluralKind = kindToPluralWithGroup(resource.kind, resource.group ?? '')
     setSelectedResource({ ...resource, kind: pluralKind })
     const newParams = new URLSearchParams(searchParams)
@@ -748,10 +749,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     } else {
       newParams.delete('apiGroup')
     }
+    if (investigationRunID === null) newParams.delete('ai-run')
+    else if (investigationRunID) newParams.set('ai-run', investigationRunID)
     navigate({ pathname: `/resources/${pluralKind}`, search: newParams.toString() })
   }, [searchParams, navigate])
 
-  const navigateToHelmRelease = useCallback((namespace: string, name: string, storageNamespace?: string) => {
+  const navigateToHelmRelease = useCallback((namespace: string, name: string, storageNamespace?: string, investigationRunID?: string | null) => {
     const newParams = new URLSearchParams()
     const globalNamespaces = searchParams.get('namespaces')
     if (globalNamespaces) {
@@ -761,6 +764,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (storageNamespace) {
       newParams.set('releaseStorage', storageNamespace)
     }
+    if (investigationRunID) newParams.set('ai-run', investigationRunID)
     setSelectedHelmRelease({ namespace, name, storageNamespace })
     if (mainView === 'helm') {
       setSearchParams(newParams, { replace: true })
@@ -772,9 +776,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // From the Issues queue: special controller/manager subjects route to their
   // rich detail pages, not the generic resource drawer that's a dead-end for
   // them. Member resources (Pods, Services, …) fall through to resources.
-  const navigateFromIssue = useCallback((resource: SelectedResource) => {
+  const navigateFromIssue = useCallback((resource: SelectedResource, investigationRunID?: string | null) => {
     if (resource.kind === 'HelmRelease' && resource.group === 'helm.sh' && resource.namespace) {
-      navigateToHelmRelease(resource.namespace, resource.name)
+      navigateToHelmRelease(resource.namespace, resource.name, undefined, investigationRunID)
       return
     }
     const gitOpsPath = gitOpsRouteForResource({
@@ -783,10 +787,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       metadata: { namespace: resource.namespace ?? '', name: resource.name },
     })
     if (gitOpsPath) {
-      navigate(gitOpsPath)
+      const destination = new URL(gitOpsPath, window.location.origin)
+      if (investigationRunID) destination.searchParams.set('ai-run', investigationRunID)
+      navigate(`${destination.pathname}${destination.search}${destination.hash}`)
       return
     }
-    navigateToResourceList(resource)
+    navigateToResourceList(resource, investigationRunID)
   }, [navigate, navigateToHelmRelease, navigateToResourceList])
 
   // Collapse the over-list fullscreen back to the drawer = drop ?full=1 (and the
@@ -842,7 +848,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     gitops: 'g o', checks: 'g u', cost: 'g c', capacity: 'g p',
     // Non-rail views (reachable via deep links / actions, not the rail) get no
     // dedicated mnemonic — listed for exhaustiveness so the type stays total.
-    workload: '', compare: '', helmCompare: '',
+    workload: '', compare: '', helmCompare: '', investigations: '',
   }
   const views = Object.keys(VIEW_SHORTCUT_KEYS).filter(
     (v): v is ExtendedMainView => VIEW_SHORTCUT_KEYS[v as ExtendedMainView] !== '',
@@ -1163,7 +1169,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       // focus. Diagnose resolves runs by id and owns whether the focused run is
       // still readable after the context switch.
       const nextParams = new URLSearchParams()
-      const diagnoseRun = new URLSearchParams(window.location.search).get('ai-run')
+      const diagnoseRun = new URLSearchParams(location.search).get('ai-run')
       if (diagnoseRun) nextParams.set('ai-run', diagnoseRun)
       navigate({ pathname: location.pathname, search: nextParams.toString() }, { replace: true })
 
@@ -2467,7 +2473,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {diagnoseOpen && (
         <DiagnoseSurface
           topInset={chromeless ? 0 : APP_HEADER_HEIGHT}
-          onOpenResource={(ref) => {
+          onOpenResource={(ref, investigationRunID) => {
             const resource: SelectedResource = {
               kind: ref.kind,
               namespace: ref.namespace ?? '',
@@ -2476,10 +2482,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             }
             const path = relatedResourcePath(resource)
             if (path.startsWith('/workload/')) {
-              navigate(path)
+              const destination = new URL(path, window.location.origin)
+              if (investigationRunID) destination.searchParams.set('ai-run', investigationRunID)
+              navigate(`${destination.pathname}${destination.search}${destination.hash}`)
               return
             }
-            navigateFromIssue(resource)
+            navigateFromIssue(resource, investigationRunID)
           }}
           onOpenTimeline={({ namespace, name }) => {
             // Scope state and URL move together, as the Timeline's own

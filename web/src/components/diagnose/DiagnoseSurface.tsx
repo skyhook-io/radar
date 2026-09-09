@@ -469,17 +469,20 @@ function DiagnoseHeaderIdentity({
 
 export function openInvestigationEvidenceResource(
   ref: DiagnosisResourceRef,
-  onOpenResource: (ref: DiagnosisResourceRef) => void,
+  onOpenResource: (ref: DiagnosisResourceRef, runID?: string | null) => void,
   setMaximized: (maximized: boolean) => void,
-  closeDiagnose: () => void,
+  dismissDiagnose: () => void,
   dockedPanelWouldOverlay: boolean,
+  activeRunID?: string,
 ) {
   revealInvestigationDestination(
     setMaximized,
-    closeDiagnose,
+    dismissDiagnose,
     dockedPanelWouldOverlay,
   );
-  onOpenResource(ref);
+  if (dockedPanelWouldOverlay) onOpenResource(ref, null);
+  else if (activeRunID) onOpenResource(ref, activeRunID);
+  else onOpenResource(ref);
 }
 
 // A destination must be visible after the handoff. On a wide canvas, restoring
@@ -488,13 +491,13 @@ export function openInvestigationEvidenceResource(
 // navigating instead of making the click appear to do nothing.
 function revealInvestigationDestination(
   setMaximized: (maximized: boolean) => void,
-  closeDiagnose: () => void,
+  dismissDiagnose: () => void,
   dockedPanelWouldOverlay: boolean,
 ) {
   if (dockedPanelWouldOverlay) {
     // Closing already exposes the destination; retain the user's maximized
     // preference for the next time they open investigations.
-    closeDiagnose();
+    dismissDiagnose();
   } else {
     setMaximized(false);
   }
@@ -504,12 +507,15 @@ export function DiagnoseSurface({
   topInset = 0,
   onOpenResource,
   onOpenTimeline,
+  onOpenWorkspace,
 }: {
   topInset?: number;
   /** Resolves an evidence subject into the embedding Radar surface. */
-  onOpenResource?: (ref: DiagnosisResourceRef) => void;
+  onOpenResource?: (ref: DiagnosisResourceRef, runID?: string | null) => void;
   /** Opens the embedding Radar Timeline for one resource's change history. */
   onOpenTimeline?: (scope: InvestigationTimelineScope) => void;
+  /** Lets a host whose drawer lives outside Radar's route tree cross into it. */
+  onOpenWorkspace?: () => void;
 }) {
   const d = useDiagnose();
   const { data: contexts } = useContexts();
@@ -574,19 +580,30 @@ export function DiagnoseSurface({
         ref,
         onOpenResource,
         setMaximized,
-        d.close,
+        d.dismissForNavigation,
         narrow,
+        d.activeRunId ?? undefined,
       );
     },
-    [d.close, narrow, onOpenResource, setMaximized],
+    [
+      d.activeRunId,
+      d.dismissForNavigation,
+      narrow,
+      onOpenResource,
+      setMaximized,
+    ],
   );
   const openEvidenceTimeline = useCallback(
     (scope: InvestigationTimelineScope) => {
       if (!onOpenTimeline) return;
-      revealInvestigationDestination(setMaximized, d.close, narrow);
+      revealInvestigationDestination(
+        setMaximized,
+        d.dismissForNavigation,
+        narrow,
+      );
       onOpenTimeline(scope);
     },
-    [d.close, narrow, onOpenTimeline, setMaximized],
+    [d.dismissForNavigation, narrow, onOpenTimeline, setMaximized],
   );
 
   const startResize = (e: React.MouseEvent) => {
@@ -887,19 +904,25 @@ export function DiagnoseSurface({
               <InvestigationMenu run={visibleRunDetail} />
             </div>
           )}
-          <Tooltip content={maximized ? "Restore" : "Expand"} position="bottom">
-            <button
-              onClick={() => setMaximized((v) => !v)}
-              className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-              aria-label={maximized ? "Restore" : "Expand"}
-            >
-              {maximized ? (
-                <Minimize2 className="h-4 w-4" />
-              ) : (
-                <Maximize2 className="h-4 w-4" />
-              )}
-            </button>
-          </Tooltip>
+          {(!maximized || d.canRestoreWorkspace) && (
+            <Tooltip content={maximized ? "Restore" : "Expand"} position="bottom">
+              <button
+                onClick={
+                  maximized
+                    ? d.restoreWorkspace
+                    : (onOpenWorkspace ?? d.openWorkspace)
+                }
+                className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+                aria-label={maximized ? "Restore" : "Expand"}
+              >
+                {maximized ? (
+                  <Minimize2 className="h-4 w-4" />
+                ) : (
+                  <Maximize2 className="h-4 w-4" />
+                )}
+              </button>
+            </Tooltip>
+          )}
           <Tooltip content="Close" position="bottom">
             <button
               onClick={d.close}

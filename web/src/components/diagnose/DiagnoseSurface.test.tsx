@@ -117,12 +117,13 @@ describe("investigation history navigation", () => {
       setMaximized,
       closeDiagnose,
       false,
+      "run-1",
     );
 
     expect(events).toEqual(["dock", "open"]);
     expect(setMaximized).toHaveBeenCalledWith(false);
     expect(closeDiagnose).not.toHaveBeenCalled();
-    expect(onOpenResource).toHaveBeenCalledWith(ref);
+    expect(onOpenResource).toHaveBeenCalledWith(ref, "run-1");
   });
 
   it("closes an overlay before opening an evidence resource", () => {
@@ -147,7 +148,7 @@ describe("investigation history navigation", () => {
     expect(events).toEqual(["close", "open"]);
     expect(setMaximized).not.toHaveBeenCalled();
     expect(closeDiagnose).toHaveBeenCalledOnce();
-    expect(onOpenResource).toHaveBeenCalledWith(ref);
+    expect(onOpenResource).toHaveBeenCalledWith(ref, null);
   });
 
   it("keeps document overflow out of the bounded Diagnose frame", () => {

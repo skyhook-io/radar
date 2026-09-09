@@ -32,13 +32,15 @@ export type {
 } from './context/DiagnoseCustomization';
 
 // Standalone AI investigation surface — mount the investigation panel outside a
-// full <RadarApp>. No router dependency, no client-side cluster state: the
-// backend set via setApiBase() picks the cluster, so hosts remount
-// <DiagnoseProvider key={cluster}> to switch. Mount order: ThemeProvider >
-// DiagnoseCustomizationProvider > DiagnoseProvider > DiagnoseSurface, under a
-// @tanstack/react-query QueryClientProvider.
+// full <RadarApp>. It uses the nearest React Router for durable drawer/workspace
+// URLs, or supplies one when mounted standalone. The backend set via setApiBase()
+// picks the cluster, so hosts remount <DiagnoseProvider key={cluster}> to switch.
+// Mount order: ThemeProvider > DiagnoseCustomizationProvider > DiagnoseProvider
+// > DiagnoseSurface, under a @tanstack/react-query QueryClientProvider.
 export {
   DiagnoseProvider,
+  investigationWorkspaceNavigationState,
+  investigationWorkspaceSearch,
   useDiagnose,
   useDiagnoseLayout,
 } from './components/diagnose/DiagnoseContext';
