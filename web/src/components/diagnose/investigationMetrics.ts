@@ -53,6 +53,10 @@ const UNIT_PRESERVING_FUNCTIONS = new Set([
   "label_join",
   "topk",
   "bottomk",
+  "sort",
+  "sort_desc",
+  "sort_by_label",
+  "sort_by_label_desc",
   "quantile",
   "min_over_time",
   "max_over_time",
@@ -114,8 +118,8 @@ function withoutStringsAndComments(query: string): string {
  * rather than guessed: arithmetic and comparisons produce a quantity the
  * metric's name no longer describes (`x_bytes > bool 0` is a 0 or a 1,
  * `stdvar(x_bytes)` is bytes squared), a set operator mixes two expressions
- * whose units may differ, a second rate divides by time twice, and an
- * unlisted function is simply unknown. Strings, comments, label matchers and
+ * whose units may differ, `atan2` returns an angle, a second rate divides by
+ * time twice, and an unlisted function is simply unknown. Strings, comments, label matchers and
  * range selectors are blanked before the expression is read, so nothing
  * inside them can be mistaken for an operator or a call.
  */
@@ -135,7 +139,7 @@ export function metricsUnitForExpression(
     .replace(/\[[^\]]*\]/g, "");
   // Arithmetic, comparison and the set operators all produce something the
   // metric's name no longer describes, or mix two things that disagree.
-  if (/[-+/*%^]|[<>!=]=|[<>]|\b(?:bool|and|or|unless)\b/.test(expression)) {
+  if (/[-+/*%^]|[<>!=]=|[<>]|\b(?:bool|and|or|unless|atan2)\b/.test(expression)) {
     return "";
   }
   // An aggregation may put its grouping clause before the parenthesis, as in
