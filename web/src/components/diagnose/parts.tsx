@@ -1223,11 +1223,11 @@ export function Timeline({
             ))}
             {radarServer
               ? mcpStatusIsFailure(radarServer.status)
-                ? ` at startup — ${agentLabel} had no Radar tools this turn, so it could not use Radar's cluster evidence.`
-                : ` at startup — Radar's tools may not have been available to ${agentLabel} this turn.`
+                ? ` at startup. ${agentLabel} had no Radar tools this turn, so it could not use Radar's cluster evidence.`
+                : ` at startup. Radar's tools may not have been available to ${agentLabel} this turn.`
               : allDefiniteFailures
-                ? ` at startup — ${agentLabel} ran this turn without those tools.`
-                : ` at startup — those tools may not have been available to ${agentLabel} this turn.`}
+                ? ` at startup. ${agentLabel} ran this turn without those tools.`
+                : ` at startup. Those tools may not have been available to ${agentLabel} this turn.`}
           </span>
         </div>
       )}

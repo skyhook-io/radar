@@ -2907,8 +2907,8 @@ describe("InvestigationEvidencePane metrics cards", () => {
     expect(partition.workload.map((group) => group.kind)).toEqual(["metrics"]);
     expect(partition.hiddenMetrics).toBe(0);
     const html = render(projection);
-    expect(html).toContain("container_memory_working_set_bytes");
-    expect(html).toContain("Prometheus · 1 series");
+    expect(html).toContain("Memory working set");
+    expect(html).toContain("container_memory_working_set_bytes · 1 series");
     expect(html).not.toContain("Prometheus metrics");
     expect(html).not.toContain("metric result");
   });

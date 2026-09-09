@@ -5,6 +5,7 @@ import {
   type InvestigationEvidenceTimelineItem,
 } from "./investigationEvidence";
 import {
+  metricsChangeCoverage,
   metricsChangeMarkers,
   metricsDomain,
   metricsUnitForExpression,
@@ -592,5 +593,88 @@ describe("units only survive expressions that keep the meaning", () => {
         ],
       ),
     ).toBe("");
+  });
+});
+
+describe("metricsChangeCoverage", () => {
+  function coverageFor(
+    timelines: InvestigationEvidenceTimelineItem[][],
+    sourceId: string,
+  ) {
+    const projection = projectInvestigationEvidence(
+      timelines.map((timeline) => ({ timeline })),
+      target,
+    );
+    const observation = projection.groups
+      .flatMap((group) => group.observations)
+      .find(
+        (item) =>
+          item.data.type === "metrics" && item.source.stepId === sourceId,
+      );
+    if (!observation) throw new Error("metrics observation missing");
+    return metricsChangeCoverage(projection.groups, observation);
+  }
+
+  it("reports a checked window when the turn captured changes and none landed in it", () => {
+    const coverage = coverageFor(
+      [
+        [
+          tool("diag", "diagnose", { ...diagnoseBundle, recentChanges: [] }),
+          tool(
+            "changes",
+            "get_changes",
+            {
+              changes: [
+                change("Deployment", "api", "2020-01-01T00:00:00Z", "apps/v1"),
+              ],
+            },
+            {
+              summary: JSON.stringify({
+                kind: "Deployment",
+                namespace: "shop",
+                name: "api",
+              }),
+            },
+          ),
+          tool("prom", "query_prometheus", rangeResult(targetSelectors)),
+        ],
+      ],
+      "prom",
+    );
+    expect(coverage.markers).toEqual([]);
+    expect(coverage.checked).toBe(true);
+  });
+
+  it("does not call the window checked when only a broader change result was captured", () => {
+    const coverage = coverageFor(
+      [
+        [tool("diag", "diagnose", diagnoseBundle)],
+        [
+          tool(
+            "broad",
+            "get_changes",
+            {
+              changes: [
+                change("Deployment", "api", "2026-09-06T08:10:00Z", "apps/v1"),
+              ],
+            },
+            { summary: JSON.stringify({ namespace: "shop" }) },
+          ),
+          tool("prom", "query_prometheus", rangeResult(targetSelectors)),
+        ],
+      ],
+      "prom",
+    );
+    expect(coverage.markers).toEqual([]);
+    expect(coverage.checked).toBe(false);
+  });
+
+  it("does not call the window checked when the turn captured no changes at all", () => {
+    const coverage = coverageFor(
+      [[tool("prom", "query_prometheus", rangeResult(targetSelectors))]],
+      "prom",
+    );
+    expect(coverage.markers).toEqual([]);
+    expect(coverage.checked).toBe(false);
   });
 });
