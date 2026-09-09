@@ -233,6 +233,8 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 		resolved, err := ResolvePodScope(r.Context(), client, cache, kind, namespace, name, end.Sub(start), restMaxScopePods)
 		if err != nil {
 			switch {
+			case errors.Is(err, k8s.ErrWorkloadCacheWarming):
+				writeError(w, http.StatusServiceUnavailable, "cluster cache is still loading the workload's pods: "+err.Error())
 			case errors.Is(err, k8s.ErrWorkloadAccessDenied):
 				writeError(w, http.StatusServiceUnavailable, "cluster cache cannot list the workload's pods: "+err.Error())
 			case errors.Is(err, ErrPodScopeUnsupportedKind):
