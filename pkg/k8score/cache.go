@@ -1591,6 +1591,25 @@ func (rc *ResourceCache) DeferredDone() <-chan struct{} {
 	return rc.deferredDone
 }
 
+// InformerSynced reports one informer's initial-sync state. `known` is false
+// when this cache never started that kind, so a caller can tell "not ready"
+// from "not watched at all" instead of failing closed on both. Callers that
+// need one kind must use this rather than IsDeferredSynced, which stays false
+// while any unrelated deferred informer is warming or has permanently failed.
+func (rc *ResourceCache) InformerSynced(key string) (synced, known bool) {
+	if rc == nil {
+		return false, false
+	}
+	rc.informerMu.RLock()
+	defer rc.informerMu.RUnlock()
+	for _, status := range rc.informerStatuses {
+		if status.Key == key {
+			return status.Synced, true
+		}
+	}
+	return false, false
+}
+
 // GetSyncStatus returns the current sync status of all informers for diagnostics.
 // Safe to call at any time, including during sync.
 func (rc *ResourceCache) GetSyncStatus() CacheSyncStatus {

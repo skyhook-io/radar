@@ -5821,6 +5821,38 @@ describe("query_prometheus evidence", () => {
     expect(groupsOf(asStatefulSet.groups, "metrics")[0].latest.relevance).toBe(
       "producer-related",
     );
+
+    // The same exclusion written as a regex. Reading only `=` let a sibling's
+    // chart take the target's identity and its change markers.
+    const regexSelectors = (value: string) => [
+      {
+        metric: "container_cpu_usage_seconds_total",
+        matchers: [
+          { label: "namespace", op: "=", value: "shop" },
+          { label: "workload", op: "=", value: "api" },
+          { label: "workload_type", op: "=~", value },
+        ],
+      },
+    ];
+    for (const [value, relevance] of [
+      ["statefulset", "producer-related"],
+      ["^(statefulset)$", "producer-related"],
+      // A set that includes the target kind could be the target, so it is no
+      // conflict; an inexact regex proves nothing either way.
+      ["^(deployment|statefulset)$", "target"],
+      [".*", "target"],
+    ] as const) {
+      const projection = project([
+        tool(
+          "prom",
+          "query_prometheus",
+          promResult({ selectors: regexSelectors(value) }),
+        ),
+      ]);
+      expect(groupsOf(projection.groups, "metrics")[0].latest.relevance).toBe(
+        relevance,
+      );
+    }
   });
 
   it("refuses an unescaped dot as proof that a pod set names the target", () => {

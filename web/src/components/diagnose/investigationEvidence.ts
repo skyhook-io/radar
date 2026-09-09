@@ -4761,12 +4761,28 @@ function classifySelector(
 ): SelectorVerdict {
   // `workload` is generic, so a `workload_type` naming another kind means
   // the series is about a different workload that happens to share a name.
+  // A regex counts when it names an exact set, the same way the namespace
+  // matcher below does: `workload_type=~"statefulset"` excludes a Deployment
+  // as plainly as `=` does, and reading only `=` let a sibling's chart take
+  // the target's identity. A set that includes the target kind is no conflict,
+  // and an inexact regex says nothing either way.
   const workloadType = selector.matchers.find(
-    (matcher) => matcher.label === "workload_type" && matcher.op === "=",
+    (matcher) =>
+      matcher.label === "workload_type" &&
+      (matcher.op === "=" || matcher.op === "=~"),
   );
+  const workloadTypeNames =
+    workloadType === undefined
+      ? undefined
+      : workloadType.op === "="
+        ? [workloadType.value]
+        : exactPodSet(workloadType.value);
   const workloadTypeConflicts =
-    workloadType !== undefined &&
-    workloadType.value.toLowerCase() !== target.kind.toLowerCase();
+    workloadTypeNames !== undefined &&
+    workloadTypeNames.length > 0 &&
+    !workloadTypeNames.some(
+      (name) => name.toLowerCase() === target.kind.toLowerCase(),
+    );
   // Prometheus anchors regex matchers, so namespace=~"shop" is exact too.
   const inNamespace = selector.matchers.some(
     (matcher) =>

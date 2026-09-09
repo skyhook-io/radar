@@ -170,7 +170,20 @@ func diagnoseWorkloadMetrics(ctx context.Context, group, resource, namespace, na
 		}
 	}
 	if scope.Selection.IsEmpty() {
-		// Neither source named a pod: nothing to chart and nothing to say.
+		if querier == nil {
+			// Prometheus is configured but not answering, so ownership history
+			// was never consulted — only the empty current-pod list was. For a
+			// workload scaled to zero or freshly replaced that is the source
+			// that would have had the answer, and omitting the field reads as
+			// "this workload has no metrics" rather than "Radar could not look".
+			return &diagnoseMetrics{
+				Window: diagnoseMetricsWindow{Start: now.Add(-since).UTC().Format(time.RFC3339), End: now.UTC().Format(time.RFC3339), Step: "0s"},
+				Pods:   len(pods),
+				Series: []diagnoseMetricSeries{},
+				Error:  boundDiagnoseMetricsError(fmt.Sprintf("metrics omitted: Prometheus is %s, so the workload's pods could not be established from ownership history", avail.State)),
+			}
+		}
+		// Both sources were consulted and neither named a pod.
 		return nil
 	}
 	return diagnoseMetricsForScope(budgetCtx, avail, scope, since, now)
