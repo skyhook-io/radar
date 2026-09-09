@@ -215,9 +215,12 @@ func buildPodQuery(namespace, podName string, category MetricCategory, filterCon
 
 	switch category {
 	case CategoryRestarts:
-		// changes() over a 1h window gives the count of restarts during that window;
-		// using a long window keeps the chart legible (most pods never restart).
-		// Sums across containers so a multi-container pod surfaces one line per pod.
+		// changes() counts samples that differ from the one before, so several
+		// restarts between two scrapes read as one. buildPodSetQueryInner
+		// counts the same category with increase() instead; the two disagree
+		// and only that one is exact. The long window keeps the chart legible,
+		// since most pods never restart, and the sum across containers gives a
+		// multi-container pod one line.
 		return fmt.Sprintf(
 			`sum by (pod,namespace) (changes(kube_pod_container_status_restarts_total{namespace='%s',pod='%s'}[1h]))`,
 			ns, pod)
