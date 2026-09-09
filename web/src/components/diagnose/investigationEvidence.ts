@@ -4383,7 +4383,12 @@ function adaptSubjectPermissions(
     // evaluation error already reaches the coverage strip below, but a card
     // reading "cannot verb resource" is the part an operator acts on, and a
     // webhook returning partial data is not a denial.
-    const unresolved = nonEmptyString(check.evaluationError);
+    // Only when the authorizer decided nothing. Kubernetes returns this error
+    // alongside a real verdict too — one webhook failing while another allows —
+    // and rewriting a decided allow or deny as "could not check" loses the
+    // answer and puts an allow in the warning list.
+    const unresolved =
+      nonEmptyString(check.evaluationError) && !check.allowed && !check.denied;
     const denied = !check.allowed && !unresolved;
     const verdict = unresolved
       ? `Could not be evaluated: ${check.evaluationError}`

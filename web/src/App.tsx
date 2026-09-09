@@ -2495,10 +2495,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               // A cluster-scoped subject has no namespace, and the Timeline
               // drops every event whose namespace is not in the filter — so
               // carrying the current scope opens a view the cited change
-              // cannot appear in, which reads as "nothing happened". Widen to
-              // all namespaces, moving scope and URL together as above.
-              setNamespaces([])
-              setActiveNamespace.mutate({ namespaces: [] })
+              // cannot appear in, which reads as "nothing happened". Widening
+              // goes through clearAllNamespaces: it waits for the server before
+              // moving local state, so queries cannot refetch under the empty
+              // key while the server still returns the previous pick, and it
+              // refuses to widen a namespace-locked session.
+              clearAllNamespaces()
             }
             navigate({ pathname: '/timeline', search: params.toString() })
           }}

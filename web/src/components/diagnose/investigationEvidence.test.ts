@@ -4432,6 +4432,42 @@ describe("subject permissions adapter", () => {
     );
   });
 
+  it("keeps a decided verdict that arrived with an evaluation error", () => {
+    // Kubernetes returns the error alongside a real answer too — one webhook
+    // failing while another allows. That answer is still the answer.
+    const projection = project([
+      tool("diagnose", "diagnose", {
+        resource: deploymentWithServiceAccount,
+        resourceContext: { tier: "basic" },
+      }),
+      tool(
+        "perm",
+        "get_subject_permissions",
+        {
+          subject: { kind: "ServiceAccount", namespace: "shop", name: "api-sa" },
+          accessCheck: {
+            verb: "get",
+            resource: "secrets",
+            namespace: "shop",
+            allowed: true,
+            denied: false,
+            reason: "allowed by one authorizer",
+            evaluationError: "a second webhook did not answer",
+          },
+        },
+        { summary: permissionsArgs },
+      ),
+    ]);
+    const [group] = groupsOf(projection.groups, "permissions");
+    expect(group.latest.title).toContain("can get");
+    expect(group.latest.title).not.toContain("Could not check");
+    expect(group.latest.tone).toBe("info");
+    // And the error is still reported, just not as the verdict.
+    expect(projection.limitations).toContainEqual(
+      expect.objectContaining({ source: "Permissions", kind: "error" }),
+    );
+  });
+
   it("binds an access check to the target's ServiceAccount seen in the same turn", () => {
     const check = {
       subject: { kind: "ServiceAccount", namespace: "shop", name: "api-sa" },
