@@ -5788,6 +5788,38 @@ describe("query_prometheus evidence", () => {
     );
   });
 
+  it("will not establish target pods from a diagnose that never confirmed success", () => {
+    // This set is what proves a Prometheus selector is about the target, so it
+    // takes confirmed success — the same test the sources use — rather than
+    // merely the absence of an error.
+    const unconfirmed = {
+      ...podsBundle(),
+      isError: undefined as unknown as boolean,
+    };
+    const projection = project([
+      unconfirmed,
+      tool(
+        "prom",
+        "query_prometheus",
+        promResult({
+          query: `sum(container_memory_working_set_bytes{namespace="shop",pod=~"${podSetPattern}"})`,
+          selectors: [
+            {
+              metric: "container_memory_working_set_bytes",
+              matchers: [
+                { label: "namespace", op: "=", value: "shop" },
+                { label: "pod", op: "=~", value: podSetPattern },
+              ],
+            },
+          ],
+        }),
+      ),
+    ]);
+    expect(groupsOf(projection.groups, "metrics")[0].latest.relevance).not.toBe(
+      "target",
+    );
+  });
+
   it("does not let a generic workload label claim another kind's series", () => {
     const workloadSelectors = (type?: string) => [
       {

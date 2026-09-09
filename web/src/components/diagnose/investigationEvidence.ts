@@ -4976,7 +4976,15 @@ function addDiagnoseMetrics(
         summary: [
           series.length === 0 ? "No samples in the window" : podsLabel,
           windowLabel,
-          partial ? "partial pod set" : undefined,
+          // partial says the current-pod list was cut by the cap. With
+          // ownership history the query still covers every pod the workload
+          // owned, so calling the population partial would contradict the
+          // count beside it.
+          partial
+            ? coverage === "ksm_history"
+              ? "pod list capped"
+              : "partial pod set"
+            : undefined,
         ]
           .filter((part): part is string => Boolean(part))
           .join(" · "),
@@ -5170,7 +5178,10 @@ function collectEstablishedTargetPods(
         item.tool !== "diagnose" ||
         item.radarEvidence !== true ||
         item.status !== "done" ||
-        item.isError === true ||
+        // Confirmed success, the same test the sources use. This set is what
+        // proves a Prometheus selector is about the target, so a result that
+        // never said it succeeded must not put pods into it.
+        item.isError !== false ||
         !nonEmptyString(item.result)
       ) {
         continue;
