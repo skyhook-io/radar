@@ -1288,6 +1288,28 @@ describe("strict evidence adapters", () => {
     });
   });
 
+  it("keeps discovered critical evidence prominent for an untargeted question", () => {
+    const result = projectInvestigationEvidence(
+      [
+        {
+          timeline: [
+            tool("issues-cluster", "issues", {
+              issues: [criticalIssue],
+              total: 1,
+              total_matched: 1,
+            }),
+          ],
+        },
+      ],
+      { kind: "", group: "", namespace: "", name: "" },
+    );
+
+    expect(groupsOf(result.groups, "issue")[0].latest).toMatchObject({
+      tier: "key",
+      relevance: "producer-related",
+    });
+  });
+
   it("treats API group as part of exact target identity", () => {
     const coreServiceTarget = {
       kind: "Service",

@@ -153,8 +153,7 @@ export function InvestigationHome({
           What should I investigate?
         </h1>
         <p className="mt-1 text-sm text-theme-text-tertiary">
-          Ask {agentLabel} about {clusterName}, or choose a previous
-          investigation below.
+          Ask {agentLabel} about {clusterName}, or pick one from your history.
         </p>
         <form onSubmit={submit} className="mt-5 text-left">
           <div className="rounded-xl border border-theme-border bg-theme-surface p-2 shadow-sm focus-within:border-accent/60 focus-within:ring-2 focus-within:ring-accent/15">
@@ -282,7 +281,7 @@ export function RecentList({
             No investigations yet
           </div>
           <p className="mt-1 max-w-xs text-sm text-theme-text-tertiary">
-            Ask a question above, or open a resource and use its{" "}
+            Start a new question, or open a resource and use its{" "}
             <Sparkles className="inline h-3.5 w-3.5 align-text-bottom text-accent" />{" "}
             action to investigate it with {agentLabel} —{" "}
             <span className="font-medium text-theme-text-secondary">

@@ -1302,6 +1302,10 @@ function relevanceForResource(
     name: string;
   },
 ): InvestigationEvidenceRelevance {
+  // Cluster-scoped questions intentionally have no single target. Evidence
+  // discovered by the producer is therefore related, not "broader" than an
+  // empty resource, so its intended key/supporting tier remains meaningful.
+  if (!builder.target.kind && !builder.target.name) return "producer-related";
   return resourceMatchesTarget(builder.target, resource) ? "target" : "broader";
 }
 
@@ -1317,10 +1321,16 @@ function sourceArgsRelevance(
     kind,
     // get_events/get_changes/issues cannot express an API group today. An
     // omitted group is therefore unspecified, not proof that the caller meant
-    // the core API group. Use the known investigation target for that missing
-    // dimension; if a producer does provide a group, exact matching still
-    // applies (including an explicitly empty core group).
-    group: typeof args?.group === "string" ? args.group : builder.target.group,
+    // the core API group. Use a known resource target for that missing
+    // dimension; cluster-wide questions have no target group to infer. If a
+    // producer provides a group, exact matching still applies (including an
+    // explicitly empty core group).
+    group:
+      typeof args?.group === "string"
+        ? args.group
+        : builder.target.kind || builder.target.name
+          ? builder.target.group
+          : undefined,
     namespace: nonEmptyString(args?.namespace) ? args.namespace : undefined,
     name: args.name,
   });
@@ -1761,13 +1771,18 @@ function addIssueObservation(
   producerRelevance: InvestigationEvidenceRelevance = "broader",
   pods?: string[],
 ): void {
+  const untargeted = !builder.target.kind && !builder.target.name;
   const matchesTarget = resourceMatchesTarget(builder.target, {
     kind: value.kind,
     group: value.group ?? "",
     namespace: value.namespace,
     name: value.name,
   });
-  const relevance = matchesTarget ? "target" : producerRelevance;
+  const relevance = matchesTarget
+    ? "target"
+    : untargeted
+      ? "producer-related"
+      : producerRelevance;
   builder.observe(`issue:${value.id}`, "issue", source, {
     tier:
       relevance === "broader"

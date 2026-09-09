@@ -16,7 +16,7 @@ import {
   type SetStateAction,
 } from "react";
 import {
-  BrowserRouter,
+  MemoryRouter,
   useInRouterContext,
   useLocation,
   useNavigate,
@@ -58,6 +58,13 @@ export interface QuestionStart {
 }
 export type InvestigationStart = Target | QuestionStart;
 export type DiagnoseView = "home" | "investigation";
+
+export function investigationStartView(
+  start: InvestigationStart,
+  focusedRunID: string | null,
+): DiagnoseView {
+  return "question" in start && !focusedRunID ? "home" : "investigation";
+}
 
 // Setup readiness of local AI investigations, derived from the agents API:
 //  - "ready":         an agent is installed and the engine is running (available)
@@ -203,8 +210,6 @@ function writeStored(key: string, value: string) {
 
 const WORKSPACE_RETURN_STATE = "investigationWorkspaceReturn";
 const WORKSPACE_RETURN_HISTORY_STEPS_STATE = "investigationReturnHistorySteps";
-const WORKSPACE_RESTORE_HISTORY_STEPS_STATE =
-  "investigationRestoreHistorySteps";
 const INVALID_WORKSPACE_RUN_ID = "__invalid_workspace_run__";
 
 function runIDFromSearch(search: string): string | null {
@@ -247,14 +252,44 @@ export function investigationWorkspaceSearch(search: string): string {
   return value ? `?${value}` : "";
 }
 
-function safeWorkspaceReturn(state: unknown): string | null {
+function safeWorkspaceReturn(
+  state: unknown,
+  origin = window.location.origin,
+): string | null {
   if (!state || typeof state !== "object") return null;
   const value = (state as Record<string, unknown>)[WORKSPACE_RETURN_STATE];
-  return typeof value === "string" &&
-    value.startsWith("/") &&
-    !value.startsWith("//")
-    ? value
-    : null;
+  if (typeof value !== "string" || !value.startsWith("/")) return null;
+  try {
+    const url = new URL(value, origin);
+    if (url.origin !== origin || url.pathname.startsWith("//"))
+      return null;
+    return `${url.pathname}${url.search}${url.hash}`;
+  } catch {
+    return null;
+  }
+}
+
+export function investigationWorkspaceRestorePath(
+  state: unknown,
+  focusedRunID: string | null,
+  origin = window.location.origin,
+): string {
+  const target = safeWorkspaceReturn(state, origin) ?? "/";
+  const url = new URL(target, origin);
+  if (focusedRunID && focusedRunID !== INVALID_WORKSPACE_RUN_ID) {
+    url.searchParams.set("ai-run", focusedRunID);
+  } else {
+    url.searchParams.delete("ai-run");
+  }
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+export function shouldExitUnavailableWorkspace(
+  pathname: string,
+  agentsResolved: boolean,
+  eligible: boolean,
+): boolean {
+  return agentsResolved && !eligible && isInvestigationWorkspacePath(pathname);
 }
 
 export function investigationWorkspaceNavigationState(options?: {
@@ -264,7 +299,6 @@ export function investigationWorkspaceNavigationState(options?: {
 }): Record<string, string> | undefined {
   const state: Record<string, string> = {};
   if (options?.returnPath) state[WORKSPACE_RETURN_STATE] = options.returnPath;
-  if (options?.drawerOrigin) state[WORKSPACE_RESTORE_HISTORY_STEPS_STATE] = "1";
   if (options?.closeHistorySteps && options.closeHistorySteps > 0) {
     state[WORKSPACE_RETURN_HISTORY_STEPS_STATE] = String(
       options.closeHistorySteps,
@@ -277,16 +311,6 @@ function workspaceReturnHistorySteps(state: unknown): number | null {
   if (!state || typeof state !== "object") return null;
   const raw = (state as Record<string, unknown>)[
     WORKSPACE_RETURN_HISTORY_STEPS_STATE
-  ];
-  if (typeof raw !== "string" || !/^\d+$/.test(raw)) return null;
-  const steps = Number(raw);
-  return steps > 0 ? steps : null;
-}
-
-function workspaceRestoreHistorySteps(state: unknown): number | null {
-  if (!state || typeof state !== "object") return null;
-  const raw = (state as Record<string, unknown>)[
-    WORKSPACE_RESTORE_HISTORY_STEPS_STATE
   ];
   if (typeof raw !== "string" || !/^\d+$/.test(raw)) return null;
   const steps = Number(raw);
@@ -324,6 +348,7 @@ function RoutedDiagnoseProvider({
   }, [location]);
   const [available, setAvailable] = useState(false);
   const [eligible, setEligible] = useState(false);
+  const [agentsResolved, setAgentsResolved] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [consented, setConsented] = useState<Record<string, boolean>>({});
   const [selectedAgent, setSelectedAgentState] = useState<string>(
@@ -360,28 +385,14 @@ function RoutedDiagnoseProvider({
       const current = locationRef.current;
       urlRunIdRef.current = id;
       if (isInvestigationWorkspacePath(current.pathname)) {
-        const restoreSteps = workspaceRestoreHistorySteps(current.state);
         const returnSteps = workspaceReturnHistorySteps(current.state);
         const state =
-          push && (restoreSteps || returnSteps)
+          push && returnSteps
             ? {
                 ...(current.state && typeof current.state === "object"
                   ? current.state
                   : {}),
-                ...(restoreSteps
-                  ? {
-                      [WORKSPACE_RESTORE_HISTORY_STEPS_STATE]: String(
-                        restoreSteps + 1,
-                      ),
-                    }
-                  : {}),
-                ...(returnSteps
-                  ? {
-                      [WORKSPACE_RETURN_HISTORY_STEPS_STATE]: String(
-                        returnSteps + 1,
-                      ),
-                    }
-                  : {}),
+                [WORKSPACE_RETURN_HISTORY_STEPS_STATE]: String(returnSteps + 1),
               }
             : current.state;
         navigate(
@@ -473,7 +484,10 @@ function RoutedDiagnoseProvider({
           writeStored(EFFORT_KEY, "");
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (live) setAgentsResolved(true);
+      });
     return () => {
       live = false;
     };
@@ -694,6 +708,7 @@ function RoutedDiagnoseProvider({
 
   const openInvestigation = useCallback(
     (t: InvestigationStart) => {
+      const startView = investigationStartView(t, activeRunIdRef.current);
       setStartError(null);
       setConsentError(null);
       setOpen(true);
@@ -702,15 +717,15 @@ function RoutedDiagnoseProvider({
         setStartError(
           "Radar can’t run this agent with a verified execution profile.",
         );
-        setView("question" in t ? "home" : "investigation");
+        setView(startView);
         return;
       }
       if (!consentedRef.current[consentSurface]) {
         setPendingTarget(t);
-        setView("question" in t ? "home" : "investigation");
+        setView(startView);
         return;
       }
-      setView("question" in t ? "home" : "investigation");
+      setView(startView);
       startRunRef.current(t);
     },
     [consentSurface, hosted],
@@ -745,6 +760,20 @@ function RoutedDiagnoseProvider({
     if (!forceRouterURLState && !diagnoseURLStateEnabled(browserURLState))
       return;
     const workspace = isInvestigationWorkspacePath(location.pathname);
+    // Eligibility is unresolved until the agent probe returns. Once it has
+    // definitively resolved to off, workspace routes cannot render anything
+    // useful; return to the app instead of leaving an eternal loading panel.
+    if (agentsResolved && !eligible) {
+      if (
+        shouldExitUnavailableWorkspace(
+          location.pathname,
+          agentsResolved,
+          eligible,
+        )
+      )
+        navigate("/", { replace: true });
+      return;
+    }
     const id = workspace
       ? workspaceRunIDFromPath(location.pathname)
       : runIDFromSearch(location.search);
@@ -803,10 +832,13 @@ function RoutedDiagnoseProvider({
       });
   }, [
     available,
+    agentsResolved,
     browserURLState,
+    eligible,
     forceRouterURLState,
     location.pathname,
     location.search,
+    navigate,
     updateRunSummary,
     writeFocusedRunID,
   ]);
@@ -828,6 +860,8 @@ function RoutedDiagnoseProvider({
       setOpen(true);
       setStartError(null);
       if (!forceRouterURLState && !diagnoseURLStateEnabled(browserURLState)) {
+        setActiveRunId(null);
+        setView("home");
         setMaximized(true);
         return;
       }
@@ -848,7 +882,6 @@ function RoutedDiagnoseProvider({
           ? current.state
           : {}),
         [WORKSPACE_RETURN_STATE]: `${current.pathname}${current.search}${current.hash}`,
-        ...(runID ? { [WORKSPACE_RESTORE_HISTORY_STEPS_STATE]: "1" } : {}),
       };
       navigate(
         {
@@ -864,8 +897,8 @@ function RoutedDiagnoseProvider({
     forceRouterURLState || diagnoseURLStateEnabled(browserURLState);
   const canRestoreWorkspace = routerURLStateEnabled
     ? isInvestigationWorkspacePath(location.pathname) &&
-      !!safeWorkspaceReturn(location.state) &&
-      !!workspaceRestoreHistorySteps(location.state)
+      !!activeRunId &&
+      activeRunId !== INVALID_WORKSPACE_RUN_ID
     : maximized;
   const restoreWorkspace = useCallback(() => {
     if (!routerURLStateEnabled) {
@@ -873,11 +906,13 @@ function RoutedDiagnoseProvider({
       return;
     }
     const current = locationRef.current;
-    const target = safeWorkspaceReturn(current.state);
-    if (!target) return;
-    const steps = workspaceRestoreHistorySteps(current.state);
-    if (steps) navigate(-steps);
-    else navigate(target, { replace: true });
+    navigate(
+      investigationWorkspaceRestorePath(
+        current.state,
+        activeRunIdRef.current,
+      ),
+      { replace: true },
+    );
   }, [navigate, routerURLStateEnabled]);
   const goHome = useCallback(() => {
     unavailableRunIDsRef.current.clear();
@@ -1052,8 +1087,8 @@ export function DiagnoseProvider(props: DiagnoseProviderProps) {
   const inRouter = useInRouterContext();
   if (inRouter) return <RoutedDiagnoseProvider {...props} />;
   return (
-    <BrowserRouter>
+    <MemoryRouter>
       <RoutedDiagnoseProvider {...props} />
-    </BrowserRouter>
+    </MemoryRouter>
   );
 }

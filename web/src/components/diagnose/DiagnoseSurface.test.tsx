@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   DIAGNOSE_SURFACE_FRAME_CLASS,
-  MAXIMIZED_COMPACT_HISTORY_VISIBILITY_CLASS,
-  MAXIMIZED_HOME_DETAIL_VISIBILITY_CLASS,
-  MAXIMIZED_HOME_RUN_HEADER_VISIBILITY_CLASS,
   INVESTIGATION_HISTORY_MIN_WIDTH,
   MAXIMIZED_RUN_META_VISIBILITY_CLASS,
   canRerunInvestigation,
@@ -43,9 +40,8 @@ describe("canRerunInvestigation", () => {
   });
 
   it("stays hidden on the investigations list", () => {
-    // goHome() leaves activeRunId set, so the header still has a run to read.
-    // Without the view check the click starts an agent on a resource the user
-    // navigated away from, over a list of unrelated investigations.
+    // Home is a fresh-entry surface and must never expose a token-spending
+    // re-run action, even if a stale caller hands the header a run.
     expect(canRerunInvestigation("home", run("done"), false)).toBe(false);
   });
 
@@ -170,15 +166,6 @@ describe("investigation history navigation", () => {
 
   it("reserves the history rail for wider investigation surfaces", () => {
     expect(INVESTIGATION_HISTORY_MIN_WIDTH).toBe(1750);
-    expect(MAXIMIZED_COMPACT_HISTORY_VISIBILITY_CLASS).toBe(
-      "@min-[1750px]/diagnose-surface:hidden",
-    );
-    expect(MAXIMIZED_HOME_DETAIL_VISIBILITY_CLASS).toBe(
-      "hidden @min-[1750px]/diagnose-surface:flex",
-    );
-    expect(MAXIMIZED_HOME_RUN_HEADER_VISIBILITY_CLASS).toBe(
-      "hidden @min-[1750px]/diagnose-surface:block",
-    );
     expect(MAXIMIZED_RUN_META_VISIBILITY_CLASS).toBe(
       "hidden @min-[1750px]/diagnose-surface:flex",
     );
@@ -198,7 +185,7 @@ describe("investigation history navigation", () => {
     });
   });
 
-  it("swaps generic Home identity for the labeled retained detail at the wide breakpoint", () => {
+  it("keeps Home generic even if a stale caller supplies retained detail", () => {
     expect(
       investigationHeaderPresentation({
         view: "home",
@@ -206,9 +193,9 @@ describe("investigation history navigation", () => {
         hasVisibleRunDetail: true,
       }),
     ).toEqual({
-      genericIdentityClass: MAXIMIZED_COMPACT_HISTORY_VISIBILITY_CLASS,
-      detailIdentityClass: MAXIMIZED_HOME_RUN_HEADER_VISIBILITY_CLASS,
-      runActionsClass: MAXIMIZED_HOME_DETAIL_VISIBILITY_CLASS,
+      genericIdentityClass: "",
+      detailIdentityClass: null,
+      runActionsClass: null,
     });
   });
 

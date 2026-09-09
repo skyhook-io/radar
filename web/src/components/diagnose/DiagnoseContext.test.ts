@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  investigationStartView,
   investigationWorkspaceNavigationState,
   investigationWorkspacePath,
+  investigationWorkspaceRestorePath,
   investigationWorkspaceSearch,
   isInvestigationWorkspacePath,
+  shouldExitUnavailableWorkspace,
   workspaceRunIDFromPath,
 } from "./DiagnoseContext";
 
@@ -39,9 +42,46 @@ describe("investigation workspace routes", () => {
       }),
     ).toEqual({
       investigationWorkspaceReturn: "/?ai-run=r1",
-      investigationRestoreHistorySteps: "1",
       investigationReturnHistorySteps: "2",
     });
+  });
+
+  it("restores the currently focused run into the original dock location", () => {
+    expect(
+      investigationWorkspaceRestorePath(
+        { investigationWorkspaceReturn: "/resources?kind=pods&ai-run=old#row" },
+        "new run",
+        "https://radar.local",
+      ),
+    ).toBe("/resources?kind=pods&ai-run=new+run#row");
+  });
+
+  it("falls back safely when a malformed return path normalizes cross-origin", () => {
+    expect(
+      investigationWorkspaceRestorePath(
+        { investigationWorkspaceReturn: "/\\\\evil.example" },
+        "run-1",
+        "https://radar.local",
+      ),
+    ).toBe("/?ai-run=run-1");
+  });
+
+  it("exits only resolved AI-off workspace routes", () => {
+    expect(
+      shouldExitUnavailableWorkspace("/investigations/run-1", true, false),
+    ).toBe(true);
+    expect(
+      shouldExitUnavailableWorkspace("/investigations/run-1", false, false),
+    ).toBe(false);
+    expect(shouldExitUnavailableWorkspace("/?ai-run=run-1", true, false)).toBe(
+      false,
+    );
+  });
+
+  it("keeps a question re-run focused while fresh questions start on Home", () => {
+    const question = { question: "Why is it slow?" };
+    expect(investigationStartView(question, null)).toBe("home");
+    expect(investigationStartView(question, "run-1")).toBe("investigation");
   });
 
   it("builds history-only return state for cross-tree workspace entry", () => {

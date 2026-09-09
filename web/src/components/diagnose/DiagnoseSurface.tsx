@@ -344,9 +344,7 @@ function VisibilityControl({
 // Whether the header offers a fresh re-run of the focused investigation.
 // Every clause is a failure this button actually had:
 //
-//   view          goHome() leaves activeRunId set, so the header keeps rendering
-//                 the last focused run. Without this the button dispatches an
-//                 agent — real tokens — from a screen showing an unrelated list.
+//   view          Home is the fresh-entry surface, never a re-run action.
 //   run           nothing to take a resource from.
 //   running/stopping human starts reuse the live run. Automatic investigations
 //                 are immutable, so they retain a separate fresh human start.
@@ -375,12 +373,6 @@ export function canRerunInvestigation(
 // Detail uses one stable history toggle; below this width it opens an overlay.
 export const INVESTIGATION_HISTORY_MIN_WIDTH = 1750;
 export const INVESTIGATION_HOME_HISTORY_MIN_WIDTH = 960;
-export const MAXIMIZED_COMPACT_HISTORY_VISIBILITY_CLASS =
-  "@min-[1750px]/diagnose-surface:hidden";
-export const MAXIMIZED_HOME_DETAIL_VISIBILITY_CLASS =
-  "hidden @min-[1750px]/diagnose-surface:flex";
-export const MAXIMIZED_HOME_RUN_HEADER_VISIBILITY_CLASS =
-  "hidden @min-[1750px]/diagnose-surface:block";
 export const MAXIMIZED_RUN_META_VISIBILITY_CLASS =
   "hidden @min-[1750px]/diagnose-surface:flex";
 // The panel is a bounded absolute frame whose descendants own scrolling. If
@@ -407,17 +399,10 @@ export function investigationHeaderPresentation(input: {
       runActionsClass: input.hasVisibleRunDetail ? "" : null,
     };
   }
-  const hasWideRetainedDetail = input.maximized && input.hasVisibleRunDetail;
   return {
-    genericIdentityClass: hasWideRetainedDetail
-      ? MAXIMIZED_COMPACT_HISTORY_VISIBILITY_CLASS
-      : "",
-    detailIdentityClass: hasWideRetainedDetail
-      ? MAXIMIZED_HOME_RUN_HEADER_VISIBILITY_CLASS
-      : null,
-    runActionsClass: hasWideRetainedDetail
-      ? MAXIMIZED_HOME_DETAIL_VISIBILITY_CLASS
-      : null,
+    genericIdentityClass: "",
+    detailIdentityClass: null,
+    runActionsClass: null,
   };
 }
 

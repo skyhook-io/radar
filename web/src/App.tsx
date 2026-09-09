@@ -7,7 +7,7 @@ import { useNavigate, useLocation, useSearchParams, useNavigationType, Navigatio
 import { HomeView } from './components/home/HomeView'
 import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
-import { useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
+import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
 import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, assetUrl } from '@skyhook-io/k8s-ui'
 import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
@@ -1168,10 +1168,23 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       // Reset resource-specific params while retaining the durable investigation
       // focus. Diagnose resolves runs by id and owns whether the focused run is
       // still readable after the context switch.
-      const nextParams = new URLSearchParams()
-      const diagnoseRun = new URLSearchParams(location.search).get('ai-run')
-      if (diagnoseRun) nextParams.set('ai-run', diagnoseRun)
-      navigate({ pathname: location.pathname, search: nextParams.toString() }, { replace: true })
+      if (isInvestigationWorkspacePath(location.pathname)) {
+        navigate(
+          {
+            pathname: location.pathname,
+            search: investigationWorkspaceSearch(location.search),
+          },
+          { replace: true, state: location.state },
+        )
+      } else {
+        const nextParams = new URLSearchParams()
+        const diagnoseRun = new URLSearchParams(location.search).get('ai-run')
+        if (diagnoseRun) nextParams.set('ai-run', diagnoseRun)
+        navigate(
+          { pathname: location.pathname, search: nextParams.toString() },
+          { replace: true, state: location.state },
+        )
+      }
 
       // Auto-unpause so the new cluster's topology loads immediately
       setTopologyPaused(false)
