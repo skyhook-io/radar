@@ -244,6 +244,9 @@ export function PrometheusChartsView({
             <p className="mt-1 text-xs text-theme-text-quaternary">
               Try a different time range or check that metrics are being collected
             </p>
+            {/* An empty chart is where the pod set matters most: it separates
+                "these pods reported nothing" from "we charted the wrong pods". */}
+            {coverageNote && <p className="mt-2 max-w-lg text-center text-xs text-theme-text-tertiary">{coverageNote}</p>}
             {metrics?.hint && (
               <p className="mt-3 w-full max-w-lg rounded border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-700 dark:text-yellow-400">
                 {metrics.hint}
