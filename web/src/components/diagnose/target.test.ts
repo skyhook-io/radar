@@ -3,18 +3,6 @@ import { describe, expect, it } from "vitest";
 import { formatInvestigationTarget, runTargetKey } from "./target";
 
 describe("investigation target identity", () => {
-  it("uses the question as the identity for a cluster-scoped investigation", () => {
-    expect(
-      formatInvestigationTarget({
-        kind: "",
-        group: "",
-        namespace: "",
-        name: "",
-        question: "Why are requests slow?",
-      }),
-    ).toBe("Why are requests slow?");
-  });
-
   it("uses one running key for singular Kinds and plural resource names", () => {
     expect(runTargetKey("Deployment", "prod", "api", "apps")).toBe(
       runTargetKey("deployments", "prod", "api", "apps"),

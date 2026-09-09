@@ -52,19 +52,7 @@ export interface Target {
    *  state is a thing that can fall out of sync with the target it describes. */
   fresh?: boolean;
 }
-export interface QuestionStart {
-  /** A fresh investigation scoped to the current cluster. */
-  question: string;
-}
-export type InvestigationStart = Target | QuestionStart;
 export type DiagnoseView = "home" | "investigation";
-
-export function investigationStartView(
-  start: InvestigationStart,
-  focusedRunID: string | null,
-): DiagnoseView {
-  return "question" in start && !focusedRunID ? "home" : "investigation";
-}
 
 // Setup readiness of local AI investigations, derived from the agents API:
 //  - "ready":         an agent is installed and the engine is running (available)
@@ -101,8 +89,7 @@ interface DiagnoseCtx {
   // approval was refused", and a run-start failure landing in the same slot
   // would be read as exactly that — the two paths don't share a lifecycle.
   consentError: string | null;
-  starting: boolean;
-  openInvestigation: (t: InvestigationStart) => void;
+  openInvestigation: (t: Target) => void;
   openRun: (id: string) => void;
   openHome: () => void;
   openWorkspace: (runID?: string | null) => void;
@@ -135,7 +122,7 @@ interface DiagnoseLayoutCtx {
   panelBounds: { min: number; max: number };
   panelWidthKey: string;
   runningKeys: ReadonlySet<string>; // resources with a live investigation (see runTargetKey)
-  runningCount: number; // all live investigations, including cluster questions
+  runningCount: number;
 }
 
 const Ctx = createContext<DiagnoseCtx | null>(null);
@@ -425,10 +412,7 @@ function RoutedDiagnoseProvider({
   const [runsLoaded, setRunsLoaded] = useState(false);
   const [runsLoadFailed, setRunsLoadFailed] = useState(false);
   const [historyDegraded, setHistoryDegraded] = useState(false);
-  const [pendingTarget, setPendingTarget] = useState<InvestigationStart | null>(
-    null,
-  );
-  const [starting, setStarting] = useState(false);
+  const [pendingTarget, setPendingTarget] = useState<Target | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
   const [consentError, setConsentError] = useState<string | null>(null);
   const [width, setWidth] = useState<number>(() => {
@@ -641,9 +625,8 @@ function RoutedDiagnoseProvider({
   );
   // A content-stable signature of the resources with a live investigation,
   // so per-resource Investigate buttons only re-render when their live targets
-  // change. Cluster-question runs deliberately have no resource key.
+  // change.
   const runningSig = runningRuns
-    .filter((r) => !!r.kind && !!r.name)
     .map((r) => runTargetKey(r.kind, r.namespace, r.name, r.group))
     .sort()
     // resourceKey itself is pipe-delimited; newlines cannot occur in a
@@ -674,10 +657,9 @@ function RoutedDiagnoseProvider({
   // Monotonic token so an earlier createRun that resolves late can't steal focus
   // from a later click on a different resource (only the latest start wins).
   const startSeqRef = useRef(0);
-  const startRunRef = useRef<(t: InvestigationStart) => void>(() => {});
-  startRunRef.current = (t: InvestigationStart) => {
+  const startRunRef = useRef<(t: Target) => void>(() => {});
+  startRunRef.current = (t: Target) => {
     const seq = ++startSeqRef.current;
-    setStarting(true);
     createRun(t, {
       agent: selectedAgent || undefined,
       profile: hosted ? undefined : effectiveProfile,
@@ -700,15 +682,11 @@ function RoutedDiagnoseProvider({
             ? e.message
             : "Couldn't start the investigation.",
         );
-      })
-      .finally(() => {
-        if (seq === startSeqRef.current) setStarting(false);
       });
   };
 
   const openInvestigation = useCallback(
-    (t: InvestigationStart) => {
-      const startView = investigationStartView(t, activeRunIdRef.current);
+    (t: Target) => {
       setStartError(null);
       setConsentError(null);
       setOpen(true);
@@ -717,15 +695,15 @@ function RoutedDiagnoseProvider({
         setStartError(
           "Radar can’t run this agent with a verified execution profile.",
         );
-        setView(startView);
+        setView("investigation");
         return;
       }
       if (!consentedRef.current[consentSurface]) {
         setPendingTarget(t);
-        setView(startView);
+        setView("investigation");
         return;
       }
-      setView(startView);
+      setView("investigation");
       startRunRef.current(t);
     },
     [consentSurface, hosted],
@@ -1036,7 +1014,6 @@ function RoutedDiagnoseProvider({
     needsConsent: !!pendingTarget,
     startError,
     consentError,
-    starting,
     openInvestigation,
     openRun,
     openHome,

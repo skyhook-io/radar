@@ -8,7 +8,6 @@ export interface InvestigationTargetIdentity {
   group: string;
   namespace: string;
   name: string;
-  question?: string;
 }
 
 // Normalize the Kind/resource-name boundary before comparing a run returned by
@@ -32,8 +31,6 @@ export function runTargetKey(
 export function formatInvestigationTarget(
   target: InvestigationTargetIdentity,
 ): string {
-  if (target.question?.trim()) return target.question.trim();
-  if (!target.kind && !target.name) return "Cluster investigation";
   const kind = target.group ? `${target.kind}.${target.group}` : target.kind;
   return `${kind} ${target.namespace ? `${target.namespace}/` : ""}${target.name}`;
 }

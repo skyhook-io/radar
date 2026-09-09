@@ -20,7 +20,6 @@ import {
   TerminalSquare,
   Copy,
   Check,
-  Plus,
   RotateCcw,
   PanelLeftOpen,
   Link,
@@ -360,7 +359,8 @@ export function canRerunInvestigation(
   return (
     view === "investigation" &&
     !!run &&
-    ((!!run.kind && !!run.name) || !!run.question) &&
+    !!run.kind &&
+    !!run.name &&
     ((run.status !== "running" && run.status !== "stopping") ||
       run.trigger === "background") &&
     run.status !== "stale" &&
@@ -763,14 +763,7 @@ export function DiagnoseSurface({
       <AgentSetupNotice setupState={d.setupState} />
     </div>
   ) : (
-    <InvestigationHome
-      currentContext={currentContext}
-      agentLabel={d.agentLabel}
-      onStart={(question) => d.openInvestigation({ question })}
-      starting={d.starting}
-      startError={d.startError}
-      autoFocus={maximized}
-    />
+    <InvestigationHome agentLabel={d.agentLabel} />
   );
 
   const showHistory = !setupPending || d.runs.length > 0;
@@ -874,17 +867,6 @@ export function DiagnoseSurface({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
-          {d.view !== "home" && !d.needsConsent && (
-            <Tooltip content="New investigation" position="bottom">
-              <button
-                onClick={d.goHome}
-                className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-                aria-label="New investigation"
-              >
-                <Plus className="h-4 w-4" />
-              </button>
-            </Tooltip>
-          )}
           {activeRun &&
             canRerunInvestigation(d.view, activeRun, d.needsConsent) && (
               <Tooltip
@@ -893,18 +875,14 @@ export function DiagnoseSurface({
               >
                 <button
                   onClick={() =>
-                    d.openInvestigation(
-                      activeRun.question
-                        ? { question: activeRun.question, fresh: true }
-                        : {
-                            kind: activeRun.kind,
-                            group: activeRun.group,
-                            namespace: activeRun.namespace,
-                            name: activeRun.name,
-                            issueId: activeRun.issueId,
-                            fresh: true,
-                          },
-                    )
+                    d.openInvestigation({
+                      kind: activeRun.kind,
+                      group: activeRun.group,
+                      namespace: activeRun.namespace,
+                      name: activeRun.name,
+                      issueId: activeRun.issueId,
+                      fresh: true,
+                    })
                   }
                   className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
                   aria-label="Re-run this investigation from scratch"

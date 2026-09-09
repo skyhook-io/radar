@@ -181,28 +181,18 @@ export function InvestigationView({
   // Investigate again means look again, so it asks for a new session explicitly and only
   // carries the issue forward — being handed the previous answer is the one
   // thing someone clicking this doesn't want.
-  const retryDiagnosis = useCallback(() => {
-    if (run.question) {
-      openInvestigation({ question: run.question });
-      return;
-    }
-    openInvestigation({
-      kind,
-      group: run.group,
-      namespace,
-      name,
-      issueId: run.issueId,
-      fresh: true,
-    });
-  }, [
-    openInvestigation,
-    kind,
-    namespace,
-    name,
-    run.group,
-    run.issueId,
-    run.question,
-  ]);
+  const retryDiagnosis = useCallback(
+    () =>
+      openInvestigation({
+        kind,
+        group: run.group,
+        namespace,
+        name,
+        issueId: run.issueId,
+        fresh: true,
+      }),
+    [openInvestigation, kind, namespace, name, run.group, run.issueId],
+  );
   const queryClient = useQueryClient();
   const [turns, setTurns] = useState<Turn[]>([]);
   // The run is gone server-side (evicted past the retention cap, or lost on a
@@ -587,7 +577,6 @@ export function InvestigationView({
               } else if (
                 latest?.status === "done" &&
                 latest.question &&
-                replayTurnsRef.current.length > 1 &&
                 !latest.verify &&
                 !latest.apply
               ) {
@@ -885,7 +874,7 @@ export function InvestigationView({
       t.status === "done" &&
       !t.apply &&
       !t.explainAssessment &&
-      (!t.question || t.verify || i === 0) &&
+      (!t.question || t.verify) &&
       (t.diagnosis?.remediation?.length ?? 0) > 0
     )
       lastRemediationIdx = i;
@@ -910,7 +899,7 @@ export function InvestigationView({
       t.status === "done" &&
       !t.apply &&
       !t.explainAssessment &&
-      (!t.question || t.verify || i === 0) &&
+      (!t.question || t.verify) &&
       structured
     )
       assessmentIndexes.push(i);
@@ -1708,7 +1697,7 @@ export function InvestigationView({
                           onRetryDiagnosis={
                             isLast &&
                             turn.status === "error" &&
-                            (!turn.question || index === 0) &&
+                            !turn.question &&
                             !turn.apply &&
                             !stale
                               ? retryDiagnosis
@@ -2126,7 +2115,7 @@ export function InvestigationView({
                                 lastApplyAttemptIdx,
                                 localApplyAttemptAssessmentIdx,
                                 interactionsBlocked,
-                                hosted: hosted || !run.kind || !run.name,
+                                hosted,
                                 hasNewerEvidence:
                                   hasEvidenceCollectedAfterAssessment,
                               })

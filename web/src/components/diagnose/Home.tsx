@@ -1,8 +1,6 @@
 // Server-side runs keep background and running investigations visible in both
 // the docked Home view and the maximized workspace's master pane.
-import { useState, type FormEvent } from "react";
 import {
-  ArrowUp,
   CircleAlert,
   Loader2,
   Server,
@@ -119,30 +117,9 @@ export function statusWord(status: RunSummary["status"]): {
 
 export function InvestigationHome({
   agentLabel,
-  onStart,
-  starting,
-  startError,
-  currentContext,
-  autoFocus = false,
 }: {
   agentLabel: string;
-  onStart: (question: string) => void;
-  starting: boolean;
-  startError?: string | null;
-  currentContext?: string;
-  autoFocus?: boolean;
 }) {
-  const [question, setQuestion] = useState("");
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    const value = question.trim();
-    if (!value || starting) return;
-    onStart(value);
-  };
-  const clusterName = currentContext
-    ? parseContextName(currentContext).clusterName
-    : "this cluster";
-
   return (
     <div className="flex min-h-full w-full items-center justify-center px-4 py-8 sm:px-6">
       <section className="mx-auto max-w-2xl text-center">
@@ -150,53 +127,15 @@ export function InvestigationHome({
           <Sparkles className="h-5 w-5" />
         </span>
         <h1 className="mt-4 text-xl font-semibold text-theme-text-primary">
-          What should I investigate?
+          Choose an investigation
         </h1>
-        <p className="mt-1 text-sm text-theme-text-tertiary">
-          Ask {agentLabel} about {clusterName}, or pick one from your history.
+        <p className="mx-auto mt-1 max-w-md text-sm text-theme-text-tertiary">
+          Select one from your history, or open a resource and choose{" "}
+          <span className="font-medium text-theme-text-secondary">
+            Investigate
+          </span>{" "}
+          to start a focused investigation with {agentLabel}.
         </p>
-        <form onSubmit={submit} className="mt-5 text-left">
-          <div className="rounded-xl border border-theme-border bg-theme-surface p-2 shadow-sm focus-within:border-accent/60 focus-within:ring-2 focus-within:ring-accent/15">
-            <textarea
-              value={question}
-              onChange={(event) => setQuestion(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  event.currentTarget.form?.requestSubmit();
-                }
-              }}
-              rows={3}
-              maxLength={4000}
-              autoFocus={autoFocus}
-              placeholder="Why are requests to checkout getting slower?"
-              aria-label="Investigation question"
-              className="block w-full resize-none bg-transparent px-2 py-1.5 text-sm text-theme-text-primary outline-none placeholder:text-theme-text-tertiary"
-            />
-            <div className="flex items-center justify-between gap-3 px-1 pb-0.5">
-              <span className="truncate text-xs text-theme-text-tertiary">
-                Current cluster · {clusterName}
-              </span>
-              <button
-                type="submit"
-                disabled={!question.trim() || starting}
-                aria-label="Start investigation"
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {starting ? (
-                  <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
-                ) : (
-                  <ArrowUp className="h-4 w-4" />
-                )}
-              </button>
-            </div>
-          </div>
-          {startError ? (
-            <p role="alert" className="mt-2 text-sm text-semantic-error">
-              {startError}
-            </p>
-          ) : null}
-        </form>
       </section>
     </div>
   );
@@ -229,7 +168,6 @@ export function RecentList({
     contextsByName.set(parsed.clusterName, names);
   }
   for (const r of runs) {
-    if (!r.kind) continue;
     const kind = pluralToKind(r.kind);
     const groups = groupsByKind.get(kind) ?? new Set<string>();
     // Match Radar's resource-lane display convention: built-in API groups
@@ -281,7 +219,7 @@ export function RecentList({
             No investigations yet
           </div>
           <p className="mt-1 max-w-xs text-sm text-theme-text-tertiary">
-            Start a new question, or open a resource and use its{" "}
+            Open a resource and use its{" "}
             <Sparkles className="inline h-3.5 w-3.5 align-text-bottom text-accent" />{" "}
             action to investigate it with {agentLabel} —{" "}
             <span className="font-medium text-theme-text-secondary">
@@ -339,15 +277,10 @@ export function RecentList({
                         })
                       ? `${parsed.account} · ${parsed.region}`
                       : r.context;
-                const readableKind = r.kind ? pluralToKind(r.kind) : "";
-                const kind = !r.kind
-                  ? "Cluster-wide"
-                  : groupsByKind.get(readableKind)!.size > 1
+                const readableKind = pluralToKind(r.kind);
+                const kind = groupsByKind.get(readableKind)!.size > 1
                     ? `${readableKind} · ${r.group || "core"}`
                     : readableKind;
-                const title = r.question
-                  ? formatInvestigationTarget(r)
-                  : r.name;
                 const initialIssue = r.health?.topReason?.trim();
                 const isCurrentCluster = currentContext === r.context;
                 const visibility =
@@ -373,14 +306,14 @@ export function RecentList({
                   >
                     <span className="flex w-full items-start gap-2">
                       <Tooltip
-                        content={r.question ? title : r.name}
+                        content={r.name}
                         position="right"
                         delay={600}
                         className="pointer-events-none"
                         wrapperClassName="min-w-0 flex-1"
                       >
                         <span className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-medium leading-5 text-theme-text-primary">
-                          {title}
+                          {r.name}
                         </span>
                       </Tooltip>
                       {(Icon || short) && (

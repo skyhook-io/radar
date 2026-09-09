@@ -83,16 +83,6 @@ describe("canRerunInvestigation", () => {
     expect(canRerunInvestigation("investigation", null, false)).toBe(false);
   });
 
-  it("offers a restart for a completed cluster-scoped question", () => {
-    expect(
-      canRerunInvestigation(
-        "investigation",
-        { ...run("done"), kind: "", name: "", question: "Why is it slow?" },
-        false,
-      ),
-    ).toBe(true);
-  });
-
   it("offers one on an errored or stopped run", () => {
     // Those are the runs a person most wants to start over from.
     expect(canRerunInvestigation("investigation", run("error"), false)).toBe(

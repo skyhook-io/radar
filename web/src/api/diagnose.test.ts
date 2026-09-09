@@ -71,22 +71,6 @@ describe("createRun", () => {
       });
     },
   );
-
-  it("starts a cluster-scoped investigation from a question", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ id: "run-1", question: "Why are requests slow?" }),
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    await createRun({ question: "Why are requests slow?" }, { agent: "codex" });
-
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
-    expect(JSON.parse(String(init.body))).toEqual({
-      question: "Why are requests slow?",
-      agent: "codex",
-    });
-  });
 });
 
 it("passes durable SSE sequence IDs and explanation origin through replay", () => {

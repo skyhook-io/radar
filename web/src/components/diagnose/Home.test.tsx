@@ -174,21 +174,6 @@ describe("RecentList", () => {
     expect(html).toContain("Deployment.apps shop/checkout");
   });
 
-  it("renders cluster-scoped questions without a fake resource label", () => {
-    const html = render([
-      run({
-        kind: "",
-        group: "",
-        namespace: "",
-        name: "",
-        question: "Why are requests slow?",
-      }),
-    ]);
-    expect(visible(html)).toContain("Why are requests slow?");
-    expect(visible(html)).toContain("Cluster-wide");
-    expect(html).not.toContain("undefined");
-  });
-
   it("does not change displayed time when cluster-switch bookkeeping updates runs", () => {
     const before = visible(render([run()]));
     const after = visible(
@@ -308,19 +293,13 @@ describe("RecentList", () => {
 });
 
 describe("InvestigationHome", () => {
-  it("keeps the fresh cluster-scoped question separate from history", () => {
+  it("points users toward history or a focused resource investigation", () => {
     const html = renderToStaticMarkup(
-      <InvestigationHome
-        agentLabel="Codex"
-        currentContext="gke_project_us-east1-b_nonprod"
-        onStart={() => {}}
-        starting={false}
-      />,
+      <InvestigationHome agentLabel="Codex" />,
     );
     const text = visible(html);
-    expect(text).toContain("What should I investigate?");
-    expect(text).toContain("Current cluster · nonprod");
-    expect(text).not.toContain("checkout");
-    expect(html).toContain('aria-label="Investigation question"');
+    expect(text).toContain("Choose an investigation");
+    expect(text).toContain("start a focused investigation with Codex");
+    expect(html).not.toContain("textarea");
   });
 });

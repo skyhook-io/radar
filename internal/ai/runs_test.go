@@ -1102,27 +1102,6 @@ func TestAddTurnRejectsBlankVerificationWithoutMutation(t *testing.T) {
 	}
 }
 
-func TestAddTurnRejectsApplyForClusterScopedQuestionWithoutMutation(t *testing.T) {
-	m, r, calls := controlledRunManager(t, nil)
-	r.Question = "Why are requests slow?"
-	if err := m.AddTurn(r.ID, "", true, "fix", false); !errors.Is(err, ErrQuestionApplyUnsupported) {
-		t.Fatalf("AddTurn(cluster question apply) = %v, want ErrQuestionApplyUnsupported", err)
-	}
-	if got := r.Summary(); got.Status != "done" {
-		t.Fatalf("rejected apply mutated run: %+v", got)
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.inFlight || len(r.events) != 0 {
-		t.Fatalf("rejected apply mutated execution state: inFlight=%v events=%+v", r.inFlight, r.events)
-	}
-	select {
-	case call := <-calls:
-		t.Fatalf("rejected apply started agent: %+v", call.request)
-	default:
-	}
-}
-
 func TestStopCancelsAutomaticVerificationWithoutExtraTerminal(t *testing.T) {
 	m, r, calls := controlledRunManager(t, nil)
 	if err := m.AddTurn(r.ID, "", true, "fix", false); err != nil {
@@ -1531,33 +1510,6 @@ func TestRunMatchesTarget(t *testing.T) {
 	if r.matchesTarget("Deployment", "apps", "ns", "app", "ctx", "codex", ExecutionProfileSafeguarded, "o3", "low") {
 		t.Error("different effort must NOT match")
 	}
-}
-
-func TestStartQuestionCreatesFreshClusterScopedRuns(t *testing.T) {
-	m, _, calls := controlledRunManager(t, nil)
-
-	first, err := m.StartQuestion("Why are requests slow?", "claude", ExecutionProfileSafeguarded, "", "")
-	if err != nil {
-		t.Fatalf("StartQuestion: %v", err)
-	}
-	if first.Question != "Why are requests slow?" || first.Kind != "" || first.Name != "" {
-		t.Fatalf("cluster-scoped summary = %+v", first)
-	}
-	firstCall := receiveDiagnoseCall(t, calls)
-	if firstCall.request.Question != first.Question || firstCall.request.Kind != "" || firstCall.request.Name != "" {
-		t.Fatalf("cluster-scoped request = %+v", firstCall.request)
-	}
-
-	second, err := m.StartQuestion("Why are requests slow?", "claude", ExecutionProfileSafeguarded, "", "")
-	if err != nil {
-		t.Fatalf("second StartQuestion: %v", err)
-	}
-	if second.ID == first.ID {
-		t.Fatal("repeated questions must create fresh runs")
-	}
-	secondCall := receiveDiagnoseCall(t, calls)
-	firstCall.respond <- controlledDiagnoseResponse{diag: Diagnosis{Inconclusive: true}}
-	secondCall.respond <- controlledDiagnoseResponse{diag: Diagnosis{Inconclusive: true}}
 }
 
 // persistedManager builds a manager over a store with no live diagnoser — good

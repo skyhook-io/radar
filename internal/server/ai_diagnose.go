@@ -286,7 +286,6 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Kind, Namespace, Name string
-		Question              string `json:"question"`
 		Group                 string `json:"group"`
 		Agent                 string `json:"agent"`
 		Profile               string `json:"profile"`
@@ -299,19 +298,10 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := strings.TrimSpace(body.Kind)
 	name := strings.TrimSpace(body.Name)
-	question := strings.TrimSpace(body.Question)
 	namespace := strings.TrimSpace(body.Namespace)
 	group := strings.ToLower(strings.TrimSpace(body.Group))
-	if question != "" && (kind != "" || name != "" || namespace != "" || group != "") {
-		s.writeError(w, http.StatusBadRequest, "question cannot be combined with a resource target")
-		return
-	}
-	if question == "" && (kind == "" || name == "") {
+	if kind == "" || name == "" {
 		s.writeError(w, http.StatusBadRequest, "kind and name are required")
-		return
-	}
-	if len(question) > 4000 {
-		s.writeError(w, http.StatusBadRequest, "question is too long")
 		return
 	}
 	if len(group) > 253 {
@@ -324,9 +314,7 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if question == "" {
-		kind, group = canonicalDiagnoseTarget(r.Context(), kind, group, namespace, name)
-	}
+	kind, group = canonicalDiagnoseTarget(r.Context(), kind, group, namespace, name)
 	agent := s.aiRuns.AgentName(strings.TrimSpace(body.Agent))
 	profile := ai.ExecutionProfile(strings.TrimSpace(body.Profile))
 	if profile == "" {
@@ -357,15 +345,9 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 	// Authoritatively detect whether a GitOps/Helm controller owns this resource, so
 	// the Apply confirmation can warn that a direct change will be reverted — rather
 	// than relying on the agent to self-report it. Best effort: "" (unknown) on miss.
-	var run ai.RunSummary
-	var err error
-	if question != "" {
-		run, err = s.aiRuns.StartQuestion(question, agent, profile, model, effort)
-	} else {
-		managedBy := s.detectManagedBy(r.Context(), kind, group, namespace, name)
-		health := s.detectDiagnoseHealth(r, kind, group, namespace, name)
-		run, err = s.aiRuns.Start(kind, group, namespace, name, agent, profile, model, effort, managedBy, health)
-	}
+	managedBy := s.detectManagedBy(r.Context(), kind, group, namespace, name)
+	health := s.detectDiagnoseHealth(r, kind, group, namespace, name)
+	run, err := s.aiRuns.Start(kind, group, namespace, name, agent, profile, model, effort, managedBy, health)
 	if err != nil {
 		if errors.Is(err, ai.ErrAtCapacity) {
 			s.writeError(w, http.StatusConflict, "too many investigations running — stop or finish one first")

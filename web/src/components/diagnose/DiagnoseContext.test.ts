@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  investigationStartView,
   investigationWorkspaceNavigationState,
   investigationWorkspacePath,
   investigationWorkspaceRestorePath,
@@ -76,12 +75,6 @@ describe("investigation workspace routes", () => {
     expect(shouldExitUnavailableWorkspace("/?ai-run=run-1", true, false)).toBe(
       false,
     );
-  });
-
-  it("keeps a question re-run focused while fresh questions start on Home", () => {
-    const question = { question: "Why is it slow?" };
-    expect(investigationStartView(question, null)).toBe("home");
-    expect(investigationStartView(question, "run-1")).toBe("investigation");
   });
 
   it("builds history-only return state for cross-tree workspace entry", () => {

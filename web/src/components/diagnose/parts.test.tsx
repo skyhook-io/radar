@@ -1036,24 +1036,6 @@ describe("TurnView tool outcome truth", () => {
       expect(html).not.toContain("Couldn&#x27;t determine");
     },
   );
-
-  it("treats a free-form opening question as the run's initial assessment", () => {
-    const opening = turn(false);
-    opening.question = "Why are requests slow?";
-    opening.status = "done";
-    opening.diagnosis = {
-      rootCause: "The ingress is queuing requests.",
-      remediation: ["Increase ingress capacity."],
-      report: "Queue depth rose with traffic.",
-    };
-
-    const html = renderToStaticMarkup(
-      <TurnView turn={opening} turnIndex={0} />,
-    );
-    expect(html).toContain("Why are requests slow?");
-    expect(html).toContain("Likely cause");
-    expect(html).not.toContain(">Answer<");
-  });
 });
 
 describe("assessment provenance disclosure", () => {
