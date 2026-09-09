@@ -4379,26 +4379,34 @@ function adaptSubjectPermissions(
       return;
     }
     const resourceLabel = `${check.resource}${check.subresource ? `/${check.subresource}` : ""}${check.group ? `.${check.group}` : ""}`;
-    const denied = !check.allowed;
-    const verdict =
-      check.reason ||
-      (check.allowed
-        ? "Allowed by RBAC"
-        : check.denied
-          ? "Explicitly denied"
-          : "No RBAC rule allows it");
+    // An authorizer that could not decide has established neither answer. The
+    // evaluation error already reaches the coverage strip below, but a card
+    // reading "cannot verb resource" is the part an operator acts on, and a
+    // webhook returning partial data is not a denial.
+    const unresolved = nonEmptyString(check.evaluationError);
+    const denied = !check.allowed && !unresolved;
+    const verdict = unresolved
+      ? `Could not be evaluated: ${check.evaluationError}`
+      : check.reason ||
+        (check.allowed
+          ? "Allowed by RBAC"
+          : check.denied
+            ? "Explicitly denied"
+            : "No RBAC rule allows it");
     builder.observe(
       `permissions:check:${subjectKey}:${check.verb}:${check.group ?? ""}:${check.resource}:${check.subresource ?? ""}:${check.namespace}:${check.resourceName ?? ""}`,
       "permissions",
       source,
       {
         tier: evidenceTierForRelevance(
-          denied ? "supporting" : "context",
+          denied || unresolved ? "supporting" : "context",
           relevance,
         ),
         relevance,
-        tone: denied ? "warning" : "info",
-        title: `${subjectLabel} ${denied ? "cannot" : "can"} ${check.verb} ${resourceLabel}`,
+        tone: denied || unresolved ? "warning" : "info",
+        title: unresolved
+          ? `Could not check whether ${subjectLabel} can ${check.verb} ${resourceLabel}`
+          : `${subjectLabel} ${denied ? "cannot" : "can"} ${check.verb} ${resourceLabel}`,
         summary: `${verdict} · ${check.namespace ? `namespace ${check.namespace}` : "cluster-wide"}${check.resourceName ? ` · ${check.resourceName}` : ""}`,
         data: { type: "permissions", subject, accessCheck: check },
       },

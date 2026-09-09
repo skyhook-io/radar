@@ -4394,6 +4394,44 @@ const permissionsArgs = JSON.stringify({
 });
 
 describe("subject permissions adapter", () => {
+  it("does not turn an unevaluated access check into a denial", () => {
+    // A webhook authorizer returning partial data has established neither
+    // answer. Reading it as "cannot" sends an operator after an RBAC grant
+    // that may already exist.
+    const projection = project([
+      tool("diagnose", "diagnose", {
+        resource: deploymentWithServiceAccount,
+        resourceContext: { tier: "basic" },
+      }),
+      tool(
+        "perm",
+        "get_subject_permissions",
+        {
+          subject: { kind: "ServiceAccount", namespace: "shop", name: "api-sa" },
+          accessCheck: {
+            verb: "get",
+            resource: "secrets",
+            namespace: "shop",
+            allowed: false,
+            denied: false,
+            reason: "",
+            evaluationError: "webhook authorizer returned partial data",
+          },
+        },
+        { summary: permissionsArgs },
+      ),
+    ]);
+    const [group] = groupsOf(projection.groups, "permissions");
+    expect(group.latest.title).toContain("Could not check whether");
+    expect(group.latest.title).not.toContain("cannot get");
+    expect(group.latest.summary).toContain("webhook authorizer returned partial data");
+    expect(group.latest.summary).not.toContain("No RBAC rule allows it");
+    // The gap still reaches the coverage strip as well.
+    expect(projection.limitations).toContainEqual(
+      expect.objectContaining({ source: "Permissions", kind: "error" }),
+    );
+  });
+
   it("binds an access check to the target's ServiceAccount seen in the same turn", () => {
     const check = {
       subject: { kind: "ServiceAccount", namespace: "shop", name: "api-sa" },
