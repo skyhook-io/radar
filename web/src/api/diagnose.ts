@@ -128,6 +128,9 @@ export interface RunSummary {
   group: string;
   namespace: string;
   name: string;
+  /** The initial user question for a cluster-scoped investigation. Resource
+   *  investigations leave this absent and use kind/namespace/name instead. */
+  question?: string;
   /** The issue this session is for, on hosts that key sessions by issue. Always
    *  absent from Radar's own backend, which records no issue. */
   issueId?: string;
@@ -186,23 +189,37 @@ const RUNS = () => `${getApiBase()}/diagnose/runs`;
 
 // createRun starts a server-side investigation (or focuses a live one for the same
 // target) and returns its run summary.
+export type InvestigationStart =
+  | {
+      kind: string;
+      /** Kubernetes API group; empty means the core API group. */
+      group: string;
+      namespace: string;
+      name: string;
+      // Associates the session with the issue it was started from, for hosts that
+      // group sessions that way. Inert for Radar's own backend, which neither reads
+      // it on start nor emits it on RunSummary — carried so both hosts share one
+      // request shape.
+      issueId?: string;
+      // Start a new session rather than continuing whatever the backend would
+      // otherwise hand back for this target. Inert for Radar's own backend, which
+      // only ever continues an in-flight run — and that one is never bypassed.
+      fresh?: boolean;
+      question?: never;
+    }
+  | {
+      /** Starts a fresh investigation scoped to the current cluster. */
+      question: string;
+      kind?: never;
+      group?: never;
+      namespace?: never;
+      name?: never;
+      issueId?: never;
+      fresh?: never;
+    };
+
 export async function createRun(
-  target: {
-    kind: string;
-    /** Kubernetes API group; empty means the core API group. */
-    group: string;
-    namespace: string;
-    name: string;
-    // Associates the session with the issue it was started from, for hosts that
-    // group sessions that way. Inert for Radar's own backend, which neither reads
-    // it on start nor emits it on RunSummary — carried so both hosts share one
-    // request shape.
-    issueId?: string;
-    // Start a new session rather than continuing whatever the backend would
-    // otherwise hand back for this target. Inert for Radar's own backend, which
-    // only ever continues an in-flight run — and that one is never bypassed.
-    fresh?: boolean;
-  },
+  target: InvestigationStart,
   opts?: {
     agent?: string;
     profile?: ExecutionProfile;

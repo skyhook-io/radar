@@ -572,7 +572,8 @@ export function TurnView({
   // A follow-up (a turn the user asked a question on) is a conversational reply,
   // not a fresh diagnosis — render it as a plain answer, never the root-cause
   // anchor or a remediation card.
-  const followup = !!turn.question && !turn.apply && !turn.verify;
+  const followup =
+    !!turn.question && turnIndex !== 0 && !turn.apply && !turn.verify;
   // Whether the done turn has anything for ResultCard to render — mirrors its
   // branch order exactly (apply → followup → structured/healthy), since a followup
   // ONLY ever renders FollowupAnswer (report/rootCause), never the remediation list.

@@ -1,6 +1,14 @@
 // Server-side runs keep background and running investigations visible in both
 // the docked Home view and the maximized workspace's master pane.
-import { CircleAlert, Loader2, Server, Sparkles, Square } from "lucide-react";
+import { useState, type FormEvent } from "react";
+import {
+  ArrowUp,
+  CircleAlert,
+  Loader2,
+  Server,
+  Sparkles,
+  Square,
+} from "lucide-react";
 import { type RunSummary } from "../../api/diagnose";
 import {
   groupQualifiesLaneId,
@@ -109,6 +117,108 @@ export function statusWord(status: RunSummary["status"]): {
   }
 }
 
+export function InvestigationHome({
+  agentLabel,
+  runs,
+  onSelect,
+  onStart,
+  starting,
+  startError,
+  historyDegraded = false,
+  currentContext,
+  autoFocus = false,
+}: {
+  agentLabel: string;
+  runs: RunSummary[];
+  onSelect: (id: string) => void;
+  onStart: (question: string) => void;
+  starting: boolean;
+  startError?: string | null;
+  historyDegraded?: boolean;
+  currentContext?: string;
+  autoFocus?: boolean;
+}) {
+  const [question, setQuestion] = useState("");
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const value = question.trim();
+    if (!value || starting) return;
+    onStart(value);
+  };
+  const clusterName = currentContext
+    ? parseContextName(currentContext).clusterName
+    : "this cluster";
+
+  return (
+    <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
+      <section className="mx-auto max-w-2xl text-center">
+        <span className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-accent-muted text-accent">
+          <Sparkles className="h-5 w-5" />
+        </span>
+        <h1 className="mt-4 text-xl font-semibold text-theme-text-primary">
+          What should I investigate?
+        </h1>
+        <p className="mt-1 text-sm text-theme-text-tertiary">
+          Ask {agentLabel} about {clusterName}, or choose a previous
+          investigation below.
+        </p>
+        <form onSubmit={submit} className="mt-5 text-left">
+          <div className="rounded-xl border border-theme-border bg-theme-surface p-2 shadow-sm focus-within:border-accent/60 focus-within:ring-2 focus-within:ring-accent/15">
+            <textarea
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              rows={3}
+              maxLength={4000}
+              autoFocus={autoFocus}
+              placeholder="Why are requests to checkout getting slower?"
+              aria-label="Investigation question"
+              className="block w-full resize-none bg-transparent px-2 py-1.5 text-sm text-theme-text-primary outline-none placeholder:text-theme-text-tertiary"
+            />
+            <div className="flex items-center justify-between gap-3 px-1 pb-0.5">
+              <span className="truncate text-xs text-theme-text-tertiary">
+                Current cluster · {clusterName}
+              </span>
+              <button
+                type="submit"
+                disabled={!question.trim() || starting}
+                aria-label="Start investigation"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {starting ? (
+                  <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+                ) : (
+                  <ArrowUp className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+          </div>
+          {startError ? (
+            <p role="alert" className="mt-2 text-sm text-semantic-error">
+              {startError}
+            </p>
+          ) : null}
+        </form>
+      </section>
+
+      <div className="mt-10 border-t border-theme-border pt-5">
+        <RecentList
+          currentContext={currentContext}
+          agentLabel={agentLabel}
+          runs={runs}
+          onSelect={onSelect}
+          historyDegraded={historyDegraded}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function RecentList({
   agentLabel,
   runs,
@@ -136,6 +246,7 @@ export function RecentList({
     contextsByName.set(parsed.clusterName, names);
   }
   for (const r of runs) {
+    if (!r.kind) continue;
     const kind = pluralToKind(r.kind);
     const groups = groupsByKind.get(kind) ?? new Set<string>();
     // Match Radar's resource-lane display convention: built-in API groups
@@ -187,7 +298,7 @@ export function RecentList({
             No investigations yet
           </div>
           <p className="mt-1 max-w-xs text-sm text-theme-text-tertiary">
-            Open a resource and use its{" "}
+            Ask a question above, or open a resource and use its{" "}
             <Sparkles className="inline h-3.5 w-3.5 align-text-bottom text-accent" />{" "}
             action to investigate it with {agentLabel} —{" "}
             <span className="font-medium text-theme-text-secondary">
@@ -245,11 +356,15 @@ export function RecentList({
                         })
                       ? `${parsed.account} · ${parsed.region}`
                       : r.context;
-                const readableKind = pluralToKind(r.kind);
-                const kind =
-                  groupsByKind.get(readableKind)!.size > 1
+                const readableKind = r.kind ? pluralToKind(r.kind) : "";
+                const kind = !r.kind
+                  ? "Cluster-wide"
+                  : groupsByKind.get(readableKind)!.size > 1
                     ? `${readableKind} · ${r.group || "core"}`
                     : readableKind;
+                const title = r.question
+                  ? formatInvestigationTarget(r)
+                  : r.name;
                 const initialIssue = r.health?.topReason?.trim();
                 const isCurrentCluster = currentContext === r.context;
                 const visibility =
@@ -275,14 +390,14 @@ export function RecentList({
                   >
                     <span className="flex w-full items-start gap-2">
                       <Tooltip
-                        content={r.name}
+                        content={r.question ? title : r.name}
                         position="right"
                         delay={600}
                         className="pointer-events-none"
                         wrapperClassName="min-w-0 flex-1"
                       >
                         <span className="min-w-0 flex-1 line-clamp-2 break-words text-sm font-medium leading-5 text-theme-text-primary">
-                          {r.name}
+                          {title}
                         </span>
                       </Tooltip>
                       {(Icon || short) && (

@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RunSummary } from "../../api/diagnose";
-import { RecentList } from "./Home";
+import { InvestigationHome, RecentList } from "./Home";
 
 const NOW = new Date(2026, 8, 2, 14, 30);
 const time = (day: number, hour: number) =>
@@ -174,6 +174,21 @@ describe("RecentList", () => {
     expect(html).toContain("Deployment.apps shop/checkout");
   });
 
+  it("renders cluster-scoped questions without a fake resource label", () => {
+    const html = render([
+      run({
+        kind: "",
+        group: "",
+        namespace: "",
+        name: "",
+        question: "Why are requests slow?",
+      }),
+    ]);
+    expect(visible(html)).toContain("Why are requests slow?");
+    expect(visible(html)).toContain("Cluster-wide");
+    expect(html).not.toContain("undefined");
+  });
+
   it("does not change displayed time when cluster-switch bookkeeping updates runs", () => {
     const before = visible(render([run()]));
     const after = visible(
@@ -289,5 +304,25 @@ describe("RecentList", () => {
       />,
     );
     expect(visible(html)).toContain("disk error");
+  });
+});
+
+describe("InvestigationHome", () => {
+  it("leads with a fresh cluster-scoped question and keeps history visible", () => {
+    const html = renderToStaticMarkup(
+      <InvestigationHome
+        agentLabel="Codex"
+        currentContext="gke_project_us-east1-b_nonprod"
+        runs={[run()]}
+        onSelect={() => {}}
+        onStart={() => {}}
+        starting={false}
+      />,
+    );
+    const text = visible(html);
+    expect(text).toContain("What should I investigate?");
+    expect(text).toContain("Current cluster · nonprod");
+    expect(text).toContain("checkout");
+    expect(html).toContain('aria-label="Investigation question"');
   });
 });

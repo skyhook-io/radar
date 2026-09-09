@@ -41,7 +41,12 @@ import {
 import { useDiagnoseCustomization } from "../../context/DiagnoseCustomization";
 import { InvestigationView } from "./InvestigationView";
 import type { InvestigationTimelineScope } from "./InvestigationEvidencePane";
-import { RecentList, absoluteTime, statusWord } from "./Home";
+import {
+  InvestigationHome,
+  RecentList,
+  absoluteTime,
+  statusWord,
+} from "./Home";
 import { AgentSetupNotice } from "./AgentSetupNotice";
 import { ConsentCard } from "./parts";
 import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
@@ -356,6 +361,7 @@ export function canStartNewInvestigation(
   return (
     view === "investigation" &&
     !!run &&
+    ((!!run.kind && !!run.name) || !!run.question) &&
     ((run.status !== "running" && run.status !== "stopping") ||
       run.trigger === "background") &&
     run.status !== "stale" &&
@@ -748,25 +754,53 @@ export function DiagnoseSurface({
       Select an investigation, or open a resource and click Investigate.
     </div>
   );
-  const compactHistory = (
-    <>
-      {setupPending && <AgentSetupNotice setupState={d.setupState} />}
-      {(!setupPending || d.runs.length > 0) && (
-        <RecentList
-          currentContext={currentContext}
-          agentLabel={d.agentLabel}
-          runs={d.runs}
-          onSelect={d.openRun}
-          historyDegraded={d.historyDegraded}
-        />
-      )}
-    </>
+  const home = d.needsConsent ? (
+    <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">
+      <ConsentCard
+        agentName={d.agentLabel}
+        agent={d.selectedAgent}
+        profile={d.profile}
+        copy={consentCopy}
+        onOpenSettings={openSettings ?? undefined}
+        error={d.consentError}
+        onApprove={d.approveConsent}
+        onCancel={d.cancelConsent}
+      />
+    </div>
+  ) : setupPending ? (
+    <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">
+      <AgentSetupNotice setupState={d.setupState} />
+      {d.runs.length > 0 ? (
+        <div className="mt-6 border-t border-theme-border pt-5">
+          <RecentList
+            currentContext={currentContext}
+            agentLabel={d.agentLabel}
+            runs={d.runs}
+            onSelect={d.openRun}
+            historyDegraded={d.historyDegraded}
+          />
+        </div>
+      ) : null}
+    </div>
+  ) : (
+    <InvestigationHome
+      currentContext={currentContext}
+      agentLabel={d.agentLabel}
+      runs={d.runs}
+      onSelect={d.openRun}
+      onStart={(question) => d.openInvestigation({ question })}
+      starting={d.starting}
+      startError={d.startError}
+      historyDegraded={d.historyDegraded}
+      autoFocus={maximized}
+    />
   );
 
   const showHistory = !setupPending || d.runs.length > 0;
   const historyVisible =
+    d.view !== "home" &&
     showHistory &&
-    (wideHistory ? !historyCollapsed || d.view === "home" : historyOverlay);
+    (wideHistory ? !historyCollapsed : historyOverlay);
 
   useLayoutEffect(() => {
     if (
@@ -905,12 +939,16 @@ export function DiagnoseSurface({
             </div>
           )}
           {(!maximized || d.canRestoreWorkspace) && (
-            <Tooltip content={maximized ? "Restore" : "Expand"} position="bottom">
+            <Tooltip
+              content={maximized ? "Restore" : "Expand"}
+              position="bottom"
+            >
               <button
                 onClick={
                   maximized
                     ? d.restoreWorkspace
-                    : (onOpenWorkspace ?? d.openWorkspace)
+                    : (onOpenWorkspace ??
+                      (() => d.openWorkspace(d.activeRunId)))
                 }
                 className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
                 aria-label={maximized ? "Restore" : "Expand"}
@@ -973,22 +1011,9 @@ export function DiagnoseSurface({
           </aside>
         )}
         {d.view === "home" ? (
-          <>
-            <div
-              key="history"
-              className={`flex-1 overflow-y-auto overflow-x-hidden px-4 py-3 ${maximized ? MAXIMIZED_COMPACT_HISTORY_VISIBILITY_CLASS : ""}`}
-            >
-              {compactHistory}
-            </div>
-            {maximized && (
-              <div
-                key="main"
-                className={`${MAXIMIZED_HOME_DETAIL_VISIBILITY_CLASS} min-h-0 min-w-0 flex-1 flex-col`}
-              >
-                {detail}
-              </div>
-            )}
-          </>
+          <div key="home" className="flex-1 overflow-y-auto overflow-x-hidden">
+            {home}
+          </div>
         ) : (
           <div
             key="main"

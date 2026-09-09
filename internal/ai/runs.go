@@ -73,6 +73,7 @@ type Run struct {
 	Group     string           // immutable — Kubernetes API group (empty = core)
 	Namespace string           // immutable
 	Name      string           // immutable
+	Question  string           // immutable — initial cluster-scoped question; empty for resource runs
 	Context   string           // immutable — kube-context the run is about (baseline)
 	Agent     string           // immutable — backend CLI driving this run ("claude"/"codex")
 	WorkDir   string           // immutable — per-run scratch dir (under RunManager.workRoot); "" if none
@@ -120,6 +121,7 @@ type RunSummary struct {
 	Group     string                `json:"group"`
 	Namespace string                `json:"namespace"`
 	Name      string                `json:"name"`
+	Question  string                `json:"question,omitempty"`
 	Context   string                `json:"context"`
 	Agent     string                `json:"agent,omitempty"`
 	Profile   ExecutionProfile      `json:"profile"`
@@ -160,6 +162,9 @@ var (
 	// no instruction. Automatic post-apply verification uses the server-owned
 	// prompt and does not enter through AddTurn.
 	ErrVerificationQuestionRequired = errors.New("verification requires a question")
+	// ErrQuestionApplyUnsupported rejects write-enabled turns for cluster-scoped
+	// questions. They have no concrete resource target to bind an approved fix to.
+	ErrQuestionApplyUnsupported = errors.New("apply is unavailable for cluster-scoped investigations")
 )
 
 const (
@@ -280,7 +285,7 @@ func (m *RunManager) loadPersisted() {
 			continue
 		}
 		r := &Run{
-			ID: s.ID, Kind: s.Kind, Group: s.Group, Namespace: s.Namespace, Name: s.Name,
+			ID: s.ID, Kind: s.Kind, Group: s.Group, Namespace: s.Namespace, Name: s.Name, Question: s.Question,
 			Context: s.Context, Agent: s.Agent, Profile: s.Profile,
 			Model: s.Model, Effort: s.Effort, ManagedBy: s.ManagedBy,
 			Health: s.Health, CreatedAt: s.CreatedAt, OwnerPID: s.OwnerPID,
@@ -492,15 +497,28 @@ func (m *RunManager) ctx() string {
 // the same target+context instead of duplicating it. Returns ErrAtCapacity when
 // the concurrent-running cap is reached.
 func (m *RunManager) Start(kind, group, namespace, name, agent string, profile ExecutionProfile, model, effort, managedBy string, health *ResourceHealthSignal) (RunSummary, error) {
+	return m.start(kind, group, namespace, name, "", agent, profile, model, effort, managedBy, health)
+}
+
+// StartQuestion creates a fresh investigation scoped to the current cluster.
+// Unlike resource starts, questions are never deduplicated: submitting is an
+// explicit request for a new investigation and must not attach to unrelated work.
+func (m *RunManager) StartQuestion(question, agent string, profile ExecutionProfile, model, effort string) (RunSummary, error) {
+	return m.start("", "", "", "", question, agent, profile, model, effort, "", nil)
+}
+
+func (m *RunManager) start(kind, group, namespace, name, question, agent string, profile ExecutionProfile, model, effort, managedBy string, health *ResourceHealthSignal) (RunSummary, error) {
 	cur := m.ctx()
 	m.mu.Lock()
 	// Focus an existing live run for this exact target+mode rather than duplicate it.
-	for _, id := range m.order {
-		r := m.runs[id]
-		if r.matchesTarget(kind, group, namespace, name, cur, agent, profile, model, effort) &&
-			r.snapshotStatus() == "running" {
-			m.mu.Unlock()
-			return r.Summary(), nil
+	if question == "" {
+		for _, id := range m.order {
+			r := m.runs[id]
+			if r.matchesTarget(kind, group, namespace, name, cur, agent, profile, model, effort) &&
+				r.snapshotStatus() == "running" {
+				m.mu.Unlock()
+				return r.Summary(), nil
+			}
 		}
 	}
 	if m.countInFlightLocked() >= m.maxConcurrent {
@@ -510,7 +528,7 @@ func (m *RunManager) Start(kind, group, namespace, name, agent string, profile E
 	id := newRunID()
 	r := &Run{
 		ID: id, Kind: kind, Group: group, Namespace: namespace,
-		Name: name, Context: cur, Agent: agent, WorkDir: m.runWorkDir(id), Profile: profile,
+		Name: name, Question: question, Context: cur, Agent: agent, WorkDir: m.runWorkDir(id), Profile: profile,
 		Model: model, Effort: effort, ManagedBy: managedBy, Health: health, CreatedAt: nowUTC(),
 		OwnerPID: os.Getpid(),
 		store:    m.store,
@@ -526,7 +544,7 @@ func (m *RunManager) Start(kind, group, namespace, name, agent string, profile E
 		m.store.SaveRun(r.Summary())
 	}
 
-	m.launchTurn(r, runTurn{})
+	m.launchTurn(r, runTurn{question: question})
 	return r.Summary(), nil
 }
 
@@ -554,6 +572,9 @@ func (m *RunManager) addTurn(id, question string, apply bool, fix string, verify
 	r := m.get(id)
 	if r == nil {
 		return ErrRunNotFound
+	}
+	if apply && r.Question != "" {
+		return ErrQuestionApplyUnsupported
 	}
 	if !SupportsProfile(r.Agent, r.Profile) {
 		return fmt.Errorf("ai: run uses unsupported execution profile %q", r.Profile)
@@ -1274,7 +1295,7 @@ func (r *Run) Summary() RunSummary {
 // access to a not-yet-shared run).
 func (r *Run) summaryLocked() RunSummary {
 	return RunSummary{
-		ID: r.ID, Kind: r.Kind, Group: r.Group, Namespace: r.Namespace, Name: r.Name,
+		ID: r.ID, Kind: r.Kind, Group: r.Group, Namespace: r.Namespace, Name: r.Name, Question: r.Question,
 		Context: r.Context, Agent: r.Agent, Profile: r.Profile,
 		Model: r.Model, Effort: r.Effort, ManagedBy: r.ManagedBy,
 		Health: r.Health,

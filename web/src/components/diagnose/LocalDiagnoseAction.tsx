@@ -181,7 +181,7 @@ export function GlobalDiagnoseButton() {
       position="bottom"
     >
       <button
-        onClick={d.openWorkspace}
+        onClick={() => d.openWorkspace()}
         className="relative rounded-md bg-theme-elevated p-1.5 text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
         aria-label={
           runningCount > 0

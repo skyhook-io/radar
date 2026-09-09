@@ -52,6 +52,11 @@ export interface Target {
    *  state is a thing that can fall out of sync with the target it describes. */
   fresh?: boolean;
 }
+export interface QuestionStart {
+  /** A fresh investigation scoped to the current cluster. */
+  question: string;
+}
+export type InvestigationStart = Target | QuestionStart;
 export type DiagnoseView = "home" | "investigation";
 
 // Setup readiness of local AI investigations, derived from the agents API:
@@ -89,10 +94,11 @@ interface DiagnoseCtx {
   // approval was refused", and a run-start failure landing in the same slot
   // would be read as exactly that — the two paths don't share a lifecycle.
   consentError: string | null;
-  openInvestigation: (t: Target) => void;
+  starting: boolean;
+  openInvestigation: (t: InvestigationStart) => void;
   openRun: (id: string) => void;
   openHome: () => void;
-  openWorkspace: () => void;
+  openWorkspace: (runID?: string | null) => void;
   restoreWorkspace: () => void;
   canRestoreWorkspace: boolean;
   goHome: () => void;
@@ -196,8 +202,8 @@ function writeStored(key: string, value: string) {
 
 const WORKSPACE_RETURN_STATE = "investigationWorkspaceReturn";
 const WORKSPACE_RETURN_HISTORY_STEPS_STATE = "investigationReturnHistorySteps";
-const WORKSPACE_RESTORE_HISTORY_STEPS_STATE = "investigationRestoreHistorySteps";
-const WORKSPACE_PREFERRED_RUN_STATE = "preferredInvestigationRunID";
+const WORKSPACE_RESTORE_HISTORY_STEPS_STATE =
+  "investigationRestoreHistorySteps";
 const INVALID_WORKSPACE_RUN_ID = "__invalid_workspace_run__";
 
 function runIDFromSearch(search: string): string | null {
@@ -223,7 +229,7 @@ export function isInvestigationWorkspacePath(pathname: string): boolean {
   return /^\/investigations(?:\/.*)?$/.test(pathname);
 }
 
-function workspacePath(runID: string | null): string {
+export function investigationWorkspacePath(runID: string | null): string {
   return runID
     ? `/investigations/${encodeURIComponent(runID)}`
     : "/investigations";
@@ -243,40 +249,34 @@ export function investigationWorkspaceSearch(search: string): string {
 function safeWorkspaceReturn(state: unknown): string | null {
   if (!state || typeof state !== "object") return null;
   const value = (state as Record<string, unknown>)[WORKSPACE_RETURN_STATE];
-  return typeof value === "string" && value.startsWith("/") && !value.startsWith("//")
+  return typeof value === "string" &&
+    value.startsWith("/") &&
+    !value.startsWith("//")
     ? value
     : null;
 }
 
-function preferredWorkspaceRunID(state: unknown): string | null {
-  if (!state || typeof state !== "object") return null;
-  const value = (state as Record<string, unknown>)[WORKSPACE_PREFERRED_RUN_STATE];
-  return typeof value === "string" && value.length > 0 && !value.includes("/")
-    ? value
-    : null;
-}
-
-export function investigationWorkspaceNavigationState(
-  preferredRunID?: string | null,
-  options?: {
-    returnPath?: string | null;
-    drawerOrigin?: boolean;
-    closeHistorySteps?: number;
-  },
-): Record<string, string> | undefined {
+export function investigationWorkspaceNavigationState(options?: {
+  returnPath?: string | null;
+  drawerOrigin?: boolean;
+  closeHistorySteps?: number;
+}): Record<string, string> | undefined {
   const state: Record<string, string> = {};
-  if (preferredRunID) state[WORKSPACE_PREFERRED_RUN_STATE] = preferredRunID;
   if (options?.returnPath) state[WORKSPACE_RETURN_STATE] = options.returnPath;
   if (options?.drawerOrigin) state[WORKSPACE_RESTORE_HISTORY_STEPS_STATE] = "1";
   if (options?.closeHistorySteps && options.closeHistorySteps > 0) {
-    state[WORKSPACE_RETURN_HISTORY_STEPS_STATE] = String(options.closeHistorySteps);
+    state[WORKSPACE_RETURN_HISTORY_STEPS_STATE] = String(
+      options.closeHistorySteps,
+    );
   }
   return Object.keys(state).length > 0 ? state : undefined;
 }
 
 function workspaceReturnHistorySteps(state: unknown): number | null {
   if (!state || typeof state !== "object") return null;
-  const raw = (state as Record<string, unknown>)[WORKSPACE_RETURN_HISTORY_STEPS_STATE];
+  const raw = (state as Record<string, unknown>)[
+    WORKSPACE_RETURN_HISTORY_STEPS_STATE
+  ];
   if (typeof raw !== "string" || !/^\d+$/.test(raw)) return null;
   const steps = Number(raw);
   return steps > 0 ? steps : null;
@@ -284,7 +284,9 @@ function workspaceReturnHistorySteps(state: unknown): number | null {
 
 function workspaceRestoreHistorySteps(state: unknown): number | null {
   if (!state || typeof state !== "object") return null;
-  const raw = (state as Record<string, unknown>)[WORKSPACE_RESTORE_HISTORY_STEPS_STATE];
+  const raw = (state as Record<string, unknown>)[
+    WORKSPACE_RESTORE_HISTORY_STEPS_STATE
+  ];
   if (typeof raw !== "string" || !/^\d+$/.test(raw)) return null;
   const steps = Number(raw);
   return steps > 0 ? steps : null;
@@ -352,36 +354,38 @@ function RoutedDiagnoseProvider({
   const workspaceRouteRef = useRef(false);
   const writeFocusedRunID = useCallback(
     (id: string | null, push: boolean) => {
-      if (!forceRouterURLState && !diagnoseURLStateEnabled(browserURLState)) return;
+      if (!forceRouterURLState && !diagnoseURLStateEnabled(browserURLState))
+        return;
       const current = locationRef.current;
       urlRunIdRef.current = id;
       if (isInvestigationWorkspacePath(current.pathname)) {
         const restoreSteps = workspaceRestoreHistorySteps(current.state);
         const returnSteps = workspaceReturnHistorySteps(current.state);
-        const state = push && (restoreSteps || returnSteps)
-          ? {
-              ...(current.state && typeof current.state === "object"
-                ? current.state
-                : {}),
-              ...(restoreSteps
-                ? {
-                    [WORKSPACE_RESTORE_HISTORY_STEPS_STATE]: String(
-                      restoreSteps + 1,
-                    ),
-                  }
-                : {}),
-              ...(returnSteps
-                ? {
-                    [WORKSPACE_RETURN_HISTORY_STEPS_STATE]: String(
-                      returnSteps + 1,
-                    ),
-                  }
-                : {}),
-            }
-          : current.state;
+        const state =
+          push && (restoreSteps || returnSteps)
+            ? {
+                ...(current.state && typeof current.state === "object"
+                  ? current.state
+                  : {}),
+                ...(restoreSteps
+                  ? {
+                      [WORKSPACE_RESTORE_HISTORY_STEPS_STATE]: String(
+                        restoreSteps + 1,
+                      ),
+                    }
+                  : {}),
+                ...(returnSteps
+                  ? {
+                      [WORKSPACE_RETURN_HISTORY_STEPS_STATE]: String(
+                        returnSteps + 1,
+                      ),
+                    }
+                  : {}),
+              }
+            : current.state;
         navigate(
           {
-            pathname: workspacePath(id),
+            pathname: investigationWorkspacePath(id),
             search: investigationWorkspaceSearch(current.search),
             hash: current.hash,
           },
@@ -407,7 +411,10 @@ function RoutedDiagnoseProvider({
   const [runsLoaded, setRunsLoaded] = useState(false);
   const [runsLoadFailed, setRunsLoadFailed] = useState(false);
   const [historyDegraded, setHistoryDegraded] = useState(false);
-  const [pendingTarget, setPendingTarget] = useState<Target | null>(null);
+  const [pendingTarget, setPendingTarget] = useState<InvestigationStart | null>(
+    null,
+  );
+  const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const [consentError, setConsentError] = useState<string | null>(null);
   const [width, setWidth] = useState<number>(() => {
@@ -618,7 +625,12 @@ function RoutedDiagnoseProvider({
   // so the per-resource Investigate buttons can show a "running" indicator even with the
   // panel closed — and only re-render when the set actually changes, not every poll.
   const runningSig = runs
-    .filter((r) => r.status === "running" || r.status === "stopping")
+    .filter(
+      (r) =>
+        !!r.kind &&
+        !!r.name &&
+        (r.status === "running" || r.status === "stopping"),
+    )
     .map((r) => runTargetKey(r.kind, r.namespace, r.name, r.group))
     .sort()
     // resourceKey itself is pipe-delimited; newlines cannot occur in a
@@ -648,9 +660,10 @@ function RoutedDiagnoseProvider({
   // Monotonic token so an earlier createRun that resolves late can't steal focus
   // from a later click on a different resource (only the latest start wins).
   const startSeqRef = useRef(0);
-  const startRunRef = useRef<(t: Target) => void>(() => {});
-  startRunRef.current = (t: Target) => {
+  const startRunRef = useRef<(t: InvestigationStart) => void>(() => {});
+  startRunRef.current = (t: InvestigationStart) => {
     const seq = ++startSeqRef.current;
+    setStarting(true);
     createRun(t, {
       agent: selectedAgent || undefined,
       profile: hosted ? undefined : effectiveProfile,
@@ -673,11 +686,14 @@ function RoutedDiagnoseProvider({
             ? e.message
             : "Couldn't start the investigation.",
         );
+      })
+      .finally(() => {
+        if (seq === startSeqRef.current) setStarting(false);
       });
   };
 
   const openInvestigation = useCallback(
-    (t: Target) => {
+    (t: InvestigationStart) => {
       setStartError(null);
       setConsentError(null);
       setOpen(true);
@@ -686,15 +702,15 @@ function RoutedDiagnoseProvider({
         setStartError(
           "Radar can’t run this agent with a verified execution profile.",
         );
-        setView("investigation");
+        setView("question" in t ? "home" : "investigation");
         return;
       }
       if (!consentedRef.current[consentSurface]) {
         setPendingTarget(t);
-        setView("investigation");
+        setView("question" in t ? "home" : "investigation");
         return;
       }
-      setView("investigation");
+      setView("question" in t ? "home" : "investigation");
       startRunRef.current(t);
     },
     [consentSurface, hosted],
@@ -726,7 +742,8 @@ function RoutedDiagnoseProvider({
   // contextual drawer on its underlying page. Fetch exact ids rather than
   // assuming the bounded recent list contains them.
   useEffect(() => {
-    if (!forceRouterURLState && !diagnoseURLStateEnabled(browserURLState)) return;
+    if (!forceRouterURLState && !diagnoseURLStateEnabled(browserURLState))
+      return;
     const workspace = isInvestigationWorkspacePath(location.pathname);
     const id = workspace
       ? workspaceRunIDFromPath(location.pathname)
@@ -792,110 +809,55 @@ function RoutedDiagnoseProvider({
     writeFocusedRunID,
   ]);
 
-  // The base workspace is a stable entry point. Once server history lands,
-  // canonicalize it to the newest readable run. Empty history deliberately
-  // stays at /investigations with no synthetic "nothing selected" URL state.
-  useEffect(() => {
-    if (
-      (!forceRouterURLState && !diagnoseURLStateEnabled(browserURLState)) ||
-      location.pathname.replace(/\/+$/, "") !== "/investigations" ||
-      !runsLoaded ||
-      runs.length === 0
-    ) {
-      return;
-    }
-    let cancelled = false;
-    const focus = (runID: string) => {
-      if (cancelled) return;
-      setActiveRunId(runID);
-      setView("investigation");
-      urlRunIdRef.current = runID;
-      navigate(
-        {
-          pathname: workspacePath(runID),
-          search: investigationWorkspaceSearch(location.search),
-          hash: location.hash,
-        },
-        { replace: true, state: location.state },
-      );
-    };
-    const preferredID = preferredWorkspaceRunID(location.state);
-    const listedPreferred = runs.find((run) => run.id === preferredID);
-    if (listedPreferred) {
-      focus(listedPreferred.id);
-    } else if (preferredID) {
-      getRun(preferredID)
-        .then((run) => {
-          updateRunSummary(run);
-          focus(run.id);
-        })
-        .catch(() => focus(runs[0].id));
-    } else {
-      focus(runs[0].id);
-    }
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    browserURLState,
-    forceRouterURLState,
-    location.hash,
-    location.pathname,
-    location.search,
-    location.state,
-    navigate,
-    runs,
-    runsLoaded,
-    updateRunSummary,
-  ]);
   // Leaving the detail pane drops the failure that belonged to it. startError
   // renders as the entire pane (maximized home still shows `detail`), where a
   // message about a resource you just navigated away from has nothing to attach
   // to and no way to be dismissed.
   const openHome = useCallback(() => {
     unavailableRunIDsRef.current.clear();
+    setActiveRunId(null);
     setView("home");
     setStartError(null);
     setOpen(true);
     writeFocusedRunID(null, false);
   }, [writeFocusedRunID]);
-  const openWorkspace = useCallback(() => {
-    setOpen(true);
-    setStartError(null);
-    if (!forceRouterURLState && !diagnoseURLStateEnabled(browserURLState)) {
-      setMaximized(true);
-      return;
-    }
-    const current = locationRef.current;
-    // The global entry remains visible in the workspace. Treat clicking it
-    // there as an idempotent reveal rather than pushing another workspace
-    // entry and replacing the page that Close should return to.
-    if (isInvestigationWorkspacePath(current.pathname)) {
-      setMaximized(true);
-      return;
-    }
-    const drawerRunID = runIDFromSearch(current.search);
-    // Without a URL-backed drawer selection, enter through the base route and
-    // let server history choose the newest readable run. React state can still
-    // contain a run the user just dismissed or learned was unavailable.
-    const runID = drawerRunID;
-    const state = {
-      ...(current.state && typeof current.state === "object"
-        ? current.state
-        : {}),
-      [WORKSPACE_RETURN_STATE]: `${current.pathname}${current.search}${current.hash}`,
-      ...(drawerRunID
-        ? { [WORKSPACE_RESTORE_HISTORY_STEPS_STATE]: "1" }
-        : {}),
-    };
-    navigate(
-      {
-        pathname: workspacePath(runID),
-        search: investigationWorkspaceSearch(current.search),
-      },
-      { state },
-    );
-  }, [browserURLState, forceRouterURLState, navigate]);
+  const openWorkspace = useCallback(
+    (preferredRunID?: string | null) => {
+      setOpen(true);
+      setStartError(null);
+      if (!forceRouterURLState && !diagnoseURLStateEnabled(browserURLState)) {
+        setMaximized(true);
+        return;
+      }
+      const current = locationRef.current;
+      // The global entry remains visible in the workspace. Treat clicking it
+      // there as an idempotent reveal rather than pushing another workspace
+      // entry and replacing the page that Close should return to.
+      if (isInvestigationWorkspacePath(current.pathname)) {
+        setMaximized(true);
+        return;
+      }
+      // Global entry calls this without a run and always lands on the fresh Home.
+      // Expanding a docked detail passes its focused run explicitly so the
+      // presentation change does not discard the user's current context.
+      const runID = preferredRunID ?? null;
+      const state = {
+        ...(current.state && typeof current.state === "object"
+          ? current.state
+          : {}),
+        [WORKSPACE_RETURN_STATE]: `${current.pathname}${current.search}${current.hash}`,
+        ...(runID ? { [WORKSPACE_RESTORE_HISTORY_STEPS_STATE]: "1" } : {}),
+      };
+      navigate(
+        {
+          pathname: investigationWorkspacePath(runID),
+          search: investigationWorkspaceSearch(current.search),
+        },
+        { state },
+      );
+    },
+    [browserURLState, forceRouterURLState, navigate],
+  );
   const routerURLStateEnabled =
     forceRouterURLState || diagnoseURLStateEnabled(browserURLState);
   const canRestoreWorkspace = routerURLStateEnabled
@@ -917,6 +879,7 @@ function RoutedDiagnoseProvider({
   }, [navigate, routerURLStateEnabled]);
   const goHome = useCallback(() => {
     unavailableRunIDsRef.current.clear();
+    setActiveRunId(null);
     setView("home");
     setStartError(null);
     writeFocusedRunID(null, false);
@@ -932,12 +895,12 @@ function RoutedDiagnoseProvider({
     setOpen(false);
     const current = locationRef.current;
     if (isInvestigationWorkspacePath(current.pathname)) {
-      const returnPath = safeWorkspaceReturn(current.state);
       const historySteps = workspaceReturnHistorySteps(current.state);
-      if (returnPath && historySteps) {
+      if (historySteps) {
         navigate(-historySteps);
         return;
       }
+      const returnPath = safeWorkspaceReturn(current.state);
       if (returnPath) {
         const url = new URL(returnPath, window.location.origin);
         url.searchParams.delete("ai-run");
@@ -1022,6 +985,7 @@ function RoutedDiagnoseProvider({
     needsConsent: !!pendingTarget,
     startError,
     consentError,
+    starting,
     openInvestigation,
     openRun,
     openHome,

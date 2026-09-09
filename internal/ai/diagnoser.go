@@ -297,7 +297,7 @@ func applyPrompt(req Request) string {
 		"that change." + identityGuidance + " " + applyGuidance
 }
 
-const systemPrompt = "You are a senior Kubernetes SRE assessing a Kubernetes resource that may or may not be unhealthy for a " +
+const systemPrompt = "You are a senior Kubernetes SRE investigating a Kubernetes cluster or resource for a " +
 	"developer who is NOT a Kubernetes expert. " +
 	"Do not assume there is a problem; let Radar's issue signal and the evidence decide. " +
 	"Investigate methodically and SHOW YOUR WORK: make specific, targeted tool calls " +
