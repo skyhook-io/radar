@@ -273,8 +273,9 @@ export function investigationWorkspaceRestorePath(
   state: unknown,
   focusedRunID: string | null,
   origin = window.location.origin,
-): string {
-  const target = safeWorkspaceReturn(state, origin) ?? "/";
+): string | null {
+  const target = safeWorkspaceReturn(state, origin);
+  if (!target) return null;
   const url = new URL(target, origin);
   if (focusedRunID && focusedRunID !== INVALID_WORKSPACE_RUN_ID) {
     url.searchParams.set("ai-run", focusedRunID);
@@ -348,7 +349,8 @@ function RoutedDiagnoseProvider({
   }, [location]);
   const [available, setAvailable] = useState(false);
   const [eligible, setEligible] = useState(false);
-  const [agentsResolved, setAgentsResolved] = useState(false);
+  const [agentEligibilityResolved, setAgentEligibilityResolved] =
+    useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [consented, setConsented] = useState<Record<string, boolean>>({});
   const [selectedAgent, setSelectedAgentState] = useState<string>(
@@ -483,11 +485,9 @@ function RoutedDiagnoseProvider({
           setEffortState("");
           writeStored(EFFORT_KEY, "");
         }
+        setAgentEligibilityResolved(true);
       })
-      .catch(() => {})
-      .finally(() => {
-        if (live) setAgentsResolved(true);
-      });
+      .catch(() => {});
     return () => {
       live = false;
     };
@@ -763,15 +763,25 @@ function RoutedDiagnoseProvider({
     // Eligibility is unresolved until the agent probe returns. Once it has
     // definitively resolved to off, workspace routes cannot render anything
     // useful; return to the app instead of leaving an eternal loading panel.
-    if (agentsResolved && !eligible) {
+    if (agentEligibilityResolved && !eligible) {
+      setActiveRunId(null);
+      setView("home");
+      setOpen(false);
+      setMaximized(false);
       if (
         shouldExitUnavailableWorkspace(
           location.pathname,
-          agentsResolved,
+          agentEligibilityResolved,
           eligible,
         )
       )
-        navigate("/", { replace: true });
+        navigate(
+          {
+            pathname: "/",
+            search: investigationWorkspaceSearch(location.search),
+          },
+          { replace: true },
+        );
       return;
     }
     const id = workspace
@@ -832,7 +842,7 @@ function RoutedDiagnoseProvider({
       });
   }, [
     available,
-    agentsResolved,
+    agentEligibilityResolved,
     browserURLState,
     eligible,
     forceRouterURLState,
@@ -860,8 +870,13 @@ function RoutedDiagnoseProvider({
       setOpen(true);
       setStartError(null);
       if (!forceRouterURLState && !diagnoseURLStateEnabled(browserURLState)) {
-        setActiveRunId(null);
-        setView("home");
+        if (preferredRunID) {
+          setActiveRunId(preferredRunID);
+          setView("investigation");
+        } else {
+          setActiveRunId(null);
+          setView("home");
+        }
         setMaximized(true);
         return;
       }
@@ -898,7 +913,8 @@ function RoutedDiagnoseProvider({
   const canRestoreWorkspace = routerURLStateEnabled
     ? isInvestigationWorkspacePath(location.pathname) &&
       !!activeRunId &&
-      activeRunId !== INVALID_WORKSPACE_RUN_ID
+      activeRunId !== INVALID_WORKSPACE_RUN_ID &&
+      !!safeWorkspaceReturn(location.state)
     : maximized;
   const restoreWorkspace = useCallback(() => {
     if (!routerURLStateEnabled) {
@@ -906,13 +922,11 @@ function RoutedDiagnoseProvider({
       return;
     }
     const current = locationRef.current;
-    navigate(
-      investigationWorkspaceRestorePath(
-        current.state,
-        activeRunIdRef.current,
-      ),
-      { replace: true },
+    const target = investigationWorkspaceRestorePath(
+      current.state,
+      activeRunIdRef.current,
     );
+    if (target) navigate(target, { replace: true });
   }, [navigate, routerURLStateEnabled]);
   const goHome = useCallback(() => {
     unavailableRunIDsRef.current.clear();

@@ -63,7 +63,7 @@ describe("investigation workspace routes", () => {
         "run-1",
         "https://radar.local",
       ),
-    ).toBe("/?ai-run=run-1");
+    ).toBeNull();
   });
 
   it("exits only resolved AI-off workspace routes", () => {
