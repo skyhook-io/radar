@@ -2492,15 +2492,15 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               setNamespaces([namespace])
               setActiveNamespace.mutate({ namespaces: [namespace] })
             } else {
-              // A cluster-scoped subject has no namespace, and the Timeline
-              // drops every event whose namespace is not in the filter — so
-              // carrying the current scope opens a view the cited change
-              // cannot appear in, which reads as "nothing happened". Widening
-              // goes through clearAllNamespaces: it waits for the server before
-              // moving local state, so queries cannot refetch under the empty
-              // key while the server still returns the previous pick, and it
-              // refuses to widen a namespace-locked session.
-              clearAllNamespaces()
+              // A cluster-scoped subject changes nothing about scope, so the
+              // destination keeps the current one. That means a namespace
+              // filter can hide the very change that was clicked, because the
+              // Timeline drops events whose namespace is outside it. Widening
+              // instead has to move scope, URL and the server pick together —
+              // three coupled effects with their own ordering rules — so it is
+              // a change to make against that machinery, not here.
+              const globalNamespaces = searchParams.get('namespaces')
+              if (globalNamespaces) params.set('namespaces', globalNamespaces)
             }
             navigate({ pathname: '/timeline', search: params.toString() })
           }}
