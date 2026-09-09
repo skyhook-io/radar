@@ -119,22 +119,16 @@ export function statusWord(status: RunSummary["status"]): {
 
 export function InvestigationHome({
   agentLabel,
-  runs,
-  onSelect,
   onStart,
   starting,
   startError,
-  historyDegraded = false,
   currentContext,
   autoFocus = false,
 }: {
   agentLabel: string;
-  runs: RunSummary[];
-  onSelect: (id: string) => void;
   onStart: (question: string) => void;
   starting: boolean;
   startError?: string | null;
-  historyDegraded?: boolean;
   currentContext?: string;
   autoFocus?: boolean;
 }) {
@@ -150,7 +144,7 @@ export function InvestigationHome({
     : "this cluster";
 
   return (
-    <div className="mx-auto w-full max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
+    <div className="flex min-h-full w-full items-center justify-center px-4 py-8 sm:px-6">
       <section className="mx-auto max-w-2xl text-center">
         <span className="mx-auto flex h-10 w-10 items-center justify-center rounded-xl bg-accent-muted text-accent">
           <Sparkles className="h-5 w-5" />
@@ -205,16 +199,6 @@ export function InvestigationHome({
           ) : null}
         </form>
       </section>
-
-      <div className="mt-10 border-t border-theme-border pt-5">
-        <RecentList
-          currentContext={currentContext}
-          agentLabel={agentLabel}
-          runs={runs}
-          onSelect={onSelect}
-          historyDegraded={historyDegraded}
-        />
-      </div>
     </div>
   );
 }

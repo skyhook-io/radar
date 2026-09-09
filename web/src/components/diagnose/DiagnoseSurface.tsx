@@ -21,6 +21,7 @@ import {
   Copy,
   Check,
   Plus,
+  RotateCcw,
   PanelLeftOpen,
   Link,
   Lock,
@@ -340,7 +341,7 @@ function VisibilityControl({
 // header, right of the nav rail) — App renders it there and passes topInset (the
 // header height; 0 in chromeless embeds). It shares that frame with the resource/
 // Helm drawers, so it no longer floats viewport-fixed or DOM-measures the chrome.
-// Whether the header offers a new investigation on the focused run's resource.
+// Whether the header offers a fresh re-run of the focused investigation.
 // Every clause is a failure this button actually had:
 //
 //   view          goHome() leaves activeRunId set, so the header keeps rendering
@@ -353,7 +354,7 @@ function VisibilityControl({
 //                 the resource may not exist in the active context. Do not
 //                 silently start a different-cluster investigation from here.
 //   needsConsent  the consent card owns the surface until it's answered.
-export function canStartNewInvestigation(
+export function canRerunInvestigation(
   view: DiagnoseView,
   run: RunSummary | null,
   needsConsent: boolean,
@@ -373,6 +374,7 @@ export function canStartNewInvestigation(
 // Keep these Tailwind literals aligned with the measured rail threshold.
 // Detail uses one stable history toggle; below this width it opens an overlay.
 export const INVESTIGATION_HISTORY_MIN_WIDTH = 1750;
+export const INVESTIGATION_HOME_HISTORY_MIN_WIDTH = 960;
 export const MAXIMIZED_COMPACT_HISTORY_VISIBILITY_CLASS =
   "@min-[1750px]/diagnose-surface:hidden";
 export const MAXIMIZED_HOME_DETAIL_VISIBILITY_CLASS =
@@ -557,10 +559,14 @@ export function DiagnoseSurface({
     panelBounds: { min: minW, max: maxW },
     panelWidthKey: widthKey,
   } = useDiagnoseLayout();
-  const wideHistory =
-    maximized && surfaceWidth >= INVESTIGATION_HISTORY_MIN_WIDTH;
+  const persistentHistory =
+    maximized &&
+    surfaceWidth >=
+      (d.view === "home"
+        ? INVESTIGATION_HOME_HISTORY_MIN_WIDTH
+        : INVESTIGATION_HISTORY_MIN_WIDTH);
   const historyOverlay =
-    !wideHistory && historyOverlayOpen && d.view !== "home";
+    !persistentHistory && historyOverlayOpen;
   const { shouldRender: historyOverlayPresent, isOpen: historySlideOpen } =
     useAnimatedUnmount(historyOverlay);
   const dismissHistory = useCallback(() => {
@@ -569,7 +575,7 @@ export function DiagnoseSurface({
   }, []);
   useEffect(() => {
     setHistoryOverlayOpen(false);
-  }, [wideHistory, maximized, d.view]);
+  }, [persistentHistory, maximized, d.view]);
   useEffect(() => {
     if (historyOverlay) {
       const target =
@@ -770,37 +776,24 @@ export function DiagnoseSurface({
   ) : setupPending ? (
     <div className="mx-auto w-full max-w-3xl px-4 py-8 sm:px-6">
       <AgentSetupNotice setupState={d.setupState} />
-      {d.runs.length > 0 ? (
-        <div className="mt-6 border-t border-theme-border pt-5">
-          <RecentList
-            currentContext={currentContext}
-            agentLabel={d.agentLabel}
-            runs={d.runs}
-            onSelect={d.openRun}
-            historyDegraded={d.historyDegraded}
-          />
-        </div>
-      ) : null}
     </div>
   ) : (
     <InvestigationHome
       currentContext={currentContext}
       agentLabel={d.agentLabel}
-      runs={d.runs}
-      onSelect={d.openRun}
       onStart={(question) => d.openInvestigation({ question })}
       starting={d.starting}
       startError={d.startError}
-      historyDegraded={d.historyDegraded}
       autoFocus={maximized}
     />
   );
 
   const showHistory = !setupPending || d.runs.length > 0;
   const historyVisible =
-    d.view !== "home" &&
     showHistory &&
-    (wideHistory ? !historyCollapsed : historyOverlay);
+    (persistentHistory
+      ? d.view === "home" || !historyCollapsed
+      : historyOverlay);
 
   useLayoutEffect(() => {
     if (
@@ -840,9 +833,9 @@ export function DiagnoseSurface({
       )}
 
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-theme-border px-4 py-2.5">
+      <div className="relative z-30 flex items-center justify-between border-b border-theme-border bg-theme-surface px-4 py-2.5">
         <div className="flex min-w-0 flex-1 items-center gap-2">
-          {d.view !== "home" && showHistory ? (
+          {showHistory && (d.view !== "home" || !persistentHistory) ? (
             <Tooltip
               content={
                 historyVisible
@@ -859,7 +852,7 @@ export function DiagnoseSurface({
                 aria-expanded={historyVisible}
                 aria-controls="investigation-history"
                 onClick={() =>
-                  wideHistory
+                  persistentHistory
                     ? setHistoryCollapsed((value) => !value)
                     : historyOverlay
                       ? dismissHistory()
@@ -896,27 +889,42 @@ export function DiagnoseSurface({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
+          {d.view !== "home" && !d.needsConsent && (
+            <Tooltip content="New investigation" position="bottom">
+              <button
+                onClick={d.goHome}
+                className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+                aria-label="New investigation"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
           {activeRun &&
-            canStartNewInvestigation(d.view, activeRun, d.needsConsent) && (
+            canRerunInvestigation(d.view, activeRun, d.needsConsent) && (
               <Tooltip
-                content="Start fresh — ignore earlier findings"
+                content="Re-run this investigation from scratch"
                 position="bottom"
               >
                 <button
                   onClick={() =>
-                    d.openInvestigation({
-                      kind: activeRun.kind,
-                      group: activeRun.group,
-                      namespace: activeRun.namespace,
-                      name: activeRun.name,
-                      issueId: activeRun.issueId,
-                      fresh: true,
-                    })
+                    d.openInvestigation(
+                      activeRun.question
+                        ? { question: activeRun.question, fresh: true }
+                        : {
+                            kind: activeRun.kind,
+                            group: activeRun.group,
+                            namespace: activeRun.namespace,
+                            name: activeRun.name,
+                            issueId: activeRun.issueId,
+                            fresh: true,
+                          },
+                    )
                   }
                   className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-                  aria-label="Start fresh — ignore earlier findings"
+                  aria-label="Re-run this investigation from scratch"
                 >
-                  <Plus className="h-4 w-4" />
+                  <RotateCcw className="h-4 w-4" />
                 </button>
               </Tooltip>
             )}
@@ -979,7 +987,7 @@ export function DiagnoseSurface({
           only appears when expanded; keys keep the detail node identity-stable
           as it comes and goes. */}
       <div className="relative flex min-h-0 flex-1">
-        {!wideHistory && historyOverlayPresent && (
+        {!persistentHistory && historyOverlayPresent && (
           <div
             aria-hidden="true"
             onClick={dismissHistory}
@@ -995,7 +1003,7 @@ export function DiagnoseSurface({
             aria-hidden={!historyVisible}
             inert={!historyVisible}
             id="investigation-history"
-            className={`${historyVisible || (!wideHistory && historyOverlayPresent) ? "block" : "hidden"} ${wideHistory ? "" : `absolute inset-y-0 left-0 z-20 max-w-[calc(100%-2rem)] shadow-drawer ${TRANSITION_DRAWER} motion-reduce:transition-none ${historySlideOpen ? "translate-x-0 opacity-100" : "-translate-x-full opacity-0"}`} w-72 shrink-0 overflow-y-auto border-r border-theme-border bg-theme-surface px-3 py-3 outline-none`}
+            className={`${historyVisible || (!persistentHistory && historyOverlayPresent) ? "block" : "hidden"} ${persistentHistory ? "" : `absolute inset-y-0 left-0 z-20 max-w-[calc(100%-2rem)] ${TRANSITION_DRAWER} motion-reduce:transition-none ${historySlideOpen ? "translate-x-0 opacity-100" : "-translate-x-full opacity-0"}`} w-72 shrink-0 overflow-y-auto border-r border-theme-border bg-theme-surface px-3 py-3 outline-none`}
           >
             <RecentList
               currentContext={currentContext}
@@ -1011,7 +1019,11 @@ export function DiagnoseSurface({
           </aside>
         )}
         {d.view === "home" ? (
-          <div key="home" className="flex-1 overflow-y-auto overflow-x-hidden">
+          <div
+            key="home"
+            inert={historyOverlay}
+            className="flex-1 overflow-y-auto overflow-x-hidden"
+          >
             {home}
           </div>
         ) : (

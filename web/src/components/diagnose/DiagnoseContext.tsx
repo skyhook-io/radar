@@ -128,6 +128,7 @@ interface DiagnoseLayoutCtx {
   panelBounds: { min: number; max: number };
   panelWidthKey: string;
   runningKeys: ReadonlySet<string>; // resources with a live investigation (see runTargetKey)
+  runningCount: number; // all live investigations, including cluster questions
 }
 
 const Ctx = createContext<DiagnoseCtx | null>(null);
@@ -621,16 +622,14 @@ function RoutedDiagnoseProvider({
     onFocusedRun(activeRunId);
   }, [activeRunId, onFocusedRun, runs]);
 
+  const runningRuns = runs.filter(
+    (r) => r.status === "running" || r.status === "stopping",
+  );
   // A content-stable signature of the resources with a live investigation,
-  // so the per-resource Investigate buttons can show a "running" indicator even with the
-  // panel closed — and only re-render when the set actually changes, not every poll.
-  const runningSig = runs
-    .filter(
-      (r) =>
-        !!r.kind &&
-        !!r.name &&
-        (r.status === "running" || r.status === "stopping"),
-    )
+  // so per-resource Investigate buttons only re-render when their live targets
+  // change. Cluster-question runs deliberately have no resource key.
+  const runningSig = runningRuns
+    .filter((r) => !!r.kind && !!r.name)
     .map((r) => runTargetKey(r.kind, r.namespace, r.name, r.group))
     .sort()
     // resourceKey itself is pipe-delimited; newlines cannot occur in a
@@ -640,7 +639,8 @@ function RoutedDiagnoseProvider({
     () => new Set(runningSig ? runningSig.split("\n") : []),
     [runningSig],
   );
-  const hasRunning = runningSig.length > 0;
+  const runningCount = runningRuns.length;
+  const hasRunning = runningCount > 0;
 
   // Keep the run list (statuses, new background runs) fresh while the surface is open
   // OR while any investigation is still running — so the button indicator stays live
@@ -778,9 +778,11 @@ function RoutedDiagnoseProvider({
     }
 
     if (!available) {
-      urlRunIdRef.current = null;
-      setActiveRunId(null);
-      setView("home");
+      // Preserve the URL-selected detail while agent availability is still
+      // resolving. Leaving urlRunIdRef untouched ensures the availability
+      // transition reruns this effect and fetches the exact run.
+      setActiveRunId(id);
+      setView("investigation");
       setOpen(true);
       return;
     }
@@ -1020,6 +1022,7 @@ function RoutedDiagnoseProvider({
       panelBounds: PANEL_BOUNDS,
       panelWidthKey: WIDTH_KEY,
       runningKeys,
+      runningCount,
     }),
     [
       open,
@@ -1030,6 +1033,7 @@ function RoutedDiagnoseProvider({
       width,
       narrow,
       runningKeys,
+      runningCount,
       setMaximized,
       setWidth,
     ],

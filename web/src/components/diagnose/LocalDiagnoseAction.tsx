@@ -162,10 +162,9 @@ export function IssueDiagnoseButton({
 // investigations). Self-hides when no agent CLI is present.
 export function GlobalDiagnoseButton() {
   const d = useDiagnose();
-  const { runningKeys } = useDiagnoseLayout();
+  const { runningCount } = useDiagnoseLayout();
   if (d.setupState === "off") return null;
   const ready = d.available;
-  const runningCount = runningKeys.size;
   const agentSuffix = d.hosted
     ? `powered by ${d.agentLabel}`
     : `runs your own ${d.agentLabel} locally`;

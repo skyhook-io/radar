@@ -6,7 +6,7 @@ import {
   MAXIMIZED_HOME_RUN_HEADER_VISIBILITY_CLASS,
   INVESTIGATION_HISTORY_MIN_WIDTH,
   MAXIMIZED_RUN_META_VISIBILITY_CLASS,
-  canStartNewInvestigation,
+  canRerunInvestigation,
   canCopyRunLink,
   investigationHeaderPresentation,
   openInvestigationEvidenceResource,
@@ -18,7 +18,7 @@ import {
 } from "./investigationState";
 import type { RunSummary } from "../../api/diagnose";
 
-// The "new investigation" button dispatches an agent and spends the user's own
+// The re-run button dispatches an agent and spends the user's own
 // tokens, so every one of these clauses is load-bearing rather than cosmetic.
 // Each case below is a way it misfired before the gate existed.
 function run(status: RunSummary["status"]): RunSummary {
@@ -35,9 +35,9 @@ function run(status: RunSummary["status"]): RunSummary {
   };
 }
 
-describe("canStartNewInvestigation", () => {
+describe("canRerunInvestigation", () => {
   it("offers a new investigation on a finished run", () => {
-    expect(canStartNewInvestigation("investigation", run("done"), false)).toBe(
+    expect(canRerunInvestigation("investigation", run("done"), false)).toBe(
       true,
     );
   });
@@ -46,30 +46,30 @@ describe("canStartNewInvestigation", () => {
     // goHome() leaves activeRunId set, so the header still has a run to read.
     // Without the view check the click starts an agent on a resource the user
     // navigated away from, over a list of unrelated investigations.
-    expect(canStartNewInvestigation("home", run("done"), false)).toBe(false);
+    expect(canRerunInvestigation("home", run("done"), false)).toBe(false);
   });
 
   it("stays hidden while a turn is in flight", () => {
     // A start would be handed back the live run, so the button does nothing.
     expect(
-      canStartNewInvestigation("investigation", run("running"), false),
+      canRerunInvestigation("investigation", run("running"), false),
     ).toBe(false);
   });
 
   it("stays hidden on a stale run", () => {
     // A closed session must not start a new investigation against a resource
     // that may not exist in the active cluster.
-    expect(canStartNewInvestigation("investigation", run("stale"), false)).toBe(
+    expect(canRerunInvestigation("investigation", run("stale"), false)).toBe(
       false,
     );
   });
 
   it("blocks fresh starts while a human turn stops, but allows a separate human run from an automatic one", () => {
     expect(
-      canStartNewInvestigation("investigation", run("stopping"), false),
+      canRerunInvestigation("investigation", run("stopping"), false),
     ).toBe(false);
     expect(
-      canStartNewInvestigation(
+      canRerunInvestigation(
         "investigation",
         { ...run("running"), trigger: "background" },
         false,
@@ -78,18 +78,18 @@ describe("canStartNewInvestigation", () => {
   });
 
   it("stays hidden while consent is pending", () => {
-    expect(canStartNewInvestigation("investigation", run("done"), true)).toBe(
+    expect(canRerunInvestigation("investigation", run("done"), true)).toBe(
       false,
     );
   });
 
   it("stays hidden with no focused run", () => {
-    expect(canStartNewInvestigation("investigation", null, false)).toBe(false);
+    expect(canRerunInvestigation("investigation", null, false)).toBe(false);
   });
 
   it("offers a restart for a completed cluster-scoped question", () => {
     expect(
-      canStartNewInvestigation(
+      canRerunInvestigation(
         "investigation",
         { ...run("done"), kind: "", name: "", question: "Why is it slow?" },
         false,
@@ -99,11 +99,11 @@ describe("canStartNewInvestigation", () => {
 
   it("offers one on an errored or stopped run", () => {
     // Those are the runs a person most wants to start over from.
-    expect(canStartNewInvestigation("investigation", run("error"), false)).toBe(
+    expect(canRerunInvestigation("investigation", run("error"), false)).toBe(
       true,
     );
     expect(
-      canStartNewInvestigation("investigation", run("stopped"), false),
+      canRerunInvestigation("investigation", run("stopped"), false),
     ).toBe(true);
   });
 });

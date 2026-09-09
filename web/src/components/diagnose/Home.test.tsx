@@ -308,13 +308,11 @@ describe("RecentList", () => {
 });
 
 describe("InvestigationHome", () => {
-  it("leads with a fresh cluster-scoped question and keeps history visible", () => {
+  it("keeps the fresh cluster-scoped question separate from history", () => {
     const html = renderToStaticMarkup(
       <InvestigationHome
         agentLabel="Codex"
         currentContext="gke_project_us-east1-b_nonprod"
-        runs={[run()]}
-        onSelect={() => {}}
         onStart={() => {}}
         starting={false}
       />,
@@ -322,7 +320,7 @@ describe("InvestigationHome", () => {
     const text = visible(html);
     expect(text).toContain("What should I investigate?");
     expect(text).toContain("Current cluster · nonprod");
-    expect(text).toContain("checkout");
+    expect(text).not.toContain("checkout");
     expect(html).toContain('aria-label="Investigation question"');
   });
 });
