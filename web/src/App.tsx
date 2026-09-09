@@ -2486,6 +2486,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {diagnoseOpen && (
         <DiagnoseSurface
           topInset={chromeless ? 0 : APP_HEADER_HEIGHT}
+          onBrowseIssues={() => setMainView('issues')}
           onOpenResource={(ref, investigationRunID) => {
             const resource: SelectedResource = {
               kind: ref.kind,

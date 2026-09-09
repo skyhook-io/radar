@@ -1,6 +1,7 @@
 // Server-side runs keep background and running investigations visible in both
 // the docked Home view and the maximized workspace's master pane.
 import {
+  ArrowRight,
   CircleAlert,
   Loader2,
   Server,
@@ -117,8 +118,10 @@ export function statusWord(status: RunSummary["status"]): {
 
 export function InvestigationHome({
   agentLabel,
+  onBrowseIssues,
 }: {
   agentLabel: string;
+  onBrowseIssues?: () => void;
 }) {
   return (
     <div className="flex min-h-full w-full items-center justify-center px-4 py-8 sm:px-6">
@@ -130,12 +133,24 @@ export function InvestigationHome({
           Choose an investigation
         </h1>
         <p className="mx-auto mt-1 max-w-md text-sm text-theme-text-tertiary">
-          Select one from your history, or open a resource and choose{" "}
+          {onBrowseIssues
+            ? "Pick a problem from Issues, then choose "
+            : "Select one from your history, or open a resource and choose "}
           <span className="font-medium text-theme-text-secondary">
             Investigate
           </span>{" "}
           to start a focused investigation with {agentLabel}.
         </p>
+        {onBrowseIssues && (
+          <button
+            type="button"
+            onClick={onBrowseIssues}
+            className="btn-brand mt-4 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium"
+          >
+            Browse issues
+            <ArrowRight className="h-3.5 w-3.5" />
+          </button>
+        )}
       </section>
     </div>
   );

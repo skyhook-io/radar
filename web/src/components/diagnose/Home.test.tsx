@@ -302,4 +302,14 @@ describe("InvestigationHome", () => {
     expect(text).toContain("start a focused investigation with Codex");
     expect(html).not.toContain("textarea");
   });
+
+  it("offers first-time users a focused path through Issues", () => {
+    const html = renderToStaticMarkup(
+      <InvestigationHome agentLabel="Codex" onBrowseIssues={() => {}} />,
+    );
+    const text = visible(html);
+    expect(text).toContain("Pick a problem from Issues");
+    expect(text).toContain("Browse issues");
+    expect(html).not.toContain("textarea");
+  });
 });

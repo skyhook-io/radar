@@ -5,8 +5,10 @@ import {
   MAXIMIZED_RUN_META_VISIBILITY_CLASS,
   canRerunInvestigation,
   canCopyRunLink,
+  investigationHistoryIsPersistent,
   investigationHeaderPresentation,
   openInvestigationEvidenceResource,
+  unavailableInvestigationMessage,
 } from "./DiagnoseSurface";
 import {
   canContinueInvestigation,
@@ -95,6 +97,18 @@ describe("canRerunInvestigation", () => {
 });
 
 describe("investigation history navigation", () => {
+  it("keeps hosted recovery language out of standalone Radar", () => {
+    expect(unavailableInvestigationMessage(false)).toBe(
+      "This investigation is unavailable. It may have been removed, or its saved history may have been cleared.",
+    );
+    expect(unavailableInvestigationMessage(false)).not.toMatch(
+      /account|organization|creator|access/,
+    );
+    expect(unavailableInvestigationMessage(true)).toMatch(
+      /account and organization/,
+    );
+  });
+
   it("restores the docked surface before opening an evidence resource", () => {
     const events: string[] = [];
     const onOpenResource = vi.fn(() => events.push("open"));
@@ -159,6 +173,23 @@ describe("investigation history navigation", () => {
     expect(MAXIMIZED_RUN_META_VISIBILITY_CLASS).toBe(
       "hidden @min-[1750px]/diagnose-surface:flex",
     );
+  });
+
+  it("keeps history visible on Home even when the workspace is compact", () => {
+    expect(
+      investigationHistoryIsPersistent({
+        maximized: true,
+        view: "home",
+        surfaceWidth: 700,
+      }),
+    ).toBe(true);
+    expect(
+      investigationHistoryIsPersistent({
+        maximized: true,
+        view: "investigation",
+        surfaceWidth: 700,
+      }),
+    ).toBe(false);
   });
 
   it("keeps docked Home generic and removes actions for its retained run", () => {

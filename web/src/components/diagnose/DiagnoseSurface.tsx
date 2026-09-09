@@ -39,6 +39,7 @@ import {
   type DiagnoseView,
 } from "./DiagnoseContext";
 import { useDiagnoseCustomization } from "../../context/DiagnoseCustomization";
+import { useNavCustomization } from "../../context/NavCustomization";
 import { InvestigationView } from "./InvestigationView";
 import type { InvestigationTimelineScope } from "./InvestigationEvidencePane";
 import {
@@ -372,7 +373,6 @@ export function canRerunInvestigation(
 // Keep these Tailwind literals aligned with the measured rail threshold.
 // Detail uses one stable history toggle; below this width it opens an overlay.
 export const INVESTIGATION_HISTORY_MIN_WIDTH = 1750;
-export const INVESTIGATION_HOME_HISTORY_MIN_WIDTH = 960;
 export const MAXIMIZED_RUN_META_VISIBILITY_CLASS =
   "hidden @min-[1750px]/diagnose-surface:flex";
 // The panel is a bounded absolute frame whose descendants own scrolling. If
@@ -382,6 +382,24 @@ export const MAXIMIZED_RUN_META_VISIBILITY_CLASS =
 // docked and maximized modes; their intended scroll roots are inside the frame.
 export const DIAGNOSE_SURFACE_FRAME_CLASS =
   "@container/diagnose-surface absolute z-40 flex min-h-0 flex-col overflow-hidden border-l border-theme-border bg-theme-surface shadow-drawer";
+
+export function unavailableInvestigationMessage(embedded: boolean): string {
+  return embedded
+    ? "This investigation is unavailable. It may be private, your access may have changed, or its history may have been cleared. Check your account and organization, or ask the creator for access."
+    : "This investigation is unavailable. It may have been removed, or its saved history may have been cleared.";
+}
+
+export function investigationHistoryIsPersistent(input: {
+  maximized: boolean;
+  view: DiagnoseView;
+  surfaceWidth: number;
+}): boolean {
+  return (
+    input.maximized &&
+    (input.view === "home" ||
+      input.surfaceWidth >= INVESTIGATION_HISTORY_MIN_WIDTH)
+  );
+}
 
 export function investigationHeaderPresentation(input: {
   view: DiagnoseView;
@@ -501,6 +519,7 @@ export function DiagnoseSurface({
   onOpenResource,
   onOpenTimeline,
   onOpenWorkspace,
+  onBrowseIssues,
 }: {
   topInset?: number;
   /** Resolves an evidence subject into the embedding Radar surface. */
@@ -509,6 +528,8 @@ export function DiagnoseSurface({
   onOpenTimeline?: (scope: InvestigationTimelineScope) => void;
   /** Lets a host whose drawer lives outside Radar's route tree cross into it. */
   onOpenWorkspace?: () => void;
+  /** Opens the canonical Issues surface for a first focused investigation. */
+  onBrowseIssues?: () => void;
 }) {
   const d = useDiagnose();
   const { data: contexts } = useContexts();
@@ -533,6 +554,7 @@ export function DiagnoseSurface({
   // null = hide the gear + links.
   const { consentCopy, onOpenSettings: hostOpenSettings } =
     useDiagnoseCustomization();
+  const { embedded } = useNavCustomization();
   const openSettings =
     hostOpenSettings === undefined ? openDiagnoseSettings : hostOpenSettings;
   const {
@@ -544,12 +566,14 @@ export function DiagnoseSurface({
     panelBounds: { min: minW, max: maxW },
     panelWidthKey: widthKey,
   } = useDiagnoseLayout();
-  const persistentHistory =
-    maximized &&
-    surfaceWidth >=
-      (d.view === "home"
-        ? INVESTIGATION_HOME_HISTORY_MIN_WIDTH
-        : INVESTIGATION_HISTORY_MIN_WIDTH);
+  // Home has no detail pane competing for width, so its history is always part
+  // of the workspace. Only a focused run collapses history into a drawer when
+  // the two-pane layout would become cramped.
+  const persistentHistory = investigationHistoryIsPersistent({
+    maximized,
+    view: d.view,
+    surfaceWidth,
+  });
   const historyOverlay =
     !persistentHistory && historyOverlayOpen;
   const { shouldRender: historyOverlayPresent, isOpen: historySlideOpen } =
@@ -715,9 +739,7 @@ export function DiagnoseSurface({
     // investigation" placeholder would read as a broken link.
     <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <p className="text-sm text-theme-text-secondary">
-        This investigation is unavailable. It may be private, your access may
-        have changed, or its history may have been cleared. Check your account
-        and organization, or ask the creator for access.
+        {unavailableInvestigationMessage(embedded === true)}
       </p>
       <button
         onClick={d.goHome}
@@ -763,7 +785,12 @@ export function DiagnoseSurface({
       <AgentSetupNotice setupState={d.setupState} />
     </div>
   ) : (
-    <InvestigationHome agentLabel={d.agentLabel} />
+    <InvestigationHome
+      agentLabel={d.agentLabel}
+      onBrowseIssues={
+        d.runsLoaded && d.runs.length === 0 ? onBrowseIssues : undefined
+      }
+    />
   );
 
   const showHistory = !setupPending || d.runs.length > 0;
