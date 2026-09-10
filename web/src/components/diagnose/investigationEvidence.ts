@@ -4884,13 +4884,6 @@ function addDiagnoseMetrics(
     (value.omittedPods !== undefined &&
       !nonNegativeInteger(value.omittedPods)) ||
     (value.error !== undefined && typeof value.error !== "string") ||
-    (value.coverage !== undefined &&
-      value.coverage !== "ksm_history" &&
-      value.coverage !== "current_pods" &&
-      value.coverage !== "none") ||
-    (value.observedPods !== undefined &&
-      !nonNegativeInteger(value.observedPods)) ||
-    (value.scopeError !== undefined && typeof value.scopeError !== "string") ||
     !Array.isArray(value.series)
   ) {
     invalidPayload(builder, source, "Workload metrics");
@@ -4898,19 +4891,11 @@ function addDiagnoseMetrics(
   }
   const scope = scopeFromArgs(source);
   const partial = value.partial === true;
-  const coverage = value.coverage as
-    "ksm_history" | "current_pods" | "none" | undefined;
-  const observedPods =
-    typeof value.observedPods === "number" ? value.observedPods : undefined;
-  // The pods the chart covers: with ownership history every pod
-  // kube-state-metrics attributed in the window, otherwise the pods running
-  // at collection time, which a rollout during the window can miss.
-  const podsLabel =
-    coverage === "ksm_history" && observedPods !== undefined && observedPods > 0
-      ? `${observedPods} pod${observedPods === 1 ? "" : "s"} in window`
-      : partial
-        ? `first ${value.pods} of ${typeof value.omittedPods === "number" ? value.pods + value.omittedPods : "the"} current pods`
-        : `${value.pods} current pod${value.pods === 1 ? "" : "s"}`;
+  // The pods the chart covers: the ones the workload controlled when the
+  // bundle was captured, which a rollout during the window can miss.
+  const podsLabel = partial
+    ? `first ${value.pods} of ${typeof value.omittedPods === "number" ? value.pods + value.omittedPods : "the"} current pods`
+    : `${value.pods} current pod${value.pods === 1 ? "" : "s"}`;
   const windowLabel = metricsWindowLabel({
     mode: "range",
     start: window.start,
@@ -4954,8 +4939,6 @@ function addDiagnoseMetrics(
       subject,
       pods: value.pods,
       partial,
-      ...(coverage ? { coverage } : {}),
-      ...(observedPods !== undefined ? { observedPods } : {}),
     };
     builder.observe(
       `metrics:diagnose:${subject.group ?? ""}:${subject.kind}:${subject.namespace ?? ""}:${subject.name}:${entry.category}`,
@@ -4969,15 +4952,7 @@ function addDiagnoseMetrics(
         summary: [
           series.length === 0 ? "No samples in the window" : podsLabel,
           windowLabel,
-          // partial says the current-pod list was cut by the cap. With
-          // ownership history the query still covers every pod the workload
-          // owned, so calling the population partial would contradict the
-          // count beside it.
-          partial
-            ? coverage === "ksm_history"
-              ? "pod list capped"
-              : "partial pod set"
-            : undefined,
+          partial ? "partial pod set" : undefined,
         ]
           .filter((part): part is string => Boolean(part))
           .join(" · "),
@@ -4987,14 +4962,6 @@ function addDiagnoseMetrics(
   }
   if (nonEmptyString(value.error)) {
     builder.limit(source, "Workload metrics", value.error, "error");
-  }
-  if (nonEmptyString(value.scopeError)) {
-    builder.limit(
-      source,
-      "Workload metrics",
-      `Pod ownership history could not be read (${value.scopeError}); the charts cover the pods running at collection time.`,
-      "unknown",
-    );
   }
 }
 
