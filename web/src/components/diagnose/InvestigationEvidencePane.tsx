@@ -127,7 +127,14 @@ const EvidenceNavigationContext = createContext<{
   metricsMarkersBySource?: ReadonlyMap<string, ChartAnnotation[]>;
   /** Card- and revision-placed agent items, keyed by group id. */
   caseByGroup?: ReadonlyMap<string, InvestigationCaseItem[]>;
+  /** The hypothesis each `rules_out` item excludes, keyed by item. */
+  excludedByItem?: ReadonlyMap<string, string>;
 }>({});
+
+/** Item identity for the excluded-hypothesis lookup; index alone repeats across turns. */
+export function investigationCaseItemKey(item: InvestigationCaseItem): string {
+  return `${item.source.id}\u0000${item.index}`;
+}
 
 const EVIDENCE_ROLE_RANK: Readonly<Record<DiagnosisEvidenceRole, number>> = {
   cause: 0,
@@ -605,6 +612,13 @@ export function InvestigationEvidencePane({
           />
         ) : null}
 
+        {/* What the agent considered and rejected belongs with the conclusion
+            it argues for, not after the evidence list among the withheld
+            counts, where it read as bookkeeping. */}
+        {visibleRuledOut.length > 0 ? (
+          <RuledOutBlock entries={visibleRuledOut} onReveal={revealCaseItem} />
+        ) : null}
+
         <div className="grid items-start gap-2.5">
           {partition.main.map((group) => (
             <EvidenceCard
@@ -616,10 +630,6 @@ export function InvestigationEvidencePane({
             />
           ))}
         </div>
-
-        {visibleRuledOut.length > 0 ? (
-          <RuledOutBlock entries={visibleRuledOut} onReveal={revealCaseItem} />
-        ) : null}
 
         {partition.hiddenBroader > 0 ? (
           <p
@@ -687,6 +697,12 @@ export function InvestigationEvidencePane({
         revealSourceId: caseReveal?.sourceId ?? revealRequest?.sourceId,
         revealRequestId: caseReveal?.requestId ?? revealRequest?.requestId,
         caseByGroup: investigationCaseByGroup(investigationCase),
+        excludedByItem: new Map(
+          (investigationCase?.ruledOut ?? []).map((entry) => [
+            investigationCaseItemKey(entry.item),
+            entry.hypothesis,
+          ]),
+        ),
         metricsMarkersBySource: new Map(
           projection.groups.flatMap((group) =>
             group.observations.flatMap((observation) =>
@@ -1294,6 +1310,7 @@ function EvidenceCard({
     onGroupOpenChange,
     metricsMarkersBySource,
     caseByGroup,
+    excludedByItem,
   } = useContext(EvidenceNavigationContext);
   const open = expandedGroupIds?.has(group.id) ?? false;
   const setOpen = useCallback(
@@ -1312,7 +1329,6 @@ function EvidenceCard({
   const revisionItems = caseItems.filter(
     (item) => item.placement === "revision",
   );
-  const cardRoles = [...new Set(cardItems.map((item) => item.role))];
   const previousObservations = previousDifferentObservations(
     group,
     citedOrder,
@@ -1367,9 +1383,6 @@ function EvidenceCard({
           <span className="text-sm font-semibold leading-snug text-theme-text-primary">
             {observation.title}
           </span>
-          {cardRoles.map((role) => (
-            <AgentRoleChip key={role} role={role} />
-          ))}
         </span>
         {observation.relevance === "broader" &&
         resourceRef &&
@@ -1420,7 +1433,12 @@ function EvidenceCard({
       className={clsx(
         "@container/card scroll-mt-14 overflow-hidden outline-none focus:ring-2 focus:ring-accent/50 data-[source-related]:ring-2 data-[source-related]:ring-accent/35",
         "rounded-lg border bg-theme-surface",
-        toneBorder(observation.tone, observation.tier, prominence),
+        toneBorder(
+          observation.tone,
+          observation.tier,
+          prominence,
+          cardItems.some((item) => item.role === "cause"),
+        ),
         wide && "@min-[760px]/evidence:col-span-2",
         animateArrival && "animate-transcript-enter",
       )}
@@ -1499,16 +1517,15 @@ function EvidenceCard({
             prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2",
           )}
         >
-          {cardItems
-            .filter((item) => item.claim)
-            .map((item) => (
-              <AgentClaimNote
-                key={item.index}
-                claim={item.claim}
-                role={cardRoles.length > 1 ? item.role : undefined}
-                className="pt-1.5"
-              />
-            ))}
+          {cardItems.map((item) => (
+            <AgentClaimNote
+              key={item.index}
+              claim={item.claim}
+              role={item.role}
+              excludes={excludedByItem?.get(investigationCaseItemKey(item))}
+              className="pt-1.5"
+            />
+          ))}
         </div>
       ) : null}
       {canExpand ? (
@@ -3575,6 +3592,8 @@ function toneBorder(
   tone: InvestigationEvidenceObservation["tone"],
   tier: InvestigationEvidenceTier,
   prominence: "primary" | "supporting" | "secondary",
+  /** The agent called this card the cause. */
+  agentCause = false,
 ): string {
   if (prominence !== "primary") return "border-theme-border/70";
   // A supporting adverse card is what the healthy-conflict banner points at,
@@ -3584,7 +3603,15 @@ function toneBorder(
     return "border-l-2 border-l-semantic-error border-theme-border";
   if (tier === "supporting" && (tone === "warning" || tone === "alert"))
     return "border-l-2 border-l-semantic-warning border-theme-border";
-  if (tier !== "key") return "border-theme-border";
+  if (tier !== "key") {
+    // The card the agent calls the cause sorts first and is often the calmest
+    // thing on screen, because a cause is frequently a Secret or a ConfigMap
+    // that Radar has no reason to colour. The accent marks it in the same slot
+    // without borrowing a severity hue — and only where Radar left that slot
+    // empty, so severity always outranks the agent's framing.
+    if (agentCause) return "border-l-[3px] border-l-accent border-theme-border";
+    return "border-theme-border";
+  }
   if (tone === "error")
     return "border-l-[3px] border-l-red-500 border-theme-border";
   if (tone === "alert")

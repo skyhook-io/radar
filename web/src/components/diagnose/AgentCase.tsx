@@ -19,39 +19,61 @@ export const AGENT_ROLE_LABELS: Readonly<
  * The agent's framing of a Radar fact. Always the agent tone, never a
  * severity tone: a chip must not read as a Radar finding.
  */
-export function AgentRoleChip({ role }: { role: DiagnosisEvidenceRole }) {
+export function AgentRoleChip({
+  role,
+  excludes,
+}: {
+  role: DiagnosisEvidenceRole;
+  /** The hypothesis this evidence excludes, for `rules_out`. */
+  excludes?: string;
+}) {
+  const named = role === "rules_out" && excludes ? excludes.trim() : "";
+  const label = named
+    ? `${AGENT_ROLE_LABELS[role]}: ${named}`
+    : AGENT_ROLE_LABELS[role];
   return (
     <Tooltip
-      content={`The agent labelled this evidence "${AGENT_ROLE_LABELS[role]}". Radar recorded the fact; the label is the agent's reading of it.`}
-      wrapperClassName="shrink-0 align-middle"
+      content={
+        named
+          ? `The agent says this evidence excludes "${named}". Radar recorded the fact; the reading is the agent's.`
+          : `The agent labelled this evidence "${AGENT_ROLE_LABELS[role]}". Radar recorded the fact; the label is the agent's reading of it.`
+      }
+      wrapperClassName="align-middle"
     >
-      <Badge tone="agent" size="sm">
-        {AGENT_ROLE_LABELS[role]}
+      <Badge tone="agent" size="sm" className="whitespace-normal text-left">
+        {label}
       </Badge>
     </Tooltip>
   );
 }
 
 /**
- * One sentence from the agent about a Radar fact. The sparkle and the
- * "Agent's note:" lead-in keep the register distinct from the card's own
- * content: the fact above is Radar's, the sentence is the agent's reading.
- * The role chip, when shown, sits inline at the start of the sentence so the
- * whole note shares one baseline.
+ * One sentence from the agent about a Radar fact. Everything the agent
+ * contributed to a card lives in this one row — the sparkle, the role, and the
+ * sentence — so the register is unmistakable: the fact above is Radar's, this
+ * line is the agent's reading of it. The role travelled with the card title
+ * once, where it sat in the same slot as Radar's own badges and could be read
+ * as Radar having established it.
+ *
+ * A `rules_out` role names the hypothesis it excludes. "Rules out" alone forces
+ * the reader to find the hypothesis in a block further down and match it back.
  */
 export function AgentClaimNote({
   claim,
   role,
+  excludes,
   subject,
   className,
 }: {
   claim: string;
   role?: DiagnosisEvidenceRole;
+  /** The hypothesis a `rules_out` item excludes, when the agent named one. */
+  excludes?: string;
   /** The observation the note was bound to, when it is not on that card. */
   subject?: string;
   className?: string;
 }) {
-  if (!claim) return null;
+  if (!claim && !role) return null;
   return (
     <p
       data-agent-claim
@@ -64,14 +86,20 @@ export function AgentClaimNote({
       <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
         {role ? (
           <>
-            <AgentRoleChip role={role} />{" "}
+            <AgentRoleChip role={role} excludes={excludes} />{" "}
           </>
         ) : null}
-        <span className="font-semibold text-accent-text">Agent's note:</span>{" "}
-        {subject ? (
-          <span className="text-theme-text-tertiary">{subject} · </span>
+        {claim ? (
+          <>
+            <span className="font-semibold text-accent-text">
+              Agent&apos;s note:
+            </span>{" "}
+            {subject ? (
+              <span className="text-theme-text-tertiary">{subject} · </span>
+            ) : null}
+            {renderClaim(claim)}
+          </>
         ) : null}
-        {renderClaim(claim)}
       </span>
     </p>
   );

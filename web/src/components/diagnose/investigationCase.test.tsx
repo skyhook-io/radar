@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { AgentClaimNote } from "./AgentCase";
+import { AgentClaimNote, AgentRoleChip } from "./AgentCase";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -1442,5 +1442,55 @@ describe("agent case robustness", () => {
     );
     expect(resolved.ruledOut).toEqual([]);
     expect(render(projection, resolved)).not.toContain("DNS is broken");
+  });
+});
+
+describe("the agent's contribution is one attributed row", () => {
+  it("keeps the role inside the note rather than beside the resource title", () => {
+    const html = renderToStaticMarkup(
+      <AgentClaimNote role="cause" claim="The sealed value is stale." />,
+    );
+    // Sparkle, role and sentence share one row, so the role is as plainly the
+    // agent's as the sentence is. Beside the title it sat in the same slot as
+    // Radar's own badges.
+    const row = html.match(/<p[^>]*data-agent-claim[\s\S]*<\/p>/)?.[0] ?? "";
+    expect(row).toContain("Cause");
+    expect(row).toContain("Agent&#x27;s note:");
+    expect(row).toContain("The sealed value is stale.");
+  });
+
+  it("names the hypothesis a rules-out card excludes", () => {
+    const html = renderToStaticMarkup(
+      <AgentClaimNote
+        role="rules_out"
+        excludes="The Atlas user was deleted"
+        claim="Same user authenticates fine here."
+      />,
+    );
+    expect(html).toContain("Rules out: The Atlas user was deleted");
+    // Without the hypothesis the reader had to find it in a separate block.
+    const bare = renderToStaticMarkup(
+      <AgentClaimNote role="rules_out" claim="Same user authenticates fine." />,
+    );
+    expect(bare).toContain("Rules out");
+    expect(bare).not.toContain("Rules out:");
+  });
+
+  it("only names a hypothesis for the role that excludes one", () => {
+    const html = renderToStaticMarkup(
+      <AgentRoleChip role="demoted" excludes="something else" />,
+    );
+    expect(html).toContain("Less relevant");
+    expect(html).not.toContain("something else");
+  });
+
+  it("still shows an attributed role when the agent left no sentence", () => {
+    const html = renderToStaticMarkup(
+      <AgentClaimNote role="context" claim="" />,
+    );
+    expect(html).toContain("Context");
+    expect(html).not.toContain("Agent&#x27;s note:");
+    // Nothing at all to say and no role: render nothing.
+    expect(renderToStaticMarkup(<AgentClaimNote claim="" />)).toBe("");
   });
 });
