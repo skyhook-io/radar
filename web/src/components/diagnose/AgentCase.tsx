@@ -24,13 +24,13 @@ export function AgentRoleChip({ role }: { role: DiagnosisEvidenceRole }) {
   return (
     <Tooltip
       content={`The agent labelled this evidence "${AGENT_ROLE_LABELS[role]}". Radar recorded the fact; the label is the agent's reading of it.`}
-      wrapperClassName="shrink-0 align-middle"
+      // The label has to share the sentence's baseline. Centring the badge box
+      // drops it ~1px (padding and border make the box taller than the line),
+      // and the badge's own baseline comes from the sparkle, landing 1px high.
+      wrapperClassName="shrink-0 align-[-1px]"
     >
       <Badge tone="agent" size="sm">
-        <Sparkles
-          className="mr-1 inline h-2.5 w-2.5 align-[-1.5px]"
-          aria-hidden
-        />
+        <Sparkles className="h-2.5 w-2.5 shrink-0" aria-hidden />
         {AGENT_ROLE_LABELS[role]}
       </Badge>
     </Tooltip>
