@@ -700,7 +700,7 @@ export function useResourceIssues(
   });
 }
 
-import type { Trace as NetworkTrace, InClusterCapability } from '@skyhook-io/k8s-ui'
+import type { Trace as NetworkTrace, InClusterCapability, DrainPlan, DrainPlanPod } from '@skyhook-io/k8s-ui'
 
 // useTrace polls the static path-shaped diagnosis for one network entry
 // kind. 5s refetch + 15s staleTime keeps the drawer feeling live without
@@ -4894,6 +4894,51 @@ export interface DrainNodeOptions {
   force?: boolean;
 }
 
+export interface DrainPlanRequestOptions {
+  deleteEmptyDirData: boolean;
+  force: boolean;
+}
+
+/** Path of the read-only plan endpoint; distinct from the drain so a preview can never drain. */
+export function drainPlanPath(name: string): string {
+  return `/nodes/${encodeURIComponent(name)}/drain-plan`;
+}
+
+/** Body for the plan request: both options are always explicit, the server echoes them back. */
+export function drainPlanBody(options: DrainPlanRequestOptions): string {
+  return JSON.stringify({
+    deleteEmptyDirData: options.deleteEmptyDirData,
+    force: options.force,
+  });
+}
+
+// Read-only drain plan: what a drain with these options would do to each pod on the node.
+// Modelled as a mutation because it is a POST with a body and is fetched on demand
+// while the drain dialog is open; it performs no cluster mutation.
+export function useDrainPlan() {
+  return useMutation<
+    DrainPlan,
+    Error,
+    { name: string; options: DrainPlanRequestOptions }
+  >({
+    mutationFn: async ({ name, options }) => {
+      const response = await apiFetch(`${getApiBase()}${drainPlanPath(name)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: drainPlanBody(options),
+      });
+      if (!response.ok) {
+        const error = await response
+          .json()
+          .catch(() => ({ error: "Unknown error" }));
+        throw new Error(error.error || `HTTP ${response.status}`);
+      }
+      return response.json();
+    },
+    // No meta.errorMessage: the dialog shows plan errors inline; a toast on top would double them.
+  });
+}
+
 export function useDrainNode() {
   const queryClient = useQueryClient();
 
@@ -4923,7 +4968,11 @@ export function useDrainNode() {
       // No static successMessage — handled in onSuccess to distinguish partial failures
     },
     onSuccess: (
-      data: { evictedPods?: string[]; errors?: string[] },
+      data: {
+        evictedPods?: string[];
+        skippedPods?: DrainPlanPod[];
+        errors?: string[];
+      },
       variables,
     ) => {
       queryClient.invalidateQueries({ queryKey: ["resources", "nodes"] });
@@ -4932,18 +4981,60 @@ export function useDrainNode() {
       });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
 
-      const evicted = data?.evictedPods?.length ?? 0;
-      const errors = data?.errors?.length ?? 0;
-      if (errors > 0) {
-        showApiError(
-          `Drain completed with ${errors} error(s)`,
-          `${evicted} pods evicted. Errors: ${data.errors!.join("; ")}`,
-        );
+      const { title, detail, failed } = describeDrainResult(data);
+      if (failed) {
+        showApiError(title, detail);
       } else {
-        showApiSuccess(`Node drained: ${evicted} pods evicted`);
+        showApiSuccess(title, detail);
       }
     },
   });
+}
+
+const DRAIN_RESULT_MAX_LISTED = 5;
+
+function listWithOverflow(items: string[]): string {
+  const shown = items.slice(0, DRAIN_RESULT_MAX_LISTED);
+  const rest = items.length - shown.length;
+  return rest > 0 ? `${shown.join("; ")}; +${rest} more` : shown.join("; ");
+}
+
+/**
+ * Turns the drain response into a legible summary: evicted, skipped (with reasons),
+ * failed. Lists are capped so the toast stays readable on nodes with many pods.
+ */
+export function describeDrainResult(data: {
+  evictedPods?: string[];
+  skippedPods?: DrainPlanPod[];
+  errors?: string[];
+}): { title: string; detail: string; failed: boolean } {
+  const evicted = data?.evictedPods?.length ?? 0;
+  const skipped = data?.skippedPods ?? [];
+  const errors = data?.errors ?? [];
+  const parts: string[] = [];
+  if (skipped.length > 0) {
+    parts.push(
+      `Skipped ${skipped.length}: ${listWithOverflow(
+        skipped.map((p) => `${p.namespace}/${p.name} (${p.reason})`),
+      )}`,
+    );
+  }
+  if (errors.length > 0) {
+    parts.push(`Failed ${errors.length}: ${listWithOverflow(errors)}`);
+  }
+  const detail = parts.join("\n");
+  if (errors.length > 0) {
+    return {
+      title: `Drain finished with ${errors.length} failed eviction(s): ${evicted} evicted, ${skipped.length} skipped`,
+      detail,
+      failed: true,
+    };
+  }
+  return {
+    title: `Node drained: ${evicted} evicted, ${skipped.length} skipped`,
+    detail,
+    failed: false,
+  };
 }
 
 // ============================================================================
