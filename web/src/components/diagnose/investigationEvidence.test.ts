@@ -4408,7 +4408,11 @@ describe("subject permissions adapter", () => {
         "perm",
         "get_subject_permissions",
         {
-          subject: { kind: "ServiceAccount", namespace: "shop", name: "api-sa" },
+          subject: {
+            kind: "ServiceAccount",
+            namespace: "shop",
+            name: "api-sa",
+          },
           accessCheck: {
             verb: "get",
             resource: "secrets",
@@ -4425,7 +4429,9 @@ describe("subject permissions adapter", () => {
     const [group] = groupsOf(projection.groups, "permissions");
     expect(group.latest.title).toContain("Could not check whether");
     expect(group.latest.title).not.toContain("cannot get");
-    expect(group.latest.summary).toContain("webhook authorizer returned partial data");
+    expect(group.latest.summary).toContain(
+      "webhook authorizer returned partial data",
+    );
     expect(group.latest.summary).not.toContain("No RBAC rule allows it");
     // The gap still reaches the coverage strip as well.
     expect(projection.limitations).toContainEqual(
@@ -4445,7 +4451,11 @@ describe("subject permissions adapter", () => {
         "perm",
         "get_subject_permissions",
         {
-          subject: { kind: "ServiceAccount", namespace: "shop", name: "api-sa" },
+          subject: {
+            kind: "ServiceAccount",
+            namespace: "shop",
+            name: "api-sa",
+          },
           accessCheck: {
             verb: "get",
             resource: "secrets",
@@ -5720,6 +5730,52 @@ describe("query_prometheus evidence", () => {
         false,
       ),
     ).toBe("broader");
+  });
+
+  // Membership can also be established by a workload-logs read, which the
+  // main pass adapts into groups as it goes. Classifying a metrics query
+  // against those groups while they are still being built made the verdict
+  // depend on which tool the agent happened to call first: the same facts,
+  // read in the other order, demoted the same chart.
+  it("classifies a metrics query the same whichever order the agent worked in", () => {
+    const loggedPod = "api-68c7b766dc-fmphn";
+    const exactLoggedPod = {
+      metric: "container_memory_working_set_bytes",
+      matchers: [
+        { label: "namespace", op: "=", value: "shop" },
+        { label: "pod", op: "=~", value: `^(${loggedPod})$` },
+      ],
+    };
+    const logs = () =>
+      tool("wl-logs", "get_workload_logs", workloadLogsPayload, {
+        summary: workloadLogsArgs,
+      });
+    const metrics = () =>
+      tool(
+        "prom",
+        "query_prometheus",
+        promResult({
+          selectors: [exactLoggedPod],
+          query: `sum(container_memory_working_set_bytes{namespace="shop",pod=~"^(${loggedPod})$"})`,
+        }),
+      );
+
+    const logsFirst = groupsOf(project([logs(), metrics()]).groups, "metrics");
+    const metricsFirst = groupsOf(
+      project([metrics(), logs()]).groups,
+      "metrics",
+    );
+    expect(logsFirst[0].latest.relevance).toBe("target");
+    expect(metricsFirst[0].latest.relevance).toBe(
+      logsFirst[0].latest.relevance,
+    );
+
+    // Across turns too: the read that names the pod may arrive in a later one.
+    const acrossTurns = groupsOf(
+      project([metrics()], [logs()]).groups,
+      "metrics",
+    );
+    expect(acrossTurns[0].latest.relevance).toBe("target");
   });
 
   it("proves pod membership from the bundle instead of the workload's name", () => {

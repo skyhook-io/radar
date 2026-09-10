@@ -5129,6 +5129,18 @@ function adaptQueryPrometheus(
   );
 }
 
+/**
+ * Adapters whose verdict depends on which pods a producer established as the
+ * target's. They run after every other tool in the transcript, so the answer
+ * does not depend on whether the agent happened to query Prometheus before or
+ * after the read that named the pods. Their source order is captured before
+ * they are queued, so deferring the classification does not reorder evidence.
+ */
+const MEMBERSHIP_DEPENDENT_ADAPTERS = new Set([
+  "query_prometheus",
+  "get_prometheus_rules",
+]);
+
 const ADAPTERS: Record<
   string,
   (
@@ -5207,6 +5219,15 @@ export function projectInvestigationEvidence(
   collectEstablishedTargetPods(builder, turns);
   const evidenceRefSources: InvestigationEvidenceSource[] = [];
   const citableSources: InvestigationEvidenceSource[] = [];
+  const deferred: {
+    adapt: (
+      builder: ProjectionBuilder,
+      source: InvestigationEvidenceSource,
+      payload: unknown,
+    ) => void;
+    source: InvestigationEvidenceSource;
+    payload: unknown;
+  }[] = [];
   let order = 0;
   for (const [turnIndex, turn] of turns.entries()) {
     for (const [timelineIndex, item] of turn.timeline.entries()) {
@@ -5281,7 +5302,11 @@ export function projectInvestigationEvidence(
         invalidPayload(builder, source);
         continue;
       }
-      adapt(builder, source, payload);
+      if (MEMBERSHIP_DEPENDENT_ADAPTERS.has(item.tool)) {
+        deferred.push({ adapt, source, payload });
+      } else {
+        adapt(builder, source, payload);
+      }
       if (item.isError !== false) {
         builder.limit(
           source,
@@ -5291,6 +5316,13 @@ export function projectInvestigationEvidence(
         );
       }
     }
+  }
+
+  // Membership is settled now: every read that could name one of the target's
+  // pods has been adapted, so these see the same set whatever order the agent
+  // worked in.
+  for (const { adapt, source, payload } of deferred) {
+    adapt(builder, source, payload);
   }
 
   const tierRank: Record<InvestigationEvidenceTier, number> = {
