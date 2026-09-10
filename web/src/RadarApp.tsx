@@ -114,6 +114,7 @@ export interface RadarAppProps {
    * agent-free. See ./context/DiagnoseCustomization for the render-prop shape.
    */
   renderDiagnoseAction?: RenderDiagnoseAction;
+  /** Host-owned controls for the focused investigation; absent in standalone Radar. */
   renderInvestigationRunActions?: RenderInvestigationRunActions;
   /**
    * Replaces the first-run consent card's trust copy. REQUIRED of any host whose

@@ -13,6 +13,9 @@ import { createContext, useContext, useMemo } from "react";
 import type { ReactNode } from "react";
 import type { RunSummary } from "../api/diagnose";
 
+/** Optional host controls beside shared run actions. Return a component element
+ * if hooks are needed: this callback is invoked conditionally. Call onRunUpdated
+ * after a mutation to refresh the shared run summary. */
 export type RenderInvestigationRunActions = (props: {
   run: RunSummary;
   onRunUpdated: (run: RunSummary) => void;
