@@ -354,6 +354,8 @@ const HEALTH_CONFLICT_EVIDENCE_KINDS = new Set([
  */
 interface HealthConflictGroup {
   id?: string;
+  /** Display identity; logs partition into several groups sharing one. */
+  identity?: string;
   historical: boolean;
   kind: string;
   latest: {
@@ -404,9 +406,28 @@ export function investigationHealthConflictExplainedBy(
 ): string[] | null {
   const conflicting = investigationHealthConflictGroups(projection);
   if (conflicting.length === 0 || !caseItems) return null;
+  // `observe` keeps a log stream read through two different calls in separate
+  // groups, so a same-named pod from another workload's call cannot inherit
+  // the target's relevance. That partition must not also decide whether the
+  // agent addressed the stream: it explained one card, and the conflict is
+  // recorded on its twin. Group ids that share an identity are the same
+  // underlying observation for this question.
+  const twins = new Map<string, Set<string>>();
+  for (const group of projection.groups) {
+    if (!group.id || !group.identity) continue;
+    const key = `${group.kind}\u0000${group.identity}`;
+    const ids = twins.get(key) ?? new Set<string>();
+    ids.add(group.id);
+    twins.set(key, ids);
+  }
   const titles: string[] = [];
   for (const group of conflicting) {
-    const onGroup = caseItems.filter((item) => item.groupId === group.id);
+    const sameStream =
+      (group.identity && twins.get(`${group.kind}\u0000${group.identity}`)) ||
+      new Set<string>([group.id ?? ""]);
+    const onGroup = caseItems.filter(
+      (item) => item.groupId && sameStream.has(item.groupId),
+    );
     // The agent contradicting itself is not an explanation. If it also called
     // this card a cause or a symptom, it is asserting the problem, and the
     // reader must see the unqualified warning.

@@ -294,6 +294,7 @@ describe("investigation evidence projection stability", () => {
   it("names the explained cards only when the agent addressed every conflict", () => {
     const group = (id: string, title: string, tone = "warning") => ({
       id,
+      identity: `issue:${id}`,
       kind: "issue",
       historical: false,
       latest: {
@@ -382,6 +383,31 @@ describe("investigation evidence projection stability", () => {
         note("g1", "benign"),
       ]),
     ).toBe(null);
+
+    // One log stream read through two calls lands in two groups sharing an
+    // identity, so the partition must not decide whether the agent addressed
+    // it: a note on either twin counts for the conflict recorded on the other.
+    const stream = (id: string) => ({
+      id,
+      identity: "logs:previous:api-abc:api",
+      kind: "logs",
+      historical: false,
+      latest: {
+        tier: "supporting" as const,
+        relevance: "target" as const,
+        tone: "warning",
+        title: "Previous logs · api-abc / api",
+      },
+    });
+    expect(
+      investigationHealthConflictExplainedBy(
+        { groups: [stream("scope-a"), stream("scope-b")] },
+        [note("scope-b", "benign")],
+      ),
+    ).toEqual([
+      "Previous logs · api-abc / api",
+      "Previous logs · api-abc / api",
+    ]);
   });
 
   it("ignores reasoning-only transcript updates while retaining completed tool identity", () => {
