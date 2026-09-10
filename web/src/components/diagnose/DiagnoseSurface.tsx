@@ -22,13 +22,8 @@ import {
   Check,
   RotateCcw,
   PanelLeftOpen,
-  Link,
-  Lock,
-  Users,
 } from "lucide-react";
 import { Tooltip } from "../ui/Tooltip";
-import { ConfirmDialog } from "../ui/ConfirmDialog";
-import { Badge } from "@skyhook-io/k8s-ui/components/ui/Badge";
 import { useAnimatedUnmount } from "../../hooks/useAnimatedUnmount";
 import { TRANSITION_BACKDROP, TRANSITION_DRAWER } from "../../utils/animation";
 import {
@@ -52,7 +47,6 @@ import { AgentSetupNotice } from "./AgentSetupNotice";
 import { ConsentCard } from "./parts";
 import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
 import {
-  updateRunVisibility,
   type RunSummary,
   type ExecutionProfile,
 } from "../../api/diagnose";
@@ -187,153 +181,6 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
         </div>
       )}
     </div>
-  );
-}
-
-export function canCopyRunLink(
-  run: RunSummary | null | undefined,
-): run is RunSummary & { radarUrl: string } {
-  return typeof run?.radarUrl === "string" && run.radarUrl.length > 0;
-}
-
-function CopyRunLink({
-  radarUrl,
-  visibility,
-}: {
-  radarUrl: string;
-  visibility: RunSummary["visibility"];
-}) {
-  const label =
-    visibility === "private"
-      ? "Copy private link (only you can open it)"
-      : "Copy investigation link";
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
-    "idle",
-  );
-  const copy = async () => {
-    try {
-      if (!navigator.clipboard) throw new Error("clipboard unavailable");
-      await navigator.clipboard.writeText(
-        new URL(radarUrl, window.location.origin).href,
-      );
-      setCopyState("copied");
-    } catch {
-      setCopyState("error");
-    }
-    setTimeout(() => setCopyState("idle"), 1500);
-  };
-  return (
-    <Tooltip
-      content={
-        copyState === "copied"
-          ? "Link copied"
-          : copyState === "error"
-            ? "Couldn’t copy link"
-            : label
-      }
-      position="bottom"
-    >
-      <button
-        onClick={copy}
-        className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-        aria-label={label}
-      >
-        {copyState === "copied" ? (
-          <Check className="h-4 w-4 text-emerald-500" />
-        ) : (
-          <Link className="h-4 w-4" />
-        )}
-      </button>
-    </Tooltip>
-  );
-}
-
-function VisibilityControl({
-  run,
-  onChanged,
-}: {
-  run: RunSummary;
-  onChanged: (run: RunSummary) => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(false);
-  const [confirmShare, setConfirmShare] = useState(false);
-  if (!run.canManageVisibility) {
-    return run.visibility === "organization" ? (
-      <Tooltip content="Shared with your organization" position="bottom">
-        <Badge severity="neutral" size="sm" className="shrink-0">
-          <Users className="h-3 w-3" />
-          Organization
-        </Badge>
-      </Tooltip>
-    ) : run.visibility === "private" ? (
-      <Tooltip
-        content="Only you can view this investigation. Other organization members don’t have access."
-        position="bottom"
-      >
-        <Badge severity="neutral" size="sm" className="shrink-0">
-          <Lock className="h-3 w-3" />
-          Private
-        </Badge>
-      </Tooltip>
-    ) : null;
-  }
-  const shared = run.visibility === "organization";
-  const update = () => {
-    if (busy) return;
-    setBusy(true);
-    setError(false);
-    updateRunVisibility(run.id, shared ? "private" : "organization")
-      .then((updated) => {
-        onChanged(updated);
-        setConfirmShare(false);
-      })
-      .catch(() => setError(true))
-      .finally(() => setBusy(false));
-  };
-  const label = shared ? "Organization" : "Private";
-  return (
-    <>
-      <Tooltip
-        content={
-          error
-            ? "Couldn't change sharing"
-            : shared
-              ? "Shared with your organization — make private"
-              : "Private — click to let organization members access this investigation"
-        }
-        position="bottom"
-      >
-        <button
-          onClick={() => (shared ? update() : setConfirmShare(true))}
-          disabled={busy}
-          className="flex items-center gap-1 rounded-md border border-theme-border/70 px-1.5 py-1 text-[11px] font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary disabled:opacity-50"
-          aria-label={
-            shared
-              ? "Shared with your organization — make private"
-              : "Private — click to let organization members access this investigation"
-          }
-        >
-          {shared ? (
-            <Users className="h-3.5 w-3.5" />
-          ) : (
-            <Lock className="h-3.5 w-3.5" />
-          )}
-          {label}
-        </button>
-      </Tooltip>
-      <ConfirmDialog
-        open={confirmShare}
-        onClose={() => !busy && setConfirmShare(false)}
-        onConfirm={update}
-        title="Share this investigation?"
-        message="Everyone in your organization can read this entire investigation—including your questions and the logs and manifests Radar read—and can continue or stop it."
-        confirmLabel="Share with organization"
-        showWarning={false}
-        variant="warning"
-        isLoading={busy}
-      />
-    </>
   );
 }
 
@@ -552,7 +399,7 @@ export function DiagnoseSurface({
   }, []);
   // Injected settings action: undefined = Radar's own Settings dialog;
   // null = hide the gear + links.
-  const { consentCopy, onOpenSettings: hostOpenSettings } =
+  const { consentCopy, onOpenSettings: hostOpenSettings, renderRunActions } =
     useDiagnoseCustomization();
   const { embedded } = useNavCustomization();
   const openSettings =
@@ -922,17 +769,7 @@ export function DiagnoseSurface({
             <div
               className={`items-center gap-1 ${headerPresentation.runActionsClass || "flex"}`}
             >
-              <VisibilityControl
-                key={visibleRunDetail.id}
-                run={visibleRunDetail}
-                onChanged={d.updateRunSummary}
-              />
-              {canCopyRunLink(visibleRunDetail) && (
-                <CopyRunLink
-                  radarUrl={visibleRunDetail.radarUrl}
-                  visibility={visibleRunDetail.visibility}
-                />
-              )}
+              {renderRunActions?.({ run: visibleRunDetail, onRunUpdated: d.updateRunSummary })}
               <InvestigationMenu run={visibleRunDetail} />
             </div>
           )}

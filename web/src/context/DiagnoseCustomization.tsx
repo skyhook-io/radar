@@ -11,6 +11,12 @@
 // agent-free.
 import { createContext, useContext, useMemo } from "react";
 import type { ReactNode } from "react";
+import type { RunSummary } from "../api/diagnose";
+
+export type RenderInvestigationRunActions = (props: {
+  run: RunSummary;
+  onRunUpdated: (run: RunSummary) => void;
+}) => ReactNode;
 
 /** Render prop for the resource-level Investigate action. */
 export type RenderDiagnoseAction = (ctx: {
@@ -52,6 +58,7 @@ export type DiagnoseConsentCopy = {
 // set once at mount, so per-value re-render isolation buys nothing.
 export interface DiagnoseCustomization {
   renderAction: RenderDiagnoseAction | undefined;
+  renderRunActions?: RenderInvestigationRunActions;
   consentCopy: DiagnoseConsentCopy | undefined;
   // undefined = default (CustomEvent → Radar's own Settings dialog);
   // null = hide the settings affordances.
@@ -70,19 +77,21 @@ const DiagnoseCustomizationContext =
 export function DiagnoseCustomizationProvider({
   value,
   consentCopy,
+  renderRunActions,
   onOpenSettings,
   children,
 }: {
   value: RenderDiagnoseAction | undefined;
   consentCopy?: DiagnoseConsentCopy;
+  renderRunActions?: RenderInvestigationRunActions;
   /** Where "AI settings" affordances lead. Omit for Radar's own Settings
    *  dialog; pass `null` to hide them. */
   onOpenSettings?: (() => void) | null;
   children: ReactNode;
 }) {
   const ctx = useMemo(
-    () => ({ renderAction: value, consentCopy, onOpenSettings }),
-    [value, consentCopy, onOpenSettings],
+    () => ({ renderAction: value, consentCopy, onOpenSettings, renderRunActions }),
+    [value, consentCopy, onOpenSettings, renderRunActions],
   );
   return (
     <DiagnoseCustomizationContext.Provider value={ctx}>

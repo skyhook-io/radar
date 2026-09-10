@@ -255,20 +255,6 @@ export async function getRun(
   return res.json();
 }
 
-export async function updateRunVisibility(
-  id: string,
-  visibility: "private" | "organization",
-): Promise<RunSummary> {
-  const res = await fetch(`${RUNS()}/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    credentials: getCredentialsMode(),
-    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
-    body: JSON.stringify({ visibility }),
-  });
-  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
-  return res.json();
-}
-
 // recordConsent acknowledges the current disclosure for an execution profile, server-side.
 export async function recordConsent(surface: string): Promise<void> {
   const res = await fetch(`${getApiBase()}/diagnose/consent`, {

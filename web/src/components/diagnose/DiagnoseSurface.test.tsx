@@ -4,7 +4,6 @@ import {
   INVESTIGATION_HISTORY_MIN_WIDTH,
   MAXIMIZED_RUN_META_VISIBILITY_CLASS,
   canRerunInvestigation,
-  canCopyRunLink,
   investigationHistoryIsPersistent,
   investigationHeaderPresentation,
   openInvestigationEvidenceResource,
@@ -334,25 +333,6 @@ describe("canContinueInvestigation", () => {
         true,
       ),
     ).toBe(false);
-  });
-});
-
-describe("canCopyRunLink", () => {
-  it("does not expose collaboration UI for an OSS run", () => {
-    expect(canCopyRunLink(run("done"))).toBe(false);
-  });
-
-  it("exposes the copy action only for a canonical hosted URL", () => {
-    expect(
-      canCopyRunLink({
-        ...run("done"),
-        radarUrl: "/c/cluster-1?org=org-1&ai-run=r1",
-      }),
-    ).toBe(true);
-  });
-
-  it("treats an empty hosted URL as unavailable", () => {
-    expect(canCopyRunLink({ ...run("done"), radarUrl: "" })).toBe(false);
   });
 });
 
