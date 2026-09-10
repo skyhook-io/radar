@@ -27,6 +27,7 @@ var evidenceRoles = map[EvidenceRole]struct{}{
 	EvidenceRoleCause:    {},
 	EvidenceRoleSymptom:  {},
 	EvidenceRoleContext:  {},
+	EvidenceRoleBenign:   {},
 	EvidenceRoleDemoted:  {},
 	EvidenceRoleRulesOut: {},
 }

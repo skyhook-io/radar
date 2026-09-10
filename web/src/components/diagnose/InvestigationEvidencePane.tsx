@@ -1514,7 +1514,7 @@ function EvidenceCard({
           ) : null}
         </div>
       </div>
-      {cardItems.some((item) => item.claim) ? (
+      {cardItems.some((item) => item.claim || item.role) ? (
         <div
           className={clsx(
             "space-y-1.5",

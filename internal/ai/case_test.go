@@ -87,6 +87,37 @@ func TestDiagnosisFromText_CaseDropsBadItemsIndividually(t *testing.T) {
 	}
 }
 
+// Every role the prompt offers must survive the parser. A role the prompt asks
+// for but the parser rejects is dropped as unlinked, which is invisible: the
+// chip never appears and the healthy-conflict banner can never reframe, with
+// nothing anywhere saying why.
+func TestDiagnosisFromText_ParserAcceptsEveryPromptedRole(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
+	roles := []EvidenceRole{
+		EvidenceRoleCause,
+		EvidenceRoleSymptom,
+		EvidenceRoleContext,
+		EvidenceRoleBenign,
+		EvidenceRoleDemoted,
+		EvidenceRoleRulesOut,
+	}
+	for _, role := range roles {
+		if !strings.Contains(diagnosisJSONInstruction, string(role)) {
+			t.Errorf("role %q is accepted but the prompt never offers it", role)
+		}
+		text := caseJSON(`"root_cause":"x","evidence":[` +
+			`{"ref":"` + ref + `","role":"` + string(role) + `","claim":"a"}]`)
+		items := diagnosisFromText(text).caseRequest.items
+		if len(items) != 1 || !items[0].valid {
+			t.Errorf("role %q was rejected by the parser: %+v", role, items)
+			continue
+		}
+		if items[0].role != role {
+			t.Errorf("role %q parsed as %q", role, items[0].role)
+		}
+	}
+}
+
 func TestDiagnosisFromText_CaseCapsAndMalformedArrays(t *testing.T) {
 	ref := testEvidenceRef('a', 'b')
 	var items []string

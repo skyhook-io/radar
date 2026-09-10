@@ -1015,6 +1015,31 @@ describe("follow-up answers that cite evidence", () => {
     ).toBe("logs:current:api-abc:api");
   });
 
+  it("opens the card's note block for a role even with no sentence", () => {
+    // The note itself handles a claimless role, but the block around it was
+    // gated on a claim, so the framing vanished from the card entirely.
+    const claimless = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(first, "demoted", "", {
+            kind: "Deployment",
+            group: "apps",
+            namespace: "shop",
+            name: "api",
+            container: "api",
+            stream: "current",
+            observation: "logs",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(claimless.items[0].placement).toBe("card");
+    expect(claimless.items[0].claim).toBe("");
+    expect(render(projection, claimless)).toContain("Less relevant");
+  });
+
   it("lists an answer turn's sources under the answer", () => {
     const answerCase = resolveInvestigationCase(
       projection,
