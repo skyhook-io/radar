@@ -150,9 +150,11 @@ type ResourceMetricsResponse struct {
 	Hint      string              `json:"hint,omitempty"`  // Contextual hint when results are empty (e.g. cri-docker label issues)
 	// Workload kinds carry the pods their query named, established by
 	// controller ownership: Pods counts them, PodsTotal the workload's full
-	// set when the cap cut the list.
-	Pods      int `json:"pods,omitempty"`
-	PodsTotal int `json:"podsTotal,omitempty"`
+	// set when the cap cut the list. Pods is a pointer because zero is an
+	// answer — a workload that controls none — and has to survive the wire
+	// distinct from a kind that has no pod scope at all, such as a Node.
+	Pods      *int `json:"pods,omitempty"`
+	PodsTotal int  `json:"podsTotal,omitempty"`
 }
 
 // restMaxScopePods caps the pod list a chart query names, bounding the regex
@@ -275,7 +277,8 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 		Result:    result,
 	}
 	if scope != nil {
-		resp.Pods = len(scope.CurrentPods)
+		pods := len(scope.CurrentPods)
+		resp.Pods = &pods
 		resp.PodsTotal = scope.CurrentTotal
 	}
 	// Include the PromQL query when results are empty so users can diagnose

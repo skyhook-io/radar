@@ -4720,8 +4720,17 @@ function classifyMatcher(
   if (label === "pod") {
     if (kind === "pod") {
       if (op === "=") return value === target.name ? "target" : "related";
-      if (op === "=~")
-        return regexNamesExactly(value, target.name, "") ? "target" : "related";
+      if (op === "=~") {
+        if (regexNamesExactly(value, target.name, "")) return "target";
+        // `^(name)$` is the form the diagnose prompt asks the agent to write,
+        // so a Pod target has to recognise its own name in it. The set must
+        // name nothing else: a query covering the target and a neighbour is
+        // not evidence about the target alone.
+        const names = exactPodSet(value);
+        return names && names.every((name) => name === target.name)
+          ? "target"
+          : "related";
+      }
       return "related";
     }
     if (op === "=") return establishedPods.has(value) ? "target" : "related";

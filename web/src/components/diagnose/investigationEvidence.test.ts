@@ -5599,6 +5599,45 @@ describe("query_prometheus evidence", () => {
     }
   });
 
+  // The diagnose prompt tells the agent to scope a query as `pod=~'^(a|b)$'`.
+  // A Pod target has to recognise its own name written that way, or following
+  // our own instruction demotes the target's own series.
+  it("accepts the anchored set form the prompt asks for on a Pod target", () => {
+    const podTarget = {
+      kind: "Pod",
+      group: "",
+      namespace: "shop",
+      name: "api-7f6-abc",
+    };
+    const podSelector = (value: string) => [
+      {
+        metric: "container_cpu_usage_seconds_total",
+        matchers: [
+          { label: "namespace", op: "=", value: "shop" },
+          { label: "pod", op: "=~", value },
+        ],
+      },
+    ];
+    expect(metricsScope(podTarget, podSelector("api-7f6-abc"), false)).toBe(
+      "target",
+    );
+    expect(metricsScope(podTarget, podSelector("^(api-7f6-abc)$"), false)).toBe(
+      "target",
+    );
+    // A set that also names a neighbour is not evidence about this pod alone,
+    // and a prefix still selects pods this one does not stand for.
+    expect(
+      metricsScope(
+        podTarget,
+        podSelector("^(api-7f6-abc|api-7f6-def)$"),
+        false,
+      ),
+    ).toBe("producer-related");
+    expect(metricsScope(podTarget, podSelector("api-7f6-.*"), false)).toBe(
+      "producer-related",
+    );
+  });
+
   it("treats an unescaped dot in a workload regex as naming more than the target", () => {
     const dotted = { ...target, name: "api.v2" };
     const selector = (value: string) => [

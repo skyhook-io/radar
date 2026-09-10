@@ -405,8 +405,8 @@ func TestResourceMetricsNamesTheWorkloadsOwnPods(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Pods != 1 || resp.PodsTotal != 1 {
-		t.Fatalf("pods = %d/%d, want the one owned pod counted", resp.Pods, resp.PodsTotal)
+	if resp.Pods == nil || *resp.Pods != 1 || resp.PodsTotal != 1 {
+		t.Fatalf("pods = %v/%d, want the one owned pod counted", resp.Pods, resp.PodsTotal)
 	}
 	queries := f.queries(t)
 	if len(queries) == 0 {
@@ -440,8 +440,8 @@ func TestResourceMetricsMembershipDoesNotDependOnPrometheus(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Pods != 1 {
-		t.Fatalf("pods = %d, want 1", resp.Pods)
+	if resp.Pods == nil || *resp.Pods != 1 {
+		t.Fatalf("pods = %v, want 1", resp.Pods)
 	}
 	queries := f.queries(t)
 	last := queries[len(queries)-1]
@@ -492,8 +492,14 @@ func TestResourceMetricsChartsNothingForAWorkloadWithNoPods(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Pods != 0 {
-		t.Fatalf("pods = %d, want 0", resp.Pods)
+	// Zero has to survive the wire: the caption that tells an empty chart
+	// apart from a kind with no pod scope reads this field, and an omitted
+	// zero is indistinguishable from a Node.
+	if !strings.Contains(rec.Body.String(), `"pods":0`) {
+		t.Fatalf("a workload with no pods must serialize pods:0, got %s", rec.Body.String())
+	}
+	if resp.Pods == nil || *resp.Pods != 0 {
+		t.Fatalf("pods = %v, want 0", resp.Pods)
 	}
 	queries := f.queries(t)
 	last := queries[len(queries)-1]
