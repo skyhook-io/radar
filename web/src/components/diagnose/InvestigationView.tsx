@@ -1038,14 +1038,27 @@ export function InvestigationView({
         : [],
     );
   }, [liveCaseIsCurrentAssessment, liveTurnResolution]);
+  // The live turn's own case, before anything is carried onto it. Its source
+  // receipt must list what IT cited, not what the merge brought along.
+  const liveTurnCase = useMemo(
+    () =>
+      liveCaseIsCurrentAssessment
+        ? investigationCase
+        : resolveInvestigationCase(
+            projection,
+            turns[liveCaseTurnIdx]?.diagnosis,
+            liveCaseTurnIdx,
+          ),
+    [
+      liveCaseIsCurrentAssessment,
+      investigationCase,
+      projection,
+      turns,
+      liveCaseTurnIdx,
+    ],
+  );
   const paneCase = useMemo(() => {
-    const live = liveCaseIsCurrentAssessment
-      ? investigationCase
-      : resolveInvestigationCase(
-          projection,
-          turns[liveCaseTurnIdx]?.diagnosis,
-          liveCaseTurnIdx,
-        );
+    const live = liveTurnCase;
     const earlier: InvestigationCaseResolution[] = [];
     for (let i = turns.length - 1; i >= 0; i -= 1) {
       const diagnosis = turns[i]?.diagnosis;
@@ -1061,7 +1074,7 @@ export function InvestigationView({
     }
     return mergeInvestigationCases(live, earlier);
   }, [
-    liveCaseIsCurrentAssessment,
+    liveTurnCase,
     investigationCase,
     currentAssessmentIdx,
     projection,
@@ -1848,7 +1861,7 @@ export function InvestigationView({
                               return undefined;
                             const answerCase =
                               index === liveCaseTurnIdx
-                                ? paneCase
+                                ? liveTurnCase
                                 : resolveInvestigationCase(
                                     projection,
                                     turn.diagnosis,
