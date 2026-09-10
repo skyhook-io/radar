@@ -115,6 +115,7 @@ export const EVIDENCE_ROLES: ReadonlySet<string> =
     "cause",
     "symptom",
     "context",
+    "benign",
     "demoted",
     "rules_out",
   ]);

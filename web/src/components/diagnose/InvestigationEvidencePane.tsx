@@ -142,7 +142,8 @@ const EVIDENCE_ROLE_RANK: Readonly<Record<DiagnosisEvidenceRole, number>> = {
   // A ruled-out card keeps Radar's place in the list; the role only labels it.
   rules_out: 2,
   context: 3,
-  demoted: 4,
+  benign: 4,
+  demoted: 5,
 };
 const UNLABELLED_RANK = 2;
 
@@ -1329,6 +1330,7 @@ function EvidenceCard({
   const revisionItems = caseItems.filter(
     (item) => item.placement === "revision",
   );
+  const agentCause = cardItems.some((item) => item.role === "cause");
   const previousObservations = previousDifferentObservations(
     group,
     citedOrder,
@@ -1432,13 +1434,15 @@ function EvidenceCard({
       aria-label={`${observation.title} evidence`}
       className={clsx(
         "@container/card scroll-mt-14 overflow-hidden outline-none focus:ring-2 focus:ring-accent/50 data-[source-related]:ring-2 data-[source-related]:ring-accent/35",
-        "rounded-lg border bg-theme-surface",
-        toneBorder(
-          observation.tone,
-          observation.tier,
-          prominence,
-          cardItems.some((item) => item.role === "cause"),
-        ),
+        "rounded-lg border",
+        // The card the agent calls the cause sorts first and is often the
+        // calmest thing on screen: a cause is frequently a Secret or a
+        // ConfigMap that Radar has no reason to colour, while every card
+        // echoing the failure below it carries red. Lifting the surface marks
+        // it without borrowing a severity hue, and without touching the left
+        // rule (Radar's severity) or the ring (the source you are viewing).
+        agentCause ? "bg-theme-elevated shadow-theme-sm" : "bg-theme-surface",
+        toneBorder(observation.tone, observation.tier, prominence),
         wide && "@min-[760px]/evidence:col-span-2",
         animateArrival && "animate-transcript-enter",
       )}
@@ -3592,8 +3596,6 @@ function toneBorder(
   tone: InvestigationEvidenceObservation["tone"],
   tier: InvestigationEvidenceTier,
   prominence: "primary" | "supporting" | "secondary",
-  /** The agent called this card the cause. */
-  agentCause = false,
 ): string {
   if (prominence !== "primary") return "border-theme-border/70";
   // A supporting adverse card is what the healthy-conflict banner points at,
@@ -3603,15 +3605,7 @@ function toneBorder(
     return "border-l-2 border-l-semantic-error border-theme-border";
   if (tier === "supporting" && (tone === "warning" || tone === "alert"))
     return "border-l-2 border-l-semantic-warning border-theme-border";
-  if (tier !== "key") {
-    // The card the agent calls the cause sorts first and is often the calmest
-    // thing on screen, because a cause is frequently a Secret or a ConfigMap
-    // that Radar has no reason to colour. The accent marks it in the same slot
-    // without borrowing a severity hue — and only where Radar left that slot
-    // empty, so severity always outranks the agent's framing.
-    if (agentCause) return "border-l-[3px] border-l-accent border-theme-border";
-    return "border-theme-border";
-  }
+  if (tier !== "key") return "border-theme-border";
   if (tone === "error")
     return "border-l-[3px] border-l-red-500 border-theme-border";
   if (tone === "alert")

@@ -318,54 +318,68 @@ describe("investigation evidence projection stability", () => {
     );
     expect(
       investigationHealthConflictExplainedBy(projection, [
-        note("g1", "demoted"),
+        note("g1", "benign"),
       ]),
     ).toBe(null);
     expect(
       investigationHealthConflictExplainedBy(projection, [
-        note("g1", "demoted"),
+        note("g1", "benign"),
         note("g2", "cause"),
       ]),
     ).toBe(null);
     expect(
       investigationHealthConflictExplainedBy(projection, [
-        note("g1", "demoted"),
-        note("g2", "rules_out", "source"),
+        note("g1", "benign"),
+        note("g2", "benign", "source"),
       ]),
     ).toBe(null);
     // A note pinned to a superseded read addressed the card as it was then,
     // not the card the banner is qualifying now.
     expect(
       investigationHealthConflictExplainedBy(projection, [
-        note("g1", "demoted"),
-        note("g2", "rules_out", "revision"),
+        note("g1", "benign"),
+        note("g2", "benign", "revision"),
       ]),
     ).toBe(null);
     // An empty claim renders nothing, so the banner would be pointing at a
     // note the reader cannot find.
     expect(
       investigationHealthConflictExplainedBy(projection, [
-        note("g1", "demoted"),
-        note("g2", "rules_out", "card", "   "),
+        note("g1", "benign"),
+        note("g2", "benign", "card", "   "),
+      ]),
+    ).toBe(null);
+    // "Excludes some hypothesis" and "is peripheral here" are both true of a
+    // problem that is still live, so neither reconciles a healthy verdict.
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "benign"),
+        note("g2", "rules_out"),
       ]),
     ).toBe(null);
     expect(
       investigationHealthConflictExplainedBy(projection, [
-        note("g1", "demoted"),
-        note("g2", "rules_out"),
+        note("g1", "benign"),
+        note("g2", "demoted"),
+      ]),
+    ).toBe(null);
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "benign"),
+        note("g2", "benign"),
       ]),
     ).toEqual(["CrashLoopBackOff", "OOMKilled"]);
     // The agent contradicting itself on the same card is not an explanation.
     expect(
       investigationHealthConflictExplainedBy(projection, [
-        note("g1", "demoted"),
-        note("g2", "rules_out"),
+        note("g1", "benign"),
+        note("g2", "benign"),
         note("g2", "cause"),
       ]),
     ).toBe(null);
     expect(
       investigationHealthConflictExplainedBy({ groups: [] }, [
-        note("g1", "demoted"),
+        note("g1", "benign"),
       ]),
     ).toBe(null);
   });

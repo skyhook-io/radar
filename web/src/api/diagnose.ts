@@ -54,7 +54,7 @@ export interface RootCauseEvidence {
 
 /** How the agent frames one cited Radar result. Roles order cards; they never hide one. */
 export type DiagnosisEvidenceRole =
-  "cause" | "symptom" | "context" | "demoted" | "rules_out";
+  "cause" | "symptom" | "context" | "benign" | "demoted" | "rules_out";
 
 /**
  * Which observation inside one tool result a claim is about. Agent text

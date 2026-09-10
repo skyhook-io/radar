@@ -425,7 +425,11 @@ export function investigationHealthConflictExplainedBy(
         // the banner stays a warning either way.
         item.placement === "card" &&
         item.claim.trim() !== "" &&
-        (item.role === "demoted" || item.role === "rules_out"),
+        // Only `benign` says this evidence does not indicate a live problem.
+        // `rules_out` excludes some other hypothesis and `demoted` says the
+        // card is peripheral — both true of a still-active problem — so
+        // neither reconciles a healthy verdict with evidence contradicting it.
+        item.role === "benign",
     );
     if (!explained) return null;
     titles.push(group.latest.title ?? group.kind);

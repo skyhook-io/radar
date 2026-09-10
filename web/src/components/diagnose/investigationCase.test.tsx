@@ -1459,7 +1459,7 @@ describe("the agent's contribution is one attributed row", () => {
     expect(row).toContain("The sealed value is stale.");
   });
 
-  it("names the hypothesis a rules-out card excludes", () => {
+  it("names the hypothesis a rules-out card excludes, beside the chip", () => {
     const html = renderToStaticMarkup(
       <AgentClaimNote
         role="rules_out"
@@ -1467,21 +1467,37 @@ describe("the agent's contribution is one attributed row", () => {
         claim="Same user authenticates fine here."
       />,
     );
-    expect(html).toContain("Rules out: The Atlas user was deleted");
+    // The chip stays short; a hypothesis long enough to be useful would
+    // otherwise make a badge that swallows the row.
+    expect(html).toContain("Rules out");
+    expect(html).toContain("The Atlas user was deleted");
+    expect(html).not.toContain("Rules out: The Atlas user was deleted");
     // Without the hypothesis the reader had to find it in a separate block.
     const bare = renderToStaticMarkup(
       <AgentClaimNote role="rules_out" claim="Same user authenticates fine." />,
     );
     expect(bare).toContain("Rules out");
-    expect(bare).not.toContain("Rules out:");
+    expect(bare).not.toContain("The Atlas user was deleted");
   });
 
-  it("only names a hypothesis for the role that excludes one", () => {
+  it("never states a rejected hypothesis on a card that is not ruling it out", () => {
+    // The agent can point a ruled-out hypothesis at a card it also called a
+    // symptom. "The container is being OOMKilled" printed beside a Symptom
+    // chip reads as a fact rather than as something disproved.
     const html = renderToStaticMarkup(
-      <AgentRoleChip role="demoted" excludes="something else" />,
+      <AgentClaimNote
+        role="symptom"
+        excludes="The container is being OOMKilled"
+        claim="Memory peaked at 277MB against a 2Gi limit."
+      />,
     );
-    expect(html).toContain("Less relevant");
-    expect(html).not.toContain("something else");
+    expect(html).toContain("Symptom");
+    expect(html).not.toContain("OOMKilled");
+  });
+
+  it("labels the role that says an adverse result is not a live problem", () => {
+    const html = renderToStaticMarkup(<AgentRoleChip role="benign" />);
+    expect(html).toContain("Not a problem");
   });
 
   it("still shows an attributed role when the agent left no sentence", () => {

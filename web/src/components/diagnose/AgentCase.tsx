@@ -11,6 +11,7 @@ export const AGENT_ROLE_LABELS: Readonly<
   cause: "Cause",
   symptom: "Symptom",
   context: "Context",
+  benign: "Not a problem",
   demoted: "Less relevant",
   rules_out: "Rules out",
 };
@@ -19,29 +20,14 @@ export const AGENT_ROLE_LABELS: Readonly<
  * The agent's framing of a Radar fact. Always the agent tone, never a
  * severity tone: a chip must not read as a Radar finding.
  */
-export function AgentRoleChip({
-  role,
-  excludes,
-}: {
-  role: DiagnosisEvidenceRole;
-  /** The hypothesis this evidence excludes, for `rules_out`. */
-  excludes?: string;
-}) {
-  const named = role === "rules_out" && excludes ? excludes.trim() : "";
-  const label = named
-    ? `${AGENT_ROLE_LABELS[role]}: ${named}`
-    : AGENT_ROLE_LABELS[role];
+export function AgentRoleChip({ role }: { role: DiagnosisEvidenceRole }) {
   return (
     <Tooltip
-      content={
-        named
-          ? `The agent says this evidence excludes "${named}". Radar recorded the fact; the reading is the agent's.`
-          : `The agent labelled this evidence "${AGENT_ROLE_LABELS[role]}". Radar recorded the fact; the label is the agent's reading of it.`
-      }
-      wrapperClassName="align-middle"
+      content={`The agent labelled this evidence "${AGENT_ROLE_LABELS[role]}". Radar recorded the fact; the label is the agent's reading of it.`}
+      wrapperClassName="shrink-0 align-middle"
     >
-      <Badge tone="agent" size="sm" className="whitespace-normal text-left">
-        {label}
+      <Badge tone="agent" size="sm">
+        {AGENT_ROLE_LABELS[role]}
       </Badge>
     </Tooltip>
   );
@@ -55,8 +41,10 @@ export function AgentRoleChip({
  * once, where it sat in the same slot as Radar's own badges and could be read
  * as Radar having established it.
  *
- * A `rules_out` role names the hypothesis it excludes. "Rules out" alone forces
- * the reader to find the hypothesis in a block further down and match it back.
+ * A `rules_out` note carries the hypothesis it excludes, as text beside the
+ * chip rather than inside it: "Rules out" alone forces the reader to find the
+ * hypothesis in a block further down and match it back, and a hypothesis long
+ * enough to be useful makes a badge that swallows the row.
  */
 export function AgentClaimNote({
   claim,
@@ -67,7 +55,11 @@ export function AgentClaimNote({
 }: {
   claim: string;
   role?: DiagnosisEvidenceRole;
-  /** The hypothesis a `rules_out` item excludes, when the agent named one. */
+  /**
+   * The hypothesis this item excludes. Rendered only for `rules_out`, where
+   * the chip frames it as rejected: a hypothesis is a claim the agent
+   * DISPROVED, so on any other card it would read as a statement of fact.
+   */
   excludes?: string;
   /** The observation the note was bound to, when it is not on that card. */
   subject?: string;
@@ -86,7 +78,13 @@ export function AgentClaimNote({
       <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
         {role ? (
           <>
-            <AgentRoleChip role={role} excludes={excludes} />{" "}
+            <AgentRoleChip role={role} />{" "}
+          </>
+        ) : null}
+        {excludes && role === "rules_out" ? (
+          <>
+            <span className="italic text-theme-text-tertiary">{excludes}</span>
+            {" — "}
           </>
         ) : null}
         {claim ? (
