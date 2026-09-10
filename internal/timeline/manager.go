@@ -209,7 +209,13 @@ func InitStore(cfg StoreConfig) error {
 				startPostgresReconnect(cfg)
 			}
 		}
-		observationStartNanos.Store(time.Now().UnixNano())
+		// Only claim observation coverage once a store exists. A degraded
+		// PostgreSQL start records nothing until it reconnects, and marking the
+		// start here would tell consumers history covers a window that is empty.
+		// The PostgreSQL install path sets this when it publishes its store.
+		if GetStore() != nil {
+			observationStartNanos.Store(time.Now().UnixNano())
+		}
 	})
 	return globalStoreErr
 }

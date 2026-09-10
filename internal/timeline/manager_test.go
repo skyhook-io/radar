@@ -33,8 +33,8 @@ func TestInitStoreDegradesPostgresOnConnectionFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InitStore error = %v, want the timeline to degrade instead", err)
 	}
-	// The invariant that has not changed: no fallback store. A memory store
-	// here would look healthy while quietly dropping history on restart.
+	// No fallback store: a memory store here would look healthy while quietly
+	// dropping history on the next restart.
 	if GetStore() != nil {
 		t.Fatal("InitStore configured a fallback store for unreachable PostgreSQL")
 	}

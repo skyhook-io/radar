@@ -3,6 +3,7 @@ package timeline
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // An unreachable database must not fail InitStore. Every caller already treats a
@@ -101,5 +102,43 @@ func TestReconnectWorkerInstallsTheStoreWhenTheDatabaseReturns(t *testing.T) {
 	}
 	if TimelineUnavailableReason() != "" {
 		t.Fatalf("unavailable reason lingered after a successful open: %s", TimelineUnavailableReason())
+	}
+}
+
+// A degraded start records nothing, so it must not claim observation coverage
+// for that window. Consumers read ObservationStart to decide how far back
+// history is trustworthy.
+func TestDegradedStartClaimsNoObservationCoverage(t *testing.T) {
+	ResetStore()
+	t.Cleanup(ResetStore)
+
+	if err := InitStore(StoreConfig{
+		Type: StoreTypePostgres,
+		DSN:  "postgres://radar:radar@127.0.0.1:1/radar?sslmode=disable",
+	}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	if start := ObservationStart(); !start.IsZero() {
+		t.Fatalf("observation start = %v with no store recording; history coverage would be overstated", start)
+	}
+}
+
+// The observation window opens when the store is installed, not at process
+// start, so a timeline that arrived late does not claim the outage window.
+func TestObservationStartsWhenTheStoreIsInstalled(t *testing.T) {
+	dsn := testPostgresDSN(t)
+	ResetStore()
+	t.Cleanup(ResetStore)
+
+	before := time.Now()
+	if err := InitStore(StoreConfig{Type: StoreTypePostgres, DSN: dsn}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	start := ObservationStart()
+	if start.IsZero() {
+		t.Fatal("no observation start recorded despite an installed store")
+	}
+	if start.Before(before) {
+		t.Fatalf("observation start %v predates the install at %v", start, before)
 	}
 }
