@@ -5460,7 +5460,12 @@ export function projectInvestigationEvidence(
 
   return {
     groups: builder.groups,
-    limitations: builder.limitations,
+    // Qualifications read in the order the investigation produced them, which
+    // is the transcript's order and not the order the adapters happened to
+    // run in: the membership-dependent ones are adapted last.
+    limitations: [...builder.limitations].sort(
+      (a, b) => a.firstOrder - b.firstOrder,
+    ),
     sources: builder.sources,
     evidenceRefSources,
     citableSources,
