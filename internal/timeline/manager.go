@@ -199,17 +199,14 @@ func InitStore(cfg StoreConfig) error {
 				globalStoreErr = fmt.Errorf("PostgreSQL timeline store requires a DSN")
 				return
 			}
-			store, err := NewPostgresStore(cfg.DSN)
-			if err != nil {
-				globalStoreErr = fmt.Errorf("PostgreSQL timeline store failed to initialize: %w", err)
-				return
-			}
-			setGlobalStore(store)
-			if cfg.RetentionAge > 0 {
-				store.StartCleanupLoop(cfg.RetentionAge, time.Hour, 0)
-				log.Printf("Initialized PostgreSQL timeline store (retention: %s)", cfg.RetentionAge)
-			} else {
-				log.Printf("Initialized PostgreSQL timeline store (retention: disabled — events table will grow unbounded)")
+			if !openPostgresStore(cfg) {
+				// An unreachable database must not take the rest of Radar with
+				// it: the timeline is history, the cluster views are the
+				// product. Leave the store unset, which every caller already
+				// treats as "timeline unavailable", and keep trying in the
+				// background. Falling back to memory instead would hand the
+				// operator a timeline that silently disappears on restart.
+				startPostgresReconnect(cfg)
 			}
 		}
 		observationStartNanos.Store(time.Now().UnixNano())
@@ -324,6 +321,8 @@ func setGlobalStore(s EventStore) {
 func ResetStore() {
 	globalStoreInitMu.Lock()
 	defer globalStoreInitMu.Unlock()
+
+	stopPostgresReconnect()
 
 	globalStoreMu.Lock()
 	defer globalStoreMu.Unlock()

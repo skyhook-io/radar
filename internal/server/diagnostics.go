@@ -114,10 +114,11 @@ type DiagCache struct {
 // DiagTimeline holds timeline store info.
 type DiagTimeline struct {
 	StorageType string `json:"storageType"`
-	// Degraded reports that the configured persistent backend failed to open
-	// and this session runs on a volatile in-memory fallback — the first thing
-	// to check when history vanished after a restart. StorageType reflects the
-	// ACTUAL store in use, not the configured one.
+	// Degraded reports that the configured persistent backend failed to open.
+	// The session then runs on a volatile in-memory fallback, or with no
+	// timeline at all when falling back would hide the loss - the first thing
+	// to check when history is missing. StorageType reflects the ACTUAL store
+	// in use, not the configured one.
 	Degraded       bool   `json:"degraded,omitempty"`
 	DegradedReason string `json:"degradedReason,omitempty"`
 	TotalEvents    int64  `json:"totalEvents"`
@@ -310,6 +311,16 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	collectSafe("timeline", &errs, func() {
 		store := timeline.GetStore()
 		if store == nil {
+			// No store at all. If a configured backend is the reason, say so
+			// here rather than omitting the section: a missing timeline with no
+			// explanation is the hardest kind of failure to chase.
+			if reason := timeline.TimelineUnavailableReason(); reason != "" {
+				snap.Timeline = &DiagTimeline{
+					StorageType:    "unavailable",
+					Degraded:       true,
+					DegradedReason: reason,
+				}
+			}
 			return
 		}
 		stats := store.Stats()
