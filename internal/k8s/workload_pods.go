@@ -19,8 +19,9 @@ import (
 //
 // Supported kinds (singular or plural, any case): Deployment and Rollout
 // through their ReplicaSets, CronJob through its Jobs, and StatefulSet,
-// DaemonSet, ReplicaSet, Job and Workflow directly. Unavailable listers
-// return ErrWorkloadAccessDenied so an empty answer is never mistaken for
+// DaemonSet, ReplicaSet, Job and Workflow directly. An unavailable lister
+// returns ErrWorkloadAccessDenied and one still filling its initial sync
+// returns ErrWorkloadCacheWarming, so an empty answer is never mistaken for
 // "no pods". Pods are sorted by name.
 func WorkloadPods(cache *ResourceCache, kind, namespace, name string) ([]*corev1.Pod, error) {
 	canonical := canonicalWorkloadKind(kind)
@@ -30,6 +31,11 @@ func WorkloadPods(cache *ResourceCache, kind, namespace, name string) ([]*corev1
 	kind = canonical
 	if cache == nil || cache.ResourceCache == nil || cache.Pods() == nil {
 		return nil, fmt.Errorf("%w: list pods", ErrWorkloadAccessDenied)
+	}
+	// Every kind reaches its pods through this lister, including the ones
+	// that need no ownership hop, so it is gated before the hop is chosen.
+	if err := requireCovers(cache, "pods", namespace); err != nil {
+		return nil, err
 	}
 	ownedBy, err := workloadOwnershipTest(cache, kind, namespace, name)
 	if err != nil {
@@ -102,7 +108,7 @@ func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string) (
 		if rsLister == nil {
 			return nil, fmt.Errorf("%w: list replicasets", ErrWorkloadAccessDenied)
 		}
-		if err := requireSynced(cache, "replicasets"); err != nil {
+		if err := requireCovers(cache, "replicasets", namespace); err != nil {
 			return nil, err
 		}
 		return func(pod *corev1.Pod) bool {
@@ -122,7 +128,7 @@ func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string) (
 		if jobLister == nil {
 			return nil, fmt.Errorf("%w: list jobs", ErrWorkloadAccessDenied)
 		}
-		if err := requireSynced(cache, "jobs"); err != nil {
+		if err := requireCovers(cache, "jobs", namespace); err != nil {
 			return nil, err
 		}
 		return func(pod *corev1.Pod) bool {
@@ -140,6 +146,21 @@ func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string) (
 	default:
 		return direct, nil
 	}
+}
+
+// requireCovers refuses to read an informer that cannot answer authoritatively
+// for this namespace: one still filling its initial sync, or one scoped to
+// other namespaces. Both return an empty list rather than an error, and an
+// empty list here becomes "this workload has no pods" — a claim neither state
+// supports. KindCoversNamespace says so itself: a miss is not zero objects.
+func requireCovers(cache *ResourceCache, key, namespace string) error {
+	if err := requireSynced(cache, key); err != nil {
+		return err
+	}
+	if !cache.KindCoversNamespace(key, namespace) {
+		return fmt.Errorf("%w: list %s in %s", ErrWorkloadAccessDenied, key, namespace)
+	}
+	return nil
 }
 
 // requireSynced refuses a hop through an informer that has not finished its

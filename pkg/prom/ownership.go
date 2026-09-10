@@ -29,9 +29,18 @@ type PodSelection struct {
 // kube-state-metrics records ownership one edge at a time, so a Deployment
 // or Rollout reaches its pods through the ReplicaSets it owns and a CronJob
 // through its Jobs. Both edges are kept and joined inside the query rather
-// than resolved to a list of names first: a ReplicaSet adopted by another
-// Deployment mid-window then contributes only for the steps it actually
-// belonged to this one.
+// than resolved to a list of names first, so each step re-reads them instead
+// of inheriting a membership decision made once at query time.
+//
+// The two edges are read by separate last_over_time selectors, which pick each
+// series' most recent sample independently and so do not establish that the
+// edges held at the same instant. A ReplicaSet transferred between Deployments
+// mid-window is therefore attributed to both for the length of the lookback:
+// the new owner's pods join the old owner's retained edge. Ownership transfer
+// between controllers requires matching selectors and is rare, but a query
+// over that window overstates the old workload. Constraining a counter to the
+// interval an edge actually held needs contemporaneous joins these selectors
+// do not express.
 type WorkloadRef struct {
 	Kind      string
 	Namespace string

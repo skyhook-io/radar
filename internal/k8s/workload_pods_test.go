@@ -117,6 +117,74 @@ func TestWorkloadPodsReportsDeniedListersInsteadOfEmpty(t *testing.T) {
 	}
 }
 
+// newScopedOwnershipCache builds a cache whose informers are namespace-scoped,
+// the shape probe-based RBAC gating produces when cluster-wide list is denied.
+func newScopedOwnershipCache(t *testing.T, scopes map[string]k8score.ResourceScope, objects ...runtime.Object) *ResourceCache {
+	t.Helper()
+	types := map[string]bool{}
+	for kind, scope := range scopes {
+		if scope.Enabled {
+			types[kind] = true
+		}
+	}
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{
+		Client:         fake.NewClientset(objects...),
+		ResourceTypes:  types,
+		DeferredTypes:  map[string]bool{},
+		ResourceScopes: scopes,
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache: %v", err)
+	}
+	t.Cleanup(core.Stop)
+	return &ResourceCache{ResourceCache: core}
+}
+
+// An informer scoped to another namespace answers an empty list, not an error.
+// Reading that as "this workload has no pods" states a fact the cache never
+// established — the same mistake as trusting a denied lister, reached through
+// scope instead of permission.
+func TestWorkloadPodsRefuseNamespacesTheInformersDoNotCover(t *testing.T) {
+	apiOwner := controllerRef("ReplicaSet", "api-7f6")
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "team-b", Name: "api-7f6", OwnerReferences: []metav1.OwnerReference{controllerRef("Deployment", "api")}}}
+
+	// Pods cover team-b; ReplicaSets watch only team-a. The parent lookup for
+	// every team-b pod misses, which would read as a workload with no pods.
+	hopElsewhere := newScopedOwnershipCache(t,
+		map[string]k8score.ResourceScope{
+			k8score.Pods:        {Enabled: true, Namespace: "team-b"},
+			k8score.ReplicaSets: {Enabled: true, Namespace: "team-a"},
+		},
+		ownedPod("team-b", "api-7f6-a", &apiOwner, nil), rs,
+	)
+	if _, err := WorkloadPods(hopElsewhere, "deployment", "team-b", "api"); !errors.Is(err, ErrWorkloadAccessDenied) {
+		t.Fatalf("replicasets scoped to another namespace: err = %v, want ErrWorkloadAccessDenied", err)
+	}
+
+	// The kinds needing no hop go through the same pod lister, so a pod
+	// informer that does not reach the namespace is refused for them too.
+	podsElsewhere := newScopedOwnershipCache(t,
+		map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "team-a"}},
+		ownedPod("team-b", "db-0", nil, nil),
+	)
+	if _, err := WorkloadPods(podsElsewhere, "statefulset", "team-b", "db"); !errors.Is(err, ErrWorkloadAccessDenied) {
+		t.Fatalf("pods scoped to another namespace: err = %v, want ErrWorkloadAccessDenied", err)
+	}
+
+	// The namespace it does cover still answers.
+	covered := newScopedOwnershipCache(t,
+		map[string]k8score.ResourceScope{k8score.Pods: {Enabled: true, Namespace: "team-a"}},
+		ownedPod("team-a", "db-0", &metav1.OwnerReference{APIVersion: "apps/v1", Kind: "StatefulSet", Name: "db", Controller: func() *bool { b := true; return &b }()}, nil),
+	)
+	pods, err := WorkloadPodNames(covered, "statefulset", "team-a", "db")
+	if err != nil {
+		t.Fatalf("covered namespace: %v", err)
+	}
+	if !reflect.DeepEqual(pods, []string{"db-0"}) {
+		t.Fatalf("covered namespace returned %v, want [db-0]", pods)
+	}
+}
+
 // A Rollout migrating from a Deployment with workloadRef leaves both
 // controllers running pods that match the same labels. Ownership is what
 // separates them.
