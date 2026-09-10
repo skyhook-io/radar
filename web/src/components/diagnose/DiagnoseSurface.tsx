@@ -443,37 +443,37 @@ function DiagnoseHeaderIdentity({
   onOpenSettings: (() => void) | null;
 }) {
   return (
-    <div className={`min-w-0 ${className}`}>
-      <div className="flex min-w-0 items-center gap-2">
-        <div className="min-w-0 flex-1 truncate text-sm font-medium text-theme-text-primary">
+    <div className={`flex min-w-0 items-center gap-3 ${className}`}>
+      <div className="min-w-0 flex-1">
+        <div className="min-w-0 truncate text-sm font-medium text-theme-text-primary">
           {title}
         </div>
-        {runMeta ? (
-          <div
-            className={`${MAXIMIZED_RUN_META_VISIBILITY_CLASS} shrink-0 items-center gap-1 text-[11px] tabular-nums text-theme-text-tertiary`}
-          >
-            <span className={`font-medium ${runMeta.labelClass}`}>
-              {runMeta.label}
-            </span>
-            <span aria-hidden>·</span>
-            <time dateTime={runMeta.dateTime}>{runMeta.time}</time>
-          </div>
-        ) : null}
+        <div className="flex items-center gap-1 text-xs text-theme-text-tertiary">
+          <span className="truncate">{configLine}</span>
+          {onOpenSettings && (
+            <Tooltip content="AI settings" position="bottom">
+              <button
+                onClick={onOpenSettings}
+                className="shrink-0 rounded p-0.5 text-theme-text-tertiary hover:text-theme-text-primary"
+                aria-label="AI settings"
+              >
+                <Settings2 className="h-3 w-3" />
+              </button>
+            </Tooltip>
+          )}
+        </div>
       </div>
-      <div className="flex items-center gap-1 text-xs text-theme-text-tertiary">
-        <span className="truncate">{configLine}</span>
-        {onOpenSettings && (
-          <Tooltip content="AI settings" position="bottom">
-            <button
-              onClick={onOpenSettings}
-              className="shrink-0 rounded p-0.5 text-theme-text-tertiary hover:text-theme-text-primary"
-              aria-label="AI settings"
-            >
-              <Settings2 className="h-3 w-3" />
-            </button>
-          </Tooltip>
-        )}
-      </div>
+      {runMeta ? (
+        <div
+          className={`${MAXIMIZED_RUN_META_VISIBILITY_CLASS} shrink-0 items-center gap-1 whitespace-nowrap text-[11px] tabular-nums text-theme-text-tertiary`}
+        >
+          <span className={`font-medium ${runMeta.labelClass}`}>
+            {runMeta.label}
+          </span>
+          <span aria-hidden>·</span>
+          <time dateTime={runMeta.dateTime}>{runMeta.time}</time>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -838,7 +838,7 @@ export function DiagnoseSurface({
       )}
 
       {/* Header */}
-      <div className="relative z-30 flex items-center justify-between border-b border-theme-border bg-theme-surface px-4 py-2.5">
+      <div className="relative z-30 flex items-center justify-between gap-3 border-b border-theme-border bg-theme-surface px-4 py-2.5">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {showHistory && (d.view !== "home" || !persistentHistory) ? (
             <Tooltip
@@ -893,7 +893,7 @@ export function DiagnoseSurface({
             )}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-0.5">
+        <div className="flex shrink-0 items-center gap-1">
           {activeRun &&
             canRerunInvestigation(d.view, activeRun, d.needsConsent) && (
               <Tooltip
