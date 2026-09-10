@@ -48,9 +48,14 @@ type ResourceCache struct {
 
 	// Per-informer sync tracking for diagnostics
 	informerStatuses []InformerSyncStatus
-	informerMu       sync.RWMutex
-	promotedKinds    []string // set when SyncTimeout fires; empty on normal sync
-	syncStartTime    time.Time
+	// informerHasSynced is the informer's own HasSynced, parallel to
+	// informerStatuses. The Synced flag beside it is written by a tracking
+	// goroutine and lags it, so a caller deciding whether it may trust an
+	// empty list must ask this rather than read the flag.
+	informerHasSynced []func() bool
+	informerMu        sync.RWMutex
+	promotedKinds     []string // set when SyncTimeout fires; empty on normal sync
+	syncStartTime     time.Time
 }
 
 // InformerSyncStatus tracks the sync state of a single informer.
@@ -607,10 +612,13 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 
 	// Initialize per-informer tracking
 	statuses := make([]InformerSyncStatus, len(allEntries))
+	hasSynced := make([]func() bool, len(allEntries))
 	for i, e := range allEntries {
 		statuses[i] = InformerSyncStatus{Kind: e.kind, Key: e.key, Deferred: e.deferred}
+		hasSynced[i] = e.synced
 	}
 	rc.informerStatuses = statuses
+	rc.informerHasSynced = hasSynced
 
 	if enabledCount == 0 {
 		stdlog.Printf("Warning: No resource types are accessible (all RBAC checks failed)")
@@ -1596,14 +1604,21 @@ func (rc *ResourceCache) DeferredDone() <-chan struct{} {
 // from "not watched at all" instead of failing closed on both. Callers that
 // need one kind must use this rather than IsDeferredSynced, which stays false
 // while any unrelated deferred informer is warming or has permanently failed.
+//
+// It answers from the informer's own HasSynced, not the Synced flag the
+// tracking goroutine writes ~10ms later: a caller gating a read on this would
+// otherwise refuse to serve a cache that is in fact ready.
 func (rc *ResourceCache) InformerSynced(key string) (synced, known bool) {
 	if rc == nil {
 		return false, false
 	}
 	rc.informerMu.RLock()
 	defer rc.informerMu.RUnlock()
-	for _, status := range rc.informerStatuses {
+	for i, status := range rc.informerStatuses {
 		if status.Key == key {
+			if i < len(rc.informerHasSynced) && rc.informerHasSynced[i] != nil {
+				return rc.informerHasSynced[i](), true
+			}
 			return status.Synced, true
 		}
 	}
