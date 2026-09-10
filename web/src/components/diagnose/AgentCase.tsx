@@ -27,6 +27,10 @@ export function AgentRoleChip({ role }: { role: DiagnosisEvidenceRole }) {
       wrapperClassName="shrink-0 align-middle"
     >
       <Badge tone="agent" size="sm">
+        <Sparkles
+          className="mr-1 inline h-2.5 w-2.5 align-[-1.5px]"
+          aria-hidden
+        />
         {AGENT_ROLE_LABELS[role]}
       </Badge>
     </Tooltip>
@@ -74,8 +78,11 @@ export function AgentClaimNote({
         className,
       )}
     >
-      <Sparkles className="mt-[3px] h-3 w-3 shrink-0 text-accent" aria-hidden />
       <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+        {/* The chip and its sparkle carry this visually; the word is what
+            survives when colour and iconography do not. "Agent" rather than
+            "Agent's note" because a role can arrive with no sentence. */}
+        <span className="sr-only">Agent: </span>
         {role ? (
           <>
             <AgentRoleChip role={role} />{" "}
@@ -89,9 +96,6 @@ export function AgentClaimNote({
         ) : null}
         {claim ? (
           <>
-            <span className="font-semibold text-accent-text">
-              Agent&apos;s note:
-            </span>{" "}
             {subject ? (
               <span className="text-theme-text-tertiary">{subject} · </span>
             ) : null}

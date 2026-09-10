@@ -1450,7 +1450,7 @@ describe("agent case robustness", () => {
       "CrashLoopBackOff · </span>Was the cause back then.",
     );
     expect(earlier).toContain(">Cause<");
-    expect(earlier).toContain("Agent&#x27;s note:");
+    expect(earlier).toContain("Agent:");
   });
 
   it("lists an unpinnable ruled-out hypothesis nowhere", () => {
@@ -1480,7 +1480,9 @@ describe("the agent's contribution is one attributed row", () => {
     // Radar's own badges.
     const row = html.match(/<p[^>]*data-agent-claim[\s\S]*<\/p>/)?.[0] ?? "";
     expect(row).toContain("Cause");
-    expect(row).toContain("Agent&#x27;s note:");
+    // The chip carries the attribution visually; the word is the fallback for
+    // when colour and iconography do not reach the reader.
+    expect(row).toContain("Agent:");
     expect(row).toContain("The sealed value is stale.");
   });
 
@@ -1530,7 +1532,7 @@ describe("the agent's contribution is one attributed row", () => {
       <AgentClaimNote role="context" claim="" />,
     );
     expect(html).toContain("Context");
-    expect(html).not.toContain("Agent&#x27;s note:");
+    expect(html).not.toContain("note:");
     // Nothing at all to say and no role: render nothing.
     expect(renderToStaticMarkup(<AgentClaimNote claim="" />)).toBe("");
   });
