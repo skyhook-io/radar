@@ -55,12 +55,41 @@ func withPhase(ph corev1.PodPhase) func(*corev1.Pod) {
 	return func(p *corev1.Pod) { p.Status.Phase = ph }
 }
 
+func withReady(ready bool) func(*corev1.Pod) {
+	return func(p *corev1.Pod) {
+		st := corev1.ConditionFalse
+		if ready {
+			st = corev1.ConditionTrue
+		}
+		p.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: st}}
+	}
+}
+
 func pdb(ns, name string, selector *metav1.LabelSelector, allowed int32) policyv1.PodDisruptionBudget {
 	return policyv1.PodDisruptionBudget{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Generation: 1},
 		Spec:       policyv1.PodDisruptionBudgetSpec{Selector: selector},
-		Status:     policyv1.PodDisruptionBudgetStatus{DisruptionsAllowed: allowed},
+		Status:     policyv1.PodDisruptionBudgetStatus{DisruptionsAllowed: allowed, ObservedGeneration: 1},
 	}
+}
+
+func withPolicy(policy policyv1.UnhealthyPodEvictionPolicyType) func(*policyv1.PodDisruptionBudget) {
+	return func(p *policyv1.PodDisruptionBudget) { p.Spec.UnhealthyPodEvictionPolicy = &policy }
+}
+
+func withHealth(current, desired int32) func(*policyv1.PodDisruptionBudget) {
+	return func(p *policyv1.PodDisruptionBudget) {
+		p.Status.CurrentHealthy, p.Status.DesiredHealthy = current, desired
+	}
+}
+
+func stale(p *policyv1.PodDisruptionBudget) { p.Generation = 2 }
+
+func pdbWith(base policyv1.PodDisruptionBudget, mutate ...func(*policyv1.PodDisruptionBudget)) policyv1.PodDisruptionBudget {
+	for _, m := range mutate {
+		m(&base)
+	}
+	return base
 }
 
 func TestClassifyPodForDrain(t *testing.T) {
@@ -95,6 +124,13 @@ func TestClassifyPodForDrain(t *testing.T) {
 		{name: "PDB with nil selector matches nothing", pod: drainTestPod("a"), opts: defaults, pdbs: []policyv1.PodDisruptionBudget{pdb("shop", "none", nil, 0)}, want: DrainOutcomeEvict},
 		{name: "PDB with empty selector matches every pod in the namespace", pod: drainTestPod("a"), opts: defaults, pdbs: []policyv1.PodDisruptionBudget{pdb("shop", "all", &metav1.LabelSelector{}, 0)}, want: DrainOutcomeMayBlock},
 		{name: "skip decisions win over PDB", pod: drainTestPod("a", withEmptyDir), opts: defaults, pdbs: []policyv1.PodDisruptionBudget{pdb("shop", "web", webSelector, 0)}, want: DrainOutcomeSkip},
+		{name: "pending pod bypasses PDBs", pod: drainTestPod("a", withPhase(corev1.PodPending)), opts: defaults, pdbs: []policyv1.PodDisruptionBudget{pdb("shop", "web", webSelector, 0)}, want: DrainOutcomeEvict},
+		{name: "two PDBs covering the pod block the eviction even with budget left", pod: drainTestPod("a"), opts: defaults, pdbs: []policyv1.PodDisruptionBudget{pdb("shop", "web", webSelector, 1), pdb("shop", "all", &metav1.LabelSelector{}, 1)}, want: DrainOutcomeMayBlock},
+		{name: "unreconciled PDB status blocks", pod: drainTestPod("a"), opts: defaults, pdbs: []policyv1.PodDisruptionBudget{pdbWith(pdb("shop", "web", webSelector, 1), stale)}, want: DrainOutcomeMayBlock},
+		{name: "unready pod under AlwaysAllow is evicted despite an exhausted budget", pod: drainTestPod("a", withReady(false)), opts: defaults, pdbs: []policyv1.PodDisruptionBudget{pdbWith(pdb("shop", "web", webSelector, 0), withPolicy(policyv1.AlwaysAllow))}, want: DrainOutcomeEvict},
+		{name: "unready pod under IfHealthyBudget with a healthy budget is evicted", pod: drainTestPod("a", withReady(false)), opts: defaults, pdbs: []policyv1.PodDisruptionBudget{pdbWith(pdb("shop", "web", webSelector, 0), withHealth(2, 2))}, want: DrainOutcomeEvict},
+		{name: "unready pod under IfHealthyBudget with an unhealthy budget may block", pod: drainTestPod("a", withReady(false)), opts: defaults, pdbs: []policyv1.PodDisruptionBudget{pdbWith(pdb("shop", "web", webSelector, 0), withHealth(1, 2))}, want: DrainOutcomeMayBlock},
+		{name: "ready pod under AlwaysAllow with an exhausted budget still may block", pod: drainTestPod("a", withReady(true)), opts: defaults, pdbs: []policyv1.PodDisruptionBudget{pdbWith(pdb("shop", "web", webSelector, 0), withPolicy(policyv1.AlwaysAllow))}, want: DrainOutcomeMayBlock},
 	}
 
 	for _, tt := range tests {
@@ -162,8 +198,8 @@ func TestPlanNodeDrainIsReadOnlyAndCountsOutcomes(t *testing.T) {
 		t.Fatalf("PDBs were listable and must be reported as evaluated")
 	}
 	for _, d := range plan.Pods {
-		if !d.PDBChecked {
-			t.Fatalf("every pod on a plan with readable PDBs must be marked pdbChecked: %+v", d)
+		if (d.Outcome != DrainOutcomeSkip) != d.PDBChecked {
+			t.Fatalf("pdbChecked must be true exactly for decisions that reached the budget check: %+v", d)
 		}
 	}
 	if got := plan.Summary; got.Evict != 0 || got.Skip != 2 || got.MayBlock != 1 {
@@ -214,5 +250,36 @@ func TestDrainNodeReportsSkippedPodsWithoutPDBClaims(t *testing.T) {
 	}
 	if len(res.SkippedPods) != 1 || res.SkippedPods[0].Outcome != DrainOutcomeSkip || res.SkippedPods[0].PDBChecked {
 		t.Fatalf("skipped pods must be reported with pdbChecked=false (PDBs are not consulted during execution): %+v", res.SkippedPods)
+	}
+}
+
+func TestPlanNodeDrainListsPDBsOnlyWhereADecisionNeedsThem(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}},
+		func() *corev1.Pod {
+			p := drainTestPod("agent", withOwner("DaemonSet", true))
+			p.Namespace = "infra"
+			return &p
+		}(),
+		func() *corev1.Pod { p := drainTestPod("web-1"); return &p }(),
+	)
+	client.PrependReactor("list", "poddisruptionbudgets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.GetNamespace() == "infra" {
+			t.Fatalf("PDBs must not be listed for a namespace whose pods are all skipped")
+		}
+		return false, nil, nil
+	})
+	plan, err := PlanNodeDrain(context.Background(), client, "worker-1", DrainOptions{IgnoreDaemonSets: true})
+	if err != nil {
+		t.Fatalf("PlanNodeDrain: %v", err)
+	}
+	if !plan.PDBsEvaluated {
+		t.Fatalf("plan must count as evaluated when every needed namespace was listed: %+v", plan)
+	}
+	for _, d := range plan.Pods {
+		wantChecked := d.Name == "web-1"
+		if d.PDBChecked != wantChecked {
+			t.Fatalf("pdbChecked for %s = %v, want %v", d.Name, d.PDBChecked, wantChecked)
+		}
 	}
 }

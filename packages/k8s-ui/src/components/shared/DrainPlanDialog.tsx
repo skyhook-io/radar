@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { clsx } from 'clsx'
 import { Loader2 } from 'lucide-react'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Badge, type BadgeSeverity } from '../ui/Badge'
@@ -59,6 +58,8 @@ export interface CanConfirmDrainInput {
   nodeName: string
   options: DrainDialogOptions
   loading: boolean
+  /** the last plan request failed; with plan support the drain stays disabled until a plan is shown again */
+  error?: string | null
   acknowledgedEmptyDir: boolean
   /** false when the host cannot compute plans (no onPlanDrain); the dialog then only gates on the acknowledgement */
   planSupported: boolean
@@ -70,8 +71,9 @@ export interface CanConfirmDrainInput {
  * requires an explicit acknowledgement: the plan is an estimate, and a pod that
  * starts using emptyDir between the estimate and the drain would still lose its data.
  */
-export function canConfirmDrain({ plan, nodeName, options, loading, acknowledgedEmptyDir, planSupported }: CanConfirmDrainInput): boolean {
+export function canConfirmDrain({ plan, nodeName, options, loading, error, acknowledgedEmptyDir, planSupported }: CanConfirmDrainInput): boolean {
   if (loading) return false
+  if (planSupported && error) return false
   const current = planMatches(plan, nodeName, options) ? plan : null
   if (planSupported && !current) return false
   if (options.deleteEmptyDirData && !acknowledgedEmptyDir) return false
@@ -191,27 +193,24 @@ export function DrainPlanContent({
       )}
 
       {needsAck && (
-        <label
-          className={clsx(
-            'flex items-start gap-2 cursor-pointer rounded p-2 border',
-            'border-red-500/40 bg-red-500/10 text-theme-text-primary',
-          )}
-        >
-          <input
-            type="checkbox"
-            checked={acknowledgedEmptyDir}
-            onChange={(e) => onAcknowledgeEmptyDir(e.target.checked)}
-            className="mt-0.5 rounded border-theme-border"
-          />
-          <span>
-            {current && atRisk.length > 0
-              ? `Discard the emptyDir data of ${pluralize(atRisk.length, 'pod')}: ${atRisk.map((p) => `${p.namespace}/${p.name}`).join(', ')}.`
-              : current
-                ? 'No pod on this node uses emptyDir right now; any that does when the drain runs will lose that data.'
-                : 'Discard the emptyDir data of every evicted pod that uses emptyDir volumes.'}{' '}
-            I understand this data cannot be recovered.
-          </span>
-        </label>
+        <AlertBanner variant="error" title="emptyDir data will be discarded">
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={acknowledgedEmptyDir}
+              onChange={(e) => onAcknowledgeEmptyDir(e.target.checked)}
+              className="mt-0.5 rounded border-theme-border"
+            />
+            <span>
+              {current && atRisk.length > 0
+                ? `Discard the emptyDir data of ${pluralize(atRisk.length, 'pod')}: ${atRisk.map((p) => `${p.namespace}/${p.name}`).join(', ')}.`
+                : current
+                  ? 'No pod on this node uses emptyDir right now; any that does when the drain runs will lose that data.'
+                  : 'Discard the emptyDir data of every evicted pod that uses emptyDir volumes.'}{' '}
+              I understand this data cannot be recovered.
+            </span>
+          </label>
+        </AlertBanner>
       )}
     </div>
   )
@@ -243,7 +242,7 @@ export function DrainPlanDialog({
     setAcknowledgedEmptyDir(false)
   }, [options.force, options.deleteEmptyDirData, open, plan?.generatedAt])
 
-  const confirmEnabled = canConfirmDrain({ plan, nodeName, options, loading, acknowledgedEmptyDir, planSupported })
+  const confirmEnabled = canConfirmDrain({ plan, nodeName, options, loading, error, acknowledgedEmptyDir, planSupported })
 
   return (
     <ConfirmDialog

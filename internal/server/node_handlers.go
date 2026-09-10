@@ -97,7 +97,7 @@ func (s *Server) handleUncordonNode(w http.ResponseWriter, r *http.Request) {
 
 // drainOptionsFromRequest turns the JSON body shared by the drain and drain-plan
 // endpoints into DrainOptions. The two endpoints differ only in what an omitted
-// deleteEmptyDirData means: the drain keeps its historical default (true, matching
+// deleteEmptyDirData means: the drain defaults to true (matching
 // kubectl drain --delete-emptydir-data), the plan defaults to false so a preview
 // never silently includes emptyDir data. The plan echoes the options it used.
 func drainOptionsFromRequest(req DrainRequest, deleteEmptyDirDefault bool) k8s.DrainOptions {
@@ -170,7 +170,7 @@ func (s *Server) writeDrainPlan(w http.ResponseWriter, r *http.Request, client k
 			s.writeError(w, http.StatusForbidden, err.Error())
 			return
 		}
-		log.Printf("[node-ops] Failed to plan drain for node %s: %v", nodeName, err)
+		log.Printf("[node-ops] Failed to plan drain for node/%s: %v", nodeName, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

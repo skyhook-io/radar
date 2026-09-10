@@ -49,6 +49,12 @@ describe('canConfirmDrain', () => {
     expect(canConfirmDrain({ plan: plan([]), nodeName: 'other', options: off, loading: false, acknowledgedEmptyDir: false, planSupported: true })).toBe(false)
   })
 
+  it('keeps the drain disabled after a plan request error, even if an older plan is still around', () => {
+    const p = plan([pod('web', 'evict')])
+    expect(canConfirmDrain({ plan: p, nodeName: 'worker-1', options: off, loading: false, error: 'boom', acknowledgedEmptyDir: false, planSupported: true })).toBe(false)
+    expect(canConfirmDrain({ plan: null, nodeName: 'worker-1', options: off, loading: false, error: 'boom', acknowledgedEmptyDir: false, planSupported: false })).toBe(true)
+  })
+
   it('enables the drain once a matching plan is shown and no emptyDir data is at risk', () => {
     expect(canConfirmDrain({ plan: plan([pod('web', 'evict')]), nodeName: 'worker-1', options: off, loading: false, acknowledgedEmptyDir: false, planSupported: true })).toBe(true)
   })

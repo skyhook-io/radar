@@ -4922,7 +4922,7 @@ export function useDrainPlan() {
     { name: string; options: DrainPlanRequestOptions }
   >({
     mutationFn: async ({ name, options }) => {
-      const response = await apiFetch(`${getApiBase()}${drainPlanPath(name)}`, {
+      const response = await apiFetch(apiUrl(drainPlanPath(name)), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: drainPlanBody(options),
@@ -4935,7 +4935,10 @@ export function useDrainPlan() {
       }
       return response.json();
     },
-    // No meta.errorMessage: the dialog shows plan errors inline; a toast on top would double them.
+    meta: {
+      errorMessage: "Failed to compute drain plan",
+      // No successMessage: a plan is a preview the dialog renders, not an action to confirm.
+    },
   });
 }
 
