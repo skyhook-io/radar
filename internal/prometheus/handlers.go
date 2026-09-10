@@ -148,20 +148,15 @@ type ResourceMetricsResponse struct {
 	Result    *prom.QueryResult   `json:"result"`
 	Query     string              `json:"query,omitempty"` // PromQL query used (included when result is empty for diagnostics)
 	Hint      string              `json:"hint,omitempty"`  // Contextual hint when results are empty (e.g. cri-docker label issues)
-	// Workload kinds carry how their pods were established: Coverage says
-	// whether kube-state-metrics attributed pods over the window or only the
-	// pods controlled now were charted; Pods counts the current pods the query
-	// named (PodsTotal when the cap cut them); ObservedPods counts the pods
-	// kube-state-metrics attributed in the window under ksm_history.
-	Coverage     OwnerCoverage `json:"coverage,omitempty"`
-	Pods         int           `json:"pods,omitempty"`
-	PodsTotal    int           `json:"podsTotal,omitempty"`
-	ObservedPods int           `json:"observedPods,omitempty"`
-	ScopeError   string        `json:"scopeError,omitempty"` // the ownership probe failed; coverage may be a fallback
+	// Workload kinds carry the pods their query named, established by
+	// controller ownership: Pods counts them, PodsTotal the workload's full
+	// set when the cap cut the list.
+	Pods      int `json:"pods,omitempty"`
+	PodsTotal int `json:"podsTotal,omitempty"`
 }
 
-// restMaxScopePods caps the current-pods form of a chart query. It bounds the
-// regex the chart sends, not the workload: an ownership join needs no list.
+// restMaxScopePods caps the pod list a chart query names, bounding the regex
+// the chart sends.
 const restMaxScopePods = 500
 
 // handleResourceMetrics returns Prometheus metrics for a specific resource.
@@ -230,7 +225,7 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "cluster cache not ready")
 			return
 		}
-		resolved, err := ResolvePodScope(r.Context(), client, cache, kind, namespace, name, end.Sub(start), restMaxScopePods)
+		resolved, err := ResolvePodScope(cache, kind, namespace, name, restMaxScopePods)
 		if err != nil {
 			switch {
 			case errors.Is(err, k8s.ErrWorkloadCacheWarming):
@@ -276,13 +271,8 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 		Result:    result,
 	}
 	if scope != nil {
-		resp.Coverage = scope.Coverage
 		resp.Pods = len(scope.CurrentPods)
 		resp.PodsTotal = scope.CurrentTotal
-		resp.ObservedPods = scope.ObservedPods
-		if scope.ProbeErr != nil {
-			resp.ScopeError = scope.ProbeErr.Error()
-		}
 	}
 	// Include the PromQL query when results are empty so users can diagnose
 	// label mismatches or missing metrics in their Prometheus instance.

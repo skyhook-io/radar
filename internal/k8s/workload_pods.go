@@ -24,7 +24,7 @@ import (
 // returns ErrWorkloadCacheWarming, so an empty answer is never mistaken for
 // "no pods". Pods are sorted by name.
 func WorkloadPods(cache *ResourceCache, kind, namespace, name string) ([]*corev1.Pod, error) {
-	canonical := canonicalWorkloadKind(kind)
+	canonical := CanonicalWorkloadKind(kind)
 	if canonical == "" {
 		return nil, fmt.Errorf("unsupported workload kind: %s", kind)
 	}
@@ -68,9 +68,10 @@ func WorkloadPodNames(cache *ResourceCache, kind, namespace, name string) ([]str
 	return names, nil
 }
 
-// canonicalWorkloadKind maps the accepted spellings to the controller Kind
-// as it appears in an ownerReference.
-func canonicalWorkloadKind(kind string) string {
+// CanonicalWorkloadKind maps the accepted spellings to the controller Kind as
+// it appears in an ownerReference, or "" for a kind whose pods this package
+// cannot establish. Callers use it to reject a kind before doing work.
+func CanonicalWorkloadKind(kind string) string {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "deployment", "deployments":
 		return "Deployment"

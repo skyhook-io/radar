@@ -49,6 +49,16 @@ const (
 	ConfidenceHigh   RightsizingConfidence = "high"
 )
 
+// OwnerCoverage says how rightsizing established the pods behind a
+// recommendation: kube-state-metrics ownership across its seven-day window,
+// or only the pods the workload controls now.
+type OwnerCoverage string
+
+const (
+	OwnerCoverageKSMHistory  OwnerCoverage = "ksm_history"
+	OwnerCoverageCurrentPods OwnerCoverage = "current_pods"
+)
+
 type ObservedStatistic struct {
 	Name      string  `json:"name"`
 	Value     float64 `json:"value"`

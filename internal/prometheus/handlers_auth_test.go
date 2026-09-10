@@ -119,11 +119,7 @@ func seedScopeCache(t *testing.T) {
 	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
-	ResetPodScopeCache()
-	t.Cleanup(func() {
-		ResetPodScopeCache()
-		k8s.ResetTestState()
-	})
+	t.Cleanup(k8s.ResetTestState)
 }
 
 func metricsRouter() http.Handler {
@@ -395,7 +391,7 @@ func TestMetricsKindResourceCoversSupportedKinds(t *testing.T) {
 
 // The workload chart reports how its pods were established, and never falls
 // back to a name prefix that would also chart a sibling workload's pods.
-func TestResourceMetricsReportsPodCoverage(t *testing.T) {
+func TestResourceMetricsNamesTheWorkloadsOwnPods(t *testing.T) {
 	SetAuthGate(nil)
 	f := setupAuthFakeProm(t)
 	h := metricsRouter()
@@ -408,18 +404,16 @@ func TestResourceMetricsReportsPodCoverage(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// This fake answers the ownership probe, so the chart covers the pods
-	// kube-state-metrics attributed across the window and says so.
-	if resp.Coverage != OwnerCoverageKSMHistory || resp.Pods != 1 || resp.PodsTotal != 1 {
-		t.Fatalf("coverage = %q pods = %d/%d, want ksm_history with the one current pod counted", resp.Coverage, resp.Pods, resp.PodsTotal)
+	if resp.Pods != 1 || resp.PodsTotal != 1 {
+		t.Fatalf("pods = %d/%d, want the one owned pod counted", resp.Pods, resp.PodsTotal)
 	}
 	queries := f.queries(t)
 	if len(queries) == 0 {
 		t.Fatal("no range query reached prometheus")
 	}
 	last := queries[len(queries)-1]
-	if !strings.Contains(last, "kube_replicaset_owner{namespace='alpha',owner_kind='Deployment',owner_name='web'") {
-		t.Fatalf("query should join through the workload's ReplicaSets: %s", last)
+	if !strings.Contains(last, `pod=~'^(web-7f6-a)$'`) {
+		t.Fatalf("query should name the owned pod exactly: %s", last)
 	}
 	if strings.Contains(last, "web-.*") {
 		t.Fatalf("query still infers pods from the workload name: %s", last)
@@ -429,9 +423,9 @@ func TestResourceMetricsReportsPodCoverage(t *testing.T) {
 	}
 }
 
-// Without ownership history the chart falls back to the pods the cluster
-// shows now, named exactly.
-func TestResourceMetricsFallsBackToCurrentPods(t *testing.T) {
+// Membership comes from the cluster, not from Prometheus, so an empty
+// Prometheus answer does not change which pods the query names.
+func TestResourceMetricsMembershipDoesNotDependOnPrometheus(t *testing.T) {
 	SetAuthGate(nil)
 	f := setupAuthFakeProm(t)
 	f.queryBody = `{"status":"success","data":{"resultType":"vector","result":[]}}`
@@ -445,8 +439,8 @@ func TestResourceMetricsFallsBackToCurrentPods(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Coverage != OwnerCoverageCurrentPods || resp.Pods != 1 {
-		t.Fatalf("coverage = %q pods = %d, want current_pods/1", resp.Coverage, resp.Pods)
+	if resp.Pods != 1 {
+		t.Fatalf("pods = %d, want 1", resp.Pods)
 	}
 	queries := f.queries(t)
 	last := queries[len(queries)-1]
@@ -455,9 +449,9 @@ func TestResourceMetricsFallsBackToCurrentPods(t *testing.T) {
 	}
 }
 
-// A workload whose pods the cache cannot list must not be charted from a
-// name pattern; the handler says the cache could not answer.
-func TestResourceMetricsRefusesWhenOwnershipCannotBeResolved(t *testing.T) {
+// A workload with no pods must not be charted from a name pattern. The
+// selection matches nothing rather than falling back to the namespace.
+func TestResourceMetricsChartsNothingForAWorkloadWithNoPods(t *testing.T) {
 	SetAuthGate(nil)
 	f := setupAuthFakeProm(t)
 	h := metricsRouter()
@@ -471,7 +465,15 @@ func TestResourceMetricsRefusesWhenOwnershipCannotBeResolved(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Coverage != OwnerCoverageNone {
-		t.Fatalf("coverage = %q, want none for a workload with no pods", resp.Coverage)
+	if resp.Pods != 0 {
+		t.Fatalf("pods = %d, want 0", resp.Pods)
+	}
+	queries := f.queries(t)
+	last := queries[len(queries)-1]
+	if !strings.Contains(last, `pod=~'a^'`) {
+		t.Fatalf("a workload with no pods must match nothing, got: %s", last)
+	}
+	if strings.Contains(last, "ghost-.*") {
+		t.Fatalf("query fell back to a name pattern: %s", last)
 	}
 }

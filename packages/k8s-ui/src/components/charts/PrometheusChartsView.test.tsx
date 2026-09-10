@@ -1,74 +1,36 @@
 import { describe, expect, it } from "vitest";
 
 import { describePodCoverage } from "./PrometheusChartsView";
-import type { PrometheusResourceMetricsResult } from "../../types";
+import type { PrometheusResourceMetricsResult } from "./PrometheusChartsView";
 
 function result(
   patch: Partial<PrometheusResourceMetricsResult>,
 ): PrometheusResourceMetricsResult {
-  return { series: [], ...patch } as PrometheusResourceMetricsResult;
+  return { unit: "cores", ...patch } as PrometheusResourceMetricsResult;
 }
 
 describe("describePodCoverage", () => {
-  it("names the basis a chart was drawn on", () => {
-    expect(
-      describePodCoverage(result({ coverage: "ksm_history", observedPods: 6 })),
-    ).toBe(
-      "6 pods attributed to this workload in the window (kube-state-metrics)",
+  it("names the pods a chart covers and what it therefore misses", () => {
+    expect(describePodCoverage(result({ pods: 3, podsTotal: 3 }))).toBe(
+      "3 current pods; pods replaced during the window are not included",
     );
-    expect(
-      describePodCoverage(result({ coverage: "ksm_history", observedPods: 1 })),
-    ).toBe(
-      "1 pod attributed to this workload in the window (kube-state-metrics)",
-    );
-    expect(describePodCoverage(result({ coverage: "ksm_history" }))).toBe(
-      "Pods attributed to this workload in the window (kube-state-metrics)",
+    expect(describePodCoverage(result({ pods: 1, podsTotal: 1 }))).toBe(
+      "1 current pod; pods replaced during the window are not included",
     );
   });
 
-  it("says what the current-pod fallback cannot see", () => {
-    // The caveat is the point: a pod replaced inside the window is missing,
-    // and without saying so an empty chart reads as "nothing happened".
-    expect(
-      describePodCoverage(
-        result({ coverage: "current_pods", pods: 3, podsTotal: 3 }),
-      ),
-    ).toBe("3 current pods; pods replaced during the window are not included");
-    expect(
-      describePodCoverage(
-        result({ coverage: "current_pods", pods: 50, podsTotal: 120 }),
-      ),
-    ).toBe(
+  it("says when the cap cut the list, so a short count is not read as the workload", () => {
+    expect(describePodCoverage(result({ pods: 50, podsTotal: 120 }))).toBe(
       "first 50 of 120 current pods; pods replaced during the window are not included",
     );
   });
 
-  it("does not call an unattributed workload empty", () => {
-    expect(describePodCoverage(result({ coverage: "none" }))).toBe(
+  it("distinguishes a workload with no pods from a kind that has none to report", () => {
+    expect(describePodCoverage(result({ pods: 0 }))).toBe(
       "No pods could be attributed to this workload",
     );
-  });
-
-  it("carries the reason ownership history was unavailable", () => {
-    expect(
-      describePodCoverage(
-        result({
-          coverage: "current_pods",
-          pods: 2,
-          podsTotal: 2,
-          scopeError: "probe timed out",
-        }),
-      ),
-    ).toBe(
-      "2 current pods; pods replaced during the window are not included Radar could not read this workload's ownership history (probe timed out).",
-    );
-    // A scope error with no coverage still has to reach the reader.
-    expect(describePodCoverage(result({ scopeError: "probe timed out" }))).toBe(
-      "Radar could not read this workload's ownership history (probe timed out).",
-    );
-  });
-
-  it("says nothing when there is nothing to say", () => {
+    // A Node chart carries no pod count at all; it gets no caption rather
+    // than a claim about pods.
     expect(describePodCoverage(result({}))).toBeUndefined();
   });
 });

@@ -71,21 +71,12 @@ var diagnoseMetricsCategories = []prom.MetricCategory{prom.CategoryCPU, prom.Cat
 // missing Series (unreachable backend, a failed query, or a breached budget)
 // and is never set for "no samples in the window".
 type diagnoseMetrics struct {
-	Window      diagnoseMetricsWindow `json:"window"`
-	Pods        int                   `json:"pods"`
-	Partial     bool                  `json:"partial,omitempty"`
-	OmittedPods int                   `json:"omittedPods,omitempty"`
-	// Coverage says which source established the pods the queries cover:
-	// ksm_history when kube-state-metrics attributed pods to the workload over
-	// the window (ObservedPods counts them, and replaced pods are included),
-	// current_pods when only the pods controlled now could be named. Pods
-	// always counts the current pods the bundle resolved. ScopeError reports a
-	// failed ownership probe, so current_pods may be a fallback.
-	Coverage     prometheus.OwnerCoverage `json:"coverage,omitempty"`
-	ObservedPods int                      `json:"observedPods,omitempty"`
-	ScopeError   string                   `json:"scopeError,omitempty"`
-	Series       []diagnoseMetricSeries   `json:"series"`
-	Error        string                   `json:"error,omitempty"`
+	Window      diagnoseMetricsWindow  `json:"window"`
+	Pods        int                    `json:"pods"`
+	Partial     bool                   `json:"partial,omitempty"`
+	OmittedPods int                    `json:"omittedPods,omitempty"`
+	Series      []diagnoseMetricSeries `json:"series"`
+	Error       string                 `json:"error,omitempty"`
 }
 
 type diagnoseMetricsWindow struct {
@@ -150,13 +141,7 @@ func diagnoseWorkloadMetrics(ctx context.Context, group, resource, namespace, na
 		}
 		return nil
 	}
-	var querier interface {
-		Query(context.Context, string) (*prom.QueryResult, error)
-	}
-	if client := prometheus.GetClient(); client != nil && avail.State == prometheus.AvailabilityConnected {
-		querier = client
-	}
-	scope, err := prometheus.ResolvePodScope(budgetCtx, querier, k8s.GetResourceCache(), resource, namespace, name, since, diagnoseMetricsMaxPods)
+	scope, err := prometheus.ResolvePodScope(k8s.GetResourceCache(), resource, namespace, name, diagnoseMetricsMaxPods)
 	if err != nil {
 		log.Printf("[mcp] diagnose: pod scope for %s %s/%s failed: %v", resource, namespace, name, err)
 		// Prometheus is there and the caller may read the resource; the pods
@@ -170,27 +155,8 @@ func diagnoseWorkloadMetrics(ctx context.Context, group, resource, namespace, na
 		}
 	}
 	if scope.Selection.IsEmpty() {
-		// Ownership history is the source that answers for a workload scaled to
-		// zero or freshly replaced. If it was never consulted — Prometheus not
-		// answering — or it was consulted and failed, the empty current-pod list
-		// is all that is left, and omitting the field reads as "this workload
-		// has no metrics" rather than "Radar could not look".
-		var why string
-		switch {
-		case querier == nil:
-			why = fmt.Sprintf("Prometheus is %s", avail.State)
-		case scope.ProbeErr != nil:
-			why = fmt.Sprintf("the ownership history read failed: %v", scope.ProbeErr)
-		}
-		if why != "" {
-			return &diagnoseMetrics{
-				Window: diagnoseMetricsWindow{Start: now.Add(-since).UTC().Format(time.RFC3339), End: now.UTC().Format(time.RFC3339), Step: "0s"},
-				Pods:   len(pods),
-				Series: []diagnoseMetricSeries{},
-				Error:  boundDiagnoseMetricsError(fmt.Sprintf("metrics omitted: %s, so the workload's pods could not be established from ownership history", why)),
-			}
-		}
-		// Both sources were consulted and neither named a pod.
+		// The workload controls no pods right now. Membership is the current
+		// population, so there is nothing to chart and nothing to say about it.
 		return nil
 	}
 	return diagnoseMetricsForScope(budgetCtx, avail, scope, since, now)
@@ -204,17 +170,12 @@ func diagnoseMetricsForScope(budgetCtx context.Context, avail prometheus.Availab
 			Start: start.UTC().Format(time.RFC3339),
 			End:   now.UTC().Format(time.RFC3339),
 		},
-		Pods:         len(scope.CurrentPods),
-		Coverage:     scope.Coverage,
-		ObservedPods: scope.ObservedPods,
-		Series:       []diagnoseMetricSeries{},
+		Pods:   len(scope.CurrentPods),
+		Series: []diagnoseMetricSeries{},
 	}
 	if scope.Partial() {
 		out.Partial = true
 		out.OmittedPods = scope.CurrentTotal - len(scope.CurrentPods)
-	}
-	if scope.ProbeErr != nil {
-		out.ScopeError = boundDiagnoseMetricsError(scope.ProbeErr.Error())
 	}
 	step, _ := adjustStep(since, "", diagnoseMetricsPointBudget(out))
 	out.Window.Step = step.String()

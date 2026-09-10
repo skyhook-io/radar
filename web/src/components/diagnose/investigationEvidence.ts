@@ -484,13 +484,6 @@ export interface InvestigationMetricsEvidence {
   subject?: DiagnosisResourceRef;
   pods?: number;
   partial?: boolean;
-  /**
-   * How the vitals' pods were established: kube-state-metrics ownership over
-   * the window (replaced pods included; observedPods counts them) or only
-   * the pods controlled at collection time.
-   */
-  coverage?: "ksm_history" | "current_pods" | "none";
-  observedPods?: number;
 }
 
 export interface InvestigationEvidenceObservation {
