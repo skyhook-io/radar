@@ -4935,10 +4935,9 @@ export function useDrainPlan() {
       }
       return response.json();
     },
-    meta: {
-      errorMessage: "Failed to compute drain plan",
-      // No successMessage: a plan is a preview the dialog renders, not an action to confirm.
-    },
+    // Deliberately no meta toast keys: the plan is fetched only from the drain dialog, which
+    // renders a failure inline and keeps Drain disabled while it shows; a global toast would
+    // report the same failure twice.
   });
 }
 
