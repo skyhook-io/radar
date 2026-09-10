@@ -387,9 +387,9 @@ export function investigationEvidenceConflictsWithHealthy(projection: {
 
 /**
  * The banner over a healthy verdict points at adverse Radar evidence. When the
- * agent placed a "less relevant" or "rules out" note on every such card, the
- * evidence is still shown but the reader has the agent's reason next to it,
- * so the banner can say that instead of accusing evidence the agent addressed.
+ * agent placed a "not a problem" note on every such card, the evidence is
+ * still shown but the reader has the agent's reason next to it, so the banner
+ * can say that instead of accusing evidence the agent addressed.
  * Returns the titles of the explained cards, or null when any conflict is
  * unexplained (or there is no conflict).
  */

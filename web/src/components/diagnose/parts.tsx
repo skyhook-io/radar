@@ -1947,9 +1947,9 @@ export function ResultCard({
   /** Marks a healthy agent assessment that conflicts with same-turn Key evidence. */
   evidenceConflict?: boolean;
   /**
-   * Titles of the conflicting cards when the agent placed a "less relevant"
-   * or "rules out" note on every one of them; the banner then points at the
-   * agent's reasons rather than accusing evidence it already addressed.
+   * Titles of the conflicting cards when the agent placed a "not a problem"
+   * note on every one of them; the banner then points at the agent's reasons
+   * rather than accusing evidence it already addressed.
    */
   evidenceConflictExplainedBy?: string[];
   /** Show only the recommended (or first) action until the user asks for more. */
