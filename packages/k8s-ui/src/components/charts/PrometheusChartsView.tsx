@@ -137,7 +137,11 @@ export function describePodCoverage(
 ): string | undefined {
   const pods = metrics.pods;
   if (pods === undefined) return undefined;
-  if (pods === 0) return "No pods could be attributed to this workload";
+  // Zero is a fact about the workload, not a failure to establish one: a
+  // workload Radar cannot resolve pods for reports an error instead of a
+  // count, so this line never stands for "Radar could not tell".
+  if (pods === 0)
+    return "This workload has no pods running, so there is nothing to chart";
   const total = metrics.podsTotal ?? pods;
   const count = total > pods ? `first ${pods} of ${total}` : `${pods}`;
   return `${count} current pod${total === 1 ? "" : "s"}; pods replaced during the window are not included`;

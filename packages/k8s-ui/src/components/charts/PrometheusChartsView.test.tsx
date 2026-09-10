@@ -27,7 +27,7 @@ describe("describePodCoverage", () => {
 
   it("distinguishes a workload with no pods from a kind that has none to report", () => {
     expect(describePodCoverage(result({ pods: 0 }))).toBe(
-      "No pods could be attributed to this workload",
+      "This workload has no pods running, so there is nothing to chart",
     );
     // A Node chart carries no pod count at all; it gets no caption rather
     // than a claim about pods.
