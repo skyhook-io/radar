@@ -171,6 +171,12 @@ export function resolveInvestigationCase(
     if (matches?.length !== 1 || !citableSourceIds.has(matches[0].id)) return;
     const source = matches[0];
     const subject = validCaseSubject(entry.subject);
+    // A subject the agent supplied but got wrong is not the same as one it
+    // deliberately omitted. Omission asks Radar to place the note anywhere the
+    // cited call produced; a malformed subject asked for something specific
+    // that does not resolve, so the note stays beside its source rather than
+    // landing on whichever observation happens to be the only one.
+    const subjectUnusable = entry.subject !== undefined && !subject;
     const item: InvestigationCaseItem = {
       index,
       role: entry.role,
@@ -179,16 +185,18 @@ export function resolveInvestigationCase(
       source,
       placement: "source",
     };
-    const candidates = projection.groups.flatMap((group) =>
-      group.observations
-        .filter(
-          (observation) =>
-            observation.source.id === source.id &&
-            (!subject ||
-              observationMatchesSubject(group, observation, subject)),
-        )
-        .map((observation) => ({ group, observation })),
-    );
+    const candidates = subjectUnusable
+      ? []
+      : projection.groups.flatMap((group) =>
+          group.observations
+            .filter(
+              (observation) =>
+                observation.source.id === source.id &&
+                (!subject ||
+                  observationMatchesSubject(group, observation, subject)),
+            )
+            .map((observation) => ({ group, observation })),
+        );
     if (candidates.length === 1) {
       const { group, observation } = candidates[0];
       item.groupId = group.id;

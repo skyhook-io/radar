@@ -962,6 +962,33 @@ describe("follow-up answers that cite evidence", () => {
     expect(html).toContain(">Context<");
   });
 
+  it("keeps a malformed subject at its source instead of treating it as omitted", () => {
+    // Omitting a subject asks Radar to place the note wherever the cited call
+    // produced; supplying a broken one asked for something specific. Falling
+    // back to the omitted behaviour put the note on whichever observation
+    // happened to be the only one for that source.
+    const omitted = resolveInvestigationCase(
+      projection,
+      { evidence: [linked(second, "context", "Flat.")] },
+      1,
+    );
+    expect(omitted.items[0].placement).toBe("card");
+
+    const malformed = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(second, "context", "Flat.", {
+            name: "api",
+          } as unknown as Parameters<typeof linked>[3]),
+        ],
+      },
+      1,
+    );
+    expect(malformed.items[0].placement).toBe("source");
+    expect(malformed.items[0].groupId).toBeUndefined();
+  });
+
   it("places a log claim that names the diagnosed workload and its container", () => {
     const assessmentCase = resolveInvestigationCase(
       projection,
