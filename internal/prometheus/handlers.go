@@ -231,7 +231,11 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 			case errors.Is(err, k8s.ErrWorkloadCacheWarming):
 				writeError(w, http.StatusServiceUnavailable, "cluster cache is still loading the workload's pods: "+err.Error())
 			case errors.Is(err, k8s.ErrWorkloadAccessDenied):
-				writeError(w, http.StatusServiceUnavailable, "cluster cache cannot list the workload's pods: "+err.Error())
+				// Every path to this error is a permission one: a lister the
+				// identity may not have, or a namespace its informer was
+				// scoped away from. Retrying will not change it, and 503
+				// tells the caller it might.
+				writeError(w, http.StatusForbidden, "cluster cache cannot list the workload's pods: "+err.Error())
 			case errors.Is(err, ErrPodScopeUnsupportedKind):
 				writeError(w, http.StatusBadRequest, "cannot resolve pods for "+kind)
 			default:

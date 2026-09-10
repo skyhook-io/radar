@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/prom"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -446,6 +447,32 @@ func TestResourceMetricsMembershipDoesNotDependOnPrometheus(t *testing.T) {
 	last := queries[len(queries)-1]
 	if !strings.Contains(last, `pod=~'^(web-7f6-a)$'`) || strings.Contains(last, "web-.*") {
 		t.Fatalf("query should name the owned pod exactly: %s", last)
+	}
+}
+
+// A permission failure and a cache that is not ready yet are different
+// answers: one will never succeed on retry. The repo maps RBAC denial to 403
+// and an unready cache to 503, and a chart that cannot name its pods has to
+// tell them apart.
+func TestResourceMetricsSeparatesDenialFromUnreadiness(t *testing.T) {
+	SetAuthGate(nil)
+	setupAuthFakeProm(t)
+	// Pods are watched in another namespace only, so alpha cannot be answered
+	// for — the shape probe-based RBAC gating produces on a denied
+	// cluster-wide list.
+	if err := k8s.InitScopedTestResourceCache(
+		fake.NewClientset(),
+		map[string]k8score.ResourceScope{
+			k8score.Pods: {Enabled: true, Namespace: "beta"},
+		},
+	); err != nil {
+		t.Fatalf("InitScopedTestResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+
+	rec := getMetrics(t, metricsRouter(), "/prometheus/resources/Deployment/alpha/web?category=cpu")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 for a namespace the cache cannot list; body=%s", rec.Code, rec.Body.String())
 	}
 }
 

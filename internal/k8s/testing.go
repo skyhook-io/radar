@@ -72,10 +72,30 @@ func InitLoadTestResourceCache(client kubernetes.Interface) error {
 //
 // This is intended for integration tests only.
 func InitTestResourceCache(client kubernetes.Interface) error {
+	return initTestResourceCache(client, nil)
+}
+
+// InitScopedTestResourceCache is InitTestResourceCache with per-kind scopes,
+// the shape probe-based RBAC gating produces when a kind cannot be listed
+// cluster-wide. It is what lets a test reach the paths that must refuse to
+// read an informer covering other namespaces.
+func InitScopedTestResourceCache(client kubernetes.Interface, scopes map[string]k8score.ResourceScope) error {
+	return initTestResourceCache(client, scopes)
+}
+
+func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8score.ResourceScope) error {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
 
 	enabled := allTestResourceTypes()
+	if scopes != nil {
+		enabled = map[string]bool{}
+		for kind, scope := range scopes {
+			if scope.Enabled {
+				enabled[kind] = true
+			}
+		}
+	}
 
 	secretWriteTimes := newSecretDataManagerWriteIndex()
 	cronJobScheduleObservations := newCronJobScheduleObservationTracker()
@@ -83,7 +103,8 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 		Client:        client,
 		ResourceTypes: enabled,
 		// No deferred types for tests — all sync immediately
-		DeferredTypes: map[string]bool{},
+		DeferredTypes:  map[string]bool{},
+		ResourceScopes: scopes,
 		OnTransform: func(obj any) {
 			secretWriteTimes.capture(obj)
 		},
