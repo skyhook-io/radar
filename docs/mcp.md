@@ -211,11 +211,42 @@ These public MCP fields are available to consumers running the updated Radar ser
 
 The local investigation's final JSON also carries the agent's case: `evidence` (up to 8 items of `ref`, `role`, one-sentence `claim`, optional `subject`) and `ruled_out` (up to 5 hypotheses pointing at an evidence item by index). The server binds each item's ref against the turn ledger exactly like `root_cause_evidence_refs`, drops a failing item on its own as `unlinked`, and runs that binding for every assessment, healthy and inconclusive included. The server-authored `evidence` / `ruledOut` fields are `omitempty`, so a diagnosis with no bindable case carries neither: consumers must treat both as optional. Findings uses roles only to order cards and to attach an "Agent" note; no role can hide, collapse, or recolor a card, and a claim that cannot be pinned to exactly one observation shows beside its source in Assessment details instead. A hosted backend that sends no `evidence` renders exactly as before.
 
+## Cost and rightsizing evidence limits
+
+### `recommendationReason` — why a row carries no recommendation
+
+`get_rightsizing` rows may set `recommendedRequest: null`. The accompanying `recommendationReason` says why, and two of the values mean Radar **deliberately declined** to recommend rather than lacking the evidence to try. Reporting those as "no recommendation available" loses the reasoning that produced them:
+
+| Reason | Meaning |
+|--------|---------|
+| `hpa_managed` | An HPA manages this resource. Review its target before changing the request — the two controls interact. |
+| `oom_evidence` | A lower memory request is **withheld** because the container has OOM evidence in the window. Cutting it is the wrong move even though usage looks low. |
+| `oom_evidence_unavailable` | Radar could not verify recent OOM history, so it withheld a memory reduction rather than recommend one blind. |
+| `hpa_evidence_unavailable` | Radar could not verify HPA ownership, so it withheld a suggested request. |
+| `recommended_request_exceeds_limit` | The evidence-based request would exceed the container's current limit; the limit is the thing to review first. |
+| `request_within_fit_range` | The configured request is already within 30% of the evidence-based target. Nothing to change. |
+| `insufficient_history` | Fewer than six hours of samples. Not a verdict of correctly sized. |
+
+`reductionLimited: true` marks a different case: a recommendation exists, but it is a conservative step toward the demand-based target rather than the target itself. `bursty` and `peak` qualify CPU rows whose P99 ran far above the P95 the recommendation is built on.
+
+### `efficiency` is not request headroom
+
+`get_cost` emits `efficiency` on namespace and workload rows and `clusterEfficiency` on totals. The denominator is **cost allocation, which is the greater of requested and observed** usage — not the request. Two consequences that the numbers alone do not reveal:
+
+- The value is capped at 100 and can never exceed it. A container consuming well above its request reads as ~100%, which is not the same as correctly sized.
+- A low value is not by itself a defect and not recoverable money. Bursty workloads, P95-sized requests and HPA headroom all produce low ratios by design.
+
+It answers "how much of what this is costing me is being used", not "how much can I cut". Use `get_rightsizing` for the second question — it applies the OOM and HPA gating above, which a ratio cannot.
+
+`usageUnavailable: true` on a row means the usage query failed, so `efficiency` and `idleCost` could not be measured. That is distinct from measuring them as zero.
+
 ## Available Tools
 
 ### Read Tools
 
 For interpreting workload bundles, see [Diagnose evidence limits](#diagnose-evidence-limits), including collection failures, sampling, source timestamps, and the public MCP versus local investigation boundary.
+
+For `get_cost` and `get_rightsizing`, see [Cost and rightsizing evidence limits](#cost-and-rightsizing-evidence-limits) — what each `recommendationReason` means (two of them are deliberate withholdings) and why `efficiency` is not request headroom.
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
@@ -242,6 +273,8 @@ For interpreting workload bundles, see [Diagnose evidence limits](#diagnose-evid
 | `query_prometheus` | Execute PromQL against the cluster's Prometheus (auto-discovered or `--prometheus-url`; works with PromQL-compatible backends: Thanos, VictoriaMetrics, Mimir). `type=instant` returns current values; `type=range` returns time-series history with automatic step adjustment. Empty results include a bounded list of related active metric names when a metric family can be inferred. Oversized results return a label-cardinality summary + suggested `topk` rewrite instead of raw data. Every response carries `selectors`, the vector selectors the query reads (metric + label matchers), with `selectorsUnknown: true` when the query could not be tokenized and its scope must be treated as unbounded. | `query` (required), `type` (optional: `instant` default, `range`), `since` (optional, e.g. `30m`, `1h`, `24h`, `7d`; default `1h`), `start` / `end` (optional RFC3339, override `since`), `step` (optional, auto-calculated when omitted), `max_points` (optional, default 300, max 600), `timeout` (optional seconds, default 30, max 180) |
 | `discover_metrics` | Discover exact metric names (enriched with type/help from Prometheus metadata) or values of one label before writing PromQL. Lists active series from the last hour; `truncated: true` means narrow the `match` selector. | `match` (PromQL series selector; required when `label` is empty), `label` (optional: list values of this label instead of metric names), `limit` (optional, default 100, max 500) |
 | `get_prometheus_rules` | List Prometheus alerting/recording rules with PromQL definitions, state, labels, annotations, and active alert instances. Alert-investigation entry point: fetch the rule definition, then run its query with `query_prometheus`. | `type` (optional: `alert`, `record`), `name` / `group` (optional substring filters), `state` (optional: `firing`, `pending`, `inactive`), `limit` (optional, default 50, max 200) |
+| `get_cost` | Cluster spend from OpenCost or Kubecost via Prometheus — currency, idle attribution, and the Kubecost/OpenCost source split are handled server-side. `view=summary` (default) returns cluster totals plus per-namespace rows; `view=workloads` breaks one namespace down; `view=nodes` ranks node spend (cluster-wide; passing a namespace is an error); `view=trend` returns spend over time. Spend, not usage — use `top_resources` for consumption and `get_rightsizing` for whether requests are sized right. Rates are hourly; totals also carry `projectedMonthlyCost` (hourly x 730), matching the Costs UI. `available: false` carries `reason` + `remediation` rather than an error; `namespaceScope` is the effective scope after the requested namespace and RBAC filtering, with totals recomputed from those rows — it is not by itself evidence of restricted access, and `guidance` says which of the two narrowed it. A row's `usageUnavailable` means efficiency and idle could not be measured, which is not the same as measuring them as zero. | `view` (optional: `summary` default, `workloads`, `nodes`, `trend`), `namespace` (required for `workloads`; filters `summary`/`trend`), `range` (trend only: `6h`, `24h` default, `7d`), `limit` (optional, default 20, max 100) |
+| `get_rightsizing` | Per-container CPU/memory request and limit recommendations from **7 days of observed usage** — not live metrics (use `top_resources` for those). Each row carries `fit` (`oversized`, `under_requested`, `missing_request`, `balanced`, `insufficient_history`) and a `confidence` tier; low confidence means insufficient history, NOT correctly sized. `scope` is required and there is no default: `workload` is cheap and precise, `namespace` scans one namespace, and `cluster` scans every Deployment/StatefulSet/DaemonSet with 7-day range queries and can take 45s — call it once to find candidates, then drill in with `scope=workload`. Balanced containers are omitted unless `include_balanced=true`. `state=partial` means the evidence is incomplete for any reason — unfinished batches (`coverage.completedBatches` of `coverage.batches`), kinds this identity cannot list (`coverage.restrictedKinds`), kinds the cache has not synced (`coverage.unavailableKinds`), kinds the informer caches for only some namespaces (`coverage.partiallyCachedKinds`), a `scope=cluster` scan narrowed by RBAC or the `--namespace` pin (`namespaceScope`, reason `namespace_scope_limited`), or row-level evidence gaps; those rows are a subset and are not cluster-wide. `hpaManaged`, `currentPodOOM`, and `windowOomEvidence` change what a safe recommendation is. | `scope` (required: `workload`, `namespace`, `cluster`), `kind` + `name` (scope=workload), `namespace` (required for `workload` and `namespace` scopes; rejected for `cluster`), `include_balanced` (optional, default false), `limit` (optional, default 20, max 100) |
 
 API group is part of a resource's identity. Radar infers the canonical group for built-in kinds, but callers should pass `group` for a supported CRD or whenever a Kind can exist in more than one group. For example, diagnose an Argo Rollout with:
 

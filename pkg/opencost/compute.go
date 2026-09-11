@@ -398,12 +398,19 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 
 		nc.CPUUsageCost = cpuUsageMap[nc.Name]
 		nc.MemoryUsageCost = memUsageMap[nc.Name]
+		// A failed usage query yields the same zero as a genuinely idle
+		// namespace. Flagging it keeps a reader from reporting 0% efficiency as
+		// a measurement, and keeps scoped totals from re-deriving efficiency
+		// from evidence that was never collected.
+		nc.UsageUnavailable = cpuUsageErr != nil || memUsageErr != nil
 		allocCost := nc.CPUCost + nc.MemoryCost
 		usageCost := nc.CPUUsageCost + nc.MemoryUsageCost
-		nc.Efficiency = EfficiencyPercent(usageCost, allocCost)
-		nc.IdleCost = idleFromUsage(usageCost, allocCost)
-		totalAllocCost += allocCost
-		totalUsageCost += usageCost
+		if !nc.UsageUnavailable {
+			nc.Efficiency = EfficiencyPercent(usageCost, allocCost)
+			nc.IdleCost = idleFromUsage(usageCost, allocCost)
+			totalAllocCost += allocCost
+			totalUsageCost += usageCost
+		}
 		totalHourlyCost += nc.HourlyCost
 		namespaces = append(namespaces, *nc)
 	}

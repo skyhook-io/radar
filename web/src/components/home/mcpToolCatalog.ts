@@ -257,6 +257,28 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
     ],
   },
   {
+    name: 'get_cost',
+    desc: 'Cluster spend from OpenCost or Kubecost — cluster and per-namespace totals, per-workload and per-node breakdowns, and spend over time. Hourly rates plus the same monthly projection the Costs page shows.',
+    params: [
+      { arg: 'view', desc: 'summary (default), workloads, nodes (cluster-wide), or trend' },
+      { arg: 'namespace', desc: 'required for view=workloads; filters summary and trend' },
+      { arg: 'range', desc: 'trend only: 6h, 24h (default), or 7d' },
+      { arg: 'limit', desc: 'max rows (default 20, max 100)' },
+    ],
+  },
+  {
+    name: 'get_rightsizing',
+    desc: 'CPU/memory request and limit recommendations from 7 days of observed usage, with a fit verdict and confidence tier per container. Scans one workload, one namespace, or the whole cluster.',
+    params: [
+      { arg: 'scope', required: true, desc: 'workload (needs kind/name/namespace), namespace, or cluster' },
+      { arg: 'kind', desc: 'scope=workload: Deployment, StatefulSet, or DaemonSet' },
+      { arg: 'name', desc: 'scope=workload: the workload name' },
+      { arg: 'namespace', desc: 'required for scope=workload and scope=namespace' },
+      { arg: 'include_balanced', desc: 'also return correctly-sized containers (default false)' },
+      { arg: 'limit', desc: 'max workloads returned (default 20, max 100)' },
+    ],
+  },
+  {
     name: 'get_workload_logs',
     desc: 'Aggregated logs across all pods of a workload. Without grep, filters for diagnostic relevance; grep returns only matching timestamp-prefixed lines instead.',
     params: [

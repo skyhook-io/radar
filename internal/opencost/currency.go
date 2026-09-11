@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/config"
@@ -333,4 +334,22 @@ func normalizedDetectedCurrency(value string) string {
 		return ""
 	}
 	return code
+}
+
+// The MCP tools resolve currency outside the REST router, which owns the
+// CurrencyResolver built from --opencost-currency. Publishing it here keeps
+// both surfaces on one resolver so they share the override and its detection
+// cache instead of disagreeing about the cluster's currency.
+var processCurrencyResolver atomic.Pointer[CurrencyResolver]
+
+func PublishCurrencyResolver(resolver *CurrencyResolver) {
+	processCurrencyResolver.Store(resolver)
+}
+
+func ResolveCurrency() string {
+	resolver := processCurrencyResolver.Load()
+	if resolver == nil {
+		return pkgopencost.DefaultCurrency
+	}
+	return resolvedCurrency(resolver.Resolve)
 }

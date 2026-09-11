@@ -161,6 +161,47 @@ func filterNamespacesForUser(ctx context.Context, requested []string) []string {
 	return pkgauth.FilterNamespacesForUser(requested, user, perms)
 }
 
+// scopedNamespacesForUser applies the --namespace pin before the RBAC filter,
+// mirroring Server.openCostRouteScope and parseNamespacesForUser. Prometheus
+// and Kubecost answer cluster-wide no matter which namespace the informer
+// caches are pinned to, so a tool reading them must clamp the scope itself or a
+// namespace-scoped Radar reports spend for namespaces it was told to ignore.
+func scopedNamespacesForUser(ctx context.Context, requested []string) []string {
+	clamped, ok := clampToNamespacePin(requested)
+	if !ok {
+		return []string{}
+	}
+	return filterNamespacesForUser(ctx, clamped)
+}
+
+// clampToNamespacePin applies only the --namespace pin, reporting false when the
+// request falls outside it. Tools that authorize with an exact SubjectAccessReview
+// use this rather than scopedNamespacesForUser so that MCP allows exactly what the
+// REST route allows: handleRightsizing gates on an exact "get" SAR and nothing
+// else, while the RBAC namespace list is derived from "list" sentinels, so a
+// caller holding "get" on a workload but not "list" would be denied here and
+// served there.
+// namespaceWithinPin reports whether a single namespace survives the --namespace
+// pin, for tools that authorize it with their own exact SubjectAccessReview.
+func namespaceWithinPin(namespace string) bool {
+	_, ok := clampToNamespacePin([]string{namespace})
+	return ok
+}
+
+func clampToNamespacePin(requested []string) ([]string, bool) {
+	if !k8s.ForceNamespaceScope {
+		return requested, true
+	}
+	target := k8s.GetNamespaceScopeTarget()
+	if target == "" {
+		return nil, false
+	}
+	if requested != nil && !slices.Contains(requested, target) {
+		return nil, false
+	}
+	return []string{target}, true
+}
+
 // checkNamespaceAccess reports whether the user can read in this single
 // namespace. Convenience for tools that target one namespaced resource
 // (get_pod_logs, get_workload_logs).

@@ -411,6 +411,7 @@ var radarReadTools = []string{
 	"list_helm_releases", "get_helm_release", "list_packages", "issues",
 	"search", "get_subject_permissions", "query_prometheus", "discover_metrics",
 	"get_prometheus_rules", "get_workload_logs", "get_cluster_upgrade_readiness",
+	"get_cost", "get_rightsizing",
 }
 
 // radarWriteTools are the mutating Radar MCP tools — enabled ONLY on an apply

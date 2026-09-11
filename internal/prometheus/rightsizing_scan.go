@@ -28,6 +28,76 @@ const (
 	rightsizingScanBatchSize                        = 50
 )
 
+// RightsizingScanKind pairs a workload kind with the API resource its informer
+// and SubjectAccessReviews use.
+type RightsizingScanKind struct {
+	Kind     string
+	Resource string
+}
+
+// RightsizingScanKinds is the canonical set of kinds a scan walks. Both the
+// REST handler and the MCP tool build their scope from this one list: a kind
+// present on one surface and missing on the other is silently absent from
+// results rather than reported as restricted.
+var RightsizingScanKinds = []RightsizingScanKind{
+	{Kind: "Deployment", Resource: "deployments"},
+	{Kind: "StatefulSet", Resource: "statefulsets"},
+	{Kind: "DaemonSet", Resource: "daemonsets"},
+}
+
+// ScanKindResource maps a workload kind to the API resource its informer and
+// SubjectAccessReviews use. Authorization sites go through this rather than
+// pluralizing the kind, so a resource whose plural is not kind+"s" cannot
+// silently authorize against a resource that does not exist.
+func ScanKindResource(kind string) string {
+	for _, k := range RightsizingScanKinds {
+		if strings.EqualFold(k.Kind, kind) {
+			return k.Resource
+		}
+	}
+	return ""
+}
+
+// ScanAuthorizer answers what the caller's identity may list. The REST handler
+// and the MCP tool differ only in how they run a SubjectAccessReview, so the
+// scope policy itself — which kinds are restricted, and how a partial namespace
+// answer is recorded — lives here rather than being written once per surface.
+type ScanAuthorizer interface {
+	// CanListAllNamespaces reports cluster-wide list access for a resource.
+	CanListAllNamespaces(resource string) bool
+	// FilterNamespaces returns the subset of namespaces the identity can list.
+	FilterNamespaces(resource string, namespaces []string) []string
+}
+
+// ResolveScanScope builds the scan scope for an identity. A nil namespaces
+// means "every namespace"; a non-nil one is the already-resolved request. A
+// kind readable in only some of the requested namespaces is recorded as
+// restricted, so the scan reports a narrowed answer as partial rather than
+// as a complete one over fewer workloads.
+func ResolveScanScope(namespaces []string, authz ScanAuthorizer) RightsizingScanScope {
+	scope := RightsizingScanScope{
+		NamespacesByKind: make(map[string][]string, len(RightsizingScanKinds)),
+	}
+	for _, workloadKind := range RightsizingScanKinds {
+		if namespaces == nil {
+			if authz.CanListAllNamespaces(workloadKind.Resource) {
+				scope.NamespacesByKind[workloadKind.Kind] = nil
+			} else {
+				scope.RestrictedKinds = append(scope.RestrictedKinds, workloadKind.Kind)
+			}
+			continue
+		}
+		allowed := authz.FilterNamespaces(workloadKind.Resource, namespaces)
+		if len(allowed) > 0 {
+			scope.NamespacesByKind[workloadKind.Kind] = allowed
+		}
+		if len(allowed) < len(namespaces) {
+			scope.RestrictedKinds = append(scope.RestrictedKinds, workloadKind.Kind)
+		}
+	}
+	return scope
+}
+
 type RightsizingScanScope struct {
 	NamespacesByKind map[string][]string
 	RestrictedKinds  []string
@@ -46,6 +116,12 @@ type RightsizingScanCoverage struct {
 	CompletedBatches    int      `json:"completedBatches"`
 	RestrictedKinds     []string `json:"restrictedKinds,omitempty"`
 	UnavailableKinds    []string `json:"unavailableKinds,omitempty"`
+
+	// PartiallyCachedKinds are kinds whose informer covers only some
+	// namespaces, so a scope asking for "all namespaces" silently reads a
+	// subset. Without this a namespace-scoped Radar reports a cluster scan of
+	// one namespace as complete.
+	PartiallyCachedKinds []string `json:"partiallyCachedKinds,omitempty"`
 }
 
 type RightsizingScanWorkload struct {
@@ -110,9 +186,70 @@ func ScanRightsizing(ctx context.Context, scope RightsizingScanScope) Rightsizin
 		resp.Reason = "resource_cache_unavailable"
 		return resp
 	}
-	workloads, unavailable := snapshotScanWorkloads(cache, scope.NamespacesByKind)
+	effective, partiallyCached := clampScopeToCacheCoverage(cache, scope.NamespacesByKind)
+	resp.Coverage.PartiallyCachedKinds = partiallyCached
+	workloads, unavailable := snapshotScanWorkloads(cache, effective)
 	resp.Coverage.UnavailableKinds = unavailable
 	return computeRightsizingScan(ctx, client, workloads, resp)
+}
+
+// scanCacheCoverage is the slice of the resource cache the scope clamp needs.
+// Narrowed to an interface so the clamp is testable without standing up a real
+// informer cache.
+type scanCacheCoverage interface {
+	IsKindClusterWide(resource string) bool
+	KindNamespaces(resource string) []string
+}
+
+// clampScopeToCacheCoverage narrows a requested scope to what the informers
+// actually hold. A nil namespace list means "every namespace" to the listers,
+// but a per-kind namespace-scoped informer only ever held a subset — reading it
+// as authoritative turns a one-namespace cache into a reported cluster scan.
+// Kinds narrowed this way are returned so the caller can mark the scan partial.
+func clampScopeToCacheCoverage(cache scanCacheCoverage, scopes map[string][]string) (map[string][]string, []string) {
+	if len(scopes) == 0 {
+		return scopes, nil
+	}
+	effective := make(map[string][]string, len(scopes))
+	var partial []string
+	for kind, namespaces := range scopes {
+		resource := ScanKindResource(kind)
+		effective[kind] = namespaces
+		if resource == "" || cache.IsKindClusterWide(resource) {
+			continue
+		}
+		covered := cache.KindNamespaces(resource)
+		if len(covered) == 0 {
+			// Disabled informer: snapshotScanWorkloads reports it as
+			// unavailable via its nil lister, which is the stronger signal.
+			continue
+		}
+		if namespaces == nil {
+			effective[kind] = covered
+			partial = appendUniqueSorted(partial, kind)
+			continue
+		}
+		narrowed := intersectNamespaces(namespaces, covered)
+		effective[kind] = narrowed
+		if len(narrowed) < len(namespaces) {
+			partial = appendUniqueSorted(partial, kind)
+		}
+	}
+	return effective, partial
+}
+
+func intersectNamespaces(requested, covered []string) []string {
+	set := make(map[string]struct{}, len(covered))
+	for _, ns := range covered {
+		set[ns] = struct{}{}
+	}
+	out := make([]string, 0, len(requested))
+	for _, ns := range requested {
+		if _, ok := set[ns]; ok {
+			out = append(out, ns)
+		}
+	}
+	return out
 }
 
 func newRightsizingScanResponse(now time.Time, scope RightsizingScanScope) RightsizingScanResponse {
@@ -129,12 +266,12 @@ func computeRightsizingScan(ctx context.Context, client rightsizingScanQuerier, 
 	sortScanWorkloads(workloads)
 	resp.Coverage.WorkloadsDiscovered = len(workloads)
 	if len(workloads) == 0 {
-		limitations := len(resp.Coverage.RestrictedKinds) + len(resp.Coverage.UnavailableKinds)
+		limited := countDistinct(resp.Coverage.RestrictedKinds, resp.Coverage.UnavailableKinds, resp.Coverage.PartiallyCachedKinds)
 		switch {
-		case limitations >= 3:
+		case limited >= len(RightsizingScanKinds):
 			resp.State = RightsizingScanUnavailable
 			resp.Reason = "workload_kinds_unavailable"
-		case limitations > 0:
+		case limited > 0:
 			resp.State = RightsizingScanPartial
 			resp.Reason = "limited_scope_no_workloads"
 		default:
@@ -193,7 +330,7 @@ func computeRightsizingScan(ctx context.Context, client rightsizingScanQuerier, 
 				resp.Coverage.WorkloadsWithData++
 			}
 			if workloadHasUnavailableOOMEvidence(out) {
-				appendScanWarning(&resp, "oom_evidence_unavailable", "Restart history was incomplete for some memory recommendations.")
+				appendScanWarning(&resp, ReasonOOMEvidenceUnavailable, "Restart history was incomplete for some memory recommendations.")
 			}
 		}
 	}
@@ -204,7 +341,7 @@ func computeRightsizingScan(ctx context.Context, client rightsizingScanQuerier, 
 		if resp.Reason == "" {
 			resp.Reason = "scan_incomplete"
 		}
-	case len(resp.Warnings) > 0 || resp.Coverage.WorkloadsEvaluated < len(workloads) || len(resp.Coverage.RestrictedKinds) > 0 || len(resp.Coverage.UnavailableKinds) > 0:
+	case len(resp.Warnings) > 0 || resp.Coverage.WorkloadsEvaluated < len(workloads) || len(resp.Coverage.RestrictedKinds) > 0 || len(resp.Coverage.UnavailableKinds) > 0 || len(resp.Coverage.PartiallyCachedKinds) > 0:
 		resp.State = RightsizingScanPartial
 		resp.Reason = "some_evidence_unavailable"
 	default:
@@ -537,7 +674,7 @@ func workloadHasData(workload RightsizingScanWorkload) bool {
 
 func workloadHasUnavailableOOMEvidence(workload RightsizingScanWorkload) bool {
 	for _, row := range workload.Rows {
-		if row.Resource == "memory" && row.RecommendationReason == "oom_evidence_unavailable" {
+		if row.Resource == "memory" && row.RecommendationReason == ReasonOOMEvidenceUnavailable {
 			return true
 		}
 	}
@@ -571,6 +708,20 @@ func withoutScanKind(workloads []scanWorkload, kind string) []scanWorkload {
 		}
 	}
 	return out
+}
+
+// countDistinct counts kinds, not list entries: the coverage lists overlap — a
+// kind readable in only some of the requested namespaces is both restricted and
+// partially cached — so summing their lengths claims more limited kinds than
+// exist, and "all kinds unavailable" would fire with one kind still readable.
+func countDistinct(lists ...[]string) int {
+	seen := make(map[string]struct{})
+	for _, list := range lists {
+		for _, value := range list {
+			seen[value] = struct{}{}
+		}
+	}
+	return len(seen)
 }
 
 func appendUniqueSorted(values []string, value string) []string {

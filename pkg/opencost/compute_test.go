@@ -322,3 +322,66 @@ func TestEfficiencyPercent(t *testing.T) {
 		})
 	}
 }
+
+func TestPartialUsageFailureIsFlaggedNotUnderstated(t *testing.T) {
+	// One usage query failing used to produce a plausible-looking efficiency
+	// derived from half the evidence — a namespace at 80% reported as ~38% with
+	// nothing to say the CPU half was never collected.
+	client := scriptedProm(t, []scriptedCase{
+		{contains: "container_cpu_allocation", body: vectorBody(map[string]float64{"checkout": 2.0})},
+		{contains: "container_memory_allocation_bytes", body: vectorBody(map[string]float64{"checkout": 3.0})},
+		{contains: "container_cpu_usage_seconds_total", body: `{"status":"error","errorType":"bad_data","error":"boom"}`},
+		{contains: "container_memory_working_set_bytes", body: vectorBody(map[string]float64{"checkout": 2.4})},
+	})
+
+	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{Currency: "USD"})
+	if !got.Available {
+		t.Fatalf("summary unavailable: %+v", got)
+	}
+	if len(got.Namespaces) != 1 {
+		t.Fatalf("namespaces = %+v, want one row", got.Namespaces)
+	}
+
+	row := got.Namespaces[0]
+	if !row.UsageUnavailable {
+		t.Error("a failed usage query must mark the row, or a reader treats 0 as measured")
+	}
+	if row.Efficiency != 0 {
+		t.Errorf("Efficiency=%v, want 0 — memory usage alone understates it", row.Efficiency)
+	}
+	if row.IdleCost != 0 {
+		t.Errorf("IdleCost=%v, want 0 — idle is unknown, not the full allocation", row.IdleCost)
+	}
+	if got.ClusterEfficiency != 0 {
+		t.Errorf("ClusterEfficiency=%v, want 0 — no row contributed usable evidence", got.ClusterEfficiency)
+	}
+
+	// The costs themselves are unaffected: only the usage-derived fields are.
+	if row.HourlyCost != 5.0 {
+		t.Errorf("HourlyCost=%v, want 5.0 — allocation is independent of the usage query", row.HourlyCost)
+	}
+}
+
+func TestTotalUsageFailureMatchesThePreExistingZeros(t *testing.T) {
+	// Both usage queries failing is the case EfficiencyPercent and idleFromUsage
+	// already handled ("no data != 100% idle"); pin that the flag did not change
+	// any of those numbers.
+	client := scriptedProm(t, []scriptedCase{
+		{contains: "container_cpu_allocation", body: vectorBody(map[string]float64{"checkout": 2.0})},
+		{contains: "container_memory_allocation_bytes", body: vectorBody(map[string]float64{"checkout": 3.0})},
+		{contains: "container_cpu_usage_seconds_total", body: `{"status":"error","errorType":"bad_data","error":"boom"}`},
+		{contains: "container_memory_working_set_bytes", body: `{"status":"error","errorType":"bad_data","error":"boom"}`},
+	})
+
+	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{Currency: "USD"})
+	row := got.Namespaces[0]
+	if row.Efficiency != 0 || row.IdleCost != 0 || got.ClusterEfficiency != 0 || got.TotalIdleCost != 0 {
+		t.Errorf("totals changed for a full usage failure: row=%+v clusterEff=%v idle=%v", row, got.ClusterEfficiency, got.TotalIdleCost)
+	}
+	if !row.UsageUnavailable {
+		t.Error("the row must still be flagged")
+	}
+	if row.HourlyCost != 5.0 {
+		t.Errorf("HourlyCost=%v, want 5.0", row.HourlyCost)
+	}
+}

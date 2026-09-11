@@ -30,7 +30,29 @@ var (
 	errCacheNotReady   = errors.New("resource cache not initialized")
 	errKindRBACDenied  = errors.New("kind not listable by service account")
 	errWorkloadMissing = errors.New("workload not found")
+
+	ErrPrometheusUnavailable      = errors.New("prometheus is not connected")
+	ErrRightsizingKindUnsupported = errors.New("rightsizing supports only Deployment, StatefulSet, and DaemonSet")
 )
+
+// Recommendation reasons set only when absent evidence actually suppressed a
+// recommendation. A row carrying one is a withheld verdict, not a clean bill of
+// health, so every consumer that reports coverage must treat it as a gap.
+const (
+	ReasonHPAEvidenceUnavailable = "hpa_evidence_unavailable"
+	ReasonOOMEvidenceUnavailable = "oom_evidence_unavailable"
+)
+
+// IsWithheldRecommendationReason keeps the withheld set with the code that
+// assigns it: a reason added here without updating every consumer's own copy
+// would be reported as a clean result by whichever one was missed.
+func IsWithheldRecommendationReason(reason string) bool {
+	switch reason {
+	case ReasonHPAEvidenceUnavailable, ReasonOOMEvidenceUnavailable:
+		return true
+	}
+	return false
+}
 
 type RightsizingFit string
 
@@ -123,8 +145,7 @@ const (
 // Only Deployment / StatefulSet / DaemonSet supported — per-pod rightsizing
 // is wrong granularity (recs are per-container-template).
 func handleRightsizing(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
-	if client == nil {
+	if GetClient() == nil {
 		writeError(w, http.StatusServiceUnavailable, "Prometheus client not initialized")
 		return
 	}
@@ -133,7 +154,7 @@ func handleRightsizing(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	if !isRightsizingKind(kind) {
+	if !IsRightsizingKind(kind) {
 		writeError(w, http.StatusBadRequest, "rightsizing only supported for Deployment, StatefulSet, DaemonSet")
 		return
 	}
@@ -141,13 +162,12 @@ func handleRightsizing(w http.ResponseWriter, r *http.Request) {
 	// Per-user RBAC: the cache is populated under Radar's SA, so without this
 	// gate any authenticated user could fetch any namespace's container spec
 	// + P95 by guessing names. Use "get" — matches normal resource-detail reads.
-	resourcePlural := strings.ToLower(kind) + "s"
-	if !canRead(r, "apps", resourcePlural, namespace, "get") {
+	if !canRead(r, "apps", ScanKindResource(kind), namespace, "get") {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 
-	workload, err := loadRightsizingWorkload(kind, namespace, name)
+	resp, err := RightsizingForWorkload(r.Context(), kind, namespace, name)
 	if err != nil {
 		switch {
 		case errors.Is(err, errCacheNotReady):
@@ -162,24 +182,44 @@ func handleRightsizing(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if len(workload.containers) == 0 {
-		writeJSON(w, http.StatusOK, RightsizingResponse{
-			Kind: kind, Namespace: namespace, Name: name,
-			Window: "7d", Source: "radar", SampleAvailable: false,
-			Rows:   []RightsizingRow{},
-			Reason: "Workload has no runtime containers (init-only or empty spec).",
-		})
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	resp := computeRightsizing(ctx, client, kind, namespace, name, workload)
 
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func isRightsizingKind(kind string) bool {
+// RightsizingForWorkload is the shared entry point behind the REST handler and
+// the get_rightsizing MCP tool. It performs no per-user RBAC check: callers own
+// that gate, because the cache is populated under Radar's ServiceAccount.
+func RightsizingForWorkload(ctx context.Context, kind, namespace, name string) (RightsizingResponse, error) {
+	client := GetClient()
+	if client == nil {
+		return RightsizingResponse{}, ErrPrometheusUnavailable
+	}
+	if !IsRightsizingKind(kind) {
+		return RightsizingResponse{}, ErrRightsizingKindUnsupported
+	}
+
+	workload, err := loadRightsizingWorkload(kind, namespace, name)
+	if err != nil {
+		return RightsizingResponse{}, err
+	}
+	if len(workload.containers) == 0 {
+		return RightsizingResponse{
+			Kind: kind, Namespace: namespace, Name: name,
+			Window: "7d", Source: "radar", SampleAvailable: false,
+			Rows:   []RightsizingRow{},
+			Reason: "Workload has no runtime containers (init-only or empty spec).",
+		}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return computeRightsizing(ctx, client, kind, namespace, name, workload), nil
+}
+
+// IsRightsizingKind reports whether recommendations exist for a kind. Callers
+// check it before authorizing, so an unsupported kind gets that answer instead
+// of a denial from a SubjectAccessReview against a resource that cannot exist.
+func IsRightsizingKind(kind string) bool {
 	switch strings.ToLower(kind) {
 	case "deployment", "statefulset", "daemonset":
 		return true
@@ -683,7 +723,7 @@ func classifyRightsizingFit(row *RightsizingRow, observed float64, req, lim *res
 		return
 	}
 	if row.Fit == FitOversized && !row.HPAEvidenceAvailable {
-		row.RecommendationReason = "hpa_evidence_unavailable"
+		row.RecommendationReason = ReasonHPAEvidenceUnavailable
 		return
 	}
 	if resourceName == "memory" && row.Fit == FitOversized && (row.CurrentPodOOM || row.WindowOOMEvidence) {
@@ -691,7 +731,7 @@ func classifyRightsizingFit(row *RightsizingRow, observed float64, req, lim *res
 		return
 	}
 	if resourceName == "memory" && row.Fit == FitOversized && !row.OOMEvidenceAvailable {
-		row.RecommendationReason = "oom_evidence_unavailable"
+		row.RecommendationReason = ReasonOOMEvidenceUnavailable
 		return
 	}
 	if lim != nil && recommendedValue > quantityToFloat(*lim, resourceName) {

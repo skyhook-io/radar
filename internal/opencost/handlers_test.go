@@ -169,7 +169,7 @@ func TestFilterCostSummaryRecomputesVisibleTotals(t *testing.T) {
 			{Name: "private", HourlyCost: 8, CPUCost: 4, MemoryCost: 4, CPUUsageCost: 4, MemoryUsageCost: 4},
 		},
 	}
-	filterCostSummary(resp, []string{"allowed"})
+	FilterCostSummary(resp, []string{"allowed"})
 	if len(resp.Namespaces) != 1 || resp.Namespaces[0].Name != "allowed" || resp.TotalHourlyCost != 3 || resp.ClusterEfficiency != 50 || len(resp.NamespaceScope) != 1 || resp.NamespaceScope[0] != "allowed" {
 		t.Fatalf("unexpected filtered summary: %#v", resp)
 	}
@@ -184,12 +184,12 @@ func TestFilterCostSummaryExcludesUnavailableUsageFromEfficiency(t *testing.T) {
 			{Name: "unknown", CPUCost: 2, MemoryCost: 2, UsageUnavailable: true},
 		},
 	}
-	filterCostSummary(resp, []string{"measured", "unknown"})
+	FilterCostSummary(resp, []string{"measured", "unknown"})
 	if resp.ClusterEfficiency != 50 {
 		t.Fatalf("cluster efficiency = %v, want 50", resp.ClusterEfficiency)
 	}
 
-	filterCostSummary(resp, []string{"unknown"})
+	FilterCostSummary(resp, []string{"unknown"})
 	if resp.ClusterEfficiency != 0 {
 		t.Fatalf("unavailable-only efficiency = %v, want omitted zero value", resp.ClusterEfficiency)
 	}
@@ -202,14 +202,14 @@ func TestFilterCostSummaryCapsAndRoundsEfficiency(t *testing.T) {
 			{Name: "allowed", CPUCost: 0.5, MemoryCost: 0.5, CPUUsageCost: 0.7, MemoryUsageCost: 0.7},
 		},
 	}
-	filterCostSummary(resp, []string{"allowed"})
+	FilterCostSummary(resp, []string{"allowed"})
 	if resp.ClusterEfficiency != 100 {
 		t.Fatalf("cluster efficiency = %v, want capped 100", resp.ClusterEfficiency)
 	}
 
 	resp.Namespaces[0].CPUUsageCost = 0.3333
 	resp.Namespaces[0].MemoryUsageCost = 0
-	filterCostSummary(resp, []string{"allowed"})
+	FilterCostSummary(resp, []string{"allowed"})
 	if resp.ClusterEfficiency != 33.3 {
 		t.Fatalf("cluster efficiency = %v, want rounded 33.3", resp.ClusterEfficiency)
 	}
@@ -220,7 +220,7 @@ func TestFilterCostSummaryReportsNoMetricsForVisibleNamespacesWithoutRows(t *tes
 		Available:  true,
 		Namespaces: []pkgopencost.NamespaceCost{{Name: "private", HourlyCost: 11}},
 	}
-	filterCostSummary(resp, []string{"allowed"})
+	FilterCostSummary(resp, []string{"allowed"})
 	if resp.Available || resp.Reason != pkgopencost.ReasonNoMetrics || len(resp.Namespaces) != 0 || len(resp.NamespaceScope) != 1 || resp.NamespaceScope[0] != "allowed" {
 		t.Fatalf("unexpected empty visible summary: %#v", resp)
 	}
@@ -232,7 +232,7 @@ func TestFilterCostSummaryPreservesSourceEmptyReason(t *testing.T) {
 		Reason:         pkgopencost.ReasonNoMetrics,
 		NamespaceScope: []string{"stale"},
 	}
-	filterCostSummary(resp, []string{"allowed"})
+	FilterCostSummary(resp, []string{"allowed"})
 	if resp.Available || resp.Reason != pkgopencost.ReasonNoMetrics || len(resp.NamespaceScope) != 0 {
 		t.Fatalf("unexpected source-empty summary: %#v", resp)
 	}

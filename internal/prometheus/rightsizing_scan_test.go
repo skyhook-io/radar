@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -333,5 +334,98 @@ func TestMarkScanHPAAvailableIsNamespaceScoped(t *testing.T) {
 	markScanHPAAvailable(workloads, "team-a")
 	if !workloads["a"].workload.hpaAvailable || workloads["b"].workload.hpaAvailable {
 		t.Fatalf("HPA evidence availability crossed namespaces: %+v", workloads)
+	}
+}
+
+type fakeScanCoverage struct {
+	clusterWide map[string]bool
+	namespaces  map[string][]string
+}
+
+func (f fakeScanCoverage) IsKindClusterWide(resource string) bool { return f.clusterWide[resource] }
+func (f fakeScanCoverage) KindNamespaces(resource string) []string {
+	return f.namespaces[resource]
+}
+
+func TestScopeClampNarrowsAllNamespacesToWhatTheCacheHolds(t *testing.T) {
+	// A nil namespace list means "every namespace" to the listers, but a
+	// namespace-scoped informer only ever held a subset — without the clamp a
+	// one-namespace cache is reported as a completed cluster scan.
+	cache := fakeScanCoverage{
+		clusterWide: map[string]bool{"daemonsets": true},
+		namespaces:  map[string][]string{"deployments": {"prod"}},
+	}
+
+	effective, partial := clampScopeToCacheCoverage(cache, map[string][]string{
+		"Deployment": nil,
+		"DaemonSet":  nil,
+	})
+
+	if got := effective["Deployment"]; !slices.Equal(got, []string{"prod"}) {
+		t.Errorf("Deployment scope = %v, want the cached namespaces", got)
+	}
+	if got := effective["DaemonSet"]; got != nil {
+		t.Errorf("a cluster-wide kind must stay unclamped, got %v", got)
+	}
+	if !slices.Equal(partial, []string{"Deployment"}) {
+		t.Errorf("partially cached kinds = %v, want [Deployment]", partial)
+	}
+}
+
+func TestScopeClampIntersectsAnExplicitRequest(t *testing.T) {
+	cache := fakeScanCoverage{namespaces: map[string][]string{"deployments": {"prod"}}}
+
+	effective, partial := clampScopeToCacheCoverage(cache, map[string][]string{
+		"Deployment": {"prod", "staging"},
+	})
+
+	if got := effective["Deployment"]; !slices.Equal(got, []string{"prod"}) {
+		t.Errorf("Deployment scope = %v, want only the cached namespace", got)
+	}
+	if !slices.Equal(partial, []string{"Deployment"}) {
+		t.Errorf("dropping a requested namespace must report partial, got %v", partial)
+	}
+}
+
+func TestScopeClampLeavesFullyCoveredRequestsAlone(t *testing.T) {
+	cache := fakeScanCoverage{namespaces: map[string][]string{"deployments": {"prod", "staging"}}}
+
+	effective, partial := clampScopeToCacheCoverage(cache, map[string][]string{
+		"Deployment": {"prod"},
+	})
+
+	if got := effective["Deployment"]; !slices.Equal(got, []string{"prod"}) {
+		t.Errorf("Deployment scope = %v, want it untouched", got)
+	}
+	if len(partial) != 0 {
+		t.Errorf("a fully covered request is not partial, got %v", partial)
+	}
+}
+
+func TestOverlappingCoverageListsDoNotFakeAllKindsUnavailable(t *testing.T) {
+	// A kind readable in only some requested namespaces lands in RestrictedKinds
+	// and, if its informer covers fewer still, in PartiallyCachedKinds too.
+	// Summing the lists reaches 3 with DaemonSet still fully readable, which
+	// would claim every workload kind is unreadable.
+	resp := newRightsizingScanResponse(time.Now(), RightsizingScanScope{
+		RestrictedKinds: []string{"Deployment", "StatefulSet"},
+	})
+	resp.Coverage.PartiallyCachedKinds = []string{"Deployment"}
+
+	resp = computeRightsizingScan(context.Background(), &fakeScanQuerier{}, nil, resp)
+	if resp.State != RightsizingScanPartial || resp.Reason != "limited_scope_no_workloads" {
+		t.Fatalf("two limited kinds must stay partial, got %+v", resp)
+	}
+}
+
+func TestPartiallyCachedKindMakesAnEmptyScanPartialNotComplete(t *testing.T) {
+	// A namespace-scoped informer that happens to hold no workloads must not
+	// report "no_workloads" as a completed cluster scan.
+	resp := newRightsizingScanResponse(time.Now(), RightsizingScanScope{})
+	resp.Coverage.PartiallyCachedKinds = []string{"Deployment"}
+
+	resp = computeRightsizingScan(context.Background(), &fakeScanQuerier{}, nil, resp)
+	if resp.State != RightsizingScanPartial || resp.Reason != "limited_scope_no_workloads" {
+		t.Fatalf("partially cached empty response = %+v", resp)
 	}
 }
