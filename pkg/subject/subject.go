@@ -14,11 +14,12 @@
 // PLACEMENT NOTE: pkg/subject imports only the canonical-key helper from
 // pkg/resourceid (ResourceKey). It does NOT import internal/* or pkg/topology (the
 // plan's layering rule). The Tier-1 owner walk is parameterized over an
-// OwnerResolver interface — which a topology adapter must satisfy with a
-// CONTROLLER-ownership resolver, NOT a raw walkTopmostOwner (see OwnerResolver's
-// contract: EdgeManages also carries GitOps/Helm management edges, which are
-// Tier-2, not identity). A heuristic single-pod walk is built in. Tier-2 takes
-// only a metav1.Object's labels/annotations, so it has zero topology dependency.
+// OwnerResolver interface. ControllerOwnerResolver adapts an injected exact-ref
+// object lookup; any topology adapter must likewise use CONTROLLER ownership,
+// NOT a raw walkTopmostOwner (see OwnerResolver's contract: EdgeManages also
+// carries GitOps/Helm management edges, which are Tier-2, not identity). A
+// heuristic single-pod walk is also built in. Tier-2 takes only a metav1.Object's
+// labels/annotations, so it has zero topology dependency.
 package subject
 
 import (
@@ -128,7 +129,10 @@ func ScopeForKind(kind string) Scope {
 // the detectors (a depth-0/1 walk).
 //
 // Returns the immediate controller-parent of the given ref, or (zero, false)
-// when there is no further controller. Names already RS-hash-stripped per impl.
+// when there is no further controller. Object-backed implementations preserve
+// the exact owner-reference name and resolve the owner's namespace from
+// authoritative resource scope; only explicitly heuristic implementations may
+// derive a name when the owner object is unavailable.
 type OwnerResolver interface {
 	// ParentOf returns the next CONTROLLER up the chain, or (zero, false) at root.
 	ParentOf(child Ref) (parent Ref, ok bool)
@@ -151,8 +155,8 @@ const maxOwnerWalkDepth = 16
 
 // ResolveSubject is the Tier-1 entrypoint. It collapses ownerReferences to the
 // root controller and classifies the terminal Anchor. It SUBSUMES:
-//   - topOwnerForPod's single-hop RS->Deployment + name-strip (generalized to a
-//     multi-hop walk via OwnerResolver), AND extends it with Job->CronJob,
+//   - topOwnerForPod's owner collapse (generalized to a multi-hop walk via
+//     OwnerResolver), AND extends it with Job->CronJob,
 //     owner=nil -> AnchorBare, owner=Node -> AnchorNode, operator-CR root hop.
 //   - enrichIdentity / foldGroup's owner-else-self collapse (the single hop is
 //     just a depth-1 walk with no further parent).
