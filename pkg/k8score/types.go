@@ -270,6 +270,46 @@ const (
 	CRDDiscoveryComplete   CRDDiscoveryStatus = "ready"       // Discovery complete
 )
 
+type DynamicObservationState string
+
+const (
+	DynamicObservationUnwatched   DynamicObservationState = "unwatched"
+	DynamicObservationDeferred    DynamicObservationState = "deferred"
+	DynamicObservationSyncing     DynamicObservationState = "syncing"
+	DynamicObservationWatched     DynamicObservationState = "watched"
+	DynamicObservationDenied      DynamicObservationState = "denied"
+	DynamicObservationUnsupported DynamicObservationState = "unsupported"
+)
+
+type DynamicObservationOrigin string
+
+const (
+	DynamicObservationOriginWarmup   DynamicObservationOrigin = "warmup"
+	DynamicObservationOriginEager    DynamicObservationOrigin = "small_eager"
+	DynamicObservationOriginOnDemand DynamicObservationOrigin = "on_demand"
+)
+
+type DynamicObservationScope string
+
+const (
+	DynamicObservationScopeCluster            DynamicObservationScope = "cluster"
+	DynamicObservationScopeExplicitNamespaces DynamicObservationScope = "explicit_namespaces"
+)
+
+// DynamicResourceObservation describes what the dynamic cache can truthfully
+// claim for one exact GVR. It is an introspection snapshot: reading it never
+// probes the API server or starts an informer.
+type DynamicResourceObservation struct {
+	State            DynamicObservationState  `json:"state"`
+	Origin           DynamicObservationOrigin `json:"origin,omitempty"`
+	ObservationStart *time.Time               `json:"observationStart,omitempty"`
+	Scope            DynamicObservationScope  `json:"scope,omitempty"`
+	Namespaces       []string                 `json:"namespaces,omitempty"`
+	NamespacePartial bool                     `json:"namespacePartial,omitempty"`
+	Truncated        bool                     `json:"truncated,omitempty"`
+	ReasonCode       string                   `json:"reasonCode,omitempty"`
+}
+
 // DynamicCacheConfig holds configuration for creating a DynamicResourceCache.
 // All application-specific behavior is injected via callbacks — the cache
 // itself has no imports of any internal/ package.
@@ -320,6 +360,11 @@ type DynamicCacheConfig struct {
 	// precedence over NamespaceFallback.
 	NamespaceFallback  string
 	NamespaceFallbacks []string
+	// NamespaceFallbacksTruncated means the candidate set is incomplete because
+	// namespace enumeration was non-authoritative or the configured safety bound
+	// omitted candidates. It matters only when a GVR cannot be watched
+	// cluster-wide and falls back to per-namespace informers.
+	NamespaceFallbacksTruncated bool
 
 	// DebugEvents enables verbose debug logging.
 	DebugEvents bool

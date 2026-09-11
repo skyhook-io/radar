@@ -213,6 +213,27 @@ func TestMergeScopeCandidates_NonAuthoritativeIgnoresAccessible(t *testing.T) {
 	}
 }
 
+func TestScopeCandidateSetIncomplete(t *testing.T) {
+	tests := []struct {
+		name          string
+		authoritative bool
+		dropped       int
+		want          bool
+	}{
+		{name: "authoritative complete", authoritative: true, want: false},
+		{name: "authoritative capped", authoritative: true, dropped: 1, want: true},
+		{name: "non-authoritative empty", authoritative: false, want: true},
+		{name: "non-authoritative capped", authoritative: false, dropped: 1, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := scopeCandidateSetIncomplete(test.authoritative, test.dropped); got != test.want {
+				t.Fatalf("scopeCandidateSetIncomplete(%t, %d) = %t, want %t", test.authoritative, test.dropped, got, test.want)
+			}
+		})
+	}
+}
+
 // Operator-named namespaces (--namespaces) can exceed the cap on the
 // non-authoritative path too; the count must be reported so the truncation
 // warning fires for exactly the users who typed the list out.
@@ -308,9 +329,11 @@ func TestCheckResourcePermissionsCacheHitCopiesScopeNamespaces(t *testing.T) {
 	const nsA, nsB = "team-a", "team-b"
 	resourcePermsMu.Lock()
 	cachedPermResult = &PermissionCheckResult{
-		Perms:           &ResourcePermissions{Pods: true},
-		NamespaceScoped: true,
-		Namespace:       nsA,
+		Perms:                    &ResourcePermissions{Pods: true},
+		NamespaceScoped:          true,
+		Namespace:                nsA,
+		ScopeCandidates:          []string{nsA, nsB},
+		ScopeCandidatesTruncated: true,
 		Scopes: map[string]k8score.ResourceScope{
 			k8score.Pods: {Enabled: true, Namespace: nsA},
 		},
@@ -322,15 +345,28 @@ func TestCheckResourcePermissionsCacheHitCopiesScopeNamespaces(t *testing.T) {
 	resourcePermsMu.Unlock()
 	t.Cleanup(InvalidateResourcePermissionsCache)
 
+	direct := GetCachedPermissionResult()
+	if direct == nil || !direct.ScopeCandidatesTruncated || !reflect.DeepEqual(direct.ScopeCandidates, []string{nsA, nsB}) {
+		t.Fatalf("GetCachedPermissionResult lost candidate metadata: %+v", direct)
+	}
+	direct.ScopeCandidates[0] = "mutated-direct"
+
 	got := CheckResourcePermissions(context.Background())
 	if !reflect.DeepEqual(got.ScopeNamespaces[k8score.Pods], []string{nsA, nsB}) {
 		t.Fatalf("ScopeNamespaces = %v, want [%s %s]", got.ScopeNamespaces[k8score.Pods], nsA, nsB)
 	}
+	if !got.ScopeCandidatesTruncated {
+		t.Fatal("ScopeCandidatesTruncated was lost on cache hit")
+	}
 	got.ScopeNamespaces[k8score.Pods][0] = "mutated"
+	got.ScopeCandidates[0] = "mutated"
 
 	got = CheckResourcePermissions(context.Background())
 	if !reflect.DeepEqual(got.ScopeNamespaces[k8score.Pods], []string{nsA, nsB}) {
 		t.Fatalf("cached ScopeNamespaces was mutated through caller copy: %v", got.ScopeNamespaces[k8score.Pods])
+	}
+	if !reflect.DeepEqual(got.ScopeCandidates, []string{nsA, nsB}) || !got.ScopeCandidatesTruncated {
+		t.Fatalf("cached ScopeCandidates metadata was mutated through caller copy: %v truncated=%v", got.ScopeCandidates, got.ScopeCandidatesTruncated)
 	}
 }
 

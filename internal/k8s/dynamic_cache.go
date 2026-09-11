@@ -44,6 +44,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 		// the HTTP layer (see internal/server/namespace_scope.go).
 		var nsFallback string
 		var nsFallbacks []string
+		var nsFallbacksTruncated bool
 		if permResult := GetCachedPermissionResult(); permResult != nil {
 			if permResult.NamespaceScoped && permResult.Namespace != "" {
 				nsFallback = permResult.Namespace
@@ -52,6 +53,7 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			// can hold cluster-wide built-in access but namespace-only CRD
 			// access (or the reverse) — the per-GVR probe decides.
 			nsFallbacks = permResult.ScopeCandidates
+			nsFallbacksTruncated = permResult.ScopeCandidatesTruncated
 		}
 
 		// --namespace-scope pins namespaced CRD informers to the target namespace
@@ -77,14 +79,15 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 		recordClusterContext := ActiveClusterContext()
 
 		core, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{
-			DynamicClient:      client,
-			Discovery:          sharedDiscovery,
-			Changes:            changeCh,
-			NamespaceFallback:  nsFallback,
-			NamespaceFallbacks: nsFallbacks,
-			NamespaceScoped:    nsScoped,
-			Namespace:          nsTarget,
-			DebugEvents:        DebugEvents,
+			DynamicClient:               client,
+			Discovery:                   sharedDiscovery,
+			Changes:                     changeCh,
+			NamespaceFallback:           nsFallback,
+			NamespaceFallbacks:          nsFallbacks,
+			NamespaceFallbacksTruncated: nsFallbacksTruncated,
+			NamespaceScoped:             nsScoped,
+			Namespace:                   nsTarget,
+			DebugEvents:                 DebugEvents,
 			OnReceived: func(kind string) {
 				timeline.IncrementReceived(kind)
 			},
