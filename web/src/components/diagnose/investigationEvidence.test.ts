@@ -6527,9 +6527,12 @@ describe("live-run follow-ups", () => {
     expect(receipt.latest.title).toBe(
       "No events in the namespaces you can read",
     );
-    expect(
-      receipt.latest.data.type === "receipt" && receipt.latest.data.message,
-    ).toContain("alpha, beta");
+    const narrowedBody =
+      receipt.latest.data.type === "receipt" ? receipt.latest.data.message : "";
+    expect(narrowedBody).toContain("alpha, beta");
+    // The load-bearing half: an empty answer from the namespaces a reader can
+    // see must never read as an answer about the cluster.
+    expect(narrowedBody).toContain("does not clear the cluster");
     expect(empty.limitations).toHaveLength(0);
 
     const found = project([

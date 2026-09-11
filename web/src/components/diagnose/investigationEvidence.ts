@@ -3380,12 +3380,12 @@ function adaptEvents(
     narrowedTo
       ? {
           title: "No events in the namespaces you can read",
-          message: `The events query completed and returned nothing for ${narrowedTo}. Namespaces outside your permissions were not read, so this does not clear the cluster.`,
+          message: `Read ${narrowedTo}. Namespaces outside your permissions were not read, so this does not clear the cluster.`,
         }
       : {
           title: "No events in this window",
           message:
-            "The events query completed and returned nothing for this scope. Events outside its window or filters are not covered; a namespace you cannot read also returns nothing.",
+            "Events outside this window or its filters are not covered, and a namespace you cannot read also returns nothing.",
         },
   );
 }
@@ -3728,11 +3728,13 @@ function adaptWorkloadLogs(
       return;
     }
     if (!source.confirmedSuccess) return;
+    // The producer's own sentence when it gave one; otherwise nothing, because
+    // "no pods to read logs from" is already the whole answer.
     const message = nonEmptyString(value.emptyMessage)
       ? value.emptyMessage
       : nonEmptyString(value.logs)
         ? value.logs
-        : "The workload resolved no pods, so there were no log streams to read.";
+        : undefined;
     builder.observe(
       `workload-logs:${previous ? "previous" : "current"}:${scope}`,
       "receipt",
