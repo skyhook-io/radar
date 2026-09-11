@@ -890,3 +890,51 @@ describe('the action sits with its explanation', () => {
     expect(ev.map((e) => e.text).join(' ')).toMatch(/no entry point|Ingress/i)
   })
 })
+
+// The two vantages that can be refused need DIFFERENT grants. Sending an
+// operator to their cluster admin asking for `create jobs` when what they lack
+// is the proxy subresource wastes the one request they get to make.
+describe('a refusal asks for the grant that would actually fix it', () => {
+  const sidebarFor = (t: Trace, originId: string, opts = {}) => {
+    const origins = buildOrigins(t, opts)
+    const origin = origins.find((o) => o.id === originId)!
+    const r = t.routes![0]
+    const g = buildGraph({ trace: t, route: r, origin, origins })
+    return buildSidebar(undefined, {
+      trace: t, route: r, origin, origins,
+      nodes: g.nodes, breakNodeId: g.breakNodeId, breakAtExitOf: g.breakAtExitOf,
+      nonNetworkNodeIds: g.nonNetworkNodeIds, contextNodeIds: g.contextNodeIds,
+      interleave: g.interleave, entryParallelCount: g.entryParallelCount,
+      journeyEntryNodeIds: g.journeyEntryNodeIds, pathNodeIds: g.pathNodeIds,
+    })
+  }
+
+  // The in-cluster dial already succeeded, so no stronger gap is left to
+  // propose - which is exactly when the panel falls through to the refusal.
+  it('names the proxy subresource when the relay was the refused vantage', () => {
+    const t = mk([pod('a', true, '10.0.0.1')], [
+      p({ vantage: 'in-cluster', path: 'data', ok: true, tone: 'healthy' }),
+      p({
+        vantage: 'local', path: 'apiserver', skipped: true, ok: false, skipClass: 'denied',
+        reason: 'Permission denied. Your identity lacks get services/proxy or get pods/proxy in this namespace.',
+      }),
+    ])
+    const next = sidebarFor(t, 'apiserver').path.next!
+    expect(next.header).toBe('ASK FOR THIS PERMISSION')
+    expect(next.body).toMatch(/services\/proxy/)
+    expect(next.body).not.toMatch(/jobs/)
+    expect(next.ctas[0].command).toBe('kubectl auth can-i get services/proxy -n store')
+  })
+
+  it('still names the Job grant when the in-cluster probe was the refused one', () => {
+    const t = mk([pod('a', true, '10.0.0.1')], [p({ vantage: 'local', path: 'data', ok: true, tone: 'healthy' })])
+    const next = sidebarFor(t, 'incluster', {
+      inClusterAllowed: false,
+      inClusterDeniedReason: 'RBAC denies create on jobs',
+    }).path.next!
+    expect(next.header).toBe('ASK FOR THIS PERMISSION')
+    expect(next.body).toMatch(/jobs/)
+    expect(next.body).not.toMatch(/services\/proxy/)
+    expect(next.ctas[0].command).toBe('kubectl auth can-i create jobs -n store')
+  })
+})

@@ -59,6 +59,26 @@ describe('buildOrigins', () => {
     expect(local?.unavailable).toMatch(/not routable/)
   })
 
+  // A refused relay says nothing about the workload. Scoring it as a failure
+  // painted the vantage red for a permissions gap, and 'blocked' would have
+  // hidden that there is a grant to ask for.
+  it('reads a refused relay as not permitted, and says what to grant', () => {
+    const os = buildOrigins(
+      traceWith([
+        p({
+          vantage: 'local',
+          path: 'apiserver',
+          skipped: true,
+          skipClass: 'denied',
+          reason: 'Permission denied. Your identity lacks get services/proxy or get pods/proxy in this namespace.',
+        }),
+      ]),
+    )
+    const api = os.find((o) => o.id === 'apiserver')
+    expect(api?.mark).toBe('denied')
+    expect(api?.unavailable).toMatch(/services\/proxy/)
+  })
+
   it('reports denied rather than untested when the probe is not permitted', () => {
     const os = buildOrigins(traceWith([]), { inClusterAllowed: false, inClusterDeniedReason: 'RBAC denies create on jobs' })
     const ic = os.find((o) => o.id === 'incluster')
