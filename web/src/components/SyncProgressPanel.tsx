@@ -60,9 +60,7 @@ export function SyncProgressPanel({
                   <ArrowRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
                 </button>
               ) : k.failed ? (
-                <span className="truncate text-red-400" title="Failed to load within the sync deadline">
-                  {k.kind}
-                </span>
+                <span className="truncate text-red-400">{k.kind} — failed</span>
               ) : (
                 <span className="truncate text-theme-text-tertiary animate-pulse">{k.kind}</span>
               )}
