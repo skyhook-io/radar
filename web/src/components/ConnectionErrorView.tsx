@@ -6,7 +6,7 @@ import { parseContextName } from '../utils/context-name'
 import { useOpenLocalTerminal, ClusterName } from '@skyhook-io/k8s-ui'
 import { useAuthMe, useContexts } from '../api/client'
 import { Tooltip } from './ui/Tooltip'
-import { allShellSafe, isShellSafeAWSProfile } from '../utils/shell-safe'
+import { allShellSafe, awsProfileFlag } from '../utils/shell-safe'
 import { apiUrl } from '../api/config'
 import { useCapabilitiesContext } from '../contexts/CapabilitiesContext'
 
@@ -54,7 +54,7 @@ function getAuthHints(context: string, awsProfile?: string): AuthHints {
       return result
     }
     case 'EKS': {
-      const profileFlag = awsProfile && isShellSafeAWSProfile(awsProfile) ? ` --profile ${awsProfile}` : ''
+      const profileFlag = awsProfileFlag(awsProfile)
       const result: AuthHints = {
         title: 'EKS Authentication Failed',
         hints: [
@@ -66,7 +66,7 @@ function getAuthHints(context: string, awsProfile?: string): AuthHints {
       if (parsed.region && allShellSafe(parsed.clusterName, parsed.region)) {
         result.fallbackCommand = {
           label: 'If that doesn\'t work, refresh cluster credentials:',
-          command: `aws eks update-kubeconfig --name ${parsed.clusterName} --region ${parsed.region}`,
+          command: `aws eks update-kubeconfig --name ${parsed.clusterName} --region ${parsed.region}${profileFlag}`,
         }
       }
       return result
@@ -94,22 +94,29 @@ export function getAuthRejectedHints(context: string, awsProfile?: string): Auth
 
   switch (parsed.provider) {
     case 'EKS': {
-      const profileFlag = awsProfile && isShellSafeAWSProfile(awsProfile) ? ` --profile ${awsProfile}` : ''
+      const profileFlag = awsProfileFlag(awsProfile)
       const result: AuthHints = {
         title: 'EKS Could Not Authenticate This Request',
         hints: [
           'EKS returned HTTP 401, so Kubernetes could not authenticate this request.',
           'The AWS credential may be missing, stale, or revoked, or its IAM principal may not be mapped through an EKS access entry or the cluster\'s legacy aws-auth configuration.',
           'If the credential is current, ask a cluster admin to verify the mapping for the IAM principal used by this context.',
-          'The diagnostic uses the terminal\'s current AWS profile. If the kubeconfig exec block pins AWS_PROFILE or --role-arn, use that profile or role instead.',
+          profileFlag
+            ? 'The commands below use the AWS profile pinned by this context\'s kubeconfig exec block. If it also pins --role-arn, inspect that role instead.'
+            : 'The diagnostic uses the terminal\'s current AWS profile. If the kubeconfig exec block pins AWS_PROFILE or --role-arn, use that profile or role instead.',
           'API and API_AND_CONFIG_MAP modes use access entries; CONFIG_MAP mode uses the aws-auth ConfigMap.',
         ],
-        fallbackCommand: { label: 'If this context uses the current AWS SSO profile, re-login and retry:', command: `aws sso login${profileFlag}` },
+        fallbackCommand: {
+          label: profileFlag ? 'If this profile uses AWS SSO, re-login and retry:' : 'If this context uses the current AWS SSO profile, re-login and retry:',
+          command: `aws sso login${profileFlag}`,
+        },
       }
       if (parsed.region && allShellSafe(parsed.clusterName, parsed.region)) {
         result.authCommand = {
-          label: 'Inspect the caller and authentication mode for the current terminal AWS profile:',
-          command: `aws sts get-caller-identity && aws eks describe-cluster --name ${parsed.clusterName} --region ${parsed.region} --query cluster.accessConfig.authenticationMode --output text`,
+          label: profileFlag
+            ? 'Inspect the caller and authentication mode for the pinned AWS profile:'
+            : 'Inspect the caller and authentication mode for the current terminal AWS profile:',
+          command: `aws sts get-caller-identity${profileFlag} && aws eks describe-cluster --name ${parsed.clusterName} --region ${parsed.region}${profileFlag} --query cluster.accessConfig.authenticationMode --output text`,
         }
         // A diagnostic, not a re-auth — the "Authenticate in terminal" button
         // would misrepresent what running it does.
@@ -194,7 +201,7 @@ function getTimeoutHints(context: string, awsProfile?: string): AuthHints | null
       return result
     }
     case 'EKS': {
-      const profileFlag = awsProfile && isShellSafeAWSProfile(awsProfile) ? ` --profile ${awsProfile}` : ''
+      const profileFlag = awsProfileFlag(awsProfile)
       const result: AuthHints = {
         title: 'Connection Timed Out',
         hints: [...baseHints, 'If the endpoint is reachable, AWS credentials or SSO may need refresh.'],
@@ -203,7 +210,7 @@ function getTimeoutHints(context: string, awsProfile?: string): AuthHints | null
       if (parsed.region && allShellSafe(parsed.clusterName, parsed.region)) {
         result.fallbackCommand = {
           label: 'If that does not work, refresh cluster credentials:',
-          command: `aws eks update-kubeconfig --name ${parsed.clusterName} --region ${parsed.region}`,
+          command: `aws eks update-kubeconfig --name ${parsed.clusterName} --region ${parsed.region}${profileFlag}`,
         }
       }
       return result
