@@ -20,7 +20,7 @@ func TestInitStoreRejectsPostgresWithoutDSN(t *testing.T) {
 	}
 }
 
-func TestInitStoreRejectsPostgresOnConnectionFailure(t *testing.T) {
+func TestInitStoreDegradesPostgresOnConnectionFailure(t *testing.T) {
 	ResetStore()
 	t.Cleanup(ResetStore)
 
@@ -28,11 +28,18 @@ func TestInitStoreRejectsPostgresOnConnectionFailure(t *testing.T) {
 		Type: StoreTypePostgres,
 		DSN:  "postgres://radar:secret@127.0.0.1:1/radar?connect_timeout=1",
 	})
-	if err == nil || !strings.Contains(err.Error(), "PostgreSQL timeline store failed to initialize") {
-		t.Fatalf("InitStore error = %v, want PostgreSQL initialization failure", err)
+	// An unreachable database degrades the timeline alone. Returning an error
+	// here would fail subsystem bring-up and take every cluster view with it.
+	if err != nil {
+		t.Fatalf("InitStore error = %v, want the timeline to degrade instead", err)
 	}
+	// No fallback store: a memory store here would look healthy while quietly
+	// dropping history on the next restart.
 	if GetStore() != nil {
-		t.Fatal("InitStore configured a fallback store for failed PostgreSQL")
+		t.Fatal("InitStore configured a fallback store for unreachable PostgreSQL")
+	}
+	if TimelineUnavailableReason() == "" {
+		t.Fatal("no reason recorded; the failure would be invisible in diagnostics")
 	}
 }
 
@@ -46,14 +53,6 @@ func TestInitStoreRepeatsInitializationErrors(t *testing.T) {
 			name: "postgres missing dsn",
 			cfg:  StoreConfig{Type: StoreTypePostgres},
 			want: "PostgreSQL timeline store requires a DSN",
-		},
-		{
-			name: "postgres connection failure",
-			cfg: StoreConfig{
-				Type: StoreTypePostgres,
-				DSN:  "postgres://radar:secret@127.0.0.1:1/radar?connect_timeout=1",
-			},
-			want: "PostgreSQL timeline store failed to initialize",
 		},
 	}
 
@@ -106,14 +105,14 @@ func TestInitStoreConcurrentWithResetPreservesPostgresError(t *testing.T) {
 		close(start)
 		wg.Wait()
 
-		if initErr == nil {
-			t.Fatalf("iteration %d: concurrent InitStore reported nil for failed PostgreSQL", iteration)
+		if initErr != nil {
+			t.Fatalf("iteration %d: concurrent InitStore failed instead of degrading: %v", iteration, initErr)
 		}
-		if err := InitStore(cfg); err == nil {
-			t.Fatalf("iteration %d: final InitStore reported nil for failed PostgreSQL", iteration)
+		if err := InitStore(cfg); err != nil {
+			t.Fatalf("iteration %d: final InitStore failed instead of degrading: %v", iteration, err)
 		}
 		if GetStore() != nil {
-			t.Fatalf("iteration %d: failed PostgreSQL configured a store", iteration)
+			t.Fatalf("iteration %d: unreachable PostgreSQL configured a store", iteration)
 		}
 	}
 }

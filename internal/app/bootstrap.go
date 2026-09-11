@@ -264,15 +264,8 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 		timeline.ResetMetricsForContextSwitch()
 	}, func() error {
 		if err := timeline.ReinitStore(timelineStoreCfg); err != nil {
-			// PostgreSQL deliberately does not degrade to memory: an operator who
-			// pointed Radar at an external database must not silently get an
-			// in-memory timeline that vanishes on restart. Every other backend
-			// keeps the historical behaviour — warn and continue degraded rather
-			// than fail the whole subsystem bring-up, which would also take down
-			// cluster browsing.
-			if timelineStoreCfg.Type == timeline.StoreTypePostgres {
-				return err
-			}
+			// A timeline that cannot start is a missing feature, not a dead
+			// cluster: failing here would take down every cluster view too.
 			log.Printf("Warning: timeline init failed, continuing degraded: %v", err)
 		}
 		return nil
