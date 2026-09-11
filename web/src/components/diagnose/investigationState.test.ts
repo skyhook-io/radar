@@ -949,6 +949,53 @@ describe("adverse evidence and the healthy-conflict banner", () => {
     }
   });
 
+  // `observe` splits one log stream read by two calls into two groups, so the
+  // explained check deliberately matches a note across groups sharing a kind
+  // and identity. That crossing must not reach forward in time: a later turn
+  // reading the same stream can report a different failure, and the
+  // assessment never saw it.
+  it("refuses a note as explaining a reading captured after the assessment", () => {
+    const logGroup = (id: string, turnIndex: number) => ({
+      id,
+      // Same stream, different calls: what the twin lookup exists for.
+      identity: "logs:current:api-7f6-a:api",
+      kind: "logs",
+      historical: false,
+      latest: {
+        tier: "supporting" as const,
+        relevance: "target" as const,
+        tone: "warning",
+        title: "Error logs",
+        source: { turnIndex },
+      },
+    });
+    const note = (groupId: string, turnIndex: number) => ({
+      role: "benign",
+      placement: "card" as const,
+      claim: "the warmup error clears once the cache fills",
+      groupId,
+      source: { turnIndex },
+    });
+
+    // Two calls in the assessment's own turn read the same stream. The note
+    // sits on one group and explains its twin as well.
+    expect(
+      investigationHealthConflictExplainedBy(
+        { groups: [logGroup("g-a", 0), logGroup("g-b", 0)] },
+        [note("g-a", 0)],
+      ),
+    ).toEqual(["Error logs", "Error logs"]);
+
+    // A later turn reads the same stream and reports a different failure.
+    // The turn-0 note was about something else and must not soften it.
+    expect(
+      investigationHealthConflictExplainedBy(
+        { groups: [logGroup("g-a", 0), logGroup("g-c", 1)] },
+        [note("g-a", 0)],
+      ),
+    ).toBe(null);
+  });
+
   it("counts the intermediate alert tone, which carries every high severity", () => {
     for (const tone of ["warning", "alert", "error"]) {
       expect(

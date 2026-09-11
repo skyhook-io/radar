@@ -353,6 +353,8 @@ interface HealthConflictGroup {
     tier: "key" | "supporting" | "context" | "checked";
     tone: string;
     title?: string;
+    /** Which turn captured this reading; a note cannot explain a later one. */
+    source?: { turnIndex: number };
   };
 }
 
@@ -396,6 +398,7 @@ export function investigationHealthConflictExplainedBy(
         placement: "card" | "revision" | "source";
         claim: string;
         groupId?: string;
+        source?: { turnIndex: number };
       }[]
     | undefined,
 ): string[] | null {
@@ -445,7 +448,17 @@ export function investigationHealthConflictExplainedBy(
         // `rules_out` excludes some other hypothesis and `demoted` says the
         // card is peripheral — both true of a still-active problem — so
         // neither reconciles a healthy verdict with evidence contradicting it.
-        item.role === "benign",
+        item.role === "benign" &&
+        // An assessment cannot have addressed a reading taken after it. The
+        // twin lookup above deliberately crosses calls, because one log
+        // stream read twice lands in two groups; without this, it would also
+        // let a note about an earlier failure explain a different one that
+        // the same stream reported in a later turn.
+        !(
+          group.latest.source !== undefined &&
+          item.source !== undefined &&
+          group.latest.source.turnIndex > item.source.turnIndex
+        ),
     );
     if (!explained) return null;
     titles.push(group.latest.title ?? group.kind);

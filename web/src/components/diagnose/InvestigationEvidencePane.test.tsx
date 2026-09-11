@@ -3150,6 +3150,62 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
     ],
   };
 
+  it("says a window is clean only when changes were actually looked up", () => {
+    const withChanges = render(
+      project(
+        tool("diag", "diagnose", {
+          resource: {
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: { namespace: "shop", name: "api" },
+          },
+          pods: 1,
+          recentChanges: [],
+          metrics: vitals,
+        }),
+      ),
+    );
+    expect(withChanges).toContain(
+      "None of the changes Radar read fall in this window.",
+    );
+
+    // The same chart with no change lookup in the turn must stay silent: an
+    // empty marker list there means nobody looked, not that nothing happened.
+    const withoutChanges = render(
+      project(
+        tool("prom", "query_prometheus", {
+          query:
+            'sum(container_memory_working_set_bytes{namespace="shop",workload="api",workload_type="deployment"})',
+          type: "range",
+          ...window,
+          step: "60s",
+          series: [
+            {
+              labels: {},
+              dataPoints: [
+                { timestamp: Date.parse(window.start) / 1000, value: 1 },
+                { timestamp: Date.parse(window.end) / 1000, value: 2 },
+              ],
+            },
+          ],
+          selectors: [
+            {
+              metric: "container_memory_working_set_bytes",
+              matchers: [
+                { label: "namespace", op: "=", value: "shop" },
+                { label: "workload", op: "=", value: "api" },
+                { label: "workload_type", op: "=", value: "deployment" },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+    expect(withoutChanges).not.toContain(
+      "None of the changes Radar read fall in this window.",
+    );
+  });
+
   it("keeps an uncited diagnose chart in the workload collection and marks the same-turn change on it", () => {
     const projection = project(
       tool("diag", "diagnose", {

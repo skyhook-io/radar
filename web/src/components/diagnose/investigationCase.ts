@@ -38,14 +38,6 @@ export interface InvestigationCaseItem {
   placement: InvestigationCasePlacement;
   groupId?: string;
   observation?: InvestigationEvidenceObservation;
-  /**
-   * Written by the assessment on screen and kept on its card while a
-   * follow-up answer drives the case. It substantiates the verdict the reader
-   * is looking at, so it still orders and promotes that card; it takes no
-   * part in the live turn's ruled-out list, and the explained-conflict check
-   * reads the assessment's own items rather than this merged set.
-   */
-  carried?: boolean;
 }
 
 export interface InvestigationCaseRuledOut {

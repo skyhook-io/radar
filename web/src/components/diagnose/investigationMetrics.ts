@@ -139,7 +139,9 @@ export function metricsUnitForExpression(
     .replace(/\[[^\]]*\]/g, "");
   // Arithmetic, comparison and the set operators all produce something the
   // metric's name no longer describes, or mix two things that disagree.
-  if (/[-+/*%^]|[<>!=]=|[<>]|\b(?:bool|and|or|unless|atan2)\b/.test(expression)) {
+  if (
+    /[-+/*%^]|[<>!=]=|[<>]|\b(?:bool|and|or|unless|atan2)\b/.test(expression)
+  ) {
     return "";
   }
   // An aggregation may put its grouping clause before the parenthesis, as in

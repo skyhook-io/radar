@@ -1522,6 +1522,25 @@ describe("the agent's contribution is one attributed row", () => {
     expect(html).not.toContain("OOMKilled");
   });
 
+  it("says how many were lost rather than repairing them", () => {
+    const html = renderToStaticMarkup(
+      <AssessmentSources unlinkedEvidence={2} onViewSource={onViewSource} />,
+    );
+    expect(html).toContain(
+      "2 agent notes could not be linked to Radar results and are not shown.",
+    );
+    const one = renderToStaticMarkup(
+      <AssessmentSources unlinkedEvidence={1} onViewSource={onViewSource} />,
+    );
+    expect(one).toContain("1 agent note could not be linked");
+    // Nothing lost, nothing said.
+    expect(
+      renderToStaticMarkup(
+        <AssessmentSources unlinkedEvidence={0} onViewSource={onViewSource} />,
+      ),
+    ).toBe("");
+  });
+
   it("says the notes were unreadable when they were not a list at all", () => {
     // There is no count to give here, so the pane states the fact instead of
     // inventing a number.
