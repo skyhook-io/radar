@@ -161,7 +161,15 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     if (!firstConnect || cacheWarmAtMountRef.current) {
       queryClient.invalidateQueries()
     } else {
-      queryClient.invalidateQueries({ predicate: (q) => q.state.status === 'error' })
+      // Detail responses served during the progressive shell are partial —
+      // the server skips relationship computation while the topology cache
+      // is unavailable — and they resolve as successes, so the error-only
+      // sweep would leave an open drawer without its Related Resources
+      // forever (focus refetch is globally off). Refetching the resource
+      // detail keys is at most the open drawer, so it stays cheap.
+      queryClient.invalidateQueries({
+        predicate: (q) => q.state.status === 'error' || q.queryKey[0] === 'resource',
+      })
     }
   }, [queryClient])
 

@@ -10,12 +10,14 @@ import (
 func snapshotCacheGlobals(t *testing.T) {
 	t.Helper()
 	cacheMu.Lock()
-	prevRC, prevSC, prevGen := resourceCache, syncingCache, cacheGeneration
-	resourceCache, syncingCache = nil, nil
+	prevRC, prevSC, prevGen := resourceCache.Load(), syncingCache, cacheGeneration
+	resourceCache.Store(nil)
+	syncingCache = nil
 	cacheMu.Unlock()
 	t.Cleanup(func() {
 		cacheMu.Lock()
-		resourceCache, syncingCache, cacheGeneration = prevRC, prevSC, prevGen
+		resourceCache.Store(prevRC)
+		syncingCache, cacheGeneration = prevSC, prevGen
 		cacheMu.Unlock()
 	})
 }
@@ -72,7 +74,7 @@ func TestPromoteCache_GenerationGuard(t *testing.T) {
 
 	// Stale promotion after a switch must refuse (caller stops the core).
 	cacheMu.Lock()
-	resourceCache = nil
+	resourceCache.Store(nil)
 	cacheMu.Unlock()
 	bumpGen()
 	if promoteCache(w, gen, true) {

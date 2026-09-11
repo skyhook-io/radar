@@ -307,7 +307,12 @@ func (index *secretDataManagerWriteIndex) load(namespace, name string) (secretDa
 }
 
 var (
-	resourceCache *ResourceCache
+	// resourceCache is the promoted singleton. Reads are lock-free (handlers
+	// on hot paths call GetResourceCache constantly, and progressive startup
+	// admits them while promotion is still in flight); writes stay under
+	// cacheMu so promotion, retirement of the mid-sync handle, and the
+	// completion flag move as one lifecycle step.
+	resourceCache atomic.Pointer[ResourceCache]
 	cacheOnce     = new(sync.Once)
 	cacheMu       sync.Mutex
 	// syncingCache is the mid-Phase-1 handle published by OnInformersStarted:
@@ -518,7 +523,7 @@ func promoteCache(wrapped *ResourceCache, gen uint64, syncComplete bool) bool {
 	if cacheGeneration != gen {
 		return false
 	}
-	resourceCache = wrapped
+	resourceCache.Store(wrapped)
 	syncingCache = nil
 	initialSyncComplete.Store(syncComplete)
 	return true
@@ -558,7 +563,7 @@ func parseDebugSyncDelays(raw string) map[string]time.Duration {
 
 // GetResourceCache returns the singleton cache instance.
 func GetResourceCache() *ResourceCache {
-	return resourceCache
+	return resourceCache.Load()
 }
 
 // KindReadiness re-exports the k8score readiness vocabulary for handler use.
@@ -587,7 +592,7 @@ func GetSyncingResourceCache() *ResourceCache {
 func SnapshotCaches() (promoted, syncing *ResourceCache) {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
-	return resourceCache, syncingCache
+	return resourceCache.Load(), syncingCache
 }
 
 // ReadableCacheForKind picks the cache a typed-kind read should serve from:
@@ -621,9 +626,9 @@ func ResetResourceCache() {
 		syncingCache.Stop()
 		syncingCache = nil
 	}
-	if resourceCache != nil {
-		resourceCache.Stop()
-		resourceCache = nil
+	if promoted := resourceCache.Load(); promoted != nil {
+		promoted.Stop()
+		resourceCache.Store(nil)
 	}
 	cacheOnce = new(sync.Once)
 	initialSyncComplete.Store(false)
