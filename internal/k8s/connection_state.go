@@ -68,12 +68,11 @@ func SetConnectionStatus(status ConnectionStatus) {
 	switch status.State {
 	case StateConnected:
 		runtimeAuthRecoveryOwed.Store(false)
+		runtimeNetworkRecoveryOwed.Store(false)
 		resetInconclusiveStreak()
 	case StateDisconnected:
-		if isAuthClassification(status.ErrorType) {
-			runtimeAuthRecoveryOwed.Store(true)
-		}
-		if runtimeAuthRecoveryOwed.Load() {
+		armRecoveryDebt(status.ErrorType)
+		if runtimeRecoveryOwed() {
 			startRuntimeAuthRecovery()
 		}
 	}
