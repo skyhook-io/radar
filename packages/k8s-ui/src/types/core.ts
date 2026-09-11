@@ -516,6 +516,9 @@ export interface ContextInfo {
   /** Source kubeconfig label (e.g. "kube-cluster-paris"). Set by the backend
    *  for contexts loaded through the isolated source registry. */
   source?: string
+  /** AWS profile extracted from the exec plugin's --profile arg or AWS_PROFILE
+   *  env var. Present only for EKS contexts that pin a profile. */
+  awsProfile?: string
 }
 
 // Namespace

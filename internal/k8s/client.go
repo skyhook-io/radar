@@ -1461,6 +1461,35 @@ type ContextInfo struct {
 	// loading; populated for every context — not just colliding ones — so
 	// the dropdown can show provenance even without ambiguity.
 	Source string `json:"source,omitempty"`
+	// AWSProfile is the AWS profile used by this context's exec plugin,
+	// extracted from --profile arg or AWS_PROFILE env var. Set only for
+	// EKS-style exec plugins (aws, aws-iam-authenticator).
+	AWSProfile string `json:"awsProfile,omitempty"`
+}
+
+func extractAWSProfile(ai *clientcmdapi.AuthInfo) string {
+	if ai == nil || ai.Exec == nil {
+		return ""
+	}
+	exec := ai.Exec
+	base := filepath.Base(exec.Command)
+	if base != "aws" && base != "aws-iam-authenticator" {
+		return ""
+	}
+	for i, arg := range exec.Args {
+		if arg == "--profile" && i+1 < len(exec.Args) {
+			return exec.Args[i+1]
+		}
+		if strings.HasPrefix(arg, "--profile=") {
+			return strings.TrimPrefix(arg, "--profile=")
+		}
+	}
+	for _, env := range exec.Env {
+		if env.Name == "AWS_PROFILE" {
+			return env.Value
+		}
+	}
+	return ""
 }
 
 // GetAvailableContexts returns all available contexts from the kubeconfig
@@ -1531,6 +1560,8 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 	fileConfigs := perFileConfigs
 	currentCtx := contextName
 	singlePath := kubeconfigPath
+	activeCtxName := activeSourceName
+	activeConfig := activeSourceConfig
 	clientMu.Unlock()
 	if len(refreshEmptyAIs) > 0 {
 		recordEmptyCommandWarning("kubeconfig-refresh", refreshEmptyAIs)
@@ -1559,6 +1590,16 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 			if !ok || ctx == nil {
 				continue
 			}
+			var awsProfile string
+			// For the active context use the snapshotted config from client
+			// creation so the hint matches the credential actually in use.
+			profileCfg := cfg
+			if qName == currentCtx && activeConfig != nil && activeCtxName == entry.InFileName {
+				profileCfg = activeConfig
+			}
+			if ai := profileCfg.AuthInfos[ctx.AuthInfo]; ai != nil {
+				awsProfile = extractAWSProfile(ai)
+			}
 			contexts = append(contexts, ContextInfo{
 				Name:         qName,
 				OriginalName: entry.InFileName,
@@ -1567,6 +1608,7 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 				Namespace:    ctx.Namespace,
 				IsCurrent:    qName == currentCtx,
 				Source:       kubeconfigSourceLabel(entry.SourceFile),
+				AWSProfile:   awsProfile,
 			})
 		}
 		return contexts, nil
@@ -1593,12 +1635,21 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 	contexts := make([]ContextInfo, 0, len(rawConfig.Contexts))
 	for _, name := range sortedContextNames(&rawConfig) {
 		ctx := rawConfig.Contexts[name]
+		var awsProfile string
+		profileCfg := &rawConfig
+		if name == currentCtx && activeConfig != nil && activeCtxName == name {
+			profileCfg = activeConfig
+		}
+		if ai := profileCfg.AuthInfos[ctx.AuthInfo]; ai != nil {
+			awsProfile = extractAWSProfile(ai)
+		}
 		contexts = append(contexts, ContextInfo{
-			Name:      name,
-			Cluster:   ctx.Cluster,
-			User:      ctx.AuthInfo,
-			Namespace: ctx.Namespace,
-			IsCurrent: name == currentCtx,
+			Name:       name,
+			Cluster:    ctx.Cluster,
+			User:       ctx.AuthInfo,
+			Namespace:  ctx.Namespace,
+			IsCurrent:  name == currentCtx,
+			AWSProfile: awsProfile,
 		})
 	}
 	return contexts, nil
