@@ -1278,14 +1278,20 @@ func fallbackNamespaceCandidatesLocked() []string {
 // explicit --namespace startup flag.
 func SetNamespaceScopeOverride(ns string) {
 	clientMu.Lock()
-	defer clientMu.Unlock()
 	namespaceScopeOverride = ns
+	clientMu.Unlock()
+	// After the write, and outside clientMu: the permissions cache retires a
+	// probe by comparing the generation it captured before reading its inputs,
+	// so retiring first would leave a probe holding the old scope under the new
+	// generation.
+	InvalidateResourcePermissionsCache()
 }
 
 func ClearNamespaceScopeOverride() {
 	clientMu.Lock()
-	defer clientMu.Unlock()
 	namespaceScopeOverride = ""
+	clientMu.Unlock()
+	InvalidateResourcePermissionsCache()
 }
 
 func SetNamespaceScopePreferenceResolver(resolver func(contextName string) (string, bool)) {
