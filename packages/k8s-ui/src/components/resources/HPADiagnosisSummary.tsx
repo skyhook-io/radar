@@ -108,10 +108,17 @@ export function HPADiagnosisSummary({
               key={`${reason.id}-${reason.detail}`}
               className="text-theme-text-tertiary"
             >
-              Kubernetes
-              {reason.conditionType ? ` ${reason.conditionType}` : ""}
-              {reason.conditionReason ? ` · ${reason.conditionReason}` : ""}:
-              &ldquo;{reason.detail}&rdquo;
+              {/* Same rule as the detail variant: only a condition-built
+                  reason carries the controller's own sentence. */}
+              {reason.conditionType ? (
+                <>
+                  Kubernetes {reason.conditionType}
+                  {reason.conditionReason ? ` · ${reason.conditionReason}` : ""}
+                  : &ldquo;{reason.detail}&rdquo;
+                </>
+              ) : (
+                reason.detail
+              )}
             </p>
           ) : null,
         )}
@@ -187,11 +194,21 @@ export function HPADiagnosisSummary({
                   {reason.message}
                 </div>
               )}
-              {reason.detail && (
-                <p className="mt-1 text-xs text-theme-text-tertiary">
-                  Kubernetes: &ldquo;{reason.detail}&rdquo;
-                </p>
-              )}
+              {reason.detail &&
+                // `detail` is the controller's own sentence only on a reason
+                // built from a condition, which is the only kind that carries
+                // a condition type. Elsewhere it is Radar's — a list of metric
+                // names, a note about an unobserved generation — and quoting
+                // that as Kubernetes would put words in its mouth.
+                (reason.conditionType ? (
+                  <p className="mt-1 text-xs text-theme-text-tertiary">
+                    Kubernetes: &ldquo;{reason.detail}&rdquo;
+                  </p>
+                ) : (
+                  <p className="mt-1 text-xs text-theme-text-tertiary">
+                    {reason.detail}
+                  </p>
+                ))}
             </div>
           ))}
         </div>

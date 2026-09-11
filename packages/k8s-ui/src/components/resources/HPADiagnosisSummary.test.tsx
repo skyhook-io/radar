@@ -104,6 +104,41 @@ describe("HPADiagnosisSummary", () => {
     expect(html).toContain("HPA is missing current metric values");
   });
 
+  // `detail` is the controller's sentence only on a condition-built reason.
+  // On the others it is Radar's own — a metric-name list, a note about an
+  // unobserved generation — and quoting it as Kubernetes invents a quote.
+  it("never attributes Radar's own detail to Kubernetes", () => {
+    const radarDetail: HPADiagnosisView = {
+      state: "stale_status",
+      summary: "HPA status has not observed the latest spec generation yet",
+      bounds: { min: 1, max: 10, current: 3, desired: 3 },
+      reasons: [
+        {
+          id: "stale_status",
+          message: "HPA status has not observed the latest spec generation yet",
+          detail: "the controller has recorded no status for generation 7",
+        },
+        {
+          id: "missing_current_metric",
+          message:
+            "HPA status is missing current values for one or more configured metrics",
+          detail: "cpu, memory",
+        },
+      ],
+    } as unknown as HPADiagnosisView;
+
+    for (const variant of ["detail", "inline"] as const) {
+      const html = render(
+        <HPADiagnosisSummary diagnosis={radarDetail} variant={variant} />,
+      );
+      expect(html, variant).toContain(
+        "the controller has recorded no status for generation 7",
+      );
+      expect(html, variant).toContain("cpu, memory");
+      expect(html, variant).not.toContain("Kubernetes");
+    }
+  });
+
   it("attributes the controller condition in the inline variant and lists the rest", () => {
     const html = render(
       <HPADiagnosisSummary
