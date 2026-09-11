@@ -104,12 +104,13 @@ async function fetchPodFilePreview(
   }
 }
 
-// Map a filename to a Monaco language id. Deliberately conservative — Monaco
-// can highlight far more, but names it does not recognise fall to plaintext,
-// which is fine for the preview surface.
+// Map a filename to a Monaco language id. Only ids whose tokenizer the shared
+// runtime registers (see monacoRuntime.ts) — anything else falls to plaintext.
+// JSON goes to the YAML tokenizer: YAML 1.2 is a superset of JSON, and the
+// JSON language would need a validation worker the runtime does not ship.
 export function detectLanguage(fileName: string): string {
   const lower = fileName.toLowerCase()
-  if (lower.endsWith('.json')) return 'json'
+  if (lower.endsWith('.json')) return 'yaml'
   if (lower.endsWith('.yaml') || lower.endsWith('.yml')) return 'yaml'
   if (lower.endsWith('.xml')) return 'xml'
   if (lower.endsWith('.html') || lower.endsWith('.htm')) return 'html'
@@ -119,6 +120,7 @@ export function detectLanguage(fileName: string): string {
   if (lower.endsWith('.py')) return 'python'
   if (lower.endsWith('.sh') || lower.endsWith('.bash')) return 'shell'
   if (lower.endsWith('.md') || lower.endsWith('.markdown')) return 'markdown'
+  if (lower === 'dockerfile' || lower.endsWith('.dockerfile')) return 'dockerfile'
   if (lower.endsWith('.toml')) return 'ini'
   if (lower.endsWith('.ini') || lower.endsWith('.conf') || lower.endsWith('.cfg')) return 'ini'
   return 'plaintext'
