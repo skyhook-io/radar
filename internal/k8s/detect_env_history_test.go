@@ -13,9 +13,12 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
@@ -1041,7 +1044,8 @@ func TestSecretChangeWritesData(t *testing.T) {
 func TestStaleSecretEnvDetectionResolvesWorkloadOwner(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	controller := true
-	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "shop", UID: types.UID("dep")}}
+	deploymentCreatedAt := now.Add(-time.Hour)
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "shop", UID: types.UID("dep"), CreationTimestamp: metav1.NewTime(deploymentCreatedAt)}}
 	replicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
 		Name: "catalog-abc", Namespace: "shop", UID: types.UID("rs"),
 		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: deployment.Name, UID: deployment.UID, Controller: &controller}},
@@ -1057,12 +1061,66 @@ func TestStaleSecretEnvDetectionResolvesWorkloadOwner(t *testing.T) {
 	}
 }
 
+func TestStaleSecretEnvSubjectResolvesRolloutCreation(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+
+	createdAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	controller := true
+	replicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+		Name: "catalog-abc", Namespace: "shop", UID: types.UID("rs"),
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: "argoproj.io/v1alpha1", Kind: "Rollout", Name: "catalog", Controller: &controller}},
+	}}
+	pod := staleSecretEnvPod("catalog-abc-1", createdAt.Add(30*time.Minute), true, secretKeyEnv("DB_PASSWORD", "db-conn", "password"))
+	pod.OwnerReferences = []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: replicaSet.Name, UID: replicaSet.UID, Controller: &controller}}
+	if err := InitTestResourceCache(fake.NewClientset(replicaSet)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	rolloutGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	rollout := &unstructured.Unstructured{}
+	rollout.SetAPIVersion("argoproj.io/v1alpha1")
+	rollout.SetKind("Rollout")
+	rollout.SetNamespace("shop")
+	rollout.SetName("catalog")
+	rollout.SetCreationTimestamp(metav1.NewTime(createdAt))
+	dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(), map[schema.GroupVersionResource]string{rolloutGVR: "RolloutList"}, rollout,
+	)
+	if err := InitTestDynamicResourceCache(dynamicClient, []APIResource{{
+		Group: "argoproj.io", Version: "v1alpha1", Kind: "Rollout", Name: "rollouts", Namespaced: true, Verbs: []string{"list", "watch"},
+	}}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+	dynamicCache := GetDynamicResourceCache()
+	if err := dynamicCache.EnsureWatching(rolloutGVR); err != nil {
+		t.Fatalf("EnsureWatching Rollout: %v", err)
+	}
+	if !dynamicCache.WaitForSync(rolloutGVR, 2*time.Second) {
+		t.Fatal("Rollout cache did not sync")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var subject staleSecretEnvSubject
+	for time.Now().Before(deadline) {
+		subject = staleSecretEnvSubjectForPod(GetResourceCache(), pod)
+		if subject.kind == "Rollout" && subject.created.Equal(createdAt) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if subject.group != "argoproj.io" || subject.kind != "Rollout" || subject.name != "catalog" || !subject.created.Equal(createdAt) {
+		t.Fatalf("Rollout subject = %+v, want exact Rollout identity and creation %v", subject, createdAt)
+	}
+}
+
 func TestStaleSecretEnvReadyWorkloadAggregationAndRolloutSuppression(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	changedAt := now.Add(-time.Minute)
 	startedAt := changedAt.Add(-time.Minute)
 	controller := true
-	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "shop", UID: types.UID("dep")}}
+	deploymentCreatedAt := now.Add(-time.Hour)
+	deployment := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "catalog", Namespace: "shop", UID: types.UID("dep"), CreationTimestamp: metav1.NewTime(deploymentCreatedAt)}}
 	replicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
 		Name: "catalog-abc", Namespace: "shop", UID: types.UID("rs"),
 		OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: deployment.Name, UID: deployment.UID, Controller: &controller}},
@@ -1095,6 +1153,9 @@ func TestStaleSecretEnvReadyWorkloadAggregationAndRolloutSuppression(t *testing.
 		if !strings.Contains(detections[0].Message, "2 Ready pods") || !strings.Contains(detections[0].Message, "2 Secret-backed environment values") ||
 			!strings.Contains(detections[0].Action, "Confirm no rollout") {
 			t.Fatalf("aggregated workload issue is not operationally clear: %+v", detections[0])
+		}
+		if detections[0].AgeSeconds != int64(time.Hour.Seconds()) || !detections[0].ResourceCreatedAt.Equal(deploymentCreatedAt) {
+			t.Fatalf("aggregated workload resource age/context = %q/%v, want 1h/%v", detections[0].Age, detections[0].ResourceCreatedAt, deploymentCreatedAt)
 		}
 	})
 

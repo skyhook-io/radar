@@ -45,7 +45,7 @@ jobs:
       # so release cross-compiles (darwin/windows/arm64) always started cold.
       # A release-scoped key keeps all five targets' build cache warm.
       - name: Release build cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cache/go-build

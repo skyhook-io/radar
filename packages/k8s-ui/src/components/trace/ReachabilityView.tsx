@@ -535,7 +535,7 @@ export function problemRows(
     // entry can carry several findings, and one origin several failed routes.
     // `k` is what `seen` just proved unique, so pairing them is what makes the
     // React key safe rather than each caller having to get it right.
-    rows.push({ ...r, key: `${r.key} ${k}` })
+    rows.push({ ...r, key: `${r.key}\x00${k}` })
   }
   const refNode = (r?: ResourceRef) => (r ? `n:${r.kind}/${r.namespace ?? ''}/${r.name || 'pods'}` : '')
 

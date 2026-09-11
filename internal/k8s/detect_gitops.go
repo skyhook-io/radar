@@ -3,6 +3,7 @@ package k8s
 import (
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -80,18 +81,17 @@ func newArgoDriftTracker() *argoDriftTracker {
 	return &argoDriftTracker{entries: map[types.UID]argoDriftEntry{}}
 }
 
-// observe records the app's current sync state and returns how long it has been
-// continuously OutOfSync. An in-sync observation clears the entry (drift
-// resolved) and returns 0.
-func (t *argoDriftTracker) observe(uid types.UID, outOfSync bool, now time.Time) time.Duration {
+// observe records the app's current sync state and returns the exact first
+// OutOfSync observation. An in-sync observation clears the entry.
+func (t *argoDriftTracker) observe(uid types.UID, outOfSync bool, now time.Time) time.Time {
 	if t == nil || uid == "" {
-		return 0
+		return time.Time{}
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !outOfSync {
 		delete(t.entries, uid)
-		return 0
+		return time.Time{}
 	}
 	e, ok := t.entries[uid]
 	if !ok {
@@ -99,7 +99,7 @@ func (t *argoDriftTracker) observe(uid types.UID, outOfSync bool, now time.Time)
 	}
 	e.lastObserved = now
 	t.entries[uid] = e
-	return now.Sub(e.firstSeen)
+	return e.firstSeen
 }
 
 // purge drops entries not observed within retain, covering apps deleted without
@@ -178,19 +178,23 @@ func DetectGitOpsProblems(dynamicCache *DynamicResourceCache, discovery *Resourc
 	return problems
 }
 
-func gitopsProblem(kind, group, ns, name, severity, reason, message string, age time.Duration) Detection {
+func gitopsProblem(now time.Time, kind, group, ns, name, severity, reason, message string, createdAt time.Time) Detection {
+	var age time.Duration
+	if !createdAt.IsZero() && !createdAt.After(now) {
+		age = now.Sub(createdAt)
+	}
 	return Detection{
-		Kind:            kind,
-		Group:           group,
-		Namespace:       ns,
-		Name:            name,
-		Severity:        severity,
-		Reason:          reason,
-		Message:         message,
-		Age:             FormatAge(age),
-		AgeSeconds:      int64(age.Seconds()),
-		Duration:        FormatAge(age),
-		DurationSeconds: int64(age.Seconds()),
+		Kind:              kind,
+		Group:             group,
+		Namespace:         ns,
+		Name:              name,
+		Severity:          severity,
+		Reason:            reason,
+		Message:           message,
+		Age:               FormatAge(age),
+		AgeSeconds:        int64(age.Seconds()),
+		ResourceCreatedAt: createdAt,
+		OnsetUnknown:      true,
 	}
 }
 
@@ -208,7 +212,7 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 	var out []Detection
 	for _, app := range apps {
 		ns, name := app.GetNamespace(), app.GetName()
-		age := now.Sub(app.GetCreationTimestamp().Time)
+		createdAt := app.GetCreationTimestamp().Time
 		health, _, _ := unstructured.NestedString(app.Object, "status", "health", "status")
 		healthMsg, _, _ := unstructured.NestedString(app.Object, "status", "health", "message")
 		sync, _, _ := unstructured.NestedString(app.Object, "status", "sync", "status")
@@ -231,7 +235,11 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 		// warning; auto-synced apps use it to require SUSTAINED OutOfSync before a
 		// stuck-drift-loop verdict, so a transient post-sync snapshot doesn't trip
 		// a false critical.
-		outOfSyncFor := tracker.observe(app.GetUID(), outOfSync, now)
+		outOfSyncAt := tracker.observe(app.GetUID(), outOfSync, now)
+		var outOfSyncFor time.Duration
+		if !outOfSyncAt.IsZero() {
+			outOfSyncFor = now.Sub(outOfSyncAt)
+		}
 		var manualDriftFor time.Duration
 		if !automated {
 			manualDriftFor = outOfSyncFor
@@ -259,8 +267,11 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 			// present, it holds the actionable guidance — prefer it over a
 			// generic "operation failed" row rather than masking it.
 			if strings.TrimSpace(opMsg) == "" {
-				if ct, cmsg, rawMsg, since, hasSince, ok := argoErrorCondition(app, now); ok {
-					d := gitopsProblem("Application", argoGroup, ns, name, "critical", ct, cmsg, fallbackDuration(since, hasSince, age))
+				if ct, cmsg, rawMsg, transitionAt, hasTransition, ok := argoErrorCondition(app, now); ok {
+					d := gitopsProblem(now, "Application", argoGroup, ns, name, "critical", ct, cmsg, createdAt)
+					if hasTransition {
+						setDetectionOnset(&d, now, transitionAt)
+					}
 					d.RawMessage = rawMsg
 					if ct == "SyncError" {
 						applyArgoOperationDiagnosis(&d, cmsg)
@@ -276,7 +287,10 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 			if strings.TrimSpace(msg) == "" {
 				msg = "Last sync operation failed"
 			}
-			d := gitopsProblem("Application", argoGroup, ns, name, "critical", "OperationFailed", msg, argoOperationIssueAge(app, now, age))
+			d := gitopsProblem(now, "Application", argoGroup, ns, name, "critical", "OperationFailed", msg, createdAt)
+			if transitionAt, ok := argoOperationIssueTime(app, now); ok {
+				setDetectionOnset(&d, now, transitionAt)
+			}
 			d.RawMessage = rawMsg
 			applyArgoOperationDiagnosis(&d, msg)
 			// When there's a structured remediation, that one-click fix IS the
@@ -297,8 +311,8 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 		// conditions below so a Degraded app stays critical-Degraded rather than
 		// reframed as a lower-information condition row.
 		if strings.EqualFold(health, "Degraded") {
-			dd := gitopsProblem("Application", argoGroup, ns, name, "critical",
-				"HealthDegraded", orMsg("Application health is Degraded (managed resources are unhealthy)"), age)
+			dd := gitopsProblem(now, "Application", argoGroup, ns, name, "critical",
+				"HealthDegraded", orMsg("Application health is Degraded (managed resources are unhealthy)"), createdAt)
 			dd.Action = "Open the resource tree and inspect the unhealthy managed resource(s)."
 			out = append(out, dd)
 			continue
@@ -307,8 +321,11 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 		// without a sync operation (so operationState above won't catch them) —
 		// genuine reconciliation failures, critical, with the same condition-
 		// specific guidance the detail page shows.
-		if ct, msg, rawMsg, since, hasSince, ok := argoErrorCondition(app, now); ok {
-			d := gitopsProblem("Application", argoGroup, ns, name, "critical", ct, msg, fallbackDuration(since, hasSince, age))
+		if ct, msg, rawMsg, transitionAt, hasTransition, ok := argoErrorCondition(app, now); ok {
+			d := gitopsProblem(now, "Application", argoGroup, ns, name, "critical", ct, msg, createdAt)
+			if hasTransition {
+				setDetectionOnset(&d, now, transitionAt)
+			}
 			d.RawMessage = rawMsg
 			d.Action = diagnose.ActionForCondition(ct)
 			out = append(out, d)
@@ -317,8 +334,8 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 		if strings.EqualFold(health, "Missing") && automated {
 			// Auto-synced app whose managed resources are GONE is critical — the
 			// declared state isn't running at all.
-			dd := gitopsProblem("Application", argoGroup, ns, name, "critical",
-				"HealthMissing", orMsg("auto-synced Application's managed resources are missing from the cluster"), age)
+			dd := gitopsProblem(now, "Application", argoGroup, ns, name, "critical",
+				"HealthMissing", orMsg("auto-synced Application's managed resources are missing from the cluster"), createdAt)
 			dd.Action = "Sync the Application to recreate its managed resources."
 			out = append(out, dd)
 			continue
@@ -330,15 +347,19 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 			// webhook). Critical and distinct from ordinary drift, where the apply
 			// simply hasn't run.
 			if isArgoStuckDriftLoop(app, now) && outOfSyncFor >= argoStuckDriftMinDuration {
-				d := gitopsProblem("Application", argoGroup, ns, name, "critical",
-					"StuckDriftLoop", "Sync succeeded but the application is still OutOfSync — a controller or admission webhook is likely mutating resources after each apply.", age)
+				d := gitopsProblem(now, "Application", argoGroup, ns, name, "critical",
+					"StuckDriftLoop", "Sync succeeded but the application is still OutOfSync — a controller or admission webhook is likely mutating resources after each apply.", createdAt)
+				setDetectionOnset(&d, now, outOfSyncAt)
 				d.Stuck = true
 				d.Cause = "Auto-sync applied cleanly and reconciled recently, yet live state keeps diverging from Git. Common causes: a mutating admission webhook adds defaults Argo isn't told to ignore; a sibling controller (Karpenter, Istio, cert-manager) writes back into spec; or a conversion webhook rewrites a deprecated API schema."
 				d.Action = "Open Changes to see the per-resource drift, then match it against your Git manifest, the resource's controller, and any mutating webhooks."
 				out = append(out, d)
 			} else {
-				dd := gitopsProblem("Application", argoGroup, ns, name, "high",
-					"OutOfSync", "auto-synced Application has drifted from the desired manifests", age)
+				dd := gitopsProblem(now, "Application", argoGroup, ns, name, "high",
+					"OutOfSync", "auto-synced Application has drifted from the desired manifests", createdAt)
+				if outOfSyncFor > 0 {
+					setDetectionOnset(&dd, now, outOfSyncAt)
+				}
 				dd.Action = "Review the diff, then fix Git (or ignoreDifferences / the mutating controller) and refresh; check Argo events if it keeps drifting."
 				out = append(out, dd)
 			}
@@ -348,11 +369,9 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 		// has persisted past manualDriftGate — long enough to be a forgotten
 		// change rather than one mid-review.
 		if !automated && outOfSync && manualDriftFor >= manualDriftGate {
-			dd := gitopsProblem("Application", argoGroup, ns, name, "warning", "OutOfSyncManual",
-				fmt.Sprintf("Application has been out of sync for %s and auto-sync is not enabled", FormatAge(manualDriftFor)), age)
-			// Anchor FirstSeen to drift onset, not resource age.
-			dd.DurationSeconds = int64(manualDriftFor.Seconds())
-			dd.Duration = FormatAge(manualDriftFor)
+			dd := gitopsProblem(now, "Application", argoGroup, ns, name, "warning", "OutOfSyncManual",
+				fmt.Sprintf("Application has been out of sync for %s and auto-sync is not enabled", FormatAge(manualDriftFor)), createdAt)
+			setDetectionOnset(&dd, now, outOfSyncAt)
 			dd.Action = "Review the drift in Changes, then Sync the application (or enable auto-sync) if the drift is unintended."
 			out = append(out, dd)
 		}
@@ -369,33 +388,34 @@ func applyArgoOperationDiagnosis(d *Detection, msg string) {
 	d.Stuck = parsed.Stuck
 }
 
-func argoOperationIssueAge(app *unstructured.Unstructured, now time.Time, fallback time.Duration) time.Duration {
+func argoOperationIssueTime(app *unstructured.Unstructured, now time.Time) (time.Time, bool) {
 	if finishedAt, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "finishedAt"); finishedAt != "" {
-		if d, ok := durationFromTimestamp(now, finishedAt); ok {
-			return d
+		if t, ok := timestampAtOrBefore(now, finishedAt); ok {
+			return t, true
 		}
 	}
 	if startedAt, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "startedAt"); startedAt != "" {
-		if d, ok := durationFromTimestamp(now, startedAt); ok {
-			return d
+		if t, ok := timestampAtOrBefore(now, startedAt); ok {
+			return t, true
 		}
 	}
-	return fallback
+	return time.Time{}, false
+}
+
+func timestampAtOrBefore(now time.Time, ts string) (time.Time, bool) {
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil || t.After(now) {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 func durationFromTimestamp(now time.Time, ts string) (time.Duration, bool) {
-	t, err := time.Parse(time.RFC3339, ts)
-	if err != nil || t.After(now) {
+	t, ok := timestampAtOrBefore(now, ts)
+	if !ok {
 		return 0, false
 	}
 	return now.Sub(t), true
-}
-
-func fallbackDuration(d time.Duration, ok bool, fallback time.Duration) time.Duration {
-	if ok {
-		return d
-	}
-	return fallback
 }
 
 // isArgoStuckDriftLoop reports the "applied but still drifting" case: the last
@@ -445,10 +465,10 @@ func argoIsAutomated(app *unstructured.Unstructured) bool {
 // an error (ComparisonError / InvalidSpecError / SyncError). Argo writes these
 // as {type, message} without a status field, so FindFalseCondition can't match
 // them.
-func argoErrorCondition(app *unstructured.Unstructured, now time.Time) (condType, message, rawMessage string, since time.Duration, hasSince bool, found bool) {
+func argoErrorCondition(app *unstructured.Unstructured, now time.Time) (condType, message, rawMessage string, transitionAt time.Time, hasTransition bool, found bool) {
 	conds, ok, _ := unstructured.NestedSlice(app.Object, "status", "conditions")
 	if !ok {
-		return "", "", "", 0, false, false
+		return "", "", "", time.Time{}, false, false
 	}
 	for _, c := range conds {
 		cm, ok := c.(map[string]any)
@@ -461,11 +481,11 @@ func argoErrorCondition(app *unstructured.Unstructured, now time.Time) (condType
 			msg, _ := cm["message"].(string)
 			msg, rawMsg := diagnose.CleanArgoControllerMessageWithRaw(msg)
 			ts, _ := cm["lastTransitionTime"].(string)
-			since, hasSince := durationFromTimestamp(now, ts)
-			return ct, msg, rawMsg, since, hasSince, true
+			transitionAt, hasTransition := timestampAtOrBefore(now, ts)
+			return ct, msg, rawMsg, transitionAt, hasTransition, true
 		}
 	}
-	return "", "", "", 0, false, false
+	return "", "", "", time.Time{}, false, false
 }
 
 // detectFluxProblems flags Flux Kustomizations/HelmReleases whose Ready condition
@@ -481,20 +501,16 @@ func detectFluxProblems(items []*unstructured.Unstructured, kind, group string, 
 		if suspend, ok, _ := unstructured.NestedBool(obj.Object, "spec", "suspend"); ok && suspend {
 			continue
 		}
-		_, reason, msg, since, ok := conditions.FindFalseCondition(obj, "Ready")
-		if !ok || conditions.IsInProgressForIssues(reason) {
+		condition, ok := conditions.FindFalseConditionWithTime(obj, "Ready")
+		if !ok || conditions.IsInProgressForIssues(condition.Reason) {
 			continue
 		}
+		reason, msg := condition.Reason, condition.Message
 		// status.conditions stale relative to spec → mid-reconcile, not failed.
 		if gen := obj.GetGeneration(); gen > 0 {
 			if observed, ok, _ := unstructured.NestedInt64(obj.Object, "status", "observedGeneration"); ok && observed > 0 && observed < gen {
 				continue
 			}
-		}
-		age := now.Sub(obj.GetCreationTimestamp().Time)
-		d := since
-		if d == 0 {
-			d = age
 		}
 		displayReason := reason
 		if displayReason == "" {
@@ -503,11 +519,10 @@ func detectFluxProblems(items []*unstructured.Unstructured, kind, group string, 
 		// A Flux Ready=False for a genuine (non-in-progress) reason is a real
 		// reconciliation failure — critical, aligning Issues with the GitOps
 		// detail view instead of under-ranking it as a warning.
-		p := gitopsProblem(kind, group, obj.GetNamespace(), obj.GetName(), "critical", displayReason, msg, age)
-		p.DurationSeconds = int64(d.Seconds())
-		p.Duration = FormatAge(d)
-		if since > 0 {
-			timingR := IssueTimingFromConditionLTT(now.Add(-since), obj.GetCreationTimestamp().Time, "condition")
+		p := gitopsProblem(now, kind, group, obj.GetNamespace(), obj.GetName(), "critical", displayReason, msg, obj.GetCreationTimestamp().Time)
+		if condition.HasLastTransitionTime {
+			setDetectionOnset(&p, now, condition.LastTransitionTime)
+			timingR := IssueTimingFromConditionLTT(condition.LastTransitionTime, obj.GetCreationTimestamp().Time, "condition")
 			p.IssueTiming, p.IssueTimingBasis = timingR.IssueTiming, timingR.Basis
 		}
 		p.Action = diagnose.ActionForFluxReason(reason)
@@ -527,6 +542,7 @@ type argoControllerHealth struct {
 	subjectKind      string
 	subjectName      string
 	subjectNamespace string
+	subjectCreatedAt time.Time
 }
 
 func (h argoControllerHealth) healthy() bool { return h.ready >= 1 }
@@ -544,19 +560,24 @@ func detectArgoStaleFromCache(cache *ResourceCache, apps []*unstructured.Unstruc
 	return detectArgoStale(apps, ctrl, threshold, now)
 }
 
-// maxReconcileStaleness returns the largest now-lastReconcile across apps (0 when
-// none carry a timestamp). It's stamped as the rollup's Age so the issues layer
-// anchors FirstSeen to the oldest reconcile — when the freeze began — instead of
-// resetting it to the compose time on every poll (which makes a chronic outage
-// keep sorting as brand new). See resourceAge in detect.go for the same pattern.
-func maxReconcileStaleness(now time.Time, apps []*unstructured.Unstructured) time.Duration {
-	var max time.Duration
+// staleMajorityOnset returns when enough Applications had crossed the
+// staleness threshold for the fleet-majority condition to become true.
+func staleMajorityOnset(now time.Time, apps []*unstructured.Unstructured, eligibleCount int, threshold time.Duration) time.Time {
+	onsets := make([]time.Time, 0, len(apps))
 	for _, app := range apps {
-		if since, ok := durationFromTimestamp(now, argoReconciledAt(app)); ok && since > max {
-			max = since
+		if reconciledAt, ok := timestampAtOrBefore(now, argoReconciledAt(app)); ok {
+			onset := reconciledAt.Add(threshold)
+			if !onset.After(now) {
+				onsets = append(onsets, onset)
+			}
 		}
 	}
-	return max
+	majorityIndex := eligibleCount / 2
+	if majorityIndex >= len(onsets) {
+		return time.Time{}
+	}
+	sort.Slice(onsets, func(i, j int) bool { return onsets[i].Before(onsets[j]) })
+	return onsets[majorityIndex]
 }
 
 // detectArgoStale applies the two-level staleness verdict. Level one: if the
@@ -570,9 +591,9 @@ func detectArgoStale(apps []*unstructured.Unstructured, ctrl argoControllerHealt
 		return nil
 	}
 	if ctrl.visible && !ctrl.healthy() {
-		d := gitopsProblem(ctrl.subjectKind, argoControllerGroup(ctrl.subjectKind), ctrl.subjectNamespace, ctrl.subjectName,
+		d := gitopsProblem(now, ctrl.subjectKind, argoControllerGroup(ctrl.subjectKind), ctrl.subjectNamespace, ctrl.subjectName,
 			"critical", "GitOpsControllerStalled",
-			fmt.Sprintf("Argo CD application-controller is not running — sync status and drift detection are frozen for %s", countApps(len(apps))), maxReconcileStaleness(now, apps))
+			fmt.Sprintf("Argo CD application-controller is not running — sync status and drift detection are frozen for %s", countApps(len(apps))), ctrl.subjectCreatedAt)
 		d.Stuck = true
 		d.Action = "Inspect the application-controller pods (logs, restarts, resource limits) — no Application will sync or re-compare until it is running again."
 		return []Detection{d}
@@ -596,20 +617,22 @@ func detectArgoStale(apps []*unstructured.Unstructured, ctrl argoControllerHealt
 	// >=3 floor keeps a tiny fleet (where one stale app is not a fleet signal)
 	// on the per-app path.
 	if ctrl.healthy() && len(eligible) >= 3 && len(stale)*2 > len(eligible) {
-		d := gitopsProblem(ctrl.subjectKind, argoControllerGroup(ctrl.subjectKind), ctrl.subjectNamespace, ctrl.subjectName,
+		d := gitopsProblem(now, ctrl.subjectKind, argoControllerGroup(ctrl.subjectKind), ctrl.subjectNamespace, ctrl.subjectName,
 			"warning", "GitOpsComparisonsStale",
-			fmt.Sprintf("%d of %d Applications have stale sync/drift comparisons — the application-controller may be overloaded or wedged", len(stale), len(eligible)), maxReconcileStaleness(now, stale))
+			fmt.Sprintf("%d of %d Applications have stale sync/drift comparisons — the application-controller may be overloaded or wedged", len(stale), len(eligible)), ctrl.subjectCreatedAt)
+		setDetectionOnset(&d, now, staleMajorityOnset(now, stale, len(eligible), threshold))
 		d.Action = "Check the application-controller for reconcile backlog or throttling; individual Applications' verdicts are older than expected."
 		return []Detection{d}
 	}
 	out := make([]Detection, 0, len(stale))
 	for _, app := range stale {
 		since, _ := durationFromTimestamp(now, argoReconciledAt(app))
-		d := gitopsProblem("Application", argoGroup, app.GetNamespace(), app.GetName(),
+		d := gitopsProblem(now, "Application", argoGroup, app.GetNamespace(), app.GetName(),
 			"warning", "ComparisonStale",
-			fmt.Sprintf("Sync and drift status may be stale — last re-compared %s ago (the application-controller has not re-evaluated this Application recently)", FormatAge(since)), 0)
-		d.DurationSeconds = int64(since.Seconds())
-		d.Duration = FormatAge(since)
+			fmt.Sprintf("Sync and drift status may be stale — last re-compared %s ago (the application-controller has not re-evaluated this Application recently)", FormatAge(since)), app.GetCreationTimestamp().Time)
+		if reconciledAt, ok := timestampAtOrBefore(now, argoReconciledAt(app)); ok {
+			setDetectionOnset(&d, now, reconciledAt.Add(threshold))
+		}
 		d.Action = "Refresh the Application to force a re-comparison; if it stays stale, check the application-controller health."
 		out = append(out, d)
 	}
@@ -668,29 +691,46 @@ func argoControllerHealthFromCache(cache *ResourceCache) argoControllerHealth {
 			h.ready++
 		}
 	}
-	h.subjectKind, h.subjectName, h.subjectNamespace = argoControllerSubject(cache, pods)
+	h.subjectKind, h.subjectName, h.subjectNamespace, h.subjectCreatedAt = argoControllerSubject(cache, pods)
 	return h
 }
 
 // argoControllerSubject resolves the controller workload the pods roll up to
 // (StatefulSet in the standard install, Deployment via ReplicaSet in some),
 // falling back to a concrete pod so the rollup issue always has a subject.
-func argoControllerSubject(cache *ResourceCache, pods []*corev1.Pod) (kind, name, namespace string) {
+func argoControllerSubject(cache *ResourceCache, pods []*corev1.Pod) (kind, name, namespace string, createdAt time.Time) {
 	for _, p := range pods {
 		ref := metav1.GetControllerOf(p)
 		if ref == nil {
 			continue
 		}
 		switch ref.Kind {
-		case "StatefulSet", "Deployment":
-			return ref.Kind, ref.Name, p.Namespace
+		case "StatefulSet":
+			if lister := cache.StatefulSets(); lister != nil {
+				if sts, err := lister.StatefulSets(p.Namespace).Get(ref.Name); err == nil {
+					return ref.Kind, ref.Name, p.Namespace, sts.CreationTimestamp.Time
+				}
+			}
+			return ref.Kind, ref.Name, p.Namespace, p.CreationTimestamp.Time
+		case "Deployment":
+			if lister := cache.Deployments(); lister != nil {
+				if dep, err := lister.Deployments(p.Namespace).Get(ref.Name); err == nil {
+					return ref.Kind, ref.Name, p.Namespace, dep.CreationTimestamp.Time
+				}
+			}
+			return ref.Kind, ref.Name, p.Namespace, p.CreationTimestamp.Time
 		case "ReplicaSet":
 			if dName, ok := deploymentForReplicaSet(cache, p.Namespace, ref.Name); ok {
-				return "Deployment", dName, p.Namespace
+				if lister := cache.Deployments(); lister != nil {
+					if dep, err := lister.Deployments(p.Namespace).Get(dName); err == nil {
+						return "Deployment", dName, p.Namespace, dep.CreationTimestamp.Time
+					}
+				}
+				return "Deployment", dName, p.Namespace, p.CreationTimestamp.Time
 			}
 		}
 	}
-	return "Pod", pods[0].Name, pods[0].Namespace
+	return "Pod", pods[0].Name, pods[0].Namespace, pods[0].CreationTimestamp.Time
 }
 
 func deploymentForReplicaSet(cache *ResourceCache, namespace, rsName string) (string, bool) {

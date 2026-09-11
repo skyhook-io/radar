@@ -47,8 +47,8 @@ export function IstioServiceEntryRenderer({ data }: IstioServiceEntryRendererPro
             <span className={clsx(
               'badge',
               location === 'MESH_EXTERNAL'
-                ? 'bg-orange-500/20 text-orange-400'
-                : 'bg-blue-500/20 text-blue-400'
+                ? 'status-orange'
+                : 'status-blue'
             )}>
               {location}
             </span>

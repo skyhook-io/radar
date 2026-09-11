@@ -20,7 +20,7 @@ func TestRESTRelatedIssuesAuthorizeNodeClassSubject(t *testing.T) {
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("get", karpenter.Group, "nodepools", "", true)
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
-	s.permCache.Set("alice", perms)
+	s.permCache.Set("alice", nil, perms)
 	r := requestWithUser(http.MethodGet, "/api/issues/resource/nodepool/_/compute", &auth.User{Username: "alice"})
 	access := s.issueRelatedResourceAccess(r)
 
@@ -47,7 +47,7 @@ func TestRESTRelatedIssuesAuthorizeMissingNodeClassEvidence(t *testing.T) {
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("get", karpenter.Group, "nodepools", "", true)
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
-	s.permCache.Set("alice", perms)
+	s.permCache.Set("alice", nil, perms)
 	r := requestWithUser(http.MethodGet, "/api/issues/resource/nodepool/_/compute", &auth.User{Username: "alice"})
 	access := s.issueRelatedResourceAccess(r)
 	pool := issues.Ref{Group: karpenter.Group, Kind: karpenter.NodePoolKind, Name: "compute"}

@@ -230,7 +230,7 @@ func TestGitopsRequestHasNamespaceAccess(t *testing.T) {
 
 func TestFilterGitOpsTreeForUserAppliesNamespaceAndClusterScope(t *testing.T) {
 	s := &Server{permCache: auth.NewPermissionCache()}
-	s.permCache.Set("gitops-tree-user", &auth.UserPermissions{AllowedNamespaces: []string{"team-a"}})
+	s.permCache.Set("gitops-tree-user", nil, &auth.UserPermissions{AllowedNamespaces: []string{"team-a"}})
 	req := &gitopsRequest{AllowedNamespaces: []string{"team-a"}}
 	tree := &gitopstree.ResourceTree{
 		Root: gitopstree.Node{ID: "root", Role: gitopstree.RoleRoot, Ref: gitopstree.ResourceRef{Kind: "Application", Namespace: "argocd", Name: "app"}},

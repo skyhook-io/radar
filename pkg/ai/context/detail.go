@@ -74,20 +74,12 @@ func pruneSpecElements(m map[string]any) {
 }
 
 func minifySecretDetail(secret *corev1.Secret) map[string]any {
-	keys := make([]string, 0, len(secret.Data)+len(secret.StringData))
-	for k := range secret.Data {
-		keys = append(keys, k)
-	}
-	for k := range secret.StringData {
-		keys = append(keys, k)
-	}
-
 	result := map[string]any{
 		"kind":      "Secret",
 		"name":      secret.Name,
 		"namespace": secret.Namespace,
 		"type":      string(secret.Type),
-		"keys":      keys,
+		"keys":      secretKeyNames(secret),
 	}
 
 	if len(secret.Labels) > 0 {

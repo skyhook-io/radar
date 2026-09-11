@@ -96,3 +96,14 @@ func TestNativeHelmReleaseIssues(t *testing.T) {
 		t.Fatalf("pending issue = %#v", pending)
 	}
 }
+
+func TestNativeHelmReleaseIssueWithoutTimestampHasUnknownOnset(t *testing.T) {
+	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
+	got := NativeHelmReleaseIssues([]helm.HelmRelease{{
+		Name: "failed", Namespace: "apps",
+		LastOperation: &helm.HelmOperation{Kind: helmhistory.KindReleaseFailed, Status: helmhistory.StatusFailed},
+	}}, now)
+	if len(got) != 1 || !got[0].OnsetUnknown || !got[0].FirstSeen.IsZero() || !got[0].LastSeen.Equal(now) {
+		t.Fatalf("timestamp-less Helm issue fabricated onset: %+v", got)
+	}
+}

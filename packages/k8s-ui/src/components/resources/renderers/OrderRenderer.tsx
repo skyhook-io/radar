@@ -6,17 +6,17 @@ import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 function getOrderStateBadge(state: string): { color: string; text: string } {
   switch (state?.toLowerCase()) {
     case 'valid':
-      return { text: 'Valid', color: 'bg-green-500/20 text-green-400' }
+      return { text: 'Valid', color: 'status-green' }
     case 'ready':
-      return { text: 'Ready', color: 'bg-blue-500/20 text-blue-400' }
+      return { text: 'Ready', color: 'status-blue' }
     case 'pending':
-      return { text: 'Pending', color: 'bg-yellow-500/20 text-yellow-400' }
+      return { text: 'Pending', color: 'status-amber' }
     case 'invalid':
-      return { text: 'Invalid', color: 'bg-red-500/20 text-red-400' }
+      return { text: 'Invalid', color: 'status-red' }
     case 'expired':
-      return { text: 'Expired', color: 'bg-red-500/20 text-red-400' }
+      return { text: 'Expired', color: 'status-red' }
     case 'errored':
-      return { text: 'Errored', color: 'bg-red-500/20 text-red-400' }
+      return { text: 'Errored', color: 'status-red' }
     default:
       return { text: state || 'Unknown', color: BADGE_INACTIVE }
   }

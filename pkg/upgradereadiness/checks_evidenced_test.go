@@ -105,7 +105,7 @@ func TestNodeCompatibilityEvidence(t *testing.T) {
 
 	input = completeInput()
 	input.Nodes[0].Status.NodeInfo.OperatingSystem = "windows"
-	input.NodeRuntimeEvidence[0] = NodeRuntimeEvidence{NodeName: input.Nodes[0].Name}
+	input.NodeRuntimeEvidence = nil
 	result, _ = Scan(input, "1.34", "1.35")
 	cgroup = checkByID(t, result, "node-cgroup-v1")
 	if cgroup.Status != CheckNotApplicable || cgroup.Inspected != 0 {
@@ -357,6 +357,7 @@ func TestAdmissionWebhookConfigurationWithoutWebhooksIsInspectedEmpty(t *testing
 func TestAdmissionWebhookConfigurationPartialRBACPreservesReadableEvidence(t *testing.T) {
 	input := completeInput()
 	input.AdmissionWebhookUnavailableKinds = []string{"mutatingwebhookconfigurations"}
+	input.AdmissionWebhookDeniedKinds = []string{"mutatingwebhookconfigurations"}
 	input.AdmissionWebhookConfigurations = []*unstructured.Unstructured{{Object: map[string]any{
 		"apiVersion": "admissionregistration.k8s.io/v1", "kind": "ValidatingWebhookConfiguration", "metadata": map[string]any{"name": "policy"},
 		"webhooks": []any{map[string]any{"name": "policy.example", "matchPolicy": "Exact"}},
@@ -364,8 +365,60 @@ func TestAdmissionWebhookConfigurationPartialRBACPreservesReadableEvidence(t *te
 
 	check := scanAdmissionWebhookReadiness(input)
 	finalizeCheck(&check)
-	if check.Status != CheckReview || len(check.Findings) != 1 || !strings.Contains(check.Caveat, "mutatingwebhookconfigurations") {
+	if check.Status != CheckReview || len(check.Findings) != 1 || strings.Count(check.Caveat, "mutatingwebhookconfigurations") != 1 || !strings.Contains(check.Caveat, "current identity cannot list them") || !strings.Contains(check.Caveat, "grant list access") {
 		t.Fatalf("partially readable admission configurations = %+v, want readable findings plus a coverage caveat", check)
+	}
+}
+
+func TestAdmissionWebhookTransientFailureDoesNotSuggestRBAC(t *testing.T) {
+	input := completeInput()
+	input.AdmissionWebhookUnavailableKinds = []string{"mutatingwebhookconfigurations"}
+
+	check := scanAdmissionWebhookReadiness(input)
+	if !strings.Contains(check.Caveat, "mutatingwebhookconfigurations") || strings.Contains(check.Caveat, "current identity") || strings.Contains(check.Caveat, "grant list access") {
+		t.Fatalf("transient admission failure caveat = %q, want unattributed unavailable evidence", check.Caveat)
+	}
+}
+
+func TestAdmissionWebhookUnavailableWithoutPermissionEvidenceStaysGeneric(t *testing.T) {
+	input := completeInput()
+	input.AdmissionWebhookConfigurations = nil
+
+	check := scanAdmissionWebhookReadiness(input)
+	if check.Status != CheckUnknown || !strings.Contains(check.Caveat, "could not be inspected") || strings.Contains(check.Caveat, "rbac.viewWebhooks") {
+		t.Fatalf("unattributed admission configuration failure = %+v, want a generic coverage caveat", check)
+	}
+}
+
+func TestNodeRuntimeCoverageExplainsMissingNodeProxyPermission(t *testing.T) {
+	input := completeInput()
+	input.NodeProxyForbidden = true
+	input.NodeRuntimeEvidence = nil
+
+	result, err := Scan(input, "1.34", "1.37")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"node-cgroup-v1", "container-runtime-support", "removed-feature-gates", "kubelet-event-qps-change", "selinux-mount-transition"} {
+		check := checkByID(t, result, id)
+		if !strings.Contains(check.Caveat, "nodes/proxy request was forbidden") || !strings.Contains(check.Caveat, "grant the current identity get access to nodes/proxy") {
+			t.Fatalf("%s caveat = %q, want actionable nodes/proxy RBAC attribution", id, check.Caveat)
+		}
+		if id == "container-runtime-support" && check.Inspected != 0 {
+			t.Fatalf("%s inspected = %d, want zero when all runtime evidence is unavailable", id, check.Inspected)
+		}
+	}
+}
+
+func TestNodeRuntimeCoverageDoesNotBlameNodeProxyWhenNodesAreUnavailable(t *testing.T) {
+	input := completeInput()
+	input.Nodes = nil
+	input.NodeProxyForbidden = true
+	input.NodeRuntimeEvidence = nil
+
+	check := checkByID(t, scan137(t, input), "selinux-mount-transition")
+	if strings.Contains(check.Caveat, "nodes/proxy") {
+		t.Fatalf("SELinux caveat = %q, must not attribute missing Node list evidence to nodes/proxy", check.Caveat)
 	}
 }
 

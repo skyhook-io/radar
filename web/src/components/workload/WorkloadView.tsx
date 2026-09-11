@@ -24,6 +24,7 @@ import {
   isDiagnoseKind,
   isRolloutKind,
   canSetWorkloadImages,
+  isCoreBatchJob,
   type ManagedImageSource,
   type WorkloadImageTarget,
 } from '@skyhook-io/k8s-ui'
@@ -31,6 +32,8 @@ import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resou
 import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships } from '../../types'
 import {
   kindToPlural,
+  kindToPluralWithGroup,
+  apiVersionToGroup,
   pluralToKind,
   relatedResourcePath,
   buildWorkloadPath,
@@ -137,7 +140,6 @@ import { cleanYamlForDuplicate } from '../../utils/skeleton-yaml'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useCompareLauncher } from '../compare/useCompareLauncher'
 import { useDiagnoseCustomization } from '../../context/DiagnoseCustomization'
-import { apiVersionToGroup } from '../../utils/navigation'
 
 type TabType = WorkloadTabType
 const BATCH_EXECUTION_KINDS = new Set([
@@ -495,7 +497,7 @@ export function WorkloadView({
   ...rest
 }: WorkloadViewProps) {
   const [searchParams, setSearchParams] = useSearchParams()
-  const apiKind = kindToPlural(kindProp)
+  const apiKind = kindToPluralWithGroup(kindProp, rest.group ?? '')
   const queryClient = useQueryClient()
   const [imageTargetOwnership, setImageTargetOwnership] =
     useState<ImageTargetOwnershipContext | null>(null)
@@ -537,7 +539,8 @@ export function WorkloadView({
   )
 
   const batchKind = pluralToKind(apiKind)
-  const batchExecution = BATCH_EXECUTION_KINDS.has(batchKind)
+  const batchExecution = BATCH_EXECUTION_KINDS.has(batchKind) &&
+    (batchKind !== 'Job' || isCoreBatchJob(apiKind, rest.group))
   const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
     refetchActive: true,
     clusterScoped: batchKind === 'ClusterWorkflowTemplate',
@@ -624,7 +627,7 @@ export function WorkloadView({
     [relationships, relationshipGitopsOwner, apiKind, namespace, name, rest.group],
   )
   const inheritedGitOpsResponse = useResourceWithRelationships<any>(
-    inheritedGitOpsLookupRef ? kindToPlural(inheritedGitOpsLookupRef.kind) : '',
+    inheritedGitOpsLookupRef ? kindToPluralWithGroup(inheritedGitOpsLookupRef.kind, inheritedGitOpsLookupRef.group ?? '') : '',
     inheritedGitOpsLookupRef?.namespace ?? '',
     inheritedGitOpsLookupRef?.name ?? '',
     inheritedGitOpsLookupRef?.group,
@@ -964,7 +967,7 @@ export function WorkloadView({
       )
       const inheritedResponse = inheritedRef
         ? await fetchRelationships(
-            kindToPlural(inheritedRef.kind),
+            kindToPluralWithGroup(inheritedRef.kind, inheritedRef.group ?? ''),
             inheritedRef.namespace,
             inheritedRef.name,
             inheritedRef.group,
@@ -1083,7 +1086,7 @@ export function WorkloadView({
   const servingRefs = useMemo(() => collectServingRefs(relationships), [relationships])
   const servingQueries = useQueries({
     queries: servingRefs.map((ref) => {
-      const pluralKind = kindToPlural(ref.kind)
+      const pluralKind = kindToPluralWithGroup(ref.kind, ref.group ?? '')
       const ns = ref.namespace || '_'
       const params = new URLSearchParams()
       if (ref.group) params.set('group', ref.group)
@@ -1174,12 +1177,15 @@ export function WorkloadView({
         renderLogsTab={(props) => (
           <LogsTabContent
             {...props}
+            group={effectiveGroup}
             selectedRunKey={selectedRunKey}
             onSelectRun={handleSelectedRunChange}
           />
         )}
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res }) =>
-          BATCH_EXECUTION_KINDS.has(k) && res ? (
+          BATCH_EXECUTION_KINDS.has(k) &&
+          (k !== 'Job' || isCoreBatchJob(apiKind, effectiveGroup)) &&
+          res ? (
             <BatchExecutionFullscreen
               kind={k}
               apiKind={apiKind}
@@ -1275,7 +1281,7 @@ export function WorkloadView({
               rest.onNavigateToResource
                 ? (ref) =>
                     rest.onNavigateToResource?.({
-                      kind: kindToPlural(ref.kind),
+                      kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
                       namespace: ref.namespace ?? '',
                       name: ref.name,
                       group: ref.group ?? '',
@@ -1303,11 +1309,12 @@ export function WorkloadView({
         initialYaml={duplicateYaml}
         title="Duplicate Resource"
         onCreated={(result) => {
+          const group = apiVersionToGroup(result.apiVersion)
           rest.onNavigateToResource?.({
-            kind: kindToPlural(result.kind),
+            kind: kindToPluralWithGroup(result.kind, group),
             namespace: result.namespace,
             name: result.name,
-            group: '',
+            group,
           })
         }}
       />
@@ -1458,7 +1465,8 @@ function nativeHelmOwnerFromRelationships(
 
 function isCurrentResource(ref: ResourceRef, current: ResourceRef): boolean {
   return (
-    kindToPlural(ref.kind) === kindToPlural(current.kind) &&
+    kindToPluralWithGroup(ref.kind, ref.group ?? '') ===
+      kindToPluralWithGroup(current.kind, current.group ?? '') &&
     ref.namespace === current.namespace &&
     ref.name === current.name &&
     (ref.group ?? '') === (current.group ?? '')
@@ -1542,6 +1550,7 @@ const SCHEDULED_LOG_KINDS = new Set([
 function LogsTabContent({
   kind,
   apiKind,
+  group,
   namespace,
   name,
   resource,
@@ -1555,6 +1564,7 @@ function LogsTabContent({
 }: {
   kind: string
   apiKind: string
+  group?: string
   namespace: string
   name: string
   resource: any
@@ -1581,7 +1591,7 @@ function LogsTabContent({
   }
 
   // Workload kinds with stable pod selectors use the aggregated workload logs viewer
-  if (WORKLOAD_LOG_KINDS.has(kind)) {
+  if (WORKLOAD_LOG_KINDS.has(kind) && (kind !== 'Job' || isCoreBatchJob(apiKind, group))) {
     return (
       <div className="h-full">
         <WorkloadLogsViewer
@@ -1785,7 +1795,7 @@ function DiagnoseFromWorkloadHint({
 }) {
   if (services.length === 0) return null
   return (
-    <Section title="Diagnose network path">
+    <Section title="Trace network path">
       <div className="flex items-start gap-2 text-xs text-theme-text-secondary">
         <Stethoscope className="w-4 h-4 mt-0.5 shrink-0 text-theme-text-tertiary" aria-hidden />
         <div className="flex-1 min-w-0">
@@ -2207,7 +2217,17 @@ function DiagnoseTabContent({
         runNonce={runNonce}
         testedAt={testedAt}
         clusterChangedSinceTest={clusterChanged}
-        onNavigateToResource={onNavigate ? (ref) => onNavigate({ kind: kindToPlural(ref.kind), namespace: ref.namespace ?? '', name: ref.name, group: ref.group ?? '' }) : undefined}
+        onNavigateToResource={
+          onNavigate
+            ? (ref) =>
+                onNavigate({
+                  kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
+                  namespace: ref.namespace ?? '',
+                  name: ref.name,
+                  group: ref.group ?? '',
+                })
+            : undefined
+        }
       />
       <InClusterConsentDialog
         open={pendingRunPath !== null}
@@ -2469,7 +2489,7 @@ function RelatedResourceYaml({
   target: { kind: string; namespace: string; name: string; group?: string }
 }) {
   const { data, isLoading, error } = useResource<any>(
-    kindToPlural(target.kind),
+    kindToPluralWithGroup(target.kind, target.group ?? ''),
     target.namespace,
     target.name,
     target.group,
@@ -2485,7 +2505,7 @@ function RelatedResourceYaml({
   return (
     <EditableYamlView
       resource={{
-        kind: kindToPlural(target.kind),
+        kind: kindToPluralWithGroup(target.kind, target.group ?? ''),
         namespace: target.namespace,
         name: target.name,
         group: target.group,

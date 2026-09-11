@@ -617,7 +617,7 @@ func TestPickInitialContext_PrefersFirstFileCurrentContext(t *testing.T) {
 
 	paths := []string{f1, f2}
 	registry, fileConfigs := buildContextRegistry(paths)
-	qName, entry, ok := pickInitialContext(paths, registry, fileConfigs)
+	qName, entry, ok := pickInitialContext(paths, registry, fileConfigs, ContextRef{})
 	if !ok {
 		t.Fatal("expected initial context")
 	}
@@ -641,7 +641,7 @@ func TestPickInitialContext_FallsBackWhenCurrentContextEmpty(t *testing.T) {
 
 	paths := []string{f1, f2}
 	registry, fileConfigs := buildContextRegistry(paths)
-	qName, _, ok := pickInitialContext(paths, registry, fileConfigs)
+	qName, _, ok := pickInitialContext(paths, registry, fileConfigs, ContextRef{})
 	if !ok {
 		t.Fatal("expected initial context")
 	}
@@ -661,7 +661,7 @@ func TestPickInitialContext_UsesLaterCurrentWhenPrimaryHasNone(t *testing.T) {
 
 	paths := []string{primary, additional}
 	registry, fileConfigs := buildContextRegistry(paths)
-	qName, entry, ok := pickInitialContext(paths, registry, fileConfigs)
+	qName, entry, ok := pickInitialContext(paths, registry, fileConfigs, ContextRef{})
 	if !ok {
 		t.Fatal("expected initial context")
 	}
@@ -678,7 +678,7 @@ func TestPickInitialContext_NoCurrentContextAnywhere(t *testing.T) {
 
 	paths := []string{f1}
 	registry, fileConfigs := buildContextRegistry(paths)
-	qName, _, ok := pickInitialContext(paths, registry, fileConfigs)
+	qName, _, ok := pickInitialContext(paths, registry, fileConfigs, ContextRef{})
 	if !ok {
 		t.Fatal("expected initial context from any-ctx fallback")
 	}
@@ -695,7 +695,7 @@ func TestPickInitialContext_NoCurrentContextUsesAlphabeticalFallback(t *testing.
 	})
 
 	registry, fileConfigs := buildContextRegistry([]string{f1})
-	qName, _, ok := pickInitialContext([]string{f1}, registry, fileConfigs)
+	qName, _, ok := pickInitialContext([]string{f1}, registry, fileConfigs, ContextRef{})
 	if !ok || qName != "alpha" {
 		t.Fatalf("fallback context = %q, found=%t; want alpha", qName, ok)
 	}

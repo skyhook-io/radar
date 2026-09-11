@@ -15,6 +15,7 @@ export {
   shortClusterName,
   summarizeGitOpsRows,
   normalizeArgoApplication,
+  normalizeArgoApplicationSet,
   normalizeFluxKustomization,
   normalizeFluxHelmRelease,
   buildFluxSourceUrlMap,

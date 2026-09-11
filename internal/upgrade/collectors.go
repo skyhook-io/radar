@@ -129,7 +129,7 @@ var (
 
 func collectUpgradeAPIServices(ctx context.Context, authz EvidenceAuthorizer) []*unstructured.Unstructured {
 	client := k8s.DynamicClientFromContext(ctx)
-	if client == nil || !authz.CanList(apiServiceGVR.Group, apiServiceGVR.Resource, "") {
+	if client == nil || !canListEvidence(authz, apiServiceGVR.Group, apiServiceGVR.Resource, "") {
 		return nil
 	}
 	return collectUpgradeAPIServicesWithClient(ctx, client)
@@ -149,7 +149,7 @@ func collectUpgradeAPIServicesWithClient(ctx context.Context, client dynamic.Int
 
 func collectUpgradeCSIDrivers(ctx context.Context, authz EvidenceAuthorizer) []*storagev1.CSIDriver {
 	client := k8s.ClientFromContext(ctx)
-	if client == nil || !authz.CanList("storage.k8s.io", "csidrivers", "") {
+	if client == nil || !canListEvidence(authz, "storage.k8s.io", "csidrivers", "") {
 		return nil
 	}
 	list, err := client.StorageV1().CSIDrivers().List(ctx, metav1.ListOptions{})
@@ -191,7 +191,7 @@ func collectSchedulingV1Alpha2Evidence(ctx context.Context, authz EvidenceAuthor
 		gvr := schema.GroupVersionResource{Group: "scheduling.k8s.io", Version: "v1alpha2", Resource: resource.Name}
 		resourceUnavailable := false
 		if !resource.Namespaced || namespaces == nil {
-			if !authz.CanList(gvr.Group, gvr.Resource, "") {
+			if !canListEvidence(authz, gvr.Group, gvr.Resource, "") {
 				unavailable = append(unavailable, resource.Kind)
 				continue
 			}
@@ -200,7 +200,7 @@ func collectSchedulingV1Alpha2Evidence(ctx context.Context, authz EvidenceAuthor
 			resourceUnavailable = listErr != nil
 		} else {
 			for _, namespace := range namespaces {
-				if !authz.CanList(gvr.Group, gvr.Resource, namespace) {
+				if !canListEvidence(authz, gvr.Group, gvr.Resource, namespace) {
 					resourceUnavailable = true
 					continue
 				}
@@ -242,58 +242,71 @@ func listAllUpgradeObjects(ctx context.Context, resource dynamic.ResourceInterfa
 	}
 }
 
-func collectUpgradeWebhookEvidence(ctx context.Context, authz EvidenceAuthorizer) (configs []*unstructured.Unstructured, unavailableConfigKinds []string, crds []*unstructured.Unstructured, endpointSlices []*discoveryv1.EndpointSlice, services []*corev1.Service) {
-	defer func() { sort.Strings(unavailableConfigKinds) }()
+func collectUpgradeWebhookEvidence(ctx context.Context, authz EvidenceAuthorizer) (configs []*unstructured.Unstructured, unavailableConfigKinds, deniedConfigKinds []string, crds []*unstructured.Unstructured, endpointSlices []*discoveryv1.EndpointSlice, services []*corev1.Service) {
 	dynamicClient := k8s.DynamicClientFromContext(ctx)
 	typedClient := k8s.ClientFromContext(ctx)
 	if dynamicClient == nil || typedClient == nil {
-		return nil, nil, nil, nil, nil
+		return nil, nil, nil, nil, nil, nil
 	}
-	configs = []*unstructured.Unstructured{}
+	configs, unavailableConfigKinds, deniedConfigKinds = collectUpgradeWebhookConfigurations(ctx, dynamicClient, authz)
 	endpointSlices = []*discoveryv1.EndpointSlice{}
 	services = []*corev1.Service{}
-	for _, gvr := range []schema.GroupVersionResource{validatingWebhookGVR, mutatingWebhookGVR} {
-		if !authz.CanList(gvr.Group, gvr.Resource, "") {
-			unavailableConfigKinds = append(unavailableConfigKinds, gvr.Resource)
-			continue
-		}
-		list, err := dynamicClient.Resource(gvr).List(ctx, metav1.ListOptions{})
-		if err != nil {
-			unavailableConfigKinds = append(unavailableConfigKinds, gvr.Resource)
-			continue
-		}
-		for i := range list.Items {
-			configs = append(configs, list.Items[i].DeepCopy())
-		}
-	}
-	if authz.CanList(crdGVR.Group, crdGVR.Resource, "") {
+	if canListEvidence(authz, crdGVR.Group, crdGVR.Resource, "") {
 		crds = collectUpgradeCRDs(ctx, dynamicClient)
 	}
 	referenced := webhookServiceNamespaces(configs, crds)
 	for _, namespace := range referenced {
-		if !authz.CanList("", "services", namespace) || !authz.CanList(endpointSliceGVR.Group, endpointSliceGVR.Resource, namespace) {
-			return configs, unavailableConfigKinds, crds, nil, nil
+		if !canListEvidence(authz, "", "services", namespace) || !canListEvidence(authz, endpointSliceGVR.Group, endpointSliceGVR.Resource, namespace) {
+			return configs, unavailableConfigKinds, deniedConfigKinds, crds, nil, nil
 		}
 		svcList, err := typedClient.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{})
 		if err != nil {
-			return configs, unavailableConfigKinds, crds, nil, nil
+			return configs, unavailableConfigKinds, deniedConfigKinds, crds, nil, nil
 		}
 		for i := range svcList.Items {
 			services = append(services, svcList.Items[i].DeepCopy())
 		}
 		sliceList, err := dynamicClient.Resource(endpointSliceGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
 		if err != nil {
-			return configs, unavailableConfigKinds, crds, nil, nil
+			return configs, unavailableConfigKinds, deniedConfigKinds, crds, nil, nil
 		}
 		for i := range sliceList.Items {
 			var slice discoveryv1.EndpointSlice
 			if runtime.DefaultUnstructuredConverter.FromUnstructured(sliceList.Items[i].Object, &slice) != nil {
-				return configs, unavailableConfigKinds, crds, nil, nil
+				return configs, unavailableConfigKinds, deniedConfigKinds, crds, nil, nil
 			}
 			endpointSlices = append(endpointSlices, &slice)
 		}
 	}
-	return configs, unavailableConfigKinds, crds, endpointSlices, services
+	return configs, unavailableConfigKinds, deniedConfigKinds, crds, endpointSlices, services
+}
+
+func collectUpgradeWebhookConfigurations(ctx context.Context, dynamicClient dynamic.Interface, authz EvidenceAuthorizer) (configs []*unstructured.Unstructured, unavailableKinds, deniedKinds []string) {
+	configs = []*unstructured.Unstructured{}
+	for _, gvr := range []schema.GroupVersionResource{validatingWebhookGVR, mutatingWebhookGVR} {
+		decision := authz.CanList(gvr.Group, gvr.Resource, "")
+		if !decision.Allowed {
+			unavailableKinds = append(unavailableKinds, gvr.Resource)
+			if decision.Authoritative {
+				deniedKinds = append(deniedKinds, gvr.Resource)
+			}
+			continue
+		}
+		list, err := dynamicClient.Resource(gvr).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			unavailableKinds = append(unavailableKinds, gvr.Resource)
+			if apierrors.IsForbidden(err) {
+				deniedKinds = append(deniedKinds, gvr.Resource)
+			}
+			continue
+		}
+		for i := range list.Items {
+			configs = append(configs, list.Items[i].DeepCopy())
+		}
+	}
+	sort.Strings(unavailableKinds)
+	sort.Strings(deniedKinds)
+	return configs, unavailableKinds, deniedKinds
 }
 
 func collectUpgradeCRDs(ctx context.Context, client dynamic.Interface) []*unstructured.Unstructured {

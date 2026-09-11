@@ -123,6 +123,10 @@ func SetEnrichedKubeconfigFromShell(v bool) {
 type InitOptions struct {
 	KubeconfigPath string
 	KubeconfigDirs []string // Directories containing kubeconfig files
+	// PreferredContext is the context to start on instead of the kubeconfig's
+	// current-context. Ignored when it doesn't resolve, so a stale preference
+	// can never keep Radar from starting.
+	PreferredContext ContextRef
 }
 
 type kubeconfigSources struct {
@@ -189,6 +193,9 @@ func doInit(opts InitOptions) error {
 			activeSourceConfig = nil
 			clusterName = "in-cluster"
 			kubeconfigMode = "in-cluster"
+			if !opts.PreferredContext.Empty() {
+				log.Printf("[k8s-init] ignoring preferred context %q: running in-cluster", opts.PreferredContext.Name)
+			}
 		}
 	}
 
@@ -211,7 +218,7 @@ func doInit(opts InitOptions) error {
 		if sources.useRegistry {
 			kubeconfigPaths = sources.paths
 			kubeconfigMode = sources.mode
-			lr, ovr, err := setupIsolatedLoad(sources.paths)
+			lr, ovr, err := setupIsolatedLoad(sources.paths, opts.PreferredContext)
 			if err != nil {
 				return err
 			}
@@ -225,6 +232,7 @@ func doInit(opts InitOptions) error {
 			kubeconfigPath = sources.paths[0]
 			kubeconfigMode = sources.mode
 			loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfigPath}
+			applyContextPreference(kubeconfigPath, opts.PreferredContext, configOverrides)
 		}
 
 		kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
@@ -274,6 +282,9 @@ func doInit(opts InitOptions) error {
 				}
 			} else {
 				contextName = rawConfig.CurrentContext
+				if configOverrides.CurrentContext != "" {
+					contextName = configOverrides.CurrentContext
+				}
 				contextBinding = sourceContextBinding(kubeconfigPath, contextName)
 				activeSourceFile = kubeconfigPath
 				activeSourceName = contextName

@@ -82,15 +82,22 @@ func compressMiddleware() func(http.Handler) http.Handler {
 	}
 }
 
-// isStreamingRequest reports requests that open a long-lived response (SSE) or
-// switch protocols (WebSocket exec/terminal) and must not pass through the
-// compressor's per-request encoder acquisition.
+// isStreamingRequest reports requests that open a long-lived response (SSE), a
+// long-running transfer, or switch protocols (WebSocket exec/terminal), and must
+// not pass through the compressor's per-request encoder acquisition.
 func isStreamingRequest(r *http.Request) bool {
 	// Match by route, not just request headers: every SSE endpoint ends in
 	// "/stream" (events, pod/workload logs, traffic flows). This holds even if a
 	// future consumer reads the stream via fetch (Accept: */*) instead of
 	// EventSource, which the header check below would miss.
 	if strings.HasSuffix(r.URL.Path, "/stream") {
+		return true
+	}
+	// Pod file transfers are octet-stream, so the compressor would not compress
+	// them anyway, but it takes an encoder from the pool before the handler runs
+	// and holds it for the whole transfer — minutes, for the large files these
+	// routes exist to carry.
+	if strings.HasSuffix(r.URL.Path, "/files/download") || strings.HasSuffix(r.URL.Path, "/files/save") {
 		return true
 	}
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream") {

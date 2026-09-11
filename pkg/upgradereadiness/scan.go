@@ -248,7 +248,6 @@ func scanUpgradePath(current, target *utilversion.Version) Check {
 			Title:       "Unsupported control plane version jump",
 			Level:       LevelBlocker,
 			Evidence:    Evidence{Source: "version policy", Path: "controlPlane", Detail: sequence},
-			AppliesFrom: minorString(target),
 			Impact:      "Kubernetes control planes must follow the supported one-minor upgrade sequence; a direct major-version jump is unsupported.",
 			Remediation: fmt.Sprintf("Choose Kubernetes %d.%d as the next target, then re-run upgrade impact for each subsequent step.", current.Major(), current.Minor()+1),
 			References:  append([]Reference(nil), versionSkewReferences...),
@@ -275,7 +274,6 @@ func scanUpgradePath(current, target *utilversion.Version) Check {
 		Title:       "Unsupported control plane version jump",
 		Level:       LevelBlocker,
 		Evidence:    Evidence{Source: "version policy", Path: "controlPlane", Detail: sequence},
-		AppliesFrom: minorString(target),
 		Impact:      "Kubernetes control planes must be upgraded one minor version at a time; skipping minors is unsupported.",
 		Remediation: "Plan the control plane upgrades in sequence: " + sequence + ". Re-run upgrade impact for each step.",
 		References:  append([]Reference(nil), versionSkewReferences...),
@@ -1196,6 +1194,13 @@ func appendCaveat(existing, addition string) string {
 		return existing
 	}
 	return existing + " " + addition
+}
+
+func nodeRuntimeCoverageCaveat(input *Input, unavailable string) string {
+	if input.Nodes == nil || !input.NodeProxyForbidden {
+		return unavailable
+	}
+	return appendCaveat(unavailable, "At least one nodes/proxy request was forbidden; ask a cluster administrator to grant the current identity get access to nodes/proxy to inspect kubelet metrics and effective configuration.")
 }
 
 func appendSourceManifestCoverageCaveats(check *Check, input *Input, lastAppliedParseErrors int) {

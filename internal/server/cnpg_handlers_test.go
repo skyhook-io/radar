@@ -54,7 +54,7 @@ func TestCNPGCatalogUsers_DeniesRatherThanReportingNoUsers(t *testing.T) {
 	env := newAuthTestServer(t)
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"pg"}}
 	allow(perms, cnpgGroup, "clusters", "", false)
-	env.srv.permCache.Set("nobody", perms)
+	env.srv.permCache.Set("nobody", nil, perms)
 
 	resp := env.authGet(t, "/api/cnpg/clusterimagecatalogs/postgres-fleet/clusters", "nobody", "")
 	defer resp.Body.Close()
@@ -68,7 +68,7 @@ func TestCNPGCatalogUsers_NamespacedRouteAuthorizesInItsNamespace(t *testing.T) 
 	env := newAuthTestServer(t)
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"pg"}}
 	allow(perms, cnpgGroup, "clusters", "pg", false)
-	env.srv.permCache.Set("scoped", perms)
+	env.srv.permCache.Set("scoped", nil, perms)
 
 	resp := env.authGet(t, "/api/cnpg/imagecatalogs/pg/postgres-pinned/clusters", "scoped", "")
 	defer resp.Body.Close()

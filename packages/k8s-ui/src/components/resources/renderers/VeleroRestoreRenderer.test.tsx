@@ -8,6 +8,12 @@ const restore = (status: Record<string, unknown>) => ({
   status,
 })
 
+const scopedRestore = (spec: Record<string, unknown>) => ({
+  metadata: { name: 'live-restore', namespace: 'velero' },
+  spec: { backupName: 'live-completed', ...spec },
+  status: { phase: 'Completed' },
+})
+
 /**
  * The restore side carries the same claims as the backup side and its own
  * wording for them, so pinning one does not pin the other. Both banners below
@@ -51,5 +57,87 @@ describe('what a restore claims about itself', () => {
     )
     expect(html).toContain('nothing was restored')
     expect(html).toContain('Backup live-completed not found')
+  })
+})
+
+/**
+ * Scope is where an operator reads what a restore will touch and where it lands.
+ * namespaceMapping remaps source namespaces to different targets on restore, so
+ * omitting it hides where the data actually goes; a labelSelector narrows the
+ * restore to a subset of objects.
+ */
+// react-dom/server inserts <!-- --> markers between adjacent text nodes, which
+// splits a badge like `app=nginx` in the raw markup; strip them so assertions
+// read the visible text.
+const renderScope = (data: unknown) =>
+  renderToString(<VeleroRestoreRenderer data={data} />).replace(/<!-- -->/g, '')
+
+describe('what a restore says it will touch', () => {
+  it('shows namespaceMapping as source to target', () => {
+    const html = renderScope(
+      scopedRestore({ namespaceMapping: { prod: 'prod-clone', staging: 'staging-clone' } }),
+    )
+    expect(html).toContain('Scope')
+    expect(html).toContain('Namespace Mapping')
+    expect(html).toContain('prod')
+    expect(html).toContain('prod-clone')
+    expect(html).toContain('staging-clone')
+  })
+
+  it('shows the label selector that narrows the restore', () => {
+    const html = renderScope(
+      scopedRestore({
+        labelSelector: {
+          matchLabels: { app: 'nginx' },
+          matchExpressions: [{ key: 'tier', operator: 'In', values: ['frontend'] }],
+        },
+      }),
+    )
+    expect(html).toContain('Scope')
+    expect(html).toContain('app=nginx')
+    expect(html).toContain('tier In frontend')
+  })
+
+  it('renders a Scope section for a restore filtered only by label selector', () => {
+    const html = renderScope(scopedRestore({ labelSelector: { matchLabels: { app: 'nginx' } } }))
+    expect(html).toContain('Scope')
+    expect(html).toContain('app=nginx')
+  })
+
+  it('shows orLabelSelectors joined by OR', () => {
+    const html = renderScope(
+      scopedRestore({
+        orLabelSelectors: [{ matchLabels: { app: 'nginx' } }, { matchLabels: { app: 'redis' } }],
+      }),
+    )
+    expect(html).toContain('Scope')
+    expect(html).toContain('app=nginx')
+    expect(html).toContain('app=redis')
+  })
+
+  it('shows included and excluded namespaces alongside mapping', () => {
+    const html = renderScope(
+      scopedRestore({
+        includedNamespaces: ['prod'],
+        excludedNamespaces: ['kube-system'],
+        namespaceMapping: { prod: 'prod-clone' },
+      }),
+    )
+    expect(html).toContain('Included Namespaces')
+    expect(html).toContain('Excluded Namespaces')
+    expect(html).toContain('kube-system')
+    expect(html).toContain('prod-clone')
+  })
+
+  it('renders no empty Scope section for an unscoped restore', () => {
+    const html = renderScope(scopedRestore({}))
+    expect(html).not.toContain('Scope')
+  })
+
+  // An empty selector matches everything, so it is not scope. Presenting it as
+  // scope would tell an operator a restore is filtered when it is not.
+  it('treats an empty label selector as unscoped', () => {
+    const html = renderScope(scopedRestore({ labelSelector: {}, orLabelSelectors: [{}] }))
+    expect(html).not.toContain('Scope')
   })
 })

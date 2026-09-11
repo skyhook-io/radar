@@ -94,6 +94,36 @@ describe('getCellFilterValue — Velero status column', () => {
     const bsl = { apiVersion: 'velero.io/v1', kind: 'BackupStorageLocation', status: { phase: 'Unavailable' } }
     expect(getCellFilterValue(bsl, 'status', 'backupstoragelocations')).toBe('Unavailable')
   })
+
+  // The cell dispatch sends a non-Velero BackupStorageLocation/BackupRepository
+  // to GenericCell. The filter dropdown and the sort key have to follow it
+  // there, or the column offers and orders values that appear on no row.
+  it('leaves a foreign BackupStorageLocation on the generic reader', () => {
+    // Conditions, not a phase: Velero's reader keys on phase and has nothing to
+    // say here, so this only passes if the generic derivation ran.
+    const foreign = {
+      apiVersion: 'other.io/v1',
+      kind: 'BackupStorageLocation',
+      status: { conditions: [{ type: 'Ready', status: 'True' }] },
+    }
+    expect(getCellFilterValue(foreign, 'status', 'backupstoragelocations')).toBe('Ready')
+  })
+
+  it('leaves a foreign BackupRepository on the generic reader', () => {
+    const foreign = {
+      apiVersion: 'other.io/v1',
+      kind: 'BackupRepository',
+      status: { conditions: [{ type: 'Ready', status: 'True' }] },
+    }
+    expect(getCellFilterValue(foreign, 'status', 'backuprepositories')).toBe('Ready')
+  })
+
+  // Velero's own readers speak a phase vocabulary a foreign CRD does not share,
+  // so the two must not produce the same string for the same object.
+  it('does not label a foreign resource with Velero vocabulary', () => {
+    const foreign = { apiVersion: 'other.io/v1', kind: 'BackupRepository', status: { phase: 'NotReady' } }
+    expect(getCellFilterValue(foreign, 'status', 'backuprepositories')).not.toBe('Not ready')
+  })
 })
 
 describe('Velero Backup phase vocabulary', () => {

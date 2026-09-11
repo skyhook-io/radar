@@ -24,6 +24,7 @@ import (
 	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/pkg/health"
 	topology "github.com/skyhook-io/radar/pkg/topology"
+	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
 
 // DashboardResponse is the aggregated response for the home dashboard
@@ -61,6 +62,10 @@ type DashboardCluster struct {
 	Platform  string `json:"platform"`
 	Version   string `json:"version"`
 	Connected bool   `json:"connected"`
+	// UpgradeReviewedThrough is the newest Kubernetes minor the upgrade-impact
+	// catalog covers. A static catalog fact, so Home can hint that the cluster
+	// is behind without triggering the (expensive) upgrade-readiness scan.
+	UpgradeReviewedThrough string `json:"upgradeReviewedThrough,omitempty"`
 }
 
 type DashboardHealth struct {
@@ -487,10 +492,11 @@ func (s *Server) getDashboardCluster(ctx context.Context) DashboardCluster {
 		return DashboardCluster{Connected: false}
 	}
 	return DashboardCluster{
-		Name:      info.Cluster,
-		Platform:  info.Platform,
-		Version:   info.KubernetesVersion,
-		Connected: true,
+		Name:                   info.Cluster,
+		Platform:               info.Platform,
+		Version:                info.KubernetesVersion,
+		Connected:              true,
+		UpgradeReviewedThrough: upgradereadiness.ReviewedThrough,
 	}
 }
 

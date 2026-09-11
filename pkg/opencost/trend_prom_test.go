@@ -133,6 +133,22 @@ func TestComputeCostTrendFromProm_AllUnderMaxSeriesNoOther(t *testing.T) {
 	}
 }
 
+func TestComputeCostTrendFromProm_FiltersNamespacesBeforeOtherAggregation(t *testing.T) {
+	client := rangeProm(t, matrixBody([]namespaceSeries{
+		{"allowed", []dpoint{{1700000000, 3}}},
+		{"private-a", []dpoint{{1700000000, 20}}},
+		{"private-b", []dpoint{{1700000000, 10}}},
+	}))
+	got := ComputeCostTrendFromProm(context.Background(), client, TrendPromOptions{
+		Range:      "24h",
+		MaxSeries:  1,
+		Namespaces: []string{"allowed"},
+	})
+	if !got.Available || len(got.Series) != 1 || got.Series[0].Namespace != "allowed" {
+		t.Fatalf("unexpected filtered series: %#v", got)
+	}
+}
+
 func TestComputeCostTrendFromProm_EmptyNamespaceLabelSkipped(t *testing.T) {
 	// A series with no namespace label must not appear in the output (it
 	// can't be ranked or attributed). The implementation skips it during

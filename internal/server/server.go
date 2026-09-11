@@ -38,6 +38,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/remotecommand"
 
 	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/argocd"
@@ -46,6 +47,7 @@ import (
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/images"
+	"github.com/skyhook-io/radar/internal/investigationrefs"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
@@ -66,32 +68,37 @@ import (
 
 // Server is the Explorer HTTP server
 type Server struct {
-	router             *chi.Mux
-	broadcaster        *SSEBroadcaster
-	vitalsMetrics      vitalsMetricsMemo
-	port               int
-	listenAddress      string
-	basePath           string
-	startupLog         bool
-	remoteAccessHint   bool
-	devMode            bool
-	staticFS           fs.FS
-	startTime          time.Time
-	listener           net.Listener
-	updater            *updater.Updater
-	mcpHandler         http.Handler
-	mcpReadOnlyHandler http.Handler
-	diagConfig         *DiagConfig
-	effectiveConfig    *config.Config // running config for GET /api/config
-	openCostCurrency   *opencost.CurrencyResolver
-	currencyManaged    bool
-	authConfig         auth.Config
-	permCache          *auth.PermissionCache
-	oidcHandler        *auth.OIDCHandler
-	saveFileFunc       func(defaultFilename string, data []byte) (string, error)
-	cloudConnectCfg    CloudConnectConfig
-	cloudInstall       *cloudInstallManager
-
+	router                  *chi.Mux
+	broadcaster             *SSEBroadcaster
+	vitalsMetrics           vitalsMetricsMemo
+	port                    int
+	listenAddress           string
+	basePath                string
+	startupLog              bool
+	remoteAccessHint        bool
+	devMode                 bool
+	staticFS                fs.FS
+	startTime               time.Time
+	listener                net.Listener
+	updater                 *updater.Updater
+	mcpHandler              http.Handler
+	mcpReadOnlyHandler      http.Handler
+	mcpInvestigationHandler http.Handler
+	diagConfig              *DiagConfig
+	effectiveConfig         *config.Config // running config for GET /api/config
+	openCostCurrency        *opencost.CurrencyResolver
+	currencyManaged         bool
+	authConfig              auth.Config
+	permCache               *auth.PermissionCache
+	oidcHandler             *auth.OIDCHandler
+	saveFileFunc            func(defaultFilename string, data []byte) (string, error)
+	saveFileStreamFunc      func(defaultFilename string, r io.Reader) (string, error)
+	// newExecutor builds the exec client for pod file transfers. Nil in
+	// production, where the package default is used; tests substitute a fake so
+	// the transfer can be driven end to end without a cluster.
+	newExecutor     func(*rest.Config, *url.URL) (remotecommand.Executor, error)
+	cloudConnectCfg CloudConnectConfig
+	cloudInstall    *cloudInstallManager
 	// nsPreferences holds each user's active-namespace pick from the in-app
 	// switcher. Key shape: "<username>\x00<contextName>" when auth is enabled,
 	// "\x00<contextName>" when auth is disabled. Cleared on context switch
@@ -150,7 +157,7 @@ type Server struct {
 	yamlSchemaCacheBytes  int
 	yamlSchemaFetchGroup  singleflight.Group
 
-	// aiDiagnoser drives a local agent CLI for "Diagnose with AI" (nil when no
+	// aiDiagnoser drives a local agent CLI for AI investigations (nil when no
 	// CLI is on PATH — the endpoints then 501). Resolved once at startup.
 	aiDiagnoser *ai.Diagnoser
 	// aiRuns owns investigations as durable server-side jobs (survive panel close
@@ -163,24 +170,26 @@ type Server struct {
 
 // Config holds server configuration
 type Config struct {
-	Port               int
-	ListenAddress      string         // 127.0.0.1/localhost for local-only; 0.0.0.0 for shared access
-	BasePath           string         // Optional URL path prefix for self-hosted subpath deployments
-	StartupLog         bool           // Emit the operator-facing startup block after a successful bind
-	RemoteAccessHint   bool           // Explain the explicit shared-listener opt-in (native CLI only)
-	DevMode            bool           // Serve frontend from filesystem instead of embedded
-	StaticFS           embed.FS       // Embedded frontend files
-	StaticRoot         string         // Path within StaticFS
-	MCPHandler         http.Handler   // MCP server handler (nil = MCP disabled)
-	MCPReadOnlyHandler http.Handler   // read-only MCP handler (read tools only)
-	MCPToken           string         // per-process token for the local write-capable MCP mount
-	DiagConfig         *DiagConfig    // Sanitized config for diagnostics endpoint
-	EffectiveConfig    *config.Config // Running startup config for GET /api/config
-	OpenCostCurrency   string         // ISO 4217 code labeling values returned by OpenCost endpoints
-	OpenCostManaged    bool           // true when an explicit CLI/Helm flag owns the running value
-	AuthConfig         auth.Config    // Authentication configuration
-	AIHistoryDB        string         // AI run-history SQLite path ("" = memory-only runs)
-	CloudConnect       CloudConnectConfig
+	Port                    int
+	ListenAddress           string                      // 127.0.0.1/localhost for local-only; 0.0.0.0 for shared access
+	BasePath                string                      // Optional URL path prefix for self-hosted subpath deployments
+	StartupLog              bool                        // Emit the operator-facing startup block after a successful bind
+	RemoteAccessHint        bool                        // Explain the explicit shared-listener opt-in (native CLI only)
+	DevMode                 bool                        // Serve frontend from filesystem instead of embedded
+	StaticFS                embed.FS                    // Embedded frontend files
+	StaticRoot              string                      // Path within StaticFS
+	MCPHandler              http.Handler                // MCP server handler (nil = MCP disabled)
+	MCPReadOnlyHandler      http.Handler                // public read-only MCP handler (read tools only)
+	MCPInvestigationHandler http.Handler                // internal read-only MCP handler with evidence correlation
+	InvestigationRefs       *investigationrefs.Registry // shared private evidence issuance ledger
+	MCPToken                string                      // per-process token for the local write-capable MCP mount
+	DiagConfig              *DiagConfig                 // Sanitized config for diagnostics endpoint
+	EffectiveConfig         *config.Config              // Running startup config for GET /api/config
+	OpenCostCurrency        string                      // ISO 4217 code labeling values returned by OpenCost endpoints
+	OpenCostManaged         bool                        // true when an explicit CLI/Helm flag owns the running value
+	AuthConfig              auth.Config                 // Authentication configuration
+	AIHistoryDB             string                      // AI run-history SQLite path ("" = memory-only runs)
+	CloudConnect            CloudConnectConfig
 }
 
 // New creates a new server instance
@@ -197,47 +206,50 @@ func New(cfg Config) *Server {
 		cfg.CloudConnect.HubAppURL = "https://app.radarhq.io"
 	}
 	s := &Server{
-		router:                chi.NewRouter(),
-		broadcaster:           NewSSEBroadcaster(),
-		port:                  cfg.Port,
-		listenAddress:         cfg.ListenAddress,
-		basePath:              basePath,
-		startupLog:            cfg.StartupLog,
-		remoteAccessHint:      cfg.RemoteAccessHint,
-		devMode:               cfg.DevMode,
-		startTime:             time.Now(),
-		mcpHandler:            cfg.MCPHandler,
-		mcpReadOnlyHandler:    cfg.MCPReadOnlyHandler,
-		mcpToken:              cfg.MCPToken,
-		diagConfig:            cfg.DiagConfig,
-		effectiveConfig:       cfg.EffectiveConfig,
-		openCostCurrency:      opencost.NewCurrencyResolver(cfg.OpenCostCurrency),
-		currencyManaged:       cfg.OpenCostManaged,
-		authConfig:            cfg.AuthConfig,
-		cloudConnectCfg:       cfg.CloudConnect,
-		topoMemo:              topology.NewMemoizer(5 * time.Second),
-		rbacMemo:              rbac.NewMemoizer(5 * time.Second),
-		capacityIssueMemo:     newCapacityIssueMemo(5 * time.Second),
-		yamlSchemaCache:       make(map[string][]byte),
-		yamlSchemaPathCache:   make(map[string]yamlSchemaPathCacheEntry),
-		yamlSchemaBundleCache: make(map[string]yamlSchemaBundleCacheEntry),
+		router:                  chi.NewRouter(),
+		broadcaster:             NewSSEBroadcaster(),
+		port:                    cfg.Port,
+		listenAddress:           cfg.ListenAddress,
+		basePath:                basePath,
+		startupLog:              cfg.StartupLog,
+		remoteAccessHint:        cfg.RemoteAccessHint,
+		devMode:                 cfg.DevMode,
+		startTime:               time.Now(),
+		mcpHandler:              cfg.MCPHandler,
+		mcpReadOnlyHandler:      cfg.MCPReadOnlyHandler,
+		mcpInvestigationHandler: cfg.MCPInvestigationHandler,
+		mcpToken:                cfg.MCPToken,
+		diagConfig:              cfg.DiagConfig,
+		effectiveConfig:         cfg.EffectiveConfig,
+		openCostCurrency:        opencost.NewCurrencyResolver(cfg.OpenCostCurrency),
+		currencyManaged:         cfg.OpenCostManaged,
+		authConfig:              cfg.AuthConfig,
+		cloudConnectCfg:         cfg.CloudConnect,
+		topoMemo:                topology.NewMemoizer(5 * time.Second),
+		rbacMemo:                rbac.NewMemoizer(5 * time.Second),
+		capacityIssueMemo:       newCapacityIssueMemo(5 * time.Second),
+		yamlSchemaCache:         make(map[string][]byte),
+		yamlSchemaPathCache:     make(map[string]yamlSchemaPathCacheEntry),
+		yamlSchemaBundleCache:   make(map[string]yamlSchemaBundleCacheEntry),
 	}
 	s.cloudInstall = newCloudInstallManager(cfg.CloudConnect)
 	s.cloudInstall.sharedListener = s.sharedListener
 
-	// Resolve a local agent CLI for AI diagnosis (keyless, on the user's own
+	// Resolve a local agent CLI for AI investigations (keyless, on the user's own
 	// subscription). nil when none is found — the feature stays disabled.
 	//
 	// Gated to no-auth (local/standalone) Radar: the engine drives the CLI
-	// against this server's OWN localhost MCP mounts. When the optional local
-	// session token is enabled, Radar injects it into write-capable turns. Under
-	// proxy/OIDC auth (team / cloud deployments) the MCP requires identity
-	// headers the local CLI can't supply, and AI diagnosis is the embedding
-	// host's job (e.g. Radar Hub) anyway.
+	// against this server's own private localhost investigation MCP mount with no
+	// credentials, which only works when MCP is unauthenticated. When the optional
+	// local session token is enabled, Radar injects it into write-capable apply
+	// turns against /mcp. Under proxy/OIDC auth (team / cloud deployments) the MCP
+	// requires identity headers the local CLI can't supply, and AI investigations
+	// are the embedding host's job (e.g. Radar Hub) anyway.
 	// Also requires /mcp to be mounted — the agent reaches the cluster only
 	// through it, so with --no-mcp the feature can't work.
-	if !s.authConfig.Enabled() && s.mcpHandler != nil {
-		if d, err := ai.NewDetected(context.Background()); err == nil {
+	if !s.authConfig.Enabled() && s.mcpHandler != nil &&
+		s.mcpInvestigationHandler != nil && cfg.InvestigationRefs != nil {
+		if d, err := ai.NewDetected(context.Background(), cfg.InvestigationRefs); err == nil {
 			s.aiDiagnoser = d
 			// History store opens only when the engine actually enables, so a
 			// disabled feature never creates the DB. Open failure degrades to
@@ -253,6 +265,13 @@ func New(cfg Config) *Server {
 				}
 			}
 			s.aiRuns = ai.NewRunManager(d, s.ActualPort, s.basePath, k8s.GetContextName, store, s.mcpToken)
+			s.aiRuns.MetricsAvailability = func(ctx context.Context) ai.MetricsAvailability {
+				state := prometheuspkg.Availability(ctx)
+				return ai.MetricsAvailability{
+					Connected: state.State == prometheuspkg.AvailabilityConnected,
+					Address:   state.Address,
+				}
+			}
 			if historyBroken {
 				// Persistence was requested but isn't working — the UI must say
 				// history won't survive a restart, not just a log line.
@@ -411,6 +430,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	// Middleware (applied to all routes)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(s.protectUnauthenticatedLoopback)
 	// Note: Timeout middleware is applied per-group below to exempt streaming endpoints
 
 	// gzip response compression (content-type aware: JSON yes, SSE/WS no).
@@ -480,6 +500,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		r.Get("/pods/{namespace}/{name}/exec", s.handlePodExec)
 		r.Get("/local-terminal", s.handleLocalTerminal)
 		r.Get("/pods/{namespace}/{name}/files/download", s.handlePodFileDownload)
+		// Desktop-only: streams a pod file to disk server-side. Sits outside the
+		// 60s timeout group for the same reason the download does — a large file
+		// over a slow cluster link legitimately takes longer than that.
+		r.Post("/pods/{namespace}/{name}/files/save", s.handlePodFileSave)
 		r.Get("/workloads/{kind}/{namespace}/{name}/logs/stream", s.handleWorkloadLogsStream)
 		// AI investigation event stream via SSE — long-lived; lives outside the
 		// 60s timeout group. The run keeps going server-side after disconnect.
@@ -506,6 +530,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// AI investigations as durable server-side jobs (start/list/turn/stop).
 			r.Post("/diagnose/runs", s.handleDiagnoseStart)
 			r.Get("/diagnose/runs", s.handleDiagnoseList)
+			r.Get("/diagnose/runs/{id}", s.handleDiagnoseGet)
 			r.Post("/diagnose/runs/{id}/turns", s.handleDiagnoseTurn)
 			r.Post("/diagnose/runs/{id}/stop", s.handleDiagnoseStop)
 			r.Post("/diagnose/history/clear", s.handleDiagnoseHistoryClear)
@@ -513,6 +538,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/diagnostics", s.handleDiagnostics)
 			r.Get("/auth/me", s.handleAuthMe)
 			r.Get("/version-check", s.handleVersionCheck)
+			r.Post("/version-check/browser", s.handleVersionCheckBrowser)
 			r.Get("/dashboard", s.handleDashboard)
 			r.Get("/vitals", s.handleVitals)
 			r.Get("/dashboard/crds", s.handleDashboardCRDs)
@@ -694,28 +720,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			imageHandlers := images.NewHandlers()
 			imageHandlers.RegisterRoutes(r)
 
-			// Prometheus metrics routes. The auth gate is required for endpoints
-			// that read K8s spec data via the shared informer cache (rightsizing,
-			// PVC usage) — the cache is populated under Radar's SA, so without
-			// it any authenticated user could fetch any namespace's spec.
-			//
-			// Two checks here, both load-bearing:
-			//   1. canRead (SAR) — does the user have RBAC for this verb on this
-			//      resource? Catches missing-RBAC.
-			//   2. getUserNamespaces — is the namespace in the user's discovered
-			//      allow-list? Matches handleGetResource semantics on the main
-			//      resource API. Without this, a user with cluster-wide SAR for
-			//      "get" could read derived data via these endpoints in namespaces
-			//      they're otherwise filtered out of (multi-tenant separation).
-			prometheuspkg.SetAuthGate(func(req *http.Request, group, resource, namespace, verb string) bool {
-				if !s.canRead(req, group, resource, namespace, verb) {
-					return false
-				}
-				if namespace != "" && noNamespaceAccess(s.getUserNamespaces(req, []string{namespace})) {
-					return false
-				}
-				return true
-			})
+			// Prometheus metrics routes. Every metrics read runs with Radar's
+			// own Prometheus access, so each route authorizes the caller
+			// through this gate before querying — see prometheusAuthGate.
+			prometheuspkg.SetAuthGate(s.prometheusAuthGate)
 			r.Post("/prometheus/rightsizing/scan", s.handleRightsizingScan)
 			prometheuspkg.RegisterRoutes(r)
 
@@ -724,7 +732,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/opencost/application/trend", s.handleOpenCostApplicationTrend)
 			r.Get("/opencost/workload/{kind}/{namespace}/{name}", s.handleOpenCostWorkload)
 			r.Get("/opencost/workload/{kind}/{namespace}/{name}/trend", s.handleOpenCostWorkloadTrend)
-			opencost.RegisterRoutes(r, s.resolvedOpenCostCurrency)
+			opencost.RegisterRoutes(r, s.resolvedOpenCostCurrency, s.openCostRouteScope())
 
 			// FluxCD routes
 			r.Post("/flux/{kind}/{namespace}/{name}/reconcile", s.handleFluxReconcile)
@@ -812,6 +820,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/config", s.handleGetConfig)
 			r.Put("/config", s.handlePutConfig)
 			r.Put("/integrations/prometheus", s.handleApplyPrometheusURL)
+			r.Put("/integrations/cost", s.handleApplyCostSource)
 			r.Put("/integrations/argocd", s.handleApplyArgoCDConfig)
 			r.Get("/integrations/argocd/status", s.handleArgoCDStatus)
 
@@ -850,6 +859,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	r.Handle("/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp-readonly/.well-known/*", http.NotFoundHandler())
+	r.Handle("/mcp-investigation/.well-known/*", http.NotFoundHandler())
 
 	// MCP server (Model Context Protocol for AI tools)
 	if s.mcpHandler != nil {
@@ -857,6 +867,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	}
 	if s.mcpReadOnlyHandler != nil {
 		r.Mount("/mcp-readonly", s.mcpReadOnlyHandler)
+	}
+	if s.mcpInvestigationHandler != nil {
+		r.Mount("/mcp-investigation", s.mcpInvestigationHandler)
 	}
 
 	// OAuth discovery probes from MCP HTTP clients. Without this, the frontend
@@ -873,6 +886,27 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	} else if s.devMode {
 		// In dev mode, serve from web/dist
 		r.Handle("/*", frontendHandler(http.Dir("web/dist"), s.basePath))
+	}
+}
+
+func (s *Server) openCostRouteScope() opencost.RouteScope {
+	return opencost.RouteScope{
+		AllowedNamespaces: func(req *http.Request, requested []string) []string {
+			if requested != nil {
+				if k8s.ForceNamespaceScope {
+					target := k8s.GetNamespaceScopeTarget()
+					if target == "" || !slices.Contains(requested, target) {
+						return []string{}
+					}
+					requested = []string{target}
+				}
+				return s.getUserNamespaces(req, requested)
+			}
+			return s.parseNamespacesForUser(req)
+		},
+		CanReadNodes: func(req *http.Request) bool {
+			return s.canRead(req, "", "nodes", "", "list")
+		},
 	}
 }
 
@@ -1140,6 +1174,16 @@ func (s *Server) SetSaveFileFunc(fn func(defaultFilename string, data []byte) (s
 	s.saveFileFunc = fn
 }
 
+// SetSaveFileStreamFunc attaches a native save callback that consumes the file
+// as a stream, enabling the /api/pods/{ns}/{name}/files/save endpoint. It exists
+// so a large file can go from the cluster to disk without a copy of it passing
+// through the webview. The callback should write the stream to the chosen path
+// and return that path, leaving nothing behind if the write fails.
+// Only used by the desktop app.
+func (s *Server) SetSaveFileStreamFunc(fn func(defaultFilename string, r io.Reader) (string, error)) {
+	s.saveFileStreamFunc = fn
+}
+
 // Handler returns the full application handler for the authenticated Cloud
 // tunnel and httptest. In Cloud mode, Start exposes only the health-only wrapper
 // on the ordinary TCP listener.
@@ -1213,8 +1257,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleVersionCheck(w http.ResponseWriter, r *http.Request) {
-	info := version.CheckForUpdate(r.Context())
-	s.writeJSON(w, info)
+	if deploymentMode() == k8s.DeploymentModeCloud {
+		s.writeJSON(w, version.CheckForUpdateRelease(r.Context()))
+		return
+	}
+	s.writeJSON(w, version.CheckForUpdate(r.Context()))
 }
 
 func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
@@ -1240,6 +1287,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	responseCaps := *caps
+	caps = &responseCaps
 
 	caps.MCPEnabled = s.mcpHandler != nil
 	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
@@ -1250,6 +1299,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		WorkloadImages: true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
+	status, _ := s.localTerminalUnavailable(r)
+	caps.LocalTerminal = status == 0
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		caps.Username = user.Username
 	}
@@ -1498,6 +1549,28 @@ func noNamespaceAccess(namespaces []string) bool {
 	return namespaces != nil && len(namespaces) == 0
 }
 
+// prometheusAuthGate is the per-request read check behind every metrics
+// route. Two checks, both load-bearing:
+//
+//  1. canRead (SAR): does the user have RBAC for this verb on this resource?
+//     With namespace="" that is the all-namespaces check the cluster-wide
+//     surfaces (raw PromQL, cluster aggregate) gate on.
+//  2. getUserNamespaces: is the namespace in the user's discovered allow-list?
+//     Matches handleGetResource semantics on the main resource API. Without
+//     it a user with a cluster-wide SAR for "get" could read derived data in
+//     namespaces they are otherwise filtered out of.
+//
+// Passes through when auth is disabled (no user on the request).
+func (s *Server) prometheusAuthGate(req *http.Request, group, resource, namespace, verb string) bool {
+	if !s.canRead(req, group, resource, namespace, verb) {
+		return false
+	}
+	if namespace != "" && noNamespaceAccess(s.getUserNamespaces(req, []string{namespace})) {
+		return false
+	}
+	return true
+}
+
 // canRead authorizes a single (verb, group, resource, namespace) tuple for
 // the calling user via SubjectAccessReview. Used to gate cluster-scoped
 // reads — namespace-list discovery is too narrow a signal to authorize
@@ -1513,19 +1586,27 @@ func noNamespaceAccess(namespaces []string) bool {
 // surrounding namespace-discovery cache entry (2-min TTL by default), so
 // RBAC changes propagate within the TTL window.
 //
-// Pass namespace="" for a cluster-scoped check.
+// Pass namespace="" for a cluster-scoped check. For a namespaced resource
+// an empty namespace makes the SubjectAccessReview an all-namespaces check
+// ("may the user list pods cluster-wide?"), which is how cluster-wide
+// surfaces are gated.
 func (s *Server) canRead(r *http.Request, group, resource, namespace, verb string) bool {
+	allowed, _ := s.canReadDecision(r, group, resource, namespace, verb)
+	return allowed
+}
+
+func (s *Server) canReadDecision(r *http.Request, group, resource, namespace, verb string) (bool, bool) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil || s.permCache == nil {
-		return true
+		return true, true
 	}
-	if s.permCache.Get(user.Username) == nil {
+	if s.permCache.Get(user.Username, user.Groups) == nil {
 		// Trigger namespace discovery so SAR cache has a parent UserPermissions
 		// entry. parseNamespacesForUser is the canonical path that populates
 		// this; if it hasn't run yet, canReadUser falls through to a fresh SAR.
 		_ = s.getUserNamespaces(r, []string{})
 	}
-	return s.canReadUser(r.Context(), user, group, resource, namespace, verb)
+	return s.canReadUserDecision(r.Context(), user, group, resource, namespace, verb)
 }
 
 // canReadUser is the request-free core of canRead: it authorizes a single
@@ -1540,13 +1621,18 @@ func (s *Server) canRead(r *http.Request, group, resource, namespace, verb strin
 // Fail-closed: no apiserver / SAR error → deny. Returns true only when auth is
 // disabled (nil user) or the SAR allows it.
 func (s *Server) canReadUser(ctx context.Context, user *auth.User, group, resource, namespace, verb string) bool {
+	allowed, _ := s.canReadUserDecision(ctx, user, group, resource, namespace, verb)
+	return allowed
+}
+
+func (s *Server) canReadUserDecision(ctx context.Context, user *auth.User, group, resource, namespace, verb string) (bool, bool) {
 	if user == nil || s.permCache == nil {
-		return true
+		return true, true
 	}
-	perms := s.permCache.Get(user.Username)
+	perms := s.permCache.Get(user.Username, user.Groups)
 	if perms != nil {
 		if v, ok := perms.CanI(verb, group, resource, namespace); ok {
-			return v
+			return v, true
 		}
 	}
 	allowed, authoritative := s.canReadUserSAR(ctx, user, group, resource, namespace, verb)
@@ -1556,7 +1642,7 @@ func (s *Server) canReadUser(ctx context.Context, user *auth.User, group, resour
 	if authoritative && perms != nil {
 		perms.SetCanI(verb, group, resource, namespace, allowed)
 	}
-	return allowed
+	return allowed, authoritative
 }
 
 // canReadUserSAR runs a single fresh SubjectAccessReview for (group, resource,
@@ -1864,7 +1950,18 @@ func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, resources)
+	type apiResourceResponse struct {
+		k8score.APIResource
+		Featured bool `json:"featured,omitempty"`
+	}
+	result := make([]apiResourceResponse, 0, len(resources))
+	for _, resource := range resources {
+		result = append(result, apiResourceResponse{
+			APIResource: resource,
+			Featured:    isFeaturedKubernetesAPI(resource.Group, resource.Kind),
+		})
+	}
+	s.writeJSON(w, result)
 }
 
 // preflightResourceList runs the per-user RBAC gates shared by the REST
@@ -1959,6 +2056,13 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// table=1 switches to the printer-column envelope. See resourceTableResponse
+	// for why that envelope is written even when there are no columns to report.
+	tableMode, err := parseTableMode(r.URL.Query().Get("table"))
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	// parseNamespacesForUser primes the per-user perm cache (triggers
 	// DiscoverNamespaces if needed). canRead below relies on it.
@@ -1969,7 +2073,11 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	// returns the explicit status.
 	finalNamespaces, _, _, ok := s.preflightResourceList(r, kind, group, namespaces)
 	if !ok {
-		s.writeJSON(w, []any{})
+		// Denied, not empty. writeResourceList resolves columns for an empty
+		// list, and that lookup runs as Radar's own identity — so routing a
+		// denial through it would answer a caller who cannot list the kind with
+		// its column metadata. Emit the envelope without a table.
+		s.writeEmptyResourceTable(w, tableMode, kind, group)
 		return
 	}
 	namespaces = finalNamespaces
@@ -2068,7 +2176,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		if includeSummary {
 			result = applySummaryStrip(result)
 		}
-		s.writeJSON(w, result)
+		s.writeResourceList(w, r, cache, tableMode, kind, group, result)
 		return
 	}
 
@@ -2373,7 +2481,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		result = summarizeTypedList(kind, result)
 		result = applySummaryStrip(result)
 	}
-	s.writeJSON(w, result)
+	s.writeResourceList(w, r, cache, tableMode, kind, group, result)
 }
 
 // normalizeKind converts K8s kind names to lowercase for case-insensitive matching
@@ -2821,8 +2929,27 @@ func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
 const (
 	metricsAPIServiceKind  = "APIService"
 	metricsAPIServiceGroup = "apiregistration.k8s.io"
-	metricsAPIServiceName  = "v1beta1.metrics.k8s.io"
 )
+
+var metricsAPIServiceNames = []string{
+	"v1.metrics.k8s.io",
+	"v1beta1.metrics.k8s.io",
+}
+
+func metricsAPIServiceNamesForVersion(version string) []string {
+	if version == "" {
+		return metricsAPIServiceNames
+	}
+	selected := version + ".metrics.k8s.io"
+	names := make([]string, 0, len(metricsAPIServiceNames)+1)
+	names = append(names, selected)
+	for _, name := range metricsAPIServiceNames {
+		if name != selected {
+			names = append(names, name)
+		}
+	}
+	return names
+}
 
 var metricsAPIServiceDiagnosisMemo = metricsAPIServiceDiagnosisCache{
 	ttl: 5 * time.Second,
@@ -2831,7 +2958,12 @@ var metricsAPIServiceDiagnosisMemo = metricsAPIServiceDiagnosisCache{
 type metricsAPIServiceDiagnosisCache struct {
 	mu      sync.Mutex
 	ttl     time.Duration
-	entries map[bool]metricsAPIServiceDiagnosisEntry
+	entries map[metricsAPIServiceDiagnosisKey]metricsAPIServiceDiagnosisEntry
+}
+
+type metricsAPIServiceDiagnosisKey struct {
+	includeConditionMessage bool
+	metricsVersion          string
 }
 
 type metricsAPIServiceDiagnosisEntry struct {
@@ -2840,7 +2972,7 @@ type metricsAPIServiceDiagnosisEntry struct {
 	diagnosis   string
 }
 
-func (c *metricsAPIServiceDiagnosisCache) get(contextName string, includeConditionMessage bool, build func() (string, bool)) string {
+func (c *metricsAPIServiceDiagnosisCache) get(contextName string, key metricsAPIServiceDiagnosisKey, build func() (string, bool)) string {
 	if c == nil || c.ttl <= 0 {
 		diagnosis, _ := build()
 		return diagnosis
@@ -2848,9 +2980,9 @@ func (c *metricsAPIServiceDiagnosisCache) get(contextName string, includeConditi
 
 	c.mu.Lock()
 	if c.entries == nil {
-		c.entries = make(map[bool]metricsAPIServiceDiagnosisEntry, 2)
+		c.entries = make(map[metricsAPIServiceDiagnosisKey]metricsAPIServiceDiagnosisEntry, 4)
 	}
-	if entry, ok := c.entries[includeConditionMessage]; ok && entry.contextName == contextName && time.Now().Before(entry.expiresAt) {
+	if entry, ok := c.entries[key]; ok && entry.contextName == contextName && time.Now().Before(entry.expiresAt) {
 		c.mu.Unlock()
 		return entry.diagnosis
 	}
@@ -2863,13 +2995,13 @@ func (c *metricsAPIServiceDiagnosisCache) get(contextName string, includeConditi
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.entries == nil {
-		c.entries = make(map[bool]metricsAPIServiceDiagnosisEntry, 2)
+		c.entries = make(map[metricsAPIServiceDiagnosisKey]metricsAPIServiceDiagnosisEntry, 4)
 	}
 	now := time.Now()
-	if entry, ok := c.entries[includeConditionMessage]; ok && entry.contextName != contextName && now.Before(entry.expiresAt) {
+	if entry, ok := c.entries[key]; ok && entry.contextName != contextName && now.Before(entry.expiresAt) {
 		return diagnosis
 	}
-	c.entries[includeConditionMessage] = metricsAPIServiceDiagnosisEntry{
+	c.entries[key] = metricsAPIServiceDiagnosisEntry{
 		contextName: contextName,
 		diagnosis:   diagnosis,
 		expiresAt:   now.Add(c.ttl),
@@ -2894,9 +3026,25 @@ func metricsUnavailableDiagnosis(ctx context.Context, includeAPIServiceCondition
 	}
 
 	contextName := k8s.GetContextName()
-	return metricsAPIServiceDiagnosisMemo.get(contextName, includeAPIServiceConditionMessage, func() (string, bool) {
-		apiService, err := cache.GetDynamicWithGroup(ctx, metricsAPIServiceKind, "", metricsAPIServiceName, metricsAPIServiceGroup)
-		return metricsAPIServiceLookupDiagnosis(apiService, err, includeAPIServiceConditionMessage), isMetricsAPIServiceLookupCacheable(apiService, err)
+	metricsVersion := ""
+	if discovery := k8s.GetResourceDiscovery(); discovery != nil {
+		if gvr, ok := discovery.GetGVRWithGroup("nodes", k8score.MetricsAPIGroup); ok {
+			metricsVersion = gvr.Version
+		}
+	}
+	key := metricsAPIServiceDiagnosisKey{includeConditionMessage: includeAPIServiceConditionMessage, metricsVersion: metricsVersion}
+	return metricsAPIServiceDiagnosisMemo.get(contextName, key, func() (string, bool) {
+		for _, name := range metricsAPIServiceNamesForVersion(metricsVersion) {
+			apiService, err := cache.GetDynamicWithGroup(ctx, metricsAPIServiceKind, "", name, metricsAPIServiceGroup)
+			if err == nil {
+				return metricsAPIServiceLookupDiagnosis(name, apiService, nil, includeAPIServiceConditionMessage), isMetricsAPIServiceLookupCacheable(apiService, nil)
+			}
+			if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
+				continue
+			}
+			return metricsAPIServiceLookupDiagnosis(name, nil, err, includeAPIServiceConditionMessage), false
+		}
+		return "The metrics.k8s.io APIService is not registered. Install metrics-server or restore that APIService.", true
 	})
 }
 
@@ -2907,27 +3055,27 @@ func isMetricsAPIServiceLookupCacheable(apiService *unstructured.Unstructured, e
 	return apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound)
 }
 
-func metricsAPIServiceLookupDiagnosis(apiService *unstructured.Unstructured, err error, includeConditionMessage bool) string {
+func metricsAPIServiceLookupDiagnosis(apiServiceName string, apiService *unstructured.Unstructured, err error, includeConditionMessage bool) string {
 	if err != nil {
 		if apierrors.IsNotFound(err) || errors.Is(err, k8score.ErrResourceNotFound) {
-			return "The v1beta1.metrics.k8s.io APIService is not registered. Install metrics-server or restore that APIService."
+			return fmt.Sprintf("The %s APIService is not registered. Install metrics-server or restore that APIService.", apiServiceName)
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return ""
 		}
-		log.Printf("[metrics] Failed to inspect %s APIService for metrics unavailable diagnosis: %v", metricsAPIServiceName, err)
+		log.Printf("[metrics] Failed to inspect %s APIService for metrics unavailable diagnosis: %v", apiServiceName, err)
 		return ""
 	}
 	if apiService == nil {
 		return ""
 	}
-	return metricsAPIServiceDiagnosis(apiService, includeConditionMessage)
+	return metricsAPIServiceDiagnosis(apiServiceName, apiService, includeConditionMessage)
 }
 
-func metricsAPIServiceDiagnosis(apiService *unstructured.Unstructured, includeConditionMessage bool) string {
+func metricsAPIServiceDiagnosis(apiServiceName string, apiService *unstructured.Unstructured, includeConditionMessage bool) string {
 	condition, found := conditions.Find(apiService, "Available")
 	if !found {
-		return "The v1beta1.metrics.k8s.io APIService exists but has no Available condition. Check metrics-server and API aggregation status."
+		return fmt.Sprintf("The %s APIService exists but has no Available condition. Check metrics-server and API aggregation status.", apiServiceName)
 	}
 	reasonSuffix := ""
 	if condition.Reason != "" {
@@ -2940,15 +3088,15 @@ func metricsAPIServiceDiagnosis(apiService *unstructured.Unstructured, includeCo
 
 	switch condition.Status {
 	case "True":
-		return "The v1beta1.metrics.k8s.io APIService is Available, but metrics reads still fail. Check metrics-server logs and API aggregation errors."
+		return fmt.Sprintf("The %s APIService is Available, but metrics reads still fail. Check metrics-server logs and API aggregation errors.", apiServiceName)
 	case "False", "Unknown":
 		return metricsAPIServiceDiagnosisSentence(
-			"The v1beta1.metrics.k8s.io APIService is not Available"+reasonSuffix+messageSuffix,
+			"The "+apiServiceName+" APIService is not Available"+reasonSuffix+messageSuffix,
 			"Check the metrics-server Service, endpoints, and API aggregation/TLS configuration.",
 		)
 	default:
 		return metricsAPIServiceDiagnosisSentence(
-			"The v1beta1.metrics.k8s.io APIService has an unexpected Available status"+reasonSuffix+messageSuffix,
+			"The "+apiServiceName+" APIService has an unexpected Available status"+reasonSuffix+messageSuffix,
 			"Check metrics-server and API aggregation status.",
 		)
 	}
@@ -3570,7 +3718,7 @@ func (s *Server) filterEventsByRBAC(r *http.Request, events []timeline.TimelineE
 
 	// Prime the parent UserPermissions entry once so the parallel canReadUser
 	// calls below share its SAR memo instead of racing to populate it.
-	if s.permCache.Get(user.Username) == nil {
+	if s.permCache.Get(user.Username, user.Groups) == nil {
 		_ = s.getUserNamespaces(r, []string{})
 	}
 
@@ -4585,13 +4733,20 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 
 // Helper methods
 
+// normalizeNilSlice turns a nil slice into an empty one. Nil slices serialize
+// as "null", which breaks callers that expect an array. Shared with the
+// printer-column envelope, where the slice is nested a level down and so never
+// reaches writeJSON's own top-level check.
+func normalizeNilSlice(data any) any {
+	if data == nil || (reflect.TypeOf(data) != nil && reflect.TypeOf(data).Kind() == reflect.Slice && reflect.ValueOf(data).IsNil()) {
+		return []any{}
+	}
+	return data
+}
+
 func (s *Server) writeJSON(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
-	// Nil slices serialize as "null" in JSON — normalize to empty array "[]"
-	// to avoid frontend errors when the response is expected to be an array.
-	if data == nil || (reflect.TypeOf(data) != nil && reflect.TypeOf(data).Kind() == reflect.Slice && reflect.ValueOf(data).IsNil()) {
-		data = []any{}
-	}
+	data = normalizeNilSlice(data)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		// Can't change HTTP status at this point, but log for debugging
 		log.Printf("Failed to encode JSON response: %v", err)
@@ -4796,7 +4951,7 @@ func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string
 		return requested
 	}
 
-	perms := s.permCache.Get(user.Username)
+	perms := s.permCache.Get(user.Username, user.Groups)
 	if perms != nil {
 		log.Printf("[auth] Using cached permissions for %s: allowed=%v", user.Username, perms.AllowedNamespaces == nil)
 	}
@@ -4839,7 +4994,7 @@ func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string
 
 		log.Printf("[auth] DiscoverNamespaces result for %s: allowed=%v (nil=all, []=none)", user.Username, allowed)
 		perms = &auth.UserPermissions{AllowedNamespaces: allowed}
-		s.permCache.Set(user.Username, perms)
+		s.permCache.Set(user.Username, user.Groups, perms)
 	}
 
 	return auth.FilterNamespacesForUser(requested, user, perms)
@@ -4893,7 +5048,7 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	// available) so the closure's canReadUser calls hit the memo. When auth is
 	// off, UserFromContext is nil and canReadUser short-circuits to allow.
 	user := auth.UserFromContext(r.Context())
-	if user != nil && s.permCache != nil && s.permCache.Get(user.Username) == nil {
+	if user != nil && s.permCache != nil && s.permCache.Get(user.Username, user.Groups) == nil {
 		_ = s.getUserNamespaces(r, []string{})
 	}
 	s.broadcaster.HandleSSE(w, r, deny, s.newSSEChangeAuthorizer(r.Context(), user))
@@ -5063,6 +5218,9 @@ func deploymentMode() k8s.DeploymentMode {
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	loaded := settings.Load()
+	// Desktop's own state: on a shared instance this would hand every viewer
+	// the cluster name from whenever this $HOME last ran the Desktop app.
+	loaded.LastDesktopContext = nil
 	if cloudMode() {
 		// Strip user-scoped fields — Cloud's intercept layer fills them from
 		// user_preferences. Audit stays because it's cluster-shared policy.
@@ -5100,6 +5258,8 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// The response echoes the merged struct — same reason as handleGetSettings.
+	result.LastDesktopContext = nil
 	if cloudMode() {
 		result.Theme = ""
 		result.PinnedKinds = nil
@@ -5122,7 +5282,10 @@ type configResponse struct {
 	// can show what's set without ever receiving the (secret) values.
 	PrometheusHeaderKeys []string `json:"prometheusHeaderKeys,omitempty"`
 	// ArgoCDTokenSet tells the UI a token is configured without exposing it.
-	ArgoCDTokenSet bool `json:"argoCdTokenSet,omitempty"`
+	ArgoCDTokenSet     bool   `json:"argoCdTokenSet,omitempty"`
+	KubecostAPIKeySet  bool   `json:"kubecostApiKeySet,omitempty"`
+	KubecostEnvManaged bool   `json:"kubecostEnvManaged,omitempty"`
+	KubecostEnvError   string `json:"kubecostEnvError,omitempty"`
 	// ArgoCDEnvManaged marks the integration as provisioned from the environment
 	// (RADAR_ARGOCD_TOKEN / _TOKEN_FILE) — the UI renders it read-only, since the
 	// PUT handler refuses changes to a declaratively-configured integration.
@@ -5152,6 +5315,22 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(headerKeys)
 	file.PrometheusHeaders = nil
+	kubecostAPIKeySet := file.KubecostAPIKey != ""
+	file.KubecostAPIKey = ""
+	kubecostEnvManaged := opencost.IsEnvManaged()
+	kubecostEnvError := opencost.EnvManagedError()
+	if kubecostEnvManaged {
+		effectiveCost := opencost.ConfigSnapshot()
+		file.CostSource = string(effectiveCost.Source)
+		file.KubecostURL = effectiveCost.URL
+		file.KubecostClusterID = effectiveCost.ClusterID
+		file.KubecostAPIKeyContext = effectiveCost.APIKeyContext
+		file.KubecostClusterIDContext = effectiveCost.ClusterIDContext
+		kubecostAPIKeySet = effectiveCost.APIKey != ""
+		if kubecostEnvError != "" {
+			kubecostAPIKeySet = false
+		}
+	}
 	tokenSet := file.ArgoCDToken != ""
 	file.ArgoCDToken = ""
 	// When the integration is environment-managed, the on-disk URL/TLS are ignored;
@@ -5180,6 +5359,9 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		OpenCostManaged:      s.currencyManaged,
 		PrometheusHeaderKeys: headerKeys,
 		ArgoCDTokenSet:       tokenSet,
+		KubecostAPIKeySet:    kubecostAPIKeySet,
+		KubecostEnvManaged:   kubecostEnvManaged,
+		KubecostEnvError:     kubecostEnvError,
 		ArgoCDEnvManaged:     envManaged,
 		ArgoCDEnvError:       envError,
 	}
@@ -5190,7 +5372,14 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.effectiveConfig != nil {
 		effective := *s.effectiveConfig
+		effectiveCost := opencost.ConfigSnapshot()
+		effective.CostSource = string(effectiveCost.Source)
+		effective.KubecostURL = effectiveCost.URL
+		effective.KubecostClusterID = effectiveCost.ClusterID
+		effective.KubecostAPIKeyContext = effectiveCost.APIKeyContext
+		effective.KubecostClusterIDContext = effectiveCost.ClusterIDContext
 		effective.PrometheusHeaders = nil
+		effective.KubecostAPIKey = ""
 		effective.ArgoCDToken = ""
 		resp.Effective = effective
 	}
@@ -5200,9 +5389,8 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 // handlePutConfig replaces the entire config file. Most changes take effect on next restart;
 // the OpenCost currency override is also applied unless an explicit startup flag owns it.
 // Unlike handlePutSettings (which merges fields), this is a full replacement.
-// PrometheusHeaders and the Argo CD token are preserved from the on-disk file: the GET
-// response redacts them, so a UI round-trip would otherwise silently wipe the user's
-// credentials.
+// Live integration fields are preserved from the on-disk file: their dedicated endpoints
+// apply them, and GET redacts their credentials, so a UI round-trip must not replace them.
 func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
@@ -5225,23 +5413,35 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		// never disturb a live integration — even if it races an in-flight
 		// Apply/Connect or echoes back the redacted token as empty.
 		preserved := struct {
-			promHeaders      map[string]string
-			promHeadersEnv   map[string]string
-			promURL          string
-			argoURL          string
-			argoToken        string
-			argoInsecure     bool
-			argoTokenContext string
-			argoTokenBinding string
+			promHeaders              map[string]string
+			promHeadersEnv           map[string]string
+			promURL                  string
+			argoURL                  string
+			argoToken                string
+			argoInsecure             bool
+			argoTokenContext         string
+			argoTokenBinding         string
+			costSource               string
+			kubecostURL              string
+			kubecostAPIKey           string
+			kubecostAPIKeyContext    string
+			kubecostClusterID        string
+			kubecostClusterIDContext string
 		}{
-			promHeaders:      c.PrometheusHeaders,
-			promHeadersEnv:   c.PrometheusHeadersFromEnv,
-			promURL:          c.PrometheusURL,
-			argoURL:          c.ArgoCDURL,
-			argoToken:        c.ArgoCDToken,
-			argoInsecure:     c.ArgoCDInsecureTLS,
-			argoTokenContext: c.ArgoCDTokenContext,
-			argoTokenBinding: c.ArgoCDTokenBinding,
+			promHeaders:              c.PrometheusHeaders,
+			promHeadersEnv:           c.PrometheusHeadersFromEnv,
+			promURL:                  c.PrometheusURL,
+			argoURL:                  c.ArgoCDURL,
+			argoToken:                c.ArgoCDToken,
+			argoInsecure:             c.ArgoCDInsecureTLS,
+			argoTokenContext:         c.ArgoCDTokenContext,
+			argoTokenBinding:         c.ArgoCDTokenBinding,
+			costSource:               c.CostSource,
+			kubecostURL:              c.KubecostURL,
+			kubecostAPIKey:           c.KubecostAPIKey,
+			kubecostAPIKeyContext:    c.KubecostAPIKeyContext,
+			kubecostClusterID:        c.KubecostClusterID,
+			kubecostClusterIDContext: c.KubecostClusterIDContext,
 		}
 		*c = updated
 		c.PrometheusHeaders = preserved.promHeaders
@@ -5252,6 +5452,12 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		c.ArgoCDInsecureTLS = preserved.argoInsecure
 		c.ArgoCDTokenContext = preserved.argoTokenContext
 		c.ArgoCDTokenBinding = preserved.argoTokenBinding
+		c.CostSource = preserved.costSource
+		c.KubecostURL = preserved.kubecostURL
+		c.KubecostAPIKey = preserved.kubecostAPIKey
+		c.KubecostAPIKeyContext = preserved.kubecostAPIKeyContext
+		c.KubecostClusterID = preserved.kubecostClusterID
+		c.KubecostClusterIDContext = preserved.kubecostClusterIDContext
 	})
 	if err != nil {
 		log.Printf("[config] Failed to save config: %v", err)
@@ -5263,6 +5469,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	result.PrometheusHeaders = nil
 	result.ArgoCDToken = ""
+	result.KubecostAPIKey = ""
 	s.writeJSON(w, result)
 }
 

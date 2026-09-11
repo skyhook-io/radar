@@ -1,13 +1,13 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, useCapabilities, useNamespaceCapabilities, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit } from '../../api/client'
+import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit } from '../../api/client'
 import { isBadgeWorthy } from '../../utils/auditBadges'
 import type { AuditBadgeMessage } from '@skyhook-io/k8s-ui'
 import { apiUrl, getAuthHeaders, getCredentialsMode, stripBasename } from '../../api/config'
 import { useAPIResources } from '../../api/apiResources'
 import { useConnection } from '../../context/ConnectionContext'
-import { initNavigationMap } from '@skyhook-io/k8s-ui'
+import { initNavigationMap, getSecretStoreProviderType } from '@skyhook-io/k8s-ui'
 import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import {
@@ -16,10 +16,12 @@ import {
   ResourcesView as BaseResourcesView,
   CORE_RESOURCES,
   intersectWorkloadWrites,
+  hasCuratedColumns,
+  sanitizePrinterTable,
 } from '@skyhook-io/k8s-ui'
-import type { Capabilities, ResourceQueryResult, WorkloadWritePermissions } from '@skyhook-io/k8s-ui'
+import type { Capabilities, PrinterTable, ResourceQueryResult, WorkloadWritePermissions } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
-import { kindToPlural, type NavigateToResource } from '../../utils/navigation'
+import { apiVersionToGroup, kindToPluralWithGroup, type NavigateToResource } from '../../utils/navigation'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { getSkeletonYaml } from '../../utils/skeleton-yaml'
 
@@ -229,12 +231,19 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // Fetch full data only for the selected kind
   const selectedKindQuery = useQuery({
     queryKey: ['resources', selectedKind?.name, isSelectedCrd ? selectedKind?.group : '', namespaces],
-    queryFn: async () => {
-      if (!selectedKind) return []
+    queryFn: async (): Promise<{ items: any[]; printerTable: PrinterTable | null }> => {
+      if (!selectedKind) return { items: [], printerTable: null }
       const params = new URLSearchParams()
       if (namespaces.length > 0) params.set('namespaces', namespacesParam)
       if (isSelectedCrd && selectedKind.group) params.set('group', selectedKind.group)
       if (selectedKindSummaryServed) params.set('include', 'summary')
+      // Only CRDs can declare printer columns, and a curated kind discards the
+      // result — so table mode is requested from exactly the kinds that can use
+      // it. Resolving a table costs the server a CRD read per request; doing
+      // that for a kind whose columns are hand-curated is pure waste.
+      const wantsTable = isSelectedCrd && !!selectedKind.group &&
+        !hasCuratedColumns(selectedKind.name, selectedKind.group)
+      if (wantsTable) params.set('table', '1')
       const startedAt = performance.now()
       debugNamespaceLog('resources:selected-kind-fetch-start', {
         kind: selectedKind.name,
@@ -258,7 +267,19 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         const errorData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
         throw new ApiError(errorData.error || `Failed to fetch ${selectedKind.name}`, res.status, errorData)
       }
-      return res.json()
+      const body = await res.json()
+      // Both branches are current shapes, not a guess at a legacy one: a Radar
+      // backend that predates `table` ignores the parameter and answers with
+      // the bare array. @skyhook-io/radar-app is versioned independently of the
+      // backend it points at, so a consumer can pair a new frontend with an
+      // older Radar — and reading that array as a missing envelope would render
+      // every CRD list empty. Items and columns still come from one response,
+      // so a row can never render against another fetch's cells.
+      if (!wantsTable || Array.isArray(body)) return { items: body as any[], printerTable: null }
+      return {
+        items: Array.isArray(body?.items) ? body.items as any[] : [],
+        printerTable: sanitizePrinterTable(body),
+      }
     },
     enabled: !!selectedKind && !selectedKindQueryBlocked,
     staleTime: 30000,
@@ -275,13 +296,13 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     return {
       resourceName: selectedKind.name,
       group: selectedKind.group,
-      data: selectedKindQueryBlocked ? [] : selectedKindQuery.data as any[] | undefined,
+      data: selectedKindQueryBlocked ? [] : selectedKindQuery.data?.items,
       isLoading: waitingForGuardCount || selectedKindQuery.isLoading,
       error: selectedKindQueryBlocked ? undefined : selectedKindQuery.error,
       refetch: selectedKindQuery.refetch,
       dataUpdatedAt: selectedKindQuery.dataUpdatedAt,
     }
-  }, [selectedKind, selectedKindQueryBlocked, waitingForGuardCount, selectedKindQuery.data, selectedKindQuery.isLoading, selectedKindQuery.error, selectedKindQuery.refetch, selectedKindQuery.dataUpdatedAt])
+  }, [selectedKind, selectedKindQueryBlocked, waitingForGuardCount, selectedKindQuery.data?.items, selectedKindQuery.isLoading, selectedKindQuery.error, selectedKindQuery.refetch, selectedKindQuery.dataUpdatedAt])
 
   // Metrics
   const { data: topPodMetrics } = useTopPodMetrics({ enabled: topPodMetricsEnabled, namespaces })
@@ -289,6 +310,30 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
   // Certificate expiry
   const { data: certExpiry, isError: certExpiryError } = useSecretCertExpiry()
+
+  // An ExternalSecret names a store; only the store says which backend it reads
+  // from. Two list calls per page beat one lookup per row, and the column shows
+  // nothing rather than guessing when a store is unreadable or absent.
+  const viewingExternalSecrets = selectedKind?.name === 'externalsecrets'
+  const { data: secretStores, isPending: secretStoresPending } = useResources<any>('secretstores', undefined, undefined, { enabled: viewingExternalSecrets })
+  const { data: clusterSecretStores, isPending: clusterSecretStoresPending } = useResources<any>('clustersecretstores', undefined, undefined, { enabled: viewingExternalSecrets })
+  const storeProviders = useMemo(() => {
+    // Undefined until both lists have settled. An empty map would be
+    // indistinguishable from "every store is unreadable", and the column says
+    // that out loud.
+    if (!viewingExternalSecrets || secretStoresPending || clusterSecretStoresPending) return undefined
+    const map: Record<string, string> = {}
+    for (const store of secretStores ?? []) {
+      const ns = store?.metadata?.namespace
+      const name = store?.metadata?.name
+      if (ns && name) map[`${ns}/${name}`] = getSecretStoreProviderType(store)
+    }
+    for (const store of clusterSecretStores ?? []) {
+      const name = store?.metadata?.name
+      if (name) map[name] = getSecretStoreProviderType(store)
+    }
+    return map
+  }, [viewingExternalSecrets, secretStoresPending, clusterSecretStoresPending, secretStores, clusterSecretStores])
 
   // Pinned kinds
   const { pinned, togglePin, isPinned } = usePinnedKinds()
@@ -352,12 +397,14 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       resourceReasons={countsData?.reasons}
       resourceUnavailable={countsData?.unavailable}
       selectedKindQuery={selectedKindQueryResult}
+      printerTable={selectedKindQueryBlocked ? null : selectedKindQuery.data?.printerTable ?? null}
       connectionState={connection.state}
       largeListGuard={largeListGuard}
       onSelectedKindChange={setSelectedKind}
       topPodMetrics={topPodMetrics}
       topNodeMetrics={topNodeMetrics}
       certExpiry={certExpiry}
+      storeProviders={storeProviders}
       certExpiryError={certExpiryError}
       auditBadges={auditBadges}
       // Pinned kinds
@@ -394,7 +441,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       initialYaml={createDialogYaml}
       title={createDialogTitle}
       onCreated={(result) => {
-        onResourceClick?.({ kind: kindToPlural(result.kind), namespace: result.namespace, name: result.name, group: '' })
+        const group = apiVersionToGroup(result.apiVersion)
+        onResourceClick?.({ kind: kindToPluralWithGroup(result.kind, group), namespace: result.namespace, name: result.name, group })
       }}
     />
     </>

@@ -73,6 +73,33 @@ func TestUpdateMergesFields(t *testing.T) {
 	}
 }
 
+func TestUpdateCheckedDoesNotOverwriteInvalidSettings(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	path := filepath.Join(dir, ".radar", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const invalid = "{not-json"
+	if err := os.WriteFile(path, []byte(invalid), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := UpdateChecked(func(s *Settings) {
+		s.Theme = "dark"
+	}); err == nil {
+		t.Fatal("UpdateChecked succeeded with invalid existing settings")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != invalid {
+		t.Errorf("settings were overwritten: got %q, want %q", data, invalid)
+	}
+}
+
 func TestEmptySettingsProducesMinimalJSON(t *testing.T) {
 	s := Settings{}
 	data, err := json.Marshal(s)

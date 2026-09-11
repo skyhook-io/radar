@@ -472,7 +472,9 @@ export function getKyvernoMutations(resource: any): KyvernoMutation[] {
 export function getKyvernoGenerations(resource: any): string[] {
   const generate = resource?.spec?.generate
   if (!Array.isArray(generate)) return []
-  return generate.map((g: any) => g?.expression || '').filter(Boolean)
+  // Each entry declares its target as exactly one of a CEL `expression` or a
+  // YAML `template.value`; both are first-class ways to say what gets generated.
+  return generate.map((g: any) => g?.expression || g?.template?.value || '').filter(Boolean)
 }
 
 /**

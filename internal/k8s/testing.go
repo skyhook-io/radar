@@ -11,6 +11,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 )
 
 // InitLoadTestResourceCache creates a resource cache from a fake client using
@@ -112,7 +113,40 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 	cacheOnce = new(sync.Once)
 	cacheOnce.Do(func() {})
 
+	waitForInformerStatuses(resourceCache)
+
 	return nil
+}
+
+// waitForInformerStatuses blocks until every informer's InformerSyncStatus
+// reports synced.
+//
+// NewResourceCache returns as soon as the informers themselves report synced,
+// but InformerSyncStatus.Synced is a mirror of that, flipped by a goroutine per
+// informer. Nothing in the product waits on the mirror, so the gap is invisible
+// there — but IsKindReady reads it, and the missing-reference detectors gate on
+// IsKindReady and fail toward silence, so a test that queries on the next line
+// can see a fully-populated cache report nothing at all.
+//
+// The gap is normally sub-millisecond and closes on its own; it only widens
+// when the machine is loaded enough to delay scheduling those goroutines, which
+// is why this reproduced in CI and never locally.
+//
+// Best-effort: on timeout the caller proceeds and its own assertions report the
+// real problem, rather than this returning an error that every call site would
+// have to handle.
+func waitForInformerStatuses(rc *ResourceCache) {
+	if rc == nil {
+		return
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		st := rc.GetSyncStatus()
+		if len(st.PendingCritical) == 0 && len(st.PendingDeferred) == 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // InitTestDynamicResourceCache wires the dynamic resource cache and discovery
@@ -146,10 +180,13 @@ func InitTestDynamicResourceCache(dynClient dynamic.Interface, resources []APIRe
 		core.AddAPIResource(r)
 	}
 
+	// Installing the singleton directly is what marks discovery initialized —
+	// InitResourceDiscovery returns early when it is already set. The binding
+	// marks it valid for whatever client the test environment has (usually
+	// nil): the singleton is served only while that binding stays current.
 	discoveryMu.Lock()
 	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
-	discoveryOnce = new(sync.Once)
-	discoveryOnce.Do(func() {})
+	resourceDiscoveryClient = GetDiscoveryClient()
 	discoveryMu.Unlock()
 
 	return InitDynamicResourceCache(nil)
@@ -175,6 +212,46 @@ func SetTestContextName(name string) string {
 	contextName = name
 	clientMu.Unlock()
 	return prev
+}
+
+// SetTestLocalMode makes IsInCluster report local mode and returns a restore func.
+func SetTestLocalMode() func() {
+	clientMu.Lock()
+	previousInitializationStarted := initializationStarted
+	previousKubeconfigMode := kubeconfigMode
+	previousForceInCluster := ForceInCluster
+	initializationStarted = true
+	kubeconfigMode = "single"
+	ForceInCluster = false
+	clientMu.Unlock()
+
+	return func() {
+		clientMu.Lock()
+		initializationStarted = previousInitializationStarted
+		kubeconfigMode = previousKubeconfigMode
+		ForceInCluster = previousForceInCluster
+		clientMu.Unlock()
+	}
+}
+
+// SetTestRegistryEntry is a test-only helper that registers one context in the
+// isolated-load registry, so callers can exercise resolution against a
+// multi-kubeconfig layout. Returns a restore func.
+func SetTestRegistryEntry(qualifiedName, sourceFile, inFileName string) func() {
+	clientMu.Lock()
+	prev := contextRegistry
+	next := make(map[string]contextEntry, len(prev)+1)
+	for k, v := range prev {
+		next[k] = v
+	}
+	next[qualifiedName] = contextEntry{SourceFile: sourceFile, InFileName: inFileName}
+	contextRegistry = next
+	clientMu.Unlock()
+	return func() {
+		clientMu.Lock()
+		contextRegistry = prev
+		clientMu.Unlock()
+	}
 }
 
 // SetTestContextNamespace is a test-only helper that overrides the package-level
@@ -220,6 +297,22 @@ func SetTestClient(c *kubernetes.Clientset) *kubernetes.Clientset {
 // Returns the previous index so a test can restore it.
 //
 // This is intended for integration tests only.
+// SetTestConfig publishes a rest.Config directly, so a handler that resolves a
+// per-request config can run without a real cluster connection. SetTestClient
+// publishes the clientset but not the config, and a handler that needs both
+// bails out early with "cluster client not available" if only one is set.
+//
+// Returns the previous config so a test can restore it.
+//
+// This is intended for integration tests only.
+func SetTestConfig(c *rest.Config) *rest.Config {
+	clientMu.Lock()
+	prev := k8sConfig
+	k8sConfig = c
+	clientMu.Unlock()
+	return prev
+}
+
 func SetTestPolicyReportIndex(idx *policyreports.Index) *policyreports.Index {
 	prev := policyReportIndex.Load()
 	policyReportIndex.Store(idx)
@@ -246,6 +339,13 @@ func ResetTestState() {
 	connectionCallbacksMu.Lock()
 	connectionCallbacks = nil
 	connectionCallbacksMu.Unlock()
+
+	contextSwitchMu.Lock()
+	beforeContextSwitchCallbacks = nil
+	contextSwitchCallbacks = nil
+	namespaceRescopeCallbacks = nil
+	contextSwitchProgressCallbacks = nil
+	contextSwitchMu.Unlock()
 
 	runtimeAuthChecksMu.Lock()
 	runtimeAuthChecks = make(map[uint64]struct{})

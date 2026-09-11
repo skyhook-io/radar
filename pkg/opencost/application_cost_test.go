@@ -90,6 +90,33 @@ func TestBuildApplicationCostResponse_PartialAndScaledToZero(t *testing.T) {
 	}
 }
 
+func TestBuildApplicationCostResponse_PreservesSuccessfulNamespaces(t *testing.T) {
+	inputs := []ApplicationWorkloadCostInput{
+		{ApplicationWorkloadRef: ApplicationWorkloadRef{Namespace: "team-a", Kind: "Deployment", Name: "api"}, DesiredReplicas: 1},
+		{ApplicationWorkloadRef: ApplicationWorkloadRef{Namespace: "team-b", Kind: "StatefulSet", Name: "worker"}, DesiredReplicas: 1},
+	}
+	got := BuildApplicationCostResponse(inputs, nil, nil, map[string]*WorkloadCostResponse{
+		"team-a": {
+			Available:   true,
+			Window:      "1h",
+			DataThrough: "2026-08-26T08:30:00Z",
+			Namespace:   "team-a",
+			Workloads:   []WorkloadCost{{Name: "api", Kind: "Deployment", HourlyCost: 0.2, CPUCost: 0.1, MemoryCost: 0.1, Replicas: 1}},
+		},
+		"team-b": {Namespace: "team-b", Reason: ReasonQueryError, Window: "1d", DataThrough: "2026-08-26T09:30:00Z"},
+	})
+
+	if !got.Available || !got.Partial || got.Coverage.Included != 1 || len(got.Coverage.Unavailable) != 1 {
+		t.Fatalf("unexpected partial response: %+v", got)
+	}
+	if got.Coverage.Unavailable[0].Namespace != "team-b" || got.Coverage.Unavailable[0].Reason != ReasonQueryError {
+		t.Fatalf("unexpected unavailable coverage: %+v", got.Coverage.Unavailable)
+	}
+	if got.Window != "1h" || got.DataThrough != "2026-08-26T08:30:00Z" {
+		t.Fatalf("window = %q, dataThrough = %q; want metadata from data-bearing namespace", got.Window, got.DataThrough)
+	}
+}
+
 func TestApplicationCostTotals_IncompleteUsageSuppressesAggregatePercentage(t *testing.T) {
 	total := ApplicationCostTotals{}
 	addApplicationCostTotal(&total, WorkloadCost{

@@ -3,6 +3,7 @@ package upgradereadiness
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -37,6 +38,7 @@ func scanNodeCgroupCompatibility(input *Input) Check {
 	}
 	if input.NodeRuntimeEvidence == nil {
 		check.Status, check.Summary = CheckUnknown, "Kubelet cgroup version metrics were unavailable."
+		check.Caveat = nodeRuntimeCoverageCaveat(input, "Kubelet cgroup version metrics could not be inspected.")
 		return check
 	}
 	metrics := make(map[string]NodeRuntimeEvidence, len(input.NodeRuntimeEvidence))
@@ -61,7 +63,7 @@ func scanNodeCgroupCompatibility(input *Input) Check {
 		}
 	}
 	if missing > 0 {
-		check.Caveat = fmt.Sprintf("The cgroup metric was unavailable on %d %s.", missing, plural(missing, "node", "nodes"))
+		check.Caveat = nodeRuntimeCoverageCaveat(input, fmt.Sprintf("The cgroup metric was unavailable on %d %s.", missing, plural(missing, "node", "nodes")))
 		if len(check.Findings) == 0 {
 			check.Status, check.Summary = CheckUnknown, "No cgroup v1 nodes were observed, but node coverage is incomplete."
 		}
@@ -98,6 +100,11 @@ func scanContainerRuntimeSupport(input *Input, target *utilversion.Version) Chec
 	}
 	if linuxNodes == 0 {
 		check.Status, check.Summary = CheckNotApplicable, "Container runtime support for this upgrade does not apply to Windows nodes."
+		return check
+	}
+	if input.NodeRuntimeEvidence == nil {
+		check.Status, check.Summary = CheckUnknown, "Container runtime support metrics were unavailable."
+		check.Caveat = nodeRuntimeCoverageCaveat(input, "Container runtime support metrics could not be inspected.")
 		return check
 	}
 	metrics := make(map[string]NodeRuntimeEvidence, len(input.NodeRuntimeEvidence))
@@ -139,7 +146,7 @@ func scanContainerRuntimeSupport(input *Input, target *utilversion.Version) Chec
 		}
 	}
 	if unknown > 0 {
-		check.Caveat = fmt.Sprintf("Runtime support could not be proven for %d %s.", unknown, plural(unknown, "node", "nodes"))
+		check.Caveat = nodeRuntimeCoverageCaveat(input, fmt.Sprintf("Runtime support could not be proven for %d %s.", unknown, plural(unknown, "node", "nodes")))
 		if len(check.Findings) == 0 {
 			check.Status, check.Summary = CheckUnknown, "No unsupported runtimes were identified, but runtime evidence is incomplete."
 		}
@@ -378,10 +385,11 @@ func scanAdmissionWebhookReadiness(input *Input) Check {
 	check := Check{ID: "admission-webhook-readiness", Category: "Admission control", Title: "Admission webhook readiness", Status: CheckPassed, Summary: "Inspected admission webhooks have reachable Service backends and upgrade-safe matching behavior.", Scope: "Admission webhook configurations, Services, and EndpointSlices", References: append([]Reference(nil), admissionReferences...)}
 	if input.AdmissionWebhookConfigurations == nil {
 		check.Status, check.Summary = CheckUnknown, "Admission webhook configuration evidence was unavailable."
+		check.Caveat = admissionWebhookCoverageCaveat(input.AdmissionWebhookUnavailableKinds, input.AdmissionWebhookDeniedKinds)
 		return check
 	}
 	if len(input.AdmissionWebhookUnavailableKinds) > 0 {
-		check.Caveat = appendCaveat(check.Caveat, "Admission webhook configurations could not be inspected for: "+strings.Join(input.AdmissionWebhookUnavailableKinds, ", ")+".")
+		check.Caveat = appendCaveat(check.Caveat, admissionWebhookCoverageCaveat(input.AdmissionWebhookUnavailableKinds, input.AdmissionWebhookDeniedKinds))
 	}
 	check.Inspected = len(input.AdmissionWebhookConfigurations)
 	backendEvidenceAvailable := input.WebhookServices != nil && input.EndpointSlices != nil
@@ -458,6 +466,22 @@ func scanAdmissionWebhookReadiness(input *Input) Check {
 		check.Summary = fmt.Sprintf("%d admission webhook %s.", len(check.Findings), plural(len(check.Findings), "condition requires action or review", "conditions require action or review"))
 	}
 	return check
+}
+
+func admissionWebhookCoverageCaveat(unavailableKinds, deniedKinds []string) string {
+	caveat := "Admission webhook configurations could not be inspected"
+	if len(unavailableKinds) == 0 {
+		return caveat + "."
+	}
+	caveat += " for: " + strings.Join(unavailableKinds, ", ") + "."
+	if len(deniedKinds) > 0 {
+		if slices.Equal(unavailableKinds, deniedKinds) {
+			caveat += " The current identity cannot list them; ask a cluster administrator to grant list access if admission-plane visibility is appropriate."
+		} else {
+			caveat += " The current identity cannot list: " + strings.Join(deniedKinds, ", ") + "; ask a cluster administrator to grant list access if admission-plane visibility is appropriate."
+		}
+	}
+	return caveat
 }
 
 func readyEndpointServices(slices []*discoveryv1.EndpointSlice) map[string]bool {

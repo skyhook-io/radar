@@ -213,7 +213,7 @@ var (
 	ForceDisableHelmWrite bool
 	// ForceDisableExec overrides the exec capability to false (for dev testing)
 	ForceDisableExec bool
-	// ForceDisableLocalTerminal overrides the localTerminal capability to false (for dev testing)
+	// ForceDisableLocalTerminal turns the local terminal off (--disable-local-terminal)
 	ForceDisableLocalTerminal bool
 )
 
@@ -383,6 +383,8 @@ func InvalidateCapabilitiesCache() {
 	nsCapMu.Lock()
 	nsCapCache = nil
 	nsCapMu.Unlock()
+
+	InvalidateUserCapabilitiesCache()
 }
 
 // CheckNamespaceCapabilities performs namespace-scoped RBAC checks for

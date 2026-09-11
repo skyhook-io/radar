@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -16,6 +17,41 @@ import (
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
 )
+
+func TestTypedJobConversionPreservesWorkloadScheduling(t *testing.T) {
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "gang", Namespace: "default"},
+		Spec: batchv1.JobSpec{
+			Scheduling: &batchv1.JobSchedulingConfiguration{},
+		},
+	}
+	gvr := schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}
+	got, err := typedObjectToUnstructured(job, gvr)
+	if err != nil {
+		t.Fatalf("typedObjectToUnstructured: %v", err)
+	}
+	if _, found, err := unstructured.NestedMap(got.Object, "spec", "scheduling"); err != nil || !found {
+		t.Fatalf("spec.scheduling was not preserved: found=%v err=%v object=%v", found, err, got.Object)
+	}
+}
+
+func TestTypedPodConversionPreservesSchedulingGroup(t *testing.T) {
+	podGroupName := "batch"
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker", Namespace: "default"},
+		Spec: corev1.PodSpec{
+			SchedulingGroup: &corev1.PodSchedulingGroup{PodGroupName: &podGroupName},
+		},
+	}
+	gvr := schema.GroupVersionResource{Version: "v1", Resource: "pods"}
+	got, err := typedObjectToUnstructured(pod, gvr)
+	if err != nil {
+		t.Fatalf("typedObjectToUnstructured: %v", err)
+	}
+	if name, found, err := unstructured.NestedString(got.Object, "spec", "schedulingGroup", "podGroupName"); err != nil || !found || name != podGroupName {
+		t.Fatalf("spec.schedulingGroup.podGroupName = %q, found=%v err=%v", name, found, err)
+	}
+}
 
 func TestTypedRouteGVRDispatch(t *testing.T) {
 	cases := []struct {
@@ -29,7 +65,7 @@ func TestTypedRouteGVRDispatch(t *testing.T) {
 		{"Service", "serving.knative.dev", false}, // Knative Service stays dynamic
 		{"ConfigMap", "", true},
 		{"Prometheus", "monitoring.coreos.com", false},
-		{"Endpoints", "", false},      // typed=false: bypass kind stays dynamic
+		{"Endpoints", "", false}, // typed=false: bypass kind stays dynamic
 		{"EndpointSlice", "discovery.k8s.io", false},
 		{"ClusterRole", "rbac.authorization.k8s.io", true},
 		{"Application", "argoproj.io", false},
@@ -262,8 +298,8 @@ func TestTypedBuiltinTableParityWithFetchSwitches(t *testing.T) {
 		if _, err := FetchResourceList(cache, form, nil); errors.Is(err, ErrUnknownKind) {
 			t.Errorf("FetchResourceList(%q → %s) returned ErrUnknownKind; typed table and switch are out of sync", form, gvr.Resource)
 		}
-		if _, ok := builtinKindForResource(gvr.Resource); !ok {
-			t.Errorf("builtinKindForResource(%q) missing; converted objects would lack a kind", gvr.Resource)
+		if _, ok := BuiltinKindForResource(gvr.Resource); !ok {
+			t.Errorf("BuiltinKindForResource(%q) missing; converted objects would lack a kind", gvr.Resource)
 		}
 	}
 }

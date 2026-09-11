@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   getKyvernoEnforcementPosture,
+  getKyvernoGenerations,
   getKyvernoPolicyFamily,
   getKyvernoValidationActions,
   getKyvernoMatchSummary,
@@ -286,5 +287,40 @@ describe('match summary', () => {
 
   it('returns a dash when nothing is matched', () => {
     expect(getKyvernoMatchSummary(vpol({}))).toBe('-')
+  })
+})
+
+// A GeneratingPolicy declares each generated target as exactly one of an
+// `expression` (CEL returning the resources) or a `template` (a YAML document,
+// optionally CEL-interpolated). Both are first-class; the "Generates" count and
+// list must see either form.
+describe('generation targets', () => {
+  it('counts expression-form generations', () => {
+    const gen = getKyvernoGenerations(vpol({ generate: [{ expression: 'generator.Apply(ns, [cm])' }] }))
+    expect(gen).toEqual(['generator.Apply(ns, [cm])'])
+  })
+
+  it('counts template-form generations', () => {
+    const value = 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cfg\n'
+    const gen = getKyvernoGenerations(vpol({ generate: [{ template: { interpolate: 'none', value } }] }))
+    expect(gen).toHaveLength(1)
+    expect(gen[0]).toContain('ConfigMap')
+  })
+
+  it('counts a mix of expression and template forms', () => {
+    const gen = getKyvernoGenerations(
+      vpol({
+        generate: [
+          { expression: 'generator.Apply(ns, [cm])' },
+          { template: { value: 'kind: NetworkPolicy\n' } },
+        ],
+      }),
+    )
+    expect(gen).toHaveLength(2)
+  })
+
+  it('returns nothing for an empty or absent generate block', () => {
+    expect(getKyvernoGenerations(vpol({ generate: [] }))).toEqual([])
+    expect(getKyvernoGenerations(vpol({}))).toEqual([])
   })
 })

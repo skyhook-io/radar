@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Bell, Check, Globe, History, Sparkles, Users, X } from 'lucide-react'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
@@ -17,6 +17,7 @@ import {
   useCloudConnectInfo,
   useCloudConnectSelf,
   useCloudInstallStatus,
+  useClusterInfo,
 } from '../api/client'
 
 // OSS → Cloud funnel: a quiet globe button in the top bar that opens a modal
@@ -34,12 +35,21 @@ const FALLBACK_APP_URL = 'https://app.radarhq.io'
 // copy as the fallback means an unreachable Hub, a self-hosted one, or an
 // offline laptop all render exactly what Radar rendered before this fetch
 // existed — the dialog never waits on the network and never shows a gap.
-const DEFAULT_ASSURANCES = ['Free for 3 clusters', 'No credit card', 'Your cluster data stays in your cluster']
-// A product fact, not funnel copy — appended even when the Hub supplies its
-// own assurances (deduped if the Hub starts sending it).
-const SOC2_ASSURANCE = 'SOC 2 compliant'
+// Ordered by what matters most when deciding to connect a cluster: network
+// posture, then reversibility, then attestation, then billing. Deliberately
+// no data-locality claim — retention and alerts work because cluster data
+// flows out through the relay, so the list describes the connection model
+// instead. The SOC 2 line comes from the Hub's live list, which owns its
+// wording; here it is only the offline fallback.
+const DEFAULT_ASSURANCES = [
+  'Secure outbound-only tunnel',
+  'Disconnect and delete your data anytime',
+  'SOC 2 Type II',
+  '3 clusters free, no card required',
+]
 const SIGNUP_QUERY = '?utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal'
 const ABOUT_URL = 'https://radarhq.io/about'
+const PRICING_URL = 'https://radarhq.io/pricing'
 const SELF_HOSTED_DOCS_URL = 'https://radarhq.io/docs/cloud/self-hosted/'
 const SEEN_KEY = 'radar.cloudFunnel.seen'
 
@@ -69,6 +79,12 @@ export function CloudFunnelButton() {
   const [seen, setSeen] = useState(readSeen)
   const [inFlowView, setInFlowView] = useState(false)
   const [blocked, setBlocked] = useState<CloudInstallBlocked | null>(null)
+  // Set once an in-app attempt has actually failed, so the CTA reads "Try
+  // again" instead of implying a first attempt. Survives closing the modal
+  // (the failure belongs to the cluster, not the dialog session) but not a
+  // reload, and is reset below when the kubeconfig context changes — it must
+  // never describe a cluster the user has switched away from.
+  const [prepareFailed, setPrepareFailed] = useState(false)
 
   const capabilities = useCapabilities()
   const lane = capabilities.data?.cloudConnect?.lane ?? 'wizard'
@@ -119,7 +135,7 @@ export function CloudFunnelButton() {
       // Anything else failed before a flow existed. Return to the pitch rather
       // than leaving the flow view armed, where a later status change would
       // pull the user into a screen they did not ask for.
-      exitFlow()
+      exitFlow(true)
       showApiError('Could not inspect this cluster for Cloud connect', err instanceof Error ? err.message : undefined)
     },
     // No meta.errorMessage: the global handler cannot tell a single-flight 409
@@ -137,11 +153,16 @@ export function CloudFunnelButton() {
 
   const startConnect = () => {
     setBlocked(null)
+    setPrepareFailed(false)
     setInFlowView(true)
     prepare.mutate()
   }
 
-  const exitFlow = () => {
+  // A flow that ended in failure returns to a pitch whose CTA must not read
+  // like a first attempt. The caller passes the outcome because dismissing
+  // already overwrote the status by this point.
+  const exitFlow = (failed = false) => {
+    if (failed) setPrepareFailed(true)
     setInFlowView(false)
     setBlocked(null)
   }
@@ -151,6 +172,15 @@ export function CloudFunnelButton() {
   useEffect(() => {
     if (open && lane === 'driver' && flowLive) setInFlowView(true)
   }, [open, lane, flowLive])
+
+  // prepareFailed outlives the dialog but must not outlive the cluster it
+  // describes: a context switch swaps every query cache, yet this component
+  // stays mounted, so without the reset cluster A's failure would relabel the
+  // CTA for cluster B.
+  const contextName = useClusterInfo().data?.context
+  useEffect(() => {
+    setPrepareFailed(false)
+  }, [contextName])
 
   // The server owns the "nothing to pitch" decision: an already-tunneled
   // deployment gets no cloudConnect capability at all. Waiting for
@@ -174,7 +204,7 @@ export function CloudFunnelButton() {
     <>
       {/* Tooltip is suppressed while the modal is open — it portals above the
           modal backdrop and would otherwise paint on top of the dialog. */}
-      <Tooltip content="Radar Cloud — all your clusters, one URL" delay={100} position="bottom" disabled={open}>
+      <Tooltip content="Radar Cloud: all your clusters, one URL" delay={100} position="bottom" disabled={open}>
         <button
           onClick={openModal}
           aria-label="Radar Cloud"
@@ -220,18 +250,21 @@ export function CloudFunnelButton() {
               blocked={blocked}
               signupUrl={signupUrlFor('flow-escape')}
               onStatus={applyStatus}
-              onExit={exitFlow}
+              onExit={() => exitFlow(flowForView.state === 'failed')}
             />
           </div>
         ) : (
           <>
             <div className="min-h-0 overflow-y-auto">
-              <ModalBody />
+              <PitchBody lane={lane} freeTier={connectInfo.data?.freeTier} />
             </div>
             <ModalFooter
               lane={lane}
               signupUrl={signupUrl}
-              driverEscapeUrl={signupUrlFor('driver-escape')}
+              // driver-escape after a failed attempt, driver-alt before one, so
+              // the Hub can tell "prefers the browser" from "app path broke".
+              driverEscapeUrl={signupUrlFor(prepareFailed ? 'driver-escape' : 'driver-alt')}
+              prepareFailed={prepareFailed}
               assurances={connectInfo.data?.assurances}
               notice={connectInfo.data?.notice}
               self={inCluster ? self.data : undefined}
@@ -249,37 +282,10 @@ export function CloudFunnelButton() {
   )
 }
 
-// Secondary copy the pitch shouldn't spend vertical space on until asked for.
-function Fold({ summary, className = '', children }: { summary: string; className?: string; children: ReactNode }) {
-  const [open, setOpen] = useState(false)
-  const bodyId = useId()
-  return (
-    <div className={className}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-controls={bodyId}
-        className="flex items-center gap-1.5 text-[11.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
-      >
-        <CollapseChevron open={open} className="w-3 h-3" />
-        {summary}
-      </button>
-      <Collapse open={open}>
-        <p id={bodyId} className="mt-2 pl-[18px] text-[11.5px] leading-relaxed text-theme-text-tertiary">
-          {children}
-        </p>
-      </Collapse>
-    </div>
-  )
-}
-
+// The Hub's list renders verbatim — no client-side additions, so the Hub owns
+// the wording and can update it without a binary release.
 function assuranceItems(fromHub?: string[]): string[] {
-  const items = fromHub?.length ? fromHub : DEFAULT_ASSURANCES
-  if (items.some((item) => item.toLowerCase().includes('soc 2'))) return items
-  // Before the last item: the closer ("data stays in your cluster") is the
-  // longest line and wraps most naturally when it comes last.
-  return [...items.slice(0, -1), SOC2_ASSURANCE, items[items.length - 1]]
+  return fromHub?.length ? fromHub : DEFAULT_ASSURANCES
 }
 
 function RadarSweep() {
@@ -311,6 +317,7 @@ function ModalFooter({
   lane,
   signupUrl,
   driverEscapeUrl,
+  prepareFailed,
   assurances,
   notice,
   self,
@@ -320,10 +327,10 @@ function ModalFooter({
 }: {
   lane: 'driver' | 'wizard'
   signupUrl: string
-  // The driver branch's "start in the browser" link — same destination as
-  // signupUrl, distinct utm_content so the Hub can tell an escape from an
-  // in-product flow apart from a pitch CTA click.
+  // Same destination as signupUrl, distinct utm_content: the caller encodes
+  // whether this render follows a failed in-app attempt.
   driverEscapeUrl: string
+  prepareFailed: boolean
   // Live copy from the Hub; undefined until (or unless) it arrives.
   assurances?: string[]
   notice?: string
@@ -353,24 +360,24 @@ function ModalFooter({
             <>
               Radar found conflicting management metadata on this install, so it can't say whether a Helm
               upgrade or a repository change is the right move. Run{' '}
-              <code className="font-mono text-[11px]">radar cloud install</code> from a machine with kubectl —
-              it inspects the release and refuses rather than guessing.
+              <code className="font-mono text-[11px]">radar cloud install</code> from a machine with
+              kubectl. It inspects the release and refuses rather than guessing.
             </>
           ) : gitops ? (
             <>
               This Radar is managed by{' '}
               <b className="text-theme-text-primary">{self.controller || 'a GitOps controller'}</b>, so
-              connecting it is a values change in your repository — an imperative upgrade would be reverted.{' '}
+              connecting it is a values change in your repository; an imperative upgrade would be reverted.{' '}
               {cliOnly ? (
                 <>
                   Radar found that evidence but couldn't confirm it against the live object, so run{' '}
                   <code className="font-mono text-[11px]">radar cloud install</code> from a machine with
-                  kubectl — it inspects the release before generating anything.
+                  kubectl. It inspects the release before generating anything.
                 </>
               ) : (
                 <>
                   The wizard generates the values patch for that controller, plus the one command that
-                  creates the token Secret — the token never goes into your repository.
+                  creates the token Secret. The token never goes into your repository.
                 </>
               )}
             </>
@@ -387,12 +394,6 @@ function ModalFooter({
       {notice && (
         <div className="mb-3.5 card-inner p-3 text-[12px] leading-relaxed text-theme-text-secondary">{notice}</div>
       )}
-      {lane === 'driver' && (
-        <p className="mb-3.5 text-[12px] leading-relaxed text-theme-text-secondary">
-          The guided setup runs right here in the app — Radar installs the Cloud agent on this cluster, and
-          you approve the connection in your browser.
-        </p>
-      )}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2.5">
         {lane === 'driver' ? (
           <>
@@ -400,13 +401,18 @@ function ModalFooter({
               onClick={onConnect}
               className="whitespace-nowrap px-6 py-2.5 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[14px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all"
             >
-              Connect this cluster
+              {/* Trailing ellipsis: further input follows the click — the
+                  inspect step and a plan the user approves in the browser. */}
+              {prepareFailed ? 'Try again' : 'Connect this cluster…'}
             </button>
+            {/* Always visible: the browser wizard is a different workflow, not
+                a recovery path — install-averse operators need the door before
+                anything fails, or they close the modal instead. */}
             <a
               href={driverEscapeUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="whitespace-nowrap text-[13px] text-theme-text-secondary hover:text-theme-text-primary underline underline-offset-2 transition-colors"
+              className="whitespace-nowrap text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary hover:underline underline-offset-2 transition-colors"
             >
               or set up in the browser
             </a>
@@ -423,98 +429,129 @@ function ModalFooter({
             {self?.ownership === 'helm' || gitops ? 'Connect this cluster' : 'Try Cloud free'}
           </a>
         )}
-        <button onClick={onLater} className="whitespace-nowrap text-[13px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">
+        <button onClick={onLater} className="ml-auto whitespace-nowrap text-[12px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">
           Maybe later
         </button>
       </div>
-      <div className="mt-4 grid grid-cols-2 gap-x-5 gap-y-2 text-[11.5px] text-theme-text-tertiary">
+      {/* Mechanics, not marketing: a falsifiable claim the plan card then
+          fulfills. Sits next to the button whose click it de-risks. */}
+      {lane === 'driver' && (
+        <p className="mt-2.5 text-[11px] leading-relaxed text-theme-text-tertiary">
+          Nothing installs on click. Radar inspects the cluster and shows you a plan; you approve it in
+          the browser before anything changes.
+        </p>
+      )}
+      {/* A 2-column grid, not flex-wrap: the long data-locality chip cannot
+          share a single row with the other three at this width, and flex
+          wrapping strands it as a 3+1 orphan. Two balanced columns read as a
+          designed layout at any chip length the Hub sends. */}
+      <div className="mt-4 grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11px] text-theme-text-tertiary">
         {assuranceItems(assurances).map((item) => (
-          <span key={item} className="flex items-start gap-1.5">
-            <Check className="w-3 h-3 mt-[3px] shrink-0 text-emerald-600 dark:text-emerald-400" />
+          <span key={item} className="flex items-center gap-1">
+            <Check className="w-3 h-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
             {item}
           </span>
         ))}
       </div>
-      <Fold summary="Prefer to run the control plane in your own VPC?" className="mt-3.5">
-        Self-hosting is fully self-serve — set it up yourself, whenever you're ready.{' '}
-        <a href={SELF_HOSTED_DOCS_URL} target="_blank" rel="noopener noreferrer" className="text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
-          Read the docs
-        </a>
-        .
-      </Fold>
     </div>
   )
 }
 
-// Headline defuses the paywall fear before anything is pitched; the grid
-// carries the concrete capabilities; the anti-sell closes — the credibility
-// beat that makes the sell land.
-function ModalBody() {
-  const features = [
-    {
-      icon: Globe,
-      title: 'All your clusters, one URL',
-      body: 'Fleet-wide issues, checks and search — instead of five browser tabs.',
-    },
-    {
-      icon: Users,
-      title: 'Bring the team',
-      body: "SSO, invites and roles — your cluster's RBAC still has the final say.",
-    },
-    {
-      icon: Bell,
-      title: 'Alerts that find you',
-      body: 'Slack or webhook the moment something breaks — even at 3am.',
-    },
-    {
-      icon: History,
-      title: 'History that sticks around',
-      body: 'A timeline that survives restarts — and keeps getting longer.',
-    },
-    {
-      icon: Sparkles,
-      title: 'An AI agent on your fleet',
-      body: 'Analyzes issues, pinpoints the root cause, and proposes the fix.',
-      wide: true,
-    },
+// The detail sits behind a disclosure so the first screen stays short.
+function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: string }) {
+  const [moreOpen, setMoreOpen] = useState(false)
+  const moreId = useId()
+  // Hub-served prose fragment; the compiled fallback carries the same
+  // staleness trade as DEFAULT_ASSURANCES (rendered only when the Hub is
+  // unreachable or predates the field).
+  const freeLine = freeTier || 'free for 3 clusters'
+  // lead is the scannable anchor (medium, primary); rest stays secondary.
+  const highlights = [
+    { icon: Globe, lead: 'Your whole fleet in one URL', rest: ': issues, checks and search across every cluster' },
+    { icon: Users, lead: 'Bring the team', rest: ": SSO, invites and roles. Your cluster's RBAC has the final say" },
+    { icon: Bell, lead: 'Alerts', rest: ' that reach you the moment something breaks' },
+    { icon: History, lead: 'Long-term retention', rest: ': history that survives restarts and keeps growing' },
+    { icon: Sparkles, lead: 'An AI agent', rest: ' that digs into issues and pinpoints the root cause' },
   ]
   return (
     <div className="px-8 pt-7 pb-2">
       <Eyebrow />
-      <h3 className="text-[22px] font-semibold leading-tight tracking-tight text-theme-text-primary mb-3 text-balance">
-        First things first: Radar stays free.
+      <h3 className="text-[22px] font-semibold leading-tight tracking-tight text-theme-text-primary mb-3">
+        Meet Radar Cloud
       </h3>
-      <p className="text-[14px] leading-relaxed text-theme-text-secondary mb-5">
-        The app you're looking at is Apache&nbsp;2.0 — every feature, forever, no rug pulls.{' '}
-        <b className="text-theme-text-primary font-semibold">Radar Cloud is how we keep the lights on:</b> the
-        same Radar, plus the parts that are genuinely hard to run on your own.
+      <p className="text-[14px] leading-relaxed text-theme-text-secondary mb-6">
+        The hosted side of Radar: your clusters in one place, run by us.
+        <br />
+        The Radar you're running{' '}
+        <b className="text-theme-text-primary font-semibold">stays free and open source, always.</b>
       </p>
-      <div className="grid grid-cols-2 gap-3 mb-5">
-        {features.map(({ icon: Icon, title, body, wide }) => (
-          <div
-            key={title}
-            className={`card-inner-lg p-3.5 flex gap-3 ${
-              wide ? 'col-span-2 bg-emerald-500/[0.06] border-emerald-500/25 dark:bg-emerald-500/[0.08]' : ''
-            }`}
-          >
-            <Icon className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
-            <div>
-              <div className="text-[13px] font-semibold text-theme-text-primary">{title}</div>
-              <p className="mt-1 text-[12px] leading-relaxed text-theme-text-tertiary">{body}</p>
-            </div>
-          </div>
+      <ul className="space-y-2.5 mb-4">
+        {highlights.map(({ icon: Icon, lead, rest }) => (
+          <li key={lead} className="flex items-start gap-2.5 text-[13px] leading-relaxed text-theme-text-secondary">
+            <Icon className="w-4 h-4 shrink-0 mt-[3px] text-emerald-600 dark:text-emerald-400" />
+            <span>
+              <span className="font-medium text-theme-text-primary">{lead}</span>
+              {rest}
+            </span>
+          </li>
         ))}
-      </div>
+      </ul>
+      {/* Underlined on purpose: at the bullet list's own color and size, and
+          with a leading glyph, it otherwise reads as one more bullet. */}
+      <button
+        type="button"
+        onClick={() => setMoreOpen((v) => !v)}
+        aria-expanded={moreOpen}
+        aria-controls={moreId}
+        className="flex items-center gap-1.5 mt-5 mb-3 text-[12.5px] text-theme-text-secondary underline underline-offset-2 decoration-theme-border hover:text-theme-text-primary transition-colors"
+      >
+        <CollapseChevron open={moreOpen} className="w-3.5 h-3.5" />
+        How it works and what it costs
+      </button>
+      <Collapse open={moreOpen}>
+        <div id={moreId} className="pt-1 pb-3 pl-[18px] space-y-3.5">
+          <section>
+            {/* No heading: the disclosure's own label already names this one. */}
+            <p className="text-[12px] leading-relaxed text-theme-text-secondary">
+              {lane === 'driver'
+                ? 'Setup runs here in the app: Radar is installed in your cluster and connects outward to Radar Cloud. You review the plan and approve in your browser before anything is installed.'
+                : 'Radar runs in your cluster and connects outward to Radar Cloud. You approve the connection before anything is installed.'}
+            </p>
+          </section>
+          <section>
+            <h4 className="text-[12.5px] font-semibold text-theme-text-primary mb-0.5">What it costs</h4>
+            <p className="text-[12px] leading-relaxed text-theme-text-secondary">
+              Radar Cloud is {freeLine}. The paid plans beyond that are what keep the lights on. The
+              Radar you're running stays
+              Apache&nbsp;2.0 either way: every feature, forever.{' '}
+              <a href={PRICING_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
+                See pricing →
+              </a>
+            </p>
+          </section>
+          <section>
+            <h4 className="text-[12.5px] font-semibold text-theme-text-primary mb-0.5">Who's behind it</h4>
+            <p className="text-[12px] leading-relaxed text-theme-text-secondary">
+              Radar is built in the open and run by Skyhook, a CNCF Silver member and a small team of
+              humans, the kind you can actually talk to.{' '}
+              <a href={ABOUT_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
+                Meet us →
+              </a>
+            </p>
+          </section>
+          <p className="text-[12px] leading-relaxed text-theme-text-secondary">
+            Prefer your own VPC? You can run the Radar Cloud control plane yourself.{' '}
+            <a href={SELF_HOSTED_DOCS_URL} target="_blank" rel="noopener noreferrer" className="text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
+              Read the docs
+            </a>
+            .
+          </p>
+        </div>
+      </Collapse>
       <div className="mb-5 border-l-2 border-emerald-500/40 pl-3.5">
-        <p className="text-[12.5px] leading-relaxed text-theme-text-secondary">
-          If it's just you and one cluster — honestly, stay right here. This app is the product, not a demo.
-        </p>
-        <p className="mt-2 text-[11.5px] leading-relaxed text-theme-text-tertiary">
-          Radar is built in the open by many hands, and overseen by a small team of humans — the kind you
-          can actually talk to.{' '}
-          <a href={ABOUT_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
-            Meet us →
-          </a>
+        <p className="text-[12px] leading-relaxed text-theme-text-secondary">
+          Don't need Radar Cloud right now? That's fine. What you're running is already a full product,
+          not a demo. We're here if you ever do.
         </p>
       </div>
     </div>

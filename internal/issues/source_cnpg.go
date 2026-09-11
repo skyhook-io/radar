@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -51,6 +52,13 @@ const cnpgTransientConditionGrace = 30 * time.Minute
 // latency, not a backup policy: nothing here decides how often backups should
 // run, only that the schedule missed a time it set for itself.
 const cnpgScheduledBackupGrace = 10 * time.Minute
+
+// cnpgDownGrace debounces a was-up cluster's Ready=False before it is called a
+// full outage, absorbing a single instance restarting during a routine rollout.
+// Distinct from cnpgTransientConditionGrace (30m): that bounds mid-operation
+// condition noise, this gates an all-down escalation. Kept in step with
+// CNPG_DOWN_GRACE_MS in the frontend, or a badge and its issue disagree.
+const cnpgDownGrace = 5 * time.Minute
 
 // cnpgAttentionPhases are stalled waiting on a human. Under
 // primaryUpdateStrategy: supervised this is the documented resting state, so it
@@ -174,12 +182,10 @@ func detectCNPGScheduledBackupIssues(gvr schema.GroupVersionResource, kind strin
 	}
 
 	ns, name := u.GetNamespace(), u.GetName()
-	// The elapsed time rides on `since` rather than the message so it renders
-	// through the same "how long has this been broken" path as every other issue.
 	return []Issue{newConditionIssue(gvr, kind, ns, name, SeverityWarning,
 		"CNPGScheduledBackupMissed",
 		"No backup has run since this schedule was due",
-		overdue, "CNPGScheduledBackupMissed", u.GetCreationTimestamp().Time)}
+		due, true, "CNPGScheduledBackupMissed", u.GetCreationTimestamp().Time)}
 }
 
 // A declared object the operator could not apply.
@@ -208,8 +214,56 @@ func detectCNPGDeclarativeIssues(gvr schema.GroupVersionResource, kind string, u
 	}
 
 	return []Issue{newConditionIssue(gvr, kind, ns, name, SeverityWarning,
-		"CNPGDeclarativeNotApplied", cnpgMessage(base, "", msg), 0,
+		"CNPGDeclarativeNotApplied", cnpgMessage(base, "", msg), time.Time{}, false,
 		"CNPGDeclarativeNotApplied", u.GetCreationTimestamp().Time)}
+}
+
+// cnpgHibernated reports the operator's deliberate scale-to-zero. Hibernation
+// removes the pods and reports nothing ready by design, signalled by an
+// annotation rather than any status field — so it must be read before a
+// zero-ready count is called an outage.
+func cnpgHibernated(u *unstructured.Unstructured) bool {
+	return u.GetAnnotations()["cnpg.io/hibernation"] == "on"
+}
+
+// cnpgFencedAll reports that every instance is fenced. The annotation is a JSON
+// array of instance names; "*" fences them all, so nothing serves — by intent,
+// not fault. A malformed value counts as not-fenced rather than erroring.
+func cnpgFencedAll(u *unstructured.Unstructured) bool {
+	raw := u.GetAnnotations()["cnpg.io/fencedInstances"]
+	if raw == "" {
+		return false
+	}
+	var names []string
+	if err := json.Unmarshal([]byte(raw), &names); err != nil {
+		return false
+	}
+	for _, n := range names {
+		if n == "*" {
+			return true
+		}
+	}
+	return false
+}
+
+// cnpgHasConditions mirrors the frontend's `status.conditions?.length` half of
+// the reported check — any condition the operator wrote proves it reconciled.
+func cnpgHasConditions(u *unstructured.Unstructured) bool {
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	return len(conds) > 0
+}
+
+// cnpgDownGraceElapsed reports whether a was-up cluster's Ready=False has aged
+// past the debounce window. Reuses the shared Ready-condition reader so the
+// grace keys off the same signal the frontend does. No Ready=False (or no
+// timestamp) means nothing is debouncing a restart, so escalate immediately
+// rather than inventing a start time from creationTimestamp.
+func cnpgDownGraceElapsed(u *unstructured.Unstructured) bool {
+	cond, ok := conditions.FindFalseConditionWithTime(u, "Ready")
+	if !ok || !cond.HasLastTransitionTime {
+		return true
+	}
+	return time.Since(cond.LastTransitionTime) >= cnpgDownGrace
 }
 
 // Every CNPG issue carries a Fingerprint because one cluster genuinely has
@@ -233,32 +287,49 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 	//
 	// The condition proves the LAST ARCHIVE ATTEMPT failed — it is not an exact
 	// RPO, and the message deliberately doesn't claim one.
-	if _, reason, msg, since, ok := conditions.FindFalseCondition(u, "ContinuousArchiving"); ok {
+	if condition, ok := conditions.FindFalseConditionWithTime(u, "ContinuousArchiving"); ok {
 		out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityCritical,
 			"CNPGWALArchivingFailing",
-			cnpgMessage("The last WAL archival did not complete; recovery-point advancement is uncertain", reason, msg),
-			since, "CNPGWALArchivingFailing", created))
+			cnpgMessage("The last WAL archival did not complete; recovery-point advancement is uncertain", condition.Reason, condition.Message),
+			condition.LastTransitionTime, condition.HasLastTransitionTime,
+			"CNPGWALArchivingFailing", created))
 	}
 
 	// CNPG also sets LastBackupSucceeded=False with reason BackupStarted while a
 	// backup is merely in flight. Treating that as a failure would raise an issue
 	// on every backup run — the canonical alert-fatigue trap.
-	if _, reason, msg, since, ok := conditions.FindFalseCondition(u, "LastBackupSucceeded"); ok && reason != "BackupStarted" {
+	if condition, ok := conditions.FindFalseConditionWithTime(u, "LastBackupSucceeded"); ok && condition.Reason != "BackupStarted" {
 		out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityWarning,
 			"CNPGLastBackupFailed",
-			cnpgMessage("The most recent backup attempt failed", reason, msg),
-			since, "CNPGLastBackupFailed", created))
+			cnpgMessage("The most recent backup attempt failed", condition.Reason, condition.Message),
+			condition.LastTransitionTime, condition.HasLastTransitionTime,
+			"CNPGLastBackupFailed", created))
 	}
 
 	desired, okD, _ := unstructured.NestedInt64(u.Object, "spec", "instances")
 	ready, okR, _ := unstructured.NestedInt64(u.Object, "status", "readyInstances")
-	// No phase excuses a database with nothing serving. "Waiting for user action"
-	// under a supervised strategy legitimately explains a PARTIAL shortfall, but
-	// not a cluster that is entirely down — that is an outage, not operator
-	// intent, and silencing it is how a total failure ends up with no issue at
-	// all. Mirrors the badge, which treats zero ready as hard-down ahead of
-	// every phase branch except terminal and failing-over.
-	allDown := okD && okR && desired > 0 && ready == 0
+	currentPrimary, _, _ := unstructured.NestedString(u.Object, "status", "currentPrimary")
+	// CNPG omits readyInstances when it is 0 (omitempty), so absence on a cluster
+	// that has reported ANYTHING (phase, primary or a condition) is a real 0, not
+	// "not reported yet"; resolving it to 0 here is what lets a fully-down cluster
+	// be detected. Absent EVERYTHING stays the truly-statusless case, still no
+	// signal.
+	reported := phase != "" || currentPrimary != "" || cnpgHasConditions(u)
+	readyResolved := ready
+	if !okR && reported {
+		readyResolved = 0
+	}
+	// No phase excuses a WAS-UP database with nothing serving. currentPrimary is
+	// the version-robust "was up" signal (set on first election, never cleared),
+	// so a zero-ready cluster that has one is a regression, not a first bootstrap.
+	// Hibernation and all-fenced are deliberate, and a single instance bouncing is
+	// debounced by the grace. Mirrors the badge's availability verdict exactly.
+	// A cluster woken from hibernation or lifted from a full fence briefly matches
+	// this too — CNPG has already dropped the hibernation marker by wake, so from
+	// the Cluster status alone it is indistinguishable from a real outage and fires
+	// for that short window until the first instance is ready.
+	allDown := okD && desired > 0 && readyResolved == 0 && reported &&
+		currentPrimary != "" && !cnpgHibernated(u) && !cnpgFencedAll(u) && cnpgDownGraceElapsed(u)
 
 	phaseExplained := false
 	switch {
@@ -271,10 +342,10 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 		case cnpgPhaseUnknownPlugin, cnpgPhaseFailurePlugin:
 			reason = "CNPGClusterPluginFailure"
 		}
-		// Phase carries no lastTransitionTime, so since=0 — newConditionIssue
-		// omits issue_timing rather than inventing one from now().
+		// Phase carries no lastTransitionTime, so newConditionIssue omits
+		// issue_timing rather than inventing one from now().
 		out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityCritical,
-			reason, phase, 0, "CNPGClusterPhase", created))
+			reason, phase, time.Time{}, false, "CNPGClusterPhase", created))
 
 	case phase == cnpgPhaseFailingOver:
 		// A failover explains a shortfall, but not a cluster with nothing
@@ -282,7 +353,7 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 		// downgraded it to this warning while the badge showed red.
 		phaseExplained = !allDown
 		out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityWarning,
-			"CNPGClusterFailingOver", phase, 0, "CNPGClusterPhase", created))
+			"CNPGClusterFailingOver", phase, time.Time{}, false, "CNPGClusterPhase", created))
 
 	case cnpgAttentionPhases[phase]:
 		// The phase explains the state either way — primaryUpdateStrategy only
@@ -295,7 +366,7 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 		strategy, _, _ := unstructured.NestedString(u.Object, "spec", "primaryUpdateStrategy")
 		if strategy != "supervised" {
 			out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityWarning,
-				"CNPGClusterWaitingForUser", phase, 0, "CNPGClusterPhase", created))
+				"CNPGClusterWaitingForUser", phase, time.Time{}, false, "CNPGClusterPhase", created))
 		}
 
 	case cnpgTransientPhases[phase]:
@@ -316,16 +387,25 @@ func detectCNPGClusterIssues(gvr schema.GroupVersionResource, kind string, u *un
 	// must not key on len(out): a WAL-archiving or failed-backup issue is an
 	// unrelated cause, and letting either suppress the shortfall would hide a
 	// cluster with zero ready instances behind a backup warning.
-	if !phaseExplained {
-		if okD && okR && desired > 0 && ready < desired {
-			severity := SeverityWarning
-			if ready == 0 {
-				severity = SeverityCritical
-			}
-			out = append(out, newConditionIssue(gvr, kind, ns, name, severity,
+	//
+	// A total outage is reported only through the allDown verdict — the same
+	// signal the badge turns on — which carries the bootstrap / hibernation /
+	// fenced / grace carve-outs, so a bootstrapping or hibernated cluster never
+	// becomes a false Critical. A partial shortfall needs an explicit
+	// readyInstances count above zero; the zero case belongs to allDown, whether
+	// the field is present or (as CNPG actually emits it) omitted.
+	if !phaseExplained && okD && desired > 0 {
+		switch {
+		case allDown:
+			out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityCritical,
+				"CNPGClusterDegraded",
+				fmt.Sprintf("Only 0 of %d instances are ready", desired),
+				time.Time{}, false, "CNPGClusterDegraded", created))
+		case okR && ready > 0 && ready < desired:
+			out = append(out, newConditionIssue(gvr, kind, ns, name, SeverityWarning,
 				"CNPGClusterDegraded",
 				fmt.Sprintf("Only %d of %d instances are ready", ready, desired),
-				0, "CNPGClusterDegraded", created))
+				time.Time{}, false, "CNPGClusterDegraded", created))
 		}
 	}
 
@@ -346,14 +426,14 @@ func detectCNPGBackupIssues(gvr schema.GroupVersionResource, kind string, u *uns
 			msg += ": " + e
 		}
 		return []Issue{newConditionIssue(gvr, kind, ns, name, SeverityCritical,
-			"CNPGWALArchivingFailing", msg, 0, "CNPGWALArchivingFailing", created)}
+			"CNPGWALArchivingFailing", msg, time.Time{}, false, "CNPGWALArchivingFailing", created)}
 	case "failed":
 		msg := "Backup failed"
 		if e, _, _ := unstructured.NestedString(u.Object, "status", "error"); e != "" {
 			msg += ": " + e
 		}
 		return []Issue{newConditionIssue(gvr, kind, ns, name, SeverityWarning,
-			"CNPGBackupFailed", msg, 0, "CNPGBackupFailed", created)}
+			"CNPGBackupFailed", msg, time.Time{}, false, "CNPGBackupFailed", created)}
 	}
 	return nil
 }

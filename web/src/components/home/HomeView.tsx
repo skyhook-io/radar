@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from 'react'
-import { useDashboard, useDashboardCRDs, useDashboardHelm, useIssues, type IssuesResponse } from '../../api/client'
+import { useCloudConnectSelf, useDashboard, useDashboardCRDs, useDashboardHelm, useIssues, useVersionCheck, type IssuesResponse } from '../../api/client'
 import { useConnection } from '../../context/ConnectionContext'
 import type { ClusterLoadState } from '../../types/clusterLoadState'
 import type { ExtendedMainView, Topology, SelectedResource } from '../../types'
@@ -22,7 +22,8 @@ import {
   StatusDot,
   categoryLabel,
   groupLabel,
-  issueTiming,
+  issueFirstSeenTitle,
+  issueTimingForDisplay,
   subjectRef,
   type Issue,
 } from '@skyhook-io/k8s-ui'
@@ -30,6 +31,8 @@ import { formatCompactAge } from '@skyhook-io/k8s-ui/utils/format'
 import { ClusterHealthCard } from './ClusterHealthCard'
 import { AlertTriangle, CheckCircle, Loader2, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
+import { getVersionUpdateStatus } from '../../utils/version'
+import { RadarVersionLine } from './RadarVersionLine'
 
 interface HomeViewProps {
   namespaces: string[]
@@ -45,14 +48,19 @@ interface HomeViewProps {
    * standalone OSS → the card drills into secrets as before.
    */
   onNavigateToCerts?: () => void
+  // Omitted when an embedded host owns /checks, leaving the version as plain text.
+  onNavigateToUpgradeImpact?: () => void
+  onNavigateToHelmRelease?: (namespace: string, release: string) => void
+  onNavigateToManagerPath?: (path: string) => void
 }
 
-export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts }: HomeViewProps) {
+export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts, onNavigateToUpgradeImpact, onNavigateToHelmRelease, onNavigateToManagerPath }: HomeViewProps) {
   // The card itself decides whether the cluster has a capacity story
   // (available, softened-denied, or karpenterless-with-managers/groups) and
   // returns null otherwise — the outer gate only excludes states with nothing
   // to fetch against.
-  const karpenterState = useCapabilitiesContext().karpenter?.state
+  const capabilities = useCapabilitiesContext()
+  const karpenterState = capabilities.karpenter?.state
   const capacityCardPossible =
     karpenterState === 'available' || karpenterState === 'denied' || karpenterState === 'not_detected'
   const { data, isLoading, error, dataUpdatedAt, refetch } = useDashboard(namespaces)
@@ -61,6 +69,12 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
   const issues = issuesData?.issues ?? []
   const issueCount = issuesData?.total_matched ?? issuesData?.total ?? issues.length
   const hasCriticalIssues = issues.some((issue) => issue.severity === 'critical')
+  const deploymentMode = capabilities.deployment?.mode ?? 'local'
+  const { data: versionInfo } = useVersionCheck()
+  const showHomeUpgrade = deploymentMode === 'in-cluster'
+    && !!versionInfo?.updateAvailable
+    && getVersionUpdateStatus(versionInfo.currentVersion, versionInfo.latestVersion).tier !== 'none'
+  const { data: installationManager, isLoading: installationManagerLoading } = useCloudConnectSelf(showHomeUpgrade)
 
   // SSE is cluster-wide on small/medium clusters; the picker only narrows the
   // dashboard summary, so re-apply the filter here or the legend disagrees.
@@ -124,6 +138,15 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
         )}
         {/* Row 1: Cluster Health Card (combined health + resource counts) */}
         <ClusterHealthCard
+          radarVersion={deploymentMode === 'in-cluster' && versionInfo ? (
+            <RadarVersionLine
+              version={versionInfo}
+              manager={installationManager}
+              managerLoading={installationManagerLoading}
+              onNavigateToHelmRelease={onNavigateToHelmRelease}
+              onNavigateToGitOps={onNavigateToManagerPath}
+            />
+          ) : undefined}
           freshness={
             <FreshnessControl
               mode="auto"
@@ -143,6 +166,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
           nodeVersionSkew={data.nodeVersionSkew}
           onNavigateToKind={onNavigateToResourceKind}
           onNavigateToView={() => onNavigateToView('resources')}
+          onNavigateToUpgradeImpact={onNavigateToUpgradeImpact}
           onWarningEventsClick={() => onNavigateToView('timeline', { view: 'list', filter: 'warnings', time: 'all' })}
           onIssuesClick={() => onNavigateToView('issues')}
         />
@@ -383,8 +407,10 @@ function ProblemsPanel({
               <div className="divide-y divide-theme-border">
                 {issues.map((issue) => {
                   const ref = subjectRef(issue)
-                  const age = issue.first_seen ? formatCompactAge(issue.first_seen) : ''
-                  const timing = issueTiming(issue)
+                  const partialUnknown = issue.onset_coverage?.unknown ?? 0
+                  const partialOnset = Boolean(issue.first_seen && partialUnknown > 0)
+                  const age = issue.first_seen ? `${partialOnset ? '≥' : ''}${formatCompactAge(issue.first_seen)}` : ''
+                  const timing = issueTimingForDisplay(issue)
 
                   return (
                     <button
@@ -402,12 +428,11 @@ function ProblemsPanel({
                         <div className="flex items-center gap-1.5">
                           <span className="text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 py-0.5 rounded">{issue.kind}</span>
                           <span className="text-xs text-theme-text-primary truncate font-medium">{issue.name}</span>
-                          {(age || timing || issue.onset_unknown) && (
+                          {(age || timing) && (
                             <span className="ml-auto flex shrink-0 items-center gap-1">
-                              {age && <span className="text-[10px] text-theme-text-tertiary tabular-nums">{age}</span>}
-                              {issue.onset_unknown && (
-                                <Tooltip content="Radar can confirm this issue is active, but current Kubernetes state does not reveal when it began." delay={100}>
-                                  <span className="text-[10px] text-theme-text-tertiary">Onset unknown</span>
+                              {age && (
+                                <Tooltip content={issueFirstSeenTitle(issue)} delay={100}>
+                                  <span className="text-[10px] text-theme-text-tertiary tabular-nums">{age}</span>
                                 </Tooltip>
                               )}
                               {timing && (

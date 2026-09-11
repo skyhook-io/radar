@@ -14,7 +14,6 @@ const STORAGE_KINDS = ['PersistentVolumeClaim', 'PersistentVolume', 'StorageClas
 const ACCESS_CONTROL_KINDS = ['ServiceAccount', 'Role', 'ClusterRole', 'RoleBinding', 'ClusterRoleBinding']
 const CLUSTER_KINDS = ['Node', 'Namespace', 'Event']
 const CORE_CATEGORY_NAMES = new Set(['Workloads', 'Networking', 'Configuration', 'Storage', 'Access Control', 'Cluster'])
-
 // Core resources that must always be present (fallback if API discovery misses them)
 export const CORE_RESOURCES: APIResource[] = [
   { group: '', version: 'v1', kind: 'Pod', name: 'pods', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
@@ -66,6 +65,11 @@ export function findAPIResourceForRoute(
     ?? resources?.find(matchesRoute)
 }
 
+export function isCoreBatchJob(kind: string, group?: string): boolean {
+  const normalizedKind = kind.toLowerCase()
+  return (normalizedKind === 'job' || normalizedKind === 'jobs') && (!group || group === 'batch')
+}
+
 // Resources that should be hidden from the sidebar
 const HIDDEN_KINDS = ['PodMetrics', 'NodeMetrics']
 
@@ -100,6 +104,7 @@ export function categorizeResources(resources: APIResource[]): ResourceCategory[
   const storage = coreResources.filter(r => STORAGE_KINDS.includes(r.kind))
   const accessControl = coreResources.filter(r => ACCESS_CONTROL_KINDS.includes(r.kind))
   const cluster = coreResources.filter(r => CLUSTER_KINDS.includes(r.kind))
+  const otherKubernetesAPIs = coreResources.filter(r => r.featured)
 
   const crds = uniqueResources.filter(r => r.isCrd)
   const crdGroups = new Map<string, APIResource[]>()
@@ -115,6 +120,7 @@ export function categorizeResources(resources: APIResource[]): ResourceCategory[
   addToCategory('Storage', storage)
   addToCategory('Access Control', accessControl)
   addToCategory('Cluster', cluster)
+  addToCategory('Other Kubernetes APIs', otherKubernetesAPIs)
 
   for (const [group, groupResources] of crdGroups) {
     addToCategory(formatGroupName(group), groupResources)
@@ -215,7 +221,11 @@ export function formatGroupName(group: string): string {
     'jobset.x-k8s.io': 'JobSet',
     'inference.networking.k8s.io': 'Inference Gateway',
     'inference.networking.x-k8s.io': 'Inference Gateway',
+    'llm-d.ai': 'llm-d',
     'nvidia.com': 'NVIDIA GPU Operator',
+    'apps.nvidia.com': 'NVIDIA NIM',
+    'amd.com': 'AMD GPU Operator',
+    'trainer.kubeflow.org': 'Kubeflow',
     'scheduling.run.ai': 'KAI Scheduler',
     'kai.scheduler': 'KAI Scheduler',
     'kaito.sh': 'KAITO',

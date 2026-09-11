@@ -125,7 +125,7 @@ Use `/visual-test` command for the full workflow (cluster check, Playwright MCP,
 
 ### Demo clusters (scripted test fixtures)
 
-Nine scripted `kind` clusters under `scripts/*-demo.sh` reproduce the states each integration needs — states that are hard or impossible to conjure by hand (frozen controllers holding all phases at once, configurations that fail in ways that look like success, connection lanes toggled on demand).
+Ten scripted `kind` clusters under `scripts/*-demo.sh` reproduce the states each integration needs — states that are hard or impossible to conjure by hand (frozen controllers holding all phases at once, configurations that fail in ways that look like success, connection lanes toggled on demand).
 
 **Before using one, read its `scripts/<name>-demo/README.md` — this is not optional.** Each README is the only complete account of what the scenarios cover, which modes are NOT interchangeable, and why the cluster is shaped the way it is; the shape encodes hard-won constraints that look like bugs if you don't know them. Don't improvise against the fixtures or "fix" what looks broken before reading it.
 
@@ -139,9 +139,11 @@ After `make <name>-demo`, run `kubectl config use-context kind-radar-<name>-demo
 | CloudNativePG | `make cnpg-demo` | CNPG renderers/badges. `-live` for real failovers; fixtures have strict ordering constraints |
 | Beyla | `make beyla-demo` | `internal/traffic/beyla.go` — which labels exist depends on Beyla config, not code. Modes `attrs` / `no-network` |
 | Cilium | `make cilium-demo` | `internal/traffic/hubble.go` — every Hubble connection lane. Modes `tls` / `netpol` / `install-radar` |
+| Kubecost | `make kubecost-demo` | Kubecost 3 current costs — real allocation/assets, local port-forward and in-cluster Service DNS. Modes `query` / `install-radar` / `radar-smoke` |
 | Calico | `make calico-demo` | Calico surfaces — both API groups, staged policies, tiers |
 | Crossplane | `make crossplane-demo` | Crossplane renderers and spec-shape dispatch |
 | Rollouts | `make rollouts-demo` | Argo Rollouts progression. `-roll` advances a rollout |
+| GPU ecosystem | `make gpu-ecosystem-demo` | All 37 curated GPU, batch, distributed-training, and inference resource identities. `install-radar` verifies default chart RBAC and group-aware discovery |
 
 `scripts/rbac-demo.sh` is the odd one out: it seeds RBAC scenarios into the *current* context (no cluster of its own).
 
@@ -154,6 +156,7 @@ After `make <name>-demo`, run `kubectl config use-context kind-radar-<name>-demo
 
 **You MUST read `internal/server/server.go` before adding or modifying any endpoint** — it is the single source of truth for all routes. CLI flags live in `cmd/explorer/main.go`. Key URL patterns:
 - REST resources: `/api/resources/{kind}`, `/api/resources/{kind}/{ns}/{name}`, `/api/resources/apply` (POST), `/api/resources/preview` (POST, server-dry-run review), `/api/resources/schemas` (POST, connected-cluster OpenAPI schemas)
+  - `/api/resources/{kind}` returns a **bare array**; `?table=1` switches to the printer-column envelope `{items, kind, group, columns, cells}`, returned for every **200** with null `columns`/`cells` when there is no table (errors stay `{"error"}`). Don't combine with `?include=summary` — the strip runs first and mutates in place, so a column reading a stripped subtree resolves to null.
 - SSE streaming: `/api/events/stream`, `/api/traffic/flows/stream`
 - WebSocket: `/api/pods/{ns}/{name}/exec`
 - MCP: `/mcp` (Streamable HTTP — POST for JSON-RPC, GET for SSE)
@@ -169,6 +172,7 @@ After `make <name>-demo`, run `kubectl config use-context kind-radar-<name>-demo
 - Capacity (Karpenter): `/api/capacity` (overview), `/api/capacity/pools` (+ `/{name}`, `/{name}/members`), `/api/capacity/demand` (`?state=`, `?pool=`, `?owner=ns/Kind/name`, `?pod=ns/name`), `/api/capacity/activity` — all read-only, all gated on the caller's ability to list NodePools; deliberately cluster-wide (no namespace view-filter forwarding). See [docs/capacity.md](docs/capacity.md)
 - Upgrade impact: `/api/upgrade-readiness?target={major.minor}` (GET; cluster-wide evidence bounded by the current identity's RBAC and the configured cache scope; `?refresh=true` bypasses the shared scan memo). Engine in `pkg/upgradereadiness`; service layer — runner, live collectors, `EvidenceAuthorizer` seam, bounded scan memo — in `internal/upgrade`, shared by the HTTP handler and the `get_cluster_upgrade_readiness` MCP tool
 - CAPI: `/api/capi/clusters/{ns}/{name}/kubeconfig` (GET), `/api/capi/clusters/{ns}/{name}/connect` (POST)
+- Prometheus metrics: `/api/prometheus/resources/{kind}/{ns}/{name}`, `/api/prometheus/resources/Node/{name}`, `/api/prometheus/namespace/{ns}`, `/api/prometheus/hpa/{ns}/{name}`, `/api/prometheus/pvc/...`, `/api/prometheus/rightsizing/...` are curated charts gated (auth-enabled mode) on reading the resource they chart, through the `AuthGate` seam in `internal/prometheus/auth.go` that `Server.prometheusAuthGate` implements. `/api/prometheus/cluster`, `/api/prometheus/query` and the MCP `query_prometheus` / `discover_metrics` / `get_prometheus_rules` tools are unbounded surfaces and gate on an any-namespace `list pods` SubjectAccessReview (`ClusterWideMetricsDeniedMessage` names the grant). The raw query route applies the same `MaxResponseBytes` / `SummarizeLargeResult` bounding as the MCP tool. No-auth local mode is a passthrough
 - Cloud Connect driver lane: `/api/cloud/install/{prepare,start,status,cancel,dismiss}` — the in-product device-flow install behind the funnel modal. Enabled ONLY local + auth-disabled + no `--cloud-url` (deliberately NOT gated on a loopback listener — `resources/apply` and `pods/exec` are ungated there too; a shared listener instead requires an explicit acknowledgement); every other configuration routes to the Hub wizard. The cluster token never serializes through these endpoints.
 - RBAC reverse-lookup: `/api/rbac/subject/{kind}/{namespace}/{name}` (ServiceAccount) and `/api/rbac/subject/{kind}/{name}` (User/Group) return direct + group-inherited bindings + flattened effective rules. SA subjects also get a `usedByPods` list (Pods whose `spec.serviceAccountName` matches — closes the loop on the SA detail page). `/api/rbac/role/{kind}/{namespace}/{name}` (use `_` for ClusterRole's empty namespace) returns the inverse — bindings that reference the role + their subjects. `/api/rbac/namespace/{namespace}` returns RoleBindings in the namespace + ClusterRoleBindings with at least one SA subject in it + a ServiceAccount count (backs the NamespaceRenderer's RBAC section; group-only ClusterRoleBindings like `system:authenticated` grants are deliberately excluded — they'd appear in every namespace and would be noise). `/api/rbac/whoami?namespace=...` is a pass-through of `SelfSubjectRulesReview` for the current user. Backed by `pkg/rbac/` (pure index + 5s TTL memo); endpoints gate on `list rolebindings` AND `list clusterrolebindings` (403 when either is denied — silent partial views would mislead operators).
 - Policy (Kyverno) reverse-lookup: `/api/policy/resource/{kind}/{ns}/{name}` returns one resource's policy findings; `/api/policy/policies/{policy}?namespace=&limit=` returns the inverse — every resource one policy recorded an outcome for, per rule. Report families are authorized **per subject scope** (`policyreports` cluster-wide is a different grant from `clusterpolicyreports`), findings from an unreadable family are dropped from lists AND counts with the withheld count reported, and `counts` describe the cluster while subject lists are capped and follow the namespace view filter — the two must be read together. `/api/policy/policies/{policy}/queued` returns the policy's in-flight `UpdateRequest`s; Kyverno records those in its own namespace, so it reads cluster-wide gated on `list updaterequests` rather than inheriting the caller's view filter.
@@ -269,6 +273,18 @@ Centralized `@layer components` classes in `theme/components.css` (Tailwind util
 - Buttons: `.btn-brand` — not hand-rolled `bg-blue-*`
 - Badges: `<Badge severity="...">` or `<Badge kind="...">` — never hand-write color strings
 - Shadows: `shadow-theme-sm/md/lg` — not raw Tailwind shadows
+
+### Printer columns (uncurated CRDs)
+
+CRDs Radar hasn't curated fill their table from the kind's own
+`spec.versions[].additionalPrinterColumns` — the columns `kubectl get` shows.
+Engine in `internal/server/printer_columns.go`, frontend helpers in
+`packages/k8s-ui/src/components/resources/printer-columns.ts`; both carry the
+detail at the point of use. Three things that are easy to get wrong:
+
+- **Exclusive, never merged.** A kind gets the curated set *or* the printer set, and curated always wins — several curated sets encode why the vendor-obvious field is the wrong one to show. `hasCuratedColumns` is the single definition of curated.
+- **Never hand-roll the JSONPath.** Evaluation goes through `apiextensions-apiserver`'s `tableconvertor`: real CRDs use filter expressions, wildcards and escaped keys, and it also owns first-match semantics and type coercion.
+- **Use the served version, not the storage version.** Printer columns are per-version and the API server converts objects into the version being listed.
 
 ### Resource Renderers
 

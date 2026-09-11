@@ -53,6 +53,48 @@ describe('getApplicationCostState', () => {
     ).toBe('partial_missing_history')
   })
 
+  it('keeps Kubecost application totals visible when history is unsupported', () => {
+    const current: OpenCostApplicationCostResponse = {
+      available: true,
+      source: 'kubecost',
+      currency: 'USD',
+      totals: {
+        hourlyCost: 0.4, cpuCost: 0.25, memoryCost: 0.15, replicas: 3,
+        cpuUsageAvailable: true, memoryUsageAvailable: true,
+        cpuAllocationUse: 40, memoryAllocationUse: 60,
+      },
+      coverage: { total: 1, included: 1 },
+      workloads: [],
+    }
+    const trend: OpenCostApplicationCostTrendResponse = {
+      available: false,
+      source: 'kubecost',
+      reason: 'history_unsupported',
+      currency: 'USD',
+      range: '24h',
+      coverage: { total: 1, included: 0 },
+    }
+
+    expect(getApplicationCostState(current, trend, {})).toBe('partial_missing_history')
+  })
+
+  it('does not let unsupported history mask current loading or errors', () => {
+    const trend: OpenCostApplicationCostTrendResponse = {
+      available: false,
+      source: 'kubecost',
+      reason: 'history_unsupported',
+      currency: 'USD',
+      range: '24h',
+      coverage: { total: 1, included: 0 },
+    }
+
+    expect(getApplicationCostState(undefined, trend, { currentLoading: true })).toBe('loading')
+    expect(getApplicationCostState(undefined, trend, { currentError: true })).toBe('load_error')
+    expect(
+      getApplicationCostState(undefined, trend, { currentError: new ApiError('denied', 403) }),
+    ).toBe('access_denied')
+  })
+
   it('uses historical data when current app metrics are absent but history exists', () => {
     const current: OpenCostApplicationCostResponse = {
       available: false,
@@ -206,5 +248,8 @@ describe('getApplicationCostState', () => {
       }),
     ).toBe('access_denied')
     expect(getApplicationCostState(current, undefined, { trendError: true })).toBe('access_denied')
+
+    current.reason = 'configuration_mismatch'
+    expect(getApplicationCostState(current, undefined, {})).toBe('configuration_mismatch')
   })
 })

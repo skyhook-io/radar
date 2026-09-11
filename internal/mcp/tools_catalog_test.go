@@ -123,19 +123,28 @@ func TestIssuesToolPreservesEvidenceBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal issues input schema: %v", err)
 	}
-	for label, text := range map[string]string{
-		"description":  issuesTool.Description,
-		"input schema": string(schema),
+	for _, want := range []string{
+		"timing_summary",
+		"scopes differ",
+		"first_seen",
+		"active at least since",
+		"timing evidence",
+		"root-cause verdict",
+		"resource age",
+		"issue age",
 	} {
-		for _, want := range []string{
-			"started_at_resource_creation",
-			"started_after_resource_was_healthy",
-			"timing evidence",
-			"root-cause verdict",
-		} {
-			if !strings.Contains(text, want) {
-				t.Errorf("issues %s lost issue_timing contract %q", label, want)
-			}
+		if !strings.Contains(issuesTool.Description, want) {
+			t.Errorf("issues description lost self-explanatory timing contract %q", want)
+		}
+	}
+	for _, want := range []string{
+		"started_at_resource_creation",
+		"started_after_resource_was_healthy",
+		"timing evidence",
+		"root-cause verdict",
+	} {
+		if !strings.Contains(string(schema), want) {
+			t.Errorf("issues input schema lost issue_timing filter contract %q", want)
 		}
 	}
 }
@@ -167,9 +176,13 @@ func TestTrimmedToolsPreserveLoadBearingSteers(t *testing.T) {
 		}
 	}
 	for _, boundary := range []string{
+		"bounded, point-in-time evidence bundle",
+		"does not run an agent",
+		"not an authoritative root-cause verdict",
+		"not that every source was read atomically",
 		"not a root-cause verdict",
 		"capped sample",
-		"exhaustive set",
+		"broader, dedicated event read",
 		"low-confidence",
 	} {
 		if !strings.Contains(descriptions["diagnose"], boundary) {
@@ -465,15 +478,146 @@ func TestReadOnlyServerExcludesWriteTools(t *testing.T) {
 	}
 }
 
+func TestDiagnoseContractMatchesServerMode(t *testing.T) {
+	findDiagnose := func(t *testing.T, includeWrites bool) *mcpsdk.Tool {
+		t.Helper()
+		for _, tool := range listRegisteredToolsWith(t, includeWrites) {
+			if tool.Name == "diagnose" {
+				return tool
+			}
+		}
+		t.Fatal("diagnose tool not registered")
+		return nil
+	}
+	properties := func(t *testing.T, tool *mcpsdk.Tool) map[string]json.RawMessage {
+		t.Helper()
+		raw, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatal(err)
+		}
+		return schema.Properties
+	}
+
+	full := findDiagnose(t, true)
+	fullProperties := properties(t, full)
+	if _, ok := fullProperties["in_cluster"]; !ok {
+		t.Fatal("full MCP diagnose must expose in_cluster")
+	}
+	if full.Annotations == nil || full.Annotations.ReadOnlyHint {
+		t.Fatal("full MCP diagnose must not claim read-only")
+	}
+
+	strict := findDiagnose(t, false)
+	strictProperties := properties(t, strict)
+	if _, ok := strictProperties["in_cluster"]; ok {
+		t.Fatal("read-only MCP diagnose must not expose in_cluster")
+	}
+	for mode, props := range map[string]map[string]json.RawMessage{
+		"full":      fullProperties,
+		"read-only": strictProperties,
+	} {
+		groupSchema, ok := props["group"]
+		if !ok {
+			t.Errorf("%s MCP diagnose schema does not expose the target API group", mode)
+			continue
+		}
+		for _, want := range []string{"target API group", "argoproj.io", "built-ins are inferred"} {
+			if !strings.Contains(string(groupSchema), want) {
+				t.Errorf("%s MCP diagnose group schema lost %q: %s", mode, want, groupSchema)
+			}
+		}
+	}
+	if len(fullProperties) != len(strictProperties)+1 {
+		t.Fatalf("read-only diagnose schema drifted from the full schema: full=%v strict=%v", fullProperties, strictProperties)
+	}
+	for name := range fullProperties {
+		if name == "in_cluster" {
+			continue
+		}
+		if _, ok := strictProperties[name]; !ok {
+			t.Errorf("read-only diagnose dropped non-mutating argument %q", name)
+		}
+	}
+	if strict.Annotations == nil || !strict.Annotations.ReadOnlyHint {
+		t.Fatal("read-only MCP diagnose must advertise readOnlyHint")
+	}
+	if strings.Contains(strict.Description, "Read-only EXCEPT") || !strings.Contains(strict.Description, "strict read-only endpoint") {
+		t.Fatalf("read-only diagnose description does not match its contract: %q", strict.Description)
+	}
+}
+
+func TestReadOnlyDiagnoseRejectsHandCraftedInClusterArgument(t *testing.T) {
+	session := connectTo(t, newServer(false))
+	res, err := session.CallTool(context.Background(), &mcpsdk.CallToolParams{
+		Name: "diagnose",
+		Arguments: map[string]any{
+			"kind": "service", "namespace": "default", "name": "api", "in_cluster": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("read-only diagnose accepted a hand-crafted in_cluster request")
+	}
+	text := renderContent(res.Content)
+	if !strings.Contains(text, "unexpected additional properties") || !strings.Contains(text, "in_cluster") {
+		t.Fatalf("read-only diagnose returned an unclear refusal: %s", text)
+	}
+	for _, want := range []string{"diagnose accepts:", "kind, namespace, name (required)", "tail_lines"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("read-only diagnose refusal is missing server-local parameter help %q: %s", want, text)
+		}
+	}
+	if strings.Contains(text, "in_cluster (optional)") {
+		t.Fatalf("read-only parameter help advertised the blocked argument: %s", text)
+	}
+}
+
+func TestReadOnlyDiagnoseRepairsArgumentsWithServerLocalRegistry(t *testing.T) {
+	session := connectTo(t, newServer(false))
+	res, err := session.CallTool(context.Background(), &mcpsdk.CallToolParams{
+		Name: "diagnose",
+		Arguments: map[string]any{
+			"kind": "configmap", "namespace": "default", "name": "settings", "tailLines": 10,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("unsupported diagnose kind unexpectedly succeeded")
+	}
+	text := renderContent(res.Content)
+	if strings.Contains(text, `validating "arguments"`) || strings.Contains(text, "tailLines") {
+		t.Fatalf("server-local middleware did not repair tailLines to tail_lines: %s", text)
+	}
+	if !strings.Contains(text, "invalid kind") {
+		t.Fatalf("repaired call did not reach the diagnose handler: %s", text)
+	}
+}
+
 func listRegisteredTools(t *testing.T) []*mcpsdk.Tool {
 	return listRegisteredToolsWith(t, true)
 }
 
 func listRegisteredToolsWith(t *testing.T, includeWrites bool) []*mcpsdk.Tool {
+	tools, _ := listRegisteredToolsWithRegistry(t, includeWrites)
+	return tools
+}
+
+func listRegisteredToolsWithRegistry(t *testing.T, includeWrites bool) ([]*mcpsdk.Tool, *toolParamRegistry) {
 	t.Helper()
 
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "radar-test", Version: "test"}, nil)
-	registerTools(server, includeWrites)
+	registry := newToolParamRegistry()
+	registerTools(server, includeWrites, registry)
 
 	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "radar-test-client", Version: "test"}, nil)
 	ctx := context.Background()
@@ -498,5 +642,5 @@ func listRegisteredToolsWith(t *testing.T, includeWrites bool) []*mcpsdk.Tool {
 	if len(result.Tools) == 0 {
 		t.Fatal("no MCP tools registered")
 	}
-	return result.Tools
+	return result.Tools, registry
 }

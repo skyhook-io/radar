@@ -56,16 +56,37 @@ import (
 // there is no race — but a concurrent map write panics, and "someone later
 // builds a handler lazily" is not a failure worth discovering in production.
 // The read cost is nil next to the Kubernetes calls these tools make.
+type toolParamRegistry struct {
+	mu       sync.RWMutex
+	names    map[string][]string
+	required map[string][]string
+}
+
+func newToolParamRegistry() *toolParamRegistry {
+	return &toolParamRegistry{
+		names:    map[string][]string{},
+		required: map[string][]string{},
+	}
+}
+
+var defaultToolParams = newToolParamRegistry()
+
+// These aliases keep package tests and focused helper callers on the default
+// registry. Production servers each receive their own registry in newServer.
 var (
-	toolParamsMu   sync.RWMutex
-	toolParamNames = map[string][]string{}
-	toolRequired   = map[string][]string{}
+	toolParamsMu   = &defaultToolParams.mu
+	toolParamNames = defaultToolParams.names
+	toolRequired   = defaultToolParams.required
 )
 
 func lookupToolParams(tool string) (accepted, required []string) {
-	toolParamsMu.RLock()
-	defer toolParamsMu.RUnlock()
-	return toolParamNames[tool], toolRequired[tool]
+	return defaultToolParams.lookup(tool)
+}
+
+func (r *toolParamRegistry) lookup(tool string) (accepted, required []string) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.names[tool], r.required[tool]
 }
 
 // isRegisteredTool distinguishes a tool that takes no arguments from one this
@@ -73,9 +94,13 @@ func lookupToolParams(tool string) (accepted, required []string) {
 // first should tell a caller "this tool accepts no arguments" — for the second
 // we know nothing and must stay quiet.
 func isRegisteredTool(tool string) bool {
-	toolParamsMu.RLock()
-	defer toolParamsMu.RUnlock()
-	_, ok := toolParamNames[tool]
+	return defaultToolParams.isRegistered(tool)
+}
+
+func (r *toolParamRegistry) isRegistered(tool string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.names[tool]
 	return ok
 }
 
@@ -266,11 +291,15 @@ func subjectKindOf(args map[string]json.RawMessage) string {
 // Use this instead of mcpsdk.AddTool for every radar tool: the registry it
 // builds is what lets a failed call report what it should have been called with.
 func addTool[In, Out any](s *mcpsdk.Server, t *mcpsdk.Tool, h mcpsdk.ToolHandlerFor[In, Out]) {
+	addToolWithRegistry(defaultToolParams, s, t, h)
+}
+
+func addToolWithRegistry[In, Out any](registry *toolParamRegistry, s *mcpsdk.Server, t *mcpsdk.Tool, h mcpsdk.ToolHandlerFor[In, Out]) {
 	accepted, required := structJSONFields(reflect.TypeFor[In]())
-	toolParamsMu.Lock()
-	toolParamNames[t.Name] = accepted
-	toolRequired[t.Name] = required
-	toolParamsMu.Unlock()
+	registry.mu.Lock()
+	registry.names[t.Name] = accepted
+	registry.required[t.Name] = required
+	registry.mu.Unlock()
 	mcpsdk.AddTool(s, t, h)
 }
 
@@ -358,10 +387,14 @@ func toCamel(s string) string {
 // resolve — which are exactly the names that will make schema validation fail,
 // and so the signal for attaching parameter help without parsing SDK text.
 func repairToolArgs(tool string, raw json.RawMessage) (fixed json.RawMessage, repairs, unresolved []string) {
-	if !isRegisteredTool(tool) || len(raw) == 0 {
+	return repairToolArgsWithRegistry(defaultToolParams, tool, raw)
+}
+
+func repairToolArgsWithRegistry(registry *toolParamRegistry, tool string, raw json.RawMessage) (fixed json.RawMessage, repairs, unresolved []string) {
+	if !registry.isRegistered(tool) || len(raw) == 0 {
 		return raw, nil, nil
 	}
-	accepted, _ := lookupToolParams(tool)
+	accepted, _ := registry.lookup(tool)
 	var args map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &args); err != nil || len(args) == 0 {
 		// Not an object (or malformed) — leave it for the validator to reject.
@@ -422,7 +455,7 @@ func repairToolArgs(tool string, raw json.RawMessage) (fixed json.RawMessage, re
 	}
 	// Missing required arguments are the other guaranteed validation failure.
 	// Detecting them here means the help attaches without parsing SDK text.
-	_, required := lookupToolParams(tool)
+	_, required := registry.lookup(tool)
 	for _, req := range required {
 		if _, ok := args[req]; !ok {
 			unresolved = append(unresolved, "(missing "+req+")")
@@ -443,10 +476,14 @@ func repairToolArgs(tool string, raw json.RawMessage) (fixed json.RawMessage, re
 
 // describeToolParams renders the accepted arguments for a tool, required first.
 func describeToolParams(tool string) string {
-	if !isRegisteredTool(tool) {
+	return describeToolParamsWithRegistry(defaultToolParams, tool)
+}
+
+func describeToolParamsWithRegistry(registry *toolParamRegistry, tool string) string {
+	if !registry.isRegistered(tool) {
 		return ""
 	}
-	accepted, required := lookupToolParams(tool)
+	accepted, required := registry.lookup(tool)
 	if len(accepted) == 0 {
 		return fmt.Sprintf("\n\n%s accepts no arguments. Retry with an empty object.", tool)
 	}
@@ -474,31 +511,35 @@ func describeToolParams(tool string) string {
 // paramRepairMiddleware repairs tool arguments before schema validation and, when
 // validation still fails, tells the caller which arguments the tool accepts.
 func paramRepairMiddleware(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
-	return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
-		if method != "tools/call" {
-			return next(ctx, method, req)
-		}
-		call, ok := req.(*mcpsdk.CallToolRequest)
-		if !ok || call.Params == nil {
-			return next(ctx, method, req)
-		}
+	return paramRepairMiddlewareFor(defaultToolParams)(next)
+}
 
-		fixed, repairs, unresolved := repairToolArgs(call.Params.Name, call.Params.Arguments)
-		if repairs != nil {
-			call.Params.Arguments = fixed
-			logRepairedArgs(call.Params.Name, repairs)
-		}
+func paramRepairMiddlewareFor(registry *toolParamRegistry) mcpsdk.Middleware {
+	return func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+			if method != "tools/call" {
+				return next(ctx, method, req)
+			}
+			call, ok := req.(*mcpsdk.CallToolRequest)
+			if !ok || call.Params == nil {
+				return next(ctx, method, req)
+			}
 
-		res, err := next(ctx, method, req)
-		if err != nil {
-			return res, err
+			fixed, repairs, unresolved := repairToolArgsWithRegistry(registry, call.Params.Name, call.Params.Arguments)
+			if repairs != nil {
+				call.Params.Arguments = fixed
+				logRepairedArgs(call.Params.Name, repairs)
+			}
+
+			res, err := next(ctx, method, req)
+			if err != nil {
+				return res, err
+			}
+			if out, ok := res.(*mcpsdk.CallToolResult); ok {
+				annotateSchemaErrorWithRegistry(registry, call.Params.Name, out, unresolved)
+			}
+			return res, nil
 		}
-		// The SDK reports a schema failure as an isError result with a nil
-		// error, so the enrichment hangs off the result rather than err.
-		if out, ok := res.(*mcpsdk.CallToolResult); ok {
-			annotateSchemaError(call.Params.Name, out, unresolved)
-		}
-		return res, nil
 	}
 }
 
@@ -522,10 +563,14 @@ func logRepairedArgs(tool string, repairs []string) {
 // (wrong type, missing required field), where the SDK's wording is the only
 // signal available.
 func annotateSchemaError(tool string, res *mcpsdk.CallToolResult, unresolved []string) {
+	annotateSchemaErrorWithRegistry(defaultToolParams, tool, res, unresolved)
+}
+
+func annotateSchemaErrorWithRegistry(registry *toolParamRegistry, tool string, res *mcpsdk.CallToolResult, unresolved []string) {
 	if res == nil || !res.IsError {
 		return
 	}
-	help := describeToolParams(tool)
+	help := describeToolParamsWithRegistry(registry, tool)
 	if help == "" {
 		return
 	}

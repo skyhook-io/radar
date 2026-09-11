@@ -31,13 +31,24 @@ type EvidenceAuthorizer interface {
 	Namespaces() []string
 	// CanList authorizes a single list. namespace "" is a cluster-scoped
 	// check.
-	CanList(group, resource, namespace string) bool
+	CanList(group, resource, namespace string) EvidenceAuthorizationDecision
 	// CanGetSubresource authorizes a cluster-scoped subresource get
 	// (nodes/proxy for kubelet metrics and effective configuration).
-	CanGetSubresource(group, resource, subresource string) bool
+	CanGetSubresource(group, resource, subresource string) EvidenceAuthorizationDecision
 	// FilterNamespacesByCanList returns the subset of namespaces where the
 	// identity can list the resource.
 	FilterNamespacesByCanList(group, resource string, namespaces []string) []string
+}
+
+// EvidenceAuthorizationDecision keeps an explicit denial distinct from an
+// authorization check that could not reach an authoritative result.
+type EvidenceAuthorizationDecision struct {
+	Allowed       bool
+	Authoritative bool
+}
+
+func canListEvidence(authz EvidenceAuthorizer, group, resource, namespace string) bool {
+	return authz.CanList(group, resource, namespace).Allowed
 }
 
 // noNamespaceAccess returns true when a namespace filter explicitly grants no
@@ -67,7 +78,7 @@ func ResolveHelmNamespaces(ctx context.Context, authz EvidenceAuthorizer, namesp
 			if fallback := helm.ResolveNoAuthListNamespaces(ctx); len(fallback) > 0 {
 				return fallback, true
 			}
-		} else if !authz.CanList("", "secrets", "") {
+		} else if !canListEvidence(authz, "", "secrets", "") {
 			// Authenticated user with cluster-wide pod access but NOT
 			// cluster-wide `list secrets`. Helm storage is Secrets, so a single
 			// cluster-wide list would 403 wholesale and blank the view. Resolve
@@ -87,7 +98,7 @@ func resolveCachedEvidenceNamespaces(authz EvidenceAuthorizer, group, resource s
 	if noNamespaceAccess(namespaces) {
 		return []string{}
 	}
-	if authz.CanList(group, resource, "") {
+	if canListEvidence(authz, group, resource, "") {
 		return cloneStrings(namespaces)
 	}
 	candidates := namespaces
@@ -146,10 +157,12 @@ func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, name
 	var sourceObjectUnavailableKinds []string
 	var admissionConfigs, crds []*unstructured.Unstructured
 	var admissionConfigUnavailableKinds []string
+	var admissionConfigDeniedKinds []string
 	var apiServices []*unstructured.Unstructured
 	var endpointSlices []*discoveryv1.EndpointSlice
 	var additionalServices []*corev1.Service
 	var nodeRuntimeEvidence []upgradereadiness.NodeRuntimeEvidence
+	var nodeProxyForbidden bool
 	var csiDrivers []*storagev1.CSIDriver
 	var schedulingV1Alpha2Objects []*unstructured.Unstructured
 	var schedulingV1Alpha2UnavailableKinds []string
@@ -157,7 +170,13 @@ func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, name
 	configMapNamespaces := cloneStrings(namespaces)
 	persistentVolumeClaimNamespaces := cloneStrings(namespaces)
 	eventNamespaces := cloneStrings(namespaces)
-	canReadNodes := !noAccess && authz.CanList("", "nodes", "")
+	canReadNodes := !noAccess && canListEvidence(authz, "", "nodes", "")
+	nodeProxyDecision := EvidenceAuthorizationDecision{}
+	if !noAccess {
+		nodeProxyDecision = authz.CanGetSubresource("", "nodes", "proxy")
+	}
+	canGetNodeProxy := nodeProxyDecision.Allowed
+	nodeProxyForbidden = canReadNodes && nodeProxyDecision.Authoritative && !nodeProxyDecision.Allowed
 	if !noAccess {
 		if helmNamespaces, ok := ResolveHelmNamespaces(ctx, authz, namespaces); ok {
 			manifestResources, helmUnavailableNamespaces, manifestParseErrors = collectUpgradeHelmManifests(ctx, helmNamespaces)
@@ -171,7 +190,7 @@ func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, name
 		sourceObjectCtx, cancelSourceObjectCollection := context.WithTimeout(ctx, upgradeSourceObjectCollectionTimeout)
 		sourceObjects, sourceObjectUnavailableKinds = collectUpgradeSourceObjects(sourceObjectCtx, namespaces)
 		cancelSourceObjectCollection()
-		admissionConfigs, admissionConfigUnavailableKinds, crds, endpointSlices, additionalServices = collectUpgradeWebhookEvidence(ctx, authz)
+		admissionConfigs, admissionConfigUnavailableKinds, admissionConfigDeniedKinds, crds, endpointSlices, additionalServices = collectUpgradeWebhookEvidence(ctx, authz)
 		apiServices = collectUpgradeAPIServices(ctx, authz)
 		if collect137Evidence {
 			csiDrivers = collectUpgradeCSIDrivers(ctx, authz)
@@ -184,10 +203,12 @@ func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, name
 		if collect135Evidence || collect137Evidence {
 			eventNamespaces = resolveCachedEvidenceNamespaces(authz, "", "events", namespaces)
 		}
-		if canReadNodes && authz.CanGetSubresource("", "nodes", "proxy") && cache.Nodes() != nil {
+		if canReadNodes && canGetNodeProxy && cache.Nodes() != nil {
 			nodes, _ := cache.Nodes().List(labels.Everything())
 			nodeRuntimeCtx, cancelNodeRuntimeCollection := context.WithTimeout(ctx, upgradeNodeRuntimeCollectionTimeout)
-			nodeRuntimeEvidence = collectUpgradeNodeRuntimeEvidence(nodeRuntimeCtx, nodes, collect137Evidence)
+			var observedForbidden bool
+			nodeRuntimeEvidence, observedForbidden = collectUpgradeNodeRuntimeEvidence(nodeRuntimeCtx, nodes, collect137Evidence)
+			nodeProxyForbidden = nodeProxyForbidden || observedForbidden
 			cancelNodeRuntimeCollection()
 		}
 	}
@@ -213,11 +234,13 @@ func runUpgradeReadinessScan(ctx context.Context, authz EvidenceAuthorizer, name
 		PersistentVolumeClaimNamespaces:      persistentVolumeClaimNamespaces,
 		EventNamespaces:                      eventNamespaces,
 		CanReadNodes:                         canReadNodes,
-		CanReadPersistentVolumes:             !noAccess && authz.CanList("", "persistentvolumes", ""),
+		NodeProxyForbidden:                   nodeProxyForbidden,
+		CanReadPersistentVolumes:             !noAccess && canListEvidence(authz, "", "persistentvolumes", ""),
 		SourceObjects:                        sourceObjects,
 		SourceObjectUnavailableKinds:         sourceObjectUnavailableKinds,
 		AdmissionWebhookConfigurations:       admissionConfigs,
 		AdmissionWebhookUnavailableKinds:     admissionConfigUnavailableKinds,
+		AdmissionWebhookDeniedKinds:          admissionConfigDeniedKinds,
 		CustomResourceDefinitions:            crds,
 		APIServices:                          apiServices,
 		EndpointSlices:                       endpointSlices,

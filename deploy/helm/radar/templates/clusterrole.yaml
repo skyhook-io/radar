@@ -47,11 +47,6 @@ rules:
       - csidrivers
       - csistoragecapacities
     verbs: ["list"]
-  - apiGroups: ["scheduling.k8s.io"]
-    resources:
-      - workloads
-      - podgroups
-    verbs: ["list"]
   - apiGroups: ["flowcontrol.apiserver.k8s.io"]
     resources:
       - flowschemas
@@ -101,12 +96,13 @@ rules:
       - networkpolicies
     verbs: ["get", "list", "watch"]
 
-  # Scheduling / runtime / coordination metadata (read-only). PriorityClass
-  # and RuntimeClass are cluster-scoped infra; Leases are namespaced but
-  # surface in the resource browser and feed GitOps controller readiness.
+  # Scheduling / runtime / coordination metadata (read-only).
   - apiGroups: ["scheduling.k8s.io"]
     resources:
       - priorityclasses
+      - workloads
+      - podgroups
+      - compositepodgroups
     verbs: ["get", "list", "watch"]
   - apiGroups: ["node.k8s.io"]
     resources:
@@ -115,6 +111,11 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources:
       - leases
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["certificates.k8s.io"]
+    resources:
+      - podcertificaterequests
+      - clustertrustbundles
     verbs: ["get", "list", "watch"]
 
   # Batch resources (read-only)
@@ -165,6 +166,16 @@ rules:
       - mutatingwebhookconfigurations
       - validatingwebhookconfigurations
     verbs: ["get", "list", "watch"]
+  {{- end }}
+
+  {{- if .Values.rbac.viewNodeRuntime }}
+  # Kubelet runtime evidence (opt-in): upgrade-impact checks inspect kubelet
+  # metrics and effective configuration through the Node proxy. In no-auth
+  # mode this makes node-level details visible to anyone who can reach Radar.
+  - apiGroups: [""]
+    resources:
+      - nodes/proxy
+    verbs: ["get"]
   {{- end }}
 
   {{- if .Values.rbac.podLogs }}
@@ -390,6 +401,70 @@ rules:
   {{- end }}
   {{- if .Values.rbac.crdGroups.nvidia }}
   - apiGroups: ["nvidia.com"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.nimOperator }}
+  - apiGroups: ["apps.nvidia.com"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.amdGpu }}
+  - apiGroups: ["amd.com"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.kueue }}
+  # autoscaling.x-k8s.io carries ProvisioningRequests — created by Kueue's
+  # provisioning AdmissionCheck, so the two ship under one toggle.
+  - apiGroups: ["kueue.x-k8s.io", "autoscaling.x-k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.kserve }}
+  - apiGroups: ["serving.kserve.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.kuberay }}
+  - apiGroups: ["ray.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.lws }}
+  - apiGroups: ["leaderworkerset.x-k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.jobset }}
+  - apiGroups: ["jobset.x-k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.inferenceGateway }}
+  # InferencePool graduated to inference.networking.k8s.io; llm-d now owns
+  # InferenceObjective while deployed alpha versions retain the old group.
+  - apiGroups: ["inference.networking.k8s.io", "inference.networking.x-k8s.io", "llm-d.ai"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.volcano }}
+  - apiGroups: ["batch.volcano.sh", "scheduling.volcano.sh", "flow.volcano.sh", "bus.volcano.sh"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.kaiScheduler }}
+  - apiGroups: ["scheduling.run.ai", "kai.scheduler"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.kaito }}
+  - apiGroups: ["kaito.sh"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.kubeflow }}
+  - apiGroups: ["kubeflow.org", "trainer.kubeflow.org"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}

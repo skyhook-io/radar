@@ -477,6 +477,14 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 // describeArgoAutoSync formats spec.syncPolicy.automated into a chip label.
 // Empty when the field can't be read; "Manual" when automated is absent.
 func describeArgoAutoSync(root *unstructured.Unstructured) string {
+	// An ApplicationSet has no sync policy of its own. Its spec.syncPolicy
+	// governs how generated Applications are created and deleted, not how
+	// anything syncs, so it never carries `automated` - reading it here would
+	// report every ApplicationSet as "Manual". The policy that does decide
+	// auto-sync lives on spec.template.spec and belongs to what it generates.
+	if root.GetKind() == "ApplicationSet" {
+		return ""
+	}
 	automated, found, _ := unstructured.NestedMap(root.Object, "spec", "syncPolicy", "automated")
 	if !found {
 		return "Manual"

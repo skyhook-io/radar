@@ -49,8 +49,8 @@ func TestLegacyString(t *testing.T) {
 		want  string
 	}{
 		{LevelHealthy, "healthy"},
-		{LevelNeutral, "healthy"},   // Succeeded etc. read healthy in legacy vocab
-		{LevelUnknown, "healthy"},   // legacy classifier never produced unknown
+		{LevelNeutral, "healthy"}, // Succeeded etc. read healthy in legacy vocab
+		{LevelUnknown, "healthy"}, // legacy classifier never produced unknown
 		{LevelDegraded, "warning"},
 		{LevelUnhealthy, "error"},
 	}

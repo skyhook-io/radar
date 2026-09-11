@@ -1,8 +1,6 @@
 package main
 
 import (
-	goruntime "runtime"
-
 	"github.com/wailsapp/wails/v2/pkg/menu"
 	"github.com/wailsapp/wails/v2/pkg/menu/keys"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -68,18 +66,40 @@ func clipboardDelegate(goos string, desktopApp *DesktopApp, command string) func
 	}
 }
 
-func createMenu(desktopApp *DesktopApp, version string) *menu.Menu {
+// createMenu builds the native menubar. macOS diverges throughout: the
+// application-menu role owns Quit and About there, and Close Window hides the
+// whole app rather than closing anything — which is only safe on the one
+// platform where the close button does the same and the Dock can bring it back.
+func createMenu(desktopApp *DesktopApp, version, goos string) *menu.Menu {
+	mac := goos == "darwin"
+
 	appMenu := menu.NewMenu()
+
+	// macOS keeps Quit, Hide and Show All in the application menu — the native
+	// role also supplies the Hide/Show All pair that brings a hidden app back.
+	// Roles are darwin-only in Wails; elsewhere they degrade to a blank item.
+	if mac {
+		appMenu.Append(menu.AppMenu())
+	}
 
 	// File menu
 	fileMenu := appMenu.AddSubmenu("File")
 	fileMenu.AddText("Settings...", keys.CmdOrCtrl(","), func(_ *menu.CallbackData) {
 		runtime.WindowExecJS(desktopApp.ctx, `window.dispatchEvent(new Event('radar:open-settings'))`)
 	})
-	fileMenu.AddSeparator()
-	fileMenu.AddText("Quit", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
-		runtime.Quit(desktopApp.ctx)
-	})
+	if mac {
+		fileMenu.AddText("Close Window", keys.CmdOrCtrl("w"), func(_ *menu.CallbackData) {
+			runtime.Hide(desktopApp.ctx)
+		})
+	}
+	// On macOS the application menu owns Quit; a second Cmd+Q here would leave
+	// two menu items bound to the same accelerator.
+	if !mac {
+		fileMenu.AddSeparator()
+		fileMenu.AddText("Quit", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
+			runtime.Quit(desktopApp.ctx)
+		})
+	}
 
 	// Edit menu — clipboard handling strategy:
 	//
@@ -106,9 +126,9 @@ func createMenu(desktopApp *DesktopApp, version string) *menu.Menu {
 		runtime.WindowExecJS(desktopApp.ctx, "document.execCommand('redo')")
 	})
 	editMenu.AddSeparator()
-	editMenu.AddText("Cut", clipboardAccelerator(goruntime.GOOS, "x"), clipboardDelegate(goruntime.GOOS, desktopApp, "cut"))
-	editMenu.AddText("Copy", clipboardAccelerator(goruntime.GOOS, "c"), clipboardDelegate(goruntime.GOOS, desktopApp, "copy"))
-	editMenu.AddText("Paste", pasteAccelerator(goruntime.GOOS), func(_ *menu.CallbackData) {
+	editMenu.AddText("Cut", clipboardAccelerator(goos, "x"), clipboardDelegate(goos, desktopApp, "cut"))
+	editMenu.AddText("Copy", clipboardAccelerator(goos, "c"), clipboardDelegate(goos, desktopApp, "copy"))
+	editMenu.AddText("Paste", pasteAccelerator(goos), func(_ *menu.CallbackData) {
 		runtime.WindowExecJS(desktopApp.ctx, `
 			navigator.clipboard.readText().then(function(text) {
 				if (!text) return;
@@ -136,7 +156,7 @@ func createMenu(desktopApp *DesktopApp, version string) *menu.Menu {
 		runtime.WindowExecJS(desktopApp.ctx, "window.history.forward()")
 	})
 	viewMenu.AddSeparator()
-	viewMenu.AddText("Reload", reloadAccelerator(goruntime.GOOS), func(_ *menu.CallbackData) {
+	viewMenu.AddText("Reload", reloadAccelerator(goos), func(_ *menu.CallbackData) {
 		runtime.WindowReloadApp(desktopApp.ctx)
 	})
 	viewMenu.AddSeparator()
@@ -162,13 +182,16 @@ func createMenu(desktopApp *DesktopApp, version string) *menu.Menu {
 		runtime.WindowExecJS(desktopApp.ctx, `window.dispatchEvent(new Event('radar:check-for-updates'))`)
 	})
 	helpMenu.AddSeparator()
-	helpMenu.AddText("About Radar", nil, func(_ *menu.CallbackData) {
-		runtime.MessageDialog(desktopApp.ctx, runtime.MessageDialogOptions{
-			Type:    runtime.InfoDialog,
-			Title:   "About Radar",
-			Message: "Radar — Kubernetes Visibility Tool\nBuilt by Skyhook\n\nVersion: " + version + "\n\nhttps://github.com/skyhook-io/radar",
+	// The macOS application menu already carries About, drawn from mac.AboutInfo.
+	if !mac {
+		helpMenu.AddText("About Radar", nil, func(_ *menu.CallbackData) {
+			runtime.MessageDialog(desktopApp.ctx, runtime.MessageDialogOptions{
+				Type:    runtime.InfoDialog,
+				Title:   "About Radar",
+				Message: "Radar — Kubernetes Visibility Tool\nBuilt by Skyhook\n\nVersion: " + version + "\n\nhttps://github.com/skyhook-io/radar",
+			})
 		})
-	})
+	}
 	helpMenu.AddText("Documentation", nil, func(_ *menu.CallbackData) {
 		runtime.BrowserOpenURL(desktopApp.ctx, "https://github.com/skyhook-io/radar#readme")
 	})

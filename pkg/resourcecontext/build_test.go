@@ -70,6 +70,7 @@ type mockResourceProvider struct {
 	statefulSets []*appsv1.StatefulSet
 	jobs         []*batchv1.Job
 	cronJobs     []*batchv1.CronJob
+	hpas         []*autoscalingv2.HorizontalPodAutoscaler
 }
 
 func (m mockResourceProvider) Pods() ([]*corev1.Pod, error)               { return m.pods, nil }
@@ -92,7 +93,7 @@ func (m mockResourceProvider) PersistentVolumes() ([]*corev1.PersistentVolume, e
 	return nil, nil
 }
 func (m mockResourceProvider) HorizontalPodAutoscalers() ([]*autoscalingv2.HorizontalPodAutoscaler, error) {
-	return nil, nil
+	return m.hpas, nil
 }
 func (m mockResourceProvider) PodDisruptionBudgets() ([]*policyv1.PodDisruptionBudget, error) {
 	return nil, nil
@@ -1095,6 +1096,7 @@ func TestBuild_Unstructured_StatusSummary(t *testing.T) {
 					"status":             "False",
 					"reason":             "DependencyMissing",
 					"message":            "waiting for dependency",
+					"observedGeneration": int64(7),
 					"lastTransitionTime": "2026-05-21T10:00:00Z",
 				},
 			},
@@ -1112,7 +1114,7 @@ func TestBuild_Unstructured_StatusSummary(t *testing.T) {
 		t.Fatalf("Conditions len: got %d want %d", got, want)
 	}
 	cond := rc.StatusSummary.Conditions[0]
-	if cond.Type != "Ready" || cond.Status != "False" || cond.Reason != "DependencyMissing" {
+	if cond.Type != "Ready" || cond.Status != "False" || cond.Reason != "DependencyMissing" || cond.ObservedGeneration != 7 {
 		t.Errorf("Condition: got %+v", cond)
 	}
 }
@@ -1402,4 +1404,469 @@ func TestBuild_ContainerCompletionSplit_GatedByAccess(t *testing.T) {
 			t.Fatalf("want nil for Deployment, got %+v", got)
 		}
 	})
+}
+
+func TestBuild_SchedulingSummaryGatesEveryRelatedReference(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kueue.x-k8s.io/v1beta2",
+		"kind":       "Workload",
+		"metadata": map[string]any{
+			"name":      "trainer",
+			"namespace": "prod",
+		},
+	}}
+	active := true
+	count := int64(2)
+	summary := &SchedulingSummary{Observations: []SchedulingObservation{{
+		Source:   SchedulingSourceKueue,
+		Domain:   SchedulingDomainAdmission,
+		Subject:  ContextRef{Kind: "Workload", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "trainer"},
+		Decision: SchedulingDecisionUnsatisfied,
+		PrimaryCondition: &ConditionSummary{
+			Type: "Admitted", Status: "False", Reason: "UnsatisfiedAdmissionChecks",
+		},
+		Queues: []SchedulingQueue{
+			{Name: "gpu", Roles: []SchedulingQueueRole{SchedulingQueueSubmission}, Ref: &ContextRef{Kind: "LocalQueue", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "gpu"}},
+			{Name: "gpu-team", Roles: []SchedulingQueueRole{SchedulingQueueEntitlement}, Ref: &ContextRef{Kind: "ClusterQueue", Group: "kueue.x-k8s.io", Name: "gpu-team"}},
+		},
+		Gates: []SchedulingGate{{
+			Kind:        SchedulingGateAdmissionCheck,
+			Name:        "capacity",
+			Ref:         &ContextRef{Kind: "AdmissionCheck", Group: "kueue.x-k8s.io", Name: "capacity"},
+			NativeState: "Rejected", Decision: SchedulingDecisionUnsatisfied,
+		}},
+		Disruptions: []ConditionSummary{{Type: "Evicted", Status: "True", Reason: "Preempted"}},
+		Kueue: &KueueScheduling{
+			Phase: KueuePhaseQuotaReserved, Active: &active,
+			PodSetAssignments: []KueuePodSetAssignment{{
+				Name: "workers", Count: &count,
+				Resources: []KueueResourceAssignment{{
+					Name:      "nvidia.com/gpu",
+					Flavor:    "a10",
+					FlavorRef: &ContextRef{Kind: "ResourceFlavor", Group: "kueue.x-k8s.io", Name: "a10"},
+					Usage:     "2",
+				}},
+			}},
+			ConcurrentAdmission: &KueueConcurrentAdmission{ParentName: "parent", ParentRef: &ContextRef{
+				Kind: "Workload", Group: "kueue.x-k8s.io", Namespace: "control", Name: "parent",
+			}},
+		},
+	}}}
+
+	tests := []struct {
+		name           string
+		denied         denyChecker
+		field          string
+		assertFiltered func(SchedulingObservation) bool
+	}{
+		{
+			name: "LocalQueue", denied: denyChecker{group: "kueue.x-k8s.io", kind: "LocalQueue", namespace: "prod"},
+			field: "scheduling.observations.queues.ref", assertFiltered: func(got SchedulingObservation) bool {
+				return len(got.Queues) == 2 && got.Queues[0].Name == "gpu" && got.Queues[0].Ref == nil &&
+					len(got.Queues[0].Roles) == 1 && got.Queues[0].Roles[0] == SchedulingQueueSubmission &&
+					got.Queues[1].Ref != nil
+			},
+		},
+		{
+			name: "ClusterQueue", denied: denyChecker{group: "kueue.x-k8s.io", kind: "ClusterQueue"},
+			field: "scheduling.observations.queues.ref", assertFiltered: func(got SchedulingObservation) bool {
+				return len(got.Queues) == 2 && got.Queues[0].Ref != nil && got.Queues[1].Name == "gpu-team" &&
+					got.Queues[1].Ref == nil && len(got.Queues[1].Roles) == 1 &&
+					got.Queues[1].Roles[0] == SchedulingQueueEntitlement
+			},
+		},
+		{
+			name: "Parent Workload", denied: denyChecker{group: "kueue.x-k8s.io", kind: "Workload", namespace: "control"},
+			field: "scheduling.observations.kueue.concurrentAdmission.parentRef", assertFiltered: func(got SchedulingObservation) bool {
+				return got.Kueue != nil && got.Kueue.ConcurrentAdmission != nil &&
+					got.Kueue.ConcurrentAdmission.ParentName == "parent" && got.Kueue.ConcurrentAdmission.ParentRef == nil
+			},
+		},
+		{
+			name: "AdmissionCheck", denied: denyChecker{group: "kueue.x-k8s.io", kind: "AdmissionCheck"},
+			field: "scheduling.observations.gates.ref", assertFiltered: func(got SchedulingObservation) bool {
+				return len(got.Gates) == 1 && got.Gates[0].Name == "capacity" && got.Gates[0].Ref == nil &&
+					got.Gates[0].NativeState == "Rejected"
+			},
+		},
+		{
+			name: "ResourceFlavor", denied: denyChecker{group: "kueue.x-k8s.io", kind: "ResourceFlavor"},
+			field: "scheduling.observations.kueue.podSetAssignments.resources.flavorRef", assertFiltered: func(got SchedulingObservation) bool {
+				if got.Kueue == nil || len(got.Kueue.PodSetAssignments) != 1 || len(got.Kueue.PodSetAssignments[0].Resources) != 1 {
+					return false
+				}
+				resource := got.Kueue.PodSetAssignments[0].Resources[0]
+				return resource.Flavor == "a10" && resource.FlavorRef == nil &&
+					resource.Name == "nvidia.com/gpu" && resource.Usage == "2"
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rc := Build(context.Background(), obj, Options{
+				Tier: TierBasic, AccessChecker: test.denied, Scheduling: summary,
+			})
+			if rc.Scheduling == nil || len(rc.Scheduling.Observations) != 1 {
+				t.Fatalf("missing scheduling observation: %+v", rc.Scheduling)
+			}
+			got := rc.Scheduling.Observations[0]
+			if !test.assertFiltered(got) {
+				t.Fatalf("denied reference remained visible: %+v", rc.Scheduling)
+			}
+			if got.Source != SchedulingSourceKueue || got.Domain != SchedulingDomainAdmission ||
+				got.Subject != summary.Observations[0].Subject || got.Decision != SchedulingDecisionUnsatisfied ||
+				got.Kueue == nil || got.Kueue.Phase != KueuePhaseQuotaReserved {
+				t.Fatalf("RBAC filtering changed scheduling facts: %+v", got)
+			}
+			if !hasOmitted(rc.Omitted, test.field) {
+				t.Fatalf("missing omitted marker %q: %+v", test.field, rc.Omitted)
+			}
+		})
+	}
+
+	input := summary.Observations[0]
+	if len(input.Queues) != 2 || input.Queues[0].Ref == nil || len(input.Gates) != 1 || input.Gates[0].Ref == nil ||
+		input.Kueue.ConcurrentAdmission == nil || input.Kueue.ConcurrentAdmission.ParentRef == nil ||
+		input.Kueue.PodSetAssignments[0].Resources[0].FlavorRef == nil {
+		t.Fatalf("Build mutated caller-owned scheduling summary: %+v", summary)
+	}
+}
+
+func TestBuild_SchedulingSummaryDropsUnreadableObservationSubject(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Pod",
+		"metadata":   map[string]any{"name": "trainer-pod", "namespace": "prod"},
+	}}
+	summary := &SchedulingSummary{Observations: []SchedulingObservation{{
+		Source:   SchedulingSourceKueue,
+		Domain:   SchedulingDomainAdmission,
+		Subject:  ContextRef{Kind: "Workload", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "trainer"},
+		Decision: SchedulingDecisionUnsatisfied,
+		Queues: []SchedulingQueue{{
+			Name:  "gpu",
+			Roles: []SchedulingQueueRole{SchedulingQueueSubmission},
+		}},
+	}}}
+
+	rc := Build(context.Background(), obj, Options{
+		Tier:          TierBasic,
+		AccessChecker: denyChecker{group: "kueue.x-k8s.io", kind: "Workload", namespace: "prod"},
+		Scheduling:    summary,
+	})
+	if rc.Scheduling != nil {
+		t.Fatalf("want scheduling omitted when its only subject is unreadable, got %+v", rc.Scheduling)
+	}
+	if !hasOmitted(rc.Omitted, "scheduling.observations.subject") {
+		t.Fatalf("missing subject omission marker: %+v", rc.Omitted)
+	}
+	if len(summary.Observations) != 1 || summary.Observations[0].Subject.Name != "trainer" {
+		t.Fatalf("Build mutated caller-owned scheduling summary: %+v", summary)
+	}
+}
+
+func TestBuild_EmptySchedulingSummaryIsOmitted(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1",
+		"kind":       "Pod",
+		"metadata":   map[string]any{"name": "trainer-pod", "namespace": "prod"},
+	}}
+	rc := Build(context.Background(), obj, Options{Tier: TierBasic, Scheduling: &SchedulingSummary{}})
+	if rc.Scheduling != nil {
+		t.Fatalf("want empty scheduling summary omitted, got %+v", rc.Scheduling)
+	}
+}
+
+func TestBuild_SchedulingSummaryDeepCopiesNestedData(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "kueue.x-k8s.io/v1beta2",
+		"kind":       "Workload",
+		"metadata":   map[string]any{"name": "trainer", "namespace": "prod"},
+	}}
+	active := true
+	count := int64(2)
+	retryCount := int64(3)
+	requeueAfter := int64(30)
+	requeueCount := int64(4)
+	summary := &SchedulingSummary{Observations: []SchedulingObservation{{
+		Source: SchedulingSourceKueue, Domain: SchedulingDomainAdmission,
+		Subject:          ContextRef{Kind: "Workload", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "trainer"},
+		Decision:         SchedulingDecisionUnsatisfied,
+		PrimaryCondition: &ConditionSummary{Type: "Admitted", Status: "False", Reason: "Waiting", ObservedGeneration: 7},
+		Queues: []SchedulingQueue{{
+			Name:  "gpu",
+			Roles: []SchedulingQueueRole{SchedulingQueueSubmission},
+			Ref:   &ContextRef{Kind: "LocalQueue", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "gpu"},
+		}},
+		Gates: []SchedulingGate{{
+			Kind:        SchedulingGateAdmissionCheck,
+			Name:        "capacity",
+			Ref:         &ContextRef{Kind: "AdmissionCheck", Group: "kueue.x-k8s.io", Name: "capacity"},
+			NativeState: "Retry", Decision: SchedulingDecisionUnsatisfied,
+			RetryCount: &retryCount, RequeueAfterSeconds: &requeueAfter,
+		}},
+		Disruptions: []ConditionSummary{{Type: "Evicted", Status: "True", Reason: "Preempted"}},
+		Kueue: &KueueScheduling{
+			Phase: KueuePhaseQuotaReserved, Active: &active,
+			PodsReady: &ConditionSummary{Type: "PodsReady", Status: "False", Reason: "Waiting"},
+			WaitingForReplacementPods: &ConditionSummary{
+				Type: "WaitingForReplacementPods", Status: "True", Reason: "PodsFailed",
+			},
+			PodSetAssignments: []KueuePodSetAssignment{{
+				Name: "workers", Count: &count,
+				Resources: []KueueResourceAssignment{{
+					Name: "nvidia.com/gpu", Usage: "2", Flavor: "a10",
+					FlavorRef: &ContextRef{Kind: "ResourceFlavor", Group: "kueue.x-k8s.io", Name: "a10"},
+				}},
+			}},
+			RequeueState: &KueueRequeueState{Count: &requeueCount, RequeueAt: "2026-08-30T10:04:00Z"},
+			ConcurrentAdmission: &KueueConcurrentAdmission{ParentName: "parent", ParentRef: &ContextRef{
+				Kind: "Workload", Group: "kueue.x-k8s.io", Namespace: "prod", Name: "parent",
+			}},
+		},
+	}}}
+
+	got := Build(context.Background(), obj, Options{Tier: TierBasic, Scheduling: summary}).Scheduling
+	if got == nil || len(got.Observations) != 1 {
+		t.Fatalf("missing scheduling copy: %+v", got)
+	}
+	observation := &got.Observations[0]
+	observation.Subject.Name = "changed"
+	observation.PrimaryCondition.Reason = "changed"
+	observation.Queues[0].Ref.Name = "changed"
+	observation.Queues[0].Roles[0] = SchedulingQueueEntitlement
+	observation.Gates[0].Ref.Name = "changed"
+	*observation.Gates[0].RetryCount = 99
+	*observation.Gates[0].RequeueAfterSeconds = 99
+	observation.Disruptions[0].Reason = "changed"
+	*observation.Kueue.Active = false
+	observation.Kueue.PodsReady.Reason = "changed"
+	observation.Kueue.WaitingForReplacementPods.Reason = "changed"
+	*observation.Kueue.PodSetAssignments[0].Count = 99
+	observation.Kueue.PodSetAssignments[0].Resources[0].Name = "changed"
+	observation.Kueue.PodSetAssignments[0].Resources[0].FlavorRef.Name = "changed"
+	*observation.Kueue.RequeueState.Count = 99
+	observation.Kueue.ConcurrentAdmission.ParentRef.Name = "changed"
+
+	want := summary.Observations[0]
+	if want.Subject.Name != "trainer" || want.PrimaryCondition.Reason != "Waiting" || want.PrimaryCondition.ObservedGeneration != 7 ||
+		want.Queues[0].Ref.Name != "gpu" || want.Queues[0].Roles[0] != SchedulingQueueSubmission || want.Gates[0].Ref.Name != "capacity" ||
+		*want.Gates[0].RetryCount != 3 || *want.Gates[0].RequeueAfterSeconds != 30 ||
+		want.Disruptions[0].Reason != "Preempted" || !*want.Kueue.Active ||
+		want.Kueue.PodsReady.Reason != "Waiting" || want.Kueue.WaitingForReplacementPods.Reason != "PodsFailed" ||
+		*want.Kueue.PodSetAssignments[0].Count != 2 ||
+		want.Kueue.PodSetAssignments[0].Resources[0].Name != "nvidia.com/gpu" ||
+		want.Kueue.PodSetAssignments[0].Resources[0].FlavorRef.Name != "a10" ||
+		*want.Kueue.RequeueState.Count != 4 || want.Kueue.ConcurrentAdmission.ParentRef.Name != "parent" {
+		t.Fatalf("filtered copy aliases caller-owned scheduling data: %+v", summary)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ScaledBy: HPA diagnosis attached to the workload
+// ---------------------------------------------------------------------------
+
+func scaledByFixture(scalerKind topology.NodeKind, scalerID string) (*appsv1.Deployment, *topology.Topology, *autoscalingv2.HorizontalPodAutoscaler) {
+	deploy := &appsv1.Deployment{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod"},
+	}
+	minReplicas := int32(1)
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "autoscaling/v2", Kind: "HorizontalPodAutoscaler"},
+		ObjectMeta: metav1.ObjectMeta{Name: "api-hpa", Namespace: "prod", Generation: 3},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			MinReplicas: &minReplicas,
+			MaxReplicas: 5,
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+				APIVersion: "apps/v1", Kind: "Deployment", Name: "api",
+			},
+		},
+		Status: autoscalingv2.HorizontalPodAutoscalerStatus{
+			ObservedGeneration: func() *int64 { g := int64(3); return &g }(),
+			CurrentReplicas:    5,
+			DesiredReplicas:    5,
+			Conditions: []autoscalingv2.HorizontalPodAutoscalerCondition{
+				{Type: autoscalingv2.AbleToScale, Status: corev1.ConditionTrue, Reason: "ReadyForNewScale"},
+				{Type: autoscalingv2.ScalingActive, Status: corev1.ConditionTrue, Reason: "ValidMetricFound"},
+				{Type: autoscalingv2.ScalingLimited, Status: corev1.ConditionTrue, Reason: "TooManyReplicas",
+					Message: "the desired replica count is more than the maximum replica count"},
+			},
+		},
+	}
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			{ID: "deployment/prod/api", Kind: topology.KindDeployment, Name: "api"},
+		},
+		Edges: nil,
+	}
+	if scalerID != "" {
+		topo.Nodes = append(topo.Nodes, topology.Node{ID: scalerID, Kind: scalerKind, Name: strings.Split(scalerID, "/")[2]})
+		topo.Edges = append(topo.Edges, topology.Edge{Source: scalerID, Target: "deployment/prod/api", Type: topology.EdgeUses})
+	}
+	return deploy, topo, hpa
+}
+
+func TestBuild_Deployment_ScaledByHPA_AttachesSummary(t *testing.T) {
+	deploy, topo, hpa := scaledByFixture(topology.KindHPA, "horizontalpodautoscaler/prod/api-hpa")
+	rc := Build(context.Background(), deploy, Options{
+		Tier:          TierBasic,
+		AccessChecker: allowAllChecker{},
+		Topology:      topo,
+		Provider:      mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
+	})
+	if rc == nil || len(rc.ScaledBy) != 1 {
+		t.Fatalf("ScaledBy: got %+v want one entry", rc)
+	}
+	entry := rc.ScaledBy[0]
+	if entry.Kind != "HorizontalPodAutoscaler" || entry.Namespace != "prod" || entry.Name != "api-hpa" {
+		t.Fatalf("ScaledBy[0] ref: got %+v", entry.ContextRef)
+	}
+	if entry.HPASummary == nil {
+		t.Fatal("ScaledBy[0].HPASummary: got nil, want the HPA's diagnosis")
+	}
+	if entry.HPASummary.State != "limited_max" {
+		t.Errorf("HPASummary.State: got %q want limited_max (%+v)", entry.HPASummary.State, entry.HPASummary)
+	}
+	if entry.HPASummary.Bounds == nil || entry.HPASummary.Bounds.Max != 5 || entry.HPASummary.Bounds.Current != 5 {
+		t.Errorf("HPASummary.Bounds: got %+v", entry.HPASummary.Bounds)
+	}
+	if entry.HPASummary.Target == nil || entry.HPASummary.Target.Name != "api" || entry.HPASummary.Target.Group != "apps" {
+		t.Errorf("HPASummary.Target: got %+v want apps/Deployment api", entry.HPASummary.Target)
+	}
+	if rc.HPASummary != nil {
+		t.Errorf("top-level HPASummary belongs to HPA subjects only; got %+v", rc.HPASummary)
+	}
+
+	b, err := json.Marshal(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"scaledBy":[{"kind":"HorizontalPodAutoscaler","namespace":"prod","name":"api-hpa","hpaSummary":{`) {
+		t.Errorf("scaledBy entry should serialize as the flat ref plus hpaSummary; got %s", b)
+	}
+}
+
+func TestBuild_Deployment_ScaledByHPA_DeniedHPAIsOmittedWithoutLeak(t *testing.T) {
+	deploy, topo, hpa := scaledByFixture(topology.KindHPA, "horizontalpodautoscaler/prod/api-hpa")
+	rc := Build(context.Background(), deploy, Options{
+		Tier:          TierBasic,
+		AccessChecker: denyChecker{group: "", kind: "HorizontalPodAutoscaler", namespace: "prod"},
+		Topology:      topo,
+		Provider:      mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
+	})
+	if len(rc.ScaledBy) != 0 {
+		t.Fatalf("ScaledBy: got %+v want none for a denied HPA", rc.ScaledBy)
+	}
+	var omittedScaledBy bool
+	for _, o := range rc.Omitted {
+		if o.Field == "scaledBy" && o.Reason == OmittedRBACDenied {
+			omittedScaledBy = true
+		}
+	}
+	if !omittedScaledBy {
+		t.Errorf("Omitted: got %+v want scaledBy rbac_denied", rc.Omitted)
+	}
+	b, err := json.Marshal(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"hpaSummary", "limited_max", "api-hpa", "TooManyReplicas"} {
+		if strings.Contains(string(b), leak) {
+			t.Errorf("denied HPA leaked %q into the context: %s", leak, b)
+		}
+	}
+}
+
+func TestBuild_Deployment_NoScaler_HasNoScaledBy(t *testing.T) {
+	deploy, topo, hpa := scaledByFixture(topology.KindHPA, "")
+	rc := Build(context.Background(), deploy, Options{
+		Tier:          TierBasic,
+		AccessChecker: allowAllChecker{},
+		Topology:      topo,
+		Provider:      mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
+	})
+	if rc.ScaledBy != nil {
+		t.Fatalf("ScaledBy: got %+v want nil", rc.ScaledBy)
+	}
+	b, err := json.Marshal(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "scaledBy") || strings.Contains(string(b), "hpaSummary") {
+		t.Errorf("unscaled workload must not carry scaledBy: %s", b)
+	}
+}
+
+func TestBuild_Deployment_ScaledByKEDA_CarriesRefOnly(t *testing.T) {
+	deploy, topo, hpa := scaledByFixture(topology.KindScaledObject, "scaledobject/prod/api-scaler")
+	rc := Build(context.Background(), deploy, Options{
+		Tier:          TierBasic,
+		AccessChecker: allowAllChecker{},
+		Topology:      topo,
+		Provider:      mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
+	})
+	if len(rc.ScaledBy) != 1 {
+		t.Fatalf("ScaledBy: got %+v want one entry", rc.ScaledBy)
+	}
+	entry := rc.ScaledBy[0]
+	if entry.Kind != "ScaledObject" || entry.Name != "api-scaler" {
+		t.Fatalf("ScaledBy[0] ref: got %+v", entry.ContextRef)
+	}
+	if entry.HPASummary != nil {
+		t.Errorf("KEDA scaler must not carry an HPA summary: %+v", entry.HPASummary)
+	}
+	b, err := json.Marshal(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"scaledBy":[{"kind":"ScaledObject","namespace":"prod","name":"api-scaler"}]`) {
+		t.Errorf("KEDA scaledBy entry should serialize exactly as before: %s", b)
+	}
+}
+
+func TestBuild_Deployment_ScaledByKEDAManagedHPA_NamesTheScaledObject(t *testing.T) {
+	deploy, topo, hpa := scaledByFixture(topology.KindHPA, "horizontalpodautoscaler/prod/keda-hpa-api")
+	hpa.Name = "keda-hpa-api"
+	hpa.OwnerReferences = []metav1.OwnerReference{{APIVersion: "keda.sh/v1alpha1", Kind: "ScaledObject", Name: "api"}}
+	rc := Build(context.Background(), deploy, Options{
+		Tier: TierBasic, AccessChecker: allowAllChecker{}, Topology: topo,
+		Provider: mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
+	})
+	if len(rc.ScaledBy) != 1 || rc.ScaledBy[0].ManagedBy == nil {
+		t.Fatalf("ScaledBy: got %+v want a managedBy pointer", rc.ScaledBy)
+	}
+	if got := *rc.ScaledBy[0].ManagedBy; got != (ContextRef{Kind: "ScaledObject", Group: "keda.sh", Namespace: "prod", Name: "api"}) {
+		t.Errorf("ManagedBy: got %+v", got)
+	}
+
+	hpa.OwnerReferences = nil
+	hpa.Labels = map[string]string{"scaledobject.keda.sh/name": "api"}
+	rc = Build(context.Background(), deploy, Options{
+		Tier: TierBasic, AccessChecker: allowAllChecker{}, Topology: topo,
+		Provider: mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
+	})
+	if rc.ScaledBy[0].ManagedBy == nil || rc.ScaledBy[0].ManagedBy.Name != "api" {
+		t.Errorf("label-only attribution: got %+v", rc.ScaledBy[0].ManagedBy)
+	}
+
+	rc = Build(context.Background(), deploy, Options{
+		Tier: TierBasic, AccessChecker: denyChecker{group: "keda.sh", kind: "ScaledObject", namespace: "prod"}, Topology: topo,
+		Provider: mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
+	})
+	if rc.ScaledBy[0].ManagedBy != nil {
+		t.Errorf("denied ScaledObject must not be named: %+v", rc.ScaledBy[0].ManagedBy)
+	}
+	var omittedManagedBy bool
+	for _, o := range rc.Omitted {
+		if o.Field == "scaledBy.managedBy" && o.Reason == OmittedRBACDenied {
+			omittedManagedBy = true
+		}
+	}
+	if !omittedManagedBy {
+		t.Errorf("Omitted: got %+v want scaledBy.managedBy rbac_denied", rc.Omitted)
+	}
+	if rc.ScaledBy[0].HPASummary == nil {
+		t.Errorf("the HPA's own diagnosis still belongs on the ref: %+v", rc.ScaledBy[0])
+	}
 }

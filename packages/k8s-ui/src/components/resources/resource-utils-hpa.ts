@@ -12,9 +12,10 @@ export function getHPATableState(hpa: any): HPADiagnosisState {
   if (conditionStatus(conditions, 'AbleToScale') === 'False') return 'unable_to_scale'
   const scalingActive = condition(conditions, 'ScalingActive')
   if (scalingActive?.status === 'False') {
-    if (isScalingDisabled(scalingActive)) return 'disabled'
-    return 'metrics_unavailable'
+    if (!isScalingDisabled(scalingActive)) return 'metrics_unavailable'
   }
+  if (conditionStatus(conditions, 'ScaledToZero') === 'True' && min === 0 && desired === 0) return 'scaled_to_zero'
+  if (scalingActive?.status === 'False' && isScalingDisabled(scalingActive)) return 'disabled'
   if (max > 0 && min === max && current === desired && desired === max) return 'pinned'
   if (isMaxLimited(condition(conditions, 'ScalingLimited'))) return 'limited_max'
 
@@ -31,6 +32,8 @@ export function hpaStateLabel(state: HPADiagnosisState): string {
       return 'Metrics unavailable'
     case 'metrics_incomplete':
       return 'Metrics incomplete'
+    case 'scaled_to_zero':
+      return 'Scaled to zero'
     case 'disabled':
       return 'Disabled'
     case 'pinned':
@@ -66,6 +69,7 @@ export function hpaStateLevel(state: HPADiagnosisState): HealthLevel {
     case 'scaling_down':
       return 'degraded'
     case 'limited_min':
+    case 'scaled_to_zero':
     case 'disabled':
     case 'pinned':
     case 'stabilized':

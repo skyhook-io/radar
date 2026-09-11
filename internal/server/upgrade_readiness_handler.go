@@ -74,20 +74,25 @@ func (s *Server) upgradeReadinessNamespaces(r *http.Request) []string {
 }
 
 func (s *Server) canReadSubresource(r *http.Request, group, resource, subresource, namespace, verb string) bool {
+	allowed, _ := s.canReadSubresourceDecision(r, group, resource, subresource, namespace, verb)
+	return allowed
+}
+
+func (s *Server) canReadSubresourceDecision(r *http.Request, group, resource, subresource, namespace, verb string) (bool, bool) {
 	user := auth.UserFromContext(r.Context())
 	if user == nil {
-		return true
+		return true, true
 	}
 	client := k8s.GetClient()
 	if client == nil {
-		return false
+		return false, false
 	}
 	allowed, err := auth.SubjectCanISubresource(r.Context(), client, user.Username, user.Groups, namespace, group, resource, subresource, verb)
 	if err != nil {
 		log.Printf("[upgrade-impact] authorization failed for %s on %s/%s: %v", verb, resource, subresource, err)
-		return false
+		return false, false
 	}
-	return allowed
+	return allowed, true
 }
 
 // httpUpgradeAuthorizer adapts (*Server, *http.Request) to the upgrade
@@ -102,12 +107,14 @@ func (a httpUpgradeAuthorizer) Namespaces() []string {
 	return a.s.upgradeReadinessNamespaces(a.r)
 }
 
-func (a httpUpgradeAuthorizer) CanList(group, resource, namespace string) bool {
-	return a.s.canRead(a.r, group, resource, namespace, "list")
+func (a httpUpgradeAuthorizer) CanList(group, resource, namespace string) upgrade.EvidenceAuthorizationDecision {
+	allowed, authoritative := a.s.canReadDecision(a.r, group, resource, namespace, "list")
+	return upgrade.EvidenceAuthorizationDecision{Allowed: allowed, Authoritative: authoritative}
 }
 
-func (a httpUpgradeAuthorizer) CanGetSubresource(group, resource, subresource string) bool {
-	return a.s.canReadSubresource(a.r, group, resource, subresource, "", "get")
+func (a httpUpgradeAuthorizer) CanGetSubresource(group, resource, subresource string) upgrade.EvidenceAuthorizationDecision {
+	allowed, authoritative := a.s.canReadSubresourceDecision(a.r, group, resource, subresource, "", "get")
+	return upgrade.EvidenceAuthorizationDecision{Allowed: allowed, Authoritative: authoritative}
 }
 
 func (a httpUpgradeAuthorizer) FilterNamespacesByCanList(group, resource string, namespaces []string) []string {

@@ -33,11 +33,17 @@ import {
   type ResourceSignal,
   type RightsizingActionTone,
 } from './presentation'
+import { useNavCustomization } from '../../context/NavCustomization'
 
 export const RIGHTSIZING_SCAN_DESCRIPTION =
   'Find CPU and memory requests to increase, reduce, or review. Radar never changes them.'
 export const RIGHTSIZING_SCAN_METHODOLOGY =
   'Based on 7 days of history: CPU P95 and memory maximum, plus 15% headroom. Memory reductions require verifiable restart history.'
+export const RIGHTSIZING_METRICS_REQUIRED_TITLE = 'Metrics history is required'
+export const RIGHTSIZING_METRICS_REQUIRED_BODY =
+  'Rightsizing needs 7 days of Kubernetes workload history from a PromQL-compatible metrics backend (Prometheus, VictoriaMetrics, Thanos, or Mimir).\nCost Overview remains available without it.'
+export const RIGHTSIZING_EMBEDDED_METRICS_REQUIRED_BODY =
+  `${RIGHTSIZING_METRICS_REQUIRED_BODY}\nConfigure metrics for this cluster in the host application or Radar deployment.`
 
 export type RightsizingScanSurfaceState =
   | 'discovering'
@@ -97,6 +103,7 @@ const ACTION_META: Record<
 
 export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
   useAutoPromConnect()
+  const settingsAvailable = !useNavCustomization().embedded
   const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const { data: clusterInfo } = useClusterInfo()
@@ -242,16 +249,33 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
           />
         ) : surfaceState === 'prometheus_required' ? (
           <CenteredState
-            title="Prometheus is required"
-            body="Rightsizing uses Prometheus history. Cost Overview can still use OpenCost independently."
+            title={RIGHTSIZING_METRICS_REQUIRED_TITLE}
+            body={settingsAvailable
+              ? RIGHTSIZING_METRICS_REQUIRED_BODY
+              : RIGHTSIZING_EMBEDDED_METRICS_REQUIRED_BODY}
             action={
-              <button
-                type="button"
-                onClick={() => retryPrometheus()}
-                className="btn-brand px-3 py-1.5 text-xs font-medium"
-              >
-                Check again
-              </button>
+              <div className="flex flex-wrap items-center justify-center gap-3">
+                {settingsAvailable && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      window.dispatchEvent(
+                        new CustomEvent('radar:open-settings', { detail: { section: 'prometheus' } }),
+                      )
+                    }
+                    className="btn-brand px-4 py-2 text-sm font-medium"
+                  >
+                    Configure metrics
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => retryPrometheus()}
+                  className="rounded-lg border border-theme-border px-4 py-2 text-sm font-medium text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+                >
+                  Check again
+                </button>
+              </div>
             }
           />
         ) : surfaceState === 'first_run' ? (
@@ -860,15 +884,15 @@ function CenteredState({
   action?: React.ReactNode
 }) {
   return (
-    <div className="flex min-h-48 items-center justify-center rounded-xl border border-theme-border bg-theme-surface">
-      <div className="flex max-w-lg flex-col items-center px-6 text-center">
+    <div className="flex min-h-56 items-center justify-center rounded-xl border border-theme-border bg-theme-surface px-6 py-8">
+      <div className="flex w-full max-w-xl flex-col items-center text-center">
         {loading ? (
           <Loader2 className="h-8 w-8 animate-spin text-theme-text-tertiary" />
         ) : (
           <Gauge className="h-8 w-8 text-theme-text-tertiary" />
         )}
         <h2 className="mt-3 text-base font-semibold text-theme-text-primary">{title}</h2>
-        <p className="mt-1 text-sm text-theme-text-secondary">{body}</p>
+        <p className="mt-1 whitespace-pre-line text-sm text-theme-text-secondary">{body}</p>
         {action && <div className="mt-4">{action}</div>}
       </div>
     </div>

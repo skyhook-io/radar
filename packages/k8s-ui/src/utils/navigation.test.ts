@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from 'vitest'
 import { englishPlural } from './pluralize'
-import { kindToPlural, pluralToKind, refToSelectedResource, initNavigationMap, resetNavigationMap, laneId, laneResourceKey, groupQualifiesLaneId, parseLaneId } from './navigation'
+import { kindToPlural, kindToPluralWithGroup, pluralToKind, refToSelectedResource, initNavigationMap, resetNavigationMap, laneId, laneResourceKey, groupQualifiesLaneId, parseLaneId } from './navigation'
 
 afterEach(() => {
   resetNavigationMap()
@@ -224,6 +224,24 @@ describe('initNavigationMap', () => {
     ])
     expect(pluralToKind('pods')).toBe('Pod')
   })
+
+  test('keeps the virtual PodGroup alias distinct from scheduling PodGroup', () => {
+    initNavigationMap([
+      { group: 'scheduling.k8s.io', version: 'v1beta1', kind: 'PodGroup', name: 'podgroups', namespaced: true, isCrd: false, verbs: ['get', 'list'] },
+      { group: 'example.io', version: 'v1', kind: 'PodGroup', name: 'custompodgroups', namespaced: true, isCrd: true, verbs: ['get', 'list'] },
+    ])
+
+    expect(kindToPlural('PodGroup')).toBe('pods')
+    expect(kindToPluralWithGroup('PodGroup', 'scheduling.k8s.io')).toBe('podgroups')
+    expect(kindToPluralWithGroup('PodGroup', 'example.io')).toBe('custompodgroups')
+    expect(kindToPluralWithGroup('podgroups', 'scheduling.k8s.io')).toBe('podgroups')
+  })
+
+  test('preserves aliases and plural slugs before group discovery is initialized', () => {
+    expect(kindToPluralWithGroup('PodGroup', 'scheduling.k8s.io')).toBe('podgroups')
+    expect(kindToPluralWithGroup('CalicoGlobalNetworkPolicy', 'projectcalico.org')).toBe('globalnetworkpolicies')
+    expect(kindToPluralWithGroup('schedules', 'velero.io')).toBe('schedules')
+  })
 })
 
 describe('refToSelectedResource', () => {
@@ -238,6 +256,18 @@ describe('refToSelectedResource', () => {
       name: 'test-tls',
       namespace: 'platform',
       group: undefined,
+    })
+  })
+
+  test('uses the API group when a real resource collides with a virtual kind', () => {
+    initNavigationMap([
+      { group: 'scheduling.k8s.io', version: 'v1beta1', kind: 'PodGroup', name: 'podgroups', namespaced: true, isCrd: false, verbs: ['get', 'list'] },
+    ])
+    expect(refToSelectedResource({ kind: 'PodGroup', name: 'batch', namespace: 'default', group: 'scheduling.k8s.io' })).toEqual({
+      kind: 'podgroups',
+      name: 'batch',
+      namespace: 'default',
+      group: 'scheduling.k8s.io',
     })
   })
 
@@ -294,5 +324,15 @@ describe('lane identity helpers', () => {
       kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'prod', name: 'main-db',
     })
     expect(parseLaneId('bogus')).toBeNull()
+  })
+})
+
+describe('pluralToKind on absent input', () => {
+  // A saved investigation can carry an empty kind. This runs over every row of
+  // the run list, so throwing here took the whole investigations panel down and
+  // made every other run unopenable — one bad row, no panel.
+  test('returns the empty string instead of throwing', () => {
+    expect(() => pluralToKind('')).not.toThrow()
+    expect(pluralToKind('')).toBe('')
   })
 })

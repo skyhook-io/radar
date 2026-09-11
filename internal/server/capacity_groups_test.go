@@ -195,7 +195,7 @@ func TestCapacityResponsesFailClosedOnMidRequestContextSwitch(t *testing.T) {
 		permissions.SetCanI("list", "", "pods", "default", false)
 		permissions.SetCanI("list", "", "pods", "broken", false)
 		permissions.SetCanI("get", "", "configmaps", "kube-system", false)
-		env.srv.permCache.Set("alice", permissions)
+		env.srv.permCache.Set("alice", nil, permissions)
 
 		// Baseline: this path serves 200 when the cluster holds still.
 		resp := env.authGet(t, "/api/capacity", "alice", "")

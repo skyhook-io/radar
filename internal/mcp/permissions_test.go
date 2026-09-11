@@ -16,7 +16,7 @@ import (
 func withTestUserPerms(t *testing.T, username string, groups []string, allowed []string) context.Context {
 	t.Helper()
 	ctx := pkgauth.ContextWithUser(context.Background(), &pkgauth.User{Username: username, Groups: groups})
-	getPermCache().Set(username, &pkgauth.UserPermissions{AllowedNamespaces: allowed})
+	getPermCache().Set(username, groups, &pkgauth.UserPermissions{AllowedNamespaces: allowed})
 	t.Cleanup(func() {
 		getPermCache().Invalidate()
 	})
@@ -161,7 +161,7 @@ func TestCanReadClusterScopedKind_SARError_FailsClosed(t *testing.T) {
 
 	// And the deny must NOT be cached — the next call should also flow
 	// through the fail-closed path, not a stale cached false.
-	perms := getPermCache().Get("alice")
+	perms := getPermCache().Get("alice", nil)
 	if perms == nil {
 		t.Fatal("user perms unexpectedly evicted")
 	}
@@ -181,7 +181,7 @@ func TestCanReadClusterScopedKind_AllowedCachesResult(t *testing.T) {
 	})
 	// First call — without a real K8s client this still hits the fail-closed
 	// path (no client). To exercise the cache hit, seed it directly:
-	perms := getPermCache().Get("alice")
+	perms := getPermCache().Get("alice", nil)
 	perms.SetCanI("list", "", "nodes", "", true)
 
 	if !canReadClusterScopedKind(ctx, "nodes", "", "list") {

@@ -1,0 +1,37 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: Workload
+metadata:
+  name: finished-inactive
+  namespace: training
+spec:
+  active: false
+  queueName: gpu
+  podSets:
+    - name: workers
+      count: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: trainer
+              image: registry.k8s.io/pause:3.10
+status:
+  conditions:
+    - type: QuotaReserved
+      status: "True"
+      reason: QuotaReserved
+      lastTransitionTime: "2026-08-30T10:00:00Z"
+    - type: Admitted
+      status: "True"
+      reason: Admitted
+      lastTransitionTime: "2026-08-30T10:01:00Z"
+    - type: DeactivationTarget
+      status: "True"
+      reason: MaximumExecutionTimeExceeded
+      message: The execution time limit was reached
+      lastTransitionTime: "2026-08-30T10:02:00Z"
+    - type: Finished
+      status: "True"
+      reason: Succeeded
+      message: Training completed
+      lastTransitionTime: "2026-08-30T10:03:00Z"

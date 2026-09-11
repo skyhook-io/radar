@@ -144,7 +144,7 @@ function CiliumRuleCard({ rule }: { rule: any }) {
           <div className="text-xs text-theme-text-tertiary mb-1">From Entities</div>
           <div className="flex flex-wrap gap-1">
             {fromEntities.map((e, j) => (
-              <span key={j} className="badge bg-purple-500/20 text-purple-400 border-purple-500/30">{e}</span>
+              <span key={j} className="badge status-purple">{e}</span>
             ))}
           </div>
         </div>
@@ -215,7 +215,7 @@ function CiliumRuleCard({ rule }: { rule: any }) {
           <div className="text-xs text-theme-text-tertiary mb-1">To Entities</div>
           <div className="flex flex-wrap gap-1">
             {toEntities.map((e, j) => (
-              <span key={j} className="badge bg-purple-500/20 text-purple-400 border-purple-500/30">{e}</span>
+              <span key={j} className="badge status-purple">{e}</span>
             ))}
           </div>
         </div>
@@ -365,7 +365,7 @@ function L7Rules({ rules, ports }: { rules: any; ports?: any[] }) {
             {httpRules.map((r: any, i: number) => (
               <div key={i} className="flex flex-wrap items-center gap-1">
                 {r.method && (
-                  <span className="badge badge-sm bg-blue-500/20 text-blue-400 border-blue-500/30">
+                  <span className="badge badge-sm status-blue">
                     {r.method}
                   </span>
                 )}

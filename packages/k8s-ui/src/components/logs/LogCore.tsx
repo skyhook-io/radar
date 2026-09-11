@@ -1,11 +1,12 @@
 import { useRef, useCallback, useState, useMemo, useEffect, type ReactNode } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { Play, Square, Download, Search, X, Terminal, RotateCcw, ChevronUp, ChevronDown, ChevronRight, CaseSensitive, Regex, WrapText, Clock, Copy, Trash2, Filter, Braces, Palette, ListCollapse, Sun, Moon } from 'lucide-react'
+import { Play, Square, Download, FileDown, Search, X, Terminal, RotateCcw, ChevronUp, ChevronDown, ChevronRight, CaseSensitive, Regex, WrapText, Clock, Copy, Trash2, Filter, Braces, Palette, ListCollapse, Sun, Moon } from 'lucide-react'
 import type { LogEntry, LogLevel } from './useLogBuffer'
 import { useLogSearch } from './useLogSearch'
 import { StructuredLogLine } from './StructuredLogLine'
 import { Tooltip } from '../ui/Tooltip'
 import { Input } from '../ui/Input'
+import { showApiError, showApiSuccess } from '../ui/Toast'
 import {
   formatLogTimestamp,
   highlightSearchMatches,
@@ -15,8 +16,18 @@ import {
   TIMESTAMP_FORMAT_LABELS,
 } from '../../utils/log-format'
 import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
+import { copyText } from '../../utils/clipboard'
+import {
+  LOG_EXPORT_FORMAT_LABELS,
+  LOG_EXPORT_FORMATS,
+  previewLogExport,
+  serializeLogEntries,
+  type LogExportFormat,
+  type LogExportPayload,
+} from '../../utils/log-export'
 
-export type DownloadFormat = 'txt' | 'json' | 'csv'
+/** Retained for consumers that already import it; the export module owns the definition. */
+export type DownloadFormat = LogExportFormat
 
 /**
  * `toolbarExtra` may be a plain ReactNode, or a function that receives the
@@ -28,12 +39,19 @@ export type ToolbarExtraRenderer =
 
 interface LogCoreProps {
   entries: LogEntry[]
+  /**
+   * The unfiltered buffer, when the host filters `entries` before passing them
+   * (the workload viewer's pod picker), so that export's "All" describes the
+   * real buffer rather than the slice currently on screen.
+   */
+  allEntries?: LogEntry[]
   isLoading: boolean
   isStreaming: boolean
   onStartStream?: () => void
   onStopStream: () => void
   onRefresh: () => void
-  onDownload: (format: DownloadFormat) => void
+  /** Receives a finished payload — the viewer owns serialization so copy and download cannot diverge. */
+  onDownload: (payload: LogExportPayload) => void
   onClear?: () => void
   toolbarExtra?: ToolbarExtraRenderer
   showPodName?: boolean
@@ -118,6 +136,7 @@ const TIP_DELAY = 150
 
 export function LogCore({
   entries,
+  allEntries,
   isLoading,
   isStreaming,
   onStartStream,
@@ -183,6 +202,13 @@ export function LogCore({
     new Set(['error', 'warn', 'info', 'debug'])
   )
   const [showDownloadMenu, setShowDownloadMenu] = useState(false)
+  const [exportScope, setExportScope] = useState<'visible' | 'all'>('visible')
+  const [exportFormat, setExportFormat] = useState<LogExportFormat>(() => {
+    try {
+      const v = localStorage.getItem('radar-logs-export-format') as LogExportFormat | null
+      return v === 'txt' || v === 'json' || v === 'csv' ? v : 'txt'
+    } catch { return 'txt' }
+  })
   const [showTsMenu, setShowTsMenu] = useState(false)
   const [showStructuredMenu, setShowStructuredMenu] = useState(false)
   const [structuredMode, setStructuredMode] = useState<StructuredMode>(() => {
@@ -228,6 +254,12 @@ export function LogCore({
     ? search.filteredEntries
     : levelFilteredEntries
 
+  const exportTriggerRef = useRef<HTMLButtonElement>(null)
+  const closeExportMenu = useCallback(() => {
+    setShowDownloadMenu(false)
+    exportTriggerRef.current?.focus()
+  }, [])
+
   // Close download menu on next click anywhere (deferred so current click doesn't trigger it)
   const downloadMenuRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -239,6 +271,61 @@ export function LogCore({
     window.addEventListener('click', handleClick)
     return () => window.removeEventListener('click', handleClick)
   }, [showDownloadMenu])
+
+  useEffect(() => {
+    if (!showDownloadMenu) return
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      // Capture phase + stopImmediatePropagation: the host's drawer listens for
+      // Escape on window too, and a bubble-phase stopPropagation would not stop
+      // a sibling listener on the same target — dismissing the popover would
+      // close the drawer behind it in the same keystroke.
+      e.stopImmediatePropagation()
+      e.preventDefault()
+      closeExportMenu()
+    }
+    window.addEventListener('keydown', handleKey, true)
+    return () => window.removeEventListener('keydown', handleKey, true)
+  }, [showDownloadMenu, closeExportMenu])
+
+  // Scope and format are the only export decisions the viewer cannot already
+  // express on screen: everything else (timestamps, ANSI, level, search) has a
+  // toolbar control, and the popover's preview shows where those land.
+  const bufferEntries = allEntries ?? entries
+  const exportEntries = exportScope === 'all' ? bufferEntries : displayEntries
+  const exportOptions = useMemo(
+    () => ({ format: exportFormat, showTimestamps, showPodName }),
+    [exportFormat, showTimestamps, showPodName],
+  )
+  const exportPreview = useMemo(
+    () => showDownloadMenu ? previewLogExport(exportEntries, exportOptions) : [],
+    [showDownloadMenu, exportEntries, exportOptions],
+  )
+  // Offering a scope that resolves to the same lines is a choice about nothing.
+  const scopeIsMeaningful = displayEntries.length !== bufferEntries.length
+
+  // Scope describes the filters in play at the moment of asking, not a lasting
+  // intent, so it starts over at the narrower option every time rather than
+  // silently exporting the whole buffer on a later visit.
+  const toggleExportMenu = useCallback(() => {
+    setShowDownloadMenu(prev => !prev)
+    setExportScope('visible')
+  }, [])
+
+  const handleExportCopy = useCallback(() => {
+    closeExportMenu()
+    const count = exportEntries.length
+    const failed = () => showApiError('Failed to copy logs', 'The browser blocked clipboard access.')
+    copyText(serializeLogEntries(exportEntries, exportOptions).content).then(
+      ok => ok ? showApiSuccess('Copied to clipboard', `${count} log line${count === 1 ? '' : 's'} copied.`) : failed(),
+      failed,
+    )
+  }, [closeExportMenu, exportEntries, exportOptions])
+
+  const handleExportDownload = useCallback(() => {
+    closeExportMenu()
+    onDownload(serializeLogEntries(exportEntries, exportOptions))
+  }, [closeExportMenu, onDownload, exportEntries, exportOptions])
 
   // Same close-on-outside-click for the timestamp format menu.
   const tsMenuRef = useRef<HTMLDivElement>(null)
@@ -262,6 +349,11 @@ export function LogCore({
     window.addEventListener('click', handleClick)
     return () => window.removeEventListener('click', handleClick)
   }, [showStructuredMenu])
+
+  const pickExportFormat = useCallback((fmt: LogExportFormat) => {
+    setExportFormat(fmt)
+    try { localStorage.setItem('radar-logs-export-format', fmt) } catch {}
+  }, [])
 
   const pickStructuredMode = useCallback((mode: StructuredMode) => {
     setStructuredMode(mode)
@@ -427,6 +519,12 @@ export function LogCore({
   const iconBtnInactiveTertiary = isDark
     ? 'p-1.5 rounded transition-colors text-slate-500 hover:text-slate-100 hover:bg-slate-800'
     : 'p-1.5 rounded transition-colors text-slate-400 hover:text-slate-900 hover:bg-slate-200'
+  // Export popover: house style for a group label, plus the two equal-weight
+  // actions the scope and format rows above them both apply to.
+  const exportLabelCls = `w-12 shrink-0 text-[10px] font-semibold uppercase tracking-wide ${palette.textTertiary}`
+  const exportActionCls = isDark
+    ? 'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium transition-colors border border-slate-700 text-slate-200 hover:bg-slate-800 disabled:opacity-40 disabled:pointer-events-none'
+    : 'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-xs font-medium transition-colors border border-slate-300 text-slate-700 hover:bg-slate-200 disabled:opacity-40 disabled:pointer-events-none'
   // "disabled → tertiary on hover" for inactive level filter chips.
   const levelChipInactive = isDark
     ? 'border-transparent text-slate-600 hover:text-slate-500'
@@ -657,27 +755,77 @@ export function LogCore({
           </Tooltip>
         )}
 
-        {/* Download */}
+        {/* Export */}
         <div className="relative flex items-center" ref={downloadMenuRef}>
-          <Tooltip content="Download logs" delay={TIP_DELAY} position="bottom">
+          <Tooltip content="Export logs" delay={TIP_DELAY} position="bottom" disabled={showDownloadMenu} preserveWrapperWhenDisabled>
             <button
-              onClick={() => setShowDownloadMenu(prev => !prev)}
+              ref={exportTriggerRef}
+              onClick={toggleExportMenu}
+              aria-label="Export logs"
+              aria-haspopup="dialog"
+              aria-expanded={showDownloadMenu}
               className={iconBtnInactive}
             >
               <Download className="w-4 h-4" />
             </button>
           </Tooltip>
           {showDownloadMenu && (
-            <div className={`absolute top-full right-0 mt-1 w-32 ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50`}>
-              {(['txt', 'json', 'csv'] as DownloadFormat[]).map(fmt => (
+            <div role="dialog" aria-label="Export logs" className={`absolute top-full right-0 mt-1 w-[23rem] ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50 p-3 space-y-2.5`}>
+              <div className="flex items-center gap-3">
+                <span id="log-export-scope-label" className={exportLabelCls}>Lines</span>
+                {scopeIsMeaningful ? (
+                  <div role="radiogroup" aria-labelledby="log-export-scope-label" className="flex items-center gap-1">
+                    <ExportChoice active={exportScope === 'visible'} onClick={() => setExportScope('visible')} palette={palette}>
+                      Filtered {displayEntries.length.toLocaleString()}
+                    </ExportChoice>
+                    <ExportChoice active={exportScope === 'all'} onClick={() => setExportScope('all')} palette={palette}>
+                      All {bufferEntries.length.toLocaleString()}
+                    </ExportChoice>
+                  </div>
+                ) : (
+                  <span className={`text-[11px] ${palette.textSecondary}`}>
+                    {bufferEntries.length.toLocaleString()} line{bufferEntries.length === 1 ? '' : 's'}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3">
+                <span id="log-export-format-label" className={exportLabelCls}>Format</span>
+                <div role="radiogroup" aria-labelledby="log-export-format-label" className="flex items-center gap-1">
+                  {LOG_EXPORT_FORMATS.map(fmt => (
+                    <ExportChoice key={fmt} active={exportFormat === fmt} onClick={() => pickExportFormat(fmt)} palette={palette}>
+                      {LOG_EXPORT_FORMAT_LABELS[fmt]}
+                    </ExportChoice>
+                  ))}
+                </div>
+              </div>
+
+              {/* Shows the shape of the real output, so no caption has to claim
+                  which fields ride along or that the toolbar toggles reach it. */}
+              <div className={`rounded border ${palette.border} ${palette.toolbarBg} px-2 py-1.5 font-mono text-[10px] leading-relaxed min-h-[44px] ${palette.textSecondary}`}>
+                {exportPreview.length > 0
+                  ? exportPreview.map((line, i) => <div key={i} className="truncate">{line}</div>)
+                  : <div className={palette.textTertiary}>Nothing to export.</div>}
+              </div>
+
+              <div className="flex items-center gap-2">
                 <button
-                  key={fmt}
-                  onClick={() => { onDownload(fmt); setShowDownloadMenu(false) }}
-                  className={`w-full text-left px-3 py-2 text-xs ${palette.textPrimary} ${palette.hoverBg} first:rounded-t-lg last:rounded-b-lg`}
+                  onClick={handleExportCopy}
+                  disabled={exportEntries.length === 0}
+                  className={exportActionCls}
                 >
-                  {fmt.toUpperCase()}
+                  <Copy className="w-3.5 h-3.5" />
+                  Copy
                 </button>
-              ))}
+                <button
+                  onClick={handleExportDownload}
+                  disabled={exportEntries.length === 0}
+                  className={exportActionCls}
+                >
+                  <FileDown className="w-3.5 h-3.5" />
+                  Download
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -813,7 +961,7 @@ export function LogCore({
           <Terminal className="w-8 h-8" />
           <span>{emptyMessage}</span>
           {emptyCommand && (
-            <button type="button" onClick={() => navigator.clipboard.writeText(emptyCommand).catch(() => {})} className={`mt-2 inline-flex max-w-[80%] items-center gap-2 rounded border px-3 py-2 font-mono text-xs ${palette.border} ${palette.toolbarBg}`} title="Copy recovery command">
+            <button type="button" onClick={() => { void copyText(emptyCommand) }} className={`mt-2 inline-flex max-w-[80%] items-center gap-2 rounded border px-3 py-2 font-mono text-xs ${palette.border} ${palette.toolbarBg}`} title="Copy recovery command">
               <code className="truncate">{emptyCommand}</code>
               <Copy className="h-3.5 w-3.5 shrink-0" />
             </button>
@@ -873,6 +1021,25 @@ export function LogCore({
         <Shortcut keys="Esc" label="Close search" palette={palette} />
       </div>
     </div>
+  )
+}
+
+/** One pill in the export popover's scope and format rows. */
+function ExportChoice({ active, onClick, palette, children }: {
+  active: boolean
+  onClick: () => void
+  palette: LogPalette
+  children: ReactNode
+}) {
+  return (
+    <button
+      onClick={onClick}
+      role="radio"
+      aria-checked={active}
+      className={`px-2 py-1 rounded text-[11px] transition-colors ${active ? palette.toolbarActive : `${palette.textSecondary} ${palette.hoverBg}`}`}
+    >
+      {children}
+    </button>
   )
 }
 
@@ -969,8 +1136,7 @@ function LogLine({
   }
 
   const handleCopy = () => {
-    const raw = stripAnsi(entry.content)
-    navigator.clipboard.writeText(raw).catch(() => {})
+    void copyText(stripAnsi(entry.content))
   }
 
   return (

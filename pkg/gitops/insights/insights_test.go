@@ -237,6 +237,49 @@ func TestDescribeArgoAutoSync(t *testing.T) {
 	}
 }
 
+// An ApplicationSet's spec.syncPolicy controls how generated Applications are
+// created and deleted; it never carries `automated`. Read as an Application's
+// policy it yields "Manual" for every ApplicationSet, which the detail header
+// and the rollback gating both consume as a real sync mode.
+func TestDescribeArgoAutoSyncApplicationSet(t *testing.T) {
+	cases := []struct {
+		name string
+		spec map[string]any
+	}{
+		{name: "no syncPolicy", spec: map[string]any{}},
+		{name: "applicationsSync policy is not a sync mode", spec: map[string]any{
+			"syncPolicy": map[string]any{"applicationsSync": "create-update"},
+		}},
+		{name: "template automated belongs to generated apps, not the set", spec: map[string]any{
+			"template": map[string]any{"spec": map[string]any{
+				"syncPolicy": map[string]any{"automated": map[string]any{"prune": true}},
+			}},
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := &unstructured.Unstructured{Object: map[string]any{
+				"kind": "ApplicationSet",
+				"spec": tc.spec,
+			}}
+			if got := describeArgoAutoSync(root); got != "" {
+				t.Fatalf("describeArgoAutoSync = %q, want empty for an ApplicationSet", got)
+			}
+		})
+	}
+}
+
+// An Application with the same shape must keep reporting its real mode.
+func TestDescribeArgoAutoSyncApplicationUnaffected(t *testing.T) {
+	root := &unstructured.Unstructured{Object: map[string]any{
+		"kind": "Application",
+		"spec": map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{"prune": true}}},
+	}}
+	if got := describeArgoAutoSync(root); got != "Auto · prune" {
+		t.Fatalf("describeArgoAutoSync = %q, want %q", got, "Auto · prune")
+	}
+}
+
 // argoResourceChanges' syncResult-status gating decides whether a per-resource
 // failure message surfaces in the UI as a red SyncError. Pin the contract so
 // a future refactor that simplifies the status check (e.g. `if status != ""`)
@@ -1412,10 +1455,10 @@ func TestEnrichChangeHealthFromTree_BackfillsEmptyHealth(t *testing.T) {
 		{Ref: gitopstree.ResourceRef{Kind: "ConfigMap", Namespace: "staging", Name: "vars"}, Health: ""},
 	}}
 	changes := []Change{
-		{Ref: Ref{Group: "apps", Kind: "Deployment", Namespace: "staging", Name: "radar-hub"}, Health: ""},        // backfilled → Degraded
-		{Ref: Ref{Kind: "Service", Namespace: "staging", Name: "radar-hub"}, Health: "Progressing"},              // already set → unchanged
-		{Ref: Ref{Kind: "ConfigMap", Namespace: "staging", Name: "vars"}, Health: ""},                            // tree node empty → stays empty
-		{Ref: Ref{Kind: "SealedSecret", Namespace: "staging", Name: "x"}, Health: ""},                            // not in tree → stays empty
+		{Ref: Ref{Group: "apps", Kind: "Deployment", Namespace: "staging", Name: "radar-hub"}, Health: ""}, // backfilled → Degraded
+		{Ref: Ref{Kind: "Service", Namespace: "staging", Name: "radar-hub"}, Health: "Progressing"},        // already set → unchanged
+		{Ref: Ref{Kind: "ConfigMap", Namespace: "staging", Name: "vars"}, Health: ""},                      // tree node empty → stays empty
+		{Ref: Ref{Kind: "SealedSecret", Namespace: "staging", Name: "x"}, Health: ""},                      // not in tree → stays empty
 	}
 	enrichChangeHealthFromTree(changes, tree)
 	if changes[0].Health != "Degraded" {

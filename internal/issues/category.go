@@ -3,6 +3,7 @@ package issues
 import (
 	"strings"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -61,7 +62,7 @@ func Classify(in classifyInput) issuesapi.Category {
 			return issuesapi.CategoryIngressClassMissing
 		case "Missing Gateway backend Service", "Missing Gateway backend Service port", "Missing Gateway ReferenceGrant":
 			return issuesapi.CategoryGatewayRouteInvalid
-		case "Missing webhook backend Service":
+		case k8s.MissingWebhookBackendReason:
 			return issuesapi.CategoryWebhookBackendDown
 		case "Missing StorageClass":
 			// the dangling ref is a StorageClass, but the user-facing effect is

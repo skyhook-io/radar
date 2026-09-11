@@ -41,7 +41,7 @@ func TestUpgradeReadinessNamespacesIntersectsForcedScopeWithUserAccess(t *testin
 	})
 
 	s := &Server{permCache: auth.NewPermissionCache()}
-	s.permCache.Set("alice", &auth.UserPermissions{AllowedNamespaces: []string{"tenant-b"}})
+	s.permCache.Set("alice", nil, &auth.UserPermissions{AllowedNamespaces: []string{"tenant-b"}})
 	req := requestWithUser("GET", "/api/upgrade-readiness", &auth.User{Username: "alice"})
 	if got := s.upgradeReadinessNamespaces(req); !noNamespaceAccess(got) {
 		t.Fatalf("upgrade namespace scope = %v, want no access", got)

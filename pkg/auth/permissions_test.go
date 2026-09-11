@@ -128,9 +128,9 @@ func TestPermissionCache_SetAndGet(t *testing.T) {
 	pc := NewPermissionCache()
 
 	perms := &UserPermissions{AllowedNamespaces: []string{"default"}}
-	pc.Set("alice", perms)
+	pc.Set("alice", nil, perms)
 
-	got := pc.Get("alice")
+	got := pc.Get("alice", nil)
 	if got == nil {
 		t.Fatal("expected cached perms, got nil")
 	}
@@ -142,9 +142,63 @@ func TestPermissionCache_SetAndGet(t *testing.T) {
 func TestPermissionCache_Miss(t *testing.T) {
 	pc := NewPermissionCache()
 
-	got := pc.Get("nonexistent")
+	got := pc.Get("nonexistent", nil)
 	if got != nil {
 		t.Error("expected nil for cache miss")
+	}
+}
+
+// TestPermissionCache_GroupScopedKey pins the group-identity fix: the cache
+// key must include the caller's groups, not just the username. The SARs that
+// produce a UserPermissions entry run with username AND groups, so the same
+// username arriving with a different group set (proxy header change, OIDC
+// role change mid-TTL) must NOT inherit the first request's RBAC verdicts.
+func TestPermissionCache_GroupScopedKey(t *testing.T) {
+	pc := NewPermissionCache()
+
+	// Entry produced by SARs run for alice WITH groups [platform-admins]:
+	// cluster-wide namespace access (AllowedNamespaces == nil).
+	pc.Set("alice", []string{"platform-admins"}, &UserPermissions{AllowedNamespaces: nil})
+
+	// A request arrives as alice but WITH groups [viewers]. It must be a
+	// MISS — the weaker identity must not read the admin entry.
+	if got := pc.Get("alice", []string{"viewers"}); got != nil {
+		t.Fatalf("cross-identity leak: alice/[viewers] inherited alice/[platform-admins] entry: %+v", got)
+	}
+
+	// Same username + SAME groups must still HIT.
+	if got := pc.Get("alice", []string{"platform-admins"}); got == nil {
+		t.Fatal("same username + same groups should hit, got nil")
+	}
+
+	// Group order and duplicates must not matter (canonical fingerprint).
+	pc.Set("bob", []string{"a", "b"}, &UserPermissions{AllowedNamespaces: []string{"default"}})
+	if got := pc.Get("bob", []string{"b", "a", "a"}); got == nil {
+		t.Fatal("reordered/duplicated groups should map to the same key, got nil")
+	}
+
+	// Empty/nil groups is a valid distinct identity, not a wildcard.
+	pc.Set("carol", nil, &UserPermissions{AllowedNamespaces: []string{"kube-system"}})
+	if got := pc.Get("carol", []string{"admins"}); got != nil {
+		t.Fatalf("no-groups entry must not be read by a grouped identity: %+v", got)
+	}
+	if got := pc.Get("carol", nil); got == nil {
+		t.Fatal("no-groups entry must hit for the no-groups identity, got nil")
+	}
+
+	// Empty-string group elements are dropped: [""] canonicalizes to [] and
+	// ["a", ""] to ["a"]. An empty group is not a real principal, and the OIDC
+	// path doesn't trim empties like the proxy path does — pin the collision so
+	// it's explicit, not accidental.
+	if cacheKey("u", nil) != cacheKey("u", []string{""}) {
+		t.Error(`cacheKey("u", nil) must equal cacheKey("u", [""]) — empty group is dropped`)
+	}
+	if cacheKey("u", []string{"a"}) != cacheKey("u", []string{"a", ""}) {
+		t.Error(`cacheKey("u", ["a"]) must equal cacheKey("u", ["a", ""]) — empty group is dropped`)
+	}
+	// Dropping empties must not collapse distinct real group sets.
+	if cacheKey("u", []string{"a", ""}) == cacheKey("u", []string{"a", "b"}) {
+		t.Error(`cacheKey("u", ["a", ""]) must differ from cacheKey("u", ["a", "b"]) — "b" is a real principal`)
 	}
 }
 
@@ -155,11 +209,11 @@ func TestPermissionCache_Expiry(t *testing.T) {
 	}
 
 	perms := &UserPermissions{AllowedNamespaces: []string{"default"}}
-	pc.Set("alice", perms)
+	pc.Set("alice", nil, perms)
 
 	time.Sleep(5 * time.Millisecond)
 
-	got := pc.Get("alice")
+	got := pc.Get("alice", nil)
 	if got != nil {
 		t.Error("expected nil for expired cache entry")
 	}
@@ -168,12 +222,12 @@ func TestPermissionCache_Expiry(t *testing.T) {
 func TestPermissionCache_Invalidate(t *testing.T) {
 	pc := NewPermissionCache()
 
-	pc.Set("alice", &UserPermissions{AllowedNamespaces: []string{"default"}})
-	pc.Set("bob", &UserPermissions{AllowedNamespaces: []string{"staging"}})
+	pc.Set("alice", nil, &UserPermissions{AllowedNamespaces: []string{"default"}})
+	pc.Set("bob", nil, &UserPermissions{AllowedNamespaces: []string{"staging"}})
 
 	pc.Invalidate()
 
-	if pc.Get("alice") != nil || pc.Get("bob") != nil {
+	if pc.Get("alice", nil) != nil || pc.Get("bob", nil) != nil {
 		t.Error("Invalidate should clear all entries")
 	}
 }

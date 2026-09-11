@@ -34,7 +34,7 @@ import { ResourceBar } from '../ui/ResourceBar'
 import type { SelectedResource, APIResource } from '../../types'
 import { isForbiddenError } from '../../types/fetch-error'
 import type { NavigateToResource } from '../../utils/navigation'
-import { categorizeResources, CORE_RESOURCES, findAPIResourceForRoute } from '../../utils/api-resources'
+import { categorizeResources, CORE_RESOURCES, findAPIResourceForRoute, isCoreBatchJob } from '../../utils/api-resources'
 import { copyText } from '../../utils/clipboard'
 import {
   getPodStatus,
@@ -110,6 +110,7 @@ import {
   getGatewayClassController,
   getGatewayClassDescription,
   getRouteStatus,
+  getRouteStatusReason,
   getRouteParents,
   getRouteHostnames,
   getRouteBackends,
@@ -137,7 +138,14 @@ import {
   parseColumnFilterExcludes,
   podMatchesProblemCategory,
   SEVERITY_DOT_COLOR,
+  healthColors,
 } from './resource-utils'
+import { getGenericResourceStatus } from './generic-status'
+import { getIstioGatewayServerCount, getIstioGatewaySelectorString } from './resource-utils-istio'
+import {
+  type PrinterColumnDef, type PrinterTable, PRINTER_COLUMN_PREFIX, formatPrinterCell, printerCellSortValue,
+  printerCellTone, printerColumnKey, printerColumnWidth, printerTableKey, printerTableMatchesKind, readPrinterCell,
+} from './printer-columns'
 import { SEVERITY_BADGE, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
 import { pluralize } from '../../utils/pluralize'
 import { getPodGpuCount, getNodeGpuCount } from '../../utils/extended-resources'
@@ -157,6 +165,18 @@ import { NodePoolCell, NodeClaimCell, EC2NodeClassCell } from './renderers/karpe
 import { ScaledObjectCell, ScaledJobCell, TriggerAuthenticationCell, ClusterTriggerAuthenticationCell } from './renderers/keda-cells'
 import { ResourceClaimCell, ResourceClaimTemplateCell, DeviceClassCell, ResourceSliceCell } from './renderers/dra-cells'
 import { NvidiaClusterPolicyCell, NvidiaDriverCell } from './renderers/nvidia-cells'
+import { ClusterQueueCell, LocalQueueCell, KueueWorkloadCell, ResourceFlavorCell, AdmissionCheckCell, ProvisioningRequestCell } from './renderers/kueue-cells'
+import { RayClusterCell, RayJobCell, RayServiceCell, RayCronJobCell } from './renderers/ray-cells'
+import { LeaderWorkerSetCell, JobSetCell } from './renderers/jobset-lws-cells'
+import { getJobSetReadyJobs, getJobSetRestarts } from './resource-utils-jobset-lws'
+import { InferenceServiceCell, ServingRuntimeCell, InferenceGraphCell, TrainedModelCell, LLMInferenceServiceCell } from './renderers/kserve-cells'
+import { InferencePoolCell, InferenceObjectiveCell } from './renderers/inference-gateway-cells'
+import { VolcanoJobCell, VolcanoQueueCell, VolcanoPodGroupCell, JobFlowCell, JobTemplateCell } from './renderers/volcano-cells'
+import { KaiQueueCell, KaiPodGroupCell } from './renderers/kai-cells'
+import { KaitoWorkspaceCell, RAGEngineCell } from './renderers/kaito-cells'
+import { NIMServiceCell, NIMCacheCell, NIMPipelineCell } from './renderers/nim-cells'
+import { AMDDeviceConfigCell } from './renderers/amd-gpu-cells'
+import { PyTorchJobCell, TFJobCell, MPIJobCell, TrainJobCell } from './renderers/kubeflow-training-cells'
 import { ServiceMonitorCell, PrometheusRuleCell, PodMonitorCell } from './renderers/prometheus-cells'
 import { PolicyReportCell, ClusterPolicyReportCell, KyvernoPolicyCell, ClusterPolicyCell,
   KyvernoUpdateRequestCell,
@@ -208,6 +228,12 @@ export const SKIP_FILTER_COLUMNS = new Set([
   'lastUpdated', 'chart', 'events', 'repo',
   'generators', 'applications', 'destinations', 'sources', 'budget', 'healthy', 'allowed',
   'secrets', 'subjects', 'role', 'entrypoint', 'templates',
+  // Trivy and Kyverno report counts. These look filterable but cannot be:
+  // getCellFilterValue has no case for them and its fallback probes
+  // status[key]/spec[key], while the counts live under report.summary /
+  // status.summary. Listing them here stops the header reserving room for a
+  // button that can never render.
+  'critical', 'high', 'medium', 'low', 'pass', 'fail', 'warn', 'error', 'skip',
 ])
 
 // Namespace/node cardinality scales with cluster size, not kind enum size;
@@ -221,11 +247,10 @@ export function isColumnFilterableByDistinctCount(colKey: string, distinctCount:
 }
 
 // Column definitions per resource kind
-interface Column {
+export interface Column {
   key: string
   label: string
   width?: string
-  hideOnMobile?: boolean
   tooltip?: string // Explanation of what this column means
   defaultVisible?: boolean // false = hidden by default, shown via column picker
   defaultWidth?: number // default width in px (used for resizable columns)
@@ -302,7 +327,179 @@ const COMPARE_COLUMN_STYLE: React.CSSProperties = {
   maxWidth: COMPARE_COLUMN_WIDTH,
 }
 
-function getColumnMinWidth(col: Column): number {
+// Built-in sortable keys. Hoisted so getColumnMinWidth can reserve room for the
+// sort icon without the header render and the width math drifting apart.
+const BUILTIN_SORTABLE_COLUMN_KEYS = new Set([
+  'name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version',
+  'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object',
+  'cpu', 'memory', 'containers',
+])
+
+// The header row is px-4 with a `truncate` label, under table-layout:fixed with
+// explicit <col> widths — so a column narrower than its own heading clips to
+// "ADDRESS T…" and stays clipped at every viewport size, because only the Name
+// column flexes. Deriving a floor from the label keeps a declared w-* from
+// being narrower than the word it has to show.
+const HEADER_PADDING_PX = 32 // px-4 on both sides
+const HEADER_SORT_AFFORDANCE_PX = 20 // gap-1 + the w-3.5 chevron / ArrowUpDown
+const HEADER_FILTER_AFFORDANCE_PX = 20 // gap-1 + the p-0.5 filter button
+// Deliberately an upper bound on the rendered header font (DM Sans 500, 12px,
+// uppercase, tracking-wide): measured per-character widths across the curated
+// labels ranged 7.2–8.1px, so 8.2 never under-reserves. Over-reserving costs
+// space the flexible Name column has to spare; under-reserving clips again.
+// Printer and host-extra columns take their label from vendor CRD text, which
+// can be long or non-Latin. Cap the floor so one such label can't size a column
+// off the screen; past this a truncated heading (with its tooltip) is better.
+const HEADER_FLOOR_MAX_PX = 320
+
+// Must match the rendered header: text-xs (12px) / font-medium (500) / uppercase
+// / tracking-wide, in the app font. measureText does not apply letter-spacing,
+// so it is added per gap.
+const HEADER_FONT = "500 12px 'DM Sans Variable', 'DM Sans', system-ui, sans-serif"
+const HEADER_LETTER_SPACING_PX = 0.3 // tracking-wide = 0.025em at 12px
+// Fallback only — used where there is no canvas (SSR, jsdom). Deliberately an
+// upper bound: measured per-character widths across the curated labels ranged
+// 7.2–8.1px, so this never under-reserves for Latin text.
+const HEADER_CHAR_PX_FALLBACK = 8.2
+const HEADER_SPACE_PX_FALLBACK = 4
+
+let headerMeasureCtx: CanvasRenderingContext2D | null | undefined
+const headerLabelWidthCache = new Map<string, number>()
+
+// DM Sans is loaded with font-display:swap, so the first tables can render — and
+// be measured — while the browser is still painting the fallback face. Those
+// measurements would otherwise be cached against the wrong glyph metrics for the
+// rest of the session: a wider real face clips a label whose tooltip never
+// activates, a narrower one leaves the table permanently too wide. Drop the
+// cache when the real font arrives and let subscribers recompute.
+let headerFontEpoch = 0
+const headerFontListeners = new Set<() => void>()
+let headerFontWatchStarted = false
+
+function watchHeaderFont(): void {
+  if (headerFontWatchStarted) return
+  headerFontWatchStarted = true
+  const fonts = typeof document === 'undefined' ? undefined : (document as Document & { fonts?: FontFaceSet }).fonts
+  if (!fonts?.ready) return
+  void fonts.ready.then(() => {
+    headerLabelWidthCache.clear()
+    headerMeasureCtx = undefined // re-created so ctx.font resolves against the loaded face
+    headerFontEpoch++
+    for (const notify of headerFontListeners) notify()
+  })
+}
+
+/**
+ * Re-renders once the web font has loaded, so column widths measured against the
+ * fallback face are recomputed against the real one.
+ */
+export function useHeaderFontEpoch(): number {
+  const [epoch, setEpoch] = useState(headerFontEpoch)
+  useEffect(() => {
+    const notify = () => setEpoch(headerFontEpoch)
+    headerFontListeners.add(notify)
+    notify() // the font may have loaded between render and effect
+    return () => { headerFontListeners.delete(notify) }
+  }, [])
+  return epoch
+}
+
+/**
+ * Width of a header label as the browser will actually draw it.
+ *
+ * Measured rather than estimated because the labels are not a closed set: an
+ * uncurated CRD's printer columns take their names from the vendor's own
+ * additionalPrinterColumns, so they can be any length, any script, and a
+ * per-character constant calibrated on curated ASCII silently stops holding.
+ */
+function headerLabelWidth(label: string): number {
+  watchHeaderFont()
+  const cached = headerLabelWidthCache.get(label)
+  if (cached !== undefined) return cached
+  const upper = label.toUpperCase() // the header renders uppercase
+  let width: number
+  if (headerMeasureCtx === undefined) {
+    headerMeasureCtx = typeof document === 'undefined'
+      ? null
+      : document.createElement('canvas').getContext('2d')
+    if (headerMeasureCtx) headerMeasureCtx.font = HEADER_FONT
+  }
+  if (headerMeasureCtx) {
+    width = headerMeasureCtx.measureText(upper).width
+      + HEADER_LETTER_SPACING_PX * Math.max(0, upper.length - 1)
+  } else {
+    width = 0
+    for (const ch of upper) width += ch === ' ' ? HEADER_SPACE_PX_FALLBACK : HEADER_CHAR_PX_FALLBACK
+  }
+  headerLabelWidthCache.set(label, width)
+  return width
+}
+
+/**
+ * Header label that carries its own full text in a tooltip when it truncates.
+ *
+ * The width floor in getColumnMinWidth keeps a heading from being clipped by its
+ * own column, but three cases still truncate: a label past the floor cap, a
+ * column the user dragged narrower, and the sort/filter controls sharing the
+ * row — whose width depends on their state (an active filter renders padding,
+ * an icon and a count). Their rendered width isn't knowable from the column
+ * definition, so this reads the element's actual overflow rather than computing
+ * it.
+ *
+ * The Tooltip wrapper stays mounted whether or not the label truncates: swapping
+ * it in on overflow would remount the measured span, stranding the
+ * ResizeObserver on the detached node so the state could never flip back. It
+ * also needs min-w-0 — the wrapper is the flex item in the header row, and an
+ * inline-flex box won't shrink below its content unless told to, which would
+ * push the sort and filter controls out of the cell.
+ */
+function HeaderLabel({ label, className }: { label: string; className?: string }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [truncated, setTruncated] = useState(false)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const check = () => setTruncated(el.scrollWidth > el.clientWidth + 0.5)
+    check()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(check)
+    ro.observe(el)
+    return () => { ro.disconnect() }
+  }, [label])
+  return (
+    <Tooltip content={label} disabled={!truncated} preserveWrapperWhenDisabled wrapperClassName="min-w-0">
+      <span ref={ref} className={clsx('truncate', className)}>{label}</span>
+    </Tooltip>
+  )
+}
+
+/**
+ * Whether a column's header renders a sort control, which takes width beside the
+ * label. Shared by the header render and the width math so the two can't
+ * disagree: printer and custom columns are sortable through their own
+ * getSortValue even though their keys aren't in the built-in list.
+ */
+export function isColumnSortable(col: Column, extras?: Map<string, ExtraColumn>): boolean {
+  return BUILTIN_SORTABLE_COLUMN_KEYS.has(col.key) || !!extras?.get(col.key)?.getSortValue
+}
+
+export function getColumnMinWidth(col: Column, extras?: Map<string, ExtraColumn>): number {
+  const declared = declaredColumnWidth(col)
+  // A column-filter button also sits in this row, but whether one renders
+  // depends on the distinct values in the data (isColumnFilterableByDistinctCount),
+  // which isn't knowable here — those columns stay ~20px tighter than ideal.
+  // Both controls are reserved statically. The filter button only renders once
+  // the data has a filterable spread of values (isColumnFilterableByDistinctCount),
+  // but sizing the column from that would make it change width as rows load or
+  // are filtered — the jumping-column problem fixed layout exists to avoid. So
+  // reserve for any column that could ever carry one, and keep the width stable.
+  const affordance = (isColumnSortable(col, extras) ? HEADER_SORT_AFFORDANCE_PX : 0)
+    + (SKIP_FILTER_COLUMNS.has(col.key) ? 0 : HEADER_FILTER_AFFORDANCE_PX)
+  const headerFloor = HEADER_PADDING_PX + headerLabelWidth(col.label) + affordance
+  return Math.max(declared, Math.min(Math.ceil(headerFloor), HEADER_FLOOR_MAX_PX))
+}
+
+function declaredColumnWidth(col: Column): number {
   if (col.minWidth) return col.minWidth
   if (!col.width) return 200 // Name column (no width class) gets wider minimum
   const match = col.width.match(/(?:min-)?w-(\d+)/)
@@ -353,7 +550,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'restarts', label: 'Restarts', width: 'w-28' },
     { key: 'gpu', label: 'GPU', width: 'w-20', tooltip: 'Effective GPU request (requests, falling back to limits) summed across containers', defaultVisible: false },
     { key: 'podIP', label: 'Pod IP', width: 'w-32', defaultVisible: false },
-    { key: 'node', label: 'Node', width: 'w-44', hideOnMobile: true },
+    { key: 'node', label: 'Node', width: 'w-44' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   deployments: [
@@ -361,20 +558,20 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Status', width: 'w-40' },
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Ready pods / Desired replicas' },
-    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', hideOnMobile: true, tooltip: 'Number of pods running the current pod template' },
-    { key: 'available', label: 'Available', width: 'w-28', hideOnMobile: true, tooltip: 'Number of pods available (ready for minReadySeconds)' },
-    { key: 'images', label: 'Images', width: 'w-48', hideOnMobile: true },
+    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', tooltip: 'Number of pods running the current pod template' },
+    { key: 'available', label: 'Available', width: 'w-28', tooltip: 'Number of pods available (ready for minReadySeconds)' },
+    { key: 'images', label: 'Images', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   daemonsets: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Status', width: 'w-40' },
-    { key: 'desired', label: 'Desired', width: 'w-20', tooltip: 'Number of nodes that should run the daemon pod (based on node selector)' },
+    { key: 'desired', label: 'Desired', width: 'w-20', tooltip: 'Nodes eligible for this daemon after node selectors, required node affinity and taints/tolerations are applied' },
     { key: 'ready', label: 'Ready', width: 'w-20', tooltip: 'Number of pods that are ready (passing readiness probes)' },
-    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', hideOnMobile: true, tooltip: 'Number of pods running the current pod template spec' },
-    { key: 'available', label: 'Available', width: 'w-28', hideOnMobile: true, tooltip: 'Number of pods available (ready for minReadySeconds duration)' },
-    { key: 'images', label: 'Images', width: 'w-48', hideOnMobile: true },
+    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', tooltip: 'Number of pods running the current pod template spec' },
+    { key: 'available', label: 'Available', width: 'w-28', tooltip: 'Number of pods available (ready for minReadySeconds duration)' },
+    { key: 'images', label: 'Images', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   statefulsets: [
@@ -382,8 +579,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Status', width: 'w-40' },
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Ready pods / Desired replicas' },
-    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', hideOnMobile: true, tooltip: 'Number of pods running the current pod template' },
-    { key: 'images', label: 'Images', width: 'w-48', hideOnMobile: true },
+    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', tooltip: 'Pods running the current pod template; a rolling-update partition or OnDelete strategy can intentionally leave pods on an older template' },
+    { key: 'images', label: 'Images', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   replicasets: [
@@ -391,17 +588,17 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'ready', label: 'Ready', width: 'w-24' },
     { key: 'owner', label: 'Owner', width: 'w-48' },
-    { key: 'status', label: 'Status', width: 'w-24', hideOnMobile: true },
+    { key: 'status', label: 'Status', width: 'w-24', tooltip: 'Active means desired replicas are greater than zero; Old means desired replicas are zero, regardless of Deployment revision' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   services: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'type', label: 'Type', width: 'w-28' },
-    { key: 'selector', label: 'Selector', width: 'w-48', hideOnMobile: true },
+    { key: 'selector', label: 'Selector', width: 'w-48' },
     { key: 'endpoints', label: 'Endpoints', width: 'w-24' },
     { key: 'ports', label: 'Ports', width: 'w-40' },
-    { key: 'externalIP', label: 'External', width: 'w-40', hideOnMobile: true },
+    { key: 'externalIP', label: 'External', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   endpointslices: [
@@ -411,7 +608,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'addressType', label: 'Address Type', width: 'w-28' },
     { key: 'endpoints', label: 'Endpoints', width: 'w-32' },
     { key: 'addresses', label: 'Addresses', width: 'w-24' },
-    { key: 'ports', label: 'Ports', width: 'w-40', hideOnMobile: true },
+    { key: 'ports', label: 'Ports', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   ingresses: [
@@ -419,21 +616,21 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'class', label: 'Class', width: 'w-24 shrink-0' },
     { key: 'hosts', label: 'Hosts', width: 'min-w-48' },
-    { key: 'rules', label: 'Rules', width: 'min-w-56', hideOnMobile: true },
+    { key: 'rules', label: 'Rules', width: 'min-w-56' },
     { key: 'tls', label: 'TLS', width: 'w-14 shrink-0' },
-    { key: 'address', label: 'Address', width: 'min-w-32', hideOnMobile: true },
+    { key: 'address', label: 'Address', width: 'min-w-32' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   nodes: [
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Status', width: 'w-44' },
-    { key: 'roles', label: 'Roles', width: 'w-28' },
+    { key: 'roles', label: 'Roles', width: 'w-28', tooltip: 'Node roles from node-role.kubernetes.io/* labels. A node with no role label shows as worker.' },
     { key: 'cpu', label: 'CPU', width: 'w-40', tooltip: 'Current CPU usage / allocatable' },
     { key: 'memory', label: 'Memory', width: 'w-40', tooltip: 'Current memory usage / allocatable' },
     { key: 'pods', label: 'Pods', width: 'w-28', tooltip: 'Pods running / allocatable' },
     { key: 'gpu', label: 'GPUs', width: 'w-20', tooltip: 'Allocatable GPUs', defaultVisible: false },
-    { key: 'conditions', label: 'Conditions', width: 'w-40', hideOnMobile: true },
-    { key: 'taints', label: 'Taints', width: 'w-24', hideOnMobile: true },
+    { key: 'conditions', label: 'Conditions', width: 'w-40' },
+    { key: 'taints', label: 'Taints', width: 'w-24' },
     { key: 'version', label: 'Version', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -441,7 +638,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'keys', label: 'Keys', width: 'w-48' },
-    { key: 'size', label: 'Size', width: 'w-24' },
+    { key: 'size', label: 'Size', width: 'w-24', tooltip: 'Estimated size of data values, including decoded binary data. Kubernetes rejects ConfigMaps whose combined data exceeds 1 MiB.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   secrets: [
@@ -449,7 +646,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'type', label: 'Type', width: 'w-28' },
     { key: 'keys', label: 'Keys', width: 'w-20' },
-    { key: 'expires', label: 'Expires', width: 'w-24', tooltip: 'Certificate expiry for TLS secrets' },
+    { key: 'expires', label: 'Expires', width: 'w-24', tooltip: "Days until the certificate in a TLS Secret expires. Blank for Secrets carrying no readable TLS certificate; ! means the expiry lookup itself failed." },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   jobs: [
@@ -457,15 +654,15 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'completions', label: 'Completions', width: 'w-32' },
-    { key: 'duration', label: 'Duration', width: 'w-24', hideOnMobile: true },
+    { key: 'duration', label: 'Duration', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   cronjobs: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'schedule', label: 'Schedule', width: 'w-40' },
+    { key: 'schedule', label: 'Schedule', width: 'w-40', tooltip: "Cron schedule; fires in spec.timeZone when set, otherwise the controller's zone" },
     { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'lastRun', label: 'Last Run', width: 'w-28', hideOnMobile: true },
+    { key: 'lastRun', label: 'Last Run', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   hpas: [
@@ -473,7 +670,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'target', label: 'Target', width: 'w-48' },
     { key: 'replicas', label: 'Replicas', width: 'w-32' },
-    { key: 'metrics', label: 'Metrics', width: 'w-36', hideOnMobile: true },
+    { key: 'metrics', label: 'Metrics', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -482,18 +679,18 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'target', label: 'Target', width: 'w-48' },
     { key: 'replicas', label: 'Replicas', width: 'w-32' },
-    { key: 'metrics', label: 'Metrics', width: 'w-36', hideOnMobile: true },
+    { key: 'metrics', label: 'Metrics', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   persistentvolumeclaims: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-24', tooltip: 'With WaitForFirstConsumer, Pending can mean no pod has triggered binding yet. If a pod is waiting, check PVC events.' },
     { key: 'capacity', label: 'Capacity', width: 'w-24' },
-    { key: 'storageClass', label: 'Storage Class', width: 'w-40', hideOnMobile: true },
-    { key: 'accessModes', label: 'Access', width: 'w-20', tooltip: 'Access modes: RWO=ReadWriteOnce, RWX=ReadWriteMany, ROX=ReadOnlyMany' },
-    { key: 'volume', label: 'Volume', width: 'w-48', hideOnMobile: true },
+    { key: 'storageClass', label: 'Storage Class', width: 'w-40' },
+    { key: 'accessModes', label: 'Access', width: 'w-20', tooltip: 'RWO=ReadWriteOnce (one node, possibly several pods), ROX=ReadOnlyMany (read-only on many nodes), RWX=ReadWriteMany (read-write on many nodes), RWOP=ReadWriteOncePod (one pod only)' },
+    { key: 'volume', label: 'Volume', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   rollouts: [
@@ -502,8 +699,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-32' },
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Available / Desired replicas' },
     { key: 'strategy', label: 'Strategy', width: 'w-24' },
-    { key: 'step', label: 'Step', width: 'w-20', hideOnMobile: true, tooltip: 'Current canary step / Total steps' },
-    { key: 'images', label: 'Images', width: 'w-48', hideOnMobile: true },
+    { key: 'step', label: 'Step', width: 'w-20', tooltip: 'Current canary step / Total steps' },
+    { key: 'images', label: 'Images', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   analysisruns: [
@@ -511,7 +708,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Phase', width: 'w-28' },
     { key: 'trigger', label: 'Trigger', width: 'w-32', tooltip: 'Which part of the Rollout started this run' },
-    { key: 'metrics', label: 'Metrics', width: 'w-40', hideOnMobile: true, tooltip: 'Per-metric verdicts' },
+    { key: 'metrics', label: 'Metrics', width: 'w-40', tooltip: 'Per-metric verdicts' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   workflows: [
@@ -519,8 +716,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Phase', width: 'w-28' },
     { key: 'duration', label: 'Duration', width: 'w-24' },
-    { key: 'progress', label: 'Progress', width: 'w-24', hideOnMobile: true, tooltip: 'Succeeded steps / Total steps' },
-    { key: 'template', label: 'Template', width: 'w-40', hideOnMobile: true },
+    { key: 'progress', label: 'Progress', width: 'w-24', tooltip: 'Completed tasks / currently known total; the total can grow during execution, and completion does not imply success' },
+    { key: 'template', label: 'Template', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   cronworkflows: [
@@ -528,8 +725,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'schedule', label: 'Schedule', width: 'w-40' },
     { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'lastRun', label: 'Last Run', width: 'w-28', hideOnMobile: true },
-    { key: 'template', label: 'Template', width: 'w-40', hideOnMobile: true },
+    { key: 'lastRun', label: 'Last Run', width: 'w-28' },
+    { key: 'template', label: 'Template', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   certificates: [
@@ -537,25 +734,25 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Ready', width: 'w-24' },
     { key: 'domains', label: 'Domains', width: 'w-56' },
-    { key: 'issuer', label: 'Issuer', width: 'w-36', hideOnMobile: true },
+    { key: 'issuer', label: 'Issuer', width: 'w-36', tooltip: "Issuer name alone may be ambiguous. Check the certificate's issuer reference for its kind and API group." },
     { key: 'expires', label: 'Expires', width: 'w-24', tooltip: 'Days until certificate expires' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   persistentvolumes: [
     { key: 'name', label: 'Name' },
-    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-24', tooltip: "Released means the claim is gone but the volume still holds the previous claimant's data, so it will not be re-bound — check Reclaim before reusing it." },
     { key: 'capacity', label: 'Capacity', width: 'w-24' },
-    { key: 'accessModes', label: 'Access', width: 'w-20', tooltip: 'RWO=ReadWriteOnce, ROX=ReadOnlyMany, RWX=ReadWriteMany' },
-    { key: 'reclaimPolicy', label: 'Reclaim', width: 'w-20' },
-    { key: 'storageClass', label: 'Storage Class', width: 'w-40', hideOnMobile: true },
-    { key: 'claim', label: 'Claim', width: 'w-48', hideOnMobile: true },
+    { key: 'accessModes', label: 'Access', width: 'w-20', tooltip: 'RWO=ReadWriteOnce (one node, possibly several pods), ROX=ReadOnlyMany (read-only on many nodes), RWX=ReadWriteMany (read-write on many nodes), RWOP=ReadWriteOncePod (one pod only)' },
+    { key: 'reclaimPolicy', label: 'Reclaim', width: 'w-20', tooltip: 'When the claim is deleted, Delete removes the backing storage and its data; Retain leaves it for manual reclamation.' },
+    { key: 'storageClass', label: 'Storage Class', width: 'w-40' },
+    { key: 'claim', label: 'Claim', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   storageclasses: [
     { key: 'name', label: 'Name' },
     { key: 'provisioner', label: 'Provisioner', width: 'w-48' },
-    { key: 'reclaimPolicy', label: 'Reclaim', width: 'w-20' },
-    { key: 'bindingMode', label: 'Binding Mode', width: 'w-36' },
+    { key: 'reclaimPolicy', label: 'Reclaim', width: 'w-20', tooltip: 'Default policy for volumes this class provisions — Delete removes the backing storage when the claim goes away; Retain leaves it for manual reclamation.' },
+    { key: 'bindingMode', label: 'Binding Mode', width: 'w-36', tooltip: "When the volume is provisioned — WaitForFirstConsumer waits for a pod so the disk lands in the right zone; Immediate provisions before the pod's placement is known, which can leave the pod unschedulable." },
     { key: 'expansion', label: 'Expansion', width: 'w-24', tooltip: 'Whether volumes can be expanded after creation' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -583,44 +780,54 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   orders: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'state', label: 'State', width: 'w-24' },
+    { key: 'state', label: 'State', width: 'w-24', tooltip: 'Valid means ACME issuance finished; it does not confirm the TLS Secret is ready. If Pending persists, inspect the challenges and the order reason.' },
     { key: 'domains', label: 'Domains', width: 'w-48' },
-    { key: 'issuer', label: 'Issuer', width: 'w-36', hideOnMobile: true },
+    { key: 'issuer', label: 'Issuer', width: 'w-36' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   challenges: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'challengeType', label: 'Type', width: 'w-20' },
-    { key: 'state', label: 'State', width: 'w-24' },
+    { key: 'state', label: 'State', width: 'w-24', tooltip: 'Valid means domain authorization succeeded. If Pending persists, inspect the reason for scheduling, solver, or propagation problems.' },
     { key: 'domain', label: 'Domain', width: 'w-48' },
-    { key: 'presented', label: 'Presented', width: 'w-24', hideOnMobile: true },
+    { key: 'presented', label: 'Presented', width: 'w-24', tooltip: 'While Pending, Yes means the solver presented the token, not that it is reachable. Check the reason for propagation failures; No can also mean queued.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   gateways: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'status', label: 'Status', width: 'w-28', tooltip: "Programmed = the controller reports configuration should take effect soon; traffic has not been tested. Accepted = the controller accepted this Gateway but has not reported Programmed. If it stays Accepted, check the Gateway's conditions and addresses." },
     { key: 'class', label: 'Class', width: 'w-36' },
     { key: 'listeners', label: 'Listeners', width: 'w-40', tooltip: 'Protocol:Port for each listener' },
-    { key: 'routes', label: 'Routes', width: 'w-20', tooltip: 'Total attached routes across all listeners' },
-    { key: 'addresses', label: 'Addresses', width: 'w-48', hideOnMobile: true },
+    // attachedRoutes is reported per listener, so a route attached to several
+    // listeners is counted once for each — the total is not a route count.
+    { key: 'routes', label: 'Routes', width: 'w-20', tooltip: "Sum of route counts reported by listeners; one route can count more than once. If 0 is unexpected, check the routes' Gateway names, listener permissions, and controller status." },
+    { key: 'addresses', label: 'Addresses', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   httproutes: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'status', label: 'Status', width: 'w-28', tooltip: 'Accepted = controllers accepted this route and confirmed it can use the backends and other objects it names. Traffic has not been tested. Degraded or Not Accepted: open the route to see which Gateway or backend failed. Pending or Unknown: check the named Gateways or Services and their controllers.' },
     { key: 'hostnames', label: 'Hostnames', width: 'w-48' },
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
-    { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
+    { key: 'rules', label: 'Rules', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  istiogateways: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'servers', label: 'Servers', width: 'w-24' },
+    { key: 'selector', label: 'Selector', width: 'w-56', tooltip: "Selects gateway workloads that receive this configuration. An omitted selector applies to all workloads in Istio's selection scope; it does not mean none." },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   gatewayclasses: [
     { key: 'name', label: 'Name' },
     { key: 'controller', label: 'Controller', width: 'w-64', tooltip: 'Gateway controller implementation (spec.controllerName)' },
-    { key: 'description', label: 'Description', width: 'w-64', hideOnMobile: true },
+    { key: 'description', label: 'Description', width: 'w-64' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -628,19 +835,18 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'nodeClass', label: 'Node Class', width: 'w-36' },
-    { key: 'limits', label: 'Limits', width: 'w-36', tooltip: 'CPU and memory limits' },
-    { key: 'disruption', label: 'Disruption', width: 'w-40', hideOnMobile: true },
+    { key: 'limits', label: 'Limits', width: 'w-36', tooltip: 'Configured provisioning ceilings — not what the pool has provisioned. Concurrent provisioning can exceed them during rapid scale-out, and a limit does not remove nodes already running.' },
+    { key: 'disruption', label: 'Disruption', width: 'w-40', tooltip: 'Which nodes Karpenter may consolidate; budgets and timing controls can still prevent removal or replacement' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   nodeclaims: [
     { key: 'name', label: 'Name' },
-    { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-24', tooltip: 'Launched means a cloud instance exists; Registered means it has joined Kubernetes; Ready means the node is fully initialized' },
     { key: 'instanceType', label: 'Instance Type', width: 'w-32' },
     { key: 'capacityType', label: 'Capacity', width: 'w-24', tooltip: 'Spot or On-Demand' },
-    { key: 'zone', label: 'Zone', width: 'w-28', hideOnMobile: true },
+    { key: 'zone', label: 'Zone', width: 'w-28' },
     { key: 'nodePool', label: 'Node Pool', width: 'w-32' },
-    { key: 'nodeName', label: 'Node', width: 'w-40', hideOnMobile: true },
+    { key: 'nodeName', label: 'Node', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   ec2nodeclasses: [
@@ -664,7 +870,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28', tooltip: 'Allocated + reserved, allocated-but-unreserved, or pending' },
-    { key: 'deviceClass', label: 'Device Class', width: 'w-44' },
+    { key: 'deviceClass', label: 'Device Class', width: 'w-44', tooltip: 'DeviceClasses whose selectors constrain eligible devices. A request may list alternative classes; this column does not show which alternative was allocated.' },
     { key: 'allocated', label: 'Allocated Driver', width: 'w-44' },
     { key: 'reservedFor', label: 'Reserved For', width: 'w-44' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -677,29 +883,337 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   ],
   deviceclasses: [
     { key: 'name', label: 'Name' },
-    { key: 'selectors', label: 'Selectors', width: 'w-28', tooltip: 'CEL device selector count' },
+    // Selectors are ANDed, so an empty list restricts nothing rather than
+    // matching nothing — the reading most people reach for first.
+    { key: 'selectors', label: 'Selectors', width: 'w-28', tooltip: 'Devices must satisfy every selector. Zero selectors means this class imposes no selector restriction; claim selectors and other allocation requirements still apply.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   resourceslices: [
     { key: 'name', label: 'Name' },
     { key: 'driver', label: 'Driver', width: 'w-44' },
-    { key: 'pool', label: 'Pool', width: 'w-36' },
-    { key: 'node', label: 'Node', width: 'w-44' },
-    { key: 'devices', label: 'Devices', width: 'w-24' },
+    { key: 'pool', label: 'Pool', width: 'w-36', tooltip: "Pools are identified by driver and pool name. The scheduler needs a complete set of slices at the pool's highest generation before allocating from it." },
+    { key: 'node', label: 'Node', width: 'w-44', tooltip: "Node providing this slice's devices. A dash means node access is described by a node selector, all-nodes access, or per-device node selection." },
+    { key: 'devices', label: 'Devices', width: 'w-24', tooltip: 'Devices published in this slice, including devices already allocated. This is not a count of free devices or the whole pool.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   nvidiaclusterpolicies: [
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'components', label: 'Components', width: 'w-64', tooltip: 'Enabled GPU Operator components' },
-    { key: 'mig', label: 'MIG', width: 'w-24' },
+    { key: 'components', label: 'Components', width: 'w-64', tooltip: 'Enabled GPU Operator components" with "GPU Operator components enabled in spec — not whether they are running' },
+    { key: 'mig', label: 'MIG', width: 'w-24', tooltip: 'Multi-Instance GPU exposure: single advertises uniform partitions as nvidia.com/gpu; mixed advertises separate partition profiles; none disables MIG-aware exposure' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   nvidiadrivers: [
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'driverType', label: 'Type', width: 'w-28' },
-    { key: 'version', label: 'Version', width: 'w-32' },
+    { key: 'driverType', label: 'Type', width: 'w-28', tooltip: 'Driver role: gpu for standard GPU workloads, vgpu for virtual GPU guests, or vgpu-host-manager for virtualization hosts' },
+    { key: 'version', label: 'Version', width: 'w-32', tooltip: 'Driver version requested in spec — nodes may still be running the previous one' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  clusterqueues: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'cohort', label: 'Cohort', width: 'w-32', tooltip: 'Queues in this cohort can share unused quota, subject to borrowing and lending limits' },
+    { key: 'pendingWorkloads', label: 'Pending', width: 'w-24', tooltip: 'Workloads in this ClusterQueue waiting for admission, across namespaces; inspect workload status for the blocker' },
+    { key: 'admittedWorkloads', label: 'Admitted', width: 'w-24', tooltip: 'Unfinished workloads admitted through this ClusterQueue, across namespaces; admission does not mean their pods are running' },
+    { key: 'flavors', label: 'Flavors', width: 'w-40' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  localqueues: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'clusterQueue', label: 'Cluster Queue', width: 'w-40' },
+    { key: 'pendingWorkloads', label: 'Pending', width: 'w-24', tooltip: 'Workloads submitted to this LocalQueue that are waiting for ClusterQueue admission' },
+    { key: 'admittedWorkloads', label: 'Admitted', width: 'w-24', tooltip: 'Unfinished workloads from this LocalQueue admitted to its ClusterQueue; their pods may still be waiting to run' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  workloads: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'queueName', label: 'Queue', width: 'w-36' },
+    { key: 'admittedBy', label: 'Admitted By', width: 'w-36', tooltip: 'Admitting ClusterQueue' },
+    { key: 'priority', label: 'Priority', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  resourceflavors: [
+    { key: 'name', label: 'Name' },
+    { key: 'nodeLabels', label: 'Node Labels', width: 'w-28', tooltip: 'Node label selector count' },
+    { key: 'taints', label: 'Taints', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  admissionchecks: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'controllerName', label: 'Controller', width: 'w-64', tooltip: 'Controller responsible for this check; workloads requiring it cannot be admitted until the check passes' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  provisioningrequests: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'provisioningClassName', label: 'Class', width: 'w-56', tooltip: 'Provisioning mode: check-capacity checks existing capacity without reserving it; best-effort-atomic-scale-up creates capacity atomically' },
+    { key: 'podSets', label: 'Pod Sets', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  rayclusters: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'rayVersion', label: 'Ray Version', width: 'w-28' },
+    { key: 'workers', label: 'Workers', width: 'w-24', tooltip: 'Available/desired worker replicas' },
+    { key: 'headService', label: 'Head Service', width: 'w-48' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  rayjobs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'jobStatus', label: 'Job Status', width: 'w-28' },
+    { key: 'deploymentStatus', label: 'Deployment', width: 'w-32' },
+    { key: 'cluster', label: 'Cluster', width: 'w-48' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  rayservices: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'serviceStatus', label: 'Service Status', width: 'w-28', tooltip: "KubeRay's serving-readiness flag; this does not describe the active rollout phase." },
+    { key: 'clusters', label: 'Clusters', width: 'w-56', tooltip: 'Active and pending RayCluster names' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  raycronjobs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'schedule', label: 'Schedule', width: 'w-32' },
+    { key: 'timeZone', label: 'Time Zone', width: 'w-36', tooltip: 'IANA zone the schedule is read in; unset follows the local zone of the KubeRay operator pod' },
+    { key: 'lastSchedule', label: 'Last Schedule', width: 'w-28', tooltip: 'Time since the last recorded schedule; this does not confirm the job started or succeeded.' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  leaderworkersets: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'replicas', label: 'Groups', width: 'w-20', tooltip: 'Desired leader-worker groups' },
+    { key: 'size', label: 'Size', width: 'w-20', tooltip: 'Pods per group' },
+    { key: 'ready', label: 'Ready', width: 'w-20', tooltip: 'Ready groups / desired groups' },
+    { key: 'updated', label: 'Updated', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  jobsets: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'replicatedJobs', label: 'Repl. Jobs', width: 'w-24', tooltip: 'Number of replicated job templates' },
+    { key: 'ready', label: 'Ready', width: 'w-20' },
+    { key: 'succeeded', label: 'Succeeded', width: 'w-24' },
+    { key: 'failed', label: 'Failed', width: 'w-20' },
+    { key: 'restarts', label: 'Restarts', width: 'w-24', tooltip: 'Whole-JobSet restarts by the failure policy — every child Job is recreated' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  inferenceservices: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-36', tooltip: 'Ready condition + model load state' },
+    { key: 'url', label: 'URL', width: 'w-64' },
+    { key: 'modelFormat', label: 'Format', width: 'w-28' },
+    { key: 'runtime', label: 'Runtime', width: 'w-40' },
+    { key: 'deploymentMode', label: 'Mode', width: 'w-28', tooltip: 'Serverless, RawDeployment, or ModelMesh' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  servingruntimes: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'modelFormats', label: 'Model Formats', width: 'w-44', tooltip: 'Supported model formats' },
+    { key: 'image', label: 'Image', width: 'w-64' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  clusterservingruntimes: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'modelFormats', label: 'Model Formats', width: 'w-44', tooltip: 'Supported model formats' },
+    { key: 'image', label: 'Image', width: 'w-64' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  inferencegraphs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'nodes', label: 'Nodes', width: 'w-20', tooltip: 'Router nodes in the graph' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  trainedmodels: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'framework', label: 'Framework', width: 'w-28' },
+    { key: 'storageUri', label: 'Storage URI', width: 'w-56' },
+    { key: 'inferenceService', label: 'Inference Service', width: 'w-40', tooltip: 'Parent InferenceService' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  llminferenceservices: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'model', label: 'Model', width: 'w-56', tooltip: 'Model name or URI' },
+    { key: 'replicas', label: 'Replicas', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  inferencepools: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-36', tooltip: 'Gateway acceptance and reference errors across reported parents; Accepted does not prove backend Pods are ready.' },
+    { key: 'selector', label: 'Selector', width: 'w-48' },
+    { key: 'targetPorts', label: 'Target Ports', width: 'w-28' },
+    { key: 'extensionRef', label: 'Endpoint Picker', width: 'w-40', tooltip: 'EPP extension service' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  inferenceobjectives: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'poolRef', label: 'Pool', width: 'w-40', tooltip: 'Target InferencePool' },
+    { key: 'priority', label: 'Priority', width: 'w-24', tooltip: 'Higher values are served first when pool resources are scarce; an unset priority is treated as 0.' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  volcanojobs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'queue', label: 'Queue', width: 'w-32' },
+    { key: 'minAvailable', label: 'Min Available', width: 'w-28', tooltip: 'Minimum pods that must be schedulable together for gang scheduling to start the job' },
+    { key: 'pods', label: 'Pods', width: 'w-44', tooltip: 'Running / succeeded / failed pod counts' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  volcanoqueues: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'weight', label: 'Weight', width: 'w-20' },
+    { key: 'capability', label: 'Capability', width: 'w-48', tooltip: 'Configured resource limits for this queue; actual allocation also depends on available resources and scheduler policy' },
+    { key: 'allocated', label: 'Allocated', width: 'w-48', tooltip: 'Resources the scheduler reports as allocated to this queue; these are allocations, not measured CPU or memory use' },
+    { key: 'podGroups', label: 'PodGroups', width: 'w-44', tooltip: 'PodGroup counts by state' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  volcanopodgroups: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-32' },
+    { key: 'queue', label: 'Queue', width: 'w-32' },
+    { key: 'minMember', label: 'Min Member', width: 'w-28' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  jobflows: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'flows', label: 'Flows', width: 'w-20', tooltip: 'Declared job stages; dependencies control when each stage can start' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  jobtemplates: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'tasks', label: 'Tasks', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  kaiqueues: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'parentQueue', label: 'Parent', width: 'w-32', tooltip: 'Parent queue whose resources are shared among its children; ancestor limits constrain allocations' },
+    { key: 'priority', label: 'Priority', width: 'w-20', tooltip: "Higher priority favors allocation of resources above quota and delays reclaim; it does not increase the queue's guaranteed quota" },
+    { key: 'quota', label: 'Quota', width: 'w-52', tooltip: 'Guaranteed resource allocation; the queue may exceed it when spare resources and configured limits allow' },
+    { key: 'allocated', label: 'Allocated', width: 'w-48', tooltip: 'Resources allocated to this queue and its descendants, including scheduled pods still starting; this is not measured utilization' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  kaipodgroups: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-32' },
+    { key: 'queue', label: 'Queue', width: 'w-32' },
+    { key: 'minMember', label: 'Min Member', width: 'w-28' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  kaitoworkspaces: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'instanceType', label: 'Instance Type', width: 'w-40', tooltip: 'Requested node instance type; actual node hardware is not checked.' },
+    { key: 'preset', label: 'Model', width: 'w-44', tooltip: 'Preset model (inference or tuning)' },
+    { key: 'nodes', label: 'Nodes', width: 'w-20', tooltip: 'Worker nodes listed by KAITO, with the target count when available; listing does not confirm readiness.' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  ragengines: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'embedding', label: 'Embedding Model', width: 'w-56', tooltip: 'Local model ID/image or remote endpoint' },
+    { key: 'instanceType', label: 'Instance Type', width: 'w-40', tooltip: 'Requested node instance type; actual node hardware is not checked.' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  nimservices: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'model', label: 'Model / Image', width: 'w-64', tooltip: 'Served model name (falls back to NIM image)' },
+    { key: 'replicas', label: 'Replicas', width: 'w-28', tooltip: 'Available / desired (HPA range when autoscaling)' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  nimcaches: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'source', label: 'Model Source', width: 'w-64', tooltip: 'NGC model puller image, or DataStore/HF model name' },
+    { key: 'storage', label: 'Storage', width: 'w-24', tooltip: 'Requested PVC size' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  nimpipelines: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'services', label: 'Services', width: 'w-28', tooltip: 'NIM services in pipeline' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  deviceconfigs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'driver', label: 'Driver', width: 'w-40', tooltip: 'Out-of-tree driver install enabled (version)' },
+    { key: 'devicePluginImage', label: 'Device Plugin', width: 'w-64' },
+    { key: 'nodes', label: 'Nodes', width: 'w-20', tooltip: 'Device plugin DaemonSet available / desired' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  pytorchjobs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'replicas', label: 'Progress', width: 'w-48', tooltip: 'Active + succeeded / desired per replica type; failures shown separately' },
+    { key: 'elapsed', label: 'Elapsed', width: 'w-24', tooltip: 'Start to completion (or now)' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  tfjobs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'replicas', label: 'Progress', width: 'w-56', tooltip: 'Active + succeeded / desired per replica type; failures shown separately' },
+    { key: 'elapsed', label: 'Elapsed', width: 'w-24', tooltip: 'Start to completion (or now)' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  mpijobs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'replicas', label: 'Progress', width: 'w-48', tooltip: 'Active + succeeded / desired per replica type; failures shown separately' },
+    { key: 'elapsed', label: 'Elapsed', width: 'w-24', tooltip: 'Start to completion (or now)' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  trainjobs: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'runtime', label: 'Runtime', width: 'w-44', tooltip: 'Runtime template supplying training defaults; TrainJob settings can override its image and node count.' },
+    { key: 'suspended', label: 'Suspended', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   scaledjobs: [
@@ -707,7 +1221,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'target', label: 'Job Target', width: 'w-48' },
-    { key: 'strategy', label: 'Strategy', width: 'w-28' },
+    { key: 'strategy', label: 'Strategy', width: 'w-28', tooltip: 'Controls how queue length and running or pending Jobs determine how many new Jobs KEDA creates' },
     { key: 'triggerTypes', label: 'Trigger Types', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -729,7 +1243,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   servicemonitors: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'endpoints', label: 'Endpoints', width: 'w-20', tooltip: 'Number of scrape endpoints' },
     { key: 'jobLabel', label: 'Job Label', width: 'w-32' },
     { key: 'selector', label: 'Selector', width: 'w-48' },
@@ -738,7 +1252,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   prometheusrules: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'groups', label: 'Groups', width: 'w-20' },
     { key: 'rules', label: 'Rules', width: 'w-20', tooltip: 'Total alert + recording rules' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -746,7 +1260,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   podmonitors: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'endpoints', label: 'Endpoints', width: 'w-20', tooltip: 'Number of pod metrics endpoints' },
     { key: 'selector', label: 'Selector', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -757,18 +1271,18 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   policyreports: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'scope', label: 'Subject', width: 'w-56' },
+    { key: 'scope', label: 'Subject', width: 'w-56', tooltip: "The resource this report is about. Kyverno names the report after the resource's UID; use Subject to identify it." },
     { key: 'status', label: 'Status', width: 'w-32' },
     { key: 'pass', label: 'Pass', width: 'w-16' },
     { key: 'fail', label: 'Fail', width: 'w-16' },
     { key: 'warn', label: 'Warn', width: 'w-20' },
-    { key: 'error', label: 'Err', width: 'w-16' },
+    { key: 'error', label: 'Err', width: 'w-16', tooltip: 'Checks that could not be evaluated, for example because of missing context or a broken expression. Errors are not violations, but zero failures does not establish compliance while checks remain unevaluated.' },
     { key: 'skip', label: 'Skip', width: 'w-16' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   clusterpolicyreports: [
     { key: 'name', label: 'Name' },
-    { key: 'scope', label: 'Subject', width: 'w-56' },
+    { key: 'scope', label: 'Subject', width: 'w-56', tooltip: "The resource this report is about. Kyverno names the report after the resource's UID; use Subject to identify it." },
     { key: 'status', label: 'Status', width: 'w-32' },
     { key: 'pass', label: 'Pass', width: 'w-16' },
     { key: 'fail', label: 'Fail', width: 'w-16' },
@@ -781,15 +1295,17 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'action', label: 'Action', width: 'w-24', tooltip: 'Validation failure action (Enforce or Audit)' },
-    { key: 'rules', label: 'Rules', width: 'w-16' },
+    { key: 'action', label: 'Action', width: 'w-36', tooltip: 'Enforcement at admission — Enforce blocks, Audit reports; Background only or Inactive when admission is disabled' },
+    { key: 'ruleTypes', label: 'Types', width: 'w-40', tooltip: 'Rule kinds this policy declares. A policy can carry several, and the mix decides what it can do to a request.' },
+    { key: 'rules', label: 'Rules', width: 'w-20', defaultVisible: false },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   clusterpolicies: [
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'action', label: 'Action', width: 'w-24', tooltip: 'Validation failure action (Enforce or Audit)' },
-    { key: 'rules', label: 'Rules', width: 'w-16' },
+    { key: 'action', label: 'Action', width: 'w-36', tooltip: 'Enforcement at admission — Enforce blocks, Audit reports; Background only or Inactive when admission is disabled' },
+    { key: 'ruleTypes', label: 'Types', width: 'w-40', tooltip: 'Rule kinds this policy declares. A policy can carry several, and the mix decides what it can do to a request.' },
+    { key: 'rules', label: 'Rules', width: 'w-20', defaultVisible: false },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // Kyverno modern CEL family (policies.kyverno.io). "Enforcement" is the
@@ -870,7 +1386,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   // getModernKyvernoPolicyStatus), so a second one would be redundant.
   deletingpolicies: [
     { key: 'name', label: 'Name' },
-    { key: 'lastRun', label: 'Last Run', width: 'w-28', tooltip: 'When the schedule last fired. A scheduled policy that has never run is the failure worth catching — Kyverno rejects uncompilable policies at admission, so a broken one never exists to flag.' },
+    { key: 'lastRun', label: 'Last Run', width: 'w-28', tooltip: 'Last execution time reported by Kyverno. A timestamp does not prove every matching resource was deleted.' },
     { key: 'schedule', label: 'Schedule', width: 'w-32', tooltip: 'Cron schedule on which matched resources are deleted' },
     { key: 'appliesTo', label: 'Deletes', width: 'min-w-40' },
     { key: 'rules', label: 'Conditions', width: 'w-28', tooltip: 'CEL conditions narrowing what is deleted; none means every matched resource' },
@@ -879,7 +1395,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   namespaceddeletingpolicies: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'lastRun', label: 'Last Run', width: 'w-28', tooltip: 'When the schedule last fired. A scheduled policy that has never run is the failure worth catching — Kyverno rejects uncompilable policies at admission, so a broken one never exists to flag.' },
+    { key: 'lastRun', label: 'Last Run', width: 'w-28', tooltip: 'Last execution time reported by Kyverno. A timestamp does not prove every matching resource was deleted.' },
     { key: 'schedule', label: 'Schedule', width: 'w-32' },
     { key: 'appliesTo', label: 'Deletes', width: 'min-w-40' },
     { key: 'rules', label: 'Conditions', width: 'w-28' },
@@ -896,42 +1412,44 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'schedule', label: 'Schedule', width: 'w-32' },
+    { key: 'lastRun', label: 'Last Run', width: 'w-28', tooltip: 'Time since the controller last recorded an execution. A dash means it has not recorded one.' },
     { key: 'appliesTo', label: 'Deletes', width: 'min-w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   clustercleanuppolicies: [
     { key: 'name', label: 'Name' },
     { key: 'schedule', label: 'Schedule', width: 'w-32' },
+    { key: 'lastRun', label: 'Last Run', width: 'w-28', tooltip: 'Time since the controller last recorded an execution. A dash means it has not recorded one.' },
     { key: 'appliesTo', label: 'Deletes', width: 'min-w-40' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   grpcroutes: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'hostnames', label: 'Hostnames', width: 'w-48' },
+    { key: 'status', label: 'Status', width: 'w-28', tooltip: 'Accepted = controllers accepted this route and confirmed it can use the backends and other objects it names. Traffic has not been tested. Degraded or Not Accepted: open the route to see which Gateway or backend failed. Pending or Unknown: check the named Gateways or Services and their controllers.' },
+    { key: 'hostnames', label: 'Hostnames', width: 'w-48', tooltip: "gRPC hostnames this route matches. Any means the route adds no hostname restriction; the Gateway listener and the route's other matching rules still apply." },
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
-    { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
+    { key: 'rules', label: 'Rules', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   tcproutes: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'status', label: 'Status', width: 'w-28', tooltip: 'Accepted = controllers accepted this route and confirmed it can use the backends and other objects it names. Traffic has not been tested. Degraded or Not Accepted: open the route to see which Gateway or backend failed. Pending or Unknown: check the named Gateways or Services and their controllers.' },
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
-    { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
+    { key: 'rules', label: 'Rules', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   tlsroutes: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'hostnames', label: 'Hostnames', width: 'w-48', tooltip: 'SNI hostnames for TLS routing' },
+    { key: 'status', label: 'Status', width: 'w-28', tooltip: 'Accepted = controllers accepted this route and confirmed it can use the backends and other objects it names. Traffic has not been tested. Degraded or Not Accepted: open the route to see which Gateway or backend failed. Pending or Unknown: check the named Gateways or Services and their controllers.' },
+    { key: 'hostnames', label: 'Hostnames', width: 'w-48', tooltip: 'TLS SNI names requested by this route. Any means no route-level hostname restriction; the Gateway listener still applies.' },
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
-    { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
+    { key: 'rules', label: 'Rules', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   sealedsecrets: [
@@ -939,13 +1457,13 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Synced', width: 'w-24' },
     { key: 'keys', label: 'Keys', width: 'w-20' },
-    { key: 'type', label: 'Type', width: 'w-36', hideOnMobile: true },
+    { key: 'type', label: 'Type', width: 'w-36' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   workflowtemplates: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'entrypoint', label: 'Entrypoint', width: 'w-36' },
+    { key: 'entrypoint', label: 'Entrypoint', width: 'w-36', tooltip: 'Default template invoked when submitted as a workflow; submission may override it' },
     { key: 'templates', label: 'Templates', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -960,29 +1478,28 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'policyTypes', label: 'Types', width: 'w-28' },
     { key: 'selector', label: 'Pod Selector', width: 'w-48' },
-    { key: 'rules', label: 'Rules', width: 'w-24', tooltip: 'Ingress / Egress rule count' },
+    { key: 'rules', label: 'Rules', width: 'w-24', tooltip: 'Ingress / Egress allow-rule counts. For a direction listed in Types, 0 means this policy allows none; other policies can still allow traffic.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   caliconetworkpolicies: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'selector', label: 'Selector', width: 'w-48' },
-    { key: 'namespaceSelector', label: 'Namespace Selector', width: 'w-48', defaultVisible: false },
-    { key: 'serviceAccountSelector', label: 'Service Account Selector', width: 'w-48', defaultVisible: false },
-    { key: 'tier', label: 'Tier', width: 'w-28' },
-    { key: 'order', label: 'Order', width: 'w-24' },
-    { key: 'types', label: 'Types', width: 'w-28' },
+    { key: 'serviceAccountSelector', label: 'Service Account Selector', width: 'w-48', defaultVisible: false, tooltip: 'Endpoints must match both this service-account selector and the endpoint Selector; matching either one alone is insufficient.' },
+    { key: 'tier', label: 'Tier', width: 'w-28', tooltip: 'Tier precedence applies before policy Order. An earlier tier can allow or deny traffic before this policy is reached.' },
+    { key: 'order', label: 'Order', width: 'w-24', tooltip: 'Evaluation order within the tier — lowest runs first. Unset runs after every ordered policy.' },
+    { key: 'types', label: 'Types', width: 'w-28', tooltip: "Traffic directions this policy governs. If no applicable policy in the tier takes action, the tier's default action applies (Deny unless configured as Pass)." },
     { key: 'rules', label: 'Rules', width: 'w-24', tooltip: 'Ingress / Egress rule count' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   calicoglobalnetworkpolicies: [
     { key: 'name', label: 'Name' },
     { key: 'selector', label: 'Selector', width: 'w-48' },
-    { key: 'namespaceSelector', label: 'Namespace Selector', width: 'w-48', defaultVisible: false },
-    { key: 'serviceAccountSelector', label: 'Service Account Selector', width: 'w-48', defaultVisible: false },
-    { key: 'tier', label: 'Tier', width: 'w-28' },
-    { key: 'order', label: 'Order', width: 'w-24' },
-    { key: 'types', label: 'Types', width: 'w-28' },
+    { key: 'namespaceSelector', label: 'Namespace Selector', width: 'w-48', defaultVisible: false, tooltip: 'Adds a namespace restriction to the endpoint Selector. Unset adds no namespace restriction; the other selectors still apply.' },
+    { key: 'serviceAccountSelector', label: 'Service Account Selector', width: 'w-48', defaultVisible: false, tooltip: 'Endpoints must match both this service-account selector and the endpoint Selector; matching either one alone is insufficient.' },
+    { key: 'tier', label: 'Tier', width: 'w-28', tooltip: 'Tier precedence applies before policy Order. An earlier tier can allow or deny traffic before this policy is reached.' },
+    { key: 'order', label: 'Order', width: 'w-24', tooltip: 'Evaluation order within the tier — lowest runs first. Unset runs after every ordered policy.' },
+    { key: 'types', label: 'Types', width: 'w-28', tooltip: "Traffic directions this policy governs. If no applicable policy in the tier takes action, the tier's default action applies (Deny unless configured as Pass)." },
     { key: 'rules', label: 'Rules', width: 'w-24', tooltip: 'Ingress / Egress rule count' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -990,58 +1507,57 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'selector', label: 'Selector', width: 'w-48' },
-    { key: 'namespaceSelector', label: 'Namespace Selector', width: 'w-48', defaultVisible: false },
-    { key: 'serviceAccountSelector', label: 'Service Account Selector', width: 'w-48', defaultVisible: false },
-    { key: 'tier', label: 'Tier', width: 'w-28' },
-    { key: 'order', label: 'Order', width: 'w-24' },
-    { key: 'stagedAction', label: 'Staged Action', width: 'w-32' },
-    { key: 'types', label: 'Types', width: 'w-28' },
+    { key: 'serviceAccountSelector', label: 'Service Account Selector', width: 'w-48', defaultVisible: false, tooltip: 'Endpoints must match both this service-account selector and the endpoint Selector; matching either one alone is insufficient.' },
+    { key: 'tier', label: 'Tier', width: 'w-28', tooltip: 'Tier precedence applies before policy Order. An earlier tier can allow or deny traffic before this policy is reached.' },
+    { key: 'order', label: 'Order', width: 'w-24', tooltip: 'Evaluation order within the tier — lowest runs first. Unset runs after every ordered policy.' },
+    { key: 'stagedAction', label: 'Staged Action', width: 'w-32', tooltip: 'Staged policies do not enforce traffic. Set and Learn preview rules; Delete stages removal of the matching enforced policy; Ignore is skipped. Omitted means Set.' },
+    { key: 'types', label: 'Types', width: 'w-28', tooltip: "Traffic directions this policy governs. If no applicable policy in the tier takes action, the tier's default action applies (Deny unless configured as Pass)." },
     { key: 'rules', label: 'Rules', width: 'w-24', tooltip: 'Ingress / Egress rule count' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   calicostagedglobalnetworkpolicies: [
     { key: 'name', label: 'Name' },
     { key: 'selector', label: 'Selector', width: 'w-48' },
-    { key: 'namespaceSelector', label: 'Namespace Selector', width: 'w-48', defaultVisible: false },
-    { key: 'serviceAccountSelector', label: 'Service Account Selector', width: 'w-48', defaultVisible: false },
-    { key: 'tier', label: 'Tier', width: 'w-28' },
-    { key: 'order', label: 'Order', width: 'w-24' },
-    { key: 'stagedAction', label: 'Staged Action', width: 'w-32' },
-    { key: 'types', label: 'Types', width: 'w-28' },
+    { key: 'namespaceSelector', label: 'Namespace Selector', width: 'w-48', defaultVisible: false, tooltip: 'Adds a namespace restriction to the endpoint Selector. Unset adds no namespace restriction; the other selectors still apply.' },
+    { key: 'serviceAccountSelector', label: 'Service Account Selector', width: 'w-48', defaultVisible: false, tooltip: 'Endpoints must match both this service-account selector and the endpoint Selector; matching either one alone is insufficient.' },
+    { key: 'tier', label: 'Tier', width: 'w-28', tooltip: 'Tier precedence applies before policy Order. An earlier tier can allow or deny traffic before this policy is reached.' },
+    { key: 'order', label: 'Order', width: 'w-24', tooltip: 'Evaluation order within the tier — lowest runs first. Unset runs after every ordered policy.' },
+    { key: 'stagedAction', label: 'Staged Action', width: 'w-32', tooltip: 'Staged policies do not enforce traffic. Set and Learn preview rules; Delete stages removal of the matching enforced policy; Ignore is skipped. Omitted means Set.' },
+    { key: 'types', label: 'Types', width: 'w-28', tooltip: "Traffic directions this policy governs. If no applicable policy in the tier takes action, the tier's default action applies (Deny unless configured as Pass)." },
     { key: 'rules', label: 'Rules', width: 'w-24', tooltip: 'Ingress / Egress rule count' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   calicoippools: [
     { key: 'name', label: 'Name' },
     { key: 'cidr', label: 'CIDR', width: 'w-44' },
-    { key: 'blockSize', label: 'Block Size', width: 'w-28' },
-    { key: 'encapsulation', label: 'Encapsulation', width: 'w-36' },
-    { key: 'natOutgoing', label: 'NAT Outgoing', width: 'w-32' },
+    { key: 'blockSize', label: 'Block Size', width: 'w-28', tooltip: 'CIDR prefix of each allocation block. A node can hold several blocks, so this is not a per-node pod cap. Unset means /26 for IPv4, /122 for IPv6.' },
+    { key: 'encapsulation', label: 'Encapsulation', width: 'w-36', tooltip: 'Overlay used for pod traffic between nodes. None routes pod addresses directly; CrossSubnet tunnels only between nodes on different subnets.' },
+    { key: 'natOutgoing', label: 'NAT Outgoing', width: 'w-32', tooltip: 'When enabled, outgoing traffic from this pool is masqueraded for destinations outside all Calico IP pools.' },
     { key: 'disabled', label: 'Disabled', width: 'w-28' },
-    { key: 'allowedUses', label: 'Allowed Uses', width: 'w-40', defaultVisible: false },
+    { key: 'allowedUses', label: 'Allowed Uses', width: 'w-40', defaultVisible: false, tooltip: 'Pools without Workload are skipped for automatic pod IP allocation. Omitted or empty allows Workload and Tunnel; existing allocations are unchanged.' },
     { key: 'nodeSelector', label: 'Node Selector', width: 'w-48', defaultVisible: false },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   calicohostendpoints: [
     { key: 'name', label: 'Name' },
     { key: 'node', label: 'Node', width: 'w-48' },
-    { key: 'interfaceName', label: 'Interface', width: 'w-32' },
+    { key: 'interfaceName', label: 'Interface', width: 'w-32', tooltip: '* applies policy to all host interfaces. When unset, Calico identifies the interface using Expected IPs.' },
     { key: 'expectedIPs', label: 'Expected IPs', width: 'w-48' },
-    { key: 'profiles', label: 'Profiles', width: 'w-48', defaultVisible: false },
+    { key: 'profiles', label: 'Profiles', width: 'w-48', defaultVisible: false, tooltip: "Profiles apply only if policy evaluation reaches them. A tier's implicit deny stops traffic before profiles, even when no rule matched." },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   calicotiers: [
     { key: 'name', label: 'Name' },
-    { key: 'order', label: 'Order', width: 'w-24' },
-    { key: 'defaultAction', label: 'Default Action', width: 'w-36' },
+    { key: 'order', label: 'Order', width: 'w-24', tooltip: 'Order this tier is evaluated in — lowest first. Unset runs after every ordered tier.' },
+    { key: 'defaultAction', label: 'Default Action', width: 'w-36', tooltip: 'If this tier selects the endpoint and traffic direction but no rule decides the packet, Deny drops it and Pass continues evaluation. Tiers with no applicable policy are skipped.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   calicostagedkubernetesnetworkpolicies: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'selector', label: 'Pod Selector', width: 'w-48' },
-    { key: 'stagedAction', label: 'Staged Action', width: 'w-32' },
-    { key: 'types', label: 'Types', width: 'w-28' },
+    { key: 'stagedAction', label: 'Staged Action', width: 'w-32', tooltip: 'Staged policies do not enforce traffic. Set and Learn preview rules; Delete stages removal of the matching enforced policy; Ignore is skipped. Omitted means Set.' },
+    { key: 'types', label: 'Types', width: 'w-28', tooltip: 'An explicitly listed direction can have zero rules. When policyTypes is omitted, Ingress is included and Egress is added when egress rules exist.' },
     { key: 'rules', label: 'Rules', width: 'w-24', tooltip: 'Ingress / Egress rule count' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1049,7 +1565,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'budget', label: 'Budget', width: 'w-36' },
+    { key: 'budget', label: 'Budget', width: 'w-36', tooltip: 'min keeps at least this many pods available; max unavail permits at most this many unavailable during voluntary evictions; percentages use the expected pod count' },
     { key: 'healthy', label: 'Healthy', width: 'w-24' },
     { key: 'allowed', label: 'Allowed', width: 'w-24', tooltip: 'Number of disruptions currently allowed' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -1057,7 +1573,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   serviceaccounts: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'automount', label: 'Automount', width: 'w-32', tooltip: 'Whether token is automatically mounted in pods' },
+    { key: 'automount', label: 'Automount', width: 'w-32', tooltip: 'Default automatic API-token mounting for pods using this ServiceAccount. A pod can override this setting. Disable it for workloads that do not need Kubernetes API credentials.' },
     { key: 'secrets', label: 'Secrets', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1095,15 +1611,15 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'holder', label: 'Holder', width: 'w-48' },
-    { key: 'renewTime', label: 'Last Renewed', width: 'w-32' },
+    { key: 'renewTime', label: 'Last Renewed', width: 'w-32', tooltip: 'Time since the recorded renewal; red means it exceeds leaseDurationSeconds. Check holder health and API connectivity' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   priorityclasses: [
     { key: 'name', label: 'Name' },
-    { key: 'value', label: 'Value', width: 'w-24' },
+    { key: 'value', label: 'Value', width: 'w-24', tooltip: 'Higher values receive scheduling preference; Pods can still be preempted by Pods with higher priority' },
     { key: 'globalDefault', label: 'Global Default', width: 'w-36' },
     { key: 'preemptionPolicy', label: 'Preemption', width: 'w-32' },
-    { key: 'description', label: 'Description', width: 'w-64', hideOnMobile: true },
+    { key: 'description', label: 'Description', width: 'w-64' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   runtimeclasses: [
@@ -1114,15 +1630,15 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   mutatingwebhookconfigurations: [
     { key: 'name', label: 'Name' },
     { key: 'webhooks', label: 'Webhooks', width: 'w-28' },
-    { key: 'failurePolicy', label: 'Failure Policy', width: 'w-36' },
-    { key: 'target', label: 'Target', width: 'w-48', hideOnMobile: true },
+    { key: 'failurePolicy', label: 'Failure Policy', width: 'w-36', tooltip: 'If a matching webhook call errors or times out, Fail rejects the API request; Ignore continues without that webhook. This describes failure handling, not current webhook health.' },
+    { key: 'target', label: 'Target', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   validatingwebhookconfigurations: [
     { key: 'name', label: 'Name' },
     { key: 'webhooks', label: 'Webhooks', width: 'w-28' },
     { key: 'failurePolicy', label: 'Failure Policy', width: 'w-36' },
-    { key: 'target', label: 'Target', width: 'w-48', hideOnMobile: true },
+    { key: 'target', label: 'Target', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   events: [
@@ -1131,7 +1647,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'type', label: 'Type', width: 'w-24' },
     { key: 'reason', label: 'Reason', width: 'w-32' },
     { key: 'message', label: 'Message', width: 'w-64' },
-    { key: 'object', label: 'Object', width: 'w-48', hideOnMobile: true },
+    { key: 'object', label: 'Object', width: 'w-48' },
     { key: 'count', label: 'Count', width: 'w-20' },
     { key: 'lastSeen', label: 'Last Seen', width: 'w-28' },
   ],
@@ -1144,7 +1660,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'url', label: 'URL', width: 'w-64' },
     { key: 'ref', label: 'Ref', width: 'w-32', tooltip: 'Branch, tag, or semver' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'revision', label: 'Revision', width: 'w-24', hideOnMobile: true, tooltip: 'Last fetched commit SHA' },
+    { key: 'revision', label: 'Revision', width: 'w-24', tooltip: 'Last fetched commit SHA' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   ocirepositories: [
@@ -1153,14 +1669,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'url', label: 'URL', width: 'w-64' },
     { key: 'ref', label: 'Tag', width: 'w-24', tooltip: 'OCI tag or semver' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'revision', label: 'Digest', width: 'w-24', hideOnMobile: true },
+    { key: 'revision', label: 'Digest', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   helmrepositories: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'url', label: 'URL', width: 'w-64' },
-    { key: 'type', label: 'Type', width: 'w-20', tooltip: 'default (Helm) or oci' },
+    { key: 'type', label: 'Type', width: 'w-20', tooltip: 'default: Flux fetches a Helm repository index. oci: a registry reference with no reconciliation status of its own' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1168,11 +1684,11 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'source', label: 'Source', width: 'w-48', tooltip: 'Source GitRepository or OCIRepository' },
-    { key: 'path', label: 'Path', width: 'w-36', hideOnMobile: true },
+    { key: 'path', label: 'Path', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'revision', label: 'Revision', width: 'w-48', hideOnMobile: true, tooltip: 'Applied git revision' },
+    { key: 'revision', label: 'Revision', width: 'w-48', tooltip: 'Applied git revision' },
     { key: 'inventory', label: 'Resources', width: 'w-24', tooltip: 'Number of managed resources' },
-    { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Time since last successful reconciliation' },
+    { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Time since the last recorded reconciliation attempt; falls back to the last Ready transition. Neither guarantees success.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   helmreleases: [
@@ -1181,8 +1697,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'chart', label: 'Chart', width: 'w-40' },
     { key: 'version', label: 'Version', width: 'w-24' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'message', label: 'Message', width: 'w-64', hideOnMobile: true, tooltip: 'Last diagnostic message — distinguishes dependency-wait, install/upgrade failure, and test failure' },
-    { key: 'revision', label: 'Rev', width: 'w-16', hideOnMobile: true, tooltip: 'Helm release revision number' },
+    { key: 'message', label: 'Message', width: 'w-64', tooltip: 'Last diagnostic message — distinguishes dependency-wait, install/upgrade failure, and test failure' },
+    { key: 'revision', label: 'Rev', width: 'w-16', tooltip: 'Helm release revision number' },
     { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Time since last successful reconciliation' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1200,17 +1716,17 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   applications: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'project', label: 'Project', width: 'w-28' },
-    { key: 'sync', label: 'Sync', width: 'w-24' },
+    { key: 'project', label: 'Project', width: 'w-28', tooltip: 'AppProject the app belongs to — bounds which repos and clusters it may deploy to' },
+    { key: 'sync', label: 'Sync', width: 'w-24', tooltip: "Whether live resources match Argo's desired manifests; Synced does not mean Healthy" },
     { key: 'health', label: 'Health', width: 'w-24' },
-    { key: 'repo', label: 'Repository', width: 'w-48', hideOnMobile: true },
+    { key: 'repo', label: 'Repository', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   applicationsets: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'generators', label: 'Generators', width: 'w-32' },
-    { key: 'template', label: 'Template', width: 'w-40', hideOnMobile: true },
+    { key: 'template', label: 'Template', width: 'w-40' },
     { key: 'applications', label: 'Apps', width: 'w-20', tooltip: 'Number of generated applications' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -1228,7 +1744,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'container', label: 'Container', width: 'w-28' },
     { key: 'image', label: 'Image', width: 'w-48' },
-    { key: 'critical', label: 'C', width: 'w-12', tooltip: 'Critical vulnerabilities' },
+    { key: 'critical', label: 'C', width: 'w-12', tooltip: 'Critical-severity vulnerabilities. C/H/M/L = Critical, High, Medium, Low.' },
     { key: 'high', label: 'H', width: 'w-12', tooltip: 'High vulnerabilities' },
     { key: 'medium', label: 'M', width: 'w-12', tooltip: 'Medium vulnerabilities' },
     { key: 'low', label: 'L', width: 'w-12', tooltip: 'Low vulnerabilities' },
@@ -1238,7 +1754,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'critical', label: 'C', width: 'w-12', tooltip: 'Critical findings' },
+    { key: 'critical', label: 'C', width: 'w-12', tooltip: 'Critical-severity failed checks. C/H/M/L = Critical, High, Medium, Low.' },
     { key: 'high', label: 'H', width: 'w-12', tooltip: 'High findings' },
     { key: 'medium', label: 'M', width: 'w-12', tooltip: 'Medium findings' },
     { key: 'low', label: 'L', width: 'w-12', tooltip: 'Low findings' },
@@ -1249,7 +1765,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'container', label: 'Container', width: 'w-28' },
     { key: 'image', label: 'Image', width: 'w-48' },
-    { key: 'critical', label: 'C', width: 'w-12', tooltip: 'Critical secrets' },
+    { key: 'critical', label: 'C', width: 'w-12', tooltip: 'Critical-severity exposed secrets. C/H/M/L = Critical, High, Medium, Low.' },
     { key: 'high', label: 'H', width: 'w-12', tooltip: 'High secrets' },
     { key: 'medium', label: 'M', width: 'w-12', tooltip: 'Medium secrets' },
     { key: 'low', label: 'L', width: 'w-12', tooltip: 'Low secrets' },
@@ -1285,13 +1801,15 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   sbomreports: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'image', label: 'Image', width: 'w-48', tooltip: 'Image the SBOM describes. The container name alone does not identify what was scanned.' },
     { key: 'container', label: 'Container', width: 'w-28' },
-    { key: 'components', label: 'Components', width: 'w-24' },
+    { key: 'components', label: 'Components', width: 'w-24', tooltip: 'Packages and libraries found in the image' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-16' },
   ],
   clustersbomreports: [
     { key: 'name', label: 'Name' },
+    { key: 'image', label: 'Image', width: 'w-48', tooltip: 'Image the SBOM describes. The container name alone does not identify what was scanned.' },
     { key: 'components', label: 'Components', width: 'w-24' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-16' },
@@ -1321,8 +1839,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'store', label: 'Store', width: 'w-36' },
-    { key: 'provider', label: 'Provider', width: 'w-28' },
-    { key: 'refreshInterval', label: 'Refresh', width: 'w-24' },
+    { key: 'provider', label: 'Provider', width: 'w-48', tooltip: 'Backend the referenced store reads from. A dash means the store could not be read — it may not exist, or may be outside your access; an ellipsis means the stores are still loading.' },
+    { key: 'refreshInterval', label: 'Refresh', width: 'w-24', tooltip: 'How often the value is re-pulled from the provider. A zero interval means it is fetched once and not updated afterward.' },
     { key: 'lastSync', label: 'Last Sync', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1353,10 +1871,10 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-36' },
-    { key: 'storageLocation', label: 'Storage', width: 'w-36' },
+    { key: 'storageLocation', label: 'Storage', width: 'w-36', tooltip: "The backup's storage location. A completed backup still needs this location reachable to restore from." },
     { key: 'namespaces', label: 'Scope', width: 'w-24', tooltip: 'Included namespaces (* = all)' },
     { key: 'duration', label: 'Duration', width: 'w-24' },
-    { key: 'expiry', label: 'Expires', width: 'w-24' },
+    { key: 'expiry', label: 'Expires', width: 'w-24', tooltip: "When Velero's retention makes this backup eligible for cleanup. Expired means Velero intends to delete it, not that it is gone — and not that a restore will work." },
     { key: 'errors', label: 'Errors', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1400,7 +1918,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-36' },
-    { key: 'repositoryType', label: 'Type', width: 'w-24' },
+    { key: 'repositoryType', label: 'Type', width: 'w-24', tooltip: 'kopia or restic. Restic is deprecated — Velero 1.17 stopped creating restic backups and 1.19 drops restic restore.' },
+    { key: 'volumeNamespace', label: 'Volume NS', width: 'w-36', tooltip: 'Namespace whose volumes this repository stores. Distinct from the namespace the repository object lives in.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   backupstoragelocations: [
@@ -1409,8 +1928,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-36' },
     { key: 'provider', label: 'Provider', width: 'w-24' },
     { key: 'bucket', label: 'Bucket', width: 'w-40' },
-    { key: 'default', label: 'Default', width: 'w-24' },
-    { key: 'lastValidation', label: 'Validated', width: 'w-28' },
+    { key: 'default', label: 'Default', width: 'w-24', tooltip: 'Whether this location is marked default. A backup naming no storage location is written to the default one.' },
+    { key: 'lastValidation', label: 'Validated', width: 'w-28', tooltip: 'Time since Velero last validated this location. An old value means availability has not been checked recently; validation may be disabled or configured to run less often.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // ============================================================================
@@ -1430,7 +1949,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-44' },
     { key: 'instances', label: 'Instances', width: 'w-28', tooltip: 'Ready/Total' },
     { key: 'primary', label: 'Primary', width: 'w-36' },
-    { key: 'image', label: 'Image', width: 'w-28' },
+    { key: 'image', label: 'Image', width: 'w-28', tooltip: 'Configured image tag, or the operator-resolved image for a catalog-backed cluster. This does not confirm that every instance has finished updating.' },
     // No Storage column: it rendered spec.storage.size, the configured REQUEST.
     // The useful number is actual usage (kubectl cnpg status shows "Size: 158M")
     // and that isn't in the CR. A plausible-but-wrong-meaning number is worse
@@ -1448,7 +1967,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   updaterequests: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-32' },
-    { key: 'status', label: 'State', width: 'w-28' },
+    { key: 'status', label: 'State', width: 'w-28', tooltip: 'Pending work Kyverno has queued but not yet applied; Failed is work it tried and could not.' },
     { key: 'type', label: 'Type', width: 'w-24' },
     { key: 'policy', label: 'Policy', width: 'w-52' },
     { key: 'triggers', label: 'Triggered By', width: 'w-56' },
@@ -1459,7 +1978,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-32' },
     { key: 'status', label: 'Outcome', width: 'w-28' },
     { key: 'subject', label: 'About', width: 'w-56' },
-    { key: 'source', label: 'Produced By', width: 'w-36' },
+    { key: 'source', label: 'Produced By', width: 'w-36', tooltip: 'Admission: evaluated during an API admission request. Background scan: evaluated against existing resources.' },
     { key: 'results', label: 'Results', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1474,7 +1993,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   cnpgdatabases: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Applied', width: 'w-32' },
+    { key: 'status', label: 'Applied', width: 'w-32', tooltip: 'Whether the operator has applied this to PostgreSQL. Pending means it has not reconciled it yet — not that it failed.' },
     { key: 'cluster', label: 'Cluster', width: 'w-36' },
     { key: 'target', label: 'Database', width: 'w-40' },
     { key: 'message', label: 'Message', width: 'w-64' },
@@ -1570,24 +2089,24 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'hosts', label: 'Hosts', width: 'w-48' },
-    { key: 'gateways', label: 'Gateways', width: 'w-40' },
+    { key: 'hosts', label: 'Hosts', width: 'w-48', tooltip: 'Request hostnames this VirtualService matches — not the backends it routes to' },
+    { key: 'gateways', label: 'Gateways', width: 'w-40', tooltip: "Where these routing rules apply. '-' means the default mesh gateway — sidecar traffic; individual route matches can override this." },
     { key: 'routes', label: 'Routes', width: 'w-20', tooltip: 'HTTP + TCP + TLS routes' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   destinationrules: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'host', label: 'Host', width: 'w-48' },
-    { key: 'subsets', label: 'Subsets', width: 'w-20' },
-    { key: 'loadBalancer', label: 'LB Policy', width: 'w-28' },
+    { key: 'status', label: 'Status', width: 'w-24', defaultVisible: false },
+    { key: 'host', label: 'Host', width: 'w-48', tooltip: "The service this rule's traffic policy applies to" },
+    { key: 'subsets', label: 'Subsets', width: 'w-20', tooltip: 'Named backend groups that routes can select, often for canary releases. Defining subsets does not send traffic to them.' },
+    { key: 'tlsMode', label: 'Client TLS', width: 'w-28', tooltip: 'Declared client-side TLS mode for this host at the rule level. Subset and port policies can override it; this does not establish the effective mTLS posture.' },
+    { key: 'loadBalancer', label: 'LB Policy', width: 'w-28', tooltip: "Load balancing algorithm for this host. A dash means Istio's mesh default applies (LEAST_REQUEST since Istio 1.14). Subset and port policies can differ." },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   serviceentries: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'hosts', label: 'Hosts', width: 'w-48' },
     { key: 'location', label: 'Location', width: 'w-28' },
     { key: 'ports', label: 'Ports', width: 'w-32' },
@@ -1596,18 +2115,17 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   peerauthentications: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'mode', label: 'mTLS Mode', width: 'w-28' },
-    { key: 'selector', label: 'Selector', width: 'w-48' },
+    { key: 'mode', label: 'mTLS Mode', width: 'w-28', tooltip: 'Incoming connection policy: STRICT requires mTLS; PERMISSIVE also accepts plaintext; DISABLE turns mTLS off (unsupported in ambient). UNSET inherits the broader policy, defaulting to PERMISSIVE. Port-level overrides can differ.' },
+    { key: 'selector', label: 'Selector', width: 'w-48', tooltip: 'Selects workloads in this namespace. No selector defines a namespace default, or a mesh default in the root namespace; more specific policies can override it.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   authorizationpolicies: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'action', label: 'Action', width: 'w-24' },
-    { key: 'rules', label: 'Rules', width: 'w-20' },
-    { key: 'selector', label: 'Selector', width: 'w-48' },
+    { key: 'status', label: 'Status', width: 'w-24', defaultVisible: false },
+    { key: 'action', label: 'Action', width: 'w-24', tooltip: 'ALLOW contributes permitted matches; DENY blocks matches; AUDIT marks matches for a configured audit plugin; CUSTOM adds an external check. Other policies also affect the decision.' },
+    { key: 'rules', label: 'Rules', width: 'w-20', tooltip: 'Rules are alternatives — zero rules match nothing, an empty rule matches everything. An ALLOW policy with zero rules permits nothing on its own.' },
+    { key: 'selector', label: 'Applies to', width: 'w-48', tooltip: 'Declared workload labels or resource attachments. With neither, scope is inherited — the namespace, or the whole mesh when the policy sits in the mesh root namespace.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // Knative Serving
@@ -1616,7 +2134,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'url', label: 'URL', width: 'w-56' },
-    { key: 'latestRevision', label: 'Latest Revision', width: 'w-44' },
+    { key: 'latestRevision', label: 'Latest Revision', width: 'w-44', tooltip: 'Newest revision that has reported Ready. A newer revision may still be starting or may have failed; this revision need not receive traffic.' },
     { key: 'traffic', label: 'Traffic', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1625,16 +2143,16 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'latestCreated', label: 'Latest Created', width: 'w-48' },
-    { key: 'latestReady', label: 'Latest Ready', width: 'w-48' },
+    { key: 'latestReady', label: 'Latest Ready', width: 'w-48', tooltip: 'Newest revision that has reported Ready. If it differs from Latest Created, the newer revision may still be starting or may have failed; inspect Status.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   knativerevisions: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'routing', label: 'Traffic', width: 'w-20', tooltip: 'Whether this revision is receiving traffic' },
+    { key: 'routing', label: 'Traffic', width: 'w-20', tooltip: 'Active: marked for Route traffic, even if scaled to zero. Reserve: not currently marked for Route traffic. Neither value measures incoming requests.' },
     { key: 'image', label: 'Image', width: 'w-48' },
-    { key: 'concurrency', label: 'Concurrency', width: 'w-32' },
+    { key: 'concurrency', label: 'Concurrency', width: 'w-32', tooltip: "Hard limit on simultaneous requests handled by each pod; excess requests are buffered. Unlimited removes this cap, not autoscaling's target." },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   knativeroutes: [
@@ -1659,7 +2177,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'broker', label: 'Broker', width: 'w-36' },
     { key: 'subscriber', label: 'Subscriber', width: 'w-48' },
-    { key: 'filter', label: 'Filter', width: 'w-48' },
+    { key: 'filter', label: 'Filter', width: 'w-48', tooltip: 'Selects which broker events are eligible for delivery. No filtering admits every event; it does not guarantee successful delivery. Expression filters override attribute filters.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   eventtypes: [
@@ -1676,7 +2194,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'schedule', label: 'Schedule', width: 'w-36' },
-    { key: 'sink', label: 'Sink', width: 'w-48' },
+    { key: 'sink', label: 'Sink', width: 'w-48', tooltip: 'Requested event destination. A displayed reference does not prove it resolved or received events; inspect conditions when delivery fails.' },
     { key: 'data', label: 'Data', width: 'w-36' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -1733,14 +2251,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'steps', label: 'Steps', width: 'w-16' },
+    { key: 'steps', label: 'Steps', width: 'w-16', tooltip: "Stages events pass through in order; each stage's reply feeds the next" },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   parallels: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'branches', label: 'Branches', width: 'w-20' },
+    { key: 'branches', label: 'Branches', width: 'w-20', tooltip: 'Independent filter-and-subscriber pairs; every event is offered to all of them' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // Knative Networking
@@ -1750,7 +2268,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'ingressClass', label: 'Class', width: 'w-24' },
     { key: 'hosts', label: 'Hosts', width: 'w-56' },
-    { key: 'visibility', label: 'Visibility', width: 'w-28' },
+    { key: 'visibility', label: 'Visibility', width: 'w-28', tooltip: 'Requested exposure across all rules. ExternalIP means at least one rule requests external exposure; ClusterLocal means all rules request cluster-only exposure. This does not verify connectivity.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   knativecertificates: [
@@ -1759,13 +2277,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'dnsNames', label: 'DNS Names', width: 'w-56' },
     { key: 'secretName', label: 'Secret', width: 'w-44' },
+    { key: 'expires', label: 'Expires', width: 'w-28', tooltip: 'Expiry of the certificate in the named Secret, as the controller reported it.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   serverlessservices: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'mode', label: 'Mode', width: 'w-20' },
+    { key: 'mode', label: 'Mode', width: 'w-20', tooltip: 'Requested backend mode: Serve selects revision pods; Proxy selects activators. Activators may remain involved with healthy pods for burst handling, so Proxy does not prove a cold start.' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   domainmappings: [
@@ -1779,9 +2298,9 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   ingressroutes: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
-    { key: 'entrypoints', label: 'Entry Points', width: 'w-32 shrink-0' },
+    { key: 'entrypoints', label: 'Entry Points', width: 'w-32 shrink-0', tooltip: 'Entry points this route binds to. When unset, Traefik uses the default entry points from its static configuration.' },
     { key: 'hosts', label: 'Hosts', width: 'min-w-44' },
-    { key: 'routes', label: 'Routes', width: 'min-w-48', hideOnMobile: true },
+    { key: 'routes', label: 'Routes', width: 'min-w-48' },
     { key: 'tls', label: 'TLS', width: 'w-14 shrink-0' },
     { key: 'middlewares', label: 'MW', width: 'w-14 shrink-0', tooltip: 'Unique middleware count' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
@@ -1789,9 +2308,9 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   ingressroutetcps: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
-    { key: 'entrypoints', label: 'Entry Points', width: 'w-32 shrink-0' },
+    { key: 'entrypoints', label: 'Entry Points', width: 'w-32 shrink-0', tooltip: 'Entry points this route binds to. When unset, Traefik uses the default entry points from its static configuration.' },
     { key: 'hosts', label: 'Hosts', width: 'min-w-44' },
-    { key: 'routes', label: 'Routes', width: 'min-w-48', hideOnMobile: true },
+    { key: 'routes', label: 'Routes', width: 'min-w-48' },
     { key: 'tls', label: 'TLS', width: 'w-14 shrink-0' },
     { key: 'middlewares', label: 'MW', width: 'w-14 shrink-0', tooltip: 'Unique middleware count' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
@@ -1799,7 +2318,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   ingressrouteudps: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
-    { key: 'entrypoints', label: 'Entry Points', width: 'w-32 shrink-0' },
+    { key: 'entrypoints', label: 'Entry Points', width: 'w-32 shrink-0', tooltip: 'Entry points this route binds to. When unset it is attached to every available UDP entry point; asDefault has no effect on UDP.' },
     { key: 'routes', label: 'Routes', width: 'min-w-48' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
@@ -1839,7 +2358,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   tlsoptions: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
-    { key: 'minVersion', label: 'Min TLS', width: 'w-24 shrink-0' },
+    { key: 'minVersion', label: 'Min TLS', width: 'w-24 shrink-0', tooltip: "Lowest TLS version accepted; connections below it are rejected. A dash means the resource sets no minimum, so Traefik's own default applies." },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   tlsstores: [
@@ -1855,7 +2374,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'class', label: 'Class', width: 'w-32 shrink-0' },
     { key: 'cpReplicas', label: 'CP Ready', width: 'w-24 shrink-0', tooltip: 'Control plane replicas (ready/desired)' },
     { key: 'workerReplicas', label: 'Workers', width: 'w-20 shrink-0', tooltip: 'Worker replicas (ready/desired)' },
-    { key: 'phase', label: 'Phase', width: 'w-28 shrink-0' },
+    { key: 'phase', label: 'Phase', width: 'w-28 shrink-0', tooltip: 'Lifecycle phase while the cluster is still provisioning or deleting; the Available/Ready condition once it has landed.' },
     { key: 'version', label: 'Version', width: 'w-24 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
@@ -1864,6 +2383,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'cluster', label: 'Cluster', width: 'w-32 shrink-0' },
     { key: 'ready', label: 'Ready', width: 'w-20 shrink-0', tooltip: 'Ready replicas / desired' },
+    { key: 'upToDate', label: 'Up-to-date', width: 'w-24', tooltip: 'Machines already running the current spec. Fewer than Ready means a rollout is still in progress.' },
     { key: 'phase', label: 'Phase', width: 'w-28 shrink-0' },
     { key: 'version', label: 'Version', width: 'w-24 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
@@ -1873,7 +2393,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'cluster', label: 'Cluster', width: 'w-32 shrink-0' },
     { key: 'role', label: 'Role', width: 'w-28 shrink-0' },
-    { key: 'phase', label: 'Phase', width: 'w-28 shrink-0' },
+    { key: 'phase', label: 'Phase', width: 'w-28 shrink-0', tooltip: 'Lifecycle milestone; Running does not guarantee that the node is currently Ready.' },
     { key: 'node', label: 'Node', width: 'w-32 shrink-0' },
     { key: 'version', label: 'Version', width: 'w-24 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
@@ -1931,7 +2451,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'instanceType', label: 'Instance', width: 'w-28 shrink-0' },
-    { key: 'replicas', label: 'Ready', width: 'w-20 shrink-0', tooltip: 'Ready replicas' },
+    { key: 'replicas', label: 'Ready', width: 'w-20 shrink-0', tooltip: "Replicas the provider reports, over the autoscaling maximum when one is set. The second number is a ceiling, not a target, so this is not a ready/desired ratio." },
     { key: 'capacityType', label: 'Capacity', width: 'w-28 shrink-0' },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
@@ -1949,7 +2469,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'instanceType', label: 'Instance', width: 'w-28 shrink-0' },
-    { key: 'capacity', label: 'Capacity', width: 'w-32 shrink-0', tooltip: 'Computed CPU/memory' },
+    { key: 'capacity', label: 'Capacity', width: 'w-32 shrink-0', tooltip: 'Per-node CPU and memory reported by the provider for scale-from-zero estimation.' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   awsmanagedclusters: [
@@ -1974,7 +2494,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'machineType', label: 'Machine Type', width: 'w-32 shrink-0' },
-    { key: 'replicas', label: 'Replicas', width: 'w-20 shrink-0' },
+    { key: 'replicas', label: 'Replicas', width: 'w-20 shrink-0', tooltip: "Replicas the provider reports as observed. Not a ready/desired ratio, and the pool's autoscaling bounds are not shown here." },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
@@ -2013,9 +2533,9 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'sku', label: 'VM Size', width: 'w-32 shrink-0' },
-    { key: 'mode', label: 'Mode', width: 'w-20 shrink-0' },
-    { key: 'replicas', label: 'Replicas', width: 'w-20 shrink-0' },
-    { key: 'priority', label: 'Priority', width: 'w-24 shrink-0' },
+    { key: 'mode', label: 'Mode', width: 'w-20 shrink-0', tooltip: 'System pools are preferred for critical AKS system pods; User pools are intended for applications. Mode does not enforce workload isolation.' },
+    { key: 'replicas', label: 'Replicas', width: 'w-20 shrink-0', tooltip: "Replicas the provider reports as observed. Not a ready/desired ratio, and the pool's autoscaling bounds are not shown here." },
+    { key: 'priority', label: 'Priority', width: 'w-24 shrink-0', tooltip: 'Spot VMs may be evicted for capacity or price; Regular VMs are not Spot. This is unrelated to Kubernetes scheduling priority.' },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
@@ -2042,11 +2562,11 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   httpproxies: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
-    { key: 'fqdn', label: 'FQDN', width: 'min-w-44' },
+    { key: 'fqdn', label: 'FQDN', width: 'min-w-44', tooltip: 'Virtual-host hostname this proxy declares. A dash means it declares none, which is normal for an included proxy — its routes are served under the roots that include it.' },
     { key: 'routes', label: 'Routes', width: 'w-20 shrink-0' },
-    { key: 'includes', label: 'Includes', width: 'w-24 shrink-0' },
+    { key: 'includes', label: 'Includes', width: 'w-24 shrink-0', tooltip: "Child HTTPProxies this one directly includes. They contribute routing configuration, so a proxy can serve traffic even when its own Routes count is zero." },
     { key: 'tls', label: 'TLS', width: 'w-14 shrink-0' },
-    { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
+    { key: 'status', label: 'Status', width: 'w-28 shrink-0', tooltip: "Contour's verdict on this proxy. Orphaned means no root proxy includes it, so it serves no traffic." },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   // Crossplane — Managed Resources are unbounded (one kind per provider CRD);
@@ -2055,15 +2575,15 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-32 shrink-0' },
     { key: 'kind', label: 'Kind', width: 'w-32 shrink-0' },
-    { key: 'external', label: 'External Name', width: 'min-w-48', hideOnMobile: true },
-    { key: 'provider', label: 'Provider Config', width: 'w-40 shrink-0', hideOnMobile: true },
+    { key: 'external', label: 'External Name', width: 'min-w-48' },
+    { key: 'provider', label: 'Provider Config', width: 'w-40 shrink-0', tooltip: 'Provider configuration selecting the credentials and connection settings used to manage this external resource.' },
     { key: 'status', label: 'Status', width: 'w-32 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   providers: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'package', label: 'Package', width: 'min-w-48' },
-    { key: 'revision', label: 'Revision', width: 'w-36 shrink-0', hideOnMobile: true },
+    { key: 'revision', label: 'Revision', width: 'w-36 shrink-0' },
     { key: 'status', label: 'Status', width: 'w-32 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
@@ -2076,14 +2596,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   compositions: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'composite', label: 'Composite Kind', width: 'w-44 shrink-0' },
-    { key: 'mode', label: 'Mode', width: 'w-24 shrink-0' },
-    { key: 'functions', label: 'Functions', width: 'w-28 shrink-0', hideOnMobile: true },
+    { key: 'mode', label: 'Mode', width: 'w-24 shrink-0', tooltip: 'Pipeline runs composition functions. Resources uses native patch-and-transform composition and must be migrated before upgrading to Crossplane v2.' },
+    { key: 'functions', label: 'Functions', width: 'w-28 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   compositeresourcedefinitions: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'kind', label: 'Kind', width: 'w-40 shrink-0' },
-    { key: 'claim', label: 'Claim Kind', width: 'w-40 shrink-0', hideOnMobile: true },
+    { key: 'claim', label: 'Claim Kind', width: 'w-40 shrink-0', tooltip: 'Optional namespaced claim kind. Crossplane v2 supports claims only for XRDs using LegacyCluster scope.' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
 }
@@ -2105,6 +2625,21 @@ const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
   // completely different shape (cluster + method, no storage location/expiry).
   backups: { 'postgresql.cnpg.io': 'cnpgbackups' },
   clusterpolicies: { 'nvidia.com': 'nvidiaclusterpolicies' },
+  // Kyverno's namespaced Policy. `policies` is a plural several projects use,
+  // so it is only Kyverno's when the group says so; the curated set and its
+  // cells already existed but nothing routed to them.
+  policies: { 'kyverno.io': 'kyvernopolicies' },
+  // Istio Gateway is not a Gateway API Gateway: it has servers and a workload
+  // selector, and none of Class/Listeners/Routes/Addresses.
+  gateways: { 'networking.istio.io': 'istiogateways' },
+  job: { batch: 'jobs', 'batch.volcano.sh': 'volcanojobs' },
+  jobs: { batch: 'jobs', 'batch.volcano.sh': 'volcanojobs' },
+  queue: { 'scheduling.volcano.sh': 'volcanoqueues', 'scheduling.run.ai': 'kaiqueues' },
+  queues: { 'scheduling.volcano.sh': 'volcanoqueues', 'scheduling.run.ai': 'kaiqueues' },
+  podgroup: { 'scheduling.volcano.sh': 'volcanopodgroups', 'scheduling.run.ai': 'kaipodgroups' },
+  podgroups: { 'scheduling.volcano.sh': 'volcanopodgroups', 'scheduling.run.ai': 'kaipodgroups' },
+  workspace: { 'kaito.sh': 'kaitoworkspaces' },
+  workspaces: { 'kaito.sh': 'kaitoworkspaces' },
   services: { 'serving.knative.dev': 'knativeservices' },
   configurations: { 'serving.knative.dev': 'knativeconfigurations' },
   revisions: { 'serving.knative.dev': 'knativerevisions' },
@@ -2173,6 +2708,7 @@ const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
 
 const GROUP_QUALIFIED_ONLY_COLUMN_KEYS = new Set([
   'networkpolicy', 'networkpolicies',
+  'job', 'jobs',
   // Other projects serve their own IPPool CRD, so only a Calico group earns the
   // Calico columns.
   'ippool', 'ippools',
@@ -2181,6 +2717,7 @@ const GROUP_QUALIFIED_ONLY_COLUMN_KEYS = new Set([
   'stagedglobalnetworkpolicy', 'stagedglobalnetworkpolicies',
   'stagedkubernetesnetworkpolicy', 'stagedkubernetesnetworkpolicies',
 ])
+
 const CALICO_ONLY_COLUMN_KEYS = new Set([
   'globalnetworkpolicy', 'globalnetworkpolicies',
   'stagednetworkpolicy', 'stagednetworkpolicies',
@@ -2191,7 +2728,7 @@ const CALICO_ONLY_COLUMN_KEYS = new Set([
 // Normalize a kind name to its plural API form used in KNOWN_COLUMNS keys.
 // Handles CRD singular names from URLs: 'ScaledObject' → 'scaledobjects', 'NodePool' → 'nodepools'
 // When group is provided, resolves collisions (e.g., 'services' + 'serving.knative.dev' → 'knativeservices')
-function normalizeKindToPlural(kind: string, group?: string): string {
+export function normalizeKindToPlural(kind: string, group?: string): string {
   const lower = kind.toLowerCase()
   // Check group-qualified mapping first for collision resolution
   if (group && GROUP_QUALIFIED_COLUMN_KEYS[lower]?.[group]) {
@@ -2236,18 +2773,414 @@ function isLikelyCrossplaneMRGroup(kind: string, group: string): boolean {
   return false
 }
 
+/**
+ * API groups the Kubernetes API server reserves. A CRD cannot be created in
+ * one, so a curated set keyed on a core kind can never be claimed by a foreign
+ * resource and needs no ownership entry. Note the deliberate omissions:
+ * gateway.networking.k8s.io, snapshot.storage.k8s.io and cluster.x-k8s.io end
+ * in k8s.io but ARE CRD groups, so this is an explicit list, not a suffix test.
+ */
+const CORE_API_GROUPS = new Set([
+  '', 'apps', 'batch', 'autoscaling', 'policy', 'networking.k8s.io',
+  'rbac.authorization.k8s.io', 'storage.k8s.io', 'apiextensions.k8s.io',
+  'coordination.k8s.io', 'discovery.k8s.io', 'scheduling.k8s.io',
+  'admissionregistration.k8s.io', 'certificates.k8s.io', 'node.k8s.io',
+  'flowcontrol.apiserver.k8s.io', 'authentication.k8s.io', 'authorization.k8s.io',
+  'apiregistration.k8s.io', 'events.k8s.io', 'resource.k8s.io',
+  'internal.apiserver.k8s.io', 'storagemigration.k8s.io',
+])
+
+// ProviderConfig groups are unbounded — one per provider — so they are matched
+// by suffix. Managed resources take the isLikelyCrossplaneMRGroup branch above.
+function isCuratedUnboundedGroup(key: string, group: string): boolean {
+  if (key !== 'providerconfigs') return false
+  return group.endsWith('.crossplane.io') || group.endsWith('.upbound.io')
+}
+
+/**
+ * Which API group(s) each curated column set was written for.
+ *
+ * A CRD is not the kind Radar curated just because it reuses its plural:
+ * chaos-mesh ships workflows.chaos-mesh.org, Istio ships gateways, and Flux
+ * ships providers. Rendering Argo's or Gateway API's columns for those reads
+ * every field off a schema the object does not have. Anything not claimed here
+ * falls through to the generic set (and, for a CRD, to its own printer
+ * columns), which is the honest answer for a kind Radar has never seen.
+ *
+ * Core kinds need no entry: the API server reserves their groups, so a CRD
+ * cannot occupy one. See CORE_API_GROUPS.
+ */
+const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
+  challenges: ['acme.cert-manager.io'],
+  orders: ['acme.cert-manager.io'],
+  compositeresourcedefinitions: ['apiextensions.crossplane.io'],
+  compositions: ['apiextensions.crossplane.io'],
+  clustercompliancereports: ['aquasecurity.github.io'],
+  clusterinfraassessmentreports: ['aquasecurity.github.io'],
+  clusterrbacassessmentreports: ['aquasecurity.github.io'],
+  clustersbomreports: ['aquasecurity.github.io'],
+  configauditreports: ['aquasecurity.github.io'],
+  exposedsecretreports: ['aquasecurity.github.io'],
+  infraassessmentreports: ['aquasecurity.github.io'],
+  rbacassessmentreports: ['aquasecurity.github.io'],
+  sbomreports: ['aquasecurity.github.io'],
+  vulnerabilityreports: ['aquasecurity.github.io'],
+  analysisruns: ['argoproj.io'],
+  applications: ['argoproj.io'],
+  applicationsets: ['argoproj.io'],
+  appprojects: ['argoproj.io'],
+  clusterworkflowtemplates: ['argoproj.io'],
+  cronworkflows: ['argoproj.io'],
+  rollouts: ['argoproj.io'],
+  workflows: ['argoproj.io'],
+  workflowtemplates: ['argoproj.io'],
+  barmanobjectstores: ['barmancloud.cnpg.io'],
+  sealedsecrets: ['bitnami.com'],
+  certificaterequests: ['cert-manager.io'],
+  certificates: ['cert-manager.io'],
+  clusterissuers: ['cert-manager.io'],
+  issuers: ['cert-manager.io'],
+  capiclusters: ['cluster.x-k8s.io'],
+  clusterclasses: ['cluster.x-k8s.io'],
+  machinedeployments: ['cluster.x-k8s.io'],
+  machinehealthchecks: ['cluster.x-k8s.io'],
+  machinepools: ['cluster.x-k8s.io'],
+  machines: ['cluster.x-k8s.io'],
+  machinesets: ['cluster.x-k8s.io'],
+  kubeadmcontrolplanes: ['controlplane.cluster.x-k8s.io'],
+  brokers: ['eventing.knative.dev'],
+  eventtypes: ['eventing.knative.dev'],
+  triggers: ['eventing.knative.dev'],
+  clusterexternalsecrets: ['external-secrets.io'],
+  clustersecretstores: ['external-secrets.io'],
+  externalsecrets: ['external-secrets.io'],
+  secretstores: ['external-secrets.io'],
+  parallels: ['flows.knative.dev'],
+  sequences: ['flows.knative.dev'],
+  gatewayclasses: ['gateway.networking.k8s.io'],
+  gateways: ['gateway.networking.k8s.io'],
+  istiogateways: ['networking.istio.io'],
+  grpcroutes: ['gateway.networking.k8s.io'],
+  httproutes: ['gateway.networking.k8s.io'],
+  tcproutes: ['gateway.networking.k8s.io'],
+  tlsroutes: ['gateway.networking.k8s.io'],
+  helmreleases: ['helm.toolkit.fluxcd.io'],
+  awsmachines: ['infrastructure.cluster.x-k8s.io'],
+  awsmachinetemplates: ['infrastructure.cluster.x-k8s.io'],
+  awsmanagedclusters: ['infrastructure.cluster.x-k8s.io'],
+  awsmanagedcontrolplanes: ['controlplane.cluster.x-k8s.io'],
+  awsmanagedmachinepools: ['infrastructure.cluster.x-k8s.io'],
+  azuremachines: ['infrastructure.cluster.x-k8s.io'],
+  azuremachinetemplates: ['infrastructure.cluster.x-k8s.io'],
+  azuremanagedclusters: ['infrastructure.cluster.x-k8s.io'],
+  azuremanagedcontrolplanes: ['infrastructure.cluster.x-k8s.io'],
+  azuremanagedmachinepools: ['infrastructure.cluster.x-k8s.io'],
+  gcpmachines: ['infrastructure.cluster.x-k8s.io'],
+  gcpmachinetemplates: ['infrastructure.cluster.x-k8s.io'],
+  gcpmanagedclusters: ['infrastructure.cluster.x-k8s.io'],
+  gcpmanagedcontrolplanes: ['infrastructure.cluster.x-k8s.io'],
+  gcpmanagedmachinepools: ['infrastructure.cluster.x-k8s.io'],
+  ec2nodeclasses: ['karpenter.k8s.aws'],
+  nodeclaims: ['karpenter.sh'],
+  nodepools: ['karpenter.sh'],
+  clustertriggerauthentications: ['keda.sh'],
+  scaledjobs: ['keda.sh'],
+  scaledobjects: ['keda.sh'],
+  triggerauthentications: ['keda.sh'],
+  kustomizations: ['kustomize.toolkit.fluxcd.io'],
+  cleanuppolicies: ['kyverno.io'],
+  clustercleanuppolicies: ['kyverno.io'],
+  clusterpolicies: ['kyverno.io'],
+  kyvernopolicies: ['kyverno.io'],
+  updaterequests: ['kyverno.io'],
+  policyexceptions: ['kyverno.io', 'policies.kyverno.io'],
+  channels: ['messaging.knative.dev'],
+  inmemorychannels: ['messaging.knative.dev'],
+  knativesubscriptions: ['messaging.knative.dev'],
+  podmonitors: ['monitoring.coreos.com'],
+  prometheusrules: ['monitoring.coreos.com'],
+  servicemonitors: ['monitoring.coreos.com'],
+  knativecertificates: ['networking.internal.knative.dev'],
+  knativeingresses: ['networking.internal.knative.dev'],
+  serverlessservices: ['networking.internal.knative.dev'],
+  destinationrules: ['networking.istio.io'],
+  serviceentries: ['networking.istio.io'],
+  virtualservices: ['networking.istio.io'],
+  alerts: ['notification.toolkit.fluxcd.io'],
+  nvidiaclusterpolicies: ['nvidia.com'],
+  nvidiadrivers: ['nvidia.com'],
+  providers: ['pkg.crossplane.io'],
+  deletingpolicies: ['policies.kyverno.io'],
+  generatingpolicies: ['policies.kyverno.io'],
+  imagevalidatingpolicies: ['policies.kyverno.io'],
+  mutatingpolicies: ['policies.kyverno.io'],
+  namespaceddeletingpolicies: ['policies.kyverno.io'],
+  namespacedgeneratingpolicies: ['policies.kyverno.io'],
+  namespacedimagevalidatingpolicies: ['policies.kyverno.io'],
+  namespacedmutatingpolicies: ['policies.kyverno.io'],
+  namespacedvalidatingpolicies: ['policies.kyverno.io'],
+  validatingpolicies: ['policies.kyverno.io'],
+  cnpgbackups: ['postgresql.cnpg.io'],
+  cnpgclusterimagecatalogs: ['postgresql.cnpg.io'],
+  cnpgclusters: ['postgresql.cnpg.io'],
+  cnpgdatabases: ['postgresql.cnpg.io'],
+  cnpgimagecatalogs: ['postgresql.cnpg.io'],
+  cnpgpublications: ['postgresql.cnpg.io'],
+  cnpgsubscriptions: ['postgresql.cnpg.io'],
+  poolers: ['postgresql.cnpg.io'],
+  scheduledbackups: ['postgresql.cnpg.io'],
+  calicoglobalnetworkpolicies: ['projectcalico.org', 'crd.projectcalico.org'],
+  calicohostendpoints: ['projectcalico.org', 'crd.projectcalico.org'],
+  calicoippools: ['projectcalico.org', 'crd.projectcalico.org'],
+  caliconetworkpolicies: ['projectcalico.org', 'crd.projectcalico.org'],
+  calicostagedglobalnetworkpolicies: ['projectcalico.org', 'crd.projectcalico.org'],
+  calicostagedkubernetesnetworkpolicies: ['projectcalico.org', 'crd.projectcalico.org'],
+  calicostagednetworkpolicies: ['projectcalico.org', 'crd.projectcalico.org'],
+  calicotiers: ['projectcalico.org', 'crd.projectcalico.org'],
+  httpproxies: ['projectcontour.io'],
+  clusterephemeralreports: ['reports.kyverno.io'],
+  ephemeralreports: ['reports.kyverno.io'],
+  authorizationpolicies: ['security.istio.io'],
+  peerauthentications: ['security.istio.io'],
+  domainmappings: ['serving.knative.dev'],
+  knativeconfigurations: ['serving.knative.dev'],
+  knativerevisions: ['serving.knative.dev'],
+  knativeroutes: ['serving.knative.dev'],
+  knativeservices: ['serving.knative.dev'],
+  gitrepositories: ['source.toolkit.fluxcd.io'],
+  helmrepositories: ['source.toolkit.fluxcd.io'],
+  ocirepositories: ['source.toolkit.fluxcd.io'],
+  apiserversources: ['sources.knative.dev'],
+  containersources: ['sources.knative.dev'],
+  pingsources: ['sources.knative.dev'],
+  sinkbindings: ['sources.knative.dev'],
+  ingressroutes: ['traefik.io', 'traefik.containo.us'],
+  ingressroutetcps: ['traefik.io', 'traefik.containo.us'],
+  ingressrouteudps: ['traefik.io', 'traefik.containo.us'],
+  middlewares: ['traefik.io', 'traefik.containo.us'],
+  middlewaretcps: ['traefik.io', 'traefik.containo.us'],
+  serverstransports: ['traefik.io', 'traefik.containo.us'],
+  serverstransporttcps: ['traefik.io', 'traefik.containo.us'],
+  tlsoptions: ['traefik.io', 'traefik.containo.us'],
+  tlsstores: ['traefik.io', 'traefik.containo.us'],
+  traefikservices: ['traefik.io', 'traefik.containo.us'],
+  backuprepositories: ['velero.io'],
+  backups: ['velero.io'],
+  backupstoragelocations: ['velero.io'],
+  velerorestores: ['velero.io'],
+  veleroschedules: ['velero.io'],
+  volumesnapshotlocations: ['velero.io'],
+  clusterpolicyreports: ['wgpolicyk8s.io'],
+  policyreports: ['wgpolicyk8s.io'],
+  deviceconfigs: ['amd.com'],
+  nimcaches: ['apps.nvidia.com'],
+  nimpipelines: ['apps.nvidia.com'],
+  nimservices: ['apps.nvidia.com'],
+  provisioningrequests: ['autoscaling.x-k8s.io'],
+  volcanojobs: ['batch.volcano.sh'],
+  jobflows: ['flow.volcano.sh'],
+  jobtemplates: ['flow.volcano.sh'],
+  inferencepools: ['inference.networking.k8s.io', 'inference.networking.x-k8s.io'],
+  inferenceobjectives: ['inference.networking.x-k8s.io', 'llm-d.ai'],
+  jobsets: ['jobset.x-k8s.io'],
+  kaitoworkspaces: ['kaito.sh'],
+  ragengines: ['kaito.sh'],
+  admissionchecks: ['kueue.x-k8s.io'],
+  clusterqueues: ['kueue.x-k8s.io'],
+  localqueues: ['kueue.x-k8s.io'],
+  resourceflavors: ['kueue.x-k8s.io'],
+  workloads: ['kueue.x-k8s.io'],
+  mpijobs: ['kubeflow.org'],
+  pytorchjobs: ['kubeflow.org'],
+  tfjobs: ['kubeflow.org'],
+  leaderworkersets: ['leaderworkerset.x-k8s.io'],
+  rayclusters: ['ray.io'],
+  raycronjobs: ['ray.io'],
+  rayjobs: ['ray.io'],
+  rayservices: ['ray.io'],
+  kaipodgroups: ['scheduling.run.ai'],
+  kaiqueues: ['scheduling.run.ai'],
+  volcanopodgroups: ['scheduling.volcano.sh'],
+  volcanoqueues: ['scheduling.volcano.sh'],
+  clusterservingruntimes: ['serving.kserve.io'],
+  inferencegraphs: ['serving.kserve.io'],
+  inferenceservices: ['serving.kserve.io'],
+  llminferenceservices: ['serving.kserve.io'],
+  servingruntimes: ['serving.kserve.io'],
+  trainedmodels: ['serving.kserve.io'],
+  trainjobs: ['trainer.kubeflow.org'],
+}
+
 function getColumnsForKind(kind: string, group?: string): Column[] {
-  const key = normalizeKindToPlural(kind, group)
-  if (KNOWN_COLUMNS[key]) return KNOWN_COLUMNS[key]
+  // Ahead of the curated lookup: a provider ships one CRD per service, so a
+  // managed resource routinely collides with a curated plural (acm's
+  // Certificate, s3's Service). Resolving the collision the other way would
+  // return DEFAULT_COLUMNS and never reach this branch at all.
   if (group && isLikelyCrossplaneMRGroup(kind, group)) {
     return KNOWN_COLUMNS.crossplanemanagedresources
   }
+  const key = normalizeKindToPlural(kind, group)
+  const curated = KNOWN_COLUMNS[key]
+  if (curated) {
+    const owners = CURATED_COLUMN_GROUPS[key]
+    if (group && owners) return owners.includes(group) ? curated : DEFAULT_COLUMNS
+    // A core kind cannot be shadowed by a CRD, so it keeps its columns without
+    // an ownership entry. Anything else has to be claimed for this exact group.
+    if (!group || CORE_API_GROUPS.has(group)) return curated
+    if (isCuratedUnboundedGroup(key, group)) return curated
+    return DEFAULT_COLUMNS
+  }
   return DEFAULT_COLUMNS
+}
+
+/**
+ * Whether Radar hand-curates this kind's columns. The single definition of
+ * "curated": the printer-column XOR, the storage-key qualifier, and the host's
+ * decision whether to request table mode at all must all agree, or the server
+ * does work the client throws away — or worse, they disagree about which set a
+ * kind is on.
+ */
+export function hasCuratedColumns(kind: string, group?: string): boolean {
+  return getColumnsForKind(kind, group) !== DEFAULT_COLUMNS
+}
+
+export function getCellFilterKind(kind: string, group?: string): string {
+  const normalized = normalizeKindToPlural(kind, group)
+  if (!group || hasCuratedColumns(kind, group) || normalized.startsWith('__generic_')) return normalized
+  return `__generic_${normalized}`
 }
 
 // Get the default visible columns for a kind
 function getDefaultVisibleColumns(columns: Column[]): Set<string> {
   return new Set(columns.filter(c => c.defaultVisible !== false).map(c => c.key))
+}
+
+// Materializes one vendor-declared printer column into a self-contained
+// ExtraColumn, so it rides the same render/sort/filter rails as a user's custom
+// column. Values were evaluated server-side and arrive keyed by uid.
+function buildPrinterColumn(def: PrinterColumnDef, index: number, table: PrinterTable): ExtraColumn {
+  const read = (resource: any) => readPrinterCell(table, resource?.metadata?.uid, index)
+  return {
+    key: printerColumnKey(def),
+    label: def.name,
+    width: printerColumnWidth(def),
+    // Columns in kubectl's `-o wide` tier are declared but not shown by
+    // default; the column picker still offers them.
+    defaultVisible: (def.priority ?? 0) === 0,
+    tooltip: def.description || undefined,
+    render: (resource: any) => {
+      const value = read(resource)
+      // `date` cells arrive already humanized ("5m") — the API server's table
+      // converter does that, so re-formatting here would parse "5m" as a date.
+      const text = formatPrinterCell(value)
+      if (!text) return <span className="text-sm text-theme-text-tertiary">-</span>
+      // A column the vendor named Ready/Healthy/Established carries the only
+      // scannable signal these kinds have — they have no curated Status column.
+      // Rendering it as grey text would leave a screen of uniform "True".
+      const tone = printerCellTone(def, value)
+      if (tone) {
+        return (
+          // The value, not the column's description — the header tooltip
+          // carries that. A cell tooltip exists to reveal a truncated value.
+          <Tooltip content={text}>
+            <span className={clsx('badge', healthColors[tone])}>{text}</span>
+          </Tooltip>
+        )
+      }
+      return (
+        <Tooltip content={text}>
+          <span className="text-sm text-theme-text-secondary truncate block">{text}</span>
+        </Tooltip>
+      )
+    },
+    getSortValue: (resource: any) => printerCellSortValue(read(resource), def),
+    getFilterValue: (resource: any) => formatPrinterCell(read(resource)),
+  }
+}
+
+// Printer columns fill in only where Radar has no curated set for the kind —
+// the two are exclusive, never merged. A curated set is hand-tuned and often
+// encodes why a vendor-obvious field is the wrong one to show, so it wins.
+function buildPrinterColumns(
+  kind: string,
+  group: string | undefined,
+  table: PrinterTable | null | undefined,
+): ExtraColumn[] {
+  if (!table?.columns?.length) return []
+  if (!printerTableMatchesKind(table, kind, group)) return []
+  if (hasCuratedColumns(kind, group)) return []
+  return table.columns.map((def, i) => buildPrinterColumn(def, i, table))
+}
+
+// The kind's effective column set. Printer columns replace the generic
+// Name/Namespace/Status/Age set rather than joining it: the vendor's columns
+// are the answer to the same question the generic Status column was guessing
+// at, and showing both would ask the reader which one to believe. Name,
+// Namespace and Age stay because Radar renders those itself (the server drops
+// the CRD's own duplicates of them before sending).
+function columnsForKindWithPrinter(
+  kind: string,
+  group: string | undefined,
+  printerColumns: ExtraColumn[],
+): Column[] {
+  const curated = getColumnsForKind(kind, group)
+  if (!printerColumns.length || hasCuratedColumns(kind, group)) return curated
+  return [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    ...printerColumns,
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ]
+}
+
+/**
+ * The visible-column set for a kind the user has saved settings for.
+ *
+ * Saved choices win, with two seeded exceptions for columns the blob predates —
+ * a user cannot have decided to hide something they were never shown:
+ *   - host extras, which are injected by the embedding app;
+ *   - printer columns, but only when the blob names none at all. Once it names
+ *     one, the user has seen the set and an absent key is a deliberate hide.
+ */
+export function mergeSavedVisibleColumns(
+  savedVisible: string[],
+  extraKeys: string[],
+  printerColumns: ExtraColumn[],
+  effective?: Column[],
+  known?: string[],
+): Set<string> {
+  const merged = new Set(savedVisible)
+  for (const k of extraKeys) merged.add(k)
+  if (!savedVisible.some(k => k.startsWith(PRINTER_COLUMN_PREFIX))) {
+    for (const c of printerColumns) {
+      if (c.defaultVisible !== false) merged.add(c.key)
+    }
+  }
+  // Curated columns the blob predates. Same principle as the two above, but it
+  // needs a record of what the user was actually offered: the blob stores only
+  // what is visible, so a curated key's absence is ambiguous between "hidden on
+  // purpose" and "not offered yet". `known` is that record. Without one the two
+  // cases are indistinguishable, so nothing is inferred and visibility is left
+  // to the saved set alone.
+  //
+  // Printer columns are excluded even when `known` lists none of them. They are
+  // fetched, so `known` can be written during the window before the printer
+  // table arrives; treating their absence as "new" would re-show ones the user
+  // hid. Their own rule above already covers them.
+  if (effective && Array.isArray(known)) {
+    const seen = new Set(known)
+    for (const c of effective) {
+      if (c.key.startsWith(PRINTER_COLUMN_PREFIX)) continue
+      if (!seen.has(c.key) && c.defaultVisible !== false) merged.add(c.key)
+    }
+  }
+  return merged
+}
+
+/** Storage/reset identity for a selection. Two CRDs can share a plural across
+ * API groups, and their columns are unrelated. */
+export function selectedKindIdentityOf(kind: { name: string; group?: string }): string {
+  return `${kind.name} ${kind.group ?? ''}`
 }
 
 // Host-injected leading columns minus any whose key collides with a built-in.
@@ -2276,15 +3209,35 @@ function filterHostExtras(
 // localStorage helpers for column settings
 const COLUMN_SETTINGS_PREFIX = 'radar-columns-'
 
+// Storage identity for a kind's column settings. normalizeKindToPlural falls
+// through to the bare plural for anything outside the curated collision
+// catalog, so two uncurated CRDs sharing a plural in different API groups —
+// Crossplane ships two `Usage` kinds — would share one blob and leak column
+// visibility, widths and custom columns between them. Harmless while both got
+// identical generic columns; not harmless once each has its own printer
+// columns. Only the fallthrough kinds are qualified, so curated and core kinds
+// keep the key their saved preferences are already under.
+export function columnSettingsKey(kind: string, group?: string): string {
+  const normalized = normalizeKindToPlural(kind, group)
+  if (group && !hasCuratedColumns(kind, group)) {
+    return `${normalized}.${group}`
+  }
+  return normalized
+}
+
 interface ColumnSettings {
   visible: string[]
   widths: Record<string, number>
   custom?: CustomColumnDef[]
+  /** Every column key the user was offered when this was written. Lets a later
+   *  load tell a column they hid from one that did not exist yet. Absent on
+   *  blobs written before this field. */
+  known?: string[]
 }
 
 function loadColumnSettings(kind: string, group?: string): ColumnSettings | null {
   try {
-    const key = COLUMN_SETTINGS_PREFIX + normalizeKindToPlural(kind, group)
+    const key = COLUMN_SETTINGS_PREFIX + columnSettingsKey(kind, group)
     const raw = localStorage.getItem(key)
     if (raw) return JSON.parse(raw)
   } catch { /* ignore */ }
@@ -2293,14 +3246,14 @@ function loadColumnSettings(kind: string, group?: string): ColumnSettings | null
 
 function saveColumnSettings(kind: string, group: string | undefined, settings: ColumnSettings) {
   try {
-    const key = COLUMN_SETTINGS_PREFIX + normalizeKindToPlural(kind, group)
+    const key = COLUMN_SETTINGS_PREFIX + columnSettingsKey(kind, group)
     localStorage.setItem(key, JSON.stringify(settings))
   } catch { /* ignore */ }
 }
 
 function clearColumnSettings(kind: string, group?: string) {
   try {
-    const key = COLUMN_SETTINGS_PREFIX + normalizeKindToPlural(kind, group)
+    const key = COLUMN_SETTINGS_PREFIX + columnSettingsKey(kind, group)
     localStorage.removeItem(key)
   } catch { /* ignore */ }
 }
@@ -2318,6 +3271,10 @@ interface ResourcesViewData {
   onNavigate?: (path: string, options?: { replace?: boolean }) => void
   certExpiry?: Record<string, { expired?: boolean; daysLeft: number }>
   certExpiryError?: boolean
+  // Provider type per SecretStore, keyed 'ns/name' and 'name' for the
+  // cluster-scoped kind. An ExternalSecret names a store; only the store
+  // knows which backend it reads from.
+  storeProviders?: Record<string, string>
   /** Cluster Audit findings keyed by "namespace/name". Raw compatibility
    *  counts render danger as High and warning as Medium. */
   auditBadges?: Record<string, { danger: number; warning: number; messages?: AuditBadgeMessage[] }>
@@ -2378,6 +3335,10 @@ interface ResourcesViewProps {
   topNodeMetrics?: TopNodeMetrics[]
   certExpiry?: Record<string, { expired?: boolean; daysLeft: number }>
   certExpiryError?: boolean
+  // Provider type per SecretStore, keyed 'ns/name' and 'name' for the
+  // cluster-scoped kind. An ExternalSecret names a store; only the store
+  // knows which backend it reads from.
+  storeProviders?: Record<string, string>
   /** Cluster Audit findings keyed by "namespace/name". Raw compatibility
    *  counts render danger as High and warning as Medium. */
   auditBadges?: Record<string, { danger: number; warning: number; messages?: AuditBadgeMessage[] }>
@@ -2408,6 +3369,11 @@ interface ResourcesViewProps {
    *  doesn't need to extend KNOWN_COLUMNS or per-kind cell renderers.
    *  When undefined, behavior is byte-identical to single-cluster mode. */
   extraLeadingColumns?: ExtraColumn[]
+  /** Vendor-declared columns from the kind's CRD (additionalPrinterColumns),
+   *  evaluated server-side. Used ONLY for kinds Radar has no curated column
+   *  set for — the two are exclusive. Hosts that don't fetch them get the
+   *  generic columns and nothing changes. */
+  printerTable?: PrinterTable | null
   /** Escape hatch for full-page-nav row selection: receive the FULL
    *  resource object on row click / Enter / `d` / search-Enter, instead
    *  of the stripped {kind, namespace, name, group} shape onResourceClick
@@ -2622,6 +3588,7 @@ export function ResourcesView({
   topNodeMetrics,
   certExpiry,
   certExpiryError,
+  storeProviders,
   auditBadges,
   pinned = [],
   togglePin = () => {},
@@ -2637,6 +3604,7 @@ export function ResourcesView({
   onCreateResource,
   defaultKind = DEFAULT_KIND_INFO,
   extraLeadingColumns,
+  printerTable,
   onRowSelect,
   rowHrefFor,
   onCompareSubmit,
@@ -2834,26 +3802,52 @@ export function ResourcesView({
   // collision: a colliding extra is filtered out (with a dev-mode warn)
   // so we don't render two columns sharing one key — that would yield
   // duplicate React keys and corrupt visibleColumns / columnWidths state.
+  const builtPrinterColumns = useMemo(
+    () => buildPrinterColumns(selectedKind.name, selectedKind.group, printerTable),
+    [selectedKind.name, selectedKind.group, printerTable],
+  )
+  const printerColumnsKey = useMemo(
+    () => printerTableKey(builtPrinterColumns.length ? printerTable : null),
+    [printerTable, builtPrinterColumns],
+  )
+
   const allColumns = useMemo(() => {
-    const kindColumns = getColumnsForKind(selectedKind.name, selectedKind.group)
+    const kindColumns = columnsForKindWithPrinter(selectedKind.name, selectedKind.group, builtPrinterColumns)
     if (!extraLeadingColumns?.length && !builtCustomColumns.length) return kindColumns
     const builtinKeys = new Set(kindColumns.map(c => c.key))
     const filteredExtras = filterHostExtras(extraLeadingColumns, builtinKeys, selectedKind.name)
     return [...filteredExtras, ...kindColumns, ...builtCustomColumns]
-  }, [selectedKind.name, selectedKind.group, extraLeadingColumns, builtCustomColumns])
+  }, [selectedKind.name, selectedKind.group, extraLeadingColumns, builtCustomColumns, builtPrinterColumns])
+
+  // The offered key set, and a stable signature for it. allColumns is a new
+  // identity on every printer-column refetch; depending on the array itself
+  // would rewrite the settings blob on each poll.
+  const allColumnKeys = useMemo(() => allColumns.map(c => c.key), [allColumns])
+  const allColumnKeysSig = allColumnKeys.join('\u0000')
 
   // Map of extra column keys for fast O(1) lookup on each render path
   // (cell render, sort, column-filter unique-values).
+  // Recompute header-derived widths once the web font swaps in (see watchHeaderFont).
+  const headerFontEpoch = useHeaderFontEpoch()
+
   const extraColumnsByKey = useMemo(() => {
     const m = new Map<string, ExtraColumn>()
     extraLeadingColumns?.forEach(c => m.set(c.key, c))
+    builtPrinterColumns.forEach(c => m.set(c.key, c))
     builtCustomColumns.forEach(c => m.set(c.key, c))
     return m
-  }, [extraLeadingColumns, builtCustomColumns])
+  }, [extraLeadingColumns, builtCustomColumns, builtPrinterColumns])
 
   // Guards the save effect from persisting on the initial load of each kind
   // (set false by the load effect, flipped true on its first skipped save).
   const isColumnSettingsLoaded = useRef(false)
+  // Every column key this kind has ever offered, accumulated. A single save
+  // cannot stand in for it: the offered set shrinks as well as grows — an
+  // uncurated kind's generic Status disappears once its printer columns arrive
+  // — and a shrunk snapshot would forget that a column absent from `visible`
+  // was one the user hid rather than one never shown.
+  const knownColumnKeys = useRef<Set<string>>(new Set())
+  const knownColumnKeysKind = useRef('')
   // Whether the user has a persisted column blob for this kind — data-driven
   // column defaults (GPU auto-show) must never override explicit user choices.
   const hadSavedColumnSettings = useRef(false)
@@ -2879,7 +3873,16 @@ export function ResourcesView({
     // (non-array, blank path, bad source) must not crash the later .map or add dead columns.
     const savedCustom = sanitizeCustomColumnDefs(saved?.custom)
     setCustomColumns(savedCustom)
-    const kindColumns = getColumnsForKind(selectedKind.name, selectedKind.group)
+    // Reset on a kind change only. This effect also re-runs when the printer
+    // columns arrive, and that is the moment the offered set shrinks — clearing
+    // here would drop the evidence for the column they replaced just before the
+    // next save persists the record without it.
+    const knownKeysIdentity = selectedKindIdentityOf(selectedKind)
+    if (knownColumnKeysKind.current !== knownKeysIdentity) {
+      knownColumnKeys.current = new Set()
+      knownColumnKeysKind.current = knownKeysIdentity
+    }
+    const kindColumns = columnsForKindWithPrinter(selectedKind.name, selectedKind.group, builtPrinterColumns)
     const builtinKeys = new Set(kindColumns.map(c => c.key))
     const extras = filterHostExtras(extraLeadingColumns, builtinKeys, selectedKind.name)
     const effective = [...extras, ...kindColumns, ...savedCustom.map(buildCustomColumn)]
@@ -2895,31 +3898,48 @@ export function ResourcesView({
       // discard the stale save and use the specialized columns instead. User-added
       // custom columns mean the blob isn't a stale pure-defaults save — keep it, or
       // the migration would clear them from storage (and un-hide hidden ones).
+      // Persisted JSON: only an array of keys is usable, anything else reads as
+      // no record at all.
+      const savedKnown = Array.isArray(saved.known)
+        ? saved.known.filter((k): k is string => typeof k === 'string')
+        : undefined
+      for (const k of savedKnown ?? []) knownColumnKeys.current.add(k)
+
       const defaultKeys = DEFAULT_COLUMNS.map(c => c.key)
+      // A blob carrying an offered-key record is not a pre-curation leftover:
+      // its visible set matching the generic defaults means the user hid their
+      // way down to them, and clearing it would undo exactly that.
       const isStaleDefaults = kindColumns !== DEFAULT_COLUMNS &&
+        !savedKnown &&
         !savedCustom.length &&
         saved.visible.length === defaultKeys.length &&
         saved.visible.every(v => defaultKeys.includes(v))
       if (isStaleDefaults) {
         clearColumnSettings(selectedKind.name, selectedKind.group)
+        knownColumnKeys.current = new Set()
         hadSavedColumnSettings.current = false
         setVisibleColumns(getDefaultVisibleColumns(effective))
         setColumnWidths({})
       } else {
-        const merged = new Set(saved.visible)
-        for (const k of extraKeys) merged.add(k)
-        setVisibleColumns(merged)
+        setVisibleColumns(mergeSavedVisibleColumns(
+          saved.visible, extraKeys, builtPrinterColumns, effective, savedKnown,
+        ))
         setColumnWidths(saved.widths || {})
       }
     } else {
       setVisibleColumns(getDefaultVisibleColumns(effective))
       setColumnWidths({})
     }
-  }, [selectedKind.name, selectedKind.group, extraLeadingColumns])
+    // printerColumnsKey, not builtPrinterColumns: the built array is a new
+    // identity on every refetch, and re-running this effect would reset the
+    // user's in-session column choices each time the list polls. The key only
+    // changes when the kind changes or an operator upgrade changes the CRD.
+  }, [selectedKind.name, selectedKind.group, extraLeadingColumns, printerColumnsKey])
 
   // Save column settings when they change (skip the initial load of each kind)
   useEffect(() => {
     if (visibleColumns.size === 0) return // not loaded yet
+    for (const k of allColumnKeys) knownColumnKeys.current.add(k)
     if (!isColumnSettingsLoaded.current) {
       isColumnSettingsLoaded.current = true
       return
@@ -2928,11 +3948,13 @@ export function ResourcesView({
       visible: Array.from(visibleColumns),
       widths: columnWidths,
       custom: customColumns,
+      known: Array.from(knownColumnKeys.current),
     })
     // A persisted blob blocks GPU auto-show from here on — same rule in-session
     // as across sessions, so a later data refresh can't override user choices.
     hadSavedColumnSettings.current = true
-  }, [visibleColumns, columnWidths, customColumns, selectedKind.name, selectedKind.group])
+    // allColumnKeysSig, not allColumnKeys: see the memo above.
+  }, [visibleColumns, columnWidths, customColumns, selectedKind.name, selectedKind.group, allColumnKeysSig])
 
   // Close column picker on outside click or Escape
   useEffect(() => {
@@ -3035,6 +4057,7 @@ export function ResourcesView({
   // Reset column settings to defaults (also drops user-added custom columns)
   const resetColumnSettings = useCallback(() => {
     clearColumnSettings(selectedKind.name, selectedKind.group)
+    knownColumnKeys.current = new Set()
     setCustomColumns([])
     const customKeys = new Set(builtCustomColumns.map(c => c.key))
     setVisibleColumns(getDefaultVisibleColumns(allColumns.filter(c => !customKeys.has(c.key))))
@@ -3310,11 +4333,14 @@ export function ResourcesView({
           if (containers.length > 0) {
             openLogs?.({ namespace: ns, podName: name, containers })
           }
-        } else if (['deployments', 'statefulsets', 'daemonsets', 'replicasets', 'jobs', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kindLower)) {
+        } else if (['deployments', 'statefulsets', 'daemonsets', 'replicasets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(kindLower) || isCoreBatchJob(kindLower, selectedKind.group)) {
           openWorkloadLogs?.({ namespace: ns, workloadKind: selectedKind.kind, workloadName: name })
         }
       },
-      enabled: highlightedIndex >= 0 && !compareMode && ['pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets', 'jobs', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(selectedKind.name.toLowerCase()),
+      enabled: highlightedIndex >= 0 && !compareMode && (
+        ['pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets', 'workflows', 'cronjobs', 'cronworkflows', 'workflowtemplates', 'clusterworkflowtemplates', 'scaledjobs'].includes(selectedKind.name.toLowerCase()) ||
+        isCoreBatchJob(selectedKind.name, selectedKind.group)
+      ),
     },
     {
       id: 'resources-sort-name',
@@ -3969,12 +4995,17 @@ export function ResourcesView({
 
   // Reset sort and filters when kind changes (but not when syncing from URL navigation)
   // Track previous kind to skip on mount (where the effect fires but kind hasn't actually changed)
-  const prevKindRef = useRef(selectedKind.name)
+  // Keyed on group as well as plural: two CRDs can share a plural across API
+  // groups, and their printer columns are unrelated. Resetting on the plural
+  // alone would carry a `printer:*` sort or filter onto a table with no such
+  // column, where every row fails the filter and the list looks empty.
+  const selectedKindIdentity = selectedKindIdentityOf(selectedKind)
+  const prevKindRef = useRef(selectedKindIdentity)
   useEffect(() => {
-    if (prevKindRef.current === selectedKind.name) {
+    if (prevKindRef.current === selectedKindIdentity) {
       return
     }
-    prevKindRef.current = selectedKind.name
+    prevKindRef.current = selectedKindIdentity
     setSortColumn(null)
     setSortDirection(null)
     setOpenColumnFilter(null)
@@ -3983,7 +5014,7 @@ export function ResourcesView({
       setColumnFilterExcludes({})
     }
     setProblemFilters([])
-  }, [selectedKind.name])
+  }, [selectedKindIdentity])
 
   // Toggle sort for a column
   const handleSort = useCallback((column: string) => {
@@ -4017,7 +5048,28 @@ export function ResourcesView({
       case 'age':
         return meta.creationTimestamp ? new Date(meta.creationTimestamp).getTime() : 0
       case 'status':
-        return status.phase || ''
+        // Phase first for a curated kind: it keeps the most-used lists — Pods,
+        // Deployments, Nodes — ordering as they always have.
+        //
+        // Everything else routes through getCellFilterValue, the same reader
+        // the cell and the filter dropdown use, so all three agree on one
+        // string. Deriving it here instead ordered rows on a status the row
+        // never displayed: a Gateway shows `Programmed` while the generic
+        // ladder, which knows neither Programmed nor Accepted, called it
+        // `Accepted` — so a healthy Gateway and a pending one sorted equal.
+        // getCellFilterValue ends in that same generic derivation, so an
+        // uncurated kind still sorts on the text its badge shows.
+        if (hasCuratedColumns(selectedKind.name, selectedKind.group) && status.phase) {
+          return status.phase
+        }
+        return getCellFilterValue(resource, 'status', kindLower)
+      case 'servers':
+        // Numeric so 10 does not sort before 9.
+        if (kindLower === 'istiogateways') return getIstioGatewayServerCount(resource)
+        return ''
+      case 'selector':
+        if (kindLower === 'istiogateways') return getIstioGatewaySelectorString(resource)
+        return ''
       case 'containers':
         // Pod containers column — sort by readiness ratio
         if (status.containerStatuses) {
@@ -4027,6 +5079,7 @@ export function ResourcesView({
         }
         return 0
       case 'ready':
+        if (kindLower === 'jobsets') return getJobSetReadyJobs(resource)
         // For DaemonSets, use numberReady/desiredNumberScheduled
         if (kindLower === 'daemonsets') {
           const desired = status.desiredNumberScheduled ?? 0
@@ -4044,9 +5097,12 @@ export function ResourcesView({
         // DaemonSet: numberAvailable, others: availableReplicas
         return status.numberAvailable ?? status.availableReplicas ?? 0
       case 'upToDate':
-        // DaemonSet: updatedNumberScheduled, others: updatedReplicas
-        return status.updatedNumberScheduled ?? status.updatedReplicas ?? 0
+        // DaemonSet: updatedNumberScheduled; CAPI v1beta2: upToDateReplicas;
+        // others: updatedReplicas. Same precedence the cells display, or a row
+        // sorts as zero while showing a real count.
+        return status.updatedNumberScheduled ?? status.upToDateReplicas ?? status.updatedReplicas ?? 0
       case 'restarts':
+        if (kindLower === 'jobsets') return getJobSetRestarts(resource)
         return getPodRestarts(resource)
       case 'lastSeen': {
         const lastTs = resource.lastTimestamp || meta.creationTimestamp
@@ -4096,7 +5152,7 @@ export function ResourcesView({
       default:
         return ''
     }
-  }, [metricsLookup])
+  }, [metricsLookup, selectedKind.name, selectedKind.group])
 
   // Helper to check if a pod matches problem filters
   const podMatchesProblemFilter = useCallback((pod: any, filters: string[]): boolean => {
@@ -4149,11 +5205,11 @@ export function ResourcesView({
     // when the parent supplied a custom getFilterValue.
     const activeColFilters = Object.entries(columnFilters).filter(([, vals]) => vals.length > 0)
     if (activeColFilters.length > 0) {
-      const kindLower = normalizeKindToPlural(selectedKind.name, selectedKind.group)
+      const cellFilterKind = getCellFilterKind(selectedKind.name, selectedKind.group)
       result = result.filter((r: any) =>
         activeColFilters.every(([col, vals]) => {
           const extra = extraColumnsByKey.get(col)
-          const cellVal = extra?.getFilterValue ? extra.getFilterValue(r) : getCellFilterValue(r, col, kindLower)
+          const cellVal = extra?.getFilterValue ? extra.getFilterValue(r) : getCellFilterValue(r, col, cellFilterKind)
           const match = vals.includes(cellVal)
           return columnFilterExcludes[col] ? !match : match
         })
@@ -4215,17 +5271,26 @@ export function ResourcesView({
     // the built-in getSortValue for their key.
     if (sortColumn && sortDirection) {
       const extra = extraColumnsByKey.get(sortColumn)
-      result = [...result].sort((a: any, b: any) => {
-        const aVal = extra?.getSortValue ? extra.getSortValue(a) : getSortValue(a, sortColumn, selectedKind.name)
-        const bVal = extra?.getSortValue ? extra.getSortValue(b) : getSortValue(b, sortColumn, selectedKind.name)
+      // Normalized, matching the filter call sites: a group-qualified kind
+      // (istiogateways, cnpgclusters) otherwise arrives here as its bare plural
+      // and misses its own sort readers. Hoisted out of the comparator.
+      // The ownership-aware wrapper also keeps a foreign CRD that reuses a
+      // curated plural on the generic reader used by its cells and filters.
+      const sortKind = getCellFilterKind(selectedKind.name, selectedKind.group)
+      const keyOf = extra?.getSortValue ?? ((r: any) => getSortValue(r, sortColumn, sortKind))
+      // Derived once per row, not once per comparison: a sort visits O(n log n)
+      // pairs, and the status key now runs a per-kind status derivation.
+      const decorated = result.map((r: any) => ({ r, k: keyOf(r) }))
+      decorated.sort((a, b) => {
         let comparison = 0
-        if (typeof aVal === 'number' && typeof bVal === 'number') {
-          comparison = aVal - bVal
+        if (typeof a.k === 'number' && typeof b.k === 'number') {
+          comparison = a.k - b.k
         } else {
-          comparison = String(aVal).localeCompare(String(bVal))
+          comparison = String(a.k).localeCompare(String(b.k))
         }
         return sortDirection === 'desc' ? -comparison : comparison
       })
+      result = decorated.map(d => d.r)
     } else {
       // Default sort by kind
       const kindLower = normalizeKindToPlural(selectedKind.name, selectedKind.group)
@@ -4446,12 +5511,12 @@ export function ResourcesView({
   // scroll horizontally when the viewport is too narrow.
   const tableMinWidth = useMemo(() => {
     const compareColumnWidth = compareMode ? COMPARE_COLUMN_WIDTH : 0
-    const baseMinWidth = columns.reduce((sum, col) => sum + (columnWidths[col.key] || getColumnMinWidth(col)), compareColumnWidth)
+    const baseMinWidth = columns.reduce((sum, col) => sum + (columnWidths[col.key] || getColumnMinWidth(col, extraColumnsByKey)), compareColumnWidth)
     const flexibleNameColumn = columns.find(col => col.key === 'name' && !columnWidths[col.key])
 
     if (!hasResizedColumns || !flexibleNameColumn) return baseMinWidth
-    return baseMinWidth + getColumnMinWidth(flexibleNameColumn)
-  }, [columns, columnWidths, compareMode, hasResizedColumns])
+    return baseMinWidth + getColumnMinWidth(flexibleNameColumn, extraColumnsByKey)
+  }, [columns, columnWidths, compareMode, hasResizedColumns, extraColumnsByKey, headerFontEpoch])
 
   // Stable virtuoso components — memoized to avoid remounting the table on every render
   const virtuosoComponents = useMemo(() => ({
@@ -4479,7 +5544,7 @@ export function ResourcesView({
                 style={{
                   width: columnWidths[col.key]
                     ? `${columnWidths[col.key]}px`
-                    : col.key === 'name' ? undefined : `${getColumnMinWidth(col)}px`,
+                    : col.key === 'name' ? undefined : `${getColumnMinWidth(col, extraColumnsByKey)}px`,
                 }}
               />
             ))}
@@ -4490,13 +5555,14 @@ export function ResourcesView({
       )
     }),
     TableRow: VirtuosoTableRow,
-  }), [columns, columnWidths, hasResizedColumns, compareMode, tableMinWidth, isCheckboxMode])
+  }), [columns, columnWidths, hasResizedColumns, compareMode, tableMinWidth, isCheckboxMode, extraColumnsByKey, headerFontEpoch])
 
   // Calculate filter options with counts based on current resources (before filtering)
   const filterOptions = useMemo(() => {
     if (!resources || resources.length === 0) return null
 
     const kindLower = normalizeKindToPlural(selectedKind.name, selectedKind.group)
+    const cellFilterKind = getCellFilterKind(selectedKind.name, selectedKind.group)
     // Iterate over allColumns (built-ins + injected extras) so an
     // ExtraColumn with getFilterValue gets a column-filter dropdown like
     // any built-in does. The previous formulation iterated KNOWN_COLUMNS
@@ -4523,7 +5589,7 @@ export function ResourcesView({
       // Count distinct values for this column
       const valueCounts: Record<string, number> = {}
       for (const r of resources) {
-        const val = extra?.getFilterValue ? extra.getFilterValue(r) : getCellFilterValue(r, col.key, kindLower)
+        const val = extra?.getFilterValue ? extra.getFilterValue(r) : getCellFilterValue(r, col.key, cellFilterKind)
         if (val) {
           valueCounts[val] = (valueCounts[val] || 0) + 1
         }
@@ -5340,8 +6406,7 @@ export function ResourcesView({
                   )}
                   {columns.map((col, colIdx) => {
                     // Built-in sortable keys, plus any extra/custom column that carries its own getSortValue.
-                    const isSortable = ['name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version', 'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object', 'cpu', 'memory', 'containers'].includes(col.key)
-                      || !!extraColumnsByKey.get(col.key)?.getSortValue
+                    const isSortable = isColumnSortable(col, extraColumnsByKey)
                     const isSorted = sortColumn === col.key
                     const isLastCol = colIdx === columns.length - 1
                     const filterCol = filterableColumnMap.get(col.key)
@@ -5361,11 +6426,11 @@ export function ResourcesView({
                       >
                         <div className="flex items-center gap-1 overflow-hidden">
                           {col.tooltip ? (
-                            <Tooltip content={col.tooltip}>
+                            <Tooltip content={col.tooltip} wrapperClassName="min-w-0">
                               <span className="border-b border-dotted border-theme-text-tertiary truncate">{col.label}</span>
                             </Tooltip>
                           ) : (
-                            <span className="truncate">{col.label}</span>
+                            <HeaderLabel label={col.label} />
                           )}
                           {isSortable && (
                             <span className="text-theme-text-tertiary shrink-0">
@@ -5566,6 +6631,7 @@ export function ResourcesView({
                     isChecked={checkedResources.has(resourceKey)}
                     showCheckbox={isCheckboxMode}
                     majorityNodeMinorVersion={majorityNodeMinorVersion}
+                    storeProviders={storeProviders}
                     onRowClick={handleRowClick}
                     onRowMouseEnter={handleRowMouseEnter}
                     compareMode={compareMode}
@@ -5721,6 +6787,7 @@ interface ResourceRowCellsProps {
   isChecked?: boolean
   showCheckbox?: boolean
   majorityNodeMinorVersion?: string
+  storeProviders?: Record<string, string>
   // Row callbacks receive the resource so the parent can pass referentially
   // stable handlers — per-row closures would defeat React.memo and re-render
   // every visible row on each SSE-driven refetch.
@@ -5755,7 +6822,7 @@ function rowHighlightClass(
   return 'group-hover/row:bg-theme-surface/50'
 }
 
-const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, isChecked, showCheckbox, majorityNodeMinorVersion, onRowClick, onRowMouseEnter, compareMode, comparePickIndex = -1, rowHref, onRowCheckToggle }: ResourceRowCellsProps) {
+const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, isChecked, showCheckbox, majorityNodeMinorVersion, storeProviders, onRowClick, onRowMouseEnter, compareMode, comparePickIndex = -1, rowHref, onRowCheckToggle }: ResourceRowCellsProps) {
   const rowHighlight = rowHighlightClass(compareMode, comparePickIndex, isSelected, isHighlighted, isChecked)
   const pickedSide = comparePickIndex === 0 ? 'a' : comparePickIndex === 1 ? 'b' : null
   const onClick = onRowClick ? () => onRowClick(resource, !!isSelected) : undefined
@@ -5822,6 +6889,7 @@ const ResourceRowCells = React.memo(function ResourceRowCells({ resource, kind, 
             group={group}
             column={col.key}
             majorityNodeMinorVersion={majorityNodeMinorVersion}
+            storeProviders={storeProviders}
             extraColumn={extraColumnsByKey?.get(col.key)}
             nameHref={col.key === 'name' ? rowHref : undefined}
           />
@@ -5865,6 +6933,7 @@ interface CellContentProps {
   column: string
   group?: string
   majorityNodeMinorVersion?: string
+  storeProviders?: Record<string, string>
   /** When provided, the parent has injected an ExtraColumn for this
    *  column key. Render via the extra's render() and short-circuit
    *  the built-in cell logic. */
@@ -5874,7 +6943,7 @@ interface CellContentProps {
   nameHref?: string
 }
 
-function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, extraColumn, nameHref }: CellContentProps) {
+function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, storeProviders, extraColumn, nameHref }: CellContentProps) {
   const { auditBadges } = useContext(ResourcesViewDataContext)
   // Parent-injected extra columns short-circuit the built-in switch.
   // Used by hosts that inject leading columns (e.g. a multi-cluster Cluster column).
@@ -5948,6 +7017,9 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
 
   // Kind-specific columns (normalize CRD singular names like 'ScaledObject' → 'scaledobjects')
   const kindLower = normalizeKindToPlural(kind, group)
+  if (group && !hasCuratedColumns(kind, group)) {
+    return <GenericCell resource={resource} column={column} />
+  }
 
   // Kyverno cells are group-gated ahead of the switch so a non-matching CR
   // falls through to the switch's default (GenericCell) instead of being
@@ -6029,8 +7101,12 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <OrderCell resource={resource} column={column} />
     case 'challenges':
       return <ChallengeCell resource={resource} column={column} />
+    case 'istiogateways':
+      return <IstioGatewayCell resource={resource} column={column} />
     case 'gateways':
-      // Disambiguate Gateway API vs Istio Gateway by apiVersion
+      // Disambiguate Gateway API vs Istio Gateway by apiVersion. Retained
+      // alongside the case above because not every call site normalizes the
+      // kind through GROUP_QUALIFIED_COLUMN_KEYS before dispatching.
       if (resource.apiVersion?.includes('networking.istio.io')) {
         return <IstioGatewayCell resource={resource} column={column} />
       }
@@ -6136,6 +7212,90 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <NvidiaClusterPolicyCell resource={resource} column={column} />
     case 'nvidiadrivers':
       return <NvidiaDriverCell resource={resource} column={column} />
+    // Kueue + Cluster Autoscaler
+    case 'clusterqueues':
+      return <ClusterQueueCell resource={resource} column={column} />
+    case 'localqueues':
+      return <LocalQueueCell resource={resource} column={column} />
+    case 'workloads':
+      return <KueueWorkloadCell resource={resource} column={column} />
+    case 'resourceflavors':
+      return <ResourceFlavorCell resource={resource} column={column} />
+    case 'admissionchecks':
+      return <AdmissionCheckCell resource={resource} column={column} />
+    case 'provisioningrequests':
+      return <ProvisioningRequestCell resource={resource} column={column} />
+    // KubeRay
+    case 'rayclusters':
+      return <RayClusterCell resource={resource} column={column} />
+    case 'rayjobs':
+      return <RayJobCell resource={resource} column={column} />
+    case 'rayservices':
+      return <RayServiceCell resource={resource} column={column} />
+    case 'raycronjobs':
+      return <RayCronJobCell resource={resource} column={column} />
+    // LeaderWorkerSet + JobSet
+    case 'leaderworkersets':
+      return <LeaderWorkerSetCell resource={resource} column={column} />
+    case 'jobsets':
+      return <JobSetCell resource={resource} column={column} />
+    // KServe
+    case 'inferenceservices':
+      return <InferenceServiceCell resource={resource} column={column} />
+    case 'servingruntimes':
+    case 'clusterservingruntimes':
+      return <ServingRuntimeCell resource={resource} column={column} />
+    case 'inferencegraphs':
+      return <InferenceGraphCell resource={resource} column={column} />
+    case 'trainedmodels':
+      return <TrainedModelCell resource={resource} column={column} />
+    case 'llminferenceservices':
+      return <LLMInferenceServiceCell resource={resource} column={column} />
+    // Gateway API Inference Extension
+    case 'inferencepools':
+      return <InferencePoolCell resource={resource} column={column} />
+    case 'inferenceobjectives':
+      return <InferenceObjectiveCell resource={resource} column={column} />
+    // Volcano (group-qualified keys disambiguate from batch Jobs and KAI)
+    case 'volcanojobs':
+      return <VolcanoJobCell resource={resource} column={column} />
+    case 'volcanoqueues':
+      return <VolcanoQueueCell resource={resource} column={column} />
+    case 'volcanopodgroups':
+      return <VolcanoPodGroupCell resource={resource} column={column} />
+    case 'jobflows':
+      return <JobFlowCell resource={resource} column={column} />
+    case 'jobtemplates':
+      return <JobTemplateCell resource={resource} column={column} />
+    // KAI Scheduler
+    case 'kaiqueues':
+      return <KaiQueueCell resource={resource} column={column} />
+    case 'kaipodgroups':
+      return <KaiPodGroupCell resource={resource} column={column} />
+    // KAITO
+    case 'kaitoworkspaces':
+      return <KaitoWorkspaceCell resource={resource} column={column} />
+    case 'ragengines':
+      return <RAGEngineCell resource={resource} column={column} />
+    // NVIDIA NIM Operator
+    case 'nimservices':
+      return <NIMServiceCell resource={resource} column={column} />
+    case 'nimcaches':
+      return <NIMCacheCell resource={resource} column={column} />
+    case 'nimpipelines':
+      return <NIMPipelineCell resource={resource} column={column} />
+    // AMD GPU Operator
+    case 'deviceconfigs':
+      return <AMDDeviceConfigCell resource={resource} column={column} />
+    // Kubeflow training
+    case 'pytorchjobs':
+      return <PyTorchJobCell resource={resource} column={column} />
+    case 'tfjobs':
+      return <TFJobCell resource={resource} column={column} />
+    case 'mpijobs':
+      return <MPIJobCell resource={resource} column={column} />
+    case 'trainjobs':
+      return <TrainJobCell resource={resource} column={column} />
     // ArgoCD GitOps resources
     case 'applications':
       return <ArgoApplicationCell resource={resource} column={column} />
@@ -6171,7 +7331,7 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <SbomReportCell resource={resource} column={column} />
     // External Secrets Operator
     case 'externalsecrets':
-      return <ExternalSecretCell resource={resource} column={column} />
+      return <ExternalSecretCell resource={resource} column={column} storeProviders={storeProviders} />
     case 'clusterexternalsecrets':
       return <ClusterExternalSecretCell resource={resource} column={column} />
     case 'secretstores':
@@ -6436,53 +7596,13 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
 function GenericCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status': {
-      // Try to extract status from common patterns
-      const status = resource.status
-      if (!status) return <span className="text-sm text-theme-text-tertiary">-</span>
-
-      // Check for phase (common in many CRDs)
-      if (status.phase) {
-        const phase = status.phase as string
-        const isHealthy = ['Running', 'Active', 'Succeeded', 'Ready', 'Healthy', 'Available'].includes(phase)
-        const isWarning = ['Pending', 'Progressing', 'Unknown'].includes(phase)
-        return (
-          <span className={clsx(
-            'badge',
-            isHealthy ? 'status-healthy' :
-            isWarning ? 'status-degraded' :
-            'status-unhealthy'
-          )}>
-            {phase}
-          </span>
-        )
-      }
-
-      // Check for conditions (common pattern)
-      if (status.conditions && Array.isArray(status.conditions)) {
-        const readyCondition = status.conditions.find((c: any) => c.type === 'Ready' || c.type === 'Available')
-        if (readyCondition) {
-          const isReady = readyCondition.status === 'True'
-          return (
-            <span className={clsx(
-              'badge',
-              isReady ? 'status-healthy' : 'status-degraded'
-            )}>
-              {isReady ? 'Ready' : 'Not Ready'}
-            </span>
-          )
-        }
-      }
-
-      // Check for state field
-      if (status.state) {
-        return (
-          <span className="text-sm text-theme-text-secondary truncate">
-            {String(status.state)}
-          </span>
-        )
-      }
-
-      return <span className="text-sm text-theme-text-tertiary">-</span>
+      const derived = getGenericResourceStatus(resource)
+      if (!derived) return <span className="text-sm text-theme-text-tertiary">-</span>
+      return (
+        <Tooltip content={derived.reason ?? derived.text}>
+          <span className={clsx('badge', healthColors[derived.tone])}>{derived.text}</span>
+        </Tooltip>
+      )
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
@@ -7866,11 +8986,11 @@ function RouteCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status': {
       const status = getRouteStatus(resource)
-      return (
-        <span className={clsx('badge', status.color)}>
-          {status.text}
-        </span>
-      )
+      const reason = getRouteStatusReason(resource)
+      const badge = <span className={clsx('badge', status.color)}>{status.text}</span>
+      // "Degraded" on its own says something is wrong and not what. The
+      // controller's own reason is usually "the backend you named is missing".
+      return reason ? <Tooltip content={reason}>{badge}</Tooltip> : badge
     }
     case 'hostnames': {
       const hostnames = getRouteHostnames(resource)

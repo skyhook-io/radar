@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,6 +51,8 @@ type fakeProm struct {
 	queryBody      string
 	rangeStatus    int
 	rangeBody      string
+	rangeDelay     time.Duration                  // sleep before answering /api/v1/query_range, outside the lock so concurrent callers are not serialized
+	rangeBodyFunc  func(params url.Values) string // when set, renders the range body from the request (wins over rangeBody)
 	labelStatus    int
 	labelBody      string
 	labelDelay     time.Duration
@@ -61,6 +64,9 @@ type fakeProm struct {
 }
 
 func (f *fakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api/v1/query_range" && f.rangeDelay > 0 {
+		time.Sleep(f.rangeDelay)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -76,7 +82,11 @@ func (f *fakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeFakeBody(w, f.queryStatus, orDefault(f.queryBody, emptyVectorBody))
 	case path == "/api/v1/query_range":
 		f.rangeParams = append(f.rangeParams, q)
-		writeFakeBody(w, f.rangeStatus, orDefault(f.rangeBody, defaultMatrixBody))
+		body := f.rangeBody
+		if f.rangeBodyFunc != nil {
+			body = f.rangeBodyFunc(q)
+		}
+		writeFakeBody(w, f.rangeStatus, orDefault(body, defaultMatrixBody))
 	case strings.HasPrefix(path, "/api/v1/label/") && strings.HasSuffix(path, "/values"):
 		label := strings.TrimSuffix(strings.TrimPrefix(path, "/api/v1/label/"), "/values")
 		f.labelCalls = append(f.labelCalls, labelCall{label: label, params: q})
@@ -1270,5 +1280,44 @@ func TestHandleGetPrometheusRules_HTTPErrorNoLeak(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "http://") || strings.Contains(err.Error(), "127.0.0.1") {
 		t.Errorf("rules 503 leaked the internal backend URL: %v", err)
+	}
+}
+
+func TestHandleQueryPrometheus_SelectorInventory(t *testing.T) {
+	f := setupFakeProm(t)
+	f.queryBody = `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"pod":"api-1"},"value":[1700000000,"1"]}]}}`
+
+	result, _, err := handleQueryPrometheus(context.Background(), nil, queryPrometheusInput{
+		Query: `sum by (pod) (rate(container_cpu_usage_seconds_total{namespace="payments", pod=~"api-.*"}[5m]))`,
+	})
+	if err != nil {
+		t.Fatalf("handleQueryPrometheus: %v", err)
+	}
+	resp := decodeQueryResponse(t, extractText(t, result))
+	if resp.SelectorsUnknown {
+		t.Fatalf("selectorsUnknown set for a plain query: %s", extractText(t, result))
+	}
+	want := []prometheus.Selector{{
+		Metric: "container_cpu_usage_seconds_total",
+		Matchers: []prometheus.Matcher{
+			{Label: "namespace", Op: "=", Value: "payments"},
+			{Label: "pod", Op: "=~", Value: "api-.*"},
+		},
+	}}
+	if !reflect.DeepEqual(resp.Selectors, want) {
+		t.Fatalf("selectors = %#v, want %#v", resp.Selectors, want)
+	}
+
+	result, _, err = handleQueryPrometheus(context.Background(), nil, queryPrometheusInput{Query: "rate(foo[$__interval])"})
+	if err != nil {
+		t.Fatalf("handleQueryPrometheus: %v", err)
+	}
+	body := extractText(t, result)
+	resp = decodeQueryResponse(t, body)
+	if !resp.SelectorsUnknown {
+		t.Fatalf("expected selectorsUnknown for a templated range, body: %s", body)
+	}
+	if !strings.Contains(body, `"selectors":[]`) {
+		t.Fatalf("selectors must be an empty array when unknown, body: %s", body)
 	}
 }

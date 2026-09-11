@@ -302,3 +302,23 @@ func TestWindowHours(t *testing.T) {
 		}
 	}
 }
+
+func TestEfficiencyPercent(t *testing.T) {
+	tests := []struct {
+		name         string
+		usage, alloc float64
+		want         float64
+	}{
+		{name: "unavailable usage", usage: 0, alloc: 1, want: 0},
+		{name: "unavailable allocation", usage: 1, alloc: 0, want: 0},
+		{name: "rounded", usage: 1, alloc: 3, want: 33.3},
+		{name: "capped", usage: 2, alloc: 1, want: 100},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := EfficiencyPercent(test.usage, test.alloc); got != test.want {
+				t.Fatalf("EfficiencyPercent(%v, %v) = %v, want %v", test.usage, test.alloc, got, test.want)
+			}
+		})
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/settings"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -56,6 +57,59 @@ func TestNsPreferenceKey_PerUserIsolation(t *testing.T) {
 	// The \x00 separator makes this safe — verify by counterexample.
 	if nsPreferenceKey("alice", "foo") == nsPreferenceKey("ali", "cefoo") {
 		t.Error("nsPreferenceKey separator is ambiguous")
+	}
+}
+
+func TestDeniedNamespacesUsesCoreWorkloadVisibility(t *testing.T) {
+	permissions := &k8s.PermissionCheckResult{
+		Scopes: map[string]k8score.ResourceScope{
+			k8score.Pods:        {Enabled: true, Namespace: "team-a"},
+			k8score.Deployments: {Enabled: true, Namespace: "team-b"},
+			k8score.Nodes:       {Enabled: true},
+		},
+	}
+
+	got := deniedNamespaces([]string{"team-a", "team-b", "team-c"}, permissions, false, "")
+	if !slices.Equal(got, []string{"team-c"}) {
+		t.Fatalf("deniedNamespaces = %v, want [team-c]", got)
+	}
+}
+
+func TestDeniedNamespacesHandlesMultiNamespaceAndUnknownPermissions(t *testing.T) {
+	permissions := &k8s.PermissionCheckResult{
+		Scopes: map[string]k8score.ResourceScope{
+			k8score.Pods: {Enabled: true, Namespace: "team-a"},
+		},
+		ScopeNamespaces: map[string][]string{
+			k8score.Pods: {"team-a", "team-b"},
+		},
+	}
+
+	if got := deniedNamespaces([]string{"team-a", "team-b"}, permissions, false, ""); len(got) != 0 {
+		t.Fatalf("multi-namespace grants marked denied: %v", got)
+	}
+	if got := deniedNamespaces([]string{"team-a"}, nil, false, ""); len(got) != 0 {
+		t.Fatalf("unknown permissions marked denied: %v", got)
+	}
+	clusterWide := &k8s.PermissionCheckResult{
+		Scopes: map[string]k8score.ResourceScope{
+			k8score.Deployments: {Enabled: true},
+		},
+	}
+	if got := deniedNamespaces([]string{"team-a", "team-b"}, clusterWide, false, ""); len(got) != 0 {
+		t.Fatalf("cluster-wide workload access marked denied: %v", got)
+	}
+}
+
+func TestDeniedNamespacesOnlyMarksCurrentCacheScope(t *testing.T) {
+	permissions := &k8s.PermissionCheckResult{Scopes: map[string]k8score.ResourceScope{}}
+
+	got := deniedNamespaces([]string{"team-a", "team-b"}, permissions, true, "team-a")
+	if !slices.Equal(got, []string{"team-a"}) {
+		t.Fatalf("deniedNamespaces = %v, want [team-a]", got)
+	}
+	if got := deniedNamespaces([]string{"team-a", "team-b"}, permissions, true, ""); len(got) != 0 {
+		t.Fatalf("namespaces marked denied without an active cache scope: %v", got)
 	}
 }
 
@@ -155,14 +209,14 @@ func TestFinalizePostContextSwitch_ClearsBothCaches(t *testing.T) {
 	// that drops either side leaves stale state attached to the new cluster.
 	s := newTestServer(t)
 	s.permCache = pkgauth.NewPermissionCache()
-	s.permCache.Set("alice", &pkgauth.UserPermissions{AllowedNamespaces: []string{"alpha"}})
+	s.permCache.Set("alice", nil, &pkgauth.UserPermissions{AllowedNamespaces: []string{"alpha"}})
 	s.setActiveNamespaceForUser(reqAs("alice"), []string{"alpha"})
 	s.setActiveNamespaceForUser(reqAs("bob"), []string{"beta", "gamma"})
 
 	s.finalizePostContextSwitch()
 
-	if got := s.permCache.Get("alice"); got != nil {
-		t.Errorf("permCache.Get(alice) = %+v after finalize, want nil", got)
+	if got := s.permCache.Get("alice", nil); got != nil {
+		t.Errorf("permCache.Get(alice, nil) = %+v after finalize, want nil", got)
 	}
 	if got := s.getActiveNamespaceForUser(reqAs("alice")); len(got) != 0 {
 		t.Errorf("alice ns pick survived: %v", got)
@@ -277,7 +331,7 @@ func TestResolveHelmNamespaces_AuthenticatedClusterWideUserDoesNotUseBackendFall
 	restoreHelmNamespaceFallbackState(t)
 
 	s.permCache = pkgauth.NewPermissionCache()
-	s.permCache.Set("alice", &pkgauth.UserPermissions{AllowedNamespaces: nil})
+	s.permCache.Set("alice", nil, &pkgauth.UserPermissions{AllowedNamespaces: nil})
 
 	got, ok := s.resolveHelmNamespaces(reqAs("alice"))
 	if !ok {
@@ -295,7 +349,7 @@ func TestResolveHelmNamespacesForScope_ClusterWideWorkloadReaderUsesPerNamespace
 	perms.SetCanI("list", "", "secrets", "default", true)
 	perms.SetCanI("list", "", "secrets", "broken", false)
 	s.permCache = pkgauth.NewPermissionCache()
-	s.permCache.Set("alice", perms)
+	s.permCache.Set("alice", nil, perms)
 
 	got, ok := s.resolveHelmNamespacesForScope(reqAs("alice"), nil)
 	if !ok {

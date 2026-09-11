@@ -10,7 +10,7 @@ import (
 )
 
 func TestCreateMenuFileMenuExposesSupportedActions(t *testing.T) {
-	appMenu := createMenu(&DesktopApp{}, "test")
+	appMenu := createMenu(&DesktopApp{}, "test", "linux")
 	fileMenu := findSubmenu(t, appMenu, "File")
 
 	got := menuLabels(fileMenu)
@@ -20,8 +20,66 @@ func TestCreateMenuFileMenuExposesSupportedActions(t *testing.T) {
 	}
 }
 
+// Close Window hides the whole app rather than closing anything, so it only
+// belongs where the Dock can bring the app back. Its absence off macOS is
+// pinned by TestCreateMenuFileMenuExposesSupportedActions' exact label match.
+func TestCreateMenuAddsCloseWindowOnMacOnly(t *testing.T) {
+	fileMenu := findSubmenu(t, createMenu(&DesktopApp{}, "test", "darwin"), "File")
+
+	got := menuLabels(fileMenu)
+	want := []string{"Settings...", "Close Window"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("File menu labels = %v, want %v", got, want)
+	}
+	if findMenuItem(t, fileMenu, "Close Window").Click == nil {
+		t.Fatal("Close Window has no callback")
+	}
+}
+
+// macOS puts Quit in the application menu, and binding Cmd+Q on a File item too
+// would leave two menu entries racing for the same accelerator. The native
+// AppMenu role also carries Hide/Show All, which is how a hidden app is found
+// again.
+func TestCreateMenuMacDelegatesQuitToTheApplicationMenu(t *testing.T) {
+	appMenu := createMenu(&DesktopApp{}, "test", "darwin")
+
+	roles := topLevelRoles(appMenu)
+	if len(roles) != 1 || roles[0] != menu.AppMenuRole {
+		t.Fatalf("top-level roles = %v, want [AppMenuRole]", roles)
+	}
+	if appMenu.Items[0].Role != menu.AppMenuRole {
+		t.Fatalf("first menu item role = %v, want the application menu", appMenu.Items[0].Role)
+	}
+	if containsLabel(findSubmenu(t, appMenu, "File"), "Quit") {
+		t.Fatal("File menu still carries Quit on macOS — Cmd+Q would be bound twice")
+	}
+	if containsLabel(findSubmenu(t, appMenu, "Help"), "About Radar") {
+		t.Fatal("Help menu still carries About on macOS — the application menu already shows it")
+	}
+}
+
+// Roles are a macOS-only concept in Wails: off macOS a role item falls through
+// to an ordinary item with an empty label, so it would render as a blank entry.
+func TestCreateMenuOffMacUsesNoRolesAndKeepsFileQuit(t *testing.T) {
+	for _, goos := range []string{"linux", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			appMenu := createMenu(&DesktopApp{}, "test", goos)
+
+			if roles := topLevelRoles(appMenu); len(roles) != 0 {
+				t.Fatalf("top-level roles on %s = %v, want none", goos, roles)
+			}
+			if !containsLabel(findSubmenu(t, appMenu, "File"), "Quit") {
+				t.Fatalf("File menu on %s has no Quit — the app would have no exit", goos)
+			}
+			if !containsLabel(findSubmenu(t, appMenu, "Help"), "About Radar") {
+				t.Fatalf("Help menu on %s has no About — there is no application menu to carry it", goos)
+			}
+		})
+	}
+}
+
 func TestCreateMenuHelpMenuKeepsUpdateAction(t *testing.T) {
-	appMenu := createMenu(&DesktopApp{}, "test")
+	appMenu := createMenu(&DesktopApp{}, "test", "linux")
 	helpMenu := findSubmenu(t, appMenu, "Help")
 
 	if !containsLabel(helpMenu, "Check for Updates...") {
@@ -30,7 +88,7 @@ func TestCreateMenuHelpMenuKeepsUpdateAction(t *testing.T) {
 }
 
 func TestCreateMenuNativeActionsHaveCallbacks(t *testing.T) {
-	appMenu := createMenu(&DesktopApp{}, "test")
+	appMenu := createMenu(&DesktopApp{}, "test", "linux")
 
 	cases := []struct {
 		menu string
@@ -73,7 +131,7 @@ func TestReloadAcceleratorAvoidsCtrlROffMac(t *testing.T) {
 // the platform-picked accelerator. On Linux CI (goruntime.GOOS == "linux") this
 // executes the non-mac branch for real, proving Ctrl+R is not bound to Reload.
 func TestCreateMenuReloadIsWiredToPlatformAccelerator(t *testing.T) {
-	appMenu := createMenu(&DesktopApp{}, "test")
+	appMenu := createMenu(&DesktopApp{}, "test", goruntime.GOOS)
 	reload := findMenuItem(t, findSubmenu(t, appMenu, "View"), "Reload")
 
 	if reload.Click == nil {
@@ -132,7 +190,7 @@ func TestClipboardAcceleratorDroppedOnlyOnLinux(t *testing.T) {
 // xterm as SIGINT rather than firing a menu Copy, while the items keep their
 // click callbacks (covered by TestCreateMenuCutCopyAreClickableOffMac).
 func TestCreateMenuCutCopyAcceleratorMatchesPlatform(t *testing.T) {
-	editMenu := findSubmenu(t, createMenu(&DesktopApp{}, "test"), "Edit")
+	editMenu := findSubmenu(t, createMenu(&DesktopApp{}, "test", goruntime.GOOS), "Edit")
 
 	for _, tc := range []struct{ label, key string }{{"Cut", "x"}, {"Copy", "c"}} {
 		t.Run(tc.label, func(t *testing.T) {
@@ -153,7 +211,7 @@ func TestCreateMenuCutCopyAcceleratorMatchesPlatform(t *testing.T) {
 // Windows), and on Windows no accelerator may be bound alongside it because
 // winc does not consume the key.
 func TestCreateMenuPasteKeepsCallbackWithoutDoubleBinding(t *testing.T) {
-	appMenu := createMenu(&DesktopApp{}, "test")
+	appMenu := createMenu(&DesktopApp{}, "test", goruntime.GOOS)
 	paste := findMenuItem(t, findSubmenu(t, appMenu, "Edit"), "Paste")
 
 	if paste.Click == nil {
@@ -186,7 +244,7 @@ func TestCreateMenuCutCopyAreClickableOffMac(t *testing.T) {
 	if goruntime.GOOS == "darwin" {
 		t.Skip("macOS delegates Cut/Copy to the native responder chain")
 	}
-	editMenu := findSubmenu(t, createMenu(&DesktopApp{}, "test"), "Edit")
+	editMenu := findSubmenu(t, createMenu(&DesktopApp{}, "test", goruntime.GOOS), "Edit")
 
 	for _, label := range []string{"Cut", "Copy"} {
 		t.Run(label, func(t *testing.T) {
@@ -195,6 +253,16 @@ func TestCreateMenuCutCopyAreClickableOffMac(t *testing.T) {
 			}
 		})
 	}
+}
+
+func topLevelRoles(m *menu.Menu) []menu.Role {
+	var roles []menu.Role
+	for _, item := range m.Items {
+		if item.Role != 0 {
+			roles = append(roles, item.Role)
+		}
+	}
+	return roles
 }
 
 func findSubmenu(t *testing.T, root *menu.Menu, label string) *menu.Menu {

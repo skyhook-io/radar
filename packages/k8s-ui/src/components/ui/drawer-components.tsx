@@ -101,7 +101,8 @@ export function Section({ title, icon: Icon, children, defaultExpanded = true, c
         className="grid transition-[grid-template-rows] duration-200 ease-out"
         style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
       >
-        <div className="overflow-hidden">
+        {/* `relative` is load-bearing — see the note in ui/Collapse.tsx. */}
+        <div className="relative overflow-hidden">
           <div className={contentClassName ?? 'pl-6'}>{children}</div>
         </div>
       </div>
@@ -131,7 +132,8 @@ export function ExpandableSection({ title, children, defaultExpanded = true }: E
         className="grid transition-[grid-template-rows] duration-200 ease-out"
         style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
       >
-        <div className="overflow-hidden">
+        {/* `relative` is load-bearing — see the note in ui/Collapse.tsx. */}
+        <div className="relative overflow-hidden">
           <div className="ml-5">{children}</div>
         </div>
       </div>
@@ -289,7 +291,7 @@ function isConditionHealthy(cond: { type?: string; status?: string }): boolean {
 
 export type ConditionTone = 'ok' | 'warning' | 'fail' | 'unknown'
 
-function defaultConditionTone(cond: { type?: string; status?: string }): ConditionTone {
+export function defaultConditionTone(cond: { type?: string; status?: string }): ConditionTone {
   if (cond.status !== 'True' && cond.status !== 'False') return 'unknown'
   return isConditionHealthy(cond) ? 'ok' : 'fail'
 }
@@ -733,6 +735,18 @@ export function formatKindName(kind: string): string {
     resourceclaims: 'ResourceClaim', resourceclaimtemplates: 'ResourceClaimTemplate',
     deviceclasses: 'DeviceClass', resourceslices: 'ResourceSlice',
     clusterpolicies: 'ClusterPolicy', nvidiadrivers: 'NVIDIADriver',
+    clusterqueues: 'ClusterQueue', localqueues: 'LocalQueue', resourceflavors: 'ResourceFlavor',
+    admissionchecks: 'AdmissionCheck', provisioningrequests: 'ProvisioningRequest',
+    rayclusters: 'RayCluster', rayjobs: 'RayJob', rayservices: 'RayService', raycronjobs: 'RayCronJob',
+    leaderworkersets: 'LeaderWorkerSet', jobsets: 'JobSet',
+    inferenceservices: 'InferenceService', servingruntimes: 'ServingRuntime',
+    clusterservingruntimes: 'ClusterServingRuntime', inferencegraphs: 'InferenceGraph',
+    trainedmodels: 'TrainedModel', llminferenceservices: 'LLMInferenceService',
+    inferencepools: 'InferencePool', inferenceobjectives: 'InferenceObjective',
+    jobflows: 'JobFlow', jobtemplates: 'JobTemplate', ragengines: 'RAGEngine',
+    nimservices: 'NIMService', nimcaches: 'NIMCache', nimpipelines: 'NIMPipeline',
+    deviceconfigs: 'DeviceConfig',
+    pytorchjobs: 'PyTorchJob', tfjobs: 'TFJob', mpijobs: 'MPIJob', trainjobs: 'TrainJob',
   }
   if (names[k]) return names[k]
 

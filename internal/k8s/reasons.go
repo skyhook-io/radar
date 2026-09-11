@@ -6,9 +6,9 @@ package k8s
 // rather than in pkg/health because they are detector vocabulary, not part of the
 // shared health classifier.
 const (
-	crashLoopReason            = "CrashLoopBackOff"
-	highRestartReason          = "HighRestartCount"
-	readinessProbeFailedReason = "ReadinessProbeFailed"
+	crashLoopReason             = "CrashLoopBackOff"
+	highRestartReason           = "HighRestartCount"
+	readinessProbeFailedReason  = "ReadinessProbeFailed"
 	readinessProbeInvalidReason = "ReadinessProbeInvalid"
 	livenessProbeInvalidReason  = "LivenessProbeInvalid"
 	initContainerStalledReason  = "InitContainerStalled"

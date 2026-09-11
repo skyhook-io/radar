@@ -16,9 +16,12 @@ import (
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/investigationrefs"
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
+	internalopencost "github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/server"
 	"github.com/skyhook-io/radar/internal/settings"
@@ -32,47 +35,57 @@ var clusterConnectionProbe = k8s.TestClusterConnection
 
 // AppConfig holds all parsed configuration for the Radar application.
 type AppConfig struct {
-	Kubeconfig               string
-	KubeconfigDirs           []string
-	Namespace                string
-	Namespaces               []string
-	Port                     int
-	ListenAddress            string
-	ShowRemoteAccessHint     bool
-	BasePath                 string
-	NoBrowser                bool
-	Browser                  string
-	DevMode                  bool
-	HistoryLimit             int
-	DebugEvents              bool
-	FakeInCluster            bool
-	DisableHelmWrite         bool
-	DisableExec              bool
-	DisableLocalTerminal     bool
-	PodShellDefault          string
-	DebugImage               string
-	ReachabilityImage        string
-	ListPageSize             int64
-	NamespaceScope           bool
-	TimelineStorage          string
-	TimelineDBPath           string
-	TimelineRetention        time.Duration
-	TimelineMaxSizeBytes     int64
-	PrometheusURL            string
-	OpenCostCurrency         string
-	OpenCostFlagSet          bool
-	PrometheusHeaders        map[string]string
-	PrometheusHeadersFromEnv map[string]string
-	BeylaJobSelector         string
-	Version                  string
-	MCPEnabled               bool
-	MCPSessionToken          bool
-	AIHistory                bool   // persist AI investigations across restarts
-	AIHistoryDBPath          string // "" = ~/.radar/ai-runs.db
-	AuthConfig               auth.Config
-	HubAPIURL                string // Hub API origin override ("" = hosted default)
-	HubAppURL                string // Hub frontend origin override ("" = derived)
-	CloudTunnelConfigured    bool   // --cloud-url was set on this process
+	Kubeconfig     string
+	KubeconfigDirs []string
+	// Zero value is the deliberate one: an entrypoint that never sets this
+	// starts on the kubeconfig's current-context. Only cmd/desktop opts in.
+	RestoreLastDesktopContext bool
+	Namespace                 string
+	Namespaces                []string
+	Port                      int
+	ListenAddress             string
+	ShowRemoteAccessHint      bool
+	BasePath                  string
+	NoBrowser                 bool
+	Browser                   string
+	DevMode                   bool
+	HistoryLimit              int
+	DebugEvents               bool
+	FakeInCluster             bool
+	DisableHelmWrite          bool
+	DisableExec               bool
+	DisableLocalTerminal      bool
+	PodShellDefault           string
+	DebugImage                string
+	ReachabilityImage         string
+	ListPageSize              int64
+	NamespaceScope            bool
+	TimelineStorage           string
+	TimelineDBPath            string
+	TimelinePostgresDSN       string
+	TimelineRetention         time.Duration
+	TimelineMaxSizeBytes      int64
+	PrometheusURL             string
+	OpenCostCurrency          string
+	OpenCostFlagSet           bool
+	CostSource                string
+	KubecostURL               string
+	KubecostAPIKey            string
+	KubecostAPIKeyContext     string
+	KubecostClusterID         string
+	KubecostClusterIDContext  string
+	PrometheusHeaders         map[string]string
+	PrometheusHeadersFromEnv  map[string]string
+	BeylaJobSelector          string
+	Version                   string
+	MCPEnabled                bool
+	MCPSessionToken           bool
+	AIHistory                 bool   // persist AI investigations across restarts
+	AIHistoryDBPath           string // "" = ~/.radar/ai-runs.db
+	AuthConfig                auth.Config
+	HubAPIURL                 string // Hub API origin override ("" = hosted default)
+	HubAppURL                 string // Hub frontend origin override ("" = derived)
+	CloudTunnelConfigured     bool   // --cloud-url was set on this process
 }
 
 // SetGlobals applies debug/test flags to global state.
@@ -109,9 +122,16 @@ func validateNamespaceFanout(namespaces []string, ctxNs string, maxCandidates in
 
 // InitializeK8s creates and configures the Kubernetes client.
 func InitializeK8s(cfg AppConfig) error {
-	err := k8s.Initialize(k8s.InitOptions{
-		KubeconfigPath: cfg.Kubeconfig,
-		KubeconfigDirs: cfg.KubeconfigDirs,
+	preferredContext, err := startupContextPreference(cfg)
+	if err != nil {
+		log.Printf("[context] failed to read the remembered Desktop context: %v", err)
+		errorlog.Record("k8s-init", "warning",
+			"could not read the Desktop cluster memory from local settings. Starting on the kubeconfig's current-context instead; check ~/.radar/settings.json.")
+	}
+	err = k8s.Initialize(k8s.InitOptions{
+		KubeconfigPath:   cfg.Kubeconfig,
+		KubeconfigDirs:   cfg.KubeconfigDirs,
+		PreferredContext: preferredContext,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize K8s client: %w", err)
@@ -197,12 +217,16 @@ func seedNamespaceScopePick(ctxName, ns string) {
 }
 
 // BuildTimelineStoreConfig creates the timeline store configuration from app config.
-func BuildTimelineStoreConfig(cfg AppConfig) timeline.StoreConfig {
+func BuildTimelineStoreConfig(cfg AppConfig) (timeline.StoreConfig, error) {
 	storeCfg := timeline.StoreConfig{
 		Type:    timeline.StoreTypeMemory,
 		MaxSize: cfg.HistoryLimit,
 	}
-	if cfg.TimelineStorage == "sqlite" {
+
+	switch cfg.TimelineStorage {
+	case "", "memory":
+		return storeCfg, nil
+	case "sqlite":
 		storeCfg.Type = timeline.StoreTypeSQLite
 		dbPath := cfg.TimelineDBPath
 		if dbPath == "" {
@@ -212,8 +236,18 @@ func BuildTimelineStoreConfig(cfg AppConfig) timeline.StoreConfig {
 		storeCfg.Path = dbPath
 		storeCfg.RetentionAge = cfg.TimelineRetention
 		storeCfg.MaxStorageBytes = cfg.TimelineMaxSizeBytes
+		return storeCfg, nil
+	case "postgres":
+		if cfg.TimelinePostgresDSN == "" {
+			return timeline.StoreConfig{}, fmt.Errorf("PostgreSQL timeline storage requires a DSN")
+		}
+		storeCfg.Type = timeline.StoreTypePostgres
+		storeCfg.DSN = cfg.TimelinePostgresDSN
+		storeCfg.RetentionAge = cfg.TimelineRetention
+		return storeCfg, nil
+	default:
+		return timeline.StoreConfig{}, fmt.Errorf("unknown timeline storage %q", cfg.TimelineStorage)
 	}
-	return storeCfg
 }
 
 // RegisterCallbacks registers Helm, timeline, traffic, and Prometheus reset/reinit
@@ -222,13 +256,27 @@ func BuildTimelineStoreConfig(cfg AppConfig) timeline.StoreConfig {
 func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 	k8s.RegisterHelmFuncs(helm.ResetClient, helm.ReinitClient)
 
+	RegisterLastContextMemory(cfg)
+
 	k8s.RegisterTimelineFuncs(func() {
 		// Reset the store AND the per-cluster event-pipeline metrics: RecentDrops
 		// name resources from the previous cluster and must not survive the switch.
 		timeline.ResetStore()
 		timeline.ResetMetricsForContextSwitch()
 	}, func() error {
-		return timeline.ReinitStore(timelineStoreCfg)
+		if err := timeline.ReinitStore(timelineStoreCfg); err != nil {
+			// PostgreSQL deliberately does not degrade to memory: an operator who
+			// pointed Radar at an external database must not silently get an
+			// in-memory timeline that vanishes on restart. Every other backend
+			// keeps the historical behaviour — warn and continue degraded rather
+			// than fail the whole subsystem bring-up, which would also take down
+			// cluster browsing.
+			if timelineStoreCfg.Type == timeline.StoreTypePostgres {
+				return err
+			}
+			log.Printf("Warning: timeline init failed, continuing degraded: %v", err)
+		}
+		return nil
 	})
 
 	// Initialize Prometheus metrics client (must come before SetManualURL)
@@ -246,6 +294,17 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 		traffic.SetMetricsHeaders(cfg.PrometheusHeaders)
 		prometheuspkg.SetHeaders(cfg.PrometheusHeaders)
 	}
+	cfg = persistKubecostContextBindings(cfg)
+	if err := internalopencost.ConfigureStartup(internalopencost.ManagerConfig{
+		Source:           internalopencost.Source(cfg.CostSource),
+		URL:              cfg.KubecostURL,
+		APIKey:           cfg.KubecostAPIKey,
+		APIKeyContext:    cfg.KubecostAPIKeyContext,
+		ClusterID:        cfg.KubecostClusterID,
+		ClusterIDContext: cfg.KubecostClusterIDContext,
+	}); err != nil {
+		log.Printf("[opencost] Invalid cost source configuration: %v", err)
+	}
 	if cfg.BeylaJobSelector != "" {
 		traffic.SetBeylaJobSelector(cfg.BeylaJobSelector)
 	}
@@ -261,29 +320,87 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 		prometheuspkg.Reinitialize(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
 		return nil
 	})
+	k8s.RegisterCostResetFunc(internalopencost.Reset)
+}
+
+func persistKubecostContextBindings(cfg AppConfig) AppConfig {
+	contextName := strings.TrimSpace(k8s.GetContextName())
+	if contextName == "" {
+		return cfg
+	}
+	stored := config.Load()
+	bindAPIKey := strings.TrimSpace(cfg.KubecostURL) == "" && cfg.KubecostAPIKey != "" && strings.TrimSpace(cfg.KubecostAPIKeyContext) == "" &&
+		strings.TrimSpace(stored.KubecostURL) == "" && stored.KubecostAPIKey == cfg.KubecostAPIKey && strings.TrimSpace(stored.KubecostAPIKeyContext) == ""
+	bindClusterID := strings.TrimSpace(cfg.KubecostClusterID) != "" && strings.TrimSpace(cfg.KubecostClusterIDContext) == "" &&
+		stored.KubecostClusterID == cfg.KubecostClusterID && strings.TrimSpace(stored.KubecostClusterIDContext) == ""
+	if !bindAPIKey && !bindClusterID {
+		return cfg
+	}
+	updated, err := config.Update(func(c *config.Config) {
+		if bindAPIKey && strings.TrimSpace(c.KubecostURL) == "" && c.KubecostAPIKey == cfg.KubecostAPIKey && strings.TrimSpace(c.KubecostAPIKeyContext) == "" {
+			c.KubecostAPIKeyContext = contextName
+		}
+		if bindClusterID && c.KubecostClusterID == cfg.KubecostClusterID && strings.TrimSpace(c.KubecostClusterIDContext) == "" {
+			c.KubecostClusterIDContext = contextName
+		}
+	})
+	if err != nil {
+		log.Printf("[opencost] Failed to persist Kubecost context binding: %v", err)
+		return cfg
+	}
+	if updated.KubecostAPIKey == cfg.KubecostAPIKey && strings.TrimSpace(updated.KubecostURL) == strings.TrimSpace(cfg.KubecostURL) {
+		cfg.KubecostAPIKeyContext = updated.KubecostAPIKeyContext
+	}
+	if updated.KubecostClusterID == cfg.KubecostClusterID {
+		cfg.KubecostClusterIDContext = updated.KubecostClusterIDContext
+	}
+	return cfg
 }
 
 // CreateServer creates the HTTP server with the given configuration.
 func CreateServer(cfg AppConfig) *server.Server {
+	restoreLastDesktopContext := remembersLastContext(cfg)
+	costSource := cfg.CostSource
+	kubecostURL := cfg.KubecostURL
+	kubecostAPIKey := cfg.KubecostAPIKey
+	kubecostAPIKeyContext := cfg.KubecostAPIKeyContext
+	kubecostClusterID := cfg.KubecostClusterID
+	kubecostClusterIDContext := cfg.KubecostClusterIDContext
+	if internalopencost.IsEnvManaged() {
+		costConfig := internalopencost.ConfigSnapshot()
+		costSource = string(costConfig.Source)
+		kubecostURL = costConfig.URL
+		kubecostAPIKey = costConfig.APIKey
+		kubecostAPIKeyContext = costConfig.APIKeyContext
+		kubecostClusterID = costConfig.ClusterID
+		kubecostClusterIDContext = costConfig.ClusterIDContext
+	}
 	effectiveCfg := &config.Config{
-		Kubeconfig:               cfg.Kubeconfig,
-		KubeconfigDirs:           cfg.KubeconfigDirs,
-		Namespace:                cfg.Namespace,
-		Namespaces:               cfg.Namespaces,
-		Port:                     cfg.Port,
-		NoBrowser:                cfg.NoBrowser,
-		Browser:                  cfg.Browser,
-		TimelineStorage:          cfg.TimelineStorage,
-		TimelineDBPath:           cfg.TimelineDBPath,
-		TimelineMaxSize:          fmt.Sprintf("%d", cfg.TimelineMaxSizeBytes),
-		HistoryLimit:             cfg.HistoryLimit,
-		PrometheusURL:            cfg.PrometheusURL,
-		OpenCostCurrency:         cfg.OpenCostCurrency,
-		PrometheusHeaders:        cfg.PrometheusHeaders,
-		PrometheusHeadersFromEnv: cfg.PrometheusHeadersFromEnv,
-		DebugImage:               cfg.DebugImage,
-		ReachabilityImage:        cfg.ReachabilityImage,
-		MCP:                      &cfg.MCPEnabled,
+		Kubeconfig:                cfg.Kubeconfig,
+		KubeconfigDirs:            cfg.KubeconfigDirs,
+		Namespace:                 cfg.Namespace,
+		Namespaces:                cfg.Namespaces,
+		Port:                      cfg.Port,
+		NoBrowser:                 cfg.NoBrowser,
+		Browser:                   cfg.Browser,
+		TimelineStorage:           cfg.TimelineStorage,
+		TimelineDBPath:            cfg.TimelineDBPath,
+		TimelineMaxSize:           fmt.Sprintf("%d", cfg.TimelineMaxSizeBytes),
+		HistoryLimit:              cfg.HistoryLimit,
+		PrometheusURL:             cfg.PrometheusURL,
+		OpenCostCurrency:          cfg.OpenCostCurrency,
+		CostSource:                costSource,
+		KubecostURL:               kubecostURL,
+		KubecostAPIKey:            kubecostAPIKey,
+		KubecostAPIKeyContext:     kubecostAPIKeyContext,
+		KubecostClusterID:         kubecostClusterID,
+		KubecostClusterIDContext:  kubecostClusterIDContext,
+		PrometheusHeaders:         cfg.PrometheusHeaders,
+		PrometheusHeadersFromEnv:  cfg.PrometheusHeadersFromEnv,
+		DebugImage:                cfg.DebugImage,
+		ReachabilityImage:         cfg.ReachabilityImage,
+		MCP:                       &cfg.MCPEnabled,
+		RestoreLastDesktopContext: &restoreLastDesktopContext,
 	}
 
 	serverCfg := server.Config{
@@ -339,8 +456,14 @@ func CreateServer(cfg AppConfig) *server.Server {
 			}
 			serverCfg.MCPToken = token
 		}
+		// The same in-memory registry must back both ends of Radar's private
+		// evidence protocol: DiagnoseStream owns active turn scopes, while the MCP
+		// handler records exactly what Radar returned inside those scopes.
+		evidenceRefs := investigationrefs.NewRegistry()
+		serverCfg.InvestigationRefs = evidenceRefs
 		serverCfg.MCPHandler = mcppkg.NewHandler(serverCfg.MCPToken)
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
+		serverCfg.MCPInvestigationHandler = mcppkg.NewInvestigationHandler(evidenceRefs)
 	}
 
 	return server.New(serverCfg)

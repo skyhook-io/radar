@@ -106,10 +106,10 @@ export interface RadarAppProps {
    */
   documentTitleSuffix?: string;
   /**
-   * Injects a resource-level "Diagnose" action (e.g. a "Diagnose with AI"
+   * Injects a resource-level "Investigate" action (e.g. an "Investigate with AI"
    * button) into every resource detail action bar's right-aligned universal
    * actions. The host returns the node to render given the resource context.
-   * Standalone Radar omits this and renders no Diagnose button — OSS stays
+   * Standalone Radar omits this and renders no Investigate button — OSS stays
    * agent-free. See ./context/DiagnoseCustomization for the render-prop shape.
    */
   renderDiagnoseAction?: RenderDiagnoseAction;
@@ -135,6 +135,12 @@ export interface RadarAppProps {
    * Radar runs with `navSlots.chrome: 'none'`.
    */
   onClusterLoadStateChange?: (state: ClusterLoadState) => void;
+  /**
+   * Called after a focused investigation has been resolved by the server.
+   * Embedders whose chrome lives outside RadarApp's router can use this as a
+   * navigation hint without treating an unverified URL id as durable state.
+   */
+  onInvestigationFocus?: (runID: string) => void;
   /**
    * Selects the store backing the event timeline. Omit for the local event
    * store the Radar binary keeps (default, standalone behavior). Set
@@ -199,6 +205,7 @@ export function RadarApp({
   diagnoseConsent,
   initialPath,
   onClusterLoadStateChange,
+  onInvestigationFocus,
   timelineSource,
 }: RadarAppProps): React.ReactElement {
   // Apply runtime config during render so module-level singletons are set
@@ -228,7 +235,11 @@ export function RadarApp({
                   value={renderDiagnoseAction ?? defaultDiagnoseAction}
                   consentCopy={diagnoseConsent}
                 >
-                  <DiagnoseProvider>
+                  <DiagnoseProvider
+                    browserURLState={router !== "memory"}
+                    forceRouterURLState={router === "memory"}
+                    onFocusedRun={onInvestigationFocus}
+                  >
                     <App
                       manageDocumentTitle={manageDocumentTitle}
                       documentTitleSuffix={documentTitleSuffix}

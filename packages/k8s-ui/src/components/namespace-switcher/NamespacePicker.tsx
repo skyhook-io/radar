@@ -1,6 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, Globe, Search, AlertTriangle } from 'lucide-react'
+import { Badge } from '../ui/Badge'
 import { Tooltip } from '../ui/Tooltip'
 import { MultiSelectPicker } from '../ui/MultiSelectPicker'
 
@@ -14,6 +15,8 @@ export interface NamespaceScopeView {
   actives: string[]
   /** Namespaces the user may pick from. */
   accessibleNamespaces: string[]
+  /** Namespaces where Radar cannot list pods or deployments. */
+  deniedNamespaces?: string[]
   mode?: 'cluster-wide' | 'namespace' | 'restricted' | string
   /** Single-namespace cache-scope control instead of a multi-select filter. */
   cacheScoped?: boolean
@@ -115,6 +118,7 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
     if (!scope) return [] as string[]
     return [...(scope.accessibleNamespaces ?? [])].sort((a, b) => a.localeCompare(b))
   }, [scope])
+  const deniedNamespaces = useMemo(() => new Set(scope?.deniedNamespaces ?? []), [scope?.deniedNamespaces])
 
   const filteredItems = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -215,6 +219,21 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
           ? `View is filtered to namespace ${scopeActives[0]}. Click to switch or reset.`
           : `View is filtered to ${activeCount} namespaces. Click to adjust or reset.`
 
+  const renderNamespaceMeta = (ns: string) => (
+    <>
+      {deniedNamespaces.has(ns) && (
+        <Badge severity="error" size="sm" title="Radar cannot list pods or deployments in this namespace.">
+          No access
+        </Badge>
+      )}
+      {ns === scope.kubeconfigNamespace && ns !== '' && (
+        <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary shrink-0">
+          kubeconfig
+        </span>
+      )}
+    </>
+  )
+
   return (
     <>
       <Tooltip
@@ -286,7 +305,6 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
 
                   {filteredItems.map(ns => {
                     const isChecked = draft.has(ns)
-                    const isContextDefault = ns === scope.kubeconfigNamespace && ns !== ''
                     return (
                       <li key={ns}>
                         <label className="w-full flex items-center justify-between px-3 py-1.5 text-sm hover:bg-theme-hover text-left text-theme-text-primary cursor-pointer">
@@ -299,11 +317,7 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
                               className="shrink-0 accent-current"
                             />
                             <span className="truncate">{ns}</span>
-                            {isContextDefault && (
-                              <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary shrink-0">
-                                kubeconfig
-                              </span>
-                            )}
+                            {renderNamespaceMeta(ns)}
                           </span>
                         </label>
                       </li>
@@ -335,13 +349,7 @@ export const NamespacePicker = forwardRef<NamespacePickerHandle, NamespacePicker
                 noItemsLabel="No namespaces available."
                 clearAllDisabled={!canClearAll || activeCount === 0}
                 clearAllAriaLabel="Clear namespace selection"
-                renderItemMeta={ns =>
-                  ns === scope.kubeconfigNamespace && ns !== '' ? (
-                    <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary shrink-0">
-                      kubeconfig
-                    </span>
-                  ) : null
-                }
+                renderItemMeta={renderNamespaceMeta}
               />
             )}
 

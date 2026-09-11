@@ -52,6 +52,23 @@ type Settings struct {
 	// cluster-scoped: a registry is where your charts live, independent of which
 	// cluster they're deployed to.
 	HelmOCISources []string `json:"helmOciSources,omitempty"`
+	// LastDesktopContext is the context the Desktop window last used, reopened
+	// on the next launch. Desktop-scoped by name because
+	// `kubectl radar` shares this file and must never follow it: a command
+	// typed after `kubectl config use-context` runs where the shell says it
+	// will.
+	LastDesktopContext *LastContext `json:"lastDesktopContext,omitempty"`
+}
+
+// LastContext identifies a context precisely enough to survive a restart.
+// Name alone is not enough: with several kubeconfigs, which file owns the
+// unqualified name depends on directory read order, so a new file can steal it
+// and point the restore at another cluster. SourceFile + InFileName are the
+// identity; Name is the label.
+type LastContext struct {
+	Name       string `json:"name"`
+	SourceFile string `json:"sourceFile,omitempty"`
+	InFileName string `json:"inFileName,omitempty"`
 }
 
 // mu serializes Load-mutate-Save cycles to prevent concurrent PUTs from
@@ -130,6 +147,20 @@ func Update(mutate func(*Settings)) (Settings, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	s := Load()
+	mutate(&s)
+	return s, Save(s)
+}
+
+// UpdateChecked refuses to write when existing settings cannot be read. It is
+// for automatic writers, which must not replace a damaged or temporarily
+// unavailable file with a mutated zero value.
+func UpdateChecked(mutate func(*Settings)) (Settings, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	s, err := LoadChecked()
+	if err != nil {
+		return Settings{}, err
+	}
 	mutate(&s)
 	return s, Save(s)
 }

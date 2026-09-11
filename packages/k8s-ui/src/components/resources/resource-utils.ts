@@ -11,14 +11,28 @@ import { getNodePoolStatus, getNodeClaimStatus } from './resource-utils-karpente
 import { getScaledObjectStatus, getScaledJobStatus } from './resource-utils-keda'
 import { getGitRepositoryStatus, getOCIRepositoryStatus, getHelmRepositoryStatus, getHelmRepositoryType, getKustomizationStatus, getFluxHelmReleaseStatus, getFluxAlertStatus } from './resource-utils-flux'
 import { getArgoApplicationStatus, getArgoApplicationSetStatus, getArgoApplicationSync, getArgoApplicationHealth, getArgoApplicationProject } from './resource-utils-argo'
-import { getPolicyReportStatus as _getPolicyReportStatus, getKyvernoPolicyStatus as _getKyvernoPolicyStatus } from './resource-utils-kyverno'
+import { getVulnerabilityReportImage as _getVulnerabilityReportImage } from './resource-utils-trivy'
+import { getKyvernoPolicyRuleTypes as _getKyvernoPolicyRuleTypes, getPolicyReportStatus as _getPolicyReportStatus, getKyvernoPolicyStatus as _getKyvernoPolicyStatus } from './resource-utils-kyverno'
 import { getResourceClaimStatus as _getResourceClaimStatus, getResourceClaimDeviceClasses as _getResourceClaimDeviceClasses, getResourceClaimTemplateDeviceClasses as _getResourceClaimTemplateDeviceClasses, getResourceClaimAllocation as _getResourceClaimAllocation, getResourceClaimReservedFor as _getResourceClaimReservedFor } from './resource-utils-dra'
 import { getNvidiaClusterPolicyStatus as _getNvidiaClusterPolicyStatus, getNvidiaClusterPolicyEnabledComponents as _getNvidiaClusterPolicyEnabledComponents, getNvidiaDriverStatus as _getNvidiaDriverStatus } from './resource-utils-nvidia'
+import { getClusterQueueStatus as _getClusterQueueStatus, getLocalQueueStatus as _getLocalQueueStatus, getKueueWorkloadStatus as _getKueueWorkloadStatus, getResourceFlavorStatus as _getResourceFlavorStatus, getAdmissionCheckStatus as _getAdmissionCheckStatus, getProvisioningRequestStatus as _getProvisioningRequestStatus } from './resource-utils-kueue'
+import { getRayClusterStatus as _getRayClusterStatus, getRayJobStatus as _getRayJobStatus, getRayServiceStatus as _getRayServiceStatus, getRayCronJobStatus as _getRayCronJobStatus, getRayCronJobTimeZone as _getRayCronJobTimeZone } from './resource-utils-ray'
+import { getLeaderWorkerSetStatus as _getLeaderWorkerSetStatus, getJobSetStatus as _getJobSetStatus } from './resource-utils-jobset-lws'
+import { getInferenceServiceStatus as _getInferenceServiceStatus, getServingRuntimeStatus as _getServingRuntimeStatus, getInferenceGraphStatus as _getInferenceGraphStatus, getTrainedModelStatus as _getTrainedModelStatus, getLLMInferenceServiceStatus as _getLLMInferenceServiceStatus } from './resource-utils-kserve'
+import { getInferencePoolStatus as _getInferencePoolStatus, getInferenceObjectiveStatus as _getInferenceObjectiveStatus } from './resource-utils-inference-gateway'
+import { getVolcanoJobStatus as _getVolcanoJobStatus, getVolcanoQueueStatus as _getVolcanoQueueStatus, getVolcanoPodGroupStatus as _getVolcanoPodGroupStatus, getJobFlowStatus as _getJobFlowStatus, getJobTemplateStatus as _getJobTemplateStatus } from './resource-utils-volcano'
+import { getKaiQueueStatus as _getKaiQueueStatus, getKaiPodGroupStatus as _getKaiPodGroupStatus } from './resource-utils-kai'
+import { getKaitoWorkspaceStatus as _getKaitoWorkspaceStatus, getRAGEngineStatus as _getRAGEngineStatus } from './resource-utils-kaito'
+import { getNIMServiceStatus as _getNIMServiceStatus, getNIMCacheStatus as _getNIMCacheStatus, getNIMPipelineStatus as _getNIMPipelineStatus } from './resource-utils-nim'
+import { getAMDDeviceConfigStatus as _getAMDDeviceConfigStatus } from './resource-utils-amd-gpu'
+import { getPyTorchJobStatus as _getPyTorchJobStatus, getTFJobStatus as _getTFJobStatus, getMPIJobStatus as _getMPIJobStatus, getTrainJobStatus as _getTrainJobStatus } from './resource-utils-kubeflow-training'
 import { getBackupStatus as _getBackupStatus, getRestoreStatus as _getRestoreStatus, getScheduleStatus as _getScheduleStatus, getBSLStatus as _getBSLStatus, getBackupRepositoryStatus as _getBackupRepositoryStatus } from './resource-utils-velero'
 import { getExternalSecretStatus as _getExternalSecretStatus, getClusterExternalSecretStatus as _getClusterExternalSecretStatus, getSecretStoreStatus as _getSecretStoreStatus, getClusterSecretStoreStatus as _getClusterSecretStoreStatus, getSecretStoreProviderType as _getSecretStoreProviderType } from './resource-utils-eso'
 import { getHPATableState, hpaStatusFromState } from './resource-utils-hpa'
 import { getCNPGClusterStatus as _getCNPGClusterStatus, getCNPGBackupStatus as _getCNPGBackupStatus, getCNPGScheduledBackupStatus as _getCNPGScheduledBackupStatus, getCNPGPoolerStatus as _getCNPGPoolerStatus, isApiGroup as _isApiGroup, CNPG_GROUP as _CNPG_GROUP } from './resource-utils-cnpg'
-import { getCalicoIPPoolAllowedUses, getCalicoIPPoolBlockSize, getCalicoIPPoolEncapsulation, getCalicoPolicyNamespaceSelector, getCalicoPolicyServiceAccountSelector, getCalicoPolicyTypes, isCalicoApiVersion, isCalicoPolicyResource } from './resource-utils-calico'
+import { getGenericResourceStatus } from './generic-status'
+import { getIstioGatewayStatus as _getIstioGatewayStatus, getIstioGatewayServerCount as _getIstioGatewayServerCount, getIstioGatewaySelectorString as _getIstioGatewaySelectorString, getAuthorizationPolicySelectorString as _getAuthorizationPolicySelectorString, getDestinationRuleTlsMode as _getDestinationRuleTlsMode } from './resource-utils-istio'
+import { formatKubernetesLabelSelector, getCalicoIPPoolAllowedUses, getCalicoIPPoolBlockSize, getCalicoIPPoolEncapsulation, getCalicoPolicyNamespaceSelector, getCalicoPolicyServiceAccountSelector, getCalicoPolicyTypes, isCalicoApiVersion, isCalicoPolicyResource } from './resource-utils-calico'
 
 // ============================================================================
 // STATUS & HEALTH UTILITIES
@@ -1278,7 +1292,7 @@ export function getHPAStatus(hpa: any): StatusBadge {
 export function getHPAReplicas(hpa: any): { current: number; min: number; max: number } {
   return {
     current: hpa.status?.currentReplicas || 0,
-    min: hpa.spec?.minReplicas || 1,
+    min: hpa.spec?.minReplicas ?? 1,
     max: hpa.spec?.maxReplicas || 0,
   }
 }
@@ -1848,19 +1862,143 @@ export function getGatewayClassDescription(gc: any): string {
 // GATEWAY API ROUTE UTILITIES (shared by HTTPRoute, GRPCRoute, TCPRoute, TLSRoute)
 // ============================================================================
 
+const GATEWAY_API_GROUP = 'gateway.networking.k8s.io'
+
+/**
+ * Whether a status report describes a parent the spec still asks for.
+ *
+ * A controller can leave a report behind after its parentRef is removed, and
+ * the defaults matter: an unset group/kind/namespace on either side means
+ * gateway.networking.k8s.io, Gateway, and the route's own namespace.
+ */
+function isReportForParentRef(ref: any, reported: any, routeNamespace: string): boolean {
+  const norm = (r: any) => ({
+    group: r?.group ?? GATEWAY_API_GROUP,
+    kind: r?.kind ?? 'Gateway',
+    namespace: r?.namespace ?? routeNamespace,
+    name: r?.name,
+    sectionName: r?.sectionName,
+    port: r?.port,
+  })
+  const a = norm(ref)
+  const b = norm(reported)
+  return a.group === b.group && a.kind === b.kind && a.namespace === b.namespace &&
+    a.name === b.name && a.sectionName === b.sectionName && a.port === b.port
+}
+
 // All Gateway API route types share the same status/parents/rules/hostnames structure
+/**
+ * A route's verdict, from BOTH conditions the API guarantees it carries.
+ *
+ * Accepted alone is not health: a backendRef naming a Service that does not
+ * exist is Accepted=True by design, because the gateway still has to answer the
+ * request — with a 5xx. Reading only Accepted therefore reported the "why is my
+ * route 503ing" case as healthy, beside a Backends column naming the Service
+ * that is missing. An ABSENT ResolvedRefs is not healthy either: GEP-1364 has
+ * routes always carry both, so a missing one means nothing has confirmed the
+ * refs yet.
+ */
+/**
+ * The reports that describe parents this route is actually attached to, plus
+ * the readers the verdict uses. Shared with getRouteStatusReason so the badge
+ * and its explanation can never disagree about which parents counted.
+ */
+function routeParentEvidence(route: any) {
+  const refs = route.spec?.parentRefs || []
+  const reports = route.status?.parents || []
+  const routeNamespace = route.metadata?.namespace || ''
+  const generation = route.metadata?.generation
+
+  // Status entries are identified by parentRef AND controllerName, so one
+  // parent can carry reports from two controllers while one replaces the other.
+  // All of them count: reading a single report would make the verdict depend on
+  // their order in the array.
+  const reportsFor = (ref: any) =>
+    reports.filter((p: any) => isReportForParentRef(ref, p?.parentRef, routeNamespace))
+  const perRef = refs.map(reportsFor)
+
+  // A route can also attach to default Gateways without naming them, in which
+  // case the attachment exists only in status. Those reports are real and their
+  // failures must count. Without that opt-in an unmatched report is a leftover
+  // from a parentRef the spec no longer names, and counting it would resurrect
+  // a verdict for a parent the route has left.
+  const useDefaultGateways = route.spec?.useDefaultGateways
+  const attachedByDefault = useDefaultGateways !== undefined && useDefaultGateways !== 'None'
+  const claimed = new Set(perRef.flat())
+  // Only a Gateway can be a default parent. An unmatched report for anything
+  // else — a mesh Service parent the spec has dropped — is obsolete by
+  // definition, and would otherwise keep voting forever if its controller is
+  // gone.
+  const isDefaultGatewayReport = (p: any) =>
+    (p?.parentRef?.group ?? GATEWAY_API_GROUP) === GATEWAY_API_GROUP &&
+    (p?.parentRef?.kind ?? 'Gateway') === 'Gateway'
+  const considered = attachedByDefault
+    ? [...perRef.flat(), ...reports.filter((p: any) => !claimed.has(p) && isDefaultGatewayReport(p))]
+    : perRef.flat()
+
+  // A condition observed against a superseded generation describes a spec that
+  // has since changed, so it cannot confirm the current one. A condition with no
+  // observedGeneration at all is taken at face value.
+  const isCurrent = (c: any) =>
+    c?.observedGeneration === undefined || generation === undefined || c.observedGeneration === generation
+  const conditionOf = (report: any, type: string) =>
+    (report?.conditions || []).filter((c: any) => c?.type === type && isCurrent(c)).pop()
+  const statusOf = (report: any, type: string) => conditionOf(report, type)?.status
+
+  // A report whose conditions all describe a superseded spec says nothing about
+  // the current one, either way — so it neither votes nor confirms the parent it
+  // belongs to. Requiring it to agree would let one leftover from a replaced
+  // controller hold a live healthy parent at Pending; counting it as
+  // confirmation would let the other parents speak for one nothing has
+  // confirmed.
+  const speaksToCurrentSpec = (r: any) =>
+    conditionOf(r, 'Accepted') !== undefined || conditionOf(r, 'ResolvedRefs') !== undefined
+  const current = considered.filter(speaksToCurrentSpec)
+  const everyRefConfirmed = perRef.every((list: any[]) => list.some(speaksToCurrentSpec))
+
+  return { considered, current, everyRefConfirmed, conditionOf, statusOf }
+}
+
 export function getRouteStatus(route: any): StatusBadge {
-  const parents = route.status?.parents || []
-  if (parents.length === 0) return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
-  const allAccepted = parents.every((p: any) =>
-    (p.conditions || []).some((c: any) => c.type === 'Accepted' && c.status === 'True')
-  )
-  const anyRejected = parents.some((p: any) =>
-    (p.conditions || []).some((c: any) => c.type === 'Accepted' && c.status === 'False')
-  )
-  if (allAccepted) return { text: 'Accepted', color: healthColors.healthy, level: 'healthy' }
-  if (anyRejected) return { text: 'Not Accepted', color: healthColors.unhealthy, level: 'unhealthy' }
+  const { considered, current, everyRefConfirmed, statusOf } = routeParentEvidence(route)
+
+  if (considered.length === 0) return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+  if (current.length === 0) return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+  const anyFailure = current.some((r: any) =>
+    statusOf(r, 'Accepted') === 'False' || statusOf(r, 'ResolvedRefs') === 'False')
+
+  if (everyRefConfirmed && current.every((r: any) => statusOf(r, 'Accepted') === 'False')) {
+    return { text: 'Not Accepted', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+  if (anyFailure) {
+    return { text: 'Degraded', color: healthColors.degraded, level: 'degraded' }
+  }
+  if (everyRefConfirmed && current.every((r: any) =>
+      statusOf(r, 'Accepted') === 'True' && statusOf(r, 'ResolvedRefs') === 'True')) {
+    return { text: 'Accepted', color: healthColors.healthy, level: 'healthy' }
+  }
   return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+}
+
+/**
+ * Why the badge says what it says: which parent is unhappy, and the controller's
+ * own reason. Without it "Degraded" tells an operator something is wrong and
+ * nothing about what — and the whole point of reading ResolvedRefs is that the
+ * answer is usually "the backend you named does not exist".
+ */
+export function getRouteStatusReason(route: any): string {
+  const { current, conditionOf } = routeParentEvidence(route)
+  const parts: string[] = []
+  for (const report of current) {
+    const name = report?.parentRef?.name || 'parent'
+    for (const type of ['Accepted', 'ResolvedRefs']) {
+      const c = conditionOf(report, type)
+      if (c?.status !== 'False') continue
+      const detail = [c.reason, c.message].filter(Boolean).join(': ')
+      parts.push(detail ? `${name}: ${detail}` : `${name}: ${type} is false`)
+    }
+  }
+  return parts.join(' · ')
 }
 
 export function getRouteParents(route: any): string {
@@ -1941,10 +2079,24 @@ export function getNetworkPolicyRuleCount(np: any): { ingress: number; egress: n
   }
 }
 
+/**
+ * Who the policy applies to.
+ *
+ * podSelector is a LabelSelector, so it can target a subset through
+ * matchExpressions alone. Reading only matchLabels reported those policies as
+ * covering the whole namespace — a gap rendered as coverage, on the surface
+ * where that reads as "this namespace is protected, look elsewhere".
+ */
 export function getNetworkPolicySelector(np: any): string {
-  const labels = np.spec?.podSelector?.matchLabels
-  if (!labels || Object.keys(labels).length === 0) return 'All pods'
-  return Object.entries(labels).map(([k, v]) => `${k}=${v}`).join(', ')
+  const selector = np.spec?.podSelector
+  const hasLabels = Object.keys(selector?.matchLabels ?? {}).length > 0
+  // Count only what the formatter will actually render: it skips malformed
+  // entries, and an expression list of nothing but those would otherwise reach
+  // its empty-case string and describe the same state in different words.
+  const hasExpressions = (Array.isArray(selector?.matchExpressions) ? selector.matchExpressions : [])
+    .some((e: any) => e && typeof e === 'object')
+  if (!hasLabels && !hasExpressions) return 'All pods'
+  return formatKubernetesLabelSelector(selector)
 }
 
 // ============================================================================
@@ -2216,7 +2368,50 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'nvidiaclusterpolicies') return _getNvidiaClusterPolicyStatus(resource).text
       if (kindLower === 'nvidiadrivers') return _getNvidiaDriverStatus(resource).text
       if (kindLower === 'resourceclaims') return _getResourceClaimStatus(resource).text
-      if (kindLower === 'backups') return _getBackupStatus(resource).text
+      if (kindLower === 'clusterqueues') return _getClusterQueueStatus(resource).text
+      if (kindLower === 'localqueues') return _getLocalQueueStatus(resource).text
+      if (kindLower === 'workloads') return _getKueueWorkloadStatus(resource).text
+      if (kindLower === 'admissionchecks') return _getAdmissionCheckStatus(resource).text
+      if (kindLower === 'provisioningrequests') return _getProvisioningRequestStatus(resource).text
+      if (kindLower === 'rayclusters') return _getRayClusterStatus(resource).text
+      if (kindLower === 'rayjobs') return _getRayJobStatus(resource).text
+      if (kindLower === 'rayservices') return _getRayServiceStatus(resource).text
+      if (kindLower === 'raycronjobs') return _getRayCronJobStatus(resource).text
+      if (kindLower === 'leaderworkersets') return _getLeaderWorkerSetStatus(resource).text
+      if (kindLower === 'jobsets') return _getJobSetStatus(resource).text
+      if (kindLower === 'inferenceservices') return _getInferenceServiceStatus(resource).text
+      if (kindLower === 'servingruntimes' || kindLower === 'clusterservingruntimes') return _getServingRuntimeStatus(resource).text
+      if (kindLower === 'inferencegraphs') return _getInferenceGraphStatus(resource).text
+      if (kindLower === 'trainedmodels') return _getTrainedModelStatus(resource).text
+      if (kindLower === 'llminferenceservices') return _getLLMInferenceServiceStatus(resource).text
+      if (kindLower === 'inferencepools') return _getInferencePoolStatus(resource).text
+      if (kindLower === 'inferenceobjectives') return _getInferenceObjectiveStatus(resource).text
+      if (kindLower === 'volcanojobs') return _getVolcanoJobStatus(resource).text
+      if (kindLower === 'volcanoqueues') return _getVolcanoQueueStatus(resource).text
+      if (kindLower === 'volcanopodgroups') return _getVolcanoPodGroupStatus(resource).text
+      if (kindLower === 'jobflows') return _getJobFlowStatus(resource).text
+      if (kindLower === 'kaiqueues') return _getKaiQueueStatus(resource).text
+      if (kindLower === 'kaipodgroups') return _getKaiPodGroupStatus(resource).text
+      if (kindLower === 'kaitoworkspaces') return _getKaitoWorkspaceStatus(resource).text
+      if (kindLower === 'ragengines') return _getRAGEngineStatus(resource).text
+      if (kindLower === 'nimservices') return _getNIMServiceStatus(resource).text
+      if (kindLower === 'nimcaches') return _getNIMCacheStatus(resource).text
+      if (kindLower === 'nimpipelines') return _getNIMPipelineStatus(resource).text
+      if (kindLower === 'deviceconfigs') return _getAMDDeviceConfigStatus(resource).text
+      if (kindLower === 'pytorchjobs') return _getPyTorchJobStatus(resource).text
+      if (kindLower === 'tfjobs') return _getTFJobStatus(resource).text
+      if (kindLower === 'mpijobs') return _getMPIJobStatus(resource).text
+      if (kindLower === 'trainjobs') return _getTrainJobStatus(resource).text
+      // Positively gated, matching the cell dispatch: `backups` is reached here
+      // only when the group is unknown to normalizeKindToPlural, and a third
+      // vendor's Backup renders through the generic path — so the sort key has
+      // to come from there too, or the column sorts on a Velero-derived string
+      // the row never displayed.
+      if (kindLower === 'backups') {
+        if (_isApiGroup(resource.apiVersion, _CNPG_GROUP)) return _getCNPGBackupStatus(resource).text
+        if (_isApiGroup(resource.apiVersion, 'velero.io')) return _getBackupStatus(resource).text
+        return getGenericResourceStatus(resource)?.text ?? ''
+      }
       // Velero's Restore/Schedule keys are group-qualified (see
       // GROUP_QUALIFIED_COLUMN_KEYS) because those plurals are shared with
       // rancher/backup-restore-operator and others. The unqualified plural
@@ -2224,8 +2419,17 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       // reader below rather than being filtered as though it were Velero.
       if (kindLower === 'velerorestores') return _getRestoreStatus(resource).text
       if (kindLower === 'veleroschedules') return _getScheduleStatus(resource).text
-      if (kindLower === 'backupstoragelocations') return _getBSLStatus(resource).text
-      if (kindLower === 'backuprepositories') return _getBackupRepositoryStatus(resource).text
+      // Same positive gate as `backups` above, for the same reason: the cell
+      // dispatch sends a non-Velero resource to GenericCell, so the sort and
+      // filter keys have to come from there too.
+      if (kindLower === 'backupstoragelocations') {
+        if (_isApiGroup(resource.apiVersion, 'velero.io')) return _getBSLStatus(resource).text
+        return getGenericResourceStatus(resource)?.text ?? ''
+      }
+      if (kindLower === 'backuprepositories') {
+        if (_isApiGroup(resource.apiVersion, 'velero.io')) return _getBackupRepositoryStatus(resource).text
+        return getGenericResourceStatus(resource)?.text ?? ''
+      }
       if (kindLower === 'externalsecrets') return _getExternalSecretStatus(resource).text
       if (kindLower === 'clusterexternalsecrets') return _getClusterExternalSecretStatus(resource).text
       if (kindLower === 'secretstores') return _getSecretStoreStatus(resource).text
@@ -2242,14 +2446,24 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'cnpgbackups') return _getCNPGBackupStatus(resource).text
       if (kindLower === 'scheduledbackups' && _isApiGroup(resource.apiVersion, _CNPG_GROUP)) return _getCNPGScheduledBackupStatus(resource).text
       if (kindLower === 'poolers' && _isApiGroup(resource.apiVersion, _CNPG_GROUP)) return _getCNPGPoolerStatus(resource).text
-      // Generic CRDs: try status.phase, then Ready condition
-      if (resource.status?.phase) return resource.status.phase
-      {
-        const conditions = resource.status?.conditions || []
-        const ready = conditions.find((c: any) => c.type === 'Ready')
-        if (ready?.status === 'True') return 'Ready'
-        if (ready?.status === 'False') return 'Not Ready'
-      }
+      if (kindLower === 'istiogateways') return _getIstioGatewayStatus(resource).text
+      // Generic CRDs. Must read the same text the cell renders or the dropdown
+      // offers strings that appear on no row — hence the shared derivation.
+      return getGenericResourceStatus(resource)?.text ?? ''
+    // Istio Gateway's own columns. Without these the filter dropdown is empty
+    // for a column the table is visibly populating.
+    case 'servers':
+      if (kindLower === 'istiogateways') return String(_getIstioGatewayServerCount(resource))
+      return ''
+    case 'selector':
+      if (kindLower === 'istiogateways') return _getIstioGatewaySelectorString(resource)
+      if (kindLower === 'authorizationpolicies') return _getAuthorizationPolicySelectorString(resource)
+      return ''
+    case 'tlsMode':
+      // Distinct from Traefik's boolean 'tls' key, which SKIP_FILTER_COLUMNS
+      // excludes — sharing it would have made this reader unreachable. The
+      // generic fallback cannot reach spec.trafficPolicy.tls.mode.
+      if (kindLower === 'destinationrules') return _getDestinationRuleTlsMode(resource)
       return ''
     case 'state':
       if (kindLower === 'orders') return getOrderState(resource).text
@@ -2381,6 +2595,25 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
     case 'mig':
       if (kindLower === 'nvidiaclusterpolicies') return resource.spec?.mig?.strategy || ''
       break
+    // Trivy keeps the scanned image under report.artifact, so the generic
+    // spec/status probe finds nothing and the header would offer a filter
+    // button that never populates.
+    case 'image':
+      if (kindLower === 'vulnerabilityreports' || kindLower === 'sbomreports'
+        || kindLower === 'clustersbomreports' || kindLower === 'exposedsecretreports') {
+        return _getVulnerabilityReportImage(resource)
+      }
+      break
+    case 'ruleTypes':
+      if (kindLower === 'kyvernopolicies' || kindLower === 'clusterpolicies') {
+        return _getKyvernoPolicyRuleTypes(resource)
+      }
+      break
+    // The fallback would read spec.timeZone and yield '' for an undeclared
+    // zone, so those rows would drop out of a filter the cell shows a value for.
+    case 'timeZone':
+      if (kindLower === 'raycronjobs') return _getRayCronJobTimeZone(resource)
+      break
   }
 
   // Fallback: try common paths
@@ -2404,6 +2637,7 @@ export {
   getVulnerabilityReportSummary,
   getVulnerabilityReportStatus,
   getVulnerabilityReportImage,
+  getSbomReportImage,
   getVulnerabilityReportContainer,
   getConfigAuditReportSummary,
   getConfigAuditReportStatus,

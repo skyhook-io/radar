@@ -310,12 +310,20 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 	}
 
 	subjectByPod := make(map[string]staleSecretEnvSubject, len(pods))
+	subjects := make(map[string]staleSecretEnvSubject)
 	podsBySubject := make(map[string][]*corev1.Pod)
 	for _, pod := range pods {
-		subject := staleSecretEnvSubjectForPod(cache, pod)
+		subject := staleSecretEnvSubjectIdentityForPod(cache, pod)
+		subjectKey := subject.key()
+		if resolved, ok := subjects[subjectKey]; ok {
+			subject = resolved
+		} else {
+			subject.created = staleSecretEnvSubjectCreatedAt(cache, pod, subject.group, subject.kind, subject.name)
+			subjects[subjectKey] = subject
+		}
 		podKey := pod.Namespace + "\x00" + pod.Name
 		subjectByPod[podKey] = subject
-		podsBySubject[subject.key()] = append(podsBySubject[subject.key()], pod)
+		podsBySubject[subjectKey] = append(podsBySubject[subjectKey], pod)
 	}
 
 	var notReadyOut []Detection
@@ -341,20 +349,23 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 		notReadySubjects[subject.key()] = true
 		ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
 		notReadyOut = append(notReadyOut, Detection{
-			Kind:        "Pod",
-			Namespace:   pod.Namespace,
-			Name:        pod.Name,
-			Severity:    "warning",
-			Reason:      "StaleSecretEnv",
-			Message:     staleSecretEnvDetectionMessage(issueChecks),
-			OwnerGroup:  ownerGroup,
-			OwnerKind:   ownerKind,
-			OwnerName:   ownerName,
-			Fingerprint: "stale-secret-env",
-			Cause:       "A running container loaded a Secret-backed environment value before Radar observed that Secret key change.",
-			Action:      "Restart the pod so its containers re-read Secret-backed environment variables.",
+			Kind:              "Pod",
+			Namespace:         pod.Namespace,
+			Name:              pod.Name,
+			Severity:          "warning",
+			Reason:            "StaleSecretEnv",
+			Message:           staleSecretEnvDetectionMessage(issueChecks),
+			OwnerGroup:        ownerGroup,
+			OwnerKind:         ownerKind,
+			OwnerName:         ownerName,
+			Fingerprint:       "stale-secret-env",
+			Age:               FormatAge(now.Sub(pod.CreationTimestamp.Time)),
+			AgeSeconds:        int64(now.Sub(pod.CreationTimestamp.Time).Seconds()),
+			ResourceCreatedAt: pod.CreationTimestamp.Time,
+			Cause:             "A running container loaded a Secret-backed environment value before Radar observed that Secret key change.",
+			Action:            "Restart the pod so its containers re-read Secret-backed environment variables.",
 		})
-		setStaleSecretEnvDetectionAge(&notReadyOut[len(notReadyOut)-1], issueChecks, now)
+		setStaleSecretEnvOnset(&notReadyOut[len(notReadyOut)-1], issueChecks, now)
 	}
 
 	readyKeys := make([]string, 0, len(readyGroups))
@@ -394,7 +405,13 @@ func detectStaleSecretEnv(cache *ResourceCache, namespace string, now time.Time)
 			Cause:       "Radar observed consumed Secret keys change after these Ready container instances started; Kubernetes does not refresh Secret-backed environment variables in running containers.",
 			Action:      staleSecretEnvReadyAction(group.subject),
 		}
-		setStaleSecretEnvDetectionAge(&detection, currentChecks, now)
+		if !group.subject.created.IsZero() && !group.subject.created.After(now) {
+			age := now.Sub(group.subject.created)
+			detection.Age = FormatAge(age)
+			detection.AgeSeconds = int64(age.Seconds())
+			detection.ResourceCreatedAt = group.subject.created
+		}
+		setStaleSecretEnvOnset(&detection, currentChecks, now)
 		readyOut = append(readyOut, detection)
 	}
 
@@ -462,10 +479,17 @@ type staleSecretEnvSubject struct {
 	kind        string
 	namespace   string
 	name        string
+	created     time.Time
 	restartable bool
 }
 
 func staleSecretEnvSubjectForPod(cache *ResourceCache, pod *corev1.Pod) staleSecretEnvSubject {
+	subject := staleSecretEnvSubjectIdentityForPod(cache, pod)
+	subject.created = staleSecretEnvSubjectCreatedAt(cache, pod, subject.group, subject.kind, subject.name)
+	return subject
+}
+
+func staleSecretEnvSubjectIdentityForPod(cache *ResourceCache, pod *corev1.Pod) staleSecretEnvSubject {
 	group, kind, name := podOwnerKindName(cache, pod)
 	if kind == "" {
 		kind = "Pod"
@@ -475,6 +499,51 @@ func staleSecretEnvSubjectForPod(cache *ResourceCache, pod *corev1.Pod) staleSec
 		group: group, kind: kind, namespace: pod.Namespace, name: name,
 		restartable: staleSecretEnvRestartableOwner(group, kind),
 	}
+}
+
+func staleSecretEnvSubjectCreatedAt(cache *ResourceCache, pod *corev1.Pod, group, kind, name string) time.Time {
+	if kind == "Pod" || cache == nil {
+		return pod.CreationTimestamp.Time
+	}
+	switch {
+	case group == "apps" && kind == "Deployment" && cache.Deployments() != nil:
+		if obj, err := cache.Deployments().Deployments(pod.Namespace).Get(name); err == nil {
+			return obj.CreationTimestamp.Time
+		}
+	case group == "apps" && kind == "StatefulSet" && cache.StatefulSets() != nil:
+		if obj, err := cache.StatefulSets().StatefulSets(pod.Namespace).Get(name); err == nil {
+			return obj.CreationTimestamp.Time
+		}
+	case group == "apps" && kind == "DaemonSet" && cache.DaemonSets() != nil:
+		if obj, err := cache.DaemonSets().DaemonSets(pod.Namespace).Get(name); err == nil {
+			return obj.CreationTimestamp.Time
+		}
+	case group == "batch" && kind == "Job" && cache.Jobs() != nil:
+		if obj, err := cache.Jobs().Jobs(pod.Namespace).Get(name); err == nil {
+			return obj.CreationTimestamp.Time
+		}
+	case group == "batch" && kind == "CronJob" && cache.CronJobs() != nil:
+		if obj, err := cache.CronJobs().CronJobs(pod.Namespace).Get(name); err == nil {
+			return obj.CreationTimestamp.Time
+		}
+	case group == "argoproj.io" && kind == "Rollout":
+		dynamicCache := GetDynamicResourceCache()
+		discovery := GetResourceDiscovery()
+		if dynamicCache == nil || discovery == nil {
+			break
+		}
+		gvr, ok := discovery.GetGVRWithGroup("Rollout", "argoproj.io")
+		if !ok {
+			break
+		}
+		// This request path must not probe RBAC or start an informer on a miss.
+		obj, err := dynamicCache.GetWatched(gvr, pod.Namespace, name)
+		if err != nil {
+			break
+		}
+		return obj.GetCreationTimestamp().Time
+	}
+	return time.Time{}
 }
 
 func staleSecretEnvRestartableOwner(group, kind string) bool {
@@ -651,18 +720,14 @@ func secretEnvReferenceNamespaces(pods []*corev1.Pod) []string {
 	return out
 }
 
-func setStaleSecretEnvDetectionAge(detection *Detection, checks []StaleSecretEnvCheck, now time.Time) {
+func setStaleSecretEnvOnset(detection *Detection, checks []StaleSecretEnvCheck, now time.Time) {
 	changedAt := checks[0].SecretChangedAt
 	for _, check := range checks[1:] {
 		if check.SecretChangedAt.Before(changedAt) {
 			changedAt = check.SecretChangedAt
 		}
 	}
-	age := ageSeconds(now, changedAt)
-	detection.Age = FormatAge(time.Duration(age) * time.Second)
-	detection.AgeSeconds = age
-	detection.Duration = FormatAge(time.Duration(age) * time.Second)
-	detection.DurationSeconds = age
+	setDetectionOnset(detection, now, changedAt)
 }
 
 func staleSecretEnvReadyDetectionMessage(subject staleSecretEnvSubject, podCount, checkCount int) string {

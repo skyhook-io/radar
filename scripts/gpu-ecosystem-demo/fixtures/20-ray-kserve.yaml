@@ -1,0 +1,253 @@
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: inference-ray
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  rayVersion: 2.52.0
+  headGroupSpec:
+    rayStartParams: {}
+    template:
+      spec:
+        containers:
+          - name: ray-head
+            image: rayproject/ray:2.52.0
+  workerGroupSpecs:
+    - groupName: gpu-workers
+      replicas: 2
+      minReplicas: 1
+      maxReplicas: 4
+      rayStartParams: {}
+      template:
+        spec:
+          containers:
+            - name: ray-worker
+              image: rayproject/ray:2.52.0
+              resources:
+                limits:
+                  nvidia.com/gpu: 1
+status:
+  state: ready
+  desiredWorkerReplicas: 2
+  availableWorkerReplicas: 2
+  head:
+    serviceName: inference-ray-head-svc
+  conditions:
+    - type: HeadPodReady
+      status: "True"
+      reason: HeadReady
+      message: Ray head is ready
+      observedGeneration: 1
+      lastTransitionTime: __START_TIME__
+---
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: batch-embedding
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  entrypoint: python /app/embed.py
+  shutdownAfterJobFinishes: true
+  rayClusterSpec:
+    rayVersion: 2.52.0
+    headGroupSpec:
+      rayStartParams: {}
+      template:
+        spec:
+          containers:
+            - name: ray-head
+              image: rayproject/ray:2.52.0
+status:
+  jobStatus: RUNNING
+  jobDeploymentStatus: Running
+  rayClusterName: batch-embedding-cluster
+---
+apiVersion: ray.io/v1
+kind: RayService
+metadata:
+  name: online-inference
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  serveConfigV2: |
+    applications:
+      - name: classifier
+        import_path: app:deployment
+  rayClusterConfig:
+    rayVersion: 2.52.0
+    headGroupSpec:
+      rayStartParams: {}
+      template:
+        spec:
+          containers:
+            - name: ray-head
+              image: rayproject/ray:2.52.0
+status:
+  serviceStatus: Running
+  activeServiceStatus:
+    rayClusterName: online-inference-active
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: ServeReady
+      message: Ray Serve application is ready
+      observedGeneration: 1
+      lastTransitionTime: __START_TIME__
+---
+apiVersion: ray.io/v1
+kind: RayCronJob
+metadata:
+  name: nightly-evaluation
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  schedule: "0 2 * * *"
+  suspend: false
+  jobTemplate:
+    entrypoint: python /app/evaluate.py
+    shutdownAfterJobFinishes: true
+    rayClusterSpec:
+      rayVersion: 2.52.0
+      headGroupSpec:
+        rayStartParams: {}
+        template:
+          spec:
+            containers:
+              - name: ray-head
+                image: rayproject/ray:2.52.0
+status:
+  lastScheduleTime: __START_TIME__
+---
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: fraud-model
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+  annotations:
+    serving.kserve.io/deploymentMode: RawDeployment
+spec:
+  predictor:
+    model:
+      modelFormat:
+        name: sklearn
+      runtime: sklearn-runtime
+      storageUri: s3://models/fraud-detector
+status:
+  url: https://fraud-model.gpu-demo.example.test
+  deploymentMode: RawDeployment
+  modelStatus:
+    transitionStatus: UpToDate
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: PredictorReady
+      message: Predictor is ready
+      lastTransitionTime: __START_TIME__
+---
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: sklearn-runtime
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  supportedModelFormats:
+    - name: sklearn
+      version: "1"
+      autoSelect: true
+  containers:
+    - name: runtime
+      image: kserve/sklearnserver:v0.20.0
+---
+apiVersion: serving.kserve.io/v1alpha1
+kind: ClusterServingRuntime
+metadata:
+  name: vllm-runtime
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  supportedModelFormats:
+    - name: huggingface
+      autoSelect: true
+  containers:
+    - name: runtime
+      image: vllm/vllm-openai:v0.10.1
+---
+apiVersion: serving.kserve.io/v1alpha1
+kind: InferenceGraph
+metadata:
+  name: recommendation-graph
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  nodes:
+    root:
+      routerType: Sequence
+      steps:
+        - serviceName: candidate-model
+        - serviceName: ranking-model
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: GraphReady
+      message: Inference graph is ready
+      lastTransitionTime: __START_TIME__
+---
+apiVersion: serving.kserve.io/v1alpha1
+kind: TrainedModel
+metadata:
+  name: fraud-v42
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  inferenceService: fraud-model
+  model:
+    framework: sklearn
+    memory: 2Gi
+    storageUri: s3://models/fraud-detector/v42/model.joblib
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: ModelLoaded
+      message: Trained model is loaded
+      lastTransitionTime: __START_TIME__
+---
+apiVersion: serving.kserve.io/v1alpha2
+kind: LLMInferenceService
+metadata:
+  name: qwen-inference
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  model:
+    name: Qwen/Qwen2.5-7B-Instruct
+    uri: hf://Qwen/Qwen2.5-7B-Instruct
+  replicas: 2
+  template:
+    containers:
+      - name: main
+        image: vllm/vllm-openai:v0.10.1
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+status:
+  conditions:
+    - type: Ready
+      status: "True"
+      reason: ServiceReady
+      message: LLM inference service is ready
+      lastTransitionTime: __START_TIME__

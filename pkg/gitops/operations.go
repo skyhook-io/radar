@@ -153,6 +153,7 @@ type OperationResult struct {
 	Name        string
 	RequestedAt string     // RFC3339Nano, empty if not timed
 	Source      *SourceRef // only for sync-with-source
+	NoChange    bool       // request was already in the desired in-progress state
 }
 
 // SourceRef identifies the source resource in sync-with-source operations.
@@ -597,6 +598,7 @@ func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespa
 			Kind:      "Application",
 			Namespace: namespace,
 			Name:      name,
+			NoChange:  true,
 		}, nil
 	}
 	if !found || phase != "Running" {

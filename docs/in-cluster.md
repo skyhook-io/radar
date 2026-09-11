@@ -4,6 +4,14 @@ Deploy Radar to your Kubernetes cluster for shared team access.
 
 > **Note:** This guide covers deploying Radar as a pod in your cluster. If you're running Radar locally but need to understand cluster connection behavior (e.g., using `KUBECONFIG` to override in-cluster detection), see the [Configuration Guide](configuration.md).
 
+Choose the path that matches what you are trying to do:
+
+- **New installation:** follow [Quick Start](#quick-start), then configure how
+  your team will reach and authenticate to Radar.
+- **Existing installation:** start with [Upgrading](#upgrading). The correct
+  workflow depends on whether Helm, Argo CD, Flux, or another system owns the
+  deployment.
+
 ## Quick Start
 
 ```bash
@@ -17,6 +25,107 @@ Access via port-forward:
 kubectl port-forward svc/radar 9280:9280 -n radar
 open http://localhost:9280
 ```
+
+## Upgrading
+
+Upgrade Radar through the same source that manages the current installation.
+If Argo CD or Flux owns Radar, change the version in Git and let the controller
+reconcile it. Running `helm upgrade` directly against a GitOps-managed release
+creates drift and the controller may revert it.
+
+Before upgrading, review the [release notes](https://github.com/skyhook-io/radar/releases)
+between your current and target versions, especially for a major-version update.
+The Radar version shown on the Home page matches the published Helm chart
+version.
+
+### Helm
+
+If Radar links you to a Helm release, use that release name and namespace. You
+can also find likely releases with:
+
+```bash
+helm list --all-namespaces --filter radar
+```
+
+Update the chart repository, then upgrade while preserving the values already
+set on the release:
+
+```bash
+helm repo update skyhook
+helm upgrade radar skyhook/radar \
+  --namespace radar \
+  --reset-then-reuse-values \
+  --wait
+```
+
+Replace `radar` with the release name and namespace used by your installation.
+`--reset-then-reuse-values` requires Helm 3.14 or newer. It starts from the
+target chart's defaults, then reapplies the release's existing values, so keys
+introduced by the new chart are not omitted. With an older Helm client, upgrade
+Helm or use the installation's maintained values file; plain `--reuse-values`
+is not equivalent and can omit new defaults.
+
+If the deployment is managed from a values file, use that same file with
+`-f values.yaml` instead of `--reset-then-reuse-values` so Git remains the
+reproducible source of configuration. The command installs the latest published
+chart; add `--version X.Y.Z` to pin the exact version shown in Radar (without
+the leading `v`).
+
+### Argo CD or Flux
+
+Do not upgrade the live Helm release or Deployment directly. Update the
+version in the repository that owns the installation, then reconcile its
+controller:
+
+- **Argo CD Application:** if the Application directly references the Radar
+  chart, update its Helm chart `targetRevision`. Otherwise update the chart or
+  image version in the Git source referenced by the Application, then sync it.
+- **Flux HelmRelease:** update the Radar chart version in the HelmRelease source,
+  usually `spec.chart.spec.version`, then reconcile the HelmRelease.
+- **Flux Kustomization:** update the Radar chart or image version in the Git
+  source referenced by the Kustomization, then reconcile it.
+
+Radar links directly to a verified owning Application, HelmRelease, or
+Kustomization when it can. Open that object to confirm its source and health
+before changing Git.
+
+### If the manager could not be identified
+
+Inspect the Radar Deployment before choosing an upgrade method:
+
+```bash
+kubectl get deployment --all-namespaces \
+  --selector app.kubernetes.io/name=radar \
+  --output yaml
+```
+
+Look at the Deployment's labels and annotations:
+
+- `meta.helm.sh/release-name` and `meta.helm.sh/release-namespace` identify the
+  underlying Helm release.
+- `argocd.argoproj.io/tracking-id` or `argocd.argoproj.io/instance` points to
+  Argo CD ownership.
+- `helm.toolkit.fluxcd.io/*` and `kustomize.toolkit.fluxcd.io/*` point to Flux
+  ownership.
+
+A GitOps-managed chart normally has both Helm and GitOps metadata. In that
+case, GitOps is the source of truth: update Git rather than running Helm
+directly. If none of these markers exist, update the manifests or image tag in
+the system that originally deployed Radar.
+
+### Verify or roll back
+
+Wait for the Radar Deployment to finish rolling out, then refresh Radar and
+confirm the new version on the Home page:
+
+```bash
+kubectl rollout status deployment/radar --namespace radar --timeout 5m
+```
+
+Use the actual Deployment name and namespace if they differ. For a Helm-managed
+installation, inspect `helm history` and use `helm rollback` if the rollout
+fails. For a GitOps-managed installation, revert the version change in Git and
+reconcile the owning object.
 
 ## Exposing with Gateway API
 
@@ -36,7 +145,12 @@ With no custom `rules`, the chart routes `/` to Radar. `httpRoute` and `ingress`
 
 ## Exposing with Ingress
 
-### Basic (No Authentication)
+### Ingress without authentication
+
+> **Warning:** Only use this behind a trusted private network boundary. Anyone
+> who can reach Radar can use the permissions granted to its ServiceAccount.
+> For shared or externally reachable installations, configure authentication
+> before exposing the ingress.
 
 ```yaml
 # values.yaml
@@ -114,14 +228,14 @@ want several clusters in one view, that is what
 [Radar Cloud](https://radarhq.io) is for, and its agent dials out so there is no
 per-cluster ingress to wire up.
 
-### With Basic Authentication
+### With ingress basic authentication
 
 1. **Create the auth secret:**
    ```bash
    # Install htpasswd if needed: brew install httpd (macOS) or apt install apache2-utils (Linux)
 
-   # Generate credentials (replace 'admin' and 'your-password')
-   htpasswd -nb admin 'your-password' > auth
+   # Create the file and enter the password when prompted
+   htpasswd -cB auth admin
 
    # Create the secret
    kubectl create secret generic radar-basic-auth \
@@ -198,6 +312,7 @@ Radar uses its ServiceAccount to access the Kubernetes API. The Helm chart creat
 - Pods, Services, ConfigMaps, Events, Namespaces, Nodes, ServiceAccounts, Endpoints
 - Deployments, DaemonSets, StatefulSets, ReplicaSets
 - Ingresses, NetworkPolicies, Jobs, CronJobs, HPAs, PVCs
+- Kubernetes 1.37 Workloads, PodGroups, CompositePodGroups, PodCertificateRequests, and ClusterTrustBundles when the API server advertises them; the scheduling APIs are feature-gated
 - Pod logs (enabled by default)
 
 ### Opt-in Permissions
@@ -212,6 +327,8 @@ Some features require additional permissions. Most are disabled by default for s
 | Logs | `rbac.podLogs: true` | `true` | View pod logs |
 | Helm Write | `rbac.helm: true` | `false` | Install/upgrade/rollback/uninstall Helm releases (grants broad write access; auto-enables secrets). When auth or cloud is on, also emits a split helm add-on: `radar-helm` (CRDs/storage/PDBs/namespaces, bound to owner+member) and `radar-helm-admin` (RBAC/webhooks/APIServices, owner-only) — see [authentication.md](authentication.md#cloud-mode-helm-bindings) |
 | RBAC view | `rbac.viewRBAC: true` | `false` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings in the resource browser. Off by default: cache-served reads bypass per-user RBAC, so granting this exposes the cluster's authorization graph to every authenticated Radar user |
+| Webhooks view | `rbac.viewWebhooks: true` | `false` | Show admission webhook configurations. Off by default because they expose the cluster's admission-control posture; auto-enabled when auth or cloud mode enforces each user's own RBAC |
+| Node runtime evidence | `rbac.viewNodeRuntime: true` | `false` | Let upgrade-impact checks inspect kubelet metrics and effective configuration through `nodes/proxy`. Enable only for a trusted no-auth audience; authenticated users need this permission on their own Kubernetes identity |
 | Traffic TLS | `rbac.traffic: true` | `true` | Read Hubble relay TLS certs for Cilium traffic observation |
 
 > **Node management** (cordon, uncordon, drain) is available via the MCP server and API. These operations require `patch` on nodes, `list` on pods, and `create` on `pods/eviction`, which are not included in the default ClusterRole. Add them via `rbac.additionalRules` or use [per-user authentication](authentication.md) so each user's own RBAC governs node operations.
@@ -356,16 +473,28 @@ part of the deployment boundary.
 
 4. **Network access**: Consider using NetworkPolicies to restrict which pods can reach Radar.
 
-## Timeline Storage: memory vs sqlite
+## Timeline Storage: memory vs sqlite vs postgres
 
-Radar's timeline records every cluster change. Two backends:
+Radar's timeline records every cluster change. Three backends:
 
 - **`memory`** (default): events live in-process, lost on pod restart. Lowest footprint; pick this if you only need recent activity (last few hours).
-- **`sqlite`**: events persist to a PVC across restarts. Multi-day audit trail; pick this for long-running in-cluster deployments where you care about history surviving pod cycles.
+- **`sqlite`**: events persist to a PVC across restarts. Multi-day audit trail; pick this for long-running in-cluster deployments where you care about history surviving pod cycles. Requires `persistence.enabled=true`.
+- **`postgres`**: events persist in an externally managed PostgreSQL database. Pick this for durability across restarts and rolling updates, or when you want to avoid the single-PVC constraint. Use a dedicated database per Radar deployment. The DSN must be provided via an existing Kubernetes Secret (`timeline.postgres.existingSecret`); Helm never touches the credential.
 
-Timeline volume depends on cluster size and controller churn. Tune `timeline.retention` (Go duration; `0` disables age cleanup), `timeline.maxSize`, and `persistence.size` together. Keep `timeline.maxSize` below the PVC size so Radar prunes oldest events before the volume fills.
+For SQLite, tune `timeline.retention` (Go duration; `0` disables age cleanup), `timeline.maxSize`, and `persistence.size` together. Keep `timeline.maxSize` below the PVC size so Radar prunes oldest events before the volume fills. `timeline.maxSize` is ignored for postgres and memory.
 
 Cleanup runs hourly + once at startup. Confirm it's keeping up via `/api/diagnostics` — the `timeline.maxStorageBytes`, `timeline.lastCleanupAt`, `timeline.lastCleanupDeletedRows`, `timeline.lastCleanupError`, and `timeline.storageBytes` fields surface the state without requiring `kubectl logs`.
+
+### PostgreSQL requirements
+
+- PostgreSQL 14+ (tested against 17).
+- A dedicated database and a user with DDL permissions so Radar can create/update the `radar_timeline_*` tables, indexes, and migrations on first startup.
+- `sslmode` and other TLS settings are controlled through the DSN string.
+- The DSN is read from a Secret; never put it in Helm values or `config.json`.
+- Restart the Radar Deployment after rotating the Secret because Kubernetes does not refresh environment variables in running containers.
+- There is no built-in import path from SQLite to PostgreSQL. Migrating historical events is not supported.
+- Radar treats an unreachable PostgreSQL as fatal rather than falling back to an in-memory timeline, so a pod that cannot reach the database starts in disconnected mode and serves errors instead of cluster data. This is deliberate: silently degrading to memory would hand you a timeline that disappears on the next restart, without saying so. It also means the database is on Radar's startup path — treat its availability accordingly, and prefer one that lives close to the cluster.
+- Recovery after a database outage is not automatic. Once PostgreSQL is reachable again, either use the retry action in the UI or restart the pod. Verified TLS modes: `require` and `verify-full`.
 
 ## Configuration Reference
 
@@ -382,12 +511,18 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `mcp.enabled` | Enable MCP server for AI tools | `true` |
 | `debug.image` | Image for ephemeral debug containers and node debug pods. In built-in restricted PodSecurity namespaces, pod debug containers may retry as the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. | `""` (busybox:latest) |
 | `listPageSize` | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) on very large clusters that fail to sync; `0` = off, try `2000`. Only used when the apiserver lacks WatchList streaming. | `0` |
-| `timeline.storage` | Event storage (memory/sqlite) | `memory` |
+| `timeline.storage` | Event storage (memory/sqlite/postgres) | `memory` |
 | `timeline.dbPath` | SQLite database path | `/data/timeline.db` |
 | `timeline.historyLimit` | Max events to retain (memory only) | `10000` |
-| `timeline.retention` | SQLite retention (Go duration; `0` disables) | `168h` |
-| `timeline.maxSize` | SQLite max DB + WAL size before oldest events are pruned (`0` disables) | `800Mi` |
-| `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL | `""` (auto-discover) |
+| `timeline.retention` | Retention (Go duration; `0` disables). Applies to sqlite and postgres. | `168h` |
+| `timeline.maxSize` | SQLite max DB + WAL size before oldest events are pruned (`0` disables). Not used for postgres. | `800Mi` |
+| `timeline.postgres.existingSecret` | Name of a Secret holding the PostgreSQL DSN (required when `storage=postgres`) | `""` |
+| `timeline.postgres.secretKey` | Key within the Secret holding the DSN | `dsn` |
+| `cost.source` | Cost source: `auto`, `prometheus`, or `kubecost`; controls stay editable only when this and the Kubecost URL, cluster ID, and Secret are empty | `""` (Auto) |
+| `cost.kubecost.url` | Kubecost 3 Aggregator URL; blank discovers local port 9004 and may fall back to the named SAML/OIDC bypass port 9008 without a key; required for agent-only clusters | `""` (discover local) |
+| `cost.kubecost.clusterId` | Cluster ID filter for a central Aggregator | `""` (detect literal `CLUSTER_ID`) |
+| `cost.kubecost.existingSecret` | Secret containing an optional Kubecost API key; setting it disables automatic port-9008 auth bypass | `""` |
+| `traffic.prometheusUrl` | Manual PromQL-compatible query URL (Prometheus, VictoriaMetrics, Thanos, Mimir) | `""` (auto-discover) |
 | `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers | `{}` |
 | `persistence.enabled` | Enable PVC for SQLite storage | `false` |
 | `persistence.size` | PVC size | `1Gi` |
@@ -397,6 +532,8 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `rbac.secrets` | Show secrets in resource list | `false` |
 | `rbac.helm` | Enable Helm write operations | `false` |
 | `rbac.viewRBAC` | Show RBAC objects in resource browser | `false` |
+| `rbac.viewWebhooks` | Show admission webhook configurations | `false` |
+| `rbac.viewNodeRuntime` | Inspect kubelet metrics and effective configuration for upgrade impact | `false` |
 | `rbac.traffic` | Read Hubble TLS certs | `true` |
 | `rbac.crdGroups.all` | Wildcard CRD read access | `false` |
 
@@ -418,24 +555,21 @@ kubectl get ingress -n radar -o yaml
 kubectl logs -n ingress-nginx -l app.kubernetes.io/name=ingress-nginx
 ```
 
+If the UI loads through an ingress but pod exec does not connect, ensure the ingress forwards WebSocket upgrades and preserves the browser-facing `Host` header. Preserving `Host` is the compatibility requirement across browsers and proxies; Fetch Metadata is an additional signal only when both sides forward it. Radar logs rejected handshakes with both `Origin` and `Host`.
+
 ### Basic auth prompt not appearing
 
 Verify the secret format:
 ```bash
 kubectl get secret radar-basic-auth -n radar -o jsonpath='{.data.auth}' | base64 -d
-# Should show: username:$apr1$...
-```
-
-## Upgrading
-
-```bash
-helm repo update skyhook
-helm upgrade radar skyhook/radar -n radar -f values.yaml
+# Should show: username:<password-hash>
 ```
 
 ## Uninstalling
 
 ```bash
 helm uninstall radar -n radar
-kubectl delete namespace radar
 ```
+
+If `radar` is a dedicated namespace and contains nothing you need to retain,
+delete it separately with `kubectl delete namespace radar`.

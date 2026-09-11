@@ -1,13 +1,50 @@
 package k8score
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
+
+func TestMetricsHistoryResolvesServedVersionLazily(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: MetricsAPIGroup, Version: "v1", Resource: "pods"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		runtime.NewScheme(),
+		map[schema.GroupVersionResource]string{gvr: "PodMetricsList"},
+	)
+	dyn.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.GetResource() != gvr {
+			t.Fatalf("metrics collection used %v, want %v", action.GetResource(), gvr)
+		}
+		return true, &unstructured.UnstructuredList{}, nil
+	})
+	ready := false
+	store := NewMetricsHistoryStoreWithResolver(dyn, func(resource string) (schema.GroupVersionResource, bool) {
+		if !ready || resource != "pods" {
+			return schema.GroupVersionResource{}, false
+		}
+		return gvr, true
+	})
+
+	store.collectPodMetrics(context.Background(), time.Now())
+	if store.lastPodError != ErrMetricsAPINotDiscovered.Error() {
+		t.Fatalf("initial error = %q", store.lastPodError)
+	}
+
+	ready = true
+	store.collectPodMetrics(context.Background(), time.Now())
+	if store.consecutivePodErrors != 0 || store.lastPodError != "" {
+		t.Fatalf("collection did not recover after discovery: errors=%d last=%q", store.consecutivePodErrors, store.lastPodError)
+	}
+}
 
 func TestMetricsCollectionErrorLevel(t *testing.T) {
 	tests := []struct {

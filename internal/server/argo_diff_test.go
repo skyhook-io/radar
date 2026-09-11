@@ -413,7 +413,7 @@ func TestArgoResourceDiff_RBACDeniesBeforeArgoCall(t *testing.T) {
 	env := newAuthTestServer(t)
 	// alice can see both the app namespace (argocd) and the target namespace
 	// (default), but per-namespace `get secrets` in default is denied.
-	env.srv.permCache.Set("alice", &auth.UserPermissions{
+	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"argocd", "default"},
 	})
 	seedServerSecretGetCanI(t, env, "alice", nil, []string{"default"})

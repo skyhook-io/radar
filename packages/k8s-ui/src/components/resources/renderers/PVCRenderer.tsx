@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
 import { HardDrive } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown} from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, useOperationalIssuesShown, type ConditionTone } from '../../ui/drawer-components'
+import { formatAge } from '../resource-utils'
 
 interface PVCRendererProps {
   data: any
@@ -22,6 +23,11 @@ function formatAccessModes(modes: string[] | undefined): string | undefined {
   return modes.map(m => accessModeShorthand[m] || m).join(', ')
 }
 
+function pvcConditionTone(condition: any): ConditionTone | undefined {
+  if (condition?.type !== 'Unused') return undefined
+  return condition.status === 'True' ? 'unknown' : condition.status === 'False' ? 'ok' : 'unknown'
+}
+
 export function PVCRenderer({ data, onNavigate, extraSections }: PVCRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
@@ -39,6 +45,9 @@ export function PVCRenderer({ data, onNavigate, extraSections }: PVCRendererProp
   const bindCompleted = annotations['pv.kubernetes.io/bind-completed']
   const hasProvisionerInfo = provisioner || selectedNode || bindCompleted
   const operationalIssuesShown = useOperationalIssuesShown()
+  const unused = Array.isArray(status.conditions)
+    ? status.conditions.find((condition: any) => condition?.type === 'Unused' && condition.status === 'True')
+    : undefined
 
   return (
     <>
@@ -56,6 +65,14 @@ export function PVCRenderer({ data, onNavigate, extraSections }: PVCRendererProp
           variant="info"
           title="Pending — not yet bound"
           message="A PVC stays Pending while its volume is provisioned, or for a WaitForFirstConsumer StorageClass until a Pod that mounts it is scheduled. If it stays Pending, check the StorageClass, its provisioner, and storage quota."
+        />
+      )}
+
+      {unused && (
+        <AlertBanner
+          variant="info"
+          title={unused.lastTransitionTime ? `Unused for about ${formatAge(unused.lastTransitionTime)}` : 'Unused'}
+          message="No non-terminal Pod currently references this claim. Verify its retention policy and data ownership before deleting it."
         />
       )}
 
@@ -98,7 +115,7 @@ export function PVCRenderer({ data, onNavigate, extraSections }: PVCRendererProp
 
       {extraSections}
 
-      <ConditionsSection conditions={status.conditions} />
+      <ConditionsSection conditions={status.conditions} getConditionTone={pvcConditionTone} />
     </>
   )
 }

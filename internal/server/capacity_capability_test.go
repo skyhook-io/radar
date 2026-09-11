@@ -34,7 +34,7 @@ func TestKarpenterCapabilityReportsAbsenceBeforeRBACDenial(t *testing.T) {
 	s := newAuthServer(auth.Config{Mode: "proxy"})
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("list", karpenterGroup, karpenterNodePoolResource, "", false)
-	s.permCache.Set("alice", perms)
+	s.permCache.Set("alice", nil, perms)
 
 	r := requestWithUser(http.MethodGet, "/api/capabilities", &auth.User{Username: "alice"})
 	got := s.karpenterCapability(r)
@@ -89,7 +89,7 @@ func TestKarpenterCapabilityShortCircuitsWithoutUsableConnection(t *testing.T) {
 			if tt.seedDenied {
 				perms.SetCanI("list", karpenterGroup, karpenterNodePoolResource, "", false)
 			}
-			s.permCache.Set("alice", perms)
+			s.permCache.Set("alice", nil, perms)
 			r := requestWithUser(http.MethodGet, "/api/capabilities", &auth.User{Username: "alice"})
 
 			got := s.karpenterCapability(r)

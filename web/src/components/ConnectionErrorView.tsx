@@ -8,6 +8,7 @@ import { useAuthMe, useContexts } from '../api/client'
 import { Tooltip } from './ui/Tooltip'
 import { allShellSafe } from '../utils/shell-safe'
 import { apiUrl } from '../api/config'
+import { useCapabilitiesContext } from '../contexts/CapabilitiesContext'
 
 interface ConnectionErrorViewProps {
   connection: ConnectionState
@@ -349,6 +350,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
   const errorInfo = commandInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
   const { data: authMe } = useAuthMe()
+  const { localTerminal } = useCapabilitiesContext()
   const rawErrorDefaultOpen = !connection.errorType || connection.errorType === 'unknown'
   const [showRawError, setShowRawError] = useState(rawErrorDefaultOpen)
 
@@ -356,11 +358,8 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
     setShowRawError(rawErrorDefaultOpen)
   }, [connection.error, rawErrorDefaultOpen])
 
-  // Auto-retry after successful auth. The terminal shell runs on the server
-  // host, so the auth command itself fixes the server's credentials in every
-  // mode — but the chained retry curl carries no session cookie, so it 401s
-  // once /api/connection is auth-gated. Only chain it when auth is *known*
-  // disabled (authMe still loading → don't chain a doomed call).
+  // The local terminal is only available in unauthenticated local mode, but
+  // authMe may still be loading when the capability response arrives.
   const retryCmd = `curl -s -X POST http://${window.location.host}${apiUrl('/connection/retry')} > /dev/null`
 
   const handleAuthInTerminal = () => {
@@ -421,8 +420,8 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
             {commandInfo?.authCommand && (
               <div className="mt-3">
                 <p className="text-xs text-theme-text-tertiary">{commandInfo.authCommand.label}</p>
-                <CopyableCommand command={commandInfo.authCommand.command} onRunInTerminal={commandInfo.authCommand.runnable === false ? undefined : handleRunInTerminal} />
-                {isAuthError && !commandInfo?.hideAuthButton && commandInfo.authCommand.runnable !== false && (
+                <CopyableCommand command={commandInfo.authCommand.command} onRunInTerminal={!localTerminal || commandInfo.authCommand.runnable === false ? undefined : handleRunInTerminal} />
+                {localTerminal && isAuthError && !commandInfo?.hideAuthButton && commandInfo.authCommand.runnable !== false && (
                   <button
                     onClick={handleAuthInTerminal}
                     className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium btn-brand rounded-md"
@@ -436,7 +435,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
             {commandInfo?.fallbackCommand && (
               <div className="mt-4 pt-3 border-t border-theme-border/50">
                 <p className="text-xs text-theme-text-tertiary">{commandInfo.fallbackCommand.label}</p>
-                <CopyableCommand command={commandInfo.fallbackCommand.command} onRunInTerminal={commandInfo.fallbackCommand.runnable === false ? undefined : handleRunInTerminal} />
+                <CopyableCommand command={commandInfo.fallbackCommand.command} onRunInTerminal={!localTerminal || commandInfo.fallbackCommand.runnable === false ? undefined : handleRunInTerminal} />
               </div>
             )}
             {connection.error && (

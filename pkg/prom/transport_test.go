@@ -2,10 +2,65 @@ package prom
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+func TestHTTPTransportRejectsOversizedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", (10<<20)+1)))
+	}))
+	defer srv.Close()
+
+	_, err := NewHTTPTransport(srv.URL, "", nil).Do(context.Background(), http.MethodGet, "/api/v1/query", nil)
+	if err == nil || !errors.Is(err, ErrResponseTooLarge) {
+		t.Fatalf("error = %v, want explicit response-size error", err)
+	}
+	var httpErr *HTTPError
+	if errors.As(err, &httpErr) {
+		t.Fatalf("oversized 200 response must not be classified as an HTTP status error: %v", err)
+	}
+}
+
+func TestHTTPTransportHonorsCustomResponseLimit(t *testing.T) {
+	body := strings.Repeat("x", 2048)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+
+	transport := NewHTTPTransport(srv.URL, "", nil)
+	transport.MaxResponseBytes = 1024
+	if _, err := transport.Do(context.Background(), http.MethodGet, "/allocation", nil); !errors.Is(err, ErrResponseTooLarge) {
+		t.Fatalf("error = %v, want custom response-size error", err)
+	}
+
+	transport.MaxResponseBytes = 4096
+	got, err := transport.Do(context.Background(), http.MethodGet, "/allocation", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != body {
+		t.Fatalf("body length = %d, want %d", len(got), len(body))
+	}
+}
+
+func TestHTTPErrorDiagnosticIsBoundedAndSingleLine(t *testing.T) {
+	err := (&HTTPError{
+		StatusCode: http.StatusBadGateway,
+		URL:        "https://cost.example.com/allocation",
+		Body:       []byte("first\nsecond\tthird\vfourth\ffifth\u2028sixth\u2029" + strings.Repeat("x", 600)),
+	}).Error()
+	if strings.ContainsAny(err, "\r\n\t\v\f\u2028\u2029") {
+		t.Fatalf("error contains log control characters: %q", err)
+	}
+	if !strings.Contains(err, "first second third fourth fifth sixth ") || !strings.HasPrefix(err, "upstream returned 502") || !strings.HasSuffix(err, "…") {
+		t.Fatalf("unexpected bounded diagnostic: %q", err)
+	}
+}
 
 func TestHTTPTransport_AppliesHeaders(t *testing.T) {
 	var gotAuth, gotTenant, gotAccept string

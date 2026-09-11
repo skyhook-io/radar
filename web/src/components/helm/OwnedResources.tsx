@@ -4,7 +4,7 @@ import { getResourceIcon } from '../../utils/resource-icons'
 import { clsx } from 'clsx'
 import type { HelmOwnedResource } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
-import { kindToPlural, apiVersionToGroup } from '../../utils/navigation'
+import { kindToPluralWithGroup, apiVersionToGroup } from '../../utils/navigation'
 import { getResourceStatusColor, SEVERITY_BADGE } from '../../utils/badge-colors'
 import { useQueryClient } from '@tanstack/react-query'
 import { useOpenTerminal, useOpenLogs } from '../dock'
@@ -207,7 +207,15 @@ function ResourceItem({ resource, onNavigate }: ResourceItemProps) {
 
   const handleClick = () => {
     if (onNavigate) {
-      onNavigate({ kind: kindToPlural(resource.kind), namespace: resource.namespace, name: resource.name, group: apiVersionToGroup(resource.apiVersion) })
+      onNavigate({
+        kind: kindToPluralWithGroup(
+          resource.kind,
+          apiVersionToGroup(resource.apiVersion),
+        ),
+        namespace: resource.namespace,
+        name: resource.name,
+        group: apiVersionToGroup(resource.apiVersion),
+      })
     }
   }
 

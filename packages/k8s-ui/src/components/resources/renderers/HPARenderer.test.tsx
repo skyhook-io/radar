@@ -88,4 +88,32 @@ describe('HPARenderer', () => {
     expect(html).toContain('TooManyReplicas')
     expect(html).not.toContain('the desired replica count is more than the maximum replica count')
   })
+
+  it('preserves minReplicas zero and renders ScaledToZero as neutral evidence', () => {
+    const html = renderToString(
+      <HPARenderer
+        data={{
+          ...baseHPA,
+          spec: { ...baseHPA.spec, minReplicas: 0 },
+          status: {
+            currentReplicas: 0,
+            desiredReplicas: 0,
+            conditions: [
+              {
+                type: 'ScaledToZero',
+                status: 'True',
+                reason: 'SucceededRescale',
+                message: 'the HPA controller scaled the target to zero',
+              },
+            ],
+          },
+        }}
+      />,
+    )
+
+    expect(html).toMatch(/>Min<\/span><span[^>]*>0<\/span>/)
+    expect(html).toContain('ScaledToZero')
+    expect(html).toContain('bg-gray-400/20')
+    expect(html).not.toContain('failing')
+  })
 })

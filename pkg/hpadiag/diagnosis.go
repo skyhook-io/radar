@@ -19,6 +19,7 @@ const (
 	StateMetricsUnavailable State = "metrics_unavailable"
 	StateMetricsIncomplete  State = "metrics_incomplete"
 	StateUnableToScale      State = "unable_to_scale"
+	StateScaledToZero       State = "scaled_to_zero"
 	StateDisabled           State = "disabled"
 	StatePinned             State = "pinned"
 	StateStale              State = "stale"
@@ -35,6 +36,7 @@ const (
 	ReasonLimitedMin           ReasonID = "limited_min"
 	ReasonMetricsUnavailable   ReasonID = "metrics_unavailable"
 	ReasonUnableToScale        ReasonID = "unable_to_scale"
+	ReasonScaledToZero         ReasonID = "scaled_to_zero"
 	ReasonScalingDisabled      ReasonID = "scaling_disabled"
 	ReasonPinned               ReasonID = "pinned"
 	ReasonStaleStatus          ReasonID = "stale_status"
@@ -114,6 +116,15 @@ func Analyze(hpa *autoscalingv2.HorizontalPodAutoscaler) *Diagnosis {
 	}
 
 	conditions := mapConditions(hpa.Status.Conditions)
+	// The controller has not caught up with the spec in front of us. An unset
+	// observedGeneration means the same thing only when the controller has
+	// written no conditions either: some controllers reconcile without ever
+	// setting the field, and a live HPA with real conditions is not stale.
+	stale := hpa.Generation > 0 &&
+		(observedGeneration < hpa.Generation && (observedGeneration > 0 || len(conditions) == 0))
+	if cond, ok := conditions[autoscalingv2.ScaledToZero]; ok && cond.Status == corev1.ConditionTrue && min == 0 && hpa.Status.DesiredReplicas == 0 {
+		d.addConditionReason(ReasonScaledToZero, cond, "HPA intentionally scaled the target to zero replicas")
+	}
 
 	if cond, ok := conditions[autoscalingv2.AbleToScale]; ok && cond.Status == corev1.ConditionFalse {
 		d.addConditionReason(ReasonUnableToScale, cond, "HPA controller cannot scale the target")
@@ -131,6 +142,13 @@ func Analyze(hpa *autoscalingv2.HorizontalPodAutoscaler) *Diagnosis {
 		reason := strings.ToLower(cond.Reason)
 		message := strings.ToLower(cond.Message)
 		switch {
+		case stale:
+			// The condition was recorded against the previous spec. Raising
+			// maxReplicas from 5 to 10 would otherwise read as "capped at
+			// maxReplicas=10" and send someone to change a limit that is
+			// already changed, so the reason states the fact without the
+			// numbers it cannot vouch for.
+			d.addConditionReason(ReasonStaleStatus, cond, "HPA reported a scaling limit before the current spec was applied")
 		case isPinned(min, hpa.Spec.MaxReplicas) && (strings.Contains(reason, "toomany") || strings.Contains(reason, "toofew") || strings.Contains(message, "maximum") || strings.Contains(message, "minimum")):
 			d.addConditionReason(ReasonPinned, cond, fmt.Sprintf("HPA is pinned at %d replicas", hpa.Spec.MaxReplicas))
 		case strings.Contains(reason, "toomany") || strings.Contains(message, "maximum"):
@@ -142,11 +160,15 @@ func Analyze(hpa *autoscalingv2.HorizontalPodAutoscaler) *Diagnosis {
 		}
 	}
 
-	if hpa.Generation > 0 && observedGeneration > 0 && observedGeneration < hpa.Generation {
+	if stale {
+		detail := fmt.Sprintf("observed generation %d, current generation %d", observedGeneration, hpa.Generation)
+		if observedGeneration == 0 {
+			detail = fmt.Sprintf("the controller has recorded no status for generation %d", hpa.Generation)
+		}
 		d.Reasons = append(d.Reasons, Reason{
 			ID:      ReasonStaleStatus,
 			Message: "HPA status has not observed the latest spec generation yet",
-			Detail:  fmt.Sprintf("observed generation %d, current generation %d", observedGeneration, hpa.Generation),
+			Detail:  detail,
 		})
 	}
 
@@ -204,14 +226,15 @@ func isPinned(min, max int32) bool {
 	return max > 0 && min == max
 }
 
-func (d *Diagnosis) addConditionReason(id ReasonID, cond autoscalingv2.HorizontalPodAutoscalerCondition, fallback string) {
-	message := cond.Message
-	if message == "" {
-		message = fallback
-	}
+// The reason leads with Radar's reading of the condition and keeps the
+// controller's own sentence as detail: the raw text ("the desired replica
+// count is less than the minimum replica count") names neither the bound nor
+// the number, which is what a reader scanning a card needs.
+func (d *Diagnosis) addConditionReason(id ReasonID, cond autoscalingv2.HorizontalPodAutoscalerCondition, message string) {
 	d.Reasons = append(d.Reasons, Reason{
 		ID:              id,
 		Message:         message,
+		Detail:          cond.Message,
 		ConditionType:   string(cond.Type),
 		ConditionReason: cond.Reason,
 	})
@@ -234,6 +257,8 @@ func chooseState(d *Diagnosis) State {
 		return StateMetricsUnavailable
 	case d.hasReason(ReasonLimitedMax):
 		return StateLimitedMax
+	case d.hasReason(ReasonScaledToZero):
+		return StateScaledToZero
 	case d.hasReason(ReasonScalingDisabled):
 		return StateDisabled
 	case d.hasReason(ReasonPinned):
@@ -277,6 +302,8 @@ func summarizeState(d *Diagnosis) string {
 			return fmt.Sprintf("HPA is at maxReplicas=%d", d.Bounds.Max)
 		}
 		return "HPA is capped at maxReplicas"
+	case StateScaledToZero:
+		return "HPA intentionally scaled the target to zero replicas"
 	case StateDisabled:
 		return "HPA scaling is disabled because the target has zero replicas"
 	case StatePinned:
@@ -285,6 +312,9 @@ func summarizeState(d *Diagnosis) string {
 		}
 		return "HPA is configured for a fixed replica count"
 	case StateLimitedMin:
+		if controllerReportedMinLimit(d) {
+			return fmt.Sprintf("HPA wants fewer replicas but is held at minReplicas=%d", d.Bounds.Min)
+		}
 		return fmt.Sprintf("HPA is holding at minReplicas=%d", d.Bounds.Min)
 	case StateStale:
 		return "HPA has not observed the latest spec generation yet"
@@ -320,7 +350,7 @@ func firstReasonDetail(d *Diagnosis, id ReasonID) string {
 }
 
 func missingRequestMetric(d *Diagnosis) string {
-	message := strings.ToLower(firstReasonMessage(d, ReasonMetricsUnavailable, ""))
+	message := strings.ToLower(firstReasonDetail(d, ReasonMetricsUnavailable))
 	const marker = "missing request for "
 	idx := strings.Index(message, marker)
 	if idx < 0 {
@@ -355,8 +385,22 @@ func controllerReportedMaxLimit(d *Diagnosis) bool {
 			continue
 		}
 		conditionReason := strings.ToLower(reason.ConditionReason)
-		message := strings.ToLower(reason.Message)
+		message := strings.ToLower(reason.Detail)
 		if strings.Contains(conditionReason, "toomany") || strings.Contains(message, "maximum") {
+			return true
+		}
+	}
+	return false
+}
+
+func controllerReportedMinLimit(d *Diagnosis) bool {
+	for _, reason := range d.Reasons {
+		if reason.ID != ReasonLimitedMin {
+			continue
+		}
+		conditionReason := strings.ToLower(reason.ConditionReason)
+		message := strings.ToLower(reason.Detail)
+		if strings.Contains(conditionReason, "toofew") || strings.Contains(message, "minimum") {
 			return true
 		}
 	}

@@ -159,7 +159,7 @@ func TunnelConfirmationGuidance(err error, clusterID, cloudURL, clusterURL strin
 	case errors.Is(err, cloud.ErrConnectConsumptionTimeout):
 		reason = "the five-minute confirmation window elapsed"
 	case errors.Is(err, cloud.ErrConnectPickupExpired):
-		reason = "the Hub stopped reporting the approved request before the agent connected"
+		reason = "the Hub stopped reporting the approved request before the in-cluster Radar connected"
 	case errors.Is(err, context.Canceled):
 		reason = "confirmation was canceled"
 	}
@@ -167,7 +167,7 @@ func TunnelConfirmationGuidance(err error, clusterID, cloudURL, clusterURL strin
 	return RecoveryGuidance{
 		Summary: fmt.Sprintf("Radar was provisioned and Hub cluster %q already exists, but its tunnel could not be confirmed: %s.", clusterID, reason),
 		Lines: []string{
-			"Do not rerun the installer or delete the cluster by default; the existing agent can still connect after you resolve its startup or egress issue.",
+			"Do not rerun the installer or delete the cluster by default; the installed Radar can still connect after you resolve its startup or egress issue.",
 			fmt.Sprintf("Verify cluster DNS and outbound WSS/HTTPS access to %s.", cloudURL),
 			"Keep using this Hub cluster and token Secret for recovery. Only if you deliberately abandon the installation should you clean up Helm and the Secret, then delete the Hub cluster before starting a fresh flow.",
 		},

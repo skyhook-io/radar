@@ -69,6 +69,53 @@ describe('getWorkloadCostState', () => {
     expect(getWorkloadCostState(current, trend, false)).toBe('partial_missing_history')
   })
 
+  it('keeps Kubecost current cost visible when history is unsupported', () => {
+    const current: OpenCostWorkloadDetailResponse = {
+      available: true,
+      source: 'kubecost',
+      currency: 'USD',
+      namespace: 'default',
+      kind: 'StatefulSet',
+      name: 'queue',
+      current: {
+        name: 'queue', kind: 'StatefulSet', hourlyCost: 0.2, cpuCost: 0.12,
+        memoryCost: 0.08, replicas: 1, cpuUsageAvailable: true,
+        memoryUsageAvailable: true, cpuAllocationUse: 25, memoryAllocationUse: 25,
+      },
+    }
+    const trend: OpenCostWorkloadTrendResponse = {
+      available: false,
+      source: 'kubecost',
+      reason: 'history_unsupported',
+      currency: 'USD',
+      namespace: 'default',
+      kind: 'StatefulSet',
+      name: 'queue',
+      range: '24h',
+    }
+
+    expect(getWorkloadCostState(current, trend, false)).toBe('partial_missing_history')
+  })
+
+  it('does not let unsupported history mask current loading or errors', () => {
+    const trend: OpenCostWorkloadTrendResponse = {
+      available: false,
+      source: 'kubecost',
+      reason: 'history_unsupported',
+      currency: 'USD',
+      namespace: 'default',
+      kind: 'StatefulSet',
+      name: 'queue',
+      range: '24h',
+    }
+
+    expect(getWorkloadCostState(undefined, trend, { currentLoading: true })).toBe('loading')
+    expect(getWorkloadCostState(undefined, trend, { currentError: true })).toBe('load_error')
+    expect(
+      getWorkloadCostState(undefined, trend, { currentError: new ApiError('denied', 403) }),
+    ).toBe('access_denied')
+  })
+
   it('keeps current cost visible while historical owner metrics are still loading', () => {
     const current: OpenCostWorkloadDetailResponse = {
       available: true,
@@ -146,6 +193,9 @@ describe('getWorkloadCostState', () => {
     expect(getWorkloadCostState(undefined, missing, false)).toBe('not_found')
     expect(getWorkloadCostState(undefined, undefined, { currentError: new ApiError('denied', 403) })).toBe('access_denied')
     expect(getWorkloadCostState(undefined, undefined, { trendError: new ApiError('missing', 404) })).toBe('not_found')
+
+    current.reason = 'configuration_mismatch'
+    expect(getWorkloadCostState(current, undefined, false)).toBe('configuration_mismatch')
   })
 
   it('shows Prometheus discovery as soon as one query reports it', () => {

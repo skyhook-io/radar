@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	goruntime "runtime"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/app"
@@ -61,9 +62,9 @@ func main() {
 	disableHelmWrite := flag.Bool("disable-helm-write", false, "Simulate restricted Helm permissions")
 	disableExec := flag.Bool("disable-exec", false, "Simulate restricted exec permissions")
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
-	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory or sqlite")
+	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory, sqlite, or postgres")
 	timelineDBPath := flag.String("timeline-db", fileCfg.TimelineDBPath, "Path to timeline database file (default: ~/.radar/timeline.db)")
-	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite (e.g. 168h, 720h). 0 disables age-based cleanup.")
+	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite or postgres (e.g. 168h, 720h). 0 disables age-based cleanup.")
 	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("1Gi"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "Override the ISO 4217 currency label for OpenCost values (empty: auto-detect, then USD)")
@@ -164,35 +165,47 @@ func main() {
 	}
 
 	cfg := app.AppConfig{
-		Kubeconfig:               resolvedKubeconfig,
-		KubeconfigDirs:           resolvedKubeconfigDirs,
-		Namespace:                resolvedNamespace,
-		Namespaces:               resolvedNamespaces,
-		Port:                     fileCfg.PortOr(0), // Configured port, or random to avoid conflicts with CLI
-		ListenAddress:            "127.0.0.1",
-		DevMode:                  false,
-		HistoryLimit:             *historyLimit,
-		DebugEvents:              *debugEvents,
-		FakeInCluster:            *fakeInCluster,
-		DisableHelmWrite:         *disableHelmWrite,
-		DisableExec:              *disableExec,
-		PodShellDefault:          *podShellDefault,
-		TimelineStorage:          *timelineStorage,
-		TimelineDBPath:           *timelineDBPath,
-		TimelineRetention:        *timelineRetention,
-		TimelineMaxSizeBytes:     timelineMaxSizeBytes,
-		PrometheusURL:            *prometheusURL,
-		OpenCostCurrency:         normalizedOpenCostCurrency,
-		OpenCostFlagSet:          openCostCurrencyFlagSet,
-		PrometheusHeaders:        resolvedPrometheusHeaders,
-		PrometheusHeadersFromEnv: fileCfg.PrometheusHeadersFromEnv,
-		Version:                  version,
-		HubAPIURL:                hubAPIURL,
-		HubAppURL:                hubAppURL,
-		MCPEnabled:               fileCfg.MCPEnabledOr(true),
-		MCPSessionToken:          *mcpSessionToken,
-		AIHistory:                fileCfg.AIHistoryOr(true),
-		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,
+		Kubeconfig:                resolvedKubeconfig,
+		KubeconfigDirs:            resolvedKubeconfigDirs,
+		RestoreLastDesktopContext: fileCfg.RestoreLastDesktopContextOr(true),
+		Namespace:                 resolvedNamespace,
+		Namespaces:                resolvedNamespaces,
+		Port:                      fileCfg.PortOr(0), // Configured port, or random to avoid conflicts with CLI
+		ListenAddress:             "127.0.0.1",
+		DevMode:                   false,
+		HistoryLimit:              *historyLimit,
+		DebugEvents:               *debugEvents,
+		FakeInCluster:             *fakeInCluster,
+		DisableHelmWrite:          *disableHelmWrite,
+		DisableExec:               *disableExec,
+		PodShellDefault:           *podShellDefault,
+		TimelineStorage:           *timelineStorage,
+		TimelineDBPath:            *timelineDBPath,
+		TimelinePostgresDSN:       os.Getenv("RADAR_TIMELINE_POSTGRES_DSN"),
+		TimelineRetention:         *timelineRetention,
+		TimelineMaxSizeBytes:      timelineMaxSizeBytes,
+		PrometheusURL:             *prometheusURL,
+		OpenCostCurrency:          normalizedOpenCostCurrency,
+		CostSource:                fileCfg.CostSource,
+		KubecostURL:               fileCfg.KubecostURL,
+		KubecostAPIKey:            fileCfg.KubecostAPIKey,
+		KubecostAPIKeyContext:     fileCfg.KubecostAPIKeyContext,
+		KubecostClusterID:         fileCfg.KubecostClusterID,
+		KubecostClusterIDContext:  fileCfg.KubecostClusterIDContext,
+		OpenCostFlagSet:           openCostCurrencyFlagSet,
+		PrometheusHeaders:         resolvedPrometheusHeaders,
+		PrometheusHeadersFromEnv:  fileCfg.PrometheusHeadersFromEnv,
+		Version:                   version,
+		HubAPIURL:                 hubAPIURL,
+		HubAppURL:                 hubAppURL,
+		MCPEnabled:                fileCfg.MCPEnabledOr(true),
+		MCPSessionToken:           *mcpSessionToken,
+		AIHistory:                 fileCfg.AIHistoryOr(true),
+		AIHistoryDBPath:           fileCfg.AIHistoryDBPath,
+	}
+
+	if !cfg.RestoreLastDesktopContext {
+		app.ForgetLastContext()
 	}
 
 	app.SetGlobals(cfg)
@@ -214,7 +227,10 @@ func main() {
 		})
 	}
 
-	timelineStoreCfg := app.BuildTimelineStoreConfig(cfg)
+	timelineStoreCfg, err := app.BuildTimelineStoreConfig(cfg)
+	if err != nil {
+		log.Fatalf("Invalid timeline configuration: %v", err)
+	}
 	app.RegisterCallbacks(cfg, timelineStoreCfg)
 
 	// Create server and attach desktop updater
@@ -246,6 +262,12 @@ func main() {
 	windowTitle := formatWindowTitle(k8s.GetContextName())
 
 	desktopApp := NewDesktopApp(srv, timelineStoreCfg)
+	// macOS only. Wails maps this to `[NSApp hide:]`, which leaves the dock icon
+	// in place, so a dock click or Cmd+Tab brings the window back. The other
+	// platforms have no such affordance: GTK hides the window on delete-event and
+	// Windows drops the taskbar entry, and Wails v2 ships no tray icon, so a
+	// hidden window there is only recoverable by killing the process.
+	hideOnClose := goruntime.GOOS == "darwin"
 
 	// Run Wails application
 	err = wails.Run(&options.App{
@@ -258,11 +280,15 @@ func main() {
 		MaxHeight:        4320,
 		WindowStartState: options.Maximised,
 
+		// Closing the window leaves the server running. Quit is explicit
+		// (Cmd+Q / File → Quit).
+		HideWindowOnClose: hideOnClose,
+
 		AssetServer: &assetserver.Options{
 			Handler: NewRedirectHandler(srv.ActualAddr(), cfg.Namespace, cfg.Namespaces),
 		},
 
-		Menu: createMenu(desktopApp, version),
+		Menu: createMenu(desktopApp, version, goruntime.GOOS),
 
 		BackgroundColour: options.NewRGBA(10, 10, 15, 255),
 
@@ -279,7 +305,7 @@ func main() {
 			TitleBar: mac.TitleBarDefault(),
 			About: &mac.AboutInfo{
 				Title:   "Radar",
-				Message: "Kubernetes Visibility Tool\nBuilt by Skyhook\n\nVersion: " + version,
+				Message: "Kubernetes Visibility Tool\nBuilt by Skyhook\n\nVersion: " + version + "\n\nhttps://github.com/skyhook-io/radar",
 			},
 		},
 

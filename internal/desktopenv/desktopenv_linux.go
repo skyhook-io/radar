@@ -16,7 +16,7 @@ func collect() *Snapshot {
 		DisplayServer:      displayServer(),
 		RenderOverrides:    readAll(OverrideKeys),
 		Sandbox:            readSet(SandboxKeys),
-		WebKitLibrary:      webKitLibrary("/proc/self/maps"),
+		WebKitLibrary:      webviewLibrary(),
 		GPUPolicy:          GPUPolicy(),
 	}
 	return s
@@ -55,6 +55,8 @@ func readSet(keys []string) []EnvVar {
 	}
 	return out
 }
+
+func webviewLibrary() string { return webKitLibrary("/proc/self/maps") }
 
 // webKitLibrary returns the basename of the webview library mapped into this
 // process. The soname's trailing version identifies the WebKitGTK build, which

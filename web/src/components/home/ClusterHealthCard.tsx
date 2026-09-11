@@ -13,6 +13,7 @@ import { MCPSetupDialog } from './MCPSetupDialog'
 import { assetUrl, pluralize, parseContextName } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 import { routePath } from '../../api/config'
+import { parseMajorMinor } from '../../utils/version'
 import gkeIcon from '../../assets/platform-icons/google_kubernetes_engine.png'
 import eksIcon from '../../assets/platform-icons/aws_eks.png'
 import aksIcon from '../../assets/platform-icons/azure-aks.svg'
@@ -33,11 +34,14 @@ interface ClusterHealthCardProps {
   nodeVersionSkew: DashboardResponse['nodeVersionSkew']
   onNavigateToKind: (kind: string, group?: string) => void
   onNavigateToView: () => void
+  // Left unset in Cloud takeover mode, where /checks is owned by the host.
+  onNavigateToUpgradeImpact?: () => void
   onWarningEventsClick?: () => void
   onIssuesClick?: () => void
   // Freshness/refresh control for the dashboard poll — rendered under the
   // cluster metadata so the overview carries a freshness signal without a band.
   freshness?: ReactNode
+  radarVersion?: ReactNode
 }
 
 function getMetricsInstallHint(platform: string): string {
@@ -130,9 +134,11 @@ export function ClusterHealthCard({
   nodeVersionSkew,
   onNavigateToKind,
   onNavigateToView,
+  onNavigateToUpgradeImpact,
   onWarningEventsClick,
   onIssuesClick,
   freshness,
+  radarVersion,
 }: ClusterHealthCardProps) {
   void _topCRDs // Reserved for future CRD display
 
@@ -251,8 +257,13 @@ export function ClusterHealthCard({
                 </Tooltip>
               )}
               {cluster.version && (
-                <span>Kubernetes {cluster.version}</span>
+                <KubernetesVersionLine
+                  version={cluster.version}
+                  reviewedThrough={cluster.upgradeReviewedThrough}
+                  onNavigate={onNavigateToUpgradeImpact}
+                />
               )}
+              {radarVersion}
               <span><span className="font-mono">{counts.namespaces}</span> namespaces</span>
               {/* Show raw kubeconfig context as muted metadata only when
                   it differs from the headline AND we're in local mode
@@ -516,6 +527,54 @@ export function ClusterHealthCard({
         </div>
       </div>
     </div>
+  )
+}
+
+// How many minors the running version trails the newest one the upgrade-impact
+// catalog covers. Cross-major comparisons return 0 — better a missing hint than
+// a wrong count on an exotic version string.
+export function minorsBehind(current: string, reviewedThrough?: string): number {
+  const cur = parseMajorMinor(current)
+  const latest = reviewedThrough ? parseMajorMinor(reviewedThrough) : null
+  if (!cur || !latest || latest.major !== cur.major) return 0
+  return Math.max(0, latest.minor - cur.minor)
+}
+
+function KubernetesVersionLine({
+  version,
+  reviewedThrough,
+  onNavigate,
+}: {
+  version: string
+  reviewedThrough?: string
+  onNavigate?: () => void
+}) {
+  if (!onNavigate) {
+    return <span>Kubernetes {version}</span>
+  }
+
+  const behind = minorsBehind(version, reviewedThrough)
+
+  return (
+    <Tooltip
+      content={
+        behind > 0
+          ? `Radar's upgrade checks cover Kubernetes through ${reviewedThrough}. Click to assess the next minor upgrade.`
+          : 'Assess the next minor Kubernetes upgrade.'
+      }
+      wrapperClassName="w-fit"
+    >
+      <button
+        onClick={onNavigate}
+        className="group flex items-center gap-1 hover:text-theme-text-secondary transition-colors"
+      >
+        <span>Kubernetes {version}</span>
+        {behind > 0 && (
+          <span>· Upgrade impact</span>
+        )}
+        <ArrowRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+      </button>
+    </Tooltip>
   )
 }
 

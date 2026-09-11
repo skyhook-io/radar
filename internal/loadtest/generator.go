@@ -150,14 +150,16 @@ func podsInApp(app, pods, perApp int) int {
 	return perApp
 }
 
-func (g *Generator) appIndex(pod int) int   { return pod / g.cfg.PodsPerApp }
-func (g *Generator) nsName(app int) string  { return fmt.Sprintf("loadtest-%02d", app%g.cfg.Namespaces) }
+func (g *Generator) appIndex(pod int) int      { return pod / g.cfg.PodsPerApp }
+func (g *Generator) nsName(app int) string     { return fmt.Sprintf("loadtest-%02d", app%g.cfg.Namespaces) }
 func (g *Generator) appName(app int) string    { return fmt.Sprintf("app-%04d", app) }
 func (g *Generator) rsName(app int) string     { return fmt.Sprintf("app-%04d-rs", app) }
 func (g *Generator) cmName(app int) string     { return fmt.Sprintf("app-%04d-config", app) }
 func (g *Generator) secretName(app int) string { return fmt.Sprintf("app-%04d-secret", app) }
-func (g *Generator) nodeName(i int) string  { return fmt.Sprintf("loadtest-node-%03d", i%g.cfg.Nodes) }
-func (g *Generator) podName(pod int) string { return fmt.Sprintf("app-%04d-%06d", g.appIndex(pod), pod) }
+func (g *Generator) nodeName(i int) string     { return fmt.Sprintf("loadtest-node-%03d", i%g.cfg.Nodes) }
+func (g *Generator) podName(pod int) string {
+	return fmt.Sprintf("app-%04d-%06d", g.appIndex(pod), pod)
+}
 func (g *Generator) deployUID(app int) types.UID {
 	return types.UID(fmt.Sprintf("loadtest-deploy-%04d", app))
 }

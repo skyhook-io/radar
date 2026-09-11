@@ -12,32 +12,29 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 )
 
-// cursorAgent drives the Cursor CLI (`cursor-agent -p`). Containment differs from
-// Claude/Codex and is weaker by necessity: Cursor has NO flag to suppress the
-// user's global ~/.cursor/mcp.json, so the user's other MCP servers also load and
-// --approve-mcps approves all of them. There is no hermetic read-only mode. What
-// we DO contain:
-//   - cluster WRITE access is gated by the read-only MCP MOUNT (radar passes
-//     /mcp-readonly on investigation turns, full /mcp only on a confirmed apply) —
-//     same server-side gate Claude/Codex rely on;
-//   - --sandbox enabled blocks Cursor's own shell/file tools from writing;
-//   - the workspace is a throwaway per-run temp dir, not the user's project.
+// cursorAgent drives the Cursor CLI (`cursor-agent -p`). Cursor has no hermetic
+// read-only mode: it always loads the user's global ~/.cursor/mcp.json, and the
+// --force grant required for headless MCP calls also approves its built-in tools
+// and every loaded MCP server. --sandbox enabled is still requested, but Cursor's
+// tools can write outside the supplied workspace, so neither it nor the
+// throwaway workspace is treated as a security boundary. Radar's investigation
+// MCP mount remains read-only; Cursor's other tools are outside Radar's control.
+// This exposure is explicit in the versioned full-local consent surface.
 //
-// The residual exposure (the user's other MCP servers are reachable during a run)
-// is disclosed in the consent UI — this is a BYO "your own setup" mode, not a
-// hermetic one. Cursor's --resume is workspace-scoped, so every turn of a run must
-// share one workspace dir (RunManager supplies a stable per-run dir via turnSpec).
+// Cursor's --resume is workspace-scoped, so every turn of a run must share one
+// workspace dir (RunManager supplies a stable per-run dir via turnSpec).
 type cursorAgent struct {
 	bin string
 
-	trustMu    sync.Mutex
-	trustKnown bool
-	trustArg   string // resolved workspace-trust flag: "--trust" | "--force" | ""
+	approvalMu    sync.Mutex
+	approvalKnown bool
+	approvalArgs  []string // resolved approval flags, e.g. {"--force", "--trust"}
 }
 
 func (a *cursorAgent) Name() string { return "cursor-agent" }
@@ -76,23 +73,30 @@ func (a *cursorAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(
 	args := []string{
 		"-p", "--output-format", "stream-json",
 		"--workspace", workdir,
-		"--sandbox", "enabled", // sandbox Cursor's own shell/file tools; MCP calls run server-side in radar
+		"--sandbox", "enabled", // request Cursor's sandbox; full-local consent does not treat it as a security boundary
 		"--approve-mcps", // auto-approve the radar server for this headless run
 	}
-	// Headless (-p) runs get no TTY, so Cursor can't prompt the workspace-trust
-	// gate — without a trust flag it aborts with "Workspace Trust Required", and
-	// the per-run throwaway workdir means a one-time manual trust never carries
-	// over. Which flag grants trust varies across Cursor releases (--trust was
-	// removed, then re-added), so probe --help and pass what's supported,
-	// preferring the narrowest. --force/--yolo also auto-approve command runs, but
-	// --sandbox enabled already contains Cursor's own shell/file tools and cluster
-	// writes stay gated by the read-only MCP mount, so the extra grant is bounded.
-	trustArg, err := a.resolveTrustFlag()
+	// Headless (-p) runs get no TTY, so nothing can answer Cursor's approval
+	// prompts: without an approval flag the run aborts at the workspace-trust gate,
+	// and the per-run throwaway workdir means a one-time manual trust never carries
+	// over. --force/--yolo is the load-bearing grant — it approves tool calls, and
+	// observably clears the workspace gate as well (the force-only shim run pins
+	// that). --trust clears only the gate: --approve-mcps registers the radar server
+	// but does NOT approve its invocations, so a run granted trust alone has every
+	// MCP call auto-denied and ends with no evidence. Trust is still passed when
+	// advertised, since no help text promises force subsumes it; an unsupported flag
+	// aborts the run, so the set comes from probing --help.
+	//
+	// --force also approves Cursor's built-in tools and every MCP server it loaded,
+	// the user's own from ~/.cursor/mcp.json included. Cursor offers no way to
+	// exclude those servers, and its sandbox is not a reliable workspace boundary.
+	// The versioned full-local consent gate discloses that wider grant.
+	approvalArgs, err := a.resolveApprovalFlags()
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	args = append(args, trustArg)
+	args = append(args, approvalArgs...)
 	if s.model != "" {
 		args = append(args, "--model", s.model) // free-form Cursor model slug; "" = the user's default
 	}
@@ -109,54 +113,66 @@ func (a *cursorAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(
 	return cmd, cleanup, nil
 }
 
-// resolveTrustFlag returns the workspace-trust flag to pass this cursor-agent,
-// probing --help once and caching. Prefers --trust (workspace trust only); falls
-// back to --force (also skips command approvals, bounded by --sandbox). Errors if
-// the probe is inconclusive or no known trust flag is supported.
-func (a *cursorAgent) resolveTrustFlag() (string, error) {
-	a.trustMu.Lock()
-	defer a.trustMu.Unlock()
-	if a.trustKnown {
-		if a.trustArg == "" {
-			return "", errNoCursorTrustFlag
+// resolveApprovalFlags returns every approval flag this cursor-agent supports,
+// probing --help once and caching. Errors if the probe is inconclusive or the CLI
+// offers no known flag.
+func (a *cursorAgent) resolveApprovalFlags() ([]string, error) {
+	a.approvalMu.Lock()
+	defer a.approvalMu.Unlock()
+	if a.approvalKnown {
+		if !hasCursorForceGrant(a.approvalArgs) {
+			return nil, errNoCursorApprovalFlag
 		}
-		return a.trustArg, nil
+		return a.approvalArgs, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	out, _ := exec.CommandContext(ctx, a.bin, "--help").CombinedOutput()
 	if ctx.Err() != nil {
-		return "", fmt.Errorf("ai: Cursor Agent capability probe timed out")
+		return nil, fmt.Errorf("ai: Cursor Agent capability probe timed out")
 	}
 	if len(bytes.TrimSpace(out)) == 0 {
-		return "", fmt.Errorf("ai: Cursor Agent capability probe returned no help output")
+		return nil, fmt.Errorf("ai: Cursor Agent capability probe returned no help output")
 	}
-	a.trustArg = cursorHelpTrustFlag(string(out))
-	a.trustKnown = true
-	log.Printf("[ai] cursor-agent trust flag=%q", a.trustArg)
-	if a.trustArg == "" {
-		return "", errNoCursorTrustFlag
+	a.approvalArgs = cursorHelpApprovalFlags(string(out))
+	a.approvalKnown = true
+	log.Printf("[ai] cursor-agent approval flags=%v", a.approvalArgs)
+	if !hasCursorForceGrant(a.approvalArgs) {
+		return nil, errNoCursorApprovalFlag
 	}
-	return a.trustArg, nil
+	return a.approvalArgs, nil
 }
 
-var errNoCursorTrustFlag = fmt.Errorf("ai: installed cursor-agent supports no known workspace-trust flag (--trust/--force/--yolo); upgrade cursor-agent")
+// hasCursorForceGrant reports whether the resolved set carries the tool-approval
+// grant. --trust alone is not enough: it clears the workspace gate, so the run
+// starts and looks healthy, then auto-denies every MCP call and ends with no
+// evidence. Failing here costs nothing; spawning burns a full agent turn.
+func hasCursorForceGrant(flags []string) bool {
+	return slices.Contains(flags, "--force") || slices.Contains(flags, "--yolo")
+}
+
+var errNoCursorApprovalFlag = fmt.Errorf("ai: installed cursor-agent supports no tool-approval flag (--force/--yolo); upgrade cursor-agent")
 
 var (
 	cursorTrustFlag = regexp.MustCompile(`(?m)^[[:space:]]*(-[[:alnum:]],?[[:space:]]+)?--trust([[:space:],=]|$)`)
-	cursorForceFlag = regexp.MustCompile(`(?m)^[[:space:]]*(-[[:alnum:]],?[[:space:]]+)?(--force|--yolo)([[:space:],=]|$)`)
+	cursorForceFlag = regexp.MustCompile(`(?m)^[[:space:]]*(-[[:alnum:]],?[[:space:]]+)?--force([[:space:],=]|$)`)
+	cursorYoloFlag  = regexp.MustCompile(`(?m)^[[:space:]]*(-[[:alnum:]],?[[:space:]]+)?--yolo([[:space:],=]|$)`)
 )
 
-// cursorHelpTrustFlag returns the narrowest supported trust flag, or "" if none.
-func cursorHelpTrustFlag(help string) string {
+// cursorHelpApprovalFlags returns the supported approval flags, empty if none.
+// --yolo is documented as an alias of --force, so only one of the pair is taken.
+func cursorHelpApprovalFlags(help string) []string {
+	var flags []string
 	switch {
-	case cursorTrustFlag.MatchString(help):
-		return "--trust"
 	case cursorForceFlag.MatchString(help):
-		return "--force"
-	default:
-		return ""
+		flags = append(flags, "--force")
+	case cursorYoloFlag.MatchString(help):
+		flags = append(flags, "--yolo")
 	}
+	if cursorTrustFlag.MatchString(help) {
+		flags = append(flags, "--trust")
+	}
+	return flags
 }
 
 // writeCursorMCPConfig points Cursor at radar's MCP via the workspace-local config
@@ -184,6 +200,7 @@ type cursorEvent struct {
 	Type      string          `json:"type"`    // system|user|assistant|thinking|tool_call|result
 	Subtype   string          `json:"subtype"` // init | delta | started | completed | success | ...
 	SessionID string          `json:"session_id"`
+	Model     string          `json:"model"`   // on system/init
 	Text      string          `json:"text"`    // on thinking/delta
 	Message   *cursorMessage  `json:"message"` // on assistant/user
 	ToolCall  *cursorToolCall `json:"tool_call"`
@@ -211,16 +228,52 @@ type cursorMCPCall struct {
 		ToolName string          `json:"toolName"`
 		Args     json.RawMessage `json:"args"`
 	} `json:"args"`
-	Result *struct {
-		Success *struct {
-			IsError bool `json:"isError"`
-			Content []struct {
-				Text struct {
-					Text string `json:"text"`
-				} `json:"text"`
-			} `json:"content"`
-		} `json:"success"`
-	} `json:"result"`
+	Result *cursorMCPResult `json:"result"`
+}
+
+// cursorMCPResult mirrors the McpResult protobuf oneof emitted by Cursor
+// 2026.08.25. The CLI JSON projection uses lowerCamelCase field names.
+type cursorMCPResult struct {
+	Success          *cursorMCPSuccess          `json:"success"`
+	Error            *cursorMCPError            `json:"error"`
+	Rejected         *cursorMCPRejected         `json:"rejected"`
+	PermissionDenied *cursorMCPPermissionDenied `json:"permissionDenied"`
+	ToolNotFound     *cursorMCPToolNotFound     `json:"toolNotFound"`
+	ServerNotFound   *cursorMCPServerNotFound   `json:"serverNotFound"`
+	Approved         *struct{}                  `json:"approved"`
+}
+
+type cursorMCPSuccess struct {
+	IsError bool `json:"isError"`
+	Content []struct {
+		Text struct {
+			Text string `json:"text"`
+		} `json:"text"`
+	} `json:"content"`
+}
+
+type cursorMCPError struct {
+	Error string `json:"error"`
+}
+
+type cursorMCPRejected struct {
+	Reason     string `json:"reason"`
+	IsReadonly bool   `json:"isReadonly"`
+}
+
+type cursorMCPPermissionDenied struct {
+	Error      string `json:"error"`
+	IsReadonly bool   `json:"isReadonly"`
+}
+
+type cursorMCPToolNotFound struct {
+	Name           string   `json:"name"`
+	AvailableTools []string `json:"availableTools"`
+}
+
+type cursorMCPServerNotFound struct {
+	Name             string   `json:"name"`
+	AvailableServers []string `json:"availableServers"`
 }
 
 func (a *cursorAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
@@ -243,6 +296,11 @@ func (a *cursorAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagno
 			sessionID = e.SessionID
 		}
 		switch e.Type {
+		case "system":
+			// Cursor's init names the model but not its MCP servers or tools.
+			if e.Subtype == "init" {
+				onEvent(StreamEvent{Type: "phase", Phase: "ready", Model: e.Model})
+			}
 		case "thinking":
 			if e.Subtype == "delta" && e.Text != "" {
 				onEvent(StreamEvent{Type: "thinking", Token: e.Text})
@@ -293,12 +351,39 @@ func cursorToolCallEvent(e cursorEvent, onEvent func(StreamEvent)) {
 			Summary: cursorArgsText(m.Args.Args),
 		}})
 	case "completed":
-		res, trunc := capPayload(cursorMCPResultText(m))
+		resultText, evidenceRef := splitInvestigationEvidenceMarker(
+			cursorMCPResultText(m),
+		)
+		res, trunc := capPayload(resultText)
 		onEvent(StreamEvent{Type: "step", Step: &StepInfo{
 			ID: tc.ToolCallID, Tool: m.Args.ToolName, Status: "done",
-			Result: res, Truncated: trunc,
+			Result: res, EvidenceRef: evidenceRef,
+			IsError: cursorMCPResultErrorState(m.Result), Truncated: trunc,
+			producerResult: &resultText,
 		}})
 	}
+}
+
+func cursorMCPResultErrorState(result *cursorMCPResult) *bool {
+	if result == nil {
+		return nil
+	}
+	confirmed := false
+	switch {
+	case result.Success != nil:
+		confirmed = result.Success.IsError
+	case result.Approved != nil:
+		confirmed = false
+	case result.Error != nil,
+		result.Rejected != nil,
+		result.PermissionDenied != nil,
+		result.ToolNotFound != nil,
+		result.ServerNotFound != nil:
+		confirmed = true
+	default:
+		return nil
+	}
+	return &confirmed
 }
 
 func cursorArgsText(raw json.RawMessage) string {
@@ -314,12 +399,62 @@ func cursorArgsText(raw json.RawMessage) string {
 // nests the text one level deeper than Codex: content[].text.text. Capping happens
 // at the call site so the truncated flag can be surfaced.
 func cursorMCPResultText(m *cursorMCPCall) string {
-	if m.Result == nil || m.Result.Success == nil {
+	if m.Result == nil {
 		return ""
 	}
-	var b strings.Builder
-	for _, c := range m.Result.Success.Content {
-		b.WriteString(c.Text.Text)
+	result := m.Result
+	switch {
+	case result.Success != nil:
+		var b strings.Builder
+		for _, c := range result.Success.Content {
+			b.WriteString(c.Text.Text)
+		}
+		if b.Len() == 0 && result.Success.IsError {
+			return "Cursor reported an MCP tool error without details."
+		}
+		return b.String()
+	case result.Error != nil:
+		return cursorMCPFailureText("Cursor reported an MCP tool error", result.Error.Error)
+	case result.Rejected != nil:
+		return cursorMCPAccessFailureText("Cursor rejected the MCP tool call", result.Rejected.Reason, result.Rejected.IsReadonly)
+	case result.PermissionDenied != nil:
+		return cursorMCPAccessFailureText("Cursor denied permission for the MCP tool call", result.PermissionDenied.Error, result.PermissionDenied.IsReadonly)
+	case result.ToolNotFound != nil:
+		text := "Cursor could not find the requested MCP tool"
+		if result.ToolNotFound.Name != "" {
+			text = fmt.Sprintf("Cursor could not find MCP tool %q", result.ToolNotFound.Name)
+		}
+		if len(result.ToolNotFound.AvailableTools) > 0 {
+			text += "; available tools: " + strings.Join(result.ToolNotFound.AvailableTools, ", ")
+		}
+		return text
+	case result.ServerNotFound != nil:
+		text := "Cursor could not find the requested MCP server"
+		if result.ServerNotFound.Name != "" {
+			text = fmt.Sprintf("Cursor could not find MCP server %q", result.ServerNotFound.Name)
+		}
+		if len(result.ServerNotFound.AvailableServers) > 0 {
+			text += "; available servers: " + strings.Join(result.ServerNotFound.AvailableServers, ", ")
+		}
+		return text
+	case result.Approved != nil:
+		return "Cursor approved the MCP tool call."
+	default:
+		return ""
 	}
-	return b.String()
+}
+
+func cursorMCPFailureText(summary, detail string) string {
+	if detail == "" {
+		return summary + " without details."
+	}
+	return summary + ": " + detail
+}
+
+func cursorMCPAccessFailureText(summary, detail string, isReadonly bool) string {
+	text := cursorMCPFailureText(summary, detail)
+	if isReadonly {
+		text += " (read-only tool)"
+	}
+	return text
 }

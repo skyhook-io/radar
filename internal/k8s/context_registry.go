@@ -24,7 +24,7 @@ import (
 // loading: each file stays an island. A SwitchContext later
 // looks up the target entry in the registry and loads that one file, so
 // shared user/cluster names across files never collide — see issue #519.
-func setupIsolatedLoad(paths []string) (
+func setupIsolatedLoad(paths []string, preferred ContextRef) (
 	*clientcmd.ClientConfigLoadingRules,
 	*clientcmd.ConfigOverrides,
 	error,
@@ -33,7 +33,7 @@ func setupIsolatedLoad(paths []string) (
 	if len(registry) == 0 {
 		return nil, nil, fmt.Errorf("no contexts found across %d kubeconfig files", len(paths))
 	}
-	qName, entry, ok := pickInitialContext(paths, registry, fileConfigs)
+	qName, entry, ok := pickInitialContext(paths, registry, fileConfigs, preferred)
 	if !ok {
 		return nil, nil, fmt.Errorf("no usable context found across %d kubeconfig files", len(paths))
 	}
@@ -227,7 +227,15 @@ func pickInitialContext(
 	paths []string,
 	registry map[string]contextEntry,
 	fileConfigs map[string]*clientcmdapi.Config,
+	preferred ContextRef,
 ) (string, contextEntry, bool) {
+	// Preference pass: the context the last session ended on. It resolves only
+	// on an exact (file, in-file name) match — see matchPreferred.
+	if qName, entry, ok := matchPreferred(registry, fileConfigs, preferred); ok {
+		return qName, entry, true
+	}
+	reportContextPreferenceMiss(preferred)
+
 	// First pass: honor CurrentContext in file order.
 	for _, path := range paths {
 		cfg, ok := fileConfigs[path]
@@ -255,6 +263,33 @@ func pickInitialContext(
 				}
 			}
 		}
+	}
+	return "", contextEntry{}, false
+}
+
+// matchPreferred resolves a saved reference against the registry on the exact
+// (file, in-file name) pair, and nothing else. There is deliberately no
+// fallback to the display name: another file may have taken that name over
+// since it was recorded, so following it would connect to a different cluster
+// under the name the user last used. Losing the convenience costs one click;
+// landing on the wrong cluster costs more than that.
+func matchPreferred(
+	registry map[string]contextEntry,
+	fileConfigs map[string]*clientcmdapi.Config,
+	preferred ContextRef,
+) (string, contextEntry, bool) {
+	if preferred.Empty() {
+		return "", contextEntry{}, false
+	}
+	for qName, entry := range registry {
+		if entry.SourceFile != preferred.SourceFile || entry.InFileName != preferred.InFileName {
+			continue
+		}
+		cfg := fileConfigs[entry.SourceFile]
+		if cfg == nil || clientcmd.ConfirmUsable(*cfg, entry.InFileName) != nil {
+			return "", contextEntry{}, false
+		}
+		return qName, entry, true
 	}
 	return "", contextEntry{}, false
 }

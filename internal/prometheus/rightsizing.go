@@ -64,35 +64,35 @@ type ObservedStatistic struct {
 }
 
 type RightsizingRow struct {
-	Container               string               `json:"container"`
-	Resource                string               `json:"resource"`
+	Container               string                `json:"container"`
+	Resource                string                `json:"resource"`
 	Fit                     RightsizingFit        `json:"fit"`
 	Confidence              RightsizingConfidence `json:"confidence"`
-	CurrentRequest          *string              `json:"currentRequest,omitempty"`
-	CurrentRequestValue     *float64             `json:"currentRequestValue,omitempty"`
-	CurrentLimit            *string              `json:"currentLimit,omitempty"`
-	CurrentLimitValue       *float64             `json:"currentLimitValue,omitempty"`
-	Observed                *ObservedStatistic   `json:"observed,omitempty"`
-	Peak                    *ObservedStatistic   `json:"peak,omitempty"`
-	CalculatedReq           *string              `json:"calculatedRequest,omitempty"`
-	CalculatedRequestValue  *float64             `json:"calculatedRequestValue,omitempty"`
-	RecommendedReq          *string              `json:"recommendedRequest,omitempty"`
-	RecommendedRequestValue *float64             `json:"recommendedRequestValue,omitempty"`
-	ReductionLimited        bool                 `json:"reductionLimited,omitempty"`
-	Bursty                  bool                 `json:"bursty,omitempty"`
-	RecommendationReason    string               `json:"recommendationReason,omitempty"`
-	SampleCount             int                  `json:"sampleCount"`
-	ExpectedSamples         int                  `json:"expectedSamples"`
-	Coverage                float64              `json:"coverage"`
-	HPAManaged              bool                 `json:"hpaManaged"`
-	HPAEvidenceAvailable    bool                 `json:"hpaEvidenceAvailable"`
-	ThrottleAvailable       bool                 `json:"throttleAvailable,omitempty"`
-	ThrottleRatio           *float64             `json:"throttleRatio,omitempty"`
-	CurrentPodOOM           bool                 `json:"currentPodOOM,omitempty"`
-	WindowOOMEvidence       bool                 `json:"windowOomEvidence,omitempty"`
-	OOMEvidenceAvailable    bool                 `json:"oomEvidenceAvailable"`
-	LimitConflict           bool                 `json:"limitConflict,omitempty"`
-	QueryError              string               `json:"queryError,omitempty"`
+	CurrentRequest          *string               `json:"currentRequest,omitempty"`
+	CurrentRequestValue     *float64              `json:"currentRequestValue,omitempty"`
+	CurrentLimit            *string               `json:"currentLimit,omitempty"`
+	CurrentLimitValue       *float64              `json:"currentLimitValue,omitempty"`
+	Observed                *ObservedStatistic    `json:"observed,omitempty"`
+	Peak                    *ObservedStatistic    `json:"peak,omitempty"`
+	CalculatedReq           *string               `json:"calculatedRequest,omitempty"`
+	CalculatedRequestValue  *float64              `json:"calculatedRequestValue,omitempty"`
+	RecommendedReq          *string               `json:"recommendedRequest,omitempty"`
+	RecommendedRequestValue *float64              `json:"recommendedRequestValue,omitempty"`
+	ReductionLimited        bool                  `json:"reductionLimited,omitempty"`
+	Bursty                  bool                  `json:"bursty,omitempty"`
+	RecommendationReason    string                `json:"recommendationReason,omitempty"`
+	SampleCount             int                   `json:"sampleCount"`
+	ExpectedSamples         int                   `json:"expectedSamples"`
+	Coverage                float64               `json:"coverage"`
+	HPAManaged              bool                  `json:"hpaManaged"`
+	HPAEvidenceAvailable    bool                  `json:"hpaEvidenceAvailable"`
+	ThrottleAvailable       bool                  `json:"throttleAvailable,omitempty"`
+	ThrottleRatio           *float64              `json:"throttleRatio,omitempty"`
+	CurrentPodOOM           bool                  `json:"currentPodOOM,omitempty"`
+	WindowOOMEvidence       bool                  `json:"windowOomEvidence,omitempty"`
+	OOMEvidenceAvailable    bool                  `json:"oomEvidenceAvailable"`
+	LimitConflict           bool                  `json:"limitConflict,omitempty"`
+	QueryError              string                `json:"queryError,omitempty"`
 }
 
 type RightsizingResponse struct {

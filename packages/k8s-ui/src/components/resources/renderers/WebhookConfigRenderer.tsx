@@ -8,17 +8,17 @@ interface WebhookConfigRendererProps {
 }
 
 function getOperationColor(op: string): string {
-  if (op === 'CREATE') return 'bg-green-500/20 text-green-400'
-  if (op === 'UPDATE') return 'bg-yellow-500/20 text-yellow-400'
-  if (op === 'DELETE') return 'bg-red-500/20 text-red-400'
-  if (op === '*') return 'bg-red-500/20 text-red-400'
-  if (op === 'CONNECT') return 'bg-blue-500/20 text-blue-400'
+  if (op === 'CREATE') return 'status-green'
+  if (op === 'UPDATE') return 'status-amber'
+  if (op === 'DELETE') return 'status-red'
+  if (op === '*') return 'status-red'
+  if (op === 'CONNECT') return 'status-blue'
   return 'bg-theme-elevated text-theme-text-secondary'
 }
 
 function getSideEffectsColor(se: string): string {
-  if (se === 'None' || se === 'NoneOnDryRun') return 'bg-green-500/20 text-green-400'
-  return 'bg-amber-500/20 text-amber-400'
+  if (se === 'None' || se === 'NoneOnDryRun') return 'status-green'
+  return 'status-amber'
 }
 
 export function WebhookConfigRenderer({ data, isMutating }: WebhookConfigRendererProps) {
@@ -75,7 +75,7 @@ export function WebhookConfigRenderer({ data, isMutating }: WebhookConfigRendere
 
                 {/* Policy badges */}
                 <div className="flex flex-wrap gap-1.5 mt-2">
-                  <span className={clsx('badge-sm', wh.failurePolicy === 'Fail' ? 'bg-red-500/20 text-red-400' : 'bg-theme-elevated text-theme-text-secondary')}>
+                  <span className={clsx('badge-sm', wh.failurePolicy === 'Fail' ? 'status-red' : 'bg-theme-elevated text-theme-text-secondary')}>
                     {wh.failurePolicy || 'Fail'}
                   </span>
                   {wh.sideEffects && (
@@ -108,7 +108,7 @@ export function WebhookConfigRenderer({ data, isMutating }: WebhookConfigRendere
                         ))}
                         <span className="text-theme-text-tertiary">on</span>
                         {(rule.resources || []).map((r: string) => (
-                          <span key={r} className="px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400">{r}</span>
+                          <span key={r} className="px-1.5 py-0.5 rounded status-purple">{r}</span>
                         ))}
                         {(rule.apiGroups || []).map((g: string) => (
                           <span key={g} className="px-1.5 py-0.5 rounded bg-theme-elevated text-theme-text-secondary">{g === '' ? 'core' : g}</span>

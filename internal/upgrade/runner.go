@@ -36,10 +36,12 @@ type Options struct {
 	PersistentVolumeClaimNamespaces      []string
 	EventNamespaces                      []string
 	CanReadNodes                         bool
+	NodeProxyForbidden                   bool
 	CanReadPersistentVolumes             bool
 	SourceObjects                        []metav1.Object
 	AdmissionWebhookConfigurations       []*unstructured.Unstructured
 	AdmissionWebhookUnavailableKinds     []string
+	AdmissionWebhookDeniedKinds          []string
 	CustomResourceDefinitions            []*unstructured.Unstructured
 	APIServices                          []*unstructured.Unstructured
 	EndpointSlices                       []*discoveryv1.EndpointSlice
@@ -62,8 +64,10 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts Options) (
 		WebhookServices:                      opts.WebhookServices,
 		AdmissionWebhookConfigurations:       opts.AdmissionWebhookConfigurations,
 		AdmissionWebhookUnavailableKinds:     opts.AdmissionWebhookUnavailableKinds,
+		AdmissionWebhookDeniedKinds:          opts.AdmissionWebhookDeniedKinds,
 		CustomResourceDefinitions:            opts.CustomResourceDefinitions,
 		APIServices:                          opts.APIServices,
+		NodeProxyForbidden:                   opts.NodeProxyForbidden,
 		NodeRuntimeEvidence:                  opts.NodeRuntimeEvidence,
 		SourceObjects:                        opts.SourceObjects,
 		SourceObjectUnavailableKinds:         opts.SourceObjectUnavailableKinds,

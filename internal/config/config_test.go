@@ -4,10 +4,31 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestConfigDoesNotPersistTimelinePostgresDSN(t *testing.T) {
+	if _, ok := reflect.TypeOf(Config{}).FieldByName("TimelinePostgresDSN"); ok {
+		t.Fatal("Config must not expose a persisted TimelinePostgresDSN field")
+	}
+
+	const dsn = "postgres://radar:secret@example.test/radar"
+	var cfg Config
+	if err := json.Unmarshal([]byte(`{"timelinePostgresDSN":"`+dsn+`"}`), &cfg); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(data), dsn) {
+		t.Fatalf("serialized Config leaked PostgreSQL DSN: %s", data)
+	}
+}
 
 func TestLoadMissing(t *testing.T) {
 	// Override path to a non-existent file
@@ -20,6 +41,29 @@ func TestLoadMissing(t *testing.T) {
 	c := Load()
 	if c.Kubeconfig != "" || c.Port != 0 || c.MCP != nil {
 		t.Errorf("expected zero-value Config, got %+v", c)
+	}
+}
+
+func TestCursorConsentRequiresCurrentDisclosureVersion(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+
+	const surface = "cursor-agent:full-local"
+	if got := AIConsentVersion(surface); got != "v2" {
+		t.Fatalf("AIConsentVersion(%q) = %q, want v2", surface, got)
+	}
+	if err := Save(Config{AIConsent: map[string]string{surface: "v1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if AIConsentGiven(surface) {
+		t.Fatal("the previous Cursor disclosure must require consent again")
+	}
+	if err := RecordAIConsent(surface); err != nil {
+		t.Fatal(err)
+	}
+	if !AIConsentGiven(surface) {
+		t.Fatal("the current Cursor disclosure should satisfy consent")
 	}
 }
 

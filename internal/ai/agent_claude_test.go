@@ -51,3 +51,24 @@ func TestClaudeExecutionProfiles(t *testing.T) {
 		t.Fatal("Claude must reject an empty profile rather than fail open")
 	}
 }
+
+func TestClaudeSafeguardedApplyAllowsEveryRadarWriteTool(t *testing.T) {
+	a := &claudeAgent{bin: "claude"}
+	cmd, cleanup, err := a.command(context.Background(), turnSpec{
+		mcpURL: "http://localhost:1/mcp", prompt: "apply",
+		profile: ExecutionProfileSafeguarded, apply: true, maxTurns: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	args := strings.Join(cmd.Args, " ")
+	for _, tool := range radarWriteTools {
+		if !strings.Contains(args, "mcp__radar__"+tool) {
+			t.Errorf("safeguarded apply command missing write tool %q: %q", tool, args)
+		}
+	}
+	if !strings.Contains(args, "mcp__radar__manage_rollout") {
+		t.Errorf("real Rollout mutations must be available on apply turns: %q", args)
+	}
+}

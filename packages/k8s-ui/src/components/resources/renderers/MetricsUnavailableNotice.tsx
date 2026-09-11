@@ -21,7 +21,8 @@ export function MetricsUnavailableNotice({ rawError, diagnosis }: MetricsUnavail
                   This panel uses Kubernetes metrics.k8s.io for live CPU and memory; Prometheus data does not fill it.
                 </span>
                 <span className="block">
-                  {diagnosis || 'Check that metrics-server is installed and healthy, and that the v1beta1.metrics.k8s.io APIService is Available.'}
+                  {diagnosis ||
+                    "Check that metrics-server is installed and healthy, and that its metrics.k8s.io APIService is Available."}
                 </span>
                 <span className="block">
                   Raw error: <span className="font-mono break-words">{rawError}</span>

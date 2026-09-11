@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { AlertTriangle, ArrowUpRight, Check, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
+import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import {
   ApiError,
   cancelCloudInstall,
@@ -40,7 +41,7 @@ export function CloudConnectFlow({
         <div className="px-8 py-10 flex flex-col items-center gap-3 text-center">
           <Loader2 className="w-5 h-5 animate-spin text-emerald-600 dark:text-emerald-400" />
           <p className="text-[13px] text-theme-text-secondary">
-            Checking this cluster and preparing the install — this can take a moment on a slow link.
+            Checking this cluster and preparing the install. This can take a moment on a slow link.
           </p>
         </div>
       )
@@ -143,6 +144,7 @@ function PlanCard({
   const [acceptAdoption, setAcceptAdoption] = useState(false)
   const [ackUncertainty, setAckUncertainty] = useState(false)
   const [ackShared, setAckShared] = useState(false)
+  const [notesOpen, setNotesOpen] = useState(false)
 
   // The approval tab is opened synchronously by the click below (popup
   // blockers reject window.open from an async callback) and navigated once the
@@ -236,19 +238,27 @@ function PlanCard({
           their presence visible so nobody approves blind, but don't let the
           wall of text bury the decision. */}
       {plan.advisories && plan.advisories.length > 0 && (
-        <details className="mt-2.5">
-          <summary className="flex items-center gap-1.5 cursor-pointer select-none text-[11.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">
+        <div className="mt-2.5">
+          <button
+            type="button"
+            onClick={() => setNotesOpen((v) => !v)}
+            aria-expanded={notesOpen}
+            className="flex items-center gap-1.5 text-[11.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
+          >
+            <CollapseChevron open={notesOpen} className="w-3.5 h-3.5" />
             <Info className="w-3.5 h-3.5 shrink-0" />
             {plan.advisories.length === 1 ? '1 preflight note' : `${plan.advisories.length} preflight notes`}
-          </summary>
-          <ul className="mt-1.5 space-y-1.5 pl-5">
-            {plan.advisories.map((note) => (
-              <li key={note} className="text-[11.5px] leading-snug text-theme-text-tertiary">
-                {note}
-              </li>
-            ))}
-          </ul>
-        </details>
+          </button>
+          <Collapse open={notesOpen}>
+            <ul className="mt-1.5 space-y-1.5 pl-5">
+              {plan.advisories.map((note) => (
+                <li key={note} className="text-[11.5px] leading-snug text-theme-text-tertiary">
+                  {note}
+                </li>
+              ))}
+            </ul>
+          </Collapse>
+        </div>
       )}
 
       <label className="mt-3.5 block">
@@ -312,8 +322,9 @@ function PlanCard({
        *  so this cannot assert whether an account already exists. Phrased to
        *  read correctly for a returning operator and a first-time one alike. */}
       <p className="mt-2.5 text-[11px] text-theme-text-tertiary">
-        Nothing is installed yet — you'll approve this cluster in the browser, creating your account and
-        organization first if you don't have one. Then Radar installs the agent.
+        Nothing is installed yet. You'll approve this cluster in the browser, creating your account and
+        organization first if you don't have one.{' '}
+        {adopt ? 'Then your existing Radar is upgraded and connected.' : 'Then Radar is installed in your cluster.'}
       </p>
     </div>
   )
@@ -365,7 +376,7 @@ function ApprovalCard({ status, onStatus }: { status: CloudInstallStatus; onStat
       </div>
       <p className="text-[12.5px] leading-relaxed text-theme-text-secondary mb-3.5">
         Approve connecting <b className="text-theme-text-primary">{status.clusterName}</b> in the browser tab.
-        Sign-in and org setup happen there too — this screen advances automatically.
+        Sign-in and org setup happen there too, and this screen advances automatically.
       </p>
       {status.connectUrl && (
         <div className="card-inner flex items-center gap-2">
@@ -391,7 +402,7 @@ function ProgressCard({ status, onStatus }: { status: CloudInstallStatus; onStat
   const steps: Array<{ label: string; state: 'done' | 'active' | 'todo' }> = [
     { label: 'Approved in browser', state: 'done' },
     { label: `Installing Radar (namespace ${status.plan?.namespace ?? 'radar'})`, state: provisioning ? 'active' : 'done' },
-    { label: 'Waiting for the agent to connect', state: provisioning ? 'todo' : 'active' },
+    { label: 'Waiting for Radar to connect to Cloud', state: provisioning ? 'todo' : 'active' },
   ]
   return (
     <div className="px-8 pt-6 pb-5">
@@ -419,7 +430,7 @@ function ProgressCard({ status, onStatus }: { status: CloudInstallStatus; onStat
       <div className="mt-4">
         {provisioning ? (
           <p className="text-[11px] text-theme-text-tertiary">
-            Installing — this step completes atomically and can’t be canceled midway.
+            Installing. This step completes atomically and can’t be canceled midway.
           </p>
         ) : (
           cancel
@@ -469,8 +480,8 @@ function ConnectedCard({
         </h4>
       </div>
       <p className="text-[12.5px] leading-relaxed text-theme-text-secondary mb-4">
-        The in-cluster agent is live and tunneled. This local app keeps working exactly as before — the
-        cluster is now also reachable for your team at one URL.
+        Radar is live in the cluster and connected to Radar Cloud. The Radar you're running keeps working,
+        and the cluster is now also reachable for your team at one URL.
       </p>
       <div className="flex items-center gap-4 mb-4">
         <a
@@ -592,14 +603,23 @@ function GuidanceBlock({
 }
 
 function GuidanceDetails({ title, guidance }: { title: string; guidance: CloudInstallRecoveryGuidance }) {
+  const [open, setOpen] = useState(false)
   return (
-    <details className="group">
-      <summary className="cursor-pointer text-[11.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors select-none">
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex items-center gap-1.5 text-[11.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
+      >
+        <CollapseChevron open={open} className="w-3.5 h-3.5" />
         {title}
-      </summary>
-      <div className="mt-2">
-        <GuidanceBlock guidance={guidance} />
-      </div>
-    </details>
+      </button>
+      <Collapse open={open}>
+        <div className="mt-2">
+          <GuidanceBlock guidance={guidance} />
+        </div>
+      </Collapse>
+    </div>
   )
 }

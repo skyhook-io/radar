@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { AlertTriangle } from 'lucide-react'
-import { kindToPlural } from '../../utils/navigation'
+import { kindToPluralWithGroup } from '../../utils/navigation'
 import { IssueRow } from './IssuesView'
 import { compareIssues, subjectRef, type Issue, type IssueResourceRef } from './types'
 
@@ -56,7 +56,8 @@ export function sameResource(a: IssueResourceRef, b: IssueResourceRef): boolean 
   return (
     a.name === b.name &&
     (a.namespace ?? '') === (b.namespace ?? '') &&
-    kindToPlural(a.kind).toLowerCase() === kindToPlural(b.kind).toLowerCase()
+    kindToPluralWithGroup(a.kind, a.group ?? '').toLowerCase() ===
+      kindToPluralWithGroup(b.kind, b.group ?? '').toLowerCase()
   )
 }
 

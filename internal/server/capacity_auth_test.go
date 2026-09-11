@@ -17,7 +17,7 @@ func TestCapacityNamespacesBypassSavedViewPreference(t *testing.T) {
 	t.Cleanup(func() { k8s.SetTestContextName(previousContext) })
 
 	s := newAuthServer(auth.Config{Mode: "proxy"})
-	s.permCache.Set("alice", &auth.UserPermissions{AllowedNamespaces: []string{"alpha", "beta"}})
+	s.permCache.Set("alice", nil, &auth.UserPermissions{AllowedNamespaces: []string{"alpha", "beta"}})
 	r := requestWithUser(http.MethodGet, "/api/capacity", &auth.User{Username: "alice"})
 	s.setActiveNamespaceForUser(r, []string{"alpha"})
 	if got := s.getActiveNamespaceForUser(r); !slices.Equal(got, []string{"alpha"}) {
@@ -57,7 +57,7 @@ func TestCapacityOwnerResolutionRequiresImmediateOwnerVisibility(t *testing.T) {
 
 func TestCapacityNamespacesHonorExplicitAndForcedScope(t *testing.T) {
 	s := newAuthServer(auth.Config{Mode: "proxy"})
-	s.permCache.Set("alice", &auth.UserPermissions{AllowedNamespaces: []string{"alpha", "beta"}})
+	s.permCache.Set("alice", nil, &auth.UserPermissions{AllowedNamespaces: []string{"alpha", "beta"}})
 
 	r := requestWithUser(http.MethodGet, "/api/capacity?namespaces=beta,other", &auth.User{Username: "alice"})
 	if got := s.capacityNamespacesForUser(r); !slices.Equal(got, []string{"beta"}) {

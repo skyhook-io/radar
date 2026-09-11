@@ -27,6 +27,12 @@ import {
   getCNPGClusterDisplayState,
   getCNPGClusterInstances,
   getCNPGPoolerInstances,
+  getCNPGClusterIsReplica,
+  getCNPGClusterReplicaSource,
+  getCNPGClusterAvailability,
+  isCNPGClusterHibernated,
+  isCNPGClusterFencedAll,
+  CNPG_DOWN_GRACE_MS,
 } from './resource-utils-cnpg'
 import { getCellFilterValue } from './resource-utils'
 
@@ -176,8 +182,10 @@ describe('getCNPGClusterStatus', () => {
     expect(getCNPGClusterStatus(cluster({ phase: 'Failing over', readyInstances: 2 }, { instances: 3 })).level).toBe('alert')
   })
 
-  it('treats zero ready instances as down regardless of phase', () => {
-    const s = getCNPGClusterStatus(cluster({ phase: 'Cluster in healthy state', readyInstances: 0 }, { instances: 3 }))
+  it('treats a was-up cluster with zero ready instances as down regardless of phase', () => {
+    // currentPrimary proves it was serving; the omitted-then-zero count is a
+    // regression, not a first bootstrap. Even a "healthy" phase does not rescue it.
+    const s = getCNPGClusterStatus(cluster({ phase: 'Cluster in healthy state', currentPrimary: 'pg-1', readyInstances: 0 }, { instances: 3 }))
     expect(s.level).toBe('unhealthy')
     expect(s.text).toBe('Not Ready')
   })
@@ -190,6 +198,68 @@ describe('getCNPGClusterStatus', () => {
     const s = getCNPGClusterStatus(cluster({ phase: 'Some future phase', readyInstances: 2 }, { instances: 2 }))
     expect(s.level).toBe('unknown')
     expect(s.text).toBe('Some future phase')
+  })
+})
+
+describe('getCNPGClusterAvailability — three states a bare zero-ready count collapses', () => {
+  // CNPG omits readyInstances when it is 0, so these fixtures OMIT it — the shape
+  // the operator actually emits for a down cluster.
+  const withPrimary = (extra: any = {}, meta: any = {}) => ({
+    metadata: meta,
+    spec: { instances: 3 },
+    status: { currentPrimary: 'pg-1', ...extra },
+  })
+
+  it('is null while still bootstrapping — reported, but no primary ever elected', () => {
+    // The truly-statusless case AND the reported-but-no-primary case both stay
+    // null: nothing was serving to lose.
+    expect(getCNPGClusterAvailability({ spec: { instances: 3 }, status: {} })).toBeNull()
+    expect(getCNPGClusterAvailability({ spec: { instances: 3 }, status: { phase: 'Setting up primary' } })).toBeNull()
+  })
+
+  it('is null when a real ready count exists', () => {
+    expect(getCNPGClusterAvailability({ spec: { instances: 3 }, status: { currentPrimary: 'pg-1', readyInstances: 2 } })).toBeNull()
+  })
+
+  it('is down for a was-up cluster with no Ready condition — escalates immediately', () => {
+    expect(getCNPGClusterAvailability(withPrimary({ phase: 'Waiting for the instances to become active' }))).toBe('down')
+  })
+
+  it('debounces a fresh Ready=False, then escalates once it ages past the grace', () => {
+    const recent = new Date(Date.now() - 60 * 1000).toISOString()
+    const old = new Date(Date.now() - CNPG_DOWN_GRACE_MS - 60 * 1000).toISOString()
+    const cond = (ltt: string) => withPrimary({
+      conditions: [{ type: 'Ready', status: 'False', reason: 'ClusterIsNotReady', lastTransitionTime: ltt }],
+    })
+    expect(getCNPGClusterAvailability(cond(recent))).toBeNull()
+    expect(getCNPGClusterAvailability(cond(old))).toBe('down')
+  })
+
+  it('reads hibernation and all-fencing as neutral, ahead of the down verdict', () => {
+    expect(getCNPGClusterAvailability(withPrimary({}, { annotations: { 'cnpg.io/hibernation': 'on' } }))).toBe('hibernated')
+    expect(getCNPGClusterAvailability(withPrimary({}, { annotations: { 'cnpg.io/fencedInstances': '["*"]' } }))).toBe('fenced')
+  })
+
+  it('a partial fence is not all-fenced — "*" is the only all-down token', () => {
+    expect(isCNPGClusterFencedAll({ metadata: { annotations: { 'cnpg.io/fencedInstances': '["pg-1-2"]' } } })).toBe(false)
+    expect(isCNPGClusterFencedAll({ metadata: { annotations: { 'cnpg.io/fencedInstances': '["*"]' } } })).toBe(true)
+    // A malformed annotation is treated as not-fenced rather than throwing.
+    expect(isCNPGClusterFencedAll({ metadata: { annotations: { 'cnpg.io/fencedInstances': 'not-json' } } })).toBe(false)
+  })
+
+  it('hibernation is an explicit "on", nothing else', () => {
+    expect(isCNPGClusterHibernated({ metadata: { annotations: { 'cnpg.io/hibernation': 'on' } } })).toBe(true)
+    expect(isCNPGClusterHibernated({ metadata: { annotations: { 'cnpg.io/hibernation': 'off' } } })).toBe(false)
+    expect(isCNPGClusterHibernated({ metadata: {} })).toBe(false)
+  })
+
+  it('renders the badge neutral for hibernation and fencing, red only for a real outage', () => {
+    expect(getCNPGClusterStatus(withPrimary({}, { annotations: { 'cnpg.io/hibernation': 'on' } })))
+      .toMatchObject({ text: 'Hibernated', level: 'neutral' })
+    expect(getCNPGClusterStatus(withPrimary({}, { annotations: { 'cnpg.io/fencedInstances': '["*"]' } })))
+      .toMatchObject({ text: 'Fenced', level: 'neutral' })
+    expect(getCNPGClusterStatus(withPrimary({ phase: 'Switchover in progress' })))
+      .toMatchObject({ text: 'Not Ready', level: 'unhealthy' })
   })
 })
 
@@ -714,5 +784,75 @@ describe('CNPG scheduled backup lateness', () => {
   it('says nothing when the operator published no next-run time', () => {
     expect(getCNPGScheduledBackupNextSchedule(sb(false))).toBe('-')
     expect(getCNPGScheduledBackupStatus(sb(false, undefined, at(-24 * 60 * MIN))).level).toBe('healthy')
+  })
+})
+
+describe('getCNPGClusterIsReplica — the live replica-cluster role, per CNPG semantics', () => {
+  // CNPG carries replica-cluster state in `spec.replica` (enabled/primary/self/source),
+  // and its own Cluster.IsReplica() reads: enabled wins when set; otherwise the
+  // cluster is a replica only while (self || name) != primary. Promotion mutates
+  // those fields but leaves the stanza in place, so presence alone cannot be the
+  // signal.
+
+  it('standalone replica cluster (replica mode enabled) reads as a replica', () => {
+    const resource = {
+      metadata: { name: 'pg-eu' },
+      spec: { replica: { source: 'pg-us', enabled: true } },
+    }
+    expect(getCNPGClusterIsReplica(resource)).toBe(true)
+  })
+
+  it('a promoted standalone cluster (replica.enabled turned off) is no longer a replica', () => {
+    const resource = {
+      metadata: { name: 'pg-eu' },
+      spec: { replica: { source: 'pg-us', enabled: false } },
+    }
+    expect(getCNPGClusterIsReplica(resource)).toBe(false)
+  })
+
+  it('distributed topology: a designated replica (primary names another cluster) reads as a replica', () => {
+    const resource = {
+      metadata: { name: 'pg-eu' },
+      spec: { replica: { source: 'pg-us', primary: 'pg-us', self: 'pg-eu' } },
+    }
+    expect(getCNPGClusterIsReplica(resource)).toBe(true)
+  })
+
+  it('distributed topology: after promotion (primary now names this cluster) it is the primary, stanza still present', () => {
+    const resource = {
+      metadata: { name: 'pg-eu' },
+      spec: { replica: { source: 'pg-us', primary: 'pg-eu', self: 'pg-eu' } },
+    }
+    expect(getCNPGClusterIsReplica(resource)).toBe(false)
+  })
+
+  it('distributed topology without self falls back to the resource name', () => {
+    const promoted = {
+      metadata: { name: 'pg-eu' },
+      spec: { replica: { source: 'pg-us', primary: 'pg-eu' } },
+    }
+    expect(getCNPGClusterIsReplica(promoted)).toBe(false)
+
+    const stillReplica = {
+      metadata: { name: 'pg-eu' },
+      spec: { replica: { source: 'pg-us', primary: 'pg-us' } },
+    }
+    expect(getCNPGClusterIsReplica(stillReplica)).toBe(true)
+  })
+
+  it('a bootstrapping standalone replica with only a source (no enabled, no primary) is a replica', () => {
+    // The stanza's source is required; before the operator writes enabled, the
+    // cluster is still a replica — (self || name) never equals an unset primary.
+    const resource = { metadata: { name: 'pg-eu' }, spec: { replica: { source: 'pg-us' } } }
+    expect(getCNPGClusterIsReplica(resource)).toBe(true)
+  })
+
+  it('an ordinary standalone cluster with no replica stanza is not a replica', () => {
+    expect(getCNPGClusterIsReplica({ metadata: { name: 'pg' }, spec: { instances: 3 } })).toBe(false)
+  })
+
+  it('getCNPGClusterReplicaSource reads the source from the replica stanza', () => {
+    const resource = { metadata: { name: 'pg-eu' }, spec: { replica: { source: 'pg-us', enabled: true } } }
+    expect(getCNPGClusterReplicaSource(resource)).toBe('pg-us')
   })
 })

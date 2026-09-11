@@ -36,7 +36,7 @@ import {
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
 import type { NavigateToResource } from '../../utils/navigation'
-import { refToSelectedResource, pluralToKind, kindToPlural, apiVersionToGroup } from '../../utils/navigation'
+import { refToSelectedResource, pluralToKind, kindToPlural, kindToPluralWithGroup, apiVersionToGroup } from '../../utils/navigation'
 import { neighborhoodFor, seedNodeIds } from '../../utils/topology-neighborhood'
 import { TopologyGraph } from '../topology/TopologyGraph'
 import { gitOpsOwnerFromRelationships, type GitOpsOwnerRef } from '../../utils/gitops-owner'
@@ -73,6 +73,7 @@ import {
 import { ServicePortCards, type ServicePortRenderProps } from '../resources/renderers/ServiceRenderer'
 import { rolloutMayAdvanceAutomatically, type WorkloadRolloutActivity } from '../../utils/workload-rollout'
 import { WorkloadRolloutNotice } from './WorkloadRolloutNotice'
+import { isCoreBatchJob } from '../../utils/api-resources'
 
 export type WorkloadTabType = 'overview' | 'topology' | 'timeline' | 'logs' | 'metrics' | 'reachability' | 'cost' | 'yaml'
 type TabType = WorkloadTabType
@@ -555,11 +556,12 @@ export function WorkloadView({
   const handleTopologyNodeClick = useCallback(
     (node: TopologyNode) => {
       if (!onNavigateToResource || !node.kind || !node.name) return
+      const group = apiVersionToGroup(node.data?.apiVersion as string | undefined)
       onNavigateToResource({
-        kind: kindToPlural(node.kind),
+        kind: kindToPluralWithGroup(node.kind, group),
         namespace: (node.data?.namespace as string) || '',
         name: node.name,
-        group: apiVersionToGroup(node.data?.apiVersion as string | undefined),
+        group,
       })
     },
     [onNavigateToResource],
@@ -726,10 +728,11 @@ export function WorkloadView({
   // prominent "Diagnose" on a problem, a quiet icon when fine. Rendered via the host
   // slot (DiagnoseCustomization); standalone Radar injects it, Hub overrides it.
   const renderDiagnose = actionsBarProps?.renderDiagnose as
-    | ((ctx: { kind: string; namespace: string; name: string; health?: DiagnoseHealthHint }) => ReactNode)
+    | ((ctx: { kind: string; group?: string; namespace: string; name: string; health?: DiagnoseHealthHint }) => ReactNode)
     | undefined
   const diagnoseAction = renderDiagnose?.({
     kind: apiKind,
+    group,
     namespace,
     name,
     health: diagnoseHealthHint(apiKind, resource),
@@ -737,7 +740,10 @@ export function WorkloadView({
 
   const showMetricsTab = isMetricsAvailable ? isMetricsAvailable(kind, resource) : false
   const showCostTab = isCostAvailable ? isCostAvailable(kind, resource) : false
-  const logsTabVisible = Boolean(renderLogsTab) && (allPods.length > 0 || LOGS_TAB_WITHOUT_PODS_KINDS.has(kindToPlural(kind).toLowerCase()))
+  const normalizedKind = kindToPlural(kind).toLowerCase()
+  const logsWithoutPods = LOGS_TAB_WITHOUT_PODS_KINDS.has(normalizedKind) &&
+    (normalizedKind !== 'jobs' || isCoreBatchJob(kind, group))
+  const logsTabVisible = Boolean(renderLogsTab) && (allPods.length > 0 || logsWithoutPods)
   const metricsTabVisible = Boolean(showMetricsTab && renderMetricsTab)
   const costTabVisible = Boolean(showCostTab && renderCostTab)
   const podEvidenceLoading = resourceLoading || workloadPodsLoading || eventsLoading
@@ -875,8 +881,15 @@ export function WorkloadView({
         {/* Success animation overlay */}
         {saveSuccess && <SaveSuccessAnimation />}
 
-        {/* Content — viewTransitionName scopes View Transitions API cross-fade to this element */}
-        <div className="flex-1 overflow-y-auto" style={{ viewTransitionName: 'drawer-content' }}>
+        {/* Content — viewTransitionName scopes View Transitions API cross-fade to this element.
+            `relative` is the backstop for absolutely-positioned descendants (Tailwind's
+            `sr-only` is position:absolute). The drawer frame keeps overflow visible at idle so
+            popovers aren't clipped, and the app's content column clips only horizontally, so one
+            that resolves its containing block above this scroller escapes into the DOCUMENT's
+            scrollable overflow — a second, page-level scrollbar. Anchoring here confines the
+            damage to this scroll body; ui/Collapse.tsx keeps them from escaping in the first
+            place. */}
+        <div className="relative flex-1 overflow-y-auto" style={{ viewTransitionName: 'drawer-content' }}>
           {!resource ? (
             // Fill the drawer body so the loading logo centers in it, not in a
             // 128px box pinned to the top (matches the splash/PaneLoader centering).
@@ -1624,7 +1637,7 @@ function InfoTab({
     return <FetchResult loading={isLoading} error={error} className="h-full" />
   }
 
-  if (!isRuntimeWorkloadOverviewKind(selectedResource.kind)) {
+  if (!isRuntimeWorkloadOverviewKind(selectedResource.kind, selectedResource.group)) {
     return (
       <div className="h-full overflow-auto">
         {leadContent && (
@@ -1728,8 +1741,10 @@ const RUNTIME_WORKLOAD_OVERVIEW_KINDS = new Set(['deployments', 'statefulsets', 
 const ROLLOUT_STATUS_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'rollouts'])
 type RuntimeOverviewShape = 'replicated' | 'job' | 'cronjob'
 
-function isRuntimeWorkloadOverviewKind(kind: string) {
-  return RUNTIME_WORKLOAD_OVERVIEW_KINDS.has(kindToPlural(kind).toLowerCase())
+function isRuntimeWorkloadOverviewKind(kind: string, group?: string) {
+  const normalizedKind = kindToPlural(kind).toLowerCase()
+  return RUNTIME_WORKLOAD_OVERVIEW_KINDS.has(normalizedKind) &&
+    (normalizedKind !== 'jobs' || isCoreBatchJob(kind, group))
 }
 
 function isRolloutStatusKind(kind: string) {
@@ -1796,7 +1811,7 @@ function WorkloadOverviewTab({
   leadContent?: ReactNode
   recentImageSave?: boolean
 }) {
-  const apiKind = kindToPlural(selectedResource.kind)
+  const apiKind = kindToPluralWithGroup(selectedResource.kind, selectedResource.group ?? '')
   const resourceKind = resource?.kind || displayKindName(apiKind, resource?.kind)
   const readiness = getReadinessSummary(resource, apiKind)
   const podSummary = getPodSummary(workloadPods, relationships, apiKind)

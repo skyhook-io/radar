@@ -206,7 +206,7 @@ func TestDashboardCalicoCoverageUsesNamespaceAwareReadsAndCalicoFallback(t *test
 		perms.SetCanI("list", tuple.group, tuple.resource, tuple.namespace, true)
 	}
 	perms.SetCanI("list", legacyNetworkPolicy.Group, legacyNetworkPolicy.Resource, "ns-c", false)
-	server.permCache.Set("alice", perms)
+	server.permCache.Set("alice", nil, perms)
 	authenticated := requestWithUser("GET", "/", &auth.User{Username: "alice"})
 	filtered := server.getDashboardNetworkPolicyCoverage(authenticated, cache, []string{"ns-a", "ns-b", "ns-c"})
 	if filtered == nil {

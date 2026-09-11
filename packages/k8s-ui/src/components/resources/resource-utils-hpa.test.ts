@@ -22,6 +22,10 @@ describe('hpaStateLabel', () => {
   it('keeps max-bound wording terse for table cells', () => {
     expect(hpaStateLabel('limited_max')).toBe('Maxed')
   })
+
+  it('describes an intentional zero-replica target', () => {
+    expect(hpaStateLabel('scaled_to_zero')).toBe('Scaled to zero')
+  })
 })
 
 function loadCases(): FixtureCase[] {

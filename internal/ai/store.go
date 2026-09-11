@@ -30,16 +30,22 @@ type RunStore interface {
 	// is upserted in the SAME transaction — terminal events ride with their
 	// status so crash recovery can trust the status column.
 	AppendEvent(runID string, e RunEvent, summary *RunSummary)
+	// AppendEvents is the ordered batch form of AppendEvent. Every event and the
+	// optional summary commit in ONE transaction. Compound boundaries such as
+	// apply→verify and stale-error→closed use this so a hard process exit can
+	// leave either the whole transition or none of it, never a partial boundary.
+	AppendEvents(runID string, events []RunEvent, summary *RunSummary)
 	// LoadRuns returns every persisted summary, oldest first.
 	LoadRuns() ([]RunSummary, error)
 	// LoadEvents returns a run's events ordered by seq.
 	LoadEvents(runID string) ([]RunEvent, error)
 	// DeleteRun removes a run and its events.
 	DeleteRun(id string)
-	// Clear synchronously removes persisted runs and events in ONE transaction,
-	// except the given run ids (live investigations that must survive a crash
-	// mid-clear).
-	Clear(keep []string) error
+	// ClearTerminal synchronously removes every non-running run and its events in
+	// ONE transaction. The store derives the live set from the same database
+	// snapshot used by the delete: a manager's in-memory run list is deliberately
+	// incomplete when another Radar process owns a live run in this shared DB.
+	ClearTerminal() error
 	// Degraded reports that persistence has stopped working (disk error or a
 	// saturated write queue) — history will not survive a restart.
 	Degraded() bool
@@ -49,6 +55,11 @@ type RunStore interface {
 	// Close drains pending writes and closes the DB.
 	Close()
 }
+
+// errCorruptRunHistory classifies structural transcript damage separately from
+// transient database/read failures. Callers must not retry this condition in a
+// tight EventSource loop: the same retained rows will fail on every load.
+var errCorruptRunHistory = errors.New("corrupt investigation transcript")
 
 const storeSchema = `
 CREATE TABLE IF NOT EXISTS runs (
@@ -204,28 +215,38 @@ func (s *sqliteRunStore) SaveRun(sum RunSummary) {
 }
 
 func (s *sqliteRunStore) AppendEvent(runID string, e RunEvent, summary *RunSummary) {
+	s.AppendEvents(runID, []RunEvent{e}, summary)
+}
+
+func (s *sqliteRunStore) AppendEvents(runID string, events []RunEvent, summary *RunSummary) {
+	if len(events) == 0 {
+		return
+	}
 	s.enqueue(func(db *sql.DB) error {
-		b, err := json.Marshal(e.Event)
-		if err != nil {
-			return err
-		}
 		tx, err := db.Begin()
 		if err != nil {
 			return err
 		}
 		defer func() { _ = tx.Rollback() }()
-		if e.Seq > 0 {
-			_, err = tx.Exec(`INSERT OR REPLACE INTO run_events (run_id, seq, event_json) VALUES (?, ?, ?)`,
-				runID, e.Seq, string(b))
-		} else {
-			// Store-assigned sequence: terminal markers appended to a run whose
-			// log was never loaded into memory this process.
-			_, err = tx.Exec(`INSERT INTO run_events (run_id, seq, event_json)
+		for _, event := range events {
+			b, marshalErr := json.Marshal(event.Event)
+			if marshalErr != nil {
+				return marshalErr
+			}
+			if event.Seq > 0 {
+				_, err = tx.Exec(`INSERT OR REPLACE INTO run_events (run_id, seq, event_json) VALUES (?, ?, ?)`,
+					runID, event.Seq, string(b))
+			} else {
+				// Store-assigned sequence: terminal markers appended to a run whose
+				// log was never loaded into memory this process. Repeating MAX inside
+				// this transaction advances through an unsequenced batch.
+				_, err = tx.Exec(`INSERT INTO run_events (run_id, seq, event_json)
 				SELECT ?, COALESCE(MAX(seq), 0) + 1, ? FROM run_events WHERE run_id = ?`,
-				runID, string(b), runID)
-		}
-		if err != nil {
-			return err
+					runID, string(b), runID)
+			}
+			if err != nil {
+				return err
+			}
 		}
 		if summary != nil {
 			b, err := json.Marshal(*summary)
@@ -271,23 +292,40 @@ func (s *sqliteRunStore) LoadEvents(runID string) ([]RunEvent, error) {
 	s.barrier() // read-your-writes: a hydration right after markStale/startup must see those markers
 	rows, err := s.db.Query(`SELECT seq, event_json FROM run_events WHERE run_id = ? ORDER BY seq ASC`, runID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load investigation events for %q: %w", runID, err)
 	}
 	defer rows.Close()
 	var out []RunEvent
+	expectedSeq := 1
 	for rows.Next() {
 		var seq int
 		var raw string
 		if err := rows.Scan(&seq, &raw); err != nil {
-			return nil, err
+			// With this fixed schema, Scan failures are stored-value conversion
+			// failures (for example a non-integer sequence), not a retryable read
+			// outage. Driver I/O failures arrive through rows.Err below.
+			return nil, fmt.Errorf("%w for %q: invalid stored event row: %v", errCorruptRunHistory, runID, err)
+		}
+		if seq != expectedSeq {
+			return nil, fmt.Errorf(
+				"%w for %q: non-contiguous sequence: got %d, want %d",
+				errCorruptRunHistory, runID, seq, expectedSeq,
+			)
 		}
 		var ev StreamEvent
 		if err := json.Unmarshal([]byte(raw), &ev); err != nil {
-			continue
+			return nil, fmt.Errorf("%w for %q at sequence %d: invalid event JSON: %v", errCorruptRunHistory, runID, seq, err)
+		}
+		if ev.Type == "" {
+			return nil, fmt.Errorf("%w for %q at sequence %d: event type is empty", errCorruptRunHistory, runID, seq)
 		}
 		out = append(out, RunEvent{Seq: seq, Event: ev})
+		expectedSeq++
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("load investigation events for %q: %w", runID, err)
+	}
+	return out, nil
 }
 
 func (s *sqliteRunStore) DeleteRun(id string) {
@@ -300,7 +338,7 @@ func (s *sqliteRunStore) DeleteRun(id string) {
 	})
 }
 
-func (s *sqliteRunStore) Clear(keep []string) error {
+func (s *sqliteRunStore) ClearTerminal() error {
 	var out error
 	ran := s.enqueueWait(func(db *sql.DB) error {
 		tx, err := db.Begin()
@@ -309,25 +347,19 @@ func (s *sqliteRunStore) Clear(keep []string) error {
 			return err
 		}
 		defer func() { _ = tx.Rollback() }()
-		args := make([]any, len(keep))
-		ph := ""
-		for i, id := range keep {
-			if i > 0 {
-				ph += ","
-			}
-			ph += "?"
-			args[i] = id
-		}
-		evQ, runQ := `DELETE FROM run_events`, `DELETE FROM runs`
-		if len(keep) > 0 {
-			evQ += ` WHERE run_id NOT IN (` + ph + `)`
-			runQ += ` WHERE id NOT IN (` + ph + `)`
-		}
-		if _, err := tx.Exec(evQ, args...); err != nil {
+		// Keep events only when their summary is running at this transaction's
+		// snapshot. This also clears orphaned event rows, which have no live owner
+		// to protect. SQLite's write transaction prevents a foreign terminal update
+		// from interleaving between the event and summary deletes.
+		if _, err := tx.Exec(`DELETE FROM run_events
+			WHERE NOT EXISTS (
+				SELECT 1 FROM runs
+				WHERE runs.id = run_events.run_id AND runs.status = 'running'
+			)`); err != nil {
 			out = err
 			return err
 		}
-		if _, err := tx.Exec(runQ, args...); err != nil {
+		if _, err := tx.Exec(`DELETE FROM runs WHERE status <> 'running'`); err != nil {
 			out = err
 			return err
 		}

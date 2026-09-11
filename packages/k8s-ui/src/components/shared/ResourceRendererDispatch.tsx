@@ -1,6 +1,7 @@
 import { clsx } from 'clsx'
-import { SEVERITY_BADGE } from '../../utils/badge-colors'
+import { SEVERITY_BADGE, HEALTH_BADGE_COLORS } from '../../utils/badge-colors'
 import { isArgoRolloutResource } from '../../utils/workload-rollout'
+import { getGenericResourceStatus } from '../resources/generic-status'
 import {
   getPodStatus,
   getWorkloadDisplayStatus,
@@ -66,6 +67,17 @@ import {
 } from '../resources/resource-utils-kyverno-exceptions'
 import { getResourceClaimStatus, getResourceClaimTemplateStatus, getDeviceClassStatus, getResourceSliceStatus } from '../resources/resource-utils-dra'
 import { getNvidiaClusterPolicyStatus, getNvidiaDriverStatus } from '../resources/resource-utils-nvidia'
+import { getClusterQueueStatus, getLocalQueueStatus, getKueueWorkloadStatus, getResourceFlavorStatus, getAdmissionCheckStatus, getProvisioningRequestStatus } from '../resources/resource-utils-kueue'
+import { getRayClusterStatus, getRayJobStatus, getRayServiceStatus, getRayCronJobStatus } from '../resources/resource-utils-ray'
+import { getLeaderWorkerSetStatus, getJobSetStatus } from '../resources/resource-utils-jobset-lws'
+import { getInferenceServiceStatus, getServingRuntimeStatus, getInferenceGraphStatus, getTrainedModelStatus, getLLMInferenceServiceStatus } from '../resources/resource-utils-kserve'
+import { getInferencePoolStatus, getInferenceObjectiveStatus } from '../resources/resource-utils-inference-gateway'
+import { getVolcanoJobStatus, getVolcanoQueueStatus, getVolcanoPodGroupStatus, getJobFlowStatus, getJobTemplateStatus } from '../resources/resource-utils-volcano'
+import { getKaiQueueStatus, getKaiPodGroupStatus } from '../resources/resource-utils-kai'
+import { getKaitoWorkspaceStatus, getRAGEngineStatus } from '../resources/resource-utils-kaito'
+import { getNIMServiceStatus, getNIMCacheStatus, getNIMPipelineStatus } from '../resources/resource-utils-nim'
+import { getAMDDeviceConfigStatus } from '../resources/resource-utils-amd-gpu'
+import { getPyTorchJobStatus, getTFJobStatus, getMPIJobStatus, getTrainJobStatus } from '../resources/resource-utils-kubeflow-training'
 import { getBackupStatus, getRestoreStatus, getScheduleStatus, getBSLStatus, getBackupRepositoryStatus, isVeleroResource } from '../resources/resource-utils-velero'
 import {
   getVirtualServiceStatus,
@@ -491,6 +503,20 @@ const KNOWN_KINDS = new Set([
   'functions', 'configurations',
 ])
 
+// Cluster topology owns resources across the core, bootstrap, control-plane,
+// and infrastructure contracts. Keep this explicit: a suffix/substring match
+// would also accept unrelated groups such as extension.cluster.x-k8s.io.
+const CAPI_TOPOLOGY_GROUPS = [
+  'cluster.x-k8s.io',
+  'bootstrap.cluster.x-k8s.io',
+  'controlplane.cluster.x-k8s.io',
+  'infrastructure.cluster.x-k8s.io',
+] as const
+
+function isCAPITopologyGroup(apiVersion?: string): boolean {
+  return CAPI_TOPOLOGY_GROUPS.some(group => isApiGroup(apiVersion, group))
+}
+
 // ============================================================================
 // RESOURCE CONTENT - Delegates to specific renderers
 // ============================================================================
@@ -646,11 +672,13 @@ export function ResourceRendererDispatch({
   // them, and `subscriptions` is Knative's as well. Adding a kind to KNOWN_KINDS
   // with a positively-gated render line and forgetting this list is what makes a
   // foreign CRD render a BLANK drawer rather than the generic one.
+  // CAPI's `machines` and `machinesets` need the same protection because another
+  // API group can publish either plural without inheriting CAPI presentation.
   const isGroupGatedKind =
     kind === 'clusters' || kind === 'backups' || kind === 'scheduledbackups' || kind === 'poolers'
     || kind === 'objectstores' || kind === 'databases' || kind === 'publications'
     || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs'
-    || kind === 'policies' || kind === 'rollouts'
+    || kind === 'policies' || kind === 'rollouts' || kind === 'machines' || kind === 'machinesets'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
     (kind === 'clusters' && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'cluster.x-k8s.io')))
@@ -663,6 +691,8 @@ export function ResourceRendererDispatch({
       && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'messaging.knative.dev')))
     || (kind === 'policies' && isApiGroup(data?.apiVersion, 'kyverno.io'))
     || (kind === 'rollouts' && isArgoRolloutResource(data))
+    || ((kind === 'machines' || kind === 'machinesets')
+      && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io'))
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
   const calicoApiVersionMatched = isCalicoApiVersion(data?.apiVersion)
@@ -676,6 +706,10 @@ export function ResourceRendererDispatch({
   const calicoCollisionFallthrough = (
     isCalicoPolicyKind(kind) || kind === 'hostendpoints' || kind === 'ippools' || kind === 'tiers'
   ) && !isCoreNetworkPolicy && !((isCalicoPolicy || isCalicoHostEndpoint || isCalicoIPPool || isCalicoTier))
+
+  const nonCoreJobFallthrough = kind === 'jobs'
+    && !!data?.apiVersion
+    && !data.apiVersion.startsWith('batch/')
 
   const isKnownKind = KNOWN_KINDS.has(kind) || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
 
@@ -741,7 +775,7 @@ export function ResourceRendererDispatch({
         {kind === 'ingresses' && !data?.apiVersion?.includes('networking.internal.knative.dev') && <IngressRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'configmaps' && <ConfigMapRenderer data={data} />}
         {kind === 'secrets' && <SecretRenderer data={data} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
-        {kind === 'jobs' && <JobRenderer data={data} />}
+        {kind === 'jobs' && !nonCoreJobFallthrough && <JobRenderer data={data} />}
         {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'cronworkflows' && <CronWorkflowRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPAComp data={data} onNavigate={onNavigate} hpaDiagnosis={hpaDiagnosis} />}
@@ -846,15 +880,15 @@ export function ResourceRendererDispatch({
         {kind === 'scheduledbackups' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGScheduledBackupRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'poolers' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGPoolerRenderer data={data} onNavigate={onNavigate} />}
         {/* Cluster API (CAPI) */}
-        {'topology.cluster.x-k8s.io/owned' in (data?.metadata?.labels ?? {}) && data?.apiVersion?.includes('cluster.x-k8s.io') && (
+        {'topology.cluster.x-k8s.io/owned' in (data?.metadata?.labels ?? {}) && isCAPITopologyGroup(data?.apiVersion) && (
           <AlertBanner
             variant="warning"
             title="Topology-controlled — this resource is managed by ClusterClass. Manual changes will be reconciled back."
           />
         )}
-        {kind === 'machines' && data?.apiVersion?.includes('cluster.x-k8s.io') && <CAPIMachineRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'machines' && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && <CAPIMachineRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'machinedeployments' && <CAPIMachineDeploymentRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'machinesets' && data?.apiVersion?.includes('cluster.x-k8s.io') && <CAPIMachineSetRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'machinesets' && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && <CAPIMachineSetRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'machinepools' && <CAPIMachinePoolRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'kubeadmcontrolplanes' && <CAPIKubeadmControlPlaneRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'clusterclasses' && <CAPIClusterClassRenderer data={data} />}
@@ -940,7 +974,7 @@ export function ResourceRendererDispatch({
             for known-plural collisions where no apiVersion-gated renderer
             matched (e.g. a Knative Configuration sharing the `configurations`
             plural with Crossplane Configuration). */}
-        {(!isKnownKind || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough || veleroCollisionFallthrough || groupGatedFallthrough || calicoCollisionFallthrough) && <GenericRenderer data={data} />}
+        {(!isKnownKind || crossplaneCollisionFallthrough || kyvernoCollisionFallthrough || veleroCollisionFallthrough || groupGatedFallthrough || calicoCollisionFallthrough || nonCoreJobFallthrough) && <GenericRenderer data={data} />}
 
         {/* Common sections - can be disabled when parent handles them separately */}
         {showCommonSections && (
@@ -1015,7 +1049,55 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
       SEVERITY_BADGE.error
     return { text, color }
   }
-  if (k === 'jobs') return getJobStatus(data)
+  if (k === 'jobs') {
+    if (data?.apiVersion?.startsWith('batch.volcano.sh/')) return getVolcanoJobStatus(data)
+    if (!data?.apiVersion || data.apiVersion.startsWith('batch/')) return getJobStatus(data)
+  }
+  if (k === 'queues') {
+    if (data?.apiVersion?.startsWith('scheduling.run.ai/')) return getKaiQueueStatus(data)
+    if (data?.apiVersion?.startsWith('scheduling.volcano.sh/')) return getVolcanoQueueStatus(data)
+  }
+  if (k === 'podgroups') {
+    if (data?.apiVersion?.startsWith('scheduling.run.ai/')) return getKaiPodGroupStatus(data)
+    if (data?.apiVersion?.startsWith('scheduling.volcano.sh/')) return getVolcanoPodGroupStatus(data)
+  }
+  if (k === 'workspaces' && data?.apiVersion?.startsWith('kaito.sh/')) return getKaitoWorkspaceStatus(data)
+  if (k === 'workloads' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getKueueWorkloadStatus(data)
+  if (k === 'clusterqueues' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getClusterQueueStatus(data)
+  if (k === 'localqueues' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getLocalQueueStatus(data)
+  if (k === 'resourceflavors' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getResourceFlavorStatus(data)
+  if (k === 'admissionchecks' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getAdmissionCheckStatus(data)
+  if (k === 'provisioningrequests' && data?.apiVersion?.startsWith('autoscaling.x-k8s.io/')) return getProvisioningRequestStatus(data)
+  if (k === 'rayclusters' && data?.apiVersion?.startsWith('ray.io/')) return getRayClusterStatus(data)
+  if (k === 'rayjobs' && data?.apiVersion?.startsWith('ray.io/')) return getRayJobStatus(data)
+  if (k === 'rayservices' && data?.apiVersion?.startsWith('ray.io/')) return getRayServiceStatus(data)
+  if (k === 'raycronjobs' && data?.apiVersion?.startsWith('ray.io/')) return getRayCronJobStatus(data)
+  if (k === 'leaderworkersets' && data?.apiVersion?.startsWith('leaderworkerset.x-k8s.io/')) return getLeaderWorkerSetStatus(data)
+  if (k === 'jobsets' && data?.apiVersion?.startsWith('jobset.x-k8s.io/')) return getJobSetStatus(data)
+  if (k === 'inferenceservices' && data?.apiVersion?.startsWith('serving.kserve.io/')) return getInferenceServiceStatus(data)
+  if ((k === 'servingruntimes' || k === 'clusterservingruntimes') && data?.apiVersion?.startsWith('serving.kserve.io/')) return getServingRuntimeStatus(data)
+  if (k === 'inferencegraphs' && data?.apiVersion?.startsWith('serving.kserve.io/')) return getInferenceGraphStatus(data)
+  if (k === 'trainedmodels' && data?.apiVersion?.startsWith('serving.kserve.io/')) return getTrainedModelStatus(data)
+  if (k === 'llminferenceservices' && data?.apiVersion?.startsWith('serving.kserve.io/')) return getLLMInferenceServiceStatus(data)
+  if (k === 'inferencepools' && (
+    data?.apiVersion?.startsWith('inference.networking.k8s.io/')
+    || data?.apiVersion?.startsWith('inference.networking.x-k8s.io/')
+  )) return getInferencePoolStatus(data)
+  if (k === 'inferenceobjectives' && (
+    data?.apiVersion?.startsWith('inference.networking.x-k8s.io/')
+    || data?.apiVersion?.startsWith('llm-d.ai/')
+  )) return getInferenceObjectiveStatus(data)
+  if (k === 'jobflows' && data?.apiVersion?.startsWith('flow.volcano.sh/')) return getJobFlowStatus(data)
+  if (k === 'jobtemplates' && data?.apiVersion?.startsWith('flow.volcano.sh/')) return getJobTemplateStatus(data)
+  if (k === 'ragengines' && data?.apiVersion?.startsWith('kaito.sh/')) return getRAGEngineStatus(data)
+  if (k === 'nimservices' && data?.apiVersion?.startsWith('apps.nvidia.com/')) return getNIMServiceStatus(data)
+  if (k === 'nimcaches' && data?.apiVersion?.startsWith('apps.nvidia.com/')) return getNIMCacheStatus(data)
+  if (k === 'nimpipelines' && data?.apiVersion?.startsWith('apps.nvidia.com/')) return getNIMPipelineStatus(data)
+  if (k === 'deviceconfigs' && data?.apiVersion?.startsWith('amd.com/')) return getAMDDeviceConfigStatus(data)
+  if (k === 'pytorchjobs' && data?.apiVersion?.startsWith('kubeflow.org/')) return getPyTorchJobStatus(data)
+  if (k === 'tfjobs' && data?.apiVersion?.startsWith('kubeflow.org/')) return getTFJobStatus(data)
+  if (k === 'mpijobs' && data?.apiVersion?.startsWith('kubeflow.org/')) return getMPIJobStatus(data)
+  if (k === 'trainjobs' && data?.apiVersion?.startsWith('trainer.kubeflow.org/')) return getTrainJobStatus(data)
   if (k === 'cronjobs') return getCronJobStatus(data)
   if (k === 'hpas' || k === 'horizontalpodautoscalers') return getHPAStatus(data)
   if (k === 'nodes') return getNodeStatus(data)
@@ -1123,9 +1205,9 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     // Third-party `clusters` CRDs (KubeBlocks, Redis/Valkey) fall through to the
     // generic handling below instead of getting a fabricated PostgreSQL status.
   }
-  if (k === 'machines' && data.apiVersion?.includes('cluster.x-k8s.io')) return getMachineStatus(data)
+  if (k === 'machines' && isApiGroup(data.apiVersion, 'cluster.x-k8s.io')) return getMachineStatus(data)
   if (k === 'machinedeployments') return getMachineDeploymentStatus(data)
-  if (k === 'machinesets') return getMachineSetStatus(data)
+  if (k === 'machinesets' && isApiGroup(data.apiVersion, 'cluster.x-k8s.io')) return getMachineSetStatus(data)
   if (k === 'machinepools') return getMachinePoolStatus(data)
   if (k === 'kubeadmcontrolplanes') return getKCPStatus(data)
   if (k === 'clusterclasses') return getClusterClassStatus(data)
@@ -1201,36 +1283,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     return { text: status.text, color: status.color }
   }
 
-  // Generic status extraction
-  const status = data.status
-  if (status) {
-    if (status.phase) {
-      const phase = String(status.phase)
-      const healthyPhases = ['Running', 'Active', 'Succeeded', 'Ready', 'Healthy', 'Available', 'Bound']
-      const warningPhases = ['Pending', 'Progressing', 'Unknown', 'Terminating']
-      const isHealthy = healthyPhases.includes(phase)
-      const isWarning = warningPhases.includes(phase)
-      return {
-        text: phase,
-        color: isHealthy ? SEVERITY_BADGE.success :
-               isWarning ? SEVERITY_BADGE.warning :
-               SEVERITY_BADGE.error
-      }
-    }
-
-    if (status.conditions && Array.isArray(status.conditions)) {
-      const readyCondition = status.conditions.find((c: any) =>
-        c.type === 'Ready' || c.type === 'Available' || c.type === 'Progressing'
-      )
-      if (readyCondition) {
-        const isReady = readyCondition.status === 'True'
-        return {
-          text: isReady ? 'Ready' : 'Not Ready',
-          color: isReady ? SEVERITY_BADGE.success : SEVERITY_BADGE.warning
-        }
-      }
-    }
-  }
+  const derived = getGenericResourceStatus(data)
+  if (derived) return { text: derived.text, color: HEALTH_BADGE_COLORS[derived.tone] }
 
   return null
 }

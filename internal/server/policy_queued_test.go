@@ -49,7 +49,7 @@ func TestPolicyQueued_DeniesRatherThanReportingAnEmptyQueue(t *testing.T) {
 	env := newAuthTestServer(t)
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"app"}}
 	allow(perms, "kyverno.io", "updaterequests", "", false)
-	env.srv.permCache.Set("nobody", perms)
+	env.srv.permCache.Set("nobody", nil, perms)
 
 	resp := env.authGet(t, "/api/policy/policies/require-labels/queued", "nobody", "")
 	defer resp.Body.Close()
@@ -64,7 +64,7 @@ func TestPolicyQueued_RejectsAMissingPolicyName(t *testing.T) {
 	env := newAuthTestServer(t)
 	perms := &auth.UserPermissions{AllowedNamespaces: []string{"app"}}
 	allow(perms, "kyverno.io", "updaterequests", "", true)
-	env.srv.permCache.Set("alice", perms)
+	env.srv.permCache.Set("alice", nil, perms)
 
 	// chi will not route an empty {policy}, so the trailing-slash form is the
 	// reachable shape of "no name given".

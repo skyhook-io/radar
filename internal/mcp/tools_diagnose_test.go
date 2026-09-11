@@ -8,6 +8,9 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -37,8 +40,22 @@ func setupFakeCacheForDiagnoseTests(t *testing.T) {
 				Selector: &metav1.LabelSelector{MatchLabels: selector},
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{Labels: selector},
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{
+						Name: "cart",
+						Env: []corev1.EnvVar{{
+							Name: "CART_MODE",
+							ValueFrom: &corev1.EnvVarSource{ConfigMapKeyRef: &corev1.ConfigMapKeySelector{
+								LocalObjectReference: corev1.LocalObjectReference{Name: "cart-config"},
+								Key:                  "mode",
+							}},
+						}},
+					}}},
 				},
 			},
+		},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "cart-config", Namespace: ns},
+			Data:       map[string]string{"mode": "production"},
 		},
 		&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
@@ -109,6 +126,8 @@ func TestNormalizeDiagnoseKind(t *testing.T) {
 		{"StatefulSets", "statefulsets"},
 		{"daemonset", "daemonsets"},
 		{"DaemonSet", "daemonsets"},
+		{"rollout", "rollouts"},
+		{"Rollouts", "rollouts"},
 		{"replicaset", ""},      // not in scope for diagnose
 		{"job", ""},             // not in scope
 		{"service", ""},         // not in scope
@@ -147,6 +166,12 @@ func TestGitopsDiagnoseTarget(t *testing.T) {
 	}
 }
 
+func testDiagnoseInput(kind, namespace, name string) diagnoseInput {
+	return diagnoseInput{diagnoseCommonInput: diagnoseCommonInput{
+		Kind: kind, Namespace: namespace, Name: name,
+	}}
+}
+
 // TestHandleDiagnose_GitOpsKindDispatch confirms a GitOps kind routes to the
 // no-pods GitOps path (not the workload "invalid kind" error). With no Argo CRD
 // in the fake cache the fetch fails, but the error must come from the GitOps
@@ -156,9 +181,9 @@ func TestHandleDiagnose_GitOpsKindDispatch(t *testing.T) {
 	ctx := withClusterAdmin(t, "admin")
 	// The GitOps read is gated on a per-kind get SAR; grant it so the test
 	// exercises the dispatch fork (not the RBAC gate, covered separately).
-	getPermCache().Get("admin").SetCanI("get", "argoproj.io", "applications", "alpha", true)
+	getPermCache().Get("admin", nil).SetCanI("get", "argoproj.io", "applications", "alpha", true)
 
-	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "application", Namespace: "alpha", Name: "whatever"})
+	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("application", "alpha", "whatever"))
 	if err == nil {
 		t.Fatalf("expected an error (no Application in fake cache), got nil")
 	}
@@ -176,15 +201,15 @@ func TestHandleGitOpsDiagnose_PerKindRBAC(t *testing.T) {
 	// Namespace access to argocd, but no get on applications.argoproj.io.
 	ctx := withRestrictedUser(t, "limited", []string{"argocd"})
 
-	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "application", Namespace: "argocd", Name: "guestbook"})
+	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("application", "argocd", "guestbook"))
 	if err == nil || !strings.Contains(err.Error(), "forbidden") {
 		t.Fatalf("expected forbidden without get on applications.argoproj.io, got %v", err)
 	}
 
 	// Granting the per-kind get lets the read through (then fails for not-found,
 	// not forbidden) — proving the gate is the only thing blocking it.
-	getPermCache().Get("limited").SetCanI("get", "argoproj.io", "applications", "argocd", true)
-	if _, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "application", Namespace: "argocd", Name: "guestbook"}); err == nil || strings.Contains(err.Error(), "forbidden") {
+	getPermCache().Get("limited", nil).SetCanI("get", "argoproj.io", "applications", "argocd", true)
+	if _, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("application", "argocd", "guestbook")); err == nil || strings.Contains(err.Error(), "forbidden") {
 		t.Errorf("with get granted, expected a non-forbidden (not-found) error, got %v", err)
 	}
 }
@@ -196,9 +221,9 @@ func TestHandleGitOpsDiagnose_NamespaceGate(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	// User scoped to team-a; cluster RBAC grants get on applications in argocd.
 	ctx := withRestrictedUser(t, "scoped", []string{"team-a"})
-	getPermCache().Get("scoped").SetCanI("get", "argoproj.io", "applications", "argocd", true)
+	getPermCache().Get("scoped", nil).SetCanI("get", "argoproj.io", "applications", "argocd", true)
 
-	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "application", Namespace: "argocd", Name: "guestbook"})
+	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("application", "argocd", "guestbook"))
 	if err == nil || !strings.Contains(err.Error(), "forbidden") {
 		t.Fatalf("namespace outside the allow-list must be forbidden, got %v", err)
 	}
@@ -210,7 +235,7 @@ func TestHandleDiagnose_InvalidKind(t *testing.T) {
 
 	// configmap is not a workload, not a GitOps reconciler, and not a
 	// network entry kind - diagnose should reject it.
-	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "configmap", Namespace: "alpha", Name: "alpha-cm"})
+	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("configmap", "alpha", "alpha-cm"))
 	if err == nil {
 		t.Fatalf("expected error for unsupported kind, got nil")
 	}
@@ -223,10 +248,10 @@ func TestHandleDiagnose_MissingFields(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
 
-	if _, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "pod", Namespace: "", Name: "alpha-pod"}); err == nil {
+	if _, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "", "alpha-pod")); err == nil {
 		t.Errorf("expected error for empty namespace, got nil")
 	}
-	if _, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "pod", Namespace: "alpha", Name: ""}); err == nil {
+	if _, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "alpha", "")); err == nil {
 		t.Errorf("expected error for empty name, got nil")
 	}
 }
@@ -236,7 +261,7 @@ func TestHandleDiagnose_ForbiddenNamespace(t *testing.T) {
 	// User restricted to alpha; diagnose request targets beta.
 	ctx := withRestrictedUser(t, "alice", []string{"alpha"})
 
-	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "pod", Namespace: "beta", Name: "beta-pod"})
+	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "beta", "beta-pod"))
 	if err == nil {
 		t.Fatalf("expected forbidden error, got nil")
 	}
@@ -249,11 +274,7 @@ func TestHandleDiagnose_PodHappyPath(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
 
-	result, _, err := handleDiagnose(ctx, nil, diagnoseInput{
-		Kind:      "pod",
-		Namespace: "alpha",
-		Name:      "alpha-pod",
-	})
+	result, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "alpha", "alpha-pod"))
 	if err != nil {
 		t.Fatalf("handleDiagnose: %v", err)
 	}
@@ -297,11 +318,7 @@ func TestHandleDiagnose_AttachesPodDNSSignalButRBACGatesCoreDNSFinding(t *testin
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
 	ctx := withClusterAdmin(t, "admin")
 
-	result, _, err := handleDiagnose(ctx, nil, diagnoseInput{
-		Kind:      "pod",
-		Namespace: "alpha",
-		Name:      "frontend",
-	})
+	result, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "alpha", "frontend"))
 	if err != nil {
 		t.Fatalf("handleDiagnose: %v", err)
 	}
@@ -318,11 +335,7 @@ func TestHandleDiagnose_PodNotFound(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
 
-	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{
-		Kind:      "pod",
-		Namespace: "alpha",
-		Name:      "ghost-pod",
-	})
+	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("pod", "alpha", "ghost-pod"))
 	if err == nil {
 		t.Fatalf("expected error for non-existent pod, got nil")
 	}
@@ -343,12 +356,14 @@ func TestHandleDiagnose_PodNotFound(t *testing.T) {
 func TestHandleDiagnose_DeploymentResolvesPods(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	// The stale-Secret FYI is attached only when the caller can read the
+	// ConfigMap and Secret the Pod references; builtin kinds resolve without
+	// discovery, so the grant has to be explicit rather than fall open.
+	perms := getPermCache().Get("admin", nil)
+	perms.SetCanI("get", "", "configmaps", "alpha", true)
+	perms.SetCanI("get", "", "secrets", "alpha", true)
 
-	result, _, err := handleDiagnose(ctx, nil, diagnoseInput{
-		Kind:      "deployment",
-		Namespace: "alpha",
-		Name:      "cart",
-	})
+	result, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("deployment", "alpha", "cart"))
 	if err != nil {
 		t.Fatalf("handleDiagnose: %v", err)
 	}
@@ -372,15 +387,82 @@ func TestHandleDiagnose_DeploymentResolvesPods(t *testing.T) {
 	}
 }
 
+func TestHandleDiagnose_DeploymentGroupIsCanonicalAndExact(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	ctx := withClusterAdmin(t, "admin")
+
+	mixedCase := testDiagnoseInput("deployment", "alpha", "cart")
+	mixedCase.Group = "ApPs"
+	result, _, err := handleDiagnose(ctx, nil, mixedCase)
+	if err != nil {
+		t.Fatalf("mixed-case canonical apps group: %v", err)
+	}
+	if body := extractText(t, result); !strings.Contains(body, `"name":"cart"`) {
+		t.Fatalf("mixed-case apps group did not resolve the Deployment: %s", body)
+	}
+
+	// A same-named built-in exists in the typed cache. Supplying a different
+	// group must reject the request before any group-blind typed lookup can
+	// accidentally return that Deployment.
+	wrongGroup := testDiagnoseInput("deployment", "alpha", "cart")
+	wrongGroup.Group = "workloads.example.io"
+	if _, _, err := handleDiagnose(ctx, nil, wrongGroup); err == nil || !strings.Contains(err.Error(), `expected "apps"`) {
+		t.Fatalf("wrong Deployment group = %v, want an exact-group rejection", err)
+	}
+}
+
+func TestHandleDiagnose_RolloutGroupDefaultsAndCanonicalizes(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	rolloutGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	rollout := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1",
+		"kind":       "Rollout",
+		"metadata": map[string]any{
+			"name": "cart", "namespace": "alpha",
+		},
+		"spec": map[string]any{
+			"selector": map[string]any{"matchLabels": map[string]any{"app": "cart"}},
+		},
+	}}
+	setupMCPDynamicResource(t, rolloutGVR, "RolloutList", k8s.APIResource{
+		Group: "argoproj.io", Version: "v1alpha1", Kind: "Rollout",
+		Name: "rollouts", Namespaced: true, Verbs: []string{"get", "list", "watch"},
+	}, rollout)
+	ctx := withClusterAdmin(t, "admin")
+
+	for _, tc := range []struct {
+		name  string
+		group string
+	}{
+		{name: "omitted group defaults to argoproj.io"},
+		{name: "explicit mixed-case group canonicalizes", group: "ArGoPrOj.Io"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := testDiagnoseInput("rollout", "alpha", "cart")
+			input.Group = tc.group
+			result, _, err := handleDiagnose(ctx, nil, input)
+			if err != nil {
+				t.Fatalf("handleDiagnose: %v", err)
+			}
+			body := extractText(t, result)
+			if !strings.Contains(body, `"apiVersion":"argoproj.io/v1alpha1"`) || !strings.Contains(body, `"kind":"Rollout"`) {
+				t.Fatalf("diagnose resolved something other than the exact Rollout target: %s", body)
+			}
+		})
+	}
+
+	wrongGroup := testDiagnoseInput("rollout", "alpha", "cart")
+	wrongGroup.Group = "apps"
+	if _, _, err := handleDiagnose(ctx, nil, wrongGroup); err == nil || !strings.Contains(err.Error(), `expected "argoproj.io"`) {
+		t.Fatalf("wrong Rollout group = %v, want an exact-group rejection", err)
+	}
+}
+
 func TestHandleDiagnose_DeploymentNotFound(t *testing.T) {
 	setupFakeCacheForDiagnoseTests(t)
 	ctx := withClusterAdmin(t, "admin")
 
-	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{
-		Kind:      "deployment",
-		Namespace: "alpha",
-		Name:      "ghost",
-	})
+	_, _, err := handleDiagnose(ctx, nil, testDiagnoseInput("deployment", "alpha", "ghost"))
 	if err == nil {
 		t.Fatalf("expected error for non-existent deployment, got nil")
 	}
@@ -429,7 +511,7 @@ func TestStartupBlockersForWorkload_ScopesToWorkload(t *testing.T) {
 
 	// pods arg = cart's own pods (none created). The RS attaches via the
 	// ReplicaSet-of-Deployment match, not via pod-name.
-	out := startupBlockersForWorkload(k8s.GetResourceCache(), "deployments", "alpha", "cart", nil)
+	out := startupBlockersForWorkload(k8s.GetResourceCache(), "deployments", "apps", "alpha", "cart", nil)
 
 	var sawRS bool
 	for _, b := range out {
@@ -442,6 +524,81 @@ func TestStartupBlockersForWorkload_ScopesToWorkload(t *testing.T) {
 	}
 	if !sawRS {
 		t.Errorf("the diagnosed Deployment's blocked ReplicaSet should attach, got %+v", out)
+	}
+}
+
+func TestStartupBlockersForWorkload_AttributesReplicaSetToArgoRollout(t *testing.T) {
+	defer k8s.ResetTestState()
+	replicaSet := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "checkout-abc123", Namespace: "alpha"},
+		Spec:       appsv1.ReplicaSetSpec{Replicas: ptrInt32(2)},
+		Status:     appsv1.ReplicaSetStatus{Replicas: 0},
+	}
+	event := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{Name: "rollout-replicaset-denial", Namespace: "alpha"},
+		InvolvedObject: corev1.ObjectReference{
+			APIVersion: "apps/v1", Kind: "ReplicaSet", Namespace: "alpha", Name: "checkout-abc123",
+		},
+		Reason: "FailedCreate", Type: corev1.EventTypeWarning,
+		Message:       `pods "checkout" is forbidden: exceeded quota: rollout-quota`,
+		LastTimestamp: metav1.Now(),
+	}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(replicaSet, event)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	argo := startupBlockersForWorkload(k8s.GetResourceCache(), "rollouts", "argoproj.io", "alpha", "checkout", nil)
+	if len(argo) != 1 || argo[0].Kind != "ReplicaSet" || argo[0].Name != "checkout-abc123" {
+		t.Fatalf("Argo Rollout blockers = %+v, want its blocked apps/v1 ReplicaSet", argo)
+	}
+
+	wrongGroup := startupBlockersForWorkload(k8s.GetResourceCache(), "rollouts", "delivery.example.io", "alpha", "checkout", nil)
+	if len(wrongGroup) != 0 {
+		t.Fatalf("non-Argo Rollout blockers = %+v, want no cross-group ReplicaSet attribution", wrongGroup)
+	}
+}
+
+func TestStartupBlockersForWorkload_RequiresExactAPIGroup(t *testing.T) {
+	defer k8s.ResetTestState()
+	replicas := int32(1)
+	deployment := &appsv1.Deployment{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
+		ObjectMeta: metav1.ObjectMeta{Name: "cart", Namespace: "alpha"},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+	}
+	events := []runtime.Object{
+		&corev1.Event{
+			ObjectMeta: metav1.ObjectMeta{Name: "apps-denial", Namespace: "alpha"},
+			InvolvedObject: corev1.ObjectReference{
+				APIVersion: "apps/v1", Kind: "Deployment", Namespace: "alpha", Name: "cart",
+			},
+			Reason: "FailedCreate", Type: corev1.EventTypeWarning,
+			Message:       `pods "apps" is forbidden: exceeded quota: apps-quota`,
+			LastTimestamp: metav1.Now(),
+		},
+		&corev1.Event{
+			ObjectMeta: metav1.ObjectMeta{Name: "custom-denial", Namespace: "alpha"},
+			InvolvedObject: corev1.ObjectReference{
+				APIVersion: "workloads.example.io/v1", Kind: "Deployment", Namespace: "alpha", Name: "cart",
+			},
+			Reason: "FailedCreate", Type: corev1.EventTypeWarning,
+			Message:       `pods "custom" is forbidden: exceeded quota: custom-quota`,
+			LastTimestamp: metav1.Now(),
+		},
+	}
+	objects := []runtime.Object{deployment}
+	objects = append(objects, events...)
+	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	apps := startupBlockersForWorkload(k8s.GetResourceCache(), "deployments", "apps", "alpha", "cart", nil)
+	if len(apps) != 1 || !strings.Contains(apps[0].Message, "apps-quota") {
+		t.Fatalf("apps Deployment blockers = %+v, want only apps-group evidence", apps)
+	}
+	custom := startupBlockersForWorkload(k8s.GetResourceCache(), "deployments", "workloads.example.io", "alpha", "cart", nil)
+	if len(custom) != 1 || !strings.Contains(custom[0].Message, "custom-quota") {
+		t.Fatalf("custom Deployment blockers = %+v, want only custom-group evidence", custom)
 	}
 }
 

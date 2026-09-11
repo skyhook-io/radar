@@ -1,0 +1,16 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: Workload
+metadata:
+  name: new-workload
+  namespace: training
+spec:
+  queueName: gpu
+  podSets:
+    - name: workers
+      count: 1
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: trainer
+              image: registry.k8s.io/pause:3.10

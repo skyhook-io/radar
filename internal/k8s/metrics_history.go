@@ -35,7 +35,7 @@ func InitMetricsHistory() {
 	metricsHistoryMu.Lock()
 	defer metricsHistoryMu.Unlock()
 	metricsHistoryOnce.Do(func() {
-		metricsHistoryStore = k8score.NewMetricsHistoryStore(GetDynamicClient())
+		metricsHistoryStore = k8score.NewMetricsHistoryStoreWithResolver(GetDynamicClient(), ResolveMetricsGVR)
 		metricsHistoryStore.OnError = func(subsystem, level, format string, args ...any) {
 			errorlog.Record(subsystem, level, format, args...)
 		}

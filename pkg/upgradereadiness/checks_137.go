@@ -215,7 +215,7 @@ func scanRemovedFeatureGates(input *Input) Check {
 		}
 	}
 	if missingNodes > 0 {
-		check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("Effective kubelet configuration was unavailable for %d %s.", missingNodes, plural(missingNodes, "node", "nodes")))
+		check.Caveat = appendCaveat(check.Caveat, nodeRuntimeCoverageCaveat(input, fmt.Sprintf("Effective kubelet configuration was unavailable for %d %s.", missingNodes, plural(missingNodes, "node", "nodes"))))
 		if len(check.Findings) == 0 {
 			check.Status = CheckUnknown
 			check.Summary = "No removed feature gates were found in readable component configuration, but kubelet configuration coverage is incomplete."
@@ -397,8 +397,13 @@ func scanRemovedKubeletCAdvisorOptions() Check {
 
 func scanKubeletEventQPS(input *Input) Check {
 	check := Check{ID: "kubelet-event-qps-change", Category: "Node configuration", Title: "Kubelet event throttling behavior", Status: CheckPassed, Summary: "No readable kubelet config sets eventRecordQPS to zero.", Scope: "Effective kubelet configuration", AppliesFrom: "1.37", References: append([]Reference(nil), eventRecordQPSReferences137...)}
-	if input.Nodes == nil || input.NodeRuntimeEvidence == nil {
+	if input.Nodes == nil {
 		check.Status, check.Summary = CheckUnknown, "Effective kubelet configuration was unavailable."
+		return check
+	}
+	if input.NodeRuntimeEvidence == nil {
+		check.Status, check.Summary = CheckUnknown, "Effective kubelet configuration was unavailable."
+		check.Caveat = nodeRuntimeCoverageCaveat(input, "eventRecordQPS could not be inspected.")
 		return check
 	}
 	evidenceByNode := make(map[string]NodeRuntimeEvidence, len(input.NodeRuntimeEvidence))
@@ -422,7 +427,11 @@ func scanKubeletEventQPS(input *Input) Check {
 		check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "eventRecordQPS zero becomes unlimited", Level: LevelWarning, Resource: &ResourceRef{Kind: "Node", Name: node.Name}, Evidence: Evidence{Source: "kubelet configz", Path: "kubeletconfig.eventRecordQPS", Detail: "0"}, AppliesFrom: check.AppliesFrom, Impact: "Kubernetes 1.37 makes an explicit zero mean unlimited event recording. In Kubernetes 1.36, that zero reached client-go and used its fallback limit of 5 events per second, so event traffic can increase sharply.", Remediation: "Choose an explicit limit before upgrading. The Kubernetes upgrade note recommends 50, the normal kubelet default. Use 5 only when intentionally matching the old explicit-zero runtime limit, or choose another value after reviewing event volume.", References: append([]Reference(nil), check.References...)})
 	}
 	if missing > 0 {
-		check.Caveat = fmt.Sprintf("eventRecordQPS was unavailable for %d %s; kubelets with debugging handlers disabled do not serve configz.", missing, plural(missing, "node", "nodes"))
+		unavailable := fmt.Sprintf("eventRecordQPS was unavailable for %d %s.", missing, plural(missing, "node", "nodes"))
+		if !input.NodeProxyForbidden {
+			unavailable += " Kubelets with debugging handlers disabled do not serve configz."
+		}
+		check.Caveat = nodeRuntimeCoverageCaveat(input, unavailable)
 		if len(check.Findings) == 0 {
 			check.Status, check.Summary = CheckUnknown, "No eventRecordQPS behavior change was found in readable kubelet configuration, but coverage is incomplete."
 		}
@@ -887,7 +896,7 @@ func scanSELinuxMountTransition(input *Input, targetAllowsOptOut bool) Check {
 	if !runtimeEvidenceAvailable {
 		check.Caveat = appendCaveat(check.Caveat, "Node evidence was unavailable, so kubelet SELinux conflict metrics could not be inspected.")
 	} else if missingRuntime > 0 {
-		check.Caveat = appendCaveat(check.Caveat, fmt.Sprintf("Kubelet SELinux conflict metrics were unavailable for %d %s.", missingRuntime, plural(missingRuntime, "Linux node", "Linux nodes")))
+		check.Caveat = appendCaveat(check.Caveat, nodeRuntimeCoverageCaveat(input, fmt.Sprintf("Kubelet SELinux conflict metrics were unavailable for %d %s.", missingRuntime, plural(missingRuntime, "Linux node", "Linux nodes"))))
 	}
 	if input.Namespaces != nil {
 		check.Caveat = appendCaveat(check.Caveat, scopedCoverageNote(input.Namespaces, "Pods, PersistentVolumeClaims and Events"))

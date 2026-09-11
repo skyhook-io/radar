@@ -2,8 +2,14 @@ package version
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -124,10 +130,6 @@ func TestTruncateNotes(t *testing.T) {
 	}
 }
 
-// When the Deployment is unreadable, in-cluster must report the same timestamp a
-// local install would rather than reporting none. Asserted as equality with the
-// local path so the test holds on filesystems that don't record a birthtime at
-// all (where both are legitimately 0).
 func TestInstallTimestampFallsBackInCluster(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
@@ -141,4 +143,231 @@ func TestInstallTimestampFallsBackInCluster(t *testing.T) {
 	if got := installTimestamp(ctx, "in-cluster"); got != local {
 		t.Fatalf("in-cluster timestamp %d did not fall back to the local timestamp %d", got, local)
 	}
+}
+
+func TestIsReleaseVersion(t *testing.T) {
+	tests := map[string]bool{
+		"1.2.3":       true,
+		"v1.2.3":      true,
+		"dev":         false,
+		"1.2.3-dirty": false,
+		"1.2.3-rc.1":  false,
+		"1.2":         false,
+		"":            false,
+	}
+	for value, want := range tests {
+		if got := IsReleaseVersion(value); got != want {
+			t.Errorf("IsReleaseVersion(%q) = %v, want %v", value, got, want)
+		}
+	}
+}
+
+func TestCheckForUpdateSelectsSourceByBuildChannel(t *testing.T) {
+	var queries []url.Values
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Query())
+		_ = json.NewEncoder(w).Encode(githubRelease{TagName: "v1.3.0"})
+	}))
+	defer proxy.Close()
+
+	previousURL, previousVersion := releasesURL, Current
+	releasesURL = proxy.URL
+	t.Cleanup(func() {
+		releasesURL = previousURL
+		SetCurrent(previousVersion)
+		resetUpdateCache()
+	})
+
+	for _, current := range []string{
+		"dev-a1b2c3d",
+		"1.2.3-dirty",
+		"k8s-ui-v1.13.3-27-g1197bab6",
+		"1197bab6043c723e557714620758ace2dad36354",
+	} {
+		SetCurrent(current)
+		resetUpdateCache()
+		CheckForUpdate(context.Background())
+		query := queries[len(queries)-1]
+		if query.Get("source") != "release-only" {
+			t.Errorf("CheckForUpdate with %q used source %q, want release-only", current, query.Get("source"))
+		}
+		if got := query.Get("channel"); got != string(buildChannel(current)) {
+			t.Errorf("CheckForUpdate with %q sent channel %q", current, got)
+		}
+	}
+
+	for _, current := range []string{"1.2.3", "1.2.3-rc.1", "1.8.6-pg.2"} {
+		SetCurrent(current)
+		resetUpdateCache()
+		CheckForUpdate(context.Background())
+		query := queries[len(queries)-1]
+		if query.Has("source") {
+			t.Errorf("CheckForUpdate with %q used source %q, want default", current, query.Get("source"))
+		}
+		if got := query.Get("channel"); got != string(buildChannel(current)) {
+			t.Errorf("CheckForUpdate with %q sent channel %q", current, got)
+		}
+	}
+
+	beforeDev := len(queries)
+	SetCurrent("dev")
+	resetUpdateCache()
+	CheckForUpdate(context.Background())
+	if len(queries) != beforeDev {
+		t.Errorf("dev build made %d update requests, want none", len(queries)-beforeDev)
+	}
+}
+
+func TestRelayUpdateCheck(t *testing.T) {
+	var queries []url.Values
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Query())
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer proxy.Close()
+
+	previousURL, previousVersion := releasesURL, Current
+	releasesURL = proxy.URL
+	SetCurrent("1.2.3-rc1")
+	resetUpdateCache()
+	updateCache[""] = updateCacheEntry{result: &UpdateInfo{LatestVersion: "cached"}}
+	t.Cleanup(func() {
+		releasesURL = previousURL
+		SetCurrent(previousVersion)
+		resetUpdateCache()
+	})
+
+	if err := RelayUpdateCheck(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("requests = %d, want 1", len(queries))
+	}
+	query := queries[0]
+	for key, want := range map[string]string{
+		"v": "1.2.3-rc1", "mode": "in-cluster", "channel": "prerelease", "source": "browser-proxy",
+	} {
+		if got := query.Get(key); got != want {
+			t.Errorf("query[%q] = %q, want %q", key, got, want)
+		}
+	}
+	if cached := updateCache[""]; cached.result == nil || cached.result.LatestVersion != "cached" {
+		t.Fatalf("relayed check changed release cache: %+v", cached)
+	}
+
+	SetCurrent("dev-a1b2c3d")
+	if err := RelayUpdateCheck(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(queries) != 1 {
+		t.Fatalf("development build made %d relayed requests, want none", len(queries)-1)
+	}
+}
+
+func TestReleaseOnlyCheckDoesNotSatisfyDefaultCheck(t *testing.T) {
+	var queries []url.Values
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Query())
+		_ = json.NewEncoder(w).Encode(githubRelease{TagName: "v1.3.0"})
+	}))
+	defer proxy.Close()
+
+	previousURL, previousVersion := releasesURL, Current
+	releasesURL = proxy.URL
+	SetCurrent("1.2.3")
+	resetUpdateCache()
+	t.Cleanup(func() {
+		releasesURL = previousURL
+		SetCurrent(previousVersion)
+		resetUpdateCache()
+	})
+
+	CheckForUpdateRelease(context.Background())
+	CheckForUpdate(context.Background())
+
+	if len(queries) != 2 {
+		t.Fatalf("requests = %d, want separate release-only and default requests", len(queries))
+	}
+	if got := queries[0].Get("source"); got != "release-only" {
+		t.Fatalf("first source = %q, want release-only", got)
+	}
+	if queries[1].Has("source") {
+		t.Fatalf("default request used source %q", queries[1].Get("source"))
+	}
+}
+
+func TestCheckForUpdateSingleFlightsConcurrentCacheMisses(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var requests atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		_ = json.NewEncoder(w).Encode(githubRelease{TagName: "v1.3.0"})
+	}))
+	defer proxy.Close()
+
+	previousURL, previousVersion := releasesURL, Current
+	releasesURL = proxy.URL
+	SetCurrent("1.2.3")
+	resetUpdateCache()
+	t.Cleanup(func() {
+		releasesURL = previousURL
+		SetCurrent(previousVersion)
+		resetUpdateCache()
+	})
+
+	const callers = 12
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	for range callers {
+		go func() {
+			defer wg.Done()
+			CheckForUpdate(context.Background())
+		}()
+	}
+	<-started
+	close(release)
+	wg.Wait()
+
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("release requests = %d, want 1", got)
+	}
+}
+
+func TestBuildChannel(t *testing.T) {
+	tests := map[string]buildChannelName{
+		"1.2.3":                       buildChannelStable,
+		"v1.2.3":                      buildChannelStable,
+		"1.2.3-rc.1":                  buildChannelPrerelease,
+		"1.2.3-rc1":                   buildChannelPrerelease,
+		"1.2.3-beta.2":                buildChannelPrerelease,
+		"1.2.3-alphabet":              buildChannelCustom,
+		"1.2.3-alpha.foo":             buildChannelCustom,
+		"1.8.6-pg.2":                  buildChannelCustom,
+		"acme-radar":                  buildChannelCustom,
+		"1.2.3+vendor.1":              buildChannelCustom,
+		"1.2.3-rc.01":                 buildChannelCustom,
+		"dev":                         buildChannelDevelopment,
+		"dev-a1b2c3d":                 buildChannelDevelopment,
+		"1.2.3-dirty":                 buildChannelDevelopment,
+		"k8s-ui-v1.13.3":              buildChannelDevelopment,
+		"radar-app-v1.2.3":            buildChannelDevelopment,
+		"pkg/v1.12.1":                 buildChannelDevelopment,
+		"k8s-ui-v1.13.3-27-g1197bab6": buildChannelDevelopment,
+		"1197bab6043c723e557714620758ace2dad36354": buildChannelDevelopment,
+	}
+	for value, want := range tests {
+		if got := buildChannel(value); got != want {
+			t.Errorf("buildChannel(%q) = %q, want %q", value, got, want)
+		}
+	}
+}
+
+func resetUpdateCache() {
+	mu.Lock()
+	defer mu.Unlock()
+	updateCache = map[string]updateCacheEntry{}
 }

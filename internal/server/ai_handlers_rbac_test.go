@@ -26,7 +26,7 @@ func TestProxyAuth_AIGetSecret_PerNamespaceRBAC_Denied(t *testing.T) {
 	// nginx-tls (seeded as the SA which has cluster-wide secrets RBAC),
 	// so without the preflight a 200 would leak secret bytes.
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("alice", &auth.UserPermissions{
+	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
 	seedServerSecretGetCanI(t, env, "alice", nil, []string{"default"})
@@ -47,7 +47,7 @@ func TestProxyAuth_AIGetNode_ClusterScopedRBAC_Denied(t *testing.T) {
 	env := newAuthTestServer(t)
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("get", "", "nodes", "", false)
-	env.srv.permCache.Set("broad-reader", perms)
+	env.srv.permCache.Set("broad-reader", nil, perms)
 
 	resp := env.authGet(t, "/api/ai/resources/node/_/worker-1", "broad-reader", "")
 	defer resp.Body.Close()
@@ -62,7 +62,7 @@ func TestProxyAuth_AIGetPod_NamespaceDenied(t *testing.T) {
 	// A regression that fetched first and then filtered would let timing
 	// signal whether the pod exists (oracle).
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("alice", &auth.UserPermissions{
+	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
 
@@ -79,7 +79,7 @@ func TestProxyAuth_AIGetPod_NamespaceAllowed(t *testing.T) {
 	// Pins that the preflight isn't accidentally over-gating happy-path
 	// requests (e.g., a misordered check that always denies).
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("bob", &auth.UserPermissions{
+	env.srv.permCache.Set("bob", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
 
@@ -118,7 +118,7 @@ func TestAI_SecretsList_PerNamespaceDenied_Returns403(t *testing.T) {
 	// `list secrets` is denied. preflightResourceList must intercept
 	// before reaching the cache.
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("alice", &auth.UserPermissions{
+	env.srv.permCache.Set("alice", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
 	seedServerSecretListCanI(t, env, "alice", nil, []string{"default"})
@@ -137,7 +137,7 @@ func TestAI_NodesList_NoClusterRBAC_Returns403(t *testing.T) {
 	env := newAuthTestServer(t)
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("list", "", "nodes", "", false)
-	env.srv.permCache.Set("broad-reader", perms)
+	env.srv.permCache.Set("broad-reader", nil, perms)
 
 	resp := env.authGet(t, "/api/ai/resources/nodes", "broad-reader", "")
 	defer resp.Body.Close()
@@ -152,7 +152,7 @@ func TestAI_NamespacesList_NoListNamespacesSAR_Returns403(t *testing.T) {
 	env := newAuthTestServer(t)
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("list", "", "namespaces", "", false)
-	env.srv.permCache.Set("broad-reader", perms)
+	env.srv.permCache.Set("broad-reader", nil, perms)
 
 	resp := env.authGet(t, "/api/ai/resources/namespaces", "broad-reader", "")
 	defer resp.Body.Close()
@@ -176,7 +176,7 @@ func TestAI_NamespacesList_NoListNamespacesSAR_Returns403(t *testing.T) {
 // wrong-kind result), which is the bug.
 func TestAI_ListServices_WithGroup_RoutesToDynamicCache(t *testing.T) {
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("bob", &auth.UserPermissions{
+	env.srv.permCache.Set("bob", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
 
@@ -230,7 +230,7 @@ func TestAI_DeploymentsList_HappyPath_AttachesSummaryContext(t *testing.T) {
 	// adds — pin it so a refactor that skipped attachment surfaces
 	// here).
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("bob", &auth.UserPermissions{
+	env.srv.permCache.Set("bob", nil, &auth.UserPermissions{
 		AllowedNamespaces: []string{"default"},
 	})
 

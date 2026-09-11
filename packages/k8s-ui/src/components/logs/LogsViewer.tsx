@@ -5,7 +5,7 @@ import { useLogBuffer } from './useLogBuffer'
 import { useLogStream } from './useLogStream'
 import { ContainerSelect, LogRangeSelect } from './LogToolbarSelects'
 import { LogCore } from './LogCore'
-import type { DownloadFormat } from './LogCore'
+import type { LogExportPayload } from '../../utils/log-export'
 import type { LogPalette } from './log-palette'
 import { Tooltip } from '../ui/Tooltip'
 import { useToast } from '../ui/Toast'
@@ -140,25 +140,8 @@ export function LogsViewer({
     return () => { autoStartedForRef.current = null }
   }, [willAutoStream, selectedContainer, handleStartStreaming])
 
-  const downloadLogs = useCallback((format: DownloadFormat) => {
-    let content: string
-    let mime: string
-    const filename = `${podName}-${selectedContainer}-logs.${format}`
-    switch (format) {
-      case 'json':
-        content = JSON.stringify(entries.map(l => ({ timestamp: l.timestamp, content: l.content, container: l.container })), null, 2)
-        mime = 'application/json'
-        break
-      case 'csv':
-        content = 'timestamp,container,content\n' + entries.map(l =>
-          `${l.timestamp},${l.container},"${l.content.replace(/"/g, '""')}"`)
-          .join('\n')
-        mime = 'text/csv'
-        break
-      default:
-        content = entries.map(l => `${l.timestamp} ${l.content}`).join('\n')
-        mime = 'text/plain'
-    }
+  const downloadLogs = useCallback(({ content, mime, extension }: LogExportPayload) => {
+    const filename = `${podName}-${selectedContainer}-logs.${extension}`
     try {
       triggerDownload(content, mime, filename, overrideDownload)
       if (!overrideDownload) {
@@ -167,7 +150,7 @@ export function LogsViewer({
     } catch (err) {
       showError('Failed to download logs', err instanceof Error ? err.message : 'Unknown download error')
     }
-  }, [entries, podName, selectedContainer, overrideDownload, showError, showSuccess])
+  }, [podName, selectedContainer, overrideDownload, showError, showSuccess])
 
   const renderToolbarExtra = ({ isDark, palette }: { isDark: boolean; palette: LogPalette }) => (
     <>

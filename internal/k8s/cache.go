@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	toolscache "k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -686,8 +687,24 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 		return
 	}
 
+	obj := newObj
+	if obj == nil {
+		obj = oldObj
+	}
+	if tombstone, ok := obj.(toolscache.DeletedFinalStateUnknown); ok {
+		obj = tombstone.Obj
+	}
+	apiVersion := extractAPIVersion(obj)
+	apiGroup := ""
+	if gvr, ok := BuiltinGVRAnyGroup(kind); ok {
+		apiGroup = gvr.Group
+	}
+	if apiVersion != "" {
+		apiGroup = GroupFromAPIVersion(apiVersion)
+	}
+
 	if op == "add" {
-		if store.IsResourceSeen(clusterContext, kind, namespace, name) {
+		if store.IsResourceSeen(clusterContext, apiGroup, kind, namespace, name) {
 			timeline.RecordDrop(kind, namespace, name, timeline.DropReasonAlreadySeen, op, clusterContext)
 			if DebugEvents {
 				log.Printf("[DEBUG] Already seen, skipping: %s/%s/%s", kind, namespace, name)
@@ -695,12 +712,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 			return
 		}
 	} else if op == "delete" {
-		store.ClearResourceSeen(clusterContext, kind, namespace, name)
-	}
-
-	obj := newObj
-	if obj == nil {
-		obj = oldObj
+		store.ClearResourceSeen(clusterContext, apiGroup, kind, namespace, name)
 	}
 
 	resourceVersion := ""
@@ -711,18 +723,16 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	}
 
 	if op == "delete" {
-		stashDeletedForRecreate(kind, namespace, name, uid, obj)
+		stashDeletedForRecreate(apiGroup, kind, namespace, name, uid, obj)
 	}
 
 	// One extraction of owner/labels/createdAt, reused for both the event and
-	// the tombstone. ExtractTombstoneEntry unwraps DeletedFinalStateUnknown, so
-	// a delete whose payload is that wrapper still yields the final object.
+	// the tombstone.
 	entry, extracted := timeline.ExtractTombstoneEntry(obj)
 	owner := entry.Owner
 	labels := entry.Labels
 	createdAt := entry.CreatedAt
 	healthState := classifyTimelineHealth(kind, obj, time.Now())
-	apiVersion := extractAPIVersion(obj)
 
 	// Feed the tombstone on every add/update/delete. While the object is live
 	// this mirrors its enrichment; once it is gone (delete, or a late K8s event
@@ -779,10 +789,11 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	}
 
 	// Recreate-join: an add that replaces a just-deleted object of the same
-	// name but a different UID carries the diff against its predecessor, so
-	// the change feed can show what the recreate changed instead of a
-	// contentless delete+add pair. Guarded to young objects post-sync — the
-	// same conditions under which the add below is recorded at all.
+	// group, kind, namespace, and name but a different UID carries the diff
+	// against its predecessor, so the change feed can show what the recreate
+	// changed instead of a contentless delete+add pair. Guarded to young
+	// objects post-sync — the same conditions under which the add below is
+	// recorded at all.
 	//
 	// Status is stripped from BOTH sides before diffing: every recreate
 	// resets status, so cross-recreate status deltas (ready 1→0, condition
@@ -792,7 +803,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	recreated := false
 	if op == "add" && newObj != nil && initialSyncComplete {
 		if meta, ok := newObj.(metav1.Object); ok && time.Since(meta.GetCreationTimestamp().Time) <= 30*time.Second {
-			if stashed, ok := takeRecreateMatch(kind, namespace, name, uid); ok {
+			if stashed, ok := takeRecreateMatch(apiGroup, kind, namespace, name, uid); ok {
 				if localDiff := ComputeDiff(kind, stripStatusForRecreateDiff(stashed), stripStatusForRecreateDiff(newObj)); localDiff != nil && len(localDiff.Fields) > 0 {
 					diff = &timeline.DiffInfo{
 						Fields:  make([]timeline.FieldChange, len(localDiff.Fields)),
@@ -866,7 +877,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 					return
 				}
 			}
-			store.MarkResourceSeen(clusterContext, kind, namespace, name)
+			store.MarkResourceSeen(clusterContext, apiGroup, kind, namespace, name)
 			return
 		}
 	}
@@ -883,7 +894,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	timeline.IncrementRecorded(kind)
 
 	if op == "add" {
-		store.MarkResourceSeen(clusterContext, kind, namespace, name)
+		store.MarkResourceSeen(clusterContext, apiGroup, kind, namespace, name)
 	}
 }
 
@@ -894,9 +905,8 @@ func isUnstructuredUpdate(oldObj, newObj any) bool {
 }
 
 // extractAPIVersion returns the resource's apiVersion (e.g. "cluster.x-k8s.io/v1beta1")
-// for unstructured/CRD objects. Typed informer objects strip kind/apiVersion, so they
-// fall through to "" — the navigation layer treats an empty group as "core/typed kind",
-// which is correct since core kinds don't collide.
+// for unstructured objects. Typed informer objects have empty TypeMeta after decoding;
+// identity call sites recover their group from the canonical built-in GVR table.
 func extractAPIVersion(obj any) string {
 	if u, ok := obj.(*unstructured.Unstructured); ok {
 		return u.GetAPIVersion()
@@ -1144,7 +1154,7 @@ func typedObjectToUnstructured(obj runtime.Object, gvr schema.GroupVersionResour
 			apiVersion = gvr.Group + "/" + gvr.Version
 		}
 		u.SetAPIVersion(apiVersion)
-		if kindName, ok := builtinKindForResource(gvr.Resource); ok {
+		if kindName, ok := BuiltinKindForResource(gvr.Resource); ok {
 			u.SetKind(kindName)
 		}
 	}

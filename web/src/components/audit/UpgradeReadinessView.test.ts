@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ApiError } from '../../api/client'
-import { UPGRADE_IMPACT_DOCS_URL, UPGRADE_IMPACT_MIN_RADAR_VERSION, UpgradeReadinessError, groupFindings, incompleteUpgradeCheckCount, issueSpecificReferences, summaryMeta, upgradeEvaluationSummary } from './UpgradeReadinessView'
+import { UPGRADE_IMPACT_DOCS_URL, UPGRADE_IMPACT_MIN_RADAR_VERSION, UpgradeReadinessError, groupFindings, incompleteUpgradeCheckCount, issueSpecificReferences, summaryMeta, upgradeEvaluationSummary, upgradeEvidenceCoverageLabel, upgradeUnavailableKindsMessage } from './UpgradeReadinessView'
 
 describe('UpgradeReadinessError', () => {
   it('maps an unmatched endpoint 404 to the v1.9 upgrade message', () => {
@@ -40,7 +40,7 @@ describe('upgradeEvaluationSummary', () => {
       unknown: 1,
       notApplicable: 2,
       findings: 1,
-    })).toBe('18 evaluated · 16 applicable · 1 with partial evidence · 2 not applicable')
+    })).toBe('18 evaluated · 16 applicable · 1 with incomplete evidence · 2 not applicable')
   })
 
   it('does not imply incomplete coverage when every applicable check completed', () => {
@@ -65,6 +65,30 @@ describe('upgradeEvaluationSummary', () => {
       { status: 'unknown' },
       { status: 'passed' },
     ])).toBe(2)
+  })
+})
+
+describe('upgradeUnavailableKindsMessage', () => {
+  it('does not guess why webhook evidence is unavailable', () => {
+    const message = upgradeUnavailableKindsMessage(['mutatingwebhookconfigurations', 'validatingwebhookconfigurations'])
+
+    expect(message).toContain('Affected checks are marked incomplete')
+    expect(message).not.toContain('rbac.viewWebhooks')
+    expect(message).not.toContain('grant')
+  })
+
+  it('does not suggest webhook access for unrelated evidence gaps', () => {
+    expect(upgradeUnavailableKindsMessage(['apiservices'])).not.toContain('rbac.viewWebhooks')
+  })
+})
+
+describe('upgradeEvidenceCoverageLabel', () => {
+  it('distinguishes absent evidence from partial evidence', () => {
+    expect(upgradeEvidenceCoverageLabel({ status: 'unknown', caveat: 'unavailable' })).toBe('No evidence')
+    expect(upgradeEvidenceCoverageLabel({ status: 'unknown', inspected: 0, caveat: 'unavailable' })).toBe('No evidence')
+    expect(upgradeEvidenceCoverageLabel({ status: 'unknown', inspected: 1, caveat: 'one object malformed' })).toBe('Partial evidence')
+    expect(upgradeEvidenceCoverageLabel({ status: 'blocked', inspected: 1, caveat: 'some nodes unavailable' })).toBe('Partial evidence')
+    expect(upgradeEvidenceCoverageLabel({ status: 'passed', inspected: 1 })).toBe('')
   })
 })
 

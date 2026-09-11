@@ -65,15 +65,16 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 				// CAPI records the decisive detail in status.failureMessage/Reason.
 				Message: capiFailureDetail(cl),
 				Age:     FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
-				Duration: FormatAge(ageDur), DurationSeconds: int64(ageDur.Seconds()),
+				ResourceCreatedAt: cl.GetCreationTimestamp().Time, OnsetUnknown: true,
 			})
 			continue // don't double-report conditions
 		}
 
 		// Condition-based: InfrastructureReady, ControlPlaneReady, Ready, TopologyReconciled
-		if ct, reason, msg, dur, ok := conditions.FindFalseCondition(cl,
+		if condition, ok := conditions.FindFalseConditionWithTime(cl,
 			"Ready", "InfrastructureReady", "ControlPlaneReady", "TopologyReconciled",
 		); ok {
+			ct, reason, msg := condition.Type, condition.Reason, condition.Message
 			severity := "high"
 			if ct == "InfrastructureReady" || ct == "ControlPlaneReady" {
 				severity = "critical"
@@ -82,18 +83,16 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 			if displayReason == "" {
 				displayReason = ct + "=False"
 			}
-			d := dur
-			if d == 0 {
-				d = ageDur
-			}
-			timing, timingBasis := capiIssueTiming(dur, cl.GetCreationTimestamp().Time)
-			problems = append(problems, Detection{
+			timing, timingBasis := capiIssueTiming(condition.LastTransitionTime, condition.HasLastTransitionTime, cl.GetCreationTimestamp().Time)
+			detection := Detection{
 				Kind: "Cluster", Namespace: cl.GetNamespace(), Name: cl.GetName(), Group: capiGroup,
 				Severity: severity, Reason: displayReason, Message: msg,
 				Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
-				Duration: FormatAge(d), DurationSeconds: int64(d.Seconds()),
-				IssueTiming: timing, IssueTimingBasis: timingBasis,
-			})
+				ResourceCreatedAt: cl.GetCreationTimestamp().Time,
+				IssueTiming:       timing, IssueTimingBasis: timingBasis,
+			}
+			setDetectionOnset(&detection, now, condition.LastTransitionTime)
+			problems = append(problems, detection)
 		}
 	}
 
@@ -116,36 +115,40 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 				Kind: "Machine", Namespace: m.GetNamespace(), Name: m.GetName(), Group: capiGroup,
 				Severity: "critical", Reason: "Machine in Failed phase", Message: msg,
 				Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
-				Duration: FormatAge(ageDur), DurationSeconds: int64(ageDur.Seconds()),
+				ResourceCreatedAt: m.GetCreationTimestamp().Time, OnsetUnknown: true,
 			})
 			continue
 		}
 
 		// Phase-based: stuck Provisioning > 10m
 		if strings.EqualFold(phase, "provisioning") && ageDur > 10*time.Minute {
-			_, reason, msg, _, _ := conditions.FindFalseCondition(m, "InfrastructureReady", "BootstrapReady")
+			condition, _ := conditions.FindFalseConditionWithTime(m, "InfrastructureReady", "BootstrapReady")
+			reason, msg := condition.Reason, condition.Message
 			displayReason := fmt.Sprintf("Stuck provisioning for %s", FormatAge(ageDur))
 			if reason != "" {
 				displayReason += " (" + reason + ")"
 			}
-			problems = append(problems, Detection{
+			detection := Detection{
 				Kind: "Machine", Namespace: m.GetNamespace(), Name: m.GetName(), Group: capiGroup,
 				Severity: "high", Reason: displayReason, Message: msg,
 				Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
-				Duration: FormatAge(ageDur), DurationSeconds: int64(ageDur.Seconds()),
-			})
+				ResourceCreatedAt: m.GetCreationTimestamp().Time,
+			}
+			setDetectionOnset(&detection, now, m.GetCreationTimestamp().Time)
+			problems = append(problems, detection)
 			continue
 		}
 
 		// Condition-based: BootstrapReady=False, NodeHealthy=False, InfrastructureReady=False,
 		// with Ready=False as a fallback. Catches problems that phase alone misses,
 		// e.g. Running phase but NodeHealthy=False.
-		ct, reason, msg, dur, ok := conditions.FindFalseCondition(m,
+		condition, ok := conditions.FindFalseConditionWithTime(m,
 			"BootstrapReady", "NodeHealthy", "InfrastructureReady",
 		)
 		if !ok {
-			ct, reason, msg, dur, ok = conditions.FindFalseCondition(m, "Ready")
+			condition, ok = conditions.FindFalseConditionWithTime(m, "Ready")
 		}
+		ct, reason, msg := condition.Type, condition.Reason, condition.Message
 		if ok && capiConditionCurrent(m, reason) {
 			severity := "high"
 			if ct == "BootstrapReady" {
@@ -155,18 +158,16 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 			if displayReason == "" {
 				displayReason = ct + "=False"
 			}
-			d := dur
-			if d == 0 {
-				d = ageDur
-			}
-			timing, timingBasis := capiIssueTiming(dur, m.GetCreationTimestamp().Time)
-			problems = append(problems, Detection{
+			timing, timingBasis := capiIssueTiming(condition.LastTransitionTime, condition.HasLastTransitionTime, m.GetCreationTimestamp().Time)
+			detection := Detection{
 				Kind: "Machine", Namespace: m.GetNamespace(), Name: m.GetName(), Group: capiGroup,
 				Severity: severity, Reason: displayReason, Message: msg,
 				Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
-				Duration: FormatAge(d), DurationSeconds: int64(d.Seconds()),
-				IssueTiming: timing, IssueTimingBasis: timingBasis,
-			})
+				ResourceCreatedAt: m.GetCreationTimestamp().Time,
+				IssueTiming:       timing, IssueTimingBasis: timingBasis,
+			}
+			setDetectionOnset(&detection, now, condition.LastTransitionTime)
+			problems = append(problems, detection)
 		}
 	}
 
@@ -180,37 +181,38 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 		if desired > 0 && ready < desired {
 			ageDur := now.Sub(md.GetCreationTimestamp().Time)
 			if ageDur > 5*time.Minute {
-				_, reason, msg, _, _ := conditions.FindFalseCondition(md, "Ready", "Available")
+				condition, _ := conditions.FindFalseConditionWithTime(md, "Ready", "Available")
+				reason, msg := condition.Reason, condition.Message
 				displayReason := fmt.Sprintf("%d/%d machines ready", ready, desired)
 				if reason != "" {
 					displayReason += " (" + reason + ")"
 				}
-				problems = append(problems, Detection{
+				detection := Detection{
 					Kind: "MachineDeployment", Namespace: md.GetNamespace(), Name: md.GetName(), Group: capiGroup,
 					Severity: "high", Reason: displayReason, Message: msg,
 					Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
-					Duration: FormatAge(ageDur), DurationSeconds: int64(ageDur.Seconds()),
-				})
+					ResourceCreatedAt: md.GetCreationTimestamp().Time,
+				}
+				setDetectionOnset(&detection, now, condition.LastTransitionTime)
+				problems = append(problems, detection)
 				emitted = true
 			}
 		}
 		if emitted {
 			continue
 		}
-		if ct, reason, msg, dur, ok := conditions.FindFalseCondition(md, "Ready", "Available"); ok && capiConditionCurrent(md, reason) {
+		if condition, ok := conditions.FindFalseConditionWithTime(md, "Ready", "Available"); ok && capiConditionCurrent(md, condition.Reason) {
 			ageDur := now.Sub(md.GetCreationTimestamp().Time)
-			d := dur
-			if d == 0 {
-				d = ageDur
-			}
-			timing, timingBasis := capiIssueTiming(dur, md.GetCreationTimestamp().Time)
-			problems = append(problems, Detection{
+			timing, timingBasis := capiIssueTiming(condition.LastTransitionTime, condition.HasLastTransitionTime, md.GetCreationTimestamp().Time)
+			detection := Detection{
 				Kind: "MachineDeployment", Namespace: md.GetNamespace(), Name: md.GetName(), Group: capiGroup,
-				Severity: "high", Reason: capiDisplayReason(ct, reason), Message: msg,
+				Severity: "high", Reason: capiDisplayReason(condition.Type, condition.Reason), Message: condition.Message,
 				Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
-				Duration: FormatAge(d), DurationSeconds: int64(d.Seconds()),
-				IssueTiming: timing, IssueTimingBasis: timingBasis,
-			})
+				ResourceCreatedAt: md.GetCreationTimestamp().Time,
+				IssueTiming:       timing, IssueTimingBasis: timingBasis,
+			}
+			setDetectionOnset(&detection, now, condition.LastTransitionTime)
+			problems = append(problems, detection)
 		}
 	}
 
@@ -222,9 +224,10 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 		desired, _, _ := unstructured.NestedInt64(kcp.Object, "spec", "replicas")
 		ready, _, _ := unstructured.NestedInt64(kcp.Object, "status", "readyReplicas")
 
-		if ct, reason, msg, dur, ok := conditions.FindFalseCondition(kcp,
+		if condition, ok := conditions.FindFalseConditionWithTime(kcp,
 			"Ready", "Available", "CertificatesAvailable", "MachinesReady",
 		); ok {
+			ct, reason, msg := condition.Type, condition.Reason, condition.Message
 			severity := "critical"
 			displayReason := reason
 			if displayReason == "" {
@@ -233,18 +236,16 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 			if desired > 0 && ready < desired {
 				displayReason = fmt.Sprintf("%d/%d CP replicas ready, %s", ready, desired, displayReason)
 			}
-			d := dur
-			if d == 0 {
-				d = ageDur
-			}
-			timing, timingBasis := capiIssueTiming(dur, kcp.GetCreationTimestamp().Time)
-			problems = append(problems, Detection{
+			timing, timingBasis := capiIssueTiming(condition.LastTransitionTime, condition.HasLastTransitionTime, kcp.GetCreationTimestamp().Time)
+			detection := Detection{
 				Kind: "KubeadmControlPlane", Namespace: kcp.GetNamespace(), Name: kcp.GetName(), Group: capiCPGroup,
 				Severity: severity, Reason: displayReason, Message: msg,
 				Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
-				Duration: FormatAge(d), DurationSeconds: int64(d.Seconds()),
-				IssueTiming: timing, IssueTimingBasis: timingBasis,
-			})
+				ResourceCreatedAt: kcp.GetCreationTimestamp().Time,
+				IssueTiming:       timing, IssueTimingBasis: timingBasis,
+			}
+			setDetectionOnset(&detection, now, condition.LastTransitionTime)
+			problems = append(problems, detection)
 		}
 	}
 
@@ -259,32 +260,30 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 			ageDur := now.Sub(mhc.GetCreationTimestamp().Time)
 			problems = append(problems, Detection{
 				Kind: "MachineHealthCheck", Namespace: mhc.GetNamespace(), Name: mhc.GetName(), Group: capiGroup,
-				Severity:        "high",
-				Reason:          fmt.Sprintf("Remediating: %d/%d healthy", healthy, expected),
-				Age:             FormatAge(ageDur),
-				AgeSeconds:      int64(ageDur.Seconds()),
-				Duration:        FormatAge(ageDur),
-				DurationSeconds: int64(ageDur.Seconds()),
+				Severity:          "high",
+				Reason:            fmt.Sprintf("Remediating: %d/%d healthy", healthy, expected),
+				Age:               FormatAge(ageDur),
+				AgeSeconds:        int64(ageDur.Seconds()),
+				ResourceCreatedAt: mhc.GetCreationTimestamp().Time,
+				OnsetUnknown:      true,
 			})
 			emitted = true
 		}
 		if emitted {
 			continue
 		}
-		if ct, reason, msg, dur, ok := conditions.FindFalseCondition(mhc, "Ready", "RemediationAllowed"); ok && capiConditionCurrent(mhc, reason) {
+		if condition, ok := conditions.FindFalseConditionWithTime(mhc, "Ready", "RemediationAllowed"); ok && capiConditionCurrent(mhc, condition.Reason) {
 			ageDur := now.Sub(mhc.GetCreationTimestamp().Time)
-			d := dur
-			if d == 0 {
-				d = ageDur
-			}
-			timing, timingBasis := capiIssueTiming(dur, mhc.GetCreationTimestamp().Time)
-			problems = append(problems, Detection{
+			timing, timingBasis := capiIssueTiming(condition.LastTransitionTime, condition.HasLastTransitionTime, mhc.GetCreationTimestamp().Time)
+			detection := Detection{
 				Kind: "MachineHealthCheck", Namespace: mhc.GetNamespace(), Name: mhc.GetName(), Group: capiGroup,
-				Severity: "high", Reason: capiDisplayReason(ct, reason), Message: msg,
+				Severity: "high", Reason: capiDisplayReason(condition.Type, condition.Reason), Message: condition.Message,
 				Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
-				Duration: FormatAge(d), DurationSeconds: int64(d.Seconds()),
-				IssueTiming: timing, IssueTimingBasis: timingBasis,
-			})
+				ResourceCreatedAt: mhc.GetCreationTimestamp().Time,
+				IssueTiming:       timing, IssueTimingBasis: timingBasis,
+			}
+			setDetectionOnset(&detection, now, condition.LastTransitionTime)
+			problems = append(problems, detection)
 		}
 	}
 
@@ -299,13 +298,12 @@ func capiDisplayReason(condType, reason string) string {
 }
 
 // capiIssueTiming computes issue_timing for a CAPI condition-based Detection.
-// dur is the raw FindFalseCondition since-duration; createdAt is the resource's
-// creationTimestamp. Returns empty strings when dur==0 (no LTT available).
-func capiIssueTiming(dur time.Duration, createdAt time.Time) (timing, basis string) {
-	if dur == 0 {
+// It returns no claim when the condition has no parsed transition timestamp.
+func capiIssueTiming(transitionAt time.Time, transitionKnown bool, createdAt time.Time) (timing, basis string) {
+	if !transitionKnown {
 		return "", ""
 	}
-	r := IssueTimingFromConditionLTT(time.Now().Add(-dur), createdAt, "condition")
+	r := IssueTimingFromConditionLTT(transitionAt, createdAt, "condition")
 	return r.IssueTiming, r.Basis
 }
 

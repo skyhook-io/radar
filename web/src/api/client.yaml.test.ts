@@ -10,8 +10,8 @@ describe('formatApplyResourceError', () => {
           failedIndex: 2,
           total: 4,
           results: [
-            { kind: 'Namespace', namespace: '', name: 'checkout', created: true },
-            { kind: 'Deployment', namespace: 'checkout', name: 'api', created: true },
+            { apiVersion: 'v1', kind: 'Namespace', namespace: '', name: 'checkout', created: true },
+            { apiVersion: 'apps/v1', kind: 'Deployment', namespace: 'checkout', name: 'api', created: true },
           ],
         },
         422,
@@ -26,7 +26,7 @@ describe('formatApplyResourceError', () => {
   })
 
   it('preserves structured partial-apply results for recovery', () => {
-    const result = { kind: 'Namespace', namespace: '', name: 'checkout', created: true }
+    const result = { apiVersion: 'v1', kind: 'Namespace', namespace: '', name: 'checkout', created: true }
     const error = new ApplyResourceError(
       {
         error: 'document 2: admission denied',

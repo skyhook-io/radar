@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"slices"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,9 +81,51 @@ func (p *UserPermissions) SetCanI(verb, group, resource, namespace string, allow
 // PermissionCache caches per-user permission lookups (thread-safe)
 type PermissionCache struct {
 	mu          sync.RWMutex
-	cache       map[string]*UserPermissions // keyed by username
+	cache       map[string]*UserPermissions // keyed by cacheKey(username, groups)
 	ttl         time.Duration
 	contextName func() string // current K8s context; entries with a different stamp are invisible
+}
+
+// cacheKeySep separates the username from the groups fingerprint in a cache
+// key. It is a control byte that cannot appear in a Kubernetes username or
+// group name, so a username's entries remain enumerable by splitting on it.
+const cacheKeySep = "\x00"
+
+// cacheKey builds the composite cache key for an identity. The verdicts stored
+// in a UserPermissions entry are computed by SubjectAccessReviews that run with
+// the username AND its groups, so an entry is only valid for that exact
+// (username, groups) identity — keying by username alone lets a different group
+// set inherit another identity's RBAC ceiling for the cache TTL. Groups are
+// canonicalized (sorted + deduped) so order and duplicates don't fork the key;
+// empty/nil groups is a valid, distinct identity (not a wildcard).
+func cacheKey(username string, groups []string) string {
+	return username + cacheKeySep + groupsFingerprint(groups)
+}
+
+// groupsFingerprint returns a deterministic fingerprint of a group set:
+// sorted, deduped, and joined. Empty-string elements are dropped (an empty
+// group is not a real principal), so nil, [], [""], and ["", ""] all
+// fingerprint to "" — one identity. The proxy path already trims empties, but
+// the OIDC path (internal/auth/oidc.go) does not; dropping them here makes the
+// no-groups collision explicit rather than accidental.
+func groupsFingerprint(groups []string) string {
+	if len(groups) == 0 {
+		return ""
+	}
+	uniq := make([]string, 0, len(groups))
+	seen := make(map[string]struct{}, len(groups))
+	for _, g := range groups {
+		if g == "" {
+			continue // empty group is not a real principal
+		}
+		if _, ok := seen[g]; ok {
+			continue
+		}
+		seen[g] = struct{}{}
+		uniq = append(uniq, g)
+	}
+	sort.Strings(uniq)
+	return strings.Join(uniq, cacheKeySep)
 }
 
 // NewPermissionCache creates a new permission cache with a 2-minute TTL.
@@ -111,11 +155,11 @@ func (pc *PermissionCache) WithContextName(provider func() string) *PermissionCa
 
 // Get returns cached permissions for a user, or nil if not cached / expired
 // / stamped with a different context than the current one.
-func (pc *PermissionCache) Get(username string) *UserPermissions {
+func (pc *PermissionCache) Get(username string, groups []string) *UserPermissions {
 	pc.mu.RLock()
 	defer pc.mu.RUnlock()
 
-	perms, ok := pc.cache[username]
+	perms, ok := pc.cache[cacheKey(username, groups)]
 	if !ok || time.Now().After(perms.ExpiresAt) {
 		return nil
 	}
@@ -132,7 +176,7 @@ func (pc *PermissionCache) Get(username string) *UserPermissions {
 // current context so cross-cluster requests can't see it. Opportunistically
 // evicts expired entries so a long-running deploy with churning users
 // doesn't accumulate.
-func (pc *PermissionCache) Set(username string, perms *UserPermissions) {
+func (pc *PermissionCache) Set(username string, groups []string, perms *UserPermissions) {
 	pc.mu.Lock()
 	defer pc.mu.Unlock()
 
@@ -141,14 +185,15 @@ func (pc *PermissionCache) Set(username string, perms *UserPermissions) {
 	if pc.contextName != nil {
 		perms.ContextName = pc.contextName()
 	}
-	pc.cache[username] = perms
+	key := cacheKey(username, groups)
+	pc.cache[key] = perms
 
-	for u, p := range pc.cache {
-		if u == username {
+	for k, p := range pc.cache {
+		if k == key {
 			continue
 		}
 		if now.After(p.ExpiresAt) {
-			delete(pc.cache, u)
+			delete(pc.cache, k)
 		}
 	}
 }

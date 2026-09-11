@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"os"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -38,7 +36,6 @@ const (
 	promDefaultMaxPoints     = 300
 	promHardMaxPoints        = 600
 	promMinStep              = 15 * time.Second
-	promDefaultResponseBytes = 64 << 10
 	promDiscoverDefaultLimit = 100
 	promDiscoverMaxLimit     = 500
 	promDiscoverLookback     = time.Hour
@@ -100,6 +97,12 @@ type promQueryResponse struct {
 	Summary          json.RawMessage `json:"summary,omitempty"`
 	Note             string          `json:"note,omitempty"`
 	SuggestedMetrics []string        `json:"suggestedMetrics,omitempty"`
+	// Selectors is the query's vector-selector inventory, so a consumer can
+	// tell a query scoped to one workload from a cluster-wide one without
+	// re-parsing PromQL. Always an array; SelectorsUnknown marks a query the
+	// tokenizer could not account for, which must be read as "any scope".
+	Selectors        []prometheus.Selector `json:"selectors"`
+	SelectorsUnknown bool                  `json:"selectorsUnknown,omitempty"`
 }
 
 type promMetricInfo struct {
@@ -119,7 +122,21 @@ type discoverMetricsResponse struct {
 	Usage     string           `json:"usage,omitempty"`
 }
 
+// requireClusterWideMetrics gates the tools whose queries are unbounded by a
+// resource on the any-namespace list-pods SubjectAccessReview, the same
+// grant the REST raw-query and cluster-aggregate routes require. Passes
+// through when no user is on the context (auth-mode=none).
+func requireClusterWideMetrics(ctx context.Context) error {
+	if !canReadInNamespace(ctx, "", "pods", "", "list") {
+		return errors.New(prometheus.ClusterWideMetricsDeniedMessage)
+	}
+	return nil
+}
+
 func handleQueryPrometheus(ctx context.Context, req *mcp.CallToolRequest, input queryPrometheusInput) (*mcp.CallToolResult, any, error) {
+	if err := requireClusterWideMetrics(ctx); err != nil {
+		return nil, nil, err
+	}
 	if strings.TrimSpace(input.Query) == "" {
 		return nil, nil, fmt.Errorf("query is required — a PromQL expression, e.g. topk(5, rate(container_cpu_usage_seconds_total[5m]))")
 	}
@@ -141,6 +158,7 @@ func handleQueryPrometheus(ctx context.Context, req *mcp.CallToolRequest, input 
 	}
 
 	resp := promQueryResponse{Query: input.Query, Type: queryType}
+	resp.Selectors, resp.SelectorsUnknown = prometheus.ExtractSelectors(input.Query)
 	var result *prom.QueryResult
 	var err error
 
@@ -197,9 +215,9 @@ func handleQueryPrometheus(ctx context.Context, req *mcp.CallToolRequest, input 
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to marshal series: %w", err)
 	}
-	if len(seriesBytes) > maxPromResponseBytes() {
+	if len(seriesBytes) > prometheus.MaxResponseBytes() {
 		resp.Truncated = true
-		resp.Summary = summarizeLargeResult(result, input.Query, queryType == "range")
+		resp.Summary = prometheus.SummarizeLargeResult(result, input.Query, queryType == "range")
 		resp.Note = "result too large to return raw — do NOT answer from partial data. Retry with the summary's suggestion (topk), a tighter label selector, or a shorter window; labelCardinality shows which label to constrain."
 		return toJSONResult(resp)
 	}
@@ -209,6 +227,9 @@ func handleQueryPrometheus(ctx context.Context, req *mcp.CallToolRequest, input 
 }
 
 func handleDiscoverMetrics(ctx context.Context, req *mcp.CallToolRequest, input discoverMetricsInput) (*mcp.CallToolResult, any, error) {
+	if err := requireClusterWideMetrics(ctx); err != nil {
+		return nil, nil, err
+	}
 	if input.Label == "" && strings.TrimSpace(input.Match) == "" {
 		return nil, nil, errors.New("match is required when listing metric names — unbounded listing returns thousands of entries; " +
 			`use a selector like {__name__=~"node_cpu.*"} or {namespace="payments"}`)
@@ -409,6 +430,9 @@ func withoutPromStringLiterals(query string) string {
 }
 
 func handleGetPrometheusRules(ctx context.Context, req *mcp.CallToolRequest, input getPrometheusRulesInput) (*mcp.CallToolResult, any, error) {
+	if err := requireClusterWideMetrics(ctx); err != nil {
+		return nil, nil, err
+	}
 	if input.Type != "" && input.Type != "alert" && input.Type != "record" {
 		return nil, nil, fmt.Errorf("type must be alert or record, got %q", input.Type)
 	}
@@ -610,75 +634,6 @@ func adjustStep(window time.Duration, stepStr string, maxPoints int) (time.Durat
 	return time.Duration(math.Ceil(step.Seconds())) * time.Second, nil
 }
 
-// summarizeLargeResult replaces an oversized series payload with a
-// cardinality breakdown plus a ready-to-run rewrite, so the model can
-// self-correct instead of answering from silently cut data. isRange steers the
-// suggestion: with few series the bytes are points-driven, where topk is a
-// no-op and a shorter window / larger step is the real fix.
-func summarizeLargeResult(result *prom.QueryResult, query string, isRange bool) json.RawMessage {
-	totalPoints := 0
-	cardinality := map[string]map[string]struct{}{}
-	for _, s := range result.Series {
-		totalPoints += len(s.DataPoints)
-		for k, v := range s.Labels {
-			if cardinality[k] == nil {
-				cardinality[k] = map[string]struct{}{}
-			}
-			cardinality[k][v] = struct{}{}
-		}
-	}
-
-	type labelCount struct {
-		label string
-		count int
-	}
-	counts := make([]labelCount, 0, len(cardinality))
-	for k, vals := range cardinality {
-		counts = append(counts, labelCount{k, len(vals)})
-	}
-	sort.Slice(counts, func(i, j int) bool {
-		if counts[i].count != counts[j].count {
-			return counts[i].count > counts[j].count
-		}
-		return counts[i].label < counts[j].label
-	})
-
-	// Hand-built JSON keeps labelCardinality in descending order — the first
-	// key is the label that explodes the result, which is the whole point of
-	// the summary. A map would marshal in random order.
-	var b strings.Builder
-	b.WriteString(`{"seriesCount":`)
-	b.WriteString(strconv.Itoa(len(result.Series)))
-	b.WriteString(`,"totalDataPoints":`)
-	b.WriteString(strconv.Itoa(totalPoints))
-	b.WriteString(`,"labelCardinality":{`)
-	for i, lc := range counts {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		key, _ := json.Marshal(lc.label)
-		b.Write(key)
-		b.WriteByte(':')
-		b.WriteString(strconv.Itoa(lc.count))
-	}
-	b.WriteString(`},"suggestion":`)
-	n := len(result.Series)
-	topkN := 5
-	if n < topkN {
-		topkN = n
-	}
-	var suggestionText string
-	if isRange && n <= 5 {
-		suggestionText = fmt.Sprintf("only %d series yet still oversized — points-per-series dominate, so topk won't help; use a shorter window (smaller since) or a larger step", n)
-	} else {
-		suggestionText = fmt.Sprintf("topk(%d, %s)", topkN, query)
-	}
-	suggestion, _ := json.Marshal(suggestionText)
-	b.Write(suggestion)
-	b.WriteByte('}')
-	return json.RawMessage(b.String())
-}
-
 func connectProm(ctx context.Context) (*prom.Client, error) {
 	client := prometheus.GetClient()
 	if client == nil {
@@ -760,13 +715,4 @@ func promDiscoverError(ctx context.Context, match string, err error) error {
 		return e
 	}
 	return err
-}
-
-func maxPromResponseBytes() int {
-	if v := os.Getenv("RADAR_MCP_PROM_MAX_RESPONSE_BYTES"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			return n
-		}
-	}
-	return promDefaultResponseBytes
 }

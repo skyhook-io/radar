@@ -129,6 +129,12 @@ export function KyvernoCleanupPolicyCell({ resource, column }: { resource: any; 
       const status = getKyvernoCleanupPolicyStatus(resource)
       return <span className={clsx('badge', status.color)}>{status.text}</span>
     }
+    case 'lastRun': {
+      const last = getKyvernoLastExecutionTime(resource)
+      return last
+        ? <span className="text-sm text-theme-text-secondary">{formatAge(last)}</span>
+        : <span className="text-sm text-theme-text-tertiary">-</span>
+    }
     case 'schedule': {
       const schedule = getKyvernoCleanupSchedule(resource)
       return schedule ? (

@@ -2,6 +2,7 @@ package conditions
 
 import (
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -28,6 +29,34 @@ func TestIsInProgressForIssues(t *testing.T) {
 		if !IsTransientConditionReason(r) || !IsGenuineFailureReason(r) {
 			t.Errorf("%q should be both transient (health) and genuine-failure (issues)", r)
 		}
+	}
+}
+
+func TestFindFalseConditionWithTimeDistinguishesTimestampPresence(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Nanosecond)
+	tests := []struct {
+		name      string
+		timestamp any
+		wantTime  time.Time
+		wantKnown bool
+	}{
+		{name: "absent"},
+		{name: "malformed", timestamp: "not-a-time"},
+		{name: "exact now", timestamp: now.Format(time.RFC3339Nano), wantTime: now, wantKnown: true},
+		{name: "old", timestamp: now.Add(-2 * time.Hour).Format(time.RFC3339Nano), wantTime: now.Add(-2 * time.Hour), wantKnown: true},
+		{name: "future is preserved for caller validation", timestamp: now.Add(time.Hour).Format(time.RFC3339Nano), wantTime: now.Add(time.Hour), wantKnown: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			condition := map[string]any{"type": "Ready", "status": "False"}
+			if tt.timestamp != nil {
+				condition["lastTransitionTime"] = tt.timestamp
+			}
+			got, found := FindFalseConditionWithTime(cond(map[string]any{"conditions": []any{condition}}), "Ready")
+			if !found || got.HasLastTransitionTime != tt.wantKnown || !got.LastTransitionTime.Equal(tt.wantTime) {
+				t.Fatalf("got found=%v known=%v time=%v, want found=true known=%v time=%v", found, got.HasLastTransitionTime, got.LastTransitionTime, tt.wantKnown, tt.wantTime)
+			}
+		})
 	}
 }
 

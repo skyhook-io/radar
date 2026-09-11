@@ -91,6 +91,13 @@ rbac:
   # plane visibility.
   viewWebhooks: false
 
+  # Allow the no-auth in-cluster Radar identity to read kubelet metrics and
+  # effective configuration through nodes/proxy for upgrade-impact checks.
+  # This exposes node-level runtime and configuration details to anyone who
+  # can reach that Radar instance. Enable only when that audience is trusted.
+  # Authenticated users need this permission on their own Kubernetes identity.
+  viewNodeRuntime: false
+
   # Allow pod exec (enables terminal feature)
   podExec: false
 
@@ -141,9 +148,11 @@ rbac:
     clusterApi: true        # *.cluster.x-k8s.io (CAPI core + infrastructure / controlplane / bootstrap / addons)
     contour: true           # projectcontour.io
     crossplane: true        # crossplane.io, pkg.crossplane.io, apiextensions.crossplane.io, helm.crossplane.io, kubernetes.crossplane.io. For Upbound provider CRDs (s3.aws.upbound.io, compute.gcp.upbound.io, etc.) list them in additionalCrdGroups — K8s RBAC has no apiGroup wildcards.
+    amdGpu: true            # amd.com (AMD GPU Operator: DeviceConfig)
     descheduler: true       # descheduler.alpha.kubernetes.io
     dra: true               # resource.k8s.io (Dynamic Resource Allocation — ResourceClaims, DeviceClasses, ResourceSlices)
     envoyGateway: true      # gateway.envoyproxy.io
+    inferenceGateway: true  # inference.networking.k8s.io, inference.networking.x-k8s.io, llm-d.ai (Inference Gateway + llm-d routing APIs)
     externalDns: true       # externaldns.k8s.io
     externalSecrets: true   # external-secrets.io
     flux: true              # *.toolkit.fluxcd.io
@@ -151,16 +160,25 @@ rbac:
     gcpMonitoring: true     # monitoring.googleapis.com
     grafana: true           # monitoring.grafana.com, tempo/loki/grafana.integreatly.org
     istio: true             # networking.istio.io, security.istio.io
+    jobset: true            # jobset.x-k8s.io
+    kaiScheduler: true      # scheduling.run.ai, kai.scheduler (KAI Scheduler queues and pod groups)
+    kaito: true             # kaito.sh (Workspaces, RAGEngines)
     karpenter: true         # karpenter.sh, karpenter.k8s.aws, karpenter.azure.com, karpenter.k8s.gcp, eks.amazonaws.com (EKS Auto Mode NodeClasses)
     keda: true              # keda.sh
     knative: true           # serving.knative.dev, eventing.knative.dev, sources/messaging/flows/networking.internal.knative.dev
+    kserve: true            # serving.kserve.io (InferenceServices, ServingRuntimes, LLMInferenceServices)
+    kubeflow: true          # kubeflow.org, trainer.kubeflow.org (PyTorchJob/TFJob/MPIJob, TrainJob)
+    kuberay: true           # ray.io (RayClusters, RayJobs, RayServices)
     kubeshark: true         # kubeshark.io
     kubevirt: true          # kubevirt.io (VirtualMachines/VMIs) + cdi/clone/export/instancetype/migrations/pool/snapshot.kubevirt.io
+    kueue: true             # kueue.x-k8s.io + autoscaling.x-k8s.io (queues, workloads, ProvisioningRequests)
     kured: true             # kured.io
     kyverno: true           # kyverno.io, policies.kyverno.io (modern CEL policy family), wgpolicyk8s.io, reports.kyverno.io, openreports.io
+    lws: true               # leaderworkerset.x-k8s.io
     mariadb: true           # mariadb.mmontes.io
     networkPolicyApi: true  # policy.networking.k8s.io (Admin/Baseline/ClusterNetworkPolicy — SIG-network)
     nginx: true             # nginx.org
+    nimOperator: true       # apps.nvidia.com (NVIDIA NIM: NIMServices, NIMCaches, NIMPipelines)
     nvidia: true            # nvidia.com (GPU Operator: ClusterPolicy, NVIDIADriver)
     openshift: true         # observability.openshift.io
     opentelemetry: true     # opentelemetry.io
@@ -174,6 +192,7 @@ rbac:
     trivy: true             # aquasecurity.github.io
     velero: true            # velero.io
     verticalPodAutoscaler: true  # autoscaling.k8s.io (VPA — granted by default; no-op on clusters where VPA isn't installed)
+    volcano: true           # batch.volcano.sh, scheduling.volcano.sh, flow.volcano.sh, bus.volcano.sh
 
   # Additional CRD API groups for custom/unlisted CRDs
   # Example: ["mycompany.io", "custom.example.com"]
@@ -260,27 +279,45 @@ resources:
 #     that happened while you weren't looking, or run Radar in-cluster as a
 #     long-lived deployment. Adds operational concerns: the PVC fills if
 #     retention is unbounded; restart on a multi-GB DB is slower.
+#   postgres — events persist in an externally managed PostgreSQL database.
+#     Pick this when you want history to survive pod restarts and rolling
+#     updates without attaching a PVC, or when your platform already runs a
+#     managed database. The DSN must be provided via an existing Kubernetes
+#     Secret; Helm never touches the credential.
+#     This does NOT make Radar multi-replica: informer caches, SSE streams,
+#     and exec/port-forward sessions are still per-pod, so replicaCount must
+#     stay 1. Only the timeline is shared.
 #
 # Timeline volume depends on cluster size and controller churn. Keep `maxSize`
 # below the PVC `size` so Radar can prune before the volume fills; tune
 # `retention`, `maxSize`, and PVC `size` together.
 timeline:
-  # Storage backend: "memory" or "sqlite"
+  # Storage backend: "memory", "sqlite", or "postgres"
   storage: memory
   # Path to SQLite database (only used when storage is "sqlite")
   # Note: Requires a PVC when using sqlite
   dbPath: /data/timeline.db
   # Maximum number of events to retain (memory store only — currently
-  # ignored by sqlite; use `retention` instead).
+  # ignored by sqlite and postgres; use `retention` instead).
   historyLimit: 10000
-  # SQLite retention: how long to keep events. Go duration (e.g. 168h, 720h).
+  # Retention: how long to keep events. Go duration (e.g. 168h, 720h).
   # "0" disables cleanup (events table grows unbounded — not recommended for
   # in-cluster deployments). Cleanup runs hourly + once at startup.
+  # Applies to sqlite and postgres.
   retention: 168h
   # SQLite max storage size. When the DB + WAL exceed this value, Radar prunes
   # oldest events until storage is back under the low-water mark. Set "0" to
-  # disable size-based pruning.
+  # disable size-based pruning. Not used for postgres or memory.
   maxSize: 800Mi
+  # PostgreSQL configuration (only used when storage is "postgres")
+  postgres:
+    # Name of an existing, same-namespace Secret containing the PostgreSQL DSN.
+    # Required when storage is "postgres". The chart creates no PostgreSQL
+    # resources, so the Secret may come from any operator or secret manager.
+    existingSecret: ""
+    # Key within existingSecret that holds the DSN value. Set this to match the
+    # producer's key, for example "uri" for an operator-managed Secret.
+    secretKey: dsn
 
 # Authentication and RBAC configuration
 auth:
@@ -454,9 +491,27 @@ mcp:
 
 # OpenCost/Kubecost display configuration
 cost:
+  # Cost data source: "auto", "prometheus", or "kubecost". Empty uses Auto;
+  # source controls stay editable only when the Kubecost URL, cluster ID, and
+  # existing Secret are also empty.
+  source: ""
   # Optional ISO 4217 override for OpenCost/Kubecost values. Empty detects the
   # running cost tool's configured currency when available, then uses USD.
   currency: ""
+  kubecost:
+    # Kubecost 3 Aggregator base URL. Empty auto-discovers tcp-api:9004 in the
+    # connected cluster and, without an API key, can fall back to the same
+    # Service's tcp-api-rbac:9008 when 9004 requires SAML/OIDC. Federated
+    # agent-only clusters need the central URL. Root and /model URLs are accepted.
+    url: ""
+    # Cluster ID used to filter central/federated Aggregator results. Empty
+    # detects a literal CLUSTER_ID from an active FinOps Agent or Aggregator.
+    clusterId: ""
+    # Optional Secret containing a Kubecost service-account API key. Radar sends
+    # it only to the configured origin as X-API-KEY. When a key is configured,
+    # Radar will not bypass a failed authentication attempt through port 9008.
+    existingSecret: ""
+    existingSecretKey: "api-key"
 
 # Traffic source configuration
 traffic:

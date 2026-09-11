@@ -6,6 +6,7 @@ import {
   getVulnerabilityReportSummary,
   getVulnerabilityReportContainer,
   getVulnerabilityReportImage,
+  getSbomReportImage,
   getConfigAuditReportSummary,
   getConfigAuditReportStatus,
   getExposedSecretReportSummary,
@@ -133,6 +134,12 @@ export function ClusterComplianceReportCell({ resource, column }: { resource: an
 
 export function SbomReportCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
+    case 'image': {
+      const image = getSbomReportImage(resource)
+      return (
+        <span className="text-sm text-theme-text-secondary truncate block" title={image}>{image}</span>
+      )
+    }
     case 'container':
       return <span className="text-sm text-theme-text-secondary">{getSbomReportContainer(resource)}</span>
     case 'components': {

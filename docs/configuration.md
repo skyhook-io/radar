@@ -6,7 +6,13 @@ This document covers Radar's cluster connection behavior. For commands and flags
 
 Radar listens on `127.0.0.1:9280` by default, so an unauthenticated local
 instance is reachable only from the same network namespace. `localhost` is
-accepted as an equivalent spelling.
+accepted as an equivalent spelling. Requests to this loopback-only,
+unauthenticated listener must also use a loopback `Host`; Radar rejects other
+hostnames so DNS rebinding cannot turn an untrusted site into a local client.
+The reserved `*.localhost` family is accepted; arbitrary local DNS and
+`/etc/hosts` aliases are not.
+To put a non-loopback hostname or reverse proxy in front of Radar, enable Radar
+authentication; do not switch to `0.0.0.0` merely to bypass this check.
 
 To reach Radar through a VM, WSL, dev container, jump host, or another machine,
 opt into a shared listener explicitly:
@@ -17,12 +23,38 @@ radar --listen-address=0.0.0.0
 
 An all-interface listener can be reached by non-browser clients; CORS is not an
 authentication boundary. Enable Radar authentication and restrict network
-access whenever using `0.0.0.0`.
+access whenever using `0.0.0.0`. The loopback `Host` protection above does not
+apply to a shared listener, and Origin checks alone do not stop DNS rebinding
+there. Treat an unauthenticated shared listener as accessible to any browser
+that can reach the network and do not expose it outside a fully trusted network.
+The host local terminal is unavailable on a shared listener even if a client
+sends a loopback `Host` value.
 
 The Docker image and Helm chart set `0.0.0.0` explicitly because their HTTP
 listener must be reachable through a published container port or Kubernetes
 Service. Desktop Radar and temporary `radar diagnose` servers remain
 loopback-only.
+
+## Desktop Window Behavior
+
+On macOS, closing the Radar window hides the app rather than quitting it. The
+Dock icon stays; a Dock click, Cmd+Tab, or Radar → Show All brings the window
+back with the session intact. File → Close Window (Cmd+W) hides it the same way
+the close button does. To quit, use Radar → Quit Radar (Cmd+Q).
+
+Radar keeps running while hidden. That is the point — MCP clients stay
+connected across a window close — but it means a hidden Radar still:
+
+- serves its loopback HTTP and MCP endpoints, under your kubeconfig identity;
+- holds watches open against the API server for every cached resource kind;
+- holds the memory backing those caches.
+
+None of that stops until you quit. If you close the window expecting Radar to
+release its cluster access, quit explicitly.
+
+On Linux and Windows, closing the window always quits. Neither gives Radar
+anything to reopen from — no Dock, and Wails v2 ships no tray icon — so hiding
+there would leave a running process with no way to reach it.
 
 ## Persistent Configuration
 
@@ -47,6 +79,10 @@ Persistent defaults for CLI flags. CLI flags always override these values. Manag
   "historyLimit": 10000,
   "prometheusUrl": "",
   "opencostCurrency": "",
+  "costSource": "auto",
+  "kubecostUrl": "",
+  "kubecostClusterId": "",
+  "kubecostApiKey": "",
   "prometheusHeaders": {},
   "mcp": true,
   "debugImage": ""
@@ -59,17 +95,22 @@ All fields are optional — omitted fields use built-in defaults.
 |-------|-------------|
 | `kubeconfig` | Primary kubeconfig file (same as `--kubeconfig`) |
 | `kubeconfigDirs` | Directories containing additional kubeconfig files (same as `--kubeconfig-dir`) |
+| `restoreLastDesktopContext` | Desktop app only: reopen on the cluster last used (default: enabled). `false` always opens on the kubeconfig's `current-context` — see [Startup Context](#startup-context) |
 | `namespace` | Initial namespace filter |
 | `namespaces` | Initial namespace filters as a list (same as `--namespaces ns1,ns2,ns3`) |
 | `port` | Server port (default 9280) |
 | `noBrowser` | Don't auto-open browser |
 | `browser` | Browser for automatic launch (same as `--browser`; on macOS, app names like `Google Chrome` are supported) |
-| `timelineStorage` | `memory` or `sqlite` |
-| `timelineDbPath` | Path to SQLite database |
-| `timelineMaxSize` | Max SQLite DB + WAL size before pruning oldest events (`0` disables) |
-| `historyLimit` | Max timeline events to retain |
-| `prometheusUrl` | Manual Prometheus/VictoriaMetrics URL — skips auto-discovery. Useful when Prometheus is not in the same cluster or uses a non-standard service name. |
-| `opencostCurrency` | Optional ISO 4217 override for values produced by OpenCost or Kubecost. Empty reads `currencyCode` from the pricing ConfigMap referenced by an active OpenCost/Kubecost workload, or literal `DISPLAY_CURRENCY` from an active Kubecost Deployment or StatefulSet, when Radar auto-discovers cluster Prometheus; otherwise it falls back to `USD`. Radar labels values but does not convert them. Equivalent CLI: `--opencost-currency`; an explicit CLI value remains authoritative while Radar runs and after restart. |
+| `timelineStorage` | `memory`, `sqlite`, or `postgres` |
+| `timelineDbPath` | Path to SQLite database (sqlite only) |
+| `timelineMaxSize` | Max SQLite DB + WAL size before pruning oldest events (`0` disables; sqlite only) |
+| `historyLimit` | Max timeline events to retain (memory only) |
+| `prometheusUrl` | Manual PromQL-compatible query URL — works with Prometheus, VictoriaMetrics, Thanos, Mimir, and similar backends. Skips auto-discovery; useful when the backend is not in the same cluster or uses a non-standard service name. |
+| `opencostCurrency` | Optional ISO 4217 override for values produced by OpenCost or Kubecost. Empty reads `currencyCode` from the pricing ConfigMap referenced by an active OpenCost/Kubecost workload, or literal `DISPLAY_CURRENCY` from an active Kubecost Deployment or StatefulSet, when the selected cost source is tied to the connected cluster; otherwise it falls back to `USD`. In Settings this preference saves through the dialog footer, independently of source testing, so it can be changed while a source is unavailable. Radar labels values but does not convert them. Equivalent CLI: `--opencost-currency`; an explicit CLI value remains authoritative while Radar runs and after restart. |
+| `costSource` | `auto` (default), `prometheus`, or `kubecost`. Auto keeps working OpenCost metrics from a PromQL-compatible backend, then tries a Kubecost 3 Aggregator; if neither is present, selection remains unavailable and retries instead of reporting an absent source as active. Settings validates Auto and Kubecost before saving. An explicit `prometheus` value is a persisted preference and can be saved before its metrics are installed. |
+| `kubecostUrl` | Optional Kubecost 3 Aggregator base URL. Empty discovers an active local Aggregator Service and tries its named `tcp-api` port (9004). When that port requires SAML/OIDC and no API key is configured, Radar can fall back to the same Service's exact `tcp-api-rbac` port (9008). Federated agent-only clusters need the central URL; root API URLs and URLs ending in `/model` are accepted. |
+| `kubecostClusterId` | Cluster ID used to filter a central Aggregator. Empty detects one distinct literal `CLUSTER_ID` from an active FinOps Agent or Aggregator; indirect or conflicting values require an override. An override saved in Settings is bound to the active kubeconfig context so switching clusters cannot silently reuse the wrong cluster's costs. A value added directly to the config file is bound and persisted on its first startup with an available kubeconfig context. |
+| `kubecostApiKey` | Optional Kubecost service-account key sent as `X-API-KEY`. Stored in the unencrypted `0600` config file and redacted from `GET /api/config`; changing the URL origin clears a stored key unless it is supplied again. With a blank URL, a key saved in Settings is bound to the active kubeconfig context because Radar will auto-discover that cluster's local Aggregator; a key added directly to the config file is bound and persisted on its first startup with an available kubeconfig context. An explicit key is never bypassed through an auto-discovered unauthenticated port: authentication failure remains visible. A key paired with an explicit central Aggregator URL can be reused across contexts. In the Helm deployment, the UI-written config lives on the pod's temporary `emptyDir` and does not survive pod replacement; use a Kubernetes Secret with `cost.kubecost.existingSecret` instead. |
 | `prometheusHeaders` | HTTP headers sent with every Prometheus request. Required for auth-protected backends — e.g. `{"X-Scope-OrgID": "my-org"}`. Equivalent CLI: `--prometheus-header Key=Value` (repeatable). Stored in plain text in `config.json` — protect the file accordingly. |
 | `argoCdUrl` | Manual argocd-server URL for the Argo CD API integration — skips auto-discovery. |
 | `argoCdToken` | Argo CD API token (get-only account recommended). Stored in plain text — the file is written `0600`; the token is redacted from `GET /api/config`. |
@@ -77,6 +118,15 @@ All fields are optional — omitted fields use built-in defaults.
 | `prometheusHeadersFromEnv` | Header values read from environment variables at startup — e.g. `{"Authorization": "PROMETHEUS_TOKEN"}`. Equivalent CLI: `--prometheus-header-from-env Key=ENV_VAR` (repeatable). Use this with Kubernetes Secret-backed env vars in Helm deployments. |
 | `mcp` | Enable/disable MCP server for AI tools (default: enabled) |
 | `debugImage` | Image for ephemeral debug containers and node debug pods (same as `--debug-image`). Empty = `busybox:latest`; point at a mirror for air-gapped / private-registry clusters. |
+
+The PostgreSQL DSN is **runtime-only** — set it through the `RADAR_TIMELINE_POSTGRES_DSN` environment variable. It is intentionally never written to `config.json` so credentials do not persist to disk in the settings file.
+
+For declarative deployments, `RADAR_COST_SOURCE`, `RADAR_KUBECOST_URL`,
+`RADAR_KUBECOST_CLUSTER_ID`, and `RADAR_KUBECOST_API_KEY` override these cost
+source fields. When any is set, the source controls are read-only in Settings;
+edit the deployment and restart Radar. `RADAR_KUBECOST_URL` does not carry an
+API key over from the config file; set `RADAR_KUBECOST_API_KEY` explicitly when
+the environment-managed endpoint requires one. The currency override remains separate.
 
 ### Settings File (`~/.radar/settings.json`)
 
@@ -95,6 +145,7 @@ User preferences for the UI. Managed via the Settings dialog or `PUT /api/settin
 |-------|--------|-------------|
 | `theme` | `light`, `dark`, `system` | UI theme preference |
 | `pinnedKinds` | Array of `{name, kind, group}` | Resource kinds pinned to the sidebar |
+| `lastDesktopContext` | `{name, sourceFile, inFileName}` | Written by the Desktop app for itself: the cluster its window last used, reopened on the next launch. Stripped from `/api/settings`, and never read by `kubectl radar` or the `radar` CLI — see [Startup Context](#startup-context) |
 
 ## Cluster Connection Precedence
 
@@ -191,9 +242,37 @@ Radar supports switching between Kubernetes contexts at runtime through the UI. 
 
 When running in-cluster (using the pod's service account), context switching is disabled.
 
+Switching contexts in the UI never rewrites your kubeconfig — `kubectl` keeps pointing wherever it pointed before.
+
 ### Expired credentials
 
 If an active context's credentials expire or are rejected, Radar disconnects cluster-backed work and retries automatically. After you re-authenticate, exec-based credentials are re-probed and static credentials are reloaded from kubeconfig on disk, so Radar can reconnect without a restart. Retries start after 30 seconds and back off to 5 minutes; a credential plugin that stops responding is retried less frequently.
+
+## Startup Context
+
+Which cluster Radar comes up on depends on how you launched it.
+
+**The Desktop app reopens where you left off.** The context selected at startup and every successful context switch are recorded as `lastDesktopContext` in `~/.radar/settings.json`, and the next launch reconnects to it — the natural behaviour for a window you closed and reopened.
+
+**`kubectl radar`, `radar`, and `radar diagnose --standalone` start on the kubeconfig's `current-context`**, as `kubectl` would. A command typed right after `kubectl config use-context staging` runs against staging, and a cluster picked in the Desktop app days ago never redirects it. Terminal runs don't record switches either, so nothing you do in one moves where the Desktop app reopens.
+
+The separation is not a preference: the remembered cluster is written under a Desktop-scoped key that the CLI never reads, and there is no setting that opts the CLI in.
+
+To stop the Desktop app reopening on the last cluster, turn off **Reopen on the last used cluster** in Settings → Connection, or set in `~/.radar/config.json`:
+
+```json
+{
+  "restoreLastDesktopContext": false
+}
+```
+
+Details worth knowing:
+
+- The remembered context records the kubeconfig file it came from, not just its name — the name alone is not a stable handle. With several kubeconfigs loaded, two files can define the same context name, and which one keeps the unqualified name depends on the order the files are read, so adding a file can hand that name to a different cluster.
+- Radar reopens only on an exact match: the same context, in the same file. Anything else — the context renamed or deleted, the file moved or no longer loaded — opens the kubeconfig's `current-context` instead, and says so in Diagnostics. A same-named context in another file is not treated as evidence that it is the same cluster; losing the convenience costs a click, landing on the wrong cluster costs more.
+- If the remembered cluster is unreachable (VPN down, for instance), Radar reports the connection failure rather than silently connecting to a different cluster. Pick another cluster from the header.
+- Clusters connected through CAPI are never remembered: their kubeconfig is a temporary file that no longer exists on the next run.
+- Turning the memory off takes effect on the next Desktop start: it clears the remembered cluster as well as stopping new recording, so turning it back on later starts fresh rather than reopening a cluster you stopped using months ago.
 
 ## Namespace Picker
 
@@ -239,12 +318,13 @@ kubeconfig before these commands can run.
 
 ### What Radar sends
 
-Until you connect a cluster to Cloud, Radar makes exactly two outbound
-requests, both to Skyhook, neither containing cluster data:
+Until you connect a cluster to Cloud, Radar makes two kinds of outbound
+request, both to Skyhook, neither containing cluster data:
 
-- **Update check** — periodically, to `releases.skyhook.io`, with the Radar
-  version, OS/arch, install method, and whether it's running locally or
-  in-cluster. Skipped entirely on development builds.
+- **Update check** — to `releases.skyhook.io`, with the Radar version, OS/arch,
+  install method, whether it is running locally or in-cluster, and the
+  installation timestamp when Radar can determine it. Radar caches the release
+  result for one hour. Development builds are excluded.
 - **Cloud dialog copy** — only when you *open* the Cloud dialog, to fetch the
   current terms shown in it. No identifiers are sent. `RADAR_CLOUD_FUNNEL=off`
   stops this request from ever happening.

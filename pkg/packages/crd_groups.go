@@ -14,7 +14,7 @@ package packages
 // Helm release secrets) — that's how rows merge.
 var crdGroupToChart = map[string]string{
 	// Cert-manager
-	"cert-manager.io":   "cert-manager",
+	"cert-manager.io":      "cert-manager",
 	"acme.cert-manager.io": "cert-manager",
 
 	// Argo CD + Argo Workflows + Argo Rollouts.
@@ -36,24 +36,24 @@ var crdGroupToChart = map[string]string{
 	"karpenter.k8s.aws": "karpenter",
 
 	// External Secrets Operator
-	"external-secrets.io":          "external-secrets",
+	"external-secrets.io": "external-secrets",
 
 	// Velero
 	"velero.io": "velero",
 
 	// Kyverno
-	"kyverno.io":                "kyverno",
-	"wgpolicyk8s.io":            "kyverno", // PolicyReport CRDs
+	"kyverno.io":     "kyverno",
+	"wgpolicyk8s.io": "kyverno", // PolicyReport CRDs
 
 	// Prometheus stack (kube-prometheus-stack)
 	"monitoring.coreos.com": "kube-prometheus-stack",
 
 	// Istio
-	"networking.istio.io":  "istio",
-	"security.istio.io":    "istio",
-	"telemetry.istio.io":   "istio",
-	"install.istio.io":     "istio",
-	"extensions.istio.io":  "istio",
+	"networking.istio.io": "istio",
+	"security.istio.io":   "istio",
+	"telemetry.istio.io":  "istio",
+	"install.istio.io":    "istio",
+	"extensions.istio.io": "istio",
 
 	// Traefik
 	"traefik.io":          "traefik",
@@ -66,7 +66,7 @@ var crdGroupToChart = map[string]string{
 	"opentelemetry.io": "opentelemetry-operator",
 
 	// KEDA
-	"keda.sh": "keda",
+	"keda.sh":          "keda",
 	"eventing.keda.sh": "keda",
 
 	// Knative
@@ -76,17 +76,17 @@ var crdGroupToChart = map[string]string{
 	"sources.knative.dev":  "knative-eventing",
 
 	// Cluster API
-	"cluster.x-k8s.io":           "cluster-api",
-	"controlplane.cluster.x-k8s.io": "cluster-api",
-	"bootstrap.cluster.x-k8s.io":  "cluster-api",
+	"cluster.x-k8s.io":                "cluster-api",
+	"controlplane.cluster.x-k8s.io":   "cluster-api",
+	"bootstrap.cluster.x-k8s.io":      "cluster-api",
 	"infrastructure.cluster.x-k8s.io": "cluster-api",
-	"addons.cluster.x-k8s.io":     "cluster-api",
+	"addons.cluster.x-k8s.io":         "cluster-api",
 
 	// Trivy operator
 	"aquasecurity.github.io": "trivy-operator",
 
 	// Cilium
-	"cilium.io":          "cilium",
+	"cilium.io": "cilium",
 }
 
 // chartFromCRDGroup returns (chartName, true) if the group is in our

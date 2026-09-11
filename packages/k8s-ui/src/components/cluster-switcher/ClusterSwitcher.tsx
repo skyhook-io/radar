@@ -243,7 +243,10 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
           // context inline (per-row secondary line), and an extra hover
           // tooltip would just overlap the search input.
           <>
-            <span className={variant === 'segment' ? 'min-w-0 flex-1' : 'min-w-0'}>
+            {/* flex (not a plain span): ClusterName is inline-flex and would
+                otherwise baseline-align inside this wrapper's line box,
+                sitting a couple px above the segment's vertical center. */}
+            <span className={variant === 'segment' ? 'flex items-center min-w-0 flex-1' : 'flex items-center min-w-0'}>
               <ClusterName
                 name={currentName}
                 fallbackBadge={<Server className="w-3.5 h-3.5 text-theme-text-secondary" />}

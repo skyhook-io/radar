@@ -238,15 +238,17 @@ func detectSuspiciousCoreDNS(cache *ResourceCache, now time.Time) []Detection {
 		}
 		age := ageSeconds(now, cm.CreationTimestamp.Time)
 		out = append(out, Detection{
-			Kind:        "ConfigMap",
-			Namespace:   cm.Namespace,
-			Name:        cm.Name,
-			Severity:    "warning",
-			Reason:      reason,
-			Message:     "CoreDNS Corefile contains a rule that can override Kubernetes service DNS responses.",
-			Age:         FormatAge(time.Duration(age) * time.Second),
-			AgeSeconds:  age,
-			Fingerprint: "coredns:service-dns-override",
+			Kind:              "ConfigMap",
+			Namespace:         cm.Namespace,
+			Name:              cm.Name,
+			Severity:          "warning",
+			Reason:            reason,
+			Message:           "CoreDNS Corefile contains a rule that can override Kubernetes service DNS responses.",
+			Age:               FormatAge(time.Duration(age) * time.Second),
+			AgeSeconds:        age,
+			ResourceCreatedAt: cm.CreationTimestamp.Time,
+			OnsetUnknown:      true,
+			Fingerprint:       "coredns:service-dns-override",
 		})
 	}
 	return out
@@ -289,20 +291,21 @@ type envServiceWorkload struct {
 // EnvServiceRefCheck is a conservative validation result for an environment
 // variable that names a Service host:port.
 type EnvServiceRefCheck struct {
-	WorkloadGroup    string
-	WorkloadKind     string
-	Namespace        string
-	WorkloadName     string
-	Container        string
-	EnvName          string
-	Value            string
-	ServiceNamespace string
-	ServiceName      string
-	ReferencedPort   int32
-	Status           string
-	ServicePorts     []string
-	Message          string
-	AgeSeconds       int64
+	WorkloadGroup     string
+	WorkloadKind      string
+	Namespace         string
+	WorkloadName      string
+	Container         string
+	EnvName           string
+	Value             string
+	ServiceNamespace  string
+	ServiceName       string
+	ReferencedPort    int32
+	Status            string
+	ServicePorts      []string
+	Message           string
+	AgeSeconds        int64
+	ResourceCreatedAt time.Time
 }
 
 type DuplicateEnvVarOccurrence struct {
@@ -321,6 +324,7 @@ type DuplicateEnvVarCheck struct {
 	LastDeclaredValue string
 	Message           string
 	AgeSeconds        int64
+	ResourceCreatedAt time.Time
 }
 
 const maxDuplicateEnvVarMessageOccurrences = 5
@@ -330,16 +334,18 @@ func detectDuplicateEnvVars(cache *ResourceCache, namespace string, now time.Tim
 	out := make([]Detection, 0, len(checks))
 	for _, check := range checks {
 		out = append(out, Detection{
-			Kind:        check.WorkloadKind,
-			Group:       check.WorkloadGroup,
-			Namespace:   check.Namespace,
-			Name:        check.WorkloadName,
-			Severity:    "warning",
-			Reason:      "DuplicateEnvVar",
-			Message:     check.Message,
-			Age:         FormatAge(time.Duration(check.AgeSeconds) * time.Second),
-			AgeSeconds:  check.AgeSeconds,
-			Fingerprint: FormatDuplicateEnvVarFingerprint(check.Namespace, check.WorkloadName, check.Container, check.EnvName),
+			Kind:              check.WorkloadKind,
+			Group:             check.WorkloadGroup,
+			Namespace:         check.Namespace,
+			Name:              check.WorkloadName,
+			Severity:          "warning",
+			Reason:            "DuplicateEnvVar",
+			Message:           check.Message,
+			Age:               FormatAge(time.Duration(check.AgeSeconds) * time.Second),
+			AgeSeconds:        check.AgeSeconds,
+			ResourceCreatedAt: check.ResourceCreatedAt,
+			OnsetUnknown:      true,
+			Fingerprint:       FormatDuplicateEnvVarFingerprint(check.Namespace, check.WorkloadName, check.Container, check.EnvName),
 		})
 	}
 	return out
@@ -385,6 +391,7 @@ func findDuplicateEnvVarChecks(workloads []envServiceWorkload, now time.Time) []
 					LastDeclaredValue: last.Value,
 					Message:           duplicateEnvVarMessage(container.Name, envName, occurrences),
 					AgeSeconds:        ageSeconds(now, wl.created),
+					ResourceCreatedAt: wl.created,
 				})
 			}
 		}
@@ -430,16 +437,18 @@ func detectEnvServiceRefs(cache *ResourceCache, namespace string, now time.Time)
 			continue
 		}
 		out = append(out, Detection{
-			Kind:        check.WorkloadKind,
-			Group:       check.WorkloadGroup,
-			Namespace:   check.Namespace,
-			Name:        check.WorkloadName,
-			Severity:    envServiceRefSeverity(check.Status),
-			Reason:      envServiceRefReason(check.Status),
-			Message:     check.Message,
-			Age:         FormatAge(time.Duration(check.AgeSeconds) * time.Second),
-			AgeSeconds:  check.AgeSeconds,
-			Fingerprint: fmt.Sprintf("env-service-ref:%s:%s:%s:%s:%s:%d", check.Status, check.Container, check.EnvName, check.ServiceNamespace, check.ServiceName, check.ReferencedPort),
+			Kind:              check.WorkloadKind,
+			Group:             check.WorkloadGroup,
+			Namespace:         check.Namespace,
+			Name:              check.WorkloadName,
+			Severity:          envServiceRefSeverity(check.Status),
+			Reason:            envServiceRefReason(check.Status),
+			Message:           check.Message,
+			Age:               FormatAge(time.Duration(check.AgeSeconds) * time.Second),
+			AgeSeconds:        check.AgeSeconds,
+			ResourceCreatedAt: check.ResourceCreatedAt,
+			OnsetUnknown:      true,
+			Fingerprint:       fmt.Sprintf("env-service-ref:%s:%s:%s:%s:%s:%d", check.Status, check.Container, check.EnvName, check.ServiceNamespace, check.ServiceName, check.ReferencedPort),
 		})
 	}
 	return out
@@ -505,17 +514,18 @@ func findEnvServiceRefChecks(cache *ResourceCache, workloads []envServiceWorkloa
 				}
 				age := ageSeconds(now, wl.created)
 				check := EnvServiceRefCheck{
-					WorkloadGroup:    wl.group,
-					WorkloadKind:     wl.kind,
-					Namespace:        wl.namespace,
-					WorkloadName:     wl.name,
-					Container:        c.Name,
-					EnvName:          env.Name,
-					Value:            ref.display,
-					ServiceNamespace: ref.namespace,
-					ServiceName:      ref.name,
-					ReferencedPort:   ref.port,
-					AgeSeconds:       age,
+					WorkloadGroup:     wl.group,
+					WorkloadKind:      wl.kind,
+					Namespace:         wl.namespace,
+					WorkloadName:      wl.name,
+					Container:         c.Name,
+					EnvName:           env.Name,
+					Value:             ref.display,
+					ServiceNamespace:  ref.namespace,
+					ServiceName:       ref.name,
+					ReferencedPort:    ref.port,
+					AgeSeconds:        age,
+					ResourceCreatedAt: wl.created,
 				}
 				if ref.namespace != wl.namespace {
 					check.Status = "cross_namespace_unverified"

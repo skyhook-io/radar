@@ -40,7 +40,6 @@ func detectRolloutMissingServices(cache *ResourceCache, dynamicCache *DynamicRes
 	rollouts := listDynamicForMissingRefs(dynamicCache, gvr, namespace, "Rollout")
 	var out []Detection
 	for _, ro := range rollouts {
-		age := now.Sub(ro.GetCreationTimestamp().Time)
 		seen := map[string]bool{}
 		for _, ref := range rolloutServiceRefs(ro) {
 			if ref.name == "" || seen[ref.name] {
@@ -52,10 +51,10 @@ func detectRolloutMissingServices(cache *ResourceCache, dynamicCache *DynamicRes
 			if !checked || exists {
 				continue
 			}
-			out = append(out, withFix(missingRefProblemSev("Rollout", "argoproj.io", ro.GetNamespace(), ro.GetName(),
+			out = append(out, withFix(missingRefProblemSev(now, "Rollout", "argoproj.io", ro.GetNamespace(), ro.GetName(),
 				"warning", "Missing Rollout Service",
 				fmt.Sprintf("%s references Service %q which does not exist", ref.path, ref.name),
-				age),
+				ro.GetCreationTimestamp().Time),
 				fmt.Sprintf("Service %q doesn't exist, so the Rollout controller can't shift traffic during a rollout.", ref.name),
 				fmt.Sprintf("Point the Rollout's %s at an existing Service in namespace %q, or create Service %q if the rollout should still use it.", ref.path, ro.GetNamespace(), ref.name)))
 		}
@@ -118,11 +117,10 @@ func detectKEDAMissingScaleTargets(cache *ResourceCache, dynamicCache *DynamicRe
 		if !checked || exists {
 			continue
 		}
-		age := now.Sub(so.GetCreationTimestamp().Time)
-		out = append(out, withFix(missingRefProblemSev("ScaledObject", "keda.sh", so.GetNamespace(), so.GetName(),
+		out = append(out, withFix(missingRefProblemSev(now, "ScaledObject", "keda.sh", so.GetNamespace(), so.GetName(),
 			"warning", "Missing scaleTargetRef",
 			fmt.Sprintf("spec.scaleTargetRef references %s %q which does not exist", ref.kind, ref.name),
-			age),
+			so.GetCreationTimestamp().Time),
 			fmt.Sprintf("%s %q doesn't exist, so KEDA has nothing to scale.", ref.kind, ref.name),
 			fmt.Sprintf("Point spec.scaleTargetRef at an existing workload in namespace %q, remove the ScaledObject if the target is obsolete, or create %s %q if it should still exist.", so.GetNamespace(), ref.kind, ref.name)))
 	}

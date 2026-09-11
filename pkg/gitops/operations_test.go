@@ -1082,6 +1082,28 @@ func TestTerminateArgoSyncRequestsControllerTermination(t *testing.T) {
 	}
 }
 
+func TestTerminateArgoSyncReportsAlreadyTerminatingAsNoChange(t *testing.T) {
+	app := argoAppForTest("argocd", "demo", func(obj map[string]any) {
+		obj["operation"] = map[string]any{"sync": map[string]any{"revision": "abc123"}}
+		status, _ := obj["status"].(map[string]any)
+		status["operationState"] = map[string]any{"phase": "Terminating"}
+	})
+	client := newFakeArgo(app)
+
+	result, err := TerminateArgoSync(context.Background(), client, "argocd", "demo")
+	if err != nil {
+		t.Fatalf("TerminateArgoSync: %v", err)
+	}
+	if !result.NoChange || result.Message != "Termination already in progress" {
+		t.Fatalf("result = %+v, want explicit no-change termination", result)
+	}
+	for _, action := range client.Actions() {
+		if _, ok := action.(clienttesting.PatchAction); ok {
+			t.Fatalf("already-terminating application was patched: %+v", client.Actions())
+		}
+	}
+}
+
 func TestTerminateArgoSyncRepairsStaleRunningStatus(t *testing.T) {
 	app := argoAppForTest("argocd", "demo", func(obj map[string]any) {
 		status, _ := obj["status"].(map[string]any)

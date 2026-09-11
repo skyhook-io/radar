@@ -15,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -27,19 +28,38 @@ import (
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/probe"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
-// diagnoseInput is the one-shot debug bundle request. Workloads resolve to a
-// pod set for log fan-out; GitOps reconcilers take a no-pods status path.
-type diagnoseInput struct {
-	Kind      string `json:"kind" jsonschema:"kind to diagnose: a workload (pod, deployment, statefulset, daemonset) for logs+events+startup blockers, a GitOps reconciler (application, kustomization, Flux HelmRelease) for sync/health summary + parsed failure cause, or a network entry kind (service, ingress, httproute, grpcroute, gateway) for a path-shaped trace of which hop drops traffic"`
+// diagnoseCommonInput is the non-mutating diagnose contract shared by both MCP
+// endpoints. Workloads resolve to a pod set for log fan-out; GitOps reconcilers
+// take a no-pods status path.
+type diagnoseCommonInput struct {
+	Kind      string `json:"kind" jsonschema:"kind to diagnose: a workload (pod, deployment, statefulset, daemonset, Argo Rollout) for logs+events+startup blockers, a GitOps reconciler (application, kustomization, Flux HelmRelease) for sync/health summary + parsed failure cause, or a network entry kind (service, ingress, httproute, grpcroute, gateway) for a path-shaped trace of which hop drops traffic"`
+	Group     string `json:"group,omitempty" jsonschema:"target API group; set for CRDs or kind collisions (argoproj.io for Rollout); built-ins are inferred"`
 	Probe     bool   `json:"probe,omitempty" jsonschema:"active reachability test for network entry kinds: when true, augment the static trace with DNS/TCP/TLS/HTTP probes as applicable. Explicitly non-HTTP Service ports stop at TCP; Radar does not send them an unrelated HTTP request. Uses direct TCP when radar is in-cluster, K8s API server proxy from a laptop - the same call works either way. Probes can escalate the static verdict when failures are unanimous on a hop, but never soften broken or unknown. Probe failures attributable to the vantage (e.g. NetworkPolicy blocking radar's path) can produce false-positive escalations; the per-hop chip carries the granular signal. Costs 0-3s wall time. No effect for non-network kinds."`
-	InCluster bool   `json:"in_cluster,omitempty" jsonschema:"run the reachability probe from INSIDE the cluster (real dataplane), not from where radar runs. HTTP(S) routes test their declared request; explicitly non-HTTP Service ports use TCP only. Radar creates UP TO 5 short-lived, self-destructing probe pods (one per intended route, run sequentially) under YOUR RBAC (restricted, non-root, no service-account token); each runs the probe and is deleted within ~60s. USE THIS when a prior diagnose (with probe=true) returned a route with confidence:indirect or verdict:unknown - i.e. 'reached via API server, real-traffic path NOT confirmed' - and you need to confirm the live path; or to test from where NetworkPolicy / service-mesh mTLS actually applies, which the apiserver-proxy vantage cannot. EFFECT: this CREATES pods (the only mutating diagnose option); it needs create-jobs + list-pods + get-pods/log RBAC in the namespace. On success the tested route's confidence becomes 'real' and the verdict/headline reflect the live result. For a front-doored route the in-cluster dial bypasses the entry: rows carry segment:'backend' and the headline notes the entry path was not exercised - not proof of the whole route; if a probe pod can't start (unschedulable, image pull, an admission webhook injecting init containers) you get a plain-English reason; if you can't create pods you get a copyable kubectl command to run by hand. Runtime scales with the number of routes (each probe pod can take a few seconds, up to ~5x). probe=true is forced on when this is set; only meaningful for network entry kinds."`
 	Namespace string `json:"namespace" jsonschema:"resource namespace"`
 	Name      string `json:"name" jsonschema:"resource name"`
 	Container string `json:"container,omitempty" jsonschema:"specific container; defaults to all containers across the workload's pods"`
 	TailLines int    `json:"tail_lines,omitempty" jsonschema:"lines per pod/container per stream (current AND previous), default 100"`
 	Since     string `json:"since,omitempty" jsonschema:"only fetch logs newer than this duration (e.g. 30s, 10m, 1h); empty = full available history"`
+}
+
+// diagnoseInput is the full /mcp contract. InCluster is the only mutating
+// option and therefore does not exist in diagnoseReadOnlyInput.
+type diagnoseInput struct {
+	diagnoseCommonInput
+	InCluster bool `json:"in_cluster,omitempty" jsonschema:"run the reachability probe from INSIDE the cluster (real dataplane), not from where radar runs. HTTP(S) routes test their declared request; explicitly non-HTTP Service ports use TCP only. Radar creates UP TO 5 short-lived, self-destructing probe pods (one per intended route, run sequentially) under YOUR RBAC (restricted, non-root, no service-account token); each runs the probe and is deleted within ~60s. USE THIS when a prior diagnose (with probe=true) returned a route with confidence:indirect or verdict:unknown - i.e. 'reached via API server, real-traffic path NOT confirmed' - and you need to confirm the live path; or to test from where NetworkPolicy / service-mesh mTLS actually applies, which the apiserver-proxy vantage cannot. EFFECT: this CREATES pods (the only mutating diagnose option); it needs create-jobs + list-pods + get-pods/log RBAC in the namespace. On success the tested route's confidence becomes 'real' and the verdict/headline reflect the live result. For a front-doored route the in-cluster dial bypasses the entry: rows carry segment:'backend' and the headline notes the entry path was not exercised - not proof of the whole route; if a probe pod can't start (unschedulable, image pull, an admission webhook injecting init containers) you get a plain-English reason; if you can't create pods you get a copyable kubectl command to run by hand. Runtime scales with the number of routes (each probe pod can take a few seconds, up to ~5x). probe=true is forced on when this is set; only meaningful for network entry kinds."`
+}
+
+// diagnoseReadOnlyInput is the strict /mcp-readonly contract. Schema validation
+// rejects in_cluster because the field is absent.
+type diagnoseReadOnlyInput struct {
+	diagnoseCommonInput
+}
+
+func handleDiagnoseReadOnly(ctx context.Context, req *mcp.CallToolRequest, input diagnoseReadOnlyInput) (*mcp.CallToolResult, any, error) {
+	return handleDiagnose(ctx, req, diagnoseInput{diagnoseCommonInput: input.diagnoseCommonInput})
 }
 
 // diagnoseResponse is the bundled output. logsCurrent + logsPrevious are
@@ -51,15 +71,18 @@ type diagnoseInput struct {
 // NarrowHint is set when the resolved pod set was capped for log fan-out
 // — see capDiagnosePods.
 type diagnoseResponse struct {
-	Resource            any                              `json:"resource"`
-	ResourceContext     *resourcecontext.ResourceContext `json:"resourceContext,omitempty"`
-	LogsCurrent         []podLogEntry                    `json:"logsCurrent,omitempty"`
-	LogsPrevious        []podLogEntry                    `json:"logsPrevious,omitempty"`
-	CrashCause          []diagnoseCrashCause             `json:"crashCause,omitempty"`
-	CrashCauseTruncated bool                             `json:"crashCauseTruncated,omitempty"`
-	LogsError           string                           `json:"logsError,omitempty"`
-	Events              []aicontext.DeduplicatedEvent    `json:"events,omitempty"`
-	EventsError         string                           `json:"eventsError,omitempty"`
+	Resource                    any                              `json:"resource"`
+	ResourceContext             *resourcecontext.ResourceContext `json:"resourceContext,omitempty"`
+	LogsCurrent                 []podLogEntry                    `json:"logsCurrent,omitempty"`
+	LogsPrevious                []podLogEntry                    `json:"logsPrevious,omitempty"`
+	CrashCause                  []diagnoseCrashCause             `json:"crashCause,omitempty"`
+	CrashCauseTruncated         bool                             `json:"crashCauseTruncated,omitempty"`
+	LogsError                   string                           `json:"logsError,omitempty"`
+	Events                      []aicontext.DeduplicatedEvent    `json:"events,omitempty"`
+	EventsTotalGroups           int                              `json:"eventsTotalGroups,omitempty"`
+	EventsError                 string                           `json:"eventsError,omitempty"`
+	LogCoverage                 *diagnoseLogCoverage             `json:"logCoverage,omitempty"`
+	ExpectedPreviousLogAbsences []diagnosePodContainerRef        `json:"expectedPreviousLogAbsences,omitempty"`
 	// StartupBlockers carries why the workload can't reach Running when that's
 	// the failure mode, spanning the whole pre-Running path: unschedulable pods
 	// (offending node constraint named), admission rejections (quota/
@@ -76,6 +99,12 @@ type diagnoseResponse struct {
 	RelatedIssues []issues.Issue           `json:"relatedIssues,omitempty"`
 	ChangeContext *issuesapi.ChangeContext `json:"changeContext,omitempty"`
 	RecentChanges []issuesapi.RecentChange `json:"recentChanges,omitempty"`
+	// RecentChangesCoverageLimited is true when at least one referenced source
+	// could not be queried under the caller's per-kind RBAC. It deliberately does
+	// not expose how many hidden sources or rows exist.
+	RecentChangesCoverageLimited bool   `json:"recentChangesCoverageLimited,omitempty"`
+	RecentChangesSaturated       bool   `json:"recentChangesSaturated,omitempty"`
+	RecentChangesError           string `json:"recentChangesError,omitempty"`
 	// DNSContext is attached only when this diagnosed resource shows DNS
 	// symptoms or has non-default DNS settings. It includes cluster DNS facts
 	// without adding one kube-system issue to every namespaced issue list.
@@ -89,6 +118,53 @@ type diagnoseResponse struct {
 	// GitOpsDiagnosis is set only for GitOps reconcilers (Argo Application /
 	// Flux Kustomization / HelmRelease), which have no pods — see gitopsDiagnosis.
 	GitOpsDiagnosis *gitopsDiagnosis `json:"gitopsDiagnosis,omitempty"`
+	// Metrics is the workload's cpu/memory/restarts over the diagnose window
+	// for the same pod set the rest of the bundle covers. Omitted when no
+	// Prometheus is configured, the pod set is empty, or the caller cannot get
+	// the diagnosed resource — see diagnoseMetrics.
+	Metrics *diagnoseMetrics `json:"metrics,omitempty"`
+}
+
+// diagnoseLogCoverage is structured collection metadata shared by agent and UI
+// consumers. NarrowHint remains useful agent guidance; these fields let UIs
+// represent the same limits without parsing that prose.
+// SelectedPods counts fan-out targets, not successful reads. TotalLines counts
+// diagnostic-filter output before the aggregate cap (including fallback tails),
+// not the container's full history. ShownLines counts lines retained after it.
+// TotalPods/ShownPods count pods contributing at least one line before/after
+// that aggregate cap, not selected pods or all successful (possibly empty) reads.
+type diagnoseLogCoverage struct {
+	ResolvedPods       int  `json:"resolvedPods"`
+	SelectedPods       int  `json:"selectedPods"`
+	SelectionTruncated bool `json:"selectionTruncated,omitempty"`
+	ShownLines         int  `json:"shownLines"`
+	TotalLines         int  `json:"totalLines"`
+	ShownPods          int  `json:"shownPods"`
+	TotalPods          int  `json:"totalPods"`
+	ContentTruncated   bool `json:"contentTruncated,omitempty"`
+}
+
+type diagnosePodContainerRef struct {
+	Pod       string `json:"pod"`
+	Container string `json:"container"`
+}
+
+func expectedPreviousLogAbsencesForDiagnose(entries []podLogEntry) []diagnosePodContainerRef {
+	var absences []diagnosePodContainerRef
+	for _, entry := range entries {
+		// Status must establish no prior instance, and the read must either
+		// succeed empty or return the specific kubelet previous-instance absence.
+		// Permission/transport/read failures remain collection limitations even
+		// when the cached status says zero restarts.
+		if !entry.expectedPreviousAbsence || entry.RawLines != 0 || (entry.Error != "" && !entry.previousLogNotFound) {
+			continue
+		}
+		absences = append(absences, diagnosePodContainerRef{
+			Pod:       entry.Pod,
+			Container: entry.Container,
+		})
+	}
+	return absences
 }
 
 // gitopsDiagnosis is the status summary for a GitOps reconciler. The actionable
@@ -180,6 +256,10 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	// have no pods, so they take a dedicated path: reconciler status summary +
 	// the parsed failure issue (via RelatedIssues), no log/pod fan-out.
 	if gk, group, resource, tool, ok := gitopsDiagnoseTarget(input.Kind); ok {
+		if input.Group != "" && !strings.EqualFold(input.Group, group) {
+			return nil, nil, fmt.Errorf("invalid group %q for %s: expected %q", input.Group, input.Kind, group)
+		}
+		input.Group = group
 		return handleGitOpsDiagnose(ctx, input, gk, group, resource, tool)
 	}
 	// Network entry kinds get a path-shaped trace instead of pod-log fan-out
@@ -187,12 +267,22 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	// is not Accepted" is a different shape of answer than logs+events. See
 	// internal/trace.
 	if traceKind, ok := networkTraceKind(input.Kind); ok {
+		expectedGroup := networkDiagnoseGroup(traceKind)
+		if input.Group != "" && !strings.EqualFold(input.Group, expectedGroup) {
+			return nil, nil, fmt.Errorf("diagnose does not support %s in API group %q; expected %q", input.Kind, input.Group, expectedGroup)
+		}
+		input.Group = expectedGroup
 		return handleNetworkTraceDiagnose(ctx, input, traceKind)
 	}
 	kindNorm := normalizeDiagnoseKind(input.Kind)
 	if kindNorm == "" {
-		return nil, nil, fmt.Errorf("invalid kind %q: must be pod, deployment, statefulset, daemonset, application, kustomization, Flux HelmRelease, or a network entry kind (service, ingress, httproute, grpcroute, gateway)", input.Kind)
+		return nil, nil, fmt.Errorf("invalid kind %q: must be pod, deployment, statefulset, daemonset, Argo Rollout, application, kustomization, Flux HelmRelease, or a network entry kind (service, ingress, httproute, grpcroute, gateway)", input.Kind)
 	}
+	expectedGroup := workloadDiagnoseGroup(kindNorm)
+	if input.Group != "" && !strings.EqualFold(input.Group, expectedGroup) {
+		return nil, nil, fmt.Errorf("invalid group %q for %s: expected %q", input.Group, input.Kind, expectedGroup)
+	}
+	input.Group = expectedGroup
 
 	if !checkNamespaceAccess(ctx, input.Namespace) {
 		return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", input.Namespace)
@@ -203,9 +293,19 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		return nil, nil, errNotConnected()
 	}
 
-	obj, err := k8s.FetchResource(cache, kindNorm, input.Namespace, input.Name)
-	if err != nil {
-		return nil, nil, notFoundError(ctx, err, kindNorm, input.Namespace, input.Name)
+	var obj runtime.Object
+	if input.Group != "" && !k8s.TypedKindOwnsGroup(kindNorm, input.Group) {
+		u, err := cache.GetDynamicWithGroup(ctx, kindNorm, input.Namespace, input.Name, input.Group)
+		if err != nil {
+			return nil, nil, notFoundError(ctx, err, kindNorm, input.Namespace, input.Name)
+		}
+		obj = u
+	} else {
+		var err error
+		obj, err = k8s.FetchResource(cache, kindNorm, input.Namespace, input.Name)
+		if err != nil {
+			return nil, nil, notFoundError(ctx, err, kindNorm, input.Namespace, input.Name)
+		}
 	}
 	k8s.SetTypeMeta(obj)
 	gvk := obj.GetObjectKind().GroupVersionKind()
@@ -246,6 +346,19 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		return nil, nil, err
 	}
 
+	// Vitals run beside the log fan-out under their own budget, gated per
+	// kind: the namespace check above only proves the caller may see the
+	// namespace, while the pod set and the object came from the shared cache.
+	var (
+		metrics   *diagnoseMetrics
+		metricsWG sync.WaitGroup
+	)
+	metricsWG.Add(1)
+	go func() {
+		defer metricsWG.Done()
+		metrics = diagnoseWorkloadMetrics(ctx, input.Group, kindNorm, input.Namespace, pods, diagnoseMetricsSince(sinceSeconds), time.Now())
+	}()
+
 	resp := diagnoseResponse{
 		Resource:        minified,
 		ResourceContext: resCtx,
@@ -268,6 +381,12 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	// anyway. Emit a narrowHint so the caller knows to drill down via
 	// kind=pod + specific pod name when they want full coverage.
 	logPods, logsTruncated := capDiagnosePods(pods, maxDiagnosePods)
+	logCoverage := &diagnoseLogCoverage{
+		ResolvedPods:       len(pods),
+		SelectedPods:       len(logPods),
+		SelectionTruncated: logsTruncated,
+	}
+	resp.LogCoverage = logCoverage
 
 	// Fan out current + previous in parallel — previous is expected to error
 	// for healthy pods (no previous container instance); fetchPodLogs records
@@ -306,13 +425,14 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		)
 	}
 
-	events, eventsErr := fetchEventsForResource(cache, kindNorm, input.Namespace, input.Name, pods, 10)
+	events, eventsTotalGroups, eventsErr := fetchEventsForResource(cache, kindNorm, canonicalGroup, input.Namespace, input.Name, pods, 10)
 	resp.Events = events
+	resp.EventsTotalGroups = eventsTotalGroups
 	if eventsErr != nil {
 		resp.EventsError = eventsErr.Error()
 	}
 
-	resp.StartupBlockers = startupBlockersForWorkload(cache, kindNorm, input.Namespace, input.Name, pods)
+	resp.StartupBlockers = startupBlockersForWorkload(cache, kindNorm, canonicalGroup, input.Namespace, input.Name, pods)
 	if len(resp.RelatedIssues) > 0 || len(resp.StartupBlockers) > 0 {
 		if p := issues.NewCacheProvider(); p != nil {
 			resp.ChangeContext = p.ChangeContextForIssue(issues.Issue{
@@ -323,16 +443,51 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 			})
 		}
 	}
-	if changes, _, err := meaningfulchanges.RecentForWorkloadAndConfigMaps(ctx, obj, kindNorm, input.Namespace, input.Name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit); err == nil && len(changes) > 0 {
-		// Per-kind RBAC: the result includes consumed ConfigMaps the caller may
-		// not be able to read even when authorized on the workload subject.
-		resp.RecentChanges = filterRecentChangesRBAC(ctx, changes)
+	changeSourceAPIVersion := func(sourceKind string) string {
+		if meaningfulchanges.ConfigMapKind(sourceKind) {
+			return "v1"
+		}
+		return gvk.GroupVersion().String()
+	}
+	changesResult, changesCoverageLimited, changesErr := meaningfulchanges.RecentForWorkloadAndConfigMapsAuthorizedDetailed(
+		ctx,
+		obj,
+		kindNorm,
+		input.Namespace,
+		input.Name,
+		meaningfulchanges.DefaultSince,
+		meaningfulchanges.ResourceLimit,
+		meaningfulchanges.DefaultFieldLimit,
+		func(sourceKind, _ string) bool {
+			return k8s.ChangeReadAllowed(
+				sourceKind,
+				changeSourceAPIVersion(sourceKind),
+				input.Namespace,
+				mcpChangeAuthorizer(ctx),
+			)
+		},
+	)
+	resp.RecentChangesCoverageLimited = changesCoverageLimited
+	resp.RecentChangesSaturated = changesResult.OutputCapped || changesResult.FetchSaturated
+	if changesErr != nil {
+		resp.RecentChangesError = changesErr.Error()
+	} else if len(changesResult.Changes) > 0 {
+		// The source predicate skips unauthorized targets before querying. Keep
+		// the shared row filter as a fail-closed defense if a timeline result's
+		// identity does not match the source Radar asked for.
+		resp.RecentChanges = filterRecentChangesRBAC(ctx, changesResult.Changes)
 	}
 	resp.DNSContext = dnsContextForDiagnose(ctx, cache, obj, pods, resp.LogsCurrent, resp.LogsPrevious, resp.Events)
 	resp.Warnings = k8score.EnrichRuntimeObjectWarnings(obj)
 	capped, capStats := capMultiPodLogBundles(resp.LogsCurrent, resp.LogsPrevious)
 	resp.LogsCurrent = capped[0]
 	resp.LogsPrevious = capped[1]
+	resp.LogCoverage.ShownLines = capStats.ShownLines
+	resp.LogCoverage.TotalLines = capStats.TotalLines
+	resp.LogCoverage.ShownPods = capStats.ShownPods
+	resp.LogCoverage.TotalPods = capStats.TotalPods
+	resp.LogCoverage.ContentTruncated = capStats.Truncated
+	resp.ExpectedPreviousLogAbsences = expectedPreviousLogAbsencesForDiagnose(resp.LogsPrevious)
 	if capStats.Truncated {
 		capHint := multiPodLogBundleNarrowHint(input.Namespace, capStats, capStats.FirstOmittedBundle == 1)
 		if logsTruncated {
@@ -344,6 +499,8 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 			resp.NarrowHint = capHint
 		}
 	}
+	metricsWG.Wait()
+	resp.Metrics = metrics
 	return toJSONResult(resp)
 }
 
@@ -567,7 +724,7 @@ func textContainsDNSSymptom(text string) bool {
 // Namespace-scoped findings that aren't tied to this workload (the prior
 // blanket "any ResourceQuota" case) are deliberately excluded — attaching a
 // namespace's quota state to an unrelated workload over-attributes failures.
-func startupBlockersForWorkload(cache *k8s.ResourceCache, kind, namespace, name string, pods []*corev1.Pod) []startupBlocker {
+func startupBlockersForWorkload(cache *k8s.ResourceCache, kind, group, namespace, name string, pods []*corev1.Pod) []startupBlocker {
 	all := k8s.DetectSchedulingProblems(cache, namespace)
 	all = append(all, k8s.DetectAdmissionProblems(cache, namespace)...)
 	all = append(all, k8s.DetectPostBindProblems(cache, namespace)...)
@@ -583,14 +740,21 @@ func startupBlockersForWorkload(cache *k8s.ResourceCache, kind, namespace, name 
 
 	var out []startupBlocker
 	for _, p := range all {
+		problemGroup := p.Group
+		if problemGroup == "" {
+			problemGroup = resourceid.GroupForBuiltinKind(p.Kind)
+		}
 		relevant := false
 		switch {
-		case p.Kind == "Pod" && podNames[p.Name]:
+		case p.Kind == "Pod" && problemGroup == "" && podNames[p.Name]:
 			relevant = true
-		case p.Kind == dispKind && p.Name == name:
+		case p.Kind == dispKind && strings.EqualFold(problemGroup, group) && p.Name == name:
 			relevant = true // FailedCreate on the workload itself (StatefulSet/DaemonSet)
-		case dispKind == "Deployment" && p.Kind == "ReplicaSet" && isReplicaSetOf(p.Name, name):
-			relevant = true // FailedCreate on the Deployment's ReplicaSet
+		case p.Kind == "ReplicaSet" && problemGroup == "apps" &&
+			((dispKind == "Deployment" && group == "apps") ||
+				(dispKind == "Rollout" && group == "argoproj.io")) &&
+			isReplicaSetOf(p.Name, name):
+			relevant = true // FailedCreate on the workload's ReplicaSet
 		}
 		if !relevant {
 			continue
@@ -606,18 +770,18 @@ func startupBlockersForWorkload(cache *k8s.ResourceCache, kind, namespace, name 
 	return out
 }
 
-// isReplicaSetOf reports whether rsName belongs to the given Deployment.
-// Deployment ReplicaSets are named "<deployment>-<podTemplateHash>" with a
+// isReplicaSetOf reports whether rsName belongs to the given Deployment or
+// Argo Rollout. Their ReplicaSets are named "<workload>-<podTemplateHash>" with a
 // single hyphen-free hash segment, so we require exactly one trailing segment
-// after "<deployment>-". This avoids a prefix false-match against a sibling
-// Deployment that merely shares the prefix (diagnosing "api" must not claim
-// "api-gateway-<hash>", which belongs to Deployment "api-gateway").
-func isReplicaSetOf(rsName, deployName string) bool {
-	suffix, ok := strings.CutPrefix(rsName, deployName+"-")
+// after "<workload>-". This avoids a prefix false-match against a sibling
+// workload that merely shares the prefix (diagnosing "api" must not claim
+// "api-gateway-<hash>", which belongs to workload "api-gateway").
+func isReplicaSetOf(rsName, workloadName string) bool {
+	suffix, ok := strings.CutPrefix(rsName, workloadName+"-")
 	return ok && suffix != "" && !strings.Contains(suffix, "-")
 }
 
-// normalizeDiagnoseKind accepts pod/deployment/statefulset/daemonset in any
+// normalizeDiagnoseKind accepts pod and supported workload kinds in any
 // singular/plural form and returns the plural cache form. Empty return means
 // unsupported. Delegates to normalizeWorkloadKind for the workload kinds so
 // the canonical mapping lives in one place.
@@ -626,6 +790,17 @@ func normalizeDiagnoseKind(kind string) string {
 		return "pods"
 	}
 	return normalizeWorkloadKind(kind)
+}
+
+func workloadDiagnoseGroup(kind string) string {
+	switch kind {
+	case "pods":
+		return ""
+	case "rollouts":
+		return "argoproj.io"
+	default:
+		return "apps"
+	}
 }
 
 // resolveDiagnosePods returns the set of pods to fetch logs from. For
@@ -655,18 +830,18 @@ func resolveDiagnosePods(cache *k8s.ResourceCache, kindNorm, namespace, name str
 // "no warnings exist" from "apiserver list failed and we couldn't tell"
 // — diagnose surfaces it as EventsError so the agent doesn't read empty
 // events as ground truth.
-func fetchEventsForResource(cache *k8s.ResourceCache, kind, namespace, name string, pods []*corev1.Pod, limit int) ([]aicontext.DeduplicatedEvent, error) {
+func fetchEventsForResource(cache *k8s.ResourceCache, kind, group, namespace, name string, pods []*corev1.Pod, limit int) ([]aicontext.DeduplicatedEvent, int, error) {
 	eventLister := cache.Events()
 	if eventLister == nil {
 		// Mirror attachResourceExtras / get_resource(include=events): surface
 		// "couldn't load" rather than returning empty, so handleDiagnose sets
 		// EventsError and agents don't read silence as "no warnings."
-		return nil, fmt.Errorf("events lister unavailable (insufficient permissions or cache cold)")
+		return nil, 0, fmt.Errorf("events lister unavailable (insufficient permissions or cache cold)")
 	}
 	events, err := eventLister.Events(namespace).List(labels.Everything())
 	if err != nil {
 		log.Printf("[mcp] diagnose: failed to list events for %s/%s/%s: %v", kind, namespace, name, err)
-		return nil, err
+		return nil, 0, err
 	}
 	podNames := make(map[string]bool, len(pods))
 	for _, p := range pods {
@@ -674,15 +849,14 @@ func fetchEventsForResource(cache *k8s.ResourceCache, kind, namespace, name stri
 			podNames[p.Name] = true
 		}
 	}
-	matched := filterEventsByInvolvedObject(events, normalizeDisplayKind(kind), name, podNames)
+	matched := filterEventsByInvolvedObject(events, normalizeDisplayKind(kind), group, name, podNames)
 	if len(matched) == 0 {
-		return nil, nil
+		return nil, 0, nil
 	}
-	// Deliberately a fixed-size evidence sample with silent truncation: this
-	// feeds one section of a composite diagnosis, where a hint would be
-	// noise. get_events is the exhaustive, truncation-signaled path.
-	dedup, _ := aicontext.DeduplicateEventsN(matched, limit)
-	return dedup, nil
+	// This remains a fixed-size evidence sample, but return the pre-cap group
+	// count so the composite response can report when groups were omitted.
+	dedup, totalGroups := aicontext.DeduplicateEventsN(matched, limit)
+	return dedup, totalGroups, nil
 }
 
 // filterEventsByInvolvedObject keeps Warning events whose InvolvedObject
@@ -715,6 +889,17 @@ func networkTraceKind(kind string) (string, bool) {
 		return "Gateway", true
 	}
 	return "", false
+}
+
+func networkDiagnoseGroup(kind string) string {
+	switch kind {
+	case "Service":
+		return ""
+	case "Ingress":
+		return "networking.k8s.io"
+	default:
+		return "gateway.networking.k8s.io"
+	}
 }
 
 // networkDiagnoseResponse is the coverage-honest, agent-shaped output for a
@@ -921,17 +1106,21 @@ func handleNetworkTraceDiagnose(ctx context.Context, input diagnoseInput, kind s
 // coverage) and attachResourceExtras / get_resource include=events
 // (passes nil — supplemental fetch; callers wanting pod-level events should
 // use the diagnose tool which does the workload→pods resolution).
-func filterEventsByInvolvedObject(events []*corev1.Event, displayKind, name string, podNames map[string]bool) []corev1.Event {
+func filterEventsByInvolvedObject(events []*corev1.Event, displayKind, group, name string, podNames map[string]bool) []corev1.Event {
 	var matched []corev1.Event
 	for _, e := range events {
 		if e.Type != corev1.EventTypeWarning {
 			continue
 		}
-		if strings.EqualFold(e.InvolvedObject.Kind, displayKind) && e.InvolvedObject.Name == name {
+		involvedGroup := k8s.GroupFromAPIVersion(e.InvolvedObject.APIVersion)
+		if e.InvolvedObject.APIVersion == "" {
+			involvedGroup = resourceid.GroupForBuiltinKind(e.InvolvedObject.Kind)
+		}
+		if strings.EqualFold(e.InvolvedObject.Kind, displayKind) && strings.EqualFold(involvedGroup, group) && e.InvolvedObject.Name == name {
 			matched = append(matched, *e)
 			continue
 		}
-		if displayKind != "Pod" && strings.EqualFold(e.InvolvedObject.Kind, "Pod") && podNames[e.InvolvedObject.Name] {
+		if displayKind != "Pod" && involvedGroup == "" && strings.EqualFold(e.InvolvedObject.Kind, "Pod") && podNames[e.InvolvedObject.Name] {
 			matched = append(matched, *e)
 		}
 	}

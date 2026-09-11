@@ -12,15 +12,21 @@ export function SelectMenu({
   options,
   onChange,
   ariaLabel,
+  ariaDescribedBy,
   className,
   searchPlaceholder,
+  disabled = false,
+  id,
 }: {
   value: string
   options: SelectMenuOption[]
   onChange: (value: string) => void
   ariaLabel: string
+  ariaDescribedBy?: string
   className?: string
   searchPlaceholder?: string
+  disabled?: boolean
+  id?: string
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -109,8 +115,10 @@ export function SelectMenu({
     >
       <button
         ref={triggerRef}
+        id={id}
         type="button"
         aria-label={ariaLabel}
+        aria-describedby={ariaDescribedBy}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}
@@ -125,7 +133,8 @@ export function SelectMenu({
           }
           setOpen(!open)
         }}
-        className="flex h-8 w-full items-center justify-between gap-2 rounded-md border border-theme-border bg-theme-elevated px-2.5 text-xs text-theme-text-primary transition-colors hover:bg-theme-hover"
+        disabled={disabled}
+        className="flex h-8 w-full items-center justify-between gap-2 rounded-md border border-theme-border bg-theme-elevated px-2.5 text-xs text-theme-text-primary transition-colors hover:bg-theme-hover disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-theme-elevated"
       >
         <span className="truncate">{selected?.label}</span>
         <ChevronDown className={clsx('h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform', open && 'rotate-180')} />

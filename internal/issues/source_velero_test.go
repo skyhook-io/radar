@@ -562,6 +562,13 @@ func TestVeleroIssueAnchorsOnRunTime(t *testing.T) {
 	}
 }
 
+func TestVeleroFailedRunWithoutRunTimestampHasUnknownOnset(t *testing.T) {
+	got := detectBackups(veleroObj{name: "b1", phase: "Failed"})
+	if len(got) != 1 || !got[0].OnsetUnknown || !got[0].FirstSeen.IsZero() || got[0].ResourceCreatedAt.IsZero() {
+		t.Fatalf("timestamp-less failed run fabricated onset: %+v", got)
+	}
+}
+
 // Schedule, BackupStorageLocation and BackupRepository record no transition
 // timestamp at all (their status carries only phase, message and last-check
 // times), so there is no honest age to report and FirstSeen must be omitted.

@@ -1,9 +1,766 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { AgentControls, ConsentCard } from "./parts";
-import type { AgentInfo, ExecutionProfile } from "../../api/diagnose";
+import {
+  AgentControls,
+  AssessmentSources,
+  ConsentCard,
+  ResultCard,
+  Timeline,
+  TurnView,
+  appendThinking,
+  remediationCommands,
+  mergeStartupSignal,
+  middleTruncate,
+  runningElapsedLabel,
+  toolDurationLabel,
+  toolErrorReason,
+  upsertTool,
+  type TimelineItem,
+  type Turn,
+} from "./parts";
+import type {
+  AgentInfo,
+  Diagnosis,
+  DiagnoseStep,
+  DiagnoseStreamEvent,
+  ExecutionProfile,
+} from "../../api/diagnose";
+import { investigationEvidenceSourceId } from "./investigationEvidence";
+import { ThemeProvider } from "../../context/ThemeContext";
 
 const noop = vi.fn();
+
+it("keeps earlier remediation copyable without suggesting it is executable", () => {
+  const html = renderToStaticMarkup(
+    <ResultCard
+      diagnosis={
+        {
+          rootCause: "Missing configuration",
+          report: "Assessment",
+          remediation: ["Restore the required Secret"],
+          recommendedIndex: 1,
+        } as Diagnosis
+      }
+      section="actions"
+      compactActions
+      actionNotice="Proposed before the latest evidence. Reassess before applying."
+    />,
+  );
+  expect(html).toContain("Restore the required Secret");
+  // Prose has nothing worth copying; only a command gets a copy button.
+  expect(html).not.toContain("Copy remediation step");
+  expect(html).not.toContain("Copy command");
+  expect(html).toContain("Reassess before applying");
+  expect(html).not.toContain("Apply…");
+  expect(html).not.toContain("ask the agent to continue");
+  expect(html.indexOf("Reassess before applying")).toBeLessThan(
+    html.indexOf("Restore the required Secret"),
+  );
+});
+
+describe("remediation commands", () => {
+  it("extracts shell commands from inline code and fenced blocks, not identifiers", () => {
+    expect(
+      remediationCommands(
+        "Run `kubectl rollout undo deployment/api -n dev --to-revision=7` to revert; the `MONGO_PASSWORD` key in `Secret/api` stays.",
+      ),
+    ).toEqual(["kubectl rollout undo deployment/api -n dev --to-revision=7"]);
+    expect(
+      remediationCommands(
+        "Then:\n```bash\nhelm rollback prometheus 1 -n opencost\nkubectl -n opencost get pods\n```\nand check `mongosh --host nonprod-boxer.ax6bh.mongodb.net`.",
+      ),
+    ).toEqual([
+      "helm rollback prometheus 1 -n opencost\nkubectl -n opencost get pods",
+      "mongosh --host nonprod-boxer.ax6bh.mongodb.net",
+    ]);
+    expect(
+      remediationCommands("Pin the image to a digest instead of `latest`."),
+    ).toEqual([]);
+  });
+
+  it("offers one copy button per command in a step", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={
+          {
+            rootCause: "Stale credential",
+            report: "Assessment",
+            remediation: [
+              "Roll back with `kubectl rollout undo deployment/api -n dev` and then verify with `kubectl -n dev get pods`.",
+            ],
+          } as Diagnosis
+        }
+        section="actions"
+        compactActions
+      />,
+    );
+    expect(html).toContain("Copy command 1 of step 1");
+    expect(html).toContain("Copy command 2 of step 1");
+    expect(html).not.toContain("Copy remediation step");
+  });
+});
+
+describe("explanation placement", () => {
+  it("gives analysis and explanation separate animated disclosure regions", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={
+          {
+            rootCause: "Missing Secret",
+            report: "Technical analysis",
+            remediation: [],
+          } as Diagnosis
+        }
+        section="conclusion"
+        explanation={{ status: "running" }}
+      />,
+    );
+    const controls = [...html.matchAll(/aria-controls="([^"]+)"/g)].map(
+      (match) => match[1],
+    );
+    const analysis = controls.find((id) => id.endsWith("-analysis"));
+    const explanation = controls.find((id) => id.endsWith("-explanation"));
+    expect(analysis).toBeDefined();
+    expect(explanation).toBeDefined();
+    expect(analysis).not.toBe(explanation);
+    expect(html).toContain(`id="${analysis}"`);
+    expect(html).toContain(`id="${explanation}"`);
+    expect(
+      html.match(/transition-\[grid-template-rows\]/g)?.length,
+    ).toBeGreaterThanOrEqual(2);
+    expect(html).not.toContain("Technical analysis");
+    expect(html).toContain("Explaining this assessment");
+  });
+
+  it("shows local progress in the assessment's shared disclosure", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={
+          {
+            rootCause: "Missing Secret",
+            report: "Technical analysis",
+            remediation: [],
+          } as Diagnosis
+        }
+        section="conclusion"
+        explanation={{ status: "running" }}
+      />,
+    );
+    expect(html).toContain("Explaining this assessment");
+    expect(html).toContain('role="status"');
+    expect(html).toContain("Full analysis");
+    expect(html).not.toContain("Agent confidence:");
+  });
+
+  it("keeps a saved explanation accessible without permission to start another turn", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={
+          {
+            rootCause: "Missing Secret",
+            remediation: [],
+          } as unknown as Diagnosis
+        }
+        section="conclusion"
+        explanation={{ status: "done", text: "Saved explanation" }}
+      />,
+    );
+    expect(html).toContain("Explain simply");
+    expect(html).not.toContain('disabled=""');
+  });
+
+  it("shows a compact Activity receipt instead of repeating the answer", () => {
+    const html = renderToStaticMarkup(
+      <TurnView
+        turn={{
+          question: "Explain simply",
+          explainAssessment: 2,
+          status: "done",
+          timeline: [],
+          error: null,
+          diagnosis: { report: "The long answer is in Findings" } as Diagnosis,
+        }}
+        onViewExplanation={noop}
+      />,
+    );
+    expect(html).toContain("Plain-language explanation");
+    expect(html).toContain("View in Findings");
+    expect(html).not.toContain("The long answer is in Findings");
+  });
+});
+
+describe("appendThinking", () => {
+  it("separates adjacent bold reasoning headings without changing ordinary chunks", () => {
+    const first = appendThinking([], "**Inspecting workload**", false);
+    const headings = appendThinking(first, "**Reading crash logs**", false);
+    const chunks = appendThinking(headings, " and events", false);
+
+    expect(headings).toEqual([
+      {
+        kind: "thinking",
+        text: "**Inspecting workload**",
+        animate: false,
+      },
+      {
+        kind: "thinking",
+        text: "**Reading crash logs**",
+        animate: false,
+      },
+    ]);
+    expect(chunks[1]).toMatchObject({
+      text: "**Reading crash logs** and events",
+    });
+
+    expect(
+      appendThinking([], "**Checking logs**\n**Checking events**", false),
+    ).toMatchObject([
+      { kind: "thinking", text: "**Checking logs**" },
+      { kind: "thinking", text: "**Checking events**" },
+    ]);
+  });
+
+  it("deduplicates an exact repeated reasoning beat", () => {
+    const first = appendThinking([], "**Inspecting workload**", false);
+    expect(appendThinking(first, "**Inspecting workload**", false)).toEqual(
+      first,
+    );
+  });
+
+  it("preserves repeated ordinary lines identically in live chunks and replay", () => {
+    const line = "The retry produced the same timeout.\n";
+    const replay = appendThinking([], line + line, false);
+    const live = appendThinking(appendThinking([], line, true), line, true);
+
+    expect(
+      live.map((item) => (item.kind === "thinking" ? item.text : undefined)),
+    ).toEqual(
+      replay.map((item) => (item.kind === "thinking" ? item.text : undefined)),
+    );
+    expect(live).toMatchObject([
+      {
+        kind: "thinking",
+        text: line + line,
+        animate: true,
+      },
+    ]);
+  });
+});
+
+describe("upsertTool", () => {
+  const running: DiagnoseStep = {
+    id: "tool-1",
+    tool: "get_resource",
+    status: "running",
+    summary: "kind=deployment namespace=dev name=api",
+  };
+  const completion: DiagnoseStep = {
+    id: running.id,
+    tool: "",
+    status: "done",
+    ms: 83,
+    result: '{"readyReplicas":1}',
+    evidenceRef: "ev-1",
+    radarEvidence: true,
+    isError: false,
+    truncated: false,
+  };
+
+  it("appends a new call with its identity and input without changing earlier entries", () => {
+    const previous: TimelineItem[] = [
+      { kind: "thinking", text: "Checking the workload" },
+    ];
+    const next = upsertTool(previous, running);
+
+    expect(next).toEqual([
+      previous[0],
+      { kind: "tool", ...running, animate: true },
+    ]);
+    expect(next[0]).toBe(previous[0]);
+    expect(previous).toHaveLength(1);
+  });
+
+  it.each([undefined, ""])(
+    "merges completion in place, preserving running input when summary is %s",
+    (summary) => {
+      const previous = upsertTool([], running, false);
+      previous.push({ kind: "tool", ...running, id: "tool-2", animate: false });
+      const next = upsertTool(previous, { ...completion, summary }, false);
+
+      expect(next).toEqual([
+        {
+          kind: "tool",
+          ...completion,
+          tool: running.tool,
+          summary: running.summary,
+          animate: false,
+        },
+        previous[1],
+      ]);
+      expect(next[1]).toBe(previous[1]);
+      expect(previous[0]).toEqual({ kind: "tool", ...running, animate: false });
+      expect(upsertTool(next, completion, false)).toEqual(next);
+    },
+  );
+
+  it("replaces result and provenance metadata, including explicit false values", () => {
+    const previous = upsertTool([], completion, false);
+    const failed: DiagnoseStep = {
+      ...completion,
+      result: "Permission denied",
+      evidenceRef: "ev-2",
+      radarEvidence: false,
+      isError: true,
+      truncated: true,
+    };
+    const next = upsertTool(previous, failed, false);
+
+    expect(next).toEqual([{ kind: "tool", ...failed, animate: false }]);
+    expect(upsertTool(next, completion, false)).toEqual(previous);
+    expect(previous[0]).toMatchObject(completion);
+  });
+
+  it.each([
+    { arrival: false, update: false, expected: false },
+    { arrival: false, update: true, expected: true },
+    { arrival: true, update: false, expected: true },
+    { arrival: true, update: true, expected: true },
+  ])(
+    "keeps animation $expected for arrival=$arrival and update=$update",
+    ({ arrival, update, expected }) => {
+      const previous = upsertTool([], running, arrival);
+      const next = upsertTool(previous, completion, update);
+
+      expect(previous[0]).toMatchObject({ animate: arrival });
+      expect(next[0]).toMatchObject({ animate: expected });
+    },
+  );
+});
+
+describe("Timeline reasoning density", () => {
+  const reasoning = {
+    kind: "thinking" as const,
+    text: "A long reasoning beat that may occupy several lines in the activity pane.",
+    animate: false,
+  };
+
+  it("clamps completed reasoning to two lines", () => {
+    const html = renderToStaticMarkup(
+      <Timeline items={[reasoning]} running={false} />,
+    );
+
+    expect(html).toContain("height:47px");
+    expect(html).toContain(
+      "transition-[height] duration-200 ease-out motion-reduce:transition-none",
+    );
+    expect(html).not.toContain("animate-transcript-enter");
+    expect(html).not.toContain("Show reasoning");
+  });
+
+  it("keeps the final live reasoning beat unclamped", () => {
+    const html = renderToStaticMarkup(<Timeline items={[reasoning]} running />);
+
+    expect(html).not.toContain("height:47px");
+  });
+
+  it("clamps an earlier reasoning beat once a live tool follows it", () => {
+    const html = renderToStaticMarkup(
+      <Timeline
+        items={[
+          reasoning,
+          {
+            kind: "tool",
+            id: "tool-1",
+            tool: "get_resource",
+            status: "running",
+            animate: false,
+          },
+        ]}
+        running
+      />,
+    );
+
+    expect(html).toContain("height:47px");
+  });
+});
+
+describe("Timeline startup signals", () => {
+  const readyEvent: Pick<
+    DiagnoseStreamEvent,
+    "phase" | "model" | "toolCount" | "mcpServers"
+  > = {
+    phase: "ready",
+    model: "claude-opus-5",
+    toolCount: 24,
+    mcpServers: [{ name: "radar", status: "connected" }],
+  };
+
+  it("reports each startup phase in place of the generic pending label", () => {
+    const before = renderToStaticMarkup(
+      <Timeline items={[]} running agentLabel="Claude Code" />,
+    );
+    expect(before).toContain("Starting investigation…");
+
+    const starting = mergeStartupSignal(undefined, { phase: "investigating" });
+    expect(
+      renderToStaticMarkup(
+        <Timeline
+          items={[]}
+          running
+          agentLabel="Claude Code"
+          startup={starting}
+        />,
+      ),
+    ).toContain("Claude Code starting…");
+
+    const connected = mergeStartupSignal(starting, { phase: "connected" });
+    expect(
+      renderToStaticMarkup(
+        <Timeline
+          items={[]}
+          running
+          agentLabel="Claude Code"
+          startup={connected}
+        />,
+      ),
+    ).toContain("Connected to Radar&#x27;s tools");
+
+    const ready = mergeStartupSignal(connected, readyEvent);
+    const html = renderToStaticMarkup(
+      <Timeline items={[]} running agentLabel="Claude Code" startup={ready} />,
+    );
+    expect(html).toContain(
+      "Claude Code ready · claude-opus-5 · 24 Radar tools",
+    );
+    expect(html).not.toContain("Starting investigation…");
+    expect(html).not.toContain("MCP server");
+  });
+
+  it("keeps the furthest phase when the handshake lands after the init line", () => {
+    const ready = mergeStartupSignal(undefined, readyEvent);
+    const late = mergeStartupSignal(ready, { phase: "connected" });
+    expect(late).toEqual({
+      phase: "ready",
+      model: "claude-opus-5",
+      toolCount: 24,
+      mcpServers: [{ name: "radar", status: "connected" }],
+    });
+    expect(mergeStartupSignal(ready, { phase: "investigating" })).toBe(late);
+    expect(mergeStartupSignal(undefined, { phase: "unknown" })).toBeUndefined();
+  });
+
+  it("yields to the tool activity once the transcript has items", () => {
+    const html = renderToStaticMarkup(
+      <Timeline
+        items={[
+          {
+            kind: "tool",
+            id: "tool-1",
+            tool: "get_logs",
+            status: "running",
+            animate: false,
+          },
+        ]}
+        running
+        agentLabel="Claude Code"
+        startup={mergeStartupSignal(undefined, readyEvent)}
+      />,
+    );
+    expect(html).toContain("Reading logs…");
+    expect(html).not.toContain("Claude Code ready");
+  });
+
+  it("shows no startup label on a replayed finished turn", () => {
+    const html = renderToStaticMarkup(
+      <Timeline
+        items={[]}
+        running={false}
+        agentLabel="Claude Code"
+        startup={mergeStartupSignal(undefined, readyEvent)}
+      />,
+    );
+    expect(html).not.toContain("Claude Code ready");
+    expect(html).not.toContain("Starting investigation…");
+    expect(html).not.toContain("Connected to Radar");
+  });
+
+  it("renders a bare ready label when the init facts are absent", () => {
+    // Hosted transports may forward only the phase name; the label and the
+    // warning must degrade to exactly what was reported.
+    const startup = mergeStartupSignal(undefined, { phase: "ready" });
+    const html = renderToStaticMarkup(
+      <Timeline
+        items={[]}
+        running
+        agentLabel="Claude Code"
+        startup={startup}
+      />,
+    );
+    expect(html).toContain("Claude Code ready</span>");
+    expect(html).not.toContain("Radar tools");
+    expect(html).not.toContain("MCP server");
+  });
+
+  it("uses conditional wording for servers whose startup state is not final", () => {
+    const startup = mergeStartupSignal(undefined, {
+      phase: "ready",
+      model: "claude-opus-5",
+      toolCount: 24,
+      mcpServers: [
+        { name: "radar", status: "connected" },
+        { name: "github", status: "pending" },
+      ],
+    });
+    const pending = renderToStaticMarkup(
+      <Timeline
+        items={[]}
+        running
+        agentLabel="Claude Code"
+        startup={startup}
+      />,
+    );
+    expect(pending).toContain("is pending");
+    expect(pending).toContain("may not have been available");
+    expect(pending).not.toContain("ran this turn without");
+
+    const failed = renderToStaticMarkup(
+      <Timeline
+        items={[]}
+        running
+        agentLabel="Claude Code"
+        startup={mergeStartupSignal(undefined, {
+          phase: "ready",
+          mcpServers: [
+            { name: "radar", status: "connected" },
+            { name: "github", status: "failed" },
+          ],
+        })}
+      />,
+    );
+    expect(failed).toContain("failed to connect");
+    expect(failed).toContain("ran this turn without those tools");
+  });
+
+  it("warns when the CLI reports an MCP server that is not connected", () => {
+    const startup = mergeStartupSignal(undefined, {
+      phase: "ready",
+      model: "claude-opus-5",
+      toolCount: 0,
+      mcpServers: [{ name: "radar", status: "failed" }],
+    });
+    const live = renderToStaticMarkup(
+      <Timeline
+        items={[]}
+        running
+        agentLabel="Claude Code"
+        startup={startup}
+      />,
+    );
+    expect(live).toContain("Claude Code ready · claude-opus-5 · 0 Radar tools");
+    expect(live).toContain("failed to connect");
+    expect(live).toContain("had no Radar tools this turn");
+
+    // The warning is a fact of the run and survives replay; the label does not.
+    const replayed = renderToStaticMarkup(
+      <Timeline
+        items={[{ kind: "thinking", text: "done", animate: false }]}
+        running={false}
+        agentLabel="Claude Code"
+        startup={startup}
+      />,
+    );
+    expect(replayed).toContain("failed to connect");
+    expect(replayed).not.toContain("Claude Code ready");
+  });
+});
+
+describe("running status elapsed counter", () => {
+  it("is a row-level figure, never part of the phase label", () => {
+    expect(runningElapsedLabel(0)).toBeUndefined();
+    expect(runningElapsedLabel(2)).toBeUndefined();
+    expect(runningElapsedLabel(3)).toBe("3s elapsed");
+    expect(runningElapsedLabel(19)).toBe("19s elapsed");
+
+    const html = renderToStaticMarkup(
+      <Timeline
+        items={[]}
+        running
+        agentLabel="Claude Code"
+        startup={mergeStartupSignal(undefined, { phase: "connected" })}
+      />,
+    );
+    const label = html.match(/<span class="ai-shimmer[^"]*">([^<]*)</);
+    expect(label?.[1]).toBe("Connected to Radar&#x27;s tools");
+    expect(label?.[1]).not.toMatch(/\d+s/);
+  });
+});
+
+describe("tool row duration and failure reason", () => {
+  const doneStep = (
+    overrides: Partial<Extract<TimelineItem, { kind: "tool" }>>,
+  ): TimelineItem => ({
+    kind: "tool",
+    id: "tool-1",
+    tool: "get_events",
+    status: "done",
+    summary: '{"namespace":"dev"}',
+    result: '{"events":[]}',
+    isError: false,
+    animate: false,
+    ...overrides,
+  });
+
+  it("hides sub-threshold durations and shows whole seconds above it", () => {
+    expect(toolDurationLabel(undefined)).toBeUndefined();
+    expect(toolDurationLabel(125)).toBeUndefined();
+    expect(toolDurationLabel(1999)).toBeUndefined();
+    expect(toolDurationLabel(2000)).toBe("2s");
+    expect(toolDurationLabel(3400)).toBe("3s");
+    expect(toolDurationLabel(12600)).toBe("13s");
+
+    const quick = renderToStaticMarkup(
+      <ThemeProvider>
+        <Timeline items={[doneStep({ ms: 125 })]} running={false} />
+      </ThemeProvider>,
+    );
+    // The only millisecond figure is the expanded result header, not the row.
+    expect(quick.match(/125ms/g)).toHaveLength(1);
+    expect(quick.indexOf("125ms")).toBeGreaterThan(
+      quick.indexOf("Original result"),
+    );
+    expect(quick).not.toMatch(/>\d+s</);
+
+    const slow = renderToStaticMarkup(
+      <ThemeProvider>
+        <Timeline items={[doneStep({ ms: 3400 })]} running={false} />
+      </ThemeProvider>,
+    );
+    expect(slow).toContain(">3s<");
+    expect(slow.indexOf(">3s<")).toBeLessThan(slow.indexOf("Original result"));
+    expect(slow.match(/3400ms/g)).toHaveLength(1);
+  });
+
+  it("keeps the exact milliseconds in the expanded result header", () => {
+    const sourceId = investigationEvidenceSourceId(0, "tool-1");
+    const html = renderToStaticMarkup(
+      <ThemeProvider>
+        <Timeline
+          items={[doneStep({ ms: 3400 })]}
+          running={false}
+          turnIndex={0}
+          sourceRevealRequest={{ sourceId, requestId: 1 }}
+        />
+      </ThemeProvider>,
+    );
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain("Original result");
+    expect(html).toContain("3400ms");
+  });
+
+  it("extracts a one-line reason from the producer's error text", () => {
+    expect(
+      toolErrorReason('\ninvalid duration "30d": time: unknown unit "d"\nmore'),
+    ).toBe('invalid duration "30d": time: unknown unit "d"');
+    expect(
+      toolErrorReason(JSON.stringify({ error: 'resource not found: pod "x"' })),
+    ).toBe('resource not found: pod "x"');
+    expect(toolErrorReason("")).toBeUndefined();
+    expect(toolErrorReason("  \n ")).toBeUndefined();
+    expect(toolErrorReason('{"error":""}')).toBeUndefined();
+    // Radar's not-found hints are for the agent; the row keeps what failed.
+    expect(
+      toolErrorReason(
+        'resource not found: secret "project-infra" not found — found Deployment autopush/project-infra — retry with kind=deployment; or use search',
+      ),
+    ).toBe('resource not found: secret "project-infra" not found');
+  });
+
+  it("middle-truncates a long reason so its identifier tail survives", () => {
+    const short = 'resource not found: secret "dev/does-not-exist" not found';
+    expect(middleTruncate(short)).toBe(short);
+    const long =
+      "failed to get logs for autopush/project-infra-68c7b766dc-g2xlg: container is waiting to start: CreateContainerConfigError for pod project-infra-68c7b766dc-g2xlg";
+    const cut = middleTruncate(long);
+    expect(cut.length).toBeLessThanOrEqual(100);
+    expect(cut).toContain("…");
+    expect(cut.startsWith("failed to get logs for autopush")).toBe(true);
+    expect(cut.endsWith("project-infra-68c7b766dc-g2xlg")).toBe(true);
+    expect(middleTruncate("abcdefghij", 6, 2)).toBe("abc…ij");
+  });
+
+  it("lets the arguments give way before the reason on a collapsed failed row", () => {
+    const html = renderToStaticMarkup(
+      <ThemeProvider>
+        <Timeline
+          items={[
+            doneStep({
+              isError: true,
+              summary:
+                '{"kind":"Secret","namespace":"dev","name":"does-not-exist"}',
+              result:
+                'resource not found: secret "dev/does-not-exist" not found — found Deployment dev/api — retry with kind=deployment',
+            }),
+          ]}
+          running={false}
+        />
+      </ThemeProvider>,
+    );
+    const args = html.match(/<span class="([^"]*)">kind=Secret/);
+    expect(args?.[1]).toContain("flex-1");
+    expect(args?.[1]).toContain("truncate");
+    const reason = html.match(
+      /<span class="investigation-tool-reason ([^"]*)">([^<]*)</,
+    );
+    expect(reason?.[1]).toContain("shrink-0");
+    expect(reason?.[2]).toBe(
+      "resource not found: secret &quot;dev/does-not-exist&quot; not found",
+    );
+  });
+
+  it("shows the failure reason inline on a failed row only when the producer gave one", () => {
+    const failed = renderToStaticMarkup(
+      <ThemeProvider>
+        <Timeline
+          items={[
+            doneStep({
+              isError: true,
+              result:
+                '\nfailed to get logs for dev/api: container "api" is waiting to start: CreateContainerConfigError',
+            }),
+          ]}
+          running={false}
+        />
+      </ThemeProvider>,
+    );
+    expect(failed).toContain("investigation-tool-reason");
+    expect(failed).toContain(
+      "failed to get logs for dev/api: container &quot;api&quot; is waiting to start",
+    );
+    expect(failed.indexOf("investigation-tool-reason")).toBeGreaterThan(
+      failed.indexOf("namespace=dev"),
+    );
+
+    const silent = renderToStaticMarkup(
+      <ThemeProvider>
+        <Timeline
+          items={[doneStep({ isError: true, result: undefined })]}
+          running={false}
+        />
+      </ThemeProvider>,
+    );
+    expect(silent).toContain('aria-label="Tool failed"');
+    expect(silent).not.toContain("investigation-tool-reason");
+
+    const succeeded = renderToStaticMarkup(
+      <ThemeProvider>
+        <Timeline
+          items={[doneStep({ isError: false, result: "plain text result" })]}
+          running={false}
+        />
+      </ThemeProvider>,
+    );
+    expect(succeeded).not.toContain("investigation-tool-reason");
+  });
+});
 
 function renderAgent(
   agent: string,
@@ -41,9 +798,12 @@ describe("AgentControls execution profile explanation", () => {
     const html = renderAgent("cursor-agent", ["full-local"], "safeguarded");
     expect(html).toContain("must use this agent");
     expect(html).toContain("normal setup");
-    expect(html).toContain("always loads your global MCP servers");
-    expect(html).toContain("still enables the agent CLI");
-    expect(html).toContain("does not constrain external MCP servers");
+    expect(html).toContain("--force");
+    expect(html).toContain("auto-approves its built-in tools");
+    expect(html).toContain("including your global servers");
+    expect(html).toContain("does not reliably confine those tools");
+    expect(html).not.toContain("still enables the agent CLI");
+    expect(html).not.toContain("does not constrain external MCP servers");
     expect(html).not.toContain("always runs this agent with safeguards");
   });
 
@@ -54,7 +814,9 @@ describe("AgentControls execution profile explanation", () => {
       "safeguarded",
     );
     expect(html).toContain("built-in tools are disabled");
-    expect(html).toContain("settings, hooks, and CLAUDE.md instructions still apply");
+    expect(html).toContain(
+      "settings, hooks, and CLAUDE.md instructions still apply",
+    );
     expect(html).toContain("Your claude setup");
     expect(html).not.toContain("other agent configuration is excluded");
   });
@@ -104,7 +866,12 @@ describe("ConsentCard execution profile treatment", () => {
     expect(html).toContain("border-amber-500/40");
     expect(html).toContain("text-amber-500");
     expect(html).toContain("Radar cannot constrain");
-    expect(html).toContain("always loads your global MCP servers");
+    expect(html).toContain("--force");
+    expect(html).toContain("auto-approves its built-in tools");
+    expect(html).toContain("including your global servers");
+    expect(html).toContain("does not reliably confine those tools");
+    expect(html).not.toContain("still enables the agent CLI");
+    expect(html).not.toContain("does not constrain external MCP servers");
     expect(html).not.toContain("text-accent");
   });
 
@@ -160,5 +927,644 @@ describe("ConsentCard error", () => {
   it("renders no alert when the approval hasn't failed", () => {
     const html = renderToStaticMarkup(<ConsentCard {...base} />);
     expect(html).not.toContain('role="alert"');
+  });
+});
+
+describe("ResultCard conclusion states", () => {
+  const diagnosis = (patch: Partial<Diagnosis>): Diagnosis => ({
+    rootCause: "",
+    report: "",
+    remediation: [],
+    ...patch,
+  });
+
+  const conclusionCases: Array<[Diagnosis, string]> = [
+    [diagnosis({ rootCause: "The image does not exist." }), "Likely cause"],
+    [
+      diagnosis({ healthy: true, report: "The workload is ready." }),
+      "No problem found in checked evidence",
+    ],
+    [diagnosis({ inconclusive: true }), "Couldn&#x27;t determine"],
+  ];
+
+  it.each(conclusionCases)(
+    "preserves the outcome-specific heading %#",
+    (value, heading) => {
+      const html = renderToStaticMarkup(<ResultCard diagnosis={value} />);
+      expect(html).toContain(heading);
+      expect(html).not.toContain("Verdict");
+    },
+  );
+
+  it("qualifies a healthy assessment when structured evidence coverage is absent", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          healthy: true,
+          report: "The workload appears ready.",
+        })}
+        coverageLimited
+      />,
+    );
+
+    expect(html).toContain("No problem identified in available evidence");
+    expect(html).toContain("Evidence coverage is limited.");
+    expect(html).not.toContain("Some evidence could not be summarized");
+    expect(html).toContain("border-amber-500/30");
+    expect(html).toContain("text-amber-500");
+    expect(html).not.toContain("border-emerald-500/30");
+    expect(html).not.toContain("text-emerald-500");
+    expect(html).not.toContain(">No active problems found</div>");
+  });
+
+  it("reserves the verified healthy treatment for an adequately covered all-clear", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          healthy: true,
+          report: "The workload is ready.",
+        })}
+      />,
+    );
+
+    expect(html).toContain("No problem found in checked evidence");
+    expect(html).toContain("border-emerald-500/30");
+    expect(html).toContain("text-emerald-500");
+    expect(html).not.toContain("No problem identified in available evidence");
+  });
+
+  it("does not overstate the rank of evidence that conflicts with an all-clear", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          healthy: true,
+          report: "The workload appears ready.",
+        })}
+        evidenceConflict
+      />,
+    );
+
+    expect(html).toContain("Assessment conflicts with captured evidence");
+    expect(html).toContain("Radar also captured evidence of an active problem");
+    expect(html).not.toContain("Key evidence");
+    expect(html).toContain("border-amber-500/40");
+    expect(html).not.toContain("border-emerald-500/30");
+  });
+
+  it("lists a step's commands in reading order across inline and fenced code", () => {
+    const step =
+      "Roll it with `kubectl -n dev rollout restart deploy/api`, then verify:\n```bash\nkubectl -n dev rollout status deploy/api\n```";
+    expect(remediationCommands(step)).toEqual([
+      "kubectl -n dev rollout restart deploy/api",
+      "kubectl -n dev rollout status deploy/api",
+    ]);
+  });
+
+  it("reframes the conflict banner when the agent explained every adverse card", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          healthy: true,
+          report: "The workload appears ready.",
+        })}
+        evidenceConflict
+        evidenceConflictExplainedBy={["CrashLoopBackOff", "Error logs"]}
+      />,
+    );
+
+    // An explanation reframes Radar's finding; it never replaces it with
+    // reassurance. The banner stays a warning, still says the evidence is
+    // there, and points at the notes.
+    expect(html).toContain(
+      "Agent reports no active problem; adverse evidence remains",
+    );
+    expect(html).toContain("Radar captured evidence of an active problem");
+    expect(html).toContain("the note on CrashLoopBackOff and Error logs");
+    expect(html).toContain("stays in the list below, unchanged");
+    expect(html).not.toContain("Assessment conflicts with captured evidence");
+    expect(html).toContain("border-amber-500/40");
+    expect(html).not.toContain("border-emerald-500/30");
+    expect(html).not.toContain("bg-accent/5");
+    // Never claims a severity tier it did not check.
+    expect(html).not.toContain("warning-level");
+
+    const unexplained = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          healthy: true,
+          report: "The workload appears ready.",
+        })}
+        evidenceConflict
+        evidenceConflictExplainedBy={[]}
+      />,
+    );
+    expect(unexplained).toContain(
+      "Assessment conflicts with captured evidence",
+    );
+
+    // Coverage is a separate fact from the conflict; an explanation of the
+    // conflict must not quietly retire it.
+    const limited = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          healthy: true,
+          report: "The workload appears ready.",
+        })}
+        evidenceConflict
+        evidenceConflictExplainedBy={["CrashLoopBackOff"]}
+        coverageLimited
+      />,
+    );
+    expect(limited).toContain("Evidence coverage is also limited");
+  });
+
+  it("keeps a follow-up framed as an answer rather than a new conclusion", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({ report: "The restart count is unchanged." })}
+        followup
+      />,
+    );
+    expect(html).toContain("Answer");
+    expect(html).not.toContain("Likely cause");
+    expect(html).not.toContain("Conclusion");
+  });
+
+  it.each([
+    diagnosis({ healthy: true, report: "It is healthy right now." }),
+    diagnosis({
+      inconclusive: true,
+      report: "I cannot tell from the available checks.",
+    }),
+  ])("keeps health-flagged ordinary follow-ups conversational", (value) => {
+    const html = renderToStaticMarkup(
+      <ResultCard diagnosis={value} followup />,
+    );
+
+    expect(html).toContain("Answer");
+    expect(html).not.toContain("No active problems found");
+    expect(html).not.toContain("Couldn&#x27;t determine");
+  });
+
+  it("keeps recovery guidance when Findings suppresses the AI disclaimer", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          inconclusive: true,
+          report: "The available evidence is ambiguous.",
+        })}
+        showDisclaimer={false}
+      />,
+    );
+
+    expect(html).toContain("Try a follow-up with more context");
+  });
+
+  it("can place the conclusion before evidence and actions after it", () => {
+    const value = diagnosis({
+      rootCause: "The image does not exist.",
+      remediation: ["Push the image, then restart the rollout."],
+      recommendedIndex: 1,
+    });
+    const conclusion = renderToStaticMarkup(
+      <ResultCard diagnosis={value} section="conclusion" />,
+    );
+    const actions = renderToStaticMarkup(
+      <ResultCard diagnosis={value} section="actions" />,
+    );
+
+    expect(conclusion).toContain(value.rootCause);
+    expect(conclusion).not.toContain("Remediation");
+    expect(actions).toContain(value.remediation![0]);
+    expect(actions).not.toContain("Likely cause");
+  });
+
+  it("does not stagger remediation rows after the result card arrives", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          rootCause: "The image does not exist.",
+          remediation: ["Push the image.", "Restart the rollout."],
+          recommendedIndex: 1,
+        })}
+      />,
+    );
+
+    expect(html).not.toContain("animation-delay");
+  });
+
+  it("keeps only the recommended action in the first Findings scan", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          rootCause: "The image does not exist.",
+          remediation: [
+            "Inspect the registry.",
+            "Push the missing image.",
+            "Restart the rollout.",
+          ],
+          recommendedIndex: 2,
+        })}
+        section="actions"
+        compactActions
+      />,
+    );
+
+    expect(html).toContain("Push the missing image.");
+    expect(html).not.toContain("Inspect the registry.");
+    expect(html).not.toContain("Restart the rollout.");
+    expect(html).toContain("Show 2 more steps");
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain("grid-template-rows:0fr");
+    expect(html).toContain("motion-reduce:transition-none");
+  });
+
+  it("groups assessment controls in one footer without duplicating actions", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          rootCause: "The image is missing.",
+          report: "Registry details.",
+        })}
+        section="conclusion"
+        explanation={{ status: "idle", onGenerate: noop }}
+        assessmentAction={<button>Next steps</button>}
+      />,
+    );
+    const footer = html.slice(html.indexOf("data-assessment-actions"));
+    expect(footer).toContain("Full analysis");
+    expect(footer).toContain("Explain simply");
+    expect(footer).toContain("Next steps");
+    expect(html.match(/Explain simply/g)).toHaveLength(1);
+    expect(html.match(/Next steps/g)).toHaveLength(1);
+  });
+
+  it("offers apply only for the explicitly recommended remediation", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={diagnosis({
+          rootCause: "The image does not exist.",
+          remediation: [
+            "Inspect the registry.",
+            "Push the missing image.",
+            "Restart the rollout.",
+          ],
+          recommendedIndex: 2,
+        })}
+        section="actions"
+        onApply={() => undefined}
+      />,
+    );
+
+    expect(html.match(/Apply…/g)).toHaveLength(1);
+    expect(html).toContain("Push the missing image.");
+  });
+});
+
+describe("TurnView tool outcome truth", () => {
+  function turn(isError: boolean | undefined): Turn {
+    return {
+      timeline: [
+        {
+          kind: "tool",
+          id: "tool-1",
+          tool: "diagnose",
+          status: "done",
+          isError,
+        },
+      ],
+      diagnosis: null,
+      error: null,
+      status: "running",
+    };
+  }
+
+  it("uses success color only for producer-confirmed success", () => {
+    const success = renderToStaticMarkup(<TurnView turn={turn(false)} />);
+    const unknown = renderToStaticMarkup(<TurnView turn={turn(undefined)} />);
+
+    expect(success).toContain("text-emerald-400");
+    expect(unknown).toContain("text-theme-text-tertiary");
+    expect(unknown).not.toContain("text-emerald-400");
+    expect(unknown).toContain("lucide-circle-question-mark");
+    expect(unknown).not.toContain("lucide-circle-check-big");
+  });
+
+  it("renders a producer-confirmed failure as an error", () => {
+    const html = renderToStaticMarkup(<TurnView turn={turn(true)} />);
+    expect(html).toContain("Tool failed");
+    expect(html).toContain("text-red-400");
+  });
+
+  it("does not expose an inert button when a tool has no detail", () => {
+    const html = renderToStaticMarkup(<TurnView turn={turn(false)} />);
+    expect(html).not.toContain("<button");
+  });
+
+  it("visibly marks a tool row reached from Findings programmatically", () => {
+    const html = renderToStaticMarkup(
+      <TurnView
+        turn={turn(false)}
+        turnIndex={0}
+        evidenceStepIds={new Set(["tool-1"])}
+        onViewEvidence={noop}
+      />,
+    );
+
+    expect(html).toContain("focus:ring-2");
+    expect(html).not.toContain("focus-visible:ring-2");
+  });
+
+  it("connects a detail disclosure to the region it controls", () => {
+    const detailed = turn(false);
+    const item = detailed.timeline[0];
+    if (item.kind === "tool") item.summary = '{"ready":true}';
+    const html = renderToStaticMarkup(<TurnView turn={detailed} />);
+    const controlled = html.match(/aria-controls="([^"]+)"/)?.[1];
+
+    expect(controlled).toBeTruthy();
+    expect(html).toContain(`id="${controlled}"`);
+  });
+
+  it("opens and names the exact tool result requested from Findings", () => {
+    const detailed = turn(false);
+    const item = detailed.timeline[0];
+    if (item.kind === "tool") {
+      item.summary = '{"kind":"Deployment"}';
+    }
+    const sourceId = investigationEvidenceSourceId(0, "tool-1");
+    const html = renderToStaticMarkup(
+      <TurnView
+        turn={detailed}
+        turnIndex={0}
+        sourceRevealRequest={{ sourceId, requestId: 1 }}
+      />,
+    );
+
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain('role="group"');
+    expect(html).toContain('aria-label="Diagnose tool completed"');
+    expect(html).toContain('aria-label="Tool arguments"');
+    expect(html.match(/kind=Deployment/g)).toHaveLength(1);
+    expect(html).not.toContain("<details");
+  });
+
+  it("offers large arguments once above the result without a duplicate header preview", () => {
+    const detailed = turn(false);
+    const item = detailed.timeline[0];
+    if (item.kind === "tool") {
+      item.summary = JSON.stringify({ query: "long-query-".repeat(40) });
+      item.result = '{"ok":true}';
+    }
+    const html = renderToStaticMarkup(
+      <ThemeProvider>
+        <TurnView
+          turn={detailed}
+          turnIndex={0}
+          sourceRevealRequest={{
+            sourceId: investigationEvidenceSourceId(0, "tool-1"),
+            requestId: 1,
+          }}
+        />
+      </ThemeProvider>,
+    );
+    expect(html).toContain("Show arguments");
+    expect(html.indexOf("Show arguments")).toBeLessThan(
+      html.indexOf("Original result"),
+    );
+    expect(html).not.toContain("query=long-query");
+    expect(html).not.toContain("<details");
+    expect(html).toContain("transition-[grid-template-rows]");
+    expect(html).toContain('aria-expanded="false"');
+  });
+
+  it("renders replayed activity and its conclusion without arrival motion", () => {
+    const replayed = turn(false);
+    replayed.status = "done";
+    replayed.timeline[0].animate = false;
+    replayed.diagnosis = {
+      healthy: true,
+      rootCause: "",
+      report: "The workload is ready.",
+      remediation: [],
+    };
+    replayed.animateResult = false;
+
+    const html = renderToStaticMarkup(<TurnView turn={replayed} />);
+    expect(html).not.toContain("animate-transcript-enter");
+    expect(html).not.toContain("animate-result-in");
+  });
+
+  it("frames automatic verification as system activity, not user chat", () => {
+    const verification = turn(false);
+    verification.question = "internal verification prompt";
+    verification.verify = true;
+
+    const html = renderToStaticMarkup(<TurnView turn={verification} />);
+    expect(html).toContain("Automatic verification");
+    expect(html).toContain("Re-checking after apply");
+    expect(html).not.toContain("internal verification prompt");
+  });
+
+  it("renders an unknown apply prominently and offers current-state verification", () => {
+    const apply = turn(false);
+    apply.apply = true;
+    apply.status = "error";
+    apply.applyOutcome = "unknown";
+    apply.error =
+      "The apply stopped before Radar could confirm whether the change completed.";
+
+    const html = renderToStaticMarkup(
+      <TurnView turn={apply} onCheckStatus={noop} />,
+    );
+    expect(html).toContain("Outcome unknown");
+    expect(html).toContain("border-amber-500/40");
+    expect(html).toContain(
+      "Check the current state before trying to apply this change again.",
+    );
+    expect(html).toContain("Check current status");
+    expect(html).toContain("could confirm whether the change completed");
+    expect(html).not.toContain(">Applied</div>");
+  });
+
+  it("reserves green Applied for a producer-confirmed mutation", () => {
+    const apply = turn(undefined);
+    apply.apply = true;
+    apply.status = "done";
+    apply.applyOutcome = "confirmed";
+    apply.diagnosis = {
+      rootCause: "",
+      report: "Deployment updated.",
+      remediation: [],
+    };
+
+    const html = renderToStaticMarkup(<TurnView turn={apply} />);
+    expect(html).toContain("Applied");
+    expect(html).toContain("border-emerald-500/30");
+    expect(html).toContain("Radar confirmed the change was applied");
+    expect(html).not.toContain("Outcome unknown");
+    expect(html).not.toContain("Not applied");
+  });
+
+  it("renders an authoritative apply failure as Not applied and never green", () => {
+    const apply = turn(undefined);
+    apply.apply = true;
+    apply.status = "error";
+    apply.applyOutcome = "failed";
+    apply.error = "The write tool rejected the change.";
+
+    const html = renderToStaticMarkup(
+      <TurnView turn={apply} onCheckStatus={noop} />,
+    );
+    expect(html).toContain("Not applied");
+    expect(html).toContain("border-red-500/30");
+    expect(html).toContain("The write tool rejected the change.");
+    expect(html).not.toContain("border-emerald-500/30");
+    expect(html).not.toContain("Check current status");
+  });
+
+  it("keeps confirmed mutation truth when the agent report is incomplete", () => {
+    const apply = turn(undefined);
+    apply.apply = true;
+    apply.status = "error";
+    apply.applyOutcome = "confirmed";
+    apply.error =
+      "A Radar write tool confirmed the mutation, but the agent ended before completing its report.";
+
+    const html = renderToStaticMarkup(<TurnView turn={apply} />);
+    expect(html).toContain("Applied");
+    expect(html).toContain("border-emerald-500/30");
+    expect(html).toContain("the agent report is incomplete");
+    expect(html).toContain("confirmed the mutation");
+    expect(html).not.toContain("Not applied");
+  });
+
+  it("fails closed when an apply terminal event has no outcome metadata", () => {
+    const apply = turn(undefined);
+    apply.apply = true;
+    apply.status = "done";
+    apply.diagnosis = {
+      rootCause: "",
+      report: "The agent says the deployment was updated.",
+      remediation: [],
+    };
+
+    const html = renderToStaticMarkup(<TurnView turn={apply} />);
+    expect(html).toContain("Outcome unknown");
+    expect(html).toContain("border-amber-500/40");
+    expect(html).not.toContain("border-emerald-500/30");
+  });
+
+  it.each([
+    { healthy: true, report: "It is healthy right now." },
+    {
+      inconclusive: true,
+      report: "I cannot tell from the available checks.",
+    },
+  ])(
+    "does not promote a health-flagged question into a conclusion",
+    (patch) => {
+      const followup = turn(false);
+      followup.question = "Is it healthy now?";
+      followup.status = "done";
+      followup.diagnosis = {
+        rootCause: "",
+        remediation: [],
+        ...patch,
+      };
+
+      const html = renderToStaticMarkup(<TurnView turn={followup} />);
+      expect(html).toContain("Answer");
+      expect(html).not.toContain("No active problems found");
+      expect(html).not.toContain("Couldn&#x27;t determine");
+    },
+  );
+});
+
+describe("assessment provenance disclosure", () => {
+  it.each([
+    { rootCause: "Missing configuration", remediation: [] },
+    { healthy: true, remediation: [] },
+    { inconclusive: true, remediation: [] },
+  ])("offers Assessment details with sources alone: %j", (diagnosis) => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={{ ...diagnosis, report: "" } as Diagnosis}
+        section="conclusion"
+        assessmentSources={<div>SOURCE_ONLY</div>}
+        explanation={{ status: "running" }}
+      />,
+    );
+    expect(html).toContain("Assessment details");
+    expect(html).not.toContain(">Full analysis<");
+  });
+  it("keeps separate assessments' exact source bindings without Evidence DOM anchors", () => {
+    const renderSources = (stepId: string) =>
+      renderToStaticMarkup(
+        <AssessmentSources
+          resolution={
+            {
+              status: "linked",
+              links: [
+                {
+                  source: {
+                    id: stepId,
+                    tool: "search",
+                    args: JSON.stringify({ query: stepId }),
+                  },
+                },
+              ],
+            } as Parameters<typeof AssessmentSources>[0]["resolution"]
+          }
+          onViewSource={noop}
+        />,
+      );
+    expect(renderSources("initial-source")).toContain("initial-source");
+    expect(renderSources("initial-source")).not.toContain("verified-source");
+    expect(renderSources("verified-source")).toContain("verified-source");
+    expect(renderSources("verified-source")).not.toContain("initial-source");
+    expect(renderSources("initial-source")).not.toContain(
+      'id="investigation-evidence-',
+    );
+  });
+
+  it("shows a claim here when its card was withheld, instead of counting it as visible", () => {
+    // A card-placed note whose card the pane withheld renders nowhere unless
+    // this row falls back to it, while the count still claimed it was on a
+    // card — a receipt for something the reader cannot see.
+    const investigationCase = {
+      items: [
+        {
+          index: 0,
+          role: "context",
+          claim: "WITHHELD_CLAIM",
+          source: { id: "s1", tool: "issues", args: "{}" },
+          placement: "card",
+          groupId: "g-hidden",
+        },
+      ],
+    } as unknown as Parameters<
+      typeof AssessmentSources
+    >[0]["investigationCase"];
+
+    const hidden = renderToStaticMarkup(
+      <AssessmentSources
+        investigationCase={investigationCase}
+        renderedGroupIds={new Set<string>()}
+        onViewSource={noop}
+      />,
+    );
+    expect(hidden).toContain("WITHHELD_CLAIM");
+    expect(hidden).not.toContain("agent note on an evidence card");
+
+    const shown = renderToStaticMarkup(
+      <AssessmentSources
+        investigationCase={investigationCase}
+        renderedGroupIds={new Set(["g-hidden"])}
+        onViewSource={noop}
+      />,
+    );
+    expect(shown).not.toContain("WITHHELD_CLAIM");
+    expect(shown).toContain("1 agent note on an evidence card");
   });
 });

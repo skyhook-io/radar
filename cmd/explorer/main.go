@@ -11,7 +11,6 @@ import (
 	neturl "net/url"
 	"os"
 	"os/signal"
-	"regexp"
 	"sort"
 	"strings"
 	"syscall"
@@ -39,10 +38,6 @@ import (
 var (
 	version = "dev"
 )
-
-// releaseVersionRe matches a published release version ("1.10.3", "v1.10.3").
-// Anything else - git-describe suffixes, "dev", "-dirty" - is a dev build.
-var releaseVersionRe = regexp.MustCompile(`^v?\d+\.\d+\.\d+$`)
 
 func main() {
 	// Subcommand dispatch (before flag parsing — subcommands own their flags).
@@ -79,10 +74,10 @@ func main() {
 	// published image tag, so its version-matched default ImagePullBackOffs on
 	// every in-cluster test. Fall back to the latest published release instead -
 	// only for dev-shaped versions; a released binary keeps its exact match.
-	// CheckForUpdate is cached and cheap relative to the probe run it precedes.
-	if !releaseVersionRe.MatchString(version) {
+	// The release-only lookup is cached and cheap relative to the probe run it precedes.
+	if !versionpkg.IsReleaseVersion(version) {
 		reachability.LatestReleaseImage = func() string {
-			if u := versionpkg.CheckForUpdate(context.Background()); u != nil && u.LatestVersion != "" {
+			if u := versionpkg.CheckForUpdateRelease(context.Background()); u != nil && u.LatestVersion != "" {
 				return "ghcr.io/skyhook-io/radar:" + u.LatestVersion
 			}
 			return ""
@@ -117,19 +112,19 @@ func main() {
 	fakeInCluster := flag.Bool("fake-in-cluster", false, "Simulate in-cluster mode for testing (shows kubectl copy buttons instead of port-forward)")
 	disableHelmWrite := flag.Bool("disable-helm-write", false, "Simulate restricted Helm permissions (disables install/upgrade/rollback/uninstall)")
 	disableExec := flag.Bool("disable-exec", false, "Simulate restricted exec permissions (disables terminal, debug shell)")
-	disableLocalTerminal := flag.Bool("disable-local-terminal", false, "Disable local terminal feature")
+	disableLocalTerminal := flag.Bool("disable-local-terminal", false, "Disable the host local terminal")
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
 	debugImage := flag.String("debug-image", fileCfg.DebugImage, "Image for ephemeral debug containers and node debug pods (empty = busybox:latest; point at a mirror for air-gapped/private-registry clusters)")
 	reachabilityImage := flag.String("reachability-image", fileCfg.ReachabilityImage, "Image for the in-cluster reachability probe Job (empty = RADAR_IMAGE env, then the version-matched published Radar image; point at a mirror for air-gapped clusters)")
 	listPageSize := flag.Int64("list-page-size", 0, "Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this page size on clusters without WatchList streaming. 0 = off (single LIST). Try 2000 if a very large cluster fails to sync.")
 	namespaceScope := flag.Bool("namespace-scope", false, "Scope namespaced informer caches to a single namespace (multiple namespaces are not supported yet). Requires --namespace or a kubeconfig context namespace. Local mode can rescope by switching namespaces; auth/cloud mode locks to the startup namespace.")
 	// Timeline storage options
-	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory or sqlite")
+	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory, sqlite, or postgres")
 	timelineDBPath := flag.String("timeline-db", fileCfg.TimelineDBPath, "Path to timeline database file (default: ~/.radar/timeline.db)")
-	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite (e.g. 168h, 720h). 0 disables age-based cleanup.")
+	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite or postgres (e.g. 168h, 720h). 0 disables age-based cleanup.")
 	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("1Gi"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
-	// AI history (Diagnose investigations)
-	aiHistory := flag.Bool("ai-history", fileCfg.AIHistoryOr(true), "Persist AI investigations (transcripts + verdicts) to ~/.radar/ai-runs.db so they survive restarts")
+	// AI investigation history
+	aiHistory := flag.Bool("ai-history", fileCfg.AIHistoryOr(true), "Persist AI investigations (transcripts + conclusions) to ~/.radar/ai-runs.db so they survive restarts")
 	// Traffic/metrics options
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "Override the ISO 4217 currency label for OpenCost values (empty: auto-detect, then USD)")
@@ -370,11 +365,18 @@ func main() {
 		NamespaceScope:           *namespaceScope,
 		TimelineStorage:          *timelineStorage,
 		TimelineDBPath:           *timelineDBPath,
+		TimelinePostgresDSN:      os.Getenv("RADAR_TIMELINE_POSTGRES_DSN"),
 		TimelineRetention:        *timelineRetention,
 		TimelineMaxSizeBytes:     timelineMaxSizeBytes,
 		PrometheusURL:            *prometheusURL,
 		OpenCostCurrency:         normalizedOpenCostCurrency,
 		OpenCostFlagSet:          openCostCurrencyFlagSet,
+		CostSource:               fileCfg.CostSource,
+		KubecostURL:              fileCfg.KubecostURL,
+		KubecostAPIKey:           fileCfg.KubecostAPIKey,
+		KubecostAPIKeyContext:    fileCfg.KubecostAPIKeyContext,
+		KubecostClusterID:        fileCfg.KubecostClusterID,
+		KubecostClusterIDContext: fileCfg.KubecostClusterIDContext,
 		PrometheusHeaders:        resolvedPrometheusHeaders,
 		PrometheusHeadersFromEnv: promHeadersFromEnv.value(),
 		BeylaJobSelector:         *beylaJobSelector,
@@ -470,7 +472,10 @@ func main() {
 
 	// Build timeline config and register callbacks
 	t = time.Now()
-	timelineStoreCfg := app.BuildTimelineStoreConfig(cfg)
+	timelineStoreCfg, err := app.BuildTimelineStoreConfig(cfg)
+	if err != nil {
+		log.Fatalf("Invalid timeline configuration: %v", err)
+	}
 	app.RegisterCallbacks(cfg, timelineStoreCfg)
 	k8s.LogTiming(" Callbacks registered: %v", time.Since(t))
 

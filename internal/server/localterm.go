@@ -13,6 +13,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -85,17 +86,36 @@ func setEnv(env []string, key, value string) []string {
 	return append(env, prefix+value)
 }
 
+func (s *Server) localTerminalUnavailable(r *http.Request) (int, string) {
+	if k8s.ForceDisableLocalTerminal {
+		return http.StatusForbidden, "local terminal is disabled"
+	}
+	if s.authConfig.Enabled() {
+		return http.StatusForbidden, "local terminal is unavailable when authentication is enabled"
+	}
+	if cloud.IsAuthenticatedTunnelRequest(r.Context()) {
+		return http.StatusForbidden, "local terminal is unavailable over the Radar Hub tunnel"
+	}
+	if k8s.IsInCluster() {
+		return http.StatusBadRequest, "local terminal not available in-cluster mode"
+	}
+	if s.sharedListener() || !requestHostIsLoopback(r) {
+		return http.StatusForbidden, "local terminal is only available over a loopback address"
+	}
+	return 0, ""
+}
+
 // handleLocalTerminal handles WebSocket connections for local terminal sessions
 func (s *Server) handleLocalTerminal(w http.ResponseWriter, r *http.Request) {
-	if k8s.IsInCluster() {
-		s.writeError(w, http.StatusBadRequest, "local terminal not available in-cluster mode")
+	if status, message := s.localTerminalUnavailable(r); status != 0 {
+		s.writeError(w, status, message)
 		return
 	}
 
 	// Upgrade to WebSocket
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := s.upgradeWebSocket(w, r)
 	if err != nil {
-		log.Printf("[localterm] WebSocket upgrade error: %v", err)
+		log.Printf("[localterm] WebSocket upgrade error (origin=%q host=%q): %v", r.Header.Get("Origin"), r.Host, err)
 		return
 	}
 

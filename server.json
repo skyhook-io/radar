@@ -1,13 +1,13 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.skyhook-io/radar",
-  "title": "Radar",
-  "description": "Kubernetes visibility for AI agents: query workloads, events, logs, topology, and Helm releases.",
+  "title": "Radar Kubernetes MCP Server",
+  "description": "Kubernetes MCP server for diagnosis, resource management, GitOps, and RBAC-enforced operations.",
   "repository": {
     "url": "https://github.com/skyhook-io/radar",
     "source": "github"
   },
-  "websiteUrl": "https://radarhq.io",
+  "websiteUrl": "https://radarhq.io/product/mcp",
   "version": "1.8.6",
   "packages": [
     {

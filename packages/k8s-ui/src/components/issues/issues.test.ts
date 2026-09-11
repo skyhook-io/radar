@@ -1,10 +1,10 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
-import { compareIssues, subjectRef, memberRef, normalizeImagePullMessage, issueMessageParts, type Issue } from './types'
+import { compareIssues, issueSortAnchor, subjectRef, memberRef, normalizeImagePullMessage, issueMessageParts, type Issue } from './types'
 import { categoryLabel, groupBadgeClass, groupLabel } from './severity'
 import { IssueRow } from './IssuesView'
-import { issueTiming } from './issue-timing'
+import { issueFirstSeenTitle, issueResourceCreatedTitle, issueTiming } from './issue-timing'
 
 const base: Issue = {
   id: 'id-0',
@@ -36,6 +36,12 @@ describe('compareIssues', () => {
     expect([older, newer].sort(compareIssues).map((i) => i.id)).toEqual(['n', 'o'])
   })
 
+  it('compares sort anchors as instants across timezone formats', () => {
+    const newerLocal = mk({ id: 'local', first_seen: '2026-08-09T23:00:00-07:00' })
+    const olderUTC = mk({ id: 'utc', onset_unknown: true, resource_created_at: '2026-08-10T01:00:00Z' })
+    expect([olderUTC, newerLocal].sort(compareIssues).map((i) => i.id)).toEqual(['local', 'utc'])
+  })
+
   it('orders direct startup blockers before generic problem rows at same severity', () => {
     const generic = mk({ id: 'generic', source: 'problem', first_seen: '2026-05-01T00:00:00Z' })
     const blocker = mk({ id: 'blocker', source: 'scheduling', first_seen: '2026-01-01T00:00:00Z' })
@@ -55,6 +61,21 @@ describe('compareIssues', () => {
     const aRefetched = mk({ ...a, last_seen: '2026-06-01T00:00:00Z' })
     const after = [aRefetched, b].sort(compareIssues).map((i) => i.id)
     expect(after).toEqual(before)
+  })
+
+  it('uses resource creation as the stable fallback only when onset is unknown', () => {
+    const unknownOlder = mk({ id: 'unknown-old', name: 'unknown-old', onset_unknown: true, resource_created_at: '2026-01-01T00:00:00Z' })
+    const unknownNewer = mk({ id: 'unknown-new', name: 'unknown-new', onset_unknown: true, resource_created_at: '2026-05-01T00:00:00Z' })
+    const known = mk({ id: 'known', name: 'known', first_seen: '2026-03-01T00:00:00Z', resource_created_at: '2025-01-01T00:00:00Z' })
+    const noMetadata = mk({ id: 'none', name: 'none', onset_unknown: true })
+
+    expect(issueSortAnchor(known)).toBe('2026-03-01T00:00:00Z')
+    expect([unknownOlder, noMetadata, known, unknownNewer].sort(compareIssues).map((i) => i.id)).toEqual([
+      'unknown-new',
+      'known',
+      'unknown-old',
+      'none',
+    ])
   })
 })
 
@@ -127,15 +148,147 @@ describe('IssueRow', () => {
     expect(html).toContain(groupBadgeClass('control_plane'))
   })
 
-  it('shows an explicit unknown-onset state instead of inventing an age', () => {
+  it('does not fill collapsed rows with low-information unknown-onset labels', () => {
     const html = renderToString(createElement(IssueRow, {
       issue: mk({ onset_unknown: true }),
       open: false,
       onToggle: () => undefined,
     }))
 
-    expect(html).toContain('Onset unknown')
+    expect(html).not.toMatch(/onset unknown/i)
     expect(html).not.toContain('0s')
+  })
+
+  it('shows independent timing alongside an unknown onset', () => {
+    const html = renderToString(createElement(IssueRow, {
+      issue: mk({
+        onset_unknown: true,
+        issue_timing: 'started_at_resource_creation',
+        issue_timing_basis: 'owner_condition',
+      }),
+      open: true,
+      onToggle: () => undefined,
+    }))
+
+    expect(html).toContain('workload never healthy')
+    expect(html).toContain('exact onset unknown; owner workload never became healthy after deployment')
+    expect(html).not.toContain('since deploy')
+  })
+
+  it('qualifies a workload regression when the issue onset is unknown', () => {
+    const html = renderToString(createElement(IssueRow, {
+      issue: mk({
+        onset_unknown: true,
+        issue_timing: 'started_after_resource_was_healthy',
+        issue_timing_basis: 'owner_condition',
+      }),
+      open: true,
+      onToggle: () => undefined,
+    }))
+
+    expect(html).toContain('workload regressed')
+    expect(html).toContain('onset unknown')
+    expect(html).toContain('exact onset unknown; owner workload was healthy before its current health regression')
+    expect(html).not.toContain('workload health regressed')
+  })
+
+  it('renders mixed groups as a lower-bound age and suppresses a group-wide timing claim', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-30T12:00:00Z'))
+
+    const html = renderToString(createElement(IssueRow, {
+      issue: mk({
+        first_seen: '2026-06-30T10:00:00Z',
+        onset_coverage: { known: 2, unknown: 1 },
+        issue_timing: 'started_after_resource_was_healthy',
+      }),
+      open: true,
+      onToggle: () => undefined,
+    }))
+
+    expect(html).toContain('≥')
+    expect(html).toContain('timing unknown for 1 of 3 signals')
+    expect(html).not.toContain('after healthy')
+  })
+
+  it('keeps onset-independent workload evidence visible on mixed groups', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-30T12:00:00Z'))
+
+    const html = renderToString(createElement(IssueRow, {
+      issue: mk({
+        first_seen: '2026-06-30T10:00:00Z',
+        onset_coverage: { known: 1, unknown: 1 },
+        issue_timing: 'started_after_resource_was_healthy',
+        issue_timing_basis: 'owner_condition',
+      }),
+      open: true,
+      onToggle: () => undefined,
+    }))
+
+    expect(html).toContain('≥')
+    expect(html).toContain('health regressed')
+    expect(html).not.toContain('workload regressed')
+    expect(html).not.toContain('workload regressed · onset unknown')
+    expect(html).toContain('exact onset unknown for 1 of 2 signals')
+    expect(html).toContain('some signals active at least 2h ago')
+    expect(html).not.toContain('exact onset unknown;')
+  })
+
+  it('keeps lower-bound age, unknown count, and freshness for mixed creation groups', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-30T12:00:00Z'))
+
+    const html = renderToString(createElement(IssueRow, {
+      issue: mk({
+        first_seen: '2026-06-30T10:00:00Z',
+        last_seen: '2026-06-30T11:30:00Z',
+        onset_coverage: { known: 1, unknown: 1 },
+        issue_timing: 'started_at_resource_creation',
+        issue_timing_basis: 'owner_condition',
+      }),
+      open: true,
+      onToggle: () => undefined,
+    }))
+
+    expect(html).toContain('workload never healthy')
+    expect(html).toContain('exact onset unknown for 1 of 2 signals')
+    expect(html).toContain('some signals active at least 2h ago')
+    expect(html).toContain('last seen 30m ago')
+  })
+
+  it('presents ordinary first-seen time as a conservative active lower bound', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-06-30T12:00:00Z'))
+
+    const html = renderToString(createElement(IssueRow, {
+      issue: mk({ first_seen: '2026-06-30T10:00:00Z' }),
+      open: true,
+      onToggle: () => undefined,
+    }))
+
+    expect(html).toContain('active at least 2h ago')
+    expect(html).not.toContain('started 2h ago')
+  })
+})
+
+describe('onset provenance copy', () => {
+  it('describes a known first-seen value as an active lower bound', () => {
+    const title = issueFirstSeenTitle(mk({ first_seen: '2026-06-30T10:00:00Z' }))
+
+    expect(title).toContain('Active at least since')
+    expect(title).not.toContain('started')
+  })
+
+  it('labels a one-member workload rollup as affected-resource context', () => {
+    const title = issueResourceCreatedTitle(mk({
+      kind: 'Deployment',
+      count: 1,
+      members: [{ kind: 'Pod', namespace: 'prod', name: 'web-abc' }],
+      resource_created_at: '2026-06-30T10:00:00Z',
+    }))
+
+    expect(title).toContain('Affected resource created')
   })
 })
 
@@ -184,6 +337,51 @@ describe('issueTiming', () => {
     })
   })
 
+  it('uses self-explanatory copy when exact onset and independent timing have different scopes', () => {
+    expect(issueTiming(mk({
+      kind: 'Pod',
+      onset_unknown: true,
+      issue_timing: 'started_at_resource_creation',
+      issue_timing_basis: 'pod_creation',
+    }))).toMatchObject({
+      chip: 'pod failed at startup',
+      meta: 'exact onset unknown; affected pod failed during workload startup',
+    })
+
+    expect(issueTiming(mk({
+      kind: 'Rollout',
+      group: 'argoproj.io',
+      onset_unknown: true,
+      issue_timing: 'started_at_resource_creation',
+      issue_timing_basis: 'spec',
+    }))).toMatchObject({
+      chip: 'invalid at first reconcile',
+      meta: 'exact onset unknown; initial spec was failing from first reconciliation',
+    })
+  })
+
+  it('uses group-safe pod timing copy for multiple contributing signals', () => {
+    expect(issueTiming(mk({
+      kind: 'Deployment',
+      onset_coverage: { known: 0, unknown: 3 },
+      issue_timing: 'started_at_resource_creation',
+      issue_timing_basis: 'pod_creation',
+    }))).toMatchObject({
+      chip: 'startup pod failures',
+      meta: 'exact onset unknown; failures occurred in pods created during workload startup',
+    })
+
+    expect(issueTiming(mk({
+      kind: 'Deployment',
+      onset_coverage: { known: 0, unknown: 3 },
+      issue_timing: 'started_after_resource_was_healthy',
+      issue_timing_basis: 'pod_creation',
+    }))).toMatchObject({
+      chip: 'new pods failed after healthy',
+      meta: 'exact onset unknown; failing pods were created after an earlier healthy period',
+    })
+  })
+
   it('uses resource creation wording for non-deployment creation failures', () => {
     expect(issueTiming(mk({
       kind: 'PersistentVolumeClaim',
@@ -196,10 +394,7 @@ describe('issueTiming', () => {
     })
   })
 
-  it('describes after-healthy timing without implying root cause or safety', () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-06-30T12:00:00Z'))
-
+  it('describes direct after-healthy timing without coupling it to first_seen', () => {
     const display = issueTiming(mk({
       first_seen: '2026-06-30T10:00:00Z',
       issue_timing: 'started_after_resource_was_healthy',
@@ -209,10 +404,26 @@ describe('issueTiming', () => {
     expect(display).toMatchObject({
       kind: 'regression',
       chip: 'after healthy',
-      meta: 'started 2h ago after being healthy',
-      tooltip: 'Previously healthy before this failing signal.',
+      meta: 'failing evidence followed a healthy period',
     })
+    expect(`${display?.chip} ${display?.meta} ${display?.tooltip}`).not.toContain('2h')
     expect(`${display?.chip} ${display?.meta} ${display?.tooltip}`).not.toMatch(/baseline|safe|ignore/i)
+  })
+
+  it('presents owner-condition timing as workload-level rather than cause-specific', () => {
+    const display = issueTiming(mk({
+      first_seen: '2026-06-30T10:00:00Z',
+      issue_timing: 'started_after_resource_was_healthy',
+      issue_timing_basis: 'owner_condition',
+    }))
+
+    expect(display).toMatchObject({
+      kind: 'regression',
+      chip: 'health regressed',
+      meta: 'workload health regressed',
+    })
+    expect(display?.tooltip).toContain('does not date or attribute this specific issue')
+    expect(`${display?.chip} ${display?.meta} ${display?.tooltip}`).not.toContain('2h')
   })
 
   it('returns null when there is no confident timing signal', () => {

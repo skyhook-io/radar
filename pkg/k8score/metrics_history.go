@@ -2,6 +2,7 @@ package k8score
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 )
 
@@ -115,8 +117,9 @@ type MetricsSourceHealth struct {
 
 // MetricsHistoryStore stores historical metrics data polled from the metrics.k8s.io API.
 type MetricsHistoryStore struct {
-	mu        sync.RWMutex
-	dynClient dynamic.Interface
+	mu         sync.RWMutex
+	dynClient  dynamic.Interface
+	resolveGVR MetricsGVRResolver
 
 	podMetrics  map[string]*podMetricsBuffer
 	nodeMetrics map[string]*nodeMetricsBuffer
@@ -199,6 +202,9 @@ func MetricsAPIUnavailable(err error) bool {
 	if err == nil {
 		return false
 	}
+	if errors.Is(err, ErrMetricsAPINotDiscovered) {
+		return true
+	}
 	if apierrors.IsNotFound(err) {
 		return true
 	}
@@ -221,8 +227,23 @@ func MetricsAPIUnavailable(err error) bool {
 
 // NewMetricsHistoryStore creates a MetricsHistoryStore. Call Start() to begin polling.
 func NewMetricsHistoryStore(client dynamic.Interface) *MetricsHistoryStore {
+	return NewMetricsHistoryStoreWithResolver(client, func(resource string) (schema.GroupVersionResource, bool) {
+		switch resource {
+		case "pods":
+			return PodMetricsGVR, true
+		case "nodes":
+			return NodeMetricsGVR, true
+		default:
+			return schema.GroupVersionResource{}, false
+		}
+	})
+}
+
+// NewMetricsHistoryStoreWithResolver creates a store that follows discovered metrics API versions.
+func NewMetricsHistoryStoreWithResolver(client dynamic.Interface, resolveGVR MetricsGVRResolver) *MetricsHistoryStore {
 	return &MetricsHistoryStore{
 		dynClient:   client,
+		resolveGVR:  resolveGVR,
 		podMetrics:  make(map[string]*podMetricsBuffer),
 		nodeMetrics: make(map[string]*nodeMetricsBuffer),
 		stopCh:      make(chan struct{}),
@@ -272,6 +293,49 @@ func (s *MetricsHistoryStore) collectMetrics() {
 	s.collectNodeMetrics(ctx, now)
 }
 
+func (s *MetricsHistoryStore) metricsGVR(resource string) (schema.GroupVersionResource, bool) {
+	if s.resolveGVR == nil {
+		return schema.GroupVersionResource{}, false
+	}
+	gvr, ok := s.resolveGVR(resource)
+	if !ok || gvr.Group != MetricsAPIGroup || gvr.Version == "" || gvr.Resource != resource {
+		return schema.GroupVersionResource{}, false
+	}
+	return gvr, true
+}
+
+func (s *MetricsHistoryStore) recordPodCollectionError(err error) {
+	errMsg := err.Error()
+	s.mu.Lock()
+	s.consecutivePodErrors++
+	s.lastPodError = errMsg
+	shouldReport := s.consecutivePodErrors == 1 || s.consecutivePodErrors%20 == 0
+	count := s.consecutivePodErrors
+	s.mu.Unlock()
+	if shouldReport {
+		log.Printf("[metrics] Pod metrics collection failed (count=%d): %v", count, err)
+		if s.OnError != nil {
+			s.OnError("metrics", metricsCollectionErrorLevel(err), "pod metrics collection failed (count=%d): %v", count, err)
+		}
+	}
+}
+
+func (s *MetricsHistoryStore) recordNodeCollectionError(err error) {
+	errMsg := err.Error()
+	s.mu.Lock()
+	s.consecutiveNodeErrors++
+	s.lastNodeError = errMsg
+	shouldReport := s.consecutiveNodeErrors == 1 || s.consecutiveNodeErrors%20 == 0
+	count := s.consecutiveNodeErrors
+	s.mu.Unlock()
+	if shouldReport {
+		log.Printf("[metrics] Node metrics collection failed (count=%d): %v", count, err)
+		if s.OnError != nil {
+			s.OnError("metrics", metricsCollectionErrorLevel(err), "node metrics collection failed (count=%d): %v", count, err)
+		}
+	}
+}
+
 func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Time) {
 	if s.dynClient == nil {
 		var shouldReport bool
@@ -290,24 +354,15 @@ func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Ti
 		}
 		return
 	}
+	podMetricsGVR, ok := s.metricsGVR("pods")
+	if !ok {
+		s.recordPodCollectionError(ErrMetricsAPINotDiscovered)
+		return
+	}
 
-	result, err := s.dynClient.Resource(PodMetricsGVR).List(ctx, metav1.ListOptions{})
+	result, err := s.dynClient.Resource(podMetricsGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		var shouldReport bool
-		var count int
-		errMsg := err.Error()
-		s.mu.Lock()
-		s.consecutivePodErrors++
-		s.lastPodError = errMsg
-		shouldReport = s.consecutivePodErrors == 1 || s.consecutivePodErrors%20 == 0
-		count = s.consecutivePodErrors
-		s.mu.Unlock()
-		if shouldReport {
-			log.Printf("[metrics] Pod metrics collection failed (count=%d): %v", count, err)
-			if s.OnError != nil {
-				s.OnError("metrics", metricsCollectionErrorLevel(err), "pod metrics collection failed (count=%d): %v", count, err)
-			}
-		}
+		s.recordPodCollectionError(err)
 		return
 	}
 
@@ -397,24 +452,15 @@ func (s *MetricsHistoryStore) collectNodeMetrics(ctx context.Context, now time.T
 		}
 		return
 	}
+	nodeMetricsGVR, ok := s.metricsGVR("nodes")
+	if !ok {
+		s.recordNodeCollectionError(ErrMetricsAPINotDiscovered)
+		return
+	}
 
-	result, err := s.dynClient.Resource(NodeMetricsGVR).List(ctx, metav1.ListOptions{})
+	result, err := s.dynClient.Resource(nodeMetricsGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		var shouldReport bool
-		var count int
-		errMsg := err.Error()
-		s.mu.Lock()
-		s.consecutiveNodeErrors++
-		s.lastNodeError = errMsg
-		shouldReport = s.consecutiveNodeErrors == 1 || s.consecutiveNodeErrors%20 == 0
-		count = s.consecutiveNodeErrors
-		s.mu.Unlock()
-		if shouldReport {
-			log.Printf("[metrics] Node metrics collection failed (count=%d): %v", count, err)
-			if s.OnError != nil {
-				s.OnError("metrics", metricsCollectionErrorLevel(err), "node metrics collection failed (count=%d): %v", count, err)
-			}
-		}
+		s.recordNodeCollectionError(err)
 		return
 	}
 

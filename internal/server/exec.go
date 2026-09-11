@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -20,15 +21,79 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins for local dev
-	},
+// The authenticated tunnel is server-to-server and carries a transport-bound
+// marker that browsers cannot forge, so its forwarded Origin is trusted.
+func checkWebSocketOrigin(r *http.Request) bool {
+	if cloud.IsAuthenticatedTunnelRequest(r.Context()) {
+		return true
+	}
+	if allowed, decided := fetchMetadataOriginVerdict(r); decided {
+		return allowed
+	}
+	return sameAuthorityOriginOK(r)
 }
+
+// fetchMetadataOriginVerdict uses the browser-controlled relationship between
+// the initiating page and this request when it is conclusive. It survives
+// reverse proxies that rewrite Host and cannot be forged by page scripts.
+func fetchMetadataOriginVerdict(r *http.Request) (allowed, decided bool) {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin":
+		return true, true
+	case "cross-site":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func sameAuthorityOriginOK(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if (r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")) &&
+		!strings.EqualFold(u.Scheme, "https") {
+		return false
+	}
+	originAuthority, originOK := normalizeOrigin(origin)
+	requestAuthority, requestOK := normalizeOrigin(u.Scheme + "://" + r.Host)
+	return originOK && requestOK && originAuthority == requestAuthority
+}
+
+func (s *Server) viteDevProxyOriginOK(r *http.Request) bool {
+	if !s.devMode || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+		return false
+	}
+	u, err := url.Parse(r.Header.Get("Origin"))
+	return err == nil &&
+		u.Scheme == "http" &&
+		u.Port() == "9273" &&
+		browserLoopbackHostname(u.Hostname()) &&
+		requestHostIsLoopback(r)
+}
+
+func (s *Server) websocketOriginAllowed(r *http.Request) bool {
+	if checkWebSocketOrigin(r) {
+		return true
+	}
+	return s.viteDevProxyOriginOK(r)
+}
+
+func (s *Server) upgradeWebSocket(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
+	return (&websocket.Upgrader{CheckOrigin: s.websocketOriginAllowed}).Upgrade(w, r, nil)
+}
+
+const podExecHeartbeatInterval = 30 * time.Second
 
 // defaultShellScript is the built-in fallback command used when no shell is
 // requested explicitly via ?shell= and no override is set via --pod-shell-default.
@@ -223,6 +288,24 @@ type TerminalMessage struct {
 	Cols uint16 `json:"cols,omitempty"`
 }
 
+func runPodExecHeartbeat(conn *websocket.Conn, interval time.Duration, done <-chan struct{}) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			// Active output already keeps intermediaries alive, so let the Ping
+			// wait behind it instead of timing out a healthy busy terminal.
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Time{}); err != nil {
+				return
+			}
+		}
+	}
+}
+
 // wsWriter wraps a websocket connection to satisfy io.Writer
 type wsWriter struct {
 	conn *websocket.Conn
@@ -265,9 +348,9 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 	overrideShell := r.URL.Query().Get("shell")
 
 	// Upgrade to WebSocket
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := s.upgradeWebSocket(w, r)
 	if err != nil {
-		log.Printf("WebSocket upgrade error: %v", err)
+		log.Printf("WebSocket upgrade error (origin=%q host=%q): %v", r.Header.Get("Origin"), r.Host, err)
 		return
 	}
 
@@ -294,6 +377,9 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 		conn.Close()
 		log.Printf("Exec session %s ended (%s/%s)", sessionID, namespace, podName)
 	}()
+	heartbeatDone := make(chan struct{})
+	defer close(heartbeatDone)
+	go runPodExecHeartbeat(conn, podExecHeartbeatInterval, heartbeatDone)
 
 	// Get K8s client and config (impersonated when auth is enabled)
 	client := s.getClientForRequest(r)

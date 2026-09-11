@@ -6,8 +6,9 @@ import {
   getPolicyReportStatus,
   getPolicyReportSummary,
   getKyvernoPolicyStatus,
-  getKyvernoPolicyAction,
+  getKyvernoEnforcement,
   getKyvernoPolicyRuleCount,
+  getKyvernoPolicyRuleTypes,
 } from '../resource-utils-kyverno'
 import {
   getKyvernoRequestState,
@@ -73,20 +74,34 @@ export function KyvernoPolicyCell({ resource, column }: { resource: any; column:
     case 'status': {
       const status = getKyvernoPolicyStatus(resource)
       return (
-        <span className={clsx('badge', status.color)}>
+        <span className={clsx('badge truncate max-w-full', status.color)} title={status.text}>
           {status.text}
         </span>
       )
     }
     case 'action': {
-      const action = getKyvernoPolicyAction(resource)
+      const { label, blocks, discrepancy } = getKyvernoEnforcement(resource)
       return (
         <span className={clsx(
           'badge',
-          action === 'Enforce' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400',
+          // Enforce and Audit are configured postures, so they take colour-named
+          // accents. A discrepancy is not a posture — the policy declares Enforce
+          // while admission evaluation is off, so it blocks nothing it claims to
+          // — and that is a fault, which is what the alert tier is for.
+          blocks
+            ? 'status-red'
+            : discrepancy
+              ? 'status-alert'
+              : 'status-amber',
         )}>
-          {action}
+          {label}
         </span>
+      )
+    }
+    case 'ruleTypes': {
+      const types = getKyvernoPolicyRuleTypes(resource)
+      return (
+        <span className="text-sm text-theme-text-secondary truncate block" title={types}>{types}</span>
       )
     }
     case 'rules': {

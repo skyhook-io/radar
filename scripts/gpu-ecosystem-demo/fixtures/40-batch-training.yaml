@@ -1,0 +1,389 @@
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: tensor-parallel
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  replicas: 2
+  leaderWorkerTemplate:
+    size: 4
+    restartPolicy: RecreateGroupOnPodRestart
+    workerTemplate:
+      spec:
+        containers:
+          - name: model-server
+            image: registry.k8s.io/pause:3.10
+            resources:
+              limits:
+                nvidia.com/gpu: 1
+status:
+  readyReplicas: 2
+  updatedReplicas: 2
+  conditions:
+    - type: Available
+      status: "True"
+      reason: AllGroupsReady
+      message: All leader-worker groups are ready
+      observedGeneration: 1
+      lastTransitionTime: __START_TIME__
+---
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: distributed-evaluation
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  replicatedJobs:
+    - name: evaluators
+      replicas: 2
+      template:
+        spec:
+          parallelism: 1
+          completions: 1
+          template:
+            spec:
+              restartPolicy: Never
+              containers:
+                - name: evaluator
+                  image: registry.k8s.io/pause:3.10
+status:
+  restarts: 1
+  replicatedJobsStatus:
+    - name: evaluators
+      active: 1
+      ready: 1
+      succeeded: 1
+      failed: 0
+      suspended: 0
+---
+apiVersion: batch.volcano.sh/v1alpha1
+kind: Job
+metadata:
+  name: collision-demo
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  queue: gpu-volcano
+  minAvailable: 2
+  schedulerName: volcano
+  tasks:
+    - name: workers
+      replicas: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: trainer
+              image: registry.k8s.io/pause:3.10
+              resources:
+                limits:
+                  nvidia.com/gpu: 1
+status:
+  running: 2
+  succeeded: 1
+  failed: 0
+  state:
+    phase: Running
+---
+apiVersion: scheduling.volcano.sh/v1beta1
+kind: Queue
+metadata:
+  name: gpu-volcano
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  weight: 4
+  capability:
+    cpu: "32"
+    memory: 128Gi
+    nvidia.com/gpu: "4"
+status:
+  state: Open
+  running: 2
+  inqueue: 1
+  pending: 1
+  completed: 3
+  allocated:
+    cpu: "12"
+    memory: 48Gi
+    nvidia.com/gpu: "2"
+---
+apiVersion: scheduling.volcano.sh/v1beta1
+kind: PodGroup
+metadata:
+  name: collision-demo
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  queue: gpu-volcano
+  minMember: 4
+status:
+  phase: Pending
+  conditions:
+    - type: Unschedulable
+      status: "True"
+      reason: NotEnoughGPU
+      message: Waiting for four GPUs
+      transitionID: demo
+      lastTransitionTime: __START_TIME__
+---
+apiVersion: flow.volcano.sh/v1alpha1
+kind: JobFlow
+metadata:
+  name: model-pipeline
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  jobRetainPolicy: retain
+  flows:
+    - name: preprocess
+    - name: train
+      dependsOn:
+        targets: [preprocess]
+    - name: evaluate
+      dependsOn:
+        targets: [train]
+status:
+  state:
+    phase: Running
+---
+apiVersion: flow.volcano.sh/v1alpha1
+kind: JobTemplate
+metadata:
+  name: train
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  queue: gpu-volcano
+  minAvailable: 1
+  schedulerName: volcano
+  tasks:
+    - name: trainer
+      replicas: 1
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: trainer
+              image: registry.k8s.io/pause:3.10
+              resources:
+                limits:
+                  nvidia.com/gpu: 1
+---
+apiVersion: scheduling.run.ai/v2
+kind: Queue
+metadata:
+  name: gpu-kai
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  displayName: GPU research
+  priority: 80
+  resources:
+    gpu:
+      quota: 4
+    cpu:
+      quota: 32000
+    memory:
+      quota: 131072
+status:
+  allocated:
+    cpu: "12"
+    memory: 48Gi
+    nvidia.com/gpu: "2"
+  conditions:
+    - type: OverQuota
+      status: "False"
+      reason: WithinQuota
+      message: Queue is within quota
+      lastTransitionTime: __START_TIME__
+---
+apiVersion: scheduling.run.ai/v2alpha2
+kind: PodGroup
+metadata:
+  name: collision-demo
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  queue: gpu-kai
+  minMember: 2
+status:
+  resourcesStatus:
+    requested:
+      cpu: "8000"
+      memory: 32Gi
+      nvidia.com/gpu: "2"
+  schedulingConditions:
+    - type: UnschedulableOnNodePool
+      status: "True"
+      reason: InsufficientGPU
+      message: Waiting for two GPUs
+      transitionID: demo
+      lastTransitionTime: __START_TIME__
+---
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata:
+  name: llm-finetune
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  pytorchReplicaSpecs:
+    Master:
+      replicas: 1
+      restartPolicy: Never
+      template:
+        spec:
+          containers:
+            - name: pytorch
+              image: registry.k8s.io/pause:3.10
+    Worker:
+      replicas: 4
+      restartPolicy: Never
+      template:
+        spec:
+          containers:
+            - name: pytorch
+              image: registry.k8s.io/pause:3.10
+              resources:
+                limits:
+                  nvidia.com/gpu: 1
+status:
+  startTime: __START_TIME__
+  replicaStatuses:
+    Master:
+      active: 1
+    Worker:
+      active: 3
+      failed: 1
+  conditions:
+    - type: Running
+      status: "True"
+      reason: JobRunning
+      message: Training workers are running
+      lastUpdateTime: __START_TIME__
+      lastTransitionTime: __START_TIME__
+---
+apiVersion: kubeflow.org/v1
+kind: TFJob
+metadata:
+  name: ranking-train
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  tfReplicaSpecs:
+    Chief:
+      replicas: 1
+      restartPolicy: Never
+      template:
+        spec:
+          containers:
+            - name: tensorflow
+              image: registry.k8s.io/pause:3.10
+    Worker:
+      replicas: 2
+      restartPolicy: Never
+      template:
+        spec:
+          containers:
+            - name: tensorflow
+              image: registry.k8s.io/pause:3.10
+status:
+  startTime: __START_TIME__
+  replicaStatuses:
+    Chief:
+      active: 1
+    Worker:
+      active: 2
+  conditions:
+    - type: Running
+      status: "True"
+      reason: JobRunning
+      message: TensorFlow workers are running
+      lastUpdateTime: __START_TIME__
+      lastTransitionTime: __START_TIME__
+---
+apiVersion: kubeflow.org/v1
+kind: MPIJob
+metadata:
+  name: distributed-benchmark
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  slotsPerWorker: 1
+  mpiReplicaSpecs:
+    Launcher:
+      replicas: 1
+      restartPolicy: Never
+      template:
+        spec:
+          containers:
+            - name: mpi
+              image: registry.k8s.io/pause:3.10
+    Worker:
+      replicas: 2
+      restartPolicy: Never
+      template:
+        spec:
+          containers:
+            - name: mpi
+              image: registry.k8s.io/pause:3.10
+status:
+  startTime: __START_TIME__
+  completionTime: __COMPLETE_TIME__
+  replicaStatuses:
+    Launcher:
+      succeeded: 1
+    Worker:
+      succeeded: 2
+  conditions:
+    - type: Succeeded
+      status: "True"
+      reason: JobSucceeded
+      message: MPI benchmark completed
+      lastUpdateTime: __COMPLETE_TIME__
+      lastTransitionTime: __COMPLETE_TIME__
+---
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: TrainJob
+metadata:
+  name: torch-distributed
+  namespace: gpu-demo
+  labels:
+    radar.skyhook.io/test-fixture: gpu-ecosystem
+spec:
+  runtimeRef:
+    apiGroup: trainer.kubeflow.org
+    kind: ClusterTrainingRuntime
+    name: torch-distributed
+  suspend: false
+  trainer:
+    numNodes: 2
+    command: [python, train.py]
+status:
+  jobsStatus:
+    - name: trainer
+      active: 1
+      failed: 0
+      ready: 1
+      succeeded: 0
+      suspended: 0
+  conditions:
+    - type: Running
+      status: "True"
+      reason: JobsRunning
+      message: Child training job is active
+      observedGeneration: 1
+      lastTransitionTime: __START_TIME__

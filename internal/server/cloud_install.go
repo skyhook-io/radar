@@ -33,9 +33,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -812,7 +810,7 @@ func (s *Server) requireCloudConnectDriver(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, http.StatusNotFound, "Cloud connect is not available on this deployment")
 		return false
 	}
-	if mutating && !sameOriginOK(r) {
+	if mutating && !s.sameOriginOK(r) {
 		s.writeError(w, http.StatusForbidden, "cross-origin requests are not allowed")
 		return false
 	}
@@ -950,32 +948,23 @@ func (s *Server) cloudConnectCapability() *k8s.CloudConnectCapability {
 	}
 }
 
-// sameOriginOK is CSRF protection for the connect endpoints: a page on another
-// origin must not be able to drive an install. It compares the Origin against
-// the authority the client actually used, rather than an allowlist of loopback
-// names — localOriginOK's shape would 403 the legitimate browser on a
-// non-loopback listener (the exact case the driver lane now supports) while
-// still admitting a scripted caller that simply omits the header.
+// sameOriginOK is CSRF protection for state-changing browser endpoints. It
+// compares the Origin scheme and authority against what the client actually
+// used, rather than an allowlist of loopback names — a loopback-only allowlist
+// would 403 the legitimate browser on a non-loopback listener (a supported
+// deployment) while still admitting a scripted caller that simply omits the
+// header.
 //
 // Loopback-to-loopback is additionally allowed for the Vite dev proxy, which
 // forwards its own :9273 origin to the backend on :9280.
-func sameOriginOK(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return true // same-origin navigation or a non-browser client
+func (s *Server) sameOriginOK(r *http.Request) bool {
+	if allowed, decided := fetchMetadataOriginVerdict(r); decided {
+		return allowed
 	}
-	u, err := url.Parse(origin)
-	if err != nil || u.Host == "" {
-		return false
-	}
-	if u.Host == r.Host {
+	if sameAuthorityOriginOK(r) {
 		return true
 	}
-	requestHost := r.Host
-	if h, _, splitErr := net.SplitHostPort(requestHost); splitErr == nil {
-		requestHost = h
-	}
-	return cloud.IsLoopbackHostname(u.Hostname()) && cloud.IsLoopbackHostname(requestHost)
+	return s.viteDevProxyOriginOK(r)
 }
 
 // redactCloudToken removes a cluster token that an upstream error may have

@@ -1,0 +1,63 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: Workload
+metadata:
+  name: disrupted-readmitted
+  namespace: training
+spec:
+  queueName: gpu
+  podSets:
+    - name: workers
+      count: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: trainer
+              image: registry.k8s.io/pause:3.10
+status:
+  admission:
+    clusterQueue: gpu-team
+    podSetAssignments:
+      - name: workers
+        count: 2
+        flavors:
+          cpu: on-demand
+          nvidia.com/gpu: a10
+        resourceUsage:
+          cpu: "4"
+          memory: 16Gi
+          nvidia.com/gpu: "2"
+  conditions:
+    - type: QuotaReserved
+      status: "True"
+      reason: QuotaReserved
+      lastTransitionTime: "2026-08-30T10:06:00Z"
+    - type: Admitted
+      status: "True"
+      reason: Admitted
+      lastTransitionTime: "2026-08-30T10:07:00Z"
+    - type: PodsReady
+      status: "False"
+      reason: WaitForRecovery
+      message: Waiting for replacement Pods
+      lastTransitionTime: "2026-08-30T10:08:00Z"
+    - type: WaitingForReplacementPods
+      status: "True"
+      reason: PodsFailed
+      message: Some failed Pods need replacement
+      observedGeneration: 5
+      lastTransitionTime: "2026-08-30T10:08:00Z"
+    - type: Evicted
+      status: "False"
+      reason: QuotaReserved
+      message: "Previously: Evicted for a higher-priority workload"
+      lastTransitionTime: "2026-08-30T10:06:00Z"
+    - type: Preempted
+      status: "False"
+      reason: QuotaReserved
+      message: "Previously: Preempted within gpu-team"
+      lastTransitionTime: "2026-08-30T10:06:00Z"
+    - type: DeactivationTarget
+      status: "False"
+      reason: Reactivated
+      lastTransitionTime: "2026-08-30T10:05:00Z"

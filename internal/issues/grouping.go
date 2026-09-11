@@ -3,6 +3,7 @@ package issues
 import (
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
@@ -116,9 +117,10 @@ func GroupIssues(flat []Issue) []Issue {
 
 // foldGroup collapses one group's member rows into a single grouped issue,
 // applying the representative rules: the worst member drives severity +
-// reason/message/crash context; age is the oldest first_seen; last_seen the
-// newest. members are the folded underlying resources (the fan-out),
-// excluding the subject itself.
+// reason/message/crash context; first_seen is the earliest member active-time
+// anchor, resource_created_at is the oldest member creation time, and last_seen
+// is the newest observation. members are the folded underlying resources (the
+// fan-out), excluding the subject itself.
 func foldGroup(members []Issue) Issue {
 	rep := members[0]
 	for _, m := range members[1:] {
@@ -151,6 +153,7 @@ func foldGroup(members []Issue) Issue {
 		LastTerminatedReason: rep.LastTerminatedReason,
 		FirstSeen:            rep.FirstSeen,
 		OnsetUnknown:         rep.OnsetUnknown,
+		ResourceCreatedAt:    rep.ResourceCreatedAt,
 		LastSeen:             rep.LastSeen,
 		// Per-issue context carries from the representative, like Reason/Message.
 		// In the cluster-wide path grouping runs before enrichment, so these are
@@ -176,12 +179,7 @@ func foldGroup(members []Issue) Issue {
 	}
 
 	var refs []Ref
-	anyOnsetUnknown := rep.OnsetUnknown
 	for _, m := range members {
-		anyOnsetUnknown = anyOnsetUnknown || m.OnsetUnknown
-		if !m.FirstSeen.IsZero() && (g.FirstSeen.IsZero() || m.FirstSeen.Before(g.FirstSeen)) {
-			g.FirstSeen = m.FirstSeen
-		}
 		if m.LastSeen.After(g.LastSeen) {
 			g.LastSeen = m.LastSeen
 		}
@@ -190,7 +188,7 @@ func foldGroup(members []Issue) Issue {
 			refs = append(refs, own)
 		}
 	}
-	g.OnsetUnknown = anyOnsetUnknown && g.FirstSeen.IsZero()
+	g.FirstSeen, g.OnsetUnknown, g.OnsetCoverage, g.ResourceCreatedAt = foldIssueOnset(members)
 	sortRefs(refs)
 
 	// IssueTiming: keep only if all members with issue_timing agree; any mix of
@@ -218,6 +216,10 @@ func foldGroup(members []Issue) Issue {
 	}
 	g.IssueTiming = groupIssueTiming
 	g.IssueTimingBasis = groupBasis
+	if g.OnsetCoverage != nil && g.OnsetCoverage.Known > 0 && g.OnsetCoverage.Unknown > 0 && !issueTimingIndependentOfOnset(g.IssueTimingBasis) {
+		g.IssueTiming = ""
+		g.IssueTimingBasis = ""
+	}
 
 	// CapacityRelevant: a group is capacity-relevant if ANY folded member is
 	// (an unschedulable pod pinned to a Karpenter NodePool) — so a workload
@@ -250,6 +252,32 @@ func foldGroup(members []Issue) Issue {
 	}
 	g.Members = refs
 	return g
+}
+
+func foldIssueOnset(members []Issue) (time.Time, bool, *issuesapi.OnsetCoverage, time.Time) {
+	var firstSeen, resourceCreatedAt time.Time
+	known, unknown := 0, 0
+	for _, member := range members {
+		if member.OnsetCoverage != nil {
+			known += member.OnsetCoverage.Known
+			unknown += member.OnsetCoverage.Unknown
+		} else if member.FirstSeen.IsZero() {
+			unknown++
+		} else {
+			known++
+		}
+		if !member.FirstSeen.IsZero() && (firstSeen.IsZero() || member.FirstSeen.Before(firstSeen)) {
+			firstSeen = member.FirstSeen
+		}
+		if !member.ResourceCreatedAt.IsZero() && (resourceCreatedAt.IsZero() || member.ResourceCreatedAt.Before(resourceCreatedAt)) {
+			resourceCreatedAt = member.ResourceCreatedAt
+		}
+	}
+	var coverage *issuesapi.OnsetCoverage
+	if unknown > 0 && known+unknown > 1 {
+		coverage = &issuesapi.OnsetCoverage{Known: known, Unknown: unknown}
+	}
+	return firstSeen, known == 0, coverage, resourceCreatedAt
 }
 
 // agreedDiagnosis returns the parsed diagnosis shared by a group's members, or
@@ -341,16 +369,24 @@ func sortRefs(refs []Ref) {
 	})
 }
 
+func issueSortAnchor(i Issue) time.Time {
+	if !i.FirstSeen.IsZero() {
+		return i.FirstSeen
+	}
+	return i.ResourceCreatedAt
+}
+
 // lessIssue is the canonical issue sort: severity desc, direct-blocker source
-// priority, then ONSET (first_seen desc) — deliberately NOT last_seen, which
-// bumps to compose-time on every poll and would reshuffle same-severity rows on
-// each refetch. Then namespace, name, and the stable id as a total tiebreak.
-// This is byte-for-byte the order the shared UI comparator (k8s-ui
-// issues/types.ts:compareIssues) produces for a single cluster — the UI's only
-// extra key is `cluster`, which it sorts on for fleet (multi-cluster) views and
-// which is constant here. So /api/issues, MCP, and the single-cluster UI return
-// one identical queue. (id is the final tiebreak — two rows can share
-// subject+ns+name and differ only by cause.)
+// priority, then a stable anchor (proven first_seen, otherwise resource creation)
+// descending — deliberately NOT last_seen, which bumps to compose-time on every
+// poll and would reshuffle same-severity rows on each refetch. Then namespace,
+// name, and the stable id as a total tiebreak.
+// The shared UI comparator (k8s-ui issues/types.ts:compareIssues) uses the same
+// keys. Its only extra key is `cluster`, which is constant in single-cluster
+// views. JavaScript parses timestamps at millisecond precision, so timestamps
+// that differ only below a millisecond may fall through to the stable
+// tiebreakers in a different order. (id is the final tiebreak — two rows can
+// share subject+ns+name and differ only by cause.)
 func lessIssue(a, b Issue) bool {
 	if a.Severity != b.Severity {
 		return SeverityRank(a.Severity) > SeverityRank(b.Severity)
@@ -358,8 +394,9 @@ func lessIssue(a, b Issue) bool {
 	if issueSourceRank(a.Source) != issueSourceRank(b.Source) {
 		return issueSourceRank(a.Source) > issueSourceRank(b.Source)
 	}
-	if !a.FirstSeen.Equal(b.FirstSeen) {
-		return a.FirstSeen.After(b.FirstSeen)
+	aAnchor, bAnchor := issueSortAnchor(a), issueSortAnchor(b)
+	if !aAnchor.Equal(bAnchor) {
+		return aAnchor.After(bAnchor)
 	}
 	if a.Namespace != b.Namespace {
 		return a.Namespace < b.Namespace

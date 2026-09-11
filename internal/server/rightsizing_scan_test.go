@@ -16,7 +16,7 @@ func TestResolveRightsizingScanScopeUnrestrictedRequiresClusterListPerKind(t *te
 	perms.SetCanI("list", "apps", "deployments", "", true)
 	perms.SetCanI("list", "apps", "statefulsets", "", false)
 	perms.SetCanI("list", "apps", "daemonsets", "", true)
-	s.permCache.Set("alice", perms)
+	s.permCache.Set("alice", nil, perms)
 
 	scope := s.resolveRightsizingScanScope(reqAs("alice"), nil)
 	if namespaces, ok := scope.NamespacesByKind["Deployment"]; !ok || namespaces != nil {
@@ -56,7 +56,7 @@ func TestResolveRightsizingScanScopeFiltersEachKindAcrossNamespaces(t *testing.T
 	perms.SetCanI("list", "apps", "statefulsets", "beta", true)
 	perms.SetCanI("list", "apps", "daemonsets", "alpha", false)
 	perms.SetCanI("list", "apps", "daemonsets", "beta", false)
-	s.permCache.Set("alice", perms)
+	s.permCache.Set("alice", nil, perms)
 
 	scope := s.resolveRightsizingScanScope(reqAs("alice"), []string{"beta", "alpha"})
 	if got := scope.NamespacesByKind["Deployment"]; !slices.Equal(got, []string{"alpha"}) {
@@ -87,7 +87,7 @@ func TestResolveRightsizingScanScopeNoNamespaceAccessExcludesAllKinds(t *testing
 func TestHandleRightsizingScanExplicitDeniedNamespaceReturnsForbidden(t *testing.T) {
 	s := newTestServer(t)
 	s.permCache = pkgauth.NewPermissionCache()
-	s.permCache.Set("alice", &pkgauth.UserPermissions{AllowedNamespaces: []string{"alpha"}})
+	s.permCache.Set("alice", nil, &pkgauth.UserPermissions{AllowedNamespaces: []string{"alpha"}})
 	req := httptest.NewRequest(http.MethodPost, "/api/prometheus/rightsizing/scan?namespace=beta", nil)
 	req = req.WithContext(pkgauth.ContextWithUser(req.Context(), &pkgauth.User{Username: "alice"}))
 	rec := httptest.NewRecorder()

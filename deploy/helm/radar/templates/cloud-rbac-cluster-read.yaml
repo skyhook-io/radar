@@ -69,6 +69,9 @@ rules:
   - apiGroups: ["scheduling.k8s.io"]
     resources: ["priorityclasses"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: ["certificates.k8s.io"]
+    resources: ["clustertrustbundles"]
+    verbs: ["get", "list", "watch"]
   # RuntimeClasses belong to the same benign-infra class: Radar's SA caches
   # them by default (clusterrole.yaml) and the UI has a dedicated renderer,
   # so omitting them here would leave tiers with an unexplainable denied
@@ -89,9 +92,6 @@ rules:
   # Upgrade impact evidence. These kinds are not cached or browsable.
   - apiGroups: ["storage.k8s.io"]
     resources: ["csidrivers", "csistoragecapacities"]
-    verbs: ["list"]
-  - apiGroups: ["scheduling.k8s.io"]
-    resources: ["workloads", "podgroups"]
     verbs: ["list"]
   - apiGroups: ["flowcontrol.apiserver.k8s.io"]
     resources: ["flowschemas", "prioritylevelconfigurations"]
