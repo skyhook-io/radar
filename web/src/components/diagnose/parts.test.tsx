@@ -1040,7 +1040,6 @@ describe("ResultCard conclusion states", () => {
     );
     expect(html).toContain("Radar captured evidence of an active problem");
     expect(html).toContain("the note on CrashLoopBackOff and Error logs");
-    expect(html).toContain("stays in the list below, unchanged");
     expect(html).not.toContain("Assessment conflicts with captured evidence");
     expect(html).toContain("border-amber-500/40");
     expect(html).not.toContain("border-emerald-500/30");

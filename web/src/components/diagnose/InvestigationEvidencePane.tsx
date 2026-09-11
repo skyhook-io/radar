@@ -1665,9 +1665,12 @@ function EvidenceBody({
     case "inventory":
       return <InventoryBody data={data} />;
     case "receipt":
-      return (
+      // The title and the scope above it are the answer. A body appears only
+      // when it adds the reason or the limit, so an absent one renders nothing
+      // rather than an empty line.
+      return data.message ? (
         <p className="text-xs text-theme-text-secondary">{data.message}</p>
-      );
+      ) : null;
     case "alerts":
       return <AlertsBody data={data} />;
     case "helm":

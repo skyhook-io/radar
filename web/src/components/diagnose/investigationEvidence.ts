@@ -431,7 +431,13 @@ export type InvestigationEvidenceData =
       checked:
         "issues" | "events" | "changes" | "inventory" | "logs" | "alerts";
       scope: string;
-      message: string;
+      /**
+       * Only when there is something to add. The card already shows the title
+       * and the scope, so a line that restates either costs the reader a read
+       * and returns nothing; this carries the reason the answer is what it is,
+       * or the limit of what it proves.
+       */
+      message?: string;
     }
   | {
       type: "alerts";
@@ -1917,9 +1923,8 @@ function addEvents(
   complete = true,
   emptyIsAuthoritative = false,
   relevance: InvestigationEvidenceRelevance = "broader",
-  emptyReceipt: { title: string; message: string } = {
+  emptyReceipt: { title: string; message?: string } = {
     title: "No warning events",
-    message: "The warning-event query completed and returned no groups.",
   },
 ): void {
   const scope = scopeFromArgs(source);
@@ -2023,7 +2028,6 @@ function addChanges(
         type: "receipt",
         checked: "changes",
         scope,
-        message: "The requested change window returned no tracked changes.",
       },
     });
     return;
@@ -2466,14 +2470,12 @@ function adaptDiagnose(
       tier: evidenceTierForRelevance("checked", bundleRelevance),
       relevance: bundleRelevance,
       tone: "neutral",
-      title: "No live issues for this resource",
+      title: "Radar's diagnosis found no live issues",
       summary: scope,
       data: {
         type: "receipt",
         checked: "issues",
         scope,
-        message:
-          "Radar's workload diagnosis completed without a classified live issue for this resource.",
       },
     });
   }
@@ -3088,8 +3090,6 @@ function adaptIssues(
         type: "receipt",
         checked: "issues",
         scope,
-        message:
-          "Radar's live-issue query completed and returned no matching issues.",
       },
     });
   } else {

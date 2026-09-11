@@ -2750,8 +2750,7 @@ function AllClearCard({
           <p className="mt-2 text-xs text-theme-text-secondary">
             Radar captured evidence of an active problem. The agent explains its
             interpretation in the note on{" "}
-            {joinTitles(evidenceConflictExplainedBy!)}; the evidence itself
-            stays in the list below, unchanged.
+            {joinTitles(evidenceConflictExplainedBy!)}.
             {coverageLimited
               ? " Evidence coverage is also limited — review the limitations in Evidence."
               : ""}

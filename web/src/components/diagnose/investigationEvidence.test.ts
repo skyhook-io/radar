@@ -2849,10 +2849,10 @@ describe("honest zero and partial-result states", () => {
           group.latest.data.checked === "events",
       )?.latest,
     ).toMatchObject({
+      // The title and the scope beside it are the whole answer here; a body
+      // would only restate them.
       title: "No warning events",
-      data: {
-        message: "The warning-event query completed and returned no groups.",
-      },
+      data: { message: undefined },
     });
   });
 

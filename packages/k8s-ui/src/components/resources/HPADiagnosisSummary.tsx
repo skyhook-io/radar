@@ -177,16 +177,20 @@ export function HPADiagnosisSummary({
                     {reason.conditionReason}
                   </span>
                 )}
-                {reason.detail && (
-                  <span className="text-theme-text-tertiary">
-                    {reason.detail}
-                  </span>
-                )}
               </div>
+              {/* Radar's reading leads, as the reason is built to; the
+                  controller's own sentence follows it, quoted and attributed
+                  the same way the inline variant attributes it. Unlabelled
+                  beside the condition chips, it read as Radar's words. */}
               {!isHPAReasonRedundant(diagnosis, reason) && (
                 <div className="mt-1 text-xs text-theme-text-secondary">
                   {reason.message}
                 </div>
+              )}
+              {reason.detail && (
+                <p className="mt-1 text-xs text-theme-text-tertiary">
+                  Kubernetes: &ldquo;{reason.detail}&rdquo;
+                </p>
               )}
             </div>
           ))}

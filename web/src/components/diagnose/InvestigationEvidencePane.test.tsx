@@ -3254,7 +3254,7 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
       partition.workload
         .filter((group) => group.kind === "receipt")
         .map((group) => group.latest.title),
-    ).toEqual(["No live issues for this resource", "No warning events"]);
+    ).toEqual(["Radar's diagnosis found no live issues", "No warning events"]);
     const onOpenResource = vi.fn();
     const html = render(
       projection,
