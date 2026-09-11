@@ -429,3 +429,71 @@ func TestPartiallyCachedKindMakesAnEmptyScanPartialNotComplete(t *testing.T) {
 		t.Fatalf("partially cached empty response = %+v", resp)
 	}
 }
+
+func TestAllKindsPartiallyCachedIsPartialNotUnavailable(t *testing.T) {
+	// A namespace-scoped Radar falls back to namespace informers for all three
+	// kinds. If the covered namespaces hold no Deployment, StatefulSet or
+	// DaemonSet, every kind is partially cached and no workload is found — but
+	// all three are readable, so the answer is "nothing here in this scope",
+	// not "none of these kinds can be read".
+	resp := newRightsizingScanResponse(time.Now(), RightsizingScanScope{})
+	resp.Coverage.PartiallyCachedKinds = []string{"Deployment", "StatefulSet", "DaemonSet"}
+
+	resp = computeRightsizingScan(context.Background(), &fakeScanQuerier{}, nil, resp)
+	if resp.State == RightsizingScanUnavailable {
+		t.Fatalf("partial caching is not unreadability: %+v", resp)
+	}
+	if resp.Reason == "workload_kinds_unavailable" {
+		t.Errorf("readable-but-narrowed kinds reported as unavailable: %+v", resp)
+	}
+	if resp.State != RightsizingScanPartial || resp.Reason != "limited_scope_no_workloads" {
+		t.Errorf("expected partial/limited_scope_no_workloads, got %+v", resp)
+	}
+}
+
+func TestAllKindsUnreadableStaysUnavailable(t *testing.T) {
+	// The other side of the same threshold: when every kind really is denied or
+	// has no metrics, the scan must still say so rather than report an empty
+	// cluster.
+	resp := newRightsizingScanResponse(time.Now(), RightsizingScanScope{
+		RestrictedKinds: []string{"Deployment", "StatefulSet"},
+	})
+	resp.Coverage.UnavailableKinds = []string{"DaemonSet"}
+
+	resp = computeRightsizingScan(context.Background(), &fakeScanQuerier{}, nil, resp)
+	if resp.State != RightsizingScanUnavailable || resp.Reason != "workload_kinds_unavailable" {
+		t.Fatalf("expected unavailable/workload_kinds_unavailable, got %+v", resp)
+	}
+}
+
+func TestScanWarningsDoNotCarryWholeQueryURLs(t *testing.T) {
+	// prom.HTTPTransport errors embed the full query_range URL. Forwarded
+	// verbatim these ran to tens of kilobytes and crowded out the rows they
+	// annotate; consumers key on Code, so the detail can be bounded.
+	longQuery := strings.Repeat("sum(rate(container_cpu_usage_seconds_total[5m]))+", 400)
+	raw := `Get "http://prom:9090/api/v1/query_range?query=` + longQuery + `&start=1&end=2": dial tcp: i/o timeout`
+
+	var resp RightsizingScanResponse
+	appendScanWarning(&resp, "owner_metrics_query_failed", raw)
+
+	if len(resp.Warnings) != 1 {
+		t.Fatalf("expected one warning, got %d", len(resp.Warnings))
+	}
+	got := resp.Warnings[0].Message
+	if len(got) > maxWarningMessageBytes+len("… (truncated)") {
+		t.Errorf("warning message not bounded: %d bytes", len(got))
+	}
+	if strings.Contains(got, longQuery) {
+		t.Error("the PromQL expression must not be forwarded verbatim")
+	}
+	if !strings.Contains(got, "query_range") {
+		t.Errorf("the bounded message should still identify the failing call: %q", got)
+	}
+}
+
+func TestBoundWarningMessageLeavesShortMessagesAlone(t *testing.T) {
+	const short = "kube_pod_owner returned no series"
+	if got := boundWarningMessage(short); got != short {
+		t.Errorf("a short diagnostic must survive intact, got %q", got)
+	}
+}

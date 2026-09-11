@@ -87,7 +87,7 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 		opts.Currency = DefaultCurrency
 	}
 	if opts.Window == "" {
-		opts.Window = "1h"
+		opts.Window = DefaultCurrentWindow
 	}
 
 	aggregate := opts.Aggregate
@@ -329,7 +329,7 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 		return &CostSummary{Available: false, Reason: ReasonNoPrometheus, Currency: opts.Currency}
 	}
 	if opts.Window == "" {
-		opts.Window = "1h"
+		opts.Window = DefaultCurrentWindow
 	}
 
 	cpuResult, err := client.Query(ctx,

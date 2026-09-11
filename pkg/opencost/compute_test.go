@@ -324,9 +324,9 @@ func TestEfficiencyPercent(t *testing.T) {
 }
 
 func TestPartialUsageFailureIsFlaggedNotUnderstated(t *testing.T) {
-	// One usage query failing used to produce a plausible-looking efficiency
-	// derived from half the evidence — a namespace at 80% reported as ~38% with
-	// nothing to say the CPU half was never collected.
+	// Partial usage evidence must not yield a plausible efficiency measurement:
+	// an efficiency derived from one of the two usage queries is indistinguishable
+	// from a real one, so the row has to report that usage was not collected.
 	client := scriptedProm(t, []scriptedCase{
 		{contains: "container_cpu_allocation", body: vectorBody(map[string]float64{"checkout": 2.0})},
 		{contains: "container_memory_allocation_bytes", body: vectorBody(map[string]float64{"checkout": 3.0})},
@@ -362,10 +362,10 @@ func TestPartialUsageFailureIsFlaggedNotUnderstated(t *testing.T) {
 	}
 }
 
-func TestTotalUsageFailureMatchesThePreExistingZeros(t *testing.T) {
-	// Both usage queries failing is the case EfficiencyPercent and idleFromUsage
-	// already handled ("no data != 100% idle"); pin that the flag did not change
-	// any of those numbers.
+func TestTotalUsageFailureLeavesUsageFieldsAtZeroAndFlagsThem(t *testing.T) {
+	// With both usage queries failing, efficiency and idle stay zero and the row
+	// marks usage unavailable. Zero here means "not measured", and only the flag
+	// separates that from a genuine 0% — no data is not 100% idle.
 	client := scriptedProm(t, []scriptedCase{
 		{contains: "container_cpu_allocation", body: vectorBody(map[string]float64{"checkout": 2.0})},
 		{contains: "container_memory_allocation_bytes", body: vectorBody(map[string]float64{"checkout": 3.0})},

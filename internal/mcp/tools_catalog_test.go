@@ -658,8 +658,9 @@ var radarReadToolsBlock = regexp.MustCompile(`(?s)var radarReadTools = \[\]strin
 var quotedToolName = regexp.MustCompile(`"([a-z][a-z0-9_]*)"`)
 
 // TestDiagnoserAllowlistCoversAllReadTools fails when a read tool is registered
-// for MCP but never added to the agent's allowlist. The pre-existing guard only
-// asserted that write tools stay OUT, so an omission here shipped green.
+// for MCP but never added to the agent's allowlist. Every registered read tool
+// must appear there: one that does not reaches every external client but not
+// Radar's own Diagnose agent, which is silent rather than an error.
 func TestDiagnoserAllowlistCoversAllReadTools(t *testing.T) {
 	writes := map[string]bool{}
 	for _, w := range writeToolNames {

@@ -1322,6 +1322,8 @@ const INVESTIGATION_RESULT_LABELS: Readonly<Record<string, string>> = {
   get_helm_release: "Helm release",
   get_subject_permissions: "Permissions",
   query_prometheus: "Prometheus query",
+  get_cost: "Cost",
+  get_rightsizing: "Rightsizing",
 };
 
 function investigationResultLabel(source: InvestigationEvidenceSource): string {

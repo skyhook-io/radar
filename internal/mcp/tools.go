@@ -507,18 +507,14 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 		Description: "Use for cluster spend questions: what a cluster, namespace, workload, or " +
 			"node costs, where the money goes, and whether spend is growing. Reads OpenCost or " +
 			"Kubecost through Prometheus, so it handles currency, idle attribution, and source " +
-			"differences you would get wrong hand-writing PromQL. view=summary (default) returns " +
+			"differences you would get wrong hand-writing PromQL. This is SPEND, not usage — for " +
+			"whether a request should change, use get_rightsizing. view=summary (default) returns " +
 			"cluster totals plus per-namespace rows and usually answers the question in one call; " +
-			"view=workloads breaks one namespace down (namespace required); view=nodes ranks node " +
-			"spend; view=trend returns spend over time. This is spend, NOT usage. Costs are " +
-			"hourly rates; totals also carry projectedMonthlyCost (hourly x 730), the same " +
-			"projection Radar's Costs UI shows. When available=false, reason and remediation " +
-			"say what is missing (usually OpenCost or Prometheus) — report that rather than " +
-			"concluding the cluster has no cost data. namespaceScope, when present, is the " +
-			"effective scope after the requested namespace and RBAC filtering — it is not by " +
-			"itself evidence that access is restricted; guidance says which of the two narrowed " +
-			"it. usageUnavailable on a row means efficiency and idle could not be measured, " +
-			"which is not the same as measuring them as zero.",
+			"view=workloads breaks one namespace down (namespace required, or pass kind+name for " +
+			"one workload); view=nodes ranks node spend; view=trend returns spend over time. " +
+			"When available=false, reason and remediation say what is missing — report that " +
+			"rather than concluding the cluster has no cost data. Every response explains its " +
+			"own fields in guidance; read it before interpreting the numbers.",
 		Annotations: readOnly,
 	}, logToolCall("get_cost", handleGetCost))
 
@@ -527,23 +523,16 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 		Description: "Use when asked whether CPU/memory requests and limits are sized correctly, " +
 			"which workloads are over-provisioned or starved, or where resource waste is. Returns " +
 			"per-container recommendations derived from 7 DAYS of observed usage, not live " +
-			"metrics. Each row carries fit (oversized, under_requested, missing_request, " +
-			"balanced, insufficient_history) and a confidence tier: ALWAYS check confidence " +
-			"and coverage before recommending a change, because low confidence means " +
-			"insufficient history, not correctly sized. scope is REQUIRED. scope=workload " +
-			"with kind+name+namespace is cheap and precise. " +
-			"scope=namespace scans one namespace. scope=cluster scans every " +
+			"metrics — ALWAYS check each row's confidence before recommending a change, because " +
+			"low confidence means insufficient history, not correctly sized. scope is REQUIRED: " +
+			"scope=workload with kind+name+namespace is cheap, precise, and returns every row of " +
+			"that workload; scope=namespace scans one namespace; scope=cluster scans every " +
 			"Deployment/StatefulSet/DaemonSet with 7-day range queries and can take 45s — call it " +
 			"ONCE to find candidates, then drill in with scope=workload; do not re-run it to " +
-			"refine rows you already have. Balanced containers are omitted unless " +
-			"include_balanced=true. state=partial means the evidence is incomplete for ANY " +
-			"reason — unfinished batches, kinds this identity cannot list, kinds the cache has " +
-			"not synced, kinds cached for only some namespaces, or row-level gaps — so read " +
-			"coverage, warnings, and omitted together; such rows are a subset and must not be " +
-			"described as cluster-wide. When namespaceScope is present, scope=cluster reached " +
-			"only those namespaces (RBAC, or the --namespace pin) and is NOT cluster-wide. " +
-			"hpaManaged, currentPodOOM, and windowOomEvidence change " +
-			"what a safe recommendation is; a request cut on an OOMKilling container is wrong.",
+			"refine rows you already have. Scan scopes rank workloads by classification and then " +
+			"by replica-weighted impact, so the first rows are the biggest real savings, not the " +
+			"biggest percentages. Every response explains its own state, coverage and omissions " +
+			"in guidance; read it before drawing a conclusion.",
 		Annotations: readOnly,
 	}, logToolCall("get_rightsizing", handleGetRightsizing))
 

@@ -174,13 +174,6 @@ func scopedNamespacesForUser(ctx context.Context, requested []string) []string {
 	return filterNamespacesForUser(ctx, clamped)
 }
 
-// clampToNamespacePin applies only the --namespace pin, reporting false when the
-// request falls outside it. Tools that authorize with an exact SubjectAccessReview
-// use this rather than scopedNamespacesForUser so that MCP allows exactly what the
-// REST route allows: handleRightsizing gates on an exact "get" SAR and nothing
-// else, while the RBAC namespace list is derived from "list" sentinels, so a
-// caller holding "get" on a workload but not "list" would be denied here and
-// served there.
 // namespaceWithinPin reports whether a single namespace survives the --namespace
 // pin, for tools that authorize it with their own exact SubjectAccessReview.
 func namespaceWithinPin(namespace string) bool {
@@ -188,6 +181,39 @@ func namespaceWithinPin(namespace string) bool {
 	return ok
 }
 
+// DeniedScopeReason names why a namespace request resolved to nothing. The pin
+// and an RBAC denial are indistinguishable in the resulting namespace list, so
+// the cause has to be re-derived from configuration to be reported correctly.
+func DeniedScopeReason(requested []string) string {
+	if _, ok := clampToNamespacePin(requested); !ok {
+		return ReasonOutsideNamespaceScope
+	}
+	return ""
+}
+
+// ReasonOutsideNamespaceScope marks a request the --namespace pin excluded,
+// rather than one this identity lacks permission for.
+const ReasonOutsideNamespaceScope = "outside_namespace_scope"
+
+// NamespacePinned reports whether informer caches are pinned to one namespace,
+// and which. Callers use it to attribute a narrowed scope: a pin and an RBAC
+// limit produce the same namespace list, and telling a cluster-admin their
+// access is restricted when the operator pinned the process is a wrong answer.
+func NamespacePinned() (string, bool) {
+	if !k8s.ForceNamespaceScope {
+		return "", false
+	}
+	target := k8s.GetNamespaceScopeTarget()
+	return target, target != ""
+}
+
+// clampToNamespacePin applies only the --namespace pin, reporting false when the
+// request falls outside it. Tools that authorize with an exact SubjectAccessReview
+// use this rather than scopedNamespacesForUser so that MCP allows exactly what the
+// REST route allows: handleRightsizing gates on an exact "get" SAR and nothing
+// else, while the RBAC namespace list is derived from "list" sentinels, so a
+// caller holding "get" on a workload but not "list" would be denied here and
+// served there.
 func clampToNamespacePin(requested []string) ([]string, bool) {
 	if !k8s.ForceNamespaceScope {
 		return requested, true

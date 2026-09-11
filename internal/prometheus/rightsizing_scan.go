@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -266,12 +267,17 @@ func computeRightsizingScan(ctx context.Context, client rightsizingScanQuerier, 
 	sortScanWorkloads(workloads)
 	resp.Coverage.WorkloadsDiscovered = len(workloads)
 	if len(workloads) == 0 {
-		limited := countDistinct(resp.Coverage.RestrictedKinds, resp.Coverage.UnavailableKinds, resp.Coverage.PartiallyCachedKinds)
+		// Unreadable and partially-cached are counted separately. A kind whose
+		// informer covers only some namespaces is still readable, so folding it
+		// in here would report "every workload kind is unreadable" for a
+		// namespace-scoped Radar whose covered namespaces simply hold none.
+		unreadable := countDistinct(resp.Coverage.RestrictedKinds, resp.Coverage.UnavailableKinds)
+		narrowed := countDistinct(resp.Coverage.RestrictedKinds, resp.Coverage.UnavailableKinds, resp.Coverage.PartiallyCachedKinds)
 		switch {
-		case limited >= len(RightsizingScanKinds):
+		case unreadable >= len(RightsizingScanKinds):
 			resp.State = RightsizingScanUnavailable
 			resp.Reason = "workload_kinds_unavailable"
-		case limited > 0:
+		case narrowed > 0:
 			resp.State = RightsizingScanPartial
 			resp.Reason = "limited_scope_no_workloads"
 		default:
@@ -284,7 +290,7 @@ func computeRightsizingScan(ctx context.Context, client rightsizingScanQuerier, 
 	ksm, err := client.Query(ctx, `count(kube_pod_owner)`)
 	if err != nil {
 		resp.Reason = "owner_metrics_query_failed"
-		resp.Warnings = append(resp.Warnings, RightsizingScanWarning{Code: "owner_metrics_query_failed", Message: err.Error()})
+		appendScanWarning(&resp, "owner_metrics_query_failed", err.Error())
 		return resp
 	}
 	if firstValue(ksm) == nil || *firstValue(ksm) <= 0 {
@@ -687,9 +693,27 @@ func appendScanWarning(resp *RightsizingScanResponse, code, message string) {
 			return
 		}
 	}
-	resp.Warnings = append(resp.Warnings, RightsizingScanWarning{Code: code, Message: message})
+	resp.Warnings = append(resp.Warnings, RightsizingScanWarning{Code: code, Message: boundWarningMessage(message)})
 	sort.Slice(resp.Warnings, func(i, j int) bool { return resp.Warnings[i].Code < resp.Warnings[j].Code })
 }
+
+// maxWarningMessageBytes bounds one warning message. Prometheus transport
+// errors embed the whole query_range URL, so an unbounded scan warning can run
+// to tens of kilobytes and crowd out the rows it is annotating.
+const maxWarningMessageBytes = 400
+
+// boundWarningMessage strips the query string from any URL in the message and
+// caps what is left. Consumers key on Code, never on Message, so the detail is
+// diagnostic rather than load-bearing.
+func boundWarningMessage(message string) string {
+	message = queryStringPattern.ReplaceAllString(message, "?<query elided>")
+	if len(message) > maxWarningMessageBytes {
+		message = message[:maxWarningMessageBytes] + "… (truncated)"
+	}
+	return message
+}
+
+var queryStringPattern = regexp.MustCompile(`\?[^\s"]{40,}`)
 
 func hasScanKind(workloads []scanWorkload, kind string) bool {
 	for _, workload := range workloads {

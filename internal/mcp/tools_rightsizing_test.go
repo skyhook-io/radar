@@ -2,8 +2,8 @@ package mcp
 
 import (
 	"context"
-	"math"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -93,7 +93,7 @@ func TestFilterRightsizingRowsDropsBalancedByDefault(t *testing.T) {
 		rightsizingRow(prometheuspkg.FitInsufficientHistory, 1, 1),
 	}
 
-	filtered := filterRightsizingRows(rows, false)
+	filtered := filterRightsizingRows(rows, false, false, 1, false)
 	actionable, omitted := filtered.rows, filtered.omitted
 	if len(actionable) != 3 {
 		t.Fatalf("expected only oversized, under_requested, and missing_request, got %d", len(actionable))
@@ -108,7 +108,7 @@ func TestFilterRightsizingRowsDropsBalancedByDefault(t *testing.T) {
 		t.Errorf("omissions must be reported so the model can see rows were withheld, got %+v", omitted)
 	}
 
-	includeAll := filterRightsizingRows(rows, true)
+	includeAll := filterRightsizingRows(rows, true, false, 1, false)
 	all, allOmitted := includeAll.rows, includeAll.omitted
 	if len(all) != len(rows) {
 		t.Errorf("include_balanced should return every row, got %d of %d", len(all), len(rows))
@@ -127,7 +127,7 @@ func TestFilterRightsizingRowsFormatsThrottleOnlyWhenMeasured(t *testing.T) {
 	unmeasured := rightsizingRow(prometheuspkg.FitOversized, 4, 1)
 	unmeasured.ThrottleRatio = &ratio
 
-	out := filterRightsizingRows([]prometheuspkg.RightsizingRow{measured, unmeasured}, false).rows
+	out := filterRightsizingRows([]prometheuspkg.RightsizingRow{measured, unmeasured}, false, false, 1, false).rows
 	if out[0].ThrottleRatio == nil || *out[0].ThrottleRatio != "12.5%" {
 		t.Errorf("measured throttling should be formatted as a percentage, got %v", out[0].ThrottleRatio)
 	}
@@ -136,34 +136,101 @@ func TestFilterRightsizingRowsFormatsThrottleOnlyWhenMeasured(t *testing.T) {
 	}
 }
 
-func TestRequestChangeRatioIsDirectionless(t *testing.T) {
-	up := requestChangeRatio(rightsizingRow(prometheuspkg.FitUnderRequested, 1, 4))
-	down := requestChangeRatio(rightsizingRow(prometheuspkg.FitOversized, 4, 1))
-	if up != 4 || down != 4 {
-		t.Errorf("a 4x change should rank the same in both directions, got up=%v down=%v", up, down)
+// Ranking must agree with the Rightsizing screen: the workload giving back the
+// most CPU or memory once replicas are counted comes first, not the one whose
+// request changes by the largest proportion.
+func TestScanRankingFollowsReplicaWeightedImpact(t *testing.T) {
+	// 200m -> 50m on one replica: a 4x proportional cut, 150m of real CPU.
+	small := filterRightsizingRows(
+		[]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 0.2, 0.05)}, false, false, 1, false)
+	// 1500m -> 750m across three replicas: a 2x cut, 2250m of real CPU.
+	large := filterRightsizingRows(
+		[]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 1.5, 0.75)}, false, false, 3, false)
+
+	if prometheuspkg.ImpactScore(large.impact) <= prometheuspkg.ImpactScore(small.impact) {
+		t.Errorf("the larger absolute saving must rank first: large=%v small=%v",
+			prometheuspkg.ImpactScore(large.impact), prometheuspkg.ImpactScore(small.impact))
 	}
-	if got := requestChangeRatio(rightsizingRow(prometheuspkg.FitMissingRequest, 0, 2)); got != 0 {
-		t.Errorf("a missing current request has no ratio, got %v", got)
+	if large.impact.CPU != "-2250m" {
+		t.Errorf("impact should carry a formatted replica-weighted quantity, got %q", large.impact.CPU)
+	}
+	if large.classification != prometheuspkg.ClassReduction {
+		t.Errorf("an oversized workload with no review flags is a reduction, got %q", large.classification)
 	}
 }
 
-func TestWorkloadRequestDeltaRanksMissingRequestsFirst(t *testing.T) {
-	missing := filterRightsizingRows(
-		[]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitMissingRequest, 0, 2)}, false)
+// Class decides the order before impact does, and the screen leads with
+// reductions — the tool is answering "where is the waste", so a reduction sorts
+// above an increase even when the increase is proportionally larger.
+func TestScanRankingOrdersByClassBeforeImpact(t *testing.T) {
+	increase := filterRightsizingRows(
+		[]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitUnderRequested, 0.05, 4)}, false, false, 10, false)
+	reduction := filterRightsizingRows(
+		[]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 4, 3.9)}, false, false, 1, false)
 
-	large := filterRightsizingRows(
-		[]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 100, 1)}, false)
-
-	if !math.IsInf(missing.requestDelta, 1) {
-		t.Error("a missing request has no ratio and should outrank every proportional change")
+	if prometheuspkg.ImpactScore(increase.impact) <= prometheuspkg.ImpactScore(reduction.impact) {
+		t.Fatal("test setup: the increase should carry the larger raw impact")
 	}
-	if got := large.requestDelta; got != 100 {
-		t.Errorf("expected the 100x reduction to rank at 100, got %v", got)
+	if !prometheuspkg.RightsizingRankLess(
+		reduction.classification, reduction.impact, "a",
+		increase.classification, increase.impact, "b") {
+		t.Error("a reduction must sort above an increase — class outranks impact, matching the Rightsizing screen")
+	}
+}
+
+// A workload with both an under-requested and an oversized container is
+// classified as an increase: the under-request is the one that takes it down.
+func TestClassificationPrefersIncreaseOverReduction(t *testing.T) {
+	under := rightsizingRow(prometheuspkg.FitUnderRequested, 0.05, 0.2)
+	over := rightsizingRow(prometheuspkg.FitOversized, 4, 1)
+	over.Container = "sidecar"
+
+	filtered := filterRightsizingRows([]prometheuspkg.RightsizingRow{over, under}, false, false, 1, false)
+	if filtered.classification != prometheuspkg.ClassIncrease {
+		t.Errorf("an under-requested container decides the workload's class, got %q", filtered.classification)
+	}
+}
+
+// The OOM shape — request fine, limit too low — classifies as balanced because
+// fit is settled from the request alone. Filtering on fit therefore dropped the
+// one row an agent asking "why does this OOM" needs.
+func TestFilterKeepsOOMEvidenceDespiteBalancedFit(t *testing.T) {
+	row := rightsizingRow(prometheuspkg.FitBalanced, 1, 1)
+	row.Resource = "memory"
+	row.CurrentPodOOM = true
+
+	filtered := filterRightsizingRows([]prometheuspkg.RightsizingRow{row}, false, false, 1, false)
+	if len(filtered.rows) != 1 {
+		t.Fatalf("a row carrying OOM evidence must never be omitted as balanced, got %d rows", len(filtered.rows))
+	}
+	if filtered.omitted.Balanced != 0 {
+		t.Errorf("the OOM row was counted as omitted-balanced: %+v", filtered.omitted)
+	}
+	if filtered.classification != prometheuspkg.ClassReview {
+		t.Errorf("OOM history demands manual review, got %q", filtered.classification)
+	}
+}
+
+// oomEvidenceAvailable is meaningless on a CPU row; a literal false there reads
+// as an evidence gap the agent should weigh.
+func TestOOMAvailabilityOnlyEmittedForMemoryRows(t *testing.T) {
+	cpu := rightsizingRow(prometheuspkg.FitOversized, 4, 1)
+	mem := rightsizingRow(prometheuspkg.FitOversized, 4, 1)
+	mem.Resource = "memory"
+
+	out := filterRightsizingRows([]prometheuspkg.RightsizingRow{cpu, mem}, false, false, 1, false).rows
+	if out[0].OOMEvidenceAvailable != nil {
+		t.Error("a CPU row must not carry oomEvidenceAvailable")
+	}
+	if out[1].OOMEvidenceAvailable == nil {
+		t.Error("a memory row must report whether OOM evidence was available")
 	}
 }
 
 func TestRightsizingGuidanceWarnsOnPartialScans(t *testing.T) {
-	complete := rightsizingGuidance(prometheuspkg.RightsizingScanComplete, false, "cluster", nil)
+	complete := rightsizingGuidance(rightsizingGuidanceInput{
+		state: prometheuspkg.RightsizingScanComplete, scope: "cluster",
+	})
 	if strings.Contains(complete, "partial") {
 		t.Errorf("a complete scan should not be described as partial: %q", complete)
 	}
@@ -174,12 +241,75 @@ func TestRightsizingGuidanceWarnsOnPartialScans(t *testing.T) {
 		t.Errorf("guidance should say correctly-sized rows were omitted: %q", complete)
 	}
 
-	partial := rightsizingGuidance(prometheuspkg.RightsizingScanPartial, true, "cluster", nil)
+	partial := rightsizingGuidance(rightsizingGuidanceInput{
+		state: prometheuspkg.RightsizingScanPartial, includeBalanced: true, scope: "cluster",
+		coverage: &prometheuspkg.RightsizingScanCoverage{RestrictedKinds: []string{"DaemonSet"}},
+	})
 	if !strings.Contains(partial, "cluster-wide") {
 		t.Errorf("a partial scan must warn against cluster-wide conclusions: %q", partial)
 	}
 	if strings.Contains(partial, "include_balanced") {
 		t.Errorf("include_balanced=true should not carry the omission note: %q", partial)
+	}
+}
+
+// A fixed paragraph naming restrictedKinds and completedBatches was wrong
+// whenever those were empty and the cause was row-level or scope-level, which
+// is the common case. The guidance has to name the causes actually present.
+func TestPartialGuidanceNamesTheCausePresent(t *testing.T) {
+	rowLevel := rightsizingGuidance(rightsizingGuidanceInput{
+		state: prometheuspkg.RightsizingScanPartial, scope: "cluster",
+		reason:   reasonRowEvidenceIncomplete,
+		coverage: &prometheuspkg.RightsizingScanCoverage{Batches: 1, CompletedBatches: 1},
+		omitted:  rightsizingOmissions{InsufficientHistory: 3},
+	})
+	if !strings.Contains(rowLevel, "insufficientHistory") {
+		t.Errorf("the real cause (3 rows short of history) must be named: %q", rowLevel)
+	}
+	if strings.Contains(rowLevel, "restrictedKinds") || strings.Contains(rowLevel, "stopped after") {
+		t.Errorf("guidance must not point at causes this response does not carry: %q", rowLevel)
+	}
+
+	cached := rightsizingGuidance(rightsizingGuidanceInput{
+		state: prometheuspkg.RightsizingScanPartial, scope: "cluster",
+		coverage: &prometheuspkg.RightsizingScanCoverage{PartiallyCachedKinds: []string{"Deployment"}},
+	})
+	if !strings.Contains(cached, "partiallyCachedKinds") {
+		t.Errorf("partial caching can be the only reason for partial, so it must be named: %q", cached)
+	}
+
+	truncatedScan := rightsizingGuidance(rightsizingGuidanceInput{
+		state: prometheuspkg.RightsizingScanPartial, scope: "cluster",
+		coverage: &prometheuspkg.RightsizingScanCoverage{Batches: 3, CompletedBatches: 1},
+	})
+	if !strings.Contains(truncatedScan, "1 of 3 batches") {
+		t.Errorf("an early stop must be stated with its counts: %q", truncatedScan)
+	}
+}
+
+// An unavailable response has no rows and no omitted counts, so guidance about
+// what was omitted describes a response the caller did not receive.
+func TestUnavailableGuidanceDropsInapplicableText(t *testing.T) {
+	got := rightsizingGuidance(rightsizingGuidanceInput{
+		state: prometheuspkg.RightsizingScanUnavailable, scope: "cluster",
+		reason: "owner_metrics_missing",
+	})
+	if strings.Contains(got, "omitted counts") || strings.Contains(got, "include_balanced") {
+		t.Errorf("unavailable responses must not describe omissions: %q", got)
+	}
+	if !strings.Contains(got, "remediation") {
+		t.Errorf("unavailable guidance should point at reason and remediation: %q", got)
+	}
+}
+
+// reductionLimited means the recommendation is a clamped step, not the fitted
+// value — without that said, a 5m observation recommending 750m looks wrong.
+func TestGuidanceExplainsClampedReductions(t *testing.T) {
+	got := rightsizingGuidance(rightsizingGuidanceInput{
+		state: prometheuspkg.RightsizingScanComplete, scope: "cluster", reductionLimited: true,
+	})
+	if !strings.Contains(got, "conservative step") {
+		t.Errorf("a clamped reduction needs explaining in the response: %q", got)
 	}
 }
 
@@ -197,10 +327,9 @@ func TestRightsizingUnavailableCarriesRemediation(t *testing.T) {
 }
 
 func TestRightsizingScanKindsComeFromTheSharedCatalogue(t *testing.T) {
-	// The previous version of this test compared against a literal of its own,
-	// so a kind added to the REST scan and not to MCP still passed. Both
-	// surfaces now range over prometheuspkg.RightsizingScanKinds, which is what
-	// actually makes drift impossible; this pins the catalogue's contents.
+	// Both surfaces range over prometheuspkg.RightsizingScanKinds, which is what
+	// makes drift between REST and MCP impossible. This pins the catalogue's
+	// contents; a test comparing against its own literal would not.
 	want := map[string]string{"Deployment": "deployments", "StatefulSet": "statefulsets", "DaemonSet": "daemonsets"}
 	if len(prometheuspkg.RightsizingScanKinds) != len(want) {
 		t.Fatalf("scan catalogue changed: %+v", prometheuspkg.RightsizingScanKinds)
@@ -213,8 +342,8 @@ func TestRightsizingScanKindsComeFromTheSharedCatalogue(t *testing.T) {
 }
 
 func TestRightsizingRemediationCoversTheScanDeadline(t *testing.T) {
-	// The scan budget now covers authorization, so a deadline can be reported
-	// where only access_denied used to be reachable.
+	// The scan budget covers authorization as well as the queries, so a blown
+	// deadline is reachable on the authorization path too.
 	if rightsizingRemediation("scan_deadline_exceeded") == "" {
 		t.Error("a blown scan budget reaches the model with no remediation")
 	}
@@ -258,13 +387,23 @@ func TestGetRightsizingRejectsUnsupportedKindBeforeAuthorizing(t *testing.T) {
 	}
 }
 
-func TestRightsizingPartialGuidancePointsAtEveryCause(t *testing.T) {
-	// partial is set for restricted/unavailable kinds and warnings with every
-	// batch complete, so naming only the batch counters reads as reassurance.
-	partial := rightsizingGuidance(prometheuspkg.RightsizingScanPartial, false, "cluster", nil)
-	for _, cause := range []string{"restrictedKinds", "unavailableKinds", "completedBatches", "warnings"} {
-		if !strings.Contains(partial, cause) {
-			t.Errorf("partial guidance omits %q, so that cause reads as complete coverage: %q", cause, partial)
+func TestRightsizingPartialGuidanceNamesEveryCoverageCause(t *testing.T) {
+	// Every coverage cause must be reachable from the guidance when it is the
+	// one present; naming a cause that is absent is the opposite failure and is
+	// covered by TestPartialGuidanceNamesTheCausePresent.
+	all := rightsizingGuidance(rightsizingGuidanceInput{
+		state: prometheuspkg.RightsizingScanPartial, scope: "cluster",
+		coverage: &prometheuspkg.RightsizingScanCoverage{
+			RestrictedKinds:      []string{"DaemonSet"},
+			UnavailableKinds:     []string{"Deployment"},
+			PartiallyCachedKinds: []string{"StatefulSet"},
+			Batches:              3,
+			CompletedBatches:     1,
+		},
+	})
+	for _, cause := range []string{"restrictedKinds", "unavailableKinds", "partiallyCachedKinds", "1 of 3 batches"} {
+		if !strings.Contains(all, cause) {
+			t.Errorf("partial guidance omits %q, so that cause reads as complete coverage: %q", cause, all)
 		}
 	}
 }
@@ -273,7 +412,10 @@ func TestNarrowedClusterScanGuidanceRefusesClusterWideFraming(t *testing.T) {
 	// scope="cluster" resolves to what the identity can list, or to the
 	// --namespace pin. A complete-looking scan over two namespaces must not
 	// read as a cluster-wide answer.
-	narrowed := rightsizingGuidance(prometheuspkg.RightsizingScanPartial, false, "cluster", []string{"prod", "staging"})
+	narrowed := rightsizingGuidance(rightsizingGuidanceInput{
+		state: prometheuspkg.RightsizingScanPartial, scope: "cluster",
+		namespaceScope: []string{"prod", "staging"},
+	})
 	if !strings.Contains(narrowed, "namespaceScope") {
 		t.Errorf("guidance must point at the field naming the real scope: %q", narrowed)
 	}
@@ -281,16 +423,29 @@ func TestNarrowedClusterScanGuidanceRefusesClusterWideFraming(t *testing.T) {
 		t.Errorf("guidance must state how many namespaces were reached: %q", narrowed)
 	}
 
-	full := rightsizingGuidance(prometheuspkg.RightsizingScanComplete, false, "cluster", nil)
+	full := rightsizingGuidance(rightsizingGuidanceInput{
+		state: prometheuspkg.RightsizingScanComplete, scope: "cluster",
+	})
 	if strings.Contains(full, "namespaceScope") {
 		t.Errorf("an unnarrowed scan should carry no scope caveat: %q", full)
 	}
 }
 
-func TestNarrowedClusterScopeRemediationExplainsBothCauses(t *testing.T) {
-	remediation := rightsizingRemediation("namespace_scope_limited")
-	if !strings.Contains(remediation, "--namespace") || !strings.Contains(remediation, "cluster-wide") {
-		t.Errorf("remediation must separate the RBAC cause from the pin: %q", remediation)
+func TestNarrowedClusterScopeRemediationNamesTheRealCause(t *testing.T) {
+	// Unpinned, the only cause left is RBAC — attributing it to --namespace
+	// would send the reader to a flag that was never passed.
+	remediation := rightsizingRemediation(reasonNamespaceScopeLimited)
+	if !strings.Contains(remediation, "cluster-wide") {
+		t.Errorf("remediation must state what the scan could not reach: %q", remediation)
+	}
+	if strings.Contains(remediation, "--namespace") {
+		t.Errorf("an unpinned radar must not blame the pin: %q", remediation)
+	}
+
+	// The pin is a startup flag, not a permissions problem.
+	pinned := rightsizingRemediation(ReasonOutsideNamespaceScope)
+	if !strings.Contains(pinned, "--namespace") || !strings.Contains(pinned, "not a permissions problem") {
+		t.Errorf("a pin-excluded scope must be attributed to the flag: %q", pinned)
 	}
 }
 
@@ -304,7 +459,7 @@ func TestOmissionCountersAreExclusive(t *testing.T) {
 		queryErr,
 		rightsizingRow(prometheuspkg.FitInsufficientHistory, 1, 1),
 		rightsizingRow(prometheuspkg.FitBalanced, 1, 1),
-	}, false).omitted
+	}, false, false, 1, false).omitted
 
 	if omitted.QueryError != 1 || omitted.InsufficientHistory != 1 || omitted.Balanced != 1 {
 		t.Errorf("categories must be exclusive, got %+v", omitted)
@@ -321,27 +476,30 @@ func TestIncompleteEvidenceReadsRawRowsNotSurvivors(t *testing.T) {
 	queryErr.QueryError = "upstream 500"
 	rows := []prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 4, 1), queryErr}
 
-	if !filterRightsizingRows(rows, true).incompleteEvidence {
+	if !filterRightsizingRows(rows, true, false, 1, false).incompleteEvidence {
 		t.Error("a query error is incomplete evidence regardless of what survives filtering")
 	}
-	if filterRightsizingRows([]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 4, 1)}, false).incompleteEvidence {
+	if filterRightsizingRows([]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 4, 1)}, false, false, 1, false).incompleteEvidence {
 		t.Error("fully evidenced rows must not be reported as partial")
 	}
 }
 
-func TestWorkloadRequestDeltaRanksBlockedRecommendationsLast(t *testing.T) {
+func TestBlockedRecommendationsRankBelowRealOnes(t *testing.T) {
 	// A row with a request but no recommendation had its evidence blocked (HPA,
-	// OOM, query error). It is less actionable than a real recommendation, so
-	// it must not consume the limit ahead of one.
+	// OOM, query error). It contributes no impact, so it must not consume the
+	// limit ahead of a workload with something to act on.
 	blocked := rightsizingRow(prometheuspkg.FitOversized, 4, 0)
 	blocked.RecommendedReq = nil
-	blockedDelta := filterRightsizingRows([]prometheuspkg.RightsizingRow{blocked}, false).requestDelta
-	realDelta := filterRightsizingRows([]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 4, 1)}, false).requestDelta
-	if math.IsInf(blockedDelta, 1) {
-		t.Error("a blocked recommendation must not rank as infinity")
+	blockedRows := filterRightsizingRows([]prometheuspkg.RightsizingRow{blocked}, false, false, 1, false)
+	realRows := filterRightsizingRows([]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 4, 1)}, false, false, 1, false)
+
+	if prometheuspkg.ImpactScore(blockedRows.impact) != 0 {
+		t.Errorf("a blocked recommendation has no impact to rank on, got %v", prometheuspkg.ImpactScore(blockedRows.impact))
 	}
-	if blockedDelta >= realDelta {
-		t.Errorf("blocked (%v) should rank below a real recommendation (%v)", blockedDelta, realDelta)
+	if !prometheuspkg.RightsizingRankLess(
+		realRows.classification, realRows.impact, "a",
+		blockedRows.classification, blockedRows.impact, "b") {
+		t.Error("a real recommendation must rank above a blocked one")
 	}
 }
 
@@ -349,15 +507,17 @@ func TestEvidenceAvailabilityFlagsSurvive(t *testing.T) {
 	// hpaManaged=false with no HPA evidence means unknown, not "not autoscaled",
 	// and a request cut is unsafe in both the OOM and HPA unknown cases.
 	unknown := rightsizingRow(prometheuspkg.FitOversized, 4, 1)
+	unknown.Resource = "memory"
 	known := rightsizingRow(prometheuspkg.FitOversized, 4, 1)
+	known.Resource = "memory"
 	known.HPAEvidenceAvailable = true
 	known.OOMEvidenceAvailable = true
 
-	out := filterRightsizingRows([]prometheuspkg.RightsizingRow{unknown, known}, false).rows
-	if out[0].HPAEvidenceAvailable || out[0].OOMEvidenceAvailable {
+	out := filterRightsizingRows([]prometheuspkg.RightsizingRow{unknown, known}, false, false, 1, false).rows
+	if out[0].HPAEvidenceAvailable || (out[0].OOMEvidenceAvailable != nil && *out[0].OOMEvidenceAvailable) {
 		t.Error("missing evidence must not be reported as available")
 	}
-	if !out[1].HPAEvidenceAvailable || !out[1].OOMEvidenceAvailable {
+	if !out[1].HPAEvidenceAvailable || out[1].OOMEvidenceAvailable == nil || !*out[1].OOMEvidenceAvailable {
 		t.Error("available evidence must be reported so the model can trust hpaManaged/OOM flags")
 	}
 }
@@ -379,7 +539,9 @@ func TestGetRightsizingNamespaceScopeRejectsWorkloadIdentifiers(t *testing.T) {
 func TestWorkloadScopeGuidanceDoesNotCiteScanCoverage(t *testing.T) {
 	// A workload response carries no coverage object, so pointing the model at
 	// coverage.completedBatches sends it to a field that is not there.
-	workload := rightsizingGuidance(prometheuspkg.RightsizingScanPartial, false, "workload", nil)
+	workload := rightsizingGuidance(rightsizingGuidanceInput{
+		state: prometheuspkg.RightsizingScanPartial, scope: "workload",
+	})
 	for _, absent := range []string{"completedBatches", "restrictedKinds", "unavailableKinds"} {
 		if strings.Contains(workload, absent) {
 			t.Errorf("workload guidance cites %q, which only exists on scan scopes: %q", absent, workload)
@@ -390,33 +552,44 @@ func TestWorkloadScopeGuidanceDoesNotCiteScanCoverage(t *testing.T) {
 	}
 }
 
-func TestBlockedRowsRankLastEvenWhenRequestIsMissing(t *testing.T) {
-	// Infinity means "maximally actionable", which requires something to act on.
+func TestBlockedRowsClassifyAsUnactionable(t *testing.T) {
+	// A missing request with no recommendation has nothing to act on, so it
+	// must not outrank a workload that does.
 	blocked := rightsizingRow(prometheuspkg.FitMissingRequest, 0, 0)
 	blocked.RecommendedReq = nil
-	blockedRows := filterRightsizingRows([]prometheuspkg.RightsizingRow{blocked}, false)
-	if got := blockedRows.requestDelta; math.IsInf(got, 1) {
-		t.Error("a missing request with no recommendation has nothing to act on and must not rank first")
+	blockedRows := filterRightsizingRows([]prometheuspkg.RightsizingRow{blocked}, false, false, 1, false)
+	if blockedRows.classification == prometheuspkg.ClassIncrease {
+		t.Error("a missing request with no recommendation is not an actionable increase")
 	}
 
 	actionable := filterRightsizingRows(
-		[]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitMissingRequest, 0, 2)}, false)
-	if got := actionable.requestDelta; !math.IsInf(got, 1) {
-		t.Errorf("a missing request WITH a recommendation is maximally actionable, got %v", got)
+		[]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitMissingRequest, 0, 2)}, false, false, 1, false)
+	if actionable.classification != prometheuspkg.ClassIncrease {
+		t.Errorf("a missing request WITH a recommendation is an increase, got %q", actionable.classification)
+	}
+	if !prometheuspkg.RightsizingRankLess(
+		actionable.classification, actionable.impact, "a",
+		blockedRows.classification, blockedRows.impact, "b") {
+		t.Error("an actionable increase must rank above a blocked row")
 	}
 }
 
-func TestExplicitZeroRequestRanksAsMissing(t *testing.T) {
-	// An explicit 0 request has a non-nil CurrentRequest and no computable
-	// ratio, so keying on nil alone would bury the strongest signal there is.
+func TestExplicitZeroRequestStillCountsItsFullImpact(t *testing.T) {
+	// An explicit 0 request has a non-nil CurrentRequest, so impact has to read
+	// the value rather than the pointer or the increase would compute as zero.
 	zero := rightsizingRow(prometheuspkg.FitMissingRequest, 0, 2)
 	explicit := "0"
 	zero.CurrentRequest = &explicit
 	zeroValue := 0.0
 	zero.CurrentRequestValue = &zeroValue
 
-	if got := filterRightsizingRows([]prometheuspkg.RightsizingRow{zero}, false).requestDelta; !math.IsInf(got, 1) {
-		t.Errorf("an explicit zero request is still a missing request, got rank %v", got)
+	filtered := filterRightsizingRows([]prometheuspkg.RightsizingRow{zero}, false, false, 2, false)
+	if filtered.classification != prometheuspkg.ClassIncrease {
+		t.Errorf("an explicit zero request is still a missing request, got %q", filtered.classification)
+	}
+	// 2 cores recommended from nothing, across 2 replicas.
+	if filtered.impact.CPU != "+4000m" {
+		t.Errorf("impact must be measured from zero, not skipped, got %q", filtered.impact.CPU)
 	}
 }
 
@@ -431,7 +604,7 @@ func TestSuppressedRecommendationsCountAsIncompleteEvidence(t *testing.T) {
 	} {
 		row := rightsizingRow(prometheuspkg.FitOversized, 4, 1)
 		row.RecommendationReason = reason
-		if !filterRightsizingRows([]prometheuspkg.RightsizingRow{row}, true).incompleteEvidence {
+		if !filterRightsizingRows([]prometheuspkg.RightsizingRow{row}, true, false, 1, false).incompleteEvidence {
 			t.Errorf("reason %q suppressed the recommendation and must not report as complete", reason)
 		}
 	}
@@ -439,7 +612,7 @@ func TestSuppressedRecommendationsCountAsIncompleteEvidence(t *testing.T) {
 	// A recommendation that stands on full evidence stays complete.
 	fine := rightsizingRow(prometheuspkg.FitOversized, 4, 1)
 	fine.RecommendationReason = "request_within_fit_range"
-	if filterRightsizingRows([]prometheuspkg.RightsizingRow{fine}, true).incompleteEvidence {
+	if filterRightsizingRows([]prometheuspkg.RightsizingRow{fine}, true, false, 1, false).incompleteEvidence {
 		t.Error("a fully evidenced row must not downgrade the response to partial")
 	}
 }
@@ -471,4 +644,51 @@ func TestEveryRecommendationReasonIsDocumented(t *testing.T) {
 			t.Errorf("recommendationReason %q reaches agents with nothing in %s explaining it", reason, docsPath)
 		}
 	}
+}
+
+// Remediation is the field the tool description points agents at, and it is set
+// from reason on every state. A reason the engine can produce but this layer
+// does not recognize reaches the agent as a bare string with nothing to act on.
+func TestEveryScanReasonCarriesRemediation(t *testing.T) {
+	// Reasons the scan engine and this layer can assign, gathered from the
+	// assignment sites rather than from a hand-kept list.
+	engineReasons := scanReasonsAssignedInEngine(t)
+	engineReasons = append(engineReasons,
+		reasonRowEvidenceIncomplete,
+		reasonNamespaceScopeLimited,
+		ReasonOutsideNamespaceScope,
+		"access_denied",
+		"scan_deadline_exceeded",
+		"prometheus_unavailable",
+	)
+
+	for _, reason := range engineReasons {
+		if rightsizingRemediation(reason) == "" {
+			t.Errorf("reason %q reaches the agent with no remediation", reason)
+		}
+	}
+}
+
+// scanReasonsAssignedInEngine reads the machine reasons out of the scan engine
+// so a reason added there without a remediation here fails CI, rather than
+// silently shipping a response an agent cannot act on.
+func scanReasonsAssignedInEngine(t *testing.T) []string {
+	t.Helper()
+	raw, err := os.ReadFile("../prometheus/rightsizing_scan.go")
+	if err != nil {
+		t.Fatalf("reading the scan engine: %v", err)
+	}
+	pattern := regexp.MustCompile(`(?:resp\.Reason|\.Reason) = "([a-z][a-z0-9_]*)"`)
+	seen := map[string]bool{}
+	var reasons []string
+	for _, match := range pattern.FindAllStringSubmatch(string(raw), -1) {
+		if !seen[match[1]] {
+			seen[match[1]] = true
+			reasons = append(reasons, match[1])
+		}
+	}
+	if len(reasons) == 0 {
+		t.Fatal("found no machine reasons in the scan engine — the pattern no longer matches")
+	}
+	return reasons
 }

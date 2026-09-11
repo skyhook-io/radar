@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -68,7 +69,7 @@ func TestCostRemediationExplainsMissingCostSource(t *testing.T) {
 }
 
 func TestCostUnavailableCarriesRemediation(t *testing.T) {
-	resp := costUnavailable("summary", pkgopencost.ReasonNoPrometheus, "USD")
+	resp := costResponse{View: "summary"}.unavailable(pkgopencost.ReasonNoPrometheus, "USD", "")
 	if resp.Available {
 		t.Fatal("response should be unavailable")
 	}
@@ -204,5 +205,152 @@ func TestEfficiencyGuidanceRidesTheViewsThatEmitEfficiency(t *testing.T) {
 	summary := costGuidance(nil, "") + " " + costEfficiencyExplainer
 	if !strings.Contains(summary, costRateExplainer) || !strings.Contains(summary, costEfficiencyExplainer) {
 		t.Error("summary guidance must carry both the rate and the efficiency explainer")
+	}
+}
+
+func TestHourlyTotalsAreRounded(t *testing.T) {
+	// Float accumulation across rows yields 0.14640000000000006, which agents
+	// echo verbatim into user-facing answers.
+	totals := hourlyTotals(0.0488 * 3)
+	if totals.HourlyCost != 0.1464 {
+		t.Errorf("hourly cost should be rounded to 4dp, got %v", totals.HourlyCost)
+	}
+	if totals.ProjectedMonthlyCost != 106.87 {
+		t.Errorf("monthly projection should be rounded to 2dp, got %v", totals.ProjectedMonthlyCost)
+	}
+}
+
+func TestIdleGuidanceFiresOnlyWhenIdleExceedsAllocated(t *testing.T) {
+	// Kubecost's idle includes unallocated node capacity while hourlyCost is
+	// allocated spend, so idle > total is correct and needs saying.
+	exceeds := idleGuidance(&costTotals{HourlyCost: 0.0886, IdleCost: 0.2677})
+	if !strings.Contains(exceeds, "unallocated") {
+		t.Errorf("idle above allocated must be explained, got %q", exceeds)
+	}
+	if got := idleGuidance(&costTotals{HourlyCost: 1.0, IdleCost: 0.2}); got != "" {
+		t.Errorf("a subset idle needs no caveat, got %q", got)
+	}
+	if got := idleGuidance(nil); got != "" {
+		t.Errorf("no totals, no caveat, got %q", got)
+	}
+}
+
+func TestNodeRowOmitsAmbiguousComponentCosts(t *testing.T) {
+	// The OpenCost path reports per-vCPU-hour unit prices and Kubecost reports
+	// whole-node totals under the same names, so neither is emitted.
+	blob, err := json.Marshal(nodeCostRow{Name: "n1", HourlyCost: 0.0961})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"cpuCost", "memoryCost"} {
+		if strings.Contains(string(blob), field) {
+			t.Errorf("node rows must not carry %q — its meaning differs per cost source: %s", field, blob)
+		}
+	}
+}
+
+func TestSelectWorkloadCostMatchesBeforeTruncation(t *testing.T) {
+	// A workload ranked past limit is otherwise unreachable: view=workloads has
+	// no other selector and the list is spend-ranked.
+	rows := []pkgopencost.WorkloadCost{
+		{Name: "expensive", Kind: "Deployment", HourlyCost: 9},
+		{Name: "checkout", Kind: "StatefulSet", HourlyCost: 0.01},
+	}
+	got := selectWorkloadCost(rows, "statefulset", "CHECKOUT")
+	if len(got) != 1 || got[0].Name != "checkout" {
+		t.Errorf("kind and name should match case-insensitively, got %+v", got)
+	}
+	if len(selectWorkloadCost(rows, "Deployment", "absent")) != 0 {
+		t.Error("a name that is not present must not fall back to another row")
+	}
+}
+
+func TestGetCostRejectsKindAndNameOutsideWorkloadsView(t *testing.T) {
+	for _, input := range []getCostInput{
+		{View: "summary", Kind: "Deployment", Name: "api"},
+		{View: "nodes", Kind: "Deployment", Name: "api"},
+		{View: "trend", Kind: "Deployment", Name: "api"},
+	} {
+		if _, _, err := handleGetCost(context.Background(), nil, input); err == nil {
+			t.Errorf("%+v should be rejected rather than silently ignoring the selector", input)
+		}
+	}
+	// Half a selector cannot match anything, so it is a caller error too.
+	if _, _, err := handleGetCost(context.Background(), nil, getCostInput{View: "workloads", Namespace: "prod", Kind: "Deployment"}); err == nil {
+		t.Error("kind without name should be rejected")
+	}
+	if _, _, err := handleGetCost(context.Background(), nil, getCostInput{View: "workloads", Namespace: "prod", Name: "api"}); err == nil {
+		t.Error("name without kind should be rejected")
+	}
+}
+
+func TestScopedEmptyResultSeparatesEmptyScopeFromMissingSource(t *testing.T) {
+	if !scopedEmptyResult(pkgopencost.ReasonNoMetrics, []string{"prod"}) {
+		t.Error("a healthy source with no rows in a named scope is an empty scope")
+	}
+	if scopedEmptyResult(pkgopencost.ReasonNoMetrics, nil) {
+		t.Error("cluster-wide no_metrics really is a missing cost source")
+	}
+	if scopedEmptyResult(pkgopencost.ReasonNoPrometheus, []string{"prod"}) {
+		t.Error("only no_metrics is ambiguous; a missing Prometheus is not")
+	}
+}
+
+func TestSummarizeTrendPreComputesDirection(t *testing.T) {
+	// Without this an agent has to sum every series per timestamp before it can
+	// answer "is spend growing", which it cannot do reliably.
+	series := []pkgopencost.CostTrendSeries{
+		{Namespace: "a", DataPoints: []pkgopencost.CostDataPoint{{Timestamp: 100, Value: 1}, {Timestamp: 200, Value: 2}}},
+		{Namespace: "b", DataPoints: []pkgopencost.CostDataPoint{{Timestamp: 100, Value: 3}, {Timestamp: 200, Value: 3}}},
+	}
+	out, total := summarizeTrend(series)
+
+	if len(out) != 2 {
+		t.Fatalf("every series should survive, got %d", len(out))
+	}
+	if out[0].ChangePercent == nil || *out[0].ChangePercent != 100 {
+		t.Errorf("series a doubled, expected +100%%, got %v", out[0].ChangePercent)
+	}
+	if out[0].DataPoints[0].Timestamp != "1970-01-01T00:01:40Z" {
+		t.Errorf("timestamps should be RFC3339, got %q", out[0].DataPoints[0].Timestamp)
+	}
+	if total == nil {
+		t.Fatal("a top-level total is what answers the growth question")
+	}
+	// Summed per timestamp: 4 -> 5, not series-by-series.
+	if total.Start != 4 || total.End != 5 {
+		t.Errorf("totals must sum across series per timestamp, got %+v", total)
+	}
+	if total.ChangePercent == nil || *total.ChangePercent != 25 {
+		t.Errorf("expected +25%%, got %v", total.ChangePercent)
+	}
+}
+
+func TestChangePercentIsAbsentFromZero(t *testing.T) {
+	// Reporting 0% from a zero start would say spend held flat when it in fact
+	// appeared.
+	if got := changePercent(0, 5); got != nil {
+		t.Errorf("a change from zero is undefined, got %v", *got)
+	}
+	if got := changePercent(4, 3); got == nil || *got != -25 {
+		t.Errorf("expected -25%%, got %v", got)
+	}
+}
+
+func TestCostRemediationNamesThePinRatherThanPermissions(t *testing.T) {
+	// The pin and an RBAC denial produce the same namespace list; telling a
+	// cluster-admin their access is restricted is the wrong answer.
+	got := costRemediation(ReasonOutsideNamespaceScope)
+	if !strings.Contains(got, "--namespace") {
+		t.Errorf("remediation should name the flag, got %q", got)
+	}
+	if !strings.Contains(got, "not a permissions problem") {
+		t.Errorf("remediation must not read as an RBAC denial, got %q", got)
+	}
+}
+
+func TestWorkloadNotFoundIsDistinctFromAnEmptyNamespace(t *testing.T) {
+	if got := costRemediation(reasonWorkloadNotFound); got == "" {
+		t.Error("a no-match selector needs its own remediation, not an empty list")
 	}
 }
