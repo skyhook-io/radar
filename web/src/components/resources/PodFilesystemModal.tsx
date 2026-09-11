@@ -11,7 +11,7 @@ import { isDesktopApp } from '../../utils/desktop-download'
 import { openFile, openFolder } from '../../utils/desktop-open-folder'
 import { useToast } from '../ui/Toast'
 import { Tooltip } from '../ui/Tooltip'
-import { PodFilePreview } from './PodFilePreview'
+import { PodFilePreview, PREVIEW_BYTE_CAP } from './PodFilePreview'
 
 interface PodFilesystem {
   root: FileNode
@@ -460,6 +460,9 @@ function PodFileTreeNode({ node, namespace, podName, container, onNavigate, onOp
   const toast = useToast()
   const isDir = node.type === 'dir'
   const isSymlink = node.type === 'symlink'
+  // Size is the one preview rejection the listing can see coming. Whether a
+  // file is binary or readable is only known once its bytes are read.
+  const tooLarge = !isDir && (node.size ?? 0) > PREVIEW_BYTE_CAP
 
   const handleDownload = async (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -476,14 +479,21 @@ function PodFileTreeNode({ node, namespace, podName, container, onNavigate, onOp
   // reports a symlink to a directory as "not a regular file" itself.
   const handleClick = () => {
     if (isDir) onNavigate(node.path)
-    else onOpenFile(node)
+    else if (!tooLarge) onOpenFile(node)
   }
 
   return (
+    <Tooltip
+      content={`Too large to preview (${formatBytes(node.size ?? 0)}) — download instead`}
+      disabled={!tooLarge}
+      wrapperClassName="flex w-full"
+      position="bottom"
+    >
     <div
       className={clsx(
-        'flex items-center gap-1 py-0.5 px-1 rounded hover:bg-theme-elevated cursor-pointer',
-        isDir && 'font-medium'
+        'flex flex-1 min-w-0 items-center gap-1 py-0.5 px-1 rounded hover:bg-theme-elevated',
+        isDir && 'font-medium',
+        tooLarge ? 'cursor-default' : 'cursor-pointer'
       )}
       onClick={handleClick}
     >
@@ -495,7 +505,7 @@ function PodFileTreeNode({ node, namespace, podName, container, onNavigate, onOp
         <File className="w-4 h-4 text-theme-text-tertiary shrink-0" />
       )}
 
-      <span className="text-theme-text-primary truncate flex-1">{node.name}</span>
+      <span className={clsx('truncate flex-1', tooLarge ? 'text-theme-text-secondary' : 'text-theme-text-primary')}>{node.name}</span>
 
       {isSymlink && node.linkTarget && (
         <span className="text-xs text-cyan-400 truncate max-w-48">
@@ -531,5 +541,6 @@ function PodFileTreeNode({ node, namespace, podName, container, onNavigate, onOp
         </Tooltip>
       )}
     </div>
+    </Tooltip>
   )
 }

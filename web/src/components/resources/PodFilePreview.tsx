@@ -10,6 +10,11 @@ import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 // Deliberately read-only for v1. Every error path is a named `code` from the
 // backend so this file switches on intent, not on stderr wording.
 
+// Mirrors podFilePreviewByteCap on the server. The listing already knows each
+// file's size, so a file over the cap is marked unopenable up front instead
+// of being clicked into a rejection.
+export const PREVIEW_BYTE_CAP = 1 << 20
+
 // Wire-side codes. Kept in sync with internal/server/copy.go.
 export type PreviewErrorCode =
   | 'file_too_large'
