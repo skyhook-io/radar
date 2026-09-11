@@ -1270,7 +1270,8 @@ func indexHPAs(provider topology.ResourceProvider) map[string]*autoscalingv2.Hor
 		if hpa == nil {
 			continue
 		}
-		// First writer wins, matching the linear scan this replaced.
+		// Two HPAs cannot share a namespace and name, so a repeat key is a
+		// provider artefact; the first entry is the one to keep.
 		key := hpaKey(hpa.Namespace, hpa.Name)
 		if _, seen := byKey[key]; !seen {
 			byKey[key] = hpa

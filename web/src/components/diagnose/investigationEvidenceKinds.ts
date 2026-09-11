@@ -22,13 +22,11 @@ import type { InvestigationEvidenceKind } from "./investigationEvidence";
 /**
  * Everything the pane needs to know about a kind of evidence, in one place.
  *
- * These five decisions used to live in five unrelated lists across four
- * files, and adding a kind meant remembering all five: the round that added
- * alerts and Helm cards missed the one that decides whether a card can
- * contradict a model's all-clear, so a firing alert naming the workload sat
- * under a green "no problem found" banner. Because this is a `Record` over the
- * kind union with no optional fields, the compiler now refuses a new kind
- * until each of them is decided.
+ * Five decisions that are easy to answer separately and wrong to forget, the
+ * sharpest being whether a card may contradict a model's all-clear: miss that
+ * one for a kind and a firing alert naming the workload sits under a green
+ * "no problem found" banner. This is a `Record` over the kind union with no
+ * optional fields, so the compiler refuses a new kind until each is decided.
  *
  * Not everything per-kind lives here. Rendering the card body, whether it can
  * expand, how a subject is read off it and what a source excerpt shows are
