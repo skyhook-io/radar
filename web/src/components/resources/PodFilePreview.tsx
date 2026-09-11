@@ -1,48 +1,14 @@
-import { createElement, useCallback, useEffect, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useEffect, useState } from 'react'
 import Editor from '@monaco-editor/react'
-import { X, AlertTriangle, Download, FileText, FolderOpen, RotateCw } from 'lucide-react'
+import { AlertTriangle, Download, FileText, RotateCw } from 'lucide-react'
 import { PaneLoader, ensureMonacoRuntime } from '@skyhook-io/k8s-ui'
 import { formatBytes } from '../../utils/format'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
-import { downloadBlob } from './file-browser-utils'
-import { isDesktopApp } from '../../utils/desktop-download'
-import { openFile, openFolder } from '../../utils/desktop-open-folder'
-import { useToast } from '../ui/Toast'
-import { Tooltip } from '../ui/Tooltip'
 
-// A curated inline viewer for text files inside a pod container. Deliberately
-// read-only for v1 — the download button is the only mutation-adjacent action.
-// Every error path is a named `code` from the backend so this file switches on
-// intent, not on stderr wording.
-
-// The desktop-save route streams a pod file straight to disk from the backend,
-// bypassing the webview round-trip that fails on large files. The download
-// route goes through the webview and is fine in the browser. The preview
-// offers Download precisely for the "file too large" case, so it MUST take
-// the same desktop path as the file browser or that case is broken there too.
-async function savePodFileToDisk(
-  namespace: string,
-  podName: string,
-  container: string,
-  filePath: string,
-): Promise<string> {
-  const params = new URLSearchParams()
-  params.set('container', container)
-  params.set('path', filePath)
-  const response = await fetch(apiUrl(`/pods/${namespace}/${podName}/files/save?${params.toString()}`), {
-    method: 'POST',
-    credentials: getCredentialsMode(),
-    headers: getAuthHeaders(),
-  })
-  if (response.status === 204) throw new Error('cancelled')
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: 'Save failed' }))
-    throw new Error(error.error || `HTTP ${response.status}`)
-  }
-  const body = await response.json()
-  return body.path as string
-}
+// A curated inline viewer for text files inside a pod container, rendered in
+// place of the file listing by PodFilesystemModal — never as its own dialog.
+// Deliberately read-only for v1. Every error path is a named `code` from the
+// backend so this file switches on intent, not on stderr wording.
 
 // Wire-side codes. Kept in sync with internal/server/copy.go.
 export type PreviewErrorCode =
@@ -153,23 +119,6 @@ export function detectLanguage(fileName: string): string {
   return 'plaintext'
 }
 
-// Shared open counter for the preview modal. The filesystem browser reads it
-// to know whether an ESC keypress belongs to a nested preview — capture-phase
-// listeners on `document` see every event, and `stopPropagation()` does not
-// stop other listeners on the same target, so the parent has to opt out
-// explicitly. A module-level counter avoids threading state through props.
-//
-// The counter alone is not enough: listener order on `document` follows
-// effect re-registration, so the browser's listener can run after this one.
-// By then React has already flushed the close (discrete events flush in the
-// microtask between listeners), the count is back to 0, and the browser
-// would close too. stopImmediatePropagation covers that order.
-let previewOpenCount = 0
-
-export function isPodFilePreviewOpen(): boolean {
-  return previewOpenCount > 0
-}
-
 function useMonacoTheme() {
   const [dark, setDark] = useState(() =>
     typeof document !== 'undefined' && document.documentElement.classList.contains('dark'),
@@ -185,35 +134,30 @@ function useMonacoTheme() {
   return dark ? 'vs-dark' : 'vs'
 }
 
-interface PodFilePreviewModalProps {
-  open: boolean
-  onClose: () => void
+interface PodFilePreviewProps {
   namespace: string
   podName: string
   container: string
   filePath: string
   fileName: string
+  onDownload: () => void
 }
 
-export function PodFilePreviewModal({
-  open,
-  onClose,
+export function PodFilePreview({
   namespace,
   podName,
   container,
   filePath,
   fileName,
-}: PodFilePreviewModalProps) {
-  const dialogRef = useRef<HTMLDivElement>(null)
+  onDownload,
+}: PodFilePreviewProps) {
   const [result, setResult] = useState<PreviewResult | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState(true)
   const [reloadCount, setReloadCount] = useState(0)
   const [runtime, setRuntime] = useState<'loading' | 'ready' | 'error'>('loading')
   const theme = useMonacoTheme()
-  const { showError, showSuccess } = useToast()
 
   useEffect(() => {
-    if (!open) return
     const controller = new AbortController()
     setLoading(true)
     setResult(null)
@@ -229,10 +173,9 @@ export function PodFilePreviewModal({
       })
       .finally(() => setLoading(false))
     return () => controller.abort()
-  }, [open, namespace, podName, container, filePath, reloadCount])
+  }, [namespace, podName, container, filePath, reloadCount])
 
   useEffect(() => {
-    if (!open) return
     let active = true
     ensureMonacoRuntime()
       .then(() => active && setRuntime('ready'))
@@ -240,171 +183,52 @@ export function PodFilePreviewModal({
     return () => {
       active = false
     }
-  }, [open])
+  }, [])
 
-  useEffect(() => {
-    if (!open) return
-    previewOpenCount += 1
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopImmediatePropagation()
-        onClose()
-      }
-    }
-    document.addEventListener('keydown', handleKeyDown, true)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown, true)
-      previewOpenCount -= 1
-    }
-  }, [open, onClose])
+  if (loading) return <PaneLoader label="Reading file…" className="flex-1" />
+  if (!result) return null
 
-  useEffect(() => {
-    if (open && dialogRef.current) {
-      dialogRef.current.focus()
-    }
-  }, [open])
+  if (!result.ok) {
+    return (
+      <PreviewErrorState
+        result={result}
+        onDownload={onDownload}
+        onRetry={() => setReloadCount((n) => n + 1)}
+      />
+    )
+  }
 
-  const handleDownload = useCallback(async () => {
-    try {
-      if (await isDesktopApp()) {
-        const savedPath = await savePodFileToDisk(namespace, podName, container, filePath)
-        showSuccess(
-          'File saved',
-          savedPath,
-          {
-            label: 'Show in Finder',
-            icon: createElement(FolderOpen, { className: 'w-3.5 h-3.5' }),
-            onClick: () => openFolder(savedPath),
-          },
-          () => openFile(savedPath),
-        )
-        return
-      }
+  if (result.empty) return <PreviewEmptyState fileName={fileName} />
 
-      const params = new URLSearchParams()
-      params.set('container', container)
-      params.set('path', filePath)
-      const response = await fetch(
-        apiUrl(`/pods/${namespace}/${podName}/files/download?${params.toString()}`),
-        {
-          credentials: getCredentialsMode(),
-          headers: getAuthHeaders(),
-        },
-      )
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ error: 'Download failed' }))
-        throw new Error(err.error || `HTTP ${response.status}`)
-      }
-      const blob = await response.blob()
-      await downloadBlob(blob, fileName)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      if (message !== 'cancelled') {
-        showError(`Could not download ${fileName}`, message)
-      }
-    }
-  }, [namespace, podName, container, filePath, fileName, showError, showSuccess])
+  if (runtime === 'loading') return <PaneLoader label="Loading editor…" className="flex-1" />
 
-  if (!open) return null
+  if (runtime === 'error') {
+    return (
+      <pre className="flex-1 min-h-0 overflow-auto p-4 font-mono text-xs text-theme-text-primary whitespace-pre">
+        {result.content}
+      </pre>
+    )
+  }
 
-  const language = detectLanguage(fileName)
-
-  return createPortal(
-    <div className="fixed inset-0 z-[110] flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-
-      {/*
-        The dialog carries a definite h-[85vh] rather than only max-h so the
-        Monaco editor (whose default height is 100%) resolves to a positive
-        pixel value. A body sized by content collapses the editor to zero.
-      */}
-      <div
-        ref={dialogRef}
-        tabIndex={-1}
-        className="relative dialog w-full max-w-5xl mx-4 h-[85vh] flex flex-col outline-none"
-      >
-        <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <FileText className="w-4 h-4 text-theme-text-tertiary shrink-0" />
-              <h3 className="text-lg font-semibold text-theme-text-primary truncate">{fileName}</h3>
-            </div>
-            <p className="text-xs text-theme-text-tertiary truncate mt-0.5 font-mono">
-              {filePath}
-            </p>
-            <p className="text-xs text-theme-text-tertiary mt-0.5">
-              {namespace}/{podName} · {container}
-              {result?.ok && !result.empty && result.size ? ` · ${formatBytes(result.size)}` : null}
-            </p>
-          </div>
-
-          <div className="flex items-center gap-1 ml-3">
-            <Tooltip content="Download file">
-              <button
-                onClick={handleDownload}
-                className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-              >
-                <Download className="w-4 h-4" />
-              </button>
-            </Tooltip>
-            <button
-              onClick={onClose}
-              className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-            >
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
-
-        <div className="flex-1 min-h-0 flex flex-col">
-          {loading && <PaneLoader label="Reading file…" className="flex-1" />}
-
-          {!loading && result?.ok && !result.empty && runtime === 'loading' && (
-            <PaneLoader label="Loading editor…" className="flex-1" />
-          )}
-
-          {!loading && result?.ok && !result.empty && runtime === 'error' && (
-            <pre className="flex-1 min-h-0 overflow-auto p-4 font-mono text-xs text-theme-text-primary whitespace-pre">
-              {result.content}
-            </pre>
-          )}
-
-          {!loading && result?.ok && !result.empty && runtime === 'ready' && (
-            <div className="flex-1 min-h-0">
-              <Editor
-                value={result.content}
-                language={language}
-                theme={theme}
-                options={{
-                  readOnly: true,
-                  domReadOnly: true,
-                  minimap: { enabled: false },
-                  scrollBeyondLastLine: false,
-                  fontSize: 12,
-                  lineNumbers: 'on',
-                  wordWrap: 'off',
-                  renderWhitespace: 'selection',
-                }}
-                loading={<PaneLoader label="Loading editor…" className="h-full" />}
-              />
-            </div>
-          )}
-
-          {!loading && result?.ok && result.empty && (
-            <PreviewEmptyState fileName={fileName} />
-          )}
-
-          {!loading && result && !result.ok && (
-            <PreviewErrorState
-              result={result}
-              onDownload={handleDownload}
-              onRetry={() => setReloadCount((n) => n + 1)}
-            />
-          )}
-        </div>
-      </div>
-    </div>,
-    document.body,
+  return (
+    <div className="flex-1 min-h-0">
+      <Editor
+        value={result.content}
+        language={detectLanguage(fileName)}
+        theme={theme}
+        options={{
+          readOnly: true,
+          domReadOnly: true,
+          minimap: { enabled: false },
+          scrollBeyondLastLine: false,
+          fontSize: 12,
+          lineNumbers: 'on',
+          wordWrap: 'off',
+          renderWhitespace: 'selection',
+        }}
+        loading={<PaneLoader label="Loading editor…" className="h-full" />}
+      />
+    </div>
   )
 }
 

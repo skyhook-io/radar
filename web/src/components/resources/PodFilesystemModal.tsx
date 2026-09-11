@@ -1,6 +1,6 @@
 import { createElement, useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { X, File, Link2, ChevronRight, AlertTriangle, Loader2, Search, Download, FolderOpen, Eye } from 'lucide-react'
+import { X, File, Link2, ChevronRight, ArrowLeft, AlertTriangle, Loader2, Search, Download, FolderOpen } from 'lucide-react'
 import { PaneLoader, Input } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import type { FileNode } from '../../types'
@@ -11,7 +11,7 @@ import { isDesktopApp } from '../../utils/desktop-download'
 import { openFile, openFolder } from '../../utils/desktop-open-folder'
 import { useToast } from '../ui/Toast'
 import { Tooltip } from '../ui/Tooltip'
-import { PodFilePreviewModal, isPodFilePreviewOpen } from './PodFilePreviewModal'
+import { PodFilePreview } from './PodFilePreview'
 
 interface PodFilesystem {
   root: FileNode
@@ -69,6 +69,56 @@ async function savePodFileToDisk(
   return body.path
 }
 
+type PodFileToast = Pick<ReturnType<typeof useToast>, 'showSuccess' | 'showError'>
+
+// One download path for the listing row and the preview header. Desktop saves
+// straight from the backend; the browser gets a blob.
+async function downloadPodFile(
+  namespace: string,
+  podName: string,
+  container: string,
+  node: Pick<FileNode, 'path' | 'name'>,
+  { showSuccess, showError }: PodFileToast,
+) {
+  try {
+    if (await isDesktopApp()) {
+      const savedPath = await savePodFileToDisk(namespace, podName, container, node.path)
+      showSuccess(
+        'File saved',
+        savedPath,
+        {
+          label: 'Show in Finder',
+          icon: createElement(FolderOpen, { className: 'w-3.5 h-3.5' }),
+          onClick: () => openFolder(savedPath),
+        },
+        () => openFile(savedPath),
+      )
+      return
+    }
+
+    const params = new URLSearchParams()
+    params.set('container', container)
+    params.set('path', node.path)
+
+    const response = await fetch(apiUrl(`/pods/${namespace}/${podName}/files/download?${params.toString()}`), {
+      credentials: getCredentialsMode(),
+      headers: getAuthHeaders(),
+    })
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ error: 'Download failed' }))
+      throw new Error(err.error || `HTTP ${response.status}`)
+    }
+
+    const blob = await response.blob()
+    await downloadBlob(blob, node.name)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (message !== 'cancelled') {
+      showError(`Could not download ${node.name}`, message)
+    }
+  }
+}
+
 interface PodFilesystemModalProps {
   open: boolean
   onClose: () => void
@@ -95,8 +145,12 @@ export function PodFilesystemModal({
   const [filesystem, setFilesystem] = useState<PodFilesystem | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The file being viewed in place of the listing; null shows the directory.
+  const [previewFile, setPreviewFile] = useState<FileNode | null>(null)
+  const toast = useToast()
 
   const loadDirectory = useCallback(async (dirPath: string) => {
+    setPreviewFile(null)
     setIsLoading(true)
     setError(null)
     try {
@@ -125,25 +179,24 @@ export function PodFilesystemModal({
       setError(null)
       setIsLoading(false)
       setCurrentPath('/')
+      setPreviewFile(null)
       setSelectedContainer(initialContainer || containers[0] || '')
     }
   }, [open, initialContainer, containers])
 
-  // Handle ESC key. Both this modal and the nested PodFilePreviewModal
-  // register capture-phase listeners on `document`, and stopPropagation does
-  // not stop other listeners on the same target — so ESC would close both.
-  // isPodFilePreviewOpen() lets the preview claim the keypress for itself.
+  // ESC steps back one level: out of a file to its listing, then out of the
+  // dialog. One listener owns both so the two can never race.
   useEffect(() => {
     if (!open) return
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !isPodFilePreviewOpen()) {
-        e.stopPropagation()
-        onClose()
-      }
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      if (previewFile) setPreviewFile(null)
+      else onClose()
     }
     document.addEventListener('keydown', handleKeyDown, true)
     return () => document.removeEventListener('keydown', handleKeyDown, true)
-  }, [open, onClose])
+  }, [open, onClose, previewFile])
 
   // Focus trap
   useEffect(() => {
@@ -156,10 +209,19 @@ export function PodFilesystemModal({
 
   const showFilesystem = filesystem && filesystem.root
 
-  // Build breadcrumb segments
-  const pathSegments = currentPath === '/'
+  // Breadcrumb: the directory path, plus the file when one is open. Clicking
+  // the current directory while viewing a file just returns to its listing.
+  const breadcrumbPath = previewFile ? previewFile.path : currentPath
+  const pathSegments = breadcrumbPath === '/'
     ? ['/']
-    : ['/', ...currentPath.split('/').filter(Boolean)]
+    : ['/', ...breadcrumbPath.split('/').filter(Boolean)]
+  const goToDirectory = (dirPath: string) => {
+    if (dirPath === currentPath) setPreviewFile(null)
+    else loadDirectory(dirPath)
+  }
+  const downloadPreviewFile = () => {
+    if (previewFile) downloadPodFile(namespace, podName, selectedContainer, previewFile, toast)
+  }
 
   return createPortal(
     <div className="fixed inset-0 z-[100] flex items-center justify-center">
@@ -170,19 +232,47 @@ export function PodFilesystemModal({
       <div
         ref={dialogRef}
         tabIndex={-1}
-        className="relative dialog w-full max-w-4xl mx-4 max-h-[85vh] flex flex-col outline-none"
+        className="relative dialog w-full max-w-4xl mx-4 h-[85vh] flex flex-col outline-none"
       >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
-          <div className="flex-1 min-w-0">
-            <h3 className="text-lg font-semibold text-theme-text-primary">Pod Files</h3>
-            <p className="text-sm text-theme-text-secondary truncate mt-0.5">
-              {namespace}/{podName}
-            </p>
-          </div>
+          {previewFile ? (
+            <>
+              <Tooltip content="Back to files">
+                <button
+                  onClick={() => setPreviewFile(null)}
+                  className="p-2 mr-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+                >
+                  <ArrowLeft className="w-5 h-5" />
+                </button>
+              </Tooltip>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-lg font-semibold text-theme-text-primary truncate">{previewFile.name}</h3>
+                <p className="text-sm text-theme-text-secondary truncate mt-0.5">
+                  {namespace}/{podName} · {selectedContainer}
+                  {previewFile.size !== undefined ? ` · ${formatBytes(previewFile.size)}` : null}
+                </p>
+              </div>
+              <Tooltip content="Download file">
+                <button
+                  onClick={downloadPreviewFile}
+                  className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+                >
+                  <Download className="w-5 h-5" />
+                </button>
+              </Tooltip>
+            </>
+          ) : (
+            <div className="flex-1 min-w-0">
+              <h3 className="text-lg font-semibold text-theme-text-primary">Pod Files</h3>
+              <p className="text-sm text-theme-text-secondary truncate mt-0.5">
+                {namespace}/{podName}
+              </p>
+            </div>
+          )}
 
           {/* Container selector */}
-          {containers.length > 1 && (
+          {!previewFile && containers.length > 1 && (
             <select
               value={selectedContainer}
               onChange={(e) => setSelectedContainer(e.target.value)}
@@ -213,7 +303,7 @@ export function PodFilesystemModal({
                 <span key={segmentPath} className="flex items-center gap-1">
                   {i > 0 && <ChevronRight className="w-3 h-3 text-theme-text-tertiary shrink-0" />}
                   <button
-                    onClick={() => !isLast && loadDirectory(segmentPath)}
+                    onClick={() => !isLast && goToDirectory(segmentPath)}
                     className={clsx(
                       'truncate',
                       isLast
@@ -229,7 +319,7 @@ export function PodFilesystemModal({
           </div>
 
           {/* Search */}
-          {showFilesystem && (
+          {showFilesystem && !previewFile && (
             <div className="relative flex-1 min-w-[200px]">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
               <Input
@@ -243,7 +333,20 @@ export function PodFilesystemModal({
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-4">
+        {previewFile ? (
+          <div className="flex-1 min-h-0 flex flex-col">
+            <PodFilePreview
+              key={previewFile.path}
+              namespace={namespace}
+              podName={podName}
+              container={selectedContainer}
+              filePath={previewFile.path}
+              fileName={previewFile.name}
+              onDownload={downloadPreviewFile}
+            />
+          </div>
+        ) : (
+        <div className="flex-1 min-h-0 overflow-y-auto p-4">
           {/* Loading */}
           {isLoading && <PaneLoader label="Loading files…" className="h-64" />}
 
@@ -269,9 +372,11 @@ export function PodFilesystemModal({
               podName={podName}
               container={selectedContainer}
               onNavigate={loadDirectory}
+              onOpenFile={setPreviewFile}
             />
           )}
         </div>
+        )}
 
         {/* Footer with stats */}
         <div className="p-3 border-t border-theme-border text-xs text-theme-text-tertiary flex items-center gap-4 shrink-0">
@@ -307,9 +412,10 @@ interface PodFileTreeViewProps {
   podName: string
   container: string
   onNavigate: (path: string) => void
+  onOpenFile: (node: FileNode) => void
 }
 
-function PodFileTreeView({ root, searchQuery, namespace, podName, container, onNavigate }: PodFileTreeViewProps) {
+function PodFileTreeView({ root, searchQuery, namespace, podName, container, onNavigate, onOpenFile }: PodFileTreeViewProps) {
   const filteredRoot = useMemo(() => {
     if (!searchQuery.trim()) return root
     return filterTree(root, searchQuery.toLowerCase())
@@ -333,6 +439,7 @@ function PodFileTreeView({ root, searchQuery, namespace, podName, container, onN
           podName={podName}
           container={container}
           onNavigate={onNavigate}
+          onOpenFile={onOpenFile}
         />
       ))}
     </div>
@@ -345,78 +452,38 @@ interface PodFileTreeNodeProps {
   podName: string
   container: string
   onNavigate: (path: string) => void
+  onOpenFile: (node: FileNode) => void
 }
 
-function PodFileTreeNode({ node, namespace, podName, container, onNavigate }: PodFileTreeNodeProps) {
+function PodFileTreeNode({ node, namespace, podName, container, onNavigate, onOpenFile }: PodFileTreeNodeProps) {
   const [downloading, setDownloading] = useState(false)
-  const [previewOpen, setPreviewOpen] = useState(false)
-  const { showSuccess, showError } = useToast()
+  const toast = useToast()
   const isDir = node.type === 'dir'
   const isSymlink = node.type === 'symlink'
-  const isDownloadable = !isDir // files and symlinks can be downloaded
-  // Preview only for regular files. Symlinks are download-only for parity with
-  // the existing behaviour: the tar `-h` resolves them for download, but the
-  // preview endpoint's classifier reads the target's bytes, which is a policy
-  // decision better deferred until users ask for it.
-  const isPreviewable = node.type === 'file'
 
   const handleDownload = async (e: React.MouseEvent) => {
     e.stopPropagation()
     if (downloading) return
-
     setDownloading(true)
     try {
-      if (await isDesktopApp()) {
-        const savedPath = await savePodFileToDisk(namespace, podName, container, node.path)
-        showSuccess(
-          'File saved',
-          savedPath,
-          {
-            label: 'Show in Finder',
-            icon: createElement(FolderOpen, { className: 'w-3.5 h-3.5' }),
-            onClick: () => openFolder(savedPath),
-          },
-          () => openFile(savedPath),
-        )
-        return
-      }
-
-      const params = new URLSearchParams()
-      params.set('container', container)
-      params.set('path', node.path)
-
-      const response = await fetch(apiUrl(`/pods/${namespace}/${podName}/files/download?${params.toString()}`), {
-        credentials: getCredentialsMode(),
-        headers: getAuthHeaders(),
-      })
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ error: 'Download failed' }))
-        throw new Error(err.error || `HTTP ${response.status}`)
-      }
-
-      const blob = await response.blob()
-      await downloadBlob(blob, node.name)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      if (message !== 'cancelled') {
-        showError(`Could not download ${node.name}`, message)
-      }
+      await downloadPodFile(namespace, podName, container, node, toast)
     } finally {
       setDownloading(false)
     }
   }
 
+  // Directories open in place; anything else opens in the viewer, which
+  // reports a symlink to a directory as "not a regular file" itself.
   const handleClick = () => {
-    if (isDir) {
-      onNavigate(node.path)
-    }
+    if (isDir) onNavigate(node.path)
+    else onOpenFile(node)
   }
 
   return (
     <div
       className={clsx(
-        'flex items-center gap-1 py-0.5 px-1 rounded hover:bg-theme-elevated',
-        isDir && 'font-medium cursor-pointer'
+        'flex items-center gap-1 py-0.5 px-1 rounded hover:bg-theme-elevated cursor-pointer',
+        isDir && 'font-medium'
       )}
       onClick={handleClick}
     >
@@ -448,21 +515,7 @@ function PodFileTreeNode({ node, namespace, podName, container, onNavigate }: Po
         </span>
       )}
 
-      {isPreviewable && (
-        <Tooltip content="Preview file" wrapperClassName="ml-1">
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              setPreviewOpen(true)
-            }}
-            className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-theme-elevated rounded"
-          >
-            <Eye className="w-3.5 h-3.5" />
-          </button>
-        </Tooltip>
-      )}
-
-      {isDownloadable && (
+      {!isDir && (
         <Tooltip content="Download file" wrapperClassName="ml-1">
         <button
           onClick={handleDownload}
@@ -477,19 +530,6 @@ function PodFileTreeNode({ node, namespace, podName, container, onNavigate }: Po
         </button>
         </Tooltip>
       )}
-
-      {isPreviewable && previewOpen && (
-        <PodFilePreviewModal
-          open={previewOpen}
-          onClose={() => setPreviewOpen(false)}
-          namespace={namespace}
-          podName={podName}
-          container={container}
-          filePath={node.path}
-          fileName={node.name}
-        />
-      )}
     </div>
   )
 }
-
