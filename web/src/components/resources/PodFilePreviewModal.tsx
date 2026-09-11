@@ -2,13 +2,14 @@ import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import Editor from '@monaco-editor/react'
 import { X, AlertTriangle, Download, FileText, FolderOpen, RotateCw } from 'lucide-react'
-import { PaneLoader } from '@skyhook-io/k8s-ui'
+import { PaneLoader, ensureMonacoRuntime } from '@skyhook-io/k8s-ui'
 import { formatBytes } from '../../utils/format'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { downloadBlob } from './file-browser-utils'
 import { isDesktopApp } from '../../utils/desktop-download'
 import { openFile, openFolder } from '../../utils/desktop-open-folder'
 import { useToast } from '../ui/Toast'
+import { Tooltip } from '../ui/Tooltip'
 
 // A curated inline viewer for text files inside a pod container. Deliberately
 // read-only for v1 — the download button is the only mutation-adjacent action.
@@ -101,7 +102,7 @@ async function fetchPodFilePreview(
   }
 
   const raw = await response.text()
-  let body: Record<string, unknown> = {}
+  let body: Record<string, unknown>
   try {
     body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {}
   } catch {
@@ -157,6 +158,12 @@ export function detectLanguage(fileName: string): string {
 // listeners on `document` see every event, and `stopPropagation()` does not
 // stop other listeners on the same target, so the parent has to opt out
 // explicitly. A module-level counter avoids threading state through props.
+//
+// The counter alone is not enough: listener order on `document` follows
+// effect re-registration, so the browser's listener can run after this one.
+// By then React has already flushed the close (discrete events flush in the
+// microtask between listeners), the count is back to 0, and the browser
+// would close too. stopImmediatePropagation covers that order.
 let previewOpenCount = 0
 
 export function isPodFilePreviewOpen(): boolean {
@@ -201,6 +208,7 @@ export function PodFilePreviewModal({
   const [result, setResult] = useState<PreviewResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [reloadCount, setReloadCount] = useState(0)
+  const [runtime, setRuntime] = useState<'loading' | 'ready' | 'error'>('loading')
   const theme = useMonacoTheme()
   const { showError, showSuccess } = useToast()
 
@@ -225,10 +233,21 @@ export function PodFilePreviewModal({
 
   useEffect(() => {
     if (!open) return
+    let active = true
+    ensureMonacoRuntime()
+      .then(() => active && setRuntime('ready'))
+      .catch(() => active && setRuntime('error'))
+    return () => {
+      active = false
+    }
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
     previewOpenCount += 1
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        e.stopPropagation()
+        e.stopImmediatePropagation()
         onClose()
       }
     }
@@ -320,13 +339,14 @@ export function PodFilePreviewModal({
           </div>
 
           <div className="flex items-center gap-1 ml-3">
-            <button
-              onClick={handleDownload}
-              className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-              title="Download file"
-            >
-              <Download className="w-4 h-4" />
-            </button>
+            <Tooltip content="Download file">
+              <button
+                onClick={handleDownload}
+                className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+              >
+                <Download className="w-4 h-4" />
+              </button>
+            </Tooltip>
             <button
               onClick={onClose}
               className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
@@ -339,7 +359,17 @@ export function PodFilePreviewModal({
         <div className="flex-1 min-h-0 flex flex-col">
           {loading && <PaneLoader label="Reading file…" className="flex-1" />}
 
-          {!loading && result?.ok && !result.empty && (
+          {!loading && result?.ok && !result.empty && runtime === 'loading' && (
+            <PaneLoader label="Loading editor…" className="flex-1" />
+          )}
+
+          {!loading && result?.ok && !result.empty && runtime === 'error' && (
+            <pre className="flex-1 min-h-0 overflow-auto p-4 font-mono text-xs text-theme-text-primary whitespace-pre">
+              {result.content}
+            </pre>
+          )}
+
+          {!loading && result?.ok && !result.empty && runtime === 'ready' && (
             <div className="flex-1 min-h-0">
               <Editor
                 value={result.content}

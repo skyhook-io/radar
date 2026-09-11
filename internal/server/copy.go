@@ -1024,15 +1024,15 @@ const (
 // render curated fallback UI (Download button, retry, container-switch hint).
 // Never renamed casually — they are wire contract.
 const (
-	previewCodeFileTooLarge         = "file_too_large"
-	previewCodeBinaryFile           = "binary_file"
-	previewCodeEmptyFile            = "empty_file"
-	previewCodeNotARegularFile      = "not_a_regular_file"
-	previewCodeNotFound             = "not_found"
-	previewCodePermissionDenied     = "permission_denied"
-	previewCodeNoShell              = "no_shell"
+	previewCodeFileTooLarge          = "file_too_large"
+	previewCodeBinaryFile            = "binary_file"
+	previewCodeEmptyFile             = "empty_file"
+	previewCodeNotARegularFile       = "not_a_regular_file"
+	previewCodeNotFound              = "not_found"
+	previewCodePermissionDenied      = "permission_denied"
+	previewCodeNoShell               = "no_shell"
 	previewCodeContainerMissingTools = "container_missing_tools"
-	previewCodeReadFailed           = "read_failed"
+	previewCodeReadFailed            = "read_failed"
 )
 
 // podFilePreviewResponse is the success shape. `code` is set on the empty-file
@@ -1082,9 +1082,9 @@ type previewClassification struct {
 //
 //  1. Empty → the caller renders an explicit "empty file" state.
 //  2. DetectContentType hit on text/*, application/json/xml/x-yaml, etc.
-//  3. NUL-byte scan of the first 8 KiB — catches YAML/nginx-conf-shaped
-//     files whose head sniffs as application/octet-stream but which are
-//     obviously text.
+//  3. NUL-byte scan of the first 8 KiB — catches text whose head sniffs as
+//     application/octet-stream because of a stray C0 control byte (record
+//     separators, ^A field delimiters) but which is obviously text.
 //  4. UTF-8 validation — non-UTF-8 falls to the binary fallback rather than
 //     rendering mojibake.
 func classifyPreviewBytes(data []byte) previewClassification {
@@ -1109,12 +1109,12 @@ func classifyPreviewBytes(data []byte) previewClassification {
 		mimeBase == "application/x-yaml" ||
 		mimeBase == "application/yaml"
 
-	// http.DetectContentType calls plain config files (nginx.conf, dockerfile
-	// snippets, .env) application/octet-stream — a NUL-byte scan rescues these
-	// as text/plain. The fallback is deliberately narrow: rescuing every
-	// non-textual MIME would let known binaries (PDF, ZIP, ELF) through
-	// whenever their first 8 KiB happen to lack a NUL, which is common in
-	// ASCII-headered formats and is not a defence.
+	// http.DetectContentType calls text with a C0 control byte in its head
+	// (record separators, ^A field delimiters) application/octet-stream — a
+	// NUL-byte scan rescues these as text/plain. The fallback is deliberately
+	// narrow: rescuing every non-textual MIME would let known binaries (PDF,
+	// ZIP, ELF) through whenever their first 8 KiB happen to lack a NUL,
+	// which is common in ASCII-headered formats and is not a defence.
 	if !looksTextual && mimeBase == "application/octet-stream" {
 		if bytes.IndexByte(head, 0) == -1 {
 			mimeType = "text/plain; charset=utf-8"
@@ -1232,8 +1232,9 @@ func (s *Server) handlePodFilePreview(w http.ResponseWriter, r *http.Request) {
 		if status >= 500 {
 			// Only the truly-unexpected shapes log — the operator-facing ones
 			// (not found, permission denied, no shell) are noise in the log.
-			log.Printf("[copy] Failed to open preview: %v, stderr: %s", openErr.err, openErr.stderr)
-			errorlog.Record("copy", "error", "Failed to open preview: %v", openErr.err)
+			namespace, podName, filePath := chi.URLParam(r, "namespace"), chi.URLParam(r, "name"), r.URL.Query().Get("path")
+			log.Printf("[copy] Failed to open preview %s/%s path=%s: %v, stderr: %s", namespace, podName, filePath, openErr.err, openErr.stderr)
+			errorlog.Record("copy", "error", "Failed to open preview %s/%s path=%s: %v", namespace, podName, filePath, openErr.err)
 		}
 		s.writePodFilePreviewError(w, status, code, openErr.message, 0, "")
 		return
@@ -1251,8 +1252,9 @@ func (s *Server) handlePodFilePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// LimitReader with size+1 is how a lying tar/cat header is caught: if we
-	// read strictly more than we were promised, the file changed under us.
+	// Both framings stop at the declared size, so the +1 never yields a byte;
+	// it makes ReadAll take the final EOF from the stream, which is what marks
+	// the read complete so Close waits for the command instead of aborting it.
 	// A short read is caught downstream by podFileStream.Read.
 	body, readErr := io.ReadAll(io.LimitReader(src, src.size+1))
 	// Close before answering — mirror the download handler, which learns
@@ -1264,13 +1266,6 @@ func (s *Server) handlePodFilePreview(w http.ResponseWriter, r *http.Request) {
 		errorlog.Record("copy", "error", "Failed to read preview %s/%s path=%s: %v", src.namespace, src.podName, src.filePath, readErr)
 		s.writePodFilePreviewError(w, http.StatusInternalServerError, previewCodeReadFailed,
 			fmt.Sprintf("Failed to read file: %v", readErr), 0, "")
-		return
-	}
-	if int64(len(body)) > src.size {
-		log.Printf("[copy] Failed to bound preview %s/%s path=%s: read %d bytes for a declared size of %d", src.namespace, src.podName, src.filePath, len(body), src.size)
-		errorlog.Record("copy", "error", "Failed to bound preview %s/%s path=%s: read %d bytes for a declared size of %d", src.namespace, src.podName, src.filePath, len(body), src.size)
-		s.writePodFilePreviewError(w, http.StatusInternalServerError, previewCodeReadFailed,
-			"The file grew while it was being read; try again.", 0, "")
 		return
 	}
 	if closeErr != nil {

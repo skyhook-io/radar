@@ -48,17 +48,21 @@ func TestClassifyPreviewAcceptsJSON(t *testing.T) {
 	}
 }
 
-// A YAML/nginx-conf-shaped input sniffs as application/octet-stream. The
-// NUL-byte fallback is what keeps these from being turned away — and this
-// is the case most likely to regress if the classifier is simplified later.
-func TestClassifyPreviewAcceptsYAMLViaNULFallback(t *testing.T) {
-	yaml := []byte("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: cfg\ndata:\n  foo: bar\n")
-	got := classifyPreviewBytes(yaml)
+// Text with a C0 control byte in its head — a JSON text sequence's 0x1E
+// record separator here — sniffs as application/octet-stream. The NUL-byte
+// fallback is what keeps it from being turned away, and this is the case
+// most likely to regress if the classifier is simplified later.
+func TestClassifyPreviewAcceptsControlByteTextViaNULFallback(t *testing.T) {
+	log := []byte("\x1e{\"level\":\"info\",\"msg\":\"server started\"}\n\x1e{\"level\":\"error\",\"msg\":\"upstream timed out\"}\n")
+	if http.DetectContentType(log) != "application/octet-stream" {
+		t.Fatalf("fixture no longer sniffs as octet-stream: %q", http.DetectContentType(log))
+	}
+	got := classifyPreviewBytes(log)
 	if got.code != "" {
-		t.Errorf("YAML was refused: code=%q mime=%q", got.code, got.mimeType)
+		t.Errorf("control-byte text was refused: code=%q mime=%q", got.code, got.mimeType)
 	}
 	if !strings.Contains(got.mimeType, "text/plain") {
-		t.Errorf("YAML fell to a non-text mime: %q", got.mimeType)
+		t.Errorf("control-byte text fell to a non-text mime: %q", got.mimeType)
 	}
 }
 

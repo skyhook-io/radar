@@ -33,6 +33,11 @@ export { InClusterConsentDialog } from './InClusterConsentDialog'
 export { ToastProvider, useToast, showApiError, showApiSuccess } from './Toast'
 export { CodeViewer } from './CodeViewer'
 export { YamlEditor, YamlDiffEditor } from './YamlEditor'
+// Boots the self-hosted Monaco runtime (bundled editor, local workers) without
+// pulling monaco-editor into the main bundle. Anything that mounts a bare
+// `Editor` must await this first, or @monaco-editor/react reaches for its CDN.
+export const ensureMonacoRuntime = () =>
+  import('./monacoRuntime').then(({ ensureMonaco }) => ensureMonaco())
 export type {
   YamlDiagnostic,
   YamlDocumentIdentity,
