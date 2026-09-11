@@ -160,6 +160,12 @@ func RunChecks(input *CheckInput) *ScanResults {
 	// reporting a missing input.
 	findings = append(findings, checkCNPGDeclarativeBackup(tr, input)...)
 
+	// --- Per-resource opt-outs (radarhq.io/ignore-checks) ---
+	// One central seam instead of a per-check concern: every check emits
+	// normally, then a subject's annotation withdraws its own findings and its
+	// own evaluated tally before results are built.
+	findings = applyIgnoreAnnotations(findings, tr, buildIgnoreIndex(input))
+
 	return buildResults(findings, tr, missingInputs)
 }
 
@@ -198,6 +204,32 @@ func (t *evalTracker) record(checkID, namespace string) {
 func (t *evalTracker) recordAll(ids []string, namespace string) {
 	for _, id := range ids {
 		t.record(id, namespace)
+	}
+}
+
+// unrecord removes one evaluated subject from checkID's tally — used when a
+// subject opts out of that check via annotation, so the denominator counts
+// only subjects the check actually spoke about.
+//
+// A check may emit a finding for a subject it never recorded (a ref-grain
+// finding under a subject-grain eligibility gate), so an absent tally means
+// "this subject was never in the denominator" and must be left alone rather
+// than driven negative.
+func (t *evalTracker) unrecord(checkID, namespace string) {
+	byNS := t.counts[checkID]
+	if byNS == nil {
+		return
+	}
+	if byNS[namespace] == 0 {
+		return
+	}
+	if byNS[namespace] == 1 {
+		delete(byNS, namespace)
+	} else {
+		byNS[namespace]--
+	}
+	if len(byNS) == 0 {
+		delete(t.counts, checkID)
 	}
 }
 
