@@ -348,7 +348,7 @@ export function PodFilesystemModal({
         ) : (
         <div className="flex-1 min-h-0 overflow-y-auto p-4">
           {/* Loading */}
-          {isLoading && <PaneLoader label="Loading files…" className="h-64" />}
+          {isLoading && <PaneLoader label="Loading files…" className="h-full" />}
 
           {/* Error */}
           {error && !isLoading && (
