@@ -73,7 +73,7 @@ func TestHandleDiagnoseRunStreamReturnsRetryableSSEWhenHydrationFails(t *testing
 		Agent: "claude", Profile: ai.ExecutionProfileSafeguarded, Status: "done",
 		CreatedAt: now, UpdatedAt: now,
 	})
-	manager := ai.NewRunManager(nil, func() int { return 9280 }, "", func() string { return "ctx-a" }, store, "")
+	manager := ai.NewRunManager(nil, func() int { return 9280 }, "", func() string { return "ctx-a" }, store)
 	t.Cleanup(manager.Shutdown)
 	if manager.Get("run-1") == nil {
 		t.Fatal("persisted run was not loaded")
@@ -139,7 +139,7 @@ func TestHandleDiagnoseRunStreamClosesNonRetryableCorruptHistory(t *testing.T) {
 		Agent: "claude", Profile: ai.ExecutionProfileSafeguarded, Status: "done",
 		CreatedAt: now, UpdatedAt: now,
 	})
-	manager := ai.NewRunManager(nil, func() int { return 9280 }, "", func() string { return "ctx-a" }, store, "")
+	manager := ai.NewRunManager(nil, func() int { return 9280 }, "", func() string { return "ctx-a" }, store)
 	t.Cleanup(manager.Shutdown)
 	if manager.Get("run-1") == nil {
 		t.Fatal("persisted run was not loaded")
@@ -213,7 +213,7 @@ func TestHandleDiagnoseRunStreamRepeatsClosedAfterDurableCursor(t *testing.T) {
 		{Seq: 3, Event: ai.StreamEvent{Type: "closed"}},
 	}, &summary)
 
-	manager := ai.NewRunManager(nil, func() int { return 9280 }, "", func() string { return "ctx-a" }, store, "")
+	manager := ai.NewRunManager(nil, func() int { return 9280 }, "", func() string { return "ctx-a" }, store)
 	t.Cleanup(manager.Shutdown)
 	if manager.Get(summary.ID) == nil {
 		t.Fatal("persisted finalized run was not loaded")
@@ -291,7 +291,7 @@ func TestHandleDiagnoseRunStreamReplaysPersistedEvidenceProvenance(t *testing.T)
 	if err != nil {
 		t.Fatalf("reopen store: %v", err)
 	}
-	manager := ai.NewRunManager(nil, func() int { return 9280 }, "", func() string { return "ctx-a" }, store, "")
+	manager := ai.NewRunManager(nil, func() int { return 9280 }, "", func() string { return "ctx-a" }, store)
 	t.Cleanup(manager.Shutdown)
 	if manager.Get(summary.ID) == nil {
 		t.Fatal("persisted evidence run was not loaded")

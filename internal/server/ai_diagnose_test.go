@@ -74,7 +74,7 @@ func TestDiagnoseExplanationRejectsMixedIntent(t *testing.T) {
 }
 
 func TestHandleDiagnoseTurnRejectsApplyAndVerify(t *testing.T) {
-	m := ai.NewRunManager(nil, func() int { return 9280 }, "", func() string { return "fake-test" }, nil, "")
+	m := ai.NewRunManager(nil, func() int { return 9280 }, "", func() string { return "fake-test" }, nil)
 	t.Cleanup(m.Shutdown)
 	s := &Server{aiRuns: m}
 	body := bytes.NewBufferString(`{"apply":true,"verify":true,"fix":"scale to 2"}`)
@@ -95,7 +95,7 @@ func TestHandleDiagnoseTurnRejectsApplyAndVerify(t *testing.T) {
 }
 
 func TestHandleDiagnoseTurnRejectsBlankVerification(t *testing.T) {
-	m := ai.NewRunManager(nil, func() int { return 9280 }, "", func() string { return "fake-test" }, nil, "")
+	m := ai.NewRunManager(nil, func() int { return 9280 }, "", func() string { return "fake-test" }, nil)
 	t.Cleanup(m.Shutdown)
 	s := &Server{aiRuns: m}
 	body := bytes.NewBufferString(`{"question":"  ","verify":true}`)

@@ -79,7 +79,6 @@ type AppConfig struct {
 	BeylaJobSelector          string
 	Version                   string
 	MCPEnabled                bool
-	MCPSessionToken           bool
 	AIHistory                 bool   // persist AI investigations across restarts
 	AIHistoryDBPath           string // "" = ~/.radar/ai-runs.db
 	AuthConfig                auth.Config
@@ -449,24 +448,39 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 
 	if cfg.MCPEnabled {
-		if cfg.MCPSessionToken && !cfg.AuthConfig.Enabled() {
-			token, err := mcppkg.NewSessionToken()
-			if err != nil {
-				log.Fatalf("[mcp] Failed to generate session token: %v", err)
-			}
-			serverCfg.MCPToken = token
+		token, err := resolveMCPSessionToken(cfg)
+		if err != nil {
+			log.Fatal(err)
 		}
+		serverCfg.MCPToken = token
 		// The same in-memory registry must back both ends of Radar's private
 		// evidence protocol: DiagnoseStream owns active turn scopes, while the MCP
 		// handler records exactly what Radar returned inside those scopes.
 		evidenceRefs := investigationrefs.NewRegistry()
 		serverCfg.InvestigationRefs = evidenceRefs
-		serverCfg.MCPHandler = mcppkg.NewHandler(serverCfg.MCPToken)
+		serverCfg.MCPHandler = mcppkg.RequireBearer(token, mcppkg.NewHandler())
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
 		serverCfg.MCPInvestigationHandler = mcppkg.NewInvestigationHandler(evidenceRefs)
+	} else if strings.TrimSpace(os.Getenv(mcppkg.SessionTokenEnv)) != "" {
+		log.Fatalf("%s requires MCP to be enabled", mcppkg.SessionTokenEnv)
 	}
 
 	return server.New(serverCfg)
+}
+
+func resolveMCPSessionToken(cfg AppConfig) (string, error) {
+	raw := strings.TrimSpace(os.Getenv(mcppkg.SessionTokenEnv))
+	if raw == "" {
+		return "", nil
+	}
+	if cfg.AuthConfig.Enabled() {
+		return "", fmt.Errorf("%s is for local auth-mode=none sessions and cannot be combined with --auth-mode=%q", mcppkg.SessionTokenEnv, cfg.AuthConfig.Mode)
+	}
+	token, err := mcppkg.ResolveSessionToken(raw)
+	if err != nil {
+		return "", fmt.Errorf("[mcp] Failed to resolve session token: %w", err)
+	}
+	return token, nil
 }
 
 // InitializeCluster connects to the cluster and initializes all subsystems.

@@ -209,7 +209,7 @@ func turnTimeout() time.Duration {
 // callbacks because the listener port and kube-context are only known at runtime.
 // store persists history across restarts (nil = memory-only); persisted runs are
 // hydrated into the manager here.
-func NewRunManager(d *Diagnoser, mcpPort func() int, mcpBasePath string, ctxLabel func() string, store RunStore, mcpToken string) *RunManager {
+func NewRunManager(d *Diagnoser, mcpPort func() int, mcpBasePath string, ctxLabel func() string, store RunStore) *RunManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	// Best-effort: a failure here just means runs get no shared workdir (logged).
 	root, err := os.MkdirTemp("", "radar-ai-")
@@ -221,7 +221,6 @@ func NewRunManager(d *Diagnoser, mcpPort func() int, mcpBasePath string, ctxLabe
 		d:             d,
 		mcpPort:       mcpPort,
 		mcpBasePath:   mcpBasePath,
-		mcpToken:      mcpToken,
 		ctxLabel:      ctxLabel,
 		baseCtx:       ctx,
 		baseCancel:    cancel,
@@ -236,6 +235,14 @@ func NewRunManager(d *Diagnoser, mcpPort func() int, mcpBasePath string, ctxLabe
 	}
 	m.loadPersisted()
 	return m
+}
+
+// SetMCPToken records the local write-capable /mcp bearer for apply turns.
+func (m *RunManager) SetMCPToken(token string) {
+	if m == nil {
+		return
+	}
+	m.mcpToken = token
 }
 
 // loadPersisted hydrates run ROWS from the store (event logs stay lazy — see

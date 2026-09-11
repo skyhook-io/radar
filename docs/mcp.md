@@ -38,15 +38,15 @@ The port matches your `--port` flag (default 9280). The MCP server uses HTTP tra
 ## Optional session token
 
 Local sessions are unauthenticated by default for backward compatibility. To
-protect the write-capable `/mcp` endpoint with a fresh bearer token, start
-Radar with:
+protect the write-capable `/mcp` endpoint with a bearer token, set:
 
 ```bash
-radar --mcp-session-token
+RADAR_MCP_SESSION_TOKEN=auto radar
 ```
 
-Radar prints the generated token in its startup summary. The token changes on
-every start and must be sent in the `Authorization` header:
+`auto` generates a fresh token for this process. Any other non-empty value is
+used as the secret. Radar prints the token in its startup summary. Send it in
+the `Authorization` header:
 
 ```text
 Authorization: Bearer <session-token>
@@ -70,7 +70,7 @@ For clients configured with JSON, add the header to the server entry:
 The read-only `/mcp-readonly` endpoint and the private `/mcp-investigation`
 mount do not require the session token. Proxy- and OIDC-authenticated
 deployments continue to use their existing authentication and cannot combine
-it with `--mcp-session-token`.
+it with `RADAR_MCP_SESSION_TOKEN`.
 
 ## Catalog Introspection
 

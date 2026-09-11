@@ -182,7 +182,6 @@ type Config struct {
 	MCPReadOnlyHandler      http.Handler                // public read-only MCP handler (read tools only)
 	MCPInvestigationHandler http.Handler                // internal read-only MCP handler with evidence correlation
 	InvestigationRefs       *investigationrefs.Registry // shared private evidence issuance ledger
-	MCPToken                string                      // per-process token for the local write-capable MCP mount
 	DiagConfig              *DiagConfig                 // Sanitized config for diagnostics endpoint
 	EffectiveConfig         *config.Config              // Running startup config for GET /api/config
 	OpenCostCurrency        string                      // ISO 4217 code labeling values returned by OpenCost endpoints
@@ -190,6 +189,7 @@ type Config struct {
 	AuthConfig              auth.Config                 // Authentication configuration
 	AIHistoryDB             string                      // AI run-history SQLite path ("" = memory-only runs)
 	CloudConnect            CloudConnectConfig
+	MCPToken                string // per-process token for the local write-capable MCP mount
 }
 
 // New creates a new server instance
@@ -264,7 +264,8 @@ func New(cfg Config) *Server {
 					store = st
 				}
 			}
-			s.aiRuns = ai.NewRunManager(d, s.ActualPort, s.basePath, k8s.GetContextName, store, s.mcpToken)
+			s.aiRuns = ai.NewRunManager(d, s.ActualPort, s.basePath, k8s.GetContextName, store)
+			s.aiRuns.SetMCPToken(s.mcpToken)
 			s.aiRuns.MetricsAvailability = func(ctx context.Context) ai.MetricsAvailability {
 				state := prometheuspkg.Availability(ctx)
 				return ai.MetricsAvailability{

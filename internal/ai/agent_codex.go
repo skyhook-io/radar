@@ -109,7 +109,7 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 		if cmd.Env == nil {
 			cmd.Env = os.Environ()
 		}
-		cmd.Env = append(cmd.Env, "RADAR_MCP_SESSION_TOKEN=Bearer "+s.mcpToken)
+		cmd.Env = append(withoutEnv(cmd.Env, "RADAR_MCP_SESSION_TOKEN"), "RADAR_MCP_SESSION_TOKEN=Bearer "+s.mcpToken)
 	}
 	// Full-local: inherit radar's cwd + full env so the user's auth/config/MCPs work.
 
@@ -131,6 +131,17 @@ func codexEnv() []string {
 			continue
 		}
 		if keep[k] || strings.HasPrefix(k, "LC_") {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+func withoutEnv(env []string, key string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, prefix) {
 			out = append(out, kv)
 		}
 	}

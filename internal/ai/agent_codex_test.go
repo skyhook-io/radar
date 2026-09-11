@@ -191,6 +191,7 @@ func TestCodexExecutionProfiles(t *testing.T) {
 }
 
 func TestCodexSessionTokenUsesEnvironment(t *testing.T) {
+	t.Setenv("RADAR_MCP_SESSION_TOKEN", "auto")
 	a := &codexAgent{bin: "codex"}
 	cmd, cleanup, err := a.command(context.Background(), turnSpec{
 		mcpURL: "http://localhost:1/mcp", mcpToken: "test-token",
@@ -210,6 +211,9 @@ func TestCodexSessionTokenUsesEnvironment(t *testing.T) {
 	}
 	if !slices.Contains(cmd.Env, "RADAR_MCP_SESSION_TOKEN=Bearer test-token") {
 		t.Fatal("Codex environment missing session token")
+	}
+	if slices.Contains(cmd.Env, "RADAR_MCP_SESSION_TOKEN=auto") {
+		t.Fatal("parent RADAR_MCP_SESSION_TOKEN leaked into Codex environment")
 	}
 }
 
