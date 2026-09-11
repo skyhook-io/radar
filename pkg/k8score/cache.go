@@ -664,7 +664,6 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		}
 	}
 
-
 	if len(backgroundKeys) > 0 {
 		stdlog.Printf("Starting resource cache: %d critical + %d deferred + %d background informers (%d total)",
 			len(criticalSyncFuncs), len(deferredSyncFuncs), len(backgroundSyncFuncs), enabledCount)

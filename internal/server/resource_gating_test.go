@@ -7,7 +7,7 @@ func TestInformerKeyForKind_AliasesResolveToInformerKeys(t *testing.T) {
 		"pods": "pods", "pod": "pods",
 		"hpa": "horizontalpodautoscalers", "hpas": "horizontalpodautoscalers",
 		"horizontalpodautoscaler": "horizontalpodautoscalers",
-		"pvc": "persistentvolumeclaims", "pvcs": "persistentvolumeclaims",
+		"pvc":                     "persistentvolumeclaims", "pvcs": "persistentvolumeclaims",
 		"pv": "persistentvolumes", "sc": "storageclasses",
 		"pdb": "poddisruptionbudgets", "netpol": "networkpolicies",
 		"deployment": "deployments", "namespaces": "namespaces",
