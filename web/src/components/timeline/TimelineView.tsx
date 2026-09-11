@@ -10,6 +10,7 @@ import {
   buildAppMembershipIndex,
   eventsForApplication,
   isPinnedLaneRef,
+  pinnedLaneRefMatches,
   LIVE_TICK_MS,
   SEVERITY_TEXT,
   type ScrubberRange,
@@ -48,6 +49,13 @@ function loadPinnedLanes(): PinnedLaneRef[] {
   } catch {
     return []
   }
+}
+
+export function togglePinnedLaneRefs(previous: PinnedLaneRef[], ref: PinnedLaneRef): PinnedLaneRef[] {
+  const pinned = previous.some((stored) => pinnedLaneRefMatches(stored, ref))
+  return pinned
+    ? previous.filter((stored) => !pinnedLaneRefMatches(stored, ref))
+    : [...previous, ref]
 }
 
 // Helper to check if topology has meaningfully changed
@@ -348,9 +356,7 @@ export function TimelineView({ namespaces, onResourceClick, initialViewMode, ini
     }
   }, [pinnedLanes])
   const togglePin = useCallback((ref: PinnedLaneRef) => {
-    setPinnedLanes((prev) => (
-      prev.some((p) => p.id === ref.id) ? prev.filter((p) => p.id !== ref.id) : [...prev, ref]
-    ))
+    setPinnedLanes((prev) => togglePinnedLaneRefs(prev, ref))
   }, [])
   // pinnedOnly is meaningless with no pins: unpinning the last lane (or landing
   // on ?pinnedOnly=1 with no stored pins) would otherwise leave the filter stuck

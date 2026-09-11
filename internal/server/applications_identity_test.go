@@ -802,7 +802,7 @@ func TestCollectArgoClaims(t *testing.T) {
 	if c.DestName != "prod-cluster" || c.DestNamespace != "billing" {
 		t.Fatalf("claim destination = %q/%q, want prod-cluster/billing", c.DestName, c.DestNamespace)
 	}
-	if len(c.Workloads) != 1 || c.Workloads[0].Kind != "Deployment" || c.Workloads[0].Name != "billing-api" {
+	if len(c.Workloads) != 1 || c.Workloads[0].Group != "apps" || c.Workloads[0].Kind != "Deployment" || c.Workloads[0].Name != "billing-api" {
 		t.Fatalf("claim workloads = %+v, want only the Deployment", c.Workloads)
 	}
 }
@@ -991,11 +991,30 @@ func TestAddFluxKustomizationManagedSourceRefsParsesInventoryIDFromRight(t *test
 	got := map[string][]appSourceRef{}
 	addFluxKustomizationManagedSourceRefs(context.Background(), &stubLister{items: []*unstructured.Unstructured{ks}}, got)
 
-	refs := got[managedWorkloadKey("Deployment", "team", "api_worker")]
+	refs := got[managedWorkloadKey("apps", "Deployment", "team", "api_worker")]
 	if len(refs) != 1 {
 		t.Fatalf("managed source refs = %#v, want one ref keyed by full workload name", got)
 	}
 	if refs[0].Name != "platform" || refs[0].Namespace != "flux-system" || refs[0].Tool != "fluxcd" {
 		t.Fatalf("source ref = %+v, want flux-system/platform flux ref", refs[0])
+	}
+}
+
+func TestAddFluxKustomizationManagedSourceRefsKeepsInventoryGroup(t *testing.T) {
+	ks := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"namespace": "flux-system", "name": "training"},
+		"status": map[string]any{"inventory": map[string]any{"entries": []any{
+			map[string]any{"id": "ml_train_batch.volcano.sh_Job"},
+		}}},
+	}}
+	sources := map[string][]appSourceRef{}
+	addFluxKustomizationManagedSourceRefs(context.Background(), &stubLister{items: []*unstructured.Unstructured{ks}}, sources)
+
+	if ref := commonManagedSourceRef([]appWorkload{{Group: "batch", Kind: "Job", Namespace: "ml", Name: "train"}}, sources); ref != nil {
+		t.Fatalf("core Job inherited the Flux-managed Volcano Job source: %+v", ref)
+	}
+	ref := commonManagedSourceRef([]appWorkload{{Group: "batch.volcano.sh", Kind: "Job", Namespace: "ml", Name: "train"}}, sources)
+	if ref == nil || ref.Name != "training" {
+		t.Fatalf("Volcano Job source ref = %+v, want flux-system/training", ref)
 	}
 }

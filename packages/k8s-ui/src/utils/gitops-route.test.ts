@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { gitOpsRouteForOwner, gitOpsRouteForResource } from './gitops-route'
+import { gitOpsRouteForKind, gitOpsRouteForOwner, gitOpsRouteForResource } from './gitops-route'
 
 describe('gitOpsRouteForOwner', () => {
   it('routes to detail URL for Argo with known namespace', () => {
@@ -74,5 +74,24 @@ describe('gitOpsRouteForResource', () => {
     expect(gitOpsRouteForResource(mk('serving.knative.dev/v1', 'Service'))).toBeNull()
     // A hypothetical "Application" CR in another group must not portal.
     expect(gitOpsRouteForResource(mk('example.com/v1', 'Application'))).toBeNull()
+  })
+})
+
+describe('gitOpsRouteForKind', () => {
+  it('uses an available group to reject foreign same-named CRDs', () => {
+    expect(gitOpsRouteForKind('Application', 'default', 'demo', 'argoproj.io'))
+      .toBe('/gitops/detail/applications/default/demo')
+    expect(gitOpsRouteForKind('Application', 'default', 'demo', 'example.com')).toBeNull()
+  })
+
+  it('retains the kind-only fallback for callers without group evidence', () => {
+    expect(gitOpsRouteForKind('Application', 'default', 'demo'))
+      .toBe('/gitops/detail/applications/default/demo')
+  })
+
+  it('retains the fallback for an unresolved historical lane with an empty placeholder group', () => {
+    expect(gitOpsRouteForKind('HelmRelease', 'flux-system', 'demo', '', false))
+      .toBe('/gitops/detail/helmreleases/flux-system/demo')
+    expect(gitOpsRouteForKind('HelmRelease', 'flux-system', 'demo', '', true)).toBeNull()
   })
 })

@@ -11,6 +11,7 @@ import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnose
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
 import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, assetUrl } from '@skyhook-io/k8s-ui'
 import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
+import { topologyNodeResourceKind } from '@skyhook-io/k8s-ui/utils/topology-neighborhood'
 import { useAPIResources, findAPIResourceForRoute } from './api/apiResources'
 import { TimelineView } from './components/timeline/TimelineView'
 import { ResourcesView } from './components/resources/ResourcesView'
@@ -1302,6 +1303,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (node.kind === 'Internet') return
 
     const nodeGroup = apiVersionToGroup(node.data.apiVersion as string | undefined)
+    const resourceKind = topologyNodeResourceKind(node)
     // Radar's topology PodGroup is a virtual pod aggregate. A Kubernetes
     // scheduling.k8s.io PodGroup carries apiVersion and is a real resource.
     if (node.kind === 'PodGroup' && !nodeGroup) return
@@ -1311,14 +1313,14 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     // detail page with tree + insights + ops that the drawer can't reproduce.
     // Route there from the main topology when the node is one of those kinds;
     // everything else falls back to the drawer.
-    const gitOpsPath = gitOpsRouteForKind(node.kind, namespace, node.name)
+    const gitOpsPath = gitOpsRouteForKind(resourceKind, namespace, node.name, nodeGroup)
     if (gitOpsPath) {
       navigate(gitOpsPath)
       return
     }
 
     navigateToResource({
-      kind: kindToPluralWithGroup(node.kind, nodeGroup),
+      kind: kindToPluralWithGroup(resourceKind, nodeGroup),
       namespace,
       name: node.name,
       group: nodeGroup,

@@ -27,6 +27,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -694,7 +695,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	if tombstone, ok := obj.(toolscache.DeletedFinalStateUnknown); ok {
 		obj = tombstone.Obj
 	}
-	apiVersion := extractAPIVersion(obj)
+	apiVersion := extractAPIVersion(kind, obj)
 	apiGroup := ""
 	if gvr, ok := BuiltinGVRAnyGroup(kind); ok {
 		apiGroup = gvr.Group
@@ -904,12 +905,14 @@ func isUnstructuredUpdate(oldObj, newObj any) bool {
 	return oldOK && newOK
 }
 
-// extractAPIVersion returns the resource's apiVersion (e.g. "cluster.x-k8s.io/v1beta1")
-// for unstructured objects. Typed informer objects have empty TypeMeta after decoding;
-// identity call sites recover their group from the canonical built-in GVR table.
-func extractAPIVersion(obj any) string {
+// extractAPIVersion returns the exact dynamic apiVersion or restores the
+// canonical version stripped from typed informer objects.
+func extractAPIVersion(kind string, obj any) string {
 	if u, ok := obj.(*unstructured.Unstructured); ok {
 		return u.GetAPIVersion()
+	}
+	if apiVersion, ok := resourceid.BuiltinAPIVersion(kind); ok {
+		return apiVersion
 	}
 	return ""
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { batchRunParentNodes, neighborhoodFor, tagWorkloadOwnership } from './topology-neighborhood'
+import { batchRunParentNodes, neighborhoodFor, tagWorkloadOwnership, workloadKey } from './topology-neighborhood'
 import type { Topology, NodeKind, EdgeType } from '../types/core'
 
 function node(id: string, kind: string, ns: string, name: string): Topology['nodes'][number] {
@@ -177,6 +177,77 @@ describe('neighborhoodFor', () => {
     }
     const out = neighborhoodFor(topo, [{ kind: 'Workflow', group: 'argoproj.io', namespace: 'app', name: 'run' }])
     expect(out.nodes.map((n) => n.id)).toEqual(['argo'])
+  })
+
+  it('resolves an omitted custom-resource group when exactly one node matches', () => {
+    const topo: Topology = {
+      nodes: [crdNode('ray', 'RayJob', 'ml', 'train', 'ray.io/v1')],
+      edges: [],
+    }
+    const out = neighborhoodFor(topo, [{ kind: 'RayJob', namespace: 'ml', name: 'train' }])
+    expect(out.nodes.map((node) => node.id)).toEqual(['ray'])
+  })
+
+  it('fails closed when an omitted custom-resource group has multiple candidates', () => {
+    const topo: Topology = {
+      nodes: [
+        crdNode('ray', 'RayJob', 'ml', 'train', 'ray.io/v1'),
+        crdNode('other', 'RayJob', 'ml', 'train', 'example.com/v1'),
+      ],
+      edges: [],
+    }
+    const out = neighborhoodFor(topo, [{ kind: 'RayJob', namespace: 'ml', name: 'train' }])
+    expect(out.nodes).toHaveLength(0)
+    expect(out.warnings?.some((warning) => warning.includes('No topology nodes matched'))).toBe(true)
+  })
+
+  it('matches typed built-ins whose topology node omits apiVersion', () => {
+    const topo: Topology = {
+      nodes: [node('dep', 'Deployment', 'app', 'web')],
+      edges: [],
+    }
+    const out = neighborhoodFor(topo, [
+      { kind: 'Deployment', group: 'apps', namespace: 'app', name: 'web' },
+    ])
+    expect(out.nodes.map((n) => n.id)).toEqual(['dep'])
+  })
+
+  it('matches collision pseudo-nodes through their Kubernetes resource kind', () => {
+    const service = crdNode('knative', 'KnativeService', 'app', 'web', 'serving.knative.dev/v1')
+    service.data = { ...service.data, resourceKind: 'Service' }
+    const topo: Topology = { nodes: [service], edges: [] }
+    const out = neighborhoodFor(topo, [
+      { kind: 'Service', group: 'serving.knative.dev', namespace: 'app', name: 'web' },
+    ])
+    expect(out.nodes.map((n) => n.id)).toEqual(['knative'])
+  })
+
+  it('does not blend a core Service seed with a same-named Knative Service', () => {
+    const core = node('core', 'Service', 'app', 'web')
+    const knative = crdNode('knative', 'KnativeService', 'app', 'web', 'serving.knative.dev/v1')
+    knative.data = { ...knative.data, resourceKind: 'Service' }
+    const topology: Topology = { nodes: [knative, core], edges: [] }
+
+    const explicit = neighborhoodFor(topology, [
+      { kind: 'Service', group: '', namespace: 'app', name: 'web' },
+    ])
+    expect(explicit.nodes.map((n) => n.id)).toEqual(['core'])
+
+    const inferred = neighborhoodFor(topology, [
+      { kind: 'Service', namespace: 'app', name: 'web' },
+    ])
+    expect(inferred.nodes.map((n) => n.id)).toEqual(['core'])
+
+    const customOnly = neighborhoodFor({ nodes: [knative], edges: [] }, [
+      { kind: 'Service', namespace: 'app', name: 'web' },
+    ])
+    expect(customOnly.nodes).toHaveLength(0)
+  })
+
+  it('qualifies workload keys only for CRD groups', () => {
+    expect(workloadKey({ kind: 'Job', group: 'batch', namespace: 'ml', name: 'train' })).toBe('Job/ml/train')
+    expect(workloadKey({ kind: 'Job', group: 'batch.volcano.sh', namespace: 'ml', name: 'train' }))
+      .toBe('Job.batch.volcano.sh/ml/train')
   })
 
   it('expands from an Argo WorkflowTemplate to its runs and run pods', () => {

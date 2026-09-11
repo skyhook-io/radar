@@ -134,6 +134,9 @@ func (m *monitorDynamicProvider) IsCRD(kind string) bool {
 	_, ok := m.gvrs[kind]
 	return ok
 }
+func (m *monitorDynamicProvider) IsCRDGVR(gvr schema.GroupVersionResource) bool {
+	return m.GetKindForGVR(gvr) != ""
+}
 
 func (m *rolloutDynamicProvider) List(_ schema.GroupVersionResource, _ string) ([]*unstructured.Unstructured, error) {
 	m.listCalls++
@@ -177,6 +180,9 @@ func (m *rolloutDynamicProvider) GetKindForGVR(gvr schema.GroupVersionResource) 
 
 func (m *rolloutDynamicProvider) IsCRD(kind string) bool {
 	return kind == "Rollout"
+}
+func (m *rolloutDynamicProvider) IsCRDGVR(gvr schema.GroupVersionResource) bool {
+	return gvr == m.gvr
 }
 
 func TestArgoWorkflowTemplateRefsFromWorkflowSpec(t *testing.T) {

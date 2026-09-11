@@ -130,6 +130,36 @@ func TestGetCascadeDeletePreview_ResolutionState(t *testing.T) {
 	}
 }
 
+func TestGetCascadeDeletePreview_UnqualifiedUniqueGenericRoot(t *testing.T) {
+	topo := &Topology{
+		Nodes: []Node{
+			{ID: "widget/demo/root/example.io", Kind: "Widget", Name: "root", Data: map[string]any{"namespace": "demo", "apiVersion": "example.io/v1"}},
+			{ID: "gadget/demo/child/example.io", Kind: "Gadget", Name: "child", Data: map[string]any{"namespace": "demo", "apiVersion": "example.io/v1"}},
+		},
+		Edges: []Edge{{Source: "widget/demo/root/example.io", Target: "gadget/demo/child/example.io", Type: EdgeManages}},
+	}
+
+	preview := GetCascadeDeletePreview(ResourceRef{Kind: "Widget", Namespace: "demo", Name: "root"}, topo, nil)
+	if !preview.RootResolved || preview.Root.Group != "example.io" {
+		t.Fatalf("generic preview root = %+v, want exact resolved identity", preview)
+	}
+	if len(preview.Dependents) != 1 || preview.Dependents[0].Name != "child" || preview.Dependents[0].Group != "example.io" {
+		t.Fatalf("generic preview dependents = %+v, want exact child", preview.Dependents)
+	}
+}
+
+func TestGetCascadeDeletePreview_UnqualifiedBuiltinDefaultsToTypedRoot(t *testing.T) {
+	topo := &Topology{Nodes: []Node{
+		{ID: "job/ml/train", Kind: KindJob, Name: "train", Data: map[string]any{"namespace": "ml"}},
+		{ID: "job/ml/train/batch.volcano.sh", Kind: KindJob, Name: "train", Data: map[string]any{"namespace": "ml", "apiVersion": "batch.volcano.sh/v1alpha1"}},
+	}}
+
+	preview := GetCascadeDeletePreview(ResourceRef{Kind: "Job", Namespace: "ml", Name: "train"}, topo, nil)
+	if !preview.RootResolved || preview.Root.Group != "batch" || preview.Root.Kind != "Job" {
+		t.Fatalf("cascade root = %+v, want exact typed Job identity", preview)
+	}
+}
+
 func TestGetCascadeDeletePreview_RouteCollisionUsesGroup(t *testing.T) {
 	knativeGVR := schema.GroupVersionResource{Group: "serving.knative.dev", Version: "v1", Resource: "routes"}
 	openshiftGVR := schema.GroupVersionResource{Group: "route.openshift.io", Version: "v1", Resource: "routes"}
@@ -344,7 +374,7 @@ func TestGetRelationships_ConfiguresDispatchesByKind(t *testing.T) {
 	for _, ref := range rel.ConfigRefs {
 		gotConfigKinds[ref.Kind] = true
 	}
-	for _, kind := range []string{"SealedSecret", "ConfigMap", "destinationrule"} {
+	for _, kind := range []string{"SealedSecret", "ConfigMap", "DestinationRule"} {
 		if !gotConfigKinds[kind] {
 			t.Errorf("ConfigRefs missing %s; got kinds=%v", kind, gotConfigKinds)
 		}
@@ -395,6 +425,85 @@ func TestGetRelationships_WorkloadIncludesServiceEntrypoints(t *testing.T) {
 	}
 	if len(serviceRel.Services) != 0 {
 		t.Fatalf("Service Services = %+v, route CRDs must not be labeled as Services", serviceRel.Services)
+	}
+}
+
+func TestGetRelationships_ServiceEntrypointsUseExactAPIGroup(t *testing.T) {
+	topo := &Topology{
+		Nodes: []Node{
+			{ID: "deployment/demo/core", Kind: KindDeployment, Name: "core", Data: map[string]any{"namespace": "demo", "apiVersion": "apps/v1"}},
+			{ID: "deployment/demo/custom", Kind: KindDeployment, Name: "custom", Data: map[string]any{"namespace": "demo", "apiVersion": "apps/v1"}},
+			{ID: "service/demo/api", Kind: KindService, Name: "api", Data: map[string]any{"namespace": "demo", "apiVersion": "v1"}},
+			{ID: "service/demo/api/platform.example.io", Kind: KindService, Name: "api", Data: map[string]any{"namespace": "demo", "apiVersion": "platform.example.io/v1"}},
+			{ID: "ingress/demo/core", Kind: KindIngress, Name: "core", Data: map[string]any{"namespace": "demo", "apiVersion": "networking.k8s.io/v1"}},
+			{ID: "route/demo/custom/platform.example.io", Kind: NodeKind("Route"), Name: "custom", Data: map[string]any{"namespace": "demo", "apiVersion": "platform.example.io/v1"}},
+		},
+		Edges: []Edge{
+			{ID: "core-service", Source: "service/demo/api", Target: "deployment/demo/core", Type: EdgeExposes},
+			{ID: "custom-service", Source: "service/demo/api/platform.example.io", Target: "deployment/demo/custom", Type: EdgeExposes},
+			{ID: "core-entrypoint", Source: "ingress/demo/core", Target: "service/demo/api", Type: EdgeRoutesTo},
+			{ID: "custom-entrypoint", Source: "route/demo/custom/platform.example.io", Target: "service/demo/api/platform.example.io", Type: EdgeRoutesTo},
+		},
+	}
+	idx := IndexByResource(topo)
+
+	core := GetRelationshipsWithIndex("Deployment", "demo", "core", topo, nil, nil, idx)
+	if core == nil || len(core.Ingresses) != 1 || core.Ingresses[0].Name != "core" || len(core.Routes) != 0 {
+		t.Fatalf("core workload borrowed custom Service entrypoints: %+v", core)
+	}
+	custom := GetRelationshipsWithIndex("Deployment", "demo", "custom", topo, nil, nil, idx)
+	if custom == nil || len(custom.Services) != 1 || custom.Services[0].Group != "platform.example.io" || len(custom.Routes) != 0 || len(custom.Ingresses) != 0 {
+		t.Fatalf("custom Service kind was given core Service entrypoint semantics: %+v", custom)
+	}
+}
+
+func TestGetRelationships_ServiceEntrypointsSkipKnativeService(t *testing.T) {
+	topo := &Topology{
+		Nodes: []Node{
+			{ID: "ingress/demo/web", Kind: KindIngress, Name: "web", Data: map[string]any{"namespace": "demo"}},
+			{ID: "knativeservice/demo/web", Kind: KindKnativeService, Name: "web", Data: map[string]any{"namespace": "demo", "apiVersion": "serving.knative.dev/v1"}},
+			{ID: "service/demo/web", Kind: KindService, Name: "web", Data: map[string]any{"namespace": "demo"}},
+		},
+		Edges: []Edge{
+			{ID: "ingress-to-knative", Source: "ingress/demo/web", Target: "knativeservice/demo/web", Type: EdgeRoutesTo},
+			{ID: "knative-to-service", Source: "knativeservice/demo/web", Target: "service/demo/web", Type: EdgeExposes},
+		},
+	}
+
+	rel := GetRelationshipsWithIndex("Service", "demo", "web", topo, nil, nil, IndexByResource(topo))
+	if len(rel.Ingresses) != 0 {
+		t.Fatalf("core Service inherited an entrypoint through a Knative Service: %+v", rel.Ingresses)
+	}
+}
+
+func TestGetRelationshipsWithObjectMatchesTypedBuiltinGroup(t *testing.T) {
+	topo := &Topology{
+		Nodes: []Node{
+			{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web", Data: map[string]any{"namespace": "demo"}},
+			{ID: "service/demo/web", Kind: KindService, Name: "web", Data: map[string]any{"namespace": "demo"}},
+		},
+		Edges: []Edge{{Source: "service/demo/web", Target: "deployment/demo/web", Type: EdgeExposes}},
+	}
+	deployment := &appsv1.Deployment{TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"}, ObjectMeta: metav1.ObjectMeta{Namespace: "demo", Name: "web"}}
+
+	rel := GetRelationshipsWithObject("deployments", "demo", "web", deployment, topo, nil, nil, IndexByResource(topo))
+	if rel == nil || len(rel.Services) != 1 || rel.Services[0].Name != "web" {
+		t.Fatalf("typed Deployment lost topology relationships: %+v", rel)
+	}
+}
+
+func TestGetRelationshipsEmitsKubernetesKindForPseudoNode(t *testing.T) {
+	topo := &Topology{
+		Nodes: []Node{
+			{ID: "knativeservice/demo/shop", Kind: KindKnativeService, Name: "shop", Data: map[string]any{"namespace": "demo", "apiVersion": "serving.knative.dev/v1"}},
+			{ID: "revision/demo/shop-v1", Kind: KindKnativeRevision, Name: "shop-v1", Data: map[string]any{"namespace": "demo", "apiVersion": "serving.knative.dev/v1"}},
+		},
+		Edges: []Edge{{Source: "knativeservice/demo/shop", Target: "revision/demo/shop-v1", Type: EdgeManages}},
+	}
+
+	rel := GetRelationships("Revision", "demo", "shop-v1", topo, nil, nil)
+	if rel == nil || rel.Owner == nil || rel.Owner.Kind != "Service" || rel.Owner.Group != "serving.knative.dev" {
+		t.Fatalf("pseudo owner leaked as a non-Kubernetes tuple: %+v", rel)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rollouts"
 	"github.com/skyhook-io/radar/pkg/subject"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -23,10 +24,13 @@ import (
 // rawInput builds a workload with no label overlay and its own structural root
 // (a singleton, raw-always).
 func rawInput(kind, ns, name, version, health string) appWorkloadInput {
+	group := appWorkloadAPIGroup(kind)
 	return appWorkloadInput{
-		wl:       appWorkload{Kind: kind, Namespace: ns, Name: name, Version: version, Health: health, WorkloadClass: classifyWorkload(kind, nil)},
-		rootKey:  ns + "/" + kind + "/" + name,
-		rootKind: kind,
+		wl:           appWorkload{Kind: kind, Group: group, Namespace: ns, Name: name, Version: version, Health: health, WorkloadClass: classifyWorkload(kind, nil)},
+		rootKey:      ns + "/" + kind + "/" + name,
+		rootKind:     kind,
+		rootGroup:    group,
+		rootIdentity: resourceid.ResourceKey(group, kind, ns, name),
 	}
 }
 
@@ -97,7 +101,18 @@ func TestWorkflowPrimaryImageUsesStoredTemplateSpec(t *testing.T) {
 // /part-of), keyed by its own structural root.
 func overlayInput(kind, ns, name, version, health string, tier subject.Tier, key string, conf subject.Confidence) appWorkloadInput {
 	in := rawInput(kind, ns, name, version, health)
-	in.overlay = &subject.AppOverlay{Winner: subject.Signal{Tier: tier, Key: key, Confidence: conf}}
+	ref := subject.Ref{}
+	switch tier {
+	case subject.TierFluxHelmRelease:
+		ref = subject.Ref{Kind: "HelmRelease", Group: "helm.toolkit.fluxcd.io"}
+	case subject.TierFluxKustomize:
+		ref = subject.Ref{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io"}
+	case subject.TierArgoTrackingID, subject.TierArgoInstance:
+		ref = subject.Ref{Kind: "Application", Group: "argoproj.io"}
+	case subject.TierHelmRelease:
+		ref = subject.Ref{Kind: "HelmRelease"}
+	}
+	in.overlay = &subject.AppOverlay{Winner: subject.Signal{Tier: tier, Key: key, Ref: ref, Confidence: conf}}
 	return in
 }
 
@@ -144,19 +159,39 @@ func clusterWorkflowRun(ns, name, template, phase, startedAt string) *unstructur
 
 func TestEventsForWorkload_MatchesKindAndName(t *testing.T) {
 	byObject := map[string][]*corev1.Event{
-		"Service/api": {
+		resourceid.ResourceKey("", "Service", "", "api"): {
 			{InvolvedObject: corev1.ObjectReference{Kind: "Service", Name: "api"}, Reason: "NoEndpoints", Type: "Warning", Message: "service has no endpoints"},
 		},
-		"Deployment/api": {
+		resourceid.ResourceKey("apps", "Deployment", "", "api"): {
 			{InvolvedObject: corev1.ObjectReference{Kind: "Deployment", Name: "api"}, Reason: "ProgressDeadlineExceeded", Type: "Warning", Message: "deployment stalled"},
 		},
 	}
-	got := eventsForWorkload(byObject, "Deployment", "api", nil)
+	got := eventsForWorkload(byObject, "apps", "Deployment", "api", nil)
 	if len(got) != 1 {
 		t.Fatalf("eventsForWorkload returned %d events: %+v", len(got), got)
 	}
 	if got[0].Object != "Deployment/api" || got[0].Reason != "ProgressDeadlineExceeded" {
 		t.Fatalf("eventsForWorkload picked wrong event: %+v", got[0])
+	}
+}
+
+func TestEventsForWorkloadPreservesAPIGroup(t *testing.T) {
+	byObject := map[string][]*corev1.Event{
+		resourceid.ResourceKey("batch", "Job", "", "train"): {
+			{InvolvedObject: corev1.ObjectReference{APIVersion: "batch/v1", Kind: "Job", Name: "train"}, Reason: "BackoffLimitExceeded", Type: "Warning"},
+		},
+		resourceid.ResourceKey("batch.volcano.sh", "Job", "", "train"): {
+			{InvolvedObject: corev1.ObjectReference{APIVersion: "batch.volcano.sh/v1alpha1", Kind: "Job", Name: "train"}, Reason: "VolcanoFailed", Type: "Warning"},
+		},
+	}
+
+	core := eventsForWorkload(byObject, "batch", "Job", "train", nil)
+	volcano := eventsForWorkload(byObject, "batch.volcano.sh", "Job", "train", nil)
+	if len(core) != 1 || core[0].Reason != "BackoffLimitExceeded" {
+		t.Fatalf("core Job events = %+v", core)
+	}
+	if len(volcano) != 1 || volcano[0].Reason != "VolcanoFailed" {
+		t.Fatalf("Volcano Job events = %+v", volcano)
 	}
 }
 
@@ -432,8 +467,12 @@ func TestGroupApplications_ArgoTrackingModesCollapse(t *testing.T) {
 func TestGroupApplications_SameNameArgoAppsInDifferentNamespacesStaySeparate(t *testing.T) {
 	a := rawInput("Deployment", "team-a", "api", "1.0.0", "healthy")
 	a.rootKey, a.rootKind = "team-a-argocd/Application/storefront", "Application"
+	a.rootGroup = "argoproj.io"
+	a.rootIdentity = resourceid.ResourceKey("argoproj.io", "Application", "team-a-argocd", "storefront")
 	b := rawInput("Deployment", "team-b", "api", "1.0.0", "healthy")
 	b.rootKey, b.rootKind = "team-b-argocd/Application/storefront", "Application"
+	b.rootGroup = "argoproj.io"
+	b.rootIdentity = resourceid.ResourceKey("argoproj.io", "Application", "team-b-argocd", "storefront")
 
 	rows := groupApplications([]appWorkloadInput{a, b})
 	if len(rows) != 2 {
@@ -448,8 +487,12 @@ func TestGroupApplications_StructuralManagerRoot(t *testing.T) {
 	// Two unlabeled Deployments whose structural root is the same Argo App node.
 	a := rawInput("Deployment", "prod", "api", "3.1.0", "healthy")
 	a.rootKey, a.rootKind = "argocd/Application/billing", "Application"
+	a.rootGroup = "argoproj.io"
+	a.rootIdentity = resourceid.ResourceKey("argoproj.io", "Application", "argocd", "billing")
 	b := rawInput("Deployment", "prod", "worker", "3.1.0", "degraded")
 	b.rootKey, b.rootKind = "argocd/Application/billing", "Application"
+	b.rootGroup = "argoproj.io"
+	b.rootIdentity = resourceid.ResourceKey("argoproj.io", "Application", "argocd", "billing")
 
 	rows := groupApplications([]appWorkloadInput{a, b})
 	if len(rows) != 1 {
@@ -467,18 +510,68 @@ func TestGroupApplications_StructuralManagerRoot(t *testing.T) {
 	}
 }
 
+func TestGroupApplications_SameNamedRootsInDifferentGroupsStaySeparate(t *testing.T) {
+	core := rawInput("Job", "ml", "core-run", "", "healthy")
+	core.rootKey, core.rootKind = "ml/Job/train", "Job"
+	core.rootGroup = "batch"
+	core.rootIdentity = resourceid.ResourceKey("batch", "Job", "ml", "train")
+	volcano := rawInput("Job", "ml", "volcano-run", "", "healthy")
+	volcano.wl.Group = "batch.volcano.sh"
+	volcano.rootKey, volcano.rootKind = "ml/Job/train", "Job"
+	volcano.rootGroup = "batch.volcano.sh"
+	volcano.rootIdentity = resourceid.ResourceKey("batch.volcano.sh", "Job", "ml", "train")
+
+	rows := groupApplications([]appWorkloadInput{core, volcano})
+	if len(rows) != 2 {
+		t.Fatalf("same kind/name roots in distinct API groups merged: %+v", rows)
+	}
+	if rows[0].Key == rows[1].Key {
+		t.Fatalf("same kind/name roots in distinct API groups share public key %q", rows[0].Key)
+	}
+	byWorkload := map[string]string{}
+	for _, row := range rows {
+		byWorkload[row.Workloads[0].Name] = row.Key
+	}
+	if byWorkload["core-run"] != "ml/Job/train" {
+		t.Fatalf("built-in raw key changed: %q", byWorkload["core-run"])
+	}
+	if byWorkload["volcano-run"] != "ml/Job/train@batch.volcano.sh" {
+		t.Fatalf("Volcano raw key = %q", byWorkload["volcano-run"])
+	}
+}
+
+func TestGroupApplications_ForeignManagerKindStaysRaw(t *testing.T) {
+	foreign := rawInput("Deployment", "prod", "api", "1.0.0", "healthy")
+	foreign.rootKey = "operators/Application/platform"
+	foreign.rootKind = "Application"
+	foreign.rootGroup = "apps.example.io"
+	foreign.rootIdentity = resourceid.ResourceKey(foreign.rootGroup, foreign.rootKind, "operators", "platform")
+	foreign.source = sourceRefForInput(nil, foreign.rootKind, foreign.rootGroup, foreign.rootKey)
+
+	rows := groupApplications([]appWorkloadInput{foreign})
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1", len(rows))
+	}
+	row := rows[0]
+	if row.Key != "operators/Application/platform@apps.example.io" || row.Tier != 0 || row.SourceRef != nil {
+		t.Fatalf("foreign Application was attributed as Argo CD: %+v", row)
+	}
+}
+
 func TestGroupApplications_SourceRefRequiresExactSource(t *testing.T) {
 	helmApp := overlayInput("Deployment", "prod", "api", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium)
 	helmApp.overlay.Winner.Ref = subject.Ref{Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}
-	helmApp.source = sourceRefForInput(helmApp.overlay, helmApp.rootKind, helmApp.rootKey)
+	helmApp.source = sourceRefForInput(helmApp.overlay, helmApp.rootKind, helmApp.rootGroup, helmApp.rootKey)
 
 	labelApp := overlayInput("Deployment", "prod", "payments-worker", "1.0", "healthy", subject.TierPartOf, "prod/app/payments", subject.ConfidenceMedium)
 	labelApp.overlay.Winner.Ref = subject.Ref{Kind: "app", Namespace: "prod", Name: "payments"}
-	labelApp.source = sourceRefForInput(labelApp.overlay, labelApp.rootKind, labelApp.rootKey)
+	labelApp.source = sourceRefForInput(labelApp.overlay, labelApp.rootKind, labelApp.rootGroup, labelApp.rootKey)
 
 	structuralApp := rawInput("Deployment", "prod", "admin", "1.0", "healthy")
 	structuralApp.rootKey, structuralApp.rootKind = "argocd/Application/admin", "Application"
-	structuralApp.source = sourceRefForInput(structuralApp.overlay, structuralApp.rootKind, structuralApp.rootKey)
+	structuralApp.rootGroup = "argoproj.io"
+	structuralApp.rootIdentity = resourceid.ResourceKey("argoproj.io", "Application", "argocd", "admin")
+	structuralApp.source = sourceRefForInput(structuralApp.overlay, structuralApp.rootKind, structuralApp.rootGroup, structuralApp.rootKey)
 
 	rows := groupApplications([]appWorkloadInput{helmApp, labelApp, structuralApp})
 
@@ -499,7 +592,7 @@ func TestGroupApplications_SourceRefRequiresExactSource(t *testing.T) {
 func TestGroupApplications_SourceRefRequiresEveryWorkload(t *testing.T) {
 	api := overlayInput("Deployment", "prod", "checkout-api", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium)
 	api.overlay.Winner.Ref = subject.Ref{Kind: "HelmRelease", Namespace: "prod", Name: "checkout"}
-	api.source = sourceRefForInput(api.overlay, api.rootKind, api.rootKey)
+	api.source = sourceRefForInput(api.overlay, api.rootKind, api.rootGroup, api.rootKey)
 
 	worker := overlayInput("Deployment", "prod", "checkout-worker", "1.0", "healthy", subject.TierHelmRelease, "prod/HelmRelease/checkout", subject.ConfidenceMedium)
 
@@ -539,18 +632,37 @@ func TestManagedSourceRefs_CrossNamespaceArgoApplication(t *testing.T) {
 			"destination": map[string]any{"namespace": "team-a"},
 		},
 		"status": map[string]any{"resources": []any{
-			map[string]any{"kind": "Deployment", "name": "api"},
-			map[string]any{"kind": "Deployment", "namespace": "team-a", "name": "worker"},
+			map[string]any{"group": "apps", "kind": "Deployment", "name": "api"},
+			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "team-a", "name": "worker"},
 		}},
 	}}
 	sources := map[string][]appSourceRef{}
 	addArgoManagedSourceRefs(sources, []*unstructured.Unstructured{app})
 	ref := commonManagedSourceRef([]appWorkload{
-		{Kind: "Deployment", Namespace: "team-a", Name: "api"},
-		{Kind: "Deployment", Namespace: "team-a", Name: "worker"},
+		{Group: "apps", Kind: "Deployment", Namespace: "team-a", Name: "api"},
+		{Group: "apps", Kind: "Deployment", Namespace: "team-a", Name: "worker"},
 	}, sources)
 	if ref == nil || ref.Tool != "argocd" || ref.Namespace != "argocd" || ref.Name != "billing" {
 		t.Fatalf("cross-namespace Argo source ref = %+v, want argocd/Application/billing", ref)
+	}
+}
+
+func TestManagedSourceRefs_ArgoStatusKeepsWorkloadGroup(t *testing.T) {
+	app := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"namespace": "argocd", "name": "training"},
+		"status": map[string]any{"resources": []any{
+			map[string]any{"group": "batch.volcano.sh", "kind": "Job", "namespace": "ml", "name": "train"},
+		}},
+	}}
+	sources := map[string][]appSourceRef{}
+	addArgoManagedSourceRefs(sources, []*unstructured.Unstructured{app})
+
+	if ref := commonManagedSourceRef([]appWorkload{{Group: "batch", Kind: "Job", Namespace: "ml", Name: "train"}}, sources); ref != nil {
+		t.Fatalf("core Job inherited the Volcano Job source: %+v", ref)
+	}
+	ref := commonManagedSourceRef([]appWorkload{{Group: "batch.volcano.sh", Kind: "Job", Namespace: "ml", Name: "train"}}, sources)
+	if ref == nil || ref.Name != "training" {
+		t.Fatalf("Volcano Job source ref = %+v, want argocd/training", ref)
 	}
 }
 
@@ -771,7 +883,7 @@ func TestAppGraphRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T
 	}
 	g := &appGraph{topo: topo, idx: topology.IndexByResource(topo)}
 
-	rels := g.relationshipsFor("Deployment", "prod", "api")
+	rels := g.relationshipsFor("Deployment", "prod", "api", nil)
 	if rels == nil {
 		t.Fatal("relationshipsFor returned nil")
 	}
@@ -798,6 +910,32 @@ func TestAppGraphRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T
 	}
 }
 
+func TestAppGraphRelationshipsForUsesFetchedObjectGroup(t *testing.T) {
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			{ID: "service/ml/core", Kind: topology.KindService, Name: "core", Data: map[string]any{"namespace": "ml"}},
+			{ID: "service/ml/volcano", Kind: topology.KindService, Name: "volcano", Data: map[string]any{"namespace": "ml"}},
+			{ID: "job/ml/train", Kind: topology.KindJob, Name: "train", Data: map[string]any{"namespace": "ml"}},
+			{ID: "job/ml/train/batch.volcano.sh", Kind: topology.NodeKind("Job"), Name: "train", Data: map[string]any{"namespace": "ml", "apiVersion": "batch.volcano.sh/v1alpha1"}},
+		},
+		Edges: []topology.Edge{
+			{ID: "core", Source: "service/ml/core", Target: "job/ml/train", Type: topology.EdgeExposes},
+			{ID: "volcano", Source: "service/ml/volcano", Target: "job/ml/train/batch.volcano.sh", Type: topology.EdgeExposes},
+		},
+	}
+	volcano := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "batch.volcano.sh/v1alpha1",
+		"kind":       "Job",
+		"metadata":   map[string]any{"namespace": "ml", "name": "train"},
+	}}
+	g := &appGraph{topo: topo, idx: topology.IndexByResource(topo)}
+
+	rels := g.relationshipsFor("Job", "ml", "train", volcano)
+	if rels == nil || len(rels.Services) != 1 || rels.Services[0] != "volcano" {
+		t.Fatalf("relationships = %+v, want only the Volcano Job service", rels)
+	}
+}
+
 // structuralRoot must stop AT the in-cluster GitOps manager (Flux
 // Kustomization) and NOT climb the EdgeManages edge to the GitRepository source
 // that feeds it. The topology builder models GitRepository → Kustomization as
@@ -806,7 +944,13 @@ func TestAppGraphRelationshipsForIncludesServiceUpstreamEntrypoints(t *testing.T
 // GitRepository root and union-find merges all installations into one app.
 func TestStructuralRoot_StopsAtManagerNotSource(t *testing.T) {
 	node := func(id, kind, ns, name string) topology.Node {
-		return topology.Node{ID: id, Kind: topology.NodeKind(kind), Name: name, Data: map[string]any{"namespace": ns}}
+		data := map[string]any{"namespace": ns}
+		if kind == "Kustomization" {
+			data["apiVersion"] = "kustomize.toolkit.fluxcd.io/v1"
+		} else if kind == "GitRepository" {
+			data["apiVersion"] = "source.toolkit.fluxcd.io/v1"
+		}
+		return topology.Node{ID: id, Kind: topology.NodeKind(kind), Name: name, Data: data}
 	}
 	manages := func(src, dst string) topology.Edge {
 		return topology.Edge{ID: src + "->" + dst, Source: src, Target: dst, Type: topology.EdgeManages}
@@ -826,24 +970,57 @@ func TestStructuralRoot_StopsAtManagerNotSource(t *testing.T) {
 			manages("ks-infra", "dep-grafana"), // manager → workload
 		},
 	}
-	g := &appGraph{byID: map[string]topology.Node{}, byKNN: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
+	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
 	for _, n := range topo.Nodes {
 		g.byID[n.ID] = n
 		ns, _ := n.Data["namespace"].(string)
-		g.byKNN[knnKey(string(n.Kind), ns, n.Name)] = n.ID
+		kind := topology.KubernetesKindForNode(&n)
+		g.byResource[resourceid.ResourceKey(appGraphNodeGroup(&n, kind), kind, ns, n.Name)] = n.ID
 	}
 
-	apiRoot, _ := g.rootOf("Deployment", "prod", "api")
-	grafanaRoot, _ := g.rootOf("Deployment", "monitoring", "grafana")
+	apiRoot, _, apiGroup, apiIdentity := g.rootOf("apps", "Deployment", "prod", "api")
+	grafanaRoot, _, _, _ := g.rootOf("apps", "Deployment", "monitoring", "grafana")
 
 	if apiRoot != "flux-system/Kustomization/apps" {
 		t.Errorf("api root = %q, want the apps Kustomization (not the GitRepository)", apiRoot)
+	}
+	if apiIdentity != resourceid.ResourceKey("kustomize.toolkit.fluxcd.io", "Kustomization", "flux-system", "apps") {
+		t.Errorf("api root identity = %q, want exact Flux Kustomization identity", apiIdentity)
+	}
+	if apiGroup != "kustomize.toolkit.fluxcd.io" {
+		t.Errorf("api root group = %q, want exact Flux Kustomization group", apiGroup)
 	}
 	if grafanaRoot != "flux-system/Kustomization/infrastructure" {
 		t.Errorf("grafana root = %q, want the infrastructure Kustomization (not the GitRepository)", grafanaRoot)
 	}
 	if apiRoot == grafanaRoot {
 		t.Fatalf("two Kustomizations under one GitRepository share root %q — the mono-repo over-merge", apiRoot)
+	}
+}
+
+func TestStructuralRoot_DoesNotStopAtForeignManagerKind(t *testing.T) {
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			{ID: "platform/prod/root/platform.example.io", Kind: "Platform", Name: "root", Data: map[string]any{"namespace": "prod", "apiVersion": "platform.example.io/v1"}},
+			{ID: "application/prod/app/apps.example.io", Kind: topology.KindApplication, Name: "app", Data: map[string]any{"namespace": "prod", "apiVersion": "apps.example.io/v1"}},
+			{ID: "deployment/prod/api", Kind: topology.KindDeployment, Name: "api", Data: map[string]any{"namespace": "prod"}},
+		},
+		Edges: []topology.Edge{
+			{Source: "platform/prod/root/platform.example.io", Target: "application/prod/app/apps.example.io", Type: topology.EdgeManages},
+			{Source: "application/prod/app/apps.example.io", Target: "deployment/prod/api", Type: topology.EdgeManages},
+		},
+	}
+	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
+	for _, node := range topo.Nodes {
+		g.byID[node.ID] = node
+		kind := topology.KubernetesKindForNode(&node)
+		ns, _ := node.Data["namespace"].(string)
+		g.byResource[resourceid.ResourceKey(appGraphNodeGroup(&node, kind), kind, ns, node.Name)] = node.ID
+	}
+
+	root, _, group, _ := g.rootOf("apps", "Deployment", "prod", "api")
+	if root != "prod/Platform/root" || group != "platform.example.io" {
+		t.Fatalf("foreign Application stopped the structural walk: root=%q group=%q", root, group)
 	}
 }
 
@@ -865,9 +1042,9 @@ func TestRelationshipsFor_RoutesCarryConcreteKind(t *testing.T) {
 			{ID: "gw->web", Source: "gateway/prod/gw", Target: "httproute/prod/web", Type: topology.EdgeRoutesTo},
 		},
 	}
-	g := &appGraph{byID: map[string]topology.Node{}, byKNN: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
+	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
 
-	rels := g.relationshipsFor("Gateway", "prod", "gw")
+	rels := g.relationshipsFor("Gateway", "prod", "gw", nil)
 	if rels == nil {
 		t.Fatal("relationshipsFor returned nil; want Routes populated")
 	}

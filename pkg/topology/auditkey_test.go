@@ -4,7 +4,7 @@ import "testing"
 
 func TestStampAuditKeys(t *testing.T) {
 	nodes := []Node{
-		{Kind: KindDeployment, Name: "api", Data: map[string]any{"namespace": "prod"}},
+		{Kind: KindDeployment, Name: "api", Data: map[string]any{"namespace": "prod", "apiVersion": "apps/v1"}},
 		{Kind: "IngressRoute", Name: "r", Data: map[string]any{"namespace": "web"}},     // CRD → group ""
 		{Kind: KindIstioGateway, Name: "gw", Data: map[string]any{"namespace": "mesh"}}, // collision → real kind "Gateway"
 		{Kind: KindNamespace, Name: "team-a", Data: nil},                                // nil Data + cluster-scoped (no ns)
@@ -23,5 +23,11 @@ func TestStampAuditKeys(t *testing.T) {
 		if got != want[n.Name] {
 			t.Errorf("auditKey for %q = %q, want %q", n.Name, got, want[n.Name])
 		}
+	}
+	if got := out[2].Data["resourceKind"]; got != "Gateway" {
+		t.Errorf("resourceKind for Istio Gateway = %v, want Gateway", got)
+	}
+	if _, ok := out[0].Data["resourceKind"]; ok {
+		t.Error("ordinary topology node unexpectedly received resourceKind")
 	}
 }

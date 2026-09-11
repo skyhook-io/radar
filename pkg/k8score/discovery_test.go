@@ -19,6 +19,31 @@ type countingDiscovery struct {
 	calls atomic.Int32
 }
 
+func TestIsBuiltInAPIGroupKeepsDynamicBuiltInsDistinctFromCRDs(t *testing.T) {
+	for _, group := range []string{"apps", "resource.k8s.io", "authentication.k8s.io", "authorization.k8s.io", "apiregistration.k8s.io"} {
+		if !IsBuiltInAPIGroup(group) {
+			t.Errorf("IsBuiltInAPIGroup(%q) = false", group)
+		}
+	}
+	if IsBuiltInAPIGroup("batch.volcano.sh") {
+		t.Fatal("a CRD API group was classified as built in")
+	}
+
+	fakeDiscovery := fakeclientset.NewSimpleClientset().Discovery().(*fakediscovery.FakeDiscovery)
+	fakeDiscovery.Resources = []*metav1.APIResourceList{{
+		GroupVersion: "resource.k8s.io/v1",
+		APIResources: []metav1.APIResource{{Name: "resourceclaims", Kind: "ResourceClaim", Verbs: []string{"get", "list", "watch"}}},
+	}}
+	d, err := NewResourceDiscovery(fakeDiscovery)
+	if err != nil {
+		t.Fatalf("NewResourceDiscovery: %v", err)
+	}
+	resource, ok := d.GetResourceWithGroup("ResourceClaim", "resource.k8s.io")
+	if !ok || !resource.IsCRD {
+		t.Fatalf("DRA must remain dynamically watched: resource=%+v ok=%v", resource, ok)
+	}
+}
+
 func (d *countingDiscovery) ServerGroupsAndResources() ([]*metav1.APIGroup, []*metav1.APIResourceList, error) {
 	d.calls.Add(1)
 	return d.DiscoveryInterface.ServerGroupsAndResources()
