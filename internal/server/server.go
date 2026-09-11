@@ -2174,7 +2174,14 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try typed cache for known resource types first
+	// Try typed cache for known resource types first. Canonicalize aliases
+	// ("pod", "pvc", "hpa") to their informer key first: gateResourceRead
+	// admits the whole typed vocabulary mid-sync, and an alias falling
+	// through to the dynamic path would hit a cache that does not exist yet.
+	// The get handler's switch already accepts these aliases directly.
+	if key := informerKeyForKind(kind); key != "" {
+		kind = key
+	}
 	switch kind {
 	case "pods":
 		if cache.Pods() == nil {

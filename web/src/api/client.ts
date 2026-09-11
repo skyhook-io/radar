@@ -2450,6 +2450,13 @@ export function useResources<T>(
     enabled: (options?.enabled ?? true) && Boolean(kind),
     staleTime: 30000, // 30 seconds - matches refetchInterval in ResourcesView
     refetchInterval: options?.refetchInterval,
+    // Kind still completing its initial sync (progressive shell, or a
+    // deferred kind shortly after connect): keep polling instead of
+    // surfacing an error after three tries.
+    retry: (failureCount, error) =>
+      isKindSyncPending(error) ? true : failureCount < 3,
+    retryDelay: (failureCount, error) =>
+      isKindSyncPending(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   });
 }
 
