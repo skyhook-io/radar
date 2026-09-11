@@ -199,6 +199,18 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     // while the retry is still running; the retry's own result supersedes it.
     if (manualRetryPendingRef.current || autoRetryInFlightRef.current) return
     const current = connectionRef.current
+    // The progressive shell renders real resource lists while still
+    // 'connecting'. A query client shared across cluster mounts may hold
+    // another cluster's data under identical keys — drop it before the
+    // shell can show it (the 'connected' path repeats this for the
+    // full-refresh case). Deliberately ahead of the SSE-generation guard:
+    // live connection_state frames bump the generation and drop the poll,
+    // and the shell must not spend the whole sync on another cluster's rows.
+    if (current.state === 'connecting' && data.state === 'connecting' &&
+        data.syncStatus && cacheWarmAtMountRef.current) {
+      cacheWarmAtMountRef.current = false
+      queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== 'connection-status' })
+    }
     if (!shouldApplyPolledConnection(
       current.state,
       data.state,
@@ -214,15 +226,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       return
     }
     const becameConnected = current.state !== 'connected' && data.state === 'connected'
-    // The progressive shell renders real resource lists while still
-    // 'connecting'. A query client shared across cluster mounts may hold
-    // another cluster's data under identical keys — drop it before the
-    // shell can show it (the 'connected' path repeats this for the
-    // full-refresh case).
-    if (data.state === 'connecting' && data.syncStatus && cacheWarmAtMountRef.current) {
-      cacheWarmAtMountRef.current = false
-      queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== 'connection-status' })
-    }
     setConnection({
       state: data.state,
       context: data.context,

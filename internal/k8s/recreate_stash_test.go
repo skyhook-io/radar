@@ -39,9 +39,9 @@ func testDeployment(uid, image string, created time.Time) *appsv1.Deployment {
 // Delete + recreate under the same name must produce an add event that
 // carries the diff against the deleted predecessor, marked ReasonRecreated.
 func TestRecreateJoin_DeleteThenRecreateCarriesDiff(t *testing.T) {
-	prev := initialSyncComplete
-	initialSyncComplete = true
-	defer func() { initialSyncComplete = prev }()
+	prev := initialSyncComplete.Load()
+	initialSyncComplete.Store(true)
+	defer func() { initialSyncComplete.Store(prev) }()
 	resetRecreateStash()
 	defer resetRecreateStash()
 
@@ -100,9 +100,9 @@ func TestRecreateJoin_DeleteThenRecreateCarriesDiff(t *testing.T) {
 
 // A re-add with the same UID is an informer replay, not a recreate.
 func TestRecreateJoin_SameUIDReAdd_NoJoin(t *testing.T) {
-	prev := initialSyncComplete
-	initialSyncComplete = true
-	defer func() { initialSyncComplete = prev }()
+	prev := initialSyncComplete.Load()
+	initialSyncComplete.Store(true)
+	defer func() { initialSyncComplete.Store(prev) }()
 	resetRecreateStash()
 	defer resetRecreateStash()
 
@@ -130,9 +130,9 @@ func TestRecreateJoin_SameUIDReAdd_NoJoin(t *testing.T) {
 }
 
 func TestRecreateJoin_CrossGroupAddDoesNotConsumeDeletedService(t *testing.T) {
-	prev := initialSyncComplete
-	initialSyncComplete = true
-	defer func() { initialSyncComplete = prev }()
+	prev := initialSyncComplete.Load()
+	initialSyncComplete.Store(true)
+	defer func() { initialSyncComplete.Store(prev) }()
 	resetRecreateStash()
 	defer resetRecreateStash()
 
@@ -194,9 +194,9 @@ func TestRecreateJoin_CrossGroupAddDoesNotConsumeDeletedService(t *testing.T) {
 }
 
 func TestTimelineSeenIdentity_SameGroupSharesServedVersions(t *testing.T) {
-	prev := initialSyncComplete
-	initialSyncComplete = true
-	defer func() { initialSyncComplete = prev }()
+	prev := initialSyncComplete.Load()
+	initialSyncComplete.Store(true)
+	defer func() { initialSyncComplete.Store(prev) }()
 
 	timeline.ResetStore()
 	defer timeline.ResetStore()
@@ -233,9 +233,9 @@ func TestTimelineSeenIdentity_SameGroupSharesServedVersions(t *testing.T) {
 }
 
 func TestTimelineSeenIdentity_CrossGroupAddsBothRecorded(t *testing.T) {
-	prev := initialSyncComplete
-	initialSyncComplete = true
-	defer func() { initialSyncComplete = prev }()
+	prev := initialSyncComplete.Load()
+	initialSyncComplete.Store(true)
+	defer func() { initialSyncComplete.Store(prev) }()
 
 	timeline.ResetStore()
 	defer timeline.ResetStore()
@@ -274,9 +274,9 @@ func TestTimelineSeenIdentity_CrossGroupAddsBothRecorded(t *testing.T) {
 }
 
 func TestTimelineSeenIdentity_TypedBuiltinUsesCanonicalGroup(t *testing.T) {
-	prev := initialSyncComplete
-	initialSyncComplete = true
-	defer func() { initialSyncComplete = prev }()
+	prev := initialSyncComplete.Load()
+	initialSyncComplete.Store(true)
+	defer func() { initialSyncComplete.Store(prev) }()
 
 	timeline.ResetStore()
 	defer timeline.ResetStore()
@@ -299,9 +299,9 @@ func TestTimelineSeenIdentity_TypedBuiltinUsesCanonicalGroup(t *testing.T) {
 }
 
 func TestRecreateJoin_KnativeDeleteTombstonePreservesGroupAndObject(t *testing.T) {
-	prev := initialSyncComplete
-	initialSyncComplete = true
-	defer func() { initialSyncComplete = prev }()
+	prev := initialSyncComplete.Load()
+	initialSyncComplete.Store(true)
+	defer func() { initialSyncComplete.Store(prev) }()
 	resetRecreateStash()
 	defer resetRecreateStash()
 
@@ -424,9 +424,9 @@ func TestRecreateStash_CapEviction(t *testing.T) {
 // across recreates are tautological, and a status-only "recreated with
 // changes" entry reads as a config change that never happened.
 func TestRecreateJoin_SpecIdenticalRecreate_NoJoin(t *testing.T) {
-	prev := initialSyncComplete
-	initialSyncComplete = true
-	defer func() { initialSyncComplete = prev }()
+	prev := initialSyncComplete.Load()
+	initialSyncComplete.Store(true)
+	defer func() { initialSyncComplete.Store(prev) }()
 	resetRecreateStash()
 	defer resetRecreateStash()
 

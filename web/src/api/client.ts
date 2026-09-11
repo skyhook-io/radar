@@ -2420,6 +2420,12 @@ export function useResourceWithRelationships<T>(
     queryKey: ["resource", kind, namespace, name, group],
     queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
     enabled: Boolean(kind && name),
+    // Deep-linked detail views can mount while the kind's informer is still
+    // completing its initial sync: keep polling instead of erroring out.
+    retry: (failureCount, error) =>
+      isKindSyncPending(error) ? true : failureCount < 3,
+    retryDelay: (failureCount, error) =>
+      isKindSyncPending(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   });
 }
 

@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -60,7 +61,7 @@ var logTiming = LogTiming
 // initialSyncComplete is set to true after the initial cache sync completes.
 // During initial sync, "add" events are skipped since they represent existing
 // resources, not new creations. Only adds after sync are recorded.
-var initialSyncComplete bool
+var initialSyncComplete atomic.Bool
 
 // deferredResources lists informer keys that are NOT required for the initial
 // dashboard render. These sync in the background after the critical informers
@@ -475,12 +476,11 @@ func InitResourceCache(ctx context.Context) error {
 			wrapped.ResourceCache = core
 		}
 
-		if !promoteCache(wrapped, gen) {
+		if !promoteCache(wrapped, gen, core.IsSyncComplete()) {
 			core.Stop()
 			initErr = fmt.Errorf("cluster changed during cache initialization")
 			return
 		}
-		initialSyncComplete = core.IsSyncComplete()
 	})
 	return initErr
 }
@@ -506,10 +506,13 @@ func clearSyncingCacheForGen(gen uint64) {
 	}
 }
 
-// promoteCache installs wrapped as the ready singleton and retires the
-// mid-sync handle. Returns false when the generation moved — the caller owns
-// stopping the now-orphaned core.
-func promoteCache(wrapped *ResourceCache, gen uint64) bool {
+// promoteCache installs wrapped as the ready singleton, retires the mid-sync
+// handle, and records the sync-completion flag — all inside the same
+// generation-checked critical section, so a context reset can never interleave
+// between promotion and the completion write and leave a stale flag behind.
+// Returns false when the generation moved — the caller owns stopping the
+// now-orphaned core.
+func promoteCache(wrapped *ResourceCache, gen uint64, syncComplete bool) bool {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
 	if cacheGeneration != gen {
@@ -517,6 +520,7 @@ func promoteCache(wrapped *ResourceCache, gen uint64) bool {
 	}
 	resourceCache = wrapped
 	syncingCache = nil
+	initialSyncComplete.Store(syncComplete)
 	return true
 }
 
@@ -576,6 +580,16 @@ func GetSyncingResourceCache() *ResourceCache {
 	return syncingCache
 }
 
+// SnapshotCaches returns the promoted singleton and the mid-sync handle as
+// one consistent read under the lifecycle lock. Progressive-startup callers
+// run concurrently with promotion and reset, so loading the two pointers
+// separately could observe promotion half-applied (both set, or neither).
+func SnapshotCaches() (promoted, syncing *ResourceCache) {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	return resourceCache, syncingCache
+}
+
 // ReadableCacheForKind picks the cache a typed-kind read should serve from:
 // the promoted singleton when it exists (post-Phase-1 — readiness still
 // gates promoted/deferred kinds that are syncing in background), otherwise
@@ -583,11 +597,12 @@ func GetSyncingResourceCache() *ResourceCache {
 // handle yet (probing, or disconnected) — callers respond "not ready".
 // key is an informer key (lowercase plural, e.g. "pods").
 func ReadableCacheForKind(key string) (*ResourceCache, KindReadiness) {
-	if c := GetResourceCache(); c != nil {
-		return c, c.KindReadinessFor(key)
+	promoted, syncing := SnapshotCaches()
+	if promoted != nil {
+		return promoted, promoted.KindReadinessFor(key)
 	}
-	if c := GetSyncingResourceCache(); c != nil {
-		return c, c.KindReadinessFor(key)
+	if syncing != nil {
+		return syncing, syncing.KindReadinessFor(key)
 	}
 	return nil, KindUnavailable
 }
@@ -611,7 +626,7 @@ func ResetResourceCache() {
 		resourceCache = nil
 	}
 	cacheOnce = new(sync.Once)
-	initialSyncComplete = false
+	initialSyncComplete.Store(false)
 	resetRecreateStash()
 	// Tombstone keys are UID-first, falling back to an apiVersion|kind|ns|name
 	// composite (no cluster context) when a source lacks a UID; a leftover
@@ -951,7 +966,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	// (namespace re-apply) would otherwise emit a status-only "recreated
 	// with changes" entry that reads as a config change.
 	recreated := false
-	if op == "add" && newObj != nil && initialSyncComplete {
+	if op == "add" && newObj != nil && initialSyncComplete.Load() {
 		if meta, ok := newObj.(metav1.Object); ok && time.Since(meta.GetCreationTimestamp().Time) <= 30*time.Second {
 			if stashed, ok := takeRecreateMatch(apiGroup, kind, namespace, name, uid); ok {
 				if localDiff := ComputeDiff(kind, stripStatusForRecreateDiff(stashed), stripStatusForRecreateDiff(newObj)); localDiff != nil && len(localDiff.Fields) > 0 {
@@ -998,7 +1013,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	if op == "add" {
 		isSyncEvent := false
 
-		if !initialSyncComplete {
+		if !initialSyncComplete.Load() {
 			isSyncEvent = true
 		}
 

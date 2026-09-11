@@ -135,8 +135,8 @@ func TestK8sEvent_MissStaysSilentNull(t *testing.T) {
 // (or just-evicted) object is enriched even without a delete.
 func TestK8sEvent_TombstoneFedOnAdd(t *testing.T) {
 	initMemoryTimeline(t)
-	initialSyncComplete = true
-	t.Cleanup(func() { initialSyncComplete = false })
+	initialSyncComplete.Store(true)
+	t.Cleanup(func() { initialSyncComplete.Store(false) })
 
 	created := time.Now() // fresh add (age <= 30s so it is recorded, not treated as sync)
 	pod := tombstoneTestPod("web-new", created)

@@ -60,7 +60,7 @@ func TestPromoteCache_GenerationGuard(t *testing.T) {
 
 	gen := currentGen()
 	publishSyncingCache(w, gen)
-	if !promoteCache(w, gen) {
+	if !promoteCache(w, gen, true) {
 		t.Fatal("promotion with current generation failed")
 	}
 	if GetResourceCache() != w {
@@ -75,7 +75,7 @@ func TestPromoteCache_GenerationGuard(t *testing.T) {
 	resourceCache = nil
 	cacheMu.Unlock()
 	bumpGen()
-	if promoteCache(w, gen) {
+	if promoteCache(w, gen, true) {
 		t.Fatal("stale-generation promotion succeeded")
 	}
 	if GetResourceCache() != nil {
@@ -112,7 +112,7 @@ func TestResetResourceCache_InvalidatesInFlightConstruction(t *testing.T) {
 	if GetSyncingResourceCache() != nil {
 		t.Fatal("reset left the mid-sync handle published")
 	}
-	if promoteCache(w, gen) {
+	if promoteCache(w, gen, true) {
 		t.Fatal("reset did not invalidate the in-flight construction's generation")
 	}
 }

@@ -51,7 +51,7 @@ func InitLoadTestResourceCache(client kubernetes.Interface) error {
 		return err
 	}
 
-	initialSyncComplete = core.IsSyncComplete()
+	initialSyncComplete.Store(core.IsSyncComplete())
 
 	resourceCache = &ResourceCache{
 		ResourceCache:               core,
@@ -121,7 +121,7 @@ func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8scor
 		return err
 	}
 
-	initialSyncComplete = true
+	initialSyncComplete.Store(true)
 
 	resourceCache = &ResourceCache{
 		ResourceCache:               core,

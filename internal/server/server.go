@@ -2551,11 +2551,11 @@ func informerKeyForKind(kind string) string {
 
 // gateResourceRead enforces per-kind readiness for the typed resource read
 // handlers and picks which cache serves the request. Post-connect that is
-// the promoted singleton — readiness still gates deferred/promoted kinds
-// syncing in background, which previously could render a partial store as an
-// empty or truncated list. During initial sync it is the mid-sync handle, so
-// kinds become readable one by one instead of waiting behind the global
-// connected gate.
+// the promoted singleton — readiness must keep gating deferred/promoted kinds
+// syncing in background, or a partial store would serve as an empty or
+// truncated list. During initial sync it is the mid-sync handle, so kinds
+// become readable one by one instead of waiting behind the global connected
+// gate.
 //
 // Returns (cache, true) when the read may proceed; otherwise writes the
 // response and returns (nil, false). Kinds outside the typed informer set —
@@ -2619,9 +2619,10 @@ func (s *Server) requireConnectedOrSyncing(w http.ResponseWriter) bool {
 	// window where later subsystems (discovery, helm, traffic) are still
 	// initializing. A disconnected cluster keeps its 503 even though a stale
 	// handle may still exist.
-	if k8s.GetConnectionStatus().State == k8s.StateConnecting &&
-		(k8s.GetSyncingResourceCache() != nil || k8s.GetResourceCache() != nil) {
-		return true
+	if k8s.GetConnectionStatus().State == k8s.StateConnecting {
+		if promoted, syncing := k8s.SnapshotCaches(); promoted != nil || syncing != nil {
+			return true
+		}
 	}
 	s.writeError(w, http.StatusServiceUnavailable, "Not connected to cluster")
 	return false
@@ -4664,9 +4665,10 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 	// GetSyncSnapshot is deliberately cheap (no lister walks) — this endpoint
 	// is polled sub-second during the connecting phase.
 	if status.State == k8s.StateConnecting {
-		if syncing := k8s.GetSyncingResourceCache(); syncing != nil {
+		promoted, syncing := k8s.SnapshotCaches()
+		if syncing != nil {
 			response["syncStatus"] = syncing.GetSyncSnapshot()
-		} else if promoted := k8s.GetResourceCache(); promoted != nil {
+		} else if promoted != nil {
 			// Phase-1 done but later subsystems still initializing: keep the
 			// progressive shell up (deferred kinds keep ticking) instead of
 			// collapsing back to the splash until 'connected'.
