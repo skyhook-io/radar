@@ -10,7 +10,6 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 )
 
-// waitForCondition polls until fn() is true or the deadline passes.
 func waitForCondition(t *testing.T, what string, fn func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
