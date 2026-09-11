@@ -2995,10 +2995,13 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	// mid-sync handle (ready singleton still nil) — relationships computed
 	// against a partially-synced cache would be silently incomplete.
 	var relationships *topology.Relationships
-	if k8s.GetResourceCache() != nil {
+	// One Load, reused: readers are lock-free and a context switch mid-request
+	// could otherwise pass the nil check on one handle and hand the provider a
+	// different (or nil) one.
+	if promoted := k8s.GetResourceCache(); promoted != nil {
 		if cachedTopo, relIdx := s.broadcaster.GetCachedTopologyWithIndex(); cachedTopo != nil {
 			relationships = topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
-				k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
+				k8s.NewTopologyResourceProvider(promoted),
 				k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
 		}
 	}

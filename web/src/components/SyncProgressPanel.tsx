@@ -18,9 +18,15 @@ export function SyncProgressPanel({
   const synced = syncStatus.criticalSynced + syncStatus.deferredSynced
   const kinds = useMemo(
     () => [...syncStatus.kinds].sort((a, b) => {
-      if (a.synced !== b.synced) return a.synced ? -1 : 1
+      // Ready first, failed last, both alphabetical within their group.
+      const rank = (k: typeof a) => (k.synced ? 0 : k.failed ? 2 : 1)
+      if (rank(a) !== rank(b)) return rank(a) - rank(b)
       return a.kind.localeCompare(b.kind)
     }),
+    [syncStatus.kinds],
+  )
+  const failedCount = useMemo(
+    () => syncStatus.kinds.filter((k) => k.failed).length,
     [syncStatus.kinds],
   )
 
@@ -34,11 +40,17 @@ export function SyncProgressPanel({
         <p className="text-sm text-theme-text-secondary mb-6">
           {synced} of {total} resource types ready — views open as their data finishes loading.
           This view needs the full dataset and will appear automatically.
+          {failedCount > 0 && (
+            <span className="block mt-1 text-red-400">
+              {failedCount} resource {failedCount === 1 ? 'type' : 'types'} failed to load within the
+              sync deadline — affected views will show an error. Retry the connection to try again.
+            </span>
+          )}
         </p>
         <div className="card-inner grid grid-cols-2 gap-x-6 gap-y-1.5 max-h-80 overflow-y-auto">
           {kinds.map((k) => (
             <div key={k.key} className="flex items-center gap-2 min-w-0 text-sm">
-              <StatusDot tone={k.synced ? 'healthy' : 'neutral'} size="sm" className="shrink-0" />
+              <StatusDot tone={k.synced ? 'healthy' : k.failed ? 'unhealthy' : 'neutral'} size="sm" className="shrink-0" />
               {k.synced ? (
                 <button
                   onClick={() => onNavigateToKind(k.key)}
@@ -47,6 +59,10 @@ export function SyncProgressPanel({
                   <span className="truncate">{k.kind}</span>
                   <ArrowRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
                 </button>
+              ) : k.failed ? (
+                <span className="truncate text-red-400" title="Failed to load within the sync deadline">
+                  {k.kind}
+                </span>
               ) : (
                 <span className="truncate text-theme-text-tertiary animate-pulse">{k.kind}</span>
               )}

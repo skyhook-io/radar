@@ -626,9 +626,12 @@ func ResetResourceCache() {
 		syncingCache.Stop()
 		syncingCache = nil
 	}
-	if promoted := resourceCache.Load(); promoted != nil {
+	// Detach before stopping: readers are lock-free, so publishing nil first
+	// shrinks the window where a request can pick up a cache whose informers
+	// are already shutting down. (A handle loaded just before this point can
+	// still serve its one request — listers stay readable after Stop.)
+	if promoted := resourceCache.Swap(nil); promoted != nil {
 		promoted.Stop()
-		resourceCache.Store(nil)
 	}
 	cacheOnce = new(sync.Once)
 	initialSyncComplete.Store(false)

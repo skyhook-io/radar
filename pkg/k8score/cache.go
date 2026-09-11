@@ -1915,6 +1915,10 @@ type KindSyncState struct {
 	Key      string `json:"key"`
 	Synced   bool   `json:"synced"`
 	Deferred bool   `json:"deferred"`
+	// Failed marks a kind whose sync deadline fired without completing —
+	// terminal for this connection. The shell renders these as errors
+	// instead of promising they will finish loading.
+	Failed bool `json:"failed,omitempty"`
 }
 
 // SyncSnapshot is a lightweight progress report for connection-status
@@ -1939,17 +1943,16 @@ func (rc *ResourceCache) GetSyncSnapshot() SyncSnapshot {
 	rc.informerMu.RLock()
 	statuses := make([]InformerSyncStatus, len(rc.informerStatuses))
 	copy(statuses, rc.informerStatuses)
-	hasSynced := make([]func() bool, len(rc.informerHasSynced))
-	copy(hasSynced, rc.informerHasSynced)
 	rc.informerMu.RUnlock()
 
 	snap := SyncSnapshot{Kinds: make([]KindSyncState, 0, len(statuses))}
-	for i, s := range statuses {
-		synced := false
-		if i < len(hasSynced) && hasSynced[i] != nil {
-			synced = hasSynced[i]()
-		}
-		snap.Kinds = append(snap.Kinds, KindSyncState{Kind: s.Kind, Key: s.Key, Synced: synced, Deferred: s.Deferred})
+	for _, s := range statuses {
+		readiness := rc.KindReadinessFor(s.Key)
+		synced := readiness == KindReady
+		snap.Kinds = append(snap.Kinds, KindSyncState{
+			Kind: s.Kind, Key: s.Key, Synced: synced, Deferred: s.Deferred,
+			Failed: readiness == KindFailed,
+		})
 		if s.Deferred {
 			snap.DeferredTotal++
 			if synced {

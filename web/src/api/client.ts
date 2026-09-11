@@ -255,6 +255,8 @@ export interface SyncKindState {
   key: string;
   synced: boolean;
   deferred: boolean;
+  // Terminal: the kind's sync deadline fired without completing.
+  failed?: boolean;
 }
 
 export interface SyncStatusSnapshot {
