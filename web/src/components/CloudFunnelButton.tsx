@@ -5,7 +5,9 @@ import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Coll
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { Tooltip } from './ui/Tooltip'
 import { CloudConnectFlow } from './CloudConnectFlow'
+import { driverConnectAvailable, driverEscapeContent, effectiveConnectionState } from './cloudFunnelState'
 import { showApiError } from './ui/Toast'
+import { useConnection } from '../context/ConnectionContext'
 import {
   ApiError,
   cloudInstallActive,
@@ -48,6 +50,12 @@ const DEFAULT_ASSURANCES = [
   '3 clusters free, no card required',
 ]
 const SIGNUP_QUERY = '?utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal'
+
+// The footer's primary action, whichever element fills that slot. Emerald is
+// this dialog's Cloud accent (eyebrow, sweep, check marks), not a generic
+// surface, so it stays literal here rather than a theme token.
+const PRIMARY_ACTION_CLASS =
+  'whitespace-nowrap px-6 py-2.5 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[14px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all'
 const ABOUT_URL = 'https://radarhq.io/about'
 const PRICING_URL = 'https://radarhq.io/pricing'
 const SELF_HOSTED_DOCS_URL = 'https://radarhq.io/docs/cloud/self-hosted/'
@@ -88,6 +96,20 @@ export function CloudFunnelButton() {
 
   const capabilities = useCapabilities()
   const lane = capabilities.data?.cloudConnect?.lane ?? 'wizard'
+  // The driver lane inspects the live cluster, so it has nothing to offer
+  // until Radar is connected to one. The header shows this button from the
+  // first paint, before that connection exists.
+  const liveConnectionState = useConnection().connection.state
+  // Set when prepare answered 503: the server has no cluster even if the
+  // connection feed still says otherwise. Cleared once that feed moves and
+  // whenever the dialog opens or closes, so a blip the feed never surfaced
+  // (it holds 'connected' across short reconnects) cannot hide the in-app
+  // connect for good.
+  const [serverReportedNoCluster, setServerReportedNoCluster] = useState(false)
+  useEffect(() => {
+    setServerReportedNoCluster(false)
+  }, [liveConnectionState])
+  const connectionState = effectiveConnectionState(liveConnectionState, serverReportedNoCluster)
   const appUrl = capabilities.data?.cloudConnect?.appUrl || FALLBACK_APP_URL
   // utm_content distinguishes the lane that opened the Hub — measured Hub-side
   // only when the user actually navigates there; Radar transmits nothing.
@@ -132,6 +154,15 @@ export function CloudFunnelButton() {
         applyStatus(live)
         return
       }
+      // A 503 means there was no cluster to inspect (the connection dropped
+      // between render and click). Nothing about the install path broke, so
+      // the pitch must not come back reading "Try again".
+      if (err instanceof ApiError && err.status === 503) {
+        setServerReportedNoCluster(true)
+        exitFlow(false)
+        showApiError("Radar isn't connected to a cluster yet", 'Connect a cluster first, or continue in Radar Cloud.')
+        return
+      }
       // Anything else failed before a flow existed. Return to the pitch rather
       // than leaving the flow view armed, where a later status change would
       // pull the user into a screen they did not ask for.
@@ -143,9 +174,15 @@ export function CloudFunnelButton() {
     // a running install. Toast explicitly on the paths that are failures.
   })
 
+  const closeModal = () => {
+    setOpen(false)
+    setServerReportedNoCluster(false)
+  }
+
   const openModal = () => {
     setOpen(true)
     setSeen(true)
+    setServerReportedNoCluster(false)
     markSeen()
     // Re-open lands on a live flow if one is running.
     if (lane === 'driver' && flowLive) setInFlowView(true)
@@ -180,6 +217,7 @@ export function CloudFunnelButton() {
   const contextName = useClusterInfo().data?.context
   useEffect(() => {
     setPrepareFailed(false)
+    setServerReportedNoCluster(false)
   }, [contextName])
 
   // The server owns the "nothing to pitch" decision: an already-tunneled
@@ -226,11 +264,11 @@ export function CloudFunnelButton() {
 
       <DialogPortal
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={closeModal}
         className="w-[580px] max-w-full max-h-[calc(100vh-2rem)] overflow-hidden flex flex-col"
       >
         <button
-          onClick={() => setOpen(false)}
+          onClick={closeModal}
           aria-label="Close"
           className="absolute top-3.5 right-3.5 z-10 p-1.5 rounded-md text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover transition-colors"
         >
@@ -256,15 +294,19 @@ export function CloudFunnelButton() {
         ) : (
           <>
             <div className="min-h-0 overflow-y-auto">
-              <PitchBody lane={lane} freeTier={connectInfo.data?.freeTier} />
+              {/* With no cluster to install into, the pitch must not promise
+                  that setup runs here: describe the Cloud-side path instead. */}
+              <PitchBody
+                lane={lane === 'driver' && !driverConnectAvailable(connectionState) ? 'wizard' : lane}
+                freeTier={connectInfo.data?.freeTier}
+              />
             </div>
             <ModalFooter
               lane={lane}
               signupUrl={signupUrl}
-              // driver-escape after a failed attempt, driver-alt before one, so
-              // the Hub can tell "prefers the browser" from "app path broke".
-              driverEscapeUrl={signupUrlFor(prepareFailed ? 'driver-escape' : 'driver-alt')}
+              driverEscapeUrl={signupUrlFor(driverEscapeContent(connectionState, prepareFailed))}
               prepareFailed={prepareFailed}
+              connectAvailable={driverConnectAvailable(connectionState)}
               assurances={connectInfo.data?.assurances}
               notice={connectInfo.data?.notice}
               self={inCluster ? self.data : undefined}
@@ -273,7 +315,7 @@ export function CloudFunnelButton() {
               // in-cluster, so the CTA would escape before classification.
               selfLoading={inCluster && self.isPending}
               onConnect={startConnect}
-              onLater={() => setOpen(false)}
+              onLater={closeModal}
             />
           </>
         )}
@@ -318,6 +360,7 @@ function ModalFooter({
   signupUrl,
   driverEscapeUrl,
   prepareFailed,
+  connectAvailable,
   assurances,
   notice,
   self,
@@ -328,9 +371,13 @@ function ModalFooter({
   lane: 'driver' | 'wizard'
   signupUrl: string
   // Same destination as signupUrl, distinct utm_content: the caller encodes
-  // whether this render follows a failed in-app attempt.
+  // whether this render follows a failed in-app attempt or has no connected
+  // cluster to attempt against.
   driverEscapeUrl: string
   prepareFailed: boolean
+  // False while Radar has no connected cluster: the in-app connect has
+  // nothing to inspect, so the Cloud path takes its place.
+  connectAvailable: boolean
   // Live copy from the Hub; undefined until (or unless) it arrives.
   assurances?: string[]
   notice?: string
@@ -395,11 +442,23 @@ function ModalFooter({
         <div className="mb-3.5 card-inner p-3 text-[12px] leading-relaxed text-theme-text-secondary">{notice}</div>
       )}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2.5">
-        {lane === 'driver' ? (
+        {lane === 'driver' && !connectAvailable ? (
+          // No cluster to inspect, so the Cloud wizard is the only path and
+          // takes the primary slot. No explanation: someone with no cluster
+          // connected is not expecting Radar to install into one.
+          <a
+            href={driverEscapeUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={PRIMARY_ACTION_CLASS}
+          >
+            Continue in Radar Cloud
+          </a>
+        ) : lane === 'driver' ? (
           <>
             <button
               onClick={onConnect}
-              className="whitespace-nowrap px-6 py-2.5 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[14px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all"
+              className={PRIMARY_ACTION_CLASS}
             >
               {/* Trailing ellipsis: further input follows the click — the
                   inspect step and a plan the user approves in the browser. */}
@@ -414,7 +473,7 @@ function ModalFooter({
               rel="noopener noreferrer"
               className="whitespace-nowrap text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary hover:underline underline-offset-2 transition-colors"
             >
-              or set up in the browser
+              or set up in Radar Cloud
             </a>
           </>
         ) : cliOnly ? null : (
@@ -435,7 +494,7 @@ function ModalFooter({
       </div>
       {/* Mechanics, not marketing: a falsifiable claim the plan card then
           fulfills. Sits next to the button whose click it de-risks. */}
-      {lane === 'driver' && (
+      {lane === 'driver' && connectAvailable && (
         <p className="mt-2.5 text-[11px] leading-relaxed text-theme-text-tertiary">
           Nothing installs on click. Radar inspects the cluster and shows you a plan; you approve it in
           the browser before anything changes.
