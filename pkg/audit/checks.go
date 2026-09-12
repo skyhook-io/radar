@@ -1050,8 +1050,12 @@ func checkOrphanConfigMapsSecrets(tr *evalTracker, input *CheckInput) []Finding 
 		if sec.Type == "helm.sh/release.v1" {
 			continue
 		}
-		// Skip TLS secrets used by cert-manager (they may be referenced by Ingress annotations, not spec)
-		if sec.Labels != nil && sec.Labels["cert-manager.io/certificate-name"] != "" {
+		// Skip cert-manager Certificate secrets. cert-manager stores
+		// cert-manager.io/certificate-name as an annotation (and some
+		// older/custom paths may copy it onto a label). Either form means
+		// the Secret is still managed for a Certificate even when no
+		// workload/Ingress in this namespace mounts it directly.
+		if isCertManagerCertificateSecret(sec) {
 			continue
 		}
 		if isKnownPlatformSecret(sec) {
@@ -1062,6 +1066,12 @@ func checkOrphanConfigMapsSecrets(tr *evalTracker, input *CheckInput) []Finding 
 		}
 		tr.record("orphanConfigMapSecret", sec.Namespace)
 		if referencedSecrets[sec.Namespace+"/"+sec.Name] {
+			continue
+		}
+		// Emberstack reflector: a source Secret mirrored into another
+		// namespace is "used" when that reflected copy is referenced
+		// (e.g. Istio Gateway credentialName in istio-system).
+		if isReflectorSourceWithReferencedCopy(sec, referencedSecrets) {
 			continue
 		}
 		findings = append(findings, Finding{
@@ -1161,6 +1171,66 @@ func isKnownPlatformConfigMap(cm *corev1.ConfigMap) bool {
 		return true
 	}
 
+	return false
+}
+
+const (
+	certManagerCertificateNameKey = "cert-manager.io/certificate-name"
+
+	reflectorReflectionAllowedAnno     = "reflector.v1.k8s.emberstack.com/reflection-allowed"
+	reflectorReflectionAutoEnabledAnno = "reflector.v1.k8s.emberstack.com/reflection-auto-enabled"
+	reflectorReflectionAutoNamespaces  = "reflector.v1.k8s.emberstack.com/reflection-auto-namespaces"
+)
+
+// isCertManagerCertificateSecret reports whether sec is the Secret named by a
+// cert-manager Certificate. cert-manager writes certificate-name onto
+// annotations; accept a label too so secretTemplate / older copies still match.
+func isCertManagerCertificateSecret(sec *corev1.Secret) bool {
+	if sec == nil {
+		return false
+	}
+	return strings.TrimSpace(labelsValue(sec.Annotations, certManagerCertificateNameKey)) != "" ||
+		strings.TrimSpace(labelsValue(sec.Labels, certManagerCertificateNameKey)) != ""
+}
+
+// isReflectorSourceWithReferencedCopy is true when sec is configured for
+// Emberstack auto-reflection and a same-named Secret in a reflected target
+// namespace is already marked referenced (typically by an Istio Gateway).
+func isReflectorSourceWithReferencedCopy(sec *corev1.Secret, referencedSecrets map[string]bool) bool {
+	if sec == nil || len(referencedSecrets) == 0 {
+		return false
+	}
+	if !metadataValueEnabled(labelsValue(sec.Annotations, reflectorReflectionAllowedAnno)) {
+		return false
+	}
+	if !metadataValueEnabled(labelsValue(sec.Annotations, reflectorReflectionAutoEnabledAnno)) {
+		return false
+	}
+	autoNamespaces := labelsValue(sec.Annotations, reflectorReflectionAutoNamespaces)
+	for key := range referencedSecrets {
+		ns, name, ok := strings.Cut(key, "/")
+		if !ok || name != sec.Name || ns == "" || ns == sec.Namespace {
+			continue
+		}
+		if reflectorAutoNamespaceMatches(autoNamespaces, ns) {
+			return true
+		}
+	}
+	return false
+}
+
+// reflectorAutoNamespaceMatches follows Emberstack's list semantics: empty
+// means all namespaces; otherwise a comma-separated exact namespace list.
+func reflectorAutoNamespaceMatches(list, namespace string) bool {
+	list = strings.TrimSpace(list)
+	if list == "" {
+		return true
+	}
+	for _, part := range strings.Split(list, ",") {
+		if strings.TrimSpace(part) == namespace {
+			return true
+		}
+	}
 	return false
 }
 

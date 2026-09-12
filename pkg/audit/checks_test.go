@@ -1953,6 +1953,116 @@ func TestOrphanConfigMapSecretAdditionalRefs(t *testing.T) {
 	}
 }
 
+func TestOrphanConfigMapSecretCertManagerCertificateMetadata(t *testing.T) {
+	input := &CheckInput{
+		Secrets: []*corev1.Secret{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "api-tls-from-annotation",
+					Namespace: "app",
+					Annotations: map[string]string{
+						"cert-manager.io/certificate-name": "api-tls",
+						"cert-manager.io/issuer-name":      "letsencrypt",
+					},
+					Labels: map[string]string{
+						"controller.cert-manager.io/fao": "true",
+					},
+				},
+				Type: corev1.SecretTypeTLS,
+			},
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "api-tls-from-label",
+					Namespace: "app",
+					Labels: map[string]string{
+						"cert-manager.io/certificate-name": "api-tls-label",
+					},
+				},
+				Type: corev1.SecretTypeTLS,
+			},
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "unrelated-tls",
+					Namespace: "app",
+					Annotations: map[string]string{
+						"cert-manager.io/issuer-name": "letsencrypt",
+					},
+				},
+				Type: corev1.SecretTypeTLS,
+			},
+		},
+	}
+
+	orphans := findingResourceKeys(RunChecks(input).Findings, "orphanConfigMapSecret")
+	for _, key := range []string{
+		"Secret/app/api-tls-from-annotation",
+		"Secret/app/api-tls-from-label",
+	} {
+		if orphans[key] {
+			t.Errorf("%s should not be flagged as orphan", key)
+		}
+	}
+	if !orphans["Secret/app/unrelated-tls"] {
+		t.Errorf("Secret/app/unrelated-tls should still be flagged as orphan")
+	}
+}
+
+func TestOrphanConfigMapSecretReflectorSourceConsumedByIstioGateway(t *testing.T) {
+	input := &CheckInput{
+		ConfigObjectRefs: []ConfigObjectRef{
+			// Istio Gateway in istio-system consumes the reflected copy.
+			{Kind: "Secret", Namespace: "istio-system", Name: "example-api-tls"},
+		},
+		Secrets: []*corev1.Secret{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "example-api-tls",
+					Namespace: "app",
+					Annotations: map[string]string{
+						"reflector.v1.k8s.emberstack.com/reflection-allowed":      "true",
+						"reflector.v1.k8s.emberstack.com/reflection-auto-enabled": "true",
+						"reflector.v1.k8s.emberstack.com/reflection-auto-namespaces": "istio-system",
+					},
+				},
+				Type: corev1.SecretTypeTLS,
+			},
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "example-api-tls",
+					Namespace: "istio-system",
+					Annotations: map[string]string{
+						"reflector.v1.k8s.emberstack.com/reflected-version": "1",
+					},
+				},
+				Type: corev1.SecretTypeTLS,
+			},
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "other-reflected-tls",
+					Namespace: "app",
+					Annotations: map[string]string{
+						"reflector.v1.k8s.emberstack.com/reflection-allowed":         "true",
+						"reflector.v1.k8s.emberstack.com/reflection-auto-enabled":    "true",
+						"reflector.v1.k8s.emberstack.com/reflection-auto-namespaces": "istio-system",
+					},
+				},
+				Type: corev1.SecretTypeTLS,
+			},
+		},
+	}
+
+	orphans := findingResourceKeys(RunChecks(input).Findings, "orphanConfigMapSecret")
+	if orphans["Secret/app/example-api-tls"] {
+		t.Errorf("reflector source Secret/app/example-api-tls should not be orphaned when its istio-system copy is referenced")
+	}
+	if orphans["Secret/istio-system/example-api-tls"] {
+		t.Errorf("referenced reflected Secret/istio-system/example-api-tls should not be orphaned")
+	}
+	if !orphans["Secret/app/other-reflected-tls"] {
+		t.Errorf("Secret/app/other-reflected-tls should still be orphaned when no copy is referenced")
+	}
+}
+
 func TestDeprecatedAPIVersion(t *testing.T) {
 	input := &CheckInput{
 		ClusterVersion: "1.30",

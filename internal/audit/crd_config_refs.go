@@ -144,6 +144,8 @@ func dynamicConfigRefHandlerFor(gvr schema.GroupVersionResource) dynamicConfigRe
 		}
 	case "cert-manager.io":
 		switch gvr.Resource {
+		case "certificates":
+			return certManagerCertificateConfigRefs
 		case "issuers":
 			return certManagerIssuerConfigRefs
 		case "clusterissuers":
@@ -313,6 +315,15 @@ func istioGatewayConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
 			addSecret(&refs, ns, name)
 		}
 	}
+	return refs
+}
+
+func certManagerCertificateConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
+	var refs []bp.ConfigObjectRef
+	ns := u.GetNamespace()
+	addSecret(&refs, ns, stringAt(u.Object, "spec", "secretName"))
+	addSecret(&refs, ns, stringAt(u.Object, "spec", "keystores", "pkcs12", "passwordSecretRef", "name"))
+	addSecret(&refs, ns, stringAt(u.Object, "spec", "keystores", "jks", "passwordSecretRef", "name"))
 	return refs
 }
 
