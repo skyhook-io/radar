@@ -2561,10 +2561,96 @@ func (c *Client) upgradeWithValues(actionConfig *action.Configuration, name, tar
 }
 
 func (c *Client) chartForUpgradeTarget(actionConfig *action.Configuration, rel *release.Release, targetVersion, repositoryName string, sendProgress func(phase, message, detail string)) (*chart.Chart, error) {
-	if targetVersion == "" || targetVersion == rel.Chart.Metadata.Version {
-		return rel.Chart, nil
+	return c.chartForUpgradeTargetWithLoader(actionConfig, rel, targetVersion, repositoryName, sendProgress, c.loadTargetChart)
+}
+
+type targetChartLoader func(*action.Configuration, *release.Release, string, string, func(string, string, string)) (*chart.Chart, error)
+
+// chartForUpgradeTargetWithLoader returns a chart that is safe to render. Helm's
+// stored release representation does not serialize Chart.dependencies, so an
+// umbrella release can retain dependency declarations in Chart.yaml while all
+// child chart bodies are absent. Reusing that object for a same-version values
+// operation renders only the parent and makes the resulting upgrade destructive.
+//
+// A complete in-memory release chart remains reusable. An incomplete one is
+// reconstructed through the same configured-source resolver used by upgrades,
+// pinned to the installed chart version. The loaded chart is checked again so a
+// source package that merely declares (but does not vendor) dependencies fails
+// closed.
+func (c *Client) chartForUpgradeTargetWithLoader(actionConfig *action.Configuration, rel *release.Release, targetVersion, repositoryName string, sendProgress func(phase, message, detail string), load targetChartLoader) (*chart.Chart, error) {
+	if rel == nil || rel.Chart == nil || rel.Chart.Metadata == nil {
+		return nil, fmt.Errorf("release has no usable chart metadata")
 	}
-	return c.loadTargetChart(actionConfig, rel, targetVersion, repositoryName, sendProgress)
+
+	currentVersion := rel.Chart.Metadata.Version
+	if targetVersion == "" {
+		targetVersion = currentVersion
+	}
+
+	reconstructingStoredChart := false
+	if targetVersion == currentVersion {
+		if err := validateChartDependencyBodies(rel.Chart); err == nil {
+			return rel.Chart, nil
+		}
+		reconstructingStoredChart = true
+	}
+
+	loaded, err := load(actionConfig, rel, targetVersion, repositoryName, sendProgress)
+	if err != nil {
+		if reconstructingStoredChart {
+			return nil, fmt.Errorf("could not reconstruct complete chart %s version %s for values operation: %w", rel.Chart.Metadata.Name, targetVersion, err)
+		}
+		return nil, err
+	}
+	if err := validateChartDependencyBodies(loaded); err != nil {
+		return nil, fmt.Errorf("refusing to render incomplete chart %s version %s: %w", rel.Chart.Metadata.Name, targetVersion, err)
+	}
+	return loaded, nil
+}
+
+// validateChartDependencyBodies verifies that every dependency declared by each
+// chart in the tree has a corresponding loaded chart body. Alias names are
+// accepted because Helm rewrites an aliased child name while processing values.
+func validateChartDependencyBodies(ch *chart.Chart) error {
+	if ch == nil || ch.Metadata == nil {
+		return fmt.Errorf("chart metadata is missing")
+	}
+
+	children := ch.Dependencies()
+	matchedChildren := make([]bool, len(children))
+	for _, declared := range ch.Metadata.Dependencies {
+		if declared == nil {
+			continue
+		}
+		found := false
+		for i, child := range children {
+			if matchedChildren[i] {
+				continue
+			}
+			if child == nil || child.Metadata == nil {
+				continue
+			}
+			if child.Metadata.Name == declared.Name || (declared.Alias != "" && child.Metadata.Name == declared.Alias) {
+				matchedChildren[i] = true
+				found = true
+				break
+			}
+		}
+		if !found {
+			name := declared.Name
+			if declared.Alias != "" {
+				name += " (alias " + declared.Alias + ")"
+			}
+			return fmt.Errorf("dependency body %q declared by chart %q is missing", name, ch.Metadata.Name)
+		}
+	}
+
+	for _, child := range children {
+		if err := validateChartDependencyBodies(child); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // loadTargetChart resolves, downloads and loads the chart for a target upgrade
@@ -2994,11 +3080,17 @@ func (c *Client) ApplyValuesAsUser(namespace, name string, newValues map[string]
 }
 
 func (c *Client) applyValuesWith(actionConfig *action.Configuration, name string, newValues map[string]any) error {
-	// Get the current release to reuse its chart
+	// Get the current release and reconstruct its exact installed chart when
+	// Helm storage omitted vendored dependency bodies.
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
 	if err != nil {
 		return fmt.Errorf("failed to get current release: %w", err)
+	}
+	noop := func(phase, message, detail string) {}
+	applyChart, err := c.chartForUpgradeTarget(actionConfig, rel, rel.Chart.Metadata.Version, "", noop)
+	if err != nil {
+		return err
 	}
 
 	// Create upgrade action — no Wait, Radar shows resource status in real-time
@@ -3007,8 +3099,8 @@ func (c *Client) applyValuesWith(actionConfig *action.Configuration, name string
 	upgradeAction.Timeout = 120 * time.Second
 	upgradeAction.ResetValues = true // Use only the provided values, don't merge
 
-	// Run the upgrade with the existing chart and new values
-	_, err = upgradeAction.Run(name, rel.Chart, newValues)
+	// Run the upgrade with the complete installed-version chart and new values.
+	_, err = upgradeAction.Run(name, applyChart, newValues)
 	if err != nil {
 		return fmt.Errorf("failed to apply values: %w", err)
 	}
