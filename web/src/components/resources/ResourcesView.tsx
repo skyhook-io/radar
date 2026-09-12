@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, isKindSyncPending, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit } from '../../api/client'
+import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, isKindSyncFailed, isKindSyncPending, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit } from '../../api/client'
 import { isBadgeWorthy } from '../../utils/auditBadges'
 import type { AuditBadgeMessage } from '@skyhook-io/k8s-ui'
 import { apiUrl, getAuthHeaders, getCredentialsMode, stripBasename } from '../../api/config'
@@ -290,11 +290,10 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     staleTime: 30000,
     refetchInterval: 120000, // Safety net — SSE k8s_event drives near-real-time invalidation
     retry: (failureCount: number, error: Error) => {
-      if (isForbiddenError(error)) return false
+      if (isForbiddenError(error) || isKindSyncFailed(error)) return false
       // Initial informer sync still running for this kind: keep the query in
       // its loading state and retry until the kind becomes readable — the
-      // header's sync-progress label explains the wait. The terminal variant
-      // (kind_sync_failed) falls through to the normal error path.
+      // header's sync-progress label explains the wait.
       if (isKindSyncPending(error)) return true
       return failureCount < 3
     },

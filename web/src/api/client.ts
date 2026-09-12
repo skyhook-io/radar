@@ -2395,8 +2395,11 @@ export function useResource<T>(
     refetchInterval: options?.refetchInterval,
     // Kind still completing its initial sync: stay in loading and poll until
     // it becomes readable instead of erroring out (deep links during startup).
-    retry: (failureCount, error) =>
-      isKindSyncPending(error) ? true : failureCount < 3,
+    retry: (failureCount, error) => {
+      if (isKindSyncPending(error)) return true;
+      if (isKindSyncFailed(error)) return false;
+      return failureCount < 1; // matches the QueryClient default (retry: 1)
+    },
     retryDelay: (failureCount, error) =>
       isKindSyncPending(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   });
@@ -2424,8 +2427,11 @@ export function useResourceWithRelationships<T>(
     enabled: Boolean(kind && name),
     // Deep-linked detail views can mount while the kind's informer is still
     // completing its initial sync: keep polling instead of erroring out.
-    retry: (failureCount, error) =>
-      isKindSyncPending(error) ? true : failureCount < 3,
+    retry: (failureCount, error) => {
+      if (isKindSyncPending(error)) return true;
+      if (isKindSyncFailed(error)) return false;
+      return failureCount < 1; // matches the QueryClient default (retry: 1)
+    },
     retryDelay: (failureCount, error) =>
       isKindSyncPending(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   });
@@ -2452,9 +2458,12 @@ export function useResources<T>(
     refetchInterval: options?.refetchInterval,
     // Kind still completing its initial sync (progressive shell, or a
     // deferred kind shortly after connect): keep polling instead of
-    // surfacing an error after three tries.
-    retry: (failureCount, error) =>
-      isKindSyncPending(error) ? true : failureCount < 3,
+    // surfacing an error.
+    retry: (failureCount, error) => {
+      if (isKindSyncPending(error)) return true;
+      if (isKindSyncFailed(error)) return false;
+      return failureCount < 1; // matches the QueryClient default (retry: 1)
+    },
     retryDelay: (failureCount, error) =>
       isKindSyncPending(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   });
