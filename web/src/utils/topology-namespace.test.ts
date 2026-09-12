@@ -31,9 +31,6 @@ describe('scopeNodesToNamespaces', () => {
   })
 
   it('drops a kind that exists only outside the scope', () => {
-    // The regression this guards: the sidebar used to receive the raw
-    // cluster-wide nodes, so it advertised Ingress with a count even when the
-    // selected namespace had none on the canvas.
     const scoped = scopeNodesToNamespaces(nodes, ['prod'])
     expect(scoped.some(n => n.kind === 'Ingress')).toBe(false)
   })

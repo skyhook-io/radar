@@ -1611,19 +1611,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     }
   }, [displayedTopology, visibleKinds, namespaces, topologyMode])
 
-  // Nodes for the filter sidebar: namespace-scoped, but NOT kind-filtered.
-  //
-  // The sidebar derives both its kind list and its visible/hidden footer counts
-  // from this prop, so it needs the full scoped set: handing it
-  // filteredTopology.nodes would drop every hidden kind out of the list instead
-  // of showing it with a count, and "hidden" would always read zero. It was
-  // previously given the raw topology.nodes, so the counts described the whole
-  // cluster rather than the namespaces on the canvas.
-  //
-  // Reads displayedTopology, not topology, so the counts freeze with the graph
-  // while paused. Nodes with no namespace are cluster-scoped (Node,
-  // PersistentVolume, Namespace, ...) and stay visible in every scope, matching
-  // the carve-out in filteredTopology above.
+  // Namespace-scoped but NOT kind-filtered: the sidebar derives its kind list
+  // and visible/hidden footer counts from this prop, so handing it the
+  // kind-filtered graph nodes would drop every hidden kind from the list and
+  // "hidden" would always read zero. Reads displayedTopology so the counts
+  // freeze with the graph while paused.
   const filterSidebarNodes = useMemo(() => {
     if (!displayedTopology) return []
     return scopeNodesToNamespaces(displayedTopology.nodes, namespaces)
