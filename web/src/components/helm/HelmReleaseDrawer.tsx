@@ -50,7 +50,7 @@ interface ParsedUpgradeValues {
 }
 
 type UpgradeSourceIssue = NonNullable<UpgradeInfo['sourceIssue']>
-type ActionableUpgradeSourceIssue = Exclude<UpgradeSourceIssue, 'ambiguous_repository'>
+type ActionableUpgradeSourceIssue = UpgradeSourceIssue
 
 function getUpgradeSourceIssue(upgradeInfo: UpgradeInfo): UpgradeSourceIssue | undefined {
   return upgradeInfo.sourceIssue
@@ -75,9 +75,11 @@ function getUpgradeSourceIssueTooltip(issue: UpgradeSourceIssue, error: string |
     case 'repo_index_error':
       return 'A configured Helm repo index failed. Fix or refresh that repo, or register an OCI prefix if this chart came from OCI.'
     case 'ambiguous_repository':
-      return 'Multiple configured Helm repos match this chart. Fix the repo list or source metadata so Radar can identify one source.'
+      return 'Multiple configured Helm repos match this chart. Select the exact source.'
+    case 'ambiguous_source':
+      return 'Multiple configured sources match this chart and version. Select the exact source.'
     case 'untracked':
-      return "Radar can't tell where this chart was installed from. Register an OCI chart source to track upgrades."
+      return "Radar can't tell where this chart was installed from. Add or select its Helm repository or OCI source."
   }
 }
 
@@ -95,7 +97,7 @@ function parseUpgradeValuesYaml(raw: string): ParsedUpgradeValues {
 }
 
 export function isUpgradeSourceIssueActionable(issue: UpgradeInfo['sourceIssue']): issue is ActionableUpgradeSourceIssue {
-  return Boolean(issue && issue !== 'ambiguous_repository')
+	return Boolean(issue)
 }
 
 const MIN_WIDTH = 500
@@ -1011,6 +1013,8 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         open={showTrackSource}
         onClose={() => setShowTrackSource(false)}
         chartName={releaseDetail?.chart}
+        namespace={release.storageNamespace || release.namespace}
+        releaseName={release.name}
         sourceIssue={upgradeSourceIssue}
         sourceError={upgradeInfo?.error}
       />
