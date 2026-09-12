@@ -70,6 +70,7 @@ import {
   useCordonNode,
   useUncordonNode,
   useDrainNode,
+  useDrainPlan,
   useCascadeDeletePreview,
   useResourceEvents,
   useResource,
@@ -381,6 +382,7 @@ function useActionsBarProps(
   const cordonMutation = useCordonNode()
   const uncordonMutation = useUncordonNode()
   const drainMutation = useDrainNode()
+  const drainPlanMutation = useDrainPlan()
 
   const { renderAction: renderDiagnose } = useDiagnoseCustomization()
 
@@ -485,6 +487,12 @@ function useActionsBarProps(
     onDrainNode: (params: Parameters<typeof drainMutation.mutate>[0]) =>
       drainMutation.mutate(params),
     isDrainingNode: drainMutation.isPending,
+    onPlanDrain: (params: Parameters<typeof drainPlanMutation.mutate>[0]) =>
+      drainPlanMutation.mutate(params),
+    onPlanDrainReset: () => drainPlanMutation.reset(),
+    drainPlan: drainPlanMutation.data ?? null,
+    isPlanningDrain: drainPlanMutation.isPending,
+    drainPlanError: drainPlanMutation.error?.message ?? null,
   }
 }
 

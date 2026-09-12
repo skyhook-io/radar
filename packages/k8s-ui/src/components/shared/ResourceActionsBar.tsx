@@ -28,6 +28,7 @@ import type { SelectedResource, WorkloadRevision } from '../../types'
 import { displayKindName } from '../ui/drawer-components'
 import { getDefaultContainerName } from '../resources/resource-utils'
 import { SetImageDialog, type ManagedImageSource } from './SetImageDialog'
+import { DrainPlanDialog, DEFAULT_DRAIN_DIALOG_OPTIONS, type DrainDialogOptions, type DrainPlan } from './DrainPlanDialog'
 import type { WorkloadImageInventory, WorkloadImageUpdate } from '../../types/core'
 import { isArgoRolloutResource } from '../../utils/workload-rollout'
 import { isCoreBatchJob } from '../../utils/api-resources'
@@ -135,6 +136,13 @@ interface ResourceActionsBarProps {
   isUncordoningNode?: boolean
   onDrainNode?: (params: { name: string; options?: { deleteEmptyDirData?: boolean; force?: boolean } }) => void
   isDrainingNode?: boolean
+  // Read-only drain plan (POST /nodes/{name}/drain-plan). When the host provides
+  // onPlanDrain, the drain dialog shows the plan before enabling the destructive action.
+  onPlanDrain?: (params: { name: string; options: DrainDialogOptions }) => void
+  onPlanDrainReset?: () => void   // forget the last plan when the dialog closes, so a re-open never shows a stale one
+  drainPlan?: DrainPlan | null
+  isPlanningDrain?: boolean
+  drainPlanError?: string | null
 }
 
 export function ResourceActionsBar({
@@ -165,6 +173,7 @@ export function ResourceActionsBar({
   onCordonNode, isCordoningNode,
   onUncordonNode, isUncordoningNode,
   onDrainNode, isDrainingNode,
+  onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError,
 }: ResourceActionsBarProps) {
   const kind = resource.kind.toLowerCase()
   const coreBatchJob = isCoreBatchJob(kind, resource.group)
@@ -183,7 +192,15 @@ export function ResourceActionsBar({
   // Node operation confirmation state
   const [showCordonConfirm, setShowCordonConfirm] = useState(false)
   const [showDrainConfirm, setShowDrainConfirm] = useState(false)
-  const [drainForce, setDrainForce] = useState(false)
+  const [drainOptions, setDrainOptions] = useState<DrainDialogOptions>(DEFAULT_DRAIN_DIALOG_OPTIONS)
+
+  // Fetch (and refetch on option changes) the read-only plan while the drain dialog is open.
+  useEffect(() => {
+    if (showDrainConfirm && onPlanDrain) {
+      onPlanDrain({ name: resource.name, options: drainOptions })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showDrainConfirm, drainOptions.force, drainOptions.deleteEmptyDirData, resource.name])
 
   // Rollback dialog state
   const [showRevisions, setShowRevisions] = useState(false)
@@ -675,40 +692,32 @@ export function ResourceActionsBar({
         isLoading={isCordoningNode}
       />
 
-      {/* Node drain confirmation */}
-      <ConfirmDialog
+      {/* Node drain: read-only plan first, then the destructive action with explicit options */}
+      <DrainPlanDialog
         open={showDrainConfirm}
+        nodeName={resource.name}
+        plan={drainPlan}
+        loading={Boolean(isPlanningDrain)}
+        error={drainPlanError}
+        options={drainOptions}
+        onOptionsChange={setDrainOptions}
+        planSupported={Boolean(onPlanDrain)}
+        isDraining={Boolean(isDrainingNode)}
         onClose={() => {
           setShowDrainConfirm(false)
-          setDrainForce(false)
+          setDrainOptions(DEFAULT_DRAIN_DIALOG_OPTIONS)
+          onPlanDrainReset?.()
         }}
-        onConfirm={() => {
+        onConfirm={(opts) => {
           onDrainNode?.({
             name: resource.name,
-            options: { deleteEmptyDirData: true, force: drainForce || undefined },
+            options: { deleteEmptyDirData: opts.deleteEmptyDirData, force: opts.force },
           })
           setShowDrainConfirm(false)
-          setDrainForce(false)
+          setDrainOptions(DEFAULT_DRAIN_DIALOG_OPTIONS)
+          onPlanDrainReset?.()
         }}
-        title="Drain Node"
-        message={`Cordon and evict all pods from node "${resource.name}"? DaemonSet pods will be skipped.`}
-        confirmLabel={isDrainingNode ? 'Draining...' : 'Drain'}
-        variant="danger"
-        isLoading={isDrainingNode}
-        isClosable
-      >
-        <div className="flex flex-col gap-2 text-sm text-theme-text-secondary">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={drainForce}
-              onChange={(e) => setDrainForce(e.target.checked)}
-              className="rounded border-theme-border"
-            />
-            Force (evict pods not managed by a controller)
-          </label>
-        </div>
-      </ConfirmDialog>
+      />
 
       {showRevisions && isRollbackKind && (
         <RevisionHistoryDialog

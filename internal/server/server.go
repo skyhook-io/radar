@@ -659,9 +659,11 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/nodes/{name}/debug", s.handleNodeDebug)
 			r.Delete("/nodes/{name}/debug", s.handleNodeDebugCleanup)
 
-			// Node operations (cordon/uncordon)
+			// Node operations (cordon/uncordon) and the read-only drain plan.
+			// The drain itself lives outside this timeout group, see above.
 			r.Post("/nodes/{name}/cordon", s.handleCordonNode)
 			r.Post("/nodes/{name}/uncordon", s.handleUncordonNode)
+			r.Post("/nodes/{name}/drain-plan", s.handleDrainPlan)
 
 			// Pod file browser
 			r.Get("/pods/{namespace}/{name}/files", s.handlePodFileList)
