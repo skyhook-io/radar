@@ -81,7 +81,7 @@ import {
 import { PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
 import { RestartEventLane } from '../resource/RestartChart'
-import { RightsizingPanel, RightsizingStrip } from '../resource/RightsizingStrip'
+import { RightsizingPanel } from '../resource/RightsizingStrip'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { useResourceAudit, useResourceIssues, useResources, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
@@ -2411,16 +2411,9 @@ function MetricsTabContent({
   resource: any
   expanded: boolean
 }) {
-  const showRightsizing = expanded && ['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind)
-
   if (expanded) {
     return (
       <div className="flex flex-col h-full">
-        {showRightsizing && (
-          <div className="px-4 pt-4">
-            <RightsizingStrip kind={kind} namespace={namespace} name={name} />
-          </div>
-        )}
         <div className="flex-1 min-h-0">
           <PrometheusChartsGrid kind={kind} namespace={namespace} name={name} resource={resource} />
         </div>
@@ -2446,9 +2439,17 @@ function DrawerMetricsContent({
 }) {
   const [chartRange, setChartRange] = useState<import('../../api/client').PrometheusTimeRange>('1h')
   const showRestartLane = isPrometheusSupported(kind) && kind !== 'Node'
+  const navigate = useNavigate()
 
   return (
     <div className="flex flex-col h-full">
+      {['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind) && (
+        <div className="px-4 pt-3">
+          <button className="text-xs text-accent hover:underline" onClick={() => navigate(`${buildWorkloadPath({ kind, namespace, name })}?tab=metrics`)}>
+            Open request and resource dashboard →
+          </button>
+        </div>
+      )}
       <div className="flex-1 min-h-0">
         <PrometheusCharts
           kind={kind}

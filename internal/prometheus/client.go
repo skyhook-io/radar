@@ -7,6 +7,7 @@ import (
 	"log"
 	"maps"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,8 @@ type Client struct {
 	discoveryService *prom.ServiceInfo // discovered service info for port-forward
 	manualURL        string            // --prometheus-url override
 	headers          map[string]string
+	workloadScope    *prom.WorkloadMetricsScope
+	beylaJobSelector string
 	lastDiscoverErr  error
 	lastDiscoverAt   time.Time
 
@@ -170,7 +173,14 @@ func SetManualURL(rawURL string) {
 	}
 	globalClient.mu.Lock()
 	defer globalClient.mu.Unlock()
-	globalClient.manualURL = strings.TrimRight(rawURL, "/")
+	normalized := strings.TrimRight(rawURL, "/")
+	if globalClient.manualURL != normalized {
+		if globalClient.workloadScope != nil {
+			log.Print("[prometheus] Workload metrics scope cleared: endpoint changed; restart with a fresh scope assertion")
+		}
+		globalClient.workloadScope = nil
+	}
+	globalClient.manualURL = normalized
 	globalClient.lastDiscoverErr = nil
 	globalClient.lastDiscoverAt = time.Time{}
 	globalClient.discoveryGen++
@@ -193,6 +203,12 @@ func SetHeaders(h map[string]string) {
 	}
 	globalClient.mu.Lock()
 	defer globalClient.mu.Unlock()
+	if !maps.Equal(globalClient.headers, h) {
+		if globalClient.workloadScope != nil {
+			log.Print("[prometheus] Workload metrics scope cleared: headers changed; restart with a fresh scope assertion")
+		}
+		globalClient.workloadScope = nil
+	}
 	globalClient.headers = copyHeaders(h)
 	// Drop the cached prom.Client so the next request rebuilds its transport
 	// with the new headers.
@@ -253,6 +269,8 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 
 	manualURL := ""
 	var headers map[string]string
+	var workloadScope *prom.WorkloadMetricsScope
+	var beylaJobSelector string
 	var oldCancel context.CancelFunc
 	if globalClient != nil {
 		// SetManualURL / SetHeaders write these under the per-client mutex
@@ -262,6 +280,16 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 		globalClient.mu.Lock()
 		manualURL = globalClient.manualURL
 		headers = copyHeaders(globalClient.headers)
+		// Startup initializes subsystems twice. Preserve trust across that same
+		// connection, but not a same-named context whose endpoint or identity changed.
+		if globalClient.contextName == contextName && reflect.DeepEqual(globalClient.k8sConfig, config) && globalClient.workloadScope != nil {
+			scope := *globalClient.workloadScope
+			scope.ClusterLabels = maps.Clone(scope.ClusterLabels)
+			workloadScope = &scope
+			beylaJobSelector = globalClient.beylaJobSelector
+		} else if globalClient.workloadScope != nil {
+			log.Print("[prometheus] Workload metrics scope cleared: Kubernetes connection changed; restart with a fresh scope assertion")
+		}
 		oldCancel = globalClient.discoveryCancel
 		globalClient.retired = true // abort even a flight that hasn't started yet
 		globalClient.mu.Unlock()
@@ -271,14 +299,16 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 	}
 
 	globalClient = &Client{
-		k8sClient:     client,
-		k8sConfig:     config,
-		contextName:   contextName,
-		inCluster:     k8s.IsInCluster(),
-		manualURL:     manualURL,
-		headers:       headers,
-		httpClient:    &http.Client{Timeout: 10 * time.Second},
-		mcpHTTPClient: newMCPHTTPClient(),
+		k8sClient:        client,
+		k8sConfig:        config,
+		contextName:      contextName,
+		inCluster:        k8s.IsInCluster(),
+		manualURL:        manualURL,
+		headers:          headers,
+		workloadScope:    workloadScope,
+		beylaJobSelector: beylaJobSelector,
+		httpClient:       &http.Client{Timeout: 10 * time.Second},
+		mcpHTTPClient:    newMCPHTTPClient(),
 	}
 }
 

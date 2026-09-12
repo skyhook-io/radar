@@ -352,8 +352,19 @@
     "traffic": {
       "type": "object",
       "additionalProperties": true,
+      "allOf": [{
+        "if": {"required": ["prometheusSingleCluster"], "properties": {"prometheusSingleCluster": {"const": true}}},
+        "then": {"properties": {"prometheusClusterLabels": {"maxProperties": 0}}}
+      }],
       "properties": {
         "prometheusUrl": { "type": "string" },
+        "prometheusSingleCluster": { "type": "boolean" },
+        "prometheusClusterLabels": {
+          "type": "object",
+          "propertyNames": {"pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$", "not": {"pattern": "^__"}},
+          "additionalProperties": {"type": "string", "minLength": 1}
+        },
+        "beylaJobSelector": { "type": "string" },
         "prometheusHeaders": {
           "type": "object",
           "additionalProperties": { "type": "string" }

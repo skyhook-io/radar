@@ -30,6 +30,8 @@ import {
 } from "./PrometheusCharts";
 import { RestartEventLane } from "./RestartChart";
 import { Tooltip } from "../ui/Tooltip";
+import { WorkloadMetricsSection } from "./WorkloadMetricsSection";
+import { RightsizingStrip } from "./RightsizingStrip";
 
 // Used when MetricsTabContent is in expanded (full-screen) mode. Drawer mode
 // uses the single-chart tabbed `PrometheusCharts` instead — drawer width
@@ -158,6 +160,14 @@ export function PrometheusChartsGrid({
         </select>
       </div>
 
+      {["Deployment", "StatefulSet", "DaemonSet"].includes(kind) && (
+        <WorkloadMetricsSection key={`${kind}/${namespace}/${name}`} kind={kind} namespace={namespace} name={name} range={timeRange} />
+      )}
+
+      {["Deployment", "StatefulSet", "DaemonSet"].includes(kind) && (
+        <h3 className="px-4 pt-4 text-sm font-semibold text-theme-text-primary">Resources</h3>
+      )}
+
       {/* Restart lane sits above the grid so its markers visually align with
           the time axis of the charts below. */}
       {showRestartLane && (
@@ -193,6 +203,9 @@ export function PrometheusChartsGrid({
         name={name}
         timeRange={timeRange}
       />
+      {["Deployment", "StatefulSet", "DaemonSet"].includes(kind) && (
+        <div className="px-4 pb-4"><RightsizingStrip kind={kind} namespace={namespace} name={name} /></div>
+      )}
     </div>
   );
 }

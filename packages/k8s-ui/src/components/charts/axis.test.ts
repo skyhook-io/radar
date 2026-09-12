@@ -29,4 +29,11 @@ describe('integer axes', () => {
     expect(compact.fontSize).toBeGreaterThan(full.fontSize)
     expect(compact.height / compact.width).toBeGreaterThan(full.height / full.width)
   })
+
+  it('keeps dashboard axes readable without changing existing layouts', () => {
+    const dashboard = chartLayout(false, true)
+    expect([dashboard.width, dashboard.height, dashboard.fontSize]).toEqual([600, 240, 14])
+    expect(chartLayout(true, true)).toEqual(chartLayout(true))
+    expect(chartLayout(false).width).toBe(1000)
+  })
 })
