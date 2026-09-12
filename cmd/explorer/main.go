@@ -295,6 +295,9 @@ func main() {
 	if *mcpCatalogStdio && noMCPFlagSet && *noMCP {
 		log.Fatalf("--mcp-catalog-stdio cannot be combined with --no-mcp")
 	}
+	if strings.TrimSpace(os.Getenv(mcppkg.SessionTokenEnv)) != "" && *mcpCatalogStdio {
+		log.Fatalf("%s applies to HTTP only and cannot be combined with --mcp-catalog-stdio", mcppkg.SessionTokenEnv)
+	}
 	resolvedPrometheusHeaders, err := app.ResolvePrometheusHeaders(promHeaders.value(), promHeadersFromEnv.value())
 	if err != nil {
 		log.Fatalf("Invalid Prometheus header configuration: %v", err)

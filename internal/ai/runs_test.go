@@ -1512,6 +1512,15 @@ func TestRunMatchesTarget(t *testing.T) {
 	}
 }
 
+func TestSetMCPToken(t *testing.T) {
+	m := NewRunManager(nil, func() int { return 0 }, "", func() string { return "ctx" }, nil)
+	t.Cleanup(m.Shutdown)
+	m.SetMCPToken("secret")
+	if m.mcpToken != "secret" {
+		t.Fatalf("mcpToken = %q, want secret", m.mcpToken)
+	}
+}
+
 // persistedManager builds a manager over a store with no live diagnoser — good
 // enough for persistence-path tests (nothing spawns an agent).
 func persistedManager(t *testing.T, store RunStore, ctx string) *RunManager {

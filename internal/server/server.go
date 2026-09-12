@@ -163,6 +163,9 @@ type Server struct {
 	// aiRuns owns investigations as durable server-side jobs (survive panel close
 	// / navigation / refresh). nil exactly when aiDiagnoser is.
 	aiRuns *ai.RunManager
+	// mcpToken authenticates the local write-capable MCP mount. It is empty when
+	// proxy/OIDC authentication protects the server instead.
+	mcpToken string
 }
 
 // Config holds server configuration
@@ -186,6 +189,7 @@ type Config struct {
 	AuthConfig              auth.Config                 // Authentication configuration
 	AIHistoryDB             string                      // AI run-history SQLite path ("" = memory-only runs)
 	CloudConnect            CloudConnectConfig
+	MCPToken                string // per-process token for the local write-capable MCP mount
 }
 
 // New creates a new server instance
@@ -214,6 +218,7 @@ func New(cfg Config) *Server {
 		mcpHandler:              cfg.MCPHandler,
 		mcpReadOnlyHandler:      cfg.MCPReadOnlyHandler,
 		mcpInvestigationHandler: cfg.MCPInvestigationHandler,
+		mcpToken:                cfg.MCPToken,
 		diagConfig:              cfg.DiagConfig,
 		effectiveConfig:         cfg.EffectiveConfig,
 		openCostCurrency:        opencost.NewCurrencyResolver(cfg.OpenCostCurrency),
@@ -235,10 +240,11 @@ func New(cfg Config) *Server {
 	//
 	// Gated to no-auth (local/standalone) Radar: the engine drives the CLI
 	// against this server's own private localhost investigation MCP mount with no
-	// credentials, which only works when MCP is unauthenticated. Under proxy/OIDC
-	// auth (team / cloud deployments) the MCP requires identity headers the local
-	// CLI can't supply, and AI investigations are the embedding host's job (e.g.
-	// Radar Hub) anyway.
+	// credentials, which only works when MCP is unauthenticated. When the optional
+	// local session token is enabled, Radar injects it into write-capable apply
+	// turns against /mcp. Under proxy/OIDC auth (team / cloud deployments) the MCP
+	// requires identity headers the local CLI can't supply, and AI investigations
+	// are the embedding host's job (e.g. Radar Hub) anyway.
 	// Also requires /mcp to be mounted — the agent reaches the cluster only
 	// through it, so with --no-mcp the feature can't work.
 	if !s.authConfig.Enabled() && s.mcpHandler != nil &&
@@ -259,6 +265,7 @@ func New(cfg Config) *Server {
 				}
 			}
 			s.aiRuns = ai.NewRunManager(d, s.ActualPort, s.basePath, k8s.GetContextName, store)
+			s.aiRuns.SetMCPToken(s.mcpToken)
 			s.aiRuns.MetricsAvailability = func(ctx context.Context) ai.MetricsAvailability {
 				state := prometheuspkg.Availability(ctx)
 				return ai.MetricsAvailability{
@@ -870,8 +877,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	// OAuth discovery probes from MCP HTTP clients. Without this, the frontend
 	// catch-all answers /.well-known/oauth-* with HTML 200, which newer
 	// claude-code parses as a broken OAuth flow and aborts MCP registration.
-	// Radar's MCP server is unauthenticated when run locally; signal that
-	// cleanly with a 404 so clients proceed without an auth handshake.
+	// Radar does not implement OAuth. The optional local bearer token is
+	// configured directly in the client, so discovery must still return 404.
 	r.Get("/.well-known/oauth-protected-resource", http.NotFound)
 	r.Get("/.well-known/oauth-authorization-server", http.NotFound)
 

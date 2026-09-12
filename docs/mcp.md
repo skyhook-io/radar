@@ -35,6 +35,43 @@ http://localhost:9280/mcp
 
 The port matches your `--port` flag (default 9280). The MCP server uses HTTP transport with JSON-RPC.
 
+## Optional session token
+
+Local sessions are unauthenticated by default for backward compatibility. To
+protect the write-capable `/mcp` endpoint with a bearer token, set:
+
+```bash
+RADAR_MCP_SESSION_TOKEN=auto radar
+```
+
+`auto` generates a fresh token for this process. Any other non-empty value is
+used as the secret. Radar prints the token in its startup summary. Send it in
+the `Authorization` header:
+
+```text
+Authorization: Bearer <session-token>
+```
+
+For clients configured with JSON, add the header to the server entry:
+
+```json
+{
+  "mcpServers": {
+    "radar": {
+      "url": "http://localhost:9280/mcp",
+      "headers": {
+        "Authorization": "Bearer <session-token>"
+      }
+    }
+  }
+}
+```
+
+The read-only `/mcp-readonly` endpoint and the private `/mcp-investigation`
+mount do not require the session token. Proxy- and OIDC-authenticated
+deployments continue to use their existing authentication and cannot combine
+it with `RADAR_MCP_SESSION_TOKEN`.
+
 ## Catalog Introspection
 
 MCP registries and inspectors can start Radar without a Kubernetes cluster when they only need the tool and resource catalog:

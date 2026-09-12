@@ -46,6 +46,24 @@ func TestFormatStartupLogSummaryLoopback(t *testing.T) {
 	}
 }
 
+func TestFormatStartupLogSummaryMCPToken(t *testing.T) {
+	got := strings.Join(formatStartupLogSummary(startupLogSummary{
+		listenAddress: DefaultListenAddress,
+		port:          9280,
+		mcpEnabled:    true,
+		mcpToken:      "test-session-token",
+	}, false), "\n")
+
+	for _, want := range []string{
+		"MCP:         session token required at /mcp",
+		"MCP token:   test-session-token (keep private; changes each start)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("startup summary missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestFormatStartupLogSummaryUnauthenticatedWildcard(t *testing.T) {
 	got := strings.Join(formatStartupLogSummary(startupLogSummary{
 		listenAddress: AllInterfacesAddress,
