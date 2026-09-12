@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -116,6 +117,36 @@ func TestResetResourceCache_InvalidatesInFlightConstruction(t *testing.T) {
 	}
 	if promoteCache(w, gen, true) {
 		t.Fatal("reset did not invalidate the in-flight construction's generation")
+	}
+}
+
+func TestClaimCacheInit_ResetInsideDoKeepsOldGeneration(t *testing.T) {
+	snapshotCacheGlobals(t)
+	cacheMu.Lock()
+	prevOnce := cacheOnce
+	cacheOnce = new(sync.Once)
+	cacheMu.Unlock()
+	t.Cleanup(func() {
+		cacheMu.Lock()
+		cacheOnce = prevOnce
+		cacheMu.Unlock()
+	})
+
+	once, gen := claimCacheInit()
+	w := &ResourceCache{}
+	once.Do(func() {
+		// A context switch after the Once was claimed but before the
+		// construction publishes: the construction must stay on its own
+		// generation, so the switch invalidates it.
+		ResetResourceCache()
+		if promoteCache(w, gen, true) {
+			t.Fatal("construction adopted the post-reset generation and promoted")
+		}
+	})
+
+	nextOnce, nextGen := claimCacheInit()
+	if nextOnce == once || nextGen == gen {
+		t.Fatal("reset did not hand out a fresh Once/generation pair")
 	}
 }
 

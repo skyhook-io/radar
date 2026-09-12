@@ -341,20 +341,13 @@ var tombstones = timeline.NewTombstoneCache(15*time.Minute, 4000)
 // InitResourceCache initializes the resource cache with timeline-wired callbacks.
 func InitResourceCache(ctx context.Context) error {
 	var initErr error
-	cacheOnce.Do(func() {
+	once, gen := claimCacheInit()
+	once.Do(func() {
 		client := GetClient()
 		if client == nil {
 			initErr = fmt.Errorf("cannot create resource cache: k8s client not initialized")
 			return
 		}
-
-		// Generation snapshot at entry — BEFORE the permission probes. A
-		// context switch during probing bumps the generation, and this
-		// construction must not adopt the new one: every publish below would
-		// otherwise install the old cluster's cache under the new identity.
-		cacheMu.Lock()
-		gen := cacheGeneration
-		cacheMu.Unlock()
 
 		// Probe per-resource list access before creating informers. The
 		// returned scope map is authoritative for both enablement and
@@ -488,6 +481,17 @@ func InitResourceCache(ctx context.Context) error {
 		}
 	})
 	return initErr
+}
+
+// claimCacheInit snapshots the init Once and the generation it belongs to in
+// one critical section. Sampling the generation inside Do instead would let a
+// context switch landing between the Once load and the snapshot hand an old
+// cluster's construction the NEW generation — it would then pass every guard
+// and could win promotion over the new cluster's cache.
+func claimCacheInit() (*sync.Once, uint64) {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	return cacheOnce, cacheGeneration
 }
 
 // publishSyncingCache installs wrapped as the mid-sync handle unless the
