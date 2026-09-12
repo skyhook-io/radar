@@ -76,6 +76,8 @@ func (d DataPoint) MarshalJSON() ([]byte, error) {
 // promResponse is the raw shape returned by Prometheus HTTP API
 // /api/v1/query and /api/v1/query_range endpoints.
 type promResponse struct {
+	Warnings  []string        `json:"warnings"`
+	IsPartial bool            `json:"isPartial"`
 	Status    string          `json:"status"`
 	Data      json.RawMessage `json:"data"`
 	ErrorType string          `json:"errorType,omitempty"`

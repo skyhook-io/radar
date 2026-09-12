@@ -78,6 +78,7 @@ type AppConfig struct {
 	PrometheusHeaders         map[string]string
 	PrometheusHeadersFromEnv  map[string]string
 	BeylaJobSelector          string
+	WorkloadMetricsScope      prom.WorkloadMetricsScope
 	Version                   string
 	MCPEnabled                bool
 	AIHistory                 bool   // persist AI investigations across restarts
@@ -310,6 +311,11 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 	}
 	if cfg.BeylaJobSelector != "" {
 		traffic.SetBeylaJobSelector(cfg.BeylaJobSelector)
+	}
+	if cfg.WorkloadMetricsScope.SingleCluster || len(cfg.WorkloadMetricsScope.ClusterLabels) > 0 {
+		if err := prometheuspkg.SetWorkloadMetricsScope(cfg.WorkloadMetricsScope, cfg.BeylaJobSelector); err != nil {
+			log.Fatalf("Invalid workload metrics scope: %v", err)
+		}
 	}
 
 	k8s.RegisterTrafficFuncs(traffic.Reset, func() error {

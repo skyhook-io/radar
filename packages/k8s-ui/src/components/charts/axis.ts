@@ -18,7 +18,9 @@ export interface ChartLayout {
 // The compact layout trades tick density for legible text: a 400-unit
 // viewBox scaled into a ~280px pane keeps 14-unit text near 10px, where the
 // full layout's 11-unit text in a 1000-unit viewBox would be 3px.
-export function chartLayout(compact: boolean): ChartLayout {
+export function chartLayout(compact: boolean, dashboard = false, renderedWidth = 0): ChartLayout {
+  if (dashboard && renderedWidth > 0) return { width: renderedWidth, height: 240, marginLeft: 60, marginRight: 14, marginTop: 12, marginBottom: 28, fontSize: 12, yIntervals: compact ? 1 : 2, xIntervals: compact ? 1 : renderedWidth >= 760 ? 4 : 2 }
+  if (dashboard && !compact) return { width: 600, height: 240, marginLeft: 90, marginRight: 24, marginTop: 12, marginBottom: 28, fontSize: 14, yIntervals: 2, xIntervals: 2 }
   return compact
     ? { width: 400, height: 260, marginLeft: 60, marginRight: 14, marginTop: 12, marginBottom: 28, fontSize: 14, yIntervals: 1, xIntervals: 1 }
     : { width: 1000, height: 300, marginLeft: 84, marginRight: 40, marginTop: 10, marginBottom: 30, fontSize: 11, yIntervals: 4, xIntervals: 6 }

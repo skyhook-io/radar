@@ -30,6 +30,8 @@ import {
 } from "./PrometheusCharts";
 import { RestartEventLane } from "./RestartChart";
 import { Tooltip } from "../ui/Tooltip";
+import { WorkloadMetricsSection } from "./WorkloadMetricsSection";
+import { RightsizingStrip } from "./RightsizingStrip";
 
 // Used when MetricsTabContent is in expanded (full-screen) mode. Drawer mode
 // uses the single-chart tabbed `PrometheusCharts` instead — drawer width
@@ -149,9 +151,13 @@ export function PrometheusChartsGrid({
   }
   const disk = findCategory("filesystem");
   const chartPanels = disk ? [...primaryCats, { def: disk }] : primaryCats;
+  const isWorkload = ["Deployment", "StatefulSet", "DaemonSet"].includes(kind);
+  const renderPanel = ({ def, refLines }: { def: CategoryDef; refLines?: ReferenceLine[] }) => (
+    <MetricsPanel key={def.key} category={def} kind={kind} namespace={namespace} name={name} timeRange={timeRange} referenceLines={refLines} />
+  );
 
   return (
-    <div className="flex flex-col h-full overflow-auto">
+    <div className="flex flex-col min-w-0 w-full h-full overflow-auto">
       <div className="flex shrink-0 justify-end px-4 pt-3">
         <select
           aria-label="Metrics time range"
@@ -167,9 +173,15 @@ export function PrometheusChartsGrid({
         </select>
       </div>
 
+      {isWorkload && (
+        <WorkloadMetricsSection key={`${kind}/${namespace}/${name}`} kind={kind} namespace={namespace} name={name} range={timeRange}
+          cpuReferenceLines={cpuRefLines} memoryReferenceLines={memRefLines}
+          restartLane={showRestartLane && <div className="mb-3"><RestartEventLane kind={kind} namespace={namespace} name={name} range={timeRange} /></div>} />
+      )}
+
       {/* Restart lane sits above the grid so its markers visually align with
           the time axis of the charts below. */}
-      {showRestartLane && (
+      {showRestartLane && !isWorkload && (
         <div className="px-4 pt-3">
           <RestartEventLane
             kind={kind}
@@ -180,28 +192,24 @@ export function PrometheusChartsGrid({
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 px-4 pt-4">
-        {chartPanels.map(({ def, refLines }) => (
-          <MetricsPanel
-            key={def.key}
-            category={def}
-            kind={kind}
-            namespace={namespace}
-            name={name}
-            timeRange={timeRange}
-            referenceLines={refLines}
-          />
-        ))}
+      <div className="metrics-layout min-w-0 px-4 pt-4">
+        {isWorkload && <h3 className="mb-2 text-sm font-semibold text-theme-text-primary">Network and storage</h3>}
+        {isWorkload && <p className="mb-2 text-xs text-theme-text-tertiary">These charts use Pod-name matching, independently of the identity-checked resource and request charts above.</p>}
+        <div className="metrics-chart-grid">
+          {chartPanels.filter(({ def }) => !isWorkload || (def.key !== "cpu" && def.key !== "memory")).map(renderPanel)}
+        </div>
       </div>
 
-      {/* Every chart here covers the same pods, so which pods those are is
-          stated once for the grid rather than repeated under each one. */}
       <PodCoverageNote
         kind={kind}
         namespace={namespace}
         name={name}
         timeRange={timeRange}
+        category={isWorkload ? "network_rx" : "cpu"}
       />
+      {["Deployment", "StatefulSet", "DaemonSet"].includes(kind) && (
+        <div className="px-4 pb-4"><RightsizingStrip kind={kind} namespace={namespace} name={name} /></div>
+      )}
     </div>
   );
 }
@@ -211,19 +219,19 @@ function PodCoverageNote({
   namespace,
   name,
   timeRange,
+  category,
 }: {
   kind: string;
   namespace: string;
   name: string;
   timeRange: PrometheusTimeRange;
+  category: PrometheusMetricCategory;
 }) {
-  // Any category answers this: the pod scope is per workload, not per metric.
-  // This is the same query key the CPU panel uses, so it is already cached.
   const { data } = usePrometheusResourceMetrics(
     kind,
     namespace,
     name,
-    "cpu",
+    category,
     timeRange,
     true,
   );
@@ -274,9 +282,9 @@ function MetricsPanel({
       : undefined;
 
   return (
-    <section className="rounded-lg border border-theme-border bg-theme-surface/30 p-3 flex flex-col min-h-[260px]">
-      <header className="flex items-center justify-between mb-2 gap-3">
-        <div className="flex items-center gap-2">
+    <section className="metrics-chart rounded-lg border border-theme-border bg-theme-surface/30 p-3 flex flex-col min-w-0">
+      <header className="flex flex-wrap items-center justify-between mb-2 gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wide">
             {category.label}
           </h3>
@@ -291,7 +299,7 @@ function MetricsPanel({
         )}
       </header>
 
-      <div className="flex-1 min-h-[200px]">
+      <div className="min-w-0">
         {isLoading ? (
           <PanelLoading />
         ) : error ? (
@@ -304,6 +312,7 @@ function MetricsPanel({
               fillColor={category.fillColor}
               unit={metrics!.unit}
               referenceLines={referenceLines}
+              layout="dashboard"
             />
             {series.length > 1 && (
               <div className="mt-1.5">
@@ -345,7 +354,7 @@ function SaturationChip({
 
 function PanelLoading() {
   return (
-    <div className="flex items-center justify-center h-full min-h-[160px] text-theme-text-tertiary text-xs">
+    <div className="flex items-center justify-center h-[240px] text-theme-text-tertiary text-xs">
       <Loader2 className="w-4 h-4 animate-spin mr-2" />
       Loading…
     </div>
@@ -355,7 +364,7 @@ function PanelLoading() {
 function PanelError({ message }: { message: string }) {
   return (
     <div
-      className={`flex flex-col items-center justify-center h-full min-h-[160px] ${SEVERITY_TEXT.warning} text-xs px-3 text-center`}
+      className={`flex flex-col items-center justify-center h-[240px] ${SEVERITY_TEXT.warning} text-xs px-3 text-center`}
     >
       Query failed
       <Tooltip content={message} wrapperClassName="!block w-full">
@@ -369,7 +378,7 @@ function PanelError({ message }: { message: string }) {
 
 function PanelNoData({ hint }: { hint?: string }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full min-h-[160px] text-theme-text-tertiary text-xs px-3 text-center">
+    <div className="flex flex-col items-center justify-center h-[240px] text-theme-text-tertiary text-xs px-3 text-center">
       No data
       {hint && (
         <span className="text-theme-text-quaternary mt-1 max-w-xs">{hint}</span>

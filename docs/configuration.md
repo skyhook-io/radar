@@ -128,6 +128,11 @@ edit the deployment and restart Radar. `RADAR_KUBECOST_URL` does not carry an
 API key over from the config file; set `RADAR_KUBECOST_API_KEY` explicitly when
 the environment-managed endpoint requires one. The currency override remains separate.
 
+For workload charts, see [Workload request and pressure metrics](workload-metrics.md)
+for the per-chart data requirements, automatic endpoint discovery and attribution,
+optional scope overrides, and coverage limits. Finding a Prometheus endpoint does
+not imply that it contains application HTTP metrics.
+
 ### Settings File (`~/.radar/settings.json`)
 
 User preferences for the UI. Managed via the Settings dialog or `PUT /api/settings`.

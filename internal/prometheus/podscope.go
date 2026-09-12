@@ -27,6 +27,7 @@ type PodScope struct {
 	CurrentPods  []string
 	CurrentTotal int
 	Selection    prom.PodSelection
+	Identities   []prom.WorkloadPodIdentity
 }
 
 // Partial reports that the pod list was cut by the cap, so the queries cover
@@ -57,7 +58,7 @@ func ResolvePodScope(cache *k8s.ResourceCache, kind, namespace, name string, max
 		return PodScope{}, fmt.Errorf("%w: %s", ErrPodScopeUnsupportedKind, kind)
 	}
 
-	current, err := k8s.WorkloadPodNames(cache, kind, namespace, name)
+	current, err := k8s.WorkloadPods(cache, kind, namespace, name)
 	if err != nil {
 		return PodScope{}, err
 	}
@@ -65,7 +66,10 @@ func ResolvePodScope(cache *k8s.ResourceCache, kind, namespace, name string, max
 	if maxPods > 0 && len(current) > maxPods {
 		current = current[:maxPods]
 	}
-	scope.CurrentPods = current
-	scope.Selection = prom.SelectPods(namespace, current)
+	for _, pod := range current {
+		scope.CurrentPods = append(scope.CurrentPods, pod.Name)
+		scope.Identities = append(scope.Identities, prom.WorkloadPodIdentity{Name: pod.Name, UID: string(pod.UID)})
+	}
+	scope.Selection = prom.SelectPods(namespace, scope.CurrentPods)
 	return scope, nil
 }

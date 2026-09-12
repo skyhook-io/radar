@@ -18,6 +18,10 @@ type Client struct {
 	t Transport
 }
 
+const MaxWorkloadQueryBytes = 16000
+
+var ErrWorkloadQueryTooLarge = errors.New("Pod-name selection or workload size exceeds Radar's safe metrics query limit")
+
 // NewClient wraps the given Transport.
 func NewClient(t Transport) *Client {
 	return &Client{t: t}
@@ -28,15 +32,78 @@ func (c *Client) Query(ctx context.Context, promQL string) (*QueryResult, error)
 	return c.issueQuery(ctx, "/api/v1/query", url.Values{"query": {promQL}})
 }
 
+// QueryEvidence rejects partial answers rather than inferring identity from them.
+func (c *Client) QueryEvidence(ctx context.Context, promQL string) (*QueryResult, error) {
+	if len(promQL) > MaxWorkloadQueryBytes {
+		return nil, ErrWorkloadQueryTooLarge
+	}
+	body, err := c.t.Do(ctx, "POST", "/api/v1/query", url.Values{"query": {promQL}, "timeout": {"8s"}})
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		Status    string          `json:"status"`
+		Data      json.RawMessage `json:"data"`
+		Warnings  []string        `json:"warnings"`
+		Infos     []string        `json:"infos"`
+		IsPartial bool            `json:"isPartial"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, err
+	}
+	if response.Status != "success" || len(response.Warnings) != 0 || len(response.Infos) != 0 || response.IsPartial {
+		return nil, errors.New("metrics attribution probe did not return complete evidence")
+	}
+	return parseQueryResult(response.Data)
+}
+
 // QueryRange executes a PromQL range query.
 func (c *Client) QueryRange(ctx context.Context, promQL string, start, end time.Time, step time.Duration) (*QueryResult, error) {
+	return c.queryRange(ctx, promQL, start, end, step, false)
+}
+
+func (c *Client) QueryWorkloadRange(ctx context.Context, promQL string, start, end time.Time, step time.Duration) (*QueryResult, error) {
+	if len(promQL) > MaxWorkloadQueryBytes {
+		return nil, ErrWorkloadQueryTooLarge
+	}
+	return c.queryRange(ctx, promQL, start, end, step, true)
+}
+
+func (c *Client) queryRange(ctx context.Context, promQL string, start, end time.Time, step time.Duration, complete bool) (*QueryResult, error) {
 	params := url.Values{
 		"query": {promQL},
 		"start": {strconv.FormatInt(start.Unix(), 10)},
 		"end":   {strconv.FormatInt(end.Unix(), 10)},
 		"step":  {fmt.Sprintf("%.0f", step.Seconds())},
 	}
+	if complete {
+		return c.issueCompleteQuery(ctx, "POST", "/api/v1/query_range", params)
+	}
 	return c.issueQuery(ctx, "/api/v1/query_range", params)
+}
+
+var ErrPartialResponse = errors.New("metrics backend returned a partial response")
+var ErrQueryWarning = errors.New("metrics backend returned a query warning")
+
+func (c *Client) issueCompleteQuery(ctx context.Context, method, path string, params url.Values) (*QueryResult, error) {
+	body, err := c.t.Do(ctx, method, path, params)
+	if err != nil {
+		return nil, err
+	}
+	var response promResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, err
+	}
+	if response.Status != "success" {
+		return nil, fmt.Errorf("metrics query failed: %s", response.Error)
+	}
+	if response.IsPartial {
+		return nil, ErrPartialResponse
+	}
+	if len(response.Warnings) > 0 {
+		return nil, ErrQueryWarning
+	}
+	return parseQueryResult(response.Data)
 }
 
 func (c *Client) issueQuery(ctx context.Context, path string, params url.Values) (*QueryResult, error) {

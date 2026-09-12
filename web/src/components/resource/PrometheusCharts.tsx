@@ -162,12 +162,12 @@ export function computeRequestLimitLines(
   if (runtimeContainers.length === 0) return undefined
 
   let reqSum = 0, reqAny = false
-  let limSum = 0, limAny = false
+  let limSum = 0, limAll = true
   for (const c of runtimeContainers) {
     const req = readQuantity(c.resources?.requests?.[category], category)
     const lim = readQuantity(c.resources?.limits?.[category], category)
     if (req != null) { reqSum += req; reqAny = true }
-    if (lim != null) { limSum += lim; limAny = true }
+    if (lim != null && lim > 0) { limSum += lim } else { limAll = false }
   }
 
   const lines: ReferenceLine[] = []
@@ -178,7 +178,7 @@ export function computeRequestLimitLines(
       kind: 'request',
     })
   }
-  if (limAny) {
+  if (limAll) {
     lines.push({
       value: limSum,
       label: `limit ${formatRequestLimitLabel(limSum, category)}`,

@@ -10,6 +10,58 @@ import (
 	"time"
 )
 
+func TestWorkloadRangeCompletePOST(t *testing.T) {
+	for _, tc := range []struct {
+		name, annotation string
+		partial          bool
+	}{
+		{"complete", "", false},
+		{"warning", `,"warnings":["shard unavailable"]`, true},
+		{"VictoriaMetrics partial", `,"isPartial":true`, true},
+		{"histogram info", `,"infos":["monotonicity repaired"]`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := fakeProm(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "POST" || r.URL.RawQuery != "" {
+					t.Errorf("query not sent in POST body: %s %s", r.Method, r.URL)
+				}
+				if err := r.ParseForm(); err != nil {
+					t.Fatal(err)
+				}
+				if r.PostForm.Get("query") != `sum(up{job="a+b"})` || r.PostForm.Get("step") != "60" {
+					t.Errorf("invalid form: %v", r.PostForm)
+				}
+				_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}` + tc.annotation + `}`))
+			})
+			_, err := NewClient(tr).QueryWorkloadRange(context.Background(), `sum(up{job="a+b"})`, time.Unix(0, 0), time.Unix(600, 0), time.Minute)
+			if (errors.Is(err, ErrPartialResponse) || errors.Is(err, ErrQueryWarning)) != tc.partial || (err != nil && !tc.partial) {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestEvidencePOSTAndSizeLimit(t *testing.T) {
+	calls := 0
+	tr := fakeProm(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Method != "POST" || r.URL.RawQuery != "" || r.FormValue("query") != "up" {
+			t.Errorf("invalid evidence request: %s %s", r.Method, r.URL)
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	})
+	client := NewClient(tr)
+	if _, err := client.QueryEvidence(context.Background(), "up"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.QueryEvidence(context.Background(), strings.Repeat("x", MaxWorkloadQueryBytes+1)); !errors.Is(err, ErrWorkloadQueryTooLarge) {
+		t.Fatalf("unbounded probe: %v", err)
+	}
+	if calls != 1 {
+		t.Fatal("oversized probe reached transport")
+	}
+}
+
 // fakeProm returns an HTTPTransport pointed at a test server with a scripted
 // response for /api/v1/query and /api/v1/query_range.
 func fakeProm(t *testing.T, handler http.HandlerFunc) *HTTPTransport {

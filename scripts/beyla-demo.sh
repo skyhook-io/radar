@@ -362,7 +362,7 @@ spec:
                 done
                 # One 500 per five successes, so the 5xx rate is a visible minority.
                 wget -q -T 3 -O /dev/null "http://web.${DEMO_NS}.svc.cluster.local/boom" || true
-                printf 'PING\r\n' | nc -w 2 db.${DEMO_NS}.svc.cluster.local 6379 >/dev/null 2>&1 || true
+                printf 'PING\r\n' | timeout 2 nc -w 2 db.${DEMO_NS}.svc.cluster.local 6379 >/dev/null 2>&1 || true
                 sleep 1
               done
           resources:

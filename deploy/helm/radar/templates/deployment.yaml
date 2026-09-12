@@ -99,6 +99,15 @@ spec:
             {{- if .Values.traffic.prometheusUrl }}
             - --prometheus-url={{ .Values.traffic.prometheusUrl }}
             {{- end }}
+            {{- if .Values.traffic.prometheusSingleCluster }}
+            - --prometheus-single-cluster
+            {{- end }}
+            {{- range $k, $v := .Values.traffic.prometheusClusterLabels }}
+            - {{ printf "--prometheus-cluster-label=%s=%s" $k $v | quote }}
+            {{- end }}
+            {{- if .Values.traffic.beylaJobSelector }}
+            - {{ printf "--beyla-job-selector=%s" .Values.traffic.beylaJobSelector | quote }}
+            {{- end }}
             {{- if .Values.cost.currency }}
             - --opencost-currency={{ .Values.cost.currency }}
             {{- end }}

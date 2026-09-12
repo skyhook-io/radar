@@ -32,16 +32,18 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
    * 'full' is the fixed wide layout every existing caller gets. 'auto' switches
    * to the compact layout (two ticks per axis, larger text, taller plot) when
    * the rendered chart is narrower than ANNOTATION_LABEL_MIN_WIDTH_PX;
-   * 'compact' forces it.
+   * 'compact' forces it. 'dashboard' uses readable, medium-width axes and
+   * keeps text and plot height stable as its container resizes.
    */
-  layout?: 'full' | 'auto' | 'compact'
+  layout?: 'full' | 'auto' | 'compact' | 'dashboard'
 }) {
   const svgRef = useRef<SVGSVGElement>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
   const [hoverX, setHoverX] = useState<number | null>(null)
   const [labelsFit, setLabelsFit] = useState(true)
+  const [renderedWidth, setRenderedWidth] = useState(0)
   const multiSeries = series.length > 1
-  const compact = layout === 'compact' || (layout === 'auto' && !labelsFit)
+  const compact = layout === 'compact' || (layout === 'auto' && !labelsFit) || (layout === 'dashboard' && renderedWidth > 0 && renderedWidth < 300)
   const countAxis = isCountUnit(unit)
 
   const chartData = useMemo(() => {
@@ -91,14 +93,14 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
   // Layout constants. marginLeft sized for the widest expected Y-tick label
   // ("422.4 MiB" etc.) — narrow grid panels squeeze the X axis so labels
   // need extra viewBox-space to survive the down-scale.
-  const base = chartLayout(compact)
+  const base = chartLayout(compact, layout === 'dashboard', renderedWidth)
   const { width, height, marginRight, marginTop, marginBottom, fontSize, yIntervals, xIntervals } = base
   const yValues = chartData ? yAxisValues(chartData.yMin, chartData.yMax, yIntervals, countAxis) : []
   const yLabels = yValues.map(val => formatMetricValue(val, unit))
   // The compact layout's larger text makes a label like "161.5 MiB" wider
   // than the fixed margin, and SVG clips it; grow the margin to the widest
   // label there. The full layout keeps its fixed margin for existing callers.
-  const marginLeft = compact
+  const marginLeft = compact || layout === 'dashboard'
     ? Math.max(base.marginLeft, Math.ceil(Math.max(0, ...yLabels.map(label => label.length)) * fontSize * 0.62 + 12))
     : base.marginLeft
   const plotWidth = width - marginLeft - marginRight
@@ -128,10 +130,10 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
       const ts = minTs + ((maxTs - minTs) / xIntervals) * i
       // In the compact layout the two labels sit at the plot edges and would
       // otherwise spill past the viewBox.
-      const anchor: 'start' | 'middle' | 'end' = !compact ? 'middle' : i === 0 ? 'start' : 'end'
+      const anchor: 'start' | 'middle' | 'end' = !(compact || layout === 'dashboard') ? 'middle' : i === 0 ? 'start' : i === xIntervals ? 'end' : 'middle'
       return { ts, x: toX(ts), label: formatTimestamp(ts), anchor }
     })
-  }, [chartData, xIntervals, compact])
+  }, [chartData, xIntervals, compact, layout, marginLeft, plotWidth])
 
   const paths = useMemo(() => {
     if (!chartData) return []
@@ -185,7 +187,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
     })
 
     return segments
-  }, [chartData])
+  }, [chartData, marginLeft, plotWidth, marginTop, plotHeight, multiSeries, color, fillColor])
 
   const placedAnnotations = useMemo(() => {
     if (!chartData || !annotations?.length) return []
@@ -195,12 +197,16 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
       { minTs: chartData.minTs, maxTs: chartData.maxTs },
       { left: marginLeft, right: width - marginRight },
     )
-  }, [chartData, annotations])
+  }, [chartData, annotations, width, marginLeft, marginRight])
 
   useEffect(() => {
     const el = wrapperRef.current
-    if (!el || (placedAnnotations.length === 0 && layout !== 'auto') || typeof ResizeObserver === 'undefined') return
-    const update = () => setLabelsFit(el.getBoundingClientRect().width >= ANNOTATION_LABEL_MIN_WIDTH_PX)
+    if (!el || (placedAnnotations.length === 0 && layout !== 'auto' && layout !== 'dashboard') || typeof ResizeObserver === 'undefined') return
+    const update = () => {
+      const measuredWidth = el.getBoundingClientRect().width
+      setLabelsFit(measuredWidth >= ANNOTATION_LABEL_MIN_WIDTH_PX)
+      if (layout === 'dashboard') setRenderedWidth(measuredWidth)
+    }
     update()
     const observer = new ResizeObserver(update)
     observer.observe(el)
@@ -263,7 +269,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
     )
 
     return { ts, x: clampedX, points, nearbyAnnotations }
-  }, [hoverX, chartData, placedAnnotations, seriesLabels])
+  }, [hoverX, chartData, placedAnnotations, seriesLabels, marginLeft, plotWidth, marginTop, plotHeight, multiSeries, color])
 
   const handleMouseMove = useCallback((e: React.MouseEvent<SVGRectElement>) => {
     const svg = svgRef.current
@@ -286,6 +292,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
         ref={svgRef}
         viewBox={`0 0 ${width} ${height}`}
         className="w-full h-full"
+        style={layout === 'dashboard' ? { height: 240 } : undefined}
         preserveAspectRatio="xMidYMid meet"
         data-chart-layout={compact ? 'compact' : 'full'}
       >

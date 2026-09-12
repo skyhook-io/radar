@@ -69,7 +69,10 @@ func NewHTTPTransport(baseURL, basePath string, httpClient *http.Client) *HTTPTr
 // transport errors this way, for example).
 func (t *HTTPTransport) Do(ctx context.Context, method, path string, params url.Values) ([]byte, error) {
 	full := t.BaseURL + t.BasePath + path
-	if len(params) > 0 {
+	var requestBody io.Reader
+	if method == http.MethodPost {
+		requestBody = strings.NewReader(params.Encode())
+	} else if len(params) > 0 {
 		if strings.Contains(full, "?") {
 			full = full + "&" + params.Encode()
 		} else {
@@ -77,13 +80,16 @@ func (t *HTTPTransport) Do(ctx context.Context, method, path string, params url.
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, full, nil)
+	req, err := http.NewRequestWithContext(ctx, method, full, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("prom.HTTPTransport: build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 	for k, v := range t.Headers {
 		req.Header.Set(k, v)
+	}
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 
 	resp, err := t.HTTPClient.Do(req)
