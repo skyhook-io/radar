@@ -23,7 +23,7 @@ const (
 	// defaultBeylaJobSelector is used unless overridden via SetBeylaJobSelector
 	// (wired to --beyla-job-selector) for clusters running Alloy/Beyla under a
 	// non-default Prometheus job name.
-	defaultBeylaJobSelector = `job=~".*beyla.*|.*alloy.*"`
+	defaultBeylaJobSelector = prom.DefaultBeylaJobSelector
 	// Rate window in the PromQL queries; used to turn per-second rates back
 	// into absolute counts for the window.
 	beylaRateWindowSeconds = 300

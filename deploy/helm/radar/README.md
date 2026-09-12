@@ -207,6 +207,9 @@ trend charts remain unavailable for Kubecost.
 | `cost.kubecost.existingSecret` | Secret holding an optional Kubecost service-account API key; setting it disables automatic port-9008 auth bypass | `""` |
 | `cost.kubecost.existingSecretKey` | Key within `cost.kubecost.existingSecret`; sent as `X-API-KEY` | `api-key` |
 | `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) | `""` |
+| `traffic.prometheusSingleCluster` | Assert that the metrics backend contains only this Kubernetes cluster; enables workload request/pressure charts | `false` |
+| `traffic.prometheusClusterLabels` | Exact label/value constraints for a shared metrics store; mutually exclusive with single-cluster trust | `{}` |
+| `traffic.beylaJobSelector` | One exact or regex `job` matcher for Beyla metrics under a non-default scrape job | `""` |
 | `traffic.prometheusHeaders` | HTTP headers sent with every Prometheus request (auth-protected backends) | `{}` |
 | `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers | `{}` |
 | `argocd.existingSecret` | Name of a Secret holding the Argo CD API token (recommended — keeps it out of the release) | `""` |

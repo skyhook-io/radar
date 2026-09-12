@@ -1,0 +1,41 @@
+suite: Workload metric scope provisioning
+templates:
+  - deployment.yaml
+tests:
+  - it: does not assert single-cluster trust by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-single-cluster
+
+  - it: provisions dedicated-backend trust
+    set:
+      traffic.prometheusSingleCluster: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-single-cluster
+
+  - it: provisions exact shared-store labels as separate arguments
+    set:
+      traffic.prometheusClusterLabels:
+        cluster: nonprod
+        region: us-east-1
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-cluster-label=cluster=nonprod
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-cluster-label=region=us-east-1
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --prometheus-single-cluster
+
+  - it: preserves a quoted Beyla job matcher as one argument
+    set:
+      traffic.beylaJobSelector: 'job="custom-http"'
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: '--beyla-job-selector=job="custom-http"'

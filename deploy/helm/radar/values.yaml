@@ -531,6 +531,11 @@ traffic:
   #   http://vmsingle.victoria-metrics:8428
   #   http://vmselect.victoria-metrics:8481/select/0/prometheus
   prometheusUrl: ""
+  # Explicit scope for workload request/pressure charts. Choose one mode only.
+  prometheusSingleCluster: false
+  prometheusClusterLabels: {}
+  # One exact or regex job matcher when Beyla uses a non-default scrape job.
+  beylaJobSelector: ""
   # HTTP headers sent with every Prometheus request. Required for
   # auth-protected backends (Bearer tokens, X-Scope-OrgID multi-tenancy, etc.).
   # Values are rendered into the pod spec; use prometheusHeadersFromEnv for
