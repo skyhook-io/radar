@@ -20,7 +20,7 @@ import { PaneLoader } from '../../ui/PaneLoader'
 import { Input } from '../../ui/Input'
 import { clsx } from 'clsx'
 
-import type { GitOpsResourceTree, GitOpsTreeNode, GitOpsTreeRef, HealthStatus } from '../../../types'
+import type { GitOpsIssue, GitOpsResourceTree, GitOpsTreeNode, GitOpsTreeRef, HealthStatus } from '../../../types'
 import { displayKind } from '../../../types'
 import { healthToSeverity, SEVERITY_DOT } from '../../../utils/badge-colors'
 import { formatCompactAge } from '../../../utils/format'
@@ -64,6 +64,22 @@ interface GitOpsTreeGraphProps {
   onQueryChange?: (query: string) => void
   filters?: GitOpsTreeFilters
   showToolbar?: boolean
+  // Root-cause issues from the same detail page's insights fetch (already
+  // loaded alongside the tree — no extra request). Matched onto tree nodes
+  // by ref so an unhealthy node's hover reveals WHY, not just THAT.
+  issues?: GitOpsIssue[]
+}
+
+// refKey builds a stable lookup key from either a tree ref or an insight
+// ref. Namespace is omitted for cluster-scoped resources on both sides, so
+// normalize the missing case the same way instead of using `undefined` vs
+// `''` as accidentally distinct keys. Group is included for the same
+// reason CLAUDE.md calls out elsewhere (Knative Service vs core Service,
+// CNPG Cluster vs CAPI Cluster) — kind+namespace+name alone collides across
+// a real, documented class of same-plural CRDs, which would show one
+// resource's cause/tooltip on a completely unrelated node.
+function refKey(ref: { group?: string; kind: string; namespace?: string; name: string }): string {
+  return `${ref.group ?? ''}/${ref.kind}/${ref.namespace ?? ''}/${ref.name}`
 }
 
 export function GitOpsTreeGraph(props: GitOpsTreeGraphProps) {
@@ -85,6 +101,7 @@ function GitOpsTreeGraphInner({
   onQueryChange,
   filters,
   showToolbar = true,
+  issues,
 }: GitOpsTreeGraphProps) {
   const [internalPreset, setInternalPreset] = useState<GitOpsTreePreset>('compact')
   const [internalQuery, setInternalQuery] = useState('')
@@ -104,7 +121,20 @@ function GitOpsTreeGraphInner({
   useEffect(() => {
     if (preset !== 'compact') setExpandedGroups(new Set())
   }, [preset])
-  const { nodes, edges } = useMemo(() => buildFlowGraph(tree, preset, query, filters, expandedGroups), [tree, preset, query, filters, expandedGroups])
+  const causeByRef = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const issue of issues ?? []) {
+      const cause = issue.cause
+      const ref = issue.refs?.[0]
+      if (!cause || !ref) continue
+      const key = refKey(ref)
+      // First match wins — issues arrive ranked by severity, so a node
+      // that's the subject of multiple issues keeps its most severe cause.
+      if (!map.has(key)) map.set(key, cause)
+    }
+    return map
+  }, [issues])
+  const { nodes, edges } = useMemo(() => buildFlowGraph(tree, preset, query, filters, expandedGroups, causeByRef), [tree, preset, query, filters, expandedGroups, causeByRef])
 
   useEffect(() => {
     if (nodes.length === 0) return
@@ -297,7 +327,7 @@ function getEdgeColor(type: string): string {
   }
 }
 
-function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePreset, query: string, filters?: GitOpsTreeFilters, expandedGroups?: Set<string>): { nodes: Node[]; edges: Edge[] } {
+function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePreset, query: string, filters?: GitOpsTreeFilters, expandedGroups?: Set<string>, causeByRef?: Map<string, string>): { nodes: Node[]; edges: Edge[] } {
   if (!tree) return { nodes: [], edges: [] }
   const visibleTree = applyGraphFilters(applyPreset(tree, preset, expandedGroups), filters)
   const byID = new Map(visibleTree.nodes.map(node => [node.id, node]))
@@ -321,6 +351,7 @@ function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePrese
       data: {
         node,
         highlighted: normalizedQuery !== '' && matchesQuery(node, normalizedQuery),
+        cause: causeByRef?.get(refKey(node.ref)),
       },
     }
   })
@@ -543,7 +574,7 @@ function positionRanks(ranks: Map<number, string[]>, nodes: Map<string, GitOpsTr
   return positioned
 }
 
-const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<Node<{ node: GitOpsTreeNode; highlighted?: boolean }>>) {
+const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<Node<{ node: GitOpsTreeNode; highlighted?: boolean; cause?: string }>>) {
   const node = data.node
   const kind = normalizeDisplayKind(node)
   const status = normalizeHealth(node.topologyStatus)
@@ -552,10 +583,11 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
   const chips = buildChips(node)
   const dim = getNodeDimensions(node)
   const KindIcon = getTopologyIcon(kind)
+  // Only unhealthy nodes carry a cause worth surfacing — a healthy node
+  // matched by a stale/unrelated issue ref shouldn't show a tooltip.
+  const cause = status === 'unhealthy' || status === 'degraded' ? data.cause : undefined
 
-  return (
-    <>
-      <Handle type="target" position={Position.Left} className="!h-0 !w-0 !border-0 !bg-transparent" />
+  const card = (
       <div
         className={clsx(
           'relative overflow-hidden rounded-lg border bg-theme-surface shadow-md transition-colors',
@@ -640,6 +672,12 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
           )}
         </div>
       </div>
+  )
+
+  return (
+    <>
+      <Handle type="target" position={Position.Left} className="!h-0 !w-0 !border-0 !bg-transparent" />
+      {cause ? <Tooltip content={cause} delay={200}>{card}</Tooltip> : card}
       <Handle type="source" position={Position.Right} className="!h-0 !w-0 !border-0 !bg-transparent" />
     </>
   )

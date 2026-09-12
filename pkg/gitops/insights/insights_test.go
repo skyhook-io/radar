@@ -929,13 +929,14 @@ type fakeResolver struct {
 	statuses map[string]string            // finalizer → status string
 	calls    []string                     // finalizers passed (in order)
 	problems map[string][]ResourceProblem // resource name → workload problems
+	events   map[string][]EventSummary    // resource name → recent events
 }
 
 func (f *fakeResolver) GetLive(string, string, string, string) *unstructured.Unstructured {
 	return nil
 }
-func (f *fakeResolver) RecentEvents(string, string, string, string) []EventSummary {
-	return nil
+func (f *fakeResolver) RecentEvents(_, _, _, name string) []EventSummary {
+	return f.events[name]
 }
 func (f *fakeResolver) ResourceProblems(_, _, _, name string) []ResourceProblem {
 	return f.problems[name]
@@ -984,6 +985,92 @@ func TestBuildIssues_EnrichesDegradedResourceWithWorkloadCause(t *testing.T) {
 	plain := resourceIssue(buildIssues(root, nil, "argocd", nil))
 	if plain == nil || plain.Cause != "" {
 		t.Errorf("nil resolver should yield a resource issue with empty Cause, got %+v", plain)
+	}
+}
+
+// TestBuildIssues_DegradedAppFallsBackToLoudestResourceEvent pins the
+// fallback for the case first found live on kiac-dev: an Application whose
+// aggregate health is Degraded, but where no per-resource health.status in
+// status.resources[] is itself Degraded/Missing (ClusterSecretStore and
+// similar CRDs never populate it), so every other detector finds nothing.
+// The fallback attributes the app-level Degraded badge to the managed
+// resource with the loudest Warning event instead of leaving it unexplained.
+func TestBuildIssues_DegradedAppFallsBackToLoudestResourceEvent(t *testing.T) {
+	root := argoApp(map[string]any{
+		"health": map[string]any{"status": "Degraded"},
+		"resources": []any{
+			map[string]any{
+				"group": "external-secrets.io", "kind": "ClusterSecretStore", "name": "platform-secret-store",
+				"status": "Synced",
+			},
+			map[string]any{
+				"kind": "Namespace", "name": "platform-secrets",
+				"status": "Synced",
+			},
+		},
+	})
+	r := &fakeResolver{events: map[string][]EventSummary{
+		"platform-secret-store": {
+			{Type: "Warning", Reason: "InvalidProviderConfig", Message: "no route to host", Count: 17},
+			{Type: "Normal", Reason: "Synced", Message: "resource synced", Count: 40},
+		},
+	}}
+	issues := buildIssues(root, nil, "argocd", r)
+	if len(issues) != 1 {
+		t.Fatalf("expected exactly 1 fallback issue, got %d: %+v", len(issues), issues)
+	}
+	got := issues[0]
+	if got.Scope != ScopeResource {
+		t.Errorf("Scope = %q, want %q", got.Scope, ScopeResource)
+	}
+	if len(got.Refs) != 1 || got.Refs[0].Name != "platform-secret-store" {
+		t.Errorf("Refs = %+v, want a single ref to platform-secret-store", got.Refs)
+	}
+	if got.Cause != "InvalidProviderConfig" {
+		t.Errorf("Cause = %q, want the winning event's Reason", got.Cause)
+	}
+	if !strings.Contains(got.Message, "no route to host") {
+		t.Errorf("Message = %q, want it to include the winning event's Message", got.Message)
+	}
+
+	empty := buildIssues(root, nil, "argocd", &fakeResolver{})
+	if len(empty) != 0 {
+		t.Errorf("expected no issues when no resource has a Warning event, got %+v", empty)
+	}
+
+	// A nil resolver can't look up events → no fabricated issue either.
+	plain := buildIssues(root, nil, "argocd", nil)
+	if len(plain) != 0 {
+		t.Errorf("expected no issues with a nil resolver, got %+v", plain)
+	}
+}
+
+// TestBuildIssues_DegradedAppFallsBackEvenWhenEventCountIsZero pins that a
+// genuine single-occurrence Warning event isn't treated as "no signal" just
+// because it has no explicit Count — the events.k8s.io/v1 API only sets a
+// count once an event has repeated into a series, so a real, first-time
+// Warning commonly reports Count == 0 on modern clusters.
+func TestBuildIssues_DegradedAppFallsBackEvenWhenEventCountIsZero(t *testing.T) {
+	root := argoApp(map[string]any{
+		"health": map[string]any{"status": "Degraded"},
+		"resources": []any{
+			map[string]any{
+				"group": "external-secrets.io", "kind": "ClusterSecretStore", "name": "platform-secret-store",
+				"status": "Synced",
+			},
+		},
+	})
+	r := &fakeResolver{events: map[string][]EventSummary{
+		"platform-secret-store": {
+			{Type: "Warning", Reason: "InvalidProviderConfig", Message: "no route to host", Count: 0},
+		},
+	}}
+	issues := buildIssues(root, nil, "argocd", r)
+	if len(issues) != 1 {
+		t.Fatalf("expected exactly 1 fallback issue for a zero-count Warning, got %d: %+v", len(issues), issues)
+	}
+	if issues[0].Cause != "InvalidProviderConfig" {
+		t.Errorf("Cause = %q, want the zero-count event's Reason", issues[0].Cause)
 	}
 }
 
