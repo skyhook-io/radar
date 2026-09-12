@@ -60,6 +60,16 @@ const (
 	probeTimeout       = 15 * time.Second
 	probeRetryInterval = 30 * time.Second
 
+	// probeEndpointTimeout bounds a single reachability probe. On macOS,
+	// resolving any *.local hostname (a common convention for local cluster
+	// Gateway/Ingress hostnames) routes through mDNSResponder, which tries
+	// multicast DNS first and only falls back to /etc/hosts after its own
+	// hardcoded 5s timeout — so a tight probe budget can time out on DNS
+	// resolution alone before the TCP connect even starts, misreporting a
+	// live, reachable server as unreachable. 8s leaves headroom above that
+	// worst case for the actual connect + HTTP round trip.
+	probeEndpointTimeout = 8 * time.Second
+
 	// repoErrorBackoff throttles repo-list refetches after a failure (commonly a
 	// token without `repositories, get`), so insights' 2s poll doesn't hammer
 	// argocd-server. Longer than probeRetryInterval since repo-scope denials are
@@ -1087,7 +1097,7 @@ func (m *Manager) verifyAuth(ctx context.Context, url string, snap probeSnapshot
 // probeEndpoint checks that an Argo CD API server answers at url. A 401/403
 // still proves reachability — auth is verifyAuth's concern.
 func (m *Manager) probeEndpoint(ctx context.Context, url string, snap probeSnapshot) error {
-	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, probeEndpointTimeout)
 	defer cancel()
 	// Reachability only — send NO token. /api/version answers 200 (public) or 401
 	// either way, so the bearer token is never needed to prove an endpoint is up.
