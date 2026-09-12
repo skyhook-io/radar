@@ -46,7 +46,7 @@
         "create": { "type": "boolean" },
         "additionalRules": { "type": "array", "items": { "type": "object" } },
         "helm": { "type": "boolean", "description": "Allow Helm write operations. Grants broad permissions." },
-        "secrets": { "type": "boolean", "description": "Allow reading Secret contents. Auto-enabled regardless of this value by rbac.helm, by auth (auth.mode != none), and in cloud mode." },
+        "secrets": { "type": "boolean", "description": "Allow reading Secret contents. Also granted by rbac.helm, by auth (auth.mode != none), and in cloud mode, where reads are re-checked per user." },
         "podExec": { "type": "boolean", "description": "Allow pod exec (terminal feature)." },
         "podLogs": { "type": "boolean" },
         "portForward": { "type": "boolean" },

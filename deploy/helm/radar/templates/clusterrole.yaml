@@ -69,10 +69,10 @@ rules:
   {{- end }}
 
   {{- if or .Values.rbac.secrets .Values.rbac.helm (ne .Values.auth.mode "none") .Values.cloud.enabled }}
-  # Secrets access - required for Helm release storage (rbac.helm),
-  # showing secrets in the resource browser (rbac.secrets),
-  # or Helm visibility when auth is enabled / cloud-mode (Helm reads use the
-  # ServiceAccount since users with the K8s 'view' role cannot list secrets)
+  # Secrets access - required for Helm release storage (rbac.helm) and for
+  # showing secrets in the resource browser (rbac.secrets). Under auth / cloud
+  # mode the shared cache holds Secrets and every read is re-checked against
+  # the requesting user's own RBAC, so the grant is always on there.
   - apiGroups: [""]
     resources:
       - secrets

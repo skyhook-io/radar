@@ -66,12 +66,16 @@ rbac:
   # Automatically enables secrets read access (needed for Helm release storage).
   helm: false
 
-  # Allow reading secrets (shows secrets in resource list).
-  # Auto-enabled regardless of this flag by rbac.helm (Helm release storage is
-  # Secrets), when auth is on (auth.mode != none), or in cloud mode. Under any
-  # of those, setting this to false does NOT narrow the ClusterRole, and the
-  # grant is cluster-wide get/list/watch on all Secrets: check the rendered
-  # ClusterRole, not this value.
+  # Allow reading secrets (shows secrets in the resource list, and backs the
+  # Helm releases view in no-auth installs since Helm stores releases in Secrets).
+  # Auto-enabled when rbac.helm is on, when auth is on (auth.mode != none), or in
+  # cloud mode. Under auth/cloud every Secret read is re-checked against the
+  # requesting user's own RBAC, so the ServiceAccount grant only lets the shared
+  # cache hold Secrets; it does not expose them to users who can't read them
+  # themselves. Like viewRBAC and viewWebhooks, this flag therefore only changes
+  # no-auth installs. The grant is cluster-wide get/list/watch on all Secrets, and
+  # setting this to false does not remove it in those modes: read the rendered
+  # ClusterRole.
   secrets: false
 
   # Allow reading RBAC objects (Roles, RoleBindings, ClusterRoles, ClusterRoleBindings)
