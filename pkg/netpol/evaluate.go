@@ -17,6 +17,13 @@ import (
 type Peer struct {
 	Pod       *corev1.Pod
 	Namespace *corev1.Namespace
+	// External marks an endpoint that is not a pod at all — a node, the host
+	// network, the world outside the cluster. Selectors can never match it;
+	// an ipBlock is matched against IP. A Peer with a nil Pod that is not
+	// External is a pod the caller could not resolve, which is a different
+	// thing: nothing about it is decidable.
+	External bool
+	IP       string
 }
 
 // Backend is a destination pod together with the port and protocol the
@@ -121,7 +128,7 @@ func Evaluate(src Peer, dst []Backend, policies []*networkingv1.NetworkPolicy) V
 			egressAll, ingressAll = triYes, triYes
 			continue
 		}
-		egress := egressAdmits(egressPolicies, b)
+		egress := egressAdmits(egressPolicies, src, b)
 		selecting, ok := selectingPolicies(b.Pod, policies, func(t PolicyTypes) bool { return t.Ingress })
 		if !ok {
 			return Verdict{Kind: Unknown}
@@ -151,20 +158,13 @@ func Evaluate(src Peer, dst []Backend, policies []*networkingv1.NetworkPolicy) V
 
 // egressAdmits answers for one backend against the policies that isolate the
 // source's egress; none means the source is unrestricted.
-func egressAdmits(selecting []*networkingv1.NetworkPolicy, b Backend) tri {
+func egressAdmits(selecting []*networkingv1.NetworkPolicy, src Peer, b Backend) tri {
 	if len(selecting) == 0 {
 		return triYes
 	}
 	verdict := triNo
 	for _, np := range selecting {
-		for i := range np.Spec.Egress {
-			rule := &np.Spec.Egress[i]
-			// Named ports in an egress rule refer to the destination pod.
-			if !RuleMatchesPort(rule.Ports, b.Port, b.Protocol, b.Pod) {
-				continue
-			}
-			verdict = fold(verdict, peersAdmit(rule.To, b.Peer, np.Namespace, DirectionEgress))
-		}
+		verdict = fold(verdict, effectTri(Explain(np, DirectionEgress, src.Pod, b.Peer, b.Port, b.Protocol).Effect))
 	}
 	return verdict
 }
@@ -178,15 +178,22 @@ func ingressAdmits(selecting []*networkingv1.NetworkPolicy, src Peer, b Backend)
 	}
 	verdict := triNo
 	for _, np := range selecting {
-		for i := range np.Spec.Ingress {
-			rule := &np.Spec.Ingress[i]
-			if !RuleMatchesPort(rule.Ports, b.Port, b.Protocol, b.Pod) {
-				continue
-			}
-			verdict = fold(verdict, peersAdmit(rule.From, src, np.Namespace, DirectionIngress))
-		}
+		verdict = fold(verdict, effectTri(Explain(np, DirectionIngress, b.Pod, src, b.Port, b.Protocol).Effect))
 	}
 	return verdict
+}
+
+// effectTri maps a policy's Effect onto the fold. A policy that does not
+// apply must not count as a refusal, so it folds as neither.
+func effectTri(e Effect) tri {
+	switch e {
+	case Admits:
+		return triYes
+	case Undecidable:
+		return triUnknown
+	default:
+		return triNo
+	}
 }
 
 // both merges the two legs of one path: the path works only if both do, is
@@ -200,19 +207,6 @@ func both(a, b tri) tri {
 	default:
 		return triYes
 	}
-}
-
-// peersAdmit is a rule's from/to list as one answer: empty admits everyone,
-// otherwise one admitting entry is enough.
-func peersAdmit(peers []networkingv1.NetworkPolicyPeer, target Peer, policyNs string, dir Direction) tri {
-	if len(peers) == 0 {
-		return triYes
-	}
-	out := triNo
-	for i := range peers {
-		out = fold(out, peerAdmits(&peers[i], target, policyNs, dir))
-	}
-	return out
 }
 
 // fold merges answers that are alternatives to each other (rules of one
@@ -260,65 +254,6 @@ func selectingPolicies(pod *corev1.Pod, policies []*networkingv1.NetworkPolicy, 
 		}
 	}
 	return out, true
-}
-
-// peerAdmits decides whether one from/to entry admits target. policyNs is the
-// namespace the rule lives in — a podSelector without a namespaceSelector
-// only ever matches pods there.
-func peerAdmits(peer *networkingv1.NetworkPolicyPeer, target Peer, policyNs string, dir Direction) tri {
-	if peer.IPBlock != nil {
-		if dir == DirectionEgress {
-			return triUnknown
-		}
-		// A match admits. A miss proves nothing: whether the policy sees the
-		// pod's address or a rewritten one (kube-proxy masquerade, a mesh
-		// sidecar) is up to the network plugin.
-		if ipBlockAdmits(peer.IPBlock, podIPs(target.Pod)) == triYes {
-			return triYes
-		}
-		return triUnknown
-	}
-	if peer.NamespaceSelector == nil && peer.PodSelector == nil {
-		return triUnknown
-	}
-
-	ns := triYes
-	if peer.NamespaceSelector == nil {
-		if target.Pod.Namespace != policyNs {
-			ns = triNo
-		}
-	} else {
-		if target.Namespace == nil {
-			ns = triUnknown
-		} else {
-			sel, err := metav1.LabelSelectorAsSelector(peer.NamespaceSelector)
-			if err != nil {
-				ns = triUnknown
-			} else if !sel.Matches(labels.Set(target.Namespace.Labels)) {
-				ns = triNo
-			}
-		}
-	}
-	if ns == triNo {
-		return triNo
-	}
-
-	pod := triYes
-	if peer.PodSelector != nil {
-		sel, err := metav1.LabelSelectorAsSelector(peer.PodSelector)
-		if err != nil {
-			pod = triUnknown
-		} else if !sel.Matches(labels.Set(target.Pod.Labels)) {
-			pod = triNo
-		}
-	}
-	if pod == triNo {
-		return triNo
-	}
-	if ns == triUnknown || pod == triUnknown {
-		return triUnknown
-	}
-	return triYes
 }
 
 // ipBlockAdmits reports whether one of the pod's addresses of the block's own
