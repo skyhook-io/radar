@@ -4,6 +4,57 @@ These panels extend the expanded
 Metrics tab for Deployments, StatefulSets and DaemonSets. They read an existing
 Prometheus-compatible backend; Radar does not install instrumentation.
 
+## Live-tested coverage
+
+Validation on 2026-09-13–14 exercised the following combinations. A successful
+query endpoint does not imply that every chart has the necessary metrics.
+These checks cover specific versions and collection configurations, not every
+installation of a backend or a measured percentage of Kubernetes users.
+
+| Backend and collection | Resource panels | HTTP panels | Setup / qualification |
+|---|---|---|---|
+| EKS, Prometheus 3.14 + cAdvisor + Beyla 3.32 | CPU, memory, throttling | Requests, 5xx, p50/p95, reporting Pods | Existing workloads; automatic endpoint discovery and Pod UID attribution |
+| GKE, OpenCost Prometheus 2.54 | CPU, memory, throttling | No HTTP source | Deployments and a Redis StatefulSet; automatic UID attribution |
+| EKS, Prometheus 2.47 | CPU, memory | No HTTP source | Throttling metrics absent from the tested store |
+| Shared Mimir with three clusters | CPU, memory | Not certified | Explicit central-store URL; current Pod UID attribution without a scope assertion |
+| EKS, Mimir 3.2 + Alloy Prometheus remote-write + Beyla 3.32 | CPU, memory, throttling | Requests, 5xx, p50/p95, reporting Pods | Explicit URL, Basic auth and tenant header; automatic UID attribution |
+| GKE, VictoriaMetrics 1.151 + cAdvisor/KSM + Istio 1.30 sidecars | CPU, memory, throttling | Requests, 5xx, reporting Pods; latency incomplete | Identity labels preserved; KSM-backed cluster attribution; explicit VM endpoint selection |
+| kind, Prometheus 3.5 + Beyla 3.32 | No cAdvisor scrape | Requests, 5xx, p50/p95, reporting Pods | Two replicas and two HTTP ports; controlled nonzero errors |
+| kind, Istio 1.30 official Prometheus sample | CPU, memory, throttling | Requests/5xx with scope assertion; latency incomplete | Sample lacks a provable automatic Istio cluster partition |
+
+Non-HTTP workers and Redis correctly retain resource panels when available,
+without an empty HTTP chart grid. A network-only VictoriaMetrics store correctly
+has no workload observations. Authenticated Mimir rejects missing/wrong
+credentials and a missing required tenant. A separate unhealthy Mimir store
+failed real queries despite having Ready Pods; readiness is not query health.
+
+### Configuration and remaining gaps
+
+- The tested VictoriaMetrics Kubernetes chart (0.92.1) drops cAdvisor `id` and KSM
+  `uid` by default. Preserve those fields for direct UID / KSM-backed attribution.
+  The successful VM test used that explicit configuration; it is not a stock-default
+  OOTB claim. Copying every GKE node label also exceeded VM's label-per-series
+  limit in the lab; collector label filtering was needed to prevent dropped data.
+- Istio request counters and histogram populations temporarily differ under live
+  traffic. The current equality guard withholds affected latency samples, so
+  Istio latency is not fully validated even with correct attribution.
+- The connection probe currently requires nonempty `up`. A remote-write filter
+  retaining workload metrics but dropping `up` can cause a false connection
+  failure. Query backend errors may be summarized too generically as unreachable.
+- Live checks primarily used one or two replicas. DaemonSet endpoint support,
+  large workloads, HA duplicate populations and adversarial cross-cluster name
+  collisions are not all live-certified by this matrix. Separate query tests
+  cover several identity/duplicate cases; that is not equivalent to a fleet test.
+- These runs used local Radar with Kubernetes port-forward access. They do not
+  certify Radar Cloud transport, managed-service authentication or every in-cluster
+  deployment path. A full browser sweep was not repeated for each backend.
+
+Historical deleted-Pod membership, ingress observers, native-only histograms,
+ambient/waypoint mapping, gRPC and queue-worker semantics remain outside this
+slice. Existing network/filesystem/restart charts have separate identity limits
+described below. See [what each chart needs](#what-each-chart-needs) before
+treating backend compatibility as automatic chart availability.
+
 ## Which workloads benefit?
 
 The resource panels apply to service processes and background workers alike.
