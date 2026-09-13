@@ -1754,6 +1754,24 @@ func (s *Server) applyClusterScopedTopologyRBAC(r *http.Request, topo *topology.
 	if topo == nil {
 		return
 	}
+	allowedSecrets := map[topology.SARTuple]bool{}
+	tuples := topo.SecretRBACTuples()
+	if len(tuples) > 0 {
+		if s.canRead(r, "", "secrets", "", "list") {
+			for _, tuple := range tuples {
+				allowedSecrets[tuple] = true
+			}
+		} else {
+			namespaces := make([]string, 0, len(tuples))
+			for _, tuple := range tuples {
+				namespaces = append(namespaces, tuple.Namespace)
+			}
+			for _, ns := range s.filterNamespacesByCanRead(r, "", "secrets", "list", namespaces) {
+				allowedSecrets[topology.SARTuple{Resource: "secrets", Namespace: ns}] = true
+			}
+		}
+	}
+	topo.StripSecretsExcept(allowedSecrets)
 	if deny := s.deniedClusterScopedTopoKinds(r); len(deny) > 0 {
 		topo.StripNodeKinds(deny)
 	}
@@ -2666,6 +2684,10 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		// kind/plural collisions like Knative Service vs core Service).
 		var relationships *topology.Relationships
 		if cachedTopo, relIdx := s.broadcaster.GetCachedTopologyWithIndex(); cachedTopo != nil {
+			if auth.UserFromContext(r.Context()) != nil {
+				cachedTopo = s.relationshipTopologyForUser(r, cachedTopo)
+				relIdx = nil
+			}
 			relationships = topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
 				k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
 				k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
@@ -2885,6 +2907,10 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	// of a group-blind kind/name lookup.
 	var relationships *topology.Relationships
 	if cachedTopo, relIdx := s.broadcaster.GetCachedTopologyWithIndex(); cachedTopo != nil {
+		if auth.UserFromContext(r.Context()) != nil {
+			cachedTopo = s.relationshipTopologyForUser(r, cachedTopo)
+			relIdx = nil
+		}
 		relationships = topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
 			k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
 			k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)

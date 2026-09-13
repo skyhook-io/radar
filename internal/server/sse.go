@@ -445,6 +445,7 @@ func (b *SSEBroadcaster) initCachedTopology() {
 	// Include ReplicaSets in the cache so relationship lookups work for them
 	opts.IncludeReplicaSets = true
 	opts.ForRelationshipCache = true
+	opts.IncludeSecrets = true
 
 	if topo, err := builder.Build(opts); err == nil {
 		if b.updateCachedTopology(topo, epoch) {
@@ -813,6 +814,7 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() bool {
 			allowed        map[topology.SARTuple]bool
 			allowedDynamic map[topology.SARTuple]bool
 			allowedCalico  map[topology.SARTuple]bool
+			allowedSecrets map[topology.SARTuple]bool
 			channels       []chan SSEEvent
 		}
 		nodeClassGroups := make(map[string]*nodeClassGroup)
@@ -821,9 +823,10 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() bool {
 			allowed := authorizedNodeClassTuples(topo, authorize)
 			allowedDynamic := authorizedClusterScopedDynamicTuples(topo, authorize)
 			allowedCalico := authorizedCalicoPolicyTuples(topo, info.Authorize)
-			authKey := nodeClassTuplesKey(allowed) + "\x02" + nodeClassTuplesKey(allowedDynamic) + "\x03" + calicoTuplesKey(allowedCalico)
+			allowedSecrets := authorizedSecretTuples(topo, info.Authorize)
+			authKey := nodeClassTuplesKey(allowed) + "\x02" + nodeClassTuplesKey(allowedDynamic) + "\x03" + sarTuplesKey(allowedCalico) + "\x04" + sarTuplesKey(allowedSecrets)
 			if nodeClassGroups[authKey] == nil {
-				nodeClassGroups[authKey] = &nodeClassGroup{allowed: allowed, allowedDynamic: allowedDynamic, allowedCalico: allowedCalico}
+				nodeClassGroups[authKey] = &nodeClassGroup{allowed: allowed, allowedDynamic: allowedDynamic, allowedCalico: allowedCalico, allowedSecrets: allowedSecrets}
 			}
 			nodeClassGroups[authKey].channels = append(nodeClassGroups[authKey].channels, ch)
 		}
@@ -832,6 +835,7 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() bool {
 			filtered.StripNodeClassesExcept(authGroup.allowed)
 			filtered.StripClusterScopedDynamicExcept(authGroup.allowedDynamic)
 			filtered.StripCalicoPoliciesExcept(authGroup.allowedCalico)
+			filtered.StripSecretsExcept(authGroup.allowedSecrets)
 			data, marshalErr := json.Marshal(filtered)
 			if marshalErr != nil {
 				log.Printf("Error marshaling topology for broadcast: %v", marshalErr)
@@ -934,7 +938,7 @@ func authorizedCalicoPolicyTuples(topo *topology.Topology, authorize func(group,
 	return allowed
 }
 
-func calicoTuplesKey(tuples map[topology.SARTuple]bool) string {
+func sarTuplesKey(tuples map[topology.SARTuple]bool) string {
 	if len(tuples) == 0 {
 		return ""
 	}
@@ -1263,6 +1267,7 @@ func buildFullTopology() (*topology.Topology, error) {
 	opts.ViewMode = topology.ViewModeResources
 	opts.IncludeReplicaSets = true
 	opts.ForRelationshipCache = true
+	opts.IncludeSecrets = true
 	return builder.Build(opts)
 }
 
@@ -1330,6 +1335,7 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 			topo.StripNodeClassesExcept(authorizedNodeClassTuples(topo, nodeClassAuthorizer(authorize)))
 			topo.StripClusterScopedDynamicExcept(authorizedClusterScopedDynamicTuples(topo, nodeClassAuthorizer(authorize)))
 			topo.StripCalicoPoliciesExcept(authorizedCalicoPolicyTuples(topo, authorize))
+			topo.StripSecretsExcept(authorizedSecretTuples(topo, authorize))
 			data, marshalErr := json.Marshal(topo)
 			if marshalErr != nil {
 				log.Printf("SSE: failed to marshal initial topology: %v", marshalErr)
@@ -1376,4 +1382,19 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request, denie
 			flusher.Flush()
 		}
 	}
+}
+
+func authorizedSecretTuples(topo *topology.Topology, authorize func(group, resource, namespace, verb string) bool) map[topology.SARTuple]bool {
+	allowed := map[topology.SARTuple]bool{}
+	if authorize == nil {
+		return allowed
+	}
+	tuples := topo.SecretRBACTuples()
+	clusterWide := len(tuples) > 0 && authorize("", "secrets", "", "list")
+	for _, tuple := range tuples {
+		if clusterWide || authorize("", "secrets", tuple.Namespace, "list") {
+			allowed[tuple] = true
+		}
+	}
+	return allowed
 }

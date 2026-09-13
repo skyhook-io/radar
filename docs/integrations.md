@@ -2,6 +2,20 @@
 
 Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar provides dedicated detail views, topology edges, smart table columns, and AI-optimized summaries for seamless integration.
 
+### ConfigMap and Secret reflection (Reflector)
+
+Radar recognizes EmberStack Reflector annotations on core Secrets and ConfigMaps.
+When both objects are visible, the mirror's `reflects` annotation creates a
+**Reflects to** configuration edge from source to mirror, including mirrors with
+a different name. The edge describes the declared relationship, not successful
+synchronization or Kubernetes ownership. Namespace filters still apply; reflected Secret
+nodes remain hidden by default and require Secret read access when included.
+
+| Resource | Group | Topology | Detail View |
+|----------|-------|----------|-------------|
+| ConfigMap | Core | Source → mirror configuration edge | Config references and consumers |
+| Secret | Core | Source → mirror configuration edge when included and authorized | Authorized config references and consumers |
+
 ---
 
 ## Karpenter

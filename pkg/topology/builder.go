@@ -99,6 +99,10 @@ func (b *Builder) Build(opts BuildOptions) (*Topology, error) {
 		return nil, err
 	}
 
+	if opts.ViewMode != ViewModeTraffic {
+		b.addReflectionRelationships(topo, opts)
+	}
+
 	// Set large cluster flags in response
 	if isLargeCluster {
 		topo.LargeCluster = true
@@ -131,11 +135,11 @@ func (b *Builder) detectLargeClusterAndOptimize(opts *BuildOptions) (bool, []str
 	opts.MaxIndividualPods = 2
 
 	// 2. Auto-hide ConfigMaps and PVCs
-	if opts.IncludeConfigMaps {
+	if opts.IncludeConfigMaps && !opts.ForRelationshipCache {
 		opts.IncludeConfigMaps = false
 		hiddenKinds = append(hiddenKinds, "ConfigMap")
 	}
-	if opts.IncludePVCs {
+	if opts.IncludePVCs && !opts.ForRelationshipCache {
 		opts.IncludePVCs = false
 		hiddenKinds = append(hiddenKinds, "PersistentVolumeClaim")
 	}
@@ -3423,17 +3427,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			}
 
 			if len(consumers) > 0 {
-				nodes = append(nodes, Node{
-					ID:     cmID,
-					Kind:   KindConfigMap,
-					Name:   cm.Name,
-					Status: StatusHealthy,
-					Data: map[string]any{
-						"namespace": cm.Namespace,
-						"keys":      len(cm.Data),
-						"labels":    cm.Labels,
-					},
-				})
+				nodes = append(nodes, configMapNode(cm))
 			}
 		}
 	}
@@ -3467,18 +3461,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			if len(consumers) > 0 {
 				visibleSecretIDs[workloadRefKey{namespace: secret.Namespace, name: secret.Name}] = secretID
-				nodes = append(nodes, Node{
-					ID:     secretID,
-					Kind:   KindSecret,
-					Name:   secret.Name,
-					Status: StatusHealthy,
-					Data: map[string]any{
-						"namespace": secret.Namespace,
-						"type":      string(secret.Type),
-						"keys":      len(secret.Data),
-						"labels":    secret.Labels,
-					},
-				})
+				nodes = append(nodes, secretNode(secret))
 			}
 		}
 	}

@@ -1564,6 +1564,24 @@ func applyClusterScopedTopologyRBAC(ctx context.Context, topo *topology.Topology
 	if topo == nil {
 		return
 	}
+	allowedSecrets := map[topology.SARTuple]bool{}
+	tuples := topo.SecretRBACTuples()
+	if len(tuples) > 0 {
+		if canReadInNamespace(ctx, "", "secrets", "", "list") {
+			for _, tuple := range tuples {
+				allowedSecrets[tuple] = true
+			}
+		} else {
+			namespaces := make([]string, 0, len(tuples))
+			for _, tuple := range tuples {
+				namespaces = append(namespaces, tuple.Namespace)
+			}
+			for _, ns := range filterNamespacesByCanRead(ctx, "", "secrets", "list", namespaces) {
+				allowedSecrets[topology.SARTuple{Resource: "secrets", Namespace: ns}] = true
+			}
+		}
+	}
+	topo.StripSecretsExcept(allowedSecrets)
 	nodesBefore, edgesBefore := len(topo.Nodes), len(topo.Edges)
 	if deny := deniedClusterScopedTopoKinds(ctx); len(deny) > 0 {
 		topo.StripNodeKinds(deny)
