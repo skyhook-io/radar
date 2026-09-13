@@ -1,7 +1,7 @@
-// The module's public surface — the same 46 names the single file exported.
-// Call sites import "./investigationEvidence", which resolves here, so the
-// split is invisible outside this directory. Anything not listed is internal
-// to the module: exported only so a sibling file can reach it.
+// The module's public surface. Importers name the directory, never a file
+// inside it, so what this file re-exports is the whole contract. Anything
+// absent here is internal: exported from its own file only so a sibling can
+// reach it, and free to move between files without affecting a caller.
 
 export { metricsScope } from "./adapters/prometheus";
 export { projectInvestigationEvidence } from "./builder";
