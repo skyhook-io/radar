@@ -47,12 +47,16 @@ func (c *Client) attributeNetworkPolicyBlock(ctx context.Context, cache *k8s.Res
 	if cache == nil || !cacheAuthoritativeFor(cache, selfNs) {
 		return nil
 	}
-	selfPod, err := cache.Pods().Pods(selfNs).Get(selfName)
+	pods, netpols := cache.Pods(), cache.NetworkPolicies()
+	if pods == nil || netpols == nil {
+		return nil
+	}
+	selfPod, err := pods.Pods(selfNs).Get(selfName)
 	if err != nil {
 		return nil
 	}
 	src := netpol.Peer{Pod: selfPod, Namespace: namespaceObject(cache, selfNs)}
-	selfPolicies, err := cache.NetworkPolicies().NetworkPolicies(selfNs).List(labels.Everything())
+	selfPolicies, err := netpols.NetworkPolicies(selfNs).List(labels.Everything())
 	if err != nil {
 		return nil
 	}
@@ -88,7 +92,7 @@ func (c *Client) attributeNetworkPolicyBlock(ctx context.Context, cache *k8s.Res
 				complete = false
 				break
 			}
-			nsPolicies, err := cache.NetworkPolicies().NetworkPolicies(ns).List(labels.Everything())
+			nsPolicies, err := netpols.NetworkPolicies(ns).List(labels.Everything())
 			if err != nil {
 				complete = false
 				break
@@ -108,13 +112,15 @@ func (c *Client) attributeNetworkPolicyBlock(ctx context.Context, cache *k8s.Res
 }
 
 // cacheAuthoritativeFor reports whether the cache can answer completely for a
-// namespace: every kind the evaluation reads is synced and covers it. A
-// namespace-scoped or still-warming informer could be missing exactly the
-// policy that admits the traffic, which would manufacture a denial.
+// namespace: every kind the evaluation reads is synced, ready to serve (a
+// deferred kind's lister stays nil for a moment after its informer syncs),
+// and covers the namespace. A namespace-scoped or still-warming informer
+// could be missing exactly the policy that admits the traffic, which would
+// manufacture a denial.
 func cacheAuthoritativeFor(cache *k8s.ResourceCache, ns string) bool {
 	for _, kind := range []k8score.ResourceType{k8score.Pods, k8score.Services, k8score.NetworkPolicies} {
 		synced, known := cache.InformerSynced(string(kind))
-		if !known || !synced || !cache.KindCoversNamespace(string(kind), ns) {
+		if !known || !synced || !cache.IsKindReady(string(kind)) || !cache.KindCoversNamespace(string(kind), ns) {
 			return false
 		}
 	}
@@ -128,7 +134,11 @@ func namespaceObject(cache *k8s.ResourceCache, name string) *corev1.Namespace {
 	if synced, known := cache.InformerSynced(string(k8score.Namespaces)); !known || !synced {
 		return nil
 	}
-	ns, err := cache.Namespaces().Get(name)
+	lister := cache.Namespaces()
+	if lister == nil {
+		return nil
+	}
+	ns, err := lister.Get(name)
 	if err != nil {
 		return nil
 	}
@@ -143,7 +153,11 @@ func namespaceObject(cache *k8s.ResourceCache, name string) *corev1.Namespace {
 // UID and address — since a verdict over a partial or misattributed backend
 // set could deny a connection the real backend admits.
 func (c *Client) candidateBackends(ctx context.Context, cache *k8s.ResourceCache, cand prom.Candidate) ([]netpol.Backend, bool) {
-	svc, err := cache.Services().Services(cand.Namespace).Get(cand.Name)
+	services, pods := cache.Services(), cache.Pods()
+	if services == nil || pods == nil {
+		return nil, false
+	}
+	svc, err := services.Services(cand.Namespace).Get(cand.Name)
 	if err != nil {
 		return nil, false
 	}
@@ -193,7 +207,7 @@ func (c *Client) candidateBackends(ctx context.Context, cache *k8s.ResourceCache
 			if ns == "" {
 				ns = cand.Namespace
 			}
-			pod, err := cache.Pods().Pods(ns).Get(ep.TargetRef.Name)
+			pod, err := pods.Pods(ns).Get(ep.TargetRef.Name)
 			if err != nil || !endpointMatchesPod(ep, pod) {
 				return nil, false
 			}

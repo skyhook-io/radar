@@ -21,6 +21,7 @@ import (
 type attributionFixture struct {
 	objects  []runtime.Object
 	scopes   map[string]k8score.ResourceScope
+	deferred map[string]bool
 	selfName string
 	selfNs   string
 }
@@ -105,10 +106,14 @@ func runAttribution(t *testing.T, fx attributionFixture, reasons []prom.ProbeRea
 	if scopes == nil {
 		scopes = clusterWideScopes()
 	}
+	deferred := fx.deferred
+	if deferred == nil {
+		deferred = map[string]bool{}
+	}
 	core, err := k8score.NewResourceCache(k8score.CacheConfig{
 		Client:         client,
 		ResourceScopes: scopes,
-		DeferredTypes:  map[string]bool{},
+		DeferredTypes:  deferred,
 	})
 	if err != nil {
 		t.Fatalf("NewResourceCache: %v", err)
@@ -289,6 +294,18 @@ func TestAttributeNetworkPolicyBlock(t *testing.T) {
 		// by any policy, so the connection is admitted.
 		if err := runAttribution(t, fx, transport); err != nil {
 			t.Fatalf("expected nil, got %v", err)
+		}
+	})
+
+	t.Run("a policy informer that is not yet ready to serve stays silent", func(t *testing.T) {
+		fx := self
+		fx.objects = clusterWithPrometheus(denyAllIngress("monitoring", "deny-all"))
+		fx.deferred = map[string]bool{string(k8score.NetworkPolicies): true}
+		// The deferred lister may or may not have flipped ready by now; either
+		// way the call must not panic, and only a ready cache may attribute.
+		err := runAttribution(t, fx, transport)
+		if err != nil && !strings.Contains(err.Error(), "monitoring/deny-all") {
+			t.Fatalf("unexpected error %v", err)
 		}
 	})
 
