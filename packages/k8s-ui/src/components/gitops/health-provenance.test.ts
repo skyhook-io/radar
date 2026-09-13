@@ -10,6 +10,7 @@ describe('radarHealthNote', () => {
   })
   test('is silent for the controller, for healthy values, and for unknown sources', () => {
     expect(radarHealthNote({ health: 'Degraded', healthSource: 'controller' })).toBe('')
+    expect(radarHealthNote({ health: 'Degraded', healthSource: 'controllerApi' })).toBe('')
     expect(radarHealthNote({ health: 'Healthy', healthSource: 'radar' })).toBe('')
     expect(radarHealthNote({ health: 'Degraded' })).toBe('')
     expect(radarHealthNote({ health: 'Degraded', healthSource: 'something-newer' })).toBe('')
@@ -22,6 +23,7 @@ describe('radarHealthNote', () => {
     // can turn; it must still avoid Radar's internal vocabulary.
     expect(APP_TREE_NO_FINDINGS_NOTICE).not.toMatch(/appTree|Tier|overlay/i)
     expect(APP_TREE_NO_FINDINGS_NOTICE).toContain('controller.resource.health.persist')
+    expect(APP_TREE_NO_FINDINGS_NOTICE).toContain('Settings')
   })
 
   test('hasRadarFinding reads the rows the markers read', () => {
@@ -41,6 +43,7 @@ describe('healthSourceNoticeKind', () => {
     expect(healthSourceNoticeKind({ tool: 'argocd', resourceHealthMode: 'appTree', health: 'Degraded' })).toBe('appTree')
     expect(healthSourceNoticeKind({ tool: 'argocd', resourceHealthMode: 'appTree' })).toBe('appTree')
     expect(healthSourceNoticeKind({ tool: 'argocd', resourceHealthMode: 'appTree', health: 'Healthy' })).toBeNull()
+    expect(healthSourceNoticeKind({ tool: 'argocd', resourceHealthMode: 'appTree', health: 'Degraded', resourceHealthFromApi: true })).toBeNull()
     expect(healthSourceNoticeKind({ tool: 'argocd', resourceHealthMode: 'inline' })).toBeNull()
     expect(healthSourceNoticeKind({ tool: 'argocd' })).toBeNull()
     expect(healthSourceNoticeKind({ tool: 'fluxcd', resourceHealthMode: 'appTree' })).toBeNull()

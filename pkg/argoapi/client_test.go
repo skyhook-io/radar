@@ -406,3 +406,50 @@ func TestInsecureSkipTLSVerify(t *testing.T) {
 		t.Errorf("Version = %q", v)
 	}
 }
+
+func TestApplicationAndResourceTreeHealth(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path+"?"+r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/applications/billing":
+			_, _ = w.Write([]byte(`{"metadata":{"uid":"app-uid"},"status":{"resourceHealthSource":"appTree","resources":[
+				{"group":"apps","kind":"Deployment","namespace":"prod","name":"web","health":{"status":"Degraded","message":"0/1 available"}},
+				{"kind":"Namespace","name":"prod"}]}}`))
+		case "/api/v1/applications/billing/resource-tree":
+			_, _ = w.Write([]byte(`{"nodes":[
+				{"group":"apps","kind":"Deployment","namespace":"prod","name":"web","health":{"status":"Progressing"}},
+				{"kind":"Pod","namespace":"prod","name":"web-1","health":{"status":"Healthy"}}]}`))
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer srv.Close()
+	c := New(Options{BaseURL: srv.URL})
+
+	app, err := c.Application(context.Background(), ApplicationQuery{AppName: "billing", AppNamespace: "argocd"})
+	if err != nil {
+		t.Fatalf("Application: %v", err)
+	}
+	if app.UID != "app-uid" || app.ResourceHealthSource != "appTree" || !app.HasHealth() {
+		t.Errorf("Application = %+v, want uid/appTree/health", app)
+	}
+	if len(app.Resources) != 2 || app.Resources[0].Health != "Degraded" || app.Resources[0].Message != "0/1 available" || app.Resources[1].Health != "" {
+		t.Errorf("Resources = %+v", app.Resources)
+	}
+
+	tree, err := c.ResourceTree(context.Background(), ApplicationQuery{AppName: "billing", AppNamespace: "argocd"})
+	if err != nil {
+		t.Fatalf("ResourceTree: %v", err)
+	}
+	if len(tree.Resources) != 2 || tree.Resources[0].Health != "Progressing" || tree.Resources[1].Kind != "Pod" {
+		t.Errorf("tree Resources = %+v", tree.Resources)
+	}
+	if paths[0] != "/api/v1/applications/billing?appNamespace=argocd" || paths[1] != "/api/v1/applications/billing/resource-tree?appNamespace=argocd" {
+		t.Errorf("paths = %v", paths)
+	}
+	if _, err := c.Application(context.Background(), ApplicationQuery{}); err == nil {
+		t.Error("Application without AppName must error")
+	}
+}

@@ -72,6 +72,18 @@ type cacheEntry struct {
 	expires time.Time
 }
 
+// applicationHealthTTL bounds how often the per-resource health of one app is
+// re-read from argocd-server. Failures are cached for the same window: the
+// GitOps detail page polls every 2s while a sync runs, and an install that
+// refuses anonymous reads must not be asked again on every tick.
+const applicationHealthTTL = 15 * time.Second
+
+type appHealthEntry struct {
+	health  *argoapi.ApplicationHealth
+	err     error
+	expires time.Time
+}
+
 // In-cluster mode cannot switch clusters, so a process-local sentinel is a
 // complete boundary. Requiring a cluster UID here would add a startup API read
 // that can fail under restricted RBAC and permanently strand env-provided tokens.
@@ -116,6 +128,13 @@ type Manager struct {
 	forward *activeForward
 
 	cache map[string]cacheEntry
+	// appHealthCache memoizes ApplicationHealthCached per app, hits and
+	// misses alike.
+	appHealthCache map[string]appHealthEntry
+	// readRetryAfter throttles unconfigured (anonymous) discovery attempts:
+	// with neither URL nor token set, nothing else ever probes, so the read
+	// path must not turn every detail-page poll into a Service list.
+	readRetryAfter time.Time
 
 	// revMetaCache holds Git commit metadata keyed by
 	// (appNamespace, app, sourceIndex, revision). Cleared alongside `cache` on
@@ -398,6 +417,12 @@ func RevisionMetadataCached(ctx context.Context, q argoapi.RevisionMetadataQuery
 	return defaultManager.RevisionMetadataCached(ctx, q)
 }
 
+// ApplicationHealthCached fetches an Application's per-resource health via the
+// default manager (see Manager.ApplicationHealthCached).
+func ApplicationHealthCached(ctx context.Context, q argoapi.ApplicationQuery) (*argoapi.ApplicationHealth, error) {
+	return defaultManager.ApplicationHealthCached(ctx, q)
+}
+
 func RepositoriesCached() []argoapi.Repository {
 	return defaultManager.RepositoriesCached()
 }
@@ -618,6 +643,7 @@ func (m *Manager) dropConnectionLocked() *activeForward {
 	m.baseURL = ""
 	m.client = nil
 	m.cache = nil
+	m.appHealthCache = nil
 	m.revMetaCache = nil
 	m.repoCache = nil
 	// Clear the retry throttles too, so a reconnect or context switch (which is
@@ -905,6 +931,82 @@ func (m *Manager) ManagedResourcesCached(ctx context.Context, q argoapi.ManagedR
 		m.mu.Unlock()
 	}
 	return items, nil
+}
+
+// ApplicationHealthCached returns Argo's own per-resource health for an
+// Application, as argocd-server reports it: a plain GET first (the server
+// fills health from its tree cache even when the controller doesn't persist
+// it), the resource-tree when that answers without any health. Served from
+// a 15s cache per app, misses included.
+//
+// Unlike the diff calls, this also runs for an UNCONFIGURED manager: with no
+// URL and no token it discovers argocd-server and asks without credentials,
+// which succeeds only where the install allows anonymous read
+// (users.anonymous.enabled). A refusal is cached and discovery is throttled,
+// so an install that says no is asked again at most every
+// probeRetryInterval.
+func (m *Manager) ApplicationHealthCached(ctx context.Context, q argoapi.ApplicationQuery) (*argoapi.ApplicationHealth, error) {
+	key := q.AppNamespace + "\x00" + q.AppName
+	m.mu.Lock()
+	if e, ok := m.appHealthCache[key]; ok && time.Now().Before(e.expires) {
+		m.mu.Unlock()
+		return e.health, e.err
+	}
+	m.ensureSeededLocked()
+	unconfigured := m.manualURL == "" && m.token == ""
+	if unconfigured && m.client == nil && time.Now().Before(m.readRetryAfter) {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("%w: anonymous read retry throttled", ErrUnreachable)
+	}
+	m.mu.Unlock()
+
+	health, err := m.fetchApplicationHealth(ctx, q)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err != nil && unconfigured && m.client == nil {
+		m.readRetryAfter = time.Now().Add(probeRetryInterval)
+	}
+	if m.appHealthCache == nil {
+		m.appHealthCache = make(map[string]appHealthEntry)
+	}
+	now := time.Now()
+	for k, e := range m.appHealthCache {
+		if now.After(e.expires) {
+			delete(m.appHealthCache, k)
+		}
+	}
+	m.appHealthCache[key] = appHealthEntry{health: health, err: err, expires: now.Add(applicationHealthTTL)}
+	return health, err
+}
+
+func (m *Manager) fetchApplicationHealth(ctx context.Context, q argoapi.ApplicationQuery) (*argoapi.ApplicationHealth, error) {
+	client, err := m.connectedClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	gen := m.generation
+	m.mu.Unlock()
+	app, err := client.Application(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	if !app.HasHealth() {
+		tree, terr := client.ResourceTree(ctx, q)
+		if terr == nil && tree.HasHealth() {
+			tree.UID = app.UID
+			tree.ResourceHealthSource = app.ResourceHealthSource
+			app = tree
+		}
+	}
+	m.mu.Lock()
+	stale := m.generation != gen
+	m.mu.Unlock()
+	if stale {
+		return nil, fmt.Errorf("%w: connection changed during fetch", ErrUnreachable)
+	}
+	return app, nil
 }
 
 // RevisionMetadataCached returns Git commit metadata for a revision, cached per

@@ -23,19 +23,20 @@ export const APP_TREE_HEALTH_NOTICE =
 // one thing the user can do today is name-checked, because the page has
 // nothing else to offer.
 export const APP_TREE_NO_FINDINGS_NOTICE =
-  'Argo CD 3 no longer records health for each resource on the application, and Radar didn\'t find a problem on its own. To see Argo\'s per-resource health here, set controller.resource.health.persist to "true" in argocd-cmd-params-cm.'
+  'Argo CD 3 no longer records health for each resource on the application, and Radar didn\'t find a problem on its own. To see Argo\'s per-resource health here, connect Radar to your Argo CD server in Settings, or set controller.resource.health.persist to "true" in argocd-cmd-params-cm.'
 export const REMOTE_DESTINATION_NOTICE =
   "This application deploys to a different cluster, so its resources aren't visible from here."
 
-export type HealthSourceNoticeSummary = Pick<GitOpsInsightSummary, 'tool' | 'health' | 'resourceHealthMode' | 'remoteDestination'>
+export type HealthSourceNoticeSummary = Pick<GitOpsInsightSummary, 'tool' | 'health' | 'resourceHealthMode' | 'remoteDestination' | 'resourceHealthFromApi'>
 
 // The appTree notice explains problems Radar found on its own; on an app
 // Argo calls Healthy nothing is derived (the host doesn't run the overlay
-// there), so the line would explain nothing and is left out.
+// there), and when the host read Argo's verdicts from its API server there
+// is nothing of Radar's to explain either.
 export function healthSourceNoticeKind(summary: HealthSourceNoticeSummary | undefined): 'remote' | 'appTree' | null {
   if (!summary || summary.tool !== 'argocd') return null
   if (summary.remoteDestination) return 'remote'
-  if (summary.resourceHealthMode === 'appTree' && summary.health !== 'Healthy') return 'appTree'
+  if (summary.resourceHealthMode === 'appTree' && !summary.resourceHealthFromApi && summary.health !== 'Healthy') return 'appTree'
   return null
 }
 

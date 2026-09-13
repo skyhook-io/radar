@@ -74,6 +74,9 @@ type Summary struct {
 	// RemoteDestination: the Application deploys to another cluster. Radar
 	// derives nothing about its resources from here.
 	RemoteDestination bool `json:"remoteDestination,omitempty"`
+	// ResourceHealthFromAPI: per-resource health came from the controller's
+	// API server, so in appTree mode the verdicts shown are still Argo's.
+	ResourceHealthFromAPI bool `json:"resourceHealthFromApi,omitempty"`
 }
 
 // IgnoredDifferencesSummary is the comparison-coverage disclosure for an Argo
@@ -380,6 +383,7 @@ func Build(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTre
 	if resourceTree != nil {
 		out.Summary.ResourceHealthMode = string(resourceTree.HealthMode)
 		out.Summary.RemoteDestination = resourceTree.RemoteDestination
+		out.Summary.ResourceHealthFromAPI = resourceTree.HealthFromAPI
 	}
 	return out
 }

@@ -175,10 +175,86 @@ func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitops
 	resolver.composed = func() ([]issues.Issue, []issues.Issue) {
 		return s.gitopsIssuesMemo.load(memoKey, resolver.composeIssues)
 	}
-	overlayRadarHealth(tree, root, resolver.ResourceProblems)
+	if !overlayArgoAPIHealth(r.Context(), tree, root, s.argoAPIHealth) {
+		overlayRadarHealth(tree, root, resolver.ResourceProblems)
+	}
 	tree = s.filterGitOpsTreeForUser(r, req, tree)
 	tree.Summary = gitopstree.Summarize(tree.Nodes)
 	return tree, root, resolver, nil
+}
+
+// argoAPIHealth asks argocd-server for an Application's per-resource health.
+// Only meaningful in appTree mode; a nil result means "no answer" (no
+// integration and no anonymous read, or the server errored) and the caller
+// falls through to Radar's own read. Cached and throttled by the manager.
+func (s *Server) argoAPIHealth(ctx context.Context, appNamespace, appName string) *argoapi.ApplicationHealth {
+	health, err := argocd.ApplicationHealthCached(ctx, argoapi.ApplicationQuery{AppNamespace: appNamespace, AppName: appName})
+	if err != nil {
+		return nil
+	}
+	return health
+}
+
+// overlayArgoAPIHealth fills per-resource health from the controller's own
+// API server when the CR doesn't carry it (appTree mode). Argo's verdicts
+// are authoritative for the whole app, including "no check for this kind",
+// so a successful overlay returns true and Radar's own read does not run.
+// The answer must be about THIS Application: argocd-server is a configured
+// URL, and a different install could serve a same-named app, so the UID has
+// to match. Remote-destination apps are skipped for the same reason the
+// diff endpoint refuses them: local SARs can't authorize data about another
+// cluster's resources.
+func overlayArgoAPIHealth(ctx context.Context, tree *gitopstree.ResourceTree, root *unstructured.Unstructured, fetch func(ctx context.Context, appNamespace, appName string) *argoapi.ApplicationHealth) bool {
+	if tree == nil || root == nil || fetch == nil {
+		return false
+	}
+	if tree.HealthMode != gitopstree.HealthModeAppTree || tree.RemoteDestination {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	health := fetch(ctx, root.GetNamespace(), root.GetName())
+	if health == nil || !health.HasHealth() {
+		return false
+	}
+	if uid := string(root.GetUID()); uid != "" && health.UID != "" && health.UID != uid {
+		log.Printf("[gitops] argocd-server answered for a different Application %s/%s (uid %s, local %s); ignoring", sanitizeForLog(root.GetNamespace()), sanitizeForLog(root.GetName()), sanitizeForLog(health.UID), sanitizeForLog(uid))
+		return false
+	}
+	byRef := make(map[string]argoapi.ResourceHealth, len(health.Resources))
+	for _, rh := range health.Resources {
+		if rh.Health == "" {
+			continue
+		}
+		byRef[apiHealthKey(rh.Group, rh.Kind, rh.Namespace, rh.Name)] = rh
+	}
+	for i := range tree.Nodes {
+		n := &tree.Nodes[i]
+		if n.Role != gitopstree.RoleDeclared {
+			continue
+		}
+		rh, ok := byRef[apiHealthKey(n.Ref.Group, n.Ref.Kind, n.Ref.Namespace, n.Ref.Name)]
+		if !ok {
+			// Argo has no verdict for this kind: clear any Radar topology
+			// fill so the page shows exactly what the controller says.
+			if n.HealthSource == gitopstree.HealthSourceRadar {
+				n.Health, n.HealthSource, n.HealthReason, n.HealthMessage, n.HealthSeverity = "", "", "", "", ""
+				n.TopologyStatus = "unknown"
+			}
+			continue
+		}
+		n.Health = rh.Health
+		n.HealthSource = gitopstree.HealthSourceControllerAPI
+		n.HealthReason, n.HealthSeverity = "", ""
+		n.HealthMessage = rh.Message
+		n.TopologyStatus = gitopstree.HealthToTopology(rh.Health)
+	}
+	tree.HealthFromAPI = true
+	return true
+}
+
+func apiHealthKey(group, kind, namespace, name string) string {
+	return group + "|" + kind + "|" + namespace + "|" + name
 }
 
 // overlayRadarHealth fills per-resource health from Radar's issues engine

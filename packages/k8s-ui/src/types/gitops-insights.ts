@@ -87,6 +87,9 @@ export interface GitOpsInsightSummary {
   // The Application deploys to another cluster; Radar derives nothing about
   // its resources from here.
   remoteDestination?: boolean
+  // Per-resource health came from Argo CD's API server: the verdicts shown
+  // are Argo's even though the Application object doesn't carry them.
+  resourceHealthFromApi?: boolean
 }
 
 export interface GitOpsIgnoredDifferences {

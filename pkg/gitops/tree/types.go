@@ -64,6 +64,11 @@ const (
 	// classification overlaid by the host. Never a "Healthy" verdict from the
 	// issues engine: that path only ever reports problems.
 	HealthSourceRadar HealthSource = "radar"
+	// HealthSourceControllerAPI: the controller's own verdict, read from its
+	// API server (argocd-server) because the CR doesn't carry it. Same
+	// authority as HealthSourceController; a distinct value so the UI can say
+	// where it came from.
+	HealthSourceControllerAPI HealthSource = "controllerApi"
 )
 
 // HealthMode says where an Argo CD Application keeps per-resource health.
@@ -126,6 +131,11 @@ type ResourceTree struct {
 	// health present came from Radar (HealthSourceRadar) unless a host
 	// overlaid the controller's answer from the Argo CD API.
 	HealthMode HealthMode `json:"healthMode,omitempty"`
+	// HealthFromAPI is true when a host filled per-resource health from the
+	// controller's API server (HealthSourceControllerAPI). In appTree mode
+	// that makes Argo's verdicts present after all, so nothing is derived and
+	// no notice is due.
+	HealthFromAPI bool `json:"healthFromApi,omitempty"`
 	// RemoteDestination is true for an Argo CD Application whose
 	// spec.destination is another cluster. Radar's own reads describe the
 	// local cluster, so nothing Radar derives can be attributed to such an

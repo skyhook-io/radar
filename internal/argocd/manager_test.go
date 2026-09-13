@@ -782,3 +782,62 @@ func TestEnvArgoAttempted(t *testing.T) {
 		})
 	}
 }
+
+// TestApplicationHealthCached_PlainGetThenTreeFallbackAndNegativeCache pins
+// the read path: a plain GET that answers with health is enough; one that
+// answers without any health falls back to resource-tree; and a refusal is
+// cached so a polling page doesn't re-ask on every tick.
+func TestApplicationHealthCached_PlainGetThenTreeFallbackAndNegativeCache(t *testing.T) {
+	var appBody, treeBody string
+	var appHits, treeHits, unauthorizedHits int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"Version":"v3.5.2"}`)) })
+	mux.HandleFunc("/api/v1/applications/billing", func(w http.ResponseWriter, r *http.Request) {
+		appHits++
+		if appBody == "" {
+			unauthorizedHits++
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(appBody))
+	})
+	mux.HandleFunc("/api/v1/applications/billing/resource-tree", func(w http.ResponseWriter, r *http.Request) {
+		treeHits++
+		_, _ = w.Write([]byte(treeBody))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	m := newTestManager(config.Config{})
+	m.SetConfig(srv.URL, "", false, false) // explicit URL, no token: the anonymous shape
+	q := argoapi.ApplicationQuery{AppName: "billing", AppNamespace: "argocd"}
+
+	// 1. Plain GET carries health: no tree call.
+	appBody = `{"metadata":{"uid":"u1"},"status":{"resourceHealthSource":"appTree","resources":[{"kind":"Deployment","name":"web","health":{"status":"Degraded"}}]}}`
+	h, err := m.ApplicationHealthCached(context.Background(), q)
+	if err != nil || h.UID != "u1" || !h.HasHealth() || treeHits != 0 {
+		t.Fatalf("plain GET: h=%+v err=%v treeHits=%d", h, err, treeHits)
+	}
+	if _, err := m.ApplicationHealthCached(context.Background(), q); err != nil || appHits != 1 {
+		t.Fatalf("second call must be served from cache, appHits=%d err=%v", appHits, err)
+	}
+
+	// 2. Plain GET without health: tree fallback, UID carried over.
+	m.Reset()
+	appBody = `{"metadata":{"uid":"u1"},"status":{"resourceHealthSource":"appTree","resources":[{"kind":"Deployment","name":"web"}]}}`
+	treeBody = `{"nodes":[{"kind":"Deployment","name":"web","health":{"status":"Progressing"}}]}`
+	h, err = m.ApplicationHealthCached(context.Background(), q)
+	if err != nil || treeHits != 1 || h.UID != "u1" || h.Resources[0].Health != "Progressing" {
+		t.Fatalf("tree fallback: h=%+v err=%v treeHits=%d", h, err, treeHits)
+	}
+
+	// 3. Refusal (anonymous read disabled) is cached for the TTL.
+	m.Reset()
+	appBody = ""
+	if _, err := m.ApplicationHealthCached(context.Background(), q); err == nil {
+		t.Fatal("401 must surface as an error")
+	}
+	if _, err := m.ApplicationHealthCached(context.Background(), q); err == nil || unauthorizedHits != 1 {
+		t.Fatalf("refusal must be served from the negative cache, unauthorizedHits=%d err=%v", unauthorizedHits, err)
+	}
+}

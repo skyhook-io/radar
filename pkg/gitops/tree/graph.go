@@ -227,6 +227,10 @@ func apiGroup(obj *unstructured.Unstructured) string {
 	return ""
 }
 
+// HealthToTopology maps a controller health vocabulary value to the graph's
+// tone (healthy / degraded / unhealthy / unknown).
+func HealthToTopology(health string) string { return healthToTopology(health) }
+
 func healthToTopology(health string) string {
 	switch health {
 	case "Healthy":

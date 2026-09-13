@@ -42,7 +42,10 @@ export interface GitOpsTreeNode {
   data?: Record<string, unknown>
 }
 
-export type GitOpsHealthSource = 'controller' | 'radar' | (string & {})
+// 'controllerApi' is the controller's own verdict read from its API server
+// (argocd-server) because the CR doesn't carry it; same authority as
+// 'controller'.
+export type GitOpsHealthSource = 'controller' | 'controllerApi' | 'radar' | (string & {})
 
 // Where an Argo CD Application keeps per-resource health. 'appTree' is the
 // Argo CD 3 default: the controller's per-resource verdicts are not in the
@@ -72,6 +75,9 @@ export interface GitOpsResourceTree {
   warnings?: string[]
   summary?: GitOpsTreeSummary
   healthMode?: GitOpsHealthMode
+  // Per-resource health came from the controller's API server, so in
+  // appTree mode the verdicts are still the controller's.
+  healthFromApi?: boolean
   // The Application deploys to another cluster; Radar derives nothing about
   // its resources from here.
   remoteDestination?: boolean
