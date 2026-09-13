@@ -804,7 +804,7 @@ function EvidenceNote({ row }: { row: RightsizingRow }) {
   // for it: a row can both be unable to check its pods and have a limit conflict,
   // and hiding either one behind the other loses something the reader needs.
   const inventory =
-    row.liveInventoryDenied && row.resource === 'memory' ? (
+    row.liveInventoryUnavailable && row.resource === 'memory' ? (
       <p className="mt-1 text-xs text-theme-text-tertiary">
         Radar could not read this workload&apos;s pods, so it could not check them for
         out-of-memory restarts.

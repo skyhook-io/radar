@@ -111,7 +111,7 @@ describe('rightsizing presentation', () => {
 describe('live pod inventory', () => {
   it('qualifies a memory row when the pod list could not be read', () => {
     const explanation = getRightsizingExplanation(
-      row({ resource: 'memory', liveInventoryDenied: true }),
+      row({ resource: 'memory', liveInventoryUnavailable: true }),
     )
     expect(explanation).toContain('could not read')
     expect(explanation).toContain('out-of-memory restarts')
@@ -119,7 +119,7 @@ describe('live pod inventory', () => {
 
   it('adds the caveat to a suppression reason instead of replacing it', () => {
     const explanation = getRightsizingExplanation(
-      row({ resource: 'memory', recommendationReason: 'oom_evidence', liveInventoryDenied: true }),
+      row({ resource: 'memory', recommendationReason: 'oom_evidence', liveInventoryUnavailable: true }),
     )
     expect(explanation).toContain('OOM evidence exists')
     expect(explanation).toContain('could not read')
@@ -129,7 +129,7 @@ describe('live pod inventory', () => {
     const explanation = getRightsizingExplanation(
       row({
         resource: 'memory',
-        liveInventoryDenied: true,
+        liveInventoryUnavailable: true,
         reductionLimited: true,
         calculatedRequest: '256Mi',
         recommendedRequest: '384Mi',

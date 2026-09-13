@@ -93,12 +93,13 @@ type RightsizingRow struct {
 	CurrentPodOOM           bool                  `json:"currentPodOOM,omitempty"`
 	WindowOOMEvidence       bool                  `json:"windowOomEvidence,omitempty"`
 	OOMEvidenceAvailable    bool                  `json:"oomEvidenceAvailable"`
-	// The cluster cache would not list this workload's pods, so CurrentPodOOM
-	// is false for want of an answer. Unset when the pods were read, including
-	// when the workload genuinely has none.
-	LiveInventoryDenied bool   `json:"liveInventoryDenied,omitempty"`
-	LimitConflict       bool   `json:"limitConflict,omitempty"`
-	QueryError          string `json:"queryError,omitempty"`
+	// The cluster cache could not answer for this workload's pods — denied, or
+	// still warming when the wait ran out — so CurrentPodOOM is false for want
+	// of an answer. Unset when the pods were read, including when the workload
+	// genuinely has none.
+	LiveInventoryUnavailable bool   `json:"liveInventoryUnavailable,omitempty"`
+	LimitConflict            bool   `json:"limitConflict,omitempty"`
+	QueryError               string `json:"queryError,omitempty"`
 }
 
 type RightsizingResponse struct {
@@ -162,6 +163,9 @@ func handleRightsizing(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, err.Error())
 		case errors.Is(err, errWorkloadMissing):
 			writeError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+			// The client is gone; nothing to report and nothing worth logging.
+			return
 		default:
 			errorlog.Record("prometheus", "error", "rightsizing: failed to load containers for %s %s/%s: %v", kind, namespace, name, err)
 			writeError(w, http.StatusInternalServerError, "failed to load workload containers")
@@ -210,7 +214,7 @@ type rightsizingWorkload struct {
 	scaledToZero  bool
 	// The live pod list could not be read, so podNames and currentPodOOM are
 	// empty because nothing answered — not because the workload has no pods.
-	liveInventoryDenied bool
+	liveInventoryUnavailable bool
 }
 
 // warmingRetryBudget bounds how long a rightsizing read waits for an informer
@@ -292,13 +296,19 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		scaledToZero:  scaledToZero,
 	}
 	pods, err := workloadPodsOnceWarm(ctx, cache, kind, namespace, name)
+	if ctx.Err() != nil {
+		// The caller went away mid-wait. Reporting that as an unreadable
+		// inventory would answer a question nobody is listening for, and would
+		// send the rest of this request into Prometheus on a dead context.
+		return rightsizingWorkload{}, ctx.Err()
+	}
 	if err != nil {
 		// The recommendation itself survives: it comes from seven days of
 		// kube-state-metrics ownership, which never needed the pod list. What
 		// does not survive is everything read from the live pods — the pod
 		// names, and whether those pods have been OOM-killed — so the row is
 		// marked rather than served as if the workload simply had no pods.
-		workload.liveInventoryDenied = true
+		workload.liveInventoryUnavailable = true
 		return workload, nil
 	}
 	for _, pod := range pods {
@@ -426,6 +436,12 @@ func computeRightsizing(ctx context.Context, client rightsizingQuerier, kind, na
 	if !resp.SampleAvailable {
 		if results["cpu_stat"].err != nil || results["cpu_coverage"].err != nil || results["memory_stat"].err != nil || results["memory_coverage"].err != nil {
 			resp.Reason = "Prometheus rightsizing queries failed."
+		} else if workload.liveInventoryUnavailable && coverage == OwnerCoverageCurrentPods {
+			// Without retained ownership the selection falls back to the current
+			// pods, and those could not be listed — so the query matched nothing
+			// by construction. "No samples" would send the reader after missing
+			// metrics instead of the unreadable inventory.
+			resp.Reason = "Radar could not read this workload's pods, and no retained ownership history was available, so there was nothing to measure."
 		} else if len(workload.podNames) == 0 && coverage == OwnerCoverageCurrentPods {
 			resp.Reason = "No current or retained workload ownership samples are available."
 		} else {
@@ -564,7 +580,7 @@ func terminationEvidenceByContainer(result *prom.QueryResult) map[string]termina
 }
 
 func buildRightsizingRow(container containerSpec, resourceName string, expected int, ownerCoverage OwnerCoverage, workload rightsizingWorkload, results map[string]queryOutcome) RightsizingRow {
-	row := RightsizingRow{Container: container.name, Resource: resourceName, Fit: FitInsufficientHistory, Confidence: ConfidenceLow, ExpectedSamples: expected, HPAManaged: workload.hpaManaged[resourceName], HPAEvidenceAvailable: workload.hpaAvailable, LiveInventoryDenied: workload.liveInventoryDenied}
+	row := RightsizingRow{Container: container.name, Resource: resourceName, Fit: FitInsufficientHistory, Confidence: ConfidenceLow, ExpectedSamples: expected, HPAManaged: workload.hpaManaged[resourceName], HPAEvidenceAvailable: workload.hpaAvailable, LiveInventoryUnavailable: workload.liveInventoryUnavailable}
 	var req, lim *resource.Quantity
 	statistic := "P95"
 	if resourceName == "cpu" {

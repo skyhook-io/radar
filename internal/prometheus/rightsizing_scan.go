@@ -443,7 +443,7 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 	row := RightsizingRow{
 		Container: container.name, Resource: resourceName, Fit: FitInsufficientHistory, Confidence: ConfidenceLow,
 		ExpectedSamples: expected, HPAManaged: workload.hpaManaged[resourceName], HPAEvidenceAvailable: workload.hpaAvailable,
-		LiveInventoryDenied: workload.liveInventoryDenied,
+		LiveInventoryUnavailable: workload.liveInventoryUnavailable,
 	}
 	var request, limit = container.cpuReq, container.cpuLim
 	statistic := "P95"
@@ -781,15 +781,27 @@ func waitForInformerSynced(ctx context.Context, cache *k8s.ResourceCache, key st
 	}
 }
 
-// markScanLiveInventoryDenied records that a live pod read did not happen, so
-// an absent OOM signal means nothing was asked rather than nothing was found.
-// An empty kind marks every workload.
-func markScanLiveInventoryDenied(workloads map[string]*scanWorkload, kind string) {
+// markScanLiveInventoryUnavailable records that a live pod read did not happen
+// for these workloads, so an absent OOM signal means nothing was asked rather
+// than nothing was found. An empty kind marks every workload.
+func markScanLiveInventoryUnavailable(workloads map[string]*scanWorkload, kind string) {
 	for _, workload := range workloads {
 		if kind == "" || strings.EqualFold(workload.kind, kind) {
-			workload.workload.liveInventoryDenied = true
+			workload.workload.liveInventoryUnavailable = true
 		}
 	}
+}
+
+// scanNeedsReplicaSets reports whether any workload in the scan resolves its
+// pods through a ReplicaSet. A StatefulSet or DaemonSet owns its pods directly,
+// so a scan of only those must not wait on a deferred informer it never reads.
+func scanNeedsReplicaSets(workloads map[string]*scanWorkload) bool {
+	for _, workload := range workloads {
+		if strings.EqualFold(workload.kind, "Deployment") {
+			return true
+		}
+	}
+	return false
 }
 
 func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes map[string][]string, workloads map[string]*scanWorkload) {
@@ -797,21 +809,44 @@ func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes 
 	// would read as a cluster with no OOM-killed pods anywhere. The scan pays
 	// this wait once rather than per workload.
 	if !waitForInformerSynced(ctx, cache, "pods") || cache.Pods() == nil {
-		markScanLiveInventoryDenied(workloads, "")
+		markScanLiveInventoryUnavailable(workloads, "")
 		return
 	}
+	// Default false: a scan that needs no ReplicaSets never establishes them,
+	// and must not then be treated as having read a lister it never touched.
+	ownersReadable := false
+	if scanNeedsReplicaSets(workloads) {
+		ownersReadable = cache.ReplicaSets() != nil && waitForInformerSynced(ctx, cache, "replicasets")
+	}
+	if ctx.Err() != nil {
+		// Nobody is waiting for this scan; do not walk the cluster for it.
+		markScanLiveInventoryUnavailable(workloads, "")
+		return
+	}
+	// A lister that is synced and non-nil still only answers for the namespaces
+	// its informer watches. An empty result for a namespace outside that scope
+	// is not "no OOM-killed pods" — it is no answer, and it has to be reported
+	// per workload because the scan can span both kinds of namespace at once.
+	for _, workload := range workloads {
+		if !cache.KindCoversNamespace("pods", workload.namespace) {
+			workload.workload.liveInventoryUnavailable = true
+			continue
+		}
+		if strings.EqualFold(workload.kind, "Deployment") &&
+			(!ownersReadable || !cache.KindCoversNamespace("replicasets", workload.namespace)) {
+			workload.workload.liveInventoryUnavailable = true
+		}
+	}
+
 	namespaces := scanScopeNamespaces(scopes)
-	replicaSetOwners, ownersReadable := scanReplicaSetOwners(ctx, cache, namespaces)
-	pods, podsReadable := scanPods(cache, namespaces)
-	if !podsReadable {
-		markScanLiveInventoryDenied(workloads, "")
+	replicaSetOwners, ownersListed := scanReplicaSetOwners(ctx, cache, namespaces, ownersReadable)
+	pods, podsListed := scanPods(cache, namespaces)
+	if !podsListed {
+		markScanLiveInventoryUnavailable(workloads, "")
 		return
 	}
-	if !ownersReadable {
-		// A pod names the ReplicaSet that owns it, never the Deployment. With
-		// no ownership to resolve, Deployment rows collect nothing while every
-		// other kind is unaffected.
-		markScanLiveInventoryDenied(workloads, "Deployment")
+	if !ownersListed {
+		markScanLiveInventoryUnavailable(workloads, "Deployment")
 	}
 	for _, pod := range pods {
 		owner := metav1.GetControllerOf(pod)
@@ -834,12 +869,9 @@ func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes 
 // scanReplicaSetOwners maps each ReplicaSet to its Deployment. It reports false
 // if any list failed, because a partial map silently drops the pods it could
 // not resolve rather than failing loudly.
-func scanReplicaSetOwners(ctx context.Context, cache *k8s.ResourceCache, namespaces []string) (map[string]string, bool) {
+func scanReplicaSetOwners(ctx context.Context, cache *k8s.ResourceCache, namespaces []string, readable bool) (map[string]string, bool) {
 	owners := map[string]string{}
-	// ReplicaSets load on the deferred path, so a warming lister is the common
-	// case right after startup: it answers an empty list with no error, which
-	// would resolve every Deployment's pods to nothing.
-	if cache.ReplicaSets() == nil || !waitForInformerSynced(ctx, cache, "replicasets") {
+	if !readable || cache.ReplicaSets() == nil {
 		return owners, false
 	}
 	var replicaSets []*appsv1.ReplicaSet

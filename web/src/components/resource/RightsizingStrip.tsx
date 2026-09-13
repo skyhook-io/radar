@@ -332,7 +332,7 @@ export function getRightsizingExplanation(row: RightsizingRow): string | undefin
   // qualifies whatever else is said instead of replacing it — including a
   // staged reduction, which is exactly where an unchecked pod matters most.
   const inventoryNote =
-    row.liveInventoryDenied && row.resource === 'memory'
+    row.liveInventoryUnavailable && row.resource === 'memory'
       ? "Radar could not read this workload's pods, so it could not check them for out-of-memory restarts."
       : undefined
   const qualified = (base: string) => (inventoryNote ? `${base} ${inventoryNote}` : base)
