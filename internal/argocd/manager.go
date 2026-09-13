@@ -1012,7 +1012,10 @@ func (m *Manager) fetchApplicationHealth(ctx context.Context, q argoapi.Applicat
 		return nil, gen, err
 	}
 	if app.ResourceHealthSource == "appTree" {
-		if tree, terr := client.ResourceTree(ctx, q); terr == nil && tree.HasHealth() {
+		// The tree is authoritative whenever it answers — a tree with no
+		// health at all is Argo saying "no check for any of these", not a
+		// reason to fall back to the GET's possibly mis-scoped inference.
+		if tree, terr := client.ResourceTree(ctx, q); terr == nil {
 			tree.UID = app.UID
 			tree.ResourceHealthSource = app.ResourceHealthSource
 			return tree, gen, nil

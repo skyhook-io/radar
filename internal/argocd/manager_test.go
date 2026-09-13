@@ -833,6 +833,15 @@ func TestApplicationHealthCached_PlainGetThenTreeFallbackAndNegativeCache(t *tes
 		t.Fatalf("appTree: h=%+v err=%v treeHits=%d", h, err, treeHits)
 	}
 
+	// 2b. A healthless tree is still the answer: Argo has no check for any
+	// of these kinds, and the GET's inline verdicts must not sneak back in.
+	m.Reset()
+	treeBody = `{"nodes":[{"kind":"Namespace","name":"prod"}]}`
+	h, err = m.ApplicationHealthCached(context.Background(), q)
+	if err != nil || h.HasHealth() {
+		t.Fatalf("healthless tree must win over GET inline health, got h=%+v err=%v", h, err)
+	}
+
 	// 3. Refusal (anonymous read disabled) is cached for the TTL.
 	m.Reset()
 	appBody = ""
