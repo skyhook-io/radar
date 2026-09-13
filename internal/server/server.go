@@ -5591,11 +5591,8 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 	// credentials stop being used is to rebuild it — the same teardown a
 	// context switch performs.
 	traffic.SetMetricsConfig(rawURL, effectiveHeaders)
-	traffic.Reset()
-	if client := k8s.GetClient(); client != nil {
-		if err := traffic.ReinitializeWithConfig(client, k8s.GetConfig(), k8s.GetContextName()); err != nil {
-			log.Printf("[traffic] Failed to reinitialize after Prometheus config change: %v", err)
-		}
+	if err := k8s.RestartTrafficSubsystem(); err != nil {
+		log.Printf("[traffic] Failed to reinitialize after Prometheus config change: %v", err)
 	}
 	if s.openCostCurrency != nil {
 		s.openCostCurrency.Invalidate()
