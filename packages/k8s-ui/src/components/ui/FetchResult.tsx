@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ShieldOff, AlertTriangle, ServerCrash, LogIn, Copy, Check, type LucideIcon } from 'lucide-react'
+import { ShieldOff, AlertTriangle, ServerCrash, LogIn, Copy, Check, RefreshCw, type LucideIcon } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PaneLoader } from './PaneLoader'
 import { isFetchError } from '../../types/fetch-error'
@@ -14,6 +14,7 @@ import { isFetchError } from '../../types/fetch-error'
 //   loading                  → <PaneLoader/>
 //   error (403)              → "Access denied"            + error.message
 //   error (404)              → notFoundMessage            + error.message
+//   error (503 sync failed)  → "Couldn't load this view"  + error.message
 //   error (503)              → "Cluster unavailable"      + error.message
 //   error (401)              → "Sign-in required"         (apiFetch redirects; fallback)
 //   error (other / no shape) → "Couldn't load this view"  + error.message
@@ -34,6 +35,8 @@ interface FetchResultProps {
   notFoundMessage?: string
   /** Pin to parent height. Existing call sites use "h-32" or "h-full". */
   className?: string
+  /** Renders a Retry button on the error surface. */
+  onRetry?: () => void
 }
 
 export function FetchResult({
@@ -41,6 +44,7 @@ export function FetchResult({
   error,
   notFoundMessage = 'Resource not found',
   className = 'h-32',
+  onRetry,
 }: FetchResultProps) {
   if (loading) {
     return <PaneLoader className={className} />
@@ -55,16 +59,17 @@ export function FetchResult({
       </div>
     )
   }
-  return <ErrorSurface error={error} notFoundMessage={notFoundMessage} className={className} />
+  return <ErrorSurface error={error} notFoundMessage={notFoundMessage} className={className} onRetry={onRetry} />
 }
 
 interface ErrorSurfaceProps {
   error: unknown
   notFoundMessage: string
   className: string
+  onRetry?: () => void
 }
 
-function ErrorSurface({ error, notFoundMessage, className }: ErrorSurfaceProps) {
+function ErrorSurface({ error, notFoundMessage, className, onRetry }: ErrorSurfaceProps) {
   const classified = classify(error, notFoundMessage)
   const Icon = classified.icon
 
@@ -80,6 +85,16 @@ function ErrorSurface({ error, notFoundMessage, className }: ErrorSurfaceProps) 
           <span className="text-xs text-theme-text-tertiary break-words">{classified.detail}</span>
           <CopyErrorButton text={classified.detail} />
         </div>
+      )}
+      {onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="mt-1 flex items-center gap-1.5 rounded-md border border-theme-border bg-theme-elevated px-3 py-1.5 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+        >
+          <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+          Retry
+        </button>
       )}
     </div>
   )
@@ -101,6 +116,11 @@ function classify(error: unknown, notFoundMessage: string): Classified {
       case 401:
         return { headline: 'Sign-in required', detail: error.message, icon: LogIn }
       case 503:
+        // The cluster is connected; one kind's informer missed its sync
+        // deadline, so "Cluster unavailable" would send the reader the wrong way.
+        if (errorCodeOf(error) === 'kind_sync_failed') {
+          return { headline: "Couldn't load this view", detail: error.message, icon: AlertTriangle }
+        }
         return { headline: 'Cluster unavailable', detail: error.message, icon: ServerCrash }
       default:
         return { headline: "Couldn't load this view", detail: error.message, icon: AlertTriangle }
@@ -108,6 +128,10 @@ function classify(error: unknown, notFoundMessage: string): Classified {
   }
   // Network failures (no .status), DOMException for AbortError, anything thrown without our shape.
   return { headline: "Couldn't load this view", detail: errorMessageOf(error), icon: AlertTriangle }
+}
+
+function errorCodeOf(error: unknown): unknown {
+  return (error as { data?: { error_code?: unknown } }).data?.error_code
 }
 
 function errorMessageOf(error: unknown): string | null {

@@ -51,14 +51,14 @@ func InitLoadTestResourceCache(client kubernetes.Interface) error {
 		return err
 	}
 
-	initialSyncComplete = core.IsSyncComplete()
+	initialSyncComplete.Store(core.IsSyncComplete())
 
-	resourceCache = &ResourceCache{
+	resourceCache.Store(&ResourceCache{
 		ResourceCache:               core,
 		secretsEnabled:              true,
 		cronJobScheduleObservations: cronJobScheduleObservations,
 		secretWriteTimes:            secretWriteTimes,
-	}
+	})
 
 	cacheOnce = new(sync.Once)
 	cacheOnce.Do(func() {})
@@ -121,20 +121,20 @@ func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8scor
 		return err
 	}
 
-	initialSyncComplete = true
+	initialSyncComplete.Store(true)
 
-	resourceCache = &ResourceCache{
+	resourceCache.Store(&ResourceCache{
 		ResourceCache:               core,
 		secretsEnabled:              true,
 		cronJobScheduleObservations: cronJobScheduleObservations,
 		secretWriteTimes:            secretWriteTimes,
-	}
+	})
 
 	// Mark cacheOnce as "already executed" so InitResourceCache is a no-op.
 	cacheOnce = new(sync.Once)
 	cacheOnce.Do(func() {})
 
-	waitForInformerStatuses(resourceCache)
+	waitForInformerStatuses(resourceCache.Load())
 
 	return nil
 }

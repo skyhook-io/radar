@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
 import { FetchResult } from './FetchResult'
 
-function shaped(message: string, status: number) {
-  return Object.assign(new Error(message), { status })
+function shaped(message: string, status: number, data?: Record<string, unknown>) {
+  return Object.assign(new Error(message), { status, data })
 }
 
 describe('FetchResult', () => {
@@ -52,6 +52,24 @@ describe('FetchResult', () => {
     )
     expect(html).toContain('Cluster unavailable')
     expect(html).toContain('Resource cache not available')
+  })
+
+  it('does not blame the cluster for a kind_sync_failed 503', () => {
+    const html = renderToString(
+      <FetchResult
+        loading={false}
+        error={shaped('pods failed to load within the sync deadline', 503, { error_code: 'kind_sync_failed' })}
+      />,
+    )
+    expect(html).not.toContain('Cluster unavailable')
+    expect(html).toContain('Couldn')
+    expect(html).toContain('pods failed to load within the sync deadline')
+  })
+
+  it('renders a Retry button only when onRetry is given', () => {
+    const err = shaped('internal server error', 500)
+    expect(renderToString(<FetchResult loading={false} error={err} onRetry={() => {}} />)).toContain('Retry')
+    expect(renderToString(<FetchResult loading={false} error={err} />)).not.toContain('Retry')
   })
 
   it('renders "Sign-in required" on 401', () => {
