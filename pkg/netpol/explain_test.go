@@ -193,6 +193,13 @@ func TestExplain(t *testing.T) {
 			effect: DoesNotAdmit, reason: "no rule admits the destination 2001:db8::7 (not a pod)",
 		},
 		{
+			name: "a malformed ipBlock is undecidable even for a known external destination",
+			np: policy("radar", "egress-bad", radarLabels, egressT, nil,
+				[]networkingv1.NetworkPolicyEgressRule{{To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "203.0.113.0/24", Except: []string{"not-a-cidr"}}}}}}),
+			dir: DirectionEgress, sel: src.Pod, peer: external, port: 443,
+			effect: Undecidable, reason: "not a valid CIDR",
+		},
+		{
 			name: "hostNetwork selected pod is undecidable",
 			np:   policy("monitoring", "deny-all", nil, ingressT, nil, nil),
 			dir:  DirectionIngress, sel: func() *corev1.Pod { p := prom(9090).Pod; p.Spec.HostNetwork = true; return p }(), peer: src, port: 9090,

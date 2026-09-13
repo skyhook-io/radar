@@ -232,6 +232,9 @@ func peerAdmits(entry *networkingv1.NetworkPolicyPeer, target Peer, policyNs str
 			// anything.
 			return triUnknown, desc + ": the destination address the policy sees for a pod cannot be established"
 		}
+		if !ipBlockWellFormed(entry.IPBlock) {
+			return triUnknown, desc + ": the block or one of its exceptions is not a valid CIDR"
+		}
 		ips := peerIPs(target)
 		switch ipBlockMatch(entry.IPBlock, ips) {
 		case triYes:
@@ -410,4 +413,16 @@ func dedupe(in []string) []string {
 
 func selectorIsEmpty(sel *metav1.LabelSelector) bool {
 	return sel != nil && len(sel.MatchLabels) == 0 && len(sel.MatchExpressions) == 0
+}
+
+func ipBlockWellFormed(block *networkingv1.IPBlock) bool {
+	if _, _, err := net.ParseCIDR(block.CIDR); err != nil {
+		return false
+	}
+	for _, ex := range block.Except {
+		if _, _, err := net.ParseCIDR(ex); err != nil {
+			return false
+		}
+	}
+	return true
 }
