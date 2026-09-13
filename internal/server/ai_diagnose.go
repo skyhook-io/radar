@@ -92,7 +92,7 @@ func (s *Server) detectDiagnoseHealth(r *http.Request, kind, group, namespace, n
 		canonicalKind = kind
 	}
 	issueSum, issueRows := computeIssueSummaryAndRows(cache, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), gvk.Group, canonicalKind, namespace, name)
-	auditSum, auditRows := computeAuditSummaryAndRows(cache, gvk.Group, canonicalKind, namespace, name)
+	auditSum, auditRows := s.computeAuditSummaryAndRows(r, cache, gvk.Group, canonicalKind, namespace, name)
 
 	var issueCount int
 	signal := &ai.ResourceHealthSignal{}

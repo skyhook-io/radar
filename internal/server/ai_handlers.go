@@ -464,7 +464,7 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	canonicalGroup := gvk.Group
 
 	issueSum := computeIssueSummaryForResource(cache, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), canonicalGroup, canonicalKind, namespace, name)
-	auditSum := computeAuditSummaryForResource(cache, canonicalGroup, canonicalKind, namespace, name)
+	auditSum := s.computeAuditSummaryForResource(r, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
 		Reflections:   k8s.ReflectionLookup{Cache: cache},
@@ -615,11 +615,11 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 	}, matched
 }
 
-func computeAuditSummaryForResource(cache *k8s.ResourceCache, group, kind, namespace, name string) *resourcecontext.AuditSummary {
-	sum, _ := auditcontext.SummarizeResource(cache, group, kind, namespace, name)
+func (s *Server) computeAuditSummaryForResource(r *http.Request, cache *k8s.ResourceCache, group, kind, namespace, name string) *resourcecontext.AuditSummary {
+	sum, _ := auditcontext.SummarizeResource(cache, group, kind, namespace, name, s.auditOptions(r))
 	return sum
 }
 
-func computeAuditSummaryAndRows(cache *k8s.ResourceCache, group, kind, namespace, name string) (*resourcecontext.AuditSummary, []bpaudit.Finding) {
-	return auditcontext.SummarizeResource(cache, group, kind, namespace, name)
+func (s *Server) computeAuditSummaryAndRows(r *http.Request, cache *k8s.ResourceCache, group, kind, namespace, name string) (*resourcecontext.AuditSummary, []bpaudit.Finding) {
+	return auditcontext.SummarizeResource(cache, group, kind, namespace, name, s.auditOptions(r))
 }

@@ -1216,7 +1216,7 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 	canonicalGroup := gvk.Group
 
 	issueSum := computeMCPIssueSummary(ctx, cache, canonicalGroup, canonicalKind, namespace, name)
-	auditSum := computeMCPAuditSummary(cache, canonicalGroup, canonicalKind, namespace, name)
+	auditSum := computeMCPAuditSummary(ctx, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
 		Reflections:   k8s.ReflectionLookup{Cache: cache},

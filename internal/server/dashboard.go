@@ -398,7 +398,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// Cert health is derived from TLS Secrets — gate by per-user secrets RBAC.
 	resp.CertificateHealth = s.getDashboardCertificateHealth(s.secretReadableNamespaces(r, namespaces))
 	resp.NetworkPolicyCoverage = s.getDashboardNetworkPolicyCoverage(r, cache, namespaces)
-	resp.Audit = getDashboardAudit(cache, namespaces)
+	resp.Audit = s.getDashboardAudit(r, cache, namespaces)
 	resp.GitOpsControllers = s.getDashboardGitOpsControllers(cache, namespaces)
 
 	if canReadNodes {
@@ -1904,8 +1904,8 @@ type DashboardCategorySummary struct {
 	Danger  int `json:"danger"`
 }
 
-func getDashboardAudit(cache *k8s.ResourceCache, namespaces []string) *DashboardAudit {
-	results := applyAuditSettings(getCachedResults(cache, namespaces), getAuditConfig())
+func (s *Server) getDashboardAudit(r *http.Request, cache *k8s.ResourceCache, namespaces []string) *DashboardAudit {
+	results := applyAuditSettings(getCachedResults(cache, namespaces, s.auditOptions(r)), getAuditConfig())
 	if results == nil {
 		return nil
 	}

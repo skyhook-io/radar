@@ -16,6 +16,7 @@ import (
 
 // RunOptions provides optional data sources for checks that need them.
 type RunOptions struct {
+	Scope          *ReadScope
 	ClusterVersion string   // e.g. "1.30"
 	ServedAPIs     []string // e.g. ["apps/v1", "batch/v1beta1"]
 }
@@ -27,7 +28,26 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 		return &bp.ScanResults{Summary: bp.ScanSummary{Categories: map[string]bp.CategorySummary{}}}
 	}
 
+	var scope *ReadScope
+	if opts != nil {
+		scope = opts.Scope
+	}
+	namespaces = scope.subjectNamespaces(namespaces)
+	if scope != nil && scope.Namespaces != nil && len(namespaces) == 0 {
+		return &bp.ScanResults{Summary: bp.ScanSummary{Categories: map[string]bp.CategorySummary{}}}
+	}
 	input := CollectTypedInput(cache, namespaces)
+	if !scope.hasSecretSubjects(namespaces) {
+		input.Secrets = nil
+	} else if scope != nil {
+		visible := input.Secrets[:0:0]
+		for _, sec := range input.Secrets {
+			if scope.allows(schema.GroupVersionResource{Resource: "secrets"}, sec.Namespace) {
+				visible = append(visible, sec)
+			}
+		}
+		input.Secrets = visible
+	}
 	input.GitOpsToolsPresent, input.ArgoAppNames = gitOpsRoots()
 
 	if opts != nil {
@@ -40,7 +60,7 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	// is best-effort: if Crossplane isn't installed, discovery is unavailable,
 	// or the dynamic cache hasn't synced, we leave the fields nil and the
 	// crossplaneStuck check no-ops.
-	mrs, xrs := listCrossplaneDynamic(namespaces)
+	mrs, xrs := listCrossplaneDynamic(namespaces, scope)
 	input.ManagedResources = mrs
 	input.CompositeResources = xrs
 	input.ConfigObjectRefs = listDynamicConfigObjectRefs(namespaces, dynamicConfigRefOptions{
@@ -112,7 +132,7 @@ func collectWorkloadInput(cache *k8s.ResourceCache, namespaces []string) *bp.Che
 // already observing — MRs/XRs in groups nobody has navigated to yet won't
 // surface until they're watched for some other reason. Acceptable trade-
 // off for an audit pass.
-func listCrossplaneDynamic(namespaces []string) (mrs, xrs []*unstructured.Unstructured) {
+func listCrossplaneDynamic(namespaces []string, scope *ReadScope) (mrs, xrs []*unstructured.Unstructured) {
 	cache := k8s.GetDynamicResourceCache()
 	if cache == nil {
 		return nil, nil
@@ -140,7 +160,7 @@ func listCrossplaneDynamic(namespaces []string) (mrs, xrs []*unstructured.Unstru
 			continue
 		}
 		for _, u := range items {
-			if u == nil {
+			if u == nil || !scope.allows(gvr, u.GetNamespace()) {
 				continue
 			}
 			if len(namespaces) > 0 {

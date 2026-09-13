@@ -160,6 +160,7 @@ func (s *Server) finalizePostContextSwitch() {
 }
 
 func (s *Server) invalidatePostContextSwitchCaches() {
+	invalidateAuditCache()
 	if s.permCache != nil {
 		s.permCache.Invalidate()
 	}
