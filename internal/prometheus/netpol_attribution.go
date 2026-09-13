@@ -279,20 +279,20 @@ func endpointMatchesPod(ep discoveryv1.Endpoint, pod *corev1.Pod) bool {
 func describeNetworkPolicyBlock(cand prom.Candidate, self *corev1.Pod, backends []netpol.Backend, v netpol.Verdict) string {
 	target := fmt.Sprintf("%s/%s:%d", cand.Namespace, cand.Name, cand.Port)
 	selfRef := self.Namespace + "/" + self.Name
-	noun := "NetworkPolicy " + v.Policies[0]
+	subject := "NetworkPolicy " + v.Policies[0] + " isolates"
 	if len(v.Policies) > 1 {
-		noun = "NetworkPolicies " + strings.Join(v.Policies, ", ")
+		subject = "NetworkPolicies " + strings.Join(v.Policies, ", ") + " isolate"
 	}
 	switch v.Direction {
 	case netpol.DirectionEgress:
 		// The rule has to admit what was evaluated — the backends' own
 		// namespaces and pod ports — not the Service's, which a targetPort or a
 		// manually managed EndpointSlice can make different.
-		return fmt.Sprintf("Prometheus candidate %s was unreachable, and %s isolates egress from %s with no rule admitting it; add an egress rule to %s",
-			target, noun, selfRef, backendDestinations(backends))
+		return fmt.Sprintf("Prometheus candidate %s was unreachable, and %s egress from %s with no rule admitting it; add an egress rule to %s",
+			target, subject, selfRef, backendDestinations(backends))
 	default:
-		return fmt.Sprintf("Prometheus candidate %s was unreachable, and %s isolates ingress to its pods with no rule admitting %s; add an ingress rule for Radar's namespace (%s)",
-			target, noun, selfRef, self.Namespace)
+		return fmt.Sprintf("Prometheus candidate %s was unreachable, and %s ingress to its pods with no rule admitting %s; add an ingress rule for Radar's namespace (%s)",
+			target, subject, selfRef, self.Namespace)
 	}
 }
 
