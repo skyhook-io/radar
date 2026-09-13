@@ -152,7 +152,7 @@ func TestAttributeNetworkPolicyBlock(t *testing.T) {
 			Spec:       networkingv1.NetworkPolicySpec{PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress}},
 		})
 		err := runAttribution(t, fx, transport)
-		if err == nil || !strings.Contains(err.Error(), "NetworkPolicy radar/egress-lockdown isolates egress") || !strings.Contains(err.Error(), "egress rule to the monitoring namespace on port 9090") {
+		if err == nil || !strings.Contains(err.Error(), "NetworkPolicy radar/egress-lockdown isolates egress") || !strings.Contains(err.Error(), "egress rule to namespace monitoring port 9090") {
 			t.Fatalf("err = %v, want the egress policy named with an egress remedy", err)
 		}
 	})
@@ -306,6 +306,36 @@ func TestAttributeNetworkPolicyBlock(t *testing.T) {
 		err := runAttribution(t, fx, transport)
 		if err != nil && !strings.Contains(err.Error(), "monitoring/deny-all") {
 			t.Fatalf("unexpected error %v", err)
+		}
+	})
+
+	t.Run("the egress remedy names the backend's namespace and pod port, not the Service's", func(t *testing.T) {
+		fx := self
+		podPort := int32(9999)
+		objs := clusterWithPrometheus(
+			&networkingv1.NetworkPolicy{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "radar", Name: "egress-lockdown"},
+				Spec:       networkingv1.NetworkPolicySpec{PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress}},
+			},
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "metrics", Labels: map[string]string{"kubernetes.io/metadata.name": "metrics"}}},
+			&corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "metrics", Name: "prom-external", Labels: map[string]string{"app": "prometheus"}},
+				Status:     corev1.PodStatus{PodIP: "10.0.3.4"},
+			},
+		)
+		for _, o := range objs {
+			if slice, ok := o.(*discoveryv1.EndpointSlice); ok {
+				slice.Ports[0].Port = &podPort
+				slice.Endpoints[0] = discoveryv1.Endpoint{
+					Addresses: []string{"10.0.3.4"},
+					TargetRef: &corev1.ObjectReference{Kind: "Pod", Namespace: "metrics", Name: "prom-external"},
+				}
+			}
+		}
+		fx.objects = objs
+		err := runAttribution(t, fx, transport)
+		if err == nil || !strings.Contains(err.Error(), "egress rule to namespace metrics port 9999") {
+			t.Fatalf("err = %v, want the resolved backend destination", err)
 		}
 	})
 

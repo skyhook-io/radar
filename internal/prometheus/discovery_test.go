@@ -436,3 +436,34 @@ func TestEnsureConnected_CanceledCallerReturnsPromptly(t *testing.T) {
 		dcancel()
 	}
 }
+
+// A probe still hanging when the pass ends is what a packet-dropping policy
+// looks like; it must come back as a transport failure so attribution can
+// look at it, while a candidate the pass never reached stays unexplained.
+func TestProbeCandidatesWithReasons_DeadlineMarksLaunchedProbesAsTransportFailures(t *testing.T) {
+	c := &Client{httpClient: &http.Client{Timeout: 30 * time.Second}}
+	blackhole := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer blackhole.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	cands := make([]prom.Candidate, maxConcurrentProbes+1)
+	for i := range cands {
+		cands[i] = prom.Candidate{ClusterAddr: blackhole.URL}
+	}
+	idx, reasons := c.probeCandidatesWithReasons(ctx, cands)
+	if idx != -1 {
+		t.Fatalf("idx = %d, want -1", idx)
+	}
+	for i := 0; i < maxConcurrentProbes; i++ {
+		if reasons[i] != prom.ProbeReasonTransportError {
+			t.Fatalf("reasons[%d] = %q, want transport_error for a probe that was launched and hung", i, reasons[i])
+		}
+	}
+	if reasons[maxConcurrentProbes] != "" {
+		t.Fatalf("reasons[%d] = %q, want empty for a probe the pass never launched", maxConcurrentProbes, reasons[maxConcurrentProbes])
+	}
+}

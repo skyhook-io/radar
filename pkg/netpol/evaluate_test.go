@@ -135,11 +135,18 @@ func TestEvaluate(t *testing.T) {
 			want: Verdict{Kind: Allowed},
 		},
 		{
-			name: "ipBlock except carving out the source IP denies",
+			name: "ipBlock except carving out the source IP is undecidable, never a denial",
 			src:  radar(), dst: []Backend{prom(9090)},
 			policies: []*networkingv1.NetworkPolicy{policy("monitoring", "cidr-except", promLabels, ingressT,
 				[]networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "10.0.0.0/16", Except: []string{"10.0.1.0/24"}}}}}}, nil)},
-			want: Verdict{Kind: Denied, Direction: DirectionIngress, Policies: []string{"monitoring/cidr-except"}},
+			want: Verdict{Kind: Unknown},
+		},
+		{
+			name: "ipBlock missing the source IP is undecidable: the policy may see a rewritten address",
+			src:  radar(), dst: []Backend{prom(9090)},
+			policies: []*networkingv1.NetworkPolicy{policy("monitoring", "other-cidr", promLabels, ingressT,
+				[]networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "192.168.0.0/16"}}}}}, nil)},
+			want: Verdict{Kind: Unknown},
 		},
 		{
 			name: "ipBlock without a known source IP is undecidable",

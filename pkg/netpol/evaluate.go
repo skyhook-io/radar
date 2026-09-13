@@ -246,7 +246,13 @@ func peerAdmits(peer *networkingv1.NetworkPolicyPeer, target Peer, policyNs stri
 		if dir == DirectionEgress {
 			return triUnknown
 		}
-		return ipBlockAdmits(peer.IPBlock, podIPs(target.Pod))
+		// A match admits. A miss proves nothing: whether the policy sees the
+		// pod's address or a rewritten one (kube-proxy masquerade, a mesh
+		// sidecar) is up to the network plugin.
+		if ipBlockAdmits(peer.IPBlock, podIPs(target.Pod)) == triYes {
+			return triYes
+		}
+		return triUnknown
 	}
 	if peer.NamespaceSelector == nil && peer.PodSelector == nil {
 		return triUnknown
@@ -291,25 +297,18 @@ func peerAdmits(peer *networkingv1.NetworkPolicyPeer, target Peer, policyNs stri
 	return triYes
 }
 
-// ipBlockAdmits matches the pod's addresses of the block's own family — a
-// dual-stack pod reaches an IPv6 backend from its IPv6 address, which an
-// IPv4 block says nothing about. No address of that family means the
-// question cannot be answered.
+// ipBlockAdmits reports whether one of the pod's addresses of the block's own
+// family is inside it and outside every exception — a dual-stack pod reaches
+// an IPv6 backend from its IPv6 address, which an IPv4 block says nothing
+// about.
 func ipBlockAdmits(block *networkingv1.IPBlock, ips []net.IP) tri {
 	_, cidr, err := net.ParseCIDR(block.CIDR)
 	if err != nil {
 		return triUnknown
 	}
 	v4 := cidr.IP.To4() != nil
-	out := triUnknown
 	for _, ip := range ips {
-		if (ip.To4() != nil) != v4 {
-			continue
-		}
-		if out == triUnknown {
-			out = triNo // an address of the block's family exists, so "no" is a real answer
-		}
-		if !cidr.Contains(ip) {
+		if (ip.To4() != nil) != v4 || !cidr.Contains(ip) {
 			continue
 		}
 		excepted := false
@@ -328,7 +327,7 @@ func ipBlockAdmits(block *networkingv1.IPBlock, ips []net.IP) tri {
 		}
 		return triYes
 	}
-	return out
+	return triUnknown
 }
 
 func podIPs(pod *corev1.Pod) []net.IP {

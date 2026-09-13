@@ -383,6 +383,7 @@ func (c *Client) probeCandidatesWithReasons(ctx context.Context, candidates []pr
 
 	var reasonsMu sync.Mutex
 	state := make([]atomic.Int32, n)
+	launched := make([]atomic.Bool, n)
 	sem := make(chan struct{}, maxConcurrentProbes)
 	woke := make(chan struct{}, n) // wake-ups; buffered so a worker never blocks
 
@@ -396,6 +397,7 @@ func (c *Client) probeCandidatesWithReasons(ctx context.Context, candidates []pr
 			go func(i int) {
 				defer func() { <-sem }()
 				outcome := probeFailed
+				launched[i].Store(true)
 				ok, reason := c.probeWithReason(ctx, candidates[i].ClusterAddr+candidates[i].BasePath, false)
 				if ok {
 					outcome = probeSucceeded
@@ -420,11 +422,20 @@ func (c *Client) probeCandidatesWithReasons(ctx context.Context, candidates []pr
 		}
 		return -1
 	}
+	// A probe still running when the pass ends got no answer in the time the
+	// pass allowed — a policy that silently drops packets looks exactly like
+	// that — so it counts as a transport failure. One never launched stays
+	// unexplained.
 	snapshot := func() []prom.ProbeReason {
 		reasonsMu.Lock()
 		defer reasonsMu.Unlock()
 		out := make([]prom.ProbeReason, n)
 		copy(out, reasons)
+		for i := range out {
+			if out[i] == "" && launched[i].Load() && state[i].Load() == probePending {
+				out[i] = prom.ProbeReasonTransportError
+			}
+		}
 		return out
 	}
 
