@@ -5586,10 +5586,7 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 		effectiveHeaders = prometheuspkg.CurrentHeaders()
 	}
 	prometheuspkg.Configure(rawURL, effectiveHeaders)
-	traffic.SetMetricsURL(rawURL)
-	if body.Headers != nil {
-		traffic.SetMetricsHeaders(headers)
-	}
+	traffic.SetMetricsConfig(rawURL, effectiveHeaders)
 	if s.openCostCurrency != nil {
 		s.openCostCurrency.Invalidate()
 	}

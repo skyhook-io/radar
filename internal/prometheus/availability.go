@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"strings"
+
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 // AvailabilityStatus is the coarse answer to "can Radar reach Prometheus
@@ -83,7 +85,7 @@ func (c *Client) Availability(ctx context.Context) AvailabilityState {
 		// caller's context ends mid-probe: the endpoint is known and only
 		// this probe failed.
 		return AvailabilityState{State: AvailabilityConfiguredFailed, Address: baseURL, Err: err}
-	case errors.Is(err, errPrometheusUnreachable), errors.Is(err, ErrHeadersRequireURL):
+	case errors.Is(err, errPrometheusUnreachable), errors.Is(err, prom.ErrHeadersRequireURL):
 		// Headers without a URL is an operator configuration that discovery
 		// refuses to act on — configured, and failing for a stated reason.
 		return AvailabilityState{State: AvailabilityConfiguredFailed, Err: err}

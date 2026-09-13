@@ -3379,6 +3379,14 @@ export function useAutoPromConnect(): void {
           queryClient.invalidateQueries({ queryKey: ["prometheus-status"] });
         })
         .catch(() => {
+          // Undo the optimistic flag, then ask the server: if it's reachable
+          // the authoritative status (possibly a still-running discovery)
+          // replaces this within one fetch; if it isn't, the CTA is right.
+          queryClient.setQueryData<PrometheusStatus>(
+            ["prometheus-status"],
+            (prev) => (prev?.discovering ? { ...prev, discovering: false } : prev),
+          );
+          queryClient.invalidateQueries({ queryKey: ["prometheus-status"] });
           try {
             window.localStorage.removeItem(promAutoConnectKey(context));
           } catch {

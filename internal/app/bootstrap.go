@@ -29,6 +29,7 @@ import (
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
 	versionpkg "github.com/skyhook-io/radar/internal/version"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 var clusterConnectionProbe = k8s.TestClusterConnection
@@ -292,8 +293,8 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 	if len(cfg.PrometheusHeaders) > 0 {
 		traffic.SetMetricsHeaders(cfg.PrometheusHeaders)
 		prometheuspkg.SetHeaders(cfg.PrometheusHeaders)
-		if prometheuspkg.HeadersRequireURL(cfg.PrometheusURL, cfg.PrometheusHeaders) {
-			log.Printf("[prometheus] Warning: %v", prometheuspkg.ErrHeadersRequireURL)
+		if prom.HeadersRequireURL(cfg.PrometheusURL, cfg.PrometheusHeaders) {
+			log.Printf("[prometheus] Warning: %v", prom.ErrHeadersRequireURL)
 		}
 	}
 	cfg = persistKubecostContextBindings(cfg)
@@ -326,6 +327,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 	// to be started explicitly, and the callback fires once subsystem init is
 	// done so the run sees a populated cache.
 	k8s.OnContextSwitch(func(_ string) { prometheuspkg.Prewarm() })
+	k8s.OnNamespaceRescope(func(_ string) { prometheuspkg.Prewarm() })
 	k8s.RegisterCostResetFunc(internalopencost.Reset)
 }
 

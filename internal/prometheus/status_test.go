@@ -155,7 +155,7 @@ func TestEnsureConnected_HeadersWithoutURLNeverDiscovers(t *testing.T) {
 
 	_, _, err := c.EnsureConnected(context.Background())
 	if !errors.Is(err, prom.ErrHeadersRequireURL) {
-		t.Fatalf("err = %v, want ErrHeadersRequireURL", err)
+		t.Fatalf("err = %v, want prom.ErrHeadersRequireURL", err)
 	}
 	if listed.Load() {
 		t.Fatal("discovery touched the cluster despite the headers gate")
@@ -194,5 +194,55 @@ func TestConfigureLocked_NewCredentialsNeverReachThePreviousEndpoint(t *testing.
 	}
 	if leaked.Load() {
 		t.Fatal("new headers were sent to the previous endpoint")
+	}
+}
+
+func TestEnsureConnected_StaleCachedProbeCannotTearDownNewerConnection(t *testing.T) {
+	release := make(chan struct{})
+	stale := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return
+		}
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer stale.Close()
+	fresh := healthyServer(t, 0)
+
+	c := &Client{
+		httpClient:  &http.Client{Timeout: 10 * time.Second},
+		baseURL:     stale.URL,
+		contextName: "ctx-stale-probe",
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _ = c.EnsureConnected(withSuppressedDiscoveryDiagnostics(context.Background()))
+	}()
+
+	// While the stale probe is still blocked, a configuration change lands and
+	// discovery under the new generation connects somewhere else. The manual
+	// URL is deliberately one the stale caller cannot reconnect through, so a
+	// wrongful teardown cannot be masked by an immediate rediscovery.
+	waitFor(t, "stale probe to be in flight", func() bool {
+		c.mu.RLock()
+		defer c.mu.RUnlock()
+		return c.prom != nil
+	})
+	c.mu.Lock()
+	c.configureLocked(deadURL(t), nil)
+	c.baseURL = fresh.URL
+	c.mu.Unlock()
+
+	close(release)
+	<-done
+
+	c.mu.RLock()
+	got := c.baseURL
+	c.mu.RUnlock()
+	if got != fresh.URL {
+		t.Fatalf("baseURL = %q after the stale probe failed, want the newer connection %q kept", got, fresh.URL)
 	}
 }

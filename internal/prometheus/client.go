@@ -113,16 +113,8 @@ const failedDiscoveryCacheTTL = 5 * time.Second
 // plus probes, without letting a wedged run block discovery indefinitely.
 const discoveryTimeout = 60 * time.Second
 
-// ErrHeadersRequireURL mirrors pkg/prom's sentinel for callers in this package.
-var ErrHeadersRequireURL = prom.ErrHeadersRequireURL
-
-// HeadersRequireURL mirrors pkg/prom's rule for callers in this package.
-func HeadersRequireURL(manualURL string, headers map[string]string) bool {
-	return prom.HeadersRequireURL(manualURL, headers)
-}
-
 func (c *Client) headersRequireURLLocked() bool {
-	return HeadersRequireURL(c.manualURL, c.headers)
+	return prom.HeadersRequireURL(c.manualURL, c.headers)
 }
 
 // Global client instance
@@ -320,7 +312,7 @@ func Prewarm() {
 		switch {
 		case err == nil:
 			log.Printf("[prometheus] Auto-discovery connected to %s (%s)", addr, took(start))
-		case errors.Is(err, ErrHeadersRequireURL):
+		case errors.Is(err, prom.ErrHeadersRequireURL):
 			log.Printf("[prometheus] Auto-discovery skipped: %v", err)
 		default:
 			log.Printf("[prometheus] Auto-discovery failed (%s): %v", took(start), err)
@@ -416,7 +408,7 @@ func (c *Client) GetStatus() prom.Status {
 	}
 	switch {
 	case c.headersRequireURLLocked():
-		st.Error = ErrHeadersRequireURL.Error()
+		st.Error = prom.ErrHeadersRequireURL.Error()
 	case !connected && !discovering && c.lastOutcomeGen == c.discoveryGen:
 		st.Error = c.lastOutcome
 	}
@@ -435,6 +427,7 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 	c.mu.RLock()
 	base := c.baseURL
 	bp := c.basePath
+	gen := c.discoveryGen
 	c.mu.RUnlock()
 
 	if base != "" {
@@ -447,18 +440,29 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 		// solely on base!="", so this preserves that behavior.
 		if p := c.getPromClient(); p != nil {
 			ok, reason := p.Probe(ctx)
+			// The probe ran unlocked; a configuration change meanwhile makes
+			// its answer describe a superseded endpoint. Neither return it nor
+			// tear down whatever the new configuration has since connected.
+			c.mu.Lock()
+			current := c.discoveryGen == gen && c.baseURL == base
 			if ok {
-				return base, bp, nil
+				c.mu.Unlock()
+				if current {
+					return base, bp, nil
+				}
+				return c.discoverShared(ctx)
 			}
 			if err := ctx.Err(); err != nil {
+				c.mu.Unlock()
 				return "", "", err
 			}
-			log.Printf("[prometheus] cached connection to %s failed probe (reason=%s), rediscovering", base, reason)
-			c.mu.Lock()
-			c.baseURL = ""
-			c.basePath = ""
-			c.prom = nil
+			if current {
+				c.baseURL = ""
+				c.basePath = ""
+				c.prom = nil
+			}
 			c.mu.Unlock()
+			log.Printf("[prometheus] cached connection to %s failed probe (reason=%s), rediscovering", base, reason)
 		}
 	}
 
@@ -504,7 +508,7 @@ func (c *Client) discoverShared(ctx context.Context) (string, string, error) {
 		// Checked per iteration, not once at entry: a supersession retry must
 		// see a configuration change that introduced headers without a URL.
 		if gated {
-			return "", "", ErrHeadersRequireURL
+			return "", "", prom.ErrHeadersRequireURL
 		}
 
 		ch := c.discoverySF.DoChan(key, func() (any, error) {
