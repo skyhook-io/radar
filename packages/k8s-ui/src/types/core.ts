@@ -631,6 +631,11 @@ export interface ResourceRef {
 
 // Computed relationships for a resource
 export interface Relationships {
+  reflection?: {
+    source?: ResourceRef
+    sourceResourceVersion?: string
+    mirrors?: ResourceRef[]
+  }
   owner?: ResourceRef
   deployment?: ResourceRef   // Grandparent Deployment (for Pods owned by ReplicaSets)
   managedBy?: ResourceRef[]  // Topmost meaningful manager(s): GitOps controller (ArgoCD Application / Flux Kustomization / Flux HelmRelease), Helm release, or the topmost K8s owner. Synthesized server-side; replaces client-side detectGitOpsOwner.

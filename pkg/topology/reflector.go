@@ -8,6 +8,8 @@ import (
 	"strings"
 )
 
+const reflectionEdgeLabel = "Reflects to"
+
 func (b *Builder) addReflectionRelationships(t *Topology, opts BuildOptions) {
 	var objects []configrefs.Object
 	observed := map[configrefs.Ref]Node{}
@@ -58,7 +60,7 @@ func (b *Builder) addReflectionRelationships(t *Topology, opts BuildOptions) {
 		source, target := id(link.Source), id(link.Mirror)
 		key := fmt.Sprintf("%s-reflects-to-%s", source, target)
 		if !edges[key] {
-			t.Edges = append(t.Edges, Edge{ID: key, Source: source, Target: target, Type: EdgeConfigures, Label: "Reflects to"})
+			t.Edges = append(t.Edges, Edge{ID: key, Source: source, Target: target, Type: EdgeConfigures, Label: reflectionEdgeLabel})
 			edges[key] = true
 		}
 	}
@@ -97,9 +99,16 @@ func (t *Topology) StripSecretsExcept(allowed map[SARTuple]bool) {
 }
 
 func configMapNode(cm *corev1.ConfigMap) Node {
-	return Node{ID: fmt.Sprintf("configmap/%s/%s", cm.Namespace, cm.Name), Kind: KindConfigMap, Name: cm.Name, Status: StatusHealthy, Data: map[string]any{"namespace": cm.Namespace, "keys": len(cm.Data), "labels": cm.Labels}}
+	return Node{ID: fmt.Sprintf("configmap/%s/%s", cm.Namespace, cm.Name), Kind: KindConfigMap, Name: cm.Name, Status: StatusHealthy, Data: map[string]any{"namespace": cm.Namespace, "resourceVersion": cm.ResourceVersion, "keys": len(cm.Data), "labels": cm.Labels}}
 }
 
 func secretNode(secret *corev1.Secret) Node {
-	return Node{ID: fmt.Sprintf("secret/%s/%s", secret.Namespace, secret.Name), Kind: KindSecret, Name: secret.Name, Status: StatusHealthy, Data: map[string]any{"namespace": secret.Namespace, "keys": len(secret.Data), "labels": secret.Labels, "type": string(secret.Type)}}
+	return Node{ID: fmt.Sprintf("secret/%s/%s", secret.Namespace, secret.Name), Kind: KindSecret, Name: secret.Name, Status: StatusHealthy, Data: map[string]any{"namespace": secret.Namespace, "resourceVersion": secret.ResourceVersion, "keys": len(secret.Data), "labels": secret.Labels, "type": string(secret.Type)}}
+}
+
+func reflectionEdge(edge Edge, nodes map[string]*Node) bool {
+	source, mirror := nodes[edge.Source], nodes[edge.Target]
+	return edge.Type == EdgeConfigures && edge.Label == reflectionEdgeLabel &&
+		source != nil && mirror != nil && source.Kind == mirror.Kind &&
+		(source.Kind == KindConfigMap || source.Kind == KindSecret)
 }

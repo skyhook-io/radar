@@ -2,10 +2,14 @@ import { useState, useRef, useEffect } from 'react'
 import { AlertTriangle, Copy, Check } from 'lucide-react'
 import { Section, ExpandableSection } from '../../ui/drawer-components'
 import { Tooltip } from '../../ui/Tooltip'
+import type { Relationships, ResourceRef } from '../../../types'
+import { ReflectorSection } from './ReflectorSection'
 import { formatBytes } from '../../../utils/format'
 
 interface ConfigMapRendererProps {
   data: any
+  relationships?: Relationships
+  onNavigate?: (ref: ResourceRef) => void
 }
 
 // Short = single-line and under 120 chars — render inline
@@ -46,7 +50,7 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
-export function ConfigMapRenderer({ data }: ConfigMapRendererProps) {
+export function ConfigMapRenderer({ data, relationships, onNavigate }: ConfigMapRendererProps) {
   const dataEntries = Object.entries((data.data || {}) as Record<string, string>)
   const binaryDataKeys = Object.keys(data.binaryData || {})
 
@@ -62,6 +66,7 @@ export function ConfigMapRenderer({ data }: ConfigMapRendererProps) {
 
   return (
     <>
+      <ReflectorSection data={data} reflection={relationships?.reflection} onNavigate={onNavigate} />
       <Section title={`Data (${dataEntries.length + binaryDataKeys.length} keys)`} defaultExpanded>
         <div className="space-y-3">
           {/* Short values: compact table */}

@@ -416,8 +416,16 @@ type ResourceRef struct {
 	Group     string `json:"group,omitempty"` // API group for CRDs (e.g., "cert-manager.io")
 }
 
+type ReflectionRelationships struct {
+	Source                *ResourceRef  `json:"source,omitempty"`
+	SourceResourceVersion string        `json:"sourceResourceVersion,omitempty"`
+	Mirrors               []ResourceRef `json:"mirrors,omitempty"`
+}
+
 // Relationships holds computed relationships for a resource
 type Relationships struct {
+	Reflection *ReflectionRelationships `json:"reflection,omitempty"`
+
 	Owner           *ResourceRef  `json:"owner,omitempty"`           // Parent via ownerReference (manages edge)
 	Deployment      *ResourceRef  `json:"deployment,omitempty"`      // Grandparent Deployment (for Pods owned by ReplicaSets)
 	Children        []ResourceRef `json:"children,omitempty"`        // Resources this owns (manages edge)

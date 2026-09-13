@@ -4,17 +4,47 @@ Radar automatically discovers and displays **any** Custom Resource Definition (C
 
 ### ConfigMap and Secret reflection (Reflector)
 
-Radar recognizes EmberStack Reflector annotations on core Secrets and ConfigMaps.
-When both objects are visible, the mirror's `reflects` annotation creates a
-**Reflects to** configuration edge from source to mirror, including mirrors with
-a different name. The edge describes the declared relationship, not successful
-synchronization or Kubernetes ownership. Namespace filters still apply; reflected Secret
-nodes remain hidden by default and require Secret read access when included.
+[EmberStack Reflector](https://github.com/emberstack/kubernetes-reflector) copies
+core Secrets and ConfigMaps between namespaces using annotations. It needs no CRDs.
+
+**Resource details:** annotated Secrets and ConfigMaps have a **Reflector** section
+showing source/mirror role, automatic versus manual mirrors, reflection permission,
+and configured namespace name patterns and label selectors. Visible sources and
+mirrors are linked directly. Automatic creation requires reflection permission;
+name patterns and selectors are alternatives within each rule on controller versions
+that support selectors. Radar displays these rules without predicting a destination
+set or evaluating the controller's regular expressions.
+
+**Recorded copy evidence:** mirrors show `reflected-version` and `reflected-at` when
+present. When the source is visible, Radar compares its observed resource version
+with the mirror's recorded version. These cached observations can lag reconciliation.
+This is metadata evidence, not a content or
+health check: metadata-only changes advance source versions, and editing a mirror
+can leave its recorded version unchanged. Mirror details and Secret edit confirmation
+explain that local changes may persist until a source update overwrites them.
+
+**Configuration checks:** local warnings identify malformed or self-referencing
+source declarations, invalid boolean settings, automatic creation without reflection
+permission, sources with visible mirrors but disabled reflection, and mirror chains that do not propagate updates as ordinary sources.
+These appear in resource details, not as cluster-wide health findings.
+
+**Topology:** when both objects are visible, the mirror's `reflects` annotation
+creates a **Reflects to** configuration edge from source to mirror, including mirrors
+with a different name. It represents a declaration, not Kubernetes ownership or
+successful synchronization. Namespace filters apply. Secret nodes are hidden by
+default and require Secret list access when included. The REST resource-detail relationship response also
+identifies reflection sources and mirrors explicitly.
+
+**Partial visibility:** unavailable sources are not called missing, and visible mirror
+counts are not expected totals. Radar does not diagnose absent mirrors, name conflicts,
+controller availability, or synchronization lag. Controller configuration and version
+can further restrict eligible namespaces. Inspect controller logs when a declared
+relationship is not being reconciled.
 
 | Resource | Group | Topology | Detail View |
 |----------|-------|----------|-------------|
-| ConfigMap | Core | Source → mirror configuration edge | Config references and consumers |
-| Secret | Core | Source → mirror configuration edge when included and authorized | Authorized config references and consumers |
+| ConfigMap | Core | Source → mirror configuration edge | Reflection settings, visible mirrors, source navigation, copy-version evidence, local configuration warnings |
+| Secret | Core | Source → mirror configuration edge when included and authorized | Same metadata-only reflection details; values remain behind existing reveal controls |
 
 ---
 

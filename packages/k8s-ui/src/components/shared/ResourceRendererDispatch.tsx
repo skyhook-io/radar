@@ -1,3 +1,4 @@
+import { hasReflectorDetails } from '../resources/renderers/ReflectorSection'
 import { clsx } from 'clsx'
 import { SEVERITY_BADGE, HEALTH_BADGE_COLORS } from '../../utils/badge-colors'
 import { isArgoRolloutResource } from '../../utils/workload-rollout'
@@ -742,11 +743,15 @@ export function ResourceRendererDispatch({
   const HPAComp = rendererOverrides?.HPARenderer ?? HPARenderer
   const PVCComp = rendererOverrides?.PVCRenderer ?? PVCRenderer
   const RolloutComp = rendererOverrides?.RolloutRenderer ?? RolloutRenderer
+  const showsReflection = (kind === 'configmaps' || kind === 'secrets') && hasReflectorDetails(data, relationships?.reflection)
+  const reflectionRefs = showsReflection ? [relationships?.reflection?.source, ...(relationships?.reflection?.mirrors ?? [])].filter((ref): ref is ResourceRef => !!ref) : []
+  const withoutReflection = (refs: ResourceRef[] | undefined) => refs?.filter(ref => !reflectionRefs.some(mirror => mirror.kind === ref.kind && mirror.namespace === ref.namespace && mirror.name === ref.name && (mirror.group ?? '') === (ref.group ?? '')))
+  const sidebarRelationships = showsReflection && relationships ? { ...relationships, configRefs: withoutReflection(relationships.configRefs), consumers: withoutReflection(relationships.consumers) } : relationships
   const scaleBlockedBy = replicaScalers(relationships?.scalers)
 
   const sidebarContent = showCommonSections && (
     <>
-      <RelatedResourcesSection relationships={relationships} onNavigate={onNavigate} />
+      <RelatedResourcesSection relationships={sidebarRelationships} onNavigate={onNavigate} />
       {kind !== 'events' && <EventsSection events={events || []} updates={updates || []} isLoading={eventsLoading ?? false} eventsError={eventsError ?? null} updatesError={updatesError ?? null} hint={eventsHint} />}
       <LabelsSection data={data} />
       <AnnotationsSection data={data} />
@@ -774,8 +779,8 @@ export function ResourceRendererDispatch({
         {kind === 'services' && !data?.apiVersion?.includes('serving.knative.dev') && <ServiceComp data={data} onCopy={onCopy} copied={copied} onNavigate={onNavigate} />}
         {kind === 'endpointslices' && <EndpointSliceRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'ingresses' && !data?.apiVersion?.includes('networking.internal.knative.dev') && <IngressRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'configmaps' && <ConfigMapRenderer data={data} />}
-        {kind === 'secrets' && <SecretRenderer data={data} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
+        {kind === 'configmaps' && <ConfigMapRenderer data={data} relationships={relationships} onNavigate={onNavigate} />}
+        {kind === 'secrets' && <SecretRenderer data={data} relationships={relationships} onNavigate={onNavigate} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
         {kind === 'jobs' && !nonCoreJobFallthrough && <JobRenderer data={data} />}
         {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'cronworkflows' && <CronWorkflowRenderer data={data} onNavigate={onNavigate} />}
