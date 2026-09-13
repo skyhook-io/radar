@@ -23,6 +23,11 @@ type Peer struct {
 	// External is a pod the caller could not resolve, which is a different
 	// thing: nothing about it is decidable.
 	External bool
+	// Host marks a node, the host network, or the API server — an endpoint
+	// the cluster knows about but that is not a pod. Whether policies apply
+	// to it at all is up to the network plugin, so nothing about it is
+	// decidable.
+	Host bool
 	// IP is the address the caller actually observed for this endpoint, when
 	// it has one (a flow record). It takes precedence over the pod's own
 	// address set for ipBlock matching.

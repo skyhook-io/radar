@@ -4,7 +4,8 @@ import type { TrafficFlow } from '../../types'
 import { clsx } from 'clsx'
 import { ChevronDown, ChevronUp, ShieldCheck } from 'lucide-react'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
-import { pluralize } from '@skyhook-io/k8s-ui'
+import { pluralize, StatusDot } from '@skyhook-io/k8s-ui'
+import type { StatusTone } from '@skyhook-io/k8s-ui'
 import { useFlowSearch } from './TrafficFlowListContext'
 import { useQuery } from '@tanstack/react-query'
 import { fetchJSON } from '../../api/client'
@@ -359,86 +360,151 @@ export function TrafficFlowList({ flows }: TrafficFlowListProps) {
 
 interface PolicyEvaluation {
   selectingPolicies: { name: string; namespace?: string; kind: string; effect: string; reason: string }[]
-  verdict: string
+  verdict: 'admitted' | 'denied' | 'undecidable' | 'no-policy'
+  reason?: string
+}
+
+/** Hubble reports which policies decided a flow only for policy drops; every
+ *  other drop reason is not a policy question at all. */
+const POLICY_DROP_REASONS = ['POLICY_DENIED', 'POLICY_DENY']
+
+function isPolicyDrop(flow: TrafficFlow): boolean {
+  if (!flow.dropReasonDesc) return true
+  return POLICY_DROP_REASONS.some((r) => flow.dropReasonDesc!.toUpperCase().includes(r))
+}
+
+const EFFECT_TONE: Record<string, StatusTone> = {
+  admits: 'healthy',
+  does_not_admit: 'neutral',
+  undecidable: 'unknown',
+}
+
+function policyRef(p: { kind: string; namespace?: string; name: string }): string {
+  return p.namespace ? `${p.namespace}/${p.name}` : p.name
 }
 
 function PolicyCorrelation({ flow }: { flow: TrafficFlow }) {
-  const destLabels = flow.destination?.labels
-  const srcLabels = flow.source?.labels
-  const destNs = flow.destination?.namespace || ''
-  const destName = flow.destination?.name || ''
-  const srcNs = flow.source?.namespace || ''
-  const srcName = flow.source?.name || ''
+  const src = flow.source
+  const dst = flow.destination
+  const direction = flow.trafficDirection === 'ingress' || flow.trafficDirection === 'egress' ? flow.trafficDirection : ''
+  const evaluated = direction === 'egress' ? src : dst
+  const observed = flow.lastSeen ? new Date(flow.lastSeen).toLocaleTimeString() : ''
 
-  const labelsParam = destLabels ? Object.entries(destLabels).map(([k, v]) => `${k}=${v}`).join(',') : ''
-  const srcLabelsParam = srcLabels ? Object.entries(srcLabels).map(([k, v]) => `${k}=${v}`).join(',') : ''
+  // Only a pod has policies applied to it; a drop at a node or an external
+  // endpoint is not a NetworkPolicy question.
+  const canQuery = isPolicyDrop(flow) && (!direction || (evaluated?.kind === 'Pod' && !!evaluated.namespace && !!evaluated.name))
 
-  const direction = flow.trafficDirection || 'ingress'
-  // For egress: the evaluated pod is the source. For ingress: the destination.
-  const evalNs = direction === 'egress' ? srcNs : destNs
-  const evalName = direction === 'egress' ? srcName : destName
-  const evalLabels = direction === 'egress' ? srcLabelsParam : labelsParam
-
-  // Need either labels or pod name to resolve the evaluated pod
-  const canQuery = !!evalNs && (!!evalLabels || !!evalName)
-
-  const { data, isLoading, isError } = useQuery<PolicyEvaluation>({
-    queryKey: ['policy-evaluate', destNs, destName, labelsParam, srcNs, srcName, srcLabelsParam, direction],
+  const { data, isLoading, error } = useQuery<PolicyEvaluation, Error>({
+    queryKey: ['policy-evaluate', direction, dst?.namespace, dst?.name, dst?.kind, dst?.ip, src?.namespace, src?.name, src?.kind, src?.ip, flow.port, flow.protocol],
     queryFn: () => {
-      const params = new URLSearchParams({ namespace: destNs })
-      if (labelsParam) params.set('labels', labelsParam)
-      if (!labelsParam && destName) params.set('podName', destName)
-      if (srcNs) params.set('sourceNamespace', srcNs)
-      if (srcLabelsParam) params.set('sourceLabels', srcLabelsParam)
-      else if (srcName && srcNs) params.set('sourcePodName', srcName)
-      if (direction === 'egress') params.set('direction', 'egress')
+      const params = new URLSearchParams()
+      if (direction) params.set('direction', direction)
+      if (dst?.namespace) params.set('namespace', dst.namespace)
+      if (dst?.name) params.set('podName', dst.name)
+      if (dst?.kind) params.set('destinationKind', dst.kind)
+      if (dst?.ip) params.set('destinationIP', dst.ip)
+      if (src?.namespace) params.set('sourceNamespace', src.namespace)
+      if (src?.name) params.set('sourcePodName', src.name)
+      if (src?.kind) params.set('sourceKind', src.kind)
+      if (src?.ip) params.set('sourceIP', src.ip)
+      if (flow.port) params.set('port', String(flow.port))
+      if (flow.protocol) params.set('protocol', flow.protocol)
       return fetchJSON(`/network-policies/evaluate?${params}`)
     },
     enabled: canQuery,
     staleTime: 30000,
   })
 
-  if (!canQuery) return null
-  if (isLoading) return (
-    <div className="pt-1 border-t border-theme-border/50 text-theme-text-tertiary text-[10px]">
-      Evaluating policies...
-    </div>
-  )
-  if (isError) return (
-    <div className="pt-1 border-t border-theme-border/50 text-theme-text-tertiary text-[10px]">
-      Unable to evaluate policies
-    </div>
-  )
-  if (!data || !data.selectingPolicies || data.selectingPolicies.length === 0) return (
-    <div className="pt-1 border-t border-theme-border/50">
-      <div className="flex items-center gap-1 text-theme-text-tertiary">
-        <ShieldCheck className="w-3 h-3" />
-        <span className="text-[10px]">No NetworkPolicy selects this destination</span>
+  const hubble = flow.policyVerdict
+  const hubbleDenied = hubble?.deniedBy ?? []
+  const hubbleAllowed = hubble?.allowedBy ?? []
+
+  if (!isPolicyDrop(flow)) {
+    return (
+      <div className="pt-1 border-t border-theme-border/50 text-[10px] text-theme-text-tertiary">
+        Not evaluated against NetworkPolicies — {flow.dropReasonDesc} is not a policy verdict
       </div>
-    </div>
-  )
+    )
+  }
+
+  // The plugin's own attribution is the ground truth; the static evaluation
+  // below is what the policies say about the pod as it is now.
+  const headline = hubbleDenied.length > 0
+    ? { text: `Denied by ${hubbleDenied.map((p) => `${p.kind} ${policyRef(p)}`).join(', ')}`, tone: 'unhealthy' as StatusTone, source: 'reported by the network plugin' }
+    : hubbleAllowed.length > 0
+      ? { text: `Allowed by ${hubbleAllowed.map((p) => `${p.kind} ${policyRef(p)}`).join(', ')}`, tone: 'healthy' as StatusTone, source: 'reported by the network plugin' }
+      : null
+
+  if (!canQuery && !headline) {
+    return (
+      <div className="pt-1 border-t border-theme-border/50 text-[10px] text-theme-text-tertiary">
+        {evaluated?.kind && evaluated.kind !== 'Pod'
+          ? `Policies apply to pods; the ${direction === 'egress' ? 'source' : 'destination'} is ${evaluated.kind === 'Host' ? 'a node or the host network' : evaluated.kind === 'External' ? 'outside the cluster' : 'not identified'}`
+          : 'Not enough is known about this flow to evaluate policies'}
+      </div>
+    )
+  }
+
+  const staticVerdict = data?.verdict
+  const staticHeadline = staticVerdict === 'admitted'
+    ? { text: 'A current NetworkPolicy admits this connection', tone: 'healthy' as StatusTone }
+    : staticVerdict === 'denied'
+      ? { text: 'No current NetworkPolicy admits this connection', tone: 'unhealthy' as StatusTone }
+      : staticVerdict === 'no-policy'
+        ? { text: 'No NetworkPolicy applies to this pod', tone: 'neutral' as StatusTone }
+        : staticVerdict === 'undecidable'
+          ? { text: 'Not decidable from current NetworkPolicies', tone: 'unknown' as StatusTone }
+          : null
+
+  const rows = data?.selectingPolicies ?? []
 
   return (
     <div className="pt-1 border-t border-theme-border/50 space-y-1">
-      <div className="flex items-center gap-1 text-theme-text-secondary">
-        <ShieldCheck className="w-3 h-3" />
-        <span className="text-[10px] font-medium">
-          {data.selectingPolicies.length} selecting {data.selectingPolicies.length === 1 ? 'policy' : 'policies'}
-        </span>
-      </div>
-      {data.selectingPolicies.map((p, i) => (
-        <div key={i} className="flex items-start gap-1.5 ml-4">
-          <span className={clsx(
-            'shrink-0 mt-0.5 w-1.5 h-1.5 rounded-full',
-            p.effect === 'allow' ? 'bg-green-500' : p.effect === 'unknown' ? 'bg-yellow-500' : 'bg-red-500',
-          )} />
-          <div className="min-w-0">
-            <span className="text-[10px] text-theme-text-primary font-medium">{p.name}</span>
-            <span className="text-[10px] text-theme-text-tertiary ml-1">({p.kind})</span>
-            <div className="text-[10px] text-theme-text-tertiary">{p.reason}</div>
+      {headline && (
+        <div className="flex items-start gap-1.5">
+          <StatusDot tone={headline.tone} className="mt-1 shrink-0" />
+          <div className="min-w-0 text-[10px]">
+            <span className="text-theme-text-primary font-medium">{headline.text}</span>
+            <span className="text-theme-text-tertiary"> · {headline.source}</span>
           </div>
         </div>
-      ))}
+      )}
+      {canQuery && isLoading && (
+        <div className="text-[10px] text-theme-text-tertiary">Checking current NetworkPolicies…</div>
+      )}
+      {canQuery && error && (
+        <div className="text-[10px] text-theme-text-tertiary">Couldn't check current NetworkPolicies: {error.message}</div>
+      )}
+      {staticHeadline && (
+        <div className="flex items-start gap-1.5">
+          <StatusDot tone={staticHeadline.tone} className="mt-1 shrink-0" />
+          <div className="min-w-0 text-[10px]">
+            <span className="text-theme-text-primary font-medium">{staticHeadline.text}</span>
+            <span className="text-theme-text-tertiary"> · against policies as they are now{observed ? `, flow seen ${observed}` : ''}</span>
+            {data?.reason && <div className="text-theme-text-tertiary">{data.reason}</div>}
+          </div>
+        </div>
+      )}
+      {rows.length > 0 && (
+        <div className="ml-4 space-y-1">
+          <div className="flex items-center gap-1 text-theme-text-secondary">
+            <ShieldCheck className="w-3 h-3" />
+            <span className="text-[10px] font-medium">
+              {rows.length} {rows.length === 1 ? 'policy applies' : 'policies apply'} to {evaluated?.namespace}/{evaluated?.name}
+            </span>
+          </div>
+          {rows.map((p, i) => (
+            <div key={i} className="flex items-start gap-1.5">
+              <StatusDot tone={EFFECT_TONE[p.effect] ?? 'unknown'} className="mt-1 shrink-0" />
+              <div className="min-w-0">
+                <span className="text-[10px] text-theme-text-primary font-medium">{p.name}</span>
+                <span className="text-[10px] text-theme-text-tertiary ml-1">({p.kind})</span>
+                <div className="text-[10px] text-theme-text-tertiary">{p.reason}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

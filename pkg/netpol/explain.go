@@ -96,6 +96,9 @@ func Explain(np *networkingv1.NetworkPolicy, dir Direction, selected *corev1.Pod
 	if peer.Pod != nil && peer.Pod.Spec.HostNetwork {
 		return Explanation{Undecidable, "pod " + podRef(peer.Pod) + " runs on the host network; whether policies see it as a pod depends on the network plugin"}
 	}
+	if peer.Host {
+		return Explanation{Undecidable, peerDesc(peer, dir) + " is a node or the host network; whether policies apply to it depends on the network plugin"}
+	}
 
 	var rules []ruleView
 	if dir == DirectionIngress {
@@ -395,6 +398,10 @@ func peerDesc(p Peer, dir Direction) string {
 		return role + " " + p.IP + " (outside the cluster)"
 	case p.External:
 		return role + " (outside the cluster)"
+	case p.Host && p.IP != "":
+		return role + " " + p.IP + " (host network)"
+	case p.Host:
+		return role + " (host network)"
 	default:
 		return role
 	}

@@ -115,3 +115,17 @@ export function volumeUnit(isRateBased: boolean | undefined): VolumeUnit {
 export function effectiveThreshold(value: number, chosenUnit: VolumeUnit, currentUnit: VolumeUnit): number {
   return chosenUnit === currentUnit ? value : 0
 }
+
+/**
+ * Is this endpoint kind drawn outside the cluster's workloads?
+ *
+ * "External" is what every source reports for the world outside; Hubble also
+ * tells nodes (`Host`) and endpoints it could not identify (`Unknown`) apart,
+ * because a policy evaluation treats each differently. The graph does not:
+ * none of them is a workload, so they take the external node's place and
+ * styling, and stay out of namespace counts.
+ */
+export function isExternalKind(kind: string): boolean {
+  const k = kind.toLowerCase()
+  return k === 'external' || k === 'host' || k === 'unknown'
+}

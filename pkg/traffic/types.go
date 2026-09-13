@@ -34,19 +34,52 @@ type Flow struct {
 	// BytesRecv follow that ordering rather than describing a caller and a callee.
 	// The graph draws these without an arrowhead: the traffic is real, only its
 	// direction is not known.
-	DirectionUnknown bool      `json:"directionUnknown,omitempty"`
-	Verdict          string    `json:"verdict"` // forwarded, dropped, error
-	LastSeen         time.Time `json:"lastSeen"`
+	DirectionUnknown bool   `json:"directionUnknown,omitempty"`
+	Verdict          string `json:"verdict"` // forwarded, dropped, error
+	// PolicyVerdict is the network plugin's own account of which policies
+	// decided this flow, when it reports one (Hubble does). It is the ground
+	// truth a static evaluation can only approximate, and it names policy
+	// kinds the static model cannot see, such as CiliumNetworkPolicy.
+	PolicyVerdict *PolicyVerdict `json:"policyVerdict,omitempty"`
+	LastSeen      time.Time      `json:"lastSeen"`
 	// L7 stats (populated by Istio source)
 	RequestRate float64 `json:"requestRate,omitempty"` // requests per second
 	ErrorRate   float64 `json:"errorRate,omitempty"`   // 5xx errors per second
 }
 
+// PolicyVerdict is the set of policies the network plugin reports as having
+// allowed or denied a flow.
+type PolicyVerdict struct {
+	AllowedBy []PolicyRef `json:"allowedBy,omitempty"`
+	DeniedBy  []PolicyRef `json:"deniedBy,omitempty"`
+}
+
+// PolicyRef identifies a policy by kind, namespace and name; a cluster-scoped
+// kind has an empty namespace.
+type PolicyRef struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+}
+
+// Endpoint kinds. Only Pod carries labels and a namespace a policy can
+// select; the others say what kind of non-pod the plugin identified, which
+// decides what a policy evaluation may conclude about it.
+const (
+	EndpointKindPod = "Pod"
+	// EndpointKindExternal: outside the cluster (the world, or a CIDR identity).
+	EndpointKindExternal = "External"
+	// EndpointKindHost: a node, the host network, or the API server.
+	EndpointKindHost = "Host"
+	// EndpointKindUnknown: the plugin reported no usable identity.
+	EndpointKindUnknown = "Unknown"
+)
+
 // Endpoint represents a source or destination in a flow.
 type Endpoint struct {
 	Name      string            `json:"name"`               // Pod or service name
 	Namespace string            `json:"namespace"`          // Namespace
-	Kind      string            `json:"kind"`               // Pod, Service, External
+	Kind      string            `json:"kind"`               // Pod, Service, External, Host, Unknown
 	IP        string            `json:"ip,omitempty"`       // IP address
 	Labels    map[string]string `json:"labels,omitempty"`   // K8s labels
 	Workload  string            `json:"workload,omitempty"` // Parent workload name (Deployment, etc.)

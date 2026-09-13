@@ -200,6 +200,13 @@ func TestExplain(t *testing.T) {
 			effect: Undecidable, reason: "not a valid CIDR",
 		},
 		{
+			name: "a node or host-network peer is undecidable even for a rule that admits everyone",
+			np: policy("monitoring", "open", promLabels, ingressT,
+				[]networkingv1.NetworkPolicyIngressRule{{}}, nil),
+			dir: DirectionIngress, sel: dst.Pod, peer: Peer{Host: true, IP: "10.0.0.3"}, port: 9090,
+			effect: Undecidable, reason: "host network",
+		},
+		{
 			name: "hostNetwork selected pod is undecidable",
 			np:   policy("monitoring", "deny-all", nil, ingressT, nil, nil),
 			dir:  DirectionIngress, sel: func() *corev1.Pod { p := prom(9090).Pod; p.Spec.HostNetwork = true; return p }(), peer: src, port: 9090,

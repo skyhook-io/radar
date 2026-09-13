@@ -23,7 +23,7 @@ import { isClusterAddon, type AddonMode } from './TrafficView'
 import { SEVERITY_BADGE, SEVERITY_DOT, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { getNamespaceColor } from '../../utils/traffic-colors'
 import { Tooltip } from '../ui/Tooltip'
-import { isRateBasedSource } from './trafficFilters'
+import { isRateBasedSource, isExternalKind } from './trafficFilters'
 
 const elk = new ELK()
 
@@ -172,7 +172,7 @@ const MAX_VISIBLE_PORTS = 4 // Maximum ports to show before "+N more"
 
 // Custom node component
 function TrafficNode({ data }: { data: TrafficNodeData }) {
-  const isExternal = data.kind.toLowerCase() === 'external'
+  const isExternal = isExternalKind(data.kind)
   const isInternet = data.kind === 'Internet'
   const isAddonInternet = data.kind === 'AddonInternet' // Separate internet for addon traffic
   const isAddon = data.kind === 'Addon'
@@ -515,7 +515,7 @@ function DetailsPanel({
               <Globe className="h-4 w-4 text-sky-400" />
             ) : nodeData?.kind === 'Addon' ? (
               <Server className="h-4 w-4 text-purple-400" />
-            ) : nodeData?.kind.toLowerCase() === 'external' ? (
+            ) : nodeData && isExternalKind(nodeData.kind) ? (
               <Globe className="h-4 w-4 text-yellow-500" />
             ) : (
               <Server className="h-4 w-4 text-blue-500" />
@@ -554,7 +554,7 @@ function DetailsPanel({
                     ? 'bg-sky-500/20 text-sky-400'
                     : nodeData.kind === 'Addon'
                       ? 'bg-purple-500/20 text-purple-400'
-                      : nodeData.kind.toLowerCase() === 'external'
+                      : isExternalKind(nodeData.kind)
                         ? 'bg-yellow-500/20 text-yellow-400'
                         : 'bg-blue-500/20 text-blue-400'
                 )}>{nodeData.kind === 'Addon' ? 'Cluster Addons' : nodeData.kind}</span>
@@ -1192,7 +1192,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
             namespaceColor: showNamespaceGroups && !sourceIsAddon ? getNamespaceColor(flow.source.namespace) : undefined,
             isHotPath: hotNodes.has(sourceId),
             isAddonNode: sourceIsAddon, // AddonInternet is NOT an addon node
-            serviceCategory: flow.source.kind.toLowerCase() === 'external' ? serviceCategories?.get(flow.source.name) : undefined,
+            serviceCategory: isExternalKind(flow.source.kind) ? serviceCategories?.get(flow.source.name) : undefined,
             nodeHeight: NODE_BASE_HEIGHT,
             connLabel,
           },
@@ -1254,7 +1254,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
             namespaceColor: showNamespaceGroups && !destIsAddon ? getNamespaceColor(flow.destination.namespace) : undefined,
             isHotPath: hotNodes.has(destId),
             isAddonNode: destIsAddon,
-            serviceCategory: flow.destination.kind.toLowerCase() === 'external' ? serviceCategories?.get(flow.destination.name) : undefined,
+            serviceCategory: isExternalKind(flow.destination.kind) ? serviceCategories?.get(flow.destination.name) : undefined,
             ports: destPorts,
             nodeHeight: getNodeHeight(destPorts),
             connLabel,

@@ -1256,7 +1256,7 @@ export interface MetricsDataPoint {
 export interface TrafficEndpoint {
   name: string
   namespace: string
-  kind: string // Pod, Service, External
+  kind: string // Pod, Service, External, Host, Unknown
   ip?: string
   labels?: Record<string, string>
   workload?: string
@@ -1297,6 +1297,12 @@ export interface TrafficFlow {
    *  status code for no single flow. */
   errorRate?: number
   verdict: string // forwarded, dropped, error
+  /** The network plugin's own account of which policies decided this flow
+   *  (Hubble reports it). Absent when the plugin said nothing. */
+  policyVerdict?: {
+    allowedBy?: { kind: string; namespace?: string; name: string }[]
+    deniedBy?: { kind: string; namespace?: string; name: string }[]
+  }
   lastSeen: string // ISO date string
 }
 
