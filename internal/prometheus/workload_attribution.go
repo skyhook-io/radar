@@ -355,6 +355,18 @@ func (c *Client) automaticWorkloadAttributions(scope PodScope) (workloadAttribut
 	var previous workloadAttributions
 	var previousExpiry time.Time
 	if entry != nil {
+		if entry.identity == identity && entry.generation == c.discoveryGen && entry.err == nil && len(entry.result) > 0 {
+			onlyNegative := true
+			for _, source := range entry.result {
+				if len(source.Pods) != 0 || source.UID || source.Scope.SingleCluster || len(source.Scope.ClusterLabels) != 0 {
+					onlyNegative = false
+					break
+				}
+			}
+			if onlyNegative {
+				previous, previousExpiry = entry.result, entry.expires
+			}
+		}
 		if entry.identity != identity && entry.generation == c.discoveryGen && entry.err == nil && now.Before(entry.expires) {
 			previous = intersectWorkloadAttributions(entry.result, scope.Identities)
 			previousExpiry = entry.expires

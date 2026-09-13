@@ -465,6 +465,7 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 	base := c.baseURL
 	bp := c.basePath
 	gen := c.discoveryGen
+	manual := c.manualURL != ""
 	c.mu.RUnlock()
 
 	if base != "" {
@@ -476,7 +477,11 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 		// cached client wrapper needs rebuilding. Pre-extraction probed
 		// solely on base!="", so this preserves that behavior.
 		if p := c.getPromClient(); p != nil {
-			ok, reason := p.Probe(ctx)
+			probe := p.Probe
+			if manual {
+				probe = p.ProbeQueryAPI
+			}
+			ok, reason := probe(ctx)
 			// The probe ran unlocked; a configuration change meanwhile makes
 			// its answer describe a superseded endpoint. Neither return it nor
 			// tear down whatever the new configuration has since connected.

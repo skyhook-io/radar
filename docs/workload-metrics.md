@@ -18,14 +18,16 @@ installation of a backend or a measured percentage of Kubernetes users.
 | EKS, Prometheus 2.47 | CPU, memory | No HTTP source | Throttling metrics absent from the tested store |
 | Shared Mimir with three clusters | CPU, memory | Not certified | Explicit central-store URL; current Pod UID attribution without a scope assertion |
 | EKS, Mimir 3.2 + Alloy Prometheus remote-write + Beyla 3.32 | CPU, memory, throttling | Requests, 5xx, p50/p95, reporting Pods | Explicit URL, Basic auth and tenant header; automatic UID attribution |
-| GKE, VictoriaMetrics 1.151 + cAdvisor/KSM + Istio 1.30 sidecars | CPU, memory, throttling | Requests, 5xx, reporting Pods; latency incomplete | Identity labels preserved; KSM-backed cluster attribution; explicit VM endpoint selection |
+| GKE, VictoriaMetrics 1.151 + cAdvisor/KSM + Istio 1.30 sidecars | CPU, memory, throttling | Requests, 5xx, p50/p95, reporting Pods | Identity labels preserved; KSM-backed cluster attribution; explicit VM endpoint selection; retested with the current histogram guard |
 | kind, Prometheus 3.5 + Beyla 3.32 | No cAdvisor scrape | Requests, 5xx, p50/p95, reporting Pods | Two replicas and two HTTP ports; controlled nonzero errors |
 | kind, Istio 1.30 official Prometheus sample | CPU, memory, throttling | Requests/5xx with scope assertion; latency incomplete | Sample lacks a provable automatic Istio cluster partition |
+| kind repeatable lab, Prometheus 3.5 + cAdvisor/KSM + Beyla 3.25 and Istio 1.30 sidecars | CPU, memory, throttling | Requests, 5xx, p50/p95, reporting Pods for each observer | Two replicas/ports each; automatic attribution; resource-only worker, Redis StatefulSet and DaemonSet also pass |
 
 Non-HTTP workers and Redis correctly retain resource panels when available,
 without an empty HTTP chart grid. A network-only VictoriaMetrics store correctly
 has no workload observations. Authenticated Mimir rejects missing/wrong
-credentials and a missing required tenant. A separate unhealthy Mimir store
+credentials and a missing required tenant in gateway-level checks, not browser
+tests of Radar's auth error state. A separate unhealthy Mimir store
 failed real queries despite having Ready Pods; readiness is not query health.
 
 ### Configuration and remaining gaps
@@ -35,19 +37,32 @@ failed real queries despite having Ready Pods; readiness is not query health.
   The successful VM test used that explicit configuration; it is not a stock-default
   OOTB claim. Copying every GKE node label also exceeded VM's label-per-series
   limit in the lab; collector label filtering was needed to prevent dropped data.
-- Istio request counters and histogram populations temporarily differ under live
-  traffic. The current equality guard withholds affected latency samples, so
-  Istio latency is not fully validated even with correct attribution.
-- The connection probe currently requires nonempty `up`. A remote-write filter
-  retaining workload metrics but dropping `up` can cause a false connection
-  failure. Query backend errors may be summarized too generically as unreachable.
-- Live checks primarily used one or two replicas. DaemonSet endpoint support,
-  large workloads, HA duplicate populations and adversarial cross-cluster name
-  collisions are not all live-certified by this matrix. Separate query tests
+- The baseline Istio latency gap came from comparing independently updated
+  request counters and histograms. Latency now matches their complete label
+  populations and validates each histogram count against its `+Inf` bucket;
+  it does not require the separate request counter to have advanced equally.
+  Missing populations, mismatched bucket layouts and duplicate jobs/replicas
+  still withhold affected samples. Histograms can briefly trail request counters.
+- Explicitly configured endpoints can return an empty `up` vector and still
+  connect; filtered remote-write stores do not have to retain scrape metadata.
+  Automatic discovery still skips empty candidates. Connected means the query
+  API answered, not that the selected tenant contains this workload's data.
+  Authentication, backend query errors and invalid query responses have distinct
+  diagnostics. HTTP 405 explains that workload queries require POST through proxies.
+- Live checks primarily used one or two replicas, including a single-node
+  DaemonSet. Large workloads, HA duplicate populations and adversarial cross-cluster name
+  collisions are not live-certified by this matrix. Separate query tests
   cover several identity/duplicate cases; that is not equivalent to a fleet test.
 - These runs used local Radar with Kubernetes port-forward access. They do not
   certify Radar Cloud transport, managed-service authentication or every in-cluster
   deployment path. A full browser sweep was not repeated for each backend.
+
+The [repeatable workload demo](../scripts/workload-metrics-demo/README.md) adds
+an isolated kind baseline with Prometheus, Beyla, cAdvisor/KSM, Istio sidecars,
+finite error-producing traffic and assertions on actual Radar chart responses.
+Its checks distinguish resource/HTTP families and include a DaemonSet. The
+unlabeled official Istio sample row records an earlier baseline, not a retroactive
+success; the fresh kind and VM rows exercise the current histogram guard.
 
 Historical deleted-Pod membership, ingress observers, native-only histograms,
 ambient/waypoint mapping, gRPC and queue-worker semantics remain outside this
@@ -95,7 +110,7 @@ it exports Kubernetes object state, not application request telemetry.
 | Beyla HTTP 5xx | The same count, split by `http_response_status_code` | Needs usable status coverage. Idle traffic does not have a defined error percentage. |
 | Beyla p50/p95 | `http_server_request_duration_seconds_bucket` with `le`, including `+Inf`, plus the count above | Classic histogram buckets must cover the request population; seconds. |
 | Istio HTTP requests / 5xx | `istio_requests_total`, including `response_code` for errors | `reporter="destination"`, `request_protocol="http"`, destination workload namespace and scrape `namespace`/`pod`; verified partition or override. |
-| Istio p50/p95 | `istio_request_duration_milliseconds_bucket` with `le`, plus the request counter | Same identity and population as request count; Radar converts milliseconds to seconds. |
+| Istio p50/p95 | `istio_request_duration_milliseconds_bucket` with `le`, `_count`, plus the request counter | Full label populations must match; `_count` and `+Inf` must agree per population. Counter values may lead histogram updates. Radar converts milliseconds to seconds. |
 | Reporting Pods | Matching request rate series | Distinct observed Pods, not the number selected from Kubernetes; idle/new Pods can explain a shortfall. |
 | Pod comparison | The same CPU/memory/throttling panels above | No independent, weaker query for comparison values. |
 | Request/limit overlays | Current Kubernetes container resource settings | No Prometheus/KSM series needed for the lines themselves. Not historical settings; unlimited containers suppress the whole-Pod limit line. |
@@ -159,7 +174,9 @@ Prometheus discovery finishes (discovery has its own 60-second bound), two activ
 at most, a bounded 128-entry memo and a 30-second per-workload churn guard.
 Evidence is bounded to 1,024 identities per metric family, 256 KSM rows and a
 4 MiB response. Positive results expire after five minutes and refresh ahead of
-expiry; negative results retry after 30 seconds. During Pod churn, unexpired
+expiry; negative results retry after 30 seconds. A purely negative explanation
+remains visible while the same identity/connection is rechecked; expired positive
+trust is never extended. During Pod churn, unexpired
 evidence is retained only for unchanged name/UID pairs while replacement Pods
 are checked. Its original expiry is not extended. Connection changes invalidate
 all attribution and their old churn timers. Sources covering a subset report partial coverage.
@@ -235,6 +252,10 @@ are not returned to the browser.
 Workload range queries and attribution probes use POST form bodies and a 16,000-byte decoded query
 limit. Long Pod names or large identity sets can reach this limit before 100
 Pods; affected panels explain the limit instead of silently dropping Pods.
+Istio latency's full-population checks repeat the selectors more often than the
+request-rate query, so they can hit the byte limit earlier (roughly 60–70 Pods
+with typical Deployment Pod names; exact names and labels determine the limit).
+This can leave request/error charts available while latency is withheld.
 HTTP error and coverage ratios are calculated from matching timestamps in the
 returned counters; histogram quantiles remain calculated by the metrics backend.
 Warnings or `isPartial: true` withhold the response; informational annotations
@@ -334,7 +355,7 @@ Fast tests live in `pkg/prom/workload_*_test.go`,
 `internal/prometheus/workload_metrics_test.go`, and the frontend
 `workloadMetricValues.test.ts`.
 
-The opt-in numerical suite evaluates the production expressions using Prometheus
+The numerical suite (also enabled in CI) evaluates the production expressions using Prometheus
 itself, including cluster separation, observer separation, unit conversion,
 quantiles and duplicate cAdvisor scrape targets:
 
@@ -345,13 +366,20 @@ RADAR_TEST_PROMTOOL_IMAGE=prom/prometheus:v3.5.0 go test -C pkg ./prom -run Test
 This does not replace live exporter compatibility testing or UI screenshots.
 Beyla direct exposition is live-verified, including Radar auto-discovery and a
 two-replica HTTP workload with bounded traffic and scheduled 503 responses.
-An Istio 1.30.3 sidecar with the official Prometheus sample was also exercised
-live. Its unlabeled store needs an explicit scope assertion; automatic Istio
-attribution requires a verified KSM-backed cluster partition. Request and error
-charts worked with the assertion, but histogram counts lagged the separate request
-counter during traffic, so the strict coverage check withheld latency samples.
-Istio latency compatibility remains incomplete; do not interpret missing latency
-as no requests or a healthy latency result.
+The repeatable kind lab additionally passes all eight core panels for both Beyla
+3.25 and Istio 1.30.3, including positive request/error/latency samples from
+two-replica, multi-port fixtures. Its worker, Redis StatefulSet and DaemonSet pass
+resource-panel checks without inventing HTTP traffic. A fresh VictoriaMetrics
+1.151 / Istio 1.30.3 run also returns available p50/p95 samples with the current
+histogram checks. These are API-level checks, not a fresh browser sweep.
+
+An unlabeled Istio store still needs an explicit scope assertion; automatic
+Istio attribution requires a verified KSM-backed cluster partition. Envoy
+[merges histogram observations separately from counters](https://github.com/envoyproxy/envoy/blob/main/source/docs/stats.md),
+so latency compares matching label populations and internal histogram consistency,
+not equality with the separate request counter. Per-metric Istio Telemetry label
+overrides can create structurally different populations; those still withhold
+latency. Missing latency never implies no requests or healthy latency.
 
 The reporting-Pod count is derived from request rate series, not the Kubernetes
 selection. A partial count does not prove missing instrumentation: Pods can be

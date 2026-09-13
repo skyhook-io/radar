@@ -278,6 +278,16 @@ const (
 //
 // Uses a 3-second timeout regardless of the context deadline to fail fast.
 func (c *Client) Probe(ctx context.Context) (bool, ProbeReason) {
+	return c.probe(ctx, true)
+}
+
+// ProbeQueryAPI checks query health without requiring scrape metadata. Explicit
+// remote-write endpoints may deliberately omit up while retaining workload data.
+func (c *Client) ProbeQueryAPI(ctx context.Context) (bool, ProbeReason) {
+	return c.probe(ctx, false)
+}
+
+func (c *Client) probe(ctx context.Context, requireTargets bool) (bool, ProbeReason) {
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
@@ -287,13 +297,22 @@ func (c *Client) Probe(ctx context.Context) (bool, ProbeReason) {
 		if errors.As(err, &httpErr) && (httpErr.StatusCode == 401 || httpErr.StatusCode == 403) {
 			return false, ProbeReasonAuthError
 		}
+		if httpErr != nil {
+			var response struct {
+				Status string `json:"status"`
+			}
+			if json.Unmarshal(httpErr.Body, &response) == nil && response.Status == "error" {
+				return false, ProbeReasonPromError
+			}
+		}
 		return false, ProbeReasonTransportError
 	}
 
 	var pr struct {
 		Status string `json:"status"`
 		Data   struct {
-			Result []json.RawMessage `json:"result"`
+			ResultType string            `json:"resultType"`
+			Result     []json.RawMessage `json:"result"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &pr); err != nil {
@@ -302,7 +321,10 @@ func (c *Client) Probe(ctx context.Context) (bool, ProbeReason) {
 	if pr.Status != "success" {
 		return false, ProbeReasonPromError
 	}
-	if len(pr.Data.Result) == 0 {
+	if !requireTargets && pr.Data.ResultType != "vector" {
+		return false, ProbeReasonNotPrometheus
+	}
+	if requireTargets && len(pr.Data.Result) == 0 {
 		return false, ProbeReasonEmptyInstance
 	}
 	return true, ""

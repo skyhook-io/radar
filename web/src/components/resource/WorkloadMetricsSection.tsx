@@ -178,6 +178,7 @@ function WorkloadRequests({ data, isLoading, error, setSource }: {
                   Queries select {data.pods} of {data.podsTotal} current Pods; previous replicas are not reconstructed.
                   Other Pods may be idle, new, or not instrumented. HTTP 5xx excludes failures without an HTTP response
                   and is not a gRPC error rate. Latency is a histogram approximation at the selected observer, not end-to-end user latency.
+                  {data.source === 'istio' && ' Istio histograms update separately and can briefly trail the request counter; latency uses the histogram observations.'}
                   Rates use a {Math.round(data.rateWindowSeconds / 60)}-minute rolling window, evaluated every {Math.round(data.stepSeconds)} seconds. Longer windows smooth short spikes.
                 </p>
               </details>

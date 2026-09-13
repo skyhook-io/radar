@@ -111,8 +111,19 @@ func TestWorkloadPromQL(t *testing.T) {
 		}
 		for i, le := range buckets {
 			increments := []int{60, 108, 120, 120}
-			add(metric+"_bucket", base+fmt.Sprintf(`,le="%s"`, le), fmt.Sprintf("0+%dx10", increments[i]))
-			add(metric+"_bucket", duplicateBase+fmt.Sprintf(`,le="%s"`, le), fmt.Sprintf("0+%dx10", increments[i]))
+			for _, labels := range []string{base, duplicateBase} {
+				if source == RequestSourceIstio {
+					for j, code := range []string{"200", "500"} {
+						fraction := []float64{0.9, 0.1}[j]
+						add(metric+"_bucket", labels+fmt.Sprintf(`,le=%q,response_code=%q`, le, code), fmt.Sprintf("0+%gx10", float64(increments[i])*fraction))
+						if le == "+Inf" {
+							add(metric+"_count", labels+fmt.Sprintf(`,response_code=%q`, code), fmt.Sprintf("0+%gx10", 120*fraction))
+						}
+					}
+				} else {
+					add(metric+"_bucket", labels+fmt.Sprintf(`,le=%q`, le), fmt.Sprintf("0+%dx10", increments[i]))
+				}
+			}
 		}
 		queries, err := BuildRequestQueries(time.Minute, sel, scope, source, "")
 		if err != nil {
@@ -122,7 +133,11 @@ func TestWorkloadPromQL(t *testing.T) {
 		check(queries.Errors, "{}", 0.2)
 		check(queries.P50, "{}", 0.1)
 		check(queries.P95, "{}", 0.75)
-		check(queries.HistogramCoverage, "{}", 2)
+		if source == RequestSourceIstio {
+			check(queries.HistogramCoverage, "{}", 1)
+		} else {
+			check(queries.HistogramCoverage, "{}", 2)
+		}
 		check(queries.HistogramUniformity, "{}", 1)
 		check(queries.StatusCoverage, "{}", 2)
 		check(queries.Population, "{}", 1)
@@ -168,6 +183,7 @@ func TestWorkloadPromQL(t *testing.T) {
 		check(healthy.Rate, "{}", 1)
 		check("count("+healthy.Errors+") or vector(0)", "{}", 0)
 		check("count("+healthy.P95+") or vector(0)", "{}", 0)
+		check("count("+healthy.HistogramCoverage+") or vector(0)", "{}", 0)
 		resetBase := strings.ReplaceAll(base, `"api-0"`, `"api-no-response"`)
 		add(count, resetBase+fmt.Sprintf(`,%s="0"`, status), "0+30x10")
 		add(count, resetBase+fmt.Sprintf(`,%s="200"`, status), "0+30x10")
@@ -199,6 +215,49 @@ func TestWorkloadPromQL(t *testing.T) {
 			t.Fatal(err)
 		}
 		check(ha.Population, "{}", 2)
+	}
+	for _, tc := range []struct {
+		name                                                         string
+		missingStatus, missingBucket, mismatchedCount, foreignBucket bool
+	}{
+		{name: "async"}, {name: "missing-status", missingStatus: true}, {name: "missing-bucket", missingBucket: true},
+		{name: "inconsistent-count", mismatchedCount: true}, {name: "foreign-bucket", foreignBucket: true},
+	} {
+		pod := "istio-" + tc.name
+		base := fmt.Sprintf(`cluster="west",job="istio",reporter="destination",request_protocol="http",namespace="shop",pod=%q,destination_workload_namespace="shop"`, pod)
+		for _, code := range []string{"200", "503"} {
+			labels := base + fmt.Sprintf(`,response_code=%q`, code)
+			add("istio_requests_total", labels, "0+60x10")
+			if tc.missingStatus && code == "503" {
+				continue
+			}
+			// The histogram is internally complete but lags its separate counter.
+			add("istio_request_duration_milliseconds_count", labels, "0+54x10")
+			for _, le := range []string{"100", "500", "+Inf"} {
+				if tc.missingBucket && code == "503" && le == "100" {
+					continue
+				}
+				values := "0+54x10"
+				if tc.mismatchedCount && code == "503" && le == "+Inf" {
+					values = "0+48x10"
+				}
+				add("istio_request_duration_milliseconds_bucket", labels+fmt.Sprintf(`,le=%q`, le), values)
+			}
+		}
+		if tc.foreignBucket {
+			add("istio_request_duration_milliseconds_bucket", base+`,response_code="404",le="100"`, "0+54x10")
+		}
+		q, err := BuildRequestQueries(time.Minute, SelectPods("shop", []string{pod}), scope, RequestSourceIstio, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := float64(0)
+		if tc.name == "async" {
+			want = 1
+			check(q.Rate, "{}", 2)
+			check(q.P95, "{}", 0.095)
+		}
+		check("("+q.HistogramCoverage+") * ("+q.HistogramUniformity+" == bool 1) or vector(0)", "{}", want)
 	}
 	// Identical workload labels in another cluster must not affect any answer.
 	add("http_server_request_duration_seconds_count", `cluster="east",job="beyla",k8s_namespace_name="shop",k8s_pod_name="api-0",http_response_status_code="500"`, "0+9999x10")

@@ -1,0 +1,54 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+scrape_configs:
+  - job_name: beyla
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces: {names: [beyla]}
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        action: keep
+        regex: beyla
+      - source_labels: [__meta_kubernetes_pod_container_port_number]
+        action: keep
+        regex: '9090'
+      - target_label: cluster
+        replacement: workload-demo
+  - job_name: kubelet
+    scheme: https
+    metrics_path: /metrics/cadvisor
+    authorization:
+      credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+    tls_config:
+      insecure_skip_verify: true
+    kubernetes_sd_configs:
+      - role: node
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_node_name]
+        target_label: node
+      - target_label: cluster
+        replacement: workload-demo
+  - job_name: kube-state-metrics
+    static_configs:
+      - targets: [kube-state-metrics.monitoring.svc:8080]
+        labels: {cluster: workload-demo}
+  - job_name: istio-fixture
+    kubernetes_sd_configs:
+      - role: pod
+        namespaces: {names: [radar-metrics-fixture]}
+    metrics_path: /stats/prometheus
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_container_port_name]
+        action: keep
+        regex: http-envoy-prom
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: namespace
+      - target_label: cluster
+        replacement: workload-demo
+  - job_name: prometheus
+    static_configs:
+      - targets: [localhost:9090]
+        labels: {cluster: workload-demo}

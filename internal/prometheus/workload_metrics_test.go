@@ -98,6 +98,21 @@ func TestWorkloadQueryBoundAndPartialResponse(t *testing.T) {
 	}
 }
 
+func TestWorkloadQueryHTTPDiagnostics(t *testing.T) {
+	for _, status := range []int{401, 403, 405, 500, 502} {
+		client := workloadQueryFunc(func(context.Context, string, time.Time, time.Time, time.Duration) (*prom.QueryResult, error) {
+			return nil, &prom.HTTPError{StatusCode: status, URL: "https://SECRET", Body: []byte("SECRET")}
+		})
+		panel := queryWorkloadPanel(context.Background(), client, "up", nil, "cores", time.Now().Add(-time.Hour), time.Now(), time.Minute, false)
+		if panel.State != "error" || !strings.Contains(panel.Reason, "HTTP") || strings.Contains(panel.Reason, "SECRET") {
+			t.Fatalf("bad diagnostic: %+v", panel)
+		}
+		if status == 405 && !strings.Contains(panel.Reason, "POST") {
+			t.Fatal("missing proxy method guidance")
+		}
+	}
+}
+
 func TestWorkloadCoverageWithholdsMismatchedSamples(t *testing.T) {
 	panel := workloadMetricPanel{State: "available", Series: []prom.Series{{DataPoints: []prom.DataPoint{{Timestamp: 1, Value: 0.2}, {Timestamp: 2, Value: 0.3}}}}}
 	coverage := workloadMetricPanel{State: "available", Series: []prom.Series{{DataPoints: []prom.DataPoint{{Timestamp: 1, Value: 1}, {Timestamp: 2, Value: 0.5}}}}}

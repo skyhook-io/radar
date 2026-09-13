@@ -100,15 +100,29 @@ func buildRequestQueries(step time.Duration, sel PodSelection, cluster string, s
 	quantile := func(q string) string {
 		return "histogram_quantile(" + q + ", " + buckets + ")" + unitScale
 	}
+	histogramCoverage := rate(metric+"_bucket", `,le="+Inf"`)
+	populationMetrics := workloadMetricExpression(countMetric, cluster, target, branches, WorkloadRateWindow(step).String()) + " or " + workloadMetricExpression(metric+"_bucket", cluster, target, branches, WorkloadRateWindow(step).String())
+	if source == RequestSourceIstio {
+		populationMetrics += " or " + workloadMetricExpression(metric+"_count", cluster, target, branches, WorkloadRateWindow(step).String())
+		counter := "max without (job,instance) (" + workloadMetricExpression(countMetric, cluster, target, branches, WorkloadRateWindow(step).String()) + ")"
+		histogramCount := "max without (job,instance) (" + workloadMetricExpression(metric+"_count", cluster, target, branches, WorkloadRateWindow(step).String()) + ")"
+		infinity := "max without (job,instance,le) (" + workloadMetricExpression(metric+"_bucket", cluster, target+`,le="+Inf"`, branches, WorkloadRateWindow(step).String()) + ")"
+		// Envoy merges histograms asynchronously from request counters. Match
+		// their complete label populations, but compare values within the histogram.
+		population := "count(" + counter + " and " + histogramCount + ") == bool count(" + counter + " or " + histogramCount + ")"
+		consistent := "count(" + histogramCount + " == " + infinity + ") == bool count(" + histogramCount + " or " + infinity + ")"
+		noForeignBuckets := "((count(" + bucketRates + " unless ignoring(le) " + histogramCount + ") or vector(0)) == bool 0)"
+		histogramCoverage = "(" + population + ") * (" + consistent + ") * " + noForeignBuckets
+	}
 	return RequestQueries{
 		Rate:                total,
 		Errors:              errors,
 		P50:                 quantile("0.50"),
 		P95:                 quantile("0.95"),
-		HistogramCoverage:   rate(metric+"_bucket", `,le="+Inf"`),
+		HistogramCoverage:   histogramCoverage,
 		HistogramUniformity: "min(" + bucketPopulation + ") / max(" + bucketPopulation + ")",
 		StatusCoverage:      rate(countMetric, fmt.Sprintf(`,%s=~"0|[1-5][0-9][0-9]"`, status)),
 		ObservedPods:        "count(count by (" + podLabel + ") (" + workloadMetricExpression(countMetric, cluster, target, branches, WorkloadRateWindow(step).String()) + "))",
-		Population:          "count(count by (job,replica,prometheus_replica,__replica__) (" + workloadMetricExpression(countMetric, cluster, target, branches, WorkloadRateWindow(step).String()) + " or " + workloadMetricExpression(metric+"_bucket", cluster, target, branches, WorkloadRateWindow(step).String()) + "))",
+		Population:          "count(count by (job,replica,prometheus_replica,__replica__) (" + populationMetrics + "))",
 	}, nil
 }

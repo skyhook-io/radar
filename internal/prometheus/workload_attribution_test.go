@@ -383,6 +383,35 @@ func TestAttributionPartitionConflicts(t *testing.T) {
 	}
 }
 
+func TestNegativeAttributionRemainsVisibleDuringRefresh(t *testing.T) {
+	scope := PodScope{Namespace: "shop", Kind: "Deployment", Name: "api", Identities: []prom.WorkloadPodIdentity{{Name: "api-0", UID: "030a7597-c1fc-48b0-9bb4-683489285358"}}}
+	for _, positive := range []bool{false, true} {
+		plan := workloadAttribution{Reason: "No matching identities."}
+		if positive {
+			plan.Pods = scope.Identities
+			plan.UID = true
+		}
+		expired := time.Now().Add(-time.Second)
+		entry := &workloadAttributionEntry{identity: fmt.Sprint(scope.Identities), started: time.Now(), expires: expired, result: workloadAttributions{"cpu": plan}, cancel: func() {}}
+		c := &Client{workloadAttributionEntries: map[string]*workloadAttributionEntry{"shop/Deployment/api": entry}}
+		got, state := c.automaticWorkloadAttributions(scope)
+		if positive {
+			if state != "detecting" || got != nil {
+				t.Fatal("expired positive evidence reused")
+			}
+		} else if state != "available" || got["cpu"].Reason != plan.Reason {
+			t.Fatal("negative refresh blanked explanation")
+		}
+		if !entry.expires.Equal(expired) {
+			t.Fatal("trust expiry extended")
+		}
+		c.discoveryGen++
+		if got, state = c.automaticWorkloadAttributions(scope); state != "detecting" || got != nil {
+			t.Fatal("reused result across connections")
+		}
+	}
+}
+
 func TestAttributionDoesNotAddHAReplicas(t *testing.T) {
 	rows := []prom.Series{{Labels: map[string]string{"job": "beyla", "prometheus_replica": "a"}}, {Labels: map[string]string{"job": "beyla", "prometheus_replica": "b"}}}
 	if _, ok := attributionJob(rows, nil, true); ok {

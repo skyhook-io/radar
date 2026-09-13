@@ -73,7 +73,12 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 
 	if manualURL != "" {
 		addr := strings.TrimRight(manualURL, "/")
-		if c.probe(ctx, addr) {
+		c.mu.RLock()
+		tr := prom.NewHTTPTransport(addr, "", c.httpClient)
+		tr.Headers = copyHeaders(c.headers)
+		c.mu.RUnlock()
+		ok, reason := prom.NewClient(tr).ProbeQueryAPI(ctx)
+		if ok {
 			log.Printf("[prometheus] connected via manual URL %s (%s)", addr, took(start))
 			if !c.markConnected(addr, "", startGen) {
 				return "", "", errDiscoverySuperseded
@@ -86,10 +91,19 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 			logDiscoveryEnded(start, err)
 			return "", "", err
 		}
-		if !discoveryDiagnosticsSuppressed(ctx) {
-			errorlog.Record("prometheus", "error", "manual Prometheus URL %s not reachable", addr)
+		message := "The configured Prometheus endpoint could not be reached. Check its address, network access and TLS configuration."
+		switch reason {
+		case prom.ProbeReasonAuthError:
+			message = "The configured Prometheus endpoint rejected authentication or access (HTTP 401/403). Check credentials, tenant headers and permissions."
+		case prom.ProbeReasonPromError:
+			message = "The configured Prometheus query API returned an error. Check the backend's query and storage health, including ingester/store availability; this is not an empty metrics result."
+		case prom.ProbeReasonNotPrometheus:
+			message = "The configured endpoint did not return a Prometheus query response. Check the API base path and whether a proxy is returning a login page."
 		}
-		return "", "", fmt.Errorf("manual Prometheus URL %s not reachable", addr)
+		if !discoveryDiagnosticsSuppressed(ctx) {
+			errorlog.Record("prometheus", "error", "%s", message)
+		}
+		return "", "", errors.New(message)
 	}
 
 	// Reuse of an existing managed port-forward happens later, per candidate, in

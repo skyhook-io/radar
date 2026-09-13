@@ -183,6 +183,38 @@ func TestClient_Probe_RejectsEmptyInstance(t *testing.T) {
 	}
 }
 
+func TestClientProbeQueryAPI(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   ProbeReason
+	}{
+		{"filtered store", 200, `{"status":"success","data":{"resultType":"vector","result":[]}}`, ""},
+		{"login", 200, `<html>login</html>`, ProbeReasonNotPrometheus},
+		{"unrelated success", 200, `{"status":"success"}`, ProbeReasonNotPrometheus},
+		{"empty vector without result", 200, `{"status":"success","data":{"resultType":"vector"}}`, ""},
+		{"auth", 401, `secret echoed by proxy`, ProbeReasonAuthError},
+		{"tenant", 403, `tenant rejected`, ProbeReasonAuthError},
+		{"ring", 500, `{"status":"error","errorType":"execution","error":"too many unhealthy instances in the ring"}`, ProbeReasonPromError},
+		{"proxy", 502, `upstream unavailable`, ProbeReasonTransportError},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := fakeProm(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Query().Get("query") != "up" {
+					t.Error("probe must exercise storage, not vector(1)")
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			})
+			ok, reason := NewClient(tr).ProbeQueryAPI(context.Background())
+			if ok != (tc.want == "") || reason != tc.want {
+				t.Fatalf("got %v/%s, want %s", ok, reason, tc.want)
+			}
+		})
+	}
+}
+
 func TestClient_Probe_AcceptsActiveInstance(t *testing.T) {
 	tr := fakeProm(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1,"1"]}]}}`))

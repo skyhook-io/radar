@@ -1,0 +1,148 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: radar-metrics-fixture
+  labels:
+    istio.io/rev: radar-lab
+    app.kubernetes.io/part-of: radar-metrics-lab
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web
+  namespace: radar-metrics-fixture
+data:
+  default.conf: |
+    server {
+      listen 8080;
+      location / { return 200 "ok\n"; }
+      location = /fail { return 503 "test failure\n"; }
+    }
+    server {
+      listen 8081;
+      location / { return 200 "second port\n"; }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: radar-metrics-fixture
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: radar-lab-web}
+  template:
+    metadata:
+      labels: {app: radar-lab-web}
+      annotations:
+        prometheus.io/scrape: "false"
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.28.0-alpine
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: http-second, containerPort: 8081}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {cpu: 200m, memory: 64Mi}
+          readinessProbe:
+            tcpSocket: {port: 8080}
+          volumeMounts:
+            - {name: config, mountPath: /etc/nginx/conf.d}
+      volumes:
+        - name: config
+          configMap: {name: web}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: radar-metrics-fixture
+spec:
+  selector: {app: radar-lab-web}
+  ports:
+    - {name: http, port: 8080, targetPort: 8080}
+    - {name: http-second, port: 8081, targetPort: 8081}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: radar-metrics-fixture
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: radar-lab-worker}
+  template:
+    metadata:
+      labels: {app: radar-lab-worker}
+      annotations:
+        prometheus.io/scrape: "false"
+    spec:
+      containers:
+        - name: worker
+          image: busybox:1.37.0
+          command: [sh, -c, 'while true; do sleep 30; done']
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 50m, memory: 32Mi}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: radar-metrics-fixture
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels: {app: radar-lab-redis}
+  template:
+    metadata:
+      labels: {app: radar-lab-redis}
+      annotations:
+        prometheus.io/scrape: "false"
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.4.2-alpine
+          args: [--save, '', --appendonly, 'no']
+          ports:
+            - {name: tcp-redis, containerPort: 6379}
+          resources:
+            requests: {cpu: 20m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: radar-metrics-fixture
+spec:
+  clusterIP: None
+  selector: {app: radar-lab-redis}
+  ports:
+    - {name: tcp-redis, port: 6379, targetPort: 6379}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-worker
+  namespace: radar-metrics-fixture
+spec:
+  selector: {matchLabels: {app: node-worker}}
+  template:
+    metadata:
+      labels: {app: node-worker}
+      annotations: {sidecar.istio.io/inject: 'false'}
+    spec:
+      tolerations: [{operator: Exists}]
+      containers:
+        - name: worker
+          image: busybox:1.37.0
+          command: [sh, -c, 'while true; do sleep 30; done']
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 50m, memory: 32Mi}

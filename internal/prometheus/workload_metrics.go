@@ -304,14 +304,16 @@ func collectWorkloadMetrics(ctx context.Context, client RangeQuerier, scope PodS
 	}
 	_ = group.Wait()
 	panels[0] = workloadRatioPanel(panels[0], c.rate, 100, true)
-	panels[3] = workloadRatioPanel(panels[3], c.rate, 1, false)
+	if resp.Source != prom.RequestSourceIstio {
+		panels[3] = workloadRatioPanel(panels[3], c.rate, 1, false)
+	}
 	panels[3] = withMetricCoverage(panels[3], panels[7], "Histogram bucket populations differ.")
 	panels[4] = workloadRatioPanel(panels[4], c.rate, 1, false)
 	resp.Panels["observedPods"] = panels[5]
 	for i, key := range keys[:3] {
 		panel := panels[i]
 		if i > 0 {
-			panel = withMetricCoverage(panel, panels[3], "Histogram buckets do not cover the same requests as the counter; latency is withheld for those samples.")
+			panel = withMetricCoverage(panel, panels[3], "Histogram observations are incomplete or inconsistent with the request population; latency is withheld for those samples.")
 		} else {
 			panel = withMetricCoverage(panel, panels[4], "HTTP status labels do not cover every request; error percentage is withheld for those samples.")
 		}
@@ -381,7 +383,7 @@ func withObservedPodCoverage(panel, observed workloadMetricPanel, total int) wor
 				if panel.Reason != "" {
 					panel.Reason += " "
 				}
-				panel.Reason += "Some samples do not cover every current Pod. Values describe reporting Pods only; other Pods may be idle, new, or not instrumented."
+				panel.Reason += "Some samples do not cover every current Pod. Values describe reporting Pods only; other Pods may be unattributed, idle, new, or not instrumented."
 				return panel
 			}
 		}
@@ -402,14 +404,23 @@ func queryWorkloadPanel(ctx context.Context, client RangeQuerier, query string, 
 	}
 	result, err := client.QueryRange(ctx, query, start, end, step)
 	if err != nil {
-		log.Printf("[prometheus] Workload metric query failed: %v", err)
 		panel.State, panel.Reason = "error", "The metrics query failed. Check the Prometheus connection and query support."
+		var httpErr *prom.HTTPError
+		if errors.As(err, &httpErr) {
+			panel.Reason = fmt.Sprintf("The metrics query failed (HTTP %d). Check the backend's query/storage health and proxy configuration.", httpErr.StatusCode)
+			if httpErr.StatusCode == http.StatusMethodNotAllowed {
+				panel.Reason = "The metrics endpoint rejected POST queries (HTTP 405). Configure the proxy to allow POST on the Prometheus query API."
+			} else if httpErr.StatusCode == http.StatusUnauthorized || httpErr.StatusCode == http.StatusForbidden {
+				panel.Reason = "The metrics endpoint rejected access (HTTP 401/403). Check credentials, tenant headers and permissions."
+			}
+		}
 		if errors.Is(err, prom.ErrPartialResponse) {
 			panel.Reason = "The metrics backend returned a partial response; samples are withheld to avoid misleading totals."
 		}
 		if errors.Is(err, prom.ErrQueryWarning) {
 			panel.Reason = "The metrics backend returned a query warning; samples are withheld because the result may be incomplete or unreliable."
 		}
+		log.Printf("[prometheus] Workload metric query failed: %s", panel.Reason)
 		return panel
 	}
 	latest := int64(0)
