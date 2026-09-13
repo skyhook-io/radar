@@ -133,6 +133,29 @@ func TestOverlayArgoAPIHealth_AppliesVerdictsAndClearsRadarFill(t *testing.T) {
 	}
 }
 
+// TestOverlayArgoAPIHealth_HealthlessAnswerIsStillArgos: a tree in which
+// Argo has no check for anything is an answer — every node is cleared,
+// including a value the CR still carried from before, and no Radar read
+// runs on top.
+func TestOverlayArgoAPIHealth_HealthlessAnswerIsStillArgos(t *testing.T) {
+	tree := overlayTree(gitopstree.HealthModeAppTree, false)
+	tree.Nodes[1].Health, tree.Nodes[1].HealthSource = "Degraded", gitopstree.HealthSourceController // stale inline value
+	app := overlayApp("Degraded")
+	app.SetUID("app-uid")
+	var calls int
+	if !overlayArgoAPIHealth(context.Background(), tree, app, apiHealthFetch(&argoapi.ApplicationHealth{UID: "app-uid", Resources: []argoapi.ResourceHealth{{Kind: "Namespace", Name: "x"}}}, &calls)) {
+		t.Fatal("a healthless answer with identity must be applied")
+	}
+	if !tree.HealthFromAPI {
+		t.Error("HealthFromAPI must be set")
+	}
+	for _, n := range tree.Nodes {
+		if n.Role == gitopstree.RoleDeclared && n.Health != "" {
+			t.Errorf("declared node must be cleared to Argo's (empty) verdict, got %+v", n)
+		}
+	}
+}
+
 func TestOverlayArgoAPIHealth_Refusals(t *testing.T) {
 	answer := &argoapi.ApplicationHealth{UID: "app-uid", Resources: []argoapi.ResourceHealth{{Kind: "ClusterSecretStore", Group: "external-secrets.io", Name: "platform", Health: "Degraded"}}}
 	cases := []struct {
@@ -145,8 +168,8 @@ func TestOverlayArgoAPIHealth_Refusals(t *testing.T) {
 		{"inline mode never asks", overlayTree(gitopstree.HealthModeInline, false), "app-uid", answer, 0},
 		{"remote destination never asks", overlayTree(gitopstree.HealthModeAppTree, true), "app-uid", answer, 0},
 		{"no answer", overlayTree(gitopstree.HealthModeAppTree, false), "app-uid", nil, 1},
-		{"answer without health", overlayTree(gitopstree.HealthModeAppTree, false), "app-uid", &argoapi.ApplicationHealth{UID: "app-uid", Resources: []argoapi.ResourceHealth{{Kind: "Namespace", Name: "x"}}}, 1},
 		{"another install's app", overlayTree(gitopstree.HealthModeAppTree, false), "other-uid", answer, 1},
+		{"answer without identity", overlayTree(gitopstree.HealthModeAppTree, false), "app-uid", &argoapi.ApplicationHealth{Resources: answer.Resources}, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

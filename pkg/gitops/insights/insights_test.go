@@ -1645,6 +1645,25 @@ func TestArgoResourceChanges_TakesTreeHealthWhenCRHasNone(t *testing.T) {
 	}
 }
 
+// TestArgoResourceChanges_APIOverlayBeatsInlineValue: when the host filled
+// the tree from Argo's API, a value the CR still carries inline is older
+// and must not win.
+func TestArgoResourceChanges_APIOverlayBeatsInlineValue(t *testing.T) {
+	root := argoApp(map[string]any{
+		"resourceHealthSource": "appTree",
+		"resources": []any{
+			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "p", "name": "web", "status": "Synced", "health": map[string]any{"status": "Degraded"}},
+		},
+	})
+	tree := &gitopstree.ResourceTree{HealthMode: gitopstree.HealthModeAppTree, HealthFromAPI: true, Nodes: []gitopstree.Node{
+		{Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "p", Name: "web"}, Health: "Healthy", HealthSource: gitopstree.HealthSourceControllerAPI},
+	}}
+	out := argoResourceChanges(root, tree, nil)
+	if len(out) != 1 || out[0].Health != "Healthy" || out[0].HealthSource != "controllerApi" {
+		t.Errorf("API overlay must beat the CR's inline value, got %+v", out)
+	}
+}
+
 // TestBuildIssues_RadarDerivedHealthYieldsEngineIssue pins the Argo 3
 // shape: no per-resource health in the CR, the tree carries the issues
 // engine's finding (overlaid by the host), and the resulting Issue is the

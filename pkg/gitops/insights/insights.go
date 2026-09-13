@@ -1181,6 +1181,12 @@ func argoResourceChanges(root *unstructured.Unstructured, resourceTree *gitopstr
 		}
 		healthSource, healthReason, healthSeverity := "", "", ""
 		message := nestedMessage(m["health"])
+		// When the host filled the tree from the controller's API, that is
+		// the current verdict; a value the CR still carries inline is older.
+		fromAPI := resourceTree != nil && resourceTree.HealthFromAPI
+		if fromAPI {
+			health = ""
+		}
 		if health != "" {
 			healthSource = string(gitopstree.HealthSourceController)
 		} else if n, ok := treeHealth[healthRefKey(ref.Group, ref.Kind, ref.Namespace, ref.Name)]; ok {

@@ -214,11 +214,13 @@ func overlayArgoAPIHealth(ctx context.Context, tree *gitopstree.ResourceTree, ro
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	health := fetch(ctx, root.GetNamespace(), root.GetName())
-	if health == nil || !health.HasHealth() {
+	if health == nil {
 		return false
 	}
-	if uid := string(root.GetUID()); uid != "" && health.UID != "" && health.UID != uid {
-		log.Printf("[gitops] argocd-server answered for a different Application %s/%s (uid %s, local %s); ignoring", sanitizeForLog(root.GetNamespace()), sanitizeForLog(root.GetName()), sanitizeForLog(health.UID), sanitizeForLog(uid))
+	// Identity must be established, not merely not contradicted: an answer
+	// with no UID is not accepted for a local Application that has one.
+	if uid := string(root.GetUID()); uid != "" && health.UID != uid {
+		log.Printf("[gitops] argocd-server answer for %s/%s is not this Application (uid %q, local %q); ignoring", sanitizeForLog(root.GetNamespace()), sanitizeForLog(root.GetName()), sanitizeForLog(health.UID), sanitizeForLog(uid))
 		return false
 	}
 	byRef := make(map[string]argoapi.ResourceHealth, len(health.Resources))
@@ -235,19 +237,19 @@ func overlayArgoAPIHealth(ctx context.Context, tree *gitopstree.ResourceTree, ro
 		}
 		rh, ok := byRef[apiHealthKey(n.Ref.Group, n.Ref.Kind, n.Ref.Namespace, n.Ref.Name)]
 		if !ok {
-			// Argo has no verdict for this kind: clear any Radar topology
-			// fill so the page shows exactly what the controller says.
-			if n.HealthSource == gitopstree.HealthSourceRadar {
-				n.Health, n.HealthSource, n.HealthReason, n.HealthMessage, n.HealthSeverity = "", "", "", "", ""
-				n.TopologyStatus = "unknown"
-			}
+			// Argo has no verdict for this resource now: clear whatever the
+			// node carried — Radar's topology fill, or a value the CR still
+			// held from before — so the page shows exactly what the
+			// controller says today.
+			n.Health, n.HealthSource, n.HealthReason, n.HealthMessage, n.HealthSeverity = "", "", "", "", ""
+			n.TopologyStatus = "unknown"
 			continue
 		}
-		n.Health = rh.Health
+		n.Health = gitopstree.NormalizeHealth(rh.Health)
 		n.HealthSource = gitopstree.HealthSourceControllerAPI
 		n.HealthReason, n.HealthSeverity = "", ""
 		n.HealthMessage = rh.Message
-		n.TopologyStatus = gitopstree.HealthToTopology(rh.Health)
+		n.TopologyStatus = gitopstree.HealthToTopology(n.Health)
 	}
 	tree.HealthFromAPI = true
 	return true

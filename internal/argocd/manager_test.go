@@ -801,8 +801,13 @@ func TestApplicationHealthCached_PlainGetThenTreeFallbackAndNegativeCache(t *tes
 		}
 		_, _ = w.Write([]byte(appBody))
 	})
+	var treeStatus int
 	mux.HandleFunc("/api/v1/applications/billing/resource-tree", func(w http.ResponseWriter, r *http.Request) {
 		treeHits++
+		if treeStatus != 0 {
+			w.WriteHeader(treeStatus)
+			return
+		}
 		_, _ = w.Write([]byte(treeBody))
 	})
 	srv := httptest.NewServer(mux)
@@ -842,6 +847,34 @@ func TestApplicationHealthCached_PlainGetThenTreeFallbackAndNegativeCache(t *tes
 		t.Fatalf("healthless tree must win over GET inline health, got h=%+v err=%v", h, err)
 	}
 
+	// 2c. A tree error is no answer: the GET's inline health must not be
+	// used in its place.
+	m.Reset()
+	treeBody = ""
+	treeStatus = http.StatusInternalServerError
+	if _, err := m.ApplicationHealthCached(context.Background(), q); err == nil {
+		t.Fatal("tree error in appTree mode must surface as an error, not the GET's inline health")
+	}
+	treeStatus = 0
+
+	// 2d. The caller's own cancellation is never cached as a miss. Connect
+	// first so the cancellation hits the app fetch, then bypass the per-app
+	// cache for the cancelled attempt.
+	m.Reset()
+	treeBody = `{"nodes":[{"kind":"Deployment","name":"web","health":{"status":"Healthy"}}]}`
+	if _, err := m.ApplicationHealthCached(context.Background(), q); err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	m.appHealthCache = nil
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := m.ApplicationHealthCached(cancelled, q); err == nil {
+		t.Fatal("cancelled context must error")
+	}
+	if h, err := m.ApplicationHealthCached(context.Background(), q); err != nil || !h.HasHealth() {
+		t.Fatalf("a cancelled attempt must not poison the cache, got h=%+v err=%v", h, err)
+	}
+
 	// 3. Refusal (anonymous read disabled) is cached for the TTL.
 	m.Reset()
 	appBody = ""
@@ -871,11 +904,10 @@ func TestApplicationHealthCached_UnconfiguredDiscoveryIsThrottled(t *testing.T) 
 	if _, err := m.ApplicationHealthCached(context.Background(), q); err == nil || !strings.Contains(err.Error(), "throttled") {
 		t.Fatalf("second read = %v, want the throttle", err)
 	}
-	// A configured manager never uses the throttle (nothing to discover).
-	m.SetConfig("https://argocd.example.invalid", "", false, false)
+	// A context switch (Reset) must not carry one cluster's refusal to the
+	// next: the throttle is dropped with the rest of the connection state.
+	m.Reset()
 	if !m.readRetryAfter.IsZero() {
-		// dropConnectionLocked doesn't clear it, and it shouldn't matter:
-		// the throttle only gates the unconfigured path.
-		t.Log("throttle still armed after SetConfig (expected: only consulted when unconfigured)")
+		t.Fatal("Reset must clear the anonymous-read throttle")
 	}
 }

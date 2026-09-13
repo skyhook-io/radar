@@ -651,6 +651,7 @@ func (m *Manager) dropConnectionLocked() *activeForward {
 	// staying suppressed for up to a retry interval on the PREVIOUS failure.
 	m.nextProbe = time.Time{}
 	m.repoRetryAfter = time.Time{}
+	m.readRetryAfter = time.Time{}
 	fwd := m.forward
 	m.forward = nil
 	return fwd
@@ -967,15 +968,21 @@ func (m *Manager) ApplicationHealthCached(ctx context.Context, q argoapi.Applica
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// A SetConfig/Reset during the fetch bumps the generation: the answer
+	// (or the failure) is for a superseded connection and must neither be
+	// served nor cached under the new one — a changed token against the same
+	// Application keeps its UID, so the overlay could not tell.
+	if m.generation != gen {
+		return nil, fmt.Errorf("%w: connection changed during fetch", ErrUnreachable)
+	}
 	if err != nil && unconfigured && m.client == nil {
 		m.readRetryAfter = time.Now().Add(probeRetryInterval)
 	}
-	// A SetConfig/Reset during the fetch bumps the generation: the answer is
-	// for a superseded connection and must neither be served nor cached under
-	// the new one — a changed token against the same Application keeps its
-	// UID, so the overlay could not tell.
-	if m.generation != gen {
-		return nil, fmt.Errorf("%w: connection changed during fetch", ErrUnreachable)
+	// The caller's own deadline or navigation is not the server's answer:
+	// caching it would make every other viewer skip Argo's verdicts for the
+	// rest of the window.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return nil, err
 	}
 	if m.appHealthCache == nil {
 		m.appHealthCache = make(map[string]appHealthEntry)
@@ -993,16 +1000,20 @@ func (m *Manager) ApplicationHealthCached(ctx context.Context, q argoapi.Applica
 // fetchApplicationHealth returns the health and the manager generation the
 // client belonged to, so the caller can refuse to cache a superseded answer.
 func (m *Manager) fetchApplicationHealth(ctx context.Context, q argoapi.ApplicationQuery) (*argoapi.ApplicationHealth, uint64, error) {
+	// The generation is taken before anything can fail: a reset that races
+	// the probe bumps it, and the caller then discards this attempt's error
+	// instead of negative-caching it under the new connection.
+	m.mu.Lock()
+	gen := m.generation
+	m.mu.Unlock()
 	if _, err := m.connectedClient(ctx); err != nil {
-		m.mu.Lock()
-		gen := m.generation
-		m.mu.Unlock()
 		return nil, gen, err
 	}
-	// Client and generation read under one lock: a reset between the two
-	// would pair the old client with the new generation.
 	m.mu.Lock()
-	client, gen := m.client, m.generation
+	client := m.client
+	if m.generation != gen {
+		client = nil
+	}
 	m.mu.Unlock()
 	if client == nil {
 		return nil, gen, fmt.Errorf("%w: connection was reset", ErrUnreachable)
@@ -1012,14 +1023,17 @@ func (m *Manager) fetchApplicationHealth(ctx context.Context, q argoapi.Applicat
 		return nil, gen, err
 	}
 	if app.ResourceHealthSource == "appTree" {
-		// The tree is authoritative whenever it answers — a tree with no
-		// health at all is Argo saying "no check for any of these", not a
-		// reason to fall back to the GET's possibly mis-scoped inference.
-		if tree, terr := client.ResourceTree(ctx, q); terr == nil {
-			tree.UID = app.UID
-			tree.ResourceHealthSource = app.ResourceHealthSource
-			return tree, gen, nil
+		// The tree is the only acceptable source here — a tree with no
+		// health at all is Argo saying "no check for any of these", and a
+		// tree error is no answer, never a reason to fall back to the GET's
+		// possibly mis-scoped inference.
+		tree, terr := client.ResourceTree(ctx, q)
+		if terr != nil {
+			return nil, gen, terr
 		}
+		tree.UID = app.UID
+		tree.ResourceHealthSource = app.ResourceHealthSource
+		return tree, gen, nil
 	}
 	return app, gen, nil
 }

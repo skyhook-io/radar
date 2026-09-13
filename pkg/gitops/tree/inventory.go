@@ -127,6 +127,11 @@ func normalizeSync(status string) string {
 		return "Unknown"
 	}
 }
+
+// NormalizeHealth maps a controller-reported health string onto the
+// vocabulary Node.Health carries; anything else becomes Unknown.
+func NormalizeHealth(status string) string { return normalizeHealth(status) }
+
 func normalizeHealth(status string) string {
 	switch status {
 	case "Healthy", "Progressing", "Degraded", "Suspended", "Missing", "Unknown":
