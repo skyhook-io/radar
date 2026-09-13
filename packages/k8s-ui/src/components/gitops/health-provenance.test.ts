@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 
 import { RADAR_HEALTH_NOTE, radarHealthNote } from './health-provenance'
-import { APP_TREE_HEALTH_NOTICE, REMOTE_DESTINATION_NOTICE, healthSourceNoticeKind } from './GitOpsHealthSourceNotice'
+import { APP_TREE_HEALTH_NOTICE, APP_TREE_NO_FINDINGS_NOTICE, REMOTE_DESTINATION_NOTICE, hasRadarFinding, healthSourceNoticeKind } from './GitOpsHealthSourceNotice'
 
 describe('radarHealthNote', () => {
   test('marks only Radar-sourced problems', () => {
@@ -18,6 +18,17 @@ describe('radarHealthNote', () => {
     for (const copy of [RADAR_HEALTH_NOTE, APP_TREE_HEALTH_NOTICE, REMOTE_DESTINATION_NOTICE]) {
       expect(copy).not.toMatch(/appTree|resourceHealthSource|persist|Tier|overlay/i)
     }
+    // The no-findings sentence deliberately names the one knob the user
+    // can turn; it must still avoid Radar's internal vocabulary.
+    expect(APP_TREE_NO_FINDINGS_NOTICE).not.toMatch(/appTree|Tier|overlay/i)
+    expect(APP_TREE_NO_FINDINGS_NOTICE).toContain('controller.resource.health.persist')
+  })
+
+  test('hasRadarFinding looks only at Radar-sourced resource issues', () => {
+    expect(hasRadarFinding(undefined)).toBe(false)
+    expect(hasRadarFinding([{ severity: 'warning', scope: 'resource', reason: 'PossibleCause', message: '' }])).toBe(false)
+    expect(hasRadarFinding([{ severity: 'critical', scope: 'resource', reason: 'Degraded', message: '', source: 'controller' }])).toBe(false)
+    expect(hasRadarFinding([{ severity: 'warning', scope: 'resource', reason: 'Ready: Bad', message: '', source: 'radar' }])).toBe(true)
   })
 })
 

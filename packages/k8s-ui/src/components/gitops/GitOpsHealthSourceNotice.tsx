@@ -1,6 +1,6 @@
 import { Info } from 'lucide-react'
 import type { ReactNode } from 'react'
-import type { GitOpsInsightSummary } from '../../types'
+import type { GitOpsInsightSummary, GitOpsIssue } from '../../types'
 
 // One quiet line above the Issues band for the two cases where per-resource
 // health on this page is not the controller's own verdict:
@@ -18,6 +18,12 @@ import type { GitOpsInsightSummary } from '../../types'
 
 export const APP_TREE_HEALTH_NOTICE =
   'Argo CD 3 no longer records health for each resource on the application. Rows marked "Found by Radar" are problems Radar detected by looking at the resources itself.'
+// Same situation, but Radar's own look found nothing to mark: the app is
+// Degraded by Argo's reckoning and nothing here says which resource. The
+// one thing the user can do today is name-checked, because the page has
+// nothing else to offer.
+export const APP_TREE_NO_FINDINGS_NOTICE =
+  'Argo CD 3 no longer records health for each resource on the application, and Radar didn\'t find a problem on its own. To see Argo\'s per-resource health here, set controller.resource.health.persist to "true" in argocd-cmd-params-cm.'
 export const REMOTE_DESTINATION_NOTICE =
   "This application deploys to a different cluster, so its resources aren't visible from here."
 
@@ -33,12 +39,21 @@ export function healthSourceNoticeKind(summary: HealthSourceNoticeSummary | unde
   return null
 }
 
+export function hasRadarFinding(issues: GitOpsIssue[] | undefined): boolean {
+  return (issues ?? []).some((i) => i.scope === 'resource' && i.source === 'radar')
+}
+
 export function GitOpsHealthSourceNotice({
   summary,
+  issues,
   docsUrl,
   remoteDestinationHint,
 }: {
   summary: HealthSourceNoticeSummary | undefined
+  // Decides between the two appTree sentences: with a Radar-sourced
+  // finding the notice explains the markers; without one it says so and
+  // names the way out.
+  issues?: GitOpsIssue[]
   // Where "Why?" goes for the appTree case. Omitted → no link.
   docsUrl?: string
   // Rendered after the remote-destination sentence. The host decides
@@ -59,7 +74,7 @@ export function GitOpsHealthSourceNotice({
           </>
         ) : (
           <>
-            {APP_TREE_HEALTH_NOTICE}
+            {hasRadarFinding(issues) ? APP_TREE_HEALTH_NOTICE : APP_TREE_NO_FINDINGS_NOTICE}
             {docsUrl && (
               <>
                 {' '}

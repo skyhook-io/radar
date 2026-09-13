@@ -233,7 +233,11 @@ the engine filters as transient (no derivation), a remote-destination app
 - Detail page, `appTree` mode and Tier B didn't answer: one quiet banner
   above the Issues band. Copy: *"Argo CD 3 no longer records health for each
   resource on the application. Rows marked "Found by Radar" are problems
-  Radar detected by looking at the resources itself."*
+  Radar detected by looking at the resources itself."* When Radar found
+  nothing to mark, the sentence says so and names the way out:
+  *"…and Radar didn't find a problem on its own. To see Argo's per-resource
+  health here, set controller.resource.health.persist to "true" in
+  argocd-cmd-params-cm."*
   plus a "Why?" link to the docs paragraph (which is where
   `resourceHealthSource`, `persist: true` and the Argo API integration get
   named). When Tier B answered: no banner.

@@ -467,7 +467,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
       {!fullscreen && (
         <>
           <GitOpsStatusStrip insight={insight ?? undefined} loading={insightLoading} renderRevisionMeta={renderRevisionMeta} />
-          <GitOpsHealthSourceNotice summary={insight?.summary} docsUrl={healthDocsUrl} remoteDestinationHint={remoteDestinationHint} />
+          <GitOpsHealthSourceNotice summary={insight?.summary} issues={insight?.issues} docsUrl={healthDocsUrl} remoteDestinationHint={remoteDestinationHint} />
           <GitOpsIssuesBand
             issues={insight?.issues}
             terminating={terminating}
