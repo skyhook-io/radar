@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -333,5 +334,166 @@ func TestMarkScanHPAAvailableIsNamespaceScoped(t *testing.T) {
 	markScanHPAAvailable(workloads, "team-a")
 	if !workloads["a"].workload.hpaAvailable || workloads["b"].workload.hpaAvailable {
 		t.Fatalf("HPA evidence availability crossed namespaces: %+v", workloads)
+	}
+}
+
+type fakeScanCoverage struct {
+	clusterWide map[string]bool
+	namespaces  map[string][]string
+}
+
+func (f fakeScanCoverage) IsKindClusterWide(resource string) bool { return f.clusterWide[resource] }
+func (f fakeScanCoverage) KindNamespaces(resource string) []string {
+	return f.namespaces[resource]
+}
+
+func TestScopeClampNarrowsAllNamespacesToWhatTheCacheHolds(t *testing.T) {
+	// A nil namespace list means "every namespace" to the listers, but a
+	// namespace-scoped informer only ever held a subset — without the clamp a
+	// one-namespace cache is reported as a completed cluster scan.
+	cache := fakeScanCoverage{
+		clusterWide: map[string]bool{"daemonsets": true},
+		namespaces:  map[string][]string{"deployments": {"prod"}},
+	}
+
+	effective, partial := clampScopeToCacheCoverage(cache, map[string][]string{
+		"Deployment": nil,
+		"DaemonSet":  nil,
+	})
+
+	if got := effective["Deployment"]; !slices.Equal(got, []string{"prod"}) {
+		t.Errorf("Deployment scope = %v, want the cached namespaces", got)
+	}
+	if got := effective["DaemonSet"]; got != nil {
+		t.Errorf("a cluster-wide kind must stay unclamped, got %v", got)
+	}
+	if !slices.Equal(partial, []string{"Deployment"}) {
+		t.Errorf("partially cached kinds = %v, want [Deployment]", partial)
+	}
+}
+
+func TestScopeClampIntersectsAnExplicitRequest(t *testing.T) {
+	cache := fakeScanCoverage{namespaces: map[string][]string{"deployments": {"prod"}}}
+
+	effective, partial := clampScopeToCacheCoverage(cache, map[string][]string{
+		"Deployment": {"prod", "staging"},
+	})
+
+	if got := effective["Deployment"]; !slices.Equal(got, []string{"prod"}) {
+		t.Errorf("Deployment scope = %v, want only the cached namespace", got)
+	}
+	if !slices.Equal(partial, []string{"Deployment"}) {
+		t.Errorf("dropping a requested namespace must report partial, got %v", partial)
+	}
+}
+
+func TestScopeClampLeavesFullyCoveredRequestsAlone(t *testing.T) {
+	cache := fakeScanCoverage{namespaces: map[string][]string{"deployments": {"prod", "staging"}}}
+
+	effective, partial := clampScopeToCacheCoverage(cache, map[string][]string{
+		"Deployment": {"prod"},
+	})
+
+	if got := effective["Deployment"]; !slices.Equal(got, []string{"prod"}) {
+		t.Errorf("Deployment scope = %v, want it untouched", got)
+	}
+	if len(partial) != 0 {
+		t.Errorf("a fully covered request is not partial, got %v", partial)
+	}
+}
+
+func TestOverlappingCoverageListsDoNotFakeAllKindsUnavailable(t *testing.T) {
+	// A kind readable in only some requested namespaces lands in RestrictedKinds
+	// and, if its informer covers fewer still, in PartiallyCachedKinds too.
+	// Summing the lists reaches 3 with DaemonSet still fully readable, which
+	// would claim every workload kind is unreadable.
+	resp := newRightsizingScanResponse(time.Now(), RightsizingScanScope{
+		RestrictedKinds: []string{"Deployment", "StatefulSet"},
+	})
+	resp.Coverage.PartiallyCachedKinds = []string{"Deployment"}
+
+	resp = computeRightsizingScan(context.Background(), &fakeScanQuerier{}, nil, resp)
+	if resp.State != RightsizingScanPartial || resp.Reason != "limited_scope_no_workloads" {
+		t.Fatalf("two limited kinds must stay partial, got %+v", resp)
+	}
+}
+
+func TestPartiallyCachedKindMakesAnEmptyScanPartialNotComplete(t *testing.T) {
+	// A namespace-scoped informer that happens to hold no workloads must not
+	// report "no_workloads" as a completed cluster scan.
+	resp := newRightsizingScanResponse(time.Now(), RightsizingScanScope{})
+	resp.Coverage.PartiallyCachedKinds = []string{"Deployment"}
+
+	resp = computeRightsizingScan(context.Background(), &fakeScanQuerier{}, nil, resp)
+	if resp.State != RightsizingScanPartial || resp.Reason != "limited_scope_no_workloads" {
+		t.Fatalf("partially cached empty response = %+v", resp)
+	}
+}
+
+func TestAllKindsPartiallyCachedIsPartialNotUnavailable(t *testing.T) {
+	// A namespace-scoped Radar falls back to namespace informers for all three
+	// kinds. If the covered namespaces hold no Deployment, StatefulSet or
+	// DaemonSet, every kind is partially cached and no workload is found — but
+	// all three are readable, so the answer is "nothing here in this scope",
+	// not "none of these kinds can be read".
+	resp := newRightsizingScanResponse(time.Now(), RightsizingScanScope{})
+	resp.Coverage.PartiallyCachedKinds = []string{"Deployment", "StatefulSet", "DaemonSet"}
+
+	resp = computeRightsizingScan(context.Background(), &fakeScanQuerier{}, nil, resp)
+	if resp.State == RightsizingScanUnavailable {
+		t.Fatalf("partial caching is not unreadability: %+v", resp)
+	}
+	if resp.Reason == "workload_kinds_unavailable" {
+		t.Errorf("readable-but-narrowed kinds reported as unavailable: %+v", resp)
+	}
+	if resp.State != RightsizingScanPartial || resp.Reason != "limited_scope_no_workloads" {
+		t.Errorf("expected partial/limited_scope_no_workloads, got %+v", resp)
+	}
+}
+
+func TestAllKindsUnreadableStaysUnavailable(t *testing.T) {
+	// The other side of the same threshold: when every kind really is denied or
+	// has no metrics, the scan must still say so rather than report an empty
+	// cluster.
+	resp := newRightsizingScanResponse(time.Now(), RightsizingScanScope{
+		RestrictedKinds: []string{"Deployment", "StatefulSet"},
+	})
+	resp.Coverage.UnavailableKinds = []string{"DaemonSet"}
+
+	resp = computeRightsizingScan(context.Background(), &fakeScanQuerier{}, nil, resp)
+	if resp.State != RightsizingScanUnavailable || resp.Reason != "workload_kinds_unavailable" {
+		t.Fatalf("expected unavailable/workload_kinds_unavailable, got %+v", resp)
+	}
+}
+
+func TestScanWarningsDoNotCarryWholeQueryURLs(t *testing.T) {
+	// prom.HTTPTransport errors embed the full query_range URL. Forwarded
+	// verbatim these ran to tens of kilobytes and crowded out the rows they
+	// annotate; consumers key on Code, so the detail can be bounded.
+	longQuery := strings.Repeat("sum(rate(container_cpu_usage_seconds_total[5m]))+", 400)
+	raw := `Get "http://prom:9090/api/v1/query_range?query=` + longQuery + `&start=1&end=2": dial tcp: i/o timeout`
+
+	var resp RightsizingScanResponse
+	appendScanWarning(&resp, "owner_metrics_query_failed", raw)
+
+	if len(resp.Warnings) != 1 {
+		t.Fatalf("expected one warning, got %d", len(resp.Warnings))
+	}
+	got := resp.Warnings[0].Message
+	if len(got) > maxWarningMessageBytes+len("… (truncated)") {
+		t.Errorf("warning message not bounded: %d bytes", len(got))
+	}
+	if strings.Contains(got, longQuery) {
+		t.Error("the PromQL expression must not be forwarded verbatim")
+	}
+	if !strings.Contains(got, "query_range") {
+		t.Errorf("the bounded message should still identify the failing call: %q", got)
+	}
+}
+
+func TestBoundWarningMessageLeavesShortMessagesAlone(t *testing.T) {
+	const short = "kube_pod_owner returned no series"
+	if got := boundWarningMessage(short); got != short {
+		t.Errorf("a short diagnostic must survive intact, got %q", got)
 	}
 }

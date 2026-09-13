@@ -1,5 +1,10 @@
 package opencost
 
+// DefaultCurrentWindow is the lookback every "current cost" query uses. It is
+// exported so a response can report the window its numbers cover instead of
+// leaving the field empty for the caller to guess.
+const DefaultCurrentWindow = "1h"
+
 // Unavailability reasons — returned in the "reason" field when available=false
 // so the frontend can show contextual guidance to the user.
 const (

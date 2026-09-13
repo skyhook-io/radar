@@ -102,6 +102,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"context: pod status, readiness, restarts, owner workload, requests, and " +
 			"limits. kind=pods ranks individual Pods, kind=workloads aggregates Pods " +
 			"to Deployments/StatefulSets/DaemonSets/Jobs, and kind=nodes ranks Nodes. " +
+			"This is live usage, not recommendations — for whether requests/limits should " +
+			"change, use get_rightsizing. " +
 			"Use before reading logs when the symptom mentions CPU, memory, GC, OOM, " +
 			"latency, or load.",
 		Annotations: readOnly,
@@ -471,6 +473,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"type=instant returns current values; type=range returns time series for a window " +
 			"(since=1h default). For live top-N snapshots prefer top_resources; for metric/label " +
 			"NAME discovery use discover_metrics first — do not guess metric names. " +
+			"For cluster or namespace spend use get_cost rather than hand-writing cost queries — " +
+			"it handles currency, idle attribution, and the Kubecost vs OpenCost source split. " +
 			"Empty results include a bounded list of related active metric names when a metric family can be inferred. " +
 			"High-cardinality queries must be wrapped in topk(5, ...): oversized results return a " +
 			"summary with a suggested rewrite instead of data.",
@@ -498,6 +502,40 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"(default 50) with truncated=true — narrow rather than paging.",
 		Annotations: readOnly,
 	}, logToolCall("get_prometheus_rules", handleGetPrometheusRules))
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name: "get_cost",
+		Description: "Use for cluster spend questions: what a cluster, namespace, workload, or " +
+			"node costs, where the money goes, and whether spend is growing. Reads OpenCost or " +
+			"Kubecost through Prometheus, so it handles currency, idle attribution, and source " +
+			"differences you would get wrong hand-writing PromQL. This is SPEND, not usage — for " +
+			"whether a request should change, use get_rightsizing. view=summary (default) returns " +
+			"cluster totals plus per-namespace rows and usually answers the question in one call; " +
+			"view=workloads breaks one namespace down (namespace required, or pass kind+name for " +
+			"one workload); view=nodes ranks node spend; view=trend returns spend over time. " +
+			"When available=false, reason and remediation say what is missing — report that " +
+			"rather than concluding the cluster has no cost data. Every response explains its " +
+			"own fields in guidance; read it before interpreting the numbers.",
+		Annotations: readOnly,
+	}, logToolCall("get_cost", handleGetCost))
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name: "get_rightsizing",
+		Description: "Use when asked whether CPU/memory requests and limits are sized correctly, " +
+			"which workloads are over-provisioned or starved, or where resource waste is. Returns " +
+			"per-container recommendations derived from 7 DAYS of observed usage, not live " +
+			"metrics — ALWAYS check each row's confidence before recommending a change, because " +
+			"low confidence means insufficient history, not correctly sized. scope is REQUIRED: " +
+			"scope=workload with kind+name+namespace is cheap, precise, and returns every row of " +
+			"that workload; scope=namespace scans one namespace; scope=cluster scans every " +
+			"Deployment/StatefulSet/DaemonSet with 7-day range queries and can take 45s — call it " +
+			"ONCE to find candidates, then drill in with scope=workload; do not re-run it to " +
+			"refine rows you already have. Scan scopes rank workloads by classification and then " +
+			"by replica-weighted impact, so the first rows are the biggest real savings, not the " +
+			"biggest percentages. Every response explains its own state, coverage and omissions " +
+			"in guidance; read it before drawing a conclusion.",
+		Annotations: readOnly,
+	}, logToolCall("get_rightsizing", handleGetRightsizing))
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_workload_logs",

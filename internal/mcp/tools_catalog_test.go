@@ -244,7 +244,7 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// These caps guard against description accretion, not against new tools or
 	// load-bearing routing and uncertainty contracts. Raise them deliberately.
 	const (
-		maxCatalogBytes         = 53500
+		maxCatalogBytes         = 58500
 		maxToolDescriptionBytes = 3000
 	)
 
@@ -643,4 +643,66 @@ func listRegisteredToolsWithRegistry(t *testing.T, includeWrites bool) ([]*mcpsd
 		t.Fatal("no MCP tools registered")
 	}
 	return result.Tools, registry
+}
+
+// diagnoserAllowlistPath holds radarReadTools, the allowlist deciding which MCP
+// read tools Radar's own Diagnose agent may call. A tool absent from it is
+// invisible to the product's highest-value consumer while still reaching every
+// external client, and nothing else fails.
+const diagnoserAllowlistPath = "../ai/diagnoser.go"
+
+// radarReadToolsBlock captures the var block's body so a tool name appearing in
+// radarWriteTools or in prose elsewhere in the file cannot false-match.
+var radarReadToolsBlock = regexp.MustCompile(`(?s)var radarReadTools = \[\]string\{(.*?)\n\}`)
+
+var quotedToolName = regexp.MustCompile(`"([a-z][a-z0-9_]*)"`)
+
+// TestDiagnoserAllowlistCoversAllReadTools fails when a read tool is registered
+// for MCP but never added to the agent's allowlist. Every registered read tool
+// must appear there: one that does not reaches every external client but not
+// Radar's own Diagnose agent, which is silent rather than an error.
+func TestDiagnoserAllowlistCoversAllReadTools(t *testing.T) {
+	writes := map[string]bool{}
+	for _, w := range writeToolNames {
+		writes[w] = true
+	}
+
+	raw, err := os.ReadFile(diagnoserAllowlistPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", diagnoserAllowlistPath, err)
+	}
+	block := radarReadToolsBlock.FindSubmatch(raw)
+	if block == nil {
+		t.Fatalf("could not locate radarReadTools in %s — did the declaration change?", diagnoserAllowlistPath)
+	}
+	allowed := map[string]bool{}
+	for _, m := range quotedToolName.FindAllSubmatch(block[1], -1) {
+		allowed[string(m[1])] = true
+	}
+	if len(allowed) == 0 {
+		t.Fatalf("no tool names parsed from radarReadTools — did the format change?")
+	}
+
+	var missing, stale []string
+	registered := map[string]bool{}
+	for _, tool := range listRegisteredTools(t) {
+		registered[tool.Name] = true
+		if writes[tool.Name] || allowed[tool.Name] {
+			continue
+		}
+		missing = append(missing, tool.Name)
+	}
+	for name := range allowed {
+		if !registered[name] {
+			stale = append(stale, name)
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(stale)
+	if len(missing) > 0 {
+		t.Errorf("read tools registered for MCP but not callable by Radar's own agent: %v — add them to radarReadTools in %s", missing, diagnoserAllowlistPath)
+	}
+	if len(stale) > 0 {
+		t.Errorf("radarReadTools names tools that are not registered: %v", stale)
+	}
 }

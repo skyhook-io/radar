@@ -54,7 +54,7 @@ func handleSummaryScoped(w http.ResponseWriter, r *http.Request, resolveCurrency
 			return
 		}
 		if allowedNamespaces != nil {
-			filterCostSummary(resp, allowedNamespaces)
+			FilterCostSummary(resp, allowedNamespaces)
 		}
 		writeJSON(w, http.StatusOK, resp)
 		return
@@ -73,7 +73,7 @@ func handleSummaryScoped(w http.ResponseWriter, r *http.Request, resolveCurrency
 		r.Context(), client.Prom(), pkgopencost.SummaryOptions{Currency: currency})
 	resp.Source = "prometheus"
 	if allowedNamespaces != nil {
-		filterCostSummary(resp, allowedNamespaces)
+		FilterCostSummary(resp, allowedNamespaces)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -268,7 +268,7 @@ func handleNodesScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func filterCostSummary(resp *pkgopencost.CostSummary, allowed []string) {
+func FilterCostSummary(resp *pkgopencost.CostSummary, allowed []string) {
 	allow := make(map[string]struct{}, len(allowed))
 	for _, namespace := range allowed {
 		allow[namespace] = struct{}{}

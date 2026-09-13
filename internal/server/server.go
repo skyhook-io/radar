@@ -227,6 +227,7 @@ func New(cfg Config) *Server {
 		yamlSchemaPathCache:     make(map[string]yamlSchemaPathCacheEntry),
 		yamlSchemaBundleCache:   make(map[string]yamlSchemaBundleCacheEntry),
 	}
+	opencost.PublishCurrencyResolver(s.openCostCurrency)
 	s.cloudInstall = newCloudInstallManager(cfg.CloudConnect)
 	s.cloudInstall.sharedListener = s.sharedListener
 
