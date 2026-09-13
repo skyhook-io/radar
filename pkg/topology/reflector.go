@@ -38,10 +38,10 @@ func (b *Builder) addReflectionRelationships(t *Topology, opts BuildOptions) {
 		}
 	}
 	refs := configrefs.BuildReflections(objects)
-	nodes := map[string]bool{}
+	nodes := map[string]int{}
 	edges := map[string]bool{}
-	for _, n := range t.Nodes {
-		nodes[n.ID] = true
+	for i, n := range t.Nodes {
+		nodes[n.ID] = i
 	}
 	for _, e := range t.Edges {
 		edges[e.ID] = true
@@ -52,9 +52,11 @@ func (b *Builder) addReflectionRelationships(t *Topology, opts BuildOptions) {
 	for _, link := range refs.Links {
 		for _, ref := range []configrefs.Ref{link.Source, link.Mirror} {
 			key := id(ref)
-			if !nodes[key] {
+			if index, exists := nodes[key]; exists {
+				t.Nodes[index] = observed[ref]
+			} else {
+				nodes[key] = len(t.Nodes)
 				t.Nodes = append(t.Nodes, observed[ref])
-				nodes[key] = true
 			}
 		}
 		source, target := id(link.Source), id(link.Mirror)
@@ -64,6 +66,7 @@ func (b *Builder) addReflectionRelationships(t *Topology, opts BuildOptions) {
 			edges[key] = true
 		}
 	}
+	t.Nodes = stampAuditKeys(t.Nodes)
 }
 
 func (t *Topology) SecretRBACTuples() []SARTuple {
