@@ -1679,8 +1679,47 @@ func TestBuildIssues_RadarDerivedHealthYieldsEngineIssue(t *testing.T) {
 		t.Errorf("Message = %q, want the engine message", issues[1].Message)
 	}
 	for _, iss := range issues {
-		if iss.Scope != ScopeTree && iss.Reason == "DegradedResources" {
-			t.Errorf("tree-summary fallback must not fire when resource-scoped Issues exist: %+v", iss)
+		if iss.Reason == "DegradedResources" {
+			t.Errorf("tree-summary fallback must not fire when per-resource findings exist: %+v", iss)
+		}
+	}
+
+	// Warning-tier findings alone still name their resources; the count
+	// must not stack on them either.
+	tree.Nodes = tree.Nodes[:1]
+	tree.Summary = gitopstree.Summarize(tree.Nodes)
+	for _, iss := range buildIssues(root, tree, "argocd", &fakeResolver{}) {
+		if iss.Reason == "DegradedResources" || iss.Reason == "PossibleCause" {
+			t.Errorf("neither the count nor an events lead may stack on a warning-tier finding: %+v", iss)
+		}
+	}
+}
+
+// TestBuildIssues_TopologyReadIsWarningAndSilentOnHealthyApp: Radar's own
+// topology read (no engine reason) is an observation, not a verdict — a
+// warning-tier Issue on a Degraded app, and no Issue at all when Argo calls
+// the app Healthy.
+func TestBuildIssues_TopologyReadIsWarningAndSilentOnHealthyApp(t *testing.T) {
+	mk := func(health string) *unstructured.Unstructured {
+		return argoApp(map[string]any{
+			"health":               map[string]any{"status": health},
+			"resourceHealthSource": "appTree",
+			"resources": []any{
+				map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "web", "status": "Synced"},
+			},
+		})
+	}
+	tree := &gitopstree.ResourceTree{HealthMode: gitopstree.HealthModeAppTree, Nodes: []gitopstree.Node{
+		{Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "web"}, Health: "Degraded", HealthSource: gitopstree.HealthSourceRadar},
+	}}
+	tree.Summary = gitopstree.Summarize(tree.Nodes)
+	degraded := buildIssues(mk("Degraded"), tree, "argocd", &fakeResolver{})
+	if len(degraded) != 1 || degraded[0].Severity != SeverityWarning || degraded[0].Source != "radar" {
+		t.Errorf("topology read on a Degraded app = %+v, want one warning-tier radar Issue", degraded)
+	}
+	for _, iss := range buildIssues(mk("Healthy"), tree, "argocd", &fakeResolver{}) {
+		if iss.Scope == ScopeResource {
+			t.Errorf("no per-resource Issue may contradict a Healthy app, got %+v", iss)
 		}
 	}
 }

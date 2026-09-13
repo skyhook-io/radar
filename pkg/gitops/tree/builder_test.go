@@ -293,7 +293,6 @@ func TestBuildParallelEnrichmentMatchesObjects(t *testing.T) {
 	}
 }
 
-// findNode returns the tree node for ref, failing the test when absent.
 func findNode(t *testing.T, tree *ResourceTree, ref ResourceRef) Node {
 	t.Helper()
 	for _, n := range tree.Nodes {

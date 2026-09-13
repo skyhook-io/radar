@@ -74,7 +74,9 @@ import { ArgoResourceDiffLoader } from './ArgoResourceDiffLoader'
 import { RevisionMetaChip } from './RevisionMetaChip'
 import { RemoteDestinationCloudHint } from './RemoteDestinationCloudHint'
 
-const GITOPS_HEALTH_DOCS_URL = 'https://radarhq.io/docs/gitops/#per-resource-health'
+// Argo's own note on the 3.0 change; the radar-docs GitOps page doesn't
+// carry a per-resource-health section yet.
+const GITOPS_HEALTH_DOCS_URL = 'https://argo-cd.readthedocs.io/en/stable/operator-manual/upgrading/2.14-3.0/#health-status-in-the-application-cr'
 import type { GitOpsHistoryItem } from '@skyhook-io/k8s-ui'
 
 const GITOPS_KINDS: APIResource[] = [

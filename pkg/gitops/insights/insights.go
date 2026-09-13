@@ -596,6 +596,8 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 		// detection — the per-resource diff/events live on the Change
 		// objects emitted by buildChanges. Pass nil resolver here to skip
 		// the (unused) drift computation in this code path.
+		appHealth, _, _ := unstructured.NestedString(root.Object, "status", "health", "status")
+		appHealthy := appHealth == "Healthy"
 		for _, change := range argoResourceChanges(root, resourceTree, nil) {
 			// Suppress a resource issue when its kind/name match a resource
 			// already named in the operation failure — same root cause, no
@@ -609,6 +611,12 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 				continue
 			}
 			if change.Health == "Degraded" || change.Health == "Missing" {
+				// Argo calling the app Healthy is its verdict on every resource
+				// it assesses; Radar's own read of a resource must not contradict
+				// that with an Issue (the node chip still shows it).
+				if change.HealthSource == string(gitopstree.HealthSourceRadar) && appHealthy {
+					continue
+				}
 				// The issues engine reads this cluster; for an app deploying
 				// elsewhere its answer would describe an unrelated local
 				// object, so the cause bridge stays off.
@@ -641,7 +649,7 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 		// or a per-resource Issue is. A warning-tier per-resource finding
 		// doesn't count as explained either, but it already names a resource;
 		// stacking an events lead about the same app on top of it is noise.
-		if !degradedResourcesExplained(out) && !hasResourceScopedIssue(out) && gitops.IsInClusterDestination(root) {
+		if !degradedResourcesExplained(out) && !hasResourceFinding(out) && gitops.IsInClusterDestination(root) {
 			if health, _, _ := unstructured.NestedString(root.Object, "status", "health", "status"); health == "Degraded" {
 				if iss := degradedResourceFromEvents(root, resolver); iss != nil {
 					out = append(out, *iss)
@@ -661,7 +669,10 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			}
 		}
 	}
-	if resourceTree != nil && resourceTree.Summary.Degraded > 0 && !degradedResourcesExplained(out) {
+	// The events lead is a pointer, so the count stays next to it; a
+	// per-resource finding of any tier already names a resource, so the
+	// count would only restate it.
+	if resourceTree != nil && resourceTree.Summary.Degraded > 0 && !degradedResourcesExplained(out) && !hasResourceFinding(out) {
 		out = append(out, Issue{Severity: SeverityWarning, Scope: ScopeTree, Reason: "DegradedResources", Message: fmt.Sprintf("%d managed %s degraded", resourceTree.Summary.Degraded, pluralizeResourcesAre(resourceTree.Summary.Degraded)), Action: "Use the graph or Resources tab to inspect affected resources."})
 	}
 	// Dedup by (scope, reason, message) — Flux carries the same failure
@@ -769,8 +780,15 @@ func resourceHealthIssue(change Change, resolver Resolver) Issue {
 			Source:   change.HealthSource,
 		}
 	}
+	// Radar's own topology read with no classified reason is a live-state
+	// observation, not a verdict: warning tier. The controller's Degraded /
+	// Missing is the verdict and stays critical.
+	severity := SeverityCritical
+	if change.HealthSource == string(gitopstree.HealthSourceRadar) {
+		severity = SeverityWarning
+	}
 	iss := Issue{
-		Severity: SeverityCritical,
+		Severity: severity,
 		Scope:    ScopeResource,
 		Reason:   change.Health,
 		Message:  fmt.Sprintf("%s %s is %s", change.Ref.Kind, change.Ref.Name, change.Health),
@@ -796,9 +814,12 @@ func resourceHealthIssue(change Change, resolver Resolver) Issue {
 // Informational rows (sync Running) and drift detectors (StuckDriftLoop,
 // ManualDrift — sync signals, not health) explain nothing, and neither
 // does the warning-tier events lead — it points, it doesn't conclude.
-func hasResourceScopedIssue(issues []Issue) bool {
+// hasResourceFinding reports a per-resource Issue that names a problem on a
+// specific resource — any tier, but not the Warning-event lead, which only
+// points at one.
+func hasResourceFinding(issues []Issue) bool {
 	for _, iss := range issues {
-		if iss.Scope == ScopeResource {
+		if iss.Scope == ScopeResource && iss.Reason != "PossibleCause" {
 			return true
 		}
 	}
