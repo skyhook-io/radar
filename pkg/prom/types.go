@@ -27,8 +27,12 @@ type ServiceInfo struct {
 // callers/UI. Address is the effective URL (may be port-forwarded, a
 // tunneled proxy URL, or a direct service URL depending on the Transport).
 type Status struct {
-	Available   bool         `json:"available"`
-	Connected   bool         `json:"connected"`
+	Available bool `json:"available"`
+	Connected bool `json:"connected"`
+	// Discovering reports that a discovery run is in flight for the current
+	// configuration and no endpoint has been found yet. Connected and
+	// Discovering are never both true.
+	Discovering bool         `json:"discovering"`
 	Address     string       `json:"address,omitempty"`
 	Service     *ServiceInfo `json:"service,omitempty"`
 	ContextName string       `json:"contextName,omitempty"`

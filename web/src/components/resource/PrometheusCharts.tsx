@@ -121,6 +121,7 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
       statusError={status?.error}
       onConnect={() => connectMutation.mutate()}
       connecting={connectMutation.isPending}
+      discovering={status?.discovering === true}
       category={activeCategory}
       onCategoryChange={setActiveCategory}
       range={timeRange}

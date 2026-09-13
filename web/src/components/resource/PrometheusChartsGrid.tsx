@@ -94,6 +94,15 @@ export function PrometheusChartsGrid({
     );
   }
 
+  if (!isConnected && status?.discovering) {
+    return (
+      <div className="flex items-center justify-center py-12 text-theme-text-tertiary">
+        <Loader2 className="w-5 h-5 animate-spin mr-2" />
+        Discovering Prometheus…
+      </div>
+    );
+  }
+
   if (!isConnected) {
     return (
       <div className="flex flex-col items-center justify-center py-12 gap-4">

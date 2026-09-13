@@ -46,6 +46,21 @@ type Client struct {
 	// configuration can't publish its (now stale) endpoint after the change.
 	discoveryGen uint64
 
+	// flightGen / flightActive are owned by the detached discovery run itself,
+	// not by its waiters: callers come and go on their own deadlines while the
+	// run continues, so "discovering" must follow the run's lifetime (gate wait
+	// included) for the status endpoint to report it truthfully.
+	flightGen    uint64
+	flightActive bool
+
+	// lastOutcome is the terminal result of the most recent run under the
+	// current generation, for display only — retry throttling stays on
+	// lastDiscoverErr, which deliberately ignores timeouts. Cleared when a run
+	// starts so an old failure never sits next to an in-flight one, and on
+	// success or any configuration change.
+	lastOutcome    string
+	lastOutcomeGen uint64
+
 	// discoveryCancel aborts the in-flight detached discovery (if any). Reset /
 	// Reinitialize call it so a superseded run — e.g. an old context's pre-warm
 	// after a context switch — stops promptly and releases the discovery gate,
@@ -97,6 +112,18 @@ const failedDiscoveryCacheTTL = 5 * time.Second
 // error: enough headroom for a few serial port-forward attempts (each ~10s)
 // plus probes, without letting a wedged run block discovery indefinitely.
 const discoveryTimeout = 60 * time.Second
+
+// ErrHeadersRequireURL mirrors pkg/prom's sentinel for callers in this package.
+var ErrHeadersRequireURL = prom.ErrHeadersRequireURL
+
+// HeadersRequireURL mirrors pkg/prom's rule for callers in this package.
+func HeadersRequireURL(manualURL string, headers map[string]string) bool {
+	return prom.HeadersRequireURL(manualURL, headers)
+}
+
+func (c *Client) headersRequireURLLocked() bool {
+	return HeadersRequireURL(c.manualURL, c.headers)
+}
 
 // Global client instance
 var (
@@ -158,10 +185,7 @@ func newMCPHTTPClient() *http.Client {
 }
 
 // SetManualURL sets the --prometheus-url override on the global client.
-// manualURL is read under the per-client c.mu (discover, Reinitialize), so the
-// write takes c.mu too. clientMu is held (read) across the whole write so a
-// concurrent Reinitialize can't swap globalClient out from under us and leave the
-// new pointer with stale settings. Lock order clientMu→c.mu matches Reinitialize.
+// Equivalent to Configure with the current headers kept.
 func SetManualURL(rawURL string) {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
@@ -170,21 +194,12 @@ func SetManualURL(rawURL string) {
 	}
 	globalClient.mu.Lock()
 	defer globalClient.mu.Unlock()
-	globalClient.manualURL = strings.TrimRight(rawURL, "/")
-	globalClient.lastDiscoverErr = nil
-	globalClient.lastDiscoverAt = time.Time{}
-	globalClient.discoveryGen++
-	// Abort any in-flight discovery started under the old config so it releases
-	// the discovery gate promptly rather than stalling rediscovery. Safe under
-	// the lock: cancel only signals the context.
-	if globalClient.discoveryCancel != nil {
-		globalClient.discoveryCancel()
-	}
+	globalClient.configureLocked(rawURL, globalClient.headers)
 }
 
 // SetHeaders sets HTTP headers attached to every Prometheus request on the
-// global client. Pass nil or an empty map to clear. Holds clientMu (read) across
-// the write for the same reason as SetManualURL.
+// global client. Pass nil or an empty map to clear. Equivalent to Configure
+// with the current URL kept.
 func SetHeaders(h map[string]string) {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
@@ -193,16 +208,81 @@ func SetHeaders(h map[string]string) {
 	}
 	globalClient.mu.Lock()
 	defer globalClient.mu.Unlock()
-	globalClient.headers = copyHeaders(h)
-	// Drop the cached prom.Client so the next request rebuilds its transport
-	// with the new headers.
-	globalClient.prom = nil
-	globalClient.lastDiscoverErr = nil
-	globalClient.lastDiscoverAt = time.Time{}
-	globalClient.discoveryGen++
-	if globalClient.discoveryCancel != nil {
-		globalClient.discoveryCancel() // release the gate for the new config
+	globalClient.configureLocked(globalClient.manualURL, h)
+}
+
+// Configure applies a URL and header set together and drops the current
+// connection in the same critical section. The two must move atomically:
+// applying them one at a time leaves a window where a request probes the
+// previous endpoint with the new credentials.
+func Configure(rawURL string, headers map[string]string) {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if globalClient == nil {
+		return
 	}
+	globalClient.mu.Lock()
+	globalClient.configureLocked(rawURL, headers)
+	globalClient.mu.Unlock()
+	// The forward served the endpoint just dropped; a manual URL never needs
+	// one, and a rediscovery opens its own.
+	portforward.Stop(portforward.OwnerPrometheus)
+}
+
+// HasHeaders reports whether the running client carries any Prometheus headers,
+// from whichever source configured them (flags, environment, config file, or a
+// live update).
+func HasHeaders() bool {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if globalClient == nil {
+		return false
+	}
+	globalClient.mu.RLock()
+	defer globalClient.mu.RUnlock()
+	return len(globalClient.headers) > 0
+}
+
+// CurrentHeaders returns a copy of the running client's headers.
+func CurrentHeaders() map[string]string {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if globalClient == nil {
+		return nil
+	}
+	globalClient.mu.RLock()
+	defer globalClient.mu.RUnlock()
+	return copyHeaders(globalClient.headers)
+}
+
+// configureLocked is the single writer for manualURL + headers. manualURL is
+// read under c.mu (discover, Reinitialize), so the write takes c.mu; callers
+// hold clientMu (read) across the whole write so a concurrent Reinitialize
+// can't swap globalClient out from under them and leave the new pointer with
+// stale settings. Lock order clientMu→c.mu matches Reinitialize.
+func (c *Client) configureLocked(rawURL string, headers map[string]string) {
+	c.manualURL = strings.TrimRight(rawURL, "/")
+	c.headers = copyHeaders(headers)
+	c.dropConnectionLocked()
+	c.discoveryGen++
+	// Abort any in-flight discovery started under the old config so it releases
+	// the discovery gate promptly rather than stalling rediscovery. Safe under
+	// the lock: cancel only signals the context.
+	if c.discoveryCancel != nil {
+		c.discoveryCancel()
+	}
+}
+
+// dropConnectionLocked forgets the current endpoint and every result derived
+// from it, so the next request rediscovers under the current configuration.
+func (c *Client) dropConnectionLocked() {
+	c.baseURL = ""
+	c.basePath = ""
+	c.prom = nil
+	c.discoveryService = nil
+	c.lastDiscoverErr = nil
+	c.lastDiscoverAt = time.Time{}
+	c.lastOutcome = ""
 }
 
 func copyHeaders(h map[string]string) map[string]string {
@@ -221,18 +301,40 @@ func GetClient() *Client {
 	return globalClient
 }
 
+// Prewarm starts discovery in the background so charts are ready by the time
+// a user opens one, at boot and after every context switch. It never blocks
+// the caller and waits a little past the run's own hang backstop so its log
+// line describes a real outcome. Diagnostics are suppressed: a cluster that
+// simply has no Prometheus should not record a warning on every start — the
+// status endpoint carries the reason where it is useful.
+func Prewarm() {
+	client := GetClient()
+	if client == nil {
+		return
+	}
+	go func() {
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(withSuppressedDiscoveryDiagnostics(context.Background()), discoveryTimeout+5*time.Second)
+		defer cancel()
+		addr, _, err := client.EnsureConnected(ctx)
+		switch {
+		case err == nil:
+			log.Printf("[prometheus] Auto-discovery connected to %s (%s)", addr, took(start))
+		case errors.Is(err, ErrHeadersRequireURL):
+			log.Printf("[prometheus] Auto-discovery skipped: %v", err)
+		default:
+			log.Printf("[prometheus] Auto-discovery failed (%s): %v", took(start), err)
+		}
+	}()
+}
+
 // Reset clears connection state so the next query triggers rediscovery (used on context switch).
 func Reset() {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if globalClient != nil {
 		globalClient.mu.Lock()
-		globalClient.baseURL = ""
-		globalClient.basePath = ""
-		globalClient.prom = nil
-		globalClient.discoveryService = nil
-		globalClient.lastDiscoverErr = nil
-		globalClient.lastDiscoverAt = time.Time{}
+		globalClient.dropConnectionLocked()
 		globalClient.discoveryGen++
 		cancel := globalClient.discoveryCancel
 		globalClient.mu.Unlock()
@@ -302,13 +404,23 @@ func (c *Client) GetStatus() prom.Status {
 		svc = &cp
 	}
 
-	return prom.Status{
-		Available:   c.baseURL != "",
-		Connected:   c.baseURL != "",
+	connected := c.baseURL != ""
+	discovering := !connected && c.flightActive && c.flightGen == c.discoveryGen
+	st := prom.Status{
+		Available:   connected,
+		Connected:   connected,
+		Discovering: discovering,
 		Address:     c.baseURL,
 		Service:     svc,
 		ContextName: c.contextName,
 	}
+	switch {
+	case c.headersRequireURLLocked():
+		st.Error = ErrHeadersRequireURL.Error()
+	case !connected && !discovering && c.lastOutcomeGen == c.discoveryGen:
+		st.Error = c.lastOutcome
+	}
+	return st
 }
 
 func (c *Client) HasManualURL() bool {
@@ -387,7 +499,13 @@ func (c *Client) discoverShared(ctx context.Context) (string, string, error) {
 		c.mu.RLock()
 		gen := c.discoveryGen
 		key := fmt.Sprintf("%s#%d", c.contextName, gen)
+		gated := c.headersRequireURLLocked()
 		c.mu.RUnlock()
+		// Checked per iteration, not once at entry: a supersession retry must
+		// see a configuration change that introduced headers without a URL.
+		if gated {
+			return "", "", ErrHeadersRequireURL
+		}
 
 		ch := c.discoverySF.DoChan(key, func() (any, error) {
 			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discoveryTimeout)
@@ -411,12 +529,20 @@ func (c *Client) discoverShared(ctx context.Context) (string, string, error) {
 			c.discoveryCancelSeq++
 			mySeq := c.discoveryCancelSeq
 			c.discoveryCancel = cancel
+			c.flightGen = gen
+			c.flightActive = true
+			c.lastOutcome = ""
 			c.mu.Unlock()
+			var flightErr error
 			defer func() {
 				c.mu.Lock()
 				if c.discoveryCancelSeq == mySeq {
 					c.discoveryCancel = nil
 				}
+				if c.flightGen == gen {
+					c.flightActive = false
+				}
+				c.recordOutcomeLocked(gen, flightErr)
 				c.mu.Unlock()
 			}()
 
@@ -426,7 +552,8 @@ func (c *Client) discoverShared(ctx context.Context) (string, string, error) {
 			case discoveryGate <- struct{}{}:
 				defer func() { <-discoveryGate }()
 			case <-dctx.Done():
-				return nil, dctx.Err()
+				flightErr = dctx.Err()
+				return nil, flightErr
 			}
 
 			// Another discovery may have connected this client while we waited on
@@ -439,6 +566,7 @@ func (c *Client) discoverShared(ctx context.Context) (string, string, error) {
 			}
 
 			addr, basePath, derr := c.discover(dctx, gen)
+			flightErr = derr
 			if derr != nil {
 				if !errors.Is(derr, context.Canceled) && !errors.Is(derr, context.DeadlineExceeded) {
 					c.mu.Lock()
@@ -499,6 +627,27 @@ func (c *Client) connectionLive(addr string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.baseURL == addr && !c.retired
+}
+
+// recordOutcomeLocked publishes a run's terminal result for the status
+// endpoint. Only the run's own generation may write: an older run ending after
+// a configuration change must not describe the new configuration. A cancelled
+// run was superseded, which is not an outcome of anything the user configured.
+func (c *Client) recordOutcomeLocked(gen uint64, err error) {
+	if c.retired || c.discoveryGen != gen {
+		return
+	}
+	switch {
+	case err == nil:
+		c.lastOutcome = ""
+	case errors.Is(err, context.Canceled), errors.Is(err, errDiscoverySuperseded):
+		return
+	case errors.Is(err, context.DeadlineExceeded):
+		c.lastOutcome = fmt.Sprintf("Prometheus discovery timed out after %s", discoveryTimeout)
+	default:
+		c.lastOutcome = err.Error()
+	}
+	c.lastOutcomeGen = gen
 }
 
 func (c *Client) recentDiscoveryError(now time.Time) error {

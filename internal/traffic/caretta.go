@@ -371,6 +371,12 @@ func (c *CarettaSource) discoverPrometheus(ctx context.Context) string {
 		c.metricsBasePath = ""
 	}
 
+	if prom.HeadersRequireURL(c.metricsURL, c.headers) {
+		log.Printf("[caretta] Discovery skipped: %v", prom.ErrHeadersRequireURL)
+		c.backendWarning = prom.ErrHeadersRequireURL.Error()
+		return ""
+	}
+
 	// Layer 1: Manual URL override — if set, use it exclusively (don't fall through)
 	if c.metricsURL != "" {
 		addr := strings.TrimRight(c.metricsURL, "/")
@@ -957,6 +963,16 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 		c.prometheusAddr = ""
 		c.metricsBasePath = ""
 		c.currentContext = contextName
+	}
+
+	if prom.HeadersRequireURL(c.metricsURL, c.headers) {
+		log.Printf("[caretta] Discovery skipped: %v", prom.ErrHeadersRequireURL)
+		c.backendWarning = prom.ErrHeadersRequireURL.Error()
+		return &portforward.ConnectionInfo{
+			Connected:   false,
+			ContextName: contextName,
+			Error:       prom.ErrHeadersRequireURL.Error(),
+		}, nil
 	}
 
 	// Layer 1: Manual URL override — if set, use it exclusively (don't fall through)

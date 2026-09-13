@@ -522,8 +522,8 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `cost.kubecost.url` | Kubecost 3 Aggregator URL; blank discovers local port 9004 and may fall back to the named SAML/OIDC bypass port 9008 without a key; required for agent-only clusters | `""` (discover local) |
 | `cost.kubecost.clusterId` | Cluster ID filter for a central Aggregator | `""` (detect literal `CLUSTER_ID`) |
 | `cost.kubecost.existingSecret` | Secret containing an optional Kubecost API key; setting it disables automatic port-9008 auth bypass | `""` |
-| `traffic.prometheusUrl` | Manual PromQL-compatible query URL (Prometheus, VictoriaMetrics, Thanos, Mimir) | `""` (auto-discover) |
-| `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers | `{}` |
+| `traffic.prometheusUrl` | Manual PromQL-compatible query URL (Prometheus, VictoriaMetrics, Thanos, Mimir). Required whenever headers are set | `""` (auto-discover) |
+| `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers. Requires `traffic.prometheusUrl` — credentials are never sent to auto-discovered endpoints | `{}` |
 | `persistence.enabled` | Enable PVC for SQLite storage | `false` |
 | `persistence.size` | PVC size | `1Gi` |
 | `rbac.podLogs` | Enable log viewer | `true` |
@@ -556,6 +556,14 @@ kubectl logs -n ingress-nginx -l app.kubernetes.io/name=ingress-nginx
 ```
 
 If the UI loads through an ingress but pod exec does not connect, ensure the ingress forwards WebSocket upgrades and preserves the browser-facing `Host` header. Preserving `Host` is the compatibility requirement across browsers and proxies; Fetch Metadata is an additional signal only when both sides forward it. Radar logs rejected handshakes with both `Origin` and `Host`.
+
+### Metrics charts show "Prometheus not connected"
+
+Radar discovers Prometheus in the background as soon as it connects to the cluster (and again after every context switch), by listing Services and probing the ones that look like a PromQL backend at their in-cluster address. While that runs the charts show "Discovering Prometheus…"; once it ends without a connection, the charts and **Settings → Overview → Metrics** show why:
+
+- *no Prometheus service found in cluster* — nothing matched the well-known names or labels. Set `traffic.prometheusUrl`.
+- *no Prometheus service reachable in cluster* — a candidate exists but its Service address did not answer from Radar's pod. In-cluster Radar does not fall back to port-forwarding, so a NetworkPolicy or mesh rule that blocks Radar's namespace from the monitoring namespace shows up exactly like this. Allow ingress from Radar's namespace, or point `traffic.prometheusUrl` at an address that is reachable.
+- *Prometheus headers are configured but no Prometheus URL is set* — see `traffic.prometheusHeadersFromEnv` above.
 
 ### Basic auth prompt not appearing
 

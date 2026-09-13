@@ -1105,9 +1105,9 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
     },
     {
       id: 'prometheus', icon: Activity, label: 'Metrics',
-      tone: prom?.connected ? 'ok' : prom?.available ? 'warn' : 'off',
-      value: prom?.connected ? 'Connected' : prom?.available ? 'Not reachable' : 'Not configured',
-      detail: prom?.connected ? prom.address : undefined,
+      tone: prom?.connected ? 'ok' : prom?.discovering ? 'unknown' : prom?.error ? 'warn' : 'off',
+      value: prom?.connected ? 'Connected' : prom?.discovering ? 'Discovering…' : prom?.error ? 'Not connected' : 'Not configured',
+      detail: prom?.connected ? prom.address : prom?.discovering ? undefined : prom?.error,
     },
     {
       id: costConfigurationAction(cost?.reason).section, icon: Coins, label: 'Cost',

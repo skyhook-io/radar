@@ -157,6 +157,8 @@ export interface PrometheusChartsViewProps {
   statusError?: string;
   onConnect: () => void;
   connecting: boolean;
+  /** Discovery is running server-side (not triggered by this view); show progress, not the CTA. */
+  discovering?: boolean;
   // Selection (controlled by host)
   category: PrometheusMetricCategory;
   onCategoryChange: (c: PrometheusMetricCategory) => void;
@@ -177,6 +179,7 @@ export function PrometheusChartsView({
   statusError,
   onConnect,
   connecting,
+  discovering = false,
   category,
   onCategoryChange,
   range,
@@ -206,6 +209,15 @@ export function PrometheusChartsView({
   if (!showEmptyState) {
     if (!isConnected) return null;
     if (!metricsLoading && !metricsError && !series.length) return null;
+  }
+
+  if (!isConnected && discovering) {
+    return (
+      <div className="flex items-center justify-center py-12 text-theme-text-tertiary">
+        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+        Discovering Prometheus…
+      </div>
+    );
   }
 
   if (!isConnected) {

@@ -3067,6 +3067,8 @@ export function useTopNodeMetrics(options?: { enabled?: boolean }) {
 export interface PrometheusStatus {
   available: boolean;
   connected: boolean;
+  /** A discovery run is in flight for the current configuration. Never true alongside connected. */
+  discovering?: boolean;
   address?: string;
   service?: {
     namespace: string;
@@ -3222,13 +3224,27 @@ export interface RightsizingScanResponse {
   reason?: string;
 }
 
+// Poll quickly while a discovery run is in flight so the flip to connected
+// (or to a failure message) lands promptly; otherwise the slow cadence.
+export const PROM_STATUS_POLL_DISCOVERING_MS = 2000;
+export const PROM_STATUS_POLL_IDLE_MS = 60000;
+
+export function prometheusStatusRefetchInterval(
+  status: PrometheusStatus | undefined,
+): number {
+  return status?.discovering
+    ? PROM_STATUS_POLL_DISCOVERING_MS
+    : PROM_STATUS_POLL_IDLE_MS;
+}
+
 // Check Prometheus availability
 export function usePrometheusStatus() {
   return useQuery<PrometheusStatus>({
     queryKey: ["prometheus-status"],
     queryFn: () => fetchJSON("/prometheus/status"),
     staleTime: 30000,
-    refetchInterval: 60000,
+    refetchInterval: (query) =>
+      prometheusStatusRefetchInterval(query.state.data),
   });
 }
 
@@ -3343,6 +3359,12 @@ export function useAutoPromConnect(): void {
     // initial UI render isn't competing with the cluster network call.
     const delay = cached === "1" ? 0 : PROM_FIRSTLAUNCH_PROBE_DELAY_MS;
     const timeout = window.setTimeout(() => {
+      // The server only reports discovering once the run has started; mark it
+      // here first so the view shows progress instead of the manual CTA for the
+      // whole duration of this request.
+      queryClient.setQueryData<PrometheusStatus>(["prometheus-status"], (prev) =>
+        prev ? { ...prev, discovering: true } : prev,
+      );
       // Direct apiFetch (not via the usePrometheusConnect mutation) so the
       // meta-driven toast handler stays silent — the user didn't click anything.
       apiFetch(`${getApiBase()}/prometheus/connect?optional=true`, {
