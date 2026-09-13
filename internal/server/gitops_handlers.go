@@ -186,8 +186,12 @@ func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitops
 // hold an unrelated same-named object) and for an app Argo calls Healthy
 // (the engine may still hold a warning; contradicting the controller's
 // verdict on a node, and composing the cluster's issues on every poll of a
-// healthy app, are both worse than leaving it). problems is the resolver's
-// ResourceProblems, which applies the request's per-user access gate.
+// healthy app, are both worse than leaving it). A node whose health is
+// Radar's own topology read (Progressing at 1/2 replicas, say) is still a
+// candidate: the engine's classified finding is the more specific Radar
+// answer and replaces it. Controller-sourced health is final. problems is
+// the resolver's ResourceProblems, which applies the request's per-user
+// access gate.
 func overlayRadarHealth(tree *gitopstree.ResourceTree, root *unstructured.Unstructured, problems func(group, kind, namespace, name string) []gitopsinsights.ResourceProblem) {
 	if tree == nil || root == nil || problems == nil {
 		return
@@ -200,7 +204,10 @@ func overlayRadarHealth(tree *gitopstree.ResourceTree, root *unstructured.Unstru
 	}
 	for i := range tree.Nodes {
 		n := &tree.Nodes[i]
-		if n.Role != gitopstree.RoleDeclared || n.Health != "" {
+		if n.Role != gitopstree.RoleDeclared {
+			continue
+		}
+		if n.Health != "" && n.HealthSource != gitopstree.HealthSourceRadar {
 			continue
 		}
 		problem, ok := gitopsinsights.WorstResourceProblem(problems(n.Ref.Group, n.Ref.Kind, n.Ref.Namespace, n.Ref.Name))

@@ -89,6 +89,14 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 
 	tool := detectTool(root, group, kind)
 	managed := managedResources(root, tool)
+	// An Argo Application deploying to another cluster declares resources
+	// that live THERE. Matching them against this cluster's topology or
+	// cache would attribute an unrelated same-named local object's health,
+	// labels and ownership to them — so for a remote destination the
+	// declared nodes carry only what the CR says (sync, persisted health)
+	// and nothing local is read for them. Hub-side hosts merge the
+	// destination cluster's own tree on top (mergeGitOpsTrees).
+	remote := tool == ToolArgoCD && strings.EqualFold(root.GetKind(), "Application") && !gitops.IsInClusterDestination(root)
 	// HelmRelease has no status.inventory; recover its managed set from live
 	// topology by Helm's recommended labels so the resource tree isn't empty.
 	if tool == ToolFluxCD && strings.EqualFold(root.GetKind(), "HelmRelease") && len(managed) == 0 {
@@ -139,8 +147,10 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		fluxRelated = fluxRelatedResources(root)
 	}
 	enrichRefs := make([]ResourceRef, 0, len(managed)+len(fluxRelated))
-	for _, res := range managed {
-		enrichRefs = append(enrichRefs, res.Ref)
+	if !remote {
+		for _, res := range managed {
+			enrichRefs = append(enrichRefs, res.Ref)
+		}
 	}
 	for _, res := range fluxRelated {
 		enrichRefs = append(enrichRefs, res.Ref)
@@ -150,6 +160,10 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	for _, res := range managed {
 		id := nodeID(res.Ref)
 		declaredIDs[id] = true
+		if remote {
+			nodes[id] = mergeData(syntheticNode(res.Ref, RoleDeclared, tool, res.Sync, res.Health, res.HealthSource), res.Data)
+			continue
+		}
 		obj := objects[refKey(res.Ref)]
 		if live, ok := findTopoNode(topoByRef, res.Ref); ok {
 			nodes[id] = mergeData(enrichNodeFromObject(nodeFromTopology(live, res.Ref, RoleDeclared, tool, res.Sync, res.Health, res.HealthSource), obj), res.Data)
@@ -277,7 +291,7 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	}
 	if tool == ToolArgoCD && strings.EqualFold(root.GetKind(), "Application") {
 		out.HealthMode = argoHealthMode(root)
-		out.RemoteDestination = !gitops.IsInClusterDestination(root)
+		out.RemoteDestination = remote
 	}
 	return out, root, nil
 }

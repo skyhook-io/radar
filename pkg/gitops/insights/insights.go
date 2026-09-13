@@ -609,7 +609,14 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 				continue
 			}
 			if change.Health == "Degraded" || change.Health == "Missing" {
-				out = append(out, resourceHealthIssue(change, resolver))
+				// The issues engine reads this cluster; for an app deploying
+				// elsewhere its answer would describe an unrelated local
+				// object, so the cause bridge stays off.
+				causeResolver := resolver
+				if resourceTree != nil && resourceTree.RemoteDestination {
+					causeResolver = nil
+				}
+				out = append(out, resourceHealthIssue(change, causeResolver))
 			}
 			// A resource that is merely OutOfSync (healthy, just drifted) gets
 			// no Issue. One issue per drifted resource restates the Resources

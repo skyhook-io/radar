@@ -1726,6 +1726,24 @@ func TestBuildIssues_TreeFallbackNotSuppressedByInfoIssue(t *testing.T) {
 	}
 }
 
+func TestBuildIssues_RemoteDestinationSkipsLocalCauseBridge(t *testing.T) {
+	root := argoApp(map[string]any{
+		"health": map[string]any{"status": "Degraded"},
+		"resources": []any{
+			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "web", "status": "Synced", "health": map[string]any{"status": "Degraded"}},
+		},
+	})
+	r := &fakeResolver{problems: map[string][]ResourceProblem{"web": {{Reason: "CrashLoopBackOff", Message: "a LOCAL deployment's problem", Severity: "critical"}}}}
+	issues := buildIssues(root, &gitopstree.ResourceTree{RemoteDestination: true}, "argocd", r)
+	if len(issues) != 1 || issues[0].Cause != "" {
+		t.Errorf("remote app must not borrow a local resource's cause, got %+v", issues)
+	}
+	local := buildIssues(root, &gitopstree.ResourceTree{}, "argocd", r)
+	if len(local) != 1 || local[0].Cause == "" {
+		t.Errorf("in-cluster app keeps the cause bridge, got %+v", local)
+	}
+}
+
 func TestBuild_SummaryCarriesHealthModeAndDestination(t *testing.T) {
 	root := argoApp(map[string]any{"resourceHealthSource": "appTree"})
 	tree := &gitopstree.ResourceTree{HealthMode: gitopstree.HealthModeAppTree, RemoteDestination: true}

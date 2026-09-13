@@ -183,12 +183,23 @@ apply_fixtures() {
 setup_argo_health_customizations() {
   step "Installing Argo CD health checks for the argo3-health scenario"
   local lua
-  lua=$(kubectl --context "${KUBECTL_CTX}" -n argocd get configmap radar-demo-argo-health-customizations     -o jsonpath='{.data.resource\.customizations\.health\.radar\.demo_Widget}')
+  lua=$(kubectl --context "${KUBECTL_CTX}" -n argocd get configmap radar-demo-argo-health-customizations \
+    -o jsonpath='{.data.resource\.customizations\.health\.radar\.demo_Widget}')
   if [ -z "$lua" ]; then
     warn "customization ConfigMap missing; Widget health will not be evaluated by Argo"
     return
   fi
-  kubectl --context "${KUBECTL_CTX}" -n argocd patch configmap argocd-cm --type merge     -p "$(printf '{"data":{"resource.customizations.health.radar.demo_Widget":%s}}' "$(printf '%s' "$lua" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")" >/dev/null
+  # A YAML block scalar sidesteps JSON-escaping the Lua: indent every line
+  # under the key and let kubectl parse the merge patch as YAML.
+  local patch
+  patch=$(mktemp)
+  {
+    printf 'data:\n  resource.customizations.health.radar.demo_Widget: |\n'
+    printf '%s\n' "$lua" | sed 's/^/    /'
+  } > "$patch"
+  kubectl --context "${KUBECTL_CTX}" -n argocd patch configmap argocd-cm --type merge \
+    --patch-file "$patch" >/dev/null
+  rm -f "$patch"
   kubectl --context "${KUBECTL_CTX}" -n argocd rollout restart statefulset/argocd-application-controller >/dev/null
   ok "Widget health check installed"
 }

@@ -380,15 +380,51 @@ func TestBuild_AppTreeModeFillsTopologyKindsFromRadar(t *testing.T) {
 	}
 }
 
-func TestBuild_RemoteDestinationFlagged(t *testing.T) {
-	app := healthProvenanceApp(map[string]any{"resources": []any{}})
+// TestBuild_RemoteDestinationReadsNothingLocal: an app deploying to a
+// spoke cluster declares a Deployment that happens to share kind/ns/name
+// with an unhealthy local one. The local object's health, ownership edges
+// and metadata must not be attributed to the remote resource.
+func TestBuild_RemoteDestinationReadsNothingLocal(t *testing.T) {
+	app := healthProvenanceApp(map[string]any{
+		"health":               map[string]any{"status": "Degraded"},
+		"resourceHealthSource": "appTree",
+		"resources": []any{
+			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "billing", "status": "Synced"},
+		},
+	})
 	app.Object["spec"] = map[string]any{"destination": map[string]any{"server": "https://spoke-1.example.com:6443"}}
-	dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "billing"}): app}}
-	tree, _, err := NewBuilder(dynamic, &topology.Topology{}).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
+	localDep := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{"name": "billing", "namespace": "prod", "uid": "local-uid", "labels": map[string]any{"local": "yes"}},
+	}}
+	dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+		refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "billing"}): app,
+		refKey(ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "billing"}):           localDep,
+	}}
+	topo := healthProvenanceTopo()
+	topo.Nodes = append(topo.Nodes, topology.Node{ID: "pod/prod/billing-1", Kind: topology.KindPod, Name: "billing-1", Status: topology.StatusUnhealthy, Data: map[string]any{"namespace": "prod"}})
+	topo.Edges = []topology.Edge{{ID: "e", Source: "deployment/prod/billing", Target: "pod/prod/billing-1", Type: topology.EdgeManages}}
+	tree, _, err := NewBuilder(dynamic, topo).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 	if !tree.RemoteDestination {
-		t.Errorf("RemoteDestination = false, want true for a spoke destination")
+		t.Fatalf("RemoteDestination = false, want true for a spoke destination")
 	}
+	dep := findNode(t, tree, ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "billing"})
+	if dep.Health != "" || dep.HealthSource != "" || dep.TopologyStatus != "unknown" {
+		t.Errorf("remote Deployment took local health: %+v", dep)
+	}
+	if dep.Ref.UID != "" || dep.Data["labels"] != nil {
+		t.Errorf("remote Deployment took local object metadata: uid=%q data=%v", dep.Ref.UID, dep.Data)
+	}
+	for _, n := range tree.Nodes {
+		if n.Ref.Kind == "Pod" {
+			t.Errorf("local Pod attached to a remote app's tree: %+v", n.Ref)
+		}
+	}
+	if tree.Summary.Degraded != 0 {
+		t.Errorf("Summary.Degraded = %d, want 0 (nothing local counts)", tree.Summary.Degraded)
+	}
+	assertNoDynamicCall(t, dynamic, ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "billing"})
 }

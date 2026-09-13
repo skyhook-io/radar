@@ -24,7 +24,8 @@ func overlayTree(mode gitopstree.HealthMode, remote bool) *gitopstree.ResourceTr
 		Nodes: []gitopstree.Node{
 			{Role: gitopstree.RoleRoot, Ref: gitopstree.ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "app"}, Health: "Degraded"},
 			{Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "external-secrets.io", Kind: "ClusterSecretStore", Name: "platform"}},
-			{Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "web"}, Health: "Healthy", HealthSource: gitopstree.HealthSourceRadar, TopologyStatus: "healthy"},
+			{Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "web"}, Health: "Progressing", HealthSource: gitopstree.HealthSourceRadar, TopologyStatus: "degraded"},
+			{Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "api"}, Health: "Healthy", HealthSource: gitopstree.HealthSourceController, TopologyStatus: "healthy"},
 			{Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Kind: "ConfigMap", Namespace: "prod", Name: "vars"}},
 			{Role: gitopstree.RoleGenerated, Ref: gitopstree.ResourceRef{Kind: "Pod", Namespace: "prod", Name: "web-1"}},
 		},
@@ -39,7 +40,7 @@ func fakeProblems(calls *[]string) func(group, kind, namespace, name string) []g
 			return []gitopsinsights.ResourceProblem{
 				{Reason: "Ready: InvalidProviderConfig", Message: "no route to host", Category: "condition_false", Severity: "warning"},
 			}
-		case "web":
+		case "web", "api":
 			return []gitopsinsights.ResourceProblem{{Reason: "CrashLoopBackOff", Message: "back-off", Severity: "critical"}}
 		}
 		return nil
@@ -55,15 +56,18 @@ func TestOverlayRadarHealth_FillsOnlyEmptyDeclaredNodes(t *testing.T) {
 	if css.Health != "Degraded" || css.HealthSource != gitopstree.HealthSourceRadar || css.HealthReason != "Ready: InvalidProviderConfig" || css.HealthMessage != "no route to host" || css.HealthSeverity != "warning" || css.TopologyStatus != "unhealthy" {
 		t.Errorf("ClusterSecretStore should carry the engine's finding as Radar-sourced Degraded, got %+v", css)
 	}
-	if dep := tree.Nodes[2]; dep.Health != "Healthy" || dep.HealthReason != "" {
-		t.Errorf("a node that already has health must not be overwritten (even by a critical finding), got %+v", dep)
+	if dep := tree.Nodes[2]; dep.Health != "Degraded" || dep.HealthReason != "CrashLoopBackOff" || dep.HealthSeverity != "critical" || dep.TopologyStatus != "unhealthy" {
+		t.Errorf("Radar's topology read (Progressing) must give way to the engine's classified finding, got %+v", dep)
 	}
-	if cm := tree.Nodes[3]; cm.Health != "" || cm.HealthSource != "" {
+	if api := tree.Nodes[3]; api.Health != "Healthy" || api.HealthSource != gitopstree.HealthSourceController || api.HealthReason != "" {
+		t.Errorf("controller-sourced health is final; the engine must not overwrite it, got %+v", api)
+	}
+	if cm := tree.Nodes[4]; cm.Health != "" || cm.HealthSource != "" {
 		t.Errorf("a node the engine has nothing on must stay without health, got %+v", cm)
 	}
 	for _, c := range calls {
-		if c == "Pod/web-1" || c == "Deployment/web" {
-			t.Errorf("only declared nodes without health should be looked up; saw %q", c)
+		if c == "Pod/web-1" || c == "Deployment/api" {
+			t.Errorf("generated nodes and controller-assessed nodes must not be looked up; saw %q", c)
 		}
 	}
 }
