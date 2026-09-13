@@ -874,6 +874,9 @@ func TestApplicationHealthCached_PlainGetThenTreeFallbackAndNegativeCache(t *tes
 	if h, err := m.ApplicationHealthCached(context.Background(), q); err != nil || !h.HasHealth() {
 		t.Fatalf("a cancelled attempt must not poison the cache, got h=%+v err=%v", h, err)
 	}
+	if !m.readRetryAfter.IsZero() {
+		t.Fatal("a cancelled attempt must not arm the anonymous-read throttle")
+	}
 
 	// 3. Refusal (anonymous read disabled) is cached for the TTL.
 	m.Reset()

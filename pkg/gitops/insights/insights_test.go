@@ -1652,14 +1652,14 @@ func TestArgoResourceChanges_APIOverlayBeatsInlineValue(t *testing.T) {
 	root := argoApp(map[string]any{
 		"resourceHealthSource": "appTree",
 		"resources": []any{
-			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "p", "name": "web", "status": "Synced", "health": map[string]any{"status": "Degraded"}},
+			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "p", "name": "web", "status": "Synced", "health": map[string]any{"status": "Degraded", "message": "old story"}},
 		},
 	})
 	tree := &gitopstree.ResourceTree{HealthMode: gitopstree.HealthModeAppTree, HealthFromAPI: true, Nodes: []gitopstree.Node{
 		{Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "p", Name: "web"}, Health: "Healthy", HealthSource: gitopstree.HealthSourceControllerAPI},
 	}}
 	out := argoResourceChanges(root, tree, nil)
-	if len(out) != 1 || out[0].Health != "Healthy" || out[0].HealthSource != "controllerApi" {
+	if len(out) != 1 || out[0].Health != "Healthy" || out[0].HealthSource != "controllerApi" || out[0].Message != "" {
 		t.Errorf("API overlay must beat the CR's inline value, got %+v", out)
 	}
 }

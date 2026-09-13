@@ -1185,7 +1185,7 @@ func argoResourceChanges(root *unstructured.Unstructured, resourceTree *gitopstr
 		// the current verdict; a value the CR still carries inline is older.
 		fromAPI := resourceTree != nil && resourceTree.HealthFromAPI
 		if fromAPI {
-			health = ""
+			health, message = "", ""
 		}
 		if health != "" {
 			healthSource = string(gitopstree.HealthSourceController)

@@ -975,14 +975,14 @@ func (m *Manager) ApplicationHealthCached(ctx context.Context, q argoapi.Applica
 	if m.generation != gen {
 		return nil, fmt.Errorf("%w: connection changed during fetch", ErrUnreachable)
 	}
-	if err != nil && unconfigured && m.client == nil {
-		m.readRetryAfter = time.Now().Add(probeRetryInterval)
-	}
 	// The caller's own deadline or navigation is not the server's answer:
-	// caching it would make every other viewer skip Argo's verdicts for the
-	// rest of the window.
+	// neither cached nor counted as a discovery failure, or every other
+	// viewer would skip Argo's verdicts for the rest of the window.
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return nil, err
+	}
+	if err != nil && unconfigured && m.client == nil {
+		m.readRetryAfter = time.Now().Add(probeRetryInterval)
 	}
 	if m.appHealthCache == nil {
 		m.appHealthCache = make(map[string]appHealthEntry)
