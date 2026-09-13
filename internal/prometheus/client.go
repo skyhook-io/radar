@@ -744,6 +744,14 @@ func (c *Client) probe(ctx context.Context, addr string) bool {
 // noisy tail that dominated cold-start logs on clusters with several
 // Prometheus-like services.
 func (c *Client) probeReachable(ctx context.Context, addr string, logReject bool) bool {
+	ok, _ := c.probeWithReason(ctx, addr, logReject)
+	return ok
+}
+
+// probeWithReason is probeReachable that also reports why a probe was
+// rejected, so discovery can tell a network-level failure apart from an
+// endpoint that answered and was refused.
+func (c *Client) probeWithReason(ctx context.Context, addr string, logReject bool) (bool, prom.ProbeReason) {
 	c.mu.RLock()
 	httpC := c.httpClient
 	headers := copyHeaders(c.headers)
@@ -754,7 +762,7 @@ func (c *Client) probeReachable(ctx context.Context, addr string, logReject bool
 	if !ok && logReject {
 		logProbeRejection(addr, reason, !discoveryDiagnosticsSuppressed(ctx))
 	}
-	return ok
+	return ok, reason
 }
 
 // logProbeRejection records an appropriate log entry for each rejection

@@ -10,6 +10,8 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+
+	"github.com/skyhook-io/radar/pkg/netpol"
 )
 
 // policyVerdict is the caller-INDEPENDENT conclusion of static NetworkPolicy
@@ -120,12 +122,12 @@ func evaluateNetpol(pods []*corev1.Pod, ports []PortMap, policies []*networkingv
 		if !selectsAnyPod(sel, pods) {
 			continue
 		}
-		types := effectivePolicyTypes(np)
-		if types.ingress {
+		types := netpol.EffectivePolicyTypes(np)
+		if types.Ingress {
 			ingressPolicies = append(ingressPolicies, np)
 			ingressNameSet[np.Name] = struct{}{}
 		}
-		if types.egress {
+		if types.Egress {
 			egressPolicies = append(egressPolicies, np)
 			egressNameSet[np.Name] = struct{}{}
 		}
@@ -166,7 +168,7 @@ func evaluateNetpol(pods []*corev1.Pod, ports []PortMap, policies []*networkingv
 // endpoint pods. The pod port the policies match is the resolved targetPort,
 // which differs per pod when the Service uses a named targetPort.
 func evaluatePort(pods []*corev1.Pod, pm PortMap, ingressPolicies []*networkingv1.NetworkPolicy) policyResult {
-	proto := protocolOrTCP(pm.Protocol)
+	proto := netpol.ProtocolOrTCP(pm.Protocol)
 	label := fmt.Sprintf(":%d", pm.Port)
 
 	anyDeny := false
@@ -272,7 +274,7 @@ func evaluatePodPort(pod *corev1.Pod, podPort int32, proto corev1.Protocol, poli
 		selectedByAny = true
 		for i := range np.Spec.Ingress {
 			rule := &np.Spec.Ingress[i]
-			if !ruleMatchesPort(rule.Ports, podPort, proto, pod) {
+			if !netpol.RuleMatchesPort(rule.Ports, podPort, proto, pod) {
 				// Rule allows OTHER ports (it has explicit ports, none matched).
 				if len(rule.Ports) > 0 {
 					otherPortsAllowed = true
@@ -302,77 +304,6 @@ func evaluatePodPort(pod *corev1.Pod, podPort int32, proto corev1.Protocol, poli
 	}
 }
 
-// ruleMatchesPort reports whether an ingress rule's port set covers the target
-// pod port + protocol. Empty ports = all ports (match). A named rule port
-// resolves against the pod's declared container ports - and per Kubernetes
-// NetworkPolicy semantics a named port the pod does NOT declare simply does not
-// match (the rule is ignored for that pod), so it's a clean no-match, not an
-// uncertainty. Treating it as "unsure" would let a policy whose only allow rule
-// references an undeclared named port read as advisory/clean when real traffic
-// to that port is in fact denied.
-func ruleMatchesPort(rulePorts []networkingv1.NetworkPolicyPort, podPort int32, proto corev1.Protocol, pod *corev1.Pod) bool {
-	if len(rulePorts) == 0 {
-		return true
-	}
-	for i := range rulePorts {
-		rp := &rulePorts[i]
-		if protocolOrTCP(protoString(rp.Protocol)) != proto {
-			continue
-		}
-		if rp.Port == nil {
-			// Protocol given, no port → all ports of that protocol.
-			return true
-		}
-		if rp.Port.Type == 0 { // intstr.Int
-			start := rp.Port.IntVal
-			end := start
-			if rp.EndPort != nil && *rp.EndPort >= start {
-				end = *rp.EndPort
-			}
-			if podPort >= start && podPort <= end {
-				return true
-			}
-			continue
-		}
-		// Named port - resolve against the pod's declared container ports. An
-		// undeclared name is a no-match per k8s (the rule doesn't apply here).
-		n, ok := containerPortByName(pod, rp.Port.StrVal, proto)
-		if !ok {
-			continue
-		}
-		if n == podPort {
-			return true
-		}
-	}
-	return false
-}
-
-type effectiveTypes struct {
-	ingress bool
-	egress  bool
-}
-
-// effectivePolicyTypes applies Kubernetes' policyTypes defaulting exactly: when
-// spec.policyTypes is set it is authoritative; when omitted, a policy always
-// isolates Ingress and additionally isolates Egress iff it declares egress
-// rules. Getting this wrong turns an egress-only policy into a false inbound
-// restriction (or vice versa).
-func effectivePolicyTypes(np *networkingv1.NetworkPolicy) effectiveTypes {
-	if len(np.Spec.PolicyTypes) > 0 {
-		var t effectiveTypes
-		for _, pt := range np.Spec.PolicyTypes {
-			switch pt {
-			case networkingv1.PolicyTypeIngress:
-				t.ingress = true
-			case networkingv1.PolicyTypeEgress:
-				t.egress = true
-			}
-		}
-		return t
-	}
-	return effectiveTypes{ingress: true, egress: len(np.Spec.Egress) > 0}
-}
-
 // resolvePortMap applies Kubernetes' targetPort rule - numeric used as-is, empty
 // defaults to the Service port, named resolved by lookup - leaving the caller to
 // say WHERE named ports are read from (a live Pod spec, or a hop's config
@@ -392,19 +323,8 @@ func resolvePortMap(pm PortMap, byName func(string) (int32, bool)) (int32, bool)
 // port a NetworkPolicy actually matches on this pod.
 func resolveTargetPort(pm PortMap, pod *corev1.Pod) (int32, bool) {
 	return resolvePortMap(pm, func(name string) (int32, bool) {
-		return containerPortByName(pod, name, protocolOrTCP(pm.Protocol))
+		return netpol.ContainerPortByName(pod, name, netpol.ProtocolOrTCP(pm.Protocol))
 	})
-}
-
-func containerPortByName(pod *corev1.Pod, name string, proto corev1.Protocol) (int32, bool) {
-	for _, c := range pod.Spec.Containers {
-		for _, cp := range c.Ports {
-			if cp.Name == name && protocolOrTCP(string(cp.Protocol)) == proto {
-				return cp.ContainerPort, true
-			}
-		}
-	}
-	return 0, false
 }
 
 func selectsAnyPod(sel labels.Selector, pods []*corev1.Pod) bool {
@@ -460,20 +380,6 @@ func nonNilPods(pods []*corev1.Pod) []*corev1.Pod {
 		}
 	}
 	return out
-}
-
-func protocolOrTCP(p string) corev1.Protocol {
-	if p == "" {
-		return corev1.ProtocolTCP
-	}
-	return corev1.Protocol(strings.ToUpper(p))
-}
-
-func protoString(p *corev1.Protocol) string {
-	if p == nil {
-		return ""
-	}
-	return string(*p)
 }
 
 func policyRank(v policyVerdict) int {

@@ -7,6 +7,8 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+
+	"github.com/skyhook-io/radar/pkg/netpol"
 )
 
 func npPod(lbls map[string]string, ports ...corev1.ContainerPort) *corev1.Pod {
@@ -279,19 +281,19 @@ func TestEvaluateNetpol(t *testing.T) {
 func TestEffectivePolicyTypes(t *testing.T) {
 	// Omitted policyTypes with no egress rules → ingress-only isolation.
 	ingressDefault := &networkingv1.NetworkPolicy{}
-	if got := effectivePolicyTypes(ingressDefault); !got.ingress || got.egress {
+	if got := netpol.EffectivePolicyTypes(ingressDefault); !got.Ingress || got.Egress {
 		t.Errorf("empty spec: got %+v, want ingress-only", got)
 	}
 	// Omitted policyTypes WITH egress rules → both.
 	withEgress := &networkingv1.NetworkPolicy{Spec: networkingv1.NetworkPolicySpec{
 		Egress: []networkingv1.NetworkPolicyEgressRule{{}},
 	}}
-	if got := effectivePolicyTypes(withEgress); !got.ingress || !got.egress {
+	if got := netpol.EffectivePolicyTypes(withEgress); !got.Ingress || !got.Egress {
 		t.Errorf("egress rules present: got %+v, want both", got)
 	}
 	// Explicit egress-only → egress, not ingress.
 	explicit := &networkingv1.NetworkPolicy{Spec: networkingv1.NetworkPolicySpec{PolicyTypes: egressOnly}}
-	if got := effectivePolicyTypes(explicit); got.ingress || !got.egress {
+	if got := netpol.EffectivePolicyTypes(explicit); got.Ingress || !got.Egress {
 		t.Errorf("explicit egress-only: got %+v, want egress-only", got)
 	}
 }
