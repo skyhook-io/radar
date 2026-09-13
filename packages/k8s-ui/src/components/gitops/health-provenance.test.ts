@@ -24,11 +24,14 @@ describe('radarHealthNote', () => {
     expect(APP_TREE_NO_FINDINGS_NOTICE).toContain('controller.resource.health.persist')
   })
 
-  test('hasRadarFinding looks only at Radar-sourced resource issues', () => {
+  test('hasRadarFinding reads the rows the markers read', () => {
+    const row = (health: string, healthSource?: string) =>
+      ({ ref: { kind: 'Deployment', namespace: 'p', name: 'w' }, category: 'Unknown', health, healthSource, hasDesired: false, hasLive: true }) as const
     expect(hasRadarFinding(undefined)).toBe(false)
-    expect(hasRadarFinding([{ severity: 'warning', scope: 'resource', reason: 'PossibleCause', message: '' }])).toBe(false)
-    expect(hasRadarFinding([{ severity: 'critical', scope: 'resource', reason: 'Degraded', message: '', source: 'controller' }])).toBe(false)
-    expect(hasRadarFinding([{ severity: 'warning', scope: 'resource', reason: 'Ready: Bad', message: '', source: 'radar' }])).toBe(true)
+    expect(hasRadarFinding([row('Degraded', 'controller')])).toBe(false)
+    expect(hasRadarFinding([row('Healthy', 'radar')])).toBe(false)
+    expect(hasRadarFinding([row('Degraded', 'radar')])).toBe(true)
+    expect(hasRadarFinding([row('Missing', 'radar')])).toBe(true)
   })
 })
 

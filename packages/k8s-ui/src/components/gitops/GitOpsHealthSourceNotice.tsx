@@ -1,6 +1,6 @@
 import { Info } from 'lucide-react'
 import type { ReactNode } from 'react'
-import type { GitOpsInsightSummary, GitOpsIssue } from '../../types'
+import type { GitOpsChange, GitOpsInsightSummary } from '../../types'
 
 // One quiet line above the Issues band for the two cases where per-resource
 // health on this page is not the controller's own verdict:
@@ -39,21 +39,25 @@ export function healthSourceNoticeKind(summary: HealthSourceNoticeSummary | unde
   return null
 }
 
-export function hasRadarFinding(issues: GitOpsIssue[] | undefined): boolean {
-  return (issues ?? []).some((i) => i.scope === 'resource' && i.source === 'radar')
+// Reads the same rows the "Found by Radar" markers read, so the sentence
+// and the markers can't disagree — an Issue can be suppressed (an operation
+// failure already names the resource) while the row still carries Radar's
+// health.
+export function hasRadarFinding(changes: GitOpsChange[] | undefined): boolean {
+  return (changes ?? []).some((c) => c.healthSource === 'radar' && (c.health === 'Degraded' || c.health === 'Missing'))
 }
 
 export function GitOpsHealthSourceNotice({
   summary,
-  issues,
+  changes,
   docsUrl,
   remoteDestinationHint,
 }: {
   summary: HealthSourceNoticeSummary | undefined
   // Decides between the two appTree sentences: with a Radar-sourced
-  // finding the notice explains the markers; without one it says so and
-  // names the way out.
-  issues?: GitOpsIssue[]
+  // problem row the notice explains the markers; without one it says so
+  // and names the way out.
+  changes?: GitOpsChange[]
   // Where "Why?" goes for the appTree case. Omitted → no link.
   docsUrl?: string
   // Rendered after the remote-destination sentence. The host decides
@@ -74,7 +78,7 @@ export function GitOpsHealthSourceNotice({
           </>
         ) : (
           <>
-            {hasRadarFinding(issues) ? APP_TREE_HEALTH_NOTICE : APP_TREE_NO_FINDINGS_NOTICE}
+            {hasRadarFinding(changes) ? APP_TREE_HEALTH_NOTICE : APP_TREE_NO_FINDINGS_NOTICE}
             {docsUrl && (
               <>
                 {' '}
