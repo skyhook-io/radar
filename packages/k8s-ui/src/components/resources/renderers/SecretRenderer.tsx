@@ -4,7 +4,7 @@ import { clsx } from 'clsx'
 import { stringify as yamlStringify } from 'yaml'
 import { Section, PropertyList, Property, AlertBanner } from '../../ui/drawer-components'
 import { ConfirmDialog } from '../../ui/ConfirmDialog'
-import { ReflectorSection, isReflectorMirror, reflectorEditNotice } from './ReflectorSection'
+import { ReflectorSummary, ReflectorSection, isReflectorMirror, reflectorEditNotice } from './ReflectorSection'
 import type { SecretCertificateInfo, CertificateInfo, Relationships, ResourceRef } from '../../../types'
 import { pluralize } from '../../../utils/pluralize'
 import { cleanResourceForYaml } from '../../../utils/yaml'
@@ -107,7 +107,6 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
 
   return (
     <>
-      <ReflectorSection data={data} reflection={relationships?.reflection} onNavigate={onNavigate} />
       <Section title="Secret">
         <PropertyList>
           <Property label="Type" value={data.type || 'Opaque'} />
@@ -140,6 +139,8 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
           message="Renewal should happen automatically before expiry."
         />
       )}
+
+      <ReflectorSummary data={data} reflection={relationships?.reflection} onNavigate={onNavigate} />
 
       {/* Certificate info section */}
       {certs && certs.length > 0 && (
@@ -263,6 +264,8 @@ export function SecretRenderer({ data, relationships, onNavigate, certificateInf
           )}
         </div>
       </Section>
+
+      <ReflectorSection data={data} reflection={relationships?.reflection} onNavigate={onNavigate} />
 
       {editingKey && (
         <ConfirmDialog

@@ -424,6 +424,7 @@ type ReflectionRelationships struct {
 
 // Relationships holds computed relationships for a resource
 type Relationships struct {
+	// Reflection distinguishes reflection links also retained in ConfigRefs/Consumers.
 	Reflection *ReflectionRelationships `json:"reflection,omitempty"`
 
 	Owner           *ResourceRef  `json:"owner,omitempty"`           // Parent via ownerReference (manages edge)

@@ -467,6 +467,7 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	auditSum := computeAuditSummaryForResource(cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
+		Reflections:   k8s.ReflectionLookup{Cache: cache},
 		Tier:          resourcecontext.TierBasic,
 		AccessChecker: s.newRequestScopedChecker(r),
 		IssueSummary:  issueSum,
@@ -527,7 +528,6 @@ func (s *Server) topologyForContext(namespace string) (*topology.Topology, topol
 	}
 	opts.IncludeReplicaSets = true
 	opts.ForRelationshipCache = true
-	opts.IncludeSecrets = true
 
 	provider := k8s.NewTopologyResourceProvider(cache)
 	dyn := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())

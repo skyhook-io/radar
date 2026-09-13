@@ -3,7 +3,7 @@ import { AlertTriangle, Copy, Check } from 'lucide-react'
 import { Section, ExpandableSection } from '../../ui/drawer-components'
 import { Tooltip } from '../../ui/Tooltip'
 import type { Relationships, ResourceRef } from '../../../types'
-import { ReflectorSection } from './ReflectorSection'
+import { ReflectorSummary, ReflectorSection } from './ReflectorSection'
 import { formatBytes } from '../../../utils/format'
 
 interface ConfigMapRendererProps {
@@ -66,7 +66,7 @@ export function ConfigMapRenderer({ data, relationships, onNavigate }: ConfigMap
 
   return (
     <>
-      <ReflectorSection data={data} reflection={relationships?.reflection} onNavigate={onNavigate} />
+      <ReflectorSummary data={data} reflection={relationships?.reflection} onNavigate={onNavigate} />
       <Section title={`Data (${dataEntries.length + binaryDataKeys.length} keys)`} defaultExpanded>
         <div className="space-y-3">
           {/* Short values: compact table */}
@@ -117,6 +117,8 @@ export function ConfigMapRenderer({ data, relationships, onNavigate }: ConfigMap
           )}
         </div>
       </Section>
+
+      <ReflectorSection data={data} reflection={relationships?.reflection} onNavigate={onNavigate} />
 
       {data.immutable && (
         <div className="flex items-center gap-2 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded text-yellow-400 text-sm">

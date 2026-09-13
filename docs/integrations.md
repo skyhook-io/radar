@@ -7,10 +7,10 @@ Radar automatically discovers and displays **any** Custom Resource Definition (C
 [EmberStack Reflector](https://github.com/emberstack/kubernetes-reflector) copies
 core Secrets and ConfigMaps between namespaces using annotations. It needs no CRDs.
 
-**Resource details:** annotated Secrets and ConfigMaps have a **Reflector** section
+**Resource details:** ordinary Secrets and ConfigMaps are unchanged. Mirrors show compact source navigation and edit guidance before their data, after Secret identity and certificate-expiry alerts. Detailed settings follow the data in a collapsible **Reflector** section
 showing source/mirror role, automatic versus manual mirrors, reflection permission,
 and configured namespace name patterns and label selectors. Visible sources and
-mirrors are linked directly. Automatic creation requires reflection permission;
+mirrors are linked directly. Source section titles show the visible mirror count; expanding shows five mirrors initially, with a control to show all. Automatic creation requires reflection permission;
 name patterns and selectors are alternatives within each rule on controller versions
 that support selectors. Radar displays these rules without predicting a destination
 set or evaluating the controller's regular expressions.
@@ -34,6 +34,8 @@ with a different name. It represents a declaration, not Kubernetes ownership or
 successful synchronization. Namespace filters apply. Secret nodes are hidden by
 default and require Secret list access when included. The REST resource-detail relationship response also
 identifies reflection sources and mirrors explicitly.
+
+**Agent context (MCP and REST):** `get_resource` and the REST AI resource context expose an optional `resourceContext.reflection` block. It separates `declaredSource` from an authorized observed `source`, includes recorded copy metadata and the authorized source resource version, and lists up to 20 `visibleMirrors` with `truncated` when more authorized mirrors were observed. This lookup spans namespaces in the available cache independently of the resource-context graph. Unreadable endpoints and their versions are withheld; omitted-field reasons describe unavailable cache evidence or denied access. These observations do not prove complete distribution or synchronization health.
 
 **Partial visibility:** unavailable sources are not called missing, and visible mirror
 counts are not expected totals. Radar does not diagnose absent mirrors, name conflicts,

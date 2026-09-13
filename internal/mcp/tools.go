@@ -1219,6 +1219,7 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 	auditSum := computeMCPAuditSummary(cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
+		Reflections:   k8s.ReflectionLookup{Cache: cache},
 		Tier:          tier,
 		AccessChecker: newMCPRequestScopedChecker(ctx),
 		IssueSummary:  issueSum,

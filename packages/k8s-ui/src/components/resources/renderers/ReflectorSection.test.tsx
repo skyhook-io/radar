@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ReflectorSection } from "./ReflectorSection";
+import { ReflectorSection, ReflectorSummary } from "./ReflectorSection";
 import { ResourceRendererDispatch } from "../../shared/ResourceRendererDispatch";
 import type { Relationships } from "../../../types";
 
@@ -24,11 +24,18 @@ function render(
   reflection?: Relationships["reflection"],
 ) {
   return renderToStaticMarkup(
-    <ReflectorSection
-      data={resource(annotations)}
-      reflection={reflection}
-      onNavigate={() => {}}
-    />,
+    <>
+      <ReflectorSummary
+        data={resource(annotations)}
+        reflection={reflection}
+        onNavigate={() => {}}
+      />
+      <ReflectorSection
+        data={resource(annotations)}
+        reflection={reflection}
+        onNavigate={() => {}}
+      />
+    </>,
   );
 }
 
@@ -67,8 +74,8 @@ describe("Reflector evidence and copy", () => {
     expect(html).toContain(">or</span>");
     expect(html).toContain("Label selector:");
     expect(html).toContain("Show all 12 visible mirrors");
-    expect(html).toContain("app/mirror-9");
-    expect(html).not.toContain("app/mirror-10");
+    expect(html).toContain("app/mirror-4");
+    expect(html).not.toContain("app/mirror-5");
     expect(html).toContain("other mirrors may exist");
   });
 
@@ -210,6 +217,65 @@ describe("Reflector configuration diagnostics", () => {
   });
   it("warns when visible mirrors reference a source that no longer allows reflection", () => {
     const html = render({}, { mirrors: [mirror] });
-    expect(html).toContain("Reflection is disabled on this source");
+    expect(html).toContain("Reflection is not enabled on this source");
+  });
+});
+
+describe("Reflector resource hierarchy", () => {
+  it("keeps ConfigMap data ahead of detailed settings and source mirror list", () => {
+    const html = renderToStaticMarkup(
+      <ResourceRendererDispatch
+        kind="configmaps"
+        data={{
+          ...resource({ "reflection-allowed": "true" }),
+          data: { setting: "value" },
+        }}
+        resource={{ kind: "configmaps", namespace: "app", name: "mirror" }}
+        relationships={{ reflection: { mirrors: [mirror] } }}
+      />,
+    );
+    expect(html.indexOf("Data (1 keys)")).toBeLessThan(
+      html.indexOf("Reflector (1 visible mirror)"),
+    );
+    expect(html).not.toContain("Reflector mirror</");
+  });
+  it("puts TLS expiry and mirror provenance ahead of data, with details below", () => {
+    const html = renderToStaticMarkup(
+      <ResourceRendererDispatch
+        kind="secrets"
+        data={{
+          ...resource({ reflects: "source/settings" }),
+          type: "kubernetes.io/tls",
+          data: { "tls.crt": "dGVzdA==" },
+        }}
+        resource={{ kind: "secrets", namespace: "app", name: "mirror" }}
+        relationships={{
+          reflection: { source: { ...source, kind: "Secret" } },
+        }}
+        certificateInfo={
+          {
+            certificates: [
+              {
+                serialNumber: "fixture",
+                expired: true,
+                daysLeft: -1,
+                notAfter: "2026-01-01T00:00:00Z",
+                notBefore: "2025-01-01T00:00:00Z",
+                subject: "test",
+                issuer: "test",
+                dnsNames: [],
+              },
+            ],
+          } as any
+        }
+      />,
+    );
+    expect(html.indexOf("Certificate has expired")).toBeLessThan(
+      html.indexOf("Reflector mirror"),
+    );
+    expect(html.indexOf("Reflector mirror")).toBeLessThan(
+      html.indexOf(">Data</"),
+    );
+    expect(html.indexOf(">Data</")).toBeLessThan(html.indexOf(">Reflector</"));
   });
 });

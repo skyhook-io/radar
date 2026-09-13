@@ -1,6 +1,19 @@
 import { useState } from "react";
 import { Copy } from "lucide-react";
-import type { Relationships, ResourceRef } from "../../../types";
+import type { ResourceRef } from "../../../types";
+import { pluralize } from "../../../utils/pluralize";
+import { formatRelativeAgeTime } from "../../../utils/format";
+import {
+  hasReflectorDetails,
+  parseReflector,
+  type Reflection,
+  type ReflectorResource,
+} from "../../../utils/reflector";
+export {
+  hasReflectorDetails,
+  isReflectorMirror,
+  reflectorEditNotice,
+} from "../../../utils/reflector";
 import { Badge } from "../../ui/Badge";
 import {
   AlertBanner,
@@ -10,66 +23,10 @@ import {
   Section,
 } from "../../ui/drawer-components";
 
-const prefix = "reflector.v1.k8s.emberstack.com/";
-const annotationNames = [
-  "reflects",
-  "auto-reflects",
-  "reflected-version",
-  "reflected-at",
-  "reflection-allowed",
-  "reflection-auto-enabled",
-  "reflection-allowed-namespaces",
-  "reflection-allowed-namespaces-selector",
-  "reflection-auto-namespaces",
-  "reflection-auto-namespaces-selector",
-];
-
-type Reflection = NonNullable<Relationships["reflection"]>;
-interface ReflectorResource {
-  apiVersion?: string;
-  metadata?: {
-    name?: string;
-    namespace?: string;
-    annotations?: Record<string, string>;
-  };
-}
 interface ReflectorSectionProps {
   data: ReflectorResource;
   reflection?: Reflection;
   onNavigate?: (ref: ResourceRef) => void;
-}
-
-function annotationsFor(data: ReflectorResource): Record<string, string> {
-  return data.apiVersion === "v1" ? (data.metadata?.annotations ?? {}) : {};
-}
-
-export function hasReflectorDetails(
-  data: ReflectorResource,
-  reflection?: Reflection,
-): boolean {
-  if (data.apiVersion !== "v1") return false;
-  const annotations = annotationsFor(data);
-  return (
-    annotationNames.some((name) => prefix + name in annotations) ||
-    !!reflection?.source ||
-    !!reflection?.mirrors?.length
-  );
-}
-
-export function isReflectorMirror(data: ReflectorResource): boolean {
-  return /^[^/\s]+\/[^/\s]+$/.test(
-    annotationsFor(data)[prefix + "reflects"] ?? "",
-  );
-}
-
-export const reflectorEditNotice =
-  "This object is a Reflector mirror. Edit the source for lasting changes. Local edits may persist until the source changes, then be overwritten.";
-
-function booleanValue(value: string | undefined): boolean | undefined {
-  if (value === undefined) return false;
-  if (value.trim().toLowerCase() === "true") return true;
-  if (value.trim().toLowerCase() === "false") return false;
-  return undefined;
 }
 
 function NamespaceRule({
@@ -108,82 +65,31 @@ export function ReflectorSection({
 }: ReflectorSectionProps) {
   const [showAll, setShowAll] = useState(false);
   if (!hasReflectorDetails(data, reflection)) return null;
-  const annotations = annotationsFor(data);
-  const value = (name: string) => annotations[prefix + name];
-  const declaration = value("reflects");
-  const hasDeclaration = declaration !== undefined;
-  const isMirror = isReflectorMirror(data);
-  const allowed = booleanValue(value("reflection-allowed"));
-  const autoEnabled = booleanValue(value("reflection-auto-enabled"));
-  const automatic = booleanValue(value("auto-reflects"));
-  const source =
-    reflection?.source &&
-    `${reflection.source.namespace}/${reflection.source.name}` === declaration
-      ? reflection.source
-      : undefined;
-  const mirrors = reflection?.mirrors ?? [];
-  const sourceSettings =
-    !isMirror ||
-    annotationNames.some(
-      (name) => name.startsWith("reflection-") && value(name) !== undefined,
-    ) ||
-    mirrors.length > 0;
-  const copiedVersion = value("reflected-version");
-  const sourceVersion = source ? reflection?.sourceResourceVersion : undefined;
-  const warnings: string[] = [];
-  for (const name of [
-    "reflection-allowed",
-    "reflection-auto-enabled",
-    "auto-reflects",
-  ]) {
-    if (booleanValue(value(name)) === undefined)
-      warnings.push(
-        `${name} must be true or false (currently "${value(name)}").`,
-      );
-  }
-  if (hasDeclaration && !isMirror)
-    warnings.push(
-      "The reflects annotation must name a source as namespace/name.",
-    );
-  if (
-    declaration &&
-    declaration === `${data.metadata?.namespace}/${data.metadata?.name}`
-  )
-    warnings.push(
-      "The reflects annotation points to this object itself. Choose a different source.",
-    );
-  if (!isMirror && mirrors.length > 0 && allowed === false)
-    warnings.push(
-      "Reflection is disabled on this source, but visible mirrors still reference it.",
-    );
-  if (!isMirror && autoEnabled === true && allowed === false)
-    warnings.push(
-      "Automatic mirror creation requires reflection-allowed to be true.",
-    );
-  if (
-    isMirror &&
-    (mirrors.length > 0 || allowed === true || autoEnabled === true)
-  )
-    warnings.push(
-      "This object is itself a mirror. Reflector does not propagate its updates as source updates to other mirrors.",
-    );
+  const {
+    value,
+    hasDeclaration,
+    isMirror,
+    allowed,
+    autoEnabled,
+    automatic,
+    mirrors,
+    sourceSettings,
+    copiedVersion,
+    sourceVersion,
+    warnings,
+  } = parseReflector(data, reflection);
 
   return (
-    <Section title="Reflector" icon={Copy} defaultExpanded>
+    <Section
+      title={
+        mirrors.length
+          ? `Reflector (${pluralize(mirrors.length, "visible mirror")})`
+          : "Reflector"
+      }
+      icon={Copy}
+      defaultExpanded={warnings.length > 0}
+    >
       <div className="space-y-3">
-        {warnings.length > 0 && (
-          <AlertBanner
-            variant="warning"
-            title="Check reflection configuration"
-            message={
-              <ul className="list-disc pl-4 space-y-1">
-                {warnings.map((warning) => (
-                  <li key={warning}>{warning}</li>
-                ))}
-              </ul>
-            }
-          />
-        )}
         <PropertyList>
           <Property
             label="Role"
@@ -201,30 +107,6 @@ export function ReflectorSection({
               </Badge>
             }
           />
-          {hasDeclaration && (
-            <Property
-              label="Declared source"
-              value={
-                <span className="break-all">
-                  {source ? (
-                    <ResourceLink
-                      {...source}
-                      label={`${source.namespace}/${source.name}`}
-                      onNavigate={onNavigate}
-                    />
-                  ) : (
-                    declaration || "(empty)"
-                  )}
-                </span>
-              }
-            />
-          )}
-          {isMirror && !source && (
-            <p className="text-xs text-theme-text-tertiary">
-              Source is not available in this view; its existence and version
-              are unverified.
-            </p>
-          )}
           {sourceSettings && (
             <>
               <Property
@@ -287,7 +169,13 @@ export function ReflectorSection({
               />
               <Property
                 label="Recorded copy time"
-                value={value("reflected-at")}
+                value={
+                  value("reflected-at") ? (
+                    <span title={value("reflected-at")}>
+                      {formatRelativeAgeTime(value("reflected-at"))}
+                    </span>
+                  ) : undefined
+                }
               />
               {copiedVersion && sourceVersion && (
                 <p className="text-xs text-theme-text-secondary">
@@ -310,7 +198,7 @@ export function ReflectorSection({
               </Badge>
             </div>
             <div className="space-y-1 max-h-60 overflow-y-auto text-sm">
-              {(showAll ? mirrors : mirrors.slice(0, 10)).map((ref) => (
+              {(showAll ? mirrors : mirrors.slice(0, 5)).map((ref) => (
                 <div key={`${ref.namespace}/${ref.name}`} className="break-all">
                   <ResourceLink
                     {...ref}
@@ -320,7 +208,7 @@ export function ReflectorSection({
                 </div>
               ))}
             </div>
-            {mirrors.length > 10 && (
+            {mirrors.length > 5 && (
               <button
                 className="text-xs text-accent-text hover:underline"
                 onClick={() => setShowAll(!showAll)}
@@ -340,12 +228,69 @@ export function ReflectorSection({
             No mirrors visible in this view.
           </p>
         )}
-        {isMirror && (
-          <p className="text-xs text-theme-text-secondary">
-            {reflectorEditNotice}
-          </p>
-        )}
       </div>
     </Section>
+  );
+}
+
+export function ReflectorSummary({
+  data,
+  reflection,
+  onNavigate,
+}: ReflectorSectionProps) {
+  if (!hasReflectorDetails(data, reflection)) return null;
+  const { isMirror, declaration, source, warnings } = parseReflector(
+    data,
+    reflection,
+  );
+  if (!isMirror && warnings.length === 0) return null;
+  return (
+    <div className="space-y-2">
+      {isMirror && (
+        <AlertBanner
+          variant="info"
+          title="Reflector mirror"
+          message={
+            <>
+              <span className="block break-all">
+                Source:{" "}
+                {source ? (
+                  <ResourceLink
+                    {...source}
+                    label={`${source.namespace}/${source.name}`}
+                    onNavigate={onNavigate}
+                  />
+                ) : (
+                  declaration
+                )}
+              </span>
+              {!source && (
+                <span className="block">
+                  Source is not available in this view; its existence and
+                  version are unverified.
+                </span>
+              )}
+              <span className="block mt-1">
+                Edit the source for lasting changes. Local edits may persist
+                until the source changes, then be overwritten.
+              </span>
+            </>
+          }
+        />
+      )}
+      {warnings.length > 0 && (
+        <AlertBanner
+          variant="warning"
+          title="Check reflection configuration"
+          message={
+            <ul className="list-disc pl-4 space-y-1">
+              {warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          }
+        />
+      )}
+    </div>
   );
 }
