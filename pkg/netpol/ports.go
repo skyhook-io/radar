@@ -55,6 +55,7 @@ func RuleMatchesPort(rulePorts []networkingv1.NetworkPolicyPort, podPort int32, 
 	if len(rulePorts) == 0 {
 		return true
 	}
+	proto = ProtocolOrTCP(string(proto))
 	for i := range rulePorts {
 		rp := &rulePorts[i]
 		if ProtocolOrTCP(protoString(rp.Protocol)) != proto {

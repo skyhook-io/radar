@@ -57,6 +57,10 @@ type Direction string
 const (
 	DirectionIngress Direction = "ingress"
 	DirectionEgress  Direction = "egress"
+	// DirectionBoth: no single direction accounts for the denial — some
+	// backends are cut off by the source's egress policies, the rest by their
+	// own ingress policies — so both policy sets are named.
+	DirectionBoth Direction = "ingress+egress"
 )
 
 // Verdict is the outcome of Evaluate. Policies lists, as namespace/name in
@@ -98,82 +102,104 @@ func Evaluate(src Peer, dst []Backend, policies []*networkingv1.NetworkPolicy) V
 		}
 	}
 
-	egress := evaluateEgress(src, dst, policies)
-	if egress.Kind == Denied {
-		return egress
-	}
-	ingress := evaluateIngress(src, dst, policies)
-	if ingress.Kind == Denied {
-		return ingress
-	}
-	if egress.Kind == Unknown || ingress.Kind == Unknown {
-		return Verdict{Kind: Unknown}
-	}
-	return Verdict{Kind: Allowed}
-}
-
-func evaluateEgress(src Peer, dst []Backend, policies []*networkingv1.NetworkPolicy) Verdict {
-	selecting, ok := selectingPolicies(src.Pod, policies, func(t PolicyTypes) bool { return t.Egress })
+	egressPolicies, ok := selectingPolicies(src.Pod, policies, func(t PolicyTypes) bool { return t.Egress })
 	if !ok {
 		return Verdict{Kind: Unknown}
 	}
-	if len(selecting) == 0 {
-		return Verdict{Kind: Allowed}
-	}
-	overall := triNo
-	for _, b := range dst {
-		if samePod(src.Pod, b.Pod) {
-			overall = fold(overall, triYes)
-			continue
-		}
-		verdict := triNo
-		for _, np := range selecting {
-			for i := range np.Spec.Egress {
-				rule := &np.Spec.Egress[i]
-				// Named ports in an egress rule refer to the destination pod.
-				if !RuleMatchesPort(rule.Ports, b.Port, b.Protocol, b.Pod) {
-					continue
-				}
-				verdict = fold(verdict, peersAdmit(rule.To, b.Peer, np.Namespace, DirectionEgress))
-			}
-		}
-		overall = fold(overall, verdict)
-	}
-	return verdictFor(overall, DirectionEgress, selecting)
-}
 
-func evaluateIngress(src Peer, dst []Backend, policies []*networkingv1.NetworkPolicy) Verdict {
+	// Each backend is judged on the complete path — the source's egress AND
+	// the backend's ingress — and the connection succeeds if any backend's
+	// path does. Folding the two directions separately would call a Service
+	// reachable when egress admits only one backend and ingress only another.
 	overall := triNo
-	var isolating []*networkingv1.NetworkPolicy
+	egressAll, ingressAll := triNo, triNo
+	var ingressPolicies []*networkingv1.NetworkPolicy
 	for _, b := range dst {
 		// A pod can never block traffic to itself.
 		if samePod(src.Pod, b.Pod) {
-			overall = fold(overall, triYes)
+			overall = triYes
+			egressAll, ingressAll = triYes, triYes
 			continue
 		}
+		egress := egressAdmits(egressPolicies, b)
 		selecting, ok := selectingPolicies(b.Pod, policies, func(t PolicyTypes) bool { return t.Ingress })
 		if !ok {
 			return Verdict{Kind: Unknown}
 		}
-		if len(selecting) == 0 {
-			// NetworkPolicy is additive: an unselected pod accepts everything.
-			overall = fold(overall, triYes)
-			continue
-		}
-		isolating = append(isolating, selecting...)
-		verdict := triNo
-		for _, np := range selecting {
-			for i := range np.Spec.Ingress {
-				rule := &np.Spec.Ingress[i]
-				if !RuleMatchesPort(rule.Ports, b.Port, b.Protocol, b.Pod) {
-					continue
-				}
-				verdict = fold(verdict, peersAdmit(rule.From, src, np.Namespace, DirectionIngress))
-			}
-		}
-		overall = fold(overall, verdict)
+		ingressPolicies = append(ingressPolicies, selecting...)
+		ingress := ingressAdmits(selecting, src, b)
+		overall = fold(overall, both(egress, ingress))
+		egressAll = fold(egressAll, egress)
+		ingressAll = fold(ingressAll, ingress)
 	}
-	return verdictFor(overall, DirectionIngress, isolating)
+
+	switch overall {
+	case triYes:
+		return Verdict{Kind: Allowed}
+	case triUnknown:
+		return Verdict{Kind: Unknown}
+	}
+	switch {
+	case egressAll == triNo:
+		return Verdict{Kind: Denied, Direction: DirectionEgress, Policies: policyNames(egressPolicies)}
+	case ingressAll == triNo:
+		return Verdict{Kind: Denied, Direction: DirectionIngress, Policies: policyNames(ingressPolicies)}
+	default:
+		return Verdict{Kind: Denied, Direction: DirectionBoth, Policies: policyNames(append(append([]*networkingv1.NetworkPolicy{}, egressPolicies...), ingressPolicies...))}
+	}
+}
+
+// egressAdmits answers for one backend against the policies that isolate the
+// source's egress; none means the source is unrestricted.
+func egressAdmits(selecting []*networkingv1.NetworkPolicy, b Backend) tri {
+	if len(selecting) == 0 {
+		return triYes
+	}
+	verdict := triNo
+	for _, np := range selecting {
+		for i := range np.Spec.Egress {
+			rule := &np.Spec.Egress[i]
+			// Named ports in an egress rule refer to the destination pod.
+			if !RuleMatchesPort(rule.Ports, b.Port, b.Protocol, b.Pod) {
+				continue
+			}
+			verdict = fold(verdict, peersAdmit(rule.To, b.Peer, np.Namespace, DirectionEgress))
+		}
+	}
+	return verdict
+}
+
+// ingressAdmits answers for one backend against the policies that isolate
+// its ingress; none means the pod accepts everything (NetworkPolicy is
+// additive — an unselected pod is open).
+func ingressAdmits(selecting []*networkingv1.NetworkPolicy, src Peer, b Backend) tri {
+	if len(selecting) == 0 {
+		return triYes
+	}
+	verdict := triNo
+	for _, np := range selecting {
+		for i := range np.Spec.Ingress {
+			rule := &np.Spec.Ingress[i]
+			if !RuleMatchesPort(rule.Ports, b.Port, b.Protocol, b.Pod) {
+				continue
+			}
+			verdict = fold(verdict, peersAdmit(rule.From, src, np.Namespace, DirectionIngress))
+		}
+	}
+	return verdict
+}
+
+// both merges the two legs of one path: the path works only if both do, is
+// denied as soon as one is, and is undecidable otherwise.
+func both(a, b tri) tri {
+	switch {
+	case a == triNo || b == triNo:
+		return triNo
+	case a == triUnknown || b == triUnknown:
+		return triUnknown
+	default:
+		return triYes
+	}
 }
 
 // peersAdmit is a rule's from/to list as one answer: empty admits everyone,
@@ -203,35 +229,33 @@ func fold(acc, next tri) tri {
 	}
 }
 
-func verdictFor(t tri, dir Direction, policies []*networkingv1.NetworkPolicy) Verdict {
-	switch t {
-	case triYes:
-		return Verdict{Kind: Allowed}
-	case triNo:
-		return Verdict{Kind: Denied, Direction: dir, Policies: policyNames(policies)}
-	default:
-		return Verdict{Kind: Unknown}
+// Selects reports whether a policy applies to a pod: same namespace and a
+// podSelector match (an empty selector matches every pod there). The error is
+// a malformed selector, which callers decide how to treat — an evaluator that
+// must be certain treats it as undecidable, a display may just skip it.
+func Selects(np *networkingv1.NetworkPolicy, pod *corev1.Pod) (bool, error) {
+	if np == nil || pod == nil || np.Namespace != pod.Namespace {
+		return false, nil
 	}
+	sel, err := metav1.LabelSelectorAsSelector(&np.Spec.PodSelector)
+	if err != nil {
+		return false, err
+	}
+	return sel.Matches(labels.Set(pod.Labels)), nil
 }
 
-// selectingPolicies returns the policies in the pod's namespace whose
-// podSelector matches it and whose effective types include the requested
-// direction. ok is false when a selector could not be parsed: the policy's
-// effect is then undecidable and no verdict may be built on the rest.
+// selectingPolicies returns the policies that select the pod and whose
+// effective types include the requested direction. ok is false when a
+// selector could not be parsed: the policy's effect is then undecidable and
+// no verdict may be built on the rest.
 func selectingPolicies(pod *corev1.Pod, policies []*networkingv1.NetworkPolicy, wants func(PolicyTypes) bool) ([]*networkingv1.NetworkPolicy, bool) {
 	var out []*networkingv1.NetworkPolicy
 	for _, np := range policies {
-		if np == nil || np.Namespace != pod.Namespace {
-			continue
-		}
-		sel, err := metav1.LabelSelectorAsSelector(&np.Spec.PodSelector)
+		selects, err := Selects(np, pod)
 		if err != nil {
 			return nil, false
 		}
-		if !sel.Matches(labels.Set(pod.Labels)) {
-			continue
-		}
-		if wants(EffectivePolicyTypes(np)) {
+		if selects && wants(EffectivePolicyTypes(np)) {
 			out = append(out, np)
 		}
 	}

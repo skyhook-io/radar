@@ -290,6 +290,9 @@ func describeNetworkPolicyBlock(cand prom.Candidate, self *corev1.Pod, backends 
 		// manually managed EndpointSlice can make different.
 		return fmt.Sprintf("Prometheus candidate %s was unreachable, and %s egress from %s with no rule admitting it; add an egress rule to %s",
 			target, subject, selfRef, backendDestinations(backends))
+	case netpol.DirectionBoth:
+		return fmt.Sprintf("Prometheus candidate %s was unreachable, and %s the path from %s: no backend is admitted by both Radar's egress rules and its own ingress rules; allow egress to %s and ingress from Radar's namespace (%s)",
+			target, subject, selfRef, backendDestinations(backends), self.Namespace)
 	default:
 		return fmt.Sprintf("Prometheus candidate %s was unreachable, and %s ingress to its pods with no rule admitting %s; add an ingress rule for Radar's namespace (%s)",
 			target, subject, selfRef, self.Namespace)

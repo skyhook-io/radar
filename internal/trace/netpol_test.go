@@ -13,7 +13,7 @@ import (
 
 func npPod(lbls map[string]string, ports ...corev1.ContainerPort) *corev1.Pod {
 	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Labels: lbls},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Labels: lbls},
 		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Ports: ports}}},
 	}
 }

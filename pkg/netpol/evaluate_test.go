@@ -327,6 +327,41 @@ func TestEvaluate(t *testing.T) {
 			want: Verdict{Kind: Unknown},
 		},
 		{
+			name: "egress admitting only one backend and ingress only another is no complete path",
+			src:  radar(),
+			dst: func() []Backend {
+				a := prom(9090)
+				a.Pod.Name, a.Pod.Labels = "prom-a", map[string]string{"app": "prometheus", "shard": "a"}
+				b := prom(9090)
+				b.Pod.Name, b.Pod.Labels = "prom-b", map[string]string{"app": "prometheus", "shard": "b"}
+				return []Backend{a, b}
+			}(),
+			policies: []*networkingv1.NetworkPolicy{
+				// Radar may only talk to shard a...
+				policy("radar", "egress-shard-a", radarLabels, egressT, nil,
+					[]networkingv1.NetworkPolicyEgressRule{{To: []networkingv1.NetworkPolicyPeer{{
+						NamespaceSelector: &metav1.LabelSelector{}, PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"shard": "a"}},
+					}}}}),
+				// ...but only shard b lets Radar in.
+				policy("monitoring", "deny-all", nil, ingressT, nil, nil),
+				policy("monitoring", "shard-b-from-radar", map[string]string{"shard": "b"}, ingressT,
+					[]networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{fromRadarNs}}}, nil),
+			},
+			want: Verdict{Kind: Denied, Direction: DirectionBoth, Policies: []string{"monitoring/deny-all", "monitoring/shard-b-from-radar", "radar/egress-shard-a"}},
+		},
+		{
+			name: "an unset backend protocol means TCP",
+			src:  radar(),
+			dst: func() []Backend {
+				b := prom(9090)
+				b.Protocol = ""
+				return []Backend{b}
+			}(),
+			policies: []*networkingv1.NetworkPolicy{policy("monitoring", "tcp-9090", promLabels, ingressT,
+				[]networkingv1.NetworkPolicyIngressRule{{Ports: []networkingv1.NetworkPolicyPort{tcpPort(9090)}, From: []networkingv1.NetworkPolicyPeer{fromRadarNs}}}, nil)},
+			want: Verdict{Kind: Allowed},
+		},
+		{
 			name: "no backends is undecidable",
 			src:  radar(), dst: nil,
 			policies: []*networkingv1.NetworkPolicy{policy("monitoring", "deny-all", nil, ingressT, nil, nil)},

@@ -8,8 +8,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/pkg/netpol"
 )
@@ -115,11 +113,7 @@ func evaluateNetpol(pods []*corev1.Pod, ports []PortMap, policies []*networkingv
 		if np == nil {
 			continue
 		}
-		sel, err := metav1.LabelSelectorAsSelector(&np.Spec.PodSelector)
-		if err != nil {
-			continue
-		}
-		if !selectsAnyPod(sel, pods) {
+		if !selectsAnyPod(np, pods) {
 			continue
 		}
 		types := netpol.EffectivePolicyTypes(np)
@@ -267,8 +261,7 @@ func evaluatePodPort(pod *corev1.Pod, podPort int32, proto corev1.Protocol, poli
 	selectedByAny := false
 
 	for _, np := range policies {
-		sel, err := metav1.LabelSelectorAsSelector(&np.Spec.PodSelector)
-		if err != nil || !sel.Matches(labels.Set(pod.Labels)) {
+		if selects, err := netpol.Selects(np, pod); err != nil || !selects {
 			continue
 		}
 		selectedByAny = true
@@ -327,9 +320,12 @@ func resolveTargetPort(pm PortMap, pod *corev1.Pod) (int32, bool) {
 	})
 }
 
-func selectsAnyPod(sel labels.Selector, pods []*corev1.Pod) bool {
+// selectsAnyPod skips a policy whose selector cannot be parsed: for a static
+// prior that is the conservative reading (the policy is treated as not
+// restricting anything), and the finding stays advisory rather than red.
+func selectsAnyPod(np *networkingv1.NetworkPolicy, pods []*corev1.Pod) bool {
 	for _, pod := range pods {
-		if sel.Matches(labels.Set(pod.Labels)) {
+		if selects, err := netpol.Selects(np, pod); err == nil && selects {
 			return true
 		}
 	}
