@@ -362,7 +362,17 @@
           "type": "object",
           "additionalProperties": { "type": "string" }
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "prometheusHeaders": { "minProperties": 1 } }, "required": ["prometheusHeaders"] },
+          "then": { "properties": { "prometheusUrl": { "pattern": "\\S" } }, "required": ["prometheusUrl"] }
+        },
+        {
+          "if": { "properties": { "prometheusHeadersFromEnv": { "minProperties": 1 } }, "required": ["prometheusHeadersFromEnv"] },
+          "then": { "properties": { "prometheusUrl": { "pattern": "\\S" } }, "required": ["prometheusUrl"] }
+        }
+      ]
     },
     "argocd": {
       "type": "object",

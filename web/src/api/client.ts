@@ -3225,14 +3225,19 @@ export interface RightsizingScanResponse {
 }
 
 // Poll quickly while a discovery run is in flight so the flip to connected
-// (or to a failure message) lands promptly; otherwise the slow cadence.
+// (or to a failure message) lands promptly; otherwise the slow cadence. A
+// status that is neither connected nor carrying an outcome was read before
+// the server's run started (boot, context switch) — every run ends in one or
+// the other, so that state is transient and gets the fast cadence too.
 export const PROM_STATUS_POLL_DISCOVERING_MS = 2000;
 export const PROM_STATUS_POLL_IDLE_MS = 60000;
 
 export function prometheusStatusRefetchInterval(
   status: PrometheusStatus | undefined,
 ): number {
-  return status?.discovering
+  if (!status) return PROM_STATUS_POLL_IDLE_MS;
+  const settled = status.connected || !!status.error;
+  return status.discovering || !settled
     ? PROM_STATUS_POLL_DISCOVERING_MS
     : PROM_STATUS_POLL_IDLE_MS;
 }

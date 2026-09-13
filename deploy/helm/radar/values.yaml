@@ -533,6 +533,8 @@ traffic:
   prometheusUrl: ""
   # HTTP headers sent with every Prometheus request. Required for
   # auth-protected backends (Bearer tokens, X-Scope-OrgID multi-tenancy, etc.).
+  # Setting headers requires prometheusUrl: Radar never sends credentials to
+  # auto-discovered endpoints, and the chart schema rejects the combination.
   # Values are rendered into the pod spec; use prometheusHeadersFromEnv for
   # secrets.
   # Example:

@@ -214,11 +214,16 @@ func Configure(rawURL string, headers map[string]string) {
 		return
 	}
 	globalClient.mu.Lock()
+	previous := globalClient.baseURL
 	globalClient.configureLocked(rawURL, headers)
 	globalClient.mu.Unlock()
-	// The forward served the endpoint just dropped; a manual URL never needs
-	// one, and a rediscovery opens its own.
-	portforward.Stop(portforward.OwnerPrometheus)
+	// Stop the forward that served the dropped endpoint, and only that one: a
+	// discovery under the new generation may already have opened its own by
+	// the time this runs, and an owner-wide stop would tear that down while
+	// its address stays cached as connected.
+	if previous != "" {
+		portforward.StopIfAddress(portforward.OwnerPrometheus, previous)
+	}
 }
 
 // HasHeaders reports whether the running client carries any Prometheus headers,

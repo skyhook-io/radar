@@ -5586,7 +5586,17 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 		effectiveHeaders = prometheuspkg.CurrentHeaders()
 	}
 	prometheuspkg.Configure(rawURL, effectiveHeaders)
+	// A live traffic source copies URL and headers at construction and reads
+	// them lock-free afterwards, so the only way rotated or cleared
+	// credentials stop being used is to rebuild it — the same teardown a
+	// context switch performs.
 	traffic.SetMetricsConfig(rawURL, effectiveHeaders)
+	traffic.Reset()
+	if client := k8s.GetClient(); client != nil {
+		if err := traffic.ReinitializeWithConfig(client, k8s.GetConfig(), k8s.GetContextName()); err != nil {
+			log.Printf("[traffic] Failed to reinitialize after Prometheus config change: %v", err)
+		}
+	}
 	if s.openCostCurrency != nil {
 		s.openCostCurrency.Invalidate()
 	}
