@@ -13,6 +13,7 @@ export interface GitOpsInsight {
 }
 
 import type { GitOpsTool } from './gitops'
+import type { GitOpsHealthMode, GitOpsHealthSource } from './gitops-tree'
 
 // Closed enums mirroring `pkg/gitops/insights/vocab.go`. Keeping the FE
 // vocabulary in lockstep with the Go side means switches over these fields
@@ -79,6 +80,13 @@ export interface GitOpsInsightSummary {
   // (jqPathExpressions / managedFieldsManagers rules) — the
   // drift panel may surface fields Argo's own UI suppresses.
   ignoredDifferences?: GitOpsIgnoredDifferences
+  // Argo roots: where Argo keeps per-resource health. 'appTree' means the
+  // controller's verdicts are not in the Application object and any
+  // per-resource health shown is Radar's own read.
+  resourceHealthMode?: GitOpsHealthMode
+  // The Application deploys to another cluster; Radar derives nothing about
+  // its resources from here.
+  remoteDestination?: boolean
 }
 
 export interface GitOpsIgnoredDifferences {
@@ -116,6 +124,10 @@ export interface GitOpsIssue {
   // a contextual action button. Nil when no automated remedy applies — the
   // `action` string still describes the manual path in that case.
   remediation?: GitOpsRemediation
+  // Set on resource-scoped issues: 'controller' when the GitOps controller's
+  // own per-resource health produced it, 'radar' when Radar's issues engine
+  // did because the controller's verdict wasn't available.
+  source?: GitOpsHealthSource
 }
 
 export type GitOpsRemediationKind = 'create-namespace'
@@ -131,6 +143,11 @@ export interface GitOpsChange {
   category: GitOpsCategory
   sync?: string
   health?: string
+  // Provenance of `health`; see GitOpsTreeNode.healthSource. `message` holds
+  // the health message from whichever source produced `health`.
+  healthSource?: GitOpsHealthSource
+  healthReason?: string
+  healthSeverity?: string
   message?: string
   // Per-resource sync failure message (Argo's status.resources[].syncResult).
   // Distinct from `message` (live health). Empty when sync succeeded.

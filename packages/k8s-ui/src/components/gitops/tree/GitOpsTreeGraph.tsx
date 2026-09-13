@@ -24,6 +24,7 @@ import type { GitOpsIssue, GitOpsResourceTree, GitOpsTreeNode, GitOpsTreeRef, He
 import { displayKind } from '../../../types'
 import { healthToSeverity, SEVERITY_DOT } from '../../../utils/badge-colors'
 import { formatCompactAge } from '../../../utils/format'
+import { radarHealthNote } from '../health-provenance'
 import { getTopologyIcon } from '../../../utils/resource-icons'
 import { Tooltip } from '../../ui/Tooltip'
 import { hasGitOpsTreeFilters, matchesGitOpsTreeFilters, type GitOpsTreeFilters } from './tree-helpers'
@@ -668,6 +669,13 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
                   {chip.label ? `${chip.label}: ` : ''}{chip.value}
                 </span>
               ))}
+              {radarHealthNote(node) && (
+                <Tooltip content={radarHealthNote(node)} delay={200}>
+                  <span className="rounded border border-theme-border bg-theme-elevated/70 px-1.5 py-0.5 text-[10px] leading-3 text-theme-text-tertiary">
+                    Radar
+                  </span>
+                </Tooltip>
+              )}
             </div>
           )}
         </div>

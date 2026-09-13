@@ -37,6 +37,7 @@ kubectl config use-context kind-radar-gitops-demo
 | `argocd/app-of-apps-parent` | Application | App-of-apps: parent that manages 3 child Applications → portal-node + lineage breadcrumb |
 | `argocd/radar-demo-set` | ApplicationSet | List generator → 3 child Applications (`set-vanilla`, `set-kustomize`, `set-helm`) |
 | `argocd/radar-demo` | AppProject | Custom project (non-default) for fleet view's Project filter |
+| `argocd/argo3-health` | Application | Degraded on Argo CD 3 with **no per-resource health in the CR**. See "Per-resource health on Argo CD 3" below. |
 
 ### Flux scenarios
 
@@ -112,6 +113,32 @@ future feature would consume; UI work is what's missing.
 | 19 | Inspect HelmRelease values + chart version | ✅ covered | podinfo HelmRelease |
 | 20 | Onboard a new app | N/A | Write-only feature; no fixture concept applies |
 
+## Per-resource health on Argo CD 3
+
+From 3.0, Argo CD stops writing per-resource health into the Application
+object (`status.resourceHealthSource: appTree`, `controller.resource.health.persist=false`
+by default). The app-level health still rolls up, but `status.resources[].health`
+is empty for every kind. Radar's detail page then reads the live resources
+itself and must say so. `argo3-health` is built to show every branch of that:
+
+| Managed resource | Argo | Radar | What the page must show |
+|---|---|---|---|
+| `Widget/platform-widget` | Has a health check (Lua in `argocd-cm`, installed by the script): `Ready=False` → **Degraded**, rolled up into the app | Issues engine: `Ready: InvalidProviderConfig` | Argo and Radar agree. Row shows Degraded with the **Radar** marker (Argo's verdict is not in the CR, so what's displayed is Radar's) |
+| `Gadget/unchecked-gadget` | **No health check.** Ignored for app health | Issues engine: `Ready: NotConfigured` | Radar reports a problem Argo never counted. The Radar marker + the notice above the Issues band are what keep this honest |
+| `Deployment/crashloop` | Built-in check: Degraded after `progressDeadlineSeconds` | Issues engine: CrashLoopBackOff collapsed onto the Deployment | The mainstream case — a crashloop that Argo 2 used to attribute via the CR |
+
+The manifests live in this repo (`scripts/gitops-demo/argo3-health/`), so the
+Application points at `https://github.com/skyhook-io/radar` — no git server
+in the kind cluster. To exercise a branch before it lands on `main`:
+`ARGO3_FIXTURE_REVISION=my-branch ./scripts/gitops-demo.sh up`.
+
+Both fixture CRDs have **no status subresource** on purpose: that is what
+lets a manifest carry `.status.conditions` and have Argo apply it verbatim.
+There is no controller for these kinds, so the conditions never change.
+`ARGOCD_VERSION=v2.13.2` runs the same fixtures against the older inline
+shape, where `status.resources[].health` is populated and no marker or
+notice should appear.
+
 ## Scenarios NOT covered (intentional gaps requiring real engineering effort)
 
 - **Stuck-drift-loop** (mutating webhook persistently changes a synced resource) — would need a custom mutating-webhook deployment in the kind cluster. Worth reproducing manually during pre-release QA: deploy a webhook that mutates `spec.replicas` on every admission, point an Argo Application at a Deployment, watch the StuckDriftLoop detector fire.
@@ -119,17 +146,19 @@ future feature would consume; UI work is what's missing.
 
 ## Implementation notes
 
-- **Argo CD pinned to `v2.13.2`**, **Flux pinned to `v2.4.0`**. Bump in
-  `scripts/gitops-demo.sh` (top of file) when the demo should track a
-  newer release.
+- **Argo CD pinned to `v3.5.2`** (the 3.x per-resource-health shape is what
+  users run; `ARGOCD_VERSION=v2.13.2` selects the inline shape), **Flux
+  pinned to `v2.4.0`**. Bump in `scripts/gitops-demo.sh` (top of file) when
+  the demo should track a newer release.
 - The fixtures rely on **public Git repos** (`argoproj/argocd-example-apps`,
   `stefanprodan/podinfo`) that are stable, MIT-licensed, and used as
   reference points by Argo + Flux upstream. If we ever need offline
   operation, mirror them into an in-cluster gitea pod and update the
   `repoURL` fields.
 - The Argo `radar-demo` AppProject scopes destinations to `demo-*`
-  namespaces. Adding new demo Applications outside that pattern
-  requires extending `02-argo-appproject.yaml`.
+  namespaces and sources to `argocd-example-apps` + this repository.
+  Adding new demo Applications outside that pattern requires extending
+  `02-argo-appproject.yaml`.
 - The zombie Kustomization uses a fake finalizer (`radar-demo.io/intentional-zombie`)
   rather than scaling Flux's source-controller down — this keeps the
   zombie isolated, so the healthy Flux fixtures keep reconciling

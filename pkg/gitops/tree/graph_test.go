@@ -107,7 +107,7 @@ func TestSummarize_ExcludesRootAndGroupFromDegraded(t *testing.T) {
 		{Role: RoleDeclared, Ref: ResourceRef{Kind: "Deployment", Name: "d"}, Health: "Healthy", Sync: "OutOfSync"},
 		{Role: RoleGroup, Ref: ResourceRef{Kind: "ConfigMap", Name: "3 ConfigMaps"}, Health: "Degraded", Count: 3}, // synthetic bucket — must NOT count
 	}
-	s := summarize(nodes)
+	s := Summarize(nodes)
 	if s.Degraded != 1 {
 		t.Errorf("Degraded = %d, want 1 (only the managed HTTPRoute; not the app or the group)", s.Degraded)
 	}

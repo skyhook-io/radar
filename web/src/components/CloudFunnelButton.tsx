@@ -48,6 +48,13 @@ const DEFAULT_ASSURANCES = [
   '3 clusters free, no card required',
 ]
 const SIGNUP_QUERY = '?utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal'
+
+// cloudSignupUrl is the one place the Hub signup link is assembled. Every
+// OSS surface that points at Radar Cloud goes through it so the Hub can
+// tell them apart by utm_content and Radar never transmits anything else.
+export function cloudSignupUrl(appUrl: string | undefined, content: string): string {
+  return `${appUrl || FALLBACK_APP_URL}/signup${SIGNUP_QUERY}&utm_content=${content}`
+}
 const ABOUT_URL = 'https://radarhq.io/about'
 const PRICING_URL = 'https://radarhq.io/pricing'
 const SELF_HOSTED_DOCS_URL = 'https://radarhq.io/docs/cloud/self-hosted/'
@@ -91,7 +98,7 @@ export function CloudFunnelButton() {
   const appUrl = capabilities.data?.cloudConnect?.appUrl || FALLBACK_APP_URL
   // utm_content distinguishes the lane that opened the Hub — measured Hub-side
   // only when the user actually navigates there; Radar transmits nothing.
-  const signupUrlFor = (content: string) => `${appUrl}/signup${SIGNUP_QUERY}&utm_content=${content}`
+  const signupUrlFor = (content: string) => cloudSignupUrl(appUrl, content)
   const signupUrl = signupUrlFor('funnel-cta')
 
   // Only while the dialog is open — never on the capabilities poll. The Hub

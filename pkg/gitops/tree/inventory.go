@@ -39,7 +39,7 @@ func parseArgoManagedResources(root *unstructured.Unstructured) []managedResourc
 		if hm, ok := m["health"].(map[string]any); ok {
 			health = gitops.StringValue(hm["status"])
 		}
-		out = append(out, managedResource{
+		res := managedResource{
 			Ref:    ref,
 			Sync:   normalizeSync(gitops.StringValue(m["status"])),
 			Health: normalizeHealth(health),
@@ -48,9 +48,26 @@ func parseArgoManagedResources(root *unstructured.Unstructured) []managedResourc
 				"syncWave":  gitops.StringValue(m["syncWave"]),
 				"syncPhase": gitops.StringValue(m["syncPhase"]),
 			},
-		})
+		}
+		if res.Health != "" {
+			res.HealthSource = HealthSourceController
+		}
+		out = append(out, res)
 	}
 	return out
+}
+
+// argoHealthMode reads where the Application keeps per-resource health.
+// Argo writes status.resourceHealthSource only in appTree mode; the inline
+// mode is its zero value. Only the explicit field decides — "some entry has
+// health" is not evidence of inline mode, since a kind without a health
+// check has no health in either mode.
+func argoHealthMode(root *unstructured.Unstructured) HealthMode {
+	src, _, _ := unstructured.NestedString(root.Object, "status", "resourceHealthSource")
+	if strings.EqualFold(strings.TrimSpace(src), string(HealthModeAppTree)) {
+		return HealthModeAppTree
+	}
+	return HealthModeInline
 }
 
 func parseFluxManagedResources(root *unstructured.Unstructured) []managedResource {

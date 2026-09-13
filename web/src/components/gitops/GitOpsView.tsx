@@ -72,6 +72,9 @@ import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
 import { CodeViewer } from '../ui/CodeViewer'
 import { ArgoResourceDiffLoader } from './ArgoResourceDiffLoader'
 import { RevisionMetaChip } from './RevisionMetaChip'
+import { RemoteDestinationCloudHint } from './RemoteDestinationCloudHint'
+
+const GITOPS_HEALTH_DOCS_URL = 'https://radarhq.io/docs/gitops/#per-resource-health'
 import type { GitOpsHistoryItem } from '@skyhook-io/k8s-ui'
 
 const GITOPS_KINDS: APIResource[] = [
@@ -634,6 +637,8 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       detail={detail}
       insight={insightsQ.data ?? null}
       insightLoading={insightsQ.isLoading}
+      healthDocsUrl={GITOPS_HEALTH_DOCS_URL}
+      remoteDestinationHint={<RemoteDestinationCloudHint />}
       renderRevisionMeta={
         isArgoApp && insightsQ.data?.capabilities?.revisionMetadataAvailable
           ? (revision) => (

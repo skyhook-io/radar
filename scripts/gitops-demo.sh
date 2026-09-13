@@ -29,8 +29,17 @@ FIXTURES_DIR="${SCRIPT_DIR}/gitops-demo"
 
 # Versions pinned so the demo behaves consistently across runs. Bump
 # when you want a newer release; otherwise leave alone.
-ARGOCD_VERSION="${ARGOCD_VERSION:-v2.13.2}"
+#
+# Argo CD 3.x is the default because it changes what Radar sees: from 3.0
+# the controller no longer persists per-resource health into the
+# Application CR (status.resourceHealthSource=appTree). Set
+# ARGOCD_VERSION=v2.13.2 to exercise the older inline shape.
+ARGOCD_VERSION="${ARGOCD_VERSION:-v3.5.2}"
 FLUX_VERSION="${FLUX_VERSION:-v2.4.0}"
+
+# The argo3-health Application sources its manifests from this repository
+# on GitHub. Point it at a branch to test fixture changes before they land.
+ARGO3_FIXTURE_REVISION="${ARGO3_FIXTURE_REVISION:-main}"
 
 # Pretty colors for status output. Quietly turn off in non-interactive env.
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -153,12 +162,35 @@ apply_fixtures() {
       continue
     fi
     note "applying $(basename "$f")"
+    if [ "$(basename "$f")" = "12-argo3-health-app.yaml" ] && [ "${ARGO3_FIXTURE_REVISION}" != "main" ]; then
+      sed "s|targetRevision: main|targetRevision: ${ARGO3_FIXTURE_REVISION}|" "$f"         | kubectl --context "${KUBECTL_CTX}" apply -f - >/dev/null
+      continue
+    fi
     kubectl --context "${KUBECTL_CTX}" apply -f "$f" >/dev/null
   done
   ok "Fixtures applied"
 
+  setup_argo_health_customizations
   setup_rollback_history
   setup_zombie
+}
+
+# setup_argo_health_customizations merges the demo's Argo health checks
+# (fixture ConfigMap radar-demo-argo-health-customizations) into argocd-cm.
+# argocd-cm is owned by install.yaml, so the keys are patched in rather
+# than applied as a second manifest. The application controller reloads
+# argocd-cm on its own; the restart just makes the first evaluation prompt.
+setup_argo_health_customizations() {
+  step "Installing Argo CD health checks for the argo3-health scenario"
+  local lua
+  lua=$(kubectl --context "${KUBECTL_CTX}" -n argocd get configmap radar-demo-argo-health-customizations     -o jsonpath='{.data.resource\.customizations\.health\.radar\.demo_Widget}')
+  if [ -z "$lua" ]; then
+    warn "customization ConfigMap missing; Widget health will not be evaluated by Argo"
+    return
+  fi
+  kubectl --context "${KUBECTL_CTX}" -n argocd patch configmap argocd-cm --type merge     -p "$(printf '{"data":{"resource.customizations.health.radar.demo_Widget":%s}}' "$(printf '%s' "$lua" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')")" >/dev/null
+  kubectl --context "${KUBECTL_CTX}" -n argocd rollout restart statefulset/argocd-application-controller >/dev/null
+  ok "Widget health check installed"
 }
 
 # wait_for_app_synced polls until an Argo Application reports Synced+Healthy.

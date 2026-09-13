@@ -12,6 +12,9 @@ spec:
   sourceRepos:
     - https://github.com/argoproj/argocd-example-apps
     - https://github.com/argoproj/argocd-example-apps.git
+    # The argo3-health scenario sources its manifests from this repository.
+    - https://github.com/skyhook-io/radar
+    - https://github.com/skyhook-io/radar.git
   destinations:
     - server: https://kubernetes.default.svc
       namespace: 'demo-*'
@@ -29,4 +32,6 @@ spec:
     - group: apps
       kind: '*'
     - group: networking.k8s.io
+      kind: '*'
+    - group: radar.demo
       kind: '*'

@@ -1,0 +1,31 @@
+# Per-resource health on Argo CD 3 (see README). Sources the manifests from
+# this repository so the scenario needs no git server in the kind cluster.
+# The demo script rewrites targetRevision to $ARGO3_FIXTURE_REVISION when
+# set, so a branch can be exercised before it lands on main.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-argo3-health
+  labels:
+    radar-demo: "true"
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argo3-health
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: radar-demo
+  source:
+    repoURL: https://github.com/skyhook-io/radar
+    targetRevision: main
+    path: scripts/gitops-demo/argo3-health
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo-argo3-health
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true

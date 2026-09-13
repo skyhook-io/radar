@@ -59,3 +59,5 @@ export type {
   FluxActionHandlers,
   GitOpsHelmValuesData,
 } from './GitOpsDetailLayout'
+export { GitOpsHealthSourceNotice, healthSourceNoticeKind, APP_TREE_HEALTH_NOTICE, REMOTE_DESTINATION_NOTICE } from './GitOpsHealthSourceNotice'
+export { radarHealthNote, RADAR_HEALTH_NOTE } from './health-provenance'

@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { GitOpsChange, GitOpsHistoryItem, GitOpsInsight, GitOpsInsightRef, GitOpsIssue, GitOpsPlanItem, GitOpsRemediation, GitOpsResourceTree, GitOpsTreeNode } from '../../../types'
 import { HealthStatusBadge, SyncStatusBadge } from '../GitOpsStatusBadge'
+import { radarHealthNote } from '../health-provenance'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '../../../utils/badge-colors'
 import { formatRelativeAgeTime } from '../../../utils/format'
 import { Tooltip } from '../../ui/Tooltip'
@@ -1230,6 +1231,9 @@ function buildTreeExtras(nodes: GitOpsTreeNode[], declared: GitOpsChange[]): Git
       category: 'Unknown',
       sync: n.sync,
       health: n.health,
+      healthSource: n.healthSource,
+      healthReason: n.healthReason,
+      message: n.healthMessage,
       hasDesired: false,
       hasLive: true,
       partial: true,
@@ -1352,6 +1356,7 @@ function ChangeRow({
   // and offer "View in Git →" instead so the operator can read the
   // declared source instead of a non-existent live object.
   const isAbsent = change.health === 'Missing' && !change.hasLive
+  const radarNote = radarHealthNote({ health: change.health, healthSource: change.healthSource, healthMessage: change.message })
   const handleRowClick = () => {
     if (expandable) {
       setExpanded((v) => !v)
@@ -1458,7 +1463,16 @@ function ChangeRow({
             <SyncStatusBadge sync={normalizeSyncStatus(change.sync ?? change.category)} />
           )}
         </div>
-        <div className="self-start"><HealthStatusBadge health={normalizeHealthStatus(change.health)} /></div>
+        <div className="flex flex-col items-start gap-1 self-start">
+          <HealthStatusBadge health={normalizeHealthStatus(change.health)} />
+          {radarNote && (
+            <Tooltip content={radarNote} delay={200} wrapperClassName="inline-flex">
+              <span className="cursor-help select-none rounded border border-theme-border bg-theme-elevated/70 px-1.5 py-0.5 text-[10px] leading-3 text-theme-text-tertiary">
+                Radar
+              </span>
+            </Tooltip>
+          )}
+        </div>
         <div className="self-start space-y-1.5">
           {syncResourceButton && syncResourceDisabledReason ? (
             <Tooltip content={syncResourceDisabledReason} delay={200} wrapperClassName="block">

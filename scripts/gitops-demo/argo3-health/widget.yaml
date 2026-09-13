@@ -1,0 +1,16 @@
+# Argo has a health check for Widget (argocd-cm customization): Ready=False
+# → Degraded, rolled up into the app. Radar's issues engine sees the same
+# condition. This is the row where Argo and Radar agree.
+apiVersion: radar.demo/v1
+kind: Widget
+metadata:
+  name: platform-widget
+spec:
+  provider: vault
+status:
+  conditions:
+    - type: Ready
+      status: "False"
+      reason: InvalidProviderConfig
+      message: "unable to authenticate to vault: no route to host"
+      lastTransitionTime: "2026-01-01T00:00:00Z"

@@ -292,3 +292,103 @@ func TestBuildParallelEnrichmentMatchesObjects(t *testing.T) {
 		t.Fatalf("found %d ConfigMap nodes, want 40", found)
 	}
 }
+
+// findNode returns the tree node for ref, failing the test when absent.
+func findNode(t *testing.T, tree *ResourceTree, ref ResourceRef) Node {
+	t.Helper()
+	for _, n := range tree.Nodes {
+		if n.Ref.Group == ref.Group && n.Ref.Kind == ref.Kind && n.Ref.Namespace == ref.Namespace && n.Ref.Name == ref.Name {
+			return n
+		}
+	}
+	t.Fatalf("node %+v not in tree", ref)
+	return Node{}
+}
+
+func healthProvenanceApp(status map[string]any) *unstructured.Unstructured {
+	status["sync"] = map[string]any{"status": "Synced"}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1",
+		"kind":       "Application",
+		"metadata":   map[string]any{"name": "billing", "namespace": "argocd"},
+		"spec":       map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}},
+		"status":     status,
+	}}
+}
+
+func healthProvenanceTopo() *topology.Topology {
+	return &topology.Topology{Nodes: []topology.Node{
+		{ID: "deployment/prod/billing", Kind: topology.KindDeployment, Name: "billing", Status: topology.StatusUnhealthy, Data: map[string]any{"namespace": "prod", "group": "apps"}},
+	}}
+}
+
+// TestBuild_ControllerHealthWinsOverTopology: Argo persisted Healthy for a
+// Deployment Radar's topology sees as unhealthy. The controller's verdict is
+// the node's health AND its tone — the graph must not paint the node red
+// on Radar's opinion while the chip says Healthy.
+func TestBuild_ControllerHealthWinsOverTopology(t *testing.T) {
+	app := healthProvenanceApp(map[string]any{
+		"health": map[string]any{"status": "Healthy"},
+		"resources": []any{
+			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "billing", "status": "Synced", "health": map[string]any{"status": "Healthy"}},
+		},
+	})
+	dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "billing"}): app}}
+	tree, _, err := NewBuilder(dynamic, healthProvenanceTopo()).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if tree.HealthMode != HealthModeInline || tree.RemoteDestination {
+		t.Errorf("HealthMode=%q RemoteDestination=%v, want inline/false", tree.HealthMode, tree.RemoteDestination)
+	}
+	n := findNode(t, tree, ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "billing"})
+	if n.Health != "Healthy" || n.HealthSource != HealthSourceController || n.TopologyStatus != "healthy" {
+		t.Errorf("node = health %q source %q tone %q, want Healthy/controller/healthy", n.Health, n.HealthSource, n.TopologyStatus)
+	}
+}
+
+// TestBuild_AppTreeModeFillsTopologyKindsFromRadar: Argo 3 default — no
+// per-resource health in the CR. Topology kinds get Radar's status,
+// labelled radar; kinds Radar doesn't model stay without health.
+func TestBuild_AppTreeModeFillsTopologyKindsFromRadar(t *testing.T) {
+	app := healthProvenanceApp(map[string]any{
+		"health":               map[string]any{"status": "Degraded"},
+		"resourceHealthSource": "appTree",
+		"resources": []any{
+			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "billing", "status": "Synced"},
+			map[string]any{"group": "external-secrets.io", "kind": "ClusterSecretStore", "name": "platform", "status": "Synced"},
+		},
+	})
+	dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "billing"}): app}}
+	tree, _, err := NewBuilder(dynamic, healthProvenanceTopo()).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if tree.HealthMode != HealthModeAppTree {
+		t.Errorf("HealthMode = %q, want appTree", tree.HealthMode)
+	}
+	dep := findNode(t, tree, ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "billing"})
+	if dep.Health != "Degraded" || dep.HealthSource != HealthSourceRadar || dep.TopologyStatus != "unhealthy" {
+		t.Errorf("Deployment = health %q source %q tone %q, want Degraded/radar/unhealthy", dep.Health, dep.HealthSource, dep.TopologyStatus)
+	}
+	css := findNode(t, tree, ResourceRef{Group: "external-secrets.io", Kind: "ClusterSecretStore", Name: "platform"})
+	if css.Health != "" || css.HealthSource != "" || css.TopologyStatus != "unknown" {
+		t.Errorf("ClusterSecretStore = health %q source %q tone %q, want no health (nothing fabricated)", css.Health, css.HealthSource, css.TopologyStatus)
+	}
+	if tree.Summary.Degraded != 1 {
+		t.Errorf("Summary.Degraded = %d, want 1 (the Radar-derived Deployment)", tree.Summary.Degraded)
+	}
+}
+
+func TestBuild_RemoteDestinationFlagged(t *testing.T) {
+	app := healthProvenanceApp(map[string]any{"resources": []any{}})
+	app.Object["spec"] = map[string]any{"destination": map[string]any{"server": "https://spoke-1.example.com:6443"}}
+	dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "billing"}): app}}
+	tree, _, err := NewBuilder(dynamic, &topology.Topology{}).Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !tree.RemoteDestination {
+		t.Errorf("RemoteDestination = false, want true for a spoke destination")
+	}
+}
