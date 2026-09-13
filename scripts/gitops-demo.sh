@@ -111,8 +111,9 @@ install_argocd() {
   kubectl --context "${KUBECTL_CTX}" create namespace argocd --dry-run=client -o yaml \
     | kubectl --context "${KUBECTL_CTX}" apply -f - >/dev/null
 
-  # Apply official manifests at the pinned version. Idempotent.
-  kubectl --context "${KUBECTL_CTX}" apply -n argocd \
+  # Apply official manifests at the pinned version. Idempotent. Server-side:
+  # the 3.x CRDs exceed the client-side last-applied annotation limit.
+  kubectl --context "${KUBECTL_CTX}" apply --server-side --force-conflicts -n argocd \
     -f "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/install.yaml" >/dev/null
 
   step "Waiting for Argo CD pods to be Ready (~60s)"

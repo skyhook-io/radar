@@ -242,7 +242,12 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 		s.writeGitOpsBuildError(w, req, err)
 		return
 	}
-	resolver.prefetchLive(gitopsinsights.ManagedResourceRows(root), gitopsinsights.OperationPhase(root))
+	// A remote-destination app's resources aren't in this cluster; the
+	// insights builder won't ask for them, so don't fan out GETs for
+	// same-named local objects either.
+	if !tree.RemoteDestination {
+		resolver.prefetchLive(gitopsinsights.ManagedResourceRows(root), gitopsinsights.OperationPhase(root))
+	}
 	insight := gitopsinsights.Build(root, tree, resolver)
 	insight.Warnings = appendWarnings(insight.Warnings, tree.Warnings...)
 	insight = s.filterGitOpsInsightForUser(r, req, insight)

@@ -868,6 +868,12 @@ func dedupeIssues(in []Issue) []Issue {
 }
 func buildChanges(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTree, tool string, live Resolver) []Change {
 	if tool == "argocd" {
+		// Drift diffs and recent events come from this cluster; for an app
+		// deploying elsewhere they would describe unrelated same-named local
+		// objects, so a remote app's rows carry CR data only.
+		if resourceTree != nil && resourceTree.RemoteDestination {
+			live = nil
+		}
 		return argoResourceChanges(root, resourceTree, live)
 	}
 	if resourceTree == nil {

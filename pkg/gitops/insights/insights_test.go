@@ -1744,6 +1744,23 @@ func TestBuildIssues_RemoteDestinationSkipsLocalCauseBridge(t *testing.T) {
 	}
 }
 
+func TestBuildChanges_RemoteDestinationSkipsLocalEnrichment(t *testing.T) {
+	root := argoApp(map[string]any{
+		"resources": []any{
+			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "web", "status": "OutOfSync"},
+		},
+	})
+	r := &fakeResolver{events: map[string][]EventSummary{"web": {{Type: "Warning", Reason: "BackOff", Message: "local pod"}}}}
+	remote := buildChanges(root, &gitopstree.ResourceTree{RemoteDestination: true}, "argocd", r)
+	if len(remote) != 1 || len(remote[0].RecentEvents) != 0 || remote[0].Drift != nil {
+		t.Errorf("remote app must not carry local events/drift, got %+v", remote)
+	}
+	local := buildChanges(root, &gitopstree.ResourceTree{}, "argocd", r)
+	if len(local) != 1 || len(local[0].RecentEvents) != 1 {
+		t.Errorf("in-cluster app keeps event enrichment, got %+v", local)
+	}
+}
+
 func TestBuild_SummaryCarriesHealthModeAndDestination(t *testing.T) {
 	root := argoApp(map[string]any{"resourceHealthSource": "appTree"})
 	tree := &gitopstree.ResourceTree{HealthMode: gitopstree.HealthModeAppTree, RemoteDestination: true}
