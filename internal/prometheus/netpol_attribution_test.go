@@ -218,6 +218,20 @@ func TestAttributeNetworkPolicyBlock(t *testing.T) {
 		}
 	})
 
+	t.Run("a secondary address matching the pod is not the routed one", func(t *testing.T) {
+		fx := self
+		objs := clusterWithPrometheus(denyAllIngress("monitoring", "deny-all"))
+		for _, o := range objs {
+			if slice, ok := o.(*discoveryv1.EndpointSlice); ok {
+				slice.Endpoints[0].Addresses = []string{"10.0.9.9", "10.0.2.9"}
+			}
+		}
+		fx.objects = objs
+		if err := runAttribution(t, fx, transport); err != nil {
+			t.Fatalf("expected nil, got %v", err)
+		}
+	})
+
 	t.Run("a UDP port sharing the number is not the probed port", func(t *testing.T) {
 		fx := self
 		udp := corev1.ProtocolUDP

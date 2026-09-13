@@ -241,17 +241,21 @@ func slicePort(slice *discoveryv1.EndpointSlice, portName string) (int32, bool) 
 // endpointMatchesPod guards against a slice that still names a pod which has
 // since been replaced, or a manually managed slice whose address is not the
 // referenced pod's: the UID must agree when the reference carries one, and
-// the published address must be one of the pod's.
+// the address traffic is routed to — the first one; consumers are told to
+// use only that — must be one of the pod's.
 func endpointMatchesPod(ep discoveryv1.Endpoint, pod *corev1.Pod) bool {
 	if ep.TargetRef.UID != "" && ep.TargetRef.UID != pod.UID {
 		return false
 	}
-	podIPs := map[string]bool{pod.Status.PodIP: true}
-	for _, ip := range pod.Status.PodIPs {
-		podIPs[ip.IP] = true
+	if len(ep.Addresses) == 0 {
+		return false
 	}
-	for _, addr := range ep.Addresses {
-		if podIPs[addr] {
+	routed := ep.Addresses[0]
+	if pod.Status.PodIP == routed {
+		return true
+	}
+	for _, ip := range pod.Status.PodIPs {
+		if ip.IP == routed {
 			return true
 		}
 	}

@@ -227,6 +227,10 @@ func (c *Client) Probe(ctx context.Context) (bool, ProbeReason) {
 			// like a dial failure.
 			return false, ProbeReasonHTTPError
 		}
+		var respErr *ResponseError
+		if errors.As(err, &respErr) {
+			return false, ProbeReasonHTTPError
+		}
 		return false, ProbeReasonTransportError
 	}
 
