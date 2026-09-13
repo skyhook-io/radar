@@ -23,6 +23,7 @@ export type RenderInvestigationRunActions = (props: {
 
 /** Render prop for the resource-level Investigate action. */
 export type RenderDiagnoseAction = (ctx: {
+  /** Kubernetes Kind when loaded or discovered; otherwise its API resource name. */
   kind: string;
   /** Kubernetes API group; empty means core. */
   group?: string;

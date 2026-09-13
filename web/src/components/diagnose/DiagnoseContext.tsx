@@ -36,6 +36,7 @@ import {
   type ExecutionProfile,
 } from "../../api/diagnose";
 import { runTargetKey } from "./target";
+import { knownKindForPluralWithGroup } from "../../utils/navigation";
 
 export interface Target {
   kind: string;
@@ -660,7 +661,7 @@ function RoutedDiagnoseProvider({
   const startRunRef = useRef<(t: Target) => void>(() => {});
   startRunRef.current = (t: Target) => {
     const seq = ++startSeqRef.current;
-    createRun(t, {
+    createRun({ ...t, kind: knownKindForPluralWithGroup(t.kind, t.group) ?? t.kind }, {
       agent: selectedAgent || undefined,
       profile: hosted ? undefined : effectiveProfile,
       model: model || undefined,

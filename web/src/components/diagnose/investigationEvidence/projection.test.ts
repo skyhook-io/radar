@@ -469,6 +469,100 @@ describe("strict evidence adapters", () => {
     );
   });
 
+  it("attributes evidence to saved Hub runs with a plural resource kind", () => {
+    const result = projectInvestigationEvidence(
+      [
+        {
+          timeline: [
+            tool("deployment", "get_resource", deployment),
+            tool("wrong-group", "get_resource", {
+              ...deployment,
+              apiVersion: "example.com/v1",
+            }),
+            tool(
+              "plural-events",
+              "get_events",
+              { events: [warningEvent] },
+              {
+                summary: JSON.stringify({
+                  kind: "deployments",
+                  namespace: "shop",
+                  name: "api",
+                }),
+              },
+            ),
+            tool("plural-issue", "issues", {
+              issues: [{ ...criticalIssue, kind: "deployments" }],
+              total: 1,
+              total_matched: 1,
+            }),
+          ],
+        },
+      ],
+      { ...target, kind: "deployments" },
+    );
+
+    const resources = groupsOf(result.groups, "resource");
+    expect(resources.map((group) => group.latest.relevance)).toEqual([
+      "target",
+      "broader",
+    ]);
+    expect(groupsOf(result.groups, "events")[0].latest.relevance).toBe(
+      "target",
+    );
+    expect(groupsOf(result.groups, "issue")[0].latest.relevance).toBe(
+      "target",
+    );
+  });
+
+  it("keeps colliding non-core plurals on their own API group", () => {
+    const podMetrics = {
+      apiVersion: "metrics.k8s.io/v1beta1",
+      kind: "PodMetrics",
+      metadata: { namespace: "shop", name: "api" },
+    };
+    const result = projectInvestigationEvidence(
+      [
+        {
+          timeline: [
+            tool("metrics-pod", "get_resource", podMetrics),
+            tool("core-pod", "get_resource", {
+              ...podMetrics,
+              apiVersion: "v1",
+              kind: "Pod",
+            }),
+          ],
+        },
+      ],
+      { ...target, kind: "pods", group: "metrics.k8s.io" },
+    );
+    expect(
+      groupsOf(result.groups, "resource").map(
+        (group) => group.latest.relevance,
+      ),
+    ).toEqual(["target", "broader"]);
+  });
+
+  it("matches an undiscovered irregular CRD without inventing its Kind", () => {
+    const result = projectInvestigationEvidence(
+      [
+        {
+          timeline: [
+            tool("database", "get_resource", {
+              apiVersion: "postgresql.cnpg.io/v1",
+              kind: "Database",
+              metadata: { namespace: "shop", name: "api" },
+            }),
+          ],
+        },
+      ],
+      { ...target, kind: "databases", group: "postgresql.cnpg.io" },
+    );
+    expect(groupsOf(result.groups, "resource")[0].latest.relevance).toBe(
+      "target",
+    );
+  });
+
   it("treats an unexpressible event group as unspecified while honoring explicit groups", () => {
     const eventsFor = (group?: string) =>
       project([

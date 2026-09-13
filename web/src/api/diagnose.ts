@@ -183,6 +183,7 @@ export interface DiagnoseStreamEvent {
 // server runs.
 export interface RunSummary {
   id: string;
+  /** Stored target Kind; existing hosted runs may contain a plural API resource name. */
   kind: string;
   /** Kubernetes API group; empty means the core API group. */
   group: string;

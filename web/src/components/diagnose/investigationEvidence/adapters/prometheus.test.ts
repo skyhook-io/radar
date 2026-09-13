@@ -71,6 +71,35 @@ function diagnoseWithPods(...pods: string[]) {
 }
 
 describe("prometheus rules adapter", () => {
+  it("attributes workload-labelled alerts in saved plural-kind Hub runs", () => {
+    const projection = projectInvestigationEvidence(
+      [
+        {
+          timeline: [
+            tool("rules", "get_prometheus_rules", {
+              count: 1,
+              rules: [
+                alertingRule({
+                  alerts: [
+                    {
+                      state: "firing",
+                      labels: { namespace: "shop", deployment: "api" },
+                    },
+                  ],
+                }),
+              ],
+            }),
+          ],
+        },
+      ],
+      { ...target, kind: "deployments" },
+    );
+
+    expect(groupsOf(projection.groups, "alerts")[0].latest.relevance).toBe(
+      "target",
+    );
+  });
+
   it("relates a rule to the target through its instances, never the rule alone", () => {
     const projection = project([
       diagnoseWithPods("api-68c7b766dc-fmphn"),

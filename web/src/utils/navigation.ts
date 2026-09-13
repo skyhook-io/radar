@@ -14,7 +14,7 @@ export function searchHitToSelectedResource(hit: SearchHit): SelectedResource {
 }
 
 // Re-export shared navigation utilities from @skyhook-io/k8s-ui.
-export { kindToPlural, kindToPluralWithGroup, pluralToKind, refToSelectedResource, apiVersionToGroup } from '@skyhook-io/k8s-ui/utils/navigation'
+export { kindToPlural, kindToPluralWithGroup, pluralToKind, knownKindForPluralWithGroup, refToSelectedResource, apiVersionToGroup } from '@skyhook-io/k8s-ui/utils/navigation'
 export type { NavigateToResource } from '@skyhook-io/k8s-ui/utils/navigation'
 
 const NETWORK_POLICY_TOPOLOGY_KINDS = new Set([

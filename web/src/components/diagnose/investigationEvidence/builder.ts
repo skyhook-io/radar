@@ -1,4 +1,4 @@
-import { apiVersionToGroup } from "../../../utils/navigation";
+import { apiVersionToGroup, knownKindForPluralWithGroup } from "../../../utils/navigation";
 import { adaptChanges } from "./adapters/changes";
 import { adaptDiagnose } from "./adapters/diagnose";
 import { adaptEvents } from "./adapters/events";
@@ -118,7 +118,10 @@ export function projectInvestigationEvidence(
   turns: readonly InvestigationEvidenceTurn[],
   target: InvestigationEvidenceTarget,
 ): InvestigationEvidenceProjection {
-  const builder = new ProjectionBuilder(target);
+  const builder = new ProjectionBuilder({
+    ...target,
+    kind: knownKindForPluralWithGroup(target.kind, target.group) ?? target.kind,
+  });
   collectEstablishedTargetPods(builder, turns);
   const evidenceRefSources: InvestigationEvidenceSource[] = [];
   const citableSources: InvestigationEvidenceSource[] = [];

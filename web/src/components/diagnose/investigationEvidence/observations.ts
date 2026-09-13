@@ -16,6 +16,7 @@ import {
   diagnosisSeverityTone,
 } from "../diagnoseEvidenceTypes";
 import { investigationResourceEvidenceSummary } from "../investigationResourceEvidenceModel";
+import { kindToPluralWithGroup } from "../../../utils/navigation";
 import { stableHash } from "./identity";
 import { nonEmptyString, parseJSON, record, stringArray } from "./parse";
 import {
@@ -198,9 +199,11 @@ export function resourceMatchesTarget(
     name: string;
   },
 ): boolean {
+  const group = (resource.group ?? "").toLowerCase();
   return (
-    resource.kind.toLowerCase() === target.kind.toLowerCase() &&
-    (resource.group ?? "").toLowerCase() === target.group.toLowerCase() &&
+    group === target.group.toLowerCase() &&
+    kindToPluralWithGroup(resource.kind, group) ===
+      kindToPluralWithGroup(target.kind, group) &&
     (resource.namespace ?? "") === (target.namespace ?? "") &&
     resource.name === target.name
   );
