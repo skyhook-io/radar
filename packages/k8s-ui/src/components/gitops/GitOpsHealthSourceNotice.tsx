@@ -67,6 +67,11 @@ export function GitOpsHealthSourceNotice({
 }) {
   const kind = healthSourceNoticeKind(summary)
   if (!kind) return null
+  // With nothing marked, the sentence only earns its place on an app Argo
+  // calls Degraded: that is the badge it explains. A Progressing or Missing
+  // app with no Radar finding has nothing here to attribute.
+  const radarFinding = hasRadarFinding(changes)
+  if (kind === 'appTree' && !radarFinding && summary?.health !== 'Degraded') return null
   return (
     <div className="flex shrink-0 items-start gap-2 border-b border-theme-border bg-theme-base px-4 py-2 text-xs text-theme-text-secondary" role="note">
       <Info className="mt-px h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
@@ -78,7 +83,7 @@ export function GitOpsHealthSourceNotice({
           </>
         ) : (
           <>
-            {hasRadarFinding(changes) ? APP_TREE_HEALTH_NOTICE : APP_TREE_NO_FINDINGS_NOTICE}
+            {radarFinding ? APP_TREE_HEALTH_NOTICE : APP_TREE_NO_FINDINGS_NOTICE}
             {docsUrl && (
               <>
                 {' '}
