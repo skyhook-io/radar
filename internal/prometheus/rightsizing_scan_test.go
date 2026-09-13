@@ -390,3 +390,36 @@ func TestScanMarksWorkloadsWhenPodInventoryIsUnreadable(t *testing.T) {
 		}
 	})
 }
+
+// A pod names the ReplicaSet that owns it, never the Deployment. Without the
+// ReplicaSet lister every Deployment silently collects no OOM evidence, while
+// a StatefulSet in the same scan is unaffected — so the flag has to follow the
+// kind that actually lost its ownership path.
+func TestScanMarksOnlyDeploymentsWhenReplicaSetOwnershipIsUnreadable(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6-a", OwnerReferences: []metav1.OwnerReference{scopeOwner("ReplicaSet", "api-7f6")}},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			Name:                 "api",
+			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"}},
+		}}},
+	}
+	cache := scopeTestCache(t, map[string]bool{k8score.Pods: true}, pod)
+	workloads := map[string]*scanWorkload{
+		workloadIdentity("Deployment", "shop", "api"): {
+			kind: "Deployment", namespace: "shop", name: "api",
+			workload: rightsizingWorkload{currentPodOOM: map[string]bool{}},
+		},
+		workloadIdentity("StatefulSet", "shop", "cache"): {
+			kind: "StatefulSet", namespace: "shop", name: "cache",
+			workload: rightsizingWorkload{currentPodOOM: map[string]bool{}},
+		},
+	}
+	enrichScanCurrentOOM(context.Background(), cache, map[string][]string{"Deployment": {"shop"}}, workloads)
+
+	if !workloads[workloadIdentity("Deployment", "shop", "api")].workload.liveInventoryDenied {
+		t.Error("no ReplicaSet lister, so the Deployment never sees its pods; that has to be reported")
+	}
+	if workloads[workloadIdentity("StatefulSet", "shop", "cache")].workload.liveInventoryDenied {
+		t.Error("a StatefulSet owns its pods directly and lost nothing; it must not be flagged")
+	}
+}

@@ -781,12 +781,14 @@ func waitForPodsSynced(ctx context.Context, cache *k8s.ResourceCache) bool {
 	}
 }
 
-// markScanLiveInventoryDenied records that no workload in the scan got a live
-// pod read, so an absent OOM signal means nothing was asked rather than nothing
-// was found.
-func markScanLiveInventoryDenied(workloads map[string]*scanWorkload) {
+// markScanLiveInventoryDenied records that a live pod read did not happen, so
+// an absent OOM signal means nothing was asked rather than nothing was found.
+// An empty kind marks every workload.
+func markScanLiveInventoryDenied(workloads map[string]*scanWorkload, kind string) {
 	for _, workload := range workloads {
-		workload.workload.liveInventoryDenied = true
+		if kind == "" || strings.EqualFold(workload.kind, kind) {
+			workload.workload.liveInventoryDenied = true
+		}
 	}
 }
 
@@ -795,35 +797,21 @@ func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes 
 	// would read as a cluster with no OOM-killed pods anywhere. The scan pays
 	// this wait once rather than per workload.
 	if !waitForPodsSynced(ctx, cache) || cache.Pods() == nil {
-		markScanLiveInventoryDenied(workloads)
+		markScanLiveInventoryDenied(workloads, "")
 		return
 	}
 	namespaces := scanScopeNamespaces(scopes)
-	replicaSetOwners := map[string]string{}
-	if cache.ReplicaSets() != nil {
-		var replicaSets []*appsv1.ReplicaSet
-		if namespaces == nil {
-			replicaSets, _ = cache.ReplicaSets().List(labels.Everything())
-		} else {
-			for _, namespace := range namespaces {
-				items, _ := cache.ReplicaSets().ReplicaSets(namespace).List(labels.Everything())
-				replicaSets = append(replicaSets, items...)
-			}
-		}
-		for _, replicaSet := range replicaSets {
-			if owner := metav1.GetControllerOf(replicaSet); owner != nil && owner.Kind == "Deployment" {
-				replicaSetOwners[replicaSet.Namespace+"\x00"+replicaSet.Name] = owner.Name
-			}
-		}
+	replicaSetOwners, ownersReadable := scanReplicaSetOwners(cache, namespaces)
+	pods, podsReadable := scanPods(cache, namespaces)
+	if !podsReadable {
+		markScanLiveInventoryDenied(workloads, "")
+		return
 	}
-	var pods []*corev1.Pod
-	if namespaces == nil {
-		pods, _ = cache.Pods().List(labels.Everything())
-	} else {
-		for _, namespace := range namespaces {
-			items, _ := cache.Pods().Pods(namespace).List(labels.Everything())
-			pods = append(pods, items...)
-		}
+	if !ownersReadable {
+		// A pod names the ReplicaSet that owns it, never the Deployment. With
+		// no ownership to resolve, Deployment rows collect nothing while every
+		// other kind is unaffected.
+		markScanLiveInventoryDenied(workloads, "Deployment")
 	}
 	for _, pod := range pods {
 		owner := metav1.GetControllerOf(pod)
@@ -841,6 +829,59 @@ func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes 
 		collectCurrentPodOOM(workload.workload.currentPodOOM, pod.Status.ContainerStatuses)
 		collectCurrentPodOOM(workload.workload.currentPodOOM, pod.Status.InitContainerStatuses)
 	}
+}
+
+// scanReplicaSetOwners maps each ReplicaSet to its Deployment. It reports false
+// if any list failed, because a partial map silently drops the pods it could
+// not resolve rather than failing loudly.
+func scanReplicaSetOwners(cache *k8s.ResourceCache, namespaces []string) (map[string]string, bool) {
+	owners := map[string]string{}
+	if cache.ReplicaSets() == nil {
+		return owners, false
+	}
+	var replicaSets []*appsv1.ReplicaSet
+	if namespaces == nil {
+		list, err := cache.ReplicaSets().List(labels.Everything())
+		if err != nil {
+			return owners, false
+		}
+		replicaSets = list
+	} else {
+		for _, namespace := range namespaces {
+			items, err := cache.ReplicaSets().ReplicaSets(namespace).List(labels.Everything())
+			if err != nil {
+				return owners, false
+			}
+			replicaSets = append(replicaSets, items...)
+		}
+	}
+	for _, replicaSet := range replicaSets {
+		if owner := metav1.GetControllerOf(replicaSet); owner != nil && owner.Kind == "Deployment" {
+			owners[replicaSet.Namespace+"\x00"+replicaSet.Name] = owner.Name
+		}
+	}
+	return owners, true
+}
+
+// scanPods reports false if any list failed: a short pod list reads as pods
+// without OOM history rather than pods that were never examined.
+func scanPods(cache *k8s.ResourceCache, namespaces []string) ([]*corev1.Pod, bool) {
+	if namespaces == nil {
+		pods, err := cache.Pods().List(labels.Everything())
+		if err != nil {
+			return nil, false
+		}
+		return pods, true
+	}
+	var pods []*corev1.Pod
+	for _, namespace := range namespaces {
+		items, err := cache.Pods().Pods(namespace).List(labels.Everything())
+		if err != nil {
+			return nil, false
+		}
+		pods = append(pods, items...)
+	}
+	return pods, true
 }
 
 func scanScopeNamespaces(scopes map[string][]string) []string {
