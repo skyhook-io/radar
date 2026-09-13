@@ -18,7 +18,7 @@ export function RemoteDestinationCloudHint() {
       <button type="button" onClick={openCloudFunnel} className="underline decoration-theme-border underline-offset-2 hover:text-theme-text-primary">
         Radar Cloud
       </button>{' '}
-      to see them alongside this app.
+      to see this app's resources here.
     </>
   )
 }

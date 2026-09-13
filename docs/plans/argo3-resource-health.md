@@ -89,16 +89,18 @@ everything derived from it.
 
 ## 3. What we are doing right now (PR #1624)
 
-Merging, with small maintainer edits: (a) render the already-computed `cause`
-on the headline issue row and as a tooltip on unhealthy tree nodes; (b) one
-attribution tier that runs only when the app is Degraded and no detector found
-anything: ask the issues engine (`resolver.ResourceProblems`) for each managed
-resource first, then fall back to the resource with the loudest Warning event.
+Merged with small maintainer edits: (a) render the already-computed `cause`
+on the headline issue row and as a tooltip on unhealthy tree nodes; (b) a
+last-resort lead when the app is Degraded, nothing else explained it, and the
+app deploys to this cluster: the managed resource with the loudest recent
+Warning event, shown as a warning-tier "PossibleCause" row that leaves the
+degraded-resources summary visible. The `degradedResourcesExplained` gate
+(critical per-resource Issue or failed operation; not info/drift rows) lands
+there too and this branch reuses it.
 
 This is a stopgap. It names *one* resource in the Issues band. It does not
 restore per-resource health on tree nodes, in Changes categories, in
-`Summary.Degraded`, or for the second and third degraded resource. It is
-gated on `len(out)==0`, so any coexisting informational issue suppresses it.
+`Summary.Degraded`, or for the second and third degraded resource.
 
 ## 4. Proposed solution — high level
 
@@ -229,8 +231,9 @@ the engine filters as transient (no derivation), a remote-destination app
 
 **Step 4 — Provenance in the UI, shipped with Step 3 (Confident).**
 - Detail page, `appTree` mode and Tier B didn't answer: one quiet banner
-  above the Issues band. Copy: *"Argo CD isn't sharing per-resource health
-  with Radar, so the problems listed here are what Radar found on its own."*
+  above the Issues band. Copy: *"Argo CD 3 no longer records per-resource
+  health on the application, so the problems below are what Radar found by
+  looking at the resources itself."*
   plus a "Why?" link to the docs paragraph (which is where
   `resourceHealthSource`, `persist: true` and the Argo API integration get
   named). When Tier B answered: no banner.
@@ -240,12 +243,11 @@ the engine filters as transient (no derivation), a remote-destination app
   marker.
 - Issues: no extra marker needed — the reason vocabulary already differs.
 - **Remote-destination apps** (`!isInClusterDestination(root)`): a different
-  banner, same slot: *"This application deploys to another cluster, so Radar
-  can't inspect its resources from here."* When Radar is running standalone
-  (not inside Radar Cloud), append one sentence: *"Radar Cloud connects the
-  destination cluster and shows this application's resources there."*
-  linking to the existing cloud entry point (the Cloud Connect modal / Hub
-  wizard route the funnel already uses). One line, no modal, no repeat nag:
+  banner, same slot: *"This application deploys to a different cluster, so
+  its resources aren't visible from here."* When Radar is running standalone
+  and the cloud funnel button is mounted (cloudConnect capability), append:
+  *"Connect that cluster with Radar Cloud to see this app's resources
+  here."* where "Radar Cloud" opens the funnel's own dialog. One line, no modal, no repeat nag:
   honour whatever dismissal state the funnel already keeps. Confirmed at
   sign-off: Radar Cloud does correlate a hub Application to its resources on
   the destination cluster, so the copy may say so.
