@@ -19,7 +19,7 @@ import type { GitOpsInsightSummary } from '../../types'
 export const APP_TREE_HEALTH_NOTICE =
   "Argo CD isn't sharing per-resource health with Radar, so the problems listed here are what Radar found on its own."
 export const REMOTE_DESTINATION_NOTICE =
-  "This application deploys to another cluster, so Radar can't inspect its resources from here."
+  "This application deploys to a different cluster, so its resources aren't visible from here."
 
 export type HealthSourceNoticeSummary = Pick<GitOpsInsightSummary, 'tool' | 'health' | 'resourceHealthMode' | 'remoteDestination'>
 

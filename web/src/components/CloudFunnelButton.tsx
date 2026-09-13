@@ -49,11 +49,14 @@ const DEFAULT_ASSURANCES = [
 ]
 const SIGNUP_QUERY = '?utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal'
 
-// cloudSignupUrl is the one place the Hub signup link is assembled. Every
-// OSS surface that points at Radar Cloud goes through it so the Hub can
-// tell them apart by utm_content and Radar never transmits anything else.
-export function cloudSignupUrl(appUrl: string | undefined, content: string): string {
-  return `${appUrl || FALLBACK_APP_URL}/signup${SIGNUP_QUERY}&utm_content=${content}`
+// Other OSS surfaces (a GitOps app that deploys to another cluster, say)
+// point at Radar Cloud by asking this button to open its dialog, so there
+// is one pitch and one flow. The button is mounted whenever Radar runs
+// standalone; embedded hosts never mount it and never dispatch this.
+const OPEN_EVENT = 'radar:open-cloud-funnel'
+
+export function openCloudFunnel() {
+  window.dispatchEvent(new Event(OPEN_EVENT))
 }
 const ABOUT_URL = 'https://radarhq.io/about'
 const PRICING_URL = 'https://radarhq.io/pricing'
@@ -98,7 +101,7 @@ export function CloudFunnelButton() {
   const appUrl = capabilities.data?.cloudConnect?.appUrl || FALLBACK_APP_URL
   // utm_content distinguishes the lane that opened the Hub — measured Hub-side
   // only when the user actually navigates there; Radar transmits nothing.
-  const signupUrlFor = (content: string) => cloudSignupUrl(appUrl, content)
+  const signupUrlFor = (content: string) => `${appUrl}/signup${SIGNUP_QUERY}&utm_content=${content}`
   const signupUrl = signupUrlFor('funnel-cta')
 
   // Only while the dialog is open — never on the capabilities poll. The Hub
@@ -173,6 +176,11 @@ export function CloudFunnelButton() {
     setInFlowView(false)
     setBlocked(null)
   }
+
+  useEffect(() => {
+    window.addEventListener(OPEN_EVENT, openModal)
+    return () => window.removeEventListener(OPEN_EVENT, openModal)
+  })
 
   // Re-attach to a server-owned flow whenever one is observed while the modal
   // is open — the status query may resolve after openModal ran.
