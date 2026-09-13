@@ -24,7 +24,9 @@ describe('radarHealthNote', () => {
 describe('healthSourceNoticeKind', () => {
   test('remote destination wins over appTree, Flux never notices', () => {
     expect(healthSourceNoticeKind({ tool: 'argocd', resourceHealthMode: 'appTree', remoteDestination: true })).toBe('remote')
+    expect(healthSourceNoticeKind({ tool: 'argocd', resourceHealthMode: 'appTree', health: 'Degraded' })).toBe('appTree')
     expect(healthSourceNoticeKind({ tool: 'argocd', resourceHealthMode: 'appTree' })).toBe('appTree')
+    expect(healthSourceNoticeKind({ tool: 'argocd', resourceHealthMode: 'appTree', health: 'Healthy' })).toBeNull()
     expect(healthSourceNoticeKind({ tool: 'argocd', resourceHealthMode: 'inline' })).toBeNull()
     expect(healthSourceNoticeKind({ tool: 'argocd' })).toBeNull()
     expect(healthSourceNoticeKind({ tool: 'fluxcd', resourceHealthMode: 'appTree' })).toBeNull()

@@ -38,6 +38,7 @@ kubectl config use-context kind-radar-gitops-demo
 | `argocd/radar-demo-set` | ApplicationSet | List generator → 3 child Applications (`set-vanilla`, `set-kustomize`, `set-helm`) |
 | `argocd/radar-demo` | AppProject | Custom project (non-default) for fleet view's Project filter |
 | `argocd/argo3-health` | Application | Degraded on Argo CD 3 with **no per-resource health in the CR**. See "Per-resource health on Argo CD 3" below. |
+| `argocd/guestbook-remote` | Application | Destination is a cluster this Argo doesn't have (`InvalidSpecError`). Radar derives nothing for a remote destination and says so; standalone Radar adds the Radar Cloud pointer. |
 
 ### Flux scenarios
 
@@ -142,7 +143,7 @@ notice should appear.
 ## Scenarios NOT covered (intentional gaps requiring real engineering effort)
 
 - **Stuck-drift-loop** (mutating webhook persistently changes a synced resource) — would need a custom mutating-webhook deployment in the kind cluster. Worth reproducing manually during pre-release QA: deploy a webhook that mutates `spec.replicas` on every admission, point an Argo Application at a Deployment, watch the StuckDriftLoop detector fire.
-- **Cross-cluster Argo** (Application destination is a remote cluster) — kind doesn't support multi-cluster easily.
+- **Cross-cluster Argo with a reachable destination** — kind doesn't support multi-cluster easily. `guestbook-remote` covers the Application-object side (remote destination, nothing derivable locally) but not a live spoke.
 
 ## Implementation notes
 

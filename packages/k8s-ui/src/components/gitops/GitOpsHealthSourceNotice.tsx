@@ -21,10 +21,15 @@ export const APP_TREE_HEALTH_NOTICE =
 export const REMOTE_DESTINATION_NOTICE =
   "This application deploys to another cluster, so Radar can't inspect its resources from here."
 
-export function healthSourceNoticeKind(summary: Pick<GitOpsInsightSummary, 'tool' | 'resourceHealthMode' | 'remoteDestination'> | undefined): 'remote' | 'appTree' | null {
+export type HealthSourceNoticeSummary = Pick<GitOpsInsightSummary, 'tool' | 'health' | 'resourceHealthMode' | 'remoteDestination'>
+
+// The appTree notice explains problems Radar found on its own; on an app
+// Argo calls Healthy nothing is derived (the host doesn't run the overlay
+// there), so the line would explain nothing and is left out.
+export function healthSourceNoticeKind(summary: HealthSourceNoticeSummary | undefined): 'remote' | 'appTree' | null {
   if (!summary || summary.tool !== 'argocd') return null
   if (summary.remoteDestination) return 'remote'
-  if (summary.resourceHealthMode === 'appTree') return 'appTree'
+  if (summary.resourceHealthMode === 'appTree' && summary.health !== 'Healthy') return 'appTree'
   return null
 }
 
@@ -33,7 +38,7 @@ export function GitOpsHealthSourceNotice({
   docsUrl,
   remoteDestinationHint,
 }: {
-  summary: Pick<GitOpsInsightSummary, 'tool' | 'resourceHealthMode' | 'remoteDestination'> | undefined
+  summary: HealthSourceNoticeSummary | undefined
   // Where "Why?" goes for the appTree case. Omitted → no link.
   docsUrl?: string
   // Rendered after the remote-destination sentence. The host decides

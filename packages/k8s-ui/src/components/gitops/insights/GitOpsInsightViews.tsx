@@ -1231,8 +1231,8 @@ function buildTreeExtras(nodes: GitOpsTreeNode[], declared: GitOpsChange[]): Git
       category: 'Unknown',
       sync: n.sync,
       health: n.health,
-      healthSource: n.healthSource,
-      healthReason: n.healthReason,
+      // No healthSource: generated rows are always Radar's read and never
+      // had a controller verdict to be distinguished from.
       message: n.healthMessage,
       hasDesired: false,
       hasLive: true,

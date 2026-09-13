@@ -753,11 +753,15 @@ func resourceHealthIssue(change Change, resolver Resolver) Issue {
 		if change.HealthSeverity == "critical" {
 			severity = SeverityCritical
 		}
+		message := fmt.Sprintf("%s %s is %s", change.Ref.Kind, change.Ref.Name, change.Health)
+		if change.Message != "" {
+			message = fmt.Sprintf("%s %s: %s", change.Ref.Kind, change.Ref.Name, change.Message)
+		}
 		return Issue{
 			Severity: severity,
 			Scope:    ScopeResource,
 			Reason:   change.HealthReason,
-			Message:  fmt.Sprintf("%s %s: %s", change.Ref.Kind, change.Ref.Name, fallback(change.Message, change.Health)),
+			Message:  message,
 			Refs:     []Ref{change.Ref},
 			Action:   "Open the resource drawer for events, logs, and YAML.",
 			Source:   change.HealthSource,
