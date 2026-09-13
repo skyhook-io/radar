@@ -1718,8 +1718,8 @@ func TestBuildIssues_TopologyReadIsWarningAndSilentOnHealthyApp(t *testing.T) {
 		t.Errorf("topology read on a Degraded app = %+v, want one warning-tier radar Issue", degraded)
 	}
 	for _, iss := range buildIssues(mk("Healthy"), tree, "argocd", &fakeResolver{}) {
-		if iss.Scope == ScopeResource {
-			t.Errorf("no per-resource Issue may contradict a Healthy app, got %+v", iss)
+		if iss.Scope == ScopeResource || iss.Reason == "DegradedResources" {
+			t.Errorf("neither a per-resource Issue nor the degraded count may contradict a Healthy app, got %+v", iss)
 		}
 	}
 }

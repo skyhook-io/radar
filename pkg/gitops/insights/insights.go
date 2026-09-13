@@ -492,6 +492,12 @@ func describeArgoAutoSync(root *unstructured.Unstructured) string {
 
 func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTree, tool string, resolver Resolver) []Issue {
 	var out []Issue
+	// Argo's app-level health is its verdict on every resource it assesses.
+	// Radar's own reads (topology fill, degraded counts) must not contradict
+	// a Healthy app with Issues. Flux roots carry no status.health, so this
+	// never gates them.
+	appHealth, _, _ := unstructured.NestedString(root.Object, "status", "health", "status")
+	appHealthy := appHealth == "Healthy"
 	// Pending deletion is appended first; the severity-stable sort below
 	// may reorder by severity-rank (e.g. a critical operation failure can
 	// land above an alert-tier lifecycle issue). The user-facing
@@ -596,8 +602,6 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 		// detection — the per-resource diff/events live on the Change
 		// objects emitted by buildChanges. Pass nil resolver here to skip
 		// the (unused) drift computation in this code path.
-		appHealth, _, _ := unstructured.NestedString(root.Object, "status", "health", "status")
-		appHealthy := appHealth == "Healthy"
 		for _, change := range argoResourceChanges(root, resourceTree, nil) {
 			// Suppress a resource issue when its kind/name match a resource
 			// already named in the operation failure — same root cause, no
@@ -672,7 +676,7 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 	// The events lead is a pointer, so the count stays next to it; a
 	// per-resource finding of any tier already names a resource, so the
 	// count would only restate it.
-	if resourceTree != nil && resourceTree.Summary.Degraded > 0 && !degradedResourcesExplained(out) && !hasResourceFinding(out) {
+	if resourceTree != nil && resourceTree.Summary.Degraded > 0 && !appHealthy && !degradedResourcesExplained(out) && !hasResourceFinding(out) {
 		out = append(out, Issue{Severity: SeverityWarning, Scope: ScopeTree, Reason: "DegradedResources", Message: fmt.Sprintf("%d managed %s degraded", resourceTree.Summary.Degraded, pluralizeResourcesAre(resourceTree.Summary.Degraded)), Action: "Use the graph or Resources tab to inspect affected resources."})
 	}
 	// Dedup by (scope, reason, message) — Flux carries the same failure
