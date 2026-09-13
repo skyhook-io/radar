@@ -171,6 +171,10 @@ func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitops
 		return s.canAccessGitOpsRef(r, req, group, kind, namespace, name, false)
 	}
 	resolver := newInsightsResolver(r.Context(), req.Cache, req.AllowedNamespaces, canAccess)
+	memoKey := gitopsIssuesMemoKey(auth.UserFromContext(r.Context()), req.AllowedNamespaces)
+	resolver.composed = func() ([]issues.Issue, []issues.Issue) {
+		return s.gitopsIssuesMemo.load(memoKey, resolver.composeIssues)
+	}
 	overlayRadarHealth(tree, root, resolver.ResourceProblems)
 	tree = s.filterGitOpsTreeForUser(r, req, tree)
 	tree.Summary = gitopstree.Summarize(tree.Nodes)
@@ -726,6 +730,9 @@ type insightsResolver struct {
 	composeOnce     sync.Once
 	composedFlat    []issues.Issue
 	composedGrouped []issues.Issue
+	// composed, when set by the host, supplies the composition (memoized
+	// across requests); nil composes inline, which tests and other hosts use.
+	composed func() ([]issues.Issue, []issues.Issue)
 
 	// livePrefetched flips GetLive into map-only mode: prefetchLive resolved
 	// (or deliberately skipped) every ref the Changes builder will ask for,
@@ -902,14 +909,11 @@ func (r *insightsResolver) ResourceProblems(group, kind, namespace, name string)
 		return nil
 	}
 	r.composeOnce.Do(func() {
-		r.composedFlat = issues.Compose(issues.NewCacheProvider(), issues.Filters{
-			Namespaces: r.allowedNamespaces,
-			Limit:      issues.NoLimit,
-			CanReadRelated: func(ref issues.Ref) bool {
-				return r.canAccess != nil && r.canAccess(ref.Group, ref.Kind, ref.Namespace, ref.Name)
-			},
-		})
-		r.composedGrouped = issues.GroupIssues(r.composedFlat)
+		if r.composed != nil {
+			r.composedFlat, r.composedGrouped = r.composed()
+			return
+		}
+		r.composedFlat, r.composedGrouped = r.composeIssues()
 	})
 	related := issues.RelatedIssuesFrom(r.composedFlat, r.composedGrouped, issues.RelatedIssueOptions{
 		CanReadRelated: func(ref issues.Ref) bool {
@@ -1011,6 +1015,19 @@ func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []g
 		})
 	}
 	return out
+}
+
+// composeIssues runs the cluster-wide issues engine for this request's
+// namespaces, redacting related refs the caller can't read.
+func (r *insightsResolver) composeIssues() ([]issues.Issue, []issues.Issue) {
+	flat := issues.Compose(issues.NewCacheProvider(), issues.Filters{
+		Namespaces: r.allowedNamespaces,
+		Limit:      issues.NoLimit,
+		CanReadRelated: func(ref issues.Ref) bool {
+			return r.canAccess != nil && r.canAccess(ref.Group, ref.Kind, ref.Namespace, ref.Name)
+		},
+	})
+	return flat, issues.GroupIssues(flat)
 }
 
 // FinalizerOwnerStatus implements gitopsinsights.Resolver.

@@ -144,6 +144,9 @@ type Server struct {
 	// burst. Index is a pure projection of four cached listers — TTL has
 	// no semantic effect.
 	rbacMemo *rbac.Memoizer
+	// gitopsIssuesMemo shares the issues-engine composition between the
+	// GitOps tree and insights requests of one page load (per user).
+	gitopsIssuesMemo *gitopsIssuesMemo
 
 	capacityIssueMemo *capacityIssueMemo
 
@@ -221,6 +224,7 @@ func New(cfg Config) *Server {
 		authConfig:              cfg.AuthConfig,
 		cloudConnectCfg:         cfg.CloudConnect,
 		topoMemo:                topology.NewMemoizer(5 * time.Second),
+		gitopsIssuesMemo:        newGitopsIssuesMemo(5 * time.Second),
 		rbacMemo:                rbac.NewMemoizer(5 * time.Second),
 		capacityIssueMemo:       newCapacityIssueMemo(5 * time.Second),
 		yamlSchemaCache:         make(map[string][]byte),
