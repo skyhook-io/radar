@@ -1685,6 +1685,29 @@ func TestBuildIssues_RadarDerivedHealthYieldsEngineIssue(t *testing.T) {
 	}
 }
 
+// TestBuildIssues_EventsLeadYieldsToRadarFinding: once the tree carries a
+// Radar-sourced finding for a resource (even a warning-tier one), the
+// Warning-event lead stays out — it would only restate the same app.
+func TestBuildIssues_EventsLeadYieldsToRadarFinding(t *testing.T) {
+	root := argoApp(map[string]any{
+		"health":               map[string]any{"status": "Degraded"},
+		"resourceHealthSource": "appTree",
+		"resources": []any{
+			map[string]any{"group": "radar.demo", "kind": "Gadget", "namespace": "demo", "name": "g", "status": "Synced"},
+		},
+	})
+	tree := &gitopstree.ResourceTree{HealthMode: gitopstree.HealthModeAppTree, Nodes: []gitopstree.Node{
+		{Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "radar.demo", Kind: "Gadget", Namespace: "demo", Name: "g"}, Health: "Degraded", HealthSource: gitopstree.HealthSourceRadar, HealthReason: "Ready: NotConfigured", HealthMessage: "no config", HealthSeverity: "warning"},
+	}}
+	tree.Summary = gitopstree.Summarize(tree.Nodes)
+	r := &fakeResolver{events: map[string][]EventSummary{"g": {{Type: "Warning", Reason: "Bad", Message: "boom", Count: 9}}}}
+	for _, iss := range buildIssues(root, tree, "argocd", r) {
+		if iss.Reason == "PossibleCause" {
+			t.Errorf("events lead must not stack on a Radar finding, got %+v", iss)
+		}
+	}
+}
+
 func TestBuildIssues_ControllerHealthIssueKeepsArgoVocabulary(t *testing.T) {
 	root := argoApp(map[string]any{
 		"health": map[string]any{"status": "Degraded"},

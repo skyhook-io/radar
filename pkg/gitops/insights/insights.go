@@ -638,8 +638,10 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 		// THIS cluster: events describe local objects, and a same-named local
 		// resource is not the remote one. An informational Running/drift row
 		// is not an explanation and must not suppress this; a failed operation
-		// or a per-resource Issue is.
-		if !degradedResourcesExplained(out) && gitops.IsInClusterDestination(root) {
+		// or a per-resource Issue is. A warning-tier per-resource finding
+		// doesn't count as explained either, but it already names a resource;
+		// stacking an events lead about the same app on top of it is noise.
+		if !degradedResourcesExplained(out) && !hasResourceScopedIssue(out) && gitops.IsInClusterDestination(root) {
 			if health, _, _ := unstructured.NestedString(root.Object, "status", "health", "status"); health == "Degraded" {
 				if iss := degradedResourceFromEvents(root, resolver); iss != nil {
 					out = append(out, *iss)
@@ -794,6 +796,15 @@ func resourceHealthIssue(change Change, resolver Resolver) Issue {
 // Informational rows (sync Running) and drift detectors (StuckDriftLoop,
 // ManualDrift — sync signals, not health) explain nothing, and neither
 // does the warning-tier events lead — it points, it doesn't conclude.
+func hasResourceScopedIssue(issues []Issue) bool {
+	for _, iss := range issues {
+		if iss.Scope == ScopeResource {
+			return true
+		}
+	}
+	return false
+}
+
 func degradedResourcesExplained(issues []Issue) bool {
 	for _, iss := range issues {
 		if iss.Scope == ScopeResource && iss.Severity == SeverityCritical {
