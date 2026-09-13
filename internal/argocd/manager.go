@@ -934,10 +934,13 @@ func (m *Manager) ManagedResourcesCached(ctx context.Context, q argoapi.ManagedR
 }
 
 // ApplicationHealthCached returns Argo's own per-resource health for an
-// Application, as argocd-server reports it: a plain GET first (the server
-// fills health from its tree cache even when the controller doesn't persist
-// it), the resource-tree when that answers without any health. Served from
-// a 15s cache per app, misses included.
+// Application, as argocd-server reports it. The plain GET establishes
+// identity (UID) and mode; in appTree mode the health itself comes from
+// resource-tree, which every 3.x scopes by the Application's own namespace
+// (3.0's GET-side inference keyed the tree cache by bare name, so an app
+// outside Argo's namespace could get a same-named app's verdicts). The GET's
+// inline health is used only when the tree call fails. Served from a 15s
+// cache per app, misses included.
 //
 // Unlike the diff calls, this also runs for an UNCONFIGURED manager: with no
 // URL and no token it discovers argocd-server and asks without credentials,
@@ -960,12 +963,19 @@ func (m *Manager) ApplicationHealthCached(ctx context.Context, q argoapi.Applica
 	}
 	m.mu.Unlock()
 
-	health, err := m.fetchApplicationHealth(ctx, q)
+	health, gen, err := m.fetchApplicationHealth(ctx, q)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err != nil && unconfigured && m.client == nil {
 		m.readRetryAfter = time.Now().Add(probeRetryInterval)
+	}
+	// A SetConfig/Reset during the fetch bumps the generation: the answer is
+	// for a superseded connection and must neither be served nor cached under
+	// the new one — a changed token against the same Application keeps its
+	// UID, so the overlay could not tell.
+	if m.generation != gen {
+		return nil, fmt.Errorf("%w: connection changed during fetch", ErrUnreachable)
 	}
 	if m.appHealthCache == nil {
 		m.appHealthCache = make(map[string]appHealthEntry)
@@ -980,33 +990,35 @@ func (m *Manager) ApplicationHealthCached(ctx context.Context, q argoapi.Applica
 	return health, err
 }
 
-func (m *Manager) fetchApplicationHealth(ctx context.Context, q argoapi.ApplicationQuery) (*argoapi.ApplicationHealth, error) {
-	client, err := m.connectedClient(ctx)
-	if err != nil {
-		return nil, err
+// fetchApplicationHealth returns the health and the manager generation the
+// client belonged to, so the caller can refuse to cache a superseded answer.
+func (m *Manager) fetchApplicationHealth(ctx context.Context, q argoapi.ApplicationQuery) (*argoapi.ApplicationHealth, uint64, error) {
+	if _, err := m.connectedClient(ctx); err != nil {
+		m.mu.Lock()
+		gen := m.generation
+		m.mu.Unlock()
+		return nil, gen, err
 	}
+	// Client and generation read under one lock: a reset between the two
+	// would pair the old client with the new generation.
 	m.mu.Lock()
-	gen := m.generation
+	client, gen := m.client, m.generation
 	m.mu.Unlock()
+	if client == nil {
+		return nil, gen, fmt.Errorf("%w: connection was reset", ErrUnreachable)
+	}
 	app, err := client.Application(ctx, q)
 	if err != nil {
-		return nil, err
+		return nil, gen, err
 	}
-	if !app.HasHealth() {
-		tree, terr := client.ResourceTree(ctx, q)
-		if terr == nil && tree.HasHealth() {
+	if app.ResourceHealthSource == "appTree" {
+		if tree, terr := client.ResourceTree(ctx, q); terr == nil && tree.HasHealth() {
 			tree.UID = app.UID
 			tree.ResourceHealthSource = app.ResourceHealthSource
-			app = tree
+			return tree, gen, nil
 		}
 	}
-	m.mu.Lock()
-	stale := m.generation != gen
-	m.mu.Unlock()
-	if stale {
-		return nil, fmt.Errorf("%w: connection changed during fetch", ErrUnreachable)
-	}
-	return app, nil
+	return app, gen, nil
 }
 
 // RevisionMetadataCached returns Git commit metadata for a revision, cached per

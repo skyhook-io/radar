@@ -812,23 +812,25 @@ func TestApplicationHealthCached_PlainGetThenTreeFallbackAndNegativeCache(t *tes
 	m.SetConfig(srv.URL, "", false, false) // explicit URL, no token: the anonymous shape
 	q := argoapi.ApplicationQuery{AppName: "billing", AppNamespace: "argocd"}
 
-	// 1. Plain GET carries health: no tree call.
-	appBody = `{"metadata":{"uid":"u1"},"status":{"resourceHealthSource":"appTree","resources":[{"kind":"Deployment","name":"web","health":{"status":"Degraded"}}]}}`
+	// 1. Inline mode: the GET's own health is the answer, no tree call.
+	appBody = `{"metadata":{"uid":"u1"},"status":{"resources":[{"kind":"Deployment","name":"web","health":{"status":"Degraded"}}]}}`
 	h, err := m.ApplicationHealthCached(context.Background(), q)
 	if err != nil || h.UID != "u1" || !h.HasHealth() || treeHits != 0 {
-		t.Fatalf("plain GET: h=%+v err=%v treeHits=%d", h, err, treeHits)
+		t.Fatalf("inline GET: h=%+v err=%v treeHits=%d", h, err, treeHits)
 	}
 	if _, err := m.ApplicationHealthCached(context.Background(), q); err != nil || appHits != 1 {
 		t.Fatalf("second call must be served from cache, appHits=%d err=%v", appHits, err)
 	}
 
-	// 2. Plain GET without health: tree fallback, UID carried over.
+	// 2. appTree mode: identity from the GET, health from resource-tree (the
+	// GET-side inference is mis-scoped on 3.0), even when the GET carried
+	// some health of its own.
 	m.Reset()
-	appBody = `{"metadata":{"uid":"u1"},"status":{"resourceHealthSource":"appTree","resources":[{"kind":"Deployment","name":"web"}]}}`
+	appBody = `{"metadata":{"uid":"u1"},"status":{"resourceHealthSource":"appTree","resources":[{"kind":"Deployment","name":"web","health":{"status":"Degraded"}}]}}`
 	treeBody = `{"nodes":[{"kind":"Deployment","name":"web","health":{"status":"Progressing"}}]}`
 	h, err = m.ApplicationHealthCached(context.Background(), q)
 	if err != nil || treeHits != 1 || h.UID != "u1" || h.Resources[0].Health != "Progressing" {
-		t.Fatalf("tree fallback: h=%+v err=%v treeHits=%d", h, err, treeHits)
+		t.Fatalf("appTree: h=%+v err=%v treeHits=%d", h, err, treeHits)
 	}
 
 	// 3. Refusal (anonymous read disabled) is cached for the TTL.
@@ -839,5 +841,32 @@ func TestApplicationHealthCached_PlainGetThenTreeFallbackAndNegativeCache(t *tes
 	}
 	if _, err := m.ApplicationHealthCached(context.Background(), q); err == nil || unauthorizedHits != 1 {
 		t.Fatalf("refusal must be served from the negative cache, unauthorizedHits=%d err=%v", unauthorizedHits, err)
+	}
+}
+
+// TestApplicationHealthCached_UnconfiguredDiscoveryIsThrottled: with neither
+// URL nor token the read path runs discovery itself; when that fails (here:
+// no Kubernetes client) the next attempts within probeRetryInterval return
+// immediately instead of re-running discovery on every poll.
+func TestApplicationHealthCached_UnconfiguredDiscoveryIsThrottled(t *testing.T) {
+	m := newTestManager(config.Config{})
+	q := argoapi.ApplicationQuery{AppName: "billing", AppNamespace: "argocd"}
+	if _, err := m.ApplicationHealthCached(context.Background(), q); !errors.Is(err, ErrUnreachable) {
+		t.Fatalf("first unconfigured read = %v, want ErrUnreachable from discovery", err)
+	}
+	if m.readRetryAfter.IsZero() {
+		t.Fatal("a failed unconfigured read must arm the retry throttle")
+	}
+	// Bypass the per-app cache to prove the throttle itself answers.
+	m.appHealthCache = nil
+	if _, err := m.ApplicationHealthCached(context.Background(), q); err == nil || !strings.Contains(err.Error(), "throttled") {
+		t.Fatalf("second read = %v, want the throttle", err)
+	}
+	// A configured manager never uses the throttle (nothing to discover).
+	m.SetConfig("https://argocd.example.invalid", "", false, false)
+	if !m.readRetryAfter.IsZero() {
+		// dropConnectionLocked doesn't clear it, and it shouldn't matter:
+		// the throttle only gates the unconfigured path.
+		t.Log("throttle still armed after SetConfig (expected: only consulted when unconfigured)")
 	}
 }
