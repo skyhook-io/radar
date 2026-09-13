@@ -113,7 +113,7 @@ func TestExplain(t *testing.T) {
 			np: policy("radar", "egress-cidr", radarLabels, egressT, nil,
 				[]networkingv1.NetworkPolicyEgressRule{{To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "10.0.2.0/24"}}}}}),
 			dir: DirectionEgress, sel: src.Pod, peer: dst.Peer, port: 9090,
-			effect: Undecidable, reason: "cluster IP",
+			effect: Undecidable, reason: "cannot be established",
 		},
 		{
 			name: "an unresolved pod peer is undecidable",
@@ -128,6 +128,40 @@ func TestExplain(t *testing.T) {
 				[]networkingv1.NetworkPolicyEgressRule{{Ports: []networkingv1.NetworkPolicyPort{namedPort("web")}, To: []networkingv1.NetworkPolicyPeer{fromAnyPodInAnyNs}}}),
 			dir: DirectionEgress, sel: src.Pod, peer: unresolved, port: 9090,
 			effect: Undecidable, reason: "names a port on a destination pod that could not be resolved",
+		},
+		{
+			name: "external destination with no known address is undecidable, not refused",
+			np: policy("radar", "egress-cidr", radarLabels, egressT, nil,
+				[]networkingv1.NetworkPolicyEgressRule{{To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "192.0.2.0/24"}}}}}),
+			dir: DirectionEgress, sel: src.Pod, peer: Peer{External: true}, port: 443,
+			effect: Undecidable, reason: "no address of that family is known",
+		},
+		{
+			name: "hostNetwork peer is undecidable",
+			np: policy("monitoring", "from-radar", promLabels, ingressT,
+				[]networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{fromRadarNs}}}, nil),
+			dir: DirectionIngress, sel: dst.Pod, peer: func() Peer { p := radar(); p.Pod.Spec.HostNetwork = true; return p }(), port: 9090,
+			effect: Undecidable, reason: "host network",
+		},
+		{
+			name: "an observed address wins over the pod's other addresses",
+			np: policy("monitoring", "v4-cidr", promLabels, ingressT,
+				[]networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "10.0.0.0/16"}}}}}, nil),
+			dir: DirectionIngress, sel: dst.Pod,
+			peer: func() Peer {
+				p := radar()
+				p.Pod.Status.PodIPs = []corev1.PodIP{{IP: "10.0.1.5"}, {IP: "fd00::5"}}
+				p.IP = "fd00::5" // the flow arrived over IPv6
+				return p
+			}(), port: 9090,
+			effect: Undecidable, reason: "no address of that family",
+		},
+		{
+			name: "a numeric port entry admits even when a named sibling cannot be resolved",
+			np: policy("radar", "egress-mixed-ports", radarLabels, egressT, nil,
+				[]networkingv1.NetworkPolicyEgressRule{{Ports: []networkingv1.NetworkPolicyPort{tcpPort(443), namedPort("https")}}}),
+			dir: DirectionEgress, sel: src.Pod, peer: unresolved, port: 443,
+			effect: Admits, reason: "rule 1 admits any destination on TCP/443",
 		},
 		{
 			name: "hostNetwork selected pod is undecidable",

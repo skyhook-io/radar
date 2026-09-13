@@ -23,7 +23,10 @@ type Peer struct {
 	// External is a pod the caller could not resolve, which is a different
 	// thing: nothing about it is decidable.
 	External bool
-	IP       string
+	// IP is the address the caller actually observed for this endpoint, when
+	// it has one (a flow record). It takes precedence over the pod's own
+	// address set for ipBlock matching.
+	IP string
 }
 
 // Backend is a destination pod together with the port and protocol the
@@ -256,18 +259,27 @@ func selectingPolicies(pod *corev1.Pod, policies []*networkingv1.NetworkPolicy, 
 	return out, true
 }
 
-// ipBlockAdmits reports whether one of the pod's addresses of the block's own
-// family is inside it and outside every exception — a dual-stack pod reaches
-// an IPv6 backend from its IPv6 address, which an IPv4 block says nothing
-// about.
-func ipBlockAdmits(block *networkingv1.IPBlock, ips []net.IP) tri {
+// ipBlockMatch compares the block against the addresses of its own family —
+// a dual-stack pod reaches an IPv6 backend from its IPv6 address, which an
+// IPv4 block says nothing about. Yes: an address is inside the block and
+// outside every exception. No: an address of the family exists and none
+// qualifies. Unknown: no address of the family, or the block is malformed.
+// Whether a "no" is decisive is the caller's question, not this one's.
+func ipBlockMatch(block *networkingv1.IPBlock, ips []net.IP) tri {
 	_, cidr, err := net.ParseCIDR(block.CIDR)
 	if err != nil {
 		return triUnknown
 	}
 	v4 := cidr.IP.To4() != nil
+	out := triUnknown
 	for _, ip := range ips {
-		if (ip.To4() != nil) != v4 || !cidr.Contains(ip) {
+		if (ip.To4() != nil) != v4 {
+			continue
+		}
+		if out == triUnknown {
+			out = triNo
+		}
+		if !cidr.Contains(ip) {
 			continue
 		}
 		excepted := false
@@ -286,7 +298,7 @@ func ipBlockAdmits(block *networkingv1.IPBlock, ips []net.IP) tri {
 		}
 		return triYes
 	}
-	return triUnknown
+	return out
 }
 
 func podIPs(pod *corev1.Pod) []net.IP {

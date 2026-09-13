@@ -91,6 +91,11 @@ func Explain(np *networkingv1.NetworkPolicy, dir Direction, selected *corev1.Pod
 	if selected.Spec.HostNetwork {
 		return Explanation{Undecidable, podRef(selected) + " runs on the host network, where NetworkPolicy does not apply the same way"}
 	}
+	// Whether a selector can match a host-network pod at the other end is up
+	// to the network plugin, so nothing about such a peer is decidable.
+	if peer.Pod != nil && peer.Pod.Spec.HostNetwork {
+		return Explanation{Undecidable, podRef(peer.Pod) + " runs on the host network; whether policies see it as a pod depends on the network plugin"}
+	}
 
 	var rules []ruleView
 	if dir == DirectionIngress {
@@ -127,12 +132,12 @@ func Explain(np *networkingv1.NetworkPolicy, dir Direction, selected *corev1.Pod
 				reasons = append(reasons, fmt.Sprintf("rule %d restricts ports but the port is not known", i+1))
 				continue
 			}
-			if hasNamedPort(rule.ports) && namedPortPod == nil && !peer.External {
+			switch rulePortsMatch(rule.ports, port, proto, namedPortPod, peer.External) {
+			case triNo:
+				continue
+			case triUnknown:
 				overall = fold(overall, triUnknown)
 				reasons = append(reasons, fmt.Sprintf("rule %d names a port on a destination pod that could not be resolved", i+1))
-				continue
-			}
-			if !RuleMatchesPort(rule.ports, port, proto, namedPortPod) {
 				continue
 			}
 		}
@@ -172,13 +177,25 @@ type ruleView struct {
 	peers []networkingv1.NetworkPolicyPeer
 }
 
-func hasNamedPort(ports []networkingv1.NetworkPolicyPort) bool {
+// rulePortsMatch treats a rule's port entries as the alternatives they are:
+// a numeric entry that covers the port is a definite match whatever the
+// named entries beside it say, and only a named entry that cannot be
+// resolved — the destination pod is unknown — leaves the question open.
+// A non-pod destination has no named ports, so a named entry never matches it.
+func rulePortsMatch(ports []networkingv1.NetworkPolicyPort, port int32, proto corev1.Protocol, namedPortPod *corev1.Pod, external bool) tri {
+	out := triNo
 	for i := range ports {
-		if ports[i].Port != nil && ports[i].Port.Type == 1 { // intstr.String
-			return true
+		one := ports[i : i+1]
+		named := ports[i].Port != nil && ports[i].Port.Type == 1 // intstr.String
+		if named && namedPortPod == nil && !external {
+			out = fold(out, triUnknown)
+			continue
+		}
+		if RuleMatchesPort(one, port, proto, namedPortPod) {
+			return triYes
 		}
 	}
-	return false
+	return out
 }
 
 // peerAdmits decides whether one from/to entry admits target and describes
@@ -198,19 +215,24 @@ func peerAdmits(entry *networkingv1.NetworkPolicyPeer, target Peer, policyNs str
 			desc += " except " + strings.Join(entry.IPBlock.Except, ", ")
 		}
 		if dir == DirectionEgress && !target.External {
-			// Whether the policy sees the pod's address or the cluster IP it
-			// was reached through is up to the network plugin; neither a hit
-			// nor a miss on the pod's address proves anything.
-			return triUnknown, desc + ": a pod destination is reached through a cluster IP the policy may see instead"
+			// Whether the policy sees the pod's address or, for traffic that
+			// went through a Service, the cluster IP is up to the network
+			// plugin; neither a hit nor a miss on the pod's address proves
+			// anything.
+			return triUnknown, desc + ": the destination address the policy sees for a pod cannot be established"
 		}
-		hit := ipBlockAdmits(entry.IPBlock, peerIPs(target))
-		switch {
-		case hit == triYes:
+		switch ipBlockMatch(entry.IPBlock, peerIPs(target)) {
+		case triYes:
 			return triYes, desc
-		case dir == DirectionEgress:
-			return triNo, desc
-		default:
+		case triNo:
+			if dir == DirectionEgress {
+				// An external destination's address is not rewritten by
+				// anything in the cluster: a miss is a miss.
+				return triNo, desc
+			}
 			return triUnknown, desc + ": the source address the policy sees may have been rewritten"
+		default:
+			return triUnknown, desc + ": no address of that family is known for " + peerDesc(target, dir)
 		}
 	}
 	if entry.NamespaceSelector == nil && entry.PodSelector == nil {
@@ -341,14 +363,15 @@ func portDesc(port int32, proto corev1.Protocol) string {
 	return fmt.Sprintf("%s/%d", p, port)
 }
 
-// peerIPs is the address set the policy would compare an ipBlock against:
-// the pod's addresses, or for a non-pod endpoint the one address it has.
+// peerIPs prefers the address the caller observed: a flow seen on one of a
+// dual-stack pod's addresses must not be admitted on the strength of the
+// other. Without an observed address, a pod's whole address set stands in.
 func peerIPs(p Peer) []net.IP {
-	if p.Pod != nil {
-		return podIPs(p.Pod)
-	}
 	if ip := net.ParseIP(p.IP); ip != nil {
 		return []net.IP{ip}
+	}
+	if p.Pod != nil {
+		return podIPs(p.Pod)
 	}
 	return nil
 }
