@@ -58,6 +58,9 @@ func (c *Client) attributeNetworkPolicyBlock(ctx context.Context, cache *k8s.Res
 	}
 
 	for i, cand := range candidates {
+		// Only a probe that got no HTTP answer at all can be a network-path
+		// failure; an endpoint that replied 500 or refused credentials was
+		// reached.
 		if i >= len(reasons) || reasons[i] != prom.ProbeReasonTransportError {
 			continue
 		}
@@ -68,13 +71,32 @@ func (c *Client) attributeNetworkPolicyBlock(ctx context.Context, cache *k8s.Res
 		if !ok || len(backends) == 0 {
 			continue
 		}
-		policies := selfPolicies
-		if cand.Namespace != selfNs {
-			candPolicies, err := cache.NetworkPolicies().NetworkPolicies(cand.Namespace).List(labels.Everything())
-			if err != nil {
+		// Policies from every namespace involved: Radar's own, and each
+		// backend's — a manually managed EndpointSlice can point outside the
+		// Service's namespace, and the policy admitting the traffic lives
+		// wherever the backend does.
+		policies := append([]*networkingv1.NetworkPolicy{}, selfPolicies...)
+		seen := map[string]bool{selfNs: true}
+		complete := true
+		for _, b := range backends {
+			ns := b.Pod.Namespace
+			if seen[ns] {
 				continue
 			}
-			policies = append(append([]*networkingv1.NetworkPolicy{}, selfPolicies...), candPolicies...)
+			seen[ns] = true
+			if !cacheAuthoritativeFor(cache, ns) {
+				complete = false
+				break
+			}
+			nsPolicies, err := cache.NetworkPolicies().NetworkPolicies(ns).List(labels.Everything())
+			if err != nil {
+				complete = false
+				break
+			}
+			policies = append(policies, nsPolicies...)
+		}
+		if !complete {
+			continue
 		}
 		verdict := netpol.Evaluate(src, backends, policies)
 		if verdict.Kind != netpol.Denied {
@@ -117,16 +139,19 @@ func namespaceObject(cache *k8s.ResourceCache, name string) *corev1.Namespace {
 // candidate Service port, from its EndpointSlices. Endpoint membership, not
 // the selector, is what routes traffic; the slice also carries the resolved
 // port number, which a named targetPort can make differ per pod. ok is false
-// when any published endpoint cannot be resolved to a cached Pod: a verdict
-// over a partial backend set could deny a connection the missing pod admits.
+// when any published endpoint cannot be tied to a cached Pod — by reference,
+// UID and address — since a verdict over a partial or misattributed backend
+// set could deny a connection the real backend admits.
 func (c *Client) candidateBackends(ctx context.Context, cache *k8s.ResourceCache, cand prom.Candidate) ([]netpol.Backend, bool) {
 	svc, err := cache.Services().Services(cand.Namespace).Get(cand.Name)
 	if err != nil {
 		return nil, false
 	}
+	// The probe is HTTP over TCP; a UDP port sharing the number is not the
+	// one it used.
 	portName, found := "", false
 	for _, p := range svc.Spec.Ports {
-		if int(p.Port) == cand.Port {
+		if int(p.Port) == cand.Port && netpol.ProtocolOrTCP(string(p.Protocol)) == corev1.ProtocolTCP {
 			portName, found = p.Name, true
 			break
 		}
@@ -140,32 +165,25 @@ func (c *Client) candidateBackends(ctx context.Context, cache *k8s.ResourceCache
 	if err != nil {
 		return nil, false
 	}
-	candNs := namespaceObject(cache, cand.Namespace)
+	namespaces := map[string]*corev1.Namespace{}
 	var backends []netpol.Backend
 	for i := range slices.Items {
 		slice := &slices.Items[i]
 		if slice.AddressType != discoveryv1.AddressTypeIPv4 && slice.AddressType != discoveryv1.AddressTypeIPv6 {
 			continue
 		}
-		var port int32
-		proto := corev1.ProtocolTCP
-		havePort := false
-		for _, p := range slice.Ports {
-			if p.Port != nil && ((p.Name == nil && portName == "") || (p.Name != nil && *p.Name == portName)) {
-				port, havePort = *p.Port, true
-				if p.Protocol != nil {
-					proto = *p.Protocol
-				}
-				break
-			}
-		}
+		port, havePort := slicePort(slice, portName)
 		if !havePort {
 			continue
 		}
 		for _, ep := range slice.Endpoints {
-			// Ready unset means "unknown", which consumers are told to treat as
-			// ready.
-			if ep.Conditions.Ready != nil && !*ep.Conditions.Ready {
+			// Traffic can still be routed to a terminating endpoint that is
+			// serving (when no ready one is available), so it stays a backend;
+			// anything more could only turn a denial into silence, which is the
+			// safe direction. Ready unset means "unknown", to be treated as ready.
+			ready := ep.Conditions.Ready == nil || *ep.Conditions.Ready
+			serving := ep.Conditions.Serving != nil && *ep.Conditions.Serving
+			if !ready && !serving {
 				continue
 			}
 			if ep.TargetRef == nil || ep.TargetRef.Kind != "Pod" {
@@ -176,17 +194,68 @@ func (c *Client) candidateBackends(ctx context.Context, cache *k8s.ResourceCache
 				ns = cand.Namespace
 			}
 			pod, err := cache.Pods().Pods(ns).Get(ep.TargetRef.Name)
-			if err != nil {
+			if err != nil || !endpointMatchesPod(ep, pod) {
 				return nil, false
 			}
+			nsObj, seen := namespaces[ns]
+			if !seen {
+				nsObj = namespaceObject(cache, ns)
+				namespaces[ns] = nsObj
+			}
 			backends = append(backends, netpol.Backend{
-				Peer:     netpol.Peer{Pod: pod, Namespace: candNs},
+				Peer:     netpol.Peer{Pod: pod, Namespace: nsObj},
 				Port:     port,
-				Protocol: proto,
+				Protocol: corev1.ProtocolTCP,
 			})
 		}
 	}
 	return backends, true
+}
+
+// slicePort finds the TCP port a slice publishes under the Service port's
+// name (both empty for a single unnamed port).
+func slicePort(slice *discoveryv1.EndpointSlice, portName string) (int32, bool) {
+	for _, p := range slice.Ports {
+		if p.Port == nil {
+			continue
+		}
+		name := ""
+		if p.Name != nil {
+			name = *p.Name
+		}
+		if name != portName {
+			continue
+		}
+		proto := corev1.ProtocolTCP
+		if p.Protocol != nil {
+			proto = *p.Protocol
+		}
+		if proto != corev1.ProtocolTCP {
+			continue
+		}
+		return *p.Port, true
+	}
+	return 0, false
+}
+
+// endpointMatchesPod guards against a slice that still names a pod which has
+// since been replaced, or a manually managed slice whose address is not the
+// referenced pod's: the UID must agree when the reference carries one, and
+// the published address must be one of the pod's.
+func endpointMatchesPod(ep discoveryv1.Endpoint, pod *corev1.Pod) bool {
+	if ep.TargetRef.UID != "" && ep.TargetRef.UID != pod.UID {
+		return false
+	}
+	podIPs := map[string]bool{pod.Status.PodIP: true}
+	for _, ip := range pod.Status.PodIPs {
+		podIPs[ip.IP] = true
+	}
+	for _, addr := range ep.Addresses {
+		if podIPs[addr] {
+			return true
+		}
+	}
+	return false
 }
 
 func describeNetworkPolicyBlock(cand prom.Candidate, self *corev1.Pod, v netpol.Verdict) string {

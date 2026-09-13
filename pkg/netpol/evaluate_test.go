@@ -291,6 +291,35 @@ func TestEvaluate(t *testing.T) {
 			want: Verdict{Kind: Unknown},
 		},
 		{
+			name: "a pod can always reach itself",
+			src:  radar(),
+			dst: func() []Backend {
+				self := radar()
+				return []Backend{{Peer: self, Port: 9090, Protocol: corev1.ProtocolTCP}}
+			}(),
+			policies: []*networkingv1.NetworkPolicy{policy("radar", "deny-all", nil, ingressT, nil, nil)},
+			want:     Verdict{Kind: Allowed},
+		},
+		{
+			name: "ipBlock admits a dual-stack source by its address of the block's family",
+			src: func() Peer {
+				p := radar()
+				p.Pod.Status.PodIPs = []corev1.PodIP{{IP: "10.0.1.5"}, {IP: "fd00::5"}}
+				return p
+			}(),
+			dst: []Backend{prom(9090)},
+			policies: []*networkingv1.NetworkPolicy{policy("monitoring", "v6-only", promLabels, ingressT,
+				[]networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "fd00::/64"}}}}}, nil)},
+			want: Verdict{Kind: Allowed},
+		},
+		{
+			name: "ipBlock of a family the source has no address in is undecidable",
+			src:  radar(), dst: []Backend{prom(9090)},
+			policies: []*networkingv1.NetworkPolicy{policy("monitoring", "v6-only", promLabels, ingressT,
+				[]networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "fd00::/64"}}}}}, nil)},
+			want: Verdict{Kind: Unknown},
+		},
+		{
 			name: "no backends is undecidable",
 			src:  radar(), dst: nil,
 			policies: []*networkingv1.NetworkPolicy{policy("monitoring", "deny-all", nil, ingressT, nil, nil)},

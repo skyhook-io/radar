@@ -196,7 +196,8 @@ func (c *Client) Rules(ctx context.Context, typ string) ([]RuleGroup, error) {
 type ProbeReason string
 
 const (
-	ProbeReasonTransportError ProbeReason = "transport_error" // network/HTTP failure
+	ProbeReasonTransportError ProbeReason = "transport_error" // no HTTP response: dial, TLS, timeout, connection reset
+	ProbeReasonHTTPError      ProbeReason = "http_error"      // the endpoint answered with a non-2xx status other than 401/403
 	ProbeReasonAuthError      ProbeReason = "auth_error"      // HTTP 401/403 — credentials rejected
 	ProbeReasonNotPrometheus  ProbeReason = "not_prometheus"  // 200 but response body isn't prom JSON (captive portal, login page)
 	ProbeReasonPromError      ProbeReason = "prom_error"      // prom responded with status=error
@@ -217,8 +218,14 @@ func (c *Client) Probe(ctx context.Context) (bool, ProbeReason) {
 	body, err := c.t.Do(probeCtx, "GET", "/api/v1/query", url.Values{"query": {"up"}})
 	if err != nil {
 		var httpErr *HTTPError
-		if errors.As(err, &httpErr) && (httpErr.StatusCode == 401 || httpErr.StatusCode == 403) {
-			return false, ProbeReasonAuthError
+		if errors.As(err, &httpErr) {
+			if httpErr.StatusCode == 401 || httpErr.StatusCode == 403 {
+				return false, ProbeReasonAuthError
+			}
+			// The server answered; whatever is wrong, the network path is not
+			// it — callers reasoning about reachability must not treat this
+			// like a dial failure.
+			return false, ProbeReasonHTTPError
 		}
 		return false, ProbeReasonTransportError
 	}

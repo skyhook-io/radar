@@ -88,8 +88,6 @@ func RuleMatchesPort(rulePorts []networkingv1.NetworkPolicyPort, podPort int32, 
 	return false
 }
 
-// ContainerPortByName resolves a named container port on a pod for the given
-// protocol.
 func ContainerPortByName(pod *corev1.Pod, name string, proto corev1.Protocol) (int32, bool) {
 	if pod == nil {
 		return 0, false

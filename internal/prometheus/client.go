@@ -788,6 +788,8 @@ func logProbeRejection(addr string, reason prom.ProbeReason, recordDiagnostics b
 		log.Printf("[prometheus] endpoint %s returned Prometheus error status, skipping", addr)
 	case prom.ProbeReasonTransportError:
 		log.Printf("[prometheus] endpoint %s unreachable, skipping", addr)
+	case prom.ProbeReasonHTTPError:
+		log.Printf("[prometheus] endpoint %s answered with an HTTP error, skipping", addr)
 	}
 }
 

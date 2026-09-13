@@ -122,6 +122,10 @@ func evaluateEgress(src Peer, dst []Backend, policies []*networkingv1.NetworkPol
 	}
 	overall := triNo
 	for _, b := range dst {
+		if samePod(src.Pod, b.Pod) {
+			overall = fold(overall, triYes)
+			continue
+		}
 		verdict := triNo
 		for _, np := range selecting {
 			for i := range np.Spec.Egress {
@@ -142,6 +146,11 @@ func evaluateIngress(src Peer, dst []Backend, policies []*networkingv1.NetworkPo
 	overall := triNo
 	var isolating []*networkingv1.NetworkPolicy
 	for _, b := range dst {
+		// A pod can never block traffic to itself.
+		if samePod(src.Pod, b.Pod) {
+			overall = fold(overall, triYes)
+			continue
+		}
 		selecting, ok := selectingPolicies(b.Pod, policies, func(t PolicyTypes) bool { return t.Ingress })
 		if !ok {
 			return Verdict{Kind: Unknown}
@@ -237,7 +246,7 @@ func peerAdmits(peer *networkingv1.NetworkPolicyPeer, target Peer, policyNs stri
 		if dir == DirectionEgress {
 			return triUnknown
 		}
-		return ipBlockAdmits(peer.IPBlock, target.Pod.Status.PodIP)
+		return ipBlockAdmits(peer.IPBlock, podIPs(target.Pod))
 	}
 	if peer.NamespaceSelector == nil && peer.PodSelector == nil {
 		return triUnknown
@@ -282,31 +291,70 @@ func peerAdmits(peer *networkingv1.NetworkPolicyPeer, target Peer, policyNs stri
 	return triYes
 }
 
-func ipBlockAdmits(block *networkingv1.IPBlock, podIP string) tri {
-	if podIP == "" {
-		return triUnknown
-	}
-	ip := net.ParseIP(podIP)
-	if ip == nil {
-		return triUnknown
-	}
+// ipBlockAdmits matches the pod's addresses of the block's own family — a
+// dual-stack pod reaches an IPv6 backend from its IPv6 address, which an
+// IPv4 block says nothing about. No address of that family means the
+// question cannot be answered.
+func ipBlockAdmits(block *networkingv1.IPBlock, ips []net.IP) tri {
 	_, cidr, err := net.ParseCIDR(block.CIDR)
 	if err != nil {
 		return triUnknown
 	}
-	if !cidr.Contains(ip) {
-		return triNo
-	}
-	for _, ex := range block.Except {
-		_, exCIDR, err := net.ParseCIDR(ex)
-		if err != nil {
-			return triUnknown
+	v4 := cidr.IP.To4() != nil
+	out := triUnknown
+	for _, ip := range ips {
+		if (ip.To4() != nil) != v4 {
+			continue
 		}
-		if exCIDR.Contains(ip) {
-			return triNo
+		if out == triUnknown {
+			out = triNo // an address of the block's family exists, so "no" is a real answer
+		}
+		if !cidr.Contains(ip) {
+			continue
+		}
+		excepted := false
+		for _, ex := range block.Except {
+			_, exCIDR, err := net.ParseCIDR(ex)
+			if err != nil {
+				return triUnknown
+			}
+			if exCIDR.Contains(ip) {
+				excepted = true
+				break
+			}
+		}
+		if excepted {
+			continue
+		}
+		return triYes
+	}
+	return out
+}
+
+func podIPs(pod *corev1.Pod) []net.IP {
+	var out []net.IP
+	seen := map[string]bool{}
+	add := func(s string) {
+		if s == "" || seen[s] {
+			return
+		}
+		seen[s] = true
+		if ip := net.ParseIP(s); ip != nil {
+			out = append(out, ip)
 		}
 	}
-	return triYes
+	add(pod.Status.PodIP)
+	for _, p := range pod.Status.PodIPs {
+		add(p.IP)
+	}
+	return out
+}
+
+func samePod(a, b *corev1.Pod) bool {
+	if a.UID != "" && b.UID != "" {
+		return a.UID == b.UID
+	}
+	return a.Namespace == b.Namespace && a.Name == b.Name
 }
 
 func policyNames(policies []*networkingv1.NetworkPolicy) []string {

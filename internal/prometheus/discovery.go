@@ -177,7 +177,14 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		c.mu.Lock()
 		c.discoveryService = nil
 		c.mu.Unlock()
-		if blocked := c.attributeNetworkPolicyBlock(ctx, k8s.GetResourceCache(), candidates, reasons); blocked != nil {
+		blocked := c.attributeNetworkPolicyBlock(ctx, k8s.GetResourceCache(), candidates, reasons)
+		// Attribution reads the API; a run superseded or timed out during it
+		// must end as such, not be recorded as a cluster without Prometheus.
+		if err := ctx.Err(); err != nil {
+			logDiscoveryEnded(start, err)
+			return "", "", err
+		}
+		if blocked != nil {
 			log.Printf("[prometheus] %v", blocked)
 			if !discoveryDiagnosticsSuppressed(ctx) {
 				errorlog.Record("prometheus", "warning", "%v", blocked)
