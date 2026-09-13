@@ -998,6 +998,10 @@ func convertHubbleFlow(pbFlow *flowpb.Flow) Flow {
 	if flow.Verdict == "dropped" {
 		if reason := pbFlow.GetDropReasonDesc(); reason != flowpb.DropReason_DROP_REASON_UNKNOWN {
 			flow.DropReasonDesc = reason.String()
+		} else if code := pbFlow.GetDropReason(); code != 0 {
+			// Older relays fill only the numeric code; its enum name is the
+			// same vocabulary.
+			flow.DropReasonDesc = flowpb.DropReason(code).String()
 		}
 	}
 	if svc := pbFlow.GetSourceService(); svc != nil && svc.GetName() != "" {

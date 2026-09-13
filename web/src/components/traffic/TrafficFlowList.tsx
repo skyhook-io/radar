@@ -364,13 +364,12 @@ interface PolicyEvaluation {
   reason?: string
 }
 
-/** Hubble reports which policies decided a flow only for policy drops; every
- *  other drop reason is not a policy question at all. */
-const POLICY_DROP_REASONS = ['POLICY_DENIED', 'POLICY_DENY']
-
+/** A drop is a policy question only on positive evidence: the plugin named a
+ *  policy reason, or named the policy itself. A drop with no reported reason
+ *  is not assumed to be one. */
 function isPolicyDrop(flow: TrafficFlow): boolean {
-  if (!flow.dropReasonDesc) return true
-  return POLICY_DROP_REASONS.some((r) => flow.dropReasonDesc!.toUpperCase().includes(r))
+  if (flow.policyVerdict?.deniedBy?.length) return true
+  return (flow.dropReasonDesc ?? '').toUpperCase().includes('POLICY_DENY')
 }
 
 const EFFECT_TONE: Record<string, StatusTone> = {
@@ -422,7 +421,9 @@ function PolicyCorrelation({ flow }: { flow: TrafficFlow }) {
   if (!isPolicyDrop(flow)) {
     return (
       <div className="pt-1 border-t border-theme-border/50 text-[10px] text-theme-text-tertiary">
-        Not evaluated against NetworkPolicies — {flow.dropReasonDesc} is not a policy verdict
+        {flow.dropReasonDesc
+          ? `Not evaluated against NetworkPolicies — ${flow.dropReasonDesc} is not a policy verdict`
+          : 'Not evaluated against NetworkPolicies — the plugin did not report why this flow was dropped'}
       </div>
     )
   }

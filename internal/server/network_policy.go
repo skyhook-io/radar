@@ -175,7 +175,7 @@ func (s *Server) handleEvaluateNetworkPolicies(w http.ResponseWriter, r *http.Re
 
 	policies, err := netpols.NetworkPolicies(selNs).List(labels.Everything())
 	if err != nil {
-		log.Printf("[network-policy] Failed to list NetworkPolicies in %s: %v", selNs, err)
+		log.Printf("[network-policy] Failed to list NetworkPolicies for %s/%s: %v", selNs, selName, err)
 		s.writeError(w, http.StatusInternalServerError, "failed to list NetworkPolicies")
 		return
 	}
@@ -352,8 +352,9 @@ func (s *Server) ciliumPolicies(r *http.Request, cache *k8s.ResourceCache, pod *
 	if discovery == nil {
 		return ciliumFindings{state: ciliumUnknown, why: "Radar has not finished discovering this cluster's APIs, so it is not known whether Cilium policies are in play"}
 	}
-	cnpGVR, ok := discovery.GetGVR("CiliumNetworkPolicy")
-	if !ok {
+	cnpGVR, hasCNP := discovery.GetGVRWithGroup("CiliumNetworkPolicy", "cilium.io")
+	ccnpGVR, hasCCNP := discovery.GetGVRWithGroup("CiliumClusterwideNetworkPolicy", "cilium.io")
+	if !hasCNP && !hasCCNP {
 		return ciliumFindings{state: ciliumAbsent}
 	}
 	identity := ciliumIdentityFor(pod, ns)
@@ -389,10 +390,10 @@ func (s *Server) ciliumPolicies(r *http.Request, cache *k8s.ResourceCache, pod *
 		consider(kind, namespace, items)
 		return true
 	}
-	if !list("CiliumNetworkPolicy", pod.Namespace, cnpGVR) {
+	if hasCNP && !list("CiliumNetworkPolicy", pod.Namespace, cnpGVR) {
 		return out
 	}
-	if ccnpGVR, ok := discovery.GetGVR("CiliumClusterwideNetworkPolicy"); ok {
+	if hasCCNP {
 		list("CiliumClusterwideNetworkPolicy", "", ccnpGVR)
 	}
 	return out

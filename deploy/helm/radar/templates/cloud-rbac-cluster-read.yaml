@@ -126,6 +126,17 @@ rules:
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
+  {{- if .Values.rbac.crdGroups.cilium }}
+  # The Traffic view's policy panel gates per-CALLER on listing Cilium
+  # policies: a Cilium policy that governs the pod makes the core
+  # NetworkPolicy reading inconclusive, so a caller who cannot list them gets
+  # an undecidable answer on every flow. Declared policy, no secrets — the same
+  # class as the core NetworkPolicies the built-in view role already reads.
+  # Gated on the SA's own cilium collection for the same reason as karpenter.
+  - apiGroups: ["cilium.io"]
+    resources: ["ciliumnetworkpolicies", "ciliumclusterwidenetworkpolicies"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.metrics }}
   # On clusters with a standard metrics-server install this is usually
   # redundant — its aggregated-metrics-reader role carries aggregate-to-view

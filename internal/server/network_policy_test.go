@@ -155,8 +155,7 @@ func TestEvaluateNetworkPolicies(t *testing.T) {
 		reason  string
 	}{
 		{
-			// The old evaluator ignored a policy without policyTypes, and so
-			// answered "allowed" here.
+			// A policy with no policyTypes still isolates ingress.
 			name:    "default-deny with no policyTypes isolates ingress",
 			params:  ingress("shop", "other-0", "8080"),
 			verdict: verdictDenied,
@@ -169,15 +168,12 @@ func TestEvaluateNetworkPolicies(t *testing.T) {
 			effects: map[string]string{"allow-api-8080": "admits"},
 		},
 		{
-			// The old evaluator never read the port.
 			name:    "port mismatch is not admitted",
 			params:  ingress("shop", "api-0", "9090"),
 			verdict: verdictDenied,
 			effects: map[string]string{"allow-api-8080": "does_not_admit"},
 		},
 		{
-			// The old evaluator matched namespaceSelector by namespace
-			// equality, so a cross-namespace peer never matched.
 			name:    "namespaceSelector matches the peer's Namespace labels",
 			params:  ingress("trusted", "client-0", "8080"),
 			verdict: verdictAdmitted,
@@ -487,6 +483,17 @@ func TestEvaluateNetworkPolicies_CiliumPresenceCapsVerdict(t *testing.T) {
 	})
 	t.Run("a cluster-wide Cilium policy selecting the pod caps the verdict", func(t *testing.T) {
 		seed(t, policy("CiliumClusterwideNetworkPolicy", "all-web", selectsWeb, nil))
+		expect(t, admitted, verdictUndecidable, "all-web")
+	})
+	t.Run("cluster-wide policies are consulted even when the namespaced kind is not served", func(t *testing.T) {
+		dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{ccnpGVR: "CiliumClusterwideNetworkPolicyList"},
+			policy("CiliumClusterwideNetworkPolicy", "all-web", selectsWeb, nil))
+		if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+			{Group: "cilium.io", Version: "v2", Kind: "CiliumClusterwideNetworkPolicy", Name: "ciliumclusterwidenetworkpolicies", Namespaced: false, IsCRD: true, Verbs: []string{"get", "list", "watch"}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(k8s.ResetTestDynamicState)
 		expect(t, admitted, verdictUndecidable, "all-web")
 	})
 	t.Run("specs[] and matchExpressions select too", func(t *testing.T) {
