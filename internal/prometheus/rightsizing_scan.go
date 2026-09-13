@@ -759,14 +759,14 @@ func markScanHPAAvailable(workloads map[string]*scanWorkload, namespace string) 
 	}
 }
 
-// waitForPodsSynced reports whether the pod informer finished its initial sync,
+// waitForInformerSynced reports whether an informer finished its initial sync,
 // waiting out a warming cache within the same budget a single-workload read
 // uses. A kind this cache never watched is not warming, and is left to the
 // nil-lister check.
-func waitForPodsSynced(ctx context.Context, cache *k8s.ResourceCache) bool {
+func waitForInformerSynced(ctx context.Context, cache *k8s.ResourceCache, key string) bool {
 	deadline := time.Now().Add(warmingRetryBudget)
 	for {
-		synced, known := cache.InformerSynced("pods")
+		synced, known := cache.InformerSynced(key)
 		if synced || !known {
 			return true
 		}
@@ -796,12 +796,12 @@ func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes 
 	// A warming informer hands out a non-nil lister that answers nothing, which
 	// would read as a cluster with no OOM-killed pods anywhere. The scan pays
 	// this wait once rather than per workload.
-	if !waitForPodsSynced(ctx, cache) || cache.Pods() == nil {
+	if !waitForInformerSynced(ctx, cache, "pods") || cache.Pods() == nil {
 		markScanLiveInventoryDenied(workloads, "")
 		return
 	}
 	namespaces := scanScopeNamespaces(scopes)
-	replicaSetOwners, ownersReadable := scanReplicaSetOwners(cache, namespaces)
+	replicaSetOwners, ownersReadable := scanReplicaSetOwners(ctx, cache, namespaces)
 	pods, podsReadable := scanPods(cache, namespaces)
 	if !podsReadable {
 		markScanLiveInventoryDenied(workloads, "")
@@ -834,9 +834,12 @@ func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes 
 // scanReplicaSetOwners maps each ReplicaSet to its Deployment. It reports false
 // if any list failed, because a partial map silently drops the pods it could
 // not resolve rather than failing loudly.
-func scanReplicaSetOwners(cache *k8s.ResourceCache, namespaces []string) (map[string]string, bool) {
+func scanReplicaSetOwners(ctx context.Context, cache *k8s.ResourceCache, namespaces []string) (map[string]string, bool) {
 	owners := map[string]string{}
-	if cache.ReplicaSets() == nil {
+	// ReplicaSets load on the deferred path, so a warming lister is the common
+	// case right after startup: it answers an empty list with no error, which
+	// would resolve every Deployment's pods to nothing.
+	if cache.ReplicaSets() == nil || !waitForInformerSynced(ctx, cache, "replicasets") {
 		return owners, false
 	}
 	var replicaSets []*appsv1.ReplicaSet

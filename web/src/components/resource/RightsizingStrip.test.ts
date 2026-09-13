@@ -125,6 +125,20 @@ describe('live pod inventory', () => {
     expect(explanation).toContain('could not read')
   })
 
+  it('keeps the caveat on a staged reduction, where an unchecked pod matters most', () => {
+    const explanation = getRightsizingExplanation(
+      row({
+        resource: 'memory',
+        liveInventoryDenied: true,
+        reductionLimited: true,
+        calculatedRequest: '256Mi',
+        recommendedRequest: '384Mi',
+      }),
+    )
+    expect(explanation).toContain('conservative next step')
+    expect(explanation).toContain('could not read')
+  })
+
   it('says nothing when the pods were read', () => {
     expect(getRightsizingExplanation(row({ resource: 'memory' })) ?? '').not.toContain(
       'could not read',
