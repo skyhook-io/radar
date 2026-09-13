@@ -677,7 +677,7 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
               {radarNote && (
                 <Tooltip content={radarNote} delay={200}>
                   <span className="rounded border border-theme-border bg-theme-elevated/70 px-1.5 py-0.5 text-[10px] leading-3 text-theme-text-tertiary">
-                    Radar
+                    Found by Radar
                   </span>
                 </Tooltip>
               )}

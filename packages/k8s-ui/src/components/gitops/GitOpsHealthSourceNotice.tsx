@@ -17,7 +17,7 @@ import type { GitOpsInsightSummary } from '../../types'
 // Copy stays in plain words; the field names live behind the docs link.
 
 export const APP_TREE_HEALTH_NOTICE =
-  'Argo CD 3 no longer records per-resource health on the application, so the problems below are what Radar found by looking at the resources itself.'
+  'Argo CD 3 no longer records health for each resource on the application. Rows marked "Found by Radar" are problems Radar detected by looking at the resources itself.'
 export const REMOTE_DESTINATION_NOTICE =
   "This application deploys to a different cluster, so its resources aren't visible from here."
 

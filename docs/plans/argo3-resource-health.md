@@ -231,9 +231,9 @@ the engine filters as transient (no derivation), a remote-destination app
 
 **Step 4 — Provenance in the UI, shipped with Step 3 (Confident).**
 - Detail page, `appTree` mode and Tier B didn't answer: one quiet banner
-  above the Issues band. Copy: *"Argo CD 3 no longer records per-resource
-  health on the application, so the problems below are what Radar found by
-  looking at the resources itself."*
+  above the Issues band. Copy: *"Argo CD 3 no longer records health for each
+  resource on the application. Rows marked "Found by Radar" are problems
+  Radar detected by looking at the resources itself."*
   plus a "Why?" link to the docs paragraph (which is where
   `resourceHealthSource`, `persist: true` and the Argo API integration get
   named). When Tier B answered: no banner.
@@ -246,8 +246,9 @@ the engine filters as transient (no derivation), a remote-destination app
   banner, same slot: *"This application deploys to a different cluster, so
   its resources aren't visible from here."* When Radar is running standalone
   and the cloud funnel button is mounted (cloudConnect capability), append:
-  *"Connect that cluster with Radar Cloud to see this app's resources
-  here."* where "Radar Cloud" opens the funnel's own dialog. One line, no modal, no repeat nag:
+  *"Connect both clusters to Radar Cloud to see this app's resources
+  together."* where "Radar Cloud" opens the funnel's own dialog (which
+  connects this cluster; the destination is a second connect from Cloud). One line, no modal, no repeat nag:
   honour whatever dismissal state the funnel already keeps. Confirmed at
   sign-off: Radar Cloud does correlate a hub Application to its resources on
   the destination cluster, so the copy may say so.
