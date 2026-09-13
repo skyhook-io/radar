@@ -93,8 +93,12 @@ type RightsizingRow struct {
 	CurrentPodOOM           bool                  `json:"currentPodOOM,omitempty"`
 	WindowOOMEvidence       bool                  `json:"windowOomEvidence,omitempty"`
 	OOMEvidenceAvailable    bool                  `json:"oomEvidenceAvailable"`
-	LimitConflict           bool                  `json:"limitConflict,omitempty"`
-	QueryError              string                `json:"queryError,omitempty"`
+	// The cluster cache would not list this workload's pods, so CurrentPodOOM
+	// is false for want of an answer. Unset when the pods were read, including
+	// when the workload genuinely has none.
+	LiveInventoryDenied bool   `json:"liveInventoryDenied,omitempty"`
+	LimitConflict       bool   `json:"limitConflict,omitempty"`
+	QueryError          string `json:"queryError,omitempty"`
 }
 
 type RightsizingResponse struct {
@@ -149,7 +153,7 @@ func handleRightsizing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workload, err := loadRightsizingWorkload(kind, namespace, name)
+	workload, err := loadRightsizingWorkload(r.Context(), kind, namespace, name)
 	if err != nil {
 		switch {
 		case errors.Is(err, errCacheNotReady):
@@ -204,9 +208,37 @@ type rightsizingWorkload struct {
 	hpaManaged    map[string]bool
 	hpaAvailable  bool
 	scaledToZero  bool
+	// The live pod list could not be read, so podNames and currentPodOOM are
+	// empty because nothing answered — not because the workload has no pods.
+	liveInventoryDenied bool
 }
 
-func loadRightsizingWorkload(kind, namespace, name string) (rightsizingWorkload, error) {
+// warmingRetryBudget bounds how long a rightsizing read waits for an informer
+// that is still filling. Initial sync takes well under this; the budget exists
+// so a cache that never syncs cannot hold the request open.
+const warmingRetryBudget = 3 * time.Second
+
+// workloadPodsOnceWarm reads the workload's pods, waiting out a cache that is
+// still loading. Warming and denial arrive at this call as the same empty pod
+// list, but they are not the same thing: warming clears on its own within
+// seconds, so surfacing it would put a caveat on the recommendation that the
+// next refresh silently removes. A denial never clears, and is returned.
+func workloadPodsOnceWarm(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name string) ([]*corev1.Pod, error) {
+	deadline := time.Now().Add(warmingRetryBudget)
+	for {
+		pods, err := k8s.WorkloadPods(cache, kind, namespace, name)
+		if !errors.Is(err, k8s.ErrWorkloadCacheWarming) || time.Now().After(deadline) {
+			return pods, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) (rightsizingWorkload, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return rightsizingWorkload{}, errCacheNotReady
@@ -259,14 +291,14 @@ func loadRightsizingWorkload(kind, namespace, name string) (rightsizingWorkload,
 		hpaAvailable:  hpaAvailable,
 		scaledToZero:  scaledToZero,
 	}
-	pods, err := k8s.WorkloadPods(cache, kind, namespace, name)
+	pods, err := workloadPodsOnceWarm(ctx, cache, kind, namespace, name)
 	if err != nil {
-		// Rightsizing deliberately ignores the denial: its recommendation
-		// comes from seven days of kube-state-metrics ownership, which does
-		// not need the pod list, and the current-pod fallback simply finds
-		// nothing. Nothing in the response distinguishes that from a workload
-		// with no pods, which is a gap worth closing when the response gains
-		// a field for it.
+		// The recommendation itself survives: it comes from seven days of
+		// kube-state-metrics ownership, which never needed the pod list. What
+		// does not survive is everything read from the live pods — the pod
+		// names, and whether those pods have been OOM-killed — so the row is
+		// marked rather than served as if the workload simply had no pods.
+		workload.liveInventoryDenied = true
 		return workload, nil
 	}
 	for _, pod := range pods {
@@ -532,7 +564,7 @@ func terminationEvidenceByContainer(result *prom.QueryResult) map[string]termina
 }
 
 func buildRightsizingRow(container containerSpec, resourceName string, expected int, ownerCoverage OwnerCoverage, workload rightsizingWorkload, results map[string]queryOutcome) RightsizingRow {
-	row := RightsizingRow{Container: container.name, Resource: resourceName, Fit: FitInsufficientHistory, Confidence: ConfidenceLow, ExpectedSamples: expected, HPAManaged: workload.hpaManaged[resourceName], HPAEvidenceAvailable: workload.hpaAvailable}
+	row := RightsizingRow{Container: container.name, Resource: resourceName, Fit: FitInsufficientHistory, Confidence: ConfidenceLow, ExpectedSamples: expected, HPAManaged: workload.hpaManaged[resourceName], HPAEvidenceAvailable: workload.hpaAvailable, LiveInventoryDenied: workload.liveInventoryDenied}
 	var req, lim *resource.Quantity
 	statistic := "P95"
 	if resourceName == "cpu" {

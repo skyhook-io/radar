@@ -824,6 +824,13 @@ function EvidenceNote({ row }: { row: RightsizingRow }) {
         Radar could not verify restart history before suggesting a lower memory request.
       </p>
     )
+  if (row.liveInventoryDenied && row.resource === 'memory')
+    return (
+      <p className="mt-1 text-xs text-theme-text-tertiary">
+        Radar could not read this workload&apos;s pods, so it could not check them for
+        out-of-memory restarts. The suggestion rests on the metrics window alone.
+      </p>
+    )
   if (row.limitConflict)
     return (
       <p className="mt-1 text-xs text-theme-text-tertiary">

@@ -9,8 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skyhook-io/radar/pkg/prom"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 type fakeScanQuerier struct {
@@ -334,4 +339,54 @@ func TestMarkScanHPAAvailableIsNamespaceScoped(t *testing.T) {
 	if !workloads["a"].workload.hpaAvailable || workloads["b"].workload.hpaAvailable {
 		t.Fatalf("HPA evidence availability crossed namespaces: %+v", workloads)
 	}
+}
+
+// A denied pod lister and a workload whose pods are simply healthy both leave
+// currentPodOOM empty. Only the flag separates them, and a recommendation that
+// silently drops OOM evidence looks identical to one that found none.
+func TestScanMarksWorkloadsWhenPodInventoryIsUnreadable(t *testing.T) {
+	oomed := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6-a", OwnerReferences: []metav1.OwnerReference{scopeOwner("ReplicaSet", "api-7f6")}},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			Name:                 "api",
+			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"}},
+		}}},
+	}
+	replicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6", OwnerReferences: []metav1.OwnerReference{scopeOwner("Deployment", "api")}}}
+
+	newWorkloads := func() map[string]*scanWorkload {
+		return map[string]*scanWorkload{
+			workloadIdentity("Deployment", "shop", "api"): {
+				kind: "Deployment", namespace: "shop", name: "api",
+				workload: rightsizingWorkload{currentPodOOM: map[string]bool{}},
+			},
+		}
+	}
+	scopes := map[string][]string{"Deployment": {"shop"}}
+
+	t.Run("pods readable", func(t *testing.T) {
+		cache := scopeTestCache(t, map[string]bool{k8score.Pods: true, k8score.ReplicaSets: true}, replicaSet, oomed)
+		workloads := newWorkloads()
+		enrichScanCurrentOOM(context.Background(), cache, scopes, workloads)
+		got := workloads[workloadIdentity("Deployment", "shop", "api")].workload
+		if got.liveInventoryDenied {
+			t.Error("pods were readable; the row must not claim the inventory was denied")
+		}
+		if !got.currentPodOOM["api"] {
+			t.Error("an OOMKilled container was in the cache but did not reach the workload")
+		}
+	})
+
+	t.Run("pod lister denied", func(t *testing.T) {
+		cache := scopeTestCache(t, map[string]bool{k8score.ReplicaSets: true}, replicaSet)
+		workloads := newWorkloads()
+		enrichScanCurrentOOM(context.Background(), cache, scopes, workloads)
+		got := workloads[workloadIdentity("Deployment", "shop", "api")].workload
+		if !got.liveInventoryDenied {
+			t.Error("the pod lister was denied, so the empty OOM map must be reported as unanswered")
+		}
+		if got.currentPodOOM["api"] {
+			t.Error("no pods were readable; nothing may be claimed about OOM")
+		}
+	})
 }

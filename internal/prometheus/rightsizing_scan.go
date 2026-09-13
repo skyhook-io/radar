@@ -110,7 +110,7 @@ func ScanRightsizing(ctx context.Context, scope RightsizingScanScope) Rightsizin
 		resp.Reason = "resource_cache_unavailable"
 		return resp
 	}
-	workloads, unavailable := snapshotScanWorkloads(cache, scope.NamespacesByKind)
+	workloads, unavailable := snapshotScanWorkloads(ctx, cache, scope.NamespacesByKind)
 	resp.Coverage.UnavailableKinds = unavailable
 	return computeRightsizingScan(ctx, client, workloads, resp)
 }
@@ -443,6 +443,7 @@ func buildScanRow(container containerSpec, resourceName string, key scanKey, exp
 	row := RightsizingRow{
 		Container: container.name, Resource: resourceName, Fit: FitInsufficientHistory, Confidence: ConfidenceLow,
 		ExpectedSamples: expected, HPAManaged: workload.hpaManaged[resourceName], HPAEvidenceAvailable: workload.hpaAvailable,
+		LiveInventoryDenied: workload.liveInventoryDenied,
 	}
 	var request, limit = container.cpuReq, container.cpuLim
 	statistic := "P95"
@@ -596,7 +597,7 @@ func sortScanWorkloads(workloads []scanWorkload) {
 	})
 }
 
-func snapshotScanWorkloads(cache *k8s.ResourceCache, scopes map[string][]string) ([]scanWorkload, []string) {
+func snapshotScanWorkloads(ctx context.Context, cache *k8s.ResourceCache, scopes map[string][]string) ([]scanWorkload, []string) {
 	workloads := map[string]*scanWorkload{}
 	var unavailable []string
 	add := func(kind, namespace, name string, replicas int, podSpec *corev1.PodSpec, scaledToZero bool) {
@@ -652,7 +653,7 @@ func snapshotScanWorkloads(cache *k8s.ResourceCache, scopes map[string][]string)
 	}
 
 	enrichScanHPA(cache, scopes, workloads)
-	enrichScanCurrentOOM(cache, scopes, workloads)
+	enrichScanCurrentOOM(ctx, cache, scopes, workloads)
 	out := make([]scanWorkload, 0, len(workloads))
 	for _, workload := range workloads {
 		out = append(out, *workload)
@@ -758,8 +759,43 @@ func markScanHPAAvailable(workloads map[string]*scanWorkload, namespace string) 
 	}
 }
 
-func enrichScanCurrentOOM(cache *k8s.ResourceCache, scopes map[string][]string, workloads map[string]*scanWorkload) {
-	if cache.Pods() == nil {
+// waitForPodsSynced reports whether the pod informer finished its initial sync,
+// waiting out a warming cache within the same budget a single-workload read
+// uses. A kind this cache never watched is not warming, and is left to the
+// nil-lister check.
+func waitForPodsSynced(ctx context.Context, cache *k8s.ResourceCache) bool {
+	deadline := time.Now().Add(warmingRetryBudget)
+	for {
+		synced, known := cache.InformerSynced("pods")
+		if synced || !known {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// markScanLiveInventoryDenied records that no workload in the scan got a live
+// pod read, so an absent OOM signal means nothing was asked rather than nothing
+// was found.
+func markScanLiveInventoryDenied(workloads map[string]*scanWorkload) {
+	for _, workload := range workloads {
+		workload.workload.liveInventoryDenied = true
+	}
+}
+
+func enrichScanCurrentOOM(ctx context.Context, cache *k8s.ResourceCache, scopes map[string][]string, workloads map[string]*scanWorkload) {
+	// A warming informer hands out a non-nil lister that answers nothing, which
+	// would read as a cluster with no OOM-killed pods anywhere. The scan pays
+	// this wait once rather than per workload.
+	if !waitForPodsSynced(ctx, cache) || cache.Pods() == nil {
+		markScanLiveInventoryDenied(workloads)
 		return
 	}
 	namespaces := scanScopeNamespaces(scopes)

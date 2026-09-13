@@ -3173,6 +3173,8 @@ export interface RightsizingRow {
   currentPodOOM?: boolean;
   windowOomEvidence?: boolean;
   oomEvidenceAvailable: boolean;
+  /** The cluster cache would not list the workload's pods, so currentPodOOM is unknown rather than false. */
+  liveInventoryDenied?: boolean;
   limitConflict?: boolean;
   queryError?: string;
 }

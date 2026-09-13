@@ -336,8 +336,15 @@ export function getRightsizingExplanation(row: RightsizingRow): string | undefin
     ? `Partial result: ${row.queryError}.`
     : messages[row.recommendationReason ?? '']
   const throttleUnavailable = row.resource === 'cpu' && !row.throttleAvailable
-  if (!message && !throttleUnavailable) return undefined
-  return message ?? 'CPU throttling metrics are unavailable; no throttling conclusion was drawn.'
+  // A denied pod read leaves currentPodOOM unknown rather than false, so this
+  // qualifies whatever reason is shown instead of replacing it.
+  const inventoryNote =
+    row.liveInventoryDenied && row.resource === 'memory'
+      ? "Radar could not read this workload's pods, so it could not check them for out-of-memory restarts."
+      : undefined
+  if (!message && !throttleUnavailable) return inventoryNote
+  const base = message ?? 'CPU throttling metrics are unavailable; no throttling conclusion was drawn.'
+  return inventoryNote ? `${base} ${inventoryNote}` : base
 }
 
 function confidenceLabel(row: RightsizingRow) {
