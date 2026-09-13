@@ -1,8 +1,6 @@
 package tree
 
 import (
-	"strings"
-
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
@@ -73,19 +71,9 @@ func parseFluxManagedResources(root *unstructured.Unstructured) []managedResourc
 }
 
 func parseFluxInventoryID(id string) (ResourceRef, bool) {
-	parts := strings.Split(id, "_")
-	if len(parts) < 4 {
+	group, kind, namespace, name, ok := gitops.ParseFluxInventoryID(id)
+	if !ok {
 		return ResourceRef{}, false
-	}
-	kind := parts[len(parts)-1]
-	group := parts[len(parts)-2]
-	namespace := parts[0]
-	name := strings.Join(parts[1:len(parts)-2], "_")
-	if kind == "" || name == "" {
-		return ResourceRef{}, false
-	}
-	if group == "core" {
-		group = ""
 	}
 	return ResourceRef{Group: group, Kind: kind, Namespace: namespace, Name: name}, true
 }

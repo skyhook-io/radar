@@ -27,6 +27,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rollouts"
 	"github.com/skyhook-io/radar/pkg/subject"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -76,6 +77,7 @@ type argoClaim struct {
 // workloadRef identifies one managed workload for the hub to match against a
 // destination cluster's rows.
 type workloadRef struct {
+	Group     string `json:"group,omitempty"`
 	Kind      string `json:"kind"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
@@ -105,7 +107,7 @@ type applicationsCacheEntry struct {
 
 // appRow is one logical app in this cluster.
 type appRow struct {
-	Key            string            `json:"key"`                      // overlay key, structural-root key, or "<ns>/<kind>/<name>" raw
+	Key            string            `json:"key"`                      // overlay key or structural-root key; raw CRD roots append "@<api-group>"
 	Name           string            `json:"name"`                     // display name
 	Namespace      string            `json:"namespace,omitempty"`      // the single namespace the WORKLOADS run in (residence, not the GitOps manager's home); empty when they span several — see Namespaces
 	Namespaces     []string          `json:"namespaces,omitempty"`     // all distinct workload namespaces, sorted; the unambiguous form of Namespace
@@ -551,12 +553,12 @@ func firstNonEmptyString(values ...string) string {
 // cleanly: every workload becomes its own structural root and carries no
 // satellites — identity then rests on the label overlay alone, raw-always.
 type appGraph struct {
-	topo     *topology.Topology
-	idx      *topology.RelationshipsIndex
-	provider topology.ResourceProvider
-	dp       topology.DynamicProvider
-	byID     map[string]topology.Node
-	byKNN    map[string]string // lower(kind)|ns|name → node ID
+	topo       *topology.Topology
+	idx        *topology.RelationshipsIndex
+	provider   topology.ResourceProvider
+	dp         topology.DynamicProvider
+	byID       map[string]topology.Node
+	byResource map[string]string
 }
 
 // ListApplications builds the structural topology graph, resolves each app
@@ -657,7 +659,7 @@ func applicationsCacheKeyFor(namespaces []string, canListClusterWorkflowTemplate
 // buildAppGraph constructs the same resources-view topology the /api/topology
 // handler builds, then indexes it for root walks and satellite lookups.
 func buildAppGraph(cache *k8s.ResourceCache, namespaces []string) *appGraph {
-	g := &appGraph{byID: map[string]topology.Node{}, byKNN: map[string]string{}}
+	g := &appGraph{byID: map[string]topology.Node{}, byResource: map[string]string{}}
 	provider := k8s.NewTopologyResourceProvider(cache)
 	if provider == nil {
 		return g
@@ -680,13 +682,19 @@ func buildAppGraph(cache *k8s.ResourceCache, namespaces []string) *appGraph {
 	for _, n := range topo.Nodes {
 		g.byID[n.ID] = n
 		ns, _ := n.Data["namespace"].(string)
-		g.byKNN[knnKey(string(n.Kind), ns, n.Name)] = n.ID
+		kind := topology.KubernetesKindForNode(&n)
+		group := appGraphNodeGroup(&n, kind)
+		g.byResource[resourceid.ResourceKey(group, kind, ns, n.Name)] = n.ID
 	}
 	return g
 }
 
-func knnKey(kind, ns, name string) string {
-	return strings.ToLower(kind) + "|" + ns + "|" + name
+func appGraphNodeGroup(node *topology.Node, kind string) string {
+	apiVersion, _ := node.Data["apiVersion"].(string)
+	if group := topology.APIVersionGroup(apiVersion); group != "" {
+		return group
+	}
+	return resourceid.GroupForBuiltinKind(kind)
 }
 
 // isGitOpsManagerKind reports whether a node is an in-cluster GitOps manager —
@@ -697,13 +705,16 @@ func knnKey(kind, ns, name string) string {
 // union-find would merge them all into one app. ownerRef chains — including
 // operator CRs (CNPG Cluster, Strimzi Kafka) — are not managers and keep
 // climbing to the topmost owner.
-func isGitOpsManagerKind(k topology.NodeKind) bool {
-	switch k {
-	case topology.KindApplication, topology.KindKustomization, topology.KindHelmRelease:
-		return true
-	default:
-		return false
+func isGitOpsManagerKind(kind topology.NodeKind, group string) bool {
+	switch kind {
+	case topology.KindApplication:
+		return group == "argoproj.io"
+	case topology.KindKustomization:
+		return group == "kustomize.toolkit.fluxcd.io"
+	case topology.KindHelmRelease:
+		return group == "helm.toolkit.fluxcd.io"
 	}
+	return false
 }
 
 // structuralRoot walks incoming EdgeManages edges from startID toward the
@@ -738,22 +749,25 @@ func (g *appGraph) structuralRoot(startID string) (topology.Node, bool) {
 			ok = true
 		}
 		cur = next
-		if exists && isGitOpsManagerKind(n.Kind) {
+		if exists && isGitOpsManagerKind(n.Kind, appGraphNodeGroup(&n, topology.KubernetesKindForNode(&n))) {
 			break
 		}
 	}
 	return top, ok
 }
 
-// rootOf returns the structural-root key ("<ns>/<Kind>/<name>") and root Kind
-// for a workload, falling back to the workload itself when the graph is absent.
-func (g *appGraph) rootOf(kind, ns, name string) (rootKey, rootKind string) {
+// rootOf returns the structural-root key ("<ns>/<Kind>/<name>"), root Kind,
+// API group, and exact identity for a workload, falling back to the workload
+// itself when the graph is absent.
+func (g *appGraph) rootOf(group, kind, ns, name string) (rootKey, rootKind, rootGroup, rootIdentity string) {
 	rootKey = ns + "/" + kind + "/" + name
 	rootKind = kind
+	rootGroup = group
+	rootIdentity = resourceid.ResourceKey(group, kind, ns, name)
 	if g.topo == nil {
 		return
 	}
-	nodeID, found := g.byKNN[knnKey(kind, ns, name)]
+	nodeID, found := g.byResource[rootIdentity]
 	if !found {
 		return
 	}
@@ -762,15 +776,19 @@ func (g *appGraph) rootOf(kind, ns, name string) (rootKey, rootKind string) {
 		return
 	}
 	rns, _ := rn.Data["namespace"].(string)
-	return rns + "/" + string(rn.Kind) + "/" + rn.Name, string(rn.Kind)
+	rootKind = string(rn.Kind)
+	identityKind := topology.KubernetesKindForNode(&rn)
+	rootGroup = appGraphNodeGroup(&rn, identityKind)
+	return rns + "/" + rootKind + "/" + rn.Name, rootKind, rootGroup,
+		resourceid.ResourceKey(appGraphNodeGroup(&rn, identityKind), identityKind, rns, rn.Name)
 }
 
 // relationshipsFor pulls the workload's structural satellites from the graph.
-func (g *appGraph) relationshipsFor(kind, ns, name string) *appRelationships {
+func (g *appGraph) relationshipsFor(kind, ns, name string, obj any) *appRelationships {
 	if g.topo == nil {
 		return nil
 	}
-	rel := topology.GetRelationshipsWithIndex(kind, ns, name, g.topo, g.provider, g.dp, g.idx)
+	rel := topology.GetRelationshipsWithObject(kind, ns, name, obj, g.topo, g.provider, g.dp, g.idx)
 	if rel == nil {
 		return nil
 	}
@@ -825,15 +843,17 @@ func isAppRouteKind(kind string) bool {
 // that decide which app it belongs to (structural root + label overlay) and how
 // it is classified.
 type appWorkloadInput struct {
-	wl       appWorkload
-	overlay  *subject.AppOverlay
-	source   *appSourceRef
-	events   []appEvent
-	rels     *appRelationships
-	rootKey  string
-	rootKind string
-	addon    bool
-	addonWhy string
+	wl           appWorkload
+	overlay      *subject.AppOverlay
+	source       *appSourceRef
+	events       []appEvent
+	rels         *appRelationships
+	rootKey      string
+	rootKind     string
+	rootGroup    string
+	rootIdentity string
+	addon        bool
+	addonWhy     string
 }
 
 // collectAppWorkloads walks Deployments/StatefulSets/DaemonSets plus
@@ -859,7 +879,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 		}
 	}
 
-	add := func(kind, ns, name string, lbls, anns map[string]string, image string, workloadHealth packages.Health, ready, desired int, selector *metav1.LabelSelector, rollout *health.WorkloadRolloutActivity, batch *appBatchSummary) {
+	add := func(obj any, kind, ns, name string, lbls, anns map[string]string, image string, workloadHealth packages.Health, ready, desired int, selector *metav1.LabelSelector, rollout *health.WorkloadRolloutActivity, batch *appBatchSummary) {
 		pods := podsForSelector(podsByNS[ns], selector)
 		if rollout != nil && (rollout.Active || rollout.Phase == health.RolloutStalled) && rollout.Phase != health.RolloutApplying {
 			updatedRevisionTargetsOnce.Do(func() {
@@ -870,13 +890,17 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 		restarts, reason := podsRestarts(pods)
 		meta := metav1.ObjectMeta{Namespace: ns, Name: name, Labels: lbls, Annotations: anns}
 		overlay := subject.ResolveOverlay(&meta, false)
-		rootKey, rootKind := g.rootOf(kind, ns, name)
-		rels := g.relationshipsFor(kind, ns, name)
+		group := appWorkloadAPIGroup(kind)
+		if resource, ok := obj.(*unstructured.Unstructured); ok {
+			group = topology.APIVersionGroup(resource.GetAPIVersion())
+		}
+		rootKey, rootKind, rootGroup, rootIdentity := g.rootOf(group, kind, ns, name)
+		rels := g.relationshipsFor(kind, ns, name, obj)
 		addon, why := packages.ClassifyAddon(lbls["helm.sh/chart"], lbls["app.kubernetes.io/name"], lbls["app.kubernetes.io/part-of"], name, lbls["addonmanager.kubernetes.io/mode"], image)
 		out = append(out, appWorkloadInput{
 			wl: appWorkload{
 				Kind:          kind,
-				Group:         appWorkloadAPIGroup(kind),
+				Group:         group,
 				Namespace:     ns,
 				Name:          name,
 				WorkloadClass: classifyWorkload(kind, rels),
@@ -894,14 +918,16 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				nameLabel:     lbls["app.kubernetes.io/name"],
 				appAnnotation: strings.TrimSpace(anns[appIdentityAnnotation]),
 			},
-			overlay:  overlay,
-			source:   sourceRefForInput(overlay, rootKind, rootKey),
-			events:   eventsForWorkload(eventsByObj[ns], kind, name, pods),
-			rels:     rels,
-			rootKey:  rootKey,
-			rootKind: rootKind,
-			addon:    addon,
-			addonWhy: why,
+			overlay:      overlay,
+			source:       sourceRefForInput(overlay, rootKind, rootGroup, rootKey),
+			events:       eventsForWorkload(eventsByObj[ns], group, kind, name, pods),
+			rels:         rels,
+			rootKey:      rootKey,
+			rootKind:     rootKind,
+			rootGroup:    rootGroup,
+			rootIdentity: rootIdentity,
+			addon:        addon,
+			addonWhy:     why,
 		})
 	}
 
@@ -927,7 +953,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				if rolloutReferencedDeployments[d.Namespace+"/"+d.Name] {
 					continue
 				}
-				add("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations,
+				add(d, "Deployment", d.Namespace, d.Name, d.Labels, d.Annotations,
 					primaryImage(d.Spec.Template.Spec.Containers),
 					levelToPackagesHealth(health.Workload(d, time.Now()).Level),
 					int(d.Status.AvailableReplicas), appDesiredReplicas(d.Spec.Replicas), d.Spec.Selector, visibleRolloutActivity(health.WorkloadRollout(d)), nil)
@@ -943,7 +969,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				items, _ = dsLister.DaemonSets(ns).List(labels.Everything())
 			}
 			for _, d := range items {
-				add("DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
+				add(d, "DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
 					primaryImage(d.Spec.Template.Spec.Containers),
 					levelToPackagesHealth(health.Workload(d, time.Now()).Level),
 					int(d.Status.NumberReady), int(d.Status.DesiredNumberScheduled), d.Spec.Selector, visibleRolloutActivity(health.WorkloadRollout(d)), nil)
@@ -959,7 +985,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				items, _ = ssLister.StatefulSets(ns).List(labels.Everything())
 			}
 			for _, d := range items {
-				add("StatefulSet", d.Namespace, d.Name, d.Labels, d.Annotations,
+				add(d, "StatefulSet", d.Namespace, d.Name, d.Labels, d.Annotations,
 					primaryImage(d.Spec.Template.Spec.Containers),
 					levelToPackagesHealth(health.Workload(d, time.Now()).Level),
 					int(d.Status.ReadyReplicas), appDesiredReplicas(d.Spec.Replicas), d.Spec.Selector, visibleRolloutActivity(health.WorkloadRollout(d)), nil)
@@ -975,7 +1001,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 			activity.Desired = int32(desired)
 		}
 		ready := int(activity.Available)
-		add("Rollout", rollout.GetNamespace(), rollout.GetName(), rollout.GetLabels(), rollout.GetAnnotations(),
+		add(rollout, "Rollout", rollout.GetNamespace(), rollout.GetName(), rollout.GetLabels(), rollout.GetAnnotations(),
 			image, applicationServingHealth(ready, desired), ready, desired, selector, visibleRolloutActivity(activity), nil)
 	}
 	if jobLister := cache.Jobs(); jobLister != nil {
@@ -994,7 +1020,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 					continue
 				}
 				batch := jobBatchSummary(j)
-				add("Job", j.Namespace, j.Name, j.Labels, j.Annotations,
+				add(j, "Job", j.Namespace, j.Name, j.Labels, j.Annotations,
 					primaryImage(j.Spec.Template.Spec.Containers),
 					batchHealth(batch, levelToPackagesHealth(health.Workload(j, time.Now()).Level)),
 					0, 0, j.Spec.Selector, nil, batch)
@@ -1018,7 +1044,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 				batch.Suspended = cj.Spec.Suspend != nil && *cj.Spec.Suspend
 				setLatestBatchTime(&batch.LastScheduledAt, formatMetaTime(cj.Status.LastScheduleTime))
 				setLatestBatchTime(&batch.LastSuccessfulAt, formatMetaTime(cj.Status.LastSuccessfulTime))
-				add("CronJob", cj.Namespace, cj.Name, cj.Labels, cj.Annotations,
+				add(cj, "CronJob", cj.Namespace, cj.Name, cj.Labels, cj.Annotations,
 					primaryImage(cj.Spec.JobTemplate.Spec.Template.Spec.Containers),
 					batchHealth(batch, levelToPackagesHealth(health.Workload(cj, time.Now()).Level)),
 					0, 0, nil, nil, batch)
@@ -1030,7 +1056,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 	return out
 }
 
-type addAppWorkloadFunc func(kind, ns, name string, lbls, anns map[string]string, image string, workloadHealth packages.Health, ready, desired int, selector *metav1.LabelSelector, rollout *health.WorkloadRolloutActivity, batch *appBatchSummary)
+type addAppWorkloadFunc func(obj any, kind, ns, name string, lbls, anns map[string]string, image string, workloadHealth packages.Health, ready, desired int, selector *metav1.LabelSelector, rollout *health.WorkloadRolloutActivity, batch *appBatchSummary)
 
 func visibleRolloutActivity(activity health.WorkloadRolloutActivity) *health.WorkloadRolloutActivity {
 	if !activity.Active && activity.Phase != health.RolloutStalled {
@@ -1282,7 +1308,7 @@ func addScaledJobWorkloads(ctx context.Context, cache *k8s.ResourceCache, namesp
 		if batch == nil {
 			batch = &appBatchSummary{}
 		}
-		add("ScaledJob", sj.GetNamespace(), sj.GetName(), sj.GetLabels(), sj.GetAnnotations(),
+		add(sj, "ScaledJob", sj.GetNamespace(), sj.GetName(), sj.GetLabels(), sj.GetAnnotations(),
 			scaledJobPrimaryImage(sj), batchHealth(batch, scaledJobHealth(sj)), 0, 0, nil, nil, batch)
 	}
 }
@@ -1309,7 +1335,7 @@ func addArgoBatchWorkloads(ctx context.Context, cache *k8s.ResourceCache, namesp
 		run := workflowRunInfo(wf)
 		batch := &appBatchSummary{}
 		applyRunToBatch(batch, run)
-		add("Workflow", wf.GetNamespace(), wf.GetName(), wf.GetLabels(), wf.GetAnnotations(),
+		add(wf, "Workflow", wf.GetNamespace(), wf.GetName(), wf.GetLabels(), wf.GetAnnotations(),
 			workflowPrimaryImage(wf), workflowHealth(run.Phase), 0, 0, nil, nil, batch)
 	}
 
@@ -1324,7 +1350,7 @@ func addArgoBatchWorkloads(ctx context.Context, cache *k8s.ResourceCache, namesp
 		if batch == nil {
 			batch = &appBatchSummary{}
 		}
-		add(info.kind, info.namespace, info.name, info.labels, info.annotations,
+		add(info.object, info.kind, info.namespace, info.name, info.labels, info.annotations,
 			templateImage(info.object, "spec", "templates"), batchHealth(batch, packages.HealthNeutral), 0, 0, nil, nil, batch)
 	}
 
@@ -1338,7 +1364,7 @@ func addArgoBatchWorkloads(ctx context.Context, cache *k8s.ResourceCache, namesp
 		batch.Suspended = suspended
 		lastScheduled, _, _ := unstructured.NestedString(cwf.Object, "status", "lastScheduledTime")
 		setLatestBatchTime(&batch.LastScheduledAt, lastScheduled)
-		add("CronWorkflow", cwf.GetNamespace(), cwf.GetName(), cwf.GetLabels(), cwf.GetAnnotations(),
+		add(cwf, "CronWorkflow", cwf.GetNamespace(), cwf.GetName(), cwf.GetLabels(), cwf.GetAnnotations(),
 			cronWorkflowPrimaryImage(cwf), batchHealth(batch, packages.HealthNeutral), 0, 0, nil, nil, batch)
 	}
 }
@@ -1709,7 +1735,7 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 	order := []string{}
 	members := map[string][]appWorkloadInput{}
 	for _, in := range inputs {
-		comp := d.find("S:" + in.rootKey)
+		comp := d.find("S:" + in.rootIdentity)
 		if _, ok := members[comp]; !ok {
 			order = append(order, comp)
 		}
@@ -1817,11 +1843,11 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 // atom is always present; overlay and canonical-Argo atoms consolidate roots
 // the graph can't connect.
 func inputAtoms(in appWorkloadInput, argoAppNamespaces map[string]map[string]bool) []string {
-	atoms := []string{"S:" + in.rootKey}
-	atoms = append(atoms, argoCanonicalAtoms(in.rootKind, in.rootKey, argoAppNamespaces)...)
+	atoms := []string{"S:" + in.rootIdentity}
+	atoms = append(atoms, argoCanonicalAtoms(in.rootKind, in.rootGroup, in.rootKey, argoAppNamespaces)...)
 	if in.overlay != nil {
 		atoms = append(atoms, "O:"+in.overlay.Winner.Key)
-		atoms = append(atoms, argoCanonicalAtoms("Application", in.overlay.Winner.Key, argoAppNamespaces)...)
+		atoms = append(atoms, argoCanonicalAtoms("Application", in.overlay.Winner.Ref.Group, in.overlay.Winner.Key, argoAppNamespaces)...)
 	}
 	return atoms
 }
@@ -1854,9 +1880,11 @@ func identifyApp(r *appRow, ins []appWorkloadInput) {
 		r.Key = root.rootKey
 		r.Name = appNameFromKey(root.rootKey)
 		r.Namespace = namespaceFromKey(root.rootKey)
-		if t, c, ok := managerTier(root.rootKind); ok {
+		if t, c, ok := managerTier(root.rootKind, root.rootGroup); ok {
 			r.Tier = t
 			r.Confidence = c
+		} else if root.rootGroup != "" && root.rootGroup != resourceid.GroupForBuiltinKind(root.rootKind) {
+			r.Key += "@" + root.rootGroup
 		}
 	}
 
@@ -1942,7 +1970,7 @@ func collectExactMatchKeys(ins []appWorkloadInput) []string {
 // pickRoot prefers a GitOps-manager root over a raw workload root for identity.
 func pickRoot(ins []appWorkloadInput) appWorkloadInput {
 	for _, in := range ins {
-		if _, _, ok := managerTier(in.rootKind); ok {
+		if _, _, ok := managerTier(in.rootKind, in.rootGroup); ok {
 			return in
 		}
 	}
@@ -1951,25 +1979,25 @@ func pickRoot(ins []appWorkloadInput) appWorkloadInput {
 
 // managerTier maps a structural manager-root kind to the overlay tier it stands
 // in for, so an in-cluster GitOps-managed app without labels still attributes.
-func managerTier(kind string) (tier int, confidence string, ok bool) {
-	switch kind {
-	case string(topology.KindHelmRelease):
+func managerTier(kind, group string) (tier int, confidence string, ok bool) {
+	switch {
+	case kind == string(topology.KindHelmRelease) && group == "helm.toolkit.fluxcd.io":
 		return int(subject.TierFluxHelmRelease), string(subject.ConfidenceHigh), true
-	case string(topology.KindKustomization):
+	case kind == string(topology.KindKustomization) && group == "kustomize.toolkit.fluxcd.io":
 		return int(subject.TierFluxKustomize), string(subject.ConfidenceHigh), true
-	case string(topology.KindApplication):
+	case kind == string(topology.KindApplication) && group == "argoproj.io":
 		return int(subject.TierArgoTrackingID), string(subject.ConfidenceHigh), true
 	}
 	return 0, "", false
 }
 
-func sourceRefForInput(overlay *subject.AppOverlay, rootKind, rootKey string) *appSourceRef {
+func sourceRefForInput(overlay *subject.AppOverlay, rootKind, rootGroup, rootKey string) *appSourceRef {
 	if overlay != nil {
 		if ref := sourceRefFromSubject(overlay.Winner.Ref); ref != nil {
 			return ref
 		}
 	}
-	return sourceRefFromRoot(rootKind, rootKey)
+	return sourceRefFromRoot(rootKind, rootGroup, rootKey)
 }
 
 func sourceRefFromSubject(ref subject.Ref) *appSourceRef {
@@ -1990,18 +2018,18 @@ func sourceRefFromSubject(ref subject.Ref) *appSourceRef {
 	}
 }
 
-func sourceRefFromRoot(rootKind, rootKey string) *appSourceRef {
+func sourceRefFromRoot(rootKind, rootGroup, rootKey string) *appSourceRef {
 	parts := strings.SplitN(rootKey, "/", 3)
 	if len(parts) != 3 || parts[0] == "" || parts[2] == "" {
 		return nil
 	}
 	ns, name := parts[0], parts[2]
-	switch rootKind {
-	case string(topology.KindApplication):
+	switch {
+	case rootKind == string(topology.KindApplication) && rootGroup == "argoproj.io":
 		return &appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: ns, Name: name}
-	case string(topology.KindKustomization):
+	case rootKind == string(topology.KindKustomization) && rootGroup == "kustomize.toolkit.fluxcd.io":
 		return &appSourceRef{Type: "gitops", Tool: "fluxcd", Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: ns, Name: name}
-	case string(topology.KindHelmRelease):
+	case rootKind == string(topology.KindHelmRelease) && rootGroup == "helm.toolkit.fluxcd.io":
 		return &appSourceRef{Type: "gitops", Tool: "fluxcd", Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: ns, Name: name}
 	default:
 		return nil
@@ -2040,8 +2068,8 @@ func sameSourceRef(a, b *appSourceRef) bool {
 
 func argoApplicationNamespaces(inputs []appWorkloadInput) map[string]map[string]bool {
 	out := map[string]map[string]bool{}
-	add := func(kind, key string) {
-		if kind != string(topology.KindApplication) {
+	add := func(kind, group, key string) {
+		if kind != string(topology.KindApplication) || group != "argoproj.io" {
 			return
 		}
 		const marker = "/Application/"
@@ -2060,9 +2088,9 @@ func argoApplicationNamespaces(inputs []appWorkloadInput) map[string]map[string]
 		out[name][ns] = true
 	}
 	for _, in := range inputs {
-		add(in.rootKind, in.rootKey)
+		add(in.rootKind, in.rootGroup, in.rootKey)
 		if in.overlay != nil {
-			add("Application", in.overlay.Winner.Key)
+			add("Application", in.overlay.Winner.Ref.Group, in.overlay.Winner.Key)
 		}
 	}
 	return out
@@ -2076,8 +2104,8 @@ func argoApplicationNamespaces(inputs []appWorkloadInput) map[string]map[string]
 // name-only bridge is emitted only when this result set has at most one concrete
 // namespace for that Argo name, so tier-3 and tier-4 tracking modes can still
 // collapse without mixing separate controller namespaces.
-func argoCanonicalAtoms(kind, key string, argoAppNamespaces map[string]map[string]bool) []string {
-	if kind != string(topology.KindApplication) {
+func argoCanonicalAtoms(kind, group, key string, argoAppNamespaces map[string]map[string]bool) []string {
+	if kind != string(topology.KindApplication) || group != "argoproj.io" {
 		return nil
 	}
 	const marker = "/Application/"
@@ -2265,6 +2293,10 @@ func classifyWorkload(kind string, rels *appRelationships) string {
 
 func appWorkloadAPIGroup(kind string) string {
 	switch kind {
+	case "Deployment", "DaemonSet", "StatefulSet":
+		return "apps"
+	case "Job", "CronJob":
+		return "batch"
 	case "Workflow", "CronWorkflow", "WorkflowTemplate", "ClusterWorkflowTemplate", "Rollout":
 		return "argoproj.io"
 	case "ScaledJob":
@@ -2428,7 +2460,11 @@ func indexWarningEventsByObject(cache *k8s.ResourceCache, namespaces []string) m
 				m = map[string][]*corev1.Event{}
 				out[e.Namespace] = m
 			}
-			key := e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name
+			group := topology.APIVersionGroup(e.InvolvedObject.APIVersion)
+			if builtinGroup, builtin := resourceid.BuiltinGroup(e.InvolvedObject.Kind); group == "" && builtin {
+				group = builtinGroup
+			}
+			key := resourceid.ResourceKey(group, e.InvolvedObject.Kind, "", e.InvolvedObject.Name)
 			m[key] = append(m[key], e)
 		}
 	}
@@ -2492,14 +2528,14 @@ func podsRestarts(pods []*corev1.Pod) (int, string) {
 // index (the workload object + its pods), deduped by (object, reason) with
 // summed counts — the "why is it broken" feed (FailedScheduling, ImagePullBackOff,
 // FailedMount, …) that restarts alone miss.
-func eventsForWorkload(byObject map[string][]*corev1.Event, workloadKind, workloadName string, pods []*corev1.Pod) []appEvent {
+func eventsForWorkload(byObject map[string][]*corev1.Event, workloadGroup, workloadKind, workloadName string, pods []*corev1.Pod) []appEvent {
 	if byObject == nil {
 		return nil
 	}
 	names := make([]string, 0, len(pods)+1)
-	names = append(names, workloadKind+"/"+workloadName)
+	names = append(names, resourceid.ResourceKey(workloadGroup, workloadKind, "", workloadName))
 	for _, p := range pods {
-		names = append(names, "Pod/"+p.Name)
+		names = append(names, resourceid.ResourceKey("", "Pod", "", p.Name))
 	}
 	byKey := map[string]*appEvent{}
 	order := []string{}

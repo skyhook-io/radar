@@ -138,10 +138,10 @@ func TestRolloutManagesItsAnalysisRuns(t *testing.T) {
 }
 
 func TestAnalysisRunIsExcludedFromGenericCRDPass(t *testing.T) {
-	if !kindsHandledOutsideGenericCRDPass["analysisrun"] {
+	if !genericCRDExcluded(schema.GroupVersionResource{Group: "argoproj.io"}, "AnalysisRun") {
 		t.Fatal("analysisrun must be excluded from the generic owner-ref pass")
 	}
-	if !kindsHandledOutsideGenericCRDPass["rollout"] {
+	if !genericCRDExcluded(schema.GroupVersionResource{Group: "argoproj.io"}, "Rollout") {
 		t.Fatal("rollout lost its exclusion")
 	}
 }

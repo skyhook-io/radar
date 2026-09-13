@@ -23,6 +23,7 @@ import {
   memberRef,
   subjectRef,
   compareIssueSortAnchors,
+  canonicalResourceGroup,
   type AppRow,
   type AppWorkload,
   type AppIdentityInstance,
@@ -490,6 +491,7 @@ function AppDetailRoute({
           source.kind,
           source.namespace,
           source.name,
+          source.group,
         );
         if (path) navigate(path);
         return;
@@ -899,7 +901,7 @@ function compareAppOverviewIssues(a: Issue, b: Issue): number {
   return a.id.localeCompare(b.id);
 }
 
-function appIssuesForWorkloads(
+export function appIssuesForWorkloads(
   issues: Issue[],
   workloads: AppWorkload[],
 ): Issue[] {
@@ -918,11 +920,11 @@ function appIssuesForWorkloads(
 }
 
 function workloadIssueKey(workload: AppWorkload): string {
-  return `${workload.kind.toLowerCase()}|${workload.namespace}|${workload.name}`;
+  return `${canonicalResourceGroup(workload.kind, workload.group) ?? "?"}|${workload.kind.toLowerCase()}|${workload.namespace}|${workload.name}`;
 }
 
 function issueRefKey(ref: IssueResourceRef): string {
-  return `${ref.kind.toLowerCase()}|${ref.namespace ?? ""}|${ref.name}`;
+  return `${canonicalResourceGroup(ref.kind, ref.group) ?? "?"}|${ref.kind.toLowerCase()}|${ref.namespace ?? ""}|${ref.name}`;
 }
 
 function issueRefs(issue: Issue): IssueResourceRef[] {

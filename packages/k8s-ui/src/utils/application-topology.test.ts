@@ -103,6 +103,31 @@ describe('layerDeploymentInventory', () => {
     expect(result.managedOnly.map((node) => node.id)).toEqual(['core-service'])
   })
 
+  it('joins a pseudo topology node to inventory by its real Kubernetes kind', () => {
+    const runtime: Topology = {
+      nodes: [{
+        id: 'knativeservice/default/api',
+        kind: 'KnativeService',
+        name: 'api',
+        status: 'healthy',
+        data: { namespace: 'default', apiVersion: 'serving.knative.dev/v1', resourceKind: 'Service' },
+      }],
+      edges: [],
+    }
+    const result = layerDeploymentInventory(runtime, deploymentInventoryFromGitOps({
+      root: inventory().root,
+      edges: [],
+      nodes: [
+        inventory().root,
+        { id: 'knative-service', ref: { group: 'serving.knative.dev', kind: 'Service', namespace: 'default', name: 'api' }, role: 'declared', tool: 'argocd' },
+      ],
+    })!, 'Argo CD')
+
+    expect(result.managedRuntimeCount).toBe(1)
+    expect(result.runtimeOnlyCount).toBe(0)
+    expect(result.managedOnly).toEqual([])
+  })
+
   it('does not classify synthetic graph nodes as runtime-only resources', () => {
     const syntheticTopology: Topology = {
       nodes: [
