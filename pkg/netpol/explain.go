@@ -127,17 +127,16 @@ func Explain(np *networkingv1.NetworkPolicy, dir Direction, selected *corev1.Pod
 	var reasons []string
 	for i, rule := range rules {
 		if len(rule.ports) > 0 {
-			if port <= 0 {
-				overall = fold(overall, triUnknown)
-				reasons = append(reasons, fmt.Sprintf("rule %d restricts ports but the port is not known", i+1))
-				continue
-			}
 			switch rulePortsMatch(rule.ports, port, proto, namedPortPod, peer.External) {
 			case triNo:
 				continue
 			case triUnknown:
 				overall = fold(overall, triUnknown)
-				reasons = append(reasons, fmt.Sprintf("rule %d names a port on a destination pod that could not be resolved", i+1))
+				if port <= 0 {
+					reasons = append(reasons, fmt.Sprintf("rule %d restricts ports but the port is not known", i+1))
+				} else {
+					reasons = append(reasons, fmt.Sprintf("rule %d names a port on a destination pod that could not be resolved", i+1))
+				}
 				continue
 			}
 		}
@@ -182,16 +181,28 @@ type ruleView struct {
 // named entries beside it say, and only a named entry that cannot be
 // resolved — the destination pod is unknown — leaves the question open.
 // A non-pod destination has no named ports, so a named entry never matches it.
+//
+// The protocol is decided before any port uncertainty: an entry for another
+// protocol never matches, and an entry with a protocol but no port admits
+// every port of it — both hold even when the caller's port is unknown.
 func rulePortsMatch(ports []networkingv1.NetworkPolicyPort, port int32, proto corev1.Protocol, namedPortPod *corev1.Pod, external bool) tri {
+	proto = ProtocolOrTCP(string(proto))
 	out := triNo
 	for i := range ports {
-		one := ports[i : i+1]
-		named := ports[i].Port != nil && ports[i].Port.Type == 1 // intstr.String
-		if named && namedPortPod == nil && !external {
-			out = fold(out, triUnknown)
+		entry := &ports[i]
+		if ProtocolOrTCP(protoString(entry.Protocol)) != proto {
 			continue
 		}
-		if RuleMatchesPort(one, port, proto, namedPortPod) {
+		if entry.Port == nil {
+			return triYes
+		}
+		named := entry.Port.Type == 1 // intstr.String
+		switch {
+		case port <= 0:
+			out = fold(out, triUnknown)
+		case named && namedPortPod == nil && !external:
+			out = fold(out, triUnknown)
+		case RuleMatchesPort(ports[i:i+1], port, proto, namedPortPod):
 			return triYes
 		}
 	}
@@ -221,7 +232,8 @@ func peerAdmits(entry *networkingv1.NetworkPolicyPeer, target Peer, policyNs str
 			// anything.
 			return triUnknown, desc + ": the destination address the policy sees for a pod cannot be established"
 		}
-		switch ipBlockMatch(entry.IPBlock, peerIPs(target)) {
+		ips := peerIPs(target)
+		switch ipBlockMatch(entry.IPBlock, ips) {
 		case triYes:
 			return triYes, desc
 		case triNo:
@@ -232,6 +244,11 @@ func peerAdmits(entry *networkingv1.NetworkPolicyPeer, target Peer, policyNs str
 			}
 			return triUnknown, desc + ": the source address the policy sees may have been rewritten"
 		default:
+			if dir == DirectionEgress && len(ips) > 0 {
+				// The destination is known and reached over the other address
+				// family; a block of this family cannot admit it.
+				return triNo, desc
+			}
 			return triUnknown, desc + ": no address of that family is known for " + peerDesc(target, dir)
 		}
 	}
@@ -251,6 +268,8 @@ func peerAdmits(entry *networkingv1.NetworkPolicyPeer, target Peer, policyNs str
 		if target.Pod.Namespace != policyNs {
 			ns = triNo
 		}
+	} else if selectorIsEmpty(entry.NamespaceSelector) {
+		// Matches every namespace; no labels needed.
 	} else if target.Namespace == nil {
 		ns = triUnknown
 	} else {
@@ -387,4 +406,8 @@ func dedupe(in []string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+func selectorIsEmpty(sel *metav1.LabelSelector) bool {
+	return sel != nil && len(sel.MatchLabels) == 0 && len(sel.MatchExpressions) == 0
 }

@@ -7,6 +7,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 func TestExplain(t *testing.T) {
@@ -162,6 +163,34 @@ func TestExplain(t *testing.T) {
 				[]networkingv1.NetworkPolicyEgressRule{{Ports: []networkingv1.NetworkPolicyPort{tcpPort(443), namedPort("https")}}}),
 			dir: DirectionEgress, sel: src.Pod, peer: unresolved, port: 443,
 			effect: Admits, reason: "rule 1 admits any destination on TCP/443",
+		},
+		{
+			name: "unknown port: a protocol-only entry admits every port of that protocol",
+			np: policy("monitoring", "any-tcp", promLabels, ingressT,
+				[]networkingv1.NetworkPolicyIngressRule{{Ports: []networkingv1.NetworkPolicyPort{{Protocol: func() *corev1.Protocol { p := corev1.ProtocolTCP; return &p }()}}, From: []networkingv1.NetworkPolicyPeer{fromRadarNs}}}, nil),
+			dir: DirectionIngress, sel: dst.Pod, peer: src, port: 0,
+			effect: Admits, reason: "on TCP/?",
+		},
+		{
+			name: "unknown port: an entry for another protocol never matches",
+			np: policy("monitoring", "udp-only", promLabels, ingressT,
+				[]networkingv1.NetworkPolicyIngressRule{{Ports: []networkingv1.NetworkPolicyPort{{Protocol: func() *corev1.Protocol { p := corev1.ProtocolUDP; return &p }(), Port: func() *intstr.IntOrString { p := intstr.FromInt32(53); return &p }()}}, From: []networkingv1.NetworkPolicyPeer{fromRadarNs}}}, nil),
+			dir: DirectionIngress, sel: dst.Pod, peer: src, port: 0,
+			effect: DoesNotAdmit, reason: "admit other ports",
+		},
+		{
+			name: "an empty namespaceSelector needs no Namespace object",
+			np: policy("monitoring", "from-anywhere", promLabels, ingressT,
+				[]networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{fromAnyPodInAnyNs}}}, nil),
+			dir: DirectionIngress, sel: dst.Pod, peer: Peer{Pod: radar().Pod}, port: 9090,
+			effect: Admits, reason: "admits any pod in namespaces matching anything",
+		},
+		{
+			name: "egress ipBlock of the other family does not admit a known external destination",
+			np: policy("radar", "egress-v4", radarLabels, egressT, nil,
+				[]networkingv1.NetworkPolicyEgressRule{{To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "203.0.113.0/24"}}}}}),
+			dir: DirectionEgress, sel: src.Pod, peer: Peer{External: true, IP: "2001:db8::7"}, port: 443,
+			effect: DoesNotAdmit, reason: "no rule admits the destination 2001:db8::7 (not a pod)",
 		},
 		{
 			name: "hostNetwork selected pod is undecidable",
