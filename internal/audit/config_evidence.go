@@ -2,6 +2,8 @@ package audit
 
 import (
 	"slices"
+
+	appsv1 "k8s.io/api/apps/v1"
 	"strings"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -116,17 +118,15 @@ func collectConfigEvidence(cache *k8s.ResourceCache, input *bp.CheckInput, names
 	subjects := metadata(input)
 	reflections := configrefs.BuildReflections(subjects)
 	reflectors := len(reflections.Sources)+len(reflections.Unresolved)+len(reflections.Links) > 0
-	evidence, evidenceNamespaces := input, namespaces
+	evidenceNamespaces := namespaces
 	if reflectors {
 		evidenceNamespaces = nil
 		if scope != nil {
 			evidenceNamespaces = scope.Namespaces
 		}
-		evidence = CollectTypedInput(cache, evidenceNamespaces)
-		result.Objects = metadata(evidence)
 	}
 	deps := discoverConfigDependencies(k8s.GetResourceDiscovery())
-	var deployments = evidence.Deployments
+	var deployments []*appsv1.Deployment
 	if typedConfigCoverage(cache, "deployments", "") && (scope == nil || scope.Namespaces == nil) {
 		deployments = ListNamespaced(cache.Deployments(), nil)
 		deps.clusterIssuerNamespaces = certManagerClusterResourceNamespaces(deployments)
@@ -147,13 +147,6 @@ func collectConfigEvidence(cache *k8s.ResourceCache, input *bp.CheckInput, names
 			}
 		}
 	}
-	if reflectors {
-		result.Refs = bp.CollectConfigObjectRefs(evidence)
-	}
-	result.Refs = append(result.Refs, listDynamicConfigObjectRefs(evidenceNamespaces, dynamicConfigRefOptions{Scope: scope, ServiceAccounts: evidence.ServiceAccounts, Deployments: deployments})...)
-	result.Refs = slices.DeleteFunc(result.Refs, func(ref bp.ConfigObjectRef) bool {
-		return !scope.allows(schema.GroupVersionResource{Resource: strings.ToLower(ref.Kind) + "s"}, ref.Namespace)
-	})
 	for _, kind := range []string{"ConfigMap", "Secret"} {
 		resource := strings.ToLower(kind) + "s"
 		seen := map[string]bool{}
@@ -167,8 +160,23 @@ func collectConfigEvidence(cache *k8s.ResourceCache, input *bp.CheckInput, names
 			}
 		}
 		if reflectors {
-			result.ReflectionsComplete[kind] = typedConfigCoverage(cache, resource, "") && configReferencesComplete(cache, kind, "", scope, deps) && (kind != "Secret" || scope == nil || scope.SecretNamespaces == nil)
+			result.ReflectionsComplete[kind] = typedConfigCoverage(cache, resource, "") && configReferencesComplete(cache, kind, "", scope, deps) && (kind != "Secret" || hasCompleteSecretInput(cache, nil, scope))
 		}
 	}
+	// Read after the readiness checks: an earlier subject snapshot can predate
+	// an informer's completed initial population.
+	evidence := collectWorkloadInput(cache, evidenceNamespaces)
+	evidence.ServiceAccounts = ListNamespaced(cache.ServiceAccounts(), evidenceNamespaces)
+	evidence.Ingresses = ListNamespaced(cache.Ingresses(), evidenceNamespaces)
+	if reflectors {
+		evidence.ConfigMaps = ListNamespaced(cache.ConfigMaps(), evidenceNamespaces)
+		evidence.Secrets = ListNamespaced(cache.Secrets(), evidenceNamespaces)
+		result.Objects = metadata(evidence)
+	}
+	result.Refs = bp.CollectConfigObjectRefs(evidence)
+	result.Refs = append(result.Refs, listDynamicConfigObjectRefs(evidenceNamespaces, dynamicConfigRefOptions{Scope: scope, ServiceAccounts: evidence.ServiceAccounts, Deployments: deployments})...)
+	result.Refs = slices.DeleteFunc(result.Refs, func(ref bp.ConfigObjectRef) bool {
+		return !scope.allows(schema.GroupVersionResource{Resource: strings.ToLower(ref.Kind) + "s"}, ref.Namespace)
+	})
 	return result
 }

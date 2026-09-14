@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	bp "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -246,5 +248,50 @@ func TestEmptyDiscoveryDoesNotProveNoConfigConsumers(t *testing.T) {
 	deps := discoverConfigDependencies(&k8s.ResourceDiscovery{ResourceDiscovery: disc})
 	if deps.complete["Secret"] || deps.complete["ConfigMap"] {
 		t.Fatal("empty discovery considered complete")
+	}
+}
+
+func TestConfigEvidenceRefreshesConsumersAfterReadiness(t *testing.T) {
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "credential", Namespace: "app"}}
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "consumer", Namespace: "app"}, Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Volumes: []corev1.Volume{{Name: "credential", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: "credential"}}}}}}}}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(secret, job)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), []k8s.APIResource{{Version: "v1", Name: "pods", Kind: "Pod", Namespaced: true}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	cache := k8s.GetResourceCache()
+	input := CollectTypedInput(cache, []string{"app"})
+	// The subject snapshot can precede the deferred Job informer's initial sync.
+	input.Jobs = nil
+	input.ConfigReferenceEvidence = collectConfigEvidence(cache, input, []string{"app"}, nil)
+	if got := bp.RunChecks(input).CheckCounts["orphanConfigMapSecret"]; got != (bp.CheckCount{Evaluated: 1, Passed: 1}) {
+		t.Fatalf("partial subject snapshot certified unused: %+v", got)
+	}
+}
+
+func TestReflectionCoverageHonorsCompleteNamespaceSecretGrants(t *testing.T) {
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "source", Namespace: "app", Annotations: map[string]string{"reflector.v1.k8s.emberstack.com/reflection-allowed": "true"}}}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(secret, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "app"}}, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "other"}})); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), []k8s.APIResource{{Version: "v1", Name: "pods", Kind: "Pod", Namespaced: true}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	for _, tc := range []struct {
+		namespaces []string
+		evaluated  int
+	}{{[]string{"app", "other"}, 1}, {[]string{"app"}, 0}} {
+		result := RunFromCache(k8s.GetResourceCache(), []string{"app"}, &RunOptions{Scope: &ReadScope{SecretNamespaces: tc.namespaces}})
+		if got := result.CheckCounts["orphanConfigMapSecret"].Evaluated; got != tc.evaluated {
+			t.Fatalf("grants %v evaluated=%d", tc.namespaces, got)
+		}
+		if slices.Contains(result.MissingInputs, "secret-references") != (tc.evaluated == 0) {
+			t.Fatalf("incorrect reference warning for grants %v: %v", tc.namespaces, result.MissingInputs)
+		}
 	}
 }

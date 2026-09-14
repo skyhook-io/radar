@@ -88,26 +88,31 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	input.CNPGClusters, input.CNPGScheduledBackups, input.CNPGScheduledBackupsAuthoritative = listCNPGDynamic(namespaces)
 
 	results := bp.RunChecks(input)
-	if scope != nil && scope.SecretNamespaces != nil {
-		secretNamespaces := namespaces
-		complete := len(secretNamespaces) > 0
-		if len(secretNamespaces) == 0 && cache.IsKindReady(k8score.Namespaces) && cache.IsKindClusterWide(k8score.Namespaces) {
-			all, err := cache.Namespaces().List(labels.Everything())
-			if err == nil {
-				complete = true
-				for _, ns := range all {
-					secretNamespaces = append(secretNamespaces, ns.Name)
-				}
-			}
-		}
-		for _, ns := range secretNamespaces {
-			complete = complete && scope.allows(schema.GroupVersionResource{Resource: "secrets"}, ns)
-		}
-		if !complete && !slices.Contains(results.MissingInputs, "secrets") {
-			results.MissingInputs = append(results.MissingInputs, "secrets")
-		}
+	if !hasCompleteSecretInput(cache, namespaces, scope) && !slices.Contains(results.MissingInputs, "secrets") {
+		results.MissingInputs = append(results.MissingInputs, "secrets")
 	}
 	return results
+}
+
+func hasCompleteSecretInput(cache *k8s.ResourceCache, namespaces []string, scope *ReadScope) bool {
+	if scope == nil || scope.SecretNamespaces == nil {
+		return true
+	}
+	secretNamespaces := namespaces
+	complete := len(secretNamespaces) > 0
+	if len(secretNamespaces) == 0 && cache.IsKindReady(k8score.Namespaces) && cache.IsKindClusterWide(k8score.Namespaces) {
+		all, err := cache.Namespaces().List(labels.Everything())
+		if err == nil {
+			complete = true
+			for _, ns := range all {
+				secretNamespaces = append(secretNamespaces, ns.Name)
+			}
+		}
+	}
+	for _, ns := range secretNamespaces {
+		complete = complete && scope.allows(schema.GroupVersionResource{Resource: "secrets"}, ns)
+	}
+	return complete
 }
 
 func CollectTypedInput(cache *k8s.ResourceCache, namespaces []string) *bp.CheckInput {
