@@ -151,6 +151,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
           chartName,
           version,
           repository,
+          repositoryName: isLocal ? repo : artifactHubDetail?.repository.name,
           values,
           createNamespace,
         },

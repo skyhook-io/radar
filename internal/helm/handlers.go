@@ -91,6 +91,7 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 		r.Get("/releases/{namespace}/{name}/resources/diff", h.handleGetResourceDiff)
 		r.Get("/releases/{namespace}/{name}/upgrade-info", h.handleCheckUpgrade)
 		r.Get("/releases/{namespace}/{name}/versions", h.handleAvailableVersions)
+		r.Get("/releases/{namespace}/{name}/source-candidates", h.handleSourceCandidates)
 		r.Get("/upgrade-check", h.handleBatchUpgradeCheck)
 		// Actions (write operations)
 		r.Post("/releases/{namespace}/{name}/rollback", h.handleRollback)
@@ -99,10 +100,13 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 		r.Post("/releases/{namespace}/{name}/upgrade-stream", h.handleUpgradeStream)
 		r.Post("/releases/{namespace}/{name}/values/preview", h.handlePreviewValues)
 		r.Put("/releases/{namespace}/{name}/values", h.handleApplyValues)
+		r.Put("/releases/{namespace}/{name}/source", h.handleSetSource)
+		r.Post("/releases/{namespace}/{name}/source-discovery/artifacthub", h.handleArtifactHubSourceDiscovery)
 		r.Delete("/releases/{namespace}/{name}", h.handleUninstall)
 
 		// Chart browser (local repositories)
 		r.Get("/repositories", h.handleListRepositories)
+		r.Post("/repositories", h.handleAddRepository)
 		r.Post("/repositories/{name}/update", h.handleUpdateRepository)
 
 		// Registered OCI chart sources (the OCI analog of `helm repo add`) — let
@@ -896,6 +900,83 @@ func (h *Handlers) handleApplyValues(w http.ResponseWriter, r *http.Request) {
 // Chart Browser Handlers
 // ============================================================================
 
+func (h *Handlers) handleSourceCandidates(w http.ResponseWriter, r *http.Request) {
+	client := GetClient()
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
+		return
+	}
+	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
+	var candidates []ChartSourceCandidate
+	var err error
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		candidates, err = client.SourceCandidatesAsUser(namespace, name, user.Username, user.Groups)
+	} else {
+		candidates, err = client.SourceCandidates(namespace, name)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, candidates)
+}
+
+func (h *Handlers) handleSetSource(w http.ResponseWriter, r *http.Request) {
+	if !requireCloudRole(w, r, auth.RoleMember, "select a Helm chart source") || !requireHelmWrite(w, r) {
+		return
+	}
+	var req SetChartSourceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	selected := ChartSourceCandidate{Type: req.Type, Reference: req.Reference, URL: req.URL}
+	client := GetClient()
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
+		return
+	}
+	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
+	var err error
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		err = client.SetSourceAsUser(namespace, name, selected, user.Username, user.Groups)
+	} else {
+		err = client.SetSource(namespace, name, selected)
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{"status": "success"})
+}
+
+func (h *Handlers) handleArtifactHubSourceDiscovery(w http.ResponseWriter, r *http.Request) {
+	if !requireCloudRole(w, r, auth.RoleMember, "discover a Helm chart source") || !requireHelmWrite(w, r) {
+		return
+	}
+	client := GetClient()
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
+		return
+	}
+	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
+	var candidates []ChartSourceCandidate
+	var err error
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		candidates, err = client.DiscoverArtifactHubSourcesAsUser(r.Context(), namespace, name, user.Username, user.Groups)
+	} else {
+		candidates, err = client.DiscoverArtifactHubSources(r.Context(), namespace, name)
+	}
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if candidates == nil {
+		candidates = []ChartSourceCandidate{}
+	}
+	writeJSON(w, candidates)
+}
+
 // handleListRepositories returns all configured Helm repositories
 func (h *Handlers) handleListRepositories(w http.ResponseWriter, r *http.Request) {
 	client := GetClient()
@@ -911,6 +992,54 @@ func (h *Handlers) handleListRepositories(w http.ResponseWriter, r *http.Request
 	}
 
 	writeJSON(w, repos)
+}
+
+func (h *Handlers) handleAddRepository(w http.ResponseWriter, r *http.Request) {
+	if !requireHelmWrite(w, r) {
+		return
+	}
+	var req AddRepositoryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	client := GetClient()
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
+		return
+	}
+	name, err := client.ensureClassicRepository(req.URL, req.Name)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	response := map[string]any{"name": name, "associated": false}
+	if req.Namespace != "" && req.ReleaseName != "" {
+		var candidates []ChartSourceCandidate
+		if user := auth.UserFromContext(r.Context()); user != nil {
+			candidates, err = client.SourceCandidatesAsUser(req.Namespace, req.ReleaseName, user.Username, user.Groups)
+		} else {
+			candidates, err = client.SourceCandidates(req.Namespace, req.ReleaseName)
+		}
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "repository added, but source recovery failed: "+err.Error())
+			return
+		}
+		response["candidates"] = candidates
+		if len(candidates) == 1 {
+			if user := auth.UserFromContext(r.Context()); user != nil {
+				err = client.SetSourceAsUser(req.Namespace, req.ReleaseName, candidates[0], user.Username, user.Groups)
+			} else {
+				err = client.SetSource(req.Namespace, req.ReleaseName, candidates[0])
+			}
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "repository added, but source association failed: "+err.Error())
+				return
+			}
+			response["associated"] = true
+		}
+	}
+	writeJSON(w, response)
 }
 
 // handleUpdateRepository updates the index for a specific repository.

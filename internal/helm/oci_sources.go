@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -47,6 +48,16 @@ func normalizeOCIPrefix(raw string) (string, error) {
 	}
 	if !strings.HasPrefix(p, "oci://") {
 		return "", fmt.Errorf("source must be an oci:// reference, got %q", raw)
+	}
+	parsed, err := url.Parse(p)
+	if err != nil || parsed.Host == "" {
+		return "", fmt.Errorf("source must include a registry host")
+	}
+	if parsed.User != nil {
+		return "", fmt.Errorf("OCI source must not contain credentials; use Helm's registry credential store")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("OCI source must not contain query credentials or fragments")
 	}
 	// Strip the scheme before trimming slashes — trimming "oci://" directly would
 	// eat the "//" and yield "oci:".
@@ -261,24 +272,45 @@ func (c *Client) discoverOCIVersions(chartName string) []string {
 // resolved from the SAME prefix discovery/the version picker used (selectBestOCIPrefix),
 // so the upgrade pulls from the registry the user's version list came from. The server
 // only ever pulls from a registered (configured) source — never a client-supplied ref.
-func (c *Client) resolveOCIUpgradeURL(chartName, targetVersion string) (string, bool) {
+func (c *Client) resolveOCIUpgradeURL(chartName, targetVersion string) (string, bool, bool) {
 	if len(ListOCISources()) == 0 {
-		return "", false
+		return "", false, false
 	}
 	lister := c.newRegistryClient()
 	if lister == nil {
-		return "", false
+		return "", false, false
 	}
-	return c.resolveOCIUpgradeURLWithLister(chartName, targetVersion, lister)
+	matches := c.resolveOCIUpgradeURLsWithLister(chartName, targetVersion, lister)
+	if len(matches) > 1 {
+		return "", false, true
+	}
+	if len(matches) == 1 {
+		return matches[0], true, false
+	}
+	return "", false, false
 }
 
 func (c *Client) resolveOCIUpgradeURLWithLister(chartName, targetVersion string, lister ociTagLister) (string, bool) {
-	if lister == nil || len(ListOCISources()) == 0 {
+	matches := c.resolveOCIUpgradeURLsWithLister(chartName, targetVersion, lister)
+	if len(matches) != 1 {
 		return "", false
 	}
-	prefix, tags := c.selectBestOCIPrefix(chartName, lister, nil)
-	if prefix != "" && slices.Contains(tags, targetVersion) {
-		return ociChartURL(prefix, chartName), true
+	return matches[0], true
+}
+
+// resolveOCIUpgradeURLsWithLister returns every registered OCI source that
+// publishes the exact chart version. Callers must never guess when more than one
+// source matches; an explicit per-release association is required instead.
+func (c *Client) resolveOCIUpgradeURLsWithLister(chartName, targetVersion string, lister ociTagLister) []string {
+	if lister == nil || len(ListOCISources()) == 0 {
+		return nil
 	}
-	return "", false
+	var matches []string
+	for _, prefix := range ListOCISources() {
+		tags, err := lister.Tags(ociRef(prefix, chartName))
+		if err == nil && slices.Contains(tags, targetVersion) {
+			matches = append(matches, ociChartURL(prefix, chartName))
+		}
+	}
+	return matches
 }

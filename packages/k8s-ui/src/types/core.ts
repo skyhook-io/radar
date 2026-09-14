@@ -1039,10 +1039,19 @@ export interface UpgradeInfo {
   error?: string
   // Machine-readable source-resolution failure, used to make the Helm drawer
   // explain whether tracking an OCI source can help.
-  sourceIssue?: 'untracked' | 'repo_index_error' | 'ambiguous_repository'
+  sourceIssue?: 'untracked' | 'repo_index_error' | 'ambiguous_repository' | 'ambiguous_source'
+  sourceCandidates?: ChartSourceCandidate[]
   // True only when the error is a genuinely untracked source (registering a
   // chart source could fix it). Kept for compatibility; prefer sourceIssue.
   untracked?: boolean
+}
+
+export interface ChartSourceCandidate {
+  type: 'repository' | 'oci'
+  reference: string
+  // Canonical classic repository URL. Absent for OCI and legacy name-only
+  // provenance written by older Radar versions.
+  url?: string
 }
 
 // Batch upgrade info keyed by "storageNamespace/name".
@@ -1117,6 +1126,7 @@ export interface InstallChartRequest {
   chartName: string
   version: string
   repository: string
+  repositoryName?: string
   values?: Record<string, unknown>
   createNamespace?: boolean
 }

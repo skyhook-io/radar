@@ -119,6 +119,18 @@ func (c *Client) PrepareFreshInstall(ctx context.Context, req *InstallRequest, m
 	if err != nil {
 		return nil, err
 	}
+	repoName, err := c.ensureClassicRepository(request.Repository, request.RepositoryName)
+	if err != nil {
+		return nil, fmt.Errorf("persist prepared chart source: %w", err)
+	}
+	repositoryURL, err := canonicalClassicRepositoryURL(request.Repository)
+	if err != nil {
+		return nil, fmt.Errorf("persist prepared chart source: %w", err)
+	}
+	request.resolvedSource = &ChartSourceCandidate{Type: "repository", Reference: repoName, URL: repositoryURL}
+	if err := validateChartSourceCandidate(request.resolvedSource); err != nil {
+		return nil, err
+	}
 	request.Version = exactVersion
 	dryRun, err := runServerDryRun(ctx, actionConfig, &request, loaded)
 	if err != nil {
@@ -188,6 +200,7 @@ func (p *PreparedInstall) Install(ctx context.Context, values map[string]any) (*
 	request := p.request
 	request.Values = cloneInstallValues(values)
 	install := action.NewInstall(actionConfig)
+	install.Labels = chartSourceLabels(request.resolvedSource)
 	install.ReleaseName = request.ReleaseName
 	install.Namespace = request.Namespace
 	install.CreateNamespace = request.CreateNamespace
