@@ -11,6 +11,18 @@ query endpoint does not imply that every chart has the necessary metrics.
 These checks cover specific versions and collection configurations, not every
 installation of a backend or a measured percentage of Kubernetes users.
 
+The fleet matrix originally validated current-Pod attribution. Historical
+ownership was additionally validated in the repeatable kind lab: Beyla and Istio
+retained identical CPU, memory, throttling, request, error and latency values at
+fixed timestamps after rollout/deletion and scale-to-zero. This is not a
+retroactive history certification of every cloud row. Historical resource and RED
+charts were also rechecked on the GKE VictoriaMetrics/Istio fixture and two EKS
+Mimir/Beyla workloads without scope assertions. The GKE fixture produced positive
+requests, approximately 25% injected 5xx responses, and defined p50/p95; its worker
+and Redis retained resource charts without fabricated HTTP charts. Cloud workloads
+were not rolled or scaled for this check. A real-Prometheus fixture
+verifies aggregate totals for 128 Pods; the live lab itself remains small.
+
 | Backend and collection | Resource panels | HTTP panels | Setup / qualification |
 |---|---|---|---|
 | EKS, Prometheus 3.14 + cAdvisor + Beyla 3.32 | CPU, memory, throttling | Requests, 5xx, p50/p95, reporting Pods | Existing workloads; automatic endpoint discovery and Pod UID attribution |
@@ -64,7 +76,7 @@ Its checks distinguish resource/HTTP families and include a DaemonSet. The
 unlabeled official Istio sample row records an earlier baseline, not a retroactive
 success; the fresh kind and VM rows exercise the current histogram guard.
 
-Historical deleted-Pod membership, ingress observers, native-only histograms,
+Ingress observers, native-only histograms,
 ambient/waypoint mapping, gRPC and queue-worker semantics remain outside this
 slice. Existing network/filesystem/restart charts have separate identity limits
 described below. See [what each chart needs](#what-each-chart-needs) before
@@ -96,15 +108,17 @@ declarations cannot recover dimensions already aggregated away by the exporter.
 
 ## What each chart needs
 
-All new panels require a reachable Prometheus-compatible query API and readable
-current workload/Pod membership. They then require either verified source identity
-or an explicit operator scope assertion. KSM below means **kube-state-metrics**;
+All new panels require a reachable Prometheus-compatible query API, workload-read
+and namespace Pod-list access. Historical charts need verified/asserted cluster
+scope and retained ownership. The labeled current-only fallback needs verified
+source identity or an operator assertion. KSM means **kube-state-metrics**;
 it exports Kubernetes object state, not application request telemetry.
 
 | Chart/data | Required metric data | Identity / interpretation |
 |---|---|---|
-| CPU usage | `container_cpu_usage_seconds_total` | cAdvisor `namespace`, `pod`, nonempty application `container`; UID in `id`, or verified cluster partition / override. Rate in cores, per Pod. |
-| Memory working set | `container_memory_working_set_bytes` | Same resource identity contract; gauge in bytes, per Pod. |
+| Historical membership | `kube_pod_owner`, plus `kube_replicaset_owner` for Deployments; or `namespace_workload_pod:kube_pod_owner:relabel` | Exact cluster, namespace, kind and name; ownership evaluated at each timestamp, including deleted Pods. |
+| CPU usage | `container_cpu_usage_seconds_total` | cAdvisor namespace/Pod/container labels and scoped ownership; total and maximum Pod, in cores. Current-only fallback uses UID in `id`, or verified partition / override. |
+| Memory working set | `container_memory_working_set_bytes` | Same identity contract; total and maximum Pod, in bytes. |
 | CPU throttled periods | `container_cpu_cfs_throttled_periods_total` and `container_cpu_cfs_periods_total` | Both counters must describe the same population. Missing CFS metrics mean unavailable, not zero throttling. |
 | Beyla HTTP requests/sec | `http_server_request_duration_seconds_count` | `k8s_namespace_name`, `k8s_pod_name`, attributable identity and a resolved job. Direct UID path uses `k8s_pod_uid`. |
 | Beyla HTTP 5xx | The same count, split by `http_response_status_code` | Needs usable status coverage. Idle traffic does not have a defined error percentage. |
@@ -112,8 +126,8 @@ it exports Kubernetes object state, not application request telemetry.
 | Istio HTTP requests / 5xx | `istio_requests_total`, including `response_code` for errors | `reporter="destination"`, `request_protocol="http"`, destination workload namespace and scrape `namespace`/`pod`; verified partition or override. |
 | Istio p50/p95 | `istio_request_duration_milliseconds_bucket` with `le`, `_count`, plus the request counter | Full label populations must match; `_count` and `+Inf` must agree per population. Counter values may lead histogram updates. Radar converts milliseconds to seconds. |
 | Reporting Pods | Matching request rate series | Distinct observed Pods, not the number selected from Kubernetes; idle/new Pods can explain a shortfall. |
-| Pod comparison | The same CPU/memory/throttling panels above | No independent, weaker query for comparison values. |
-| Request/limit overlays | Current Kubernetes container resource settings | No Prometheus/KSM series needed for the lines themselves. Not historical settings; unlimited containers suppress the whole-Pod limit line. |
+| Pod comparison | CPU/memory/throttling metrics above | Separate bounded queries for current Pods, using UID attribution or verified partition / override. Not used to reconstruct history. |
+| Request/limit overlays | Current Kubernetes container resource settings | Only on current-only per-Pod charts, not historical aggregates. Unlimited containers suppress the whole-Pod limit line. |
 | Existing restart lane | `kube_pod_container_status_restarts_total` | KSM; existing name-based scope, not the new UID attribution path. |
 | Existing network / filesystem I/O | `container_network_receive_bytes_total`, `container_network_transmit_bytes_total`; `container_fs_reads_bytes_total` and `container_fs_writes_bytes_total` | Existing namespace + exact selected Pod-name matching. These are traffic/I/O rates, not PVC capacity or application requests. |
 
@@ -136,10 +150,12 @@ There are three separate steps; success at one does not imply success at the nex
    HTTP headers require an explicit URL so credentials do not reach discovered
    candidates. One selected backend supplies these panels; Radar does not combine
    data across every Prometheus it finds.
-2. **Attribute a workload's sources.** On opening Metrics, inspect metric families
-   for current Pod identities. CPU, memory, throttling, Beyla and Istio are checked
-   independently. Matching identities can reveal a custom Beyla scrape job;
-   automatic matching does not require its name to contain `beyla`.
+2. **Establish scope and membership.** On opening Metrics, independently probe KSM
+   name/UID anchors for cluster scope, even when sources already match by UID.
+   Compare raw/recorded ownership coverage over the range. Current attribution
+   runs separately for comparison/fallback. Historical Beyla queries accept custom
+   jobs, checking observation populations throughout the range; automatic matching
+   does not require a job name containing `beyla`.
 3. **Query usable observations.** Fetch the time window and check counter, status,
    histogram and observation-population coverage. Reachability and identity are
    not guarantees that a requested chart has usable data.
@@ -169,7 +185,7 @@ anything or require new Kubernetes permissions. Known HA labels (`replica`,
 using other replica labels must deduplicate upstream. No arbitrary label stripping
 is attempted.
 
-Evidence probes run asynchronously with an eight-second deadline after shared
+Current-Pod evidence probes run asynchronously with an eight-second deadline after shared
 Prometheus discovery finishes (discovery has its own 60-second bound), two active workloads
 at most, a bounded 128-entry memo and a 30-second per-workload churn guard.
 Evidence is bounded to 1,024 identities per metric family, 256 KSM rows and a
@@ -181,12 +197,19 @@ evidence is retained only for unchanged name/UID pairs while replacement Pods
 are checked. Its original expiry is not extended. Connection changes invalidate
 all attribution and their old churn timers. Sources covering a subset report partial coverage.
 
-UID-filtered charts exclude previous incarnations of same-name Pods. A
-partition-only query cannot distinguish same-name Pod incarnations in history;
-it proves the cluster, not historical Pod lifetime. The expanded workload CPU
-and memory charts use the same attributed samples as Pod comparison. Network,
-storage and other existing metrics surfaces retain their previous query behavior.
-Template request/limit overlays describe current per-Pod settings, not history.
+Historical partition proof has a separate connection-wide five-minute positive
+cache and one coalesced probe per connection generation. Proof from an authorized
+namespace can be reused; charts still query only their own authorized namespace.
+At zero Pods, bounded anchors can come from other Pods in that same namespace.
+A cold connection with no anchors and no assertion cannot establish scope.
+UID joins inside a store cannot prove which cluster Radar is connected to.
+The UI names existing scope flags when this prevents history.
+
+Current UID-filtered charts exclude previous incarnations of same-name Pods.
+Historical charts describe the logical cluster/namespace/kind/name workload,
+including recreation under that name, not workload-UID lifetimes. Network/storage
+and other existing surfaces keep their previous query behavior. Template overlays
+are current per-Pod settings, not historical capacity.
 
 ## Optional operator override
 
@@ -239,23 +262,33 @@ per-evaluation checks for multiple known replica/job populations.
 | Requests/sec | Rolling counter rate, summed within one observer | Not a request count or an end-to-end user transaction rate |
 | HTTP 5xx | Percentage of that observer's requests with HTTP 5xx responses | Not gRPC/application success; status 0 (no HTTP response) is not counted as 5xx; idle traffic has no defined percentage; incomplete status labels withhold affected samples |
 | p50 / p95 | Quantiles of aggregated histogram buckets, in seconds | Approximations; missing/partial bucket coverage or mismatched bucket populations withhold affected samples |
-| CPU throttled periods | Throttled CFS periods divided by total CFS periods, per Pod | Not CPU time lost; missing CFS counters are unavailable |
+| CPU throttled periods | Workload-wide throttled periods / total periods, plus maximum Pod percentage | Weighted by periods, not an average of Pod percentages; not CPU time lost; missing counters are unavailable |
 | Compare current Pods | CPU, memory working set and throttling, sortable descending | Missing/stale/gap samples show a dash, not zero |
 
-All new queries use the current ownership-resolved Pod set and either verified
-source identity or explicit backend scope. This is not historical ownership reconstruction. At most 100 current Pods
-are included; a larger workload is visibly partial. The range is bounded to about
-360 evaluations per series and queries run with at most three concurrent calls and
-a 25-second request deadline. Raw HTTP route, method, peer, and other series labels
-are not returned to the browser.
+Historical queries join metrics with retained ownership at each timestamp. They
+do not enumerate today's Pod names; query size does not grow with replica count.
+CPU/memory/throttling return workload total (weighted ratio for throttling) and
+maximum Pod, not stacked. Reporting counts have no denominator of today's replicas
+or all owned Pods: neither proves instrumentation completeness. The separate
+current comparison/fallback remains capped at 100 Pods; it never samples a claimed
+historical total. Charts have about 360 evaluations, three concurrent chart queries
+and a 25-second request deadline. Timestamps align to the evaluation step. Raw
+HTTP route, method and peer labels are not returned.
 
 Workload range queries and attribution probes use POST form bodies and a 16,000-byte decoded query
-limit. Long Pod names or large identity sets can reach this limit before 100
-Pods; affected panels explain the limit instead of silently dropping Pods.
-Istio latency's full-population checks repeat the selectors more often than the
-request-rate query, so they can hit the byte limit earlier (roughly 60–70 Pods
-with typical Deployment Pod names; exact names and labels determine the limit).
-This can leave request/error charts available while latency is withheld.
+limit. Current-only name/UID queries can reach it before 100 Pods, especially
+Istio's repeated histogram checks. Historical joins avoid replica-dependent growth
+but retain backend evaluation cost and deadline/response/query bounds. A failed
+historical query is an error, not permission to silently change scope. Independent
+current-Pod comparison and explicitly current-only HTTP observations remain usable
+when the ownership lookup fails. While current attribution is pending, comparison
+shows a matching-in-progress state and refreshes every three seconds.
+
+When identity-checked CPU/memory charts cannot be served, the existing basic charts
+remain in a separate **Pod-name matching** section. They do not establish Pod UID,
+historical workload membership, or cluster identity; matching names in a shared
+backend may include another cluster. They never substitute for a verified workload
+total. Network/storage retain this same older name-matched contract independently.
 HTTP error and coverage ratios are calculated from matching timestamps in the
 returned counters; histogram quantiles remain calculated by the metrics backend.
 Warnings or `isPartial: true` withhold the response; informational annotations
@@ -263,35 +296,33 @@ alone do not. Unknown HA label conventions still require upstream deduplication.
 
 ### Why the population and query bounds exist
 
-Radar still enumerates the current workload's Pods from the local informer cache,
-by controller ownership, and embeds their exact names and (where used) UIDs in
-batched queries. It does not make one Kubernetes API or Prometheus request per Pod.
-The compact identity expressions replaced repeated per-Pod query branches; they
-did not remove identity enumeration or make query size independent of Pod count.
-
-The 100-Pod selection cap is a Radar implementation guardrail, not a Prometheus
-limit or a measured performance cliff. It bounds attribution evidence, query size,
-returned per-Pod series and browser work together with the independent limits
-above. Larger populations need a designed query path, not an arbitrary increase
-to one constant: the identity builder and evidence limits must agree. Chunking
-must merge counters and histogram buckets before deriving percentages/quantiles,
-preserving cross-chunk observation checks; averaging chunk p95s is incorrect.
+Current Pods are enumerated for identity anchors, comparison and explicit fallback,
+not historical aggregation. Their 100-Pod cap bounds evidence and rows; it is not a
+Prometheus limit. Historical aggregation covers the full matched population in
+the backend. Latency combines buckets before deriving quantiles; averaging Pod
+p95s would be incorrect. Unknown HA labels require upstream deduplication, and
+large-backend performance is not proven by the small lab.
 
 ### Historical Pods and existing resource queries
 
-"Current" means Pods still present in the cache and owned by the workload; it
-does not mean only Ready Pods. Old-revision Pods still present during a rollout
-can be included. Deleted Pods are not reconstructed, and scaling to zero produces
-no historical request/resource panels through this endpoint.
+Raw KSM and standard recording rules share one ownership contract. Radar selects
+the strategy reaching the earliest observation in the requested range, then the
+one covering more timestamps; raw wins equal coverage. One strategy is used per
+response, not a union or current-Pod fill. This handles newly installed rules and
+unequal retention but cannot recover unretained data. Rightsizing reuses the same
+ownership builder without changing its scope contract.
 
-Radar's rightsizing engine already has KSM owner joins (`kube_pod_owner`, plus
-`kube_replicaset_owner` for Deployments) evaluated over history. Those are a useful
-starting point, not a drop-in replacement for this endpoint's identity checks.
-A historical path must scope both the ownership and metric sides to the right
-cluster, handle reused names/UIDs and missing historical ownership, and explain
-which deleted Pods are covered. A partition-only match does not establish Pod
-incarnation identity. This remains a separate follow-up rather than weakening
-current UID matching to a workload-name prefix.
+Istio history needs ownership too: native names do not distinguish Kubernetes kind,
+and today's lack of a collision cannot prove past uniqueness. Historical queries
+also select native destination workload name/namespace. Missing ownership names
+the KSM prerequisite; waypoint mapping remains unsupported.
+
+When ownership stops reporting after deletion, that Pod leaves the aggregate even
+if its final rate window still has samples. Earlier retained points remain
+queryable after rollout/zero if historical cluster scope can be established.
+Where history has no usable samples but current identity does, the affected family
+can show **current Pods only**, visibly labeled, never spliced into historical gaps.
+Current means still present and owned, not only Ready.
 
 The existing network, filesystem and restart queries use exact current Pod names
 and namespace, not fuzzy workload-name prefixes. They still lack the new UID and
@@ -336,8 +367,12 @@ listed above and verified as described below.
 - **Beyla HTTP server:** `http_server_request_duration_seconds_count` and `_bucket`,
   with `k8s_namespace_name` and `k8s_pod_name`. Automatic attribution discovers an
   exact job from matching identities, including custom job names. With an explicit
-  scope override, Radar uses its Beyla/Alloy job discriminator;
+  scope override, the current-Pod path uses its Beyla/Alloy job discriminator;
   `--beyla-job-selector` accepts one exact or regex `job` matcher.
+  For workload metrics that override is paired with a verified scope assertion;
+  historical queries otherwise consider matching HTTP-server jobs across the
+  range and withhold ambiguous observation populations instead of picking a job
+  from today's Pods.
   Application-only Beyla works without network metrics: verified with
   direct exposition in kind and EKS nonprod (Beyla 3.32.0). Default OTLP-to-Alloy
   conversion was also tested and lacks Pod attributes on the request series;
@@ -360,7 +395,7 @@ itself, including cluster separation, observer separation, unit conversion,
 quantiles and duplicate cAdvisor scrape targets:
 
 ```sh
-RADAR_TEST_PROMTOOL_IMAGE=prom/prometheus:v3.5.0 go test -C pkg ./prom -run TestWorkloadPromQL -v
+RADAR_TEST_PROMTOOL_IMAGE=prom/prometheus:v3.5.0 go test -C pkg ./prom -run 'TestWorkload(History)?PromQL' -v
 ```
 
 This does not replace live exporter compatibility testing or UI screenshots.
@@ -384,7 +419,8 @@ latency. Missing latency never implies no requests or healthy latency.
 The reporting-Pod count is derived from request rate series, not the Kubernetes
 selection. A partial count does not prove missing instrumentation: Pods can be
 idle or newly started. Panels retain useful observations but label incomplete
-population coverage. Previous replicas are never silently reconstructed. Rate
+population coverage in current-only mode. Historical counts describe reporting
+Pods at each timestamp, without a current-replica denominator. Rate
 windows are at least five minutes and twice the evaluation step. Long ranges
 therefore cover the interval but smooth short spikes; the UI shows the actual
 window. All request numerators, denominators, histograms and coverage queries use

@@ -299,6 +299,12 @@ func (c *Client) probe(ctx context.Context, requireTargets bool) (bool, ProbeRea
 			if httpErr.StatusCode == 401 || httpErr.StatusCode == 403 {
 				return false, ProbeReasonAuthError
 			}
+			var response struct {
+				Status string `json:"status"`
+			}
+			if json.Unmarshal(httpErr.Body, &response) == nil && response.Status == "error" {
+				return false, ProbeReasonPromError
+			}
 			// The server answered; whatever is wrong, the network path is not
 			// it — callers reasoning about reachability must not treat this
 			// like a dial failure.
@@ -307,14 +313,6 @@ func (c *Client) probe(ctx context.Context, requireTargets bool) (bool, ProbeRea
 		var respErr *ResponseError
 		if errors.As(err, &respErr) {
 			return false, ProbeReasonHTTPError
-		}
-		if httpErr != nil {
-			var response struct {
-				Status string `json:"status"`
-			}
-			if json.Unmarshal(httpErr.Body, &response) == nil && response.Status == "error" {
-				return false, ProbeReasonPromError
-			}
 		}
 		return false, ProbeReasonTransportError
 	}

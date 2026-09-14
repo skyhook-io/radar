@@ -17,11 +17,59 @@ beforeEach(() => {
     state: 'available', source: 'beyla',
     sources: [{ id: 'beyla', label: 'Beyla', state: 'available' }],
     pods: 2, podsTotal: 2, start: 100, end: 160, stepSeconds: 60, rateWindowSeconds: 300,
+    history: { cpu: { mode: 'current-pods', reason: 'Missing retained ownership.' }, requests: { mode: 'current-pods' } },
+    comparison: { cpu: panel(0, 'cores') },
     panels: { requests: panel(0), observedPods: panel(1, 'pods'), cpu: panel(0, 'cores') },
   } }
 })
 
 describe('Workload metrics interpretation', () => {
+  it('separates historical aggregates from bounded current comparison', () => {
+    result.data!.podsTotal = 128
+    result.data!.pods = 100
+    result.data!.history = { cpu: { mode: 'workload-history' }, requests: { mode: 'workload-history' } }
+    result.data!.panels.cpu = { ...panel(128, 'cores'), series: [
+      { labels: { aggregation: 'Workload' }, dataPoints: [{ timestamp: 160, value: 128 }] },
+      { labels: { aggregation: 'Maximum Pod' }, dataPoints: [{ timestamp: 160, value: 1 }] },
+    ] }
+    const html = render().replaceAll('<!-- -->', '')
+    expect(html).toContain('CPU usage · workload')
+    expect(html).toContain('Maximum Pod')
+    expect(html).toContain('1 Pods reporting')
+    expect(html).not.toContain('of 128 current Pods reporting')
+    expect(html).toContain('checkout-0')
+    expect(html).toContain('Comparing 100 of 128 current Pods')
+    expect(html).toContain('when ownership disappears after Pod deletion')
+  })
+  it('names the current-only fallback rather than implying full history', () => {
+    const html = render()
+    expect(html).toContain('Workload history unavailable — showing current Pods only')
+    expect(html).toContain('Missing retained ownership')
+  })
+  it('keeps name-matched fallback charts separate from identity-checked metrics', () => {
+    result.data!.panels.cpu = { state: 'error', unit: 'cores', reason: 'History lookup failed', series: [] }
+    result.data!.panels.memory = panel(100, 'bytes')
+    const html = renderToString(<MemoryRouter><WorkloadMetricsSection kind="Deployment" namespace="shop" name="checkout" range="1h" nameMatchedCharts={{ cpu: <span>Existing CPU chart</span>, memory: <span>Existing memory chart</span> }} /></MemoryRouter>)
+    expect(html).toContain('Basic CPU and memory · Pod-name matching')
+    expect(html).toContain('matching names in a shared backend may include another cluster')
+    expect(html).toContain('Existing CPU chart')
+    expect(html).toContain('History lookup failed')
+    expect(html).not.toContain('Existing memory chart')
+  })
+  it('does not flash name-matched charts during the initial request', () => {
+    result = { isLoading: true }
+    const html = renderToString(<MemoryRouter><WorkloadMetricsSection kind="Deployment" namespace="shop" name="checkout" range="1h" nameMatchedCharts={{ cpu: <span>Existing CPU chart</span> }} /></MemoryRouter>)
+    expect(html).not.toContain('Existing CPU chart')
+    expect(html).toContain('Checking request metrics')
+  })
+  it('describes throttling scope independently of a failed CPU history query', () => {
+    result.data!.history.cpu = { mode: 'unavailable' }
+    result.data!.history.throttling = { mode: 'workload-history' }
+    result.data!.panels.throttling = panel(5, 'percent')
+    const html = render().replaceAll('<!-- -->', '')
+    expect(html).toContain('Throttling is weighted by total periods')
+    expect(html).not.toContain('Examines 2 of 2 current Pods')
+  })
   it('retains resource charts while loading another request observer', () => {
     result.isPlaceholderData = true
     const html = render()

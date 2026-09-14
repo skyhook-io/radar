@@ -99,6 +99,8 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 			message = "The configured Prometheus endpoint rejected authentication or access (HTTP 401/403). Check credentials, tenant headers and permissions."
 		case prom.ProbeReasonPromError:
 			message = "The configured Prometheus query API returned an error. Check the backend's query and storage health, including ingester/store availability; this is not an empty metrics result."
+		case prom.ProbeReasonHTTPError:
+			message = "The configured Prometheus endpoint responded with an HTTP error. Check the backend and proxy health; this is not a network reachability failure."
 		case prom.ProbeReasonNotPrometheus:
 			message = "The configured endpoint did not return a Prometheus query response. Check the API base path and whether a proxy is returning a login page."
 		}

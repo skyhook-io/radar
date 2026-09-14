@@ -176,6 +176,7 @@ export function PrometheusChartsGrid({
       {isWorkload && (
         <WorkloadMetricsSection key={`${kind}/${namespace}/${name}`} kind={kind} namespace={namespace} name={name} range={timeRange}
           cpuReferenceLines={cpuRefLines} memoryReferenceLines={memRefLines}
+          nameMatchedCharts={{ cpu: cpu && renderPanel({ def: cpu, refLines: cpuRefLines }), memory: mem && renderPanel({ def: mem, refLines: memRefLines }) }}
           restartLane={showRestartLane && <div className="mb-3"><RestartEventLane kind={kind} namespace={namespace} name={name} range={timeRange} /></div>} />
       )}
 

@@ -42,6 +42,8 @@ type Client struct {
 	workloadScopeEverSet       bool
 	beylaJobSelector           string
 	workloadAttributionEntries map[string]*workloadAttributionEntry
+	workloadPartition          *workloadPartitionMemo
+	workloadPartitionSF        singleflight.Group
 	lastDiscoverErr            error
 	lastDiscoverAt             time.Time
 

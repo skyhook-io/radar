@@ -41,6 +41,7 @@ case "${1:-help}" in
   traffic) kctl create -f "$FIXTURES/traffic.yaml" ;;
   status) kctl get pods -n radar-metrics-fixture; kctl get pods -n monitoring; kctl get jobs -n radar-metrics-fixture ;;
   check) node "$FIXTURES/check.mjs" "$KUBECONFIG" "$CTX" ;;
+  history) node "$FIXTURES/check.mjs" "$KUBECONFIG" "$CTX" history ;;
   down) kind delete cluster --name "$CLUSTER_NAME" --kubeconfig "$KUBECONFIG" ;;
-  *) printf 'Usage: bash %s {up|traffic|status|check|down}\nRead %s/README.md first.\n' "$0" "$FIXTURES" ;;
+  *) printf 'Usage: bash %s {up|traffic|status|check|history|down}\nRead %s/README.md first.\n' "$0" "$FIXTURES" ;;
 esac

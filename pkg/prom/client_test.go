@@ -197,7 +197,7 @@ func TestClientProbeQueryAPI(t *testing.T) {
 		{"auth", 401, `secret echoed by proxy`, ProbeReasonAuthError},
 		{"tenant", 403, `tenant rejected`, ProbeReasonAuthError},
 		{"ring", 500, `{"status":"error","errorType":"execution","error":"too many unhealthy instances in the ring"}`, ProbeReasonPromError},
-		{"proxy", 502, `upstream unavailable`, ProbeReasonTransportError},
+		{"proxy", 502, `upstream unavailable`, ProbeReasonHTTPError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tr := fakeProm(t, func(w http.ResponseWriter, r *http.Request) {

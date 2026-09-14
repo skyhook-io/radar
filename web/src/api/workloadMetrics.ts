@@ -15,6 +15,8 @@ export interface WorkloadMetricPanel {
 }
 
 export interface WorkloadMetrics {
+	 history: Partial<Record<"cpu" | "memory" | "throttling" | "requests", { mode: "workload-history" | "current-pods" | "unavailable"; reason?: string }>>;
+	 comparison: Partial<Record<"cpu" | "memory" | "throttling", WorkloadMetricPanel>>;
   scopeNotice?: string;
   attribution?: Record<string, string>;
   state: WorkloadMetricState;
@@ -60,7 +62,7 @@ export function useWorkloadMetrics(
       ),
     enabled,
     staleTime: 30_000,
-    refetchInterval: (query) => query.state.data?.state === "detecting" ? 3_000 : 30_000,
+    refetchInterval: (query) => query.state.data?.state === "detecting" || Object.values(query.state.data?.comparison ?? {}).some((panel) => panel.state === "detecting") ? 3_000 : 30_000,
     retry: (failureCount, error) => failureCount < 1 && error instanceof ApiError && error.status === 409,
   });
 }

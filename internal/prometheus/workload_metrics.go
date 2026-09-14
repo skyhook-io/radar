@@ -42,6 +42,13 @@ type workloadMetricsResponse struct {
 	RateWindowSeconds float64                        `json:"rateWindowSeconds"`
 	Panels            map[string]workloadMetricPanel `json:"panels"`
 	Attribution       map[string]string              `json:"attribution,omitempty"`
+	History           map[string]workloadMetricScope `json:"history"`
+	Comparison        map[string]workloadMetricPanel `json:"comparison"`
+}
+
+type workloadMetricScope struct {
+	Mode   string `json:"mode"`
+	Reason string `json:"reason,omitempty"`
 }
 
 func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
@@ -91,10 +98,20 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	start, end, step := parseTimeRange(r.URL.Query().Get("range"))
 	step = max(step, end.Sub(start)/360)
+	duration := end.Sub(start)
+	end = end.Truncate(step)
+	start = end.Add(-duration)
+	historyConfig, historyErr := client.historicalClusterScope(ctx, scope, cache)
+	history := workloadHistoryPlan{err: historyErr, reason: "Historical cluster identity lookup failed. Retrying automatically."}
+	if historyErr == nil {
+		history = chooseWorkloadHistory(ctx, workloadRangeClient{client}, scope, historyConfig, start, end, step)
+	}
 	var automatic []workloadAttributions
+	attributionState := "available"
 	if !configured && len(scope.CurrentPods) > 0 {
 		attributions, state := client.automaticWorkloadAttributions(scope)
-		if state != "available" {
+		attributionState = state
+		if state != "available" && history.history == nil && history.err == nil {
 			reason := "Matching metrics to current Pods…"
 			if state == "error" {
 				reason = "Metrics identity could not be checked. Retrying automatically."
@@ -106,12 +123,25 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
 				return
 			}
-			writeJSON(w, http.StatusOK, workloadMetricsResponse{State: state, Reason: reason, ScopeNotice: client.workloadScopeNotice(), Sources: []workloadRequestSource{}, Panels: map[string]workloadMetricPanel{}})
+			writeJSON(w, http.StatusOK, workloadMetricsResponse{State: state, Reason: reason, ScopeNotice: client.workloadScopeNotice(), Sources: []workloadRequestSource{}, Panels: map[string]workloadMetricPanel{}, History: map[string]workloadMetricScope{}, Comparison: map[string]workloadMetricPanel{}})
 			return
 		}
 		automatic = append(automatic, attributions)
 	}
-	resp := collectWorkloadMetrics(ctx, workloadRangeClient{client}, scope, config, job, source, start, end, step, automatic...)
+	resp := collectWorkloadMetricsWithHistory(ctx, workloadRangeClient{client}, scope, config, job, source, start, end, step, automatic, history)
+	if attributionState == "detecting" || attributionState == "error" {
+		reason := "Matching metrics to current Pods…"
+		if attributionState == "error" {
+			reason = "Metrics identity could not be checked. Retrying automatically."
+		}
+		for _, key := range []string{"cpu", "memory", "throttling"} {
+			panel := workloadMetricPanel{State: attributionState, Reason: reason, Series: []prom.Series{}}
+			resp.Comparison[key] = panel
+			if resp.History[key].Mode == "current-pods" {
+				resp.Panels[key] = panel
+			}
+		}
+	}
 	resp.ScopeNotice = client.workloadScopeNotice()
 	if client != GetClient() || generation != client.DiscoveryGeneration() {
 		writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
@@ -134,12 +164,34 @@ func (c workloadRangeClient) QueryRange(ctx context.Context, query string, start
 }
 
 func collectWorkloadMetrics(ctx context.Context, client RangeQuerier, scope PodScope, config prom.WorkloadMetricsScope, job string, selected prom.RequestSource, start, end time.Time, step time.Duration, automatic ...workloadAttributions) workloadMetricsResponse {
-	resp := workloadMetricsResponse{
+	return collectWorkloadMetricsWithHistory(ctx, client, scope, config, job, selected, start, end, step, automatic, workloadHistoryPlan{reason: "Historical ownership was not established."})
+}
+
+func collectWorkloadMetricsWithHistory(ctx context.Context, client RangeQuerier, scope PodScope, config prom.WorkloadMetricsScope, job string, selected prom.RequestSource, start, end time.Time, step time.Duration, automatic []workloadAttributions, history workloadHistoryPlan) (resp workloadMetricsResponse) {
+	resp = workloadMetricsResponse{
 		State: "available", Pods: len(scope.CurrentPods), PodsTotal: scope.CurrentTotal, End: end.Unix(),
 		Start: start.Unix(), StepSeconds: step.Seconds(),
 		RateWindowSeconds: prom.WorkloadRateWindow(step).Seconds(),
 		Sources:           []workloadRequestSource{}, Panels: map[string]workloadMetricPanel{},
-		Attribution: map[string]string{"scope": "Operator-asserted cluster scope; Pod identity was not established automatically."},
+		Attribution: map[string]string{},
+		History:     map[string]workloadMetricScope{}, Comparison: map[string]workloadMetricPanel{},
+	}
+	if _, err := config.Matchers(); err == nil {
+		resp.Attribution["scope"] = "Operator-asserted cluster scope; Pod identity was not established automatically."
+	}
+	for _, key := range []string{"cpu", "memory", "throttling", "requests"} {
+		resp.History[key] = workloadMetricScope{Mode: "current-pods", Reason: history.reason}
+		if history.history != nil {
+			resp.History[key] = workloadMetricScope{Mode: "workload-history"}
+		}
+	}
+	if history.err != nil {
+		defer func() {
+			for _, key := range []string{"cpu", "memory", "throttling"} {
+				resp.History[key] = workloadMetricScope{Mode: "unavailable", Reason: history.reason}
+				resp.Panels[key] = workloadMetricPanel{State: "error", Reason: history.reason, Series: []prom.Series{}}
+			}
+		}()
 	}
 	if len(automatic) > 0 {
 		resp.Attribution = map[string]string{}
@@ -162,14 +214,19 @@ func collectWorkloadMetrics(ctx context.Context, client RangeQuerier, scope PodS
 		resp.State = "partial"
 		resp.Reason = "Current pod population was capped; values cover only the included pods."
 	}
-	if scope.Selection.IsEmpty() {
-		resp.State, resp.Reason = "unavailable", "This workload has no current pods."
+	if history.history != nil {
+		resp.State, resp.Reason = "available", "History follows retained workload ownership, including previous replicas. Gaps are not filled using current Pods."
+		resp.Attribution["history"] = "Verified cluster scope; retained ownership evaluated at every chart timestamp."
+	}
+	if scope.Selection.IsEmpty() && history.history == nil {
+		resp.State, resp.Reason = "unavailable", "This workload has no current pods. "+history.reason
 		return resp
 	}
 	type candidate struct {
-		source  workloadRequestSource
-		queries prom.RequestQueries
-		rate    workloadMetricPanel
+		source     workloadRequestSource
+		queries    prom.RequestQueries
+		rate       workloadMetricPanel
+		historical bool
 	}
 	candidates := []candidate{
 		{source: workloadRequestSource{ID: prom.RequestSourceIstio, Label: "Istio · destination sidecars"}},
@@ -180,6 +237,10 @@ func collectWorkloadMetrics(ctx context.Context, client RangeQuerier, scope PodS
 	group.SetLimit(3)
 	for i := range pressure {
 		group.Go(func() error {
+			if scope.Selection.IsEmpty() {
+				pressure[i] = workloadMetricPanel{State: "unavailable", Reason: "No current Pods to compare.", Series: []prom.Series{}}
+				return nil
+			}
 			if len(automatic) > 0 {
 				key := []string{"throttling", "cpu", "memory"}[i]
 				plan := automatic[0][key]
@@ -245,22 +306,69 @@ func collectWorkloadMetrics(ctx context.Context, client RangeQuerier, scope PodS
 					if plan.State == "error" {
 						c.rate.State, c.source.State = "error", "error"
 					}
-					return nil
+					if history.history == nil {
+						return nil
+					}
+					err = fmt.Errorf("current Pod identity is unavailable")
 				}
 				selection := identitySelection(scope.Namespace, plan.Pods)
-				if plan.UID {
+				if len(plan.Pods) > 0 && plan.UID {
 					queries, err = prom.BuildIdentityRequestQueries(step, selection, plan.Pods, c.source.ID, plan.Job)
-				} else {
+				} else if len(plan.Pods) > 0 {
 					queries, err = prom.BuildRequestQueries(step, selection, plan.Scope, c.source.ID, plan.Job)
 				}
 			}
+			currentQueries, currentErr := queries, err
+			if history.history != nil {
+				queries, err = prom.BuildHistoryRequestQueries(step, *history.history, c.source.ID, job)
+				c.historical = true
+			}
 			c.queries = queries
 			c.rate = queryWorkloadPanel(ctx, client, queries.Rate, err, "requests/s", start, end, step, false)
+			if c.historical && c.rate.State == "unavailable" && currentErr == nil && !scope.Selection.IsEmpty() {
+				current := queryWorkloadPanel(ctx, client, currentQueries.Rate, nil, "requests/s", start, end, step, false)
+				if current.State == "available" || current.State == "stale" {
+					c.rate, c.queries, c.historical = current, currentQueries, false
+				}
+			}
 			c.source.State = c.rate.State
 			return nil
 		})
 	}
 	_ = group.Wait()
+	for i, key := range []string{"throttling", "cpu", "memory"} {
+		resp.Comparison[key] = pressure[i]
+	}
+	if history.history != nil {
+		for i := range pressure {
+			group.Go(func() error {
+				query, err := prom.BuildHistoryThrottleQuery(step, *history.history)
+				unit := "percent"
+				if i > 0 {
+					category := prom.CategoryCPU
+					if i == 2 {
+						category = prom.CategoryMemory
+					}
+					query, err = prom.BuildHistoryResourceQuery(step, *history.history, category)
+					unit = prom.CategoryUnit(category)
+				}
+				pressure[i] = queryWorkloadPanel(ctx, client, query, err, unit, start, end, step, false)
+				key := []string{"throttling", "cpu", "memory"}[i]
+				population, buildErr := prom.BuildHistoryResourcePopulationQuery(step, *history.history, key)
+				coverage := queryWorkloadPanel(ctx, client, population, buildErr, "count", start, end, step, false)
+				pressure[i] = withMetricCoverage(pressure[i], coverage, "Multiple or unverified resource observation populations; affected samples are withheld.")
+				return nil
+			})
+		}
+		_ = group.Wait()
+		for i, key := range []string{"throttling", "cpu", "memory"} {
+			current := resp.Comparison[key]
+			if pressure[i].State == "unavailable" && (current.State == "available" || current.State == "stale" || current.State == "partial") {
+				pressure[i] = current
+				resp.History[key] = workloadMetricScope{Mode: "current-pods", Reason: "This source has current-Pod observations but no usable history under the verified cluster and ownership scope."}
+			}
+		}
+	}
 	resp.Panels["throttling"] = pressure[0]
 	resp.Panels["cpu"] = pressure[1]
 	resp.Panels["memory"] = pressure[2]
@@ -282,6 +390,9 @@ func collectWorkloadMetrics(ctx context.Context, client RangeQuerier, scope PodS
 		return resp
 	}
 	c := candidates[chosen]
+	if !c.historical && history.history != nil {
+		resp.History["requests"] = workloadMetricScope{Mode: "current-pods", Reason: "This source has current-Pod observations but no usable history under the verified cluster and ownership scope."}
+	}
 	resp.Source = c.source.ID
 	resp.Panels["requests"] = c.rate
 	if c.rate.State == "error" || c.rate.State == "unavailable" {
@@ -320,8 +431,14 @@ func collectWorkloadMetrics(ctx context.Context, client RangeQuerier, scope PodS
 		resp.Panels[key] = panel
 	}
 	for _, key := range []string{"requests", "errors", "p50", "p95"} {
-		resp.Panels[key] = withObservedPodCoverage(resp.Panels[key], panels[5], len(scope.CurrentPods))
-		resp.Panels[key] = withMetricCoverage(resp.Panels[key], panels[6], "Multiple or unverified observation populations in this window; affected samples are withheld to avoid duplicate counting.")
+		if !c.historical {
+			resp.Panels[key] = withObservedPodCoverage(resp.Panels[key], panels[5], len(scope.CurrentPods))
+		}
+		reason := "Multiple or unverified observation populations in this window; affected samples are withheld to avoid duplicate counting."
+		if resp.Source == prom.RequestSourceBeyla {
+			reason += " To select one observation job, use --beyla-job-selector together with a verified --prometheus-single-cluster or --prometheus-cluster-label scope assertion."
+		}
+		resp.Panels[key] = withMetricCoverage(resp.Panels[key], panels[6], reason)
 	}
 	return resp
 }
@@ -429,6 +546,9 @@ func queryWorkloadPanel(ctx context.Context, client RangeQuerier, query string, 
 		labels := map[string]string{}
 		if keepPod {
 			labels["pod"] = series.Labels["pod"]
+		}
+		if value := series.Labels["aggregation"]; value == "Workload" || value == "Maximum Pod" {
+			labels["aggregation"] = value
 		}
 		panel.Series = append(panel.Series, prom.Series{Labels: labels, DataPoints: series.DataPoints})
 		for _, point := range series.DataPoints {

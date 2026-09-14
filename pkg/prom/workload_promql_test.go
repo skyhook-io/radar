@@ -310,6 +310,11 @@ func TestWorkloadPromQL(t *testing.T) {
 	}
 	check("count("+otlp.Rate+") or vector(0)", "{}", 0)
 	check(`sum(rate(http_server_request_duration_seconds_count{job="demo/web"}[5m]))`, "{}", 1)
+	runWorkloadPromQL(t, image, input, tests)
+}
+
+func runWorkloadPromQL(t *testing.T, image string, input []map[string]string, tests []map[string]any) {
+	t.Helper()
 	fixture := map[string]any{"evaluation_interval": "1m", "tests": []map[string]any{{"interval": "1m", "input_series": input, "promql_expr_test": tests}}}
 	data, err := json.Marshal(fixture)
 	if err != nil {

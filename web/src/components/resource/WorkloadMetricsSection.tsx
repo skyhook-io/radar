@@ -24,6 +24,7 @@ interface Props {
   cpuReferenceLines?: ReferenceLine[];
   memoryReferenceLines?: ReferenceLine[];
   restartLane?: ReactNode;
+  nameMatchedCharts?: Partial<Record<'cpu' | 'memory', ReactNode>>;
 }
 
 export function WorkloadMetricsSection(props: Props) {
@@ -36,6 +37,14 @@ export function WorkloadMetricsSection(props: Props) {
     source,
     true,
   );
+  const sameResourceScope = data && ['memory', 'throttling'].every((key) => {
+    const scope = data.history[key as 'memory' | 'throttling'];
+    return !scope || (scope.mode === data.history.cpu?.mode && scope.reason === data.history.cpu?.reason);
+  });
+  const nameMatchedFallbacks = (['cpu', 'memory'] as const).filter((key) => {
+    const panel = data?.panels[key];
+    return (data || error) && props.nameMatchedCharts?.[key] && (!panel || ['detecting', 'error', 'unavailable'].includes(panel.state));
+  });
   return (
     <div className="metrics-layout min-w-0 px-4 pt-3 space-y-4">
       {data?.scopeNotice && <p role="status" className="text-xs text-theme-text-secondary">{data.scopeNotice}</p>}
@@ -44,31 +53,47 @@ export function WorkloadMetricsSection(props: Props) {
       <section aria-label="Workload resource pressure">
         {(data?.panels.cpu || data?.panels.memory || data?.panels.throttling) && <h3 className="mb-2 text-sm font-semibold text-theme-text-primary">Resources</h3>}
         {props.restartLane}
+        {sameResourceScope && <HistoryNotice scope={data?.history.cpu} />}
         <div className="metrics-chart-grid">
-          {data?.panels.cpu && <WorkloadChart label="CPU usage · per Pod" panel={data.panels.cpu} window={data} referenceLines={props.cpuReferenceLines} />}
-          {data?.panels.memory && <WorkloadChart label="Memory working set · per Pod" panel={data.panels.memory} window={data} referenceLines={props.memoryReferenceLines} />}
+          {data?.panels.cpu && <WorkloadChart label={data.history.cpu?.mode === 'workload-history' ? 'CPU usage · workload' : 'CPU usage · per Pod'} panel={data.panels.cpu} window={data} scope={sameResourceScope ? undefined : data.history.cpu} referenceLines={data.history.cpu?.mode === 'current-pods' ? props.cpuReferenceLines : undefined} />}
+          {data?.panels.memory && <WorkloadChart label={data.history.memory?.mode === 'workload-history' ? 'Memory working set · workload' : 'Memory working set · per Pod'} panel={data.panels.memory} window={data} scope={sameResourceScope ? undefined : data.history.memory} referenceLines={data.history.memory?.mode === 'current-pods' ? props.memoryReferenceLines : undefined} />}
           {data?.panels.throttling && <WorkloadChart
             className="metrics-chart-wide"
             label="CPU throttled periods"
             panel={data.panels.throttling}
             window={data}
+            scope={sameResourceScope ? undefined : data.history.throttling}
           />}
         </div>
         {data?.panels.throttling && <p className="mt-2 text-xs text-theme-text-tertiary">
           Throttling is the share of CFS periods throttled, not CPU time lost.
-          Examines {data.pods} of {data.podsTotal} current Pods; {data.attribution?.scope ? "using operator-asserted scope" : "only attributable samples are shown"}. Previous replicas
-          are not reconstructed. {data.reason}
+          {data.history.throttling?.mode === 'workload-history'
+            ? ' Workload is the total across reporting Pods; Maximum Pod exposes skew. Throttling is weighted by total periods, not an average of Pod percentages.'
+            : ` Examines ${data.pods} of ${data.podsTotal} current Pods; previous replicas are not reconstructed.`} {data.reason}
         </p>}
       </section>
-      {data && (data.panels.cpu || data.panels.memory || data.panels.throttling) && <PodComparison
+      {nameMatchedFallbacks.length > 0 && <section aria-label="Name-matched resource metrics">
+        <h3 className="mb-2 text-sm font-semibold text-theme-text-primary">Basic CPU and memory · Pod-name matching</h3>
+        <p className="mb-2 text-xs text-theme-text-secondary">The identity-checked charts above are not available for these metrics. These existing charts match current Pod names, not Pod UIDs or historical workload ownership; matching names in a shared backend may include another cluster.</p>
+        <div className="metrics-chart-grid">{nameMatchedFallbacks.map((key) => <div key={key}>{props.nameMatchedCharts?.[key]}</div>)}</div>
+      </section>}
+      {data && (data.comparison.cpu || data.comparison.memory || data.comparison.throttling) && <PodComparison
         namespace={props.namespace}
-        cpu={data.panels.cpu}
-        memory={data.panels.memory}
-        throttle={data.panels.throttling}
+        cpu={data.comparison.cpu}
+        memory={data.comparison.memory}
+        throttle={data.comparison.throttling}
         window={data}
       />}
     </div>
   );
+}
+
+function HistoryNotice({ scope }: { scope?: WorkloadMetrics['history']['cpu'] }) {
+  if (!scope) return null;
+  if (scope.mode === 'workload-history') return <p className="mb-2 text-xs text-theme-text-tertiary">Workload history · includes previous replicas where ownership and metrics were retained.</p>;
+  return <p role="status" className="mb-2 text-xs text-theme-text-secondary">
+    {scope.mode === 'current-pods' ? 'Workload history unavailable — showing current Pods only. ' : 'Workload history could not be checked. '}{scope.reason}
+  </p>;
 }
 
 function WorkloadRequests({ data, isLoading, error, setSource }: {
@@ -149,6 +174,7 @@ function WorkloadRequests({ data, isLoading, error, setSource }: {
             </span>
           )}
         </div>
+        <HistoryNotice scope={data.history.requests} />
         {hasRequests ? (
           <>
             <div className="metrics-chart-grid">
@@ -171,11 +197,13 @@ function WorkloadRequests({ data, isLoading, error, setSource }: {
               />
             </div>
             <div className="mt-2 text-xs text-theme-text-tertiary space-y-2">
-              <p>{data.sources.find((s) => s.id === data.source)?.label} · {Math.round(data.rateWindowSeconds / 60)}-minute rates · {reportingPods == null ? "Reporting Pod count unavailable" : `${reportingPods} of ${data.podsTotal} current Pods reporting`}</p>
+              <p>{data.sources.find((s) => s.id === data.source)?.label} · {Math.round(data.rateWindowSeconds / 60)}-minute rates · {reportingPods == null ? "Reporting Pod count unavailable" : data.history.requests?.mode === 'workload-history' ? `${reportingPods} Pods reporting` : `${reportingPods} of ${data.podsTotal} current Pods reporting`}</p>
               <details>
                 <summary className="cursor-pointer">Coverage and interpretation</summary>
                 <p className="mt-2 max-w-4xl leading-relaxed">
-                  Queries select {data.pods} of {data.podsTotal} current Pods; previous replicas are not reconstructed.
+                  {data.history.requests?.mode === 'workload-history'
+                    ? 'Queries follow retained ownership at each timestamp, not today’s replica list. Workload identity is cluster, namespace, kind and name, including recreation under that name. Missing ownership produces gaps; when ownership disappears after Pod deletion, that Pod leaves the aggregate even if its last rate window still has samples.'
+                    : `Queries select ${data.pods} of ${data.podsTotal} current Pods; previous replicas are not reconstructed.`}
                   Other Pods may be idle, new, or not instrumented. HTTP 5xx excludes failures without an HTTP response
                   and is not a gRPC error rate. Latency is a histogram approximation at the selected observer, not end-to-end user latency.
                   {data.source === 'istio' && ' Istio histograms update separately and can briefly trail the request counter; latency uses the histogram observations.'}
@@ -202,6 +230,7 @@ function WorkloadChart({
   secondary,
   window,
   referenceLines,
+  scope,
 }: {
   className?: string;
   label: string;
@@ -209,6 +238,7 @@ function WorkloadChart({
   secondary?: WorkloadMetricPanel;
   window: Pick<WorkloadMetrics, "start" | "end" | "stepSeconds">;
   referenceLines?: ReferenceLine[];
+  scope?: WorkloadMetrics['history']['cpu'];
 }) {
   const series = secondary
     ? [
@@ -222,9 +252,11 @@ function WorkloadChart({
   const hasSamples = series.some((s) =>
     s.dataPoints.some((p) => p.value != null && Number.isFinite(p.value)),
   );
+  const headline = panel?.series.find((s) => s.labels.aggregation === 'Workload') ?? (panel?.series.length === 1 ? panel.series[0] : undefined);
+  const seriesLabels = secondary ? series.map((s) => s.labels.quantile) : panel?.series.every((s) => s.labels.aggregation) ? panel.series.map((s) => s.labels.aggregation) : undefined;
   const last =
-    panel?.series.length === 1
-      ? latestWorkloadValue(panel.series[0], window.end, window.stepSeconds)
+    headline
+      ? latestWorkloadValue(headline, window.end, window.stepSeconds)
       : undefined;
   return (
     <section className={`metrics-chart rounded-lg border border-theme-border bg-theme-surface/30 p-3 min-w-0 ${className}`}>
@@ -241,6 +273,7 @@ function WorkloadChart({
           </span>
         )}
       </header>
+      <HistoryNotice scope={scope} />
       {hasSamples ? (
         <>
           <AreaChart
@@ -249,12 +282,12 @@ function WorkloadChart({
             color="var(--accent)"
             fillColor="var(--accent-muted)"
             layout="dashboard"
-            seriesLabels={secondary ? series.map((s) => s.labels.quantile) : undefined}
+            seriesLabels={seriesLabels}
             domain={{ start: window.start, end: window.end }}
             referenceLines={referenceLines?.map((line) => ({ ...line, label: `Template ${line.label}` }))}
           />
           {series.length > 1 && (
-            <SeriesLegend series={series} color="var(--accent)" seriesLabels={secondary ? series.map((s) => s.labels.quantile) : undefined} />
+            <SeriesLegend series={series} color="var(--accent)" seriesLabels={seriesLabels} />
           )}
         </>
       ) : (
@@ -287,7 +320,7 @@ function PodComparison({
   cpu?: WorkloadMetricPanel;
   memory?: WorkloadMetricPanel;
   throttle?: WorkloadMetricPanel;
-  window: Pick<WorkloadMetrics, "end" | "stepSeconds">;
+  window: Pick<WorkloadMetrics, "end" | "stepSeconds" | "pods" | "podsTotal">;
 }) {
   const [sort, setSort] = useState<"cpu" | "memory" | "throttling">("cpu");
   const values = {
@@ -323,6 +356,7 @@ function PodComparison({
       <h4 className="mb-2 text-xs font-medium text-theme-text-secondary">
         Compare current Pods · latest samples
       </h4>
+      {window.pods < window.podsTotal && <p className="mb-2 text-xs text-theme-text-secondary">Comparing {window.pods} of {window.podsTotal} current Pods. This comparison cap does not limit workload-history totals.</p>}
       {cpu?.state === "error" || memory?.state === "error" ? (
         <p className="text-xs text-theme-text-tertiary">
           Some resource queries failed; missing values are shown as —.

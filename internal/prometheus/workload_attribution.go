@@ -509,6 +509,7 @@ func intersectWorkloadAttributions(plans workloadAttributions, pods []prom.Workl
 }
 
 func (c *Client) cancelWorkloadAttributionsLocked() {
+	c.workloadPartition = nil
 	for _, entry := range c.workloadAttributionEntries {
 		if entry.cancel != nil {
 			entry.cancel()

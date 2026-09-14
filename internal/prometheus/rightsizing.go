@@ -475,19 +475,8 @@ func workloadSelection(ctx context.Context, client rightsizingQuerier, kind, nam
 }
 
 func ownerSelection(kind, namespace, name string) string {
-	ns := prom.SanitizeLabelValue(namespace)
-	workload := prom.SanitizeLabelValue(name)
-	switch strings.ToLower(kind) {
-	case "deployment":
-		return fmt.Sprintf(`label_replace(max by (namespace,pod,owner_name) (kube_pod_owner{namespace="%s",owner_kind="ReplicaSet",owner_is_controller="true"}), "replicaset", "$1", "owner_name", "(.*)") * on (namespace,replicaset) group_left() max by (namespace,replicaset) (kube_replicaset_owner{namespace="%s",owner_kind="Deployment",owner_name="%s",owner_is_controller="true"})`, ns, ns, workload)
-	case "statefulset", "daemonset":
-		ownerKind := "StatefulSet"
-		if strings.EqualFold(kind, "DaemonSet") {
-			ownerKind = "DaemonSet"
-		}
-		return fmt.Sprintf(`max by (namespace,pod) (kube_pod_owner{namespace="%s",owner_kind="%s",owner_name="%s",owner_is_controller="true"})`, ns, ownerKind, workload)
-	}
-	return ""
+	query, _ := (prom.WorkloadHistory{Kind: kind, Namespace: namespace, Name: name, Scope: prom.WorkloadMetricsScope{SingleCluster: true}}).OwnerQuery()
+	return query
 }
 
 func buildRightsizingQueries(namespace string, selection metricSelection) map[string]string {

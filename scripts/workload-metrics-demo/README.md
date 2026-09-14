@@ -13,6 +13,7 @@ bash scripts/workload-metrics-demo.sh traffic
 bash scripts/workload-metrics-demo.sh status
 make build
 bash scripts/workload-metrics-demo.sh check
+bash scripts/workload-metrics-demo.sh history
 ```
 
 Requires Docker, kind, kubectl, Helm, Node.js, Python 3 and curl. The script uses
@@ -55,9 +56,19 @@ in `pkg/prom`'s real-Prometheus suite, enabled in CI.
 
 VM/Mimir, auth/tenant paths and real cloud workloads have separate dated live
 evidence in `docs/workload-metrics.md`; this local fixture does not replace those
-tests or claim every backend was recreated here. Historical membership, large
-scale, HA deduplication, ingress/waypoints and native-only histograms remain
-separate work. Raw metric availability is not proof of rendered chart quality.
+tests or claim every backend was recreated here.
+
+`history` captures settled chart values, rotates both HTTP Deployments, verifies
+old Pods are deleted, scales each to zero, and requires identical values at the
+same historical timestamps with `workload-history` scope. Original replica counts
+are restored even on failure; rotated Pods are deliberately not restored. Only
+these isolated kind fixtures are changed. Run finite `traffic` first; the test
+waits for a complete baseline before any rollout.
+
+Raw KSM history is tested live; recorded ownership and 128-Pod totals are tested
+in the real-Prometheus suite. Large live scale, HA deduplication, ingress/waypoints
+and native-only histograms remain separate work. Raw metric availability is not
+proof of rendered chart quality.
 
 For an existing cloud lab, connect a dedicated Radar instance to the desired
 cluster/backend using its normal kubeconfig and metrics credentials. Capture

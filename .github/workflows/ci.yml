@@ -30,7 +30,7 @@ jobs:
       - name: Evaluate workload PromQL in Prometheus
         env:
           RADAR_TEST_PROMTOOL_IMAGE: prom/prometheus:v3.5.0
-        run: go test ./prom -run '^TestWorkloadPromQL$' -count=1
+        run: go test ./prom -run '^TestWorkload(History)?PromQL$' -count=1
 
       - name: Build
         run: go build ./...
