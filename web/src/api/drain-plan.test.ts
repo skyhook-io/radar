@@ -63,7 +63,24 @@ describe("describeDrainResult", () => {
     const r = describeDrainResult({ evictedPods: ["a", "b"] });
     expect(r.failed).toBe(false);
     expect(r.title).toBe("Node drained: 2 evicted, 0 skipped");
-    expect(r.detail).toContain("pods may still be terminating");
+    expect(r.detail).toContain("those pods may still be terminating");
     expect(r.detail).toContain("node remains cordoned");
+  });
+
+  it("never claims evictions were accepted when nothing was evicted", () => {
+    const allFailed = describeDrainResult({
+      evictedPods: [],
+      errors: ["shop/web-1: timed out waiting for PDB to allow eviction"],
+    });
+    expect(allFailed.detail).not.toContain("accepted");
+    expect(allFailed.detail).toContain("node remains cordoned");
+
+    const skipOnly = describeDrainResult({
+      evictedPods: [],
+      skippedPods: [
+        { namespace: "shop", name: "agent", outcome: "skip", reason: "managed by a DaemonSet", emptyDir: false, pdbChecked: false },
+      ],
+    });
+    expect(skipOnly.detail).not.toContain("accepted");
   });
 });
