@@ -105,7 +105,7 @@ func TestDynamicConfigObjectRefs(t *testing.T) {
 			want: refs(secret("app", "example-api-tls"), secret("app", "pkcs12-password"), secret("app", "jks-password")),
 		},
 		{
-			name: "cert-manager clusterissuer acme refs",
+			name: "cert-manager clusterissuer needs an explicit credential namespace",
 			gvr:  gvr("cert-manager.io", "v1", "clusterissuers"),
 			obj: map[string]any{"spec": map[string]any{"acme": map[string]any{
 				"privateKeySecretRef": map[string]any{"name": "cluster-account-key"},
@@ -113,7 +113,7 @@ func TestDynamicConfigObjectRefs(t *testing.T) {
 					"secretAccessKeySecretRef": map[string]any{"name": "route53-secret", "key": "secret-access-key"},
 				}}}},
 			}}},
-			want: refs(secret("cert-manager", "cluster-account-key"), secret("cert-manager", "route53-secret")),
+			want: nil,
 		},
 		{
 			name: "flux kustomization refs",
@@ -544,6 +544,23 @@ func TestIssuerCredentialsUseIssuerScope(t *testing.T) {
 
 func TestClusterIssuerNamespaceInferenceNeverGuesses(t *testing.T) {
 	controller := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "cert-manager", Namespace: "controllers", Labels: map[string]string{"app.kubernetes.io/name": "cert-manager"}}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "cert-manager", Args: []string{"--cluster-resource-namespace=custom-secrets"}}}}}}}
+	for _, component := range []string{"webhook", "cainjector"} {
+		other := controller.DeepCopy()
+		other.Labels["app.kubernetes.io/component"] = component
+		other.Spec.Template.Spec.Containers[0].Args = nil
+		if got := certManagerClusterResourceNamespaces([]*appsv1.Deployment{controller, other}); !slices.Equal(got, []string{"custom-secrets"}) {
+			t.Fatalf("%s confused with controller: %v", component, got)
+		}
+	}
+	withConfig := controller.DeepCopy()
+	withConfig.Spec.Template.Spec.Containers[0].Args = []string{"--config=/config/controller.yaml", "--cluster-resource-namespace=explicit"}
+	if got := certManagerClusterResourceNamespaces([]*appsv1.Deployment{withConfig}); !slices.Equal(got, []string{"explicit"}) {
+		t.Fatalf("explicit flag lost to config file: %v", got)
+	}
+	withConfig.Spec.Template.Spec.Containers[0].Args = []string{"--config=/config/controller.yaml"}
+	if got := certManagerClusterResourceNamespaces([]*appsv1.Deployment{withConfig}); got != nil {
+		t.Fatalf("unread config file supplied a namespace: %v", got)
+	}
 	if got := certManagerClusterResourceNamespaces(nil); got != nil {
 		t.Fatalf("absent controller guessed namespace: %v", got)
 	}

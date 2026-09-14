@@ -986,13 +986,17 @@ func checkOrphanConfigMapsSecrets(tr *evalTracker, input *CheckInput) []Finding 
 		return nil
 	}
 
-	var refs []ConfigObjectRef
+	refs := CollectConfigObjectRefs(input)
 	var objects []configrefs.Object
+	for _, cm := range input.ConfigMaps {
+		objects = append(objects, configrefs.Metadata("ConfigMap", cm))
+	}
+	for _, sec := range input.Secrets {
+		objects = append(objects, configrefs.Metadata("Secret", sec))
+	}
 	if input.ConfigReferenceEvidence != nil {
-		refs = input.ConfigReferenceEvidence.Refs
-		objects = input.ConfigReferenceEvidence.Objects
-	} else {
-		refs = CollectConfigObjectRefs(input)
+		refs = append(refs, input.ConfigReferenceEvidence.Refs...)
+		objects = append(objects, input.ConfigReferenceEvidence.Objects...)
 	}
 	used := map[configrefs.Ref]bool{}
 	for _, ref := range refs {

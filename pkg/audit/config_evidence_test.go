@@ -79,3 +79,14 @@ func TestOrphanReflectionEvidence(t *testing.T) {
 		t.Fatal("unused automatic mirror should be exempt without making source used")
 	}
 }
+
+func TestSupplementalEvidencePreservesInputReferences(t *testing.T) {
+	input := &CheckInput{
+		ConfigMaps:              []*corev1.ConfigMap{{ObjectMeta: metav1.ObjectMeta{Name: "settings", Namespace: "app"}}},
+		Pods:                    []*corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Namespace: "app"}, Spec: corev1.PodSpec{Containers: []corev1.Container{{EnvFrom: []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "settings"}}}}}}}}},
+		ConfigReferenceEvidence: &ConfigReferenceEvidence{CompleteNamespaces: map[string][]string{"ConfigMap": {"app"}}},
+	}
+	if got := RunChecks(input).CheckCounts["orphanConfigMapSecret"]; got != (CheckCount{Evaluated: 1, Passed: 1}) {
+		t.Fatalf("supplemental evidence discarded observed use: %+v", got)
+	}
+}

@@ -17,8 +17,6 @@ import (
 
 type dynamicConfigRefHandler func(*unstructured.Unstructured) []bp.ConfigObjectRef
 
-const certManagerDefaultClusterResourceNamespace = "cert-manager"
-
 type dynamicConfigRefOptions struct {
 	Scope           *ReadScope
 	ServiceAccounts []*corev1.ServiceAccount
@@ -74,7 +72,7 @@ func listDynamicConfigObjectRefs(namespaces []string, opts dynamicConfigRefOptio
 			}
 			continue
 		}
-		handlerCanCrossNamespace := dynamicConfigRefHandlerCanCrossNamespace(gvr)
+		handlerCanCrossNamespace := configRefDependencies[gvr.GroupResource()].crossNamespace
 		for _, u := range items {
 			if u == nil || !opts.Scope.allows(gvr, u.GetNamespace()) || !cache.IsNamespaceSynced(gvr, u.GetNamespace()) {
 				continue
@@ -144,7 +142,7 @@ var configRefDependencies = map[schema.GroupResource]configRefDependency{
 	{Group: "networking.istio.io", Resource: "gateways"}:                      {istioGatewayConfigRefs, false, false},
 	{Group: "cert-manager.io", Resource: "certificates"}:                      {certManagerCertificateConfigRefs, false, false},
 	{Group: "cert-manager.io", Resource: "issuers"}:                           {certManagerIssuerConfigRefs, false, false},
-	{Group: "cert-manager.io", Resource: "clusterissuers"}:                    {certManagerClusterIssuerConfigRefs, false, false},
+	{Group: "cert-manager.io", Resource: "clusterissuers"}:                    {certManagerIssuerConfigRefs, false, false},
 	{Group: "source.toolkit.fluxcd.io", Resource: "gitrepositories"}:          {fluxGitRepositoryConfigRefs, false, false},
 	{Group: "source.toolkit.fluxcd.io", Resource: "ocirepositories"}:          {fluxOCIRepositoryConfigRefs, false, false},
 	{Group: "source.toolkit.fluxcd.io", Resource: "helmrepositories"}:         {fluxHelmRepositoryConfigRefs, false, false},
@@ -273,10 +271,6 @@ func certManagerCertificateConfigRefs(u *unstructured.Unstructured) []bp.ConfigO
 
 func certManagerIssuerConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
 	return certManagerIssuerConfigRefsForNamespaces(u, []string{u.GetNamespace()})
-}
-
-func certManagerClusterIssuerConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
-	return certManagerIssuerConfigRefsForNamespaces(u, []string{certManagerDefaultClusterResourceNamespace})
 }
 
 func certManagerIssuerConfigRefsForNamespaces(u *unstructured.Unstructured, namespaces []string) []bp.ConfigObjectRef {
@@ -631,16 +625,6 @@ func collectContainerLikeRefs(refs *[]bp.ConfigObjectRef, ns string, c map[strin
 	}
 }
 
-func dynamicConfigRefHandlerCanCrossNamespace(gvr schema.GroupVersionResource) bool {
-	switch gvr.Group {
-	case "gateway.networking.k8s.io":
-		return gvr.Resource == "gateways"
-	case "kubernetes.crossplane.io", "helm.crossplane.io":
-		return gvr.Resource == "providerconfigs" || gvr.Resource == "releases"
-	}
-	return false
-}
-
 func collectVolumeLikeRefs(refs *[]bp.ConfigObjectRef, ns string, v map[string]any) {
 	addConfigMap(refs, ns, stringAt(v, "configMap", "name"))
 	addSecret(refs, ns, stringAt(v, "secret", "secretName"))
@@ -722,11 +706,6 @@ func certManagerClusterResourceNamespaces(deployments []*appsv1.Deployment) []st
 		var ns string
 		for _, c := range deploy.Spec.Template.Spec.Containers {
 			args := slices.Concat(c.Command, c.Args)
-			for _, arg := range args {
-				if arg == "--config" || strings.HasPrefix(arg, "--config=") {
-					return nil
-				}
-			}
 			argNS := clusterResourceNamespaceArg(args)
 			if argNS == "" {
 				continue
@@ -759,6 +738,10 @@ func certManagerClusterResourceNamespaces(deployments []*appsv1.Deployment) []st
 
 func isCertManagerDeployment(deploy *appsv1.Deployment) bool {
 	if deploy == nil {
+		return false
+	}
+	component := deploy.Labels["app.kubernetes.io/component"]
+	if component == "webhook" || component == "cainjector" {
 		return false
 	}
 	return deploy.Labels["app.kubernetes.io/name"] == "cert-manager" || deploy.Labels["app"] == "cert-manager"

@@ -114,8 +114,7 @@ func collectConfigEvidence(cache *k8s.ResourceCache, input *bp.CheckInput, names
 		return objects
 	}
 	subjects := metadata(input)
-	result.Objects = subjects
-	reflections := configrefs.BuildReflections(result.Objects)
+	reflections := configrefs.BuildReflections(subjects)
 	reflectors := len(reflections.Sources)+len(reflections.Unresolved)+len(reflections.Links) > 0
 	evidence, evidenceNamespaces := input, namespaces
 	if reflectors {
@@ -148,7 +147,9 @@ func collectConfigEvidence(cache *k8s.ResourceCache, input *bp.CheckInput, names
 			}
 		}
 	}
-	result.Refs = bp.CollectConfigObjectRefs(evidence)
+	if reflectors {
+		result.Refs = bp.CollectConfigObjectRefs(evidence)
+	}
 	result.Refs = append(result.Refs, listDynamicConfigObjectRefs(evidenceNamespaces, dynamicConfigRefOptions{Scope: scope, ServiceAccounts: evidence.ServiceAccounts, Deployments: deployments})...)
 	result.Refs = slices.DeleteFunc(result.Refs, func(ref bp.ConfigObjectRef) bool {
 		return !scope.allows(schema.GroupVersionResource{Resource: strings.ToLower(ref.Kind) + "s"}, ref.Namespace)

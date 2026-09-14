@@ -312,7 +312,7 @@ Unreadable cross-namespace consumers can prevent proving a Secret unused even
 when all local workloads are visible. ClusterIssuer credential namespaces are
 resolved from an observed cert-manager controller's explicit flag, including its
 literal or downward-API namespace environment value; an unresolved namespace is
-unknown. No controller default or external configuration file is assumed.
+unknown. Explicit flags take precedence over configuration files; no controller default or unread file value is assumed.
 
 These checks cover Radar's supported reference fields, not arbitrary controller
 behavior. Cache readiness records initial synchronization, not continuous watch
