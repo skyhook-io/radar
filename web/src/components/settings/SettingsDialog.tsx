@@ -699,6 +699,7 @@ export function SettingsDialog({
                 envError={configData?.argoCdEnvError}
                 cliSession={configData?.argoCdCliSession}
                 anonymous={argoSectionStatus?.connected && argoSectionStatus.anonymous}
+                active={section === 'argocd'}
                 statusReason={
                   argoSectionStatus?.configured && !argoSectionStatus.connected
                     ? argoSectionStatus.reason
@@ -2136,6 +2137,7 @@ function ArgoCDConfigField({
   cliSession,
   statusReason,
   anonymous,
+  active,
   onChangeUrl,
   onChangeInsecureTls,
   onApplied,
@@ -2148,6 +2150,7 @@ function ArgoCDConfigField({
   cliSession?: { server: string; user: string; insecure?: boolean }
   statusReason?: string
   anonymous?: boolean
+  active?: boolean
   onChangeUrl: (value: string) => void
   onChangeInsecureTls: (value: boolean) => void
   onApplied?: (v: { url: string; insecureTls: boolean; tokenSet: boolean }) => void
@@ -2163,6 +2166,7 @@ function ArgoCDConfigField({
       cliSession={cliSession}
       statusReason={statusReason}
       anonymous={anonymous}
+      active={active}
       onChangeUrl={onChangeUrl}
       onChangeInsecureTls={onChangeInsecureTls}
       onApplied={onApplied}
@@ -2257,6 +2261,7 @@ function ArgoCDEditableField({
   cliSession,
   statusReason,
   anonymous,
+  active,
   onChangeUrl,
   onChangeInsecureTls,
   onApplied,
@@ -2267,6 +2272,7 @@ function ArgoCDEditableField({
   cliSession?: { server: string; user: string; insecure?: boolean }
   statusReason?: string
   anonymous?: boolean
+  active?: boolean
   onChangeUrl: (value: string) => void
   onChangeInsecureTls: (value: boolean) => void
   onApplied?: (v: { url: string; insecureTls: boolean; tokenSet: boolean }) => void
@@ -2360,6 +2366,14 @@ function ArgoCDEditableField({
 
   const showConfiguredPlaceholder = effectiveTokenSet && !tokenTouched && !tokenCleared
   const connecting = state.status === 'connecting'
+  // Opening this section with nothing set up (typically from the GitOps
+  // page's "connect Radar to your Argo CD server") starts the user at the
+  // token — unless a CLI session offers a one-click connect, or reads
+  // already work anonymously.
+  const tokenInputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (active && !effectiveTokenSet && !cliSession && !anonymous) tokenInputRef.current?.focus()
+  }, [active, effectiveTokenSet, cliSession, anonymous])
 
   return (
     <div>
@@ -2373,7 +2387,8 @@ function ArgoCDEditableField({
       {anonymous && state.status !== 'connected' && (
         <p className="mb-3 flex items-center gap-1.5 text-xs text-theme-text-secondary">
           <Check className="w-3.5 h-3.5 shrink-0 text-green-600 dark:text-green-400/80" />
-          Your Argo CD server lets Radar read without a token, so it's already connected — nothing to add here.
+          Your Argo CD server lets Radar read without a token, so it's already connected. Add a token only if
+          anonymous access gets restricted, or a URL to point Radar at a specific server.
         </p>
       )}
 
@@ -2439,6 +2454,7 @@ function ArgoCDEditableField({
       </p>
       <div className="flex items-center gap-2">
         <input
+          ref={tokenInputRef}
           type="password"
           value={showConfiguredPlaceholder ? '' : token}
           onChange={(e) => { setToken(e.target.value); setTokenTouched(true); setTokenCleared(false); clearStatus() }}
