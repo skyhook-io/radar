@@ -2,7 +2,7 @@
 
 Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar provides dedicated detail views, topology edges, smart table columns, and AI-optimized summaries for seamless integration.
 
-### ConfigMap and Secret reflection (Reflector)
+## ConfigMap and Secret reflection (Reflector)
 
 [EmberStack Reflector](https://github.com/emberstack/kubernetes-reflector) copies
 core Secrets and ConfigMaps between namespaces using annotations. It needs no CRDs.
