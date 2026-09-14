@@ -2,6 +2,9 @@ package k8score
 
 import (
 	"context"
+	"fmt"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -280,6 +283,81 @@ func TestPlanNodeDrainListsPDBsOnlyWhereADecisionNeedsThem(t *testing.T) {
 		wantChecked := d.Name == "web-1"
 		if d.PDBChecked != wantChecked {
 			t.Fatalf("pdbChecked for %s = %v, want %v", d.Name, d.PDBChecked, wantChecked)
+		}
+	}
+}
+
+// Six PDB-blocked pods sleep in their 429 retry loops; with only five concurrency
+// slots, a pod with no budget at all must still get its eviction attempted promptly.
+// The free pod's reactor is gated on five distinct blocked pods having been attempted
+// first, so this test cannot pass by racing ahead of the blocked retry loops.
+func TestDrainNodeEvictsFreePodWhilePDBBlockedPodsRetry(t *testing.T) {
+	objs := []runtime.Object{&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-1"}}}
+	for i := 0; i < 6; i++ {
+		p := drainTestPod(fmt.Sprintf("blocked-%d", i))
+		objs = append(objs, &p)
+	}
+	free := drainTestPod("free")
+	objs = append(objs, &free)
+	client := fake.NewSimpleClientset(objs...)
+
+	// Reactors run under the fake clientset's lock, so the gate must never block:
+	// the free pod is refused with the same 429 until five distinct blocked pods
+	// have been attempted, then its next retry is allowed through.
+	var mu sync.Mutex
+	blockedSeen := map[string]bool{}
+	gateOpen := false
+	var freeEvictedAfter time.Duration
+	start := time.Now()
+	pdbRefused := apierrors.NewTooManyRequests("Cannot evict pod as it would violate the pod's disruption budget.", 0)
+
+	client.PrependReactor("create", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.GetSubresource() != "eviction" {
+			return false, nil, nil
+		}
+		ev, ok := action.(k8stesting.CreateAction).GetObject().(*policyv1.Eviction)
+		if !ok {
+			t.Errorf("eviction create carried unexpected object")
+			return true, nil, nil
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if ev.Name == "free" {
+			if !gateOpen {
+				return true, nil, pdbRefused
+			}
+			if freeEvictedAfter == 0 {
+				freeEvictedAfter = time.Since(start)
+			}
+			return true, nil, nil
+		}
+		blockedSeen[ev.Name] = true
+		if len(blockedSeen) >= 5 {
+			gateOpen = true
+		}
+		return true, nil, pdbRefused
+	})
+
+	const timeout = 3 * time.Second
+	res, err := DrainNode(context.Background(), client, "worker-1", DrainOptions{IgnoreDaemonSets: true, Timeout: timeout})
+	if err != nil {
+		t.Fatalf("DrainNode: %v", err)
+	}
+
+	if len(res.EvictedPods) != 1 || res.EvictedPods[0] != "shop/free" {
+		t.Fatalf("free pod must be evicted, got evicted=%v errors=%v", res.EvictedPods, res.Errors)
+	}
+	// Half the deadline separates "evicted while the blocked pods retried" from
+	// "evicted only after the deadline freed their slots".
+	if freeEvictedAfter <= 0 || freeEvictedAfter > timeout/2 {
+		t.Fatalf("free pod was evicted after %v; slots are being held across PDB backoff sleeps", freeEvictedAfter)
+	}
+	if len(res.Errors) != 6 {
+		t.Fatalf("all six blocked pods must report errors, got %v", res.Errors)
+	}
+	for _, e := range res.Errors {
+		if !strings.Contains(e, "timed out waiting for PDB to allow eviction") {
+			t.Fatalf("blocked pod error must name the PDB timeout, got %q", e)
 		}
 	}
 }

@@ -111,10 +111,8 @@ func DrainNode(ctx context.Context, client kubernetes.Interface, nodeName string
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
 
-			err := evictPod(drainCtx, client, pod, opts.GracePeriodSeconds)
+			err := evictPod(drainCtx, client, pod, opts.GracePeriodSeconds, sem)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -139,7 +137,11 @@ func hasLocalStorage(pod corev1.Pod) bool {
 }
 
 // evictPod evicts a single pod, retrying on PDB conflicts until the context deadline.
-func evictPod(ctx context.Context, client kubernetes.Interface, pod corev1.Pod, gracePeriod *int64) error {
+// The concurrency slot is held only around each Eviction call, never across the
+// backoff sleep: a handful of PDB-blocked pods sleeping in their retry loops would
+// otherwise occupy every slot until the shared deadline, and pods with no budget at
+// all would time out without a single eviction attempt.
+func evictPod(ctx context.Context, client kubernetes.Interface, pod corev1.Pod, gracePeriod *int64, sem chan struct{}) error {
 	eviction := &policyv1.Eviction{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pod.Name,
@@ -154,9 +156,30 @@ func evictPod(ctx context.Context, client kubernetes.Interface, pod corev1.Pod, 
 
 	backoff := 500 * time.Millisecond
 	maxBackoff := 5 * time.Second
+	attempted := false
+
+	deadlineErr := func() error {
+		if attempted {
+			return fmt.Errorf("timed out waiting for PDB to allow eviction: %w", ctx.Err())
+		}
+		return fmt.Errorf("drain deadline passed before this pod could be attempted: %w", ctx.Err())
+	}
 
 	for {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return deadlineErr()
+		}
+		// The select above can pick the slot even when cancellation is also ready.
+		if ctx.Err() != nil {
+			<-sem
+			return deadlineErr()
+		}
 		err := client.PolicyV1().Evictions(pod.Namespace).Evict(ctx, eviction)
+		<-sem
+		attempted = true
+
 		if err == nil {
 			return nil
 		}
