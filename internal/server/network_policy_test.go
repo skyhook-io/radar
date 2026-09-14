@@ -520,6 +520,17 @@ func TestEvaluateNetworkPolicies_CiliumPresenceCapsVerdict(t *testing.T) {
 			t.Fatalf("verdict = %q (%s)", ev.Verdict, ev.Reason)
 		}
 	})
+	t.Run("an unknown key does not hide a definite miss on another key", func(t *testing.T) {
+		seed(t, cnp("other-cluster-api", map[string]any{"endpointSelector": map[string]any{"matchLabels": map[string]any{"io.cilium.k8s.policy.cluster": "other", "app": "api"}}, "ingress": []any{}}, nil))
+		expect(t, admitted, verdictAdmitted, "")
+	})
+	t.Run("a later spec that selects wins over an earlier one left open", func(t *testing.T) {
+		seed(t, cnp("mixed-specs", nil, []any{
+			map[string]any{"endpointSelector": map[string]any{"matchLabels": map[string]any{"io.cilium.k8s.policy.cluster": "other", "app": "web"}}, "ingress": []any{}},
+			map[string]any{"endpointSelector": map[string]any{"matchLabels": map[string]any{"app": "web"}}, "ingress": []any{}},
+		}))
+		expect(t, admitted, verdictUndecidable, "mixed-specs")
+	})
 	t.Run("a nodeSelector-only policy selects no pod", func(t *testing.T) {
 		seed(t, cnp("nodes", map[string]any{"nodeSelector": map[string]any{"matchLabels": map[string]any{"role": "infra"}}, "ingress": []any{}}, nil))
 		expect(t, admitted, verdictAdmitted, "")

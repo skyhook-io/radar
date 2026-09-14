@@ -446,6 +446,7 @@ func ciliumGoverns(obj *unstructured.Unstructured, id ciliumIdentity, dir netpol
 			}
 		}
 	}
+	openWhy := ""
 	for _, spec := range specs {
 		selMap, ok, _ := unstructured.NestedMap(spec, "endpointSelector")
 		if !ok {
@@ -456,12 +457,16 @@ func ciliumGoverns(obj *unstructured.Unstructured, id ciliumIdentity, dir netpol
 			continue
 		}
 		matches, decided, why := ciliumSelectorMatches(selMap, id)
-		if !decided {
-			return false, false, why
-		}
-		if matches {
+		switch {
+		case decided && matches:
+			// One selecting spec is enough, whatever the others left open.
 			return true, true, ""
+		case !decided && openWhy == "":
+			openWhy = why
 		}
+	}
+	if openWhy != "" {
+		return false, false, openWhy
 	}
 	return false, true, ""
 }
@@ -478,11 +483,15 @@ func ciliumSpecCovers(spec map[string]any, dir netpol.Direction) bool {
 }
 
 // ciliumSelectorMatches evaluates an endpointSelector against the identity.
-// Cilium label keys carry a source prefix ("k8s:", "any:"); the keys Radar
+// Cilium label keys carry a source prefix ("k8s:", "any:"). Requirements are
+// ANDed, so the ones Radar can answer are checked first: a definite miss on
+// any of them means the policy does not select the pod, whatever the rest
+// say. Only when every answerable requirement matches does a key Radar
 // cannot reproduce — the cluster name, namespace labels when the Namespace
-// was not readable — make the selector undecidable rather than a non-match.
+// was not readable — make the selector undecidable.
 func ciliumSelectorMatches(selMap map[string]any, id ciliumIdentity) (matches, decided bool, why string) {
 	var sel metav1.LabelSelector
+	openWhy := ""
 	if ml, ok, _ := unstructured.NestedMap(selMap, "matchLabels"); ok {
 		sel.MatchLabels = map[string]string{}
 		for k, v := range ml {
@@ -492,7 +501,10 @@ func ciliumSelectorMatches(selMap map[string]any, id ciliumIdentity) (matches, d
 			}
 			key, ok, why := ciliumSelectorKey(k, id)
 			if !ok {
-				return false, false, why
+				if openWhy == "" {
+					openWhy = why
+				}
+				continue
 			}
 			sel.MatchLabels[key] = s
 		}
@@ -505,7 +517,10 @@ func ciliumSelectorMatches(selMap map[string]any, id ciliumIdentity) (matches, d
 			}
 			key, ok, why := ciliumSelectorKey(fmt.Sprint(e["key"]), id)
 			if !ok {
-				return false, false, why
+				if openWhy == "" {
+					openWhy = why
+				}
+				continue
 			}
 			req := metav1.LabelSelectorRequirement{Key: key, Operator: metav1.LabelSelectorOperator(fmt.Sprint(e["operator"]))}
 			if vals, ok := e["values"].([]any); ok {
@@ -520,7 +535,13 @@ func ciliumSelectorMatches(selMap map[string]any, id ciliumIdentity) (matches, d
 	if err != nil {
 		return false, false, "has a selector Radar could not parse"
 	}
-	return parsed.Matches(id.set), true, ""
+	if !parsed.Matches(id.set) {
+		return false, true, ""
+	}
+	if openWhy != "" {
+		return false, false, openWhy
+	}
+	return true, true, ""
 }
 
 // ciliumSelectorKey strips the label source from a selector key and says

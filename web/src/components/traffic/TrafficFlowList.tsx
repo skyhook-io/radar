@@ -470,11 +470,16 @@ function PolicyCorrelation({ flow }: { flow: TrafficFlow }) {
   // truth; the current-policy check below is a reading of the policies as
   // they are now, and is presented as a note under it rather than as a
   // second verdict.
+  //
+  // Only a named deny is the account of a drop. Hubble can also record an
+  // allow on a dropped flow — at another layer (L3 allowed, then dropped at
+  // L7) or at the other end — and that is not why the packet was dropped.
   const attribution = hubbleDenied.length > 0
     ? { text: `Blocked by ${hubbleDenied.map((p) => `${p.kind} ${policyRef(p)}`).join(', ')}`, tone: 'unhealthy' as StatusTone }
-    : hubbleAllowed.length > 0
-      ? { text: `Allowed by ${hubbleAllowed.map((p) => `${p.kind} ${policyRef(p)}`).join(', ')}`, tone: 'healthy' as StatusTone }
-      : null
+    : null
+  const alsoAllowed = hubbleAllowed.length > 0
+    ? `The plugin also recorded ${hubbleAllowed.map((p) => `${p.kind} ${policyRef(p)}`).join(', ')} allowing this flow at another layer or at the other end — not the reason for the drop.`
+    : ''
 
   if (!canQuery && !attribution) {
     return (
@@ -515,6 +520,9 @@ function PolicyCorrelation({ flow }: { flow: TrafficFlow }) {
             <span className="text-theme-text-tertiary"> · reported by the network plugin when the packet was dropped</span>
           </div>
         </div>
+      )}
+      {alsoAllowed && (
+        <div className={clsx('text-[10px] text-theme-text-tertiary', attribution && 'ml-4')}>{alsoAllowed}</div>
       )}
       {canQuery && isLoading && (
         <div className="text-[10px] text-theme-text-tertiary">Checking current NetworkPolicies…</div>
