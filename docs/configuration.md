@@ -296,6 +296,30 @@ When Radar starts with `--namespace-scope`, the picker controls the process-wide
 
 **Single namespace only.** `--namespace-scope` pins the cache to exactly one namespace; scoping to several namespaces at once is not supported yet. Passing more than one (e.g. `--namespace=a,b`) fails at startup with a clear error rather than silently caching nothing. When scoped, the namespace picker becomes single-select, and a switch re-points the whole cache to the new namespace rather than adding to it.
 
+## Audit evidence under partial access
+
+The unused ConfigMap/Secret check distinguishes observed use from evidence of no
+use. A visible workload or supported controller reference establishes use. An
+unused finding requires the relevant consumer inventories to be readable under
+Radar's audit scope and initially synced for that namespace. Unknown subjects
+contribute neither findings nor passing/evaluated counts. Scan-level
+`missingInputs` reports `configmap-references` or `secret-references` when this
+prevents an evaluation; zero findings alone do not establish a complete scan.
+
+The namespace picker selects audit subjects. For Reflector-annotated subjects,
+authorized visible consumers of remote mirrors can still establish source use.
+Unreadable cross-namespace consumers can prevent proving a Secret unused even
+when all local workloads are visible. ClusterIssuer credential namespaces are
+resolved from an observed cert-manager controller's explicit flag, including its
+literal or downward-API namespace environment value; an unresolved namespace is
+unknown. No controller default or external configuration file is assumed.
+
+These checks cover Radar's supported reference fields, not arbitrary controller
+behavior. Cache readiness records initial synchronization, not continuous watch
+freshness; the existing scan memo can lag evidence changes by up to five seconds.
+The per-resource audit endpoint remains a findings array and has no completeness
+metadata. Use the scan response or AI resource context when that distinction matters.
+
 ## Radar Cloud
 
 Radar is free and fully functional without an account. A Cloud button in the

@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -508,4 +509,78 @@ func testUnstructured(apiVersion, kind, ns, name string, obj map[string]any) *un
 	u.SetName(name)
 	u.SetCreationTimestamp(metav1.Now())
 	return u
+}
+
+func TestIssuerCredentialsUseIssuerScope(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		spec    map[string]any
+		secrets []string
+	}{
+		{"ca", map[string]any{"ca": map[string]any{"secretName": "signing-key"}}, []string{"signing-key"}},
+		{"vault", map[string]any{"vault": map[string]any{"caBundleSecretRef": map[string]any{"name": "vault-ca"}, "clientCertSecretRef": map[string]any{"name": "client-tls"}, "clientKeySecretRef": map[string]any{"name": "client-tls"}, "auth": map[string]any{"kubernetes": map[string]any{"secretRef": map[string]any{"name": "vault-token"}}}}}, []string{"vault-ca", "client-tls", "vault-token"}},
+		{"venafi", map[string]any{"venafi": map[string]any{"tpp": map[string]any{"credentialsRef": map[string]any{"name": "venafi-login"}, "caBundleSecretRef": map[string]any{"name": "venafi-ca"}}}}, []string{"venafi-login", "venafi-ca"}},
+		{"acme-eab", map[string]any{"acme": map[string]any{"privateKeySecretRef": map[string]any{"name": "account"}, "externalAccountBinding": map[string]any{"keySecretRef": map[string]any{"name": "external-account"}}}}, []string{"account", "external-account"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := testUnstructured("cert-manager.io/v1", "Issuer", "team", "issuer", map[string]any{"spec": tc.spec})
+			want := []bp.ConfigObjectRef{}
+			for _, name := range tc.secrets {
+				want = append(want, secret("team", name))
+			}
+			assertRefSet(t, certManagerIssuerConfigRefs(u), want)
+			u.SetKind("ClusterIssuer")
+			u.SetNamespace("")
+			for i := range want {
+				want[i].Namespace = "controller-secrets"
+			}
+			assertRefSet(t, certManagerIssuerConfigRefsForNamespaces(u, []string{"controller-secrets"}), want)
+			if got := certManagerIssuerConfigRefsForNamespaces(u, nil); len(got) != 0 {
+				t.Fatal("unknown scope emitted guessed refs")
+			}
+		})
+	}
+}
+
+func TestClusterIssuerNamespaceInferenceNeverGuesses(t *testing.T) {
+	controller := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "cert-manager", Namespace: "controllers", Labels: map[string]string{"app.kubernetes.io/name": "cert-manager"}}, Spec: appsv1.DeploymentSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "cert-manager", Args: []string{"--cluster-resource-namespace=custom-secrets"}}}}}}}
+	if got := certManagerClusterResourceNamespaces(nil); got != nil {
+		t.Fatalf("absent controller guessed namespace: %v", got)
+	}
+	unlabeled := controller.DeepCopy()
+	unlabeled.Labels = nil
+	if got := certManagerClusterResourceNamespaces([]*appsv1.Deployment{unlabeled}); got != nil {
+		t.Fatalf("unrecognized controller guessed namespace: %v", got)
+	}
+	noFlag := controller.DeepCopy()
+	noFlag.Spec.Template.Spec.Containers[0].Args = nil
+	if got := certManagerClusterResourceNamespaces([]*appsv1.Deployment{noFlag}); got != nil {
+		t.Fatalf("missing flag guessed namespace: %v", got)
+	}
+	if got := certManagerClusterResourceNamespaces([]*appsv1.Deployment{controller, noFlag}); got != nil {
+		t.Fatalf("one resolved controller hid another unresolved controller: %v", got)
+	}
+	fromEnv := controller.DeepCopy()
+	c := &fromEnv.Spec.Template.Spec.Containers[0]
+	c.Args = []string{"--cluster-resource-namespace=$(POD_NAMESPACE)"}
+	if got := certManagerClusterResourceNamespaces([]*appsv1.Deployment{fromEnv}); got != nil {
+		t.Fatalf("unresolved environment treated as namespace: %v", got)
+	}
+	c.Env = []corev1.EnvVar{{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"}}}}
+	if got := certManagerClusterResourceNamespaces([]*appsv1.Deployment{fromEnv}); !slices.Equal(got, []string{"controllers"}) {
+		t.Fatalf("downward API namespace=%v", got)
+	}
+	c.Env = []corev1.EnvVar{{Name: "POD_NAMESPACE", Value: "credential-store"}}
+	if got := certManagerClusterResourceNamespaces([]*appsv1.Deployment{fromEnv}); !slices.Equal(got, []string{"credential-store"}) {
+		t.Fatalf("literal namespace=%v", got)
+	}
+	c.Args = []string{"--cluster-resource-namespace=first", "--cluster-resource-namespace", "last"}
+	if got := certManagerClusterResourceNamespaces([]*appsv1.Deployment{fromEnv}); !slices.Equal(got, []string{"last"}) {
+		t.Fatalf("last flag did not win: %v", got)
+	}
+	c.Args = []string{"--cluster-resource-namespace=$(POD_NAMESPACE)"}
+	c.Env = append(c.Env, corev1.EnvVar{Name: "POD_NAMESPACE", ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{LocalObjectReference: corev1.LocalObjectReference{Name: "config"}, Key: "namespace"}}})
+	if got := certManagerClusterResourceNamespaces([]*appsv1.Deployment{fromEnv}); got != nil {
+		t.Fatalf("unknown override reused an earlier env value: %v", got)
+	}
 }

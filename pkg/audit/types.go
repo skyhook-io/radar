@@ -15,6 +15,7 @@ import (
 // Each field is optional — checks are skipped for nil/empty slices.
 // Callers populate this from their own cache or API client.
 type CheckInput struct {
+	ConfigReferenceEvidence  *ConfigReferenceEvidence
 	Pods                     []*corev1.Pod
 	Deployments              []*appsv1.Deployment
 	StatefulSets             []*appsv1.StatefulSet

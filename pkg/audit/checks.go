@@ -3,6 +3,7 @@ package audit
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	utilversion "k8s.io/apimachinery/pkg/util/version"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rolloutdiag"
 	"github.com/skyhook-io/radar/pkg/timeutil"
@@ -96,14 +98,8 @@ func RunChecks(input *CheckInput) *ScanResults {
 	}
 
 	// --- Efficiency checks are included in checkWorkloadPodSpecs ---
-	// nil ConfigMaps = RBAC denied, not "none exist" — the ConfigMap-subject
-	// checks must neither run nor count anything as evaluated.
-	// Orphan detection audits ConfigMaps AND Secrets — a nil side means that
-	// KIND is unlisted, not that the whole check is off. References come from
-	// the whole workload inventory (configReferencePodSpecs — pods AND
-	// deployments/statefulsets/daemonsets/jobs) plus Ingress TLS refs; missing
-	// reference inventory surfaces via missingInputs above, so the check runs
-	// on whatever is visible.
+	// Unknown consumer evidence must not turn an unreferenced visible subject
+	// into an orphan finding or a passing evaluation.
 	if input.ConfigMaps != nil || input.Secrets != nil {
 		findings = append(findings, checkOrphanConfigMapsSecrets(tr, input)...)
 	}
@@ -175,7 +171,8 @@ func RunChecks(input *CheckInput) *ScanResults {
 // each of its subjects exactly once and records exactly once per subject
 // that passed the check's own eligibility filters.
 type evalTracker struct {
-	counts map[string]map[string]int // checkID → namespace → subjects evaluated
+	missingInputs []string
+	counts        map[string]map[string]int // checkID → namespace → subjects evaluated
 }
 
 func newEvalTracker() *evalTracker {
@@ -989,30 +986,43 @@ func checkOrphanConfigMapsSecrets(tr *evalTracker, input *CheckInput) []Finding 
 		return nil
 	}
 
-	// Build set of referenced ConfigMap and Secret names (namespace/name)
-	referencedCMs := make(map[string]bool)
-	referencedSecrets := make(map[string]bool)
-	saByKey := indexServiceAccounts(input.ServiceAccounts)
-
-	for _, refSpec := range input.configReferencePodSpecs() {
-		collectPodSpecRefs(refSpec.namespace, refSpec.spec, saByKey, referencedCMs, referencedSecrets)
+	var refs []ConfigObjectRef
+	var objects []configrefs.Object
+	if input.ConfigReferenceEvidence != nil {
+		refs = input.ConfigReferenceEvidence.Refs
+		objects = input.ConfigReferenceEvidence.Objects
+	} else {
+		refs = CollectConfigObjectRefs(input)
 	}
-	for _, ref := range input.ConfigObjectRefs {
-		switch ref.Kind {
-		case "ConfigMap":
-			addRef(referencedCMs, ref.Namespace, ref.Name)
-		case "Secret":
-			addRef(referencedSecrets, ref.Namespace, ref.Name)
+	used := map[configrefs.Ref]bool{}
+	for _, ref := range refs {
+		used[configrefs.Ref{Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}] = true
+	}
+	reflections := configrefs.BuildReflections(objects)
+	reflections.PropagateUse(used)
+	eligible := func(kind, ns, name string) bool {
+		ref := configrefs.Ref{Kind: kind, Namespace: ns, Name: name}
+		if used[ref] {
+			tr.record("orphanConfigMapSecret", ns)
+			return false
 		}
-	}
-
-	// Ingress TLS secrets
-	for _, ing := range input.Ingresses {
-		for _, tls := range ing.Spec.TLS {
-			if tls.SecretName != "" {
-				referencedSecrets[ing.Namespace+"/"+tls.SecretName] = true
+		if reflections.Automatic[ref] {
+			return false
+		}
+		evidence := input.ConfigReferenceEvidence
+		complete := evidence != nil && slices.Contains(evidence.CompleteNamespaces[kind], ns)
+		if complete && (reflections.Sources[ref] || reflections.Unresolved[ref]) {
+			complete = evidence.ReflectionsComplete[kind]
+		}
+		if !complete {
+			missing := strings.ToLower(kind) + "-references"
+			if !slices.Contains(tr.missingInputs, missing) {
+				tr.missingInputs = append(tr.missingInputs, missing)
 			}
+			return false
 		}
+		tr.record("orphanConfigMapSecret", ns)
+		return true
 	}
 
 	var findings []Finding
@@ -1029,9 +1039,7 @@ func checkOrphanConfigMapsSecrets(tr *evalTracker, input *CheckInput) []Finding 
 		if hasControllerOwnerReference(cm.OwnerReferences) {
 			continue
 		}
-		// In scope — count as evaluated before the referenced (pass) check.
-		tr.record("orphanConfigMapSecret", cm.Namespace)
-		if referencedCMs[cm.Namespace+"/"+cm.Name] {
+		if !eligible("ConfigMap", cm.Namespace, cm.Name) {
 			continue
 		}
 		findings = append(findings, Finding{
@@ -1060,8 +1068,7 @@ func checkOrphanConfigMapsSecrets(tr *evalTracker, input *CheckInput) []Finding 
 		if hasControllerOwnerReference(sec.OwnerReferences) {
 			continue
 		}
-		tr.record("orphanConfigMapSecret", sec.Namespace)
-		if referencedSecrets[sec.Namespace+"/"+sec.Name] {
+		if !eligible("Secret", sec.Namespace, sec.Name) {
 			continue
 		}
 		findings = append(findings, Finding{
@@ -1635,7 +1642,7 @@ func buildResults(findings []Finding, tr *evalTracker, missingInputs []string) *
 		Checks:               checks,
 		CheckCounts:          checkCounts,
 		EvaluatedByNamespace: tr.counts,
-		MissingInputs:        missingInputs,
+		MissingInputs:        append(missingInputs, tr.missingInputs...),
 	}
 }
 
@@ -1941,4 +1948,41 @@ func findFalseCrossplaneCondition(u *unstructured.Unstructured) (crossplaneFalse
 		}
 	}
 	return crossplaneFalseCondition{}, false
+}
+
+func CollectConfigObjectRefs(input *CheckInput) []ConfigObjectRef {
+	referencedCMs := make(map[string]bool)
+	referencedSecrets := make(map[string]bool)
+	saByKey := indexServiceAccounts(input.ServiceAccounts)
+
+	for _, refSpec := range input.configReferencePodSpecs() {
+		collectPodSpecRefs(refSpec.namespace, refSpec.spec, saByKey, referencedCMs, referencedSecrets)
+	}
+	for _, ref := range input.ConfigObjectRefs {
+		switch ref.Kind {
+		case "ConfigMap":
+			addRef(referencedCMs, ref.Namespace, ref.Name)
+		case "Secret":
+			addRef(referencedSecrets, ref.Namespace, ref.Name)
+		}
+	}
+
+	for _, ing := range input.Ingresses {
+		for _, tls := range ing.Spec.TLS {
+			if tls.SecretName != "" {
+				referencedSecrets[ing.Namespace+"/"+tls.SecretName] = true
+			}
+		}
+	}
+
+	refs := make([]ConfigObjectRef, 0, len(referencedCMs)+len(referencedSecrets))
+	for kind, names := range map[string]map[string]bool{"ConfigMap": referencedCMs, "Secret": referencedSecrets} {
+		for key := range names {
+			ns, name, ok := strings.Cut(key, "/")
+			if ok {
+				refs = append(refs, ConfigObjectRef{Kind: kind, Namespace: ns, Name: name})
+			}
+		}
+	}
+	return refs
 }

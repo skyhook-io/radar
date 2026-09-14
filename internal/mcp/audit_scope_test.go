@@ -107,6 +107,11 @@ func TestAuditGlobalViewerRetainsNamespaceSecretGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestState)
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), []k8s.APIResource{{Version: "v1", Name: "pods", Kind: "Pod", Namespaced: true}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+
 	ctx := withTestUserPerms(t, "viewer", nil, nil)
 	perms := getPermCache().Get("viewer", nil)
 	perms.SetCanI("list", "", "secrets", "", false)

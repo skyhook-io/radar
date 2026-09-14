@@ -1310,7 +1310,7 @@ func TestOrphanConfigMapSecret(t *testing.T) {
 		},
 	}
 
-	results := RunChecks(input)
+	results := RunChecks(completeOrphanEvidence(input))
 	orphans := map[string]bool{}
 	messages := map[string]string{}
 	for _, f := range results.Findings {
@@ -1522,7 +1522,7 @@ func TestOrphanConfigMapSecretSkipsKnownPlatformArtifacts(t *testing.T) {
 		},
 	}
 
-	orphans := findingResourceKeys(RunChecks(input).Findings, "orphanConfigMapSecret")
+	orphans := findingResourceKeys(RunChecks(completeOrphanEvidence(input)).Findings, "orphanConfigMapSecret")
 	for _, key := range []string{
 		"ConfigMap/kube-system/aws-auth",
 		"ConfigMap/kube-system/amazon-vpc-cni",
@@ -1649,7 +1649,7 @@ func TestOrphanConfigMapSecretKnownPlatformArtifactNegativeCases(t *testing.T) {
 		},
 	}
 
-	orphans := findingResourceKeys(RunChecks(input).Findings, "orphanConfigMapSecret")
+	orphans := findingResourceKeys(RunChecks(completeOrphanEvidence(input)).Findings, "orphanConfigMapSecret")
 	for _, key := range []string{
 		"ConfigMap/custom-argocd/argocd-rbac-cm",
 		"ConfigMap/kyverno/kyverno-metrics",
@@ -1764,7 +1764,7 @@ func TestOrphanConfigMapSecretPrecision(t *testing.T) {
 		},
 	}
 
-	orphans := findingNames(RunChecks(input).Findings, "orphanConfigMapSecret")
+	orphans := findingNames(RunChecks(completeOrphanEvidence(input)).Findings, "orphanConfigMapSecret")
 	if !orphans["actual-orphan-config"] || !orphans["actual-orphan-secret"] {
 		t.Fatalf("expected only explicit orphans, got %+v", orphans)
 	}
@@ -1833,7 +1833,7 @@ func TestOrphanConfigMapSecretTerminalJobsDoNotSuppressFindings(t *testing.T) {
 		},
 	}
 
-	orphans := findingNames(RunChecks(input).Findings, "orphanConfigMapSecret")
+	orphans := findingNames(RunChecks(completeOrphanEvidence(input)).Findings, "orphanConfigMapSecret")
 	if !orphans["finished-job-config"] || !orphans["finished-job-secret"] {
 		t.Fatalf("terminal Job references should not suppress orphan findings, got %+v", orphans)
 	}
@@ -1878,7 +1878,7 @@ func TestOrphanConfigMapSecretServiceAccountImagePullSecrets(t *testing.T) {
 		},
 	}
 
-	orphans := findingNames(RunChecks(input).Findings, "orphanConfigMapSecret")
+	orphans := findingNames(RunChecks(completeOrphanEvidence(input)).Findings, "orphanConfigMapSecret")
 	for _, name := range []string{"default-pull-secret", "builder-pull-secret", "direct-pull-secret"} {
 		if orphans[name] {
 			t.Errorf("%s should be counted as used", name)
@@ -1920,7 +1920,7 @@ func TestOrphanConfigMapSecretEphemeralContainerRefs(t *testing.T) {
 		},
 	}
 
-	orphans := findingNames(RunChecks(input).Findings, "orphanConfigMapSecret")
+	orphans := findingNames(RunChecks(completeOrphanEvidence(input)).Findings, "orphanConfigMapSecret")
 	if orphans["debug-config"] || orphans["debug-secret"] {
 		t.Fatalf("ephemeral container refs should be counted as used, got %+v", orphans)
 	}
@@ -1944,7 +1944,7 @@ func TestOrphanConfigMapSecretAdditionalRefs(t *testing.T) {
 		},
 	}
 
-	orphans := findingNames(RunChecks(input).Findings, "orphanConfigMapSecret")
+	orphans := findingNames(RunChecks(completeOrphanEvidence(input)).Findings, "orphanConfigMapSecret")
 	if orphans["crd-config"] || orphans["crd-secret"] {
 		t.Fatalf("additional refs should suppress orphan findings, got %+v", orphans)
 	}
@@ -1993,7 +1993,7 @@ func TestOrphanConfigMapSecretCertManagerCertificateMetadata(t *testing.T) {
 		},
 	}
 
-	orphans := findingResourceKeys(RunChecks(input).Findings, "orphanConfigMapSecret")
+	orphans := findingResourceKeys(RunChecks(completeOrphanEvidence(input)).Findings, "orphanConfigMapSecret")
 	for _, key := range []string{
 		"Secret/app/api-tls-from-annotation",
 		"Secret/app/api-tls-from-label",

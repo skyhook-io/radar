@@ -147,9 +147,9 @@ func TestCheckCounts_MissingInputs(t *testing.T) {
 	input.DaemonSets = []*appsv1.DaemonSet{}
 	input.Jobs = []*batchv1.Job{}
 	input.CronJobs = []*batchv1.CronJob{}
-	results = RunChecks(input)
+	results = RunChecks(completeOrphanEvidence(input))
 	if len(results.MissingInputs) != 0 {
-		t.Errorf("MissingInputs = %v, want none when inputs are non-nil", results.MissingInputs)
+		t.Errorf("MissingInputs = %v, want none with complete inputs and reference evidence", results.MissingInputs)
 	}
 	if got := results.CheckCounts["missingPDB"]; got != (CheckCount{Evaluated: 1, Passed: 0}) {
 		t.Errorf("missingPDB counts = %+v, want {Evaluated:1 Passed:0}", got)

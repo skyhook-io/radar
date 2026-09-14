@@ -35,6 +35,12 @@ successful synchronization. Namespace filters apply. Secret nodes are hidden by
 default and require Secret list access when included. The REST resource-detail relationship response also
 identifies reflection sources and mirrors explicitly.
 
+**Unused resource checks:** observed consumption of a mirror also counts as use of
+its visible same-kind source, including declared chains. Automatic mirrors with
+visible sources are exempt when unused, but their existence alone does not prove
+source use. Without adequate consumer inventory, a source is unknown rather than
+unused; see [audit evidence under partial access](configuration.md#audit-evidence-under-partial-access).
+
 **Agent context (MCP and REST):** `get_resource` and the REST AI resource context expose an optional `resourceContext.reflection` block. It separates `declaredSource` from an authorized observed `source`, includes recorded copy metadata and the authorized source resource version, and lists up to 20 `visibleMirrors` with `truncated` when more authorized mirrors were observed. This lookup spans namespaces in the available cache independently of the resource-context graph. Unreadable endpoints and their versions are withheld; omitted-field reasons describe unavailable cache evidence or denied access. These observations do not prove complete distribution or synchronization health.
 
 **Partial visibility:** unavailable sources are not called missing, and visible mirror

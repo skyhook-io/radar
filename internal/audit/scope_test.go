@@ -13,7 +13,9 @@ import (
 	bp "github.com/skyhook-io/radar/pkg/audit"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -97,6 +99,10 @@ func TestRunScopeFiltersSubjectsWithoutChangingConsumerEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(k8s.ResetTestState)
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), []k8s.APIResource{{Version: "v1", Name: "pods", Kind: "Pod", Namespaced: true}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
 	cache := k8s.GetResourceCache()
 	full := RunFromCache(cache, nil, nil)
 	emptyView := RunFromCache(cache, []string{}, nil)

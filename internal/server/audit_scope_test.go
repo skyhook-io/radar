@@ -22,6 +22,11 @@ import (
 
 func TestAuditSecretAuthorizationAcrossSurfacesAndCachedScopes(t *testing.T) {
 	env := newAuthTestServer(t)
+	if err := k8s.InitTestDynamicResourceCache(dynamicfake.NewSimpleDynamicClient(runtime.NewScheme()), []k8s.APIResource{{Version: "v1", Name: "pods", Kind: "Pod", Namespaced: true}}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+
 	cache := k8s.GetResourceCache()
 	user := "audit-reader"
 	env.srv.permCache.Set(user, nil, &auth.UserPermissions{AllowedNamespaces: []string{"default", "kube-system"}})

@@ -2,6 +2,7 @@ package audit
 
 import (
 	"log"
+	"slices"
 	"strings"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -11,6 +12,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 type dynamicConfigRefHandler func(*unstructured.Unstructured) []bp.ConfigObjectRef
@@ -18,6 +20,7 @@ type dynamicConfigRefHandler func(*unstructured.Unstructured) []bp.ConfigObjectR
 const certManagerDefaultClusterResourceNamespace = "cert-manager"
 
 type dynamicConfigRefOptions struct {
+	Scope           *ReadScope
 	ServiceAccounts []*corev1.ServiceAccount
 	Deployments     []*appsv1.Deployment
 }
@@ -73,7 +76,7 @@ func listDynamicConfigObjectRefs(namespaces []string, opts dynamicConfigRefOptio
 		}
 		handlerCanCrossNamespace := dynamicConfigRefHandlerCanCrossNamespace(gvr)
 		for _, u := range items {
-			if u == nil {
+			if u == nil || !opts.Scope.allows(gvr, u.GetNamespace()) || !cache.IsNamespaceSynced(gvr, u.GetNamespace()) {
 				continue
 			}
 			if len(nsSet) > 0 && !handlerCanCrossNamespace && u.GetNamespace() != "" && !nsSet[u.GetNamespace()] {
@@ -81,7 +84,7 @@ func listDynamicConfigObjectRefs(namespaces []string, opts dynamicConfigRefOptio
 			}
 			itemRefs := handler(u)
 			if gvr.Group == "cert-manager.io" && gvr.Resource == "clusterissuers" {
-				itemRefs = certManagerClusterIssuerConfigRefsForNamespaces(u, ctx.certManagerClusterResourceNSNames)
+				itemRefs = certManagerIssuerConfigRefsForNamespaces(u, ctx.certManagerClusterResourceNSNames)
 			}
 			itemRefs = append(itemRefs, dynamicConfigRefExtraRefs(gvr, u, ctx)...)
 			for _, ref := range itemRefs {
@@ -115,121 +118,62 @@ func serviceAccountImagePullSecrets(sas []*corev1.ServiceAccount) map[string][]s
 	return out
 }
 
+type configRefDependency struct {
+	extract        dynamicConfigRefHandler
+	configMaps     bool
+	crossNamespace bool
+}
+
+var configRefDependencies = map[schema.GroupResource]configRefDependency{
+	{Group: "gateway.networking.k8s.io", Resource: "gateways"}:                {gatewayConfigRefs, false, true},
+	{Group: "traefik.io", Resource: "ingressroutes"}:                          {traefikRouteConfigRefs, false, false},
+	{Group: "traefik.io", Resource: "ingressroutetcps"}:                       {traefikRouteConfigRefs, false, false},
+	{Group: "traefik.containo.us", Resource: "ingressroutes"}:                 {traefikRouteConfigRefs, false, false},
+	{Group: "traefik.containo.us", Resource: "ingressroutetcps"}:              {traefikRouteConfigRefs, false, false},
+	{Group: "traefik.io", Resource: "middlewares"}:                            {traefikMiddlewareConfigRefs, false, false},
+	{Group: "traefik.containo.us", Resource: "middlewares"}:                   {traefikMiddlewareConfigRefs, false, false},
+	{Group: "traefik.io", Resource: "serverstransports"}:                      {traefikTransportConfigRefs, false, false},
+	{Group: "traefik.io", Resource: "serverstransporttcps"}:                   {traefikTransportConfigRefs, false, false},
+	{Group: "traefik.containo.us", Resource: "serverstransports"}:             {traefikTransportConfigRefs, false, false},
+	{Group: "traefik.containo.us", Resource: "serverstransporttcps"}:          {traefikTransportConfigRefs, false, false},
+	{Group: "traefik.io", Resource: "tlsoptions"}:                             {traefikTLSOptionConfigRefs, false, false},
+	{Group: "traefik.containo.us", Resource: "tlsoptions"}:                    {traefikTLSOptionConfigRefs, false, false},
+	{Group: "traefik.io", Resource: "tlsstores"}:                              {traefikTLSStoreConfigRefs, false, false},
+	{Group: "traefik.containo.us", Resource: "tlsstores"}:                     {traefikTLSStoreConfigRefs, false, false},
+	{Group: "projectcontour.io", Resource: "httpproxies"}:                     {contourHTTPProxyConfigRefs, false, false},
+	{Group: "networking.istio.io", Resource: "gateways"}:                      {istioGatewayConfigRefs, false, false},
+	{Group: "cert-manager.io", Resource: "certificates"}:                      {certManagerCertificateConfigRefs, false, false},
+	{Group: "cert-manager.io", Resource: "issuers"}:                           {certManagerIssuerConfigRefs, false, false},
+	{Group: "cert-manager.io", Resource: "clusterissuers"}:                    {certManagerClusterIssuerConfigRefs, false, false},
+	{Group: "source.toolkit.fluxcd.io", Resource: "gitrepositories"}:          {fluxGitRepositoryConfigRefs, false, false},
+	{Group: "source.toolkit.fluxcd.io", Resource: "ocirepositories"}:          {fluxOCIRepositoryConfigRefs, false, false},
+	{Group: "source.toolkit.fluxcd.io", Resource: "helmrepositories"}:         {fluxHelmRepositoryConfigRefs, false, false},
+	{Group: "kustomize.toolkit.fluxcd.io", Resource: "kustomizations"}:        {fluxKustomizationConfigRefs, true, false},
+	{Group: "helm.toolkit.fluxcd.io", Resource: "helmreleases"}:               {fluxHelmReleaseConfigRefs, true, false},
+	{Group: "external-secrets.io", Resource: "externalsecrets"}:               {externalSecretConfigRefs, true, false},
+	{Group: "keda.sh", Resource: "triggerauthentications"}:                    {kedaTriggerAuthConfigRefs, true, false},
+	{Group: "monitoring.coreos.com", Resource: "servicemonitors"}:             {prometheusServiceMonitorConfigRefs, true, false},
+	{Group: "monitoring.coreos.com", Resource: "podmonitors"}:                 {prometheusPodMonitorConfigRefs, true, false},
+	{Group: "monitoring.coreos.com", Resource: "alertmanagers"}:               {alertmanagerConfigRefs, true, false},
+	{Group: "kubernetes.crossplane.io", Resource: "providerconfigs"}:          {crossplaneProviderConfigRefs, false, true},
+	{Group: "helm.crossplane.io", Resource: "providerconfigs"}:                {crossplaneProviderConfigRefs, false, true},
+	{Group: "helm.crossplane.io", Resource: "releases"}:                       {crossplaneHelmReleaseConfigRefs, true, true},
+	{Group: "argoproj.io", Resource: "rollouts"}:                              {rolloutConfigRefs, true, false},
+	{Group: "serving.knative.dev", Resource: "services"}:                      {knativeTemplateConfigRefs, true, false},
+	{Group: "serving.knative.dev", Resource: "configurations"}:                {knativeTemplateConfigRefs, true, false},
+	{Group: "serving.knative.dev", Resource: "revisions"}:                     {knativeRevisionConfigRefs, true, false},
+	{Group: "serving.knative.dev", Resource: "domainmappings"}:                {knativeDomainMappingConfigRefs, false, false},
+	{Group: "sources.knative.dev", Resource: "containersources"}:              {knativeContainerSourceConfigRefs, true, false},
+	{Group: "postgresql.cnpg.io", Resource: "clusters"}:                       {cnpgClusterConfigRefs, true, false},
+	{Group: "postgresql.cnpg.io", Resource: "poolers"}:                        {cnpgPoolerConfigRefs, false, false},
+	{Group: "bootstrap.cluster.x-k8s.io", Resource: "kubeadmconfigs"}:         {kubeadmConfigRefs, false, false},
+	{Group: "bootstrap.cluster.x-k8s.io", Resource: "kubeadmconfigtemplates"}: {kubeadmConfigTemplateRefs, false, false},
+	{Group: "velero.io", Resource: "backupstoragelocations"}:                  {veleroLocationConfigRefs, false, false},
+	{Group: "velero.io", Resource: "volumesnapshotlocations"}:                 {veleroLocationConfigRefs, false, false},
+}
+
 func dynamicConfigRefHandlerFor(gvr schema.GroupVersionResource) dynamicConfigRefHandler {
-	switch gvr.Group {
-	case "gateway.networking.k8s.io":
-		if gvr.Resource == "gateways" {
-			return gatewayConfigRefs
-		}
-	case "traefik.io", "traefik.containo.us":
-		switch gvr.Resource {
-		case "ingressroutes", "ingressroutetcps":
-			return traefikRouteConfigRefs
-		case "middlewares":
-			return traefikMiddlewareConfigRefs
-		case "serverstransports", "serverstransporttcps":
-			return traefikTransportConfigRefs
-		case "tlsoptions":
-			return traefikTLSOptionConfigRefs
-		case "tlsstores":
-			return traefikTLSStoreConfigRefs
-		}
-	case "projectcontour.io":
-		if gvr.Resource == "httpproxies" {
-			return contourHTTPProxyConfigRefs
-		}
-	case "networking.istio.io":
-		if gvr.Resource == "gateways" {
-			return istioGatewayConfigRefs
-		}
-	case "cert-manager.io":
-		switch gvr.Resource {
-		case "certificates":
-			return certManagerCertificateConfigRefs
-		case "issuers":
-			return certManagerIssuerConfigRefs
-		case "clusterissuers":
-			return certManagerClusterIssuerConfigRefs
-		}
-	case "source.toolkit.fluxcd.io":
-		switch gvr.Resource {
-		case "gitrepositories":
-			return fluxGitRepositoryConfigRefs
-		case "ocirepositories":
-			return fluxOCIRepositoryConfigRefs
-		case "helmrepositories":
-			return fluxHelmRepositoryConfigRefs
-		}
-	case "kustomize.toolkit.fluxcd.io":
-		if gvr.Resource == "kustomizations" {
-			return fluxKustomizationConfigRefs
-		}
-	case "helm.toolkit.fluxcd.io":
-		if gvr.Resource == "helmreleases" {
-			return fluxHelmReleaseConfigRefs
-		}
-	case "external-secrets.io":
-		if gvr.Resource == "externalsecrets" {
-			return externalSecretConfigRefs
-		}
-	case "keda.sh":
-		if gvr.Resource == "triggerauthentications" {
-			return kedaTriggerAuthConfigRefs
-		}
-	case "monitoring.coreos.com":
-		switch gvr.Resource {
-		case "servicemonitors":
-			return prometheusServiceMonitorConfigRefs
-		case "podmonitors":
-			return prometheusPodMonitorConfigRefs
-		case "alertmanagers":
-			return alertmanagerConfigRefs
-		}
-	case "kubernetes.crossplane.io", "helm.crossplane.io":
-		switch gvr.Resource {
-		case "providerconfigs":
-			return crossplaneProviderConfigRefs
-		case "releases":
-			return crossplaneHelmReleaseConfigRefs
-		}
-	case "argoproj.io":
-		if gvr.Resource == "rollouts" {
-			return rolloutConfigRefs
-		}
-	case "serving.knative.dev":
-		switch gvr.Resource {
-		case "services", "configurations":
-			return knativeTemplateConfigRefs
-		case "revisions":
-			return knativeRevisionConfigRefs
-		case "domainmappings":
-			return knativeDomainMappingConfigRefs
-		}
-	case "sources.knative.dev":
-		if gvr.Resource == "containersources" {
-			return knativeContainerSourceConfigRefs
-		}
-	case "postgresql.cnpg.io":
-		switch gvr.Resource {
-		case "clusters":
-			return cnpgClusterConfigRefs
-		case "poolers":
-			return cnpgPoolerConfigRefs
-		}
-	case "bootstrap.cluster.x-k8s.io":
-		switch gvr.Resource {
-		case "kubeadmconfigs":
-			return kubeadmConfigRefs
-		case "kubeadmconfigtemplates":
-			return kubeadmConfigTemplateRefs
-		}
-	case "velero.io":
-		switch gvr.Resource {
-		case "backupstoragelocations", "volumesnapshotlocations":
-			return veleroLocationConfigRefs
-		}
-	}
-	return nil
+	return configRefDependencies[gvr.GroupResource()].extract
 }
 
 func gatewayConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
@@ -328,22 +272,35 @@ func certManagerCertificateConfigRefs(u *unstructured.Unstructured) []bp.ConfigO
 }
 
 func certManagerIssuerConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
-	var refs []bp.ConfigObjectRef
-	ns := u.GetNamespace()
-	addSecret(&refs, ns, stringAt(u.Object, "spec", "acme", "privateKeySecretRef", "name"))
-	addCertManagerACMESolverRefs(&refs, ns, u.Object)
-	return refs
+	return certManagerIssuerConfigRefsForNamespaces(u, []string{u.GetNamespace()})
 }
 
 func certManagerClusterIssuerConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
-	return certManagerClusterIssuerConfigRefsForNamespaces(u, []string{certManagerDefaultClusterResourceNamespace})
+	return certManagerIssuerConfigRefsForNamespaces(u, []string{certManagerDefaultClusterResourceNamespace})
 }
 
-func certManagerClusterIssuerConfigRefsForNamespaces(u *unstructured.Unstructured, namespaces []string) []bp.ConfigObjectRef {
+func certManagerIssuerConfigRefsForNamespaces(u *unstructured.Unstructured, namespaces []string) []bp.ConfigObjectRef {
 	var refs []bp.ConfigObjectRef
 	for _, ns := range namespaces {
 		addSecret(&refs, ns, stringAt(u.Object, "spec", "acme", "privateKeySecretRef", "name"))
 		addCertManagerACMESolverRefs(&refs, ns, u.Object)
+		for _, path := range [][]string{
+			{"spec", "acme", "externalAccountBinding", "keySecretRef", "name"},
+			{"spec", "ca", "secretName"},
+			{"spec", "vault", "caBundleSecretRef", "name"},
+			{"spec", "vault", "clientCertSecretRef", "name"},
+			{"spec", "vault", "clientKeySecretRef", "name"},
+			{"spec", "vault", "auth", "tokenSecretRef", "name"},
+			{"spec", "vault", "auth", "appRole", "secretRef", "name"},
+			{"spec", "vault", "auth", "kubernetes", "secretRef", "name"},
+			{"spec", "vault", "auth", "clientCertificate", "secretName"},
+			{"spec", "venafi", "tpp", "credentialsRef", "name"},
+			{"spec", "venafi", "tpp", "caBundleSecretRef", "name"},
+			{"spec", "venafi", "cloud", "apiTokenSecretRef", "name"},
+			{"spec", "venafi", "ngts", "credentialsRef", "name"},
+		} {
+			addSecret(&refs, ns, stringAt(u.Object, path...))
+		}
 	}
 	return refs
 }
@@ -762,20 +719,40 @@ func certManagerClusterResourceNamespaces(deployments []*appsv1.Deployment) []st
 		if !isCertManagerDeployment(deploy) {
 			continue
 		}
-		ns := deploy.Namespace
+		var ns string
 		for _, c := range deploy.Spec.Template.Spec.Containers {
-			if c.Name != "cert-manager" && len(deploy.Spec.Template.Spec.Containers) > 1 {
+			args := slices.Concat(c.Command, c.Args)
+			for _, arg := range args {
+				if arg == "--config" || strings.HasPrefix(arg, "--config=") {
+					return nil
+				}
+			}
+			argNS := clusterResourceNamespaceArg(args)
+			if argNS == "" {
 				continue
 			}
-			if argNS := clusterResourceNamespaceArg(append(c.Command, c.Args...)); argNS != "" {
-				ns = argNS
-				break
+			ns = argNS
+			if strings.HasPrefix(ns, "$(") && strings.HasSuffix(ns, ")") {
+				name := ns[2 : len(ns)-1]
+				ns = ""
+				for _, env := range c.Env {
+					if env.Name != name {
+						continue
+					}
+					ns = ""
+					if env.ValueFrom == nil {
+						ns = env.Value
+					} else if env.ValueFrom.FieldRef != nil && env.ValueFrom.FieldRef.FieldPath == "metadata.namespace" {
+						ns = deploy.Namespace
+					}
+				}
 			}
+			break
+		}
+		if ns == "" || len(validation.IsDNS1123Label(ns)) != 0 {
+			return nil
 		}
 		add(ns)
-	}
-	if len(namespaces) == 0 {
-		add(certManagerDefaultClusterResourceNamespace)
 	}
 	return namespaces
 }
@@ -788,15 +765,16 @@ func isCertManagerDeployment(deploy *appsv1.Deployment) bool {
 }
 
 func clusterResourceNamespaceArg(args []string) string {
+	var namespace string
 	for i, arg := range args {
 		if strings.HasPrefix(arg, "--cluster-resource-namespace=") {
-			return strings.TrimSpace(strings.TrimPrefix(arg, "--cluster-resource-namespace="))
+			namespace = strings.TrimSpace(strings.TrimPrefix(arg, "--cluster-resource-namespace="))
 		}
 		if arg == "--cluster-resource-namespace" && i+1 < len(args) {
-			return strings.TrimSpace(args[i+1])
+			namespace = strings.TrimSpace(args[i+1])
 		}
 	}
-	return ""
+	return namespace
 }
 
 func addExplicitConfigMap(refs *[]bp.ConfigObjectRef, obj map[string]any, path ...string) {
