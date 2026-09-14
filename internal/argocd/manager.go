@@ -6,6 +6,8 @@ package argocd
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log"
@@ -1207,12 +1209,29 @@ func (m *Manager) verifyAuth(ctx context.Context, url string, snap probeSnapshot
 		if errors.Is(err, argoapi.ErrUnauthorized) {
 			return fmt.Errorf("%w: %v", ErrTokenInvalid, err)
 		}
+		// The tokenless probe skips TLS verification, so a certificate
+		// problem first surfaces here, where the token would be sent; say
+		// what to do about it rather than leaving a bare x509 error.
+		if isTLSError(err) {
+			return fmt.Errorf("%w: %v (argocd-server serves a certificate Radar can't verify; set argoCdInsecureTls to trust it)", ErrUnreachable, err)
+		}
 		return fmt.Errorf("%w: %v", ErrUnreachable, err)
 	}
 	if !info.LoggedIn {
 		return fmt.Errorf("%w: session/userinfo reports loggedIn=false", ErrTokenInvalid)
 	}
 	return nil
+}
+
+func isTLSError(err error) bool {
+	var certErr x509.UnknownAuthorityError
+	var hostErr x509.HostnameError
+	var certInvalid x509.CertificateInvalidError
+	if errors.As(err, &certErr) || errors.As(err, &hostErr) || errors.As(err, &certInvalid) {
+		return true
+	}
+	var tlsErr *tls.CertificateVerificationError
+	return errors.As(err, &tlsErr)
 }
 
 // probeEndpoint checks that an Argo CD API server answers at url. A 401/403
@@ -1233,11 +1252,17 @@ func (m *Manager) probeEndpoint(ctx context.Context, url string, snap probeSnaps
 	return err
 }
 
+// newClient builds a client for url. A client that carries no token has
+// nothing on the wire to protect, so it skips TLS verification regardless of
+// the setting: the default in-cluster argocd-server serves a self-signed
+// certificate, and without this the reachability probe and the anonymous
+// read would fail there for every install. The setting still governs every
+// client that sends the token.
 func newClient(url, token string, insecureTLS bool) *argoapi.Client {
 	return argoapi.New(argoapi.Options{
 		BaseURL:               url,
 		Token:                 token,
-		InsecureSkipTLSVerify: insecureTLS,
+		InsecureSkipTLSVerify: insecureTLS || token == "",
 	})
 }
 

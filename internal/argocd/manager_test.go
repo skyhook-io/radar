@@ -889,6 +889,26 @@ func TestApplicationHealthCached_PlainGetThenTreeFallbackAndNegativeCache(t *tes
 	}
 }
 
+// TestTokenlessClientSkipsTLSVerification: a client that sends no token has
+// nothing to protect, so it reaches a self-signed argocd-server (the default
+// in-cluster install) without the insecure setting; a client that carries
+// the token still honours the setting.
+func TestTokenlessClientSkipsTLSVerification(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"Version":"v3.5.2"}`))
+	}))
+	defer srv.Close()
+	if _, err := newClient(srv.URL, "", false).Version(context.Background()); err != nil {
+		t.Fatalf("tokenless client must skip TLS verification, got %v", err)
+	}
+	if _, err := newClient(srv.URL, "tok", false).Version(context.Background()); err == nil || !isTLSError(err) {
+		t.Fatalf("token-bearing client must verify TLS, got %v", err)
+	}
+	if _, err := newClient(srv.URL, "tok", true).Version(context.Background()); err != nil {
+		t.Fatalf("insecure setting must apply to the token-bearing client, got %v", err)
+	}
+}
+
 // TestApplicationHealthCached_UnconfiguredDiscoveryIsThrottled: with neither
 // URL nor token the read path runs discovery itself; when that fails (here:
 // no Kubernetes client) the next attempts within probeRetryInterval return
