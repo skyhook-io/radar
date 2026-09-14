@@ -521,10 +521,10 @@ func TestScanHPAAvailabilityFollowsInformerCoverage(t *testing.T) {
 	}
 }
 
-// With no ResourceScopes the cache is cluster-wide by default — the ordinary
-// full-access case — and must behave exactly as it did before coverage was
-// consulted.
-func TestScanHPAAvailabilityUnchangedWithFullAccess(t *testing.T) {
+// A cache with no scope restrictions watches every namespace, so there is no
+// namespace whose HPAs went unread: every workload's empty result is a real
+// answer, and the evidence counts for all of them.
+func TestScanHPAAvailabilityWithFullAccess(t *testing.T) {
 	cache := scopeTestCache(t, map[string]bool{k8score.HorizontalPodAutoscalers: true})
 	workloads := map[string]*scanWorkload{
 		"a": {kind: "Deployment", namespace: "team-a", name: "one"},
