@@ -114,6 +114,14 @@ func TestAuditOptionsHonorsNamespaceSecretGrantsForGlobalViewer(t *testing.T) {
 			t.Fatalf("partial Secret grant coverage for %v: %v", tc.namespaces, results.MissingInputs)
 		}
 	}
+	for _, ns := range k8s.AllNamespaceNames() {
+		perms.SetCanI("list", "", "secrets", ns, true)
+	}
+	allGranted := getCachedResults(k8s.GetResourceCache(), nil, env.srv.auditOptions(r))
+	if slices.Contains(allGranted.MissingInputs, "secrets") {
+		t.Fatal("namespace-local grants covering the complete namespace inventory were reported incomplete")
+	}
+
 }
 
 func TestAuditCacheKeySeparatesAuthorizationAndResourceCache(t *testing.T) {
