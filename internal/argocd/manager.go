@@ -80,6 +80,14 @@ type cacheEntry struct {
 // refuses anonymous reads must not be asked again on every tick.
 const applicationHealthTTL = 15 * time.Second
 
+type anonymousReadState uint8
+
+const (
+	anonymousReadUnknown anonymousReadState = iota
+	anonymousReadAllowed
+	anonymousReadRefused
+)
+
 type appHealthEntry struct {
 	health  *argoapi.ApplicationHealth
 	err     error
@@ -128,15 +136,23 @@ type Manager struct {
 	baseURL string
 	client  *argoapi.Client
 	forward *activeForward
+	// clientAnonymous marks a client built without a token. It counts as a
+	// connection only once a read has actually succeeded through it: a
+	// reachable argocd-server that answers 401 is not an integration, and
+	// must not light the diff or show as connected in Settings.
+	clientAnonymous bool
+	anonymousRead   anonymousReadState
 
 	cache map[string]cacheEntry
 	// appHealthCache memoizes ApplicationHealthCached per app, hits and
 	// misses alike.
 	appHealthCache map[string]appHealthEntry
-	// readRetryAfter throttles unconfigured (anonymous) discovery attempts:
-	// with neither URL nor token set, nothing else ever probes, so the read
-	// path must not turn every detail-page poll into a Service list.
+	// readRetryAfter throttles the health read while there is no client —
+	// discovery for the unconfigured (anonymous) case, the connect for a
+	// configured server that failed — so a detail-page poll doesn't rerun a
+	// Service list or a probe timeout. readRetryErr is the failure it repeats.
 	readRetryAfter time.Time
+	readRetryErr   error
 
 	// revMetaCache holds Git commit metadata keyed by
 	// (appNamespace, app, sourceIndex, revision). Cleared alongside `cache` on
@@ -387,6 +403,13 @@ func ValidateServerURL(raw string) error { return validateEnvArgoURL(raw) }
 
 // IsConfigured reports whether the default manager has connection settings.
 func IsConfigured() bool { return defaultManager.IsConfigured() }
+
+// AnonymousReadAllowed reports whether the default manager reads argocd-server
+// without a token and the install answers.
+func AnonymousReadAllowed() bool { return defaultManager.AnonymousReadAllowed() }
+
+// TokenSet reports whether the default manager has a token configured.
+func TokenSet() bool { return defaultManager.TokenSet() }
 
 // TokenContext returns the readable context recorded with the current token.
 func TokenContext() string { return defaultManager.TokenContext() }
@@ -654,13 +677,18 @@ func (m *Manager) dropConnectionLocked() *activeForward {
 	m.nextProbe = time.Time{}
 	m.repoRetryAfter = time.Time{}
 	m.readRetryAfter = time.Time{}
+	m.readRetryErr = nil
+	m.clientAnonymous = false
+	m.anonymousRead = anonymousReadUnknown
 	fwd := m.forward
 	m.forward = nil
 	return fwd
 }
 
 // Get returns the connected client without any network I/O. Returns
-// (nil, false) when unconfigured or not yet (successfully) probed.
+// (nil, false) when unconfigured or not yet (successfully) probed, and for
+// a tokenless client until argocd-server has answered a read through it —
+// reachability alone is not an integration the rest of the product can use.
 func (m *Manager) Get() (*argoapi.Client, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -672,7 +700,27 @@ func (m *Manager) Get() (*argoapi.Client, bool) {
 		m.maybeProbeInBackgroundLocked()
 		return nil, false
 	}
+	if m.clientAnonymous && m.anonymousRead != anonymousReadAllowed {
+		return nil, false
+	}
 	return m.client, true
+}
+
+// AnonymousReadAllowed reports that the live connection carries no token and
+// argocd-server has answered a read through it anyway — the install serves
+// reads to everyone, so there is nothing for the user to configure.
+func (m *Manager) AnonymousReadAllowed() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.client != nil && m.clientAnonymous && m.anonymousRead == anonymousReadAllowed
+}
+
+// TokenSet reports whether a token is configured, without exposing it.
+func (m *Manager) TokenSet() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureSeededLocked()
+	return m.token != ""
 }
 
 // maybeProbeInBackgroundLocked starts a background Probe when the manager has
@@ -795,8 +843,10 @@ func (m *Manager) Probe(ctx context.Context) error {
 		m.baseURL = url
 		m.cache = nil
 		m.revMetaCache = nil
+		m.anonymousRead = anonymousReadUnknown
 	}
 	m.client = newClient(url, snap.token, snap.insecureTLS)
+	m.clientAnonymous = snap.token == ""
 	return nil
 }
 
@@ -869,17 +919,25 @@ var ErrTokenBindingUpgrade = fmt.Errorf("argocd: re-confirm this token for this 
 // synchronously and re-fetches, surfacing "connection was reset" if a config
 // change raced the probe.
 func (m *Manager) connectedClient(ctx context.Context) (*argoapi.Client, error) {
-	if client, ok := m.Get(); ok {
+	if client := m.liveClient(); client != nil {
 		return client, nil
 	}
 	if err := m.Probe(ctx); err != nil {
 		return nil, err
 	}
-	client, ok := m.Get()
-	if !ok {
+	client := m.liveClient()
+	if client == nil {
 		return nil, fmt.Errorf("%w: connection was reset", ErrUnreachable)
 	}
 	return client, nil
+}
+
+// liveClient is whatever client the manager holds, tokenless or not — the
+// view for reads that may run anonymously. Get is the public, stricter one.
+func (m *Manager) liveClient() *argoapi.Client {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.client
 }
 
 // ManagedResourcesCached returns the app's managed-resource diffs, serving
@@ -959,10 +1017,10 @@ func (m *Manager) ApplicationHealthCached(ctx context.Context, q argoapi.Applica
 		return e.health, e.err
 	}
 	m.ensureSeededLocked()
-	unconfigured := m.manualURL == "" && m.token == ""
-	if unconfigured && m.client == nil && time.Now().Before(m.readRetryAfter) {
+	if m.client == nil && time.Now().Before(m.readRetryAfter) {
+		err := fmt.Errorf("%w (retry throttled)", m.readRetryErr)
 		m.mu.Unlock()
-		return nil, fmt.Errorf("%w: anonymous read retry throttled", ErrUnreachable)
+		return nil, err
 	}
 	m.mu.Unlock()
 
@@ -983,8 +1041,20 @@ func (m *Manager) ApplicationHealthCached(ctx context.Context, q argoapi.Applica
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return nil, err
 	}
-	if err != nil && unconfigured && m.client == nil {
+	if err != nil && m.client == nil {
 		m.readRetryAfter = time.Now().Add(probeRetryInterval)
+		m.readRetryErr = err
+	}
+	// The read is the only thing that proves whether the install serves
+	// anonymous reads; a 401/403 settles it the other way. Other failures
+	// leave the question open.
+	if m.client != nil && m.clientAnonymous {
+		switch {
+		case err == nil:
+			m.anonymousRead = anonymousReadAllowed
+		case errors.Is(err, argoapi.ErrUnauthorized):
+			m.anonymousRead = anonymousReadRefused
+		}
 	}
 	if m.appHealthCache == nil {
 		m.appHealthCache = make(map[string]appHealthEntry)

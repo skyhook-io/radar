@@ -78,6 +78,8 @@ export interface GitOpsResourceTree {
   // Per-resource health came from the controller's API server, so in
   // appTree mode the verdicts are still the controller's.
   healthFromApi?: boolean
+  // The controller's API server was asked and didn't answer usefully.
+  healthApiError?: string
   // The Application deploys to another cluster; Radar derives nothing about
   // its resources from here.
   remoteDestination?: boolean

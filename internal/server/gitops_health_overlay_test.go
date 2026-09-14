@@ -2,6 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"github.com/skyhook-io/radar/internal/argocd"
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/argoapi"
@@ -99,10 +102,10 @@ func TestOverlayRadarHealth_SkipsInlineModeRemoteDestinationAndHealthyApp(t *tes
 	}
 }
 
-func apiHealthFetch(h *argoapi.ApplicationHealth, calls *int) func(context.Context, string, string) *argoapi.ApplicationHealth {
-	return func(context.Context, string, string) *argoapi.ApplicationHealth {
+func apiHealthFetch(h *argoapi.ApplicationHealth, calls *int) func(context.Context, string, string) (*argoapi.ApplicationHealth, error) {
+	return func(context.Context, string, string) (*argoapi.ApplicationHealth, error) {
 		*calls++
-		return h
+		return h, nil
 	}
 }
 
@@ -186,5 +189,53 @@ func TestOverlayArgoAPIHealth_Refusals(t *testing.T) {
 				t.Errorf("nothing may be applied, got %+v", tc.tree.Nodes[1])
 			}
 		})
+	}
+}
+
+func TestOverlayArgoAPIHealth_ReportsWhyTheServerDidNotAnswer(t *testing.T) {
+	app := overlayApp("Degraded")
+	app.SetUID(types.UID("app-uid"))
+	tree := overlayTree(gitopstree.HealthModeAppTree, false)
+	failing := func(context.Context, string, string) (*argoapi.ApplicationHealth, error) {
+		return nil, errors.New("the token isn't accepted for this application")
+	}
+	if overlayArgoAPIHealth(context.Background(), tree, app, failing) {
+		t.Fatal("a failed fetch must not count as Argo's answer")
+	}
+	if tree.HealthAPIError != "the token isn't accepted for this application" || tree.HealthFromAPI {
+		t.Fatalf("tree = fromAPI %v, error %q; want the failure carried for the notice", tree.HealthFromAPI, tree.HealthAPIError)
+	}
+
+	quiet := func(context.Context, string, string) (*argoapi.ApplicationHealth, error) { return nil, nil }
+	tree = overlayTree(gitopstree.HealthModeAppTree, false)
+	if overlayArgoAPIHealth(context.Background(), tree, app, quiet) || tree.HealthAPIError != "" {
+		t.Fatalf("no answer and nothing configured must stay silent, got error %q", tree.HealthAPIError)
+	}
+
+	other := &argoapi.ApplicationHealth{UID: "someone-else", Resources: []argoapi.ResourceHealth{{Kind: "Deployment", Name: "web", Health: "Degraded"}}}
+	tree = overlayTree(gitopstree.HealthModeAppTree, false)
+	var calls int
+	if overlayArgoAPIHealth(context.Background(), tree, app, apiHealthFetch(other, &calls)) || tree.HealthAPIError == "" {
+		t.Fatalf("an answer about another Application must be refused and explained, got error %q", tree.HealthAPIError)
+	}
+}
+
+func TestArgoAPIHealthFailure_SpeaksToTheUser(t *testing.T) {
+	cases := []struct {
+		err      error
+		tokenSet bool
+		want     string
+	}{
+		{fmt.Errorf("x: %w", argocd.ErrTokenInvalid), true, "the token isn't accepted for this application"},
+		{fmt.Errorf("x: %w", argoapi.ErrUnauthorized), false, "it requires a token"},
+		{fmt.Errorf("x: %w", argoapi.ErrNotFound), true, "it doesn't know this application"},
+		{fmt.Errorf("x: %w", context.DeadlineExceeded), true, "the request timed out"},
+		{fmt.Errorf("x (retry throttled): %w", argocd.ErrUnreachable), true, "the server couldn't be reached"},
+		{errors.New("something else"), true, ""},
+	}
+	for _, tc := range cases {
+		if got := argoAPIHealthFailure(tc.err, tc.tokenSet); got != tc.want {
+			t.Errorf("argoAPIHealthFailure(%v, %v) = %q, want %q", tc.err, tc.tokenSet, got, tc.want)
+		}
 	}
 }

@@ -77,6 +77,9 @@ type Summary struct {
 	// ResourceHealthFromAPI: per-resource health came from the controller's
 	// API server, so in appTree mode the verdicts shown are still Argo's.
 	ResourceHealthFromAPI bool `json:"resourceHealthFromApi,omitempty"`
+	// ResourceHealthAPIError: the controller's API server was asked and
+	// didn't answer usefully — why, in the user's words.
+	ResourceHealthAPIError string `json:"resourceHealthApiError,omitempty"`
 }
 
 // IgnoredDifferencesSummary is the comparison-coverage disclosure for an Argo
@@ -384,6 +387,7 @@ func Build(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTre
 		out.Summary.ResourceHealthMode = string(resourceTree.HealthMode)
 		out.Summary.RemoteDestination = resourceTree.RemoteDestination
 		out.Summary.ResourceHealthFromAPI = resourceTree.HealthFromAPI
+		out.Summary.ResourceHealthAPIError = resourceTree.HealthAPIError
 	}
 	return out
 }

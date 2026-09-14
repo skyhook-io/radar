@@ -136,6 +136,10 @@ type ResourceTree struct {
 	// that makes Argo's verdicts present after all, so nothing is derived and
 	// no notice is due.
 	HealthFromAPI bool `json:"healthFromApi,omitempty"`
+	// HealthAPIError: the host asked the controller's API server and got no
+	// usable answer, in the user's words ("the token isn't accepted for
+	// this application"). Empty when nothing was configured to ask.
+	HealthAPIError string `json:"healthApiError,omitempty"`
 	// RemoteDestination is true for an Argo CD Application whose
 	// spec.destination is another cluster. Radar's own reads describe the
 	// local cluster, so nothing Radar derives can be attributed to such an

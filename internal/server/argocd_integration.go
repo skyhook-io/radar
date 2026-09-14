@@ -24,16 +24,20 @@ import (
 func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
 	_, connected := argocd.Get()
 	resp := struct {
-		Configured bool   `json:"configured"`
-		Connected  bool   `json:"connected"`
-		Address    string `json:"address,omitempty"`
-		Reason     string `json:"reason,omitempty"`
+		Configured bool `json:"configured"`
+		Connected  bool `json:"connected"`
+		// Anonymous: connected without a token because the install serves
+		// reads to everyone — Settings can say there is nothing to add.
+		Anonymous bool   `json:"anonymous,omitempty"`
+		Address   string `json:"address,omitempty"`
+		Reason    string `json:"reason,omitempty"`
 	}{
 		Configured: argocd.IsConfigured(),
 		Connected:  connected,
 	}
 	if connected {
 		resp.Address = argocd.Address()
+		resp.Anonymous = argocd.AnonymousReadAllowed()
 	} else if argocd.TokenBindingUpgradeRequired() {
 		resp.Reason = "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source."
 	}

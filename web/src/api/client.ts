@@ -3258,6 +3258,9 @@ export interface ArgoStatus {
   // client is live. The two differ right after a restart (configured, reconnecting).
   configured: boolean;
   connected: boolean;
+  // Connected without a token: the install serves reads to everyone, so
+  // there is nothing to add in Settings.
+  anonymous?: boolean;
   address?: string;
   reason?: string;
 }

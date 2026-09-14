@@ -141,7 +141,7 @@ func (s *Server) handleArgoResourceDiff(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if !argocd.IsConfigured() {
+	if !argocd.IsConfigured() && !argocd.AnonymousReadAllowed() {
 		s.writeError(w, http.StatusServiceUnavailable, "Argo CD integration is not connected")
 		return
 	}
@@ -622,7 +622,7 @@ func (s *Server) handleArgoRevisionMetadata(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if !argocd.IsConfigured() {
+	if !argocd.IsConfigured() && !argocd.AnonymousReadAllowed() {
 		s.writeError(w, http.StatusServiceUnavailable, "Argo CD integration is not connected")
 		return
 	}

@@ -639,6 +639,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       insightLoading={insightsQ.isLoading}
       healthDocsUrl={GITOPS_HEALTH_DOCS_URL}
       remoteDestinationHint={<RemoteDestinationCloudHint />}
+      onOpenSettings={onOpenSettings}
       renderRevisionMeta={
         isArgoApp && insightsQ.data?.capabilities?.revisionMetadataAvailable
           ? (revision) => (

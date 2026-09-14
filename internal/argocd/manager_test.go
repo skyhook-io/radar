@@ -934,3 +934,68 @@ func TestApplicationHealthCached_UnconfiguredDiscoveryIsThrottled(t *testing.T) 
 		t.Fatal("Reset must clear the anonymous-read throttle")
 	}
 }
+
+// A tokenless client is a connection only once argocd-server has answered a
+// read through it: a reachable server that 401s must not light the diff or
+// show as connected, and a successful anonymous read must.
+func TestTokenlessClientCountsAsConnectedOnlyAfterAnonymousReadSucceeds(t *testing.T) {
+	var allow bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"Version":"v3.5.2"}`)) })
+	mux.HandleFunc("/api/v1/applications/billing", func(w http.ResponseWriter, r *http.Request) {
+		if !allow {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"metadata":{"uid":"u1"},"status":{"resources":[{"kind":"Deployment","name":"web","health":{"status":"Healthy"}}]}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	m := newTestManager(config.Config{})
+	m.SetConfig(srv.URL, "", false, false)
+	q := argoapi.ApplicationQuery{AppName: "billing", AppNamespace: "argocd"}
+
+	if _, err := m.ApplicationHealthCached(context.Background(), q); !errors.Is(err, argoapi.ErrUnauthorized) {
+		t.Fatalf("refused read = %v, want ErrUnauthorized", err)
+	}
+	if _, ok := m.Get(); ok {
+		t.Fatal("a tokenless client whose reads are refused must not count as connected")
+	}
+	if m.AnonymousReadAllowed() {
+		t.Fatal("a refused read must not report anonymous reads as allowed")
+	}
+	if m.liveClient() == nil {
+		t.Fatal("the health path still needs the tokenless client to retry through")
+	}
+
+	allow = true
+	m.appHealthCache = nil
+	if _, err := m.ApplicationHealthCached(context.Background(), q); err != nil {
+		t.Fatalf("allowed read = %v", err)
+	}
+	if _, ok := m.Get(); !ok || !m.AnonymousReadAllowed() {
+		t.Fatal("after a successful anonymous read the connection is usable by the rest of the product")
+	}
+	m.Reset()
+	if m.AnonymousReadAllowed() {
+		t.Fatal("Reset must forget the previous cluster's anonymous verdict")
+	}
+}
+
+// A configured server that fails to connect throttles the health read the
+// same way unconfigured discovery does, and repeats the real failure so the
+// page can say why.
+func TestApplicationHealthCached_ConfiguredConnectFailureIsThrottled(t *testing.T) {
+	m := newTestManager(config.Config{})
+	m.SetConfig("http://127.0.0.1:1", "tok", false, true)
+	q := argoapi.ApplicationQuery{AppName: "billing", AppNamespace: "argocd"}
+	if _, err := m.ApplicationHealthCached(context.Background(), q); !errors.Is(err, ErrUnreachable) {
+		t.Fatalf("first read = %v, want ErrUnreachable", err)
+	}
+	m.appHealthCache = nil
+	_, err := m.ApplicationHealthCached(context.Background(), q)
+	if err == nil || !strings.Contains(err.Error(), "throttled") || !errors.Is(err, ErrUnreachable) {
+		t.Fatalf("second read = %v, want the throttle carrying ErrUnreachable", err)
+	}
+}

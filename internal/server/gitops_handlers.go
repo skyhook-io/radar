@@ -184,15 +184,41 @@ func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitops
 }
 
 // argoAPIHealth asks argocd-server for an Application's per-resource health.
-// Only meaningful in appTree mode; a nil result means "no answer" (no
-// integration and no anonymous read, or the server errored) and the caller
-// falls through to Radar's own read. Cached and throttled by the manager.
-func (s *Server) argoAPIHealth(ctx context.Context, appNamespace, appName string) *argoapi.ApplicationHealth {
+// Only meaningful in appTree mode. Cached and throttled by the manager. A
+// nil health with a nil error is "no answer and nothing to tell the user":
+// nothing is configured and the install doesn't serve anonymous reads, so
+// the caller falls through to Radar's own read quietly. With the
+// integration configured, the failure comes back in the user's words — they
+// set the connection up for this, and the page should say it isn't
+// delivering rather than silently show Radar's read.
+func (s *Server) argoAPIHealth(ctx context.Context, appNamespace, appName string) (*argoapi.ApplicationHealth, error) {
 	health, err := argocd.ApplicationHealthCached(ctx, argoapi.ApplicationQuery{AppNamespace: appNamespace, AppName: appName})
-	if err != nil {
-		return nil
+	if err == nil {
+		return health, nil
 	}
-	return health
+	if !argocd.IsConfigured() {
+		return nil, nil
+	}
+	return nil, errors.New(argoAPIHealthFailure(err, argocd.TokenSet()))
+}
+
+// argoAPIHealthFailure is the clause the notice appends to "Radar couldn't
+// read Argo's per-resource health from your Argo CD server".
+func argoAPIHealthFailure(err error, tokenSet bool) string {
+	switch {
+	case errors.Is(err, argocd.ErrTokenInvalid), errors.Is(err, argoapi.ErrUnauthorized):
+		if tokenSet {
+			return "the token isn't accepted for this application"
+		}
+		return "it requires a token"
+	case errors.Is(err, argoapi.ErrNotFound):
+		return "it doesn't know this application"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "the request timed out"
+	case errors.Is(err, argocd.ErrUnreachable):
+		return "the server couldn't be reached"
+	}
+	return ""
 }
 
 // overlayArgoAPIHealth fills per-resource health from the controller's own
@@ -204,7 +230,7 @@ func (s *Server) argoAPIHealth(ctx context.Context, appNamespace, appName string
 // to match. Remote-destination apps are skipped for the same reason the
 // diff endpoint refuses them: local SARs can't authorize data about another
 // cluster's resources.
-func overlayArgoAPIHealth(ctx context.Context, tree *gitopstree.ResourceTree, root *unstructured.Unstructured, fetch func(ctx context.Context, appNamespace, appName string) *argoapi.ApplicationHealth) bool {
+func overlayArgoAPIHealth(ctx context.Context, tree *gitopstree.ResourceTree, root *unstructured.Unstructured, fetch func(ctx context.Context, appNamespace, appName string) (*argoapi.ApplicationHealth, error)) bool {
 	if tree == nil || root == nil || fetch == nil {
 		return false
 	}
@@ -213,7 +239,11 @@ func overlayArgoAPIHealth(ctx context.Context, tree *gitopstree.ResourceTree, ro
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	health := fetch(ctx, root.GetNamespace(), root.GetName())
+	health, err := fetch(ctx, root.GetNamespace(), root.GetName())
+	if err != nil {
+		tree.HealthAPIError = err.Error()
+		return false
+	}
 	if health == nil {
 		return false
 	}
@@ -221,6 +251,7 @@ func overlayArgoAPIHealth(ctx context.Context, tree *gitopstree.ResourceTree, ro
 	// with no UID is not accepted for a local Application that has one.
 	if uid := string(root.GetUID()); uid != "" && health.UID != uid {
 		log.Printf("[gitops] argocd-server answer for %s/%s is not this Application (uid %q, local %q); ignoring", sanitizeForLog(root.GetNamespace()), sanitizeForLog(root.GetName()), sanitizeForLog(health.UID), sanitizeForLog(uid))
+		tree.HealthAPIError = "it isn't the server managing this application"
 		return false
 	}
 	byRef := make(map[string]argoapi.ResourceHealth, len(health.Resources))

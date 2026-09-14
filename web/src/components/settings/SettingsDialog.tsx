@@ -698,6 +698,7 @@ export function SettingsDialog({
                 envManaged={configData?.argoCdEnvManaged ?? false}
                 envError={configData?.argoCdEnvError}
                 cliSession={configData?.argoCdCliSession}
+                anonymous={argoSectionStatus?.connected && argoSectionStatus.anonymous}
                 statusReason={
                   argoSectionStatus?.configured && !argoSectionStatus.connected
                     ? argoSectionStatus.reason
@@ -1127,7 +1128,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
       // Configured-but-not-connected is often a permanently rejected/expired
       // token, not a transient reconnect — "Not reachable" matches Prometheus and
       // doesn't imply it will recover on its own.
-      value: argo?.connected ? 'Connected' : argo?.configured ? 'Not reachable' : 'Not connected',
+      value: argo?.connected ? (argo.anonymous ? 'Connected · no token needed' : 'Connected') : argo?.configured ? 'Not reachable' : 'Not connected',
       detail: argo?.connected ? argo.address : argo?.reason,
     },
     {
@@ -2128,6 +2129,7 @@ function ArgoCDConfigField({
   envError,
   cliSession,
   statusReason,
+  anonymous,
   onChangeUrl,
   onChangeInsecureTls,
   onApplied,
@@ -2139,6 +2141,7 @@ function ArgoCDConfigField({
   envError?: string
   cliSession?: { server: string; user: string; insecure?: boolean }
   statusReason?: string
+  anonymous?: boolean
   onChangeUrl: (value: string) => void
   onChangeInsecureTls: (value: boolean) => void
   onApplied?: (v: { url: string; insecureTls: boolean; tokenSet: boolean }) => void
@@ -2153,6 +2156,7 @@ function ArgoCDConfigField({
       tokenSet={tokenSet}
       cliSession={cliSession}
       statusReason={statusReason}
+      anonymous={anonymous}
       onChangeUrl={onChangeUrl}
       onChangeInsecureTls={onChangeInsecureTls}
       onApplied={onApplied}
@@ -2246,6 +2250,7 @@ function ArgoCDEditableField({
   tokenSet,
   cliSession,
   statusReason,
+  anonymous,
   onChangeUrl,
   onChangeInsecureTls,
   onApplied,
@@ -2255,6 +2260,7 @@ function ArgoCDEditableField({
   tokenSet: boolean
   cliSession?: { server: string; user: string; insecure?: boolean }
   statusReason?: string
+  anonymous?: boolean
   onChangeUrl: (value: string) => void
   onChangeInsecureTls: (value: boolean) => void
   onApplied?: (v: { url: string; insecureTls: boolean; tokenSet: boolean }) => void
@@ -2353,9 +2359,17 @@ function ArgoCDEditableField({
     <div>
       <p className="text-xs text-theme-text-tertiary mb-3">
         Connect your Argo CD server for the full Git-rendered desired-vs-live diff on GitOps
-        Application pages — what Git declares vs what's actually running. Without it, Radar falls
-        back to a lighter annotation-based drift that can miss fields.
+        Application pages — what Git declares vs what's actually running — and, on Argo CD 3, for
+        Argo's own health verdict on each resource. Without it, Radar falls back to a lighter
+        annotation-based drift that can miss fields, and to its own read of each resource.
       </p>
+
+      {anonymous && state.status !== 'connected' && (
+        <p className="mb-3 flex items-center gap-1.5 text-xs text-theme-text-secondary">
+          <Check className="w-3.5 h-3.5 shrink-0 text-green-600 dark:text-green-400/80" />
+          Your Argo CD server lets Radar read without a token, so it's already connected — nothing to add here.
+        </p>
+      )}
 
       {statusReason && state.status !== 'connected' && (
         <div className="mb-3 rounded-md border border-theme-border bg-theme-elevated p-3">
