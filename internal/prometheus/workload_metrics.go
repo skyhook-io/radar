@@ -111,7 +111,7 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 	if !configured && len(scope.CurrentPods) > 0 {
 		attributions, state := client.automaticWorkloadAttributions(scope)
 		attributionState = state
-		if state != "available" && history.history == nil && history.err == nil {
+		if history.awaitingAttribution(state) {
 			reason := "Matching metrics to current Pods…"
 			if state == "error" {
 				reason = "Metrics identity could not be checked. Retrying automatically."

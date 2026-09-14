@@ -54,6 +54,21 @@ func TestHistoricalOwnershipStrategy(t *testing.T) {
 	}
 }
 
+func TestHistoryFailureDoesNotTurnPendingAttributionIntoMissingMetrics(t *testing.T) {
+	for _, state := range []string{"detecting", "error", "unavailable", "available"} {
+		for _, historyErr := range []error{nil, context.DeadlineExceeded} {
+			plan := workloadHistoryPlan{err: historyErr}
+			if got := plan.awaitingAttribution(state); got != (state != "available") {
+				t.Fatalf("state=%s historyErr=%v: waiting=%v", state, historyErr, got)
+			}
+			plan.history = &prom.WorkloadHistory{}
+			if plan.awaitingAttribution(state) {
+				t.Fatalf("usable history suppressed while attribution=%s", state)
+			}
+		}
+	}
+}
+
 func TestHistoricalPartitionRequiresExternalAnchor(t *testing.T) {
 	pod := prom.WorkloadPodIdentity{Name: "api-0", UID: "030a7597-c1fc-48b0-9bb4-683489285358"}
 	for _, labeled := range []bool{false, true} {

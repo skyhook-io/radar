@@ -29,6 +29,10 @@ type workloadHistoryPlan struct {
 	err     error
 }
 
+func (p workloadHistoryPlan) awaitingAttribution(state string) bool {
+	return p.history == nil && state != "available"
+}
+
 func (c *Client) historicalClusterScope(ctx context.Context, scope PodScope, cache *k8s.ResourceCache) (prom.WorkloadMetricsScope, error) {
 	if config, _, configured := c.workloadMetricsConfig(); configured {
 		return config, nil
