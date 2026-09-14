@@ -70,31 +70,31 @@ func Explain(np *networkingv1.NetworkPolicy, dir Direction, selected *corev1.Pod
 	}
 	selects, err := Selects(np, selected)
 	if err != nil {
-		return Explanation{Undecidable, "podSelector could not be parsed: " + err.Error()}
+		return Explanation{Undecidable, "Radar could not interpret this policy's pod selector (" + err.Error() + ")"}
 	}
 	if !selects {
-		return Explanation{NotApplicable, "does not select " + podRef(selected)}
+		return Explanation{NotApplicable, "does not select pod " + podRef(selected)}
 	}
 	types := EffectivePolicyTypes(np)
 	switch dir {
 	case DirectionIngress:
 		if !types.Ingress {
-			return Explanation{NotApplicable, "does not isolate ingress"}
+			return Explanation{NotApplicable, "does not apply to incoming traffic"}
 		}
 	case DirectionEgress:
 		if !types.Egress {
-			return Explanation{NotApplicable, "does not isolate egress"}
+			return Explanation{NotApplicable, "does not apply to outgoing traffic"}
 		}
 	default:
 		return Explanation{NotApplicable, "no direction"}
 	}
 	if selected.Spec.HostNetwork {
-		return Explanation{Undecidable, podRef(selected) + " runs on the host network, where NetworkPolicy does not apply the same way"}
+		return Explanation{Undecidable, "pod " + podRef(selected) + " runs on the host network, where NetworkPolicy does not apply the same way"}
 	}
 	// Whether a selector can match a host-network pod at the other end is up
 	// to the network plugin, so nothing about such a peer is decidable.
 	if peer.Pod != nil && peer.Pod.Spec.HostNetwork {
-		return Explanation{Undecidable, podRef(peer.Pod) + " runs on the host network; whether policies see it as a pod depends on the network plugin"}
+		return Explanation{Undecidable, "pod " + podRef(peer.Pod) + " runs on the host network; whether policies see it as a pod depends on the network plugin"}
 	}
 
 	var rules []ruleView
@@ -108,7 +108,7 @@ func Explain(np *networkingv1.NetworkPolicy, dir Direction, selected *corev1.Pod
 		}
 	}
 	if len(rules) == 0 {
-		return Explanation{DoesNotAdmit, fmt.Sprintf("isolates %s with no rules — admits nothing", dir)}
+		return Explanation{DoesNotAdmit, fmt.Sprintf("requires %s traffic to be explicitly allowed, but has no allow rules", flowWord(dir))}
 	}
 
 	// A named rule port resolves against the destination pod: the selected pod
@@ -133,27 +133,27 @@ func Explain(np *networkingv1.NetworkPolicy, dir Direction, selected *corev1.Pod
 			case triUnknown:
 				overall = fold(overall, triUnknown)
 				if port <= 0 {
-					reasons = append(reasons, fmt.Sprintf("rule %d restricts ports but the port is not known", i+1))
+					reasons = append(reasons, fmt.Sprintf("rule %d allows specific ports and the port of this connection is not known", i+1))
 				} else {
-					reasons = append(reasons, fmt.Sprintf("rule %d names a port on a destination pod that could not be resolved", i+1))
+					reasons = append(reasons, fmt.Sprintf("rule %d uses a named port and the destination pod can't be looked up", i+1))
 				}
 				continue
 			}
 		}
 		sawPortMatch = true
 		if len(rule.peers) == 0 {
-			what := "any source"
+			what := "from any source"
 			if dir == DirectionEgress {
-				what = "any destination"
+				what = "to any destination"
 			}
-			return Explanation{Admits, fmt.Sprintf("rule %d admits %s on %s", i+1, what, portText)}
+			return Explanation{Admits, fmt.Sprintf("rule %d allows %s %s %s", i+1, flowWord(dir), portText, what)}
 		}
 		ruleTri := triNo
 		for j := range rule.peers {
 			t, desc := peerAdmits(&rule.peers[j], peer, np.Namespace, dir)
 			switch t {
 			case triYes:
-				return Explanation{Admits, fmt.Sprintf("rule %d admits %s on %s", i+1, desc, portText)}
+				return Explanation{Admits, fmt.Sprintf("rule %d allows %s %s %s %s", i+1, flowWord(dir), portText, fromTo(dir), desc)}
 			case triUnknown:
 				ruleTri = fold(ruleTri, triUnknown)
 				reasons = append(reasons, desc)
@@ -166,9 +166,9 @@ func Explain(np *networkingv1.NetworkPolicy, dir Direction, selected *corev1.Pod
 		return Explanation{Undecidable, strings.Join(dedupe(reasons), "; ")}
 	}
 	if !sawPortMatch {
-		return Explanation{DoesNotAdmit, fmt.Sprintf("its rules admit other ports, none covers %s", portText)}
+		return Explanation{DoesNotAdmit, fmt.Sprintf("no rule allows %s; its rules cover other ports", portText)}
 	}
-	return Explanation{DoesNotAdmit, fmt.Sprintf("no rule admits %s on %s", peerText, portText)}
+	return Explanation{DoesNotAdmit, fmt.Sprintf("no rule allows %s %s %s %s", flowWord(dir), portText, fromTo(dir), peerText)}
 }
 
 type ruleView struct {
@@ -221,19 +221,19 @@ func rulePortsMatch(ports []networkingv1.NetworkPolicyPort, port int32, proto co
 // whose address nothing in the cluster rewrites.
 func peerAdmits(entry *networkingv1.NetworkPolicyPeer, target Peer, policyNs string, dir Direction) (tri, string) {
 	if entry.IPBlock != nil {
-		desc := "ipBlock " + entry.IPBlock.CIDR
+		desc := "addresses in " + entry.IPBlock.CIDR
 		if len(entry.IPBlock.Except) > 0 {
-			desc += " except " + strings.Join(entry.IPBlock.Except, ", ")
+			desc += " (except " + strings.Join(entry.IPBlock.Except, ", ") + ")"
 		}
 		if dir == DirectionEgress && !target.External {
 			// Whether the policy sees the pod's address or, for traffic that
 			// went through a Service, the cluster IP is up to the network
 			// plugin; neither a hit nor a miss on the pod's address proves
 			// anything.
-			return triUnknown, desc + ": the destination address the policy sees for a pod cannot be established"
+			return triUnknown, desc + ": for a pod destination the network may check the Service address rather than the pod's, so Radar can't tell whether this range matches"
 		}
 		if !ipBlockWellFormed(entry.IPBlock) {
-			return triUnknown, desc + ": the block or one of its exceptions is not a valid CIDR"
+			return triUnknown, desc + ": the range or one of its exceptions is not a valid CIDR"
 		}
 		ips := peerIPs(target)
 		switch ipBlockMatch(entry.IPBlock, ips) {
@@ -245,25 +245,25 @@ func peerAdmits(entry *networkingv1.NetworkPolicyPeer, target Peer, policyNs str
 				// anything in the cluster: a miss is a miss.
 				return triNo, desc
 			}
-			return triUnknown, desc + ": the source address the policy sees may have been rewritten"
+			return triUnknown, desc + ": the network may change the source address before this rule sees it, so Radar can't tell whether " + addrOrPeer(target, dir) + " falls in this range"
 		default:
 			if dir == DirectionEgress && len(ips) > 0 {
 				// The destination is known and reached over the other address
 				// family; a block of this family cannot admit it.
 				return triNo, desc
 			}
-			return triUnknown, desc + ": no address of that family is known for " + peerDesc(target, dir)
+			return triUnknown, desc + ": no " + familyWord(entry.IPBlock.CIDR) + " address is known for " + peerDesc(target, dir)
 		}
 	}
 	if entry.NamespaceSelector == nil && entry.PodSelector == nil {
-		return triUnknown, "an empty peer entry"
+		return triUnknown, "an empty from/to entry, which Radar can't interpret"
 	}
-	desc := selectorPeerDesc(entry)
+	desc := selectorPeerDesc(entry, policyNs)
 	if target.External {
 		return triNo, desc
 	}
 	if target.Pod == nil {
-		return triUnknown, desc + ": the pod at the other end could not be resolved"
+		return triUnknown, desc + ": the pod at the other end can't be looked up (it may no longer exist)"
 	}
 
 	ns := triYes
@@ -300,33 +300,32 @@ func peerAdmits(entry *networkingv1.NetworkPolicyPeer, target Peer, policyNs str
 		return triNo, desc
 	}
 	if ns == triUnknown {
-		return triUnknown, desc + ": the Namespace of " + podRef(target.Pod) + " could not be read, so its labels are unknown"
+		return triUnknown, desc + ": can't check the labels of namespace " + target.Pod.Namespace + " — they are unavailable"
 	}
 	if pod == triUnknown {
-		return triUnknown, desc + ": selector could not be parsed"
+		return triUnknown, desc + ": Radar could not interpret this selector"
 	}
 	return triYes, desc
 }
 
-func selectorPeerDesc(entry *networkingv1.NetworkPolicyPeer) string {
-	var parts []string
-	if entry.PodSelector != nil {
-		parts = append(parts, "pods "+selectorDesc(entry.PodSelector))
+func selectorPeerDesc(entry *networkingv1.NetworkPolicyPeer, policyNs string) string {
+	pods := "any pod"
+	if entry.PodSelector != nil && !selectorIsEmpty(entry.PodSelector) {
+		pods = "pods " + selectorDesc(entry.PodSelector)
 	}
 	switch {
-	case entry.NamespaceSelector != nil && entry.PodSelector != nil:
-		parts = append(parts, "in namespaces "+selectorDesc(entry.NamespaceSelector))
-	case entry.NamespaceSelector != nil:
-		parts = append(parts, "any pod in namespaces "+selectorDesc(entry.NamespaceSelector))
+	case entry.NamespaceSelector == nil:
+		return pods + " in namespace " + policyNs
+	case selectorIsEmpty(entry.NamespaceSelector):
+		return pods + " in any namespace"
 	default:
-		parts = append(parts, "in this namespace")
+		return pods + " in namespaces " + selectorDesc(entry.NamespaceSelector)
 	}
-	return strings.Join(parts, " ")
 }
 
 func selectorDesc(sel *metav1.LabelSelector) string {
 	if sel == nil {
-		return "matching anything"
+		return "with any labels"
 	}
 	var parts []string
 	keys := make([]string, 0, len(sel.MatchLabels))
@@ -345,9 +344,43 @@ func selectorDesc(sel *metav1.LabelSelector) string {
 		}
 	}
 	if len(parts) == 0 {
-		return "matching anything"
+		return "with any labels"
 	}
-	return "matching " + strings.Join(parts, ", ")
+	return "labeled " + strings.Join(parts, ", ")
+}
+
+// flowWord and fromTo phrase a direction the way an operator reads a flow.
+func flowWord(dir Direction) string {
+	if dir == DirectionEgress {
+		return "outgoing"
+	}
+	return "incoming"
+}
+
+func fromTo(dir Direction) string {
+	if dir == DirectionEgress {
+		return "to"
+	}
+	return "from"
+}
+
+// addrOrPeer is the address a range would be checked against, or the peer
+// when none is known.
+func addrOrPeer(p Peer, dir Direction) string {
+	if p.IP != "" {
+		return p.IP
+	}
+	if p.Pod != nil && p.Pod.Status.PodIP != "" {
+		return p.Pod.Status.PodIP
+	}
+	return peerDesc(p, dir)
+}
+
+func familyWord(cidr string) string {
+	if ip, _, err := net.ParseCIDR(cidr); err == nil && ip.To4() == nil {
+		return "IPv6"
+	}
+	return "IPv4"
 }
 
 func peerDesc(p Peer, dir Direction) string {
@@ -357,11 +390,11 @@ func peerDesc(p Peer, dir Direction) string {
 	}
 	switch {
 	case p.Pod != nil:
-		return role + " " + podRef(p.Pod)
+		return role + " pod " + podRef(p.Pod)
 	case p.External && p.IP != "":
-		return role + " " + p.IP + " (not a pod)"
+		return role + " " + p.IP + " (outside the cluster)"
 	case p.External:
-		return role + " (not a pod)"
+		return role + " (outside the cluster)"
 	default:
 		return role
 	}
@@ -380,7 +413,7 @@ func podRef(pod *corev1.Pod) string {
 func portDesc(port int32, proto corev1.Protocol) string {
 	p := string(ProtocolOrTCP(string(proto)))
 	if port <= 0 {
-		return p + "/?"
+		return p + " (port unknown)"
 	}
 	return fmt.Sprintf("%s/%d", p, port)
 }
