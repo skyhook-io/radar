@@ -4,6 +4,24 @@ These panels extend the expanded
 Metrics tab for Deployments, StatefulSets and DaemonSets. They read an existing
 Prometheus-compatible backend; Radar does not install instrumentation.
 
+The selected time window is stored in the page URL as `metricsRange`. It survives
+reloads, tab changes and returning from a Pod drilldown in both workload and
+Applications views. Invalid or missing values use one hour. Request-source choice
+is local to the selected workload, so selecting Istio on one workload does not
+force it on a Beyla-only workload.
+
+If discovery cannot connect, **Discover Prometheus** retries and **Configure
+metrics** opens the existing Metrics settings in standalone Radar. Embedded views
+direct users to their operator instead. **What each chart needs** links to the
+prerequisites below; connecting a backend alone does not install collectors.
+
+Identity-unverified CPU/memory charts are collapsed under **Basic metrics —
+identity not verified**, with their scope warning and without template overlays or
+limit-percentage badges. Network/storage remain separately visible and name-based.
+The **Template per Pod** caption beside current-Pod comparison is only a configuration
+reference: actual Pods can differ after injection or rollout. Omitted reference
+values are not evidence of zero requests or unlimited capacity.
+
 ## Live-tested coverage
 
 Validation on 2026-09-13–14 exercised the following combinations. A successful

@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Loader2, Wifi, WifiOff } from "lucide-react";
 import {
   AreaChart,
@@ -32,6 +33,7 @@ import { RestartEventLane } from "./RestartChart";
 import { Tooltip } from "../ui/Tooltip";
 import { WorkloadMetricsSection } from "./WorkloadMetricsSection";
 import { RightsizingStrip } from "./RightsizingStrip";
+import { useNavCustomization } from "../../context/NavCustomization";
 
 // Used when MetricsTabContent is in expanded (full-screen) mode. Drawer mode
 // uses the single-chart tabbed `PrometheusCharts` instead — drawer width
@@ -66,9 +68,12 @@ export function PrometheusChartsGrid({
   const connectMutation = usePrometheusConnect();
   const isConnected = status?.connected === true;
   const isSupported = SUPPORTED_KINDS.has(kind);
+  const isWorkload = ["Deployment", "StatefulSet", "DaemonSet"].includes(kind);
   const showRestartLane = isSupported && kind !== "Node";
 
-  const [timeRange, setTimeRange] = useState<PrometheusTimeRange>("1h");
+  const settingsAvailable = !useNavCustomization().embedded;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const timeRange = TIME_RANGES.find((range) => range.value === searchParams.get("metricsRange"))?.value ?? "1h";
 
   const categories = kind === "Node" ? NODE_CATEGORIES : WORKLOAD_CATEGORIES;
 
@@ -117,6 +122,7 @@ export function PrometheusChartsGrid({
             {status?.error ||
               "Connect to view historical CPU, memory, and network metrics"}
           </p>
+          <div className="flex flex-wrap items-center justify-center gap-3">
           <button
             onClick={() => connectMutation.mutate()}
             disabled={connectMutation.isPending}
@@ -129,6 +135,14 @@ export function PrometheusChartsGrid({
             )}
             Discover Prometheus
           </button>
+          {settingsAvailable && <button
+            type="button"
+            className="text-sm text-accent hover:underline"
+            onClick={() => window.dispatchEvent(new CustomEvent('radar:open-settings', { detail: { section: 'prometheus' } }))}
+          >Configure metrics</button>}
+          </div>
+          {!settingsAvailable && <p className="mt-3 text-xs text-theme-text-tertiary">Ask your operator to configure the metrics connection for this cluster.</p>}
+          {isWorkload && <a className="mt-3 inline-block text-xs text-accent hover:underline" href="https://github.com/skyhook-io/radar/blob/main/docs/workload-metrics.md#what-each-chart-needs" target="_blank" rel="noopener noreferrer">What each chart needs</a>}
         </div>
       </div>
     );
@@ -151,19 +165,23 @@ export function PrometheusChartsGrid({
   }
   const disk = findCategory("filesystem");
   const chartPanels = disk ? [...primaryCats, { def: disk }] : primaryCats;
-  const isWorkload = ["Deployment", "StatefulSet", "DaemonSet"].includes(kind);
   const renderPanel = ({ def, refLines }: { def: CategoryDef; refLines?: ReferenceLine[] }) => (
     <MetricsPanel key={def.key} category={def} kind={kind} namespace={namespace} name={name} timeRange={timeRange} referenceLines={refLines} />
   );
 
   return (
     <div className="flex flex-col min-w-0 w-full h-full overflow-auto">
-      <div className="flex shrink-0 justify-end px-4 pt-3">
+      <div className="flex shrink-0 items-center justify-between gap-3 px-4 pt-3">
+        {isWorkload && <a className="text-xs text-accent hover:underline" href="https://github.com/skyhook-io/radar/blob/main/docs/workload-metrics.md#what-each-chart-needs" target="_blank" rel="noopener noreferrer">What each chart needs</a>}
         <select
           aria-label="Metrics time range"
           value={timeRange}
-          onChange={(e) => setTimeRange(e.target.value as PrometheusTimeRange)}
-          className="rounded-md border border-theme-border bg-theme-elevated px-2 py-1 text-xs text-theme-text-secondary shadow-theme-sm focus:outline-none focus:ring-1 focus:ring-accent/50"
+          onChange={(e) => {
+            const next = new URLSearchParams(searchParams);
+            next.set("metricsRange", e.target.value);
+            setSearchParams(next, { replace: true });
+          }}
+          className="ml-auto rounded-md border border-theme-border bg-theme-elevated px-2 py-1 text-xs text-theme-text-secondary shadow-theme-sm focus:outline-none focus:ring-1 focus:ring-accent/50"
         >
           {TIME_RANGES.map((tr) => (
             <option key={tr.value} value={tr.value}>
@@ -176,7 +194,7 @@ export function PrometheusChartsGrid({
       {isWorkload && (
         <WorkloadMetricsSection key={`${kind}/${namespace}/${name}`} kind={kind} namespace={namespace} name={name} range={timeRange}
           cpuReferenceLines={cpuRefLines} memoryReferenceLines={memRefLines}
-          nameMatchedCharts={{ cpu: cpu && renderPanel({ def: cpu, refLines: cpuRefLines }), memory: mem && renderPanel({ def: mem, refLines: memRefLines }) }}
+          nameMatchedCharts={{ cpu: cpu && renderPanel({ def: cpu }), memory: mem && renderPanel({ def: mem }) }}
           restartLane={showRestartLane && <div className="mb-3"><RestartEventLane kind={kind} namespace={namespace} name={name} range={timeRange} /></div>} />
       )}
 

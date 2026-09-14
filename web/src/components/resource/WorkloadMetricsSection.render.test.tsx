@@ -50,7 +50,8 @@ describe('Workload metrics interpretation', () => {
     result.data!.panels.cpu = { state: 'error', unit: 'cores', reason: 'History lookup failed', series: [] }
     result.data!.panels.memory = panel(100, 'bytes')
     const html = renderToString(<MemoryRouter><WorkloadMetricsSection kind="Deployment" namespace="shop" name="checkout" range="1h" nameMatchedCharts={{ cpu: <span>Existing CPU chart</span>, memory: <span>Existing memory chart</span> }} /></MemoryRouter>)
-    expect(html).toContain('Basic CPU and memory · Pod-name matching')
+    expect(html).toContain('Basic metrics — identity not verified')
+    expect(html).toContain('<details aria-label="Name-matched resource metrics">')
     expect(html).toContain('matching names in a shared backend may include another cluster')
     expect(html).toContain('Existing CPU chart')
     expect(html).toContain('History lookup failed')
@@ -61,6 +62,40 @@ describe('Workload metrics interpretation', () => {
     const html = renderToString(<MemoryRouter><WorkloadMetricsSection kind="Deployment" namespace="shop" name="checkout" range="1h" nameMatchedCharts={{ cpu: <span>Existing CPU chart</span> }} /></MemoryRouter>)
     expect(html).not.toContain('Existing CPU chart')
     expect(html).toContain('Checking request metrics')
+  })
+  it('shows only supplied template values and qualifies actual Pod differences', () => {
+    const html = renderToString(<MemoryRouter><WorkloadMetricsSection kind="Deployment" namespace="shop" name="checkout" range="1h" cpuReferenceLines={[{ value: 0.1, label: 'request 100m', kind: 'request' }]} memoryReferenceLines={[]} /></MemoryRouter>).replaceAll('<!-- -->', '')
+    expect(html).toContain('Template per Pod · CPU: request 100m')
+    expect(html).toContain('Actual Pods can differ after injection or rollout.')
+    expect(html).not.toContain(' · Memory:')
+    expect(html).not.toContain('unlimited')
+    expect(render()).not.toContain('Template per Pod')
+  })
+  it.each([true, false])('only promises resource charts when usable data exists: %s', (usable) => {
+    result.data!.panels.requests = { state: 'unavailable', unit: 'requests/s', series: [], reason: 'No observations' }
+    result.data!.panels.cpu = usable ? panel(0, 'cores') : { state: 'error', unit: 'cores', series: [], reason: 'Query failed' }
+    const html = render()
+    expect(html).toContain('No HTTP request observations in this window')
+    expect(html.includes('Resource charts below remain available')).toBe(usable)
+    if (!usable) expect(html).not.toContain('CPU usage · per Pod')
+  })
+  it('does not call pending attribution a lack of HTTP traffic', () => {
+    result.data!.panels.requests = { state: 'detecting', unit: 'requests/s', series: [], reason: 'Matching identity' }
+    const html = render()
+    expect(html).toContain('Checking request metrics…')
+    expect(html).toContain('Matching identity')
+    expect(html).not.toContain('No HTTP request observations')
+  })
+  it('keeps empty resource titles neutral even with an all-null series', () => {
+    result.data!.panels.cpu!.series[0].dataPoints = [{ timestamp: 160, value: null }]
+    const html = render()
+    expect(html).toContain('CPU usage')
+    expect(html).not.toContain('CPU usage · per Pod')
+  })
+  it('discloses combined request ports and reporting sidecars', () => {
+    const html = render()
+    expect(html).toContain('Ports and processes are combined; health checks and admin traffic may count.')
+    expect(html).toContain('Resource totals include reporting containers and sidecars.')
   })
   it('describes throttling scope independently of a failed CPU history query', () => {
     result.data!.history.cpu = { mode: 'unavailable' }
