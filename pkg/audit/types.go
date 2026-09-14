@@ -130,9 +130,9 @@ type ScanResults struct {
 	// ApplySettings can subtract ignored namespaces from the denominators
 	// without re-running the scan.
 	EvaluatedByNamespace map[string]map[string]int `json:"evaluatedByNamespace,omitempty"`
-	// MissingInputs lists prerequisite inputs that were nil (RBAC denied or
-	// unavailable), e.g. "poddisruptionbudgets", "configmaps".
-	// Checks depending on them did not run and are absent from CheckCounts.
+	// MissingInputs lists inputs unavailable to all or part of the scan
+	// (RBAC denied or not loaded), e.g. "poddisruptionbudgets", "configmaps".
+	// Counts describe only the subjects that could be evaluated.
 	MissingInputs []string `json:"missingInputs,omitempty"`
 	// GroupedChecks is the per-check remediation-queue rollup (one Check per
 	// failing check). Populated by the HTTP audit handler post local-settings —

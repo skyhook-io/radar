@@ -1891,10 +1891,11 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 
 // DashboardAudit is the audit summary in the dashboard response.
 type DashboardAudit struct {
-	Passing    int                                 `json:"passing"`
-	Warning    int                                 `json:"warning"`
-	Danger     int                                 `json:"danger"`
-	Categories map[string]DashboardCategorySummary `json:"categories"`
+	MissingInputs []string                            `json:"missingInputs,omitempty"`
+	Passing       int                                 `json:"passing"`
+	Warning       int                                 `json:"warning"`
+	Danger        int                                 `json:"danger"`
+	Categories    map[string]DashboardCategorySummary `json:"categories"`
 }
 
 // DashboardCategorySummary provides per-category counts for the dashboard.
@@ -1918,9 +1919,10 @@ func (s *Server) getDashboardAudit(r *http.Request, cache *k8s.ResourceCache, na
 		}
 	}
 	return &DashboardAudit{
-		Passing:    results.Summary.Passing,
-		Warning:    results.Summary.Warning,
-		Danger:     results.Summary.Danger,
-		Categories: cats,
+		MissingInputs: results.MissingInputs,
+		Passing:       results.Summary.Passing,
+		Warning:       results.Summary.Warning,
+		Danger:        results.Summary.Danger,
+		Categories:    cats,
 	}
 }

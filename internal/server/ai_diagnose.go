@@ -113,6 +113,7 @@ func (s *Server) detectDiagnoseHealth(r *http.Request, kind, group, namespace, n
 		signal.Health = summary.Health
 	}
 	if auditSum != nil {
+		signal.AuditMissingInputs = auditSum.MissingInputs
 		signal.AuditCount = auditSum.Count
 		signal.AuditSeverity = auditSum.HighestSeverity
 		signal.TopFinding = auditSum.TopFinding

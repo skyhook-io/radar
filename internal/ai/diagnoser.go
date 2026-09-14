@@ -165,15 +165,16 @@ func turnPrompt(req Request) string {
 // Issues/AuditFindings carry the top actual rows (capped) — aggregates alone
 // read as vague in the UI and starve the prompt of detail Radar already has.
 type ResourceHealthSignal struct {
-	Health          string       `json:"health,omitempty"`
-	IssueCount      int          `json:"issueCount,omitempty"`
-	HighestSeverity string       `json:"highestSeverity,omitempty"`
-	TopReason       string       `json:"topReason,omitempty"`
-	Issues          []HealthLine `json:"issues,omitempty"`
-	AuditCount      int          `json:"auditCount,omitempty"`
-	AuditSeverity   string       `json:"auditSeverity,omitempty"`
-	TopFinding      string       `json:"topFinding,omitempty"`
-	AuditFindings   []HealthLine `json:"auditFindings,omitempty"`
+	AuditMissingInputs []string     `json:"auditMissingInputs,omitempty"`
+	Health             string       `json:"health,omitempty"`
+	IssueCount         int          `json:"issueCount,omitempty"`
+	HighestSeverity    string       `json:"highestSeverity,omitempty"`
+	TopReason          string       `json:"topReason,omitempty"`
+	Issues             []HealthLine `json:"issues,omitempty"`
+	AuditCount         int          `json:"auditCount,omitempty"`
+	AuditSeverity      string       `json:"auditSeverity,omitempty"`
+	TopFinding         string       `json:"topFinding,omitempty"`
+	AuditFindings      []HealthLine `json:"auditFindings,omitempty"`
 }
 
 // HealthLine is one concrete issue/finding row: what Radar's issue engine or
@@ -894,6 +895,9 @@ func healthFrame(target string, health *ResourceHealthSignal) string {
 			b.WriteString(".")
 		}
 		b.WriteString(" Treat audit findings as static posture and remediation priority, not evidence of an active outage.")
+	}
+	if len(health.AuditMissingInputs) > 0 {
+		fmt.Fprintf(&b, " The audit scan could not read these inputs: %s. Zero audit findings do not establish that all checks passed.", strings.Join(health.AuditMissingInputs, ", "))
 	}
 	return b.String()
 }

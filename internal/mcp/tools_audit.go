@@ -21,11 +21,12 @@ type auditInput struct {
 }
 
 type auditToolResult struct {
-	Summary    auditSummary   `json:"summary"`
-	Findings   []auditFinding `json:"findings"`
-	TotalCount int            `json:"totalCount"`
-	Truncated  bool           `json:"truncated,omitempty"`
-	NarrowHint string         `json:"narrowHint,omitempty"`
+	MissingInputs []string       `json:"missingInputs,omitempty"`
+	Summary       auditSummary   `json:"summary"`
+	Findings      []auditFinding `json:"findings"`
+	TotalCount    int            `json:"totalCount"`
+	Truncated     bool           `json:"truncated,omitempty"`
+	NarrowHint    string         `json:"narrowHint,omitempty"`
 }
 
 type auditSummary struct {
@@ -111,11 +112,12 @@ func handleGetAudit(ctx context.Context, req *mcp.CallToolRequest, input auditIn
 	}
 
 	return toJSONResult(auditToolResult{
-		Summary:    summary,
-		Findings:   filtered,
-		TotalCount: totalCount,
-		Truncated:  truncated,
-		NarrowHint: narrowHint,
+		MissingInputs: results.MissingInputs,
+		Summary:       summary,
+		Findings:      filtered,
+		TotalCount:    totalCount,
+		Truncated:     truncated,
+		NarrowHint:    narrowHint,
 	})
 }
 

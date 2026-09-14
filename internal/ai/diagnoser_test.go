@@ -1108,3 +1108,10 @@ func TestDiagnoseStreamReportsHandshakeOnShortTurn(t *testing.T) {
 		}
 	}
 }
+
+func TestHealthFrameDisclosesMissingAuditInputsWithoutFindings(t *testing.T) {
+	frame := healthFrame("Pod app/api", &ResourceHealthSignal{AuditMissingInputs: []string{"secrets"}})
+	if !strings.Contains(frame, "could not read these inputs: secrets") || !strings.Contains(frame, "Zero audit findings do not establish") {
+		t.Fatal(frame)
+	}
+}

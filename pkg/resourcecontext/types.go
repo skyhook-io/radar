@@ -618,9 +618,12 @@ type IssueSummary struct {
 // resource. HighestSeverity uses the canonical Checks severity ladder; it is
 // remediation priority, not proof of an active outage.
 type AuditSummary struct {
-	Count           int    `json:"count"`
-	HighestSeverity string `json:"highestSeverity,omitempty"`
-	TopFinding      string `json:"topFinding,omitempty"`
+	// MissingInputs describes unavailable inputs in the underlying audit scan,
+	// not additional findings or proof that this resource failed a check.
+	MissingInputs   []string `json:"missingInputs,omitempty"`
+	Count           int      `json:"count"`
+	HighestSeverity string   `json:"highestSeverity,omitempty"`
+	TopFinding      string   `json:"topFinding,omitempty"`
 }
 
 // PolicySummary aggregates external policy-engine signals. Only Kyverno

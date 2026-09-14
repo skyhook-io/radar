@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -33,8 +34,11 @@ func TestAuditToolWithholdsSecretFindingsAndCounts(t *testing.T) {
 			t.Fatal(err)
 		}
 		summary := computeMCPAuditSummary(ctx, k8s.GetResourceCache(), "", "Secret", "app", "private-secret")
-		if (summary != nil) != allowed {
+		if summary == nil || (summary.Count > 0) != allowed || slices.Contains(summary.MissingInputs, "secrets") == allowed {
 			t.Fatal("MCP resource summary diverged from audit grant")
+		}
+		if slices.Contains(result.MissingInputs, "secrets") == allowed {
+			t.Fatal("MCP lost missing Secret inputs")
 		}
 		if allowed && result.TotalCount == 0 {
 			t.Fatal("authorized Secret finding missing")

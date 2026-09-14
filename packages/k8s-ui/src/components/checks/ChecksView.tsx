@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { AlertCircle, AlertOctagon, AlertTriangle, ChevronDown, ChevronRight, ExternalLink, EyeOff, Info, Layers, MoreHorizontal, Search, ShieldCheck, Wrench, X } from 'lucide-react'
-import { CardBody, CardSection, ClusterName, EmptyState, FilterPill, DistributionBar, DistributionLegendChip, Input, NEUTRAL_CHIP_CLASS, renderProse } from '../ui'
+import { AlertBanner, CardBody, CardSection, ClusterName, EmptyState, FilterPill, DistributionBar, DistributionLegendChip, Input, NEUTRAL_CHIP_CLASS, renderProse } from '../ui'
 import { useFilterState, defineFilterSchema } from '../../filter-state'
 import type { CheckMeta, CheckReference } from '../audit'
 import { CHECK_SEVERITIES, CHECK_SEVERITY_RANK, type Check, type CheckSeverity, type EffectiveCheckFinding, type CheckResourceRef } from './types'
@@ -56,6 +56,9 @@ export interface ChecksViewProps {
   catalog: Record<string, CheckMeta>
   /** True when at least one source returned audit data. */
   anyData: boolean
+  /** Evaluations and unavailable inputs for the scope supplied by the host. */
+  evaluated?: number
+  missingInputs?: string[]
   /** Deep-link href for a resource (host routing). Omit for non-link text. */
   resourceHref?: (ref: CheckResourceRef) => string
   /** In-app resource navigation (client-side). Takes precedence over href. */
@@ -106,7 +109,7 @@ const CHECKS_FILTER_SCHEMA = defineFilterSchema({
   q: { param: 'q', type: 'text' },
 })
 
-export function ChecksView({ checks, catalog, anyData, resourceHref, onResourceClick, clusterLabel, clusterLabelById, clusterFilter: clusterFilterProp, onClusterFilterChange, emptyAction, onHideCheck, onHideCategory }: ChecksViewProps) {
+export function ChecksView({ checks, catalog, anyData, evaluated, missingInputs = [], resourceHref, onResourceClick, clusterLabel, clusterLabelById, clusterFilter: clusterFilterProp, onClusterFilterChange, emptyAction, onHideCheck, onHideCategory }: ChecksViewProps) {
   // Severity / category / framework / search live in the URL (shareable,
   // bookmarkable audit links) via the shared filter-state contract. The cluster
   // facet is deliberately NOT here — it's a host-controlled seam (see
@@ -345,6 +348,14 @@ export function ChecksView({ checks, catalog, anyData, resourceHref, onResourceC
         </div>
       </div>
 
+      {missingInputs.length > 0 && (
+        <AlertBanner
+          variant="warning"
+          title="Some checks could not run"
+          message={<>Findings cover only available inputs. Unavailable inputs: {missingInputs.join(', ')}.</>}
+        />
+      )}
+
       {fleetChecks.length === 0 ? (
         hasFilters ? (
           <EmptyState
@@ -362,6 +373,13 @@ export function ChecksView({ checks, catalog, anyData, resourceHref, onResourceC
               </button>
             }
           />
+        ) : missingInputs.length > 0 ? (
+          <EmptyState
+            headline="No findings in the available data"
+            body="The audit is incomplete. This does not mean all checks passed."
+          />
+        ) : evaluated === 0 ? (
+          <EmptyState headline="No resources evaluated" body="No resources were evaluated with the current scope and check settings." />
         ) : anyData ? (
           <EmptyState
             tone="healthy"

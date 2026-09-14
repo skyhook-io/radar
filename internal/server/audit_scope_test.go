@@ -60,6 +60,9 @@ func TestAuditSecretAuthorizationAcrossSurfacesAndCachedScopes(t *testing.T) {
 			t.Fatal("denied Secrets still counted")
 		}
 		dashboard := env.srv.getDashboardAudit(r, cache, []string{"default", "kube-system"})
+		if slices.Contains(dashboard.MissingInputs, "secrets") == allowed {
+			t.Fatal("Home lost missing Secret inputs")
+		}
 		configured := applyAuditSettings(&result, getAuditConfig())
 		if dashboard.Passing != configured.Summary.Passing || dashboard.Warning != configured.Summary.Warning || dashboard.Danger != configured.Summary.Danger {
 			t.Fatal("Home audit diverged")
@@ -68,7 +71,7 @@ func TestAuditSecretAuthorizationAcrossSurfacesAndCachedScopes(t *testing.T) {
 		if allowed && (summary == nil || len(rows) == 0) {
 			t.Fatal("authorized AI summary missing")
 		}
-		if !allowed && (summary != nil || len(rows) > 0) {
+		if !allowed && (summary == nil || summary.Count != 0 || !slices.Contains(summary.MissingInputs, "secrets") || len(rows) > 0) {
 			t.Fatal("AI summary disclosed hidden Secret")
 		}
 		resource := env.authGet(t, "/api/audit/resource/secrets/kube-system/system-token?raw=true", user, "")
@@ -99,6 +102,17 @@ func TestAuditOptionsHonorsNamespaceSecretGrantsForGlobalViewer(t *testing.T) {
 	opts := env.srv.auditOptions(r)
 	if opts.Scope.Namespaces != nil || !reflect.DeepEqual(opts.Scope.SecretNamespaces, []string{"default"}) {
 		t.Fatalf("namespace Secret grant lost: %+v", opts.Scope)
+	}
+	for _, tc := range []struct {
+		namespaces []string
+		missing    bool
+	}{
+		{nil, true}, {[]string{"default", "kube-system"}, true}, {[]string{"default"}, false},
+	} {
+		results := getCachedResults(k8s.GetResourceCache(), tc.namespaces, opts)
+		if slices.Contains(results.MissingInputs, "secrets") != tc.missing {
+			t.Fatalf("partial Secret grant coverage for %v: %v", tc.namespaces, results.MissingInputs)
+		}
 	}
 }
 
@@ -205,8 +219,8 @@ func TestAuditHTTPGlobalViewerSecretSubjects(t *testing.T) {
 			t.Fatal(err)
 		}
 		resp.Body.Close()
-		if slices.Contains(result.MissingInputs, "secrets") == grant {
-			t.Fatal("global-viewer availability incorrect")
+		if !slices.Contains(result.MissingInputs, "secrets") {
+			t.Fatal("partially readable Secrets must remain an incomplete input")
 		}
 		for _, f := range result.Findings {
 			if f.Kind == "Secret" {

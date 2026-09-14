@@ -2,6 +2,7 @@ package audit
 
 import (
 	"log"
+	"slices"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -89,7 +90,17 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	// posture check. Nil inventory (CNPG absent / RBAC denied) → check no-ops.
 	input.CNPGClusters, input.CNPGScheduledBackups, input.CNPGScheduledBackupsAuthoritative = listCNPGDynamic(namespaces)
 
-	return bp.RunChecks(input)
+	results := bp.RunChecks(input)
+	if scope != nil && scope.SecretNamespaces != nil {
+		complete := len(namespaces) > 0
+		for _, ns := range namespaces {
+			complete = complete && scope.allows(schema.GroupVersionResource{Resource: "secrets"}, ns)
+		}
+		if !complete && !slices.Contains(results.MissingInputs, "secrets") {
+			results.MissingInputs = append(results.MissingInputs, "secrets")
+		}
+	}
+	return results
 }
 
 func CollectTypedInput(cache *k8s.ResourceCache, namespaces []string) *bp.CheckInput {

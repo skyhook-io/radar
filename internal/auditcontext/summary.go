@@ -30,7 +30,14 @@ func SummarizeResource(cache *k8s.ResourceCache, group, kind, namespace, name st
 	if results == nil {
 		return nil, nil
 	}
-	return summarizeFindings(results.Findings, group, kind, namespace, name)
+	summary, findings := summarizeFindings(results.Findings, group, kind, namespace, name)
+	if len(results.MissingInputs) > 0 {
+		if summary == nil {
+			summary = &resourcecontext.AuditSummary{}
+		}
+		summary.MissingInputs = results.MissingInputs
+	}
+	return summary, findings
 }
 
 func summarizeFindings(findings []bpaudit.Finding, group, kind, namespace, name string) (*resourcecontext.AuditSummary, []bpaudit.Finding) {

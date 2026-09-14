@@ -493,6 +493,7 @@ export type DashboardAudit = AuditCardData;
 export type { AuditFinding, ResourceGroup, CheckMeta, Check };
 
 export interface AuditResponse {
+  missingInputs?: string[];
   summary: DashboardAudit;
   findings: AuditFinding[];
   groups: ResourceGroup[];

@@ -8,6 +8,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+// ReadScope authorizes Secret and cluster-scoped subjects. Other namespaced
+// subjects retain Radar's namespace-visibility policy.
 // Nil namespace slices allow all namespaces; allocated-empty slices allow none.
 // ClusterResources is an explicit grant map: absent entries deny access.
 type ReadScope struct {
