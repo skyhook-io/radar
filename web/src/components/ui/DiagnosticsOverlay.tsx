@@ -593,6 +593,7 @@ function ConfigSection({ data }: { data: DiagnosticsSnapshot }) {
       <Row label="MCP Enabled" value={cfg.mcpEnabled ? 'Yes' : 'No'} />
       <Row label="Prometheus URL" value={cfg.hasPrometheusURL ? 'Set' : 'Auto-discover'} />
       <Row label="Prometheus Headers" value={cfg.hasPrometheusHeaders ? 'Set' : 'None'} />
+      {cfg.streamingLists && <Row label="Streaming Lists" value={cfg.streamingLists} />}
     </Section>
   )
 }
@@ -826,7 +827,7 @@ export function formatForGitHub(data: DiagnosticsSnapshot, frontendPerf?: K8sUIP
   if (data.config) {
     const cfg = data.config
     lines.push(`### Config`)
-    lines.push(`- Port: ${cfg.port} | Dev: ${cfg.devMode} | Timeline: \`${cfg.timelineStorage}\` | History: ${cfg.historyLimit} | MCP: ${cfg.mcpEnabled} | Prometheus URL: ${cfg.hasPrometheusURL ? 'manual' : 'auto'}`)
+    lines.push(`- Port: ${cfg.port} | Dev: ${cfg.devMode} | Timeline: \`${cfg.timelineStorage}\` | History: ${cfg.historyLimit} | MCP: ${cfg.mcpEnabled} | Prometheus URL: ${cfg.hasPrometheusURL ? 'manual' : 'auto'}${cfg.streamingLists ? ` | Streaming lists: ${cfg.streamingLists}` : ''}`)
     lines.push(``)
   }
 
