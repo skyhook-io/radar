@@ -106,6 +106,13 @@ func TestExplain(t *testing.T) {
 			effect: Undecidable, reason: "plugins disagree",
 		},
 		{
+			name: "ipBlock containing an unresolved pod source's address is undecidable too",
+			np: policy("monitoring", "from-pod-range", promLabels, ingressT,
+				[]networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "10.0.0.0/8"}}}}}, nil),
+			dir: DirectionIngress, sel: dst.Pod, peer: Peer{IP: "10.0.0.5"}, port: 9090,
+			effect: Undecidable, reason: "plugins disagree",
+		},
+		{
 			name: "ipBlock missing the source is undecidable on ingress",
 			np: policy("monitoring", "cidr", promLabels, ingressT,
 				[]networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "192.0.2.0/24"}}}}}, nil),

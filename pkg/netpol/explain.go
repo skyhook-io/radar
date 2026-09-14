@@ -247,10 +247,10 @@ func peerAdmits(entry *networkingv1.NetworkPolicyPeer, target Peer, policyNs str
 		ips := peerIPs(target)
 		switch ipBlockMatch(entry.IPBlock, ips) {
 		case triYes:
-			if target.Pod != nil {
+			if !target.External {
 				// Same plugin disagreement on ingress: a range that contains
-				// the source pod's address admits it on some plugins and
-				// nothing on others.
+				// a pod's address admits it on some plugins and nothing on
+				// others. A pod the caller could not resolve is still a pod.
 				return triUnknown, desc + ": " + podRangeCaveat
 			}
 			return triYes, desc

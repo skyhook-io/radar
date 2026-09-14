@@ -255,10 +255,15 @@ func (s *Server) resolvePeer(r *http.Request, cache *k8s.ResourceCache, ep endpo
 	if !s.canRead(r, "", "pods", ep.ns, "get") {
 		return netpol.Peer{IP: ep.ip}, ep.ns + "/" + ep.name + " (not visible to you)"
 	}
-	if pods := cache.Pods(); pods != nil && cache.KindCoversNamespace(string(k8score.Pods), ep.ns) {
-		if pod, err := pods.Pods(ep.ns).Get(ep.name); err == nil {
-			return netpol.Peer{Pod: pod, Namespace: s.namespaceObject(r, cache, ep.ns), IP: ep.ip}, ep.ns + "/" + ep.name
-		}
+	if !cache.KindCoversNamespace(string(k8score.Pods), ep.ns) {
+		return netpol.Peer{IP: ep.ip}, ep.ns + "/" + ep.name + " (outside the namespaces Radar watches)"
+	}
+	pods := cache.Pods()
+	if pods == nil {
+		return netpol.Peer{IP: ep.ip}, ep.ns + "/" + ep.name + " (pod cache not ready)"
+	}
+	if pod, err := pods.Pods(ep.ns).Get(ep.name); err == nil {
+		return netpol.Peer{Pod: pod, Namespace: s.namespaceObject(r, cache, ep.ns), IP: ep.ip}, ep.ns + "/" + ep.name
 	}
 	return netpol.Peer{IP: ep.ip}, ep.ns + "/" + ep.name + " (no longer exists)"
 }
