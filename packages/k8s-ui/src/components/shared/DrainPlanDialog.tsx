@@ -178,7 +178,13 @@ export function DrainPlanContent({
             <div className="flex items-center gap-1 shrink-0 text-xs text-theme-text-tertiary">
               <span>Estimated at {new Date(current.generatedAt).toLocaleTimeString()}</span>
               <Tooltip content={ESTIMATE_CAVEAT} className="max-w-xs">
-                <Info aria-label="About this estimate" className="w-3.5 h-3.5" />
+                <button
+                  type="button"
+                  aria-label="About this estimate"
+                  className="p-0.5 rounded text-theme-text-tertiary transition-colors hover:text-theme-text-secondary"
+                >
+                  <Info className="w-3.5 h-3.5" />
+                </button>
               </Tooltip>
               {onRefreshPlan && (
                 <Tooltip content="Recompute the plan">
@@ -280,6 +286,16 @@ export function DrainPlanDialog({
     setAcknowledgedEmptyDir(false)
   }, [options.force, options.deleteEmptyDirData, open, plan?.generatedAt])
 
+  // Drop the acknowledgement at click time, not when the refreshed plan lands:
+  // the effect above runs a paint after the new plan renders, which would leave
+  // one frame where a stale acknowledgement still enables Drain.
+  const refreshPlan = onRefreshPlan
+    ? () => {
+        setAcknowledgedEmptyDir(false)
+        onRefreshPlan()
+      }
+    : undefined
+
   const confirmEnabled = canConfirmDrain({ plan, nodeName, options, loading, error, acknowledgedEmptyDir, planSupported })
 
   return (
@@ -306,7 +322,7 @@ export function DrainPlanDialog({
         planSupported={planSupported}
         acknowledgedEmptyDir={acknowledgedEmptyDir}
         onAcknowledgeEmptyDir={setAcknowledgedEmptyDir}
-        onRefreshPlan={onRefreshPlan}
+        onRefreshPlan={refreshPlan}
       />
     </ConfirmDialog>
   )

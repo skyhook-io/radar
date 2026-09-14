@@ -120,6 +120,11 @@ describe('DrainPlanContent', () => {
     expect(render({ plan: p })).not.toContain('Recompute the plan')
   })
 
+  it('exposes the estimate caveat on a focusable trigger', () => {
+    const html = render({ plan: plan([pod('web', 'evict')]) })
+    expect(html).toMatch(/<button[^>]*aria-label="About this estimate"/)
+  })
+
   it('offers a retry on a failed plan only when the host can recompute it', () => {
     expect(render({ error: 'boom', onRefreshPlan: noop })).toContain('Try again')
     expect(render({ error: 'boom' })).not.toContain('Try again')
