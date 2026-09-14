@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/errorlog"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
@@ -159,7 +161,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 	// so endpoint selection is deterministic.
 	directStart := time.Now()
 	directCtx, cancelDirect := context.WithTimeout(ctx, directProbeBudget)
-	idx := c.probeCandidatesConcurrently(directCtx, candidates)
+	idx, reasons := c.probeCandidatesWithReasons(directCtx, candidates)
 	cancelDirect()
 	if idx >= 0 {
 		cand := candidates[idx]
@@ -189,6 +191,20 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		c.mu.Lock()
 		c.discoveryService = nil
 		c.mu.Unlock()
+		blocked := c.attributeNetworkPolicyBlock(ctx, k8s.GetResourceCache(), candidates, reasons)
+		// Attribution reads the API; a run superseded or timed out during it
+		// must end as such, not be recorded as a cluster without Prometheus.
+		if err := ctx.Err(); err != nil {
+			logDiscoveryEnded(start, err)
+			return "", "", err
+		}
+		if blocked != nil {
+			log.Printf("[prometheus] %v", blocked)
+			if !discoveryDiagnosticsSuppressed(ctx) {
+				errorlog.Record("prometheus", "warning", "%v", blocked)
+			}
+			return "", "", blocked
+		}
 		if !discoveryDiagnosticsSuppressed(ctx) {
 			errorlog.Record("prometheus", "warning", "no Prometheus service reachable in cluster")
 		}
@@ -362,15 +378,26 @@ const (
 // recorded-but-unpublished). Selection stays deterministic: a lower-priority
 // success never wins while a higher-priority probe is still pending.
 func (c *Client) probeCandidatesConcurrently(ctx context.Context, candidates []prom.Candidate) int {
+	idx, _ := c.probeCandidatesWithReasons(ctx, candidates)
+	return idx
+}
+
+// probeCandidatesWithReasons is probeCandidatesConcurrently that also returns
+// each candidate's rejection reason (empty for a candidate that succeeded or
+// was never reached before the pass ended).
+func (c *Client) probeCandidatesWithReasons(ctx context.Context, candidates []prom.Candidate) (int, []prom.ProbeReason) {
 	n := len(candidates)
+	reasons := make([]prom.ProbeReason, n)
 	if n == 0 {
-		return -1
+		return -1, reasons
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel() // stops in-flight/queued probes once we return
 
+	var reasonsMu sync.Mutex
 	state := make([]atomic.Int32, n)
+	launched := make([]atomic.Bool, n)
 	sem := make(chan struct{}, maxConcurrentProbes)
 	woke := make(chan struct{}, n) // wake-ups; buffered so a worker never blocks
 
@@ -384,9 +411,14 @@ func (c *Client) probeCandidatesConcurrently(ctx context.Context, candidates []p
 			go func(i int) {
 				defer func() { <-sem }()
 				outcome := probeFailed
-				if c.probeReachable(ctx, candidates[i].ClusterAddr+candidates[i].BasePath, false) {
+				launched[i].Store(true)
+				ok, reason := c.probeWithReason(ctx, candidates[i].ClusterAddr+candidates[i].BasePath, false)
+				if ok {
 					outcome = probeSucceeded
 				}
+				reasonsMu.Lock()
+				reasons[i] = reason
+				reasonsMu.Unlock()
 				state[i].Store(outcome)
 				select {
 				case woke <- struct{}{}:
@@ -404,6 +436,22 @@ func (c *Client) probeCandidatesConcurrently(ctx context.Context, candidates []p
 		}
 		return -1
 	}
+	// A probe still running when the pass ends got no answer in the time the
+	// pass allowed — a policy that silently drops packets looks exactly like
+	// that — so it counts as a transport failure. One never launched stays
+	// unexplained.
+	snapshot := func() []prom.ProbeReason {
+		reasonsMu.Lock()
+		defer reasonsMu.Unlock()
+		out := make([]prom.ProbeReason, n)
+		copy(out, reasons)
+		for i := range out {
+			if out[i] == "" && launched[i].Load() && state[i].Load() == probePending {
+				out[i] = prom.ProbeReasonTransportError
+			}
+		}
+		return out
+	}
 
 	frontier := 0
 	for {
@@ -413,17 +461,17 @@ func (c *Client) probeCandidatesConcurrently(ctx context.Context, candidates []p
 				break
 			}
 			if s == probeSucceeded {
-				return frontier
+				return frontier, snapshot()
 			}
 			frontier++
 		}
 		if frontier == n {
-			return -1 // every candidate resolved, none reachable
+			return -1, snapshot() // every candidate resolved, none reachable
 		}
 		select {
 		case <-woke:
 		case <-ctx.Done():
-			return earliestSuccess()
+			return earliestSuccess(), snapshot()
 		}
 	}
 }

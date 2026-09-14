@@ -102,12 +102,15 @@ func (t *HTTPTransport) Do(ctx context.Context, method, path string, params url.
 	if maxResponseBytes <= 0 {
 		maxResponseBytes = 10 << 20
 	}
+	// From here on the endpoint has answered: a failure reading the body is
+	// wrapped so callers reasoning about reachability can tell it from a
+	// connection that never produced a response.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("prom.HTTPTransport: read body: %w", err)
+		return nil, fmt.Errorf("prom.HTTPTransport: read body: %w", &ResponseError{StatusCode: resp.StatusCode, Err: err})
 	}
 	if int64(len(body)) > maxResponseBytes {
-		return nil, fmt.Errorf("prom.HTTPTransport: %w (%d bytes)", ErrResponseTooLarge, maxResponseBytes)
+		return nil, fmt.Errorf("prom.HTTPTransport: %w (%d bytes)", &ResponseError{StatusCode: resp.StatusCode, Err: ErrResponseTooLarge}, maxResponseBytes)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -127,6 +130,17 @@ type HTTPError struct {
 	URL        string
 	Body       []byte
 }
+
+// ResponseError is a failure after the endpoint answered — the body could not
+// be read, or was over the limit. It carries the status that arrived so the
+// failure is never mistaken for an unreachable endpoint.
+type ResponseError struct {
+	StatusCode int
+	Err        error
+}
+
+func (e *ResponseError) Error() string { return e.Err.Error() }
+func (e *ResponseError) Unwrap() error { return e.Err }
 
 func (e *HTTPError) Error() string {
 	body := strings.ToValidUTF8(string(e.Body), "�")

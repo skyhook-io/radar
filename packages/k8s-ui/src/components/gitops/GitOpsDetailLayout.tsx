@@ -4,6 +4,7 @@ import { PaneLoader } from '../ui/PaneLoader'
 
 import { HealthStatusBadge, SyncStatusBadge } from './GitOpsStatusBadge'
 import { GitOpsIssuesBand, GitOpsStatusStrip } from './insights'
+import { GitOpsHealthSourceNotice } from './GitOpsHealthSourceNotice'
 import { Tooltip } from '../ui/Tooltip'
 import type { GitOpsHealthStatus, GitOpsInsight, GitOpsIssue, GitOpsRemediation, SyncStatus } from '../../types'
 
@@ -138,6 +139,12 @@ export interface GitOpsDetailLayoutProps {
   // on the OSS-specific CodeViewer component.
   helmValuesContent?: ReactNode
 
+  // GitOpsHealthSourceNotice inputs: where its "Why?" link goes, and what
+  // (if anything) to say after the remote-destination sentence. Both are
+  // host decisions; the notice itself keys off `insight.summary`.
+  healthDocsUrl?: string
+  remoteDestinationHint?: ReactNode
+
   // Action buttons — Argo + Flux. Exactly one applies for any given CR.
   isArgoApp: boolean
   isFlux: boolean
@@ -222,6 +229,8 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
     helmValuesOpen,
     onToggleHelmValues,
     helmValuesContent,
+    healthDocsUrl,
+    remoteDestinationHint,
     isArgoApp,
     isFlux,
     isFluxWorkload,
@@ -458,6 +467,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
       {!fullscreen && (
         <>
           <GitOpsStatusStrip insight={insight ?? undefined} loading={insightLoading} renderRevisionMeta={renderRevisionMeta} />
+          <GitOpsHealthSourceNotice summary={insight?.summary} changes={insight?.changes} docsUrl={healthDocsUrl} remoteDestinationHint={remoteDestinationHint} />
           <GitOpsIssuesBand
             issues={insight?.issues}
             terminating={terminating}

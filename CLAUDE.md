@@ -217,6 +217,7 @@ WebSocket pod exec: `internal/server/exec.go` — xterm.js terminal, container/s
   - **Nested navigation**: `classifyGitOpsKind` tags nodes with `data.gitopsTool` + `data.gitopsKind`. Portal nodes route to child detail pages; lineage breadcrumb (`?from=kind|ns|name`) enables back navigation.
   - **Severity vocabulary**: `critical` (0, red) → `alert` (1, orange) → `warning` (2, amber) → `info` (3, blue). Adding a new severity requires updating both Go `severityRank` and TS union in `gitops-insights.ts`.
   - **Single-cluster limitation**: Application↔resource edges only render when controller + workloads are in same cluster (ArgoCD hub-spoke deployments won't show connections).
+  - **Per-resource health**: read a tree node's resolved `health` + `healthSource` (`controller` | `radar`), never `status.resources[].health` directly — Argo CD 3 doesn't persist it, and `overlayRadarHealth` (`internal/server/gitops_handlers.go`) fills the gap from the issues engine. See [docs/gitops.md](docs/gitops.md#per-resource-health)
   - **Per-resource drift**: computed from `kubectl.kubernetes.io/last-applied-configuration` annotation. SSA/Helm-installed resources lack this; SSA fallback tracked in [#601](https://github.com/skyhook-io/radar/issues/601).
 
 ### Timeline + resource relationships

@@ -10,7 +10,13 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-func nodeFromTopology(n topology.Node, ref ResourceRef, role NodeRole, tool Tool, sync, health string) Node {
+// nodeFromTopology builds a node for a managed resource Radar's topology
+// knows. A controller-supplied health wins and sets the node's tone; without
+// one, Radar's own topology status fills in as HealthSourceRadar. Either way
+// TopologyStatus is the tone of the resolved health, so the graph never
+// paints a controller-Degraded node green because Radar's live read
+// disagrees.
+func nodeFromTopology(n topology.Node, ref ResourceRef, role NodeRole, tool Tool, sync, health string, source HealthSource) Node {
 	data := map[string]any{}
 	for k, v := range n.Data {
 		data[k] = v
@@ -20,6 +26,11 @@ func nodeFromTopology(n topology.Node, ref ResourceRef, role NodeRole, tool Tool
 	info := infoFromTopology(n)
 	if health == "" {
 		health = healthFromTopology(n.Status)
+		source = HealthSourceRadar
+	}
+	status := string(n.Status)
+	if health != "" {
+		status = healthToTopology(health)
 	}
 	return Node{
 		ID:             nodeID(ref),
@@ -28,13 +39,14 @@ func nodeFromTopology(n topology.Node, ref ResourceRef, role NodeRole, tool Tool
 		Tool:           tool,
 		Sync:           sync,
 		Health:         health,
-		TopologyStatus: string(n.Status),
+		HealthSource:   healthSourceFor(health, source),
+		TopologyStatus: status,
 		Info:           info,
 		Data:           data,
 	}
 }
 
-func syntheticNode(ref ResourceRef, role NodeRole, tool Tool, sync, health string) Node {
+func syntheticNode(ref ResourceRef, role NodeRole, tool Tool, sync, health string, source HealthSource) Node {
 	return Node{
 		ID:             nodeID(ref),
 		Ref:            ref,
@@ -42,9 +54,23 @@ func syntheticNode(ref ResourceRef, role NodeRole, tool Tool, sync, health strin
 		Tool:           tool,
 		Sync:           sync,
 		Health:         health,
+		HealthSource:   healthSourceFor(health, source),
 		TopologyStatus: healthToTopology(health),
 		Data:           map[string]any{"namespace": ref.Namespace, "group": ref.Group},
 	}
+}
+
+// healthSourceFor keeps HealthSource and Health consistent: no health, no
+// source; a health with no stated source is the controller's, which is what
+// every pre-provenance caller meant.
+func healthSourceFor(health string, source HealthSource) HealthSource {
+	if health == "" {
+		return ""
+	}
+	if source == "" {
+		return HealthSourceController
+	}
+	return source
 }
 
 func enrichNodeFromObject(node Node, obj *unstructured.Unstructured) Node {
@@ -272,7 +298,10 @@ func kindPriority(kind string) int {
 	return 20
 }
 
-func summarize(nodes []Node) Summary {
+// Summarize tallies the tree's managed resources. Hosts that drop nodes
+// (per-user RBAC filtering) or overlay health after the build must call it
+// again on the final node list so the counts describe what is served.
+func Summarize(nodes []Node) Summary {
 	var s Summary
 	for _, n := range nodes {
 		switch n.Role {

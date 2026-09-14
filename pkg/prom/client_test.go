@@ -450,3 +450,32 @@ func TestClient_Query_RejectsStringResult(t *testing.T) {
 		t.Errorf("error = %v, want the string-unsupported message", err)
 	}
 }
+
+func TestClient_Probe_ReasonSeparatesAnsweredFromUnreachable(t *testing.T) {
+	t.Run("non-2xx status is an HTTP error, not transport", func(t *testing.T) {
+		tr := fakeProm(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		})
+		if ok, reason := NewClient(tr).Probe(context.Background()); ok || reason != ProbeReasonHTTPError {
+			t.Fatalf("ok=%v reason=%q, want http_error", ok, reason)
+		}
+	})
+	t.Run("oversized body after a response is still an HTTP error", func(t *testing.T) {
+		tr := fakeProm(t, func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write(make([]byte, 64))
+		})
+		tr.MaxResponseBytes = 8
+		if ok, reason := NewClient(tr).Probe(context.Background()); ok || reason != ProbeReasonHTTPError {
+			t.Fatalf("ok=%v reason=%q, want http_error", ok, reason)
+		}
+	})
+	t.Run("connection refused is transport", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		addr := srv.URL
+		srv.Close()
+		tr := NewHTTPTransport(addr, "", &http.Client{Timeout: 2 * time.Second})
+		if ok, reason := NewClient(tr).Probe(context.Background()); ok || reason != ProbeReasonTransportError {
+			t.Fatalf("ok=%v reason=%q, want transport_error", ok, reason)
+		}
+	})
+}

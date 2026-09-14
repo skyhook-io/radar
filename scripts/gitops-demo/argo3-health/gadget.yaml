@@ -1,0 +1,17 @@
+# Argo has NO health check for Gadget, so it contributes nothing to the
+# app's health. Radar's issues engine still reports Ready=False. In the
+# detail page this row must read as Radar's finding (the "Radar" marker and
+# the notice above the Issues band), not as something Argo said.
+apiVersion: radar.demo/v1
+kind: Gadget
+metadata:
+  name: unchecked-gadget
+spec:
+  mode: passive
+status:
+  conditions:
+    - type: Ready
+      status: "False"
+      reason: NotConfigured
+      message: "gadget has no configuration"
+      lastTransitionTime: "2026-01-01T00:00:00Z"

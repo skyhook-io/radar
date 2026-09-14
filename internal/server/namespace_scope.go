@@ -169,6 +169,9 @@ func (s *Server) invalidatePostContextSwitchCaches() {
 	if s.capacityIssueMemo != nil {
 		s.capacityIssueMemo.clear()
 	}
+	if s.gitopsIssuesMemo != nil {
+		s.gitopsIssuesMemo.clear()
+	}
 	if s.openCostCurrency != nil {
 		s.openCostCurrency.Invalidate()
 	}

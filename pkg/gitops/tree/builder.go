@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/topology"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -88,6 +89,14 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 
 	tool := detectTool(root, group, kind)
 	managed := managedResources(root, tool)
+	// An Argo Application deploying to another cluster declares resources
+	// that live THERE. Matching them against this cluster's topology or
+	// cache would attribute an unrelated same-named local object's health,
+	// labels and ownership to them — so for a remote destination the
+	// declared nodes carry only what the CR says (sync, persisted health)
+	// and nothing local is read for them. Hub-side hosts merge the
+	// destination cluster's own tree on top (mergeGitOpsTrees).
+	remote := tool == ToolArgoCD && strings.EqualFold(root.GetKind(), "Application") && !gitops.IsInClusterDestination(root)
 	// HelmRelease has no status.inventory; recover its managed set from live
 	// topology by Helm's recommended labels so the resource tree isn't empty.
 	if tool == ToolFluxCD && strings.EqualFold(root.GetKind(), "HelmRelease") && len(managed) == 0 {
@@ -138,8 +147,10 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		fluxRelated = fluxRelatedResources(root)
 	}
 	enrichRefs := make([]ResourceRef, 0, len(managed)+len(fluxRelated))
-	for _, res := range managed {
-		enrichRefs = append(enrichRefs, res.Ref)
+	if !remote {
+		for _, res := range managed {
+			enrichRefs = append(enrichRefs, res.Ref)
+		}
 	}
 	for _, res := range fluxRelated {
 		enrichRefs = append(enrichRefs, res.Ref)
@@ -149,13 +160,17 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	for _, res := range managed {
 		id := nodeID(res.Ref)
 		declaredIDs[id] = true
+		if remote {
+			nodes[id] = mergeData(syntheticNode(res.Ref, RoleDeclared, tool, res.Sync, res.Health, res.HealthSource), res.Data)
+			continue
+		}
 		obj := objects[refKey(res.Ref)]
 		if live, ok := findTopoNode(topoByRef, res.Ref); ok {
-			nodes[id] = mergeData(enrichNodeFromObject(nodeFromTopology(live, res.Ref, RoleDeclared, tool, res.Sync, res.Health), obj), res.Data)
+			nodes[id] = mergeData(enrichNodeFromObject(nodeFromTopology(live, res.Ref, RoleDeclared, tool, res.Sync, res.Health, res.HealthSource), obj), res.Data)
 			topoIDByTreeID[id] = live.ID
 			treeIDByTopoID[live.ID] = id
 		} else {
-			nodes[id] = mergeData(enrichNodeFromObject(syntheticNode(res.Ref, RoleDeclared, tool, res.Sync, res.Health), obj), res.Data)
+			nodes[id] = mergeData(enrichNodeFromObject(syntheticNode(res.Ref, RoleDeclared, tool, res.Sync, res.Health, res.HealthSource), obj), res.Data)
 		}
 	}
 
@@ -179,11 +194,11 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 				sync, health = s.Sync, s.Health
 			}
 			if live, ok := findTopoNode(topoByRef, res.Ref); ok {
-				nodes[id] = mergeData(enrichNodeFromObject(nodeFromTopology(live, res.Ref, RoleDeclared, tool, sync, health), obj), res.Data)
+				nodes[id] = mergeData(enrichNodeFromObject(nodeFromTopology(live, res.Ref, RoleDeclared, tool, sync, health, HealthSourceController), obj), res.Data)
 				topoIDByTreeID[id] = live.ID
 				treeIDByTopoID[live.ID] = id
 			} else if _, exists := nodes[id]; !exists {
-				nodes[id] = mergeData(enrichNodeFromObject(syntheticNode(res.Ref, RoleDeclared, tool, sync, health), obj), res.Data)
+				nodes[id] = mergeData(enrichNodeFromObject(syntheticNode(res.Ref, RoleDeclared, tool, sync, health, HealthSourceController), obj), res.Data)
 			} else {
 				nodes[id] = mergeData(nodes[id], res.Data)
 			}
@@ -232,7 +247,7 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 				topoIDByTreeID[targetID] = targetTopo.ID
 			}
 			if _, exists := nodes[targetID]; !exists {
-				nodes[targetID] = nodeFromTopology(targetTopo, targetRef, RoleGenerated, tool, "", "")
+				nodes[targetID] = nodeFromTopology(targetTopo, targetRef, RoleGenerated, tool, "", "", "")
 			}
 			edges[edgeKey(id, targetID)] = Edge{Source: id, Target: targetID, Type: EdgeOwns}
 			queue = append(queue, targetID)
@@ -252,7 +267,7 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 
 	nodeList, edgeList := materialize(nodes, edges)
 
-	summary := summarize(nodeList)
+	summary := Summarize(nodeList)
 	// Use the merged-in-the-nodes-map version of root so callers reading
 	// tree.Root see the same enriched data (live status, topology metadata)
 	// that any consumer iterating tree.Nodes would see. Without this, the
@@ -267,13 +282,18 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	if w := unknownKindsWarning(unknownKinds); w != "" {
 		warnings = append(append([]string{}, warnings...), w)
 	}
-	return &ResourceTree{
+	out := &ResourceTree{
 		Root:     mergedRoot,
 		Nodes:    nodeList,
 		Edges:    edgeList,
 		Warnings: warnings,
 		Summary:  summary,
-	}, root, nil
+	}
+	if tool == ToolArgoCD && strings.EqualFold(root.GetKind(), "Application") {
+		out.HealthMode = argoHealthMode(root)
+		out.RemoteDestination = remote
+	}
+	return out, root, nil
 }
 
 // unknownKindLog dedupes the "kind unavailable in discovery" log line

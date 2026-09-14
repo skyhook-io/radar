@@ -62,12 +62,23 @@ The Issues band at the top of the detail page surfaces six classes of problems:
 - **Stuck-drift loop** — when sync succeeded but the app is *still* OutOfSync with auto-sync on and a recent reconcile, something is mutating resources after each apply. The Issue calls out likely culprits (mutating webhook, sibling controller, schema migration)
 - **Manual drift without auto-sync** — drift exists but auto-sync is disabled. The Issue tells you "nothing will reconcile until you click Sync" so you stop waiting
 - **Argo Application conditions** — `ComparisonError` (verify repo creds), `OrphanedResourceWarning`, `InvalidSpecError`, etc. extracted into typed-severity Issues
-- **Per-resource health** — Degraded / Missing children get a critical Issue each, deduped against any operation failure that already named the same resource (no triplicate rendering)
+- **Per-resource health** — Degraded / Missing children get a critical Issue each, deduped against any operation failure that already named the same resource (no triplicate rendering). See [Per-resource health](#per-resource-health) for where that health comes from
 - **Pending deletion** (lifecycle) — see [Lifecycle awareness](#lifecycle-awareness) below
 
 **Structured remediation** — when the diagnosis pipeline recognizes a fixable failure (e.g. Argo operation error "namespace X not found"), the Issue carries a primary-blue action button that performs the fix in one click. Duplicate per-resource Missing issues + SyncError condition rows are then suppressed so the user sees one clear "create the namespace and retry" path instead of three.
 
 While an operation is running, the page polls every 2s; otherwise on-demand.
+
+### Per-resource health
+
+The health chip on each managed resource (tree node, Resources table, per-resource Issues) comes from one of two places, and Radar tells you which:
+
+- **Argo CD's own verdict.** Argo evaluates every managed resource it has a health check for (built-in checks for core kinds and many CRDs, plus your `resource.customizations`) and rolls the results up into the Application's health. Up to Argo CD 2.x this per-resource result was also written into the Application object (`status.resources[].health`), and that is what Radar reads.
+- **Radar's own read.** Argo CD 3.0 changed the default: the controller no longer persists per-resource health into the Application (`status.resourceHealthSource: appTree`, controlled by `controller.resource.health.persist` in `argocd-cmd-params-cm`). The app-level health still rolls up, but every managed resource in the object is left without one. When Radar sees that, it reads the live resources itself through its issues engine (crash loops, image pulls, failed `Ready` conditions and so on) and reports what it finds. Those rows carry a **Radar** marker, and a notice above the Issues band says that the problems listed are Radar's findings. Radar only reports problems this way; it never marks a resource Healthy on Argo's behalf, and a resource it has nothing on is shown without a health value.
+
+Two things follow from that. A resource Argo has no health check for (so Argo ignores it) can still show a Radar finding if it is unhealthy: that is Radar's read, not a change in Argo's verdict, and the marker says so. And an Application that deploys to another cluster gets neither: Radar can only read the cluster it is connected to, so it derives nothing and says why.
+
+If you want Argo's per-resource verdicts back in the object, set `controller.resource.health.persist: "true"` in `argocd-cmd-params-cm` and restart the application controller. Radar switches back to Argo's values automatically.
 
 ## Lifecycle awareness
 

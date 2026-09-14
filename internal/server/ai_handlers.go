@@ -467,6 +467,7 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	auditSum := computeAuditSummaryForResource(cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
+		Reflections:   k8s.ReflectionLookup{Cache: cache},
 		Tier:          resourcecontext.TierBasic,
 		AccessChecker: s.newRequestScopedChecker(r),
 		IssueSummary:  issueSum,

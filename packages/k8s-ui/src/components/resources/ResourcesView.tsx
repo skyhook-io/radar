@@ -3,6 +3,7 @@ import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
 import { PaneLoader } from '../ui/PaneLoader'
 import { RestrictedState } from '../ui/RestrictedState'
+import { FetchResult } from '../ui/FetchResult'
 import { Input } from '../ui/Input'
 import type { TopPodMetrics, TopNodeMetrics, ContainerResourceMetrics } from '../../types'
 import {
@@ -4987,11 +4988,13 @@ export function ResourcesView({
   // forbidden/unavailable in counts (e.g. an informer not yet synced at counts
   // time) while the list query has since returned data — show the table, not
   // RestrictedState. A 403 on the list itself never carries rows, so it still
-  // forces the restricted state.
+  // forces the restricted state. A non-403 list error also beats the counts
+  // entry: a kind whose sync deadline fired is reported unavailable by counts,
+  // but the list knows it failed to load — that is not an RBAC answer.
   const selectedHasRows = Array.isArray(resources) && resources.length > 0
   const isSelectedForbidden =
     isForbiddenError(selectedQueryError) ||
-    (!selectedHasRows && forbiddenKinds.has(selectedKindCountKey))
+    (!selectedHasRows && !selectedQueryError && forbiddenKinds.has(selectedKindCountKey))
 
   // Reset sort and filters when kind changes (but not when syncing from URL navigation)
   // Track previous kind to skip on mount (where the effect fires but kind hasn't actually changed)
@@ -6277,6 +6280,15 @@ export function ResourcesView({
                 />
               </div>
             </div>
+          ) : selectedQueryError && !Array.isArray(resources) ? (
+            // A failed fetch with no rows to fall back on must not reach the
+            // empty state below — it would tell the user the cluster has none.
+            <FetchResult
+              loading={false}
+              error={selectedQueryError}
+              onRetry={selectedQuery?.refetch}
+              className="absolute inset-0"
+            />
           ) : largeListGuard ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-theme-text-tertiary px-6 text-center">
               <AlertTriangle className="w-8 h-8 text-amber-400 mb-2" />

@@ -143,6 +143,6 @@ func BuildManagedTree(app, appNamespace string, matched []*unstructured.Unstruct
 		Root:    root,
 		Nodes:   nodes,
 		Edges:   edges,
-		Summary: summarize(nodes),
+		Summary: Summarize(nodes),
 	}
 }

@@ -51,18 +51,64 @@ func InitLoadTestResourceCache(client kubernetes.Interface) error {
 		return err
 	}
 
-	initialSyncComplete = core.IsSyncComplete()
+	initialSyncComplete.Store(core.IsSyncComplete())
 
-	resourceCache = &ResourceCache{
+	resourceCache.Store(&ResourceCache{
 		ResourceCache:               core,
 		secretsEnabled:              true,
 		cronJobScheduleObservations: cronJobScheduleObservations,
 		secretWriteTimes:            secretWriteTimes,
-	}
+	})
 
 	cacheOnce = new(sync.Once)
 	cacheOnce.Do(func() {})
 
+	return nil
+}
+
+// InitTestPromotedSyncingCache builds a cache whose Phase-1 wait returns via
+// the patience/minimal-set path while some critical kinds are still syncing
+// (delay their informer start via syncDelays), promoting them at runtime — the
+// state a SyncTimeout produces in production. syncTimeout bounds Phase 1 and
+// deferredSyncTimeout bounds the promoted kinds' background sync, so a test
+// can walk the full progressive contract: kind_sync_pending -> kind_sync_failed
+// -> served after a late sync. Call ResetResourceCache to clean up.
+//
+// This is intended for integration tests only.
+func InitTestPromotedSyncingCache(client kubernetes.Interface, syncTimeout, deferredSyncTimeout time.Duration, syncDelays map[string]time.Duration) error {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+
+	secretWriteTimes := newSecretDataManagerWriteIndex()
+	cronJobScheduleObservations := newCronJobScheduleObservationTracker()
+	cfg := k8score.CacheConfig{
+		Client:              client,
+		ResourceTypes:       allTestResourceTypes(),
+		DeferredTypes:       map[string]bool{},
+		PatienceWindow:      20 * time.Millisecond,
+		MinimalSet:          map[string]bool{"services": true},
+		SyncTimeout:         syncTimeout,
+		DeferredSyncTimeout: deferredSyncTimeout,
+		// Delaying the informer START is the only safe way to hold a kind
+		// unsynced against a fake clientset: a blocking list reactor wedges
+		// every other kind too (reactors run under the fake's lock).
+		DebugSyncDelays: syncDelays,
+	}
+
+	core, err := k8score.NewResourceCache(cfg)
+	if err != nil {
+		return err
+	}
+
+	initialSyncComplete.Store(core.IsSyncComplete())
+	resourceCache.Store(&ResourceCache{
+		ResourceCache:               core,
+		secretsEnabled:              true,
+		cronJobScheduleObservations: cronJobScheduleObservations,
+		secretWriteTimes:            secretWriteTimes,
+	})
+	cacheOnce = new(sync.Once)
+	cacheOnce.Do(func() {})
 	return nil
 }
 
@@ -121,20 +167,20 @@ func initTestResourceCache(client kubernetes.Interface, scopes map[string]k8scor
 		return err
 	}
 
-	initialSyncComplete = true
+	initialSyncComplete.Store(true)
 
-	resourceCache = &ResourceCache{
+	resourceCache.Store(&ResourceCache{
 		ResourceCache:               core,
 		secretsEnabled:              true,
 		cronJobScheduleObservations: cronJobScheduleObservations,
 		secretWriteTimes:            secretWriteTimes,
-	}
+	})
 
 	// Mark cacheOnce as "already executed" so InitResourceCache is a no-op.
 	cacheOnce = new(sync.Once)
 	cacheOnce.Do(func() {})
 
-	waitForInformerStatuses(resourceCache)
+	waitForInformerStatuses(resourceCache.Load())
 
 	return nil
 }

@@ -48,6 +48,16 @@ const DEFAULT_ASSURANCES = [
   '3 clusters free, no card required',
 ]
 const SIGNUP_QUERY = '?utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal'
+
+// Other OSS surfaces (a GitOps app that deploys to another cluster, say)
+// point at Radar Cloud by asking this button to open its dialog, so there
+// is one pitch and one flow. The button is mounted whenever Radar runs
+// standalone; embedded hosts never mount it and never dispatch this.
+const OPEN_EVENT = 'radar:open-cloud-funnel'
+
+export function openCloudFunnel() {
+  window.dispatchEvent(new Event(OPEN_EVENT))
+}
 const ABOUT_URL = 'https://radarhq.io/about'
 const PRICING_URL = 'https://radarhq.io/pricing'
 const SELF_HOSTED_DOCS_URL = 'https://radarhq.io/docs/cloud/self-hosted/'
@@ -166,6 +176,11 @@ export function CloudFunnelButton() {
     setInFlowView(false)
     setBlocked(null)
   }
+
+  useEffect(() => {
+    window.addEventListener(OPEN_EVENT, openModal)
+    return () => window.removeEventListener(OPEN_EVENT, openModal)
+  })
 
   // Re-attach to a server-owned flow whenever one is observed while the modal
   // is open — the status query may resolve after openModal ran.

@@ -2,6 +2,52 @@
 
 Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar provides dedicated detail views, topology edges, smart table columns, and AI-optimized summaries for seamless integration.
 
+### ConfigMap and Secret reflection (Reflector)
+
+[EmberStack Reflector](https://github.com/emberstack/kubernetes-reflector) copies
+core Secrets and ConfigMaps between namespaces using annotations. It needs no CRDs.
+
+**Resource details:** ordinary Secrets and ConfigMaps are unchanged. Mirrors show compact source navigation and edit guidance before their data, after Secret identity and certificate-expiry alerts. Detailed settings follow the data in a collapsible **Reflector** section
+showing source/mirror role, automatic versus manual mirrors, reflection permission,
+and configured namespace name patterns and label selectors. Visible sources and
+mirrors are linked directly. Source section titles show the visible mirror count; expanding shows five mirrors initially, with a control to show all. Automatic creation requires reflection permission;
+name patterns and selectors are alternatives within each rule on controller versions
+that support selectors. Radar displays these rules without predicting a destination
+set or evaluating the controller's regular expressions.
+
+**Recorded copy evidence:** mirrors show `reflected-version` and `reflected-at` when
+present. When the source is visible, Radar compares its observed resource version
+with the mirror's recorded version. These cached observations can lag reconciliation.
+This is metadata evidence, not a content or
+health check: metadata-only changes advance source versions, and editing a mirror
+can leave its recorded version unchanged. Mirror details and Secret edit confirmation
+explain that local changes may persist until a source update overwrites them.
+
+**Configuration checks:** local warnings identify malformed or self-referencing
+source declarations, invalid boolean settings, automatic creation without reflection
+permission, sources with visible mirrors but disabled reflection, and mirror chains that do not propagate updates as ordinary sources.
+These appear in resource details, not as cluster-wide health findings.
+
+**Topology:** when both objects are visible, the mirror's `reflects` annotation
+creates a **Reflects to** configuration edge from source to mirror, including mirrors
+with a different name. It represents a declaration, not Kubernetes ownership or
+successful synchronization. Namespace filters apply. Secret nodes are hidden by
+default and require Secret list access when included. The REST resource-detail relationship response also
+identifies reflection sources and mirrors explicitly.
+
+**Agent context (MCP and REST):** `get_resource` and the REST AI resource context expose an optional `resourceContext.reflection` block. It separates `declaredSource` from an authorized observed `source`, includes recorded copy metadata and the authorized source resource version, and lists up to 20 `visibleMirrors` with `truncated` when more authorized mirrors were observed. This lookup spans namespaces in the available cache independently of the resource-context graph. Unreadable endpoints and their versions are withheld; omitted-field reasons describe unavailable cache evidence or denied access. These observations do not prove complete distribution or synchronization health.
+
+**Partial visibility:** unavailable sources are not called missing, and visible mirror
+counts are not expected totals. Radar does not diagnose absent mirrors, name conflicts,
+controller availability, or synchronization lag. Controller configuration and version
+can further restrict eligible namespaces. Inspect controller logs when a declared
+relationship is not being reconciled.
+
+| Resource | Group | Topology | Detail View |
+|----------|-------|----------|-------------|
+| ConfigMap | Core | Source → mirror configuration edge | Reflection settings, visible mirrors, source navigation, copy-version evidence, local configuration warnings |
+| Secret | Core | Source → mirror configuration edge when included and authorized | Same metadata-only reflection details; values remain behind existing reveal controls |
+
 ---
 
 ## Karpenter

@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { GitOpsChange, GitOpsHistoryItem, GitOpsInsight, GitOpsInsightRef, GitOpsIssue, GitOpsPlanItem, GitOpsRemediation, GitOpsResourceTree, GitOpsTreeNode } from '../../../types'
 import { HealthStatusBadge, SyncStatusBadge } from '../GitOpsStatusBadge'
+import { radarHealthNote } from '../health-provenance'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '../../../utils/badge-colors'
 import { formatRelativeAgeTime } from '../../../utils/format'
 import { Tooltip } from '../../ui/Tooltip'
@@ -604,31 +605,36 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
         }}
         disabled={headlineAction === 'none'}
         className={clsx(
-          'group flex w-full items-center gap-2 px-4 py-2 text-left text-xs transition-colors',
+          'group flex w-full flex-col gap-0.5 px-4 py-2 text-left text-xs transition-colors',
           headlineAction !== 'none' ? 'hover:bg-theme-hover/50' : 'cursor-default',
         )}
         aria-expanded={canExpand ? expanded : undefined}
       >
-        {tone.icon}
-        <span className={clsx('shrink-0 font-semibold', tone.text)}>{headline.reason}</span>
-        <span className="min-w-0 flex-1 truncate text-theme-text-secondary">{headline.message}</span>
-        {/* Inline count when there are more issues behind the headline.
-            Lightweight text — pairs with the chevron as a single disclosure
-            unit instead of a separator-bordered count button. */}
-        {remaining > 0 && (
-          <span className="shrink-0 text-[11px] text-theme-text-tertiary">
-            +{remaining} more
-          </span>
+        <div className="flex w-full items-center gap-2">
+          {tone.icon}
+          <span className={clsx('shrink-0 font-semibold', tone.text)}>{headline.reason}</span>
+          <span className="min-w-0 flex-1 truncate text-theme-text-secondary">{headline.message}</span>
+          {/* Inline count when there are more issues behind the headline.
+              Lightweight text — pairs with the chevron as a single disclosure
+              unit instead of a separator-bordered count button. */}
+          {remaining > 0 && (
+            <span className="shrink-0 text-[11px] text-theme-text-tertiary">
+              +{remaining} more
+            </span>
+          )}
+          {/* Open-resource pill: only shown when the row's action IS to open
+              (single-issue case). When the row expands, the per-row Open
+              pills live inside the expanded section, scoped to each item. */}
+          {headlineAction === 'open' && headlineRef && (
+            <span className="shrink-0 text-[11px] font-medium text-theme-text-secondary opacity-70 transition-opacity group-hover:opacity-100">
+              Open {refText(headlineRef)} →
+            </span>
+          )}
+          {canExpand && <CollapseChevron open={expanded} className="h-3.5 w-3.5" />}
+        </div>
+        {headline.cause && (
+          <p className="truncate pl-[22px] text-[11px] text-theme-text-tertiary">{headline.cause}</p>
         )}
-        {/* Open-resource pill: only shown when the row's action IS to open
-            (single-issue case). When the row expands, the per-row Open
-            pills live inside the expanded section, scoped to each item. */}
-        {headlineAction === 'open' && headlineRef && (
-          <span className="shrink-0 text-[11px] font-medium text-theme-text-secondary opacity-70 transition-opacity group-hover:opacity-100">
-            Open {refText(headlineRef)} →
-          </span>
-        )}
-        {canExpand && <CollapseChevron open={expanded} className="h-3.5 w-3.5" />}
       </button>
       {canExpand && (
         <Collapse open={expanded}>
@@ -1225,6 +1231,9 @@ function buildTreeExtras(nodes: GitOpsTreeNode[], declared: GitOpsChange[]): Git
       category: 'Unknown',
       sync: n.sync,
       health: n.health,
+      // No healthSource: generated rows are always Radar's read and never
+      // had a controller verdict to be distinguished from.
+      message: n.healthMessage,
       hasDesired: false,
       hasLive: true,
       partial: true,
@@ -1347,6 +1356,7 @@ function ChangeRow({
   // and offer "View in Git →" instead so the operator can read the
   // declared source instead of a non-existent live object.
   const isAbsent = change.health === 'Missing' && !change.hasLive
+  const radarNote = radarHealthNote({ health: change.health, healthSource: change.healthSource, healthMessage: change.message })
   const handleRowClick = () => {
     if (expandable) {
       setExpanded((v) => !v)
@@ -1453,7 +1463,16 @@ function ChangeRow({
             <SyncStatusBadge sync={normalizeSyncStatus(change.sync ?? change.category)} />
           )}
         </div>
-        <div className="self-start"><HealthStatusBadge health={normalizeHealthStatus(change.health)} /></div>
+        <div className="flex flex-col items-start gap-1 self-start">
+          <HealthStatusBadge health={normalizeHealthStatus(change.health)} />
+          {radarNote && (
+            <Tooltip content={radarNote} delay={200} wrapperClassName="inline-flex">
+              <span className="cursor-help select-none rounded border border-theme-border bg-theme-elevated/70 px-1.5 py-0.5 text-[10px] leading-3 text-theme-text-tertiary">
+                Found by Radar
+              </span>
+            </Tooltip>
+          )}
+        </div>
         <div className="self-start space-y-1.5">
           {syncResourceButton && syncResourceDisabledReason ? (
             <Tooltip content={syncResourceDisabledReason} delay={200} wrapperClassName="block">

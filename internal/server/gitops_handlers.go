@@ -146,13 +146,85 @@ func (s *Server) handleGitOpsTree(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	tree, _, err := s.buildGitOpsTree(r.Context(), req)
+	tree, _, _, err := s.resolveGitOpsTree(r, req)
 	if err != nil {
 		s.writeGitOpsBuildError(w, req, err)
 		return
 	}
-	tree = s.filterGitOpsTreeForUser(r, req, tree)
 	s.writeJSON(w, tree)
+}
+
+// resolveGitOpsTree is the one path both detail endpoints take from a parsed
+// request to a servable tree: build, overlay Radar's own health where the
+// controller's isn't in the CR, drop what the user may not see, then count
+// what's left. The tree and insights endpoints are separate requests; sharing
+// this keeps a node's health identical in both responses. The returned
+// resolver already carries this request's access gate so insights can reuse
+// it (and its once-per-request issue-engine composition) instead of building
+// a second one.
+func (s *Server) resolveGitOpsTree(r *http.Request, req *gitopsRequest) (*gitopstree.ResourceTree, *unstructured.Unstructured, *insightsResolver, error) {
+	tree, root, err := s.buildGitOpsTree(r.Context(), req)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	canAccess := func(group, kind, namespace, name string) bool {
+		return s.canAccessGitOpsRef(r, req, group, kind, namespace, name, false)
+	}
+	resolver := newInsightsResolver(r.Context(), req.Cache, req.AllowedNamespaces, canAccess)
+	memoKey := gitopsIssuesMemoKey(auth.UserFromContext(r.Context()), req.AllowedNamespaces)
+	resolver.composed = func() ([]issues.Issue, []issues.Issue) {
+		return s.gitopsIssuesMemo.load(memoKey, resolver.composeIssues)
+	}
+	overlayRadarHealth(tree, root, resolver.ResourceProblems)
+	tree = s.filterGitOpsTreeForUser(r, req, tree)
+	tree.Summary = gitopstree.Summarize(tree.Nodes)
+	return tree, root, resolver, nil
+}
+
+// overlayRadarHealth fills per-resource health from Radar's issues engine
+// when the Argo Application doesn't carry the controller's own
+// (status.resourceHealthSource=appTree, the Argo CD 3 default). It only
+// ever adds problems: a node the engine has nothing on keeps no health, so
+// nothing here claims a resource is Healthy on Argo's behalf. Skipped for a
+// remote destination (Radar's engine reads the local cluster, which could
+// hold an unrelated same-named object) and for an app Argo calls Healthy
+// (the engine may still hold a warning; contradicting the controller's
+// verdict on a node, and composing the cluster's issues on every poll of a
+// healthy app, are both worse than leaving it). A node whose health is
+// Radar's own topology read (Progressing at 1/2 replicas, say) is still a
+// candidate: the engine's classified finding is the more specific Radar
+// answer and replaces it. Controller-sourced health is final. problems is
+// the resolver's ResourceProblems, which applies the request's per-user
+// access gate.
+func overlayRadarHealth(tree *gitopstree.ResourceTree, root *unstructured.Unstructured, problems func(group, kind, namespace, name string) []gitopsinsights.ResourceProblem) {
+	if tree == nil || root == nil || problems == nil {
+		return
+	}
+	if tree.HealthMode != gitopstree.HealthModeAppTree || tree.RemoteDestination {
+		return
+	}
+	if appHealth, _, _ := unstructured.NestedString(root.Object, "status", "health", "status"); appHealth == "Healthy" {
+		return
+	}
+	for i := range tree.Nodes {
+		n := &tree.Nodes[i]
+		if n.Role != gitopstree.RoleDeclared {
+			continue
+		}
+		if n.Health != "" && n.HealthSource != gitopstree.HealthSourceRadar {
+			continue
+		}
+		problem, ok := gitopsinsights.WorstResourceProblem(problems(n.Ref.Group, n.Ref.Kind, n.Ref.Namespace, n.Ref.Name))
+		if !ok {
+			continue
+		}
+		n.Health = "Degraded"
+		n.HealthSource = gitopstree.HealthSourceRadar
+		n.HealthReason = problem.Reason
+		n.HealthMessage = problem.Message
+		n.HealthSeverity = problem.Severity
+		n.TopologyStatus = "unhealthy"
+	}
 }
 
 func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
@@ -169,17 +241,17 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	tree, root, err := s.buildGitOpsTree(r.Context(), req)
+	tree, root, resolver, err := s.resolveGitOpsTree(r, req)
 	if err != nil {
 		s.writeGitOpsBuildError(w, req, err)
 		return
 	}
-	tree = s.filterGitOpsTreeForUser(r, req, tree)
-	canAccess := func(group, kind, namespace, name string) bool {
-		return s.canAccessGitOpsRef(r, req, group, kind, namespace, name, false)
+	// A remote-destination app's resources aren't in this cluster; the
+	// insights builder won't ask for them, so don't fan out GETs for
+	// same-named local objects either.
+	if !tree.RemoteDestination {
+		resolver.prefetchLive(gitopsinsights.ManagedResourceRows(root), gitopsinsights.OperationPhase(root))
 	}
-	resolver := newInsightsResolver(r.Context(), req.Cache, req.AllowedNamespaces, canAccess)
-	resolver.prefetchLive(gitopsinsights.ManagedResourceRows(root), gitopsinsights.OperationPhase(root))
 	insight := gitopsinsights.Build(root, tree, resolver)
 	insight.Warnings = appendWarnings(insight.Warnings, tree.Warnings...)
 	insight = s.filterGitOpsInsightForUser(r, req, insight)
@@ -509,7 +581,7 @@ func (s *Server) filterGitOpsTreeForUser(r *http.Request, req *gitopsRequest, tr
 	if keep[tree.Root.ID] {
 		out.Root = tree.Root
 	}
-	out.Summary = summarizeGitOpsTree(filteredNodes)
+	out.Summary = gitopstree.Summarize(filteredNodes)
 	out.Warnings = appendWarnings(append([]string{}, tree.Warnings...), "Some managed resources are hidden by RBAC.")
 	return &out
 }
@@ -603,27 +675,6 @@ func appendWarnings(existing []string, warnings ...string) []string {
 	return existing
 }
 
-func summarizeGitOpsTree(nodes []gitopstree.Node) gitopstree.Summary {
-	var s gitopstree.Summary
-	for _, n := range nodes {
-		switch n.Role {
-		case gitopstree.RoleDeclared:
-			s.Declared++
-		case gitopstree.RoleGenerated:
-			s.Generated++
-		case gitopstree.RoleGroup:
-			s.Grouped += n.Count
-		}
-		if n.Health == "Degraded" || n.Health == "Missing" {
-			s.Degraded++
-		}
-		if n.Sync == "OutOfSync" {
-			s.OutOfSync++
-		}
-	}
-	return s
-}
-
 func (s *Server) canAccessGitOpsRef(r *http.Request, req *gitopsRequest, group, kind, namespace, name string, root bool) bool {
 	if auth.UserFromContext(r.Context()) == nil {
 		return true
@@ -679,6 +730,9 @@ type insightsResolver struct {
 	composeOnce     sync.Once
 	composedFlat    []issues.Issue
 	composedGrouped []issues.Issue
+	// composed, when set by the host, supplies the composition (memoized
+	// across requests); nil composes inline, which tests and other hosts use.
+	composed func() ([]issues.Issue, []issues.Issue)
 
 	// livePrefetched flips GetLive into map-only mode: prefetchLive resolved
 	// (or deliberately skipped) every ref the Changes builder will ask for,
@@ -855,14 +909,11 @@ func (r *insightsResolver) ResourceProblems(group, kind, namespace, name string)
 		return nil
 	}
 	r.composeOnce.Do(func() {
-		r.composedFlat = issues.Compose(issues.NewCacheProvider(), issues.Filters{
-			Namespaces: r.allowedNamespaces,
-			Limit:      issues.NoLimit,
-			CanReadRelated: func(ref issues.Ref) bool {
-				return r.canAccess != nil && r.canAccess(ref.Group, ref.Kind, ref.Namespace, ref.Name)
-			},
-		})
-		r.composedGrouped = issues.GroupIssues(r.composedFlat)
+		if r.composed != nil {
+			r.composedFlat, r.composedGrouped = r.composed()
+			return
+		}
+		r.composedFlat, r.composedGrouped = r.composeIssues()
 	})
 	related := issues.RelatedIssuesFrom(r.composedFlat, r.composedGrouped, issues.RelatedIssueOptions{
 		CanReadRelated: func(ref issues.Ref) bool {
@@ -964,6 +1015,19 @@ func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []g
 		})
 	}
 	return out
+}
+
+// composeIssues runs the cluster-wide issues engine for this request's
+// namespaces, redacting related refs the caller can't read.
+func (r *insightsResolver) composeIssues() ([]issues.Issue, []issues.Issue) {
+	flat := issues.Compose(issues.NewCacheProvider(), issues.Filters{
+		Namespaces: r.allowedNamespaces,
+		Limit:      issues.NoLimit,
+		CanReadRelated: func(ref issues.Ref) bool {
+			return r.canAccess != nil && r.canAccess(ref.Group, ref.Kind, ref.Namespace, ref.Name)
+		},
+	})
+	return flat, issues.GroupIssues(flat)
 }
 
 // FinalizerOwnerStatus implements gitopsinsights.Resolver.

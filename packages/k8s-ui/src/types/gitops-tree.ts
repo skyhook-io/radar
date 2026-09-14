@@ -24,6 +24,16 @@ export interface GitOpsTreeNode {
   tool: GitOpsTreeTool
   sync?: SyncStatus
   health?: GitOpsHealthStatus
+  // Who assessed `health`. 'controller' is the GitOps controller's own
+  // verdict; 'radar' is Radar's read of the live object (topology status, or
+  // the issues engine's finding when the controller's verdict isn't
+  // available). The UI labels 'radar' values so they never pass as the
+  // controller's. Absent when `health` is absent. Kept open for sources a
+  // newer backend may add — unknown values render without a label.
+  healthSource?: GitOpsHealthSource
+  healthReason?: string
+  healthMessage?: string
+  healthSeverity?: 'critical' | 'warning' | (string & {})
   topologyStatus?: HealthStatus
   info?: GitOpsTreeInfoItem[]
   resource?: unknown
@@ -31,6 +41,13 @@ export interface GitOpsTreeNode {
   count?: number
   data?: Record<string, unknown>
 }
+
+export type GitOpsHealthSource = 'controller' | 'radar' | (string & {})
+
+// Where an Argo CD Application keeps per-resource health. 'appTree' is the
+// Argo CD 3 default: the controller's per-resource verdicts are not in the
+// Application object, so any node health present came from Radar.
+export type GitOpsHealthMode = 'inline' | 'appTree' | (string & {})
 
 export type GitOpsTreeEdgeType = 'owns' | 'source' | 'dependsOn'
 
@@ -54,4 +71,8 @@ export interface GitOpsResourceTree {
   edges: GitOpsTreeEdge[]
   warnings?: string[]
   summary?: GitOpsTreeSummary
+  healthMode?: GitOpsHealthMode
+  // The Application deploys to another cluster; Radar derives nothing about
+  // its resources from here.
+  remoteDestination?: boolean
 }

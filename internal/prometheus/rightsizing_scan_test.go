@@ -9,8 +9,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/skyhook-io/radar/pkg/prom"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 type fakeScanQuerier struct {
@@ -333,5 +341,149 @@ func TestMarkScanHPAAvailableIsNamespaceScoped(t *testing.T) {
 	markScanHPAAvailable(workloads, "team-a")
 	if !workloads["a"].workload.hpaAvailable || workloads["b"].workload.hpaAvailable {
 		t.Fatalf("HPA evidence availability crossed namespaces: %+v", workloads)
+	}
+}
+
+// A denied pod lister and a workload whose pods are simply healthy both leave
+// currentPodOOM empty. Only the flag separates them, and a recommendation that
+// silently drops OOM evidence looks identical to one that found none.
+func TestScanMarksWorkloadsWhenPodInventoryIsUnreadable(t *testing.T) {
+	oomed := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6-a", OwnerReferences: []metav1.OwnerReference{scopeOwner("ReplicaSet", "api-7f6")}},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			Name:                 "api",
+			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"}},
+		}}},
+	}
+	replicaSet := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6", OwnerReferences: []metav1.OwnerReference{scopeOwner("Deployment", "api")}}}
+
+	newWorkloads := func() map[string]*scanWorkload {
+		return map[string]*scanWorkload{
+			workloadIdentity("Deployment", "shop", "api"): {
+				kind: "Deployment", namespace: "shop", name: "api",
+				workload: rightsizingWorkload{currentPodOOM: map[string]bool{}},
+			},
+		}
+	}
+	scopes := map[string][]string{"Deployment": {"shop"}}
+
+	t.Run("pods readable", func(t *testing.T) {
+		cache := scopeTestCache(t, map[string]bool{k8score.Pods: true, k8score.ReplicaSets: true}, replicaSet, oomed)
+		workloads := newWorkloads()
+		enrichScanCurrentOOM(context.Background(), cache, scopes, workloads)
+		got := workloads[workloadIdentity("Deployment", "shop", "api")].workload
+		if got.liveInventoryUnavailable {
+			t.Error("pods were readable; the row must not claim the inventory was denied")
+		}
+		if !got.currentPodOOM["api"] {
+			t.Error("an OOMKilled container was in the cache but did not reach the workload")
+		}
+	})
+
+	t.Run("pod lister denied", func(t *testing.T) {
+		cache := scopeTestCache(t, map[string]bool{k8score.ReplicaSets: true}, replicaSet)
+		workloads := newWorkloads()
+		enrichScanCurrentOOM(context.Background(), cache, scopes, workloads)
+		got := workloads[workloadIdentity("Deployment", "shop", "api")].workload
+		if !got.liveInventoryUnavailable {
+			t.Error("the pod lister was denied, so the empty OOM map must be reported as unanswered")
+		}
+		if got.currentPodOOM["api"] {
+			t.Error("no pods were readable; nothing may be claimed about OOM")
+		}
+	})
+}
+
+// A pod names the ReplicaSet that owns it, never the Deployment. Without the
+// ReplicaSet lister every Deployment silently collects no OOM evidence, while
+// a StatefulSet in the same scan is unaffected — so the flag has to follow the
+// kind that actually lost its ownership path.
+func TestScanMarksOnlyDeploymentsWhenReplicaSetOwnershipIsUnreadable(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "api-7f6-a", OwnerReferences: []metav1.OwnerReference{scopeOwner("ReplicaSet", "api-7f6")}},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{
+			Name:                 "api",
+			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"}},
+		}}},
+	}
+	cache := scopeTestCache(t, map[string]bool{k8score.Pods: true}, pod)
+	workloads := map[string]*scanWorkload{
+		workloadIdentity("Deployment", "shop", "api"): {
+			kind: "Deployment", namespace: "shop", name: "api",
+			workload: rightsizingWorkload{currentPodOOM: map[string]bool{}},
+		},
+		workloadIdentity("StatefulSet", "shop", "cache"): {
+			kind: "StatefulSet", namespace: "shop", name: "cache",
+			workload: rightsizingWorkload{currentPodOOM: map[string]bool{}},
+		},
+	}
+	enrichScanCurrentOOM(context.Background(), cache, map[string][]string{"Deployment": {"shop"}}, workloads)
+
+	if !workloads[workloadIdentity("Deployment", "shop", "api")].workload.liveInventoryUnavailable {
+		t.Error("no ReplicaSet lister, so the Deployment never sees its pods; that has to be reported")
+	}
+	if workloads[workloadIdentity("StatefulSet", "shop", "cache")].workload.liveInventoryUnavailable {
+		t.Error("a StatefulSet owns its pods directly and lost nothing; it must not be flagged")
+	}
+}
+
+// A synced, non-nil pod lister still only answers for the namespaces its
+// informer watches. Radar runs this way whenever cluster-wide list is denied
+// and the probe falls back to specific namespaces, so a scan can legitimately
+// span one namespace it can read and one it cannot — and an empty result for
+// the second is no answer, not an absence of OOM kills.
+func TestScanMarksWorkloadsOutsideTheInformersNamespaces(t *testing.T) {
+	t.Helper()
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{
+		Client:        fake.NewClientset(),
+		ResourceTypes: map[string]bool{k8score.Pods: true},
+		DeferredTypes: map[string]bool{},
+		ResourceScopes: map[string]k8score.ResourceScope{
+			k8score.Pods: {Enabled: true, Namespace: "team-a"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache: %v", err)
+	}
+	t.Cleanup(core.Stop)
+	cache := &k8s.ResourceCache{ResourceCache: core}
+
+	workloads := map[string]*scanWorkload{
+		workloadIdentity("StatefulSet", "team-a", "watched"): {
+			kind: "StatefulSet", namespace: "team-a", name: "watched",
+			workload: rightsizingWorkload{currentPodOOM: map[string]bool{}},
+		},
+		workloadIdentity("StatefulSet", "team-b", "unwatched"): {
+			kind: "StatefulSet", namespace: "team-b", name: "unwatched",
+			workload: rightsizingWorkload{currentPodOOM: map[string]bool{}},
+		},
+	}
+	enrichScanCurrentOOM(context.Background(), cache, map[string][]string{"StatefulSet": {"team-a", "team-b"}}, workloads)
+
+	if workloads[workloadIdentity("StatefulSet", "team-a", "watched")].workload.liveInventoryUnavailable {
+		t.Error("team-a is watched, so its empty pod list is authoritative and must not be flagged")
+	}
+	if !workloads[workloadIdentity("StatefulSet", "team-b", "unwatched")].workload.liveInventoryUnavailable {
+		t.Error("team-b is outside the informer's scope; its empty result proves nothing and must be reported")
+	}
+}
+
+// A scan holding no Deployments resolves every pod through a direct owner, so
+// it must not spend the warming budget on the deferred ReplicaSet informer.
+func TestScanSkipsReplicaSetWaitWithoutDeployments(t *testing.T) {
+	cache := scopeTestCache(t, map[string]bool{k8score.Pods: true})
+	workloads := map[string]*scanWorkload{
+		workloadIdentity("DaemonSet", "shop", "agent"): {
+			kind: "DaemonSet", namespace: "shop", name: "agent",
+			workload: rightsizingWorkload{currentPodOOM: map[string]bool{}},
+		},
+	}
+	if scanNeedsReplicaSets(workloads) {
+		t.Fatal("a DaemonSet-only scan reported that it needs ReplicaSet ownership")
+	}
+	start := time.Now()
+	enrichScanCurrentOOM(context.Background(), cache, map[string][]string{"DaemonSet": {"shop"}}, workloads)
+	if elapsed := time.Since(start); elapsed >= warmingRetryBudget {
+		t.Errorf("waited %v on ReplicaSets a DaemonSet-only scan never reads", elapsed)
 	}
 }

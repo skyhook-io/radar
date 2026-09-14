@@ -1,5 +1,6 @@
 // Utility functions for resource display in tables
 
+import { effectivePolicyTypeNames } from '../../utils/network-policy'
 import { formatCPUString, formatMemoryString, formatBytes } from '../../utils/format'
 import { pluralize } from '../../utils/pluralize'
 import type { WorkloadPodInfo } from '../../types/core'
@@ -2068,8 +2069,7 @@ export function getWorkflowTemplateEntrypoint(wt: any): string {
 // ============================================================================
 
 export function getNetworkPolicyTypes(np: any): string {
-  const types = np.spec?.policyTypes || []
-  return types.join(', ') || '-'
+  return effectivePolicyTypeNames(np.spec).join(', ')
 }
 
 export function getNetworkPolicyRuleCount(np: any): { ingress: number; egress: number } {

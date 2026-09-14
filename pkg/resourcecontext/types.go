@@ -30,6 +30,7 @@ import "time"
 // emerges that needs deterministic prose, add it as a separate
 // `explain_resource` tool rather than re-introducing it inline here.
 type ResourceContext struct {
+	Reflection      *ReflectionContext `json:"reflection,omitempty"`
 	Tier            ContextTier        `json:"tier"`
 	Owner           *ContextRef        `json:"owner,omitempty"`
 	ManagedBy       []ContextRef       `json:"managedBy,omitempty"`
@@ -665,3 +666,16 @@ const (
 	OmittedCacheCold      OmittedReason = "cache_cold"
 	OmittedNotInstalled   OmittedReason = "not_installed"
 )
+
+// ReflectionContext contains declared metadata and authorized cached observations,
+// never a synchronization verdict. VisibleMirrors is not a complete inventory.
+type ReflectionContext struct {
+	DeclaredSource        string       `json:"declaredSource,omitempty"`
+	Source                *ContextRef  `json:"source,omitempty"`
+	SourceResourceVersion string       `json:"sourceResourceVersion,omitempty"`
+	RecordedSourceVersion string       `json:"recordedSourceVersion,omitempty"`
+	RecordedAt            string       `json:"recordedAt,omitempty"`
+	Automatic             *bool        `json:"automatic,omitempty"`
+	VisibleMirrors        []ContextRef `json:"visibleMirrors,omitempty"`
+	Truncated             bool         `json:"truncated,omitempty"`
+}
