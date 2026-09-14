@@ -1379,17 +1379,39 @@ a policy is shown to anyone authorized to list it under **either** group, since
 either grant is enough to read it.
 
 **Standard NetworkPolicy Detail View:**
-- Pod selector and namespace selector rules
-- Ingress and egress rules with CIDR blocks, ports, and protocols
-- Policy type indicators (Ingress, Egress, or both)
+- Pod selector and namespace selector rules, shown the way Kubernetes applies them: a peer with both selectors is one condition (pods matching X in namespaces matching Y), not two
+- Ingress and egress rules with CIDR blocks, ports, port ranges, and protocols
+- Policy types as the API server applies them: a policy with no `policyTypes` isolates ingress, and egress only when it has egress rules
 - Related resources showing protected workloads
 
-**Traffic View Integration:** When Hubble is available, dropped flows are correlated with the network policies that caused them, showing which policy denied specific traffic in real time.
+**Why was this flow dropped?** When Hubble is the traffic source, every dropped flow in the Traffic view carries a panel that answers three questions in order: what the network plugin recorded when it dropped the packet, what the current Kubernetes NetworkPolicies say about that connection, and what Radar could not check.
+
+Radar reads policies as they are now and says so. It never names a cause it cannot show: when something is missing — the pod is gone, the flow record has no direction, you cannot read the peer's namespace, a Cilium policy is in play — the panel says what was missing instead of guessing.
+
+The common case is a default-deny policy with nothing that allows the client. Cilium reports the drop as a policy drop but names no policy, because no rule matched. Radar's own check names the policy that isolates the pod and explains what it does.
 
 <p align="center">
-  <img src="screenshots/integrations/netpol-traffic-correlation.png" alt="Traffic Drop Correlation" width="800">
-  <br><em>Traffic View — dropped flow with POLICY_DENIED reason and selecting policy correlation</em>
+  <img src="screenshots/integrations/netpol-drop-default-deny.png" alt="Dropped flow with a default-deny NetworkPolicy named by Radar's check" width="900">
+  <br><em>A default-deny NetworkPolicy — Hubble reports POLICY_DENIED without naming a policy; Radar's check names deny-echo-ingress and explains it</em>
 </p>
+
+When the plugin does name the policy — an explicit Cilium deny rule — that is the headline. Radar's check of the Kubernetes policies sits under it as a note, and says honestly that they alone would have allowed the traffic.
+
+<p align="center">
+  <img src="screenshots/integrations/netpol-drop-cilium-attributed.png" alt="Dropped flow attributed by Hubble to a CiliumNetworkPolicy" width="900">
+  <br><em>A CiliumNetworkPolicy ingressDeny — the plugin's attribution leads; the Kubernetes reading is a note under it</em>
+</p>
+
+Cilium merges its own allow rules with Kubernetes ones. So when a Cilium policy governs the pod in the flow's direction, Radar states the Kubernetes reading as a reading, lists the Cilium policy, and does not call the connection allowed or denied on Kubernetes evidence alone.
+
+<p align="center">
+  <img src="screenshots/integrations/netpol-drop-cilium-capped.png" alt="Dropped flow where a Cilium policy caps the Kubernetes-only verdict" width="900">
+  <br><em>A Cilium policy also applies — Radar states what Kubernetes NetworkPolicies alone say and names what it did not evaluate</em>
+</p>
+
+Each policy row says what it does to this connection in plain words: *allows this traffic*, *no matching allow rule*, or *can't evaluate*. NetworkPolicies combine their allow rules, so a policy with no matching rule does not override another policy's allow; the panel says this whenever both kinds of row appear. Drops that are not about policy (an unroutable address, an unsupported protocol) are labeled with the plugin's reason and are not checked against policies. The check shows the time it ran and refreshes while the row is open. What the panel does not do yet: propose the rule that would allow the traffic, or tell you whether a policy changed after the drop.
+
+The panel shows only what you could read yourself: listing policies and reading the pod in that namespace are required, a peer pod or Namespace you cannot read is left unresolved, and a policy name reported by the plugin is withheld when you cannot list policies of that kind. In the Helm chart, the Cloud cluster-read role grants Cilium policy reads under `rbac.crdGroups.cilium` so the panel stays decisive on Cilium clusters.
 
 ### Supported Resources
 
