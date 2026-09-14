@@ -33,6 +33,10 @@ type Client struct {
 	baseURL  string
 	basePath string
 	prom     *prom.Client // rebuilt whenever baseURL/basePath changes
+	// Keep logical backend identity across reconnects: a new local forwarding
+	// port is not a new backend, but automatic failover must invalidate trust.
+	connectedIdentity string
+	connectionEpoch   uint64
 
 	// Discovery state
 	discoveryService           *prom.ServiceInfo // discovered service info for port-forward
@@ -369,6 +373,7 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 	manualURL := ""
 	var headers map[string]string
 	var workloadScope *prom.WorkloadMetricsScope
+	var connectedIdentity string
 	var workloadScopeEverSet bool
 	var beylaJobSelector string
 	var oldCancel context.CancelFunc
@@ -387,6 +392,7 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 			scope := *globalClient.workloadScope
 			scope.ClusterLabels = maps.Clone(scope.ClusterLabels)
 			workloadScope = &scope
+			connectedIdentity = globalClient.connectedIdentity
 			beylaJobSelector = globalClient.beylaJobSelector
 		} else if globalClient.workloadScope != nil {
 			log.Print("[prometheus] Workload metrics scope cleared: Kubernetes connection changed; restart with a fresh scope assertion")
@@ -408,6 +414,7 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 		manualURL:            manualURL,
 		headers:              headers,
 		workloadScope:        workloadScope,
+		connectedIdentity:    connectedIdentity,
 		workloadScopeEverSet: workloadScopeEverSet,
 		beylaJobSelector:     beylaJobSelector,
 		httpClient:           &http.Client{Timeout: 10 * time.Second},
@@ -422,6 +429,12 @@ func (c *Client) DiscoveryGeneration() uint64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.discoveryGen
+}
+
+func (c *Client) backendEpoch() uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.connectionEpoch
 }
 
 // GetStatus returns the current Prometheus connection status.

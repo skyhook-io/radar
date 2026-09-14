@@ -232,6 +232,23 @@ func TestWorkloadMetricsGateBeforeCacheOrPrometheus(t *testing.T) {
 		if w.Code != http.StatusForbidden {
 			t.Fatalf("denied %s returned %d", denied, w.Code)
 		}
+		if !strings.Contains(w.Body.String(), "get this workload kind and list Pods in its namespace") {
+			t.Fatalf("missing actionable permission guidance: %s", w.Body.String())
+		}
+	}
+}
+
+func TestWorkloadMetricsInvalidSourceExplainsChoices(t *testing.T) {
+	previous := k8s.GetConnectionStatus()
+	t.Cleanup(func() { k8s.SetConnectionStatus(previous) })
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+	SetAuthGate(nil)
+	router := chi.NewRouter()
+	RegisterRoutes(router)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/prometheus/workload/Deployment/shop/api?source=unknown", nil))
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "use beyla or istio") {
+		t.Fatalf("invalid source response: %d %s", w.Code, w.Body.String())
 	}
 }
 
@@ -267,6 +284,10 @@ func TestWorkloadScopeDoesNotFollowConnectionChanges(t *testing.T) {
 			change.run()
 			if _, _, ok := GetClient().workloadMetricsConfig(); ok {
 				t.Fatal("scope followed connection change")
+			}
+			notice := GetClient().workloadScopeNotice()
+			if !strings.Contains(notice, "cluster or metrics connection changed") || strings.Contains(notice, "--prometheus-") {
+				t.Fatalf("misleading scope recovery notice: %s", notice)
 			}
 		})
 	}

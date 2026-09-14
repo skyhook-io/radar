@@ -1269,6 +1269,46 @@ func TestRuntimeAuthRecoveryStaticCredentialsReconnectViaDiskReread(t *testing.T
 	}
 }
 
+func TestResetTestStateWaitsForRecoveryWorker(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+	setRuntimeAuthRecoveryIntervalsForTest(2*time.Millisecond, 4*time.Millisecond)
+	started, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	setRuntimeAuthProbe(func(context.Context) error {
+		close(started)
+		<-release
+		return errors.New("dial tcp: connection refused")
+	})
+	SetConnectionStatus(ConnectionStatus{State: StateDisconnected, Context: "previous-test", ErrorType: "auth"})
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("recovery probe did not start")
+	}
+	done := make(chan struct{})
+	go func() {
+		ResetTestState()
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("reset returned while the previous worker was still in its probe")
+	case <-time.After(20 * time.Millisecond):
+	}
+	unblock()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("reset did not finish after the probe returned")
+	}
+	if runtimeAuthRecoveryActive.Load() || runtimeAuthRecoveryOwed.Load() || len(runtimeAuthRecoveryNudge) != 0 {
+		t.Fatal("reset left recovery work for the next test")
+	}
+}
+
 func TestMarkDisconnectedAuthShapedMessageRoutesThroughDemotionPipeline(t *testing.T) {
 	for _, tt := range []struct {
 		name    string

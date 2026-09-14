@@ -70,7 +70,7 @@ func buildRequestQueries(step time.Duration, sel PodSelection, cluster string, s
 		}
 		match := beylaJobMatcher.FindStringSubmatch(jobSelector)
 		if match == nil {
-			return RequestQueries{}, fmt.Errorf("Beyla workload charts require one exact or regex job matcher")
+			return RequestQueries{}, fmt.Errorf("the configured Beyla job filter must be one job equality or regex matcher for workload charts; Live Traffic accepts wider fragments")
 		}
 		value, err := strconv.Unquote(match[2])
 		if err != nil {

@@ -82,7 +82,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		ok, reason := prom.NewClient(tr).ProbeQueryAPI(ctx)
 		if ok {
 			log.Printf("[prometheus] connected via manual URL %s (%s)", addr, took(start))
-			if !c.markConnected(addr, "", startGen) {
+			if !c.markConnected(addr, "", "url:"+addr, startGen) {
 				return "", "", errDiscoverySuperseded
 			}
 			return addr, "", nil
@@ -167,7 +167,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 	cancelDirect()
 	if idx >= 0 {
 		cand := candidates[idx]
-		if !c.markConnected(cand.ClusterAddr, cand.BasePath, startGen) {
+		if !c.markConnected(cand.ClusterAddr, cand.BasePath, cand.Key(), startGen) {
 			return "", "", errDiscoverySuperseded
 		}
 		log.Printf("[prometheus] connected to %s/%s via direct probe at %s (source=%s, score=%d, direct %s, total %s)",
@@ -237,7 +237,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		// order as the port-forward attempts below.
 		if pfAddr := portforward.GetAddressForService(portforward.OwnerPrometheus, contextName, cand.Namespace, cand.Name); pfAddr != "" {
 			if c.probe(ctx, pfAddr+cand.BasePath) {
-				if !c.markConnected(pfAddr, cand.BasePath, startGen) {
+				if !c.markConnected(pfAddr, cand.BasePath, cand.Key(), startGen) {
 					// Superseded mid-reuse: drop the stale service metadata we just
 					// published, same as the port-forward path below. The forward
 					// itself is pre-existing (own from a prior run, or a peer's), so
@@ -284,7 +284,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 
 		addr := connInfo.Address
 		if c.probe(ctx, addr+cand.BasePath) {
-			if !c.markConnected(addr, cand.BasePath, startGen) {
+			if !c.markConnected(addr, cand.BasePath, cand.Key(), startGen) {
 				// Superseded: don't leave the shared forward up for an endpoint
 				// we're discarding.
 				portforward.Stop(portforward.OwnerPrometheus)
@@ -503,7 +503,7 @@ func (c *Client) setDiscoveryServiceFromCandidate(cand prom.Candidate) {
 // published over the newer configuration. Returns whether it committed, so the
 // caller can surface a retryable error instead of a hollow success (a connected
 // address with an empty baseURL).
-func (c *Client) markConnected(addr, basePath string, gen uint64) bool {
+func (c *Client) markConnected(addr, basePath, identity string, gen uint64) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// A stale generation, or a client retired by Reinitialize, means the result
@@ -512,6 +512,12 @@ func (c *Client) markConnected(addr, basePath string, gen uint64) bool {
 	if c.discoveryGen != gen || c.retired {
 		return false
 	}
+	if c.connectedIdentity != "" && c.connectedIdentity != identity {
+		c.connectionEpoch++
+		c.workloadScope = nil
+		c.cancelWorkloadAttributionsLocked()
+	}
+	c.connectedIdentity = identity
 	c.baseURL = addr
 	c.basePath = basePath
 	c.prom = nil

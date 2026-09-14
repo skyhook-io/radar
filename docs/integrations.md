@@ -482,6 +482,11 @@ The legacy `traefik.containo.us` API group (pre-v2.11) is warm-listed alongside 
 
 [Prometheus Operator](https://prometheus-operator.dev/) simplifies Prometheus setup on Kubernetes, providing CRDs for defining monitoring targets, alerting rules, and scrape configurations declaratively.
 
+Looking for CPU, memory, throttling or HTTP request charts? See
+[Workload metrics](workload-metrics.md). Those charts read a Prometheus-compatible
+backend and do not require Prometheus Operator. This integration page describes
+inspection of the Operator's Kubernetes resources and scrape configuration.
+
 ### What Radar Shows
 
 **ServiceMonitor Detail View:**

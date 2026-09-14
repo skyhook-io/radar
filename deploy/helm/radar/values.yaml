@@ -531,10 +531,14 @@ traffic:
   #   http://vmsingle.victoria-metrics:8428
   #   http://vmselect.victoria-metrics:8481/select/0/prometheus
   prometheusUrl: ""
-  # Explicit scope for workload request/pressure charts. Choose one mode only.
+  # Optional workload-metrics scope override, not a feature enable switch.
+  # Leave both unset for automatic matching; set at most one mode.
+  # Does not scope rightsizing, node/HPA/PVC or legacy network/storage queries.
   prometheusSingleCluster: false
   prometheusClusterLabels: {}
-  # One exact or regex job matcher when Beyla uses a non-default scrape job.
+  # Beyla Live Traffic matcher fragment. Workload charts use it only with an
+  # explicit scope override and accept one job equality or regex matcher.
+  # Automatic workload matching discovers custom jobs without this override.
   beylaJobSelector: ""
   # HTTP headers sent with every Prometheus request. Required for
   # auth-protected backends (Bearer tokens, X-Scope-OrgID multi-tenancy, etc.).

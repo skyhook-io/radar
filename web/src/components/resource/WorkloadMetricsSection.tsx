@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { resourcePath } from "../../utils/navigation";
+import { Info } from "lucide-react";
+import { SEVERITY_TEXT } from "@skyhook-io/k8s-ui/utils/badge-colors";
 import {
   AreaChart,
   SeriesLegend,
@@ -15,6 +17,7 @@ import {
   type WorkloadMetrics,
 } from "../../api/workloadMetrics";
 import { latestWorkloadValue, workloadPodValues } from "./workloadMetricValues";
+import { WorkloadMetricsHelpDialog } from './WorkloadMetricsHelpDialog';
 
 interface Props {
   kind: string;
@@ -25,10 +28,12 @@ interface Props {
   memoryReferenceLines?: ReferenceLine[];
   restartLane?: ReactNode;
   nameMatchedCharts?: Partial<Record<'cpu' | 'memory', ReactNode>>;
+  controls?: ReactNode;
 }
 
 export function WorkloadMetricsSection(props: Props) {
   const [source, setSource] = useState<WorkloadRequestSource | "">("");
+  const [helpOpen, setHelpOpen] = useState(false);
   const { data, isLoading, isPlaceholderData, error } = useWorkloadMetrics(
     props.kind,
     props.namespace,
@@ -45,37 +50,55 @@ export function WorkloadMetricsSection(props: Props) {
     const panel = data?.panels[key];
     return (data || error) && props.nameMatchedCharts?.[key] && (!panel || ['detecting', 'error', 'unavailable'].includes(panel.state));
   });
+  const resourceNotice = sameResourceScope ? sharedPanelNotice([data?.panels.cpu, data?.panels.memory, data?.panels.throttling]) : undefined;
+  const hasHistoricalTotals = (['cpu', 'memory'] as const).some((key) => data?.history[key]?.mode === 'workload-history');
+  const hasResourceDetails = hasHistoricalTotals || data?.history.throttling?.mode === 'workload-history' || resourceNotice?.state === 'stale';
   return (
     <div className="metrics-layout min-w-0 px-4 pt-3 space-y-4">
-      {data?.scopeNotice && <p role="status" className="text-xs text-theme-text-secondary">{data.scopeNotice}</p>}
-      {isPlaceholderData && <p role="status" className="text-xs text-theme-text-tertiary">Loading selected request source… Resource charts show the previous sample.</p>}
+      <div className="flex items-start justify-between gap-3">
+        <button type="button" aria-haspopup="dialog" onClick={() => setHelpOpen(true)} className="min-w-0 rounded py-1 text-left text-xs text-theme-text-secondary hover:text-accent-text focus-visible:outline-accent">
+          <Info aria-hidden="true" className="mr-1 inline h-3.5 w-3.5" />About these metrics{data?.attribution?.scope && ' · operator-asserted scope'}
+        </button>
+        {props.controls}
+      </div>
+      {helpOpen && <WorkloadMetricsHelpDialog kind={props.kind} namespace={props.namespace} name={props.name} range={props.range} data={data} pending={isLoading || isPlaceholderData} error={error} onClose={() => setHelpOpen(false)} />}
+      {data?.scopeNotice && <p role="status" className={`text-xs ${SEVERITY_TEXT.warning}`}>{data.scopeNotice}</p>}
+      {data?.state === 'partial' && data.reason && <p role="status" className={`text-xs ${SEVERITY_TEXT.warning}`}>{data.reason}</p>}
+      {isPlaceholderData && <p role="status" className="text-xs text-theme-text-secondary">Loading selected request source… Resources show previous samples.</p>}
       <WorkloadRequests data={data} isLoading={isLoading || isPlaceholderData} error={error} setSource={setSource} />
       <section aria-label="Workload resource pressure">
-        {(data?.panels.cpu || data?.panels.memory || data?.panels.throttling) && <h3 className="mb-2 text-sm font-semibold text-theme-text-primary">Resources</h3>}
+        {(data?.panels.cpu || data?.panels.memory || data?.panels.throttling) && <div className="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h3 className="text-sm font-semibold text-theme-text-primary">Resources</h3>
+          {sameResourceScope && <HistoryNotice scope={data?.history.cpu} omitReason={data?.panels.cpu?.reason} />}
+        </div>}
         {props.restartLane}
-        {sameResourceScope && <HistoryNotice scope={data?.history.cpu} />}
+        {resourceNotice && <div className="mb-2"><MetricNotice panel={resourceNotice} label="CPU, memory and throttling" /></div>}
         <div className="metrics-chart-grid">
-          {data?.panels.cpu && <WorkloadChart label="CPU usage" population={data.history.cpu?.mode === 'workload-history' ? 'workload' : 'per Pod'} panel={data.panels.cpu} window={data} scope={sameResourceScope ? undefined : data.history.cpu} referenceLines={data.history.cpu?.mode === 'current-pods' ? props.cpuReferenceLines : undefined} />}
-          {data?.panels.memory && <WorkloadChart label="Memory working set" population={data.history.memory?.mode === 'workload-history' ? 'workload' : 'per Pod'} panel={data.panels.memory} window={data} scope={sameResourceScope ? undefined : data.history.memory} referenceLines={data.history.memory?.mode === 'current-pods' ? props.memoryReferenceLines : undefined} />}
+          {data?.panels.cpu && <WorkloadChart label="CPU usage" population={data.history.cpu?.mode === 'workload-history' ? 'workload' : 'per Pod'} panel={data.panels.cpu} window={data} scope={sameResourceScope ? undefined : data.history.cpu} referenceLines={data.history.cpu?.mode === 'current-pods' ? props.cpuReferenceLines : undefined} sharedNotice={!!resourceNotice} />}
+          {data?.panels.memory && <WorkloadChart label="Memory working set" population={data.history.memory?.mode === 'workload-history' ? 'workload' : 'per Pod'} panel={data.panels.memory} window={data} scope={sameResourceScope ? undefined : data.history.memory} referenceLines={data.history.memory?.mode === 'current-pods' ? props.memoryReferenceLines : undefined} sharedNotice={!!resourceNotice} />}
           {data?.panels.throttling && <WorkloadChart
             className="metrics-chart-wide"
             label="CPU throttled periods"
             panel={data.panels.throttling}
             window={data}
             scope={sameResourceScope ? undefined : data.history.throttling}
+            footnote="% of CFS periods throttled, not CPU time lost."
+            sharedNotice={!!resourceNotice}
           />}
         </div>
-        {(data?.panels.cpu || data?.panels.memory) && <p className="mt-2 text-xs text-theme-text-tertiary">Resource totals include reporting containers and sidecars.</p>}
-        {data?.panels.throttling && <p className="mt-2 text-xs text-theme-text-tertiary">
-          Throttling is the share of CFS periods throttled, not CPU time lost.
-          {data.history.throttling?.mode === 'workload-history'
-            ? ' Workload is the total across reporting Pods; Maximum Pod exposes skew. Throttling is weighted by total periods, not an average of Pod percentages.'
-            : ` Examines ${data.pods} of ${data.podsTotal} current Pods; previous replicas are not reconstructed.`} {data.reason}
-        </p>}
+        {(data?.panels.cpu || data?.panels.memory || data?.panels.throttling) && <p className="mt-2 text-xs text-theme-text-tertiary">Resource totals include reporting containers and sidecars.</p>}
+        {data && hasResourceDetails && <details className="mt-2 text-xs text-theme-text-tertiary">
+          <summary className="cursor-pointer">About resource metrics</summary>
+          <div className="mt-2 max-w-2xl space-y-2 text-sm leading-relaxed text-theme-text-secondary">
+            {hasHistoricalTotals && <p>In workload-history CPU and memory charts, Workload is the total across reporting Pods; Maximum Pod exposes skew.</p>}
+            {data.history.throttling?.mode === 'workload-history' && <p>Throttling is weighted by total periods, not an average of Pod percentages.</p>}
+            {resourceNotice?.state === 'stale' && <ul className="space-y-1">{(['cpu', 'memory', 'throttling'] as const).map((key) => data.panels[key]?.reason && <li key={key}>{key}: {data.panels[key]!.reason}</li>)}</ul>}
+          </div>
+        </details>}
       </section>
       {nameMatchedFallbacks.length > 0 && <details aria-label="Name-matched resource metrics">
-        <summary className="mb-2 cursor-pointer text-sm font-medium text-theme-text-secondary">Basic metrics — identity not verified</summary>
-        <p className="mb-2 text-xs text-theme-text-secondary">The identity-checked charts above are not available for these metrics. These existing charts match current Pod names, not Pod UIDs or historical workload ownership; matching names in a shared backend may include another cluster.</p>
+        <summary className="mb-2 cursor-pointer text-xs text-theme-text-secondary">Basic {nameMatchedFallbacks.map((key) => key === 'cpu' ? 'CPU' : 'memory').join(' / ')} · identity unverified</summary>
+        <p className={`mb-2 max-w-2xl text-sm ${SEVERITY_TEXT.warning}`}>These charts match current Pod names, not Pod UIDs or historical workload ownership; matching names in a shared backend may include another cluster.</p>
         <div className="metrics-chart-grid">{nameMatchedFallbacks.map((key) => <div key={key}>{props.nameMatchedCharts?.[key]}</div>)}</div>
       </details>}
       {data && (data.comparison.cpu || data.comparison.memory || data.comparison.throttling) && <PodComparison
@@ -84,24 +107,22 @@ export function WorkloadMetricsSection(props: Props) {
         memory={data.comparison.memory}
         throttle={data.comparison.throttling}
         window={data}
-      >
-        {(!!props.cpuReferenceLines?.length || !!props.memoryReferenceLines?.length) && <p className="mb-2 text-xs text-theme-text-tertiary">
-          Template per Pod
-          {!!props.cpuReferenceLines?.length && <> · CPU: {props.cpuReferenceLines.map((line) => line.label).join(', ')}</>}
-          {!!props.memoryReferenceLines?.length && <> · Memory: {props.memoryReferenceLines.map((line) => line.label).join(', ')}</>}
-          . Actual Pods can differ after injection or rollout.
-        </p>}
-      </PodComparison>}
+        cpuReferenceLines={props.cpuReferenceLines}
+        memoryReferenceLines={props.memoryReferenceLines}
+      />}
     </div>
   );
 }
 
-function HistoryNotice({ scope }: { scope?: WorkloadMetrics['history']['cpu'] }) {
+function HistoryNotice({ scope, omitReason }: { scope?: WorkloadMetrics['history']['cpu']; omitReason?: string }) {
   if (!scope) return null;
-  if (scope.mode === 'workload-history') return <p className="mb-2 text-xs text-theme-text-tertiary">Workload history · includes previous replicas where ownership and metrics were retained.</p>;
-  return <p role="status" className="mb-2 text-xs text-theme-text-secondary">
-    {scope.mode === 'current-pods' ? 'Workload history unavailable — showing current Pods only. ' : 'Workload history could not be checked. '}{scope.reason}
-  </p>;
+  return <details className={`text-xs ${scope.mode === 'workload-history' ? 'text-theme-text-tertiary' : SEVERITY_TEXT.warning}`}>
+    <summary className="cursor-pointer">{scope.mode === 'workload-history' ? 'Workload history' : scope.mode === 'current-pods' ? 'Current Pods only' : 'Workload history unavailable'}</summary>
+    <div className="my-2 max-w-2xl space-y-2 text-sm leading-relaxed text-theme-text-secondary">
+      <p>{scope.mode === 'workload-history' ? 'Includes previous replicas where ownership and metrics were retained. Missing history produces gaps, not current-Pod substitutes.' : scope.mode === 'current-pods' ? 'Previous replicas are not reconstructed.' : 'Workload history could not be checked.'}</p>
+      {scope.reason && scope.reason !== omitReason && <p>{scope.reason}</p>}
+    </div>
+  </details>;
 }
 
 function WorkloadRequests({ data, isLoading, error, setSource }: {
@@ -118,13 +139,13 @@ function WorkloadRequests({ data, isLoading, error, setSource }: {
     );
   if (error)
     return (
-      <p role="status" className="text-sm text-theme-text-secondary">
+      <p role="status" className={`text-sm ${SEVERITY_TEXT.error}`}>
         Workload metrics could not be loaded: {error.message}
       </p>
     );
   if (!data) return null;
   if (data.state === "detecting" || (data.state === "error" && Object.keys(data.panels).length === 0))
-    return <p role="status" className="text-xs text-theme-text-secondary">{data.reason}</p>;
+    return <p role="status" className={`text-xs ${data.state === 'error' ? SEVERITY_TEXT.error : 'text-theme-text-secondary'}`}>{data.reason}</p>;
   if (data.state === "unavailable")
     return (
       <div className="text-xs text-theme-text-secondary">
@@ -136,31 +157,28 @@ function WorkloadRequests({ data, isLoading, error, setSource }: {
       s.state === "available" || s.state === "stale" || s.id === data.source,
   );
   const requestPanel = data.panels.requests;
+  const unmatchedSources = !data.source && requestPanel?.state === 'unavailable'
+    ? data.sources.filter((candidate) => data.attribution?.[candidate.id]) : [];
   const hasRequests =
     requestPanel &&
     requestPanel.series.some((s) => s.dataPoints.some((p) => p.value != null));
-  const hasResources = [data.panels.cpu, data.panels.memory, data.panels.throttling].some(
-    (panel) => panel?.series.some((series) => series.dataPoints.some((point) => point.value != null && Number.isFinite(point.value))),
-  );
+  const requestNotice = sharedPanelNotice([data.panels.requests, data.panels.errors, data.panels.p50, data.panels.p95]);
   const observed = data.panels.observedPods?.series[0];
   const reportingPods = observed && latestWorkloadValue(observed, data.end, data.stepSeconds);
   return (
     <div className="space-y-4 min-w-0 break-words">
-      {data.attribution && <details className="text-xs text-theme-text-tertiary">
-        <summary className="cursor-pointer">{data.attribution.scope ? "Operator-asserted metrics scope" : "Automatic metrics attribution"}</summary>
-        <ul className="mt-2 space-y-1">{Object.entries(data.attribution).map(([source, evidence]) => <li key={source}>{source}: {evidence}</li>)}</ul>
-        <p className="mt-2 max-w-4xl leading-relaxed">
-          Sources are checked independently. Unmatched Pods are excluded, not treated as zero.
-          If automatic matching cannot establish identity, an operator can optionally use <code>--prometheus-single-cluster</code> for a backend dedicated to this cluster,
-          or <code>--prometheus-cluster-label cluster=your-cluster</code> for a shared backend with that exact label.
-          These overrides must be reasserted after changing the connection.
-        </p>
-      </details>}
       <section aria-label="Workload requests">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-          <h3 className="text-sm font-semibold text-theme-text-primary">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1"><h3 className="text-sm font-semibold text-theme-text-primary">
             Requests
           </h3>
+          {hasRequests ? <HistoryNotice scope={data.history.requests} /> : <details className={`text-xs ${requestPanel?.state === 'error' ? SEVERITY_TEXT.error : requestPanel?.state === 'partial' ? SEVERITY_TEXT.warning : 'text-theme-text-secondary'}`}>
+            <summary className="cursor-pointer">{requestPanel?.state === 'error' ? 'Request metrics query failed' : requestPanel?.state === 'partial' ? 'Request metrics withheld' : requestPanel?.state === 'detecting' ? 'Checking request metrics…' : 'No usable HTTP metrics in this window'}</summary>
+            {unmatchedSources.length > 0 ? <ul className="mt-2 max-w-2xl space-y-1 text-sm leading-relaxed text-theme-text-secondary">
+              {unmatchedSources.map((candidate) => <li key={candidate.id}><span className="font-medium">{candidate.label}:</span> {data.attribution?.[candidate.id]}</li>)}
+            </ul> : <p className="mt-2 max-w-2xl text-sm leading-relaxed text-theme-text-secondary">{requestPanel?.reason || 'No usable HTTP request samples were returned for this workload.'}</p>}
+          </details>}
+          </div>
           {sources.length > 1 ? (
             <select
               aria-label="Request metrics source"
@@ -185,19 +203,23 @@ function WorkloadRequests({ data, isLoading, error, setSource }: {
             </span>
           )}
         </div>
-        <HistoryNotice scope={data.history.requests} />
         {hasRequests ? (
           <>
+            {requestNotice && <div className="mb-2"><MetricNotice panel={requestNotice} label="Requests, HTTP 5xx and latency" /></div>}
             <div className="metrics-chart-grid">
               <WorkloadChart
                 label="Requests / sec"
                 panel={requestPanel}
                 window={data}
+                sharedNotice={!!requestNotice}
+                footnote="Ports combined · includes health checks and admin traffic."
               />
               <WorkloadChart
                 label="HTTP 5xx"
                 panel={data.panels.errors}
                 window={data}
+                sharedNotice={!!requestNotice}
+                footnote="Not a gRPC error rate · excludes connection failures."
               />
               <WorkloadChart
                 className="metrics-chart-wide"
@@ -205,34 +227,30 @@ function WorkloadRequests({ data, isLoading, error, setSource }: {
                 panel={data.panels.p95}
                 secondary={data.panels.p50}
                 window={data}
+                sharedNotice={!!requestNotice}
+                footnote="At the selected observer · not end-to-end latency."
               />
             </div>
             <div className="mt-2 text-xs text-theme-text-tertiary space-y-2">
-              <p>{data.sources.find((s) => s.id === data.source)?.label} · {Math.round(data.rateWindowSeconds / 60)}-minute rates · {reportingPods == null ? "Reporting Pod count unavailable" : data.history.requests?.mode === 'workload-history' ? `${reportingPods} Pods reporting` : `${reportingPods} of ${data.podsTotal} current Pods reporting`}</p>
+              <p>{Math.round(data.rateWindowSeconds / 60)}-minute rates{reportingPods != null && <> · {data.history.requests?.mode === 'workload-history' ? `${reportingPods} Pods reporting` : `${reportingPods} of ${data.podsTotal} current Pods reporting`}</>}</p>
               <details>
-                <summary className="cursor-pointer">Coverage and interpretation</summary>
-                <p className="mt-2 max-w-4xl leading-relaxed">
+                <summary className="cursor-pointer">Coverage details</summary>
+                <div className="mt-2 max-w-2xl space-y-2 text-sm leading-relaxed text-theme-text-secondary">
+                {reportingPods == null && <p>Reporting Pod count unavailable.</p>}
+                <p>
                   {data.history.requests?.mode === 'workload-history'
                     ? 'Queries follow retained ownership at each timestamp, not today’s replica list. Workload identity is cluster, namespace, kind and name, including recreation under that name. Missing ownership produces gaps; when ownership disappears after Pod deletion, that Pod leaves the aggregate even if its last rate window still has samples.'
                     : `Queries select ${data.pods} of ${data.podsTotal} current Pods; previous replicas are not reconstructed.`}
-                  Other Pods may be idle, new, or not instrumented. HTTP 5xx excludes failures without an HTTP response
-                  and is not a gRPC error rate. Latency is a histogram approximation at the selected observer, not end-to-end user latency.
-                  Ports and processes are combined; health checks and admin traffic may count.
-                  {data.source === 'istio' && ' Istio histograms update separately and can briefly trail the request counter; latency uses the histogram observations.'}
-                  Rates use a {Math.round(data.rateWindowSeconds / 60)}-minute rolling window, evaluated every {Math.round(data.stepSeconds)} seconds. Longer windows smooth short spikes.
+                  </p>
+                  {data.source === 'istio' && <p>Istio histograms update separately and can briefly trail the request counter; latency uses the histogram observations.</p>}
+                  <p>Rates use a {Math.round(data.rateWindowSeconds / 60)}-minute rolling window, evaluated every {Math.round(data.stepSeconds)} seconds. Longer windows smooth short spikes.
                 </p>
+                {requestNotice?.state === 'stale' && <ul className="space-y-1">{(['requests', 'errors', 'p50', 'p95'] as const).map((key) => data.panels[key]?.reason && <li key={key}>{key}: {data.panels[key]!.reason}</li>)}</ul>}
+                </div>
               </details>
             </div>
           </>
-        ) : (
-          <div className="text-xs text-theme-text-tertiary">
-          <details>
-            <summary className="cursor-pointer">{requestPanel?.state === "error" ? "Request metrics query failed" : requestPanel?.state === "partial" ? "Request metrics withheld" : requestPanel?.state === "detecting" ? "Checking request metrics…" : "No HTTP request observations in this window"}</summary>
-            <p className="mt-2 max-w-4xl leading-relaxed">{requestPanel?.reason}{requestPanel?.state === "unavailable" && <> If Beyla is scraped under a different job, configure <code>--beyla-job-selector</code> with its actual job matcher.</>}</p>
-          </details>
-          {hasResources && <p className="mt-2">Resource charts below remain available.</p>}
-          </div>
-        )}
+        ) : null}
       </section>
     </div>
   );
@@ -247,6 +265,8 @@ function WorkloadChart({
   window,
   referenceLines,
   scope,
+  footnote,
+  sharedNotice,
 }: {
   className?: string;
   label: string;
@@ -256,6 +276,8 @@ function WorkloadChart({
   window: Pick<WorkloadMetrics, "start" | "end" | "stepSeconds">;
   referenceLines?: ReferenceLine[];
   scope?: WorkloadMetrics['history']['cpu'];
+  footnote?: string;
+  sharedNotice?: boolean;
 }) {
   const series = secondary
     ? [
@@ -276,7 +298,7 @@ function WorkloadChart({
       ? latestWorkloadValue(headline, window.end, window.stepSeconds)
       : undefined;
   return (
-    <section className={`metrics-chart rounded-lg border border-theme-border bg-theme-surface/30 p-3 min-w-0 ${className}`}>
+    <section className={`metrics-chart flex flex-col rounded-lg border border-theme-border bg-theme-surface/30 p-3 min-w-0 ${className}`}>
       <header className="flex items-baseline justify-between gap-2 mb-2">
         <h4 className="text-xs font-medium text-theme-text-secondary">
           {`${label}${hasSamples && population ? ` · ${population}` : ''}`}
@@ -290,7 +312,7 @@ function WorkloadChart({
           </span>
         )}
       </header>
-      <HistoryNotice scope={scope} />
+      <HistoryNotice scope={scope} omitReason={panel?.reason} />
       {hasSamples ? (
         <>
           <AreaChart
@@ -301,6 +323,7 @@ function WorkloadChart({
             layout="dashboard"
             seriesLabels={seriesLabels}
             domain={{ start: window.start, end: window.end }}
+            stepSeconds={window.stepSeconds}
             referenceLines={referenceLines?.map((line) => ({ ...line, label: `Template ${line.label}` }))}
           />
           {series.length > 1 && (
@@ -308,22 +331,32 @@ function WorkloadChart({
           )}
         </>
       ) : (
-        <p className="py-8 text-xs text-theme-text-tertiary">
-          {panel?.reason ||
-            "No usable samples. Idle traffic has no defined error percentage or latency."}
-        </p>
+        <div className="py-8"><MetricNotice panel={panel} empty /></div>
       )}
-      {hasSamples && panel?.reason && (
-        <p className="mt-2 text-xs text-theme-text-tertiary">{panel.reason}</p>
-      )}
-      {hasSamples && !!referenceLines?.length && <p className="mt-2 text-xs text-theme-text-tertiary">Reference lines show current template values per Pod, not historical settings.</p>}
-      {secondary?.state === "error" && (
-        <p className="mt-2 text-xs text-theme-text-tertiary">
-          p50: {secondary.reason}
-        </p>
-      )}
+      {hasSamples && !sharedNotice && <MetricNotice panel={panel} />}
+      {hasSamples && !!referenceLines?.length && <p className="mt-2 text-xs text-theme-text-tertiary">Template lines: current values per Pod, not historical.</p>}
+      {secondary && (secondary.state !== panel?.state || secondary.reason !== panel?.reason) && !sharedNotice && <MetricNotice panel={secondary} label="p50" />}
+      {hasSamples && footnote && <p className="mt-auto pt-2 text-xs text-theme-text-tertiary">{footnote}</p>}
     </section>
   );
+}
+
+function sharedPanelNotice(panels: (WorkloadMetricPanel | undefined)[]) {
+  const first = panels[0];
+  if (!first || (first.state !== 'stale' && (first.state !== 'partial' || !first.reason))) return undefined;
+  return panels.every((panel) => panel?.state === first.state
+    && (first.state === 'stale' || panel.reason === first.reason)
+    && panel.series.some((series) => series.dataPoints.some((point) => point.value != null && Number.isFinite(point.value)))) ? first : undefined;
+}
+
+function MetricNotice({ panel, empty, label }: { panel?: WorkloadMetricPanel; empty?: boolean; label?: string }) {
+  if (!empty && !panel?.reason && panel?.state !== 'stale') return null;
+  const tone = panel?.state === 'error' ? SEVERITY_TEXT.error : panel?.state === 'partial' || panel?.state === 'stale' ? SEVERITY_TEXT.warning : 'text-theme-text-secondary';
+  if (panel?.state === 'stale' && !empty) return <details className={`mt-2 text-xs ${tone}`}>
+    <summary className="cursor-pointer">{label && `${label}: `}Historical samples only · no recent samples</summary>
+    {panel.reason && <p className="mt-2 max-w-2xl text-sm leading-relaxed text-theme-text-secondary">{panel.reason}</p>}
+  </details>;
+  return <p role="status" className={`mt-2 text-xs ${tone}`}>{label && `${label}: `}{panel?.reason || 'No usable samples in this window.'}</p>;
 }
 
 function PodComparison({
@@ -332,14 +365,16 @@ function PodComparison({
   memory,
   throttle,
   window,
-  children,
+  cpuReferenceLines,
+  memoryReferenceLines,
 }: {
   namespace: string;
   cpu?: WorkloadMetricPanel;
   memory?: WorkloadMetricPanel;
   throttle?: WorkloadMetricPanel;
   window: Pick<WorkloadMetrics, "end" | "stepSeconds" | "pods" | "podsTotal">;
-  children?: ReactNode;
+  cpuReferenceLines?: ReferenceLine[];
+  memoryReferenceLines?: ReferenceLine[];
 }) {
   const [sort, setSort] = useState<"cpu" | "memory" | "throttling">("cpu");
   const values = {
@@ -370,20 +405,32 @@ function PodComparison({
     const value = values[metric].get(pod);
     return value == null ? "—" : formatMetricValue(value, unit);
   };
+  const comparisonPanels = [{ label: 'CPU', panel: cpu }, { label: 'Memory', panel: memory }, { label: 'Throttling', panel: throttle }];
+  const pending = comparisonPanels.filter(({ panel }) => panel?.state === 'detecting');
+  const notices = new Map<string, { labels: string[]; panel: WorkloadMetricPanel }>();
+  for (const { label, panel } of comparisonPanels) {
+    if (!panel?.reason || panel.state === 'detecting') continue;
+    const key = `${panel.state}\0${panel.reason}`;
+    const notice = notices.get(key);
+    if (notice) notice.labels.push(label);
+    else notices.set(key, { labels: [label], panel });
+  }
+  const hasTemplate = !!cpuReferenceLines?.length || !!memoryReferenceLines?.length;
   return (
     <section className="rounded-lg border border-theme-border bg-theme-surface/30 p-3 min-w-0">
       <h4 className="mb-2 text-xs font-medium text-theme-text-secondary">
         Compare current Pods · latest samples
       </h4>
-      {children}
-      {window.pods < window.podsTotal && <p className="mb-2 text-xs text-theme-text-secondary">Comparing {window.pods} of {window.podsTotal} current Pods. This comparison cap does not limit workload-history totals.</p>}
-      {cpu?.state === "error" || memory?.state === "error" ? (
-        <p className="text-xs text-theme-text-tertiary">
-          Some resource queries failed; missing values are shown as —.
-        </p>
-      ) : null}
-      {cpu?.reason && <p className="text-xs text-theme-text-tertiary">CPU: {cpu.reason}</p>}
-      {memory?.reason && <p className="text-xs text-theme-text-tertiary">Memory: {memory.reason}</p>}
+      {hasTemplate && <details className="mb-2 text-xs text-theme-text-tertiary">
+        <summary className="cursor-pointer">Template per Pod · actual Pods may differ</summary>
+        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-theme-text-secondary">Actual Pods can differ after injection or rollout. Template values below are not measured allocations for each Pod.</p>
+      </details>}
+      {window.pods < window.podsTotal && <details className={`mb-2 text-xs ${SEVERITY_TEXT.warning}`}>
+        <summary className="cursor-pointer">Comparing {window.pods} of {window.podsTotal} current Pods</summary>
+        <p className="mt-2 text-sm text-theme-text-secondary">This comparison cap does not limit workload-history totals.</p>
+      </details>}
+      {pending.length > 0 && <p role="status" className="mb-2 text-xs text-theme-text-secondary">Matching {pending.map(({ label }) => label).join(' / ')} metrics to current Pods…</p>}
+      {Array.from(notices, ([key, { labels, panel }]) => <MetricNotice key={key} panel={panel} label={labels.join(' / ')} />)}
       <div className="max-h-72 overflow-auto">
         <table className="w-full min-w-[480px] text-xs text-left">
           <thead className="text-theme-text-tertiary">
@@ -403,6 +450,7 @@ function PodComparison({
                         : "Throttled"}
                     {sort === metric ? " ↓" : ""}
                   </button>
+                  {(metric === 'cpu' ? cpuReferenceLines : metric === 'memory' ? memoryReferenceLines : undefined)?.map((line) => <div key={line.kind} className="mt-1 font-normal text-theme-text-tertiary">Template {line.label}</div>)}
                 </th>
               ))}
             </tr>
@@ -427,7 +475,7 @@ function PodComparison({
             ))}
           </tbody>
         </table>
-        {pods.length === 0 && (
+        {pods.length === 0 && pending.length === 0 && notices.size === 0 && (
           <p className="py-6 text-theme-text-tertiary text-xs">
             No Pod samples available.
           </p>

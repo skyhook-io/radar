@@ -2445,7 +2445,7 @@ function DrawerMetricsContent({
     <div className="flex flex-col h-full">
       {['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind) && (
         <div className="px-4 pt-3">
-          <button className="text-xs text-accent hover:underline" onClick={() => navigate(`${buildWorkloadPath({ kind, namespace, name })}?tab=metrics`)}>
+          <button className="text-xs text-accent hover:underline" onClick={() => navigate(`${buildWorkloadPath({ kind, namespace, name })}?tab=metrics&metricsRange=${chartRange}`)}>
             Open request and resource dashboard →
           </button>
         </div>

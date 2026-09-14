@@ -5,6 +5,7 @@ import { formatMetricValue, formatTimestamp } from './format'
 import { layoutAnnotations } from './annotations'
 import { chartLayout, integerAxisTop, isCountUnit, yAxisValues } from './axis'
 import type { TimeSeries, ReferenceLine, ChartAnnotation } from './types'
+import { nearestSample } from './nearestSample'
 
 // Below this rendered width the annotation label pills would cover most of the
 // plot once the 1000-unit viewBox is scaled down; the lines stay and the label
@@ -12,7 +13,7 @@ import type { TimeSeries, ReferenceLine, ChartAnnotation } from './types'
 export const ANNOTATION_LABEL_MIN_WIDTH_PX = 420
 const ANNOTATION_HOVER_TOLERANCE = 8
 
-export function AreaChart({ series, color, fillColor, unit, referenceLines, annotations, domain, seriesLabels, layout = 'full' }: {
+export function AreaChart({ series, color, fillColor, unit, referenceLines, annotations, domain, seriesLabels, stepSeconds, layout = 'full' }: {
   series: TimeSeries[]
   color: string
   fillColor: string
@@ -22,6 +23,8 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
   annotations?: ChartAnnotation[]
   /** X axis window in unix seconds. Defaults to the sample extent. */
   domain?: { start: number; end: number }
+  /** Expected positive sample interval; omitted evaluations break paths and cannot supply hover values. */
+  stepSeconds?: number
   /**
    * Display name per series, parallel to `series`. Pass it when the chart
    * shows a subset of a larger result so names stay distinguishable across
@@ -157,6 +160,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
       // rather than bridging across missing data or dropping to y=0. Each run
       // becomes its own path segment; a run needs >=2 points to render a line.
       let run: { x: number; y: number }[] = []
+      let previousTimestamp: number | undefined
       let runIdx = 0
       const flush = () => {
         if (run.length >= 2) {
@@ -179,15 +183,18 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
       for (const dp of s.dataPoints) {
         if (dp.value == null) {
           flush()
+          previousTimestamp = undefined
           continue
         }
+        if (stepSeconds !== undefined && previousTimestamp !== undefined && dp.timestamp - previousTimestamp > stepSeconds * 1.5) flush()
         run.push({ x: toX(dp.timestamp), y: toY(dp.value) })
+        previousTimestamp = dp.timestamp
       }
       flush()
     })
 
     return segments
-  }, [chartData, marginLeft, plotWidth, marginTop, plotHeight, multiSeries, color, fillColor])
+  }, [chartData, marginLeft, plotWidth, marginTop, plotHeight, multiSeries, color, fillColor, stepSeconds])
 
   const placedAnnotations = useMemo(() => {
     if (!chartData || !annotations?.length) return []
@@ -242,18 +249,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
       if (ts < seriesMin - tolerance || ts > seriesMax + tolerance) {
         return null
       }
-      // Only snap to finite points — a gap (undefined value) has no value to
-      // show and would render NaN in the tooltip / a dot at y=NaN.
-      let closest: { timestamp: number; value: number } | null = null
-      let closestDist = Infinity
-      for (const dp of dps) {
-        if (dp.value == null) continue
-        const dist = Math.abs(dp.timestamp - ts)
-        if (dist < closestDist) {
-          closestDist = dist
-          closest = { timestamp: dp.timestamp, value: dp.value }
-        }
-      }
+      const closest = nearestSample(dps, ts, stepSeconds)
       if (!closest) return null
       return {
         label: shortLabels[vi],
@@ -269,7 +265,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines, anno
     )
 
     return { ts, x: clampedX, points, nearbyAnnotations }
-  }, [hoverX, chartData, placedAnnotations, seriesLabels, marginLeft, plotWidth, marginTop, plotHeight, multiSeries, color])
+  }, [hoverX, chartData, placedAnnotations, seriesLabels, marginLeft, plotWidth, marginTop, plotHeight, multiSeries, color, stepSeconds])
 
   const handleMouseMove = useCallback((e: React.MouseEvent<SVGRectElement>) => {
     const svg = svgRef.current

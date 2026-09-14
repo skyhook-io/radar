@@ -63,12 +63,12 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
 	if !canReadMetricsResource(r, kind, namespace) || !canRead(r, "", "pods", namespace, "list") {
-		writeError(w, http.StatusForbidden, "forbidden")
+		writeError(w, http.StatusForbidden, "Workload metrics require permission to get this workload kind and list Pods in its namespace.")
 		return
 	}
 	source := prom.RequestSource(r.URL.Query().Get("source"))
 	if source != "" && source != prom.RequestSourceBeyla && source != prom.RequestSourceIstio {
-		writeError(w, http.StatusBadRequest, "unsupported request source")
+		writeError(w, http.StatusBadRequest, "Unsupported request source; use beyla or istio, or omit source for automatic selection.")
 		return
 	}
 	client := GetClient()
@@ -77,6 +77,7 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	generation := client.DiscoveryGeneration()
+	epoch := client.backendEpoch()
 	config, job, configured := client.workloadMetricsConfig()
 	cache := k8s.GetResourceCache()
 	if cache == nil {
@@ -86,12 +87,15 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 	scope, err := ResolvePodScope(cache, kind, namespace, name, 100)
 	if err != nil {
 		status := http.StatusBadGateway
+		message := "Could not resolve current workload Pods. Retry after checking the Kubernetes connection."
 		if errors.Is(err, k8s.ErrWorkloadAccessDenied) {
 			status = http.StatusForbidden
+			message = "Radar does not have workload and Pod data for this namespace. Ask the operator to check Radar's Kubernetes permissions and configured namespace scope."
 		} else if errors.Is(err, k8s.ErrWorkloadCacheWarming) {
 			status = http.StatusServiceUnavailable
+			message = "Workload data is still loading from Kubernetes. Retry shortly."
 		}
-		writeError(w, status, "could not resolve current workload pods")
+		writeError(w, status, message)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
@@ -119,7 +123,7 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 			if state == "unavailable" {
 				reason = "Current Pod identities are not available yet."
 			}
-			if client != GetClient() || generation != client.DiscoveryGeneration() {
+			if client != GetClient() || generation != client.DiscoveryGeneration() || epoch != client.backendEpoch() {
 				writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
 				return
 			}
@@ -143,7 +147,7 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resp.ScopeNotice = client.workloadScopeNotice()
-	if client != GetClient() || generation != client.DiscoveryGeneration() {
+	if client != GetClient() || generation != client.DiscoveryGeneration() || epoch != client.backendEpoch() {
 		writeError(w, http.StatusConflict, "metrics connection changed; retry the request")
 		return
 	}
@@ -177,7 +181,7 @@ func collectWorkloadMetricsWithHistory(ctx context.Context, client RangeQuerier,
 		History:     map[string]workloadMetricScope{}, Comparison: map[string]workloadMetricPanel{},
 	}
 	if _, err := config.Matchers(); err == nil {
-		resp.Attribution["scope"] = "Operator-asserted cluster scope; Pod identity was not established automatically."
+		resp.Attribution["scope"] = "Cluster scope supplied by the operator; automatic Pod-identity matching was skipped."
 	}
 	for _, key := range []string{"cpu", "memory", "throttling", "requests"} {
 		resp.History[key] = workloadMetricScope{Mode: "current-pods", Reason: history.reason}
@@ -206,7 +210,7 @@ func collectWorkloadMetricsWithHistory(ctx context.Context, client RangeQuerier,
 			}
 			resp.Attribution[key] = fmt.Sprintf("%s · %d of %d current Pods", label, len(plan.Pods), scope.CurrentTotal)
 			if len(plan.Pods) < scope.CurrentTotal {
-				resp.State, resp.Reason = "partial", "Some sources cover only a subset of current Pods; see attribution details."
+				resp.State, resp.Reason = "partial", "Some sources cover only a subset of current Pods; open About these metrics for details."
 			}
 		}
 	}
@@ -380,7 +384,7 @@ func collectWorkloadMetricsWithHistory(ctx context.Context, client RangeQuerier,
 		}
 	}
 	if chosen == -1 {
-		resp.Panels["requests"] = workloadMetricPanel{State: "unavailable", Unit: "requests/s", Reason: "No attributed HTTP request metrics found. Istio needs destination-reporter pod labels; Beyla needs HTTP server metrics with Kubernetes pod labels. Waypoint and ingress observations are not included.", Series: []prom.Series{}}
+		resp.Panels["requests"] = workloadMetricPanel{State: "unavailable", Unit: "requests/s", Reason: "No HTTP metrics matched this workload. It may be idle, uninstrumented, or missing matching labels. Istio needs destination-sidecar Pod labels; Beyla needs HTTP server metrics with Kubernetes Pod labels. Waypoint and ingress observations are not included.", Series: []prom.Series{}}
 		for _, c := range candidates {
 			if c.rate.State == "error" {
 				resp.Panels["requests"] = c.rate
@@ -436,7 +440,7 @@ func collectWorkloadMetricsWithHistory(ctx context.Context, client RangeQuerier,
 		}
 		reason := "Multiple or unverified observation populations in this window; affected samples are withheld to avoid duplicate counting."
 		if resp.Source == prom.RequestSourceBeyla {
-			reason += " To select one observation job, use --beyla-job-selector together with a verified --prometheus-single-cluster or --prometheus-cluster-label scope assertion."
+			reason += " An operator can select a Beyla observation job; see Troubleshooting identity matching in About these metrics."
 		}
 		resp.Panels[key] = withMetricCoverage(resp.Panels[key], panels[6], reason)
 	}
@@ -456,7 +460,7 @@ func workloadRatioPanel(numerator, denominator workloadMetricPanel, scale float6
 			values[point.Timestamp] = point.Value
 		}
 	}
-	result := workloadMetricPanel{State: "unavailable", Unit: numerator.Unit, Reason: "No defined ratio for these samples.", Series: []prom.Series{}}
+	result := workloadMetricPanel{State: "unavailable", Unit: numerator.Unit, Reason: "Not enough valid samples to calculate this ratio.", Series: []prom.Series{}}
 	for _, series := range denominator.Series {
 		out := prom.Series{Labels: map[string]string{}}
 		for _, point := range series.DataPoints {

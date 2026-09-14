@@ -31,7 +31,7 @@ func (c *Client) workloadScopeNotice() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	if c.workloadScopeEverSet && c.workloadScope == nil {
-		return "The operator's metrics scope assertion was discarded after a connection change. Automatic matching is active. To override it, first verify the backend scope for the currently connected cluster, then restart Radar with the appropriate scope flags."
+		return "The previous cluster-scope override was cleared because the cluster or metrics connection changed. Radar is checking metric identity automatically."
 	}
 	return ""
 }

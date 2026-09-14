@@ -61,3 +61,10 @@ func TestRequestQueriesRejectAmbiguousScopeAndJobInjection(t *testing.T) {
 		t.Fatal("empty pod scope accepted")
 	}
 }
+
+func TestWorkloadJobFilterErrorNamesTheConfiguredFilter(t *testing.T) {
+	_, err := BuildRequestQueries(time.Minute, SelectPods("shop", []string{"api-0"}), WorkloadMetricsScope{SingleCluster: true}, RequestSourceBeyla, `job="primary",instance!=""`)
+	if err == nil || !strings.Contains(err.Error(), "configured Beyla job filter") || !strings.Contains(err.Error(), "Live Traffic accepts wider fragments") {
+		t.Fatalf("missing filter compatibility guidance: %v", err)
+	}
+}

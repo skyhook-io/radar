@@ -102,6 +102,19 @@ describe('AreaChart domain and axes', () => {
     expect(attrs(render({ series: [series([[0, 1], [3600, 5]])] }), 'path', 'fill').filter(fill => fill === 'none')).toHaveLength(1)
   })
 
+  it('breaks omitted evaluations only when the caller supplies the interval', () => {
+    const sparse = [series([[0, 1], [15, 2], [105, 3], [120, 4]])]
+    const paths = (stepSeconds?: number) => attrs(render({ series: sparse, stepSeconds }), 'path', 'fill').filter(fill => fill === 'none')
+    expect(paths(15)).toHaveLength(2)
+    expect(paths()).toHaveLength(1)
+  })
+
+  it('preserves explicit gaps, zeros and isolated-sample behavior with a known interval', () => {
+    const gaps = [series([[0, 0], [15, 0], [30, null], [45, 1], [60, 2]])]
+    expect(attrs(render({ series: gaps, stepSeconds: 15 }), 'path', 'fill').filter(fill => fill === 'none')).toHaveLength(2)
+    expect(attrs(render({ series: [series([[0, 1]])], stepSeconds: 15 }), 'path', 'fill')).toHaveLength(0)
+  })
+
   it('renders nothing for an empty series list', () => {
     expect(render({ series: [] })).toBe('')
   })

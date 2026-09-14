@@ -1,104 +1,125 @@
-# Workload request and pressure metrics
+# Workload metrics
 
-These panels extend the expanded
-Metrics tab for Deployments, StatefulSets and DaemonSets. They read an existing
-Prometheus-compatible backend; Radar does not install instrumentation.
+See whether a workload is handling traffic, failing requests, slowing down or
+running short of resources, without building a dashboard from scratch. Radar's
+Metrics tab combines HTTP request rate, errors and latency with CPU, memory and
+CPU throttling for Deployments, StatefulSets and DaemonSets.
 
-The selected time window is stored in the page URL as `metricsRange`. It survives
-reloads, tab changes and returning from a Pod drilldown in both workload and
-Applications views. Invalid or missing values use one hour. Request-source choice
-is local to the selected workload, so selecting Istio on one workload does not
-force it on a Beyla-only workload.
+Radar reads your existing Prometheus-compatible backend. It does not install a
+collector, require Prometheus Operator, or replace a general-purpose dashboarding
+tool. Resource charts work without HTTP instrumentation; request charts appear
+when a supported Beyla or Istio source has usable observations.
 
-If discovery cannot connect, **Discover Prometheus** retries and **Configure
-metrics** opens the existing Metrics settings in standalone Radar. Embedded views
-direct users to their operator instead. **What each chart needs** links to the
-prerequisites below; connecting a backend alone does not install collectors.
+<p align="center">
+  <img src="screenshots/workload-metrics-overview.png" alt="Radar workload metrics showing HTTP requests, 5xx errors and latency above CPU, memory and throttling charts" width="1100" />
+  <br /><em>Demo workload with deliberate HTTP errors. Resource charts compare the workload with the highest single-Pod value at each point; each chart identifies its population.</em>
+</p>
 
-Identity-unverified CPU/memory charts are collapsed under **Basic metrics —
-identity not verified**, with their scope warning and without template overlays or
-limit-percentage badges. Network/storage remain separately visible and name-based.
-The **Template per Pod** caption beside current-Pod comparison is only a configuration
-reference: actual Pods can differ after injection or rollout. Omitted reference
-values are not evidence of zero requests or unlimited capacity.
+## Open and use the charts
 
-## Live-tested coverage
+1. Open a Deployment, StatefulSet or DaemonSet and select **Metrics**. In
+   **Applications**, select one of those workloads, then open its Metrics tab.
+   These are the selected workload's charts, not a sum across the whole app.
+2. Choose a time window. The selection stays in the URL through reloads, tab
+   changes and returning from a Pod drilldown. Missing or invalid values use one hour.
+3. If both HTTP observers are available, choose **Istio** or **Beyla** beside
+   Requests. Istio is the default when both have data. Radar never adds their
+   observations together; the choice does not force other workloads to use it.
+4. Read the population label beside each section. **Workload history** includes
+   retained previous Pods. **Current Pods only** excludes previous replicas.
+   Gaps and unavailable data are not measured zeros.
+5. Scroll to **Compare current Pods · latest samples** to find an outlier, sort by
+   CPU, memory or throttling, and open a Pod for investigation.
 
-Validation on 2026-09-13–14 exercised the following combinations. A successful
-query endpoint does not imply that every chart has the necessary metrics.
-These checks cover specific versions and collection configurations, not every
-installation of a backend or a measured percentage of Kubernetes users.
+<p align="center">
+  <img src="screenshots/workload-metrics-pod-comparison.png" alt="Current Pod comparison with CPU, memory and throttling values and the current template's resource settings" width="1000" />
+  <br /><em>Compare the latest samples for current Pods. Template per Pod is a configuration reference, not the measured or historical capacity of every replica.</em>
+</p>
 
-The fleet matrix originally validated current-Pod attribution. Historical
-ownership was additionally validated in the repeatable kind lab: Beyla and Istio
-retained identical CPU, memory, throttling, request, error and latency values at
-fixed timestamps after rollout/deletion and scale-to-zero. This is not a
-retroactive history certification of every cloud row. Historical resource and RED
-charts were also rechecked on the GKE VictoriaMetrics/Istio fixture and two EKS
-Mimir/Beyla workloads without scope assertions. The GKE fixture produced positive
-requests, approximately 25% injected 5xx responses, and defined p50/p95; its worker
-and Redis retained resource charts without fabricated HTTP charts. Cloud workloads
-were not rolled or scaled for this check. A real-Prometheus fixture
-verifies aggregate totals for 128 Pods; the live lab itself remains small.
+## What needs to be installed?
 
-| Backend and collection | Resource panels | HTTP panels | Setup / qualification |
-|---|---|---|---|
-| EKS, Prometheus 3.14 + cAdvisor + Beyla 3.32 | CPU, memory, throttling | Requests, 5xx, p50/p95, reporting Pods | Existing workloads; automatic endpoint discovery and Pod UID attribution |
-| GKE, OpenCost Prometheus 2.54 | CPU, memory, throttling | No HTTP source | Deployments and a Redis StatefulSet; automatic UID attribution |
-| EKS, Prometheus 2.47 | CPU, memory | No HTTP source | Throttling metrics absent from the tested store |
-| Shared Mimir with three clusters | CPU, memory | Not certified | Explicit central-store URL; current Pod UID attribution without a scope assertion |
-| EKS, Mimir 3.2 + Alloy Prometheus remote-write + Beyla 3.32 | CPU, memory, throttling | Requests, 5xx, p50/p95, reporting Pods | Explicit URL, Basic auth and tenant header; automatic UID attribution |
-| GKE, VictoriaMetrics 1.151 + cAdvisor/KSM + Istio 1.30 sidecars | CPU, memory, throttling | Requests, 5xx, p50/p95, reporting Pods | Identity labels preserved; KSM-backed cluster attribution; explicit VM endpoint selection; retested with the current histogram guard |
-| kind, Prometheus 3.5 + Beyla 3.32 | No cAdvisor scrape | Requests, 5xx, p50/p95, reporting Pods | Two replicas and two HTTP ports; controlled nonzero errors |
-| kind, Istio 1.30 official Prometheus sample | CPU, memory, throttling | Requests/5xx with scope assertion; latency incomplete | Sample lacks a provable automatic Istio cluster partition |
-| kind repeatable lab, Prometheus 3.5 + cAdvisor/KSM + Beyla 3.25 and Istio 1.30 sidecars | CPU, memory, throttling | Requests, 5xx, p50/p95, reporting Pods for each observer | Two replicas/ports each; automatic attribution; resource-only worker, Redis StatefulSet and DaemonSet also pass |
+| What you already have | What it can provide |
+|---|---|
+| Metrics Server only | Existing basic live CPU/memory views, not the historical Prometheus charts described here |
+| Prometheus-compatible backend scraping kubelet/cAdvisor | CPU, memory and throttling when the required counters and identity labels are retained |
+| kube-state-metrics (KSM), or supported ownership recording rules, in that backend | Workload history across rollouts and deleted Pods, when cluster scope can be established |
+| Beyla HTTP server metrics in that backend | Request rate, HTTP 5xx and p50/p95 latency with the required Pod labels and classic histogram buckets |
+| Istio destination-sidecar metrics in that backend | The same HTTP charts, with the required scrape labels and verified cluster scope |
 
-Non-HTTP workers and Redis correctly retain resource panels when available,
-without an empty HTTP chart grid. A network-only VictoriaMetrics store correctly
-has no workload observations. Authenticated Mimir rejects missing/wrong
-credentials and a missing required tenant in gateway-level checks, not browser
-tests of Radar's auth error state. A separate unhealthy Mimir store
-failed real queries despite having Ready Pods; readiness is not query health.
+These are data prerequisites, not guarantees from an installed chart's name.
+Prometheus, Mimir, VictoriaMetrics and Thanos can expose a compatible query API;
+collector configuration, labels, retention and histogram format determine which
+panels work. See [what each chart needs](#what-each-chart-needs) for exact series
+and [live-tested coverage](#live-tested-coverage) for tested configurations.
 
-### Configuration and remaining gaps
+Radar discovers common in-cluster query Services and checks workload identity
+automatically. Hosted URLs, authentication and tenant headers still require
+configuration. **Configure metrics** opens Metrics settings in standalone Radar;
+embedded views direct users to their operator. **Discover Prometheus** retries
+discovery. Connecting a backend does not install missing instrumentation.
 
-- The tested VictoriaMetrics Kubernetes chart (0.92.1) drops cAdvisor `id` and KSM
-  `uid` by default. Preserve those fields for direct UID / KSM-backed attribution.
-  The successful VM test used that explicit configuration; it is not a stock-default
-  OOTB claim. Copying every GKE node label also exceeded VM's label-per-series
-  limit in the lab; collector label filtering was needed to prevent dropped data.
-- The baseline Istio latency gap came from comparing independently updated
-  request counters and histograms. Latency now matches their complete label
-  populations and validates each histogram count against its `+Inf` bucket;
-  it does not require the separate request counter to have advanced equally.
-  Missing populations, mismatched bucket layouts and duplicate jobs/replicas
-  still withhold affected samples. Histograms can briefly trail request counters.
-- Explicitly configured endpoints can return an empty `up` vector and still
-  connect; filtered remote-write stores do not have to retain scrape metadata.
-  Automatic discovery still skips empty candidates. Connected means the query
-  API answered, not that the selected tenant contains this workload's data.
-  Authentication, backend query errors and invalid query responses have distinct
-  diagnostics. HTTP 405 explains that workload queries require POST through proxies.
-- Live checks primarily used one or two replicas, including a single-node
-  DaemonSet. Large workloads, HA duplicate populations and adversarial cross-cluster name
-  collisions are not live-certified by this matrix. Separate query tests
-  cover several identity/duplicate cases; that is not equivalent to a fleet test.
-- These runs used local Radar with Kubernetes port-forward access. They do not
-  certify Radar Cloud transport, managed-service authentication or every in-cluster
-  deployment path. A full browser sweep was not repeated for each backend.
+If you switch between clusters locally, first read
+[local multi-cluster settings](#local-multi-cluster-settings): a manually configured
+backend and its headers are not saved separately for each cluster.
 
-The [repeatable workload demo](../scripts/workload-metrics-demo/README.md) adds
-an isolated kind baseline with Prometheus, Beyla, cAdvisor/KSM, Istio sidecars,
-finite error-producing traffic and assertions on actual Radar chart responses.
-Its checks distinguish resource/HTTP families and include a DaemonSet. The
-unlabeled official Istio sample row records an earlier baseline, not a retroactive
-success; the fresh kind and VM rows exercise the current histogram guard.
+## What the observations mean
 
-Ingress observers, native-only histograms,
-ambient/waypoint mapping, gRPC and queue-worker semantics remain outside this
-slice. Existing network/filesystem/restart charts have separate identity limits
-described below. See [what each chart needs](#what-each-chart-needs) before
-treating backend compatibility as automatic chart availability.
+| Panel | Interpretation | Limits |
+|---|---|---|
+| Requests/sec | Rolling counter rate, summed within one observer | Not a request count or an end-to-end user transaction rate |
+| HTTP 5xx | Percentage of that observer's requests with HTTP 5xx responses | Not gRPC/application success; status 0 (no HTTP response) is not counted as 5xx; idle traffic has no defined percentage; incomplete status labels withhold affected samples |
+| p50 / p95 | Quantiles of aggregated histogram buckets, in seconds | Approximations; missing/partial bucket coverage or mismatched bucket populations withhold affected samples |
+| CPU throttled periods | Workload-wide throttled periods / total periods, plus maximum Pod percentage | Weighted by periods, not an average of Pod percentages; not CPU time lost; missing counters are unavailable |
+| Compare current Pods | CPU, memory working set and throttling, sortable descending | Missing/stale/gap samples show a dash, not zero |
+
+## Understand coverage and missing charts
+
+Important scope and data-quality notices stay beside the affected charts.
+**About these metrics** opens the **Metrics sources & coverage** dialog for the
+selected workload and time window. It explains current-Pod matching for each
+source, historical ownership, chart definitions and optional troubleshooting.
+
+<p align="center">
+  <img src="screenshots/workload-metrics-coverage.png" alt="Metrics sources and coverage dialog showing separate resource, Beyla and Istio matching evidence, historical ownership and chart definitions" width="800" />
+  <br /><em>Matching evidence is separate from historical coverage. An absent optional observer does not invalidate another source's charts.</em>
+</p>
+
+| What you see | What it means / where to look |
+|---|---|
+| No usable HTTP metrics in this window | The workload may be idle, uninstrumented or unmatched. Expand the source explanation; CPU and memory can still be useful. |
+| Current Pods only | Radar has usable current-Pod observations but cannot serve workload history for that family. Previous replicas are excluded. |
+| Gaps, partial coverage or stale samples | Some observations are missing, incomplete or old. Read the notice beside that chart; do not interpret a gap as zero. |
+| Basic CPU / memory · identity unverified | A collapsed, older name-matched fallback. It does not prove Pod or cluster identity and is not a verified workload total. |
+| Prometheus not connected | Retry discovery or check the configured URL, network access, authentication and tenant. A reachable backend can still lack the required series. |
+
+Network/storage remain separately visible and name-based. Template settings
+beside current-Pod comparison can differ from actual Pods after injection or
+rollout; omitted values do not mean zero requests or unlimited capacity.
+
+## Local multi-cluster settings
+
+**Manual Prometheus settings are Radar-wide today, not per-cluster profiles.**
+The configured URL, HTTP headers (including credentials and tenant headers) and
+environment-variable header mappings persist in the local config. Switching
+Kubernetes context keeps the manually selected backend and headers.
+
+With no manual URL or headers, Radar rediscovers a backend in the selected cluster.
+With a manual backend, select the appropriate URL and headers in Metrics settings
+when changing clusters. When changing endpoints, explicitly replace or clear
+saved headers; editing only the URL retains them. Headers require an explicit URL
+and are never sent to auto-discovered candidates.
+
+The new workload charts invalidate identity evidence on connection changes and
+recheck it. Optional scope assertions are discarded on context, endpoint or
+credential changes, including automatic failover to a different metrics service,
+service port or backend path. Reconnecting to the same discovered service through
+a new local port-forward preserves the assertion. Those safeguards do **not** implement per-cluster connection
+profiles or retrofit identity checks onto older name-based charts.
+
+See [integration settings when switching clusters](configuration.md#integration-settings-when-switching-clusters).
+In-cluster Radar has no context switcher; provision its backend and credentials for
+that installation. This guide does not certify every Radar Cloud transport or
+managed-service authentication path.
 
 ## Which workloads benefit?
 
@@ -221,7 +242,7 @@ namespace can be reused; charts still query only their own authorized namespace.
 At zero Pods, bounded anchors can come from other Pods in that same namespace.
 A cold connection with no anchors and no assertion cannot establish scope.
 UID joins inside a store cannot prove which cluster Radar is connected to.
-The UI names existing scope flags when this prevents history.
+The UI points to operator configuration in **About these metrics** when this prevents history.
 
 Current UID-filtered charts exclude previous incarnations of same-name Pods.
 Historical charts describe the logical cluster/namespace/kind/name workload,
@@ -261,27 +282,25 @@ Helm installations can provision the assertion with
 `traffic.prometheusSingleCluster: true` or `traffic.prometheusClusterLabels`,
 and optionally `traffic.beylaJobSelector`. Defaults do not assert trust. Use a
 chart and Radar image version containing this feature together; adding these
-arguments to an older image is not supported. Desktop configuration UX remains
-a follow-up.
+arguments to an older image is not supported. In-cluster OSS and Radar Cloud
+viewers should ask their installation's operator to update Helm/GitOps settings,
+not try to configure a private scope for their own charts.
+
+Desktop supports automatic matching, but its separate flag parser and Settings
+do not expose these overrides. If an explicit assertion is required, use the
+standalone CLI. These flags have no `config.json` keys or environment-variable
+equivalents. See [configuration by run mode](configuration.md#workload-metrics-overrides-by-run-mode).
 
 Normal startup reinitialization and unchanged settings saves preserve the assertion.
 Changing the Kubernetes endpoint/auth configuration under the same context name
-discards it too. New pressure queries require cAdvisor container identity labels;
+discards it too. New resource queries require cAdvisor container identity labels;
 they do not use the older charts' container-label-free fallback.
 Reconstructing a kubeconfig `proxy-url` callback on laptop reconnect also discards
 the assertion conservatively. The UI reports this loss; restart to reassert it.
 Explicit assertions are labeled in the UI and do not bypass the request charts'
 per-evaluation checks for multiple known replica/job populations.
 
-## What the observations mean
-
-| Panel | Interpretation | Limits |
-|---|---|---|
-| Requests/sec | Rolling counter rate, summed within one observer | Not a request count or an end-to-end user transaction rate |
-| HTTP 5xx | Percentage of that observer's requests with HTTP 5xx responses | Not gRPC/application success; status 0 (no HTTP response) is not counted as 5xx; idle traffic has no defined percentage; incomplete status labels withhold affected samples |
-| p50 / p95 | Quantiles of aggregated histogram buckets, in seconds | Approximations; missing/partial bucket coverage or mismatched bucket populations withhold affected samples |
-| CPU throttled periods | Workload-wide throttled periods / total periods, plus maximum Pod percentage | Weighted by periods, not an average of Pod percentages; not CPU time lost; missing counters are unavailable |
-| Compare current Pods | CPU, memory working set and throttling, sortable descending | Missing/stale/gap samples show a dash, not zero |
+## Historical scope and query limits
 
 Historical queries join metrics with retained ownership at each timestamp. They
 do not enumerate today's Pod names; query size does not grow with replica count.
@@ -303,7 +322,8 @@ when the ownership lookup fails. While current attribution is pending, compariso
 shows a matching-in-progress state and refreshes every three seconds.
 
 When identity-checked CPU/memory charts cannot be served, the existing basic charts
-remain in a separate **Pod-name matching** section. They do not establish Pod UID,
+remain in a collapsed **Basic CPU / memory · identity unverified** section
+(the label lists only the affected charts). They do not establish Pod UID,
 historical workload membership, or cluster identity; matching names in a shared
 backend may include another cluster. They never substitute for a verified workload
 total. Network/storage retain this same older name-matched contract independently.
@@ -372,7 +392,7 @@ See the upstream [Prometheus histogram query documentation](https://prometheus.i
 [Istio metrics reference](https://istio.io/latest/docs/reference/config/metrics/),
 and [Beyla attribute configuration](https://grafana.com/docs/beyla/latest/configure/metrics-traces-attributes/).
 These explain upstream capabilities; Radar's narrower supported mappings are
-listed above and verified as described below.
+listed above and verified in [live-tested coverage](#live-tested-coverage).
 
 ## Request sources
 
@@ -391,6 +411,11 @@ listed above and verified as described below.
   historical queries otherwise consider matching HTTP-server jobs across the
   range and withhold ambiguous observation populations instead of picking a job
   from today's Pods.
+  For example, `--beyla-job-selector 'job="primary-beyla"'` selects one observer
+  when paired with an appropriate scope flag. The pre-existing Live Traffic
+  integration also accepts wider matcher fragments; those are not supported by
+  the workload adapter. The flag alone does not filter automatic workload
+  attribution. Do not assert an unverified cluster scope just to select a job.
   Application-only Beyla works without network metrics: verified with
   direct exposition in kind and EKS nonprod (Beyla 3.32.0). Default OTLP-to-Alloy
   conversion was also tested and lacks Pod attributes on the request series;
@@ -402,58 +427,139 @@ successful data into an error or fabricate a zero. Sources with only historical
 rate evaluations are marked stale. This is evaluation freshness, not a guarantee
 about the scrape timestamp of every underlying counter.
 
-## Verification
+## Workload metrics HTTP API
 
-Fast tests live in `pkg/prom/workload_*_test.go`,
-`internal/prometheus/workload_metrics_test.go`, and the frontend
-`workloadMetricValues.test.ts`.
+`GET /api/prometheus/workload/{kind}/{namespace}/{name}?range=1h&source=beyla`
+returns the curated workload dashboard. It does not accept arbitrary PromQL,
+backend URLs, credentials or cluster-scope overrides from chart requests.
 
-The numerical suite (also enabled in CI) evaluates the production expressions using Prometheus
-itself, including cluster separation, observer separation, unit conversion,
-quantiles and duplicate cAdvisor scrape targets:
+| Input | Contract |
+|---|---|
+| `kind` | Deployment, StatefulSet or DaemonSet; other workload kinds return 400. |
+| `namespace`, `name` | The workload identity. In auth-enabled mode, the caller must be allowed to get that workload kind and list Pods in its namespace. |
+| `range` | `10m`, `30m`, `1h`, `3h`, `6h`, `12h`, `24h`, `48h`, `7d`, `14d`. Omitted or unrecognized values use `1h`. |
+| `source` | `beyla` or `istio`; omitted/empty selects automatically, preferring usable Istio rates. An explicit valid source is honored even if unavailable; any other value returns 400. |
 
-```sh
-RADAR_TEST_PROMTOOL_IMAGE=prom/prometheus:v3.5.0 go test -C pkg ./prom -run 'TestWorkload(History)?PromQL' -v
-```
+The response describes both data and coverage:
 
-This does not replace live exporter compatibility testing or UI screenshots.
-Beyla direct exposition is live-verified, including Radar auto-discovery and a
-two-replica HTTP workload with bounded traffic and scheduled 503 responses.
-The repeatable kind lab additionally passes all eight core panels for both Beyla
-3.25 and Istio 1.30.3, including positive request/error/latency samples from
-two-replica, multi-port fixtures. Its worker, Redis StatefulSet and DaemonSet pass
-resource-panel checks without inventing HTTP traffic. A fresh VictoriaMetrics
-1.151 / Istio 1.30.3 run also returns available p50/p95 samples with the current
-histogram checks. These are API-level checks, not a fresh browser sweep.
+| Field | Meaning |
+|---|---|
+| `state`, `reason` | Overall collection status. A 200 response or `available` here does **not** guarantee every chart has usable data. |
+| `panels` | Chart results: `requests` (requests/s), `errors` (HTTP 5xx percent), `p50`/`p95` (seconds), `cpu` (cores), `memory` (bytes), `throttling` (percent), and `observedPods` (coverage helper, Pods). Keys can be absent when a prerequisite is unavailable. |
+| `panels[key].state`, `.reason`, `.unit`, `.series` | Inspect each panel independently. Missing/nonfinite point values serialize as `null`, not zero. Series expose only chart-level labels such as Pod or aggregation, not raw metric labels. |
+| `comparison` | Current-Pod CPU/memory/throttling panels, independent of historical-chart availability. |
+| `history` | Per-family membership (`cpu`, `memory`, `throttling`, `requests`): `workload-history`, `current-pods`, or `unavailable`, with an optional reason. This describes whose samples can be included, not whether a panel has data. |
+| `pods`, `podsTotal` | Selected current Pods and total current Pods respectively; not historical replica counts. Current-Pod selection is bounded to 100. |
+| `start`, `end`, `stepSeconds`, `rateWindowSeconds` | Unix-second window bounds, evaluation spacing and rolling rate window. Radar selects the step, bounds evaluations and aligns the end to the step. Use these values rather than assuming the requested range's default step. |
+| `source`, `sources` | Selected HTTP observer and candidate source status. Source status reflects rate collection before later histogram/status/population checks; inspect individual panels for final validity. |
+| `attribution` | Human-readable source evidence, with reserved `scope` and `history` entries for operator assertion and historical ownership. |
+| `scopeNotice` | Human-readable notice when a previous explicit assertion was cleared. It does not mean automatic matching has failed. |
 
-An unlabeled Istio store still needs an explicit scope assertion; automatic
-Istio attribution requires a verified KSM-backed cluster partition. Envoy
-[merges histogram observations separately from counters](https://github.com/envoyproxy/envoy/blob/main/source/docs/stats.md),
-so latency compares matching label populations and internal histogram consistency,
-not equality with the separate request counter. Per-metric Istio Telemetry label
-overrides can create structurally different populations; those still withhold
-latency. Missing latency never implies no requests or healthy latency.
+Panel states are `available`, `partial`, `stale`, `unavailable`, `error`, and
+`detecting`. `partial` can mean missing coverage; `stale` means only older usable
+evaluations remain. `unavailable` is not measured zero, and `error` is not absence
+of instrumentation. `detecting` means identity matching is in progress.
+Top-level state summarizes collection and does not aggregate all panel states.
 
-The reporting-Pod count is derived from request rate series, not the Kubernetes
-selection. A partial count does not prove missing instrumentation: Pods can be
-idle or newly started. Panels retain useful observations but label incomplete
-population coverage in current-only mode. Historical counts describe reporting
-Pods at each timestamp, without a current-replica denominator. Rate
-windows are at least five minutes and twice the evaluation step. Long ranges
-therefore cover the interval but smooth short spikes; the UI shows the actual
-window. All request numerators, denominators, histograms and coverage queries use
-that same window.
+An early identity-detection response can have empty panel/history/comparison
+maps and sources, with numeric fields serialized as zero. Read `state` first:
+those zeros are not a measured zero-Pod result or an epoch-zero query window.
+`reason`, `scopeNotice`, source labels and attribution text are display copy,
+not stable machine-readable reason codes.
 
-## Traefik feasibility notes
+HTTP errors use `{"error":"..."}`. A 403 can mean either the caller lacks the
+required workload/Pod permissions, or Radar's own cache cannot cover the Pod
+and controller data in that namespace. The latter needs an operator to check
+Radar's Kubernetes permissions and configured namespace scope, not necessarily
+change the viewer's permissions. A 503 means the connection/client/cache is not ready; a
+502 can indicate workload-Pod resolution failed. A 409 means the metrics
+connection changed during collection: retry against the new connection.
+Upstream query failures are generally reported in panel or collection state,
+not as HTTP errors; backend authentication failures are distinct from Radar's
+Kubernetes authorization gate.
 
-The Kubernetes Ingress provider in Traefik v3.5 constructs service identifiers
-from namespace, Service name and port. A default backend is a separate case.
-These are provider-internal identities, not Kubernetes references. See the
-[pinned provider source](https://github.com/traefik/traefik/blob/v3.5.0/pkg/provider/kubernetes/ingress/kubernetes.go).
+## Live-tested coverage
 
-Hyphen concatenation can collide across namespaces: `team-a/api` and `team/a-api`
-with the same port. Namespace-scoped Service inspection alone cannot prove that
-the identifier uniquely belongs to the requested target. The spike must prove
-identity and shared-Service behavior using live metrics before adding this source;
-splitting the metric label on hyphens is not an acceptable mapping. No Traefik
-adapter is shipped by the current worktree yet.
+Validation on 2026-09-13–14 exercised the following combinations. A successful
+query endpoint does not imply that every chart has the necessary metrics.
+These checks cover specific versions and collection configurations, not every
+installation of a backend or a measured percentage of Kubernetes users.
+
+The fleet matrix originally validated current-Pod attribution. Historical
+ownership was additionally validated in the repeatable kind lab: Beyla and Istio
+retained identical CPU, memory, throttling, request, error and latency values at
+fixed timestamps after rollout/deletion and scale-to-zero. This is not a
+retroactive history certification of every cloud row. Historical resource and RED
+charts were also rechecked on the GKE VictoriaMetrics/Istio fixture and two EKS
+Mimir/Beyla workloads without scope assertions. The GKE fixture produced positive
+requests, approximately 25% injected 5xx responses, and defined p50/p95; its worker
+and Redis retained resource charts without fabricated HTTP charts. Cloud workloads
+were not rolled or scaled for this check. A real-Prometheus fixture
+verifies aggregate totals for 128 Pods; the live lab itself remains small.
+
+| Backend and collection | Resource panels | HTTP panels | Setup / qualification |
+|---|---|---|---|
+| EKS, Prometheus 3.14 + cAdvisor + Beyla 3.32 | CPU, memory, throttling | Requests, 5xx, p50/p95, reporting Pods | Existing workloads; automatic endpoint discovery and Pod UID attribution |
+| GKE, OpenCost Prometheus 2.54 | CPU, memory, throttling | No HTTP source | Deployments and a Redis StatefulSet; automatic UID attribution |
+| EKS, Prometheus 2.47 | CPU, memory | No HTTP source | Throttling metrics absent from the tested store |
+| Shared Mimir with three clusters | CPU, memory | Not certified | Explicit central-store URL; current Pod UID attribution without a scope assertion |
+| EKS, Mimir 3.2 + Alloy Prometheus remote-write + Beyla 3.32 | CPU, memory, throttling | Requests, 5xx, p50/p95, reporting Pods | Explicit URL, Basic auth and tenant header; automatic UID attribution |
+| GKE, VictoriaMetrics 1.151 + cAdvisor/KSM + Istio 1.30 sidecars | CPU, memory, throttling | Requests, 5xx, p50/p95, reporting Pods | Identity labels preserved; KSM-backed cluster attribution; explicit VM endpoint selection; retested with the current histogram guard |
+| kind, Prometheus 3.5 + Beyla 3.32 | No cAdvisor scrape | Requests, 5xx, p50/p95, reporting Pods | Two replicas and two HTTP ports; controlled nonzero errors |
+| kind, Istio 1.30 official Prometheus sample | CPU, memory, throttling | Requests/5xx with scope assertion; latency incomplete | Sample lacks a provable automatic Istio cluster partition |
+| kind repeatable lab, Prometheus 3.5 + cAdvisor/KSM + Beyla 3.25 and Istio 1.30 sidecars | CPU, memory, throttling | Requests, 5xx, p50/p95, reporting Pods for each observer | Two replicas/ports each; automatic attribution; resource-only worker, Redis StatefulSet and DaemonSet also pass |
+
+Non-HTTP workers and Redis correctly retain resource panels when available,
+without an empty HTTP chart grid. A network-only VictoriaMetrics store correctly
+has no workload observations. Authenticated Mimir rejects missing/wrong
+credentials and a missing required tenant in gateway-level checks, not browser
+tests of Radar's auth error state. A separate unhealthy Mimir store
+failed real queries despite having Ready Pods; readiness is not query health.
+
+### Configuration and remaining gaps
+
+- The tested VictoriaMetrics Kubernetes chart (0.92.1) drops cAdvisor `id` and KSM
+  `uid` by default. Preserve those fields for direct UID / KSM-backed attribution.
+  The successful VM test used that explicit configuration; it is not a stock-default
+  OOTB claim. Copying every GKE node label also exceeded VM's label-per-series
+  limit in the lab; collector label filtering was needed to prevent dropped data.
+- The baseline Istio latency gap came from comparing independently updated
+  request counters and histograms. Latency now matches their complete label
+  populations and validates each histogram count against its `+Inf` bucket;
+  it does not require the separate request counter to have advanced equally.
+  Missing populations, mismatched bucket layouts and duplicate jobs/replicas
+  still withhold affected samples. Histograms can briefly trail request counters.
+- Explicitly configured endpoints can return an empty `up` vector and still
+  connect; filtered remote-write stores do not have to retain scrape metadata.
+  Automatic discovery still skips empty candidates. Connected means the query
+  API answered, not that the selected tenant contains this workload's data.
+  Authentication, backend query errors and invalid query responses have distinct
+  diagnostics. HTTP 405 explains that workload queries require POST through proxies.
+- Live checks primarily used one or two replicas, including a single-node
+  DaemonSet. Large workloads, HA duplicate populations and adversarial cross-cluster name
+  collisions are not live-certified by this matrix. Separate query tests
+  cover several identity/duplicate cases; that is not equivalent to a fleet test.
+- These runs used local Radar with Kubernetes port-forward access. They do not
+  certify Radar Cloud transport, managed-service authentication or every in-cluster
+  deployment path. A full browser sweep was not repeated for each backend.
+
+The [repeatable workload demo](../scripts/workload-metrics-demo/README.md) adds
+an isolated kind baseline with Prometheus, Beyla, cAdvisor/KSM, Istio sidecars,
+finite error-producing traffic and assertions on actual Radar chart responses.
+Its checks distinguish resource/HTTP families and include a DaemonSet. The
+unlabeled official Istio sample row records an earlier baseline, not a retroactive
+success; the fresh kind and VM rows exercise the current histogram guard.
+
+Ingress observers, native-only histograms,
+ambient/waypoint mapping, gRPC and queue-worker semantics remain outside this
+slice. Existing network/filesystem/restart charts have separate identity limits
+described in [Historical Pods and existing resource queries](#historical-pods-and-existing-resource-queries).
+See [what each chart needs](#what-each-chart-needs) before
+treating backend compatibility as automatic chart availability.
+
+## Reproduce the validation
+
+The [workload metrics demo](../scripts/workload-metrics-demo/README.md) documents
+the isolated fixtures, numerical tests and commands used to check these
+configurations. Screenshots in this guide replay one recorded demo response
+through Radar's UI; they are illustrations, not an additional live-backend test.

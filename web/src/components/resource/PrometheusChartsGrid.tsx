@@ -169,11 +169,7 @@ export function PrometheusChartsGrid({
     <MetricsPanel key={def.key} category={def} kind={kind} namespace={namespace} name={name} timeRange={timeRange} referenceLines={refLines} />
   );
 
-  return (
-    <div className="flex flex-col min-w-0 w-full h-full overflow-auto">
-      <div className="flex shrink-0 items-center justify-between gap-3 px-4 pt-3">
-        {isWorkload && <a className="text-xs text-accent hover:underline" href="https://github.com/skyhook-io/radar/blob/main/docs/workload-metrics.md#what-each-chart-needs" target="_blank" rel="noopener noreferrer">What each chart needs</a>}
-        <select
+  const rangeControl = <select
           aria-label="Metrics time range"
           value={timeRange}
           onChange={(e) => {
@@ -188,11 +184,15 @@ export function PrometheusChartsGrid({
               {tr.label}
             </option>
           ))}
-        </select>
-      </div>
+        </select>;
+
+  return (
+    <div className="flex flex-col min-w-0 w-full h-full overflow-auto">
+      {!isWorkload && <div className="flex shrink-0 items-center justify-between gap-3 px-4 pt-3">{rangeControl}</div>}
 
       {isWorkload && (
         <WorkloadMetricsSection key={`${kind}/${namespace}/${name}`} kind={kind} namespace={namespace} name={name} range={timeRange}
+          controls={rangeControl}
           cpuReferenceLines={cpuRefLines} memoryReferenceLines={memRefLines}
           nameMatchedCharts={{ cpu: cpu && renderPanel({ def: cpu }), memory: mem && renderPanel({ def: mem }) }}
           restartLane={showRestartLane && <div className="mb-3"><RestartEventLane kind={kind} namespace={namespace} name={name} range={timeRange} /></div>} />
@@ -213,7 +213,10 @@ export function PrometheusChartsGrid({
 
       <div className="metrics-layout min-w-0 px-4 pt-4">
         {isWorkload && <h3 className="mb-2 text-sm font-semibold text-theme-text-primary">Network and storage</h3>}
-        {isWorkload && <p className="mb-2 text-xs text-theme-text-tertiary">These charts use Pod-name matching, independently of the identity-checked resource and request charts above.</p>}
+        {isWorkload && <details className="mb-2 text-xs text-theme-text-secondary">
+          <summary className="cursor-pointer">Pod-name matched · identity unverified</summary>
+          <p className="mt-2 max-w-2xl text-sm leading-relaxed">These charts match current Pod names, independently of the identity-checked charts above. Matching names in a shared backend may include another cluster.</p>
+        </details>}
         <div className="metrics-chart-grid">
           {chartPanels.filter(({ def }) => !isWorkload || (def.key !== "cpu" && def.key !== "memory")).map(renderPanel)}
         </div>

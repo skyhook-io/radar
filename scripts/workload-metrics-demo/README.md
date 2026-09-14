@@ -96,3 +96,59 @@ not delete the saved evidence or any cloud installation. Run it deliberately:
 ```sh
 bash scripts/workload-metrics-demo.sh down
 ```
+
+## Numerical tests and validation evidence
+
+Fast tests live in `pkg/prom/workload_*_test.go`,
+`internal/prometheus/workload_metrics_test.go`, and the frontend
+`workloadMetricValues.test.ts`.
+
+The numerical suite (also enabled in CI) evaluates the production expressions using Prometheus
+itself, including cluster separation, observer separation, unit conversion,
+quantiles and duplicate cAdvisor scrape targets:
+
+```sh
+RADAR_TEST_PROMTOOL_IMAGE=prom/prometheus:v3.5.0 go test -C pkg ./prom -run 'TestWorkload(History)?PromQL' -v
+```
+
+This does not replace live exporter compatibility testing or UI screenshots.
+Beyla direct exposition is live-verified, including Radar auto-discovery and a
+two-replica HTTP workload with bounded traffic and scheduled 503 responses.
+The repeatable kind lab additionally passes all eight core panels for both Beyla
+3.25 and Istio 1.30.3, including positive request/error/latency samples from
+two-replica, multi-port fixtures. Its worker, Redis StatefulSet and DaemonSet pass
+resource-panel checks without inventing HTTP traffic. A fresh VictoriaMetrics
+1.151 / Istio 1.30.3 run also returns available p50/p95 samples with the current
+histogram checks. These are API-level checks, not a fresh browser sweep.
+
+An unlabeled Istio store still needs an explicit scope assertion; automatic
+Istio attribution requires a verified KSM-backed cluster partition. Envoy
+[merges histogram observations separately from counters](https://github.com/envoyproxy/envoy/blob/main/source/docs/stats.md),
+so latency compares matching label populations and internal histogram consistency,
+not equality with the separate request counter. Per-metric Istio Telemetry label
+overrides can create structurally different populations; those still withhold
+latency. Missing latency never implies no requests or healthy latency.
+
+The reporting-Pod count is derived from request rate series, not the Kubernetes
+selection. A partial count does not prove missing instrumentation: Pods can be
+idle or newly started. Panels retain useful observations but label incomplete
+population coverage in current-only mode. Historical counts describe reporting
+Pods at each timestamp, without a current-replica denominator. Rate
+windows are at least five minutes and twice the evaluation step. Long ranges
+therefore cover the interval but smooth short spikes; the UI shows the actual
+window. All request numerators, denominators, histograms and coverage queries use
+that same window.
+
+## Future ingress adapter investigation
+
+The Kubernetes Ingress provider in Traefik v3.5 constructs service identifiers
+from namespace, Service name and port. A default backend is a separate case.
+These are provider-internal identities, not Kubernetes references. See the
+[pinned provider source](https://github.com/traefik/traefik/blob/v3.5.0/pkg/provider/kubernetes/ingress/kubernetes.go).
+
+Hyphen concatenation can collide across namespaces: `team-a/api` and `team/a-api`
+with the same port. Namespace-scoped Service inspection alone cannot prove that
+the identifier uniquely belongs to the requested target. The spike must prove
+identity and shared-Service behavior using live metrics before adding this source;
+splitting the metric label on hyphens is not an acceptable mapping. No Traefik
+adapter is implemented by the current workload metrics feature.

@@ -480,9 +480,11 @@ func ScoreService(svc corev1.Service) (score int, basePath string, identity bool
 	return score, basePath, identity
 }
 
-// candidateKey identifies a candidate by the tuple that determines where and
-// how it is probed, so the same service surfaced by both discovery layers is
-// de-duplicated.
+// Key identifies the backend independently of its direct or forwarded address.
+func (c Candidate) Key() string {
+	return candidateKey(c.Namespace, c.Name, c.Port, c.BasePath)
+}
+
 func candidateKey(namespace, name string, port int, basePath string) string {
 	return fmt.Sprintf("%s/%s:%d%s", namespace, name, port, basePath)
 }

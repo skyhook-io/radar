@@ -2,6 +2,7 @@ package prometheus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"regexp"
@@ -15,7 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
-const historyScopeRemedy = "Historical cluster scope could not be verified. For a backend dedicated to this cluster, use --prometheus-single-cluster; for a shared backend, use --prometheus-cluster-label with its exact cluster label."
+const historyScopeRemedy = "Historical cluster scope could not be verified. An operator can configure a verified scope override; see Troubleshooting identity matching in About these metrics."
 
 type workloadPartitionMemo struct {
 	generation uint64
@@ -39,6 +40,7 @@ func (c *Client) historicalClusterScope(ctx context.Context, scope PodScope, cac
 	}
 	c.mu.RLock()
 	generation := c.discoveryGen
+	epoch := c.connectionEpoch
 	if memo := c.workloadPartition; memo != nil && memo.generation == generation && time.Now().Before(memo.expires) && !c.retired {
 		config := memo.scope
 		c.mu.RUnlock()
@@ -63,27 +65,29 @@ func (c *Client) historicalClusterScope(ctx context.Context, scope PodScope, cac
 		return prom.WorkloadMetricsScope{}, nil
 	}
 	// One proof flight per connection; waiters never gain access to its anchor namespace.
-	ch := c.workloadPartitionSF.DoChan(strconv.FormatUint(generation, 10), func() (any, error) {
-		probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 8*time.Second)
+	ch := c.workloadPartitionSF.DoChan(fmt.Sprintf("%d#%d", generation, epoch), func() (any, error) {
+		flightCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), discoveryTimeout+8*time.Second)
 		defer cancel()
-		if _, _, err := c.EnsureConnected(probeCtx); err != nil {
+		if _, _, err := c.EnsureConnected(flightCtx); err != nil {
 			return nil, err
 		}
 		c.mu.RLock()
-		if c.discoveryGen != generation || c.retired || c.baseURL == "" {
+		if c.discoveryGen != generation || c.connectionEpoch != epoch || c.retired || c.baseURL == "" {
 			c.mu.RUnlock()
 			return nil, fmt.Errorf("metrics connection changed")
 		}
 		tr := prom.NewHTTPTransport(c.baseURL, c.basePath, c.httpClient)
 		tr.Headers, tr.MaxResponseBytes = copyHeaders(c.headers), 4<<20
 		c.mu.RUnlock()
+		probeCtx, probeCancel := context.WithTimeout(flightCtx, 8*time.Second)
+		defer probeCancel()
 		config, err := probeHistoricalPartition(probeCtx, prom.NewClient(tr), scope.Namespace, anchors)
 		if err != nil {
 			return nil, err
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		if c.discoveryGen != generation || c.retired {
+		if c.discoveryGen != generation || c.connectionEpoch != epoch || c.retired {
 			return nil, fmt.Errorf("metrics connection changed")
 		}
 		if len(config.ClusterLabels) > 0 {
@@ -125,6 +129,7 @@ func chooseWorkloadHistory(ctx context.Context, client RangeQuerier, scope PodSc
 	}
 	plan := workloadHistoryPlan{reason: "Workload history needs retained kube-state-metrics Pod ownership (and ReplicaSet ownership for Deployments), or the standard workload ownership recording rule."}
 	var earliest int64
+	var lookupErr error
 	bestCount := 0
 	for _, recorded := range []bool{false, true} {
 		history := prom.WorkloadHistory{Kind: scope.Kind, Namespace: scope.Namespace, Name: scope.Name, Scope: config, Recorded: recorded}
@@ -134,7 +139,11 @@ func chooseWorkloadHistory(ctx context.Context, client RangeQuerier, scope PodSc
 		}
 		result, err := client.QueryRange(ctx, "count("+owner+")", start, end, step)
 		if err != nil {
-			return workloadHistoryPlan{err: err, reason: "Historical ownership lookup failed; retry when the metrics backend is healthy."}
+			lookupErr = errors.Join(lookupErr, err)
+			if ctx.Err() != nil {
+				break
+			}
+			continue
 		}
 		first, count := int64(0), 0
 		for _, series := range result.Series {
@@ -150,6 +159,9 @@ func chooseWorkloadHistory(ctx context.Context, client RangeQuerier, scope PodSc
 		if count > 0 && (plan.history == nil || first < earliest || first == earliest && count > bestCount) {
 			plan.history, plan.reason, earliest, bestCount = &history, "", first, count
 		}
+	}
+	if plan.history == nil && lookupErr != nil {
+		return workloadHistoryPlan{err: lookupErr, reason: "Historical ownership lookup failed; retry when the metrics backend is healthy."}
 	}
 	return plan
 }

@@ -69,6 +69,97 @@ func TestHistoryFailureDoesNotTurnPendingAttributionIntoMissingMetrics(t *testin
 	}
 }
 
+func TestHistoricalOwnershipStrategiesFailIndependently(t *testing.T) {
+	rawErr, recordedErr := errors.New("raw lookup failed"), errors.New("recorded lookup failed")
+	for _, tc := range []struct {
+		name                      string
+		rawErr, recordedErr       error
+		empty                     bool
+		wantRecorded, wantFailure bool
+	}{
+		{"raw failure uses rule", rawErr, nil, false, true, false},
+		{"rule failure preserves raw", nil, recordedErr, false, false, false},
+		{"raw timeout uses rule", context.DeadlineExceeded, nil, false, true, false},
+		{"both fail", rawErr, recordedErr, false, false, true},
+		{"raw fails rule empty", rawErr, nil, true, false, true},
+		{"raw empty rule fails", nil, recordedErr, true, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			q := workloadQueryFunc(func(_ context.Context, query string, _, _ time.Time, _ time.Duration) (*prom.QueryResult, error) {
+				calls++
+				err := tc.rawErr
+				if strings.Contains(query, "namespace_workload_pod:") {
+					err = tc.recordedErr
+				}
+				if err != nil {
+					return nil, err
+				}
+				result := &prom.QueryResult{}
+				if !tc.empty {
+					result.Series = []prom.Series{{DataPoints: []prom.DataPoint{{Timestamp: 100, Value: 1}}}}
+				}
+				return result, nil
+			})
+			plan := chooseWorkloadHistory(context.Background(), q, PodScope{Kind: "Deployment", Namespace: "shop", Name: "api"}, prom.WorkloadMetricsScope{SingleCluster: true}, time.Unix(100, 0), time.Unix(160, 0), time.Minute)
+			if calls != 2 || (plan.err != nil) != tc.wantFailure || (plan.history == nil) != tc.wantFailure {
+				t.Fatalf("calls=%d plan=%+v", calls, plan)
+			}
+			if plan.history != nil && plan.history.Recorded != tc.wantRecorded {
+				t.Fatalf("wrong strategy: %+v", plan.history)
+			}
+			if tc.wantFailure {
+				for _, err := range []error{tc.rawErr, tc.recordedErr} {
+					if err != nil && !errors.Is(plan.err, err) {
+						t.Fatalf("lost lookup error: %v", plan.err)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestHistoricalOwnershipStopsOnCallerCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
+	q := workloadQueryFunc(func(context.Context, string, time.Time, time.Time, time.Duration) (*prom.QueryResult, error) {
+		calls++
+		cancel()
+		return nil, ctx.Err()
+	})
+	plan := chooseWorkloadHistory(ctx, q, PodScope{Kind: "Deployment", Namespace: "shop", Name: "api"}, prom.WorkloadMetricsScope{SingleCluster: true}, time.Now(), time.Now(), time.Minute)
+	if calls != 1 || !errors.Is(plan.err, context.Canceled) || plan.history != nil {
+		t.Fatalf("canceled lookup: calls=%d plan=%+v", calls, plan)
+	}
+}
+
+func TestHistoricalPartitionDiscoveryHasSeparateBudget(t *testing.T) {
+	pod := prom.WorkloadPodIdentity{Name: "api-0", UID: "030a7597-c1fc-48b0-9bb4-683489285358"}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(attributionEvidence([]prom.Series{{Labels: map[string]string{"namespace": "shop", "pod": pod.Name, "uid": pod.UID, "cluster": "west"}}}, ""))
+	}))
+	defer server.Close()
+	c := &Client{manualURL: server.URL, httpClient: server.Client()}
+	select {
+	case discoveryGate <- struct{}{}:
+	default:
+		t.Fatal("discovery gate busy")
+	}
+	release := time.AfterFunc(9*time.Second, func() { <-discoveryGate })
+	defer func() {
+		if release.Stop() {
+			<-discoveryGate
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	got, err := c.historicalClusterScope(ctx, PodScope{Namespace: "shop", Identities: []prom.WorkloadPodIdentity{pod}}, nil)
+	if err != nil || got.ClusterLabels["cluster"] != "west" {
+		t.Fatalf("discovery consumed proof budget: %+v %v", got, err)
+	}
+}
+
 func TestHistoricalPartitionRequiresExternalAnchor(t *testing.T) {
 	pod := prom.WorkloadPodIdentity{Name: "api-0", UID: "030a7597-c1fc-48b0-9bb4-683489285358"}
 	for _, labeled := range []bool{false, true} {
@@ -92,7 +183,7 @@ func TestHistoricalPartitionRequiresExternalAnchor(t *testing.T) {
 				return nil, nil
 			})
 			plan := chooseWorkloadHistory(context.Background(), q, PodScope{Kind: "Deployment", Namespace: "shop", Name: "api"}, config, time.Now(), time.Now(), time.Minute)
-			if plan.history != nil || !strings.Contains(plan.reason, "--prometheus-single-cluster") {
+			if plan.history != nil || !strings.Contains(plan.reason, "About these metrics") || strings.Contains(plan.reason, "--prometheus-") {
 				t.Fatal("missing explicit current-only remedy")
 			}
 		}
