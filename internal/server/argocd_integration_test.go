@@ -569,3 +569,24 @@ func TestArgoCDStatus_AnonymousReadIsConnectedOnlyOnceItWorks(t *testing.T) {
 		t.Fatalf("allowed anonymous read: status = %+v, want connected+anonymous", out)
 	}
 }
+
+// Settings sends people to "check Argo CD" when a configured connection
+// doesn't deliver; the status must say what went wrong, in plain words.
+func TestArgoCDStatus_ReportsWhyAConfiguredServerIsNotReachable(t *testing.T) {
+	s := setupArgoCDTest(t)
+	argocd.SetConfig("http://127.0.0.1:1", "tok", false, true)
+	_ = argocd.Probe(context.Background())
+	rec := httptest.NewRecorder()
+	s.handleArgoCDStatus(rec, httptest.NewRequest(http.MethodGet, "/api/integrations/argocd/status", nil))
+	var out struct {
+		Configured bool   `json:"configured"`
+		Connected  bool   `json:"connected"`
+		Reason     string `json:"reason"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Configured || out.Connected || !strings.Contains(out.Reason, "the server couldn't be reached") {
+		t.Fatalf("status = %+v, want a plain reason for the failed connection", out)
+	}
+}

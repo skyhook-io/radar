@@ -132,6 +132,9 @@ type Manager struct {
 
 	probing   bool
 	nextProbe time.Time
+	// lastProbeErr is why the last probe failed, for Settings to show; a
+	// connection drop keeps it (that is when the user wants to know).
+	lastProbeErr error
 
 	baseURL string
 	client  *argoapi.Client
@@ -410,6 +413,9 @@ func AnonymousReadAllowed() bool { return defaultManager.AnonymousReadAllowed() 
 
 // TokenSet reports whether the default manager has a token configured.
 func TokenSet() bool { return defaultManager.TokenSet() }
+
+// LastProbeError is the default manager's most recent probe failure, if any.
+func LastProbeError() error { return defaultManager.LastProbeError() }
 
 // TokenContext returns the readable context recorded with the current token.
 func TokenContext() string { return defaultManager.TokenContext() }
@@ -767,6 +773,25 @@ func (m *Manager) Address() string {
 // session/userinfo. Errors wrap ErrUnreachable or ErrTokenInvalid so callers
 // can map them to distinct messages.
 func (m *Manager) Probe(ctx context.Context) error {
+	err := m.probe(ctx)
+	if errors.Is(err, errStaleProbe) {
+		return err
+	}
+	m.mu.Lock()
+	m.lastProbeErr = err
+	m.mu.Unlock()
+	return err
+}
+
+// LastProbeError is the failure of the most recent completed probe, or nil
+// after a success — what Settings shows next to "Not reachable".
+func (m *Manager) LastProbeError() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastProbeErr
+}
+
+func (m *Manager) probe(ctx context.Context) error {
 	// Serialize probes. Background reconnection and the synchronous probe from
 	// ManagedResourcesCached would otherwise run discovery + port-forward setup
 	// concurrently and race on m.forward / m.baseURL / m.client — the generation

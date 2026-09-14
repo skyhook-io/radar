@@ -26,9 +26,13 @@ export const APP_TREE_NO_FINDINGS_NOTICE =
   "Argo CD 3 no longer records health for each resource on the application, and Radar didn't find a problem on its own."
 export const APP_TREE_PERSIST_REMEDY =
   'set controller.resource.health.persist to "true" in argocd-cmd-params-cm.'
-// The integration is set up and still didn't deliver: say so, and why,
-// instead of showing Radar's read as if nothing had been configured.
+// The integration is set up and still didn't deliver: lead with that and
+// why — the user who configured it doesn't need the Argo CD 3 history
+// first — then say what the rows below are meanwhile.
 export const APP_TREE_API_ERROR_NOTICE = "Radar couldn't read Argo's per-resource health from your Argo CD server"
+export const APP_TREE_API_ERROR_FINDINGS = 'Meanwhile, rows marked "Found by Radar" are problems Radar detected by looking at the resources itself.'
+export const APP_TREE_API_ERROR_NO_FINDINGS = "Radar didn't find a problem on its own."
+
 export const REMOTE_DESTINATION_NOTICE =
   "This application deploys to a different cluster, so its resources aren't visible from here."
 
@@ -102,21 +106,24 @@ export function GitOpsHealthSourceNotice({
           </>
         ) : (
           <>
-            {radarFinding ? APP_TREE_HEALTH_NOTICE : APP_TREE_NO_FINDINGS_NOTICE}
             {apiError ? (
               <>
-                {' '}
                 {APP_TREE_API_ERROR_NOTICE}: {apiError}.
                 {onOpenSettings && <> {settingsLink('Check Argo CD in Settings')}.</>}
+                {' '}
+                {radarFinding ? APP_TREE_API_ERROR_FINDINGS : APP_TREE_API_ERROR_NO_FINDINGS}
               </>
             ) : (
-              !radarFinding && (
-                <>
-                  {' '}
-                  To see Argo's per-resource health here, {onOpenSettings && <>{settingsLink('connect Radar to your Argo CD server')}, or </>}
-                  {APP_TREE_PERSIST_REMEDY}
-                </>
-              )
+              <>
+                {radarFinding ? APP_TREE_HEALTH_NOTICE : APP_TREE_NO_FINDINGS_NOTICE}
+                {!radarFinding && (
+                  <>
+                    {' '}
+                    To see Argo's per-resource health here, {onOpenSettings && <>{settingsLink('connect Radar to your Argo CD server')}, or </>}
+                    {APP_TREE_PERSIST_REMEDY}
+                  </>
+                )}
+              </>
             )}
             {docsUrl && (
               <>

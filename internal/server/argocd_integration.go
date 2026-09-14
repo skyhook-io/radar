@@ -40,6 +40,8 @@ func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
 		resp.Anonymous = argocd.AnonymousReadAllowed()
 	} else if argocd.TokenBindingUpgradeRequired() {
 		resp.Reason = "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source."
+	} else if err := argocd.LastProbeError(); err != nil && resp.Configured {
+		resp.Reason = "Radar couldn't connect to Argo CD: " + argoAPIHealthFailure(err, argocd.TokenSet()) + "."
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)

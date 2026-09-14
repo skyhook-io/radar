@@ -717,6 +717,12 @@ export function SettingsDialog({
                       : prev
                   )
                   void refetchArgoSectionStatus()
+                  // The GitOps detail page the user came from doesn't poll
+                  // when idle; without this the notice that sent them here
+                  // would still be up when they get back.
+                  void queryClient.invalidateQueries({
+                    predicate: (query) => typeof query.queryKey[0] === 'string' && query.queryKey[0].startsWith('gitops-'),
+                  })
                 }}
               />
             </SectionPane>
@@ -2375,7 +2381,7 @@ function ArgoCDEditableField({
         <div className="mb-3 rounded-md border border-theme-border bg-theme-elevated p-3">
           <p className="flex items-center gap-1.5 text-sm font-medium text-warning-text">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-            Argo CD token needs attention
+            Argo CD connection needs attention
           </p>
           <p className="mt-1 text-xs text-theme-text-secondary">{statusReason}</p>
         </div>
