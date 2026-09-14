@@ -774,7 +774,10 @@ func (m *Manager) Address() string {
 // can map them to distinct messages.
 func (m *Manager) Probe(ctx context.Context) error {
 	err := m.probe(ctx)
-	if errors.Is(err, errStaleProbe) {
+	// The caller's own deadline or navigation says nothing about the
+	// server; recording it would have Settings report a timeout the
+	// background probe never saw.
+	if errors.Is(err, errStaleProbe) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
 	m.mu.Lock()

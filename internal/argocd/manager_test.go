@@ -999,3 +999,19 @@ func TestApplicationHealthCached_ConfiguredConnectFailureIsThrottled(t *testing.
 		t.Fatalf("second read = %v, want the throttle carrying ErrUnreachable", err)
 	}
 }
+
+// A caller that gave up (its own deadline, a navigated-away page) is not a
+// connection failure, so it must not become what Settings reports.
+func TestProbe_DoesNotRecordTheCallersOwnDeadline(t *testing.T) {
+	m := newTestManager(config.Config{})
+	m.SetConfig("http://127.0.0.1:1", "tok", false, true)
+	if err := m.Probe(context.Background()); !errors.Is(err, ErrUnreachable) || m.LastProbeError() == nil {
+		t.Fatalf("real failure = %v, want it recorded", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = m.Probe(ctx)
+	if !errors.Is(m.LastProbeError(), ErrUnreachable) {
+		t.Fatalf("a cancelled probe replaced the recorded failure with %v", m.LastProbeError())
+	}
+}
