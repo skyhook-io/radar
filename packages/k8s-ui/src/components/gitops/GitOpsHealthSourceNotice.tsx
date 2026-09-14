@@ -106,8 +106,7 @@ export function GitOpsHealthSourceNotice({
             {apiError ? (
               <>
                 {' '}
-                {APP_TREE_API_ERROR_NOTICE}
-                {apiError ? `: ${apiError}.` : '.'}
+                {APP_TREE_API_ERROR_NOTICE}: {apiError}.
                 {onOpenSettings && <> {settingsLink('Check Argo CD in Settings')}.</>}
               </>
             ) : (

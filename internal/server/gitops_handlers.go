@@ -218,7 +218,10 @@ func argoAPIHealthFailure(err error, tokenSet bool) string {
 	case errors.Is(err, argocd.ErrUnreachable):
 		return "the server couldn't be reached"
 	}
-	return ""
+	// Anything else (a 500, a body that didn't parse) is still a configured
+	// connection that didn't deliver; an empty clause would read as nothing
+	// configured and offer the connect remedy to someone who already did.
+	return "it didn't answer"
 }
 
 // overlayArgoAPIHealth fills per-resource health from the controller's own

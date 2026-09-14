@@ -231,7 +231,7 @@ func TestArgoAPIHealthFailure_SpeaksToTheUser(t *testing.T) {
 		{fmt.Errorf("x: %w", argoapi.ErrNotFound), true, "it doesn't know this application"},
 		{fmt.Errorf("x: %w", context.DeadlineExceeded), true, "the request timed out"},
 		{fmt.Errorf("x (retry throttled): %w", argocd.ErrUnreachable), true, "the server couldn't be reached"},
-		{errors.New("something else"), true, ""},
+		{errors.New("something else"), true, "it didn't answer"},
 	}
 	for _, tc := range cases {
 		if got := argoAPIHealthFailure(tc.err, tc.tokenSet); got != tc.want {
