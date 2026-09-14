@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -186,6 +187,33 @@ func TestCodexExecutionProfiles(t *testing.T) {
 	}
 	if _, _, err := a.command(ctx, turnSpec{profile: ""}); err == nil {
 		t.Fatal("Codex must reject an empty profile rather than fail open")
+	}
+}
+
+func TestCodexSessionTokenUsesEnvironment(t *testing.T) {
+	t.Setenv("RADAR_MCP_SESSION_TOKEN", "auto")
+	a := &codexAgent{bin: "codex"}
+	cmd, cleanup, err := a.command(context.Background(), turnSpec{
+		mcpURL: "http://localhost:1/mcp", mcpToken: "test-token",
+		prompt: "go", profile: ExecutionProfileFullLocal,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	args := strings.Join(cmd.Args, " ")
+	if !strings.Contains(args, "env_http_headers.Authorization") {
+		t.Fatalf("Codex config missing environment-backed Authorization header: %q", args)
+	}
+	if strings.Contains(args, "test-token") {
+		t.Fatalf("session token leaked into process arguments: %q", args)
+	}
+	if !slices.Contains(cmd.Env, "RADAR_MCP_SESSION_TOKEN=Bearer test-token") {
+		t.Fatal("Codex environment missing session token")
+	}
+	if slices.Contains(cmd.Env, "RADAR_MCP_SESSION_TOKEN=auto") {
+		t.Fatal("parent RADAR_MCP_SESSION_TOKEN leaked into Codex environment")
 	}
 }
 

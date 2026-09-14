@@ -531,3 +531,27 @@ func TestValidateNamespaceFanout(t *testing.T) {
 		t.Fatalf("cap-1 list with distinct context namespace should fit: %v", err)
 	}
 }
+
+func TestResolveMCPSessionToken(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
+		t.Setenv("RADAR_MCP_SESSION_TOKEN", "")
+		got, err := resolveMCPSessionToken(AppConfig{})
+		if err != nil || got != "" {
+			t.Fatalf("got %q err %v", got, err)
+		}
+	})
+	t.Run("literal", func(t *testing.T) {
+		t.Setenv("RADAR_MCP_SESSION_TOKEN", "secret")
+		got, err := resolveMCPSessionToken(AppConfig{})
+		if err != nil || got != "secret" {
+			t.Fatalf("got %q err %v", got, err)
+		}
+	})
+	t.Run("rejects auth", func(t *testing.T) {
+		t.Setenv("RADAR_MCP_SESSION_TOKEN", "auto")
+		_, err := resolveMCPSessionToken(AppConfig{AuthConfig: auth.Config{Mode: "oidc"}})
+		if err == nil {
+			t.Fatal("expected error with OIDC")
+		}
+	})
+}
