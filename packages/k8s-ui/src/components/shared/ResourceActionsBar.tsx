@@ -702,6 +702,7 @@ export function ResourceActionsBar({
         options={drainOptions}
         onOptionsChange={setDrainOptions}
         planSupported={Boolean(onPlanDrain)}
+        onRefreshPlan={onPlanDrain ? () => onPlanDrain({ name: resource.name, options: drainOptions }) : undefined}
         isDraining={Boolean(isDrainingNode)}
         onClose={() => {
           setShowDrainConfirm(false)

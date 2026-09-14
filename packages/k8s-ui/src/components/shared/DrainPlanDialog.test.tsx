@@ -110,8 +110,19 @@ describe('DrainPlanContent', () => {
     expect(html).toContain('shop/web')
     expect(html).toContain('currently allows no disruptions')
     expect(html).toContain('agent reason')
-    expect(html).toContain('estimate')
-    expect(html).toContain('re-lists live state')
+    expect(html).toContain('Estimated at')
+    expect(html).toContain('About this estimate')
+  })
+
+  it('offers a refresh only when the host can recompute the plan', () => {
+    const p = plan([pod('web', 'evict')])
+    expect(render({ plan: p, onRefreshPlan: noop })).toContain('Recompute the plan')
+    expect(render({ plan: p })).not.toContain('Recompute the plan')
+  })
+
+  it('offers a retry on a failed plan only when the host can recompute it', () => {
+    expect(render({ error: 'boom', onRefreshPlan: noop })).toContain('Try again')
+    expect(render({ error: 'boom' })).not.toContain('Try again')
   })
 
   it('shows a loading state instead of a stale plan', () => {

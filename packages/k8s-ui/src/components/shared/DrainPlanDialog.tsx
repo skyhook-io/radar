@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Info, Loader2, RefreshCw } from 'lucide-react'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Badge, type BadgeSeverity } from '../ui/Badge'
 import { AlertBanner } from '../ui/drawer-components'
+import { Tooltip } from '../ui/Tooltip'
 import { pluralize } from '../../utils/pluralize'
 
 // Shapes returned by POST /api/nodes/{name}/drain-plan.
@@ -92,6 +93,9 @@ const OUTCOME_LABEL: Record<DrainOutcome, string> = {
   skip: 'skip',
 }
 
+const ESTIMATE_CAVEAT =
+  'An estimate, not a guarantee: the drain re-lists live state when it runs, and pods, budgets and permissions can change until then.'
+
 interface DrainPlanContentProps {
   nodeName: string
   plan?: DrainPlan | null
@@ -102,6 +106,8 @@ interface DrainPlanContentProps {
   planSupported: boolean
   acknowledgedEmptyDir: boolean
   onAcknowledgeEmptyDir: (acknowledged: boolean) => void
+  /** Recompute the plan with the current options; also the retry after a failed plan. */
+  onRefreshPlan?: () => void
 }
 
 /**
@@ -110,7 +116,7 @@ interface DrainPlanContentProps {
  * react-dom/server); the enclosing dialog owns the confirm gating.
  */
 export function DrainPlanContent({
-  nodeName, plan, loading, error, options, onOptionsChange, planSupported, acknowledgedEmptyDir, onAcknowledgeEmptyDir,
+  nodeName, plan, loading, error, options, onOptionsChange, planSupported, acknowledgedEmptyDir, onAcknowledgeEmptyDir, onRefreshPlan,
 }: DrainPlanContentProps) {
   const current = planMatches(plan, nodeName, options) ? plan : null
   const atRisk = current ? emptyDirPodsAtRisk(current) : []
@@ -146,17 +152,47 @@ export function DrainPlanContent({
       )}
 
       {planSupported && !loading && error && (
-        <AlertBanner variant="error" title="Could not compute the drain plan" message={error} />
+        <AlertBanner variant="error" title="Could not compute the drain plan" message={error}>
+          {onRefreshPlan && (
+            <button
+              type="button"
+              onClick={onRefreshPlan}
+              className="mt-2 rounded border border-theme-border bg-theme-surface px-2 py-1 text-xs text-theme-text-primary transition-colors hover:bg-theme-hover"
+            >
+              Try again
+            </button>
+          )}
+        </AlertBanner>
       )}
 
       {planSupported && !loading && !error && current && (
         <>
-          <div className="text-theme-text-primary">
-            {pluralize(current.summary.evict, 'pod')} to evict,{' '}
-            {current.pdbsEvaluated
-              ? `${current.summary.mayBlock} may block on a PodDisruptionBudget`
-              : 'PodDisruptionBudgets not evaluated'}
-            , {current.summary.skip} skipped. This is an estimate from {new Date(current.generatedAt).toLocaleTimeString()}; the drain re-lists live state when it runs, and pods, budgets and permissions can change until then.
+          <div className="flex items-start justify-between gap-2">
+            <div className="text-theme-text-primary">
+              {pluralize(current.summary.evict, 'pod')} to evict,{' '}
+              {current.pdbsEvaluated
+                ? `${current.summary.mayBlock} may block on a PodDisruptionBudget`
+                : 'PodDisruptionBudgets not evaluated'}
+              , {current.summary.skip} skipped.
+            </div>
+            <div className="flex items-center gap-1 shrink-0 text-xs text-theme-text-tertiary">
+              <span>Estimated at {new Date(current.generatedAt).toLocaleTimeString()}</span>
+              <Tooltip content={ESTIMATE_CAVEAT} className="max-w-xs">
+                <Info aria-label="About this estimate" className="w-3.5 h-3.5" />
+              </Tooltip>
+              {onRefreshPlan && (
+                <Tooltip content="Recompute the plan">
+                  <button
+                    type="button"
+                    aria-label="Recompute the plan"
+                    onClick={onRefreshPlan}
+                    className="p-1 rounded text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
+                </Tooltip>
+              )}
+            </div>
           </div>
 
           {!current.pdbsEvaluated && (
@@ -229,10 +265,12 @@ interface DrainPlanDialogProps {
   isDraining: boolean
   /** Whether the host can compute plans. Without it the dialog still gates emptyDir on an acknowledgement. */
   planSupported: boolean
+  /** Recompute the plan with the current options; also the retry after a failed plan. */
+  onRefreshPlan?: () => void
 }
 
 export function DrainPlanDialog({
-  open, nodeName, plan, loading, error, options, onOptionsChange, onConfirm, onClose, isDraining, planSupported,
+  open, nodeName, plan, loading, error, options, onOptionsChange, onConfirm, onClose, isDraining, planSupported, onRefreshPlan,
 }: DrainPlanDialogProps) {
   const [acknowledgedEmptyDir, setAcknowledgedEmptyDir] = useState(false)
 
@@ -268,6 +306,7 @@ export function DrainPlanDialog({
         planSupported={planSupported}
         acknowledgedEmptyDir={acknowledgedEmptyDir}
         onAcknowledgeEmptyDir={setAcknowledgedEmptyDir}
+        onRefreshPlan={onRefreshPlan}
       />
     </ConfirmDialog>
   )
