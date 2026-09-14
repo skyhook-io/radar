@@ -143,6 +143,10 @@ interface ResourceActionsBarProps {
   drainPlan?: DrainPlan | null
   isPlanningDrain?: boolean
   drainPlanError?: string | null
+  // The connected backend has no drain-plan endpoint (version skew, e.g. a newer
+  // frontend against an older radar). The dialog falls back to the plan-less
+  // acknowledgement-only mode instead of keeping Drain disabled on a dead request.
+  drainPlanUnsupported?: boolean
 }
 
 export function ResourceActionsBar({
@@ -173,7 +177,7 @@ export function ResourceActionsBar({
   onCordonNode, isCordoningNode,
   onUncordonNode, isUncordoningNode,
   onDrainNode, isDrainingNode,
-  onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError,
+  onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError, drainPlanUnsupported,
 }: ResourceActionsBarProps) {
   const kind = resource.kind.toLowerCase()
   const coreBatchJob = isCoreBatchJob(kind, resource.group)
@@ -698,10 +702,10 @@ export function ResourceActionsBar({
         nodeName={resource.name}
         plan={drainPlan}
         loading={Boolean(isPlanningDrain)}
-        error={drainPlanError}
+        error={drainPlanUnsupported ? null : drainPlanError}
         options={drainOptions}
         onOptionsChange={setDrainOptions}
-        planSupported={Boolean(onPlanDrain)}
+        planSupported={Boolean(onPlanDrain) && !drainPlanUnsupported}
         onRefreshPlan={onPlanDrain ? () => onPlanDrain({ name: resource.name, options: drainOptions }) : undefined}
         isDraining={Boolean(isDrainingNode)}
         onClose={() => {

@@ -165,6 +165,6 @@ describe('DrainPlanContent', () => {
 
   it('asks for the acknowledgement with an honest text when the estimate shows no emptyDir pod', () => {
     const html = render({ plan: plan([pod('web', 'evict')], { deleteEmptyDirData: true }), options: emptyDirOn })
-    expect(html).toContain('No pod on this node uses emptyDir right now')
+    expect(html).toContain('No pod that would be evicted uses emptyDir right now')
   })
 })

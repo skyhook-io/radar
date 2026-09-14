@@ -71,6 +71,7 @@ import {
   useUncordonNode,
   useDrainNode,
   useDrainPlan,
+  DrainPlanUnsupportedError,
   useCascadeDeletePreview,
   useResourceEvents,
   useResource,
@@ -493,6 +494,7 @@ function useActionsBarProps(
     drainPlan: drainPlanMutation.data ?? null,
     isPlanningDrain: drainPlanMutation.isPending,
     drainPlanError: drainPlanMutation.error?.message ?? null,
+    drainPlanUnsupported: drainPlanMutation.error instanceof DrainPlanUnsupportedError,
   }
 }
 

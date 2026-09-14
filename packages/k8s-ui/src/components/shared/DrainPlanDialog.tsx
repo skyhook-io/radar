@@ -94,7 +94,8 @@ const OUTCOME_LABEL: Record<DrainOutcome, string> = {
 }
 
 const ESTIMATE_CAVEAT =
-  'An estimate, not a guarantee: the drain re-lists live state when it runs, and pods, budgets and permissions can change until then.'
+  'An estimate, not a guarantee: the drain re-lists live state when it runs, and pods, budgets and permissions can change until then. ' +
+  'Evictions a budget refuses are retried until the drain deadline (60 seconds, shared by all evictions); a pod covered by more than one budget is refused outright.'
 
 interface DrainPlanContentProps {
   nodeName: string
@@ -247,7 +248,7 @@ export function DrainPlanContent({
               {current && atRisk.length > 0
                 ? `Discard the emptyDir data of ${pluralize(atRisk.length, 'pod')}: ${atRisk.map((p) => `${p.namespace}/${p.name}`).join(', ')}.`
                 : current
-                  ? 'No pod on this node uses emptyDir right now; any that does when the drain runs will lose that data.'
+                  ? 'No pod that would be evicted uses emptyDir right now; any that does when the drain runs will lose that data.'
                   : 'Discard the emptyDir data of every evicted pod that uses emptyDir volumes.'}{' '}
               I understand this data cannot be recovered.
             </span>
