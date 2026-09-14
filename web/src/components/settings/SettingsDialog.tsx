@@ -2159,7 +2159,7 @@ function ArgoCDConfigField({
   onApplied?: (v: { url: string; insecureTls: boolean; tokenSet: boolean }) => void
 }) {
   if (envManaged) {
-    return <ArgoCDEnvManagedField url={url} insecureTls={insecureTls} envError={envError} />
+    return <ArgoCDEnvManagedField url={url} insecureTls={insecureTls} envError={envError} connectedAddress={connectedAddress} statusReason={statusReason} />
   }
   return (
     <ArgoCDEditableField
@@ -2186,10 +2186,17 @@ function ArgoCDEnvManagedField({
   url,
   insecureTls,
   envError,
+  connectedAddress,
+  statusReason,
 }: {
   url: string
   insecureTls: boolean
   envError?: string
+  // Live connection, from the status endpoint: the address when the
+  // token-backed session is up, else why it isn't. The card is read-only,
+  // so this is the one thing on it that can change after deploy.
+  connectedAddress?: string
+  statusReason?: string
 }) {
   if (envError) {
     return (
@@ -2241,6 +2248,21 @@ function ArgoCDEnvManagedField({
           <div className="flex gap-2">
             <dt className="w-24 shrink-0 text-theme-text-tertiary">Token</dt>
             <dd className="text-theme-text-secondary">provided via environment</dd>
+          </div>
+          <div className="flex gap-2">
+            <dt className="w-24 shrink-0 text-theme-text-tertiary">Status</dt>
+            <dd className="min-w-0 truncate text-theme-text-secondary">
+              {connectedAddress ? (
+                <span className="inline-flex items-center gap-1">
+                  <Check className="w-3 h-3 shrink-0 text-green-600 dark:text-green-400/80" />
+                  Connected at {connectedAddress}
+                </span>
+              ) : statusReason ? (
+                <span className="text-warning-text">Not reachable — {statusReason}</span>
+              ) : (
+                'Not connected'
+              )}
+            </dd>
           </div>
           {insecureTls && (
             <div className="flex gap-2">
