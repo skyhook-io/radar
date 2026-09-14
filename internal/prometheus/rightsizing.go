@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/prom"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -334,6 +335,13 @@ func collectCurrentPodOOM(dst map[string]bool, statuses []corev1.ContainerStatus
 func loadHPAManagedResources(cache *k8s.ResourceCache, kind, namespace, name string) (map[string]bool, bool) {
 	managed := map[string]bool{}
 	if !cache.IsDeferredSynced() || cache.HorizontalPodAutoscalers() == nil {
+		return managed, false
+	}
+	// A namespace-scoped informer answers an empty list for every namespace it
+	// does not watch, with no error. Treating that as "no autoscaler here" is
+	// what the availability flag exists to prevent: it gates whether a
+	// reduction may be suggested at all.
+	if !cache.KindCoversNamespace(string(k8score.HorizontalPodAutoscalers), namespace) {
 		return managed, false
 	}
 	hpas, err := cache.HorizontalPodAutoscalers().HorizontalPodAutoscalers(namespace).List(labels.Everything())

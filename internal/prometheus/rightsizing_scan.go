@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/prom"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -723,7 +724,7 @@ func enrichScanHPA(cache *k8s.ResourceCache, scopes map[string][]string, workloa
 		if err != nil {
 			return
 		}
-		markScanHPAAvailable(workloads, "")
+		markScanHPAAvailable(cache, workloads, "")
 	} else {
 		for _, namespace := range namespaces {
 			items, err := lister.HorizontalPodAutoscalers(namespace).List(labels.Everything())
@@ -731,7 +732,7 @@ func enrichScanHPA(cache *k8s.ResourceCache, scopes map[string][]string, workloa
 				continue
 			}
 			hpas = append(hpas, items...)
-			markScanHPAAvailable(workloads, namespace)
+			markScanHPAAvailable(cache, workloads, namespace)
 		}
 	}
 	for _, hpa := range hpas {
@@ -751,11 +752,19 @@ func enrichScanHPA(cache *k8s.ResourceCache, scopes map[string][]string, workloa
 	}
 }
 
-func markScanHPAAvailable(workloads map[string]*scanWorkload, namespace string) {
+// markScanHPAAvailable records that the HPA inventory was actually readable for
+// these workloads. A successful list says nothing about namespaces the informer
+// does not watch, so coverage is checked per workload: a cluster-wide scan can
+// span both kinds of namespace at once.
+func markScanHPAAvailable(cache *k8s.ResourceCache, workloads map[string]*scanWorkload, namespace string) {
 	for _, workload := range workloads {
-		if namespace == "" || workload.namespace == namespace {
-			workload.workload.hpaAvailable = true
+		if namespace != "" && workload.namespace != namespace {
+			continue
 		}
+		if !cache.KindCoversNamespace(string(k8score.HorizontalPodAutoscalers), workload.namespace) {
+			continue
+		}
+		workload.workload.hpaAvailable = true
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -338,7 +339,7 @@ func TestMarkScanHPAAvailableIsNamespaceScoped(t *testing.T) {
 		"a": {namespace: "team-a"},
 		"b": {namespace: "team-b"},
 	}
-	markScanHPAAvailable(workloads, "team-a")
+	markScanHPAAvailable(scopeTestCache(t, map[string]bool{k8score.HorizontalPodAutoscalers: true}), workloads, "team-a")
 	if !workloads["a"].workload.hpaAvailable || workloads["b"].workload.hpaAvailable {
 		t.Fatalf("HPA evidence availability crossed namespaces: %+v", workloads)
 	}
@@ -485,5 +486,133 @@ func TestScanSkipsReplicaSetWaitWithoutDeployments(t *testing.T) {
 	enrichScanCurrentOOM(context.Background(), cache, map[string][]string{"DaemonSet": {"shop"}}, workloads)
 	if elapsed := time.Since(start); elapsed >= warmingRetryBudget {
 		t.Errorf("waited %v on ReplicaSets a DaemonSet-only scan never reads", elapsed)
+	}
+}
+
+// The availability flag gates whether a reduction may be suggested at all, so
+// an HPA informer that does not watch a namespace must not report that it
+// looked there and found no autoscaler.
+func TestScanHPAAvailabilityFollowsInformerCoverage(t *testing.T) {
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{
+		Client:        fake.NewClientset(),
+		ResourceTypes: map[string]bool{k8score.HorizontalPodAutoscalers: true},
+		DeferredTypes: map[string]bool{},
+		ResourceScopes: map[string]k8score.ResourceScope{
+			string(k8score.HorizontalPodAutoscalers): {Enabled: true, Namespace: "team-a"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache: %v", err)
+	}
+	t.Cleanup(core.Stop)
+	cache := &k8s.ResourceCache{ResourceCache: core}
+
+	workloads := map[string]*scanWorkload{
+		"a": {kind: "Deployment", namespace: "team-a", name: "watched"},
+		"b": {kind: "Deployment", namespace: "team-b", name: "unwatched"},
+	}
+	markScanHPAAvailable(cache, workloads, "")
+
+	if !workloads["a"].workload.hpaAvailable {
+		t.Error("team-a is watched; its empty HPA list is authoritative and must count as evidence")
+	}
+	if workloads["b"].workload.hpaAvailable {
+		t.Error("team-b is outside the informer's scope, so no autoscaler could have been seen there")
+	}
+}
+
+// With no ResourceScopes the cache is cluster-wide by default — the ordinary
+// full-access case — and must behave exactly as it did before coverage was
+// consulted.
+func TestScanHPAAvailabilityUnchangedWithFullAccess(t *testing.T) {
+	cache := scopeTestCache(t, map[string]bool{k8score.HorizontalPodAutoscalers: true})
+	workloads := map[string]*scanWorkload{
+		"a": {kind: "Deployment", namespace: "team-a", name: "one"},
+		"b": {kind: "Deployment", namespace: "team-b", name: "two"},
+	}
+	markScanHPAAvailable(cache, workloads, "")
+	if !workloads["a"].workload.hpaAvailable || !workloads["b"].workload.hpaAvailable {
+		t.Fatalf("full access must mark every workload available: %+v", workloads)
+	}
+}
+
+// The real caller, not just the marking helper: a utilization HPA in the
+// watched namespace must both flag its workload as HPA-managed and count as
+// evidence, while a workload in an unwatched namespace gets neither — nothing
+// was ever listed there, so "no autoscaler" was never established.
+func TestEnrichScanHPAHonoursCoverageEndToEnd(t *testing.T) {
+	utilization := int32(80)
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "api"},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "api"},
+			Metrics: []autoscalingv2.MetricSpec{{
+				Type: autoscalingv2.ResourceMetricSourceType,
+				Resource: &autoscalingv2.ResourceMetricSource{
+					Name:   "cpu",
+					Target: autoscalingv2.MetricTarget{AverageUtilization: &utilization},
+				},
+			}},
+		},
+	}
+	for _, tc := range []struct {
+		name           string
+		scopes         map[string]k8score.ResourceScope
+		wantAAvailable bool
+		wantBAvailable bool
+	}{
+		{"full access", nil, true, true},
+		{"scoped to team-a", map[string]k8score.ResourceScope{
+			string(k8score.HorizontalPodAutoscalers): {Enabled: true, Namespace: "team-a"},
+		}, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			core, err := k8score.NewResourceCache(k8score.CacheConfig{
+				Client:         fake.NewClientset(hpa),
+				ResourceTypes:  map[string]bool{k8score.HorizontalPodAutoscalers: true},
+				DeferredTypes:  map[string]bool{},
+				ResourceScopes: tc.scopes,
+			})
+			if err != nil {
+				t.Fatalf("NewResourceCache: %v", err)
+			}
+			t.Cleanup(core.Stop)
+			cache := &k8s.ResourceCache{ResourceCache: core}
+			// HPAs load on the deferred path, and the evidence gate refuses to
+			// read them until that phase reports done.
+			deadline := time.Now().Add(10 * time.Second)
+			for !cache.IsDeferredSynced() {
+				if time.Now().After(deadline) {
+					t.Fatal("deferred informers never reported synced")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+
+			workloads := map[string]*scanWorkload{
+				workloadIdentity("Deployment", "team-a", "api"): {
+					kind: "Deployment", namespace: "team-a", name: "api",
+					workload: rightsizingWorkload{hpaManaged: map[string]bool{}},
+				},
+				workloadIdentity("Deployment", "team-b", "other"): {
+					kind: "Deployment", namespace: "team-b", name: "other",
+					workload: rightsizingWorkload{hpaManaged: map[string]bool{}},
+				},
+			}
+			// A kind mapped to a nil namespace list is the cluster-wide scope; an
+			// absent key yields an empty list, which is a different branch.
+			enrichScanHPA(cache, map[string][]string{"Deployment": nil}, workloads)
+
+			a := workloads[workloadIdentity("Deployment", "team-a", "api")].workload
+			b := workloads[workloadIdentity("Deployment", "team-b", "other")].workload
+			if a.hpaAvailable != tc.wantAAvailable {
+				t.Errorf("team-a hpaAvailable = %v, want %v", a.hpaAvailable, tc.wantAAvailable)
+			}
+			if b.hpaAvailable != tc.wantBAvailable {
+				t.Errorf("team-b hpaAvailable = %v, want %v", b.hpaAvailable, tc.wantBAvailable)
+			}
+			if !a.hpaManaged["cpu"] {
+				t.Error("the HPA targets this Deployment's CPU; that must survive the coverage check")
+			}
+		})
 	}
 }
