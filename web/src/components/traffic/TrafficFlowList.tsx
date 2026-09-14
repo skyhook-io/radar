@@ -1,12 +1,13 @@
 import { useState, useMemo } from 'react'
 import { Virtuoso } from 'react-virtuoso'
-import type { TrafficFlow } from '../../types'
+import type { TrafficFlow, TrafficEndpoint } from '../../types'
 import { clsx } from 'clsx'
 import { ChevronDown, ChevronUp, ShieldCheck } from 'lucide-react'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { pluralize, StatusDot } from '@skyhook-io/k8s-ui'
 import type { StatusTone } from '@skyhook-io/k8s-ui'
 import { useFlowSearch } from './TrafficFlowListContext'
+import { isPolicyDropReason } from './trafficFilters'
 import { useQuery } from '@tanstack/react-query'
 import { fetchJSON } from '../../api/client'
 import { Tooltip } from '../ui/Tooltip'
@@ -251,14 +252,14 @@ export function TrafficFlowList({ flows }: TrafficFlowListProps) {
                     <div className="grid grid-cols-2 gap-x-6 gap-y-1">
                       <div>
                         <span className="text-theme-text-tertiary">Source: </span>
-                        <span className="text-theme-text-primary">{flow.source.name}</span>
-                        {flow.source.namespace && <span className="text-theme-text-tertiary"> ({flow.source.namespace})</span>}
+                        <span className="text-theme-text-primary">{endpointLabel(flow.source)}</span>
+                        {endpointNote(flow.source) && <span className="text-theme-text-tertiary"> ({endpointNote(flow.source)})</span>}
                         {flow.sourceService && <span className="text-theme-text-tertiary"> via {flow.sourceService}</span>}
                       </div>
                       <div>
                         <span className="text-theme-text-tertiary">Destination: </span>
-                        <span className="text-theme-text-primary">{flow.destination.name}</span>
-                        {flow.destination.namespace && <span className="text-theme-text-tertiary"> ({flow.destination.namespace})</span>}
+                        <span className="text-theme-text-primary">{endpointLabel(flow.destination)}</span>
+                        {endpointNote(flow.destination) && <span className="text-theme-text-tertiary"> ({endpointNote(flow.destination)})</span>}
                         {flow.destService && <span className="text-theme-text-tertiary"> via {flow.destService}</span>}
                       </div>
                       <div>
@@ -335,7 +336,8 @@ export function TrafficFlowList({ flows }: TrafficFlowListProps) {
                     {/* Drop reason + policy correlation */}
                     {flow.dropReasonDesc && (
                       <div className="pt-1 border-t border-theme-border/50">
-                        <span className={SEVERITY_TEXT.error}>Drop reason: {flow.dropReasonDesc}</span>
+                        <span className={SEVERITY_TEXT.error}>Dropped: {describeDropReason(flow.dropReasonDesc)}</span>
+                        <span className="text-theme-text-tertiary font-mono text-[10px]"> · {flow.dropReasonDesc}</span>
                       </div>
                     )}
                     {flow.verdict === 'dropped' && (
@@ -364,18 +366,52 @@ interface PolicyEvaluation {
   reason?: string
 }
 
-/** A drop is a policy question only on positive evidence: the plugin named a
- *  policy reason, or named the policy itself. A drop with no reported reason
- *  is not assumed to be one. */
 function isPolicyDrop(flow: TrafficFlow): boolean {
-  if (flow.policyVerdict?.deniedBy?.length) return true
-  return (flow.dropReasonDesc ?? '').toUpperCase().includes('POLICY_DENY')
+  return isPolicyDropReason(flow.dropReasonDesc, flow.policyVerdict?.deniedBy?.length ?? 0)
 }
 
 const EFFECT_TONE: Record<string, StatusTone> = {
   admits: 'healthy',
   does_not_admit: 'neutral',
   undecidable: 'unknown',
+}
+
+const EFFECT_LABEL: Record<string, string> = {
+  admits: 'allows this traffic',
+  does_not_admit: 'no matching allow rule',
+  undecidable: "can't evaluate",
+}
+
+/** Plain words for the drop reasons an operator meets most; anything else is
+ *  the code itself, humanized. The code stays beside it either way. */
+const DROP_REASON_TEXT: Record<string, string> = {
+  POLICY_DENIED: 'blocked by network policy — no rule allowed it',
+  POLICY_DENY: 'blocked by an explicit deny rule',
+  AUTH_REQUIRED: 'mutual authentication required and not established',
+  NO_CONFIGURATION_AVAILABLE_TO_PERFORM_POLICY_DECISION: 'policy not yet loaded for this endpoint',
+  STALE_OR_UNROUTABLE_IP: 'no route to the destination address',
+  UNSUPPORTED_L3_PROTOCOL: 'unsupported network protocol',
+  INVALID_SOURCE_IP: 'the source address is not valid here',
+  NO_TUNNEL_OR_ENCAPSULATION_ENDPOINT: 'no tunnel endpoint for the destination node',
+}
+
+function describeDropReason(code: string | undefined): string {
+  if (!code) return 'reason not reported'
+  return DROP_REASON_TEXT[code] ?? code.toLowerCase().replace(/_/g, ' ')
+}
+
+/** A pod is named; anything else is best identified by the address the user
+ *  can act on, with the classification as the note. */
+function endpointLabel(ep: TrafficEndpoint): string {
+  if (ep.kind === 'Pod' || ep.kind === 'Service' || !ep.ip) return ep.name
+  return ep.ip
+}
+
+function endpointNote(ep: TrafficEndpoint): string {
+  if (ep.kind === 'Pod' || ep.kind === 'Service') return ep.namespace ?? ''
+  if (ep.kind === 'External') return 'outside the cluster'
+  if (ep.kind === 'Host') return ep.name === 'kube-apiserver' ? 'the API server' : 'a node or the host network'
+  return ep.ip ? 'not identified' : ''
 }
 
 function policyRef(p: { kind: string; namespace?: string; name: string }): string {
@@ -387,6 +423,8 @@ function PolicyCorrelation({ flow }: { flow: TrafficFlow }) {
   const dst = flow.destination
   const direction = flow.trafficDirection === 'ingress' || flow.trafficDirection === 'egress' ? flow.trafficDirection : ''
   const evaluated = direction === 'egress' ? src : dst
+  const evaluatedRef = evaluated ? `${evaluated.namespace}/${evaluated.name}` : ''
+  const intoOutOf = direction === 'egress' ? 'out of' : 'into'
   const observed = flow.lastSeen ? new Date(flow.lastSeen).toLocaleTimeString() : ''
 
   // Only a pod has policies applied to it; a drop at a node or an external
@@ -422,51 +460,59 @@ function PolicyCorrelation({ flow }: { flow: TrafficFlow }) {
     return (
       <div className="pt-1 border-t border-theme-border/50 text-[10px] text-theme-text-tertiary">
         {flow.dropReasonDesc
-          ? `Not evaluated against NetworkPolicies — ${flow.dropReasonDesc} is not a policy verdict`
-          : 'Not evaluated against NetworkPolicies — the plugin did not report why this flow was dropped'}
+          ? 'Not a policy decision, so current NetworkPolicies were not checked'
+          : "The plugin did not report why this flow was dropped, so Radar can't tell whether a policy was involved"}
       </div>
     )
   }
 
-  // The plugin's own attribution is the ground truth; the static evaluation
-  // below is what the policies say about the pod as it is now.
-  const headline = hubbleDenied.length > 0
-    ? { text: `Denied by ${hubbleDenied.map((p) => `${p.kind} ${policyRef(p)}`).join(', ')}`, tone: 'unhealthy' as StatusTone, source: 'reported by the network plugin' }
+  // What the plugin recorded when the packet was dropped is the ground
+  // truth; the current-policy check below is a reading of the policies as
+  // they are now, and is presented as a note under it rather than as a
+  // second verdict.
+  const attribution = hubbleDenied.length > 0
+    ? { text: `Blocked by ${hubbleDenied.map((p) => `${p.kind} ${policyRef(p)}`).join(', ')}`, tone: 'unhealthy' as StatusTone }
     : hubbleAllowed.length > 0
-      ? { text: `Allowed by ${hubbleAllowed.map((p) => `${p.kind} ${policyRef(p)}`).join(', ')}`, tone: 'healthy' as StatusTone, source: 'reported by the network plugin' }
+      ? { text: `Allowed by ${hubbleAllowed.map((p) => `${p.kind} ${policyRef(p)}`).join(', ')}`, tone: 'healthy' as StatusTone }
       : null
 
-  if (!canQuery && !headline) {
+  if (!canQuery && !attribution) {
     return (
       <div className="pt-1 border-t border-theme-border/50 text-[10px] text-theme-text-tertiary">
         {evaluated?.kind && evaluated.kind !== 'Pod'
-          ? `Policies apply to pods; the ${direction === 'egress' ? 'source' : 'destination'} is ${evaluated.kind === 'Host' ? 'a node or the host network' : evaluated.kind === 'External' ? 'outside the cluster' : 'not identified'}`
-          : 'Not enough is known about this flow to evaluate policies'}
+          ? `NetworkPolicies apply to pods, and the ${direction === 'egress' ? 'source' : 'destination'} here is ${endpointNote(evaluated) || 'not a pod'}`
+          : 'Not enough is known about this flow to check policies'}
       </div>
     )
   }
 
-  const staticVerdict = data?.verdict
-  const staticHeadline = staticVerdict === 'admitted'
-    ? { text: 'A current NetworkPolicy admits this connection', tone: 'healthy' as StatusTone }
-    : staticVerdict === 'denied'
-      ? { text: 'No current NetworkPolicy admits this connection', tone: 'unhealthy' as StatusTone }
-      : staticVerdict === 'no-policy'
-        ? { text: 'No NetworkPolicy applies to this pod', tone: 'neutral' as StatusTone }
-        : staticVerdict === 'undecidable'
-          ? { text: 'Not decidable from current NetworkPolicies', tone: 'unknown' as StatusTone }
+  // The current check, scoped to what it can establish: which policies
+  // allow this traffic at the evaluated pod, now. Never "the connection
+  // works" — the flow was dropped, and policies may have changed since.
+  const v = data?.verdict
+  const current = v === 'admitted'
+    ? { text: `A current NetworkPolicy allows this traffic ${intoOutOf} ${evaluatedRef}`, tone: 'healthy' as StatusTone,
+        note: "Policies may have changed since the drop; this doesn't confirm a new connection will succeed." }
+    : v === 'denied'
+      ? { text: `No current NetworkPolicy allows this traffic ${intoOutOf} ${evaluatedRef}`, tone: 'unhealthy' as StatusTone, note: '' }
+      : v === 'no-policy'
+        ? { text: `No NetworkPolicy selects ${evaluatedRef} for ${direction === 'egress' ? 'outgoing' : 'incoming'} traffic`, tone: 'neutral' as StatusTone, note: '' }
+        : v === 'undecidable'
+          ? { text: "Radar can't complete the current NetworkPolicy check", tone: 'unknown' as StatusTone, note: '' }
           : null
+  const currentNote = [current?.note, data?.reason].filter(Boolean).join(' ')
 
   const rows = data?.selectingPolicies ?? []
+  const explainAdditive = rows.length > 1 && rows.some((r) => r.effect === 'does_not_admit')
 
   return (
     <div className="pt-1 border-t border-theme-border/50 space-y-1">
-      {headline && (
+      {attribution && (
         <div className="flex items-start gap-1.5">
-          <StatusDot tone={headline.tone} className="mt-1 shrink-0" />
+          <StatusDot tone={attribution.tone} className="mt-1 shrink-0" />
           <div className="min-w-0 text-[10px]">
-            <span className="text-theme-text-primary font-medium">{headline.text}</span>
-            <span className="text-theme-text-tertiary"> · {headline.source}</span>
+            <span className="text-theme-text-primary font-medium">{attribution.text}</span>
+            <span className="text-theme-text-tertiary"> · reported by the network plugin when the packet was dropped</span>
           </div>
         </div>
       )}
@@ -476,30 +522,43 @@ function PolicyCorrelation({ flow }: { flow: TrafficFlow }) {
       {canQuery && error && (
         <div className="text-[10px] text-theme-text-tertiary">Couldn't check current NetworkPolicies: {error.message}</div>
       )}
-      {staticHeadline && (
+      {current && (attribution ? (
+        <div className="ml-4 text-[10px]">
+          <span className="text-theme-text-secondary">Current check: </span>
+          <span className="text-theme-text-primary">{current.text}</span>
+          <span className="text-theme-text-tertiary">{observed ? ` · flow seen ${observed}` : ''}</span>
+          {currentNote && <div className="text-theme-text-tertiary">{currentNote}</div>}
+        </div>
+      ) : (
         <div className="flex items-start gap-1.5">
-          <StatusDot tone={staticHeadline.tone} className="mt-1 shrink-0" />
+          <StatusDot tone={current.tone} className="mt-1 shrink-0" />
           <div className="min-w-0 text-[10px]">
-            <span className="text-theme-text-primary font-medium">{staticHeadline.text}</span>
-            <span className="text-theme-text-tertiary"> · against policies as they are now{observed ? `, flow seen ${observed}` : ''}</span>
-            {data?.reason && <div className="text-theme-text-tertiary">{data.reason}</div>}
+            <span className="text-theme-text-primary font-medium">{current.text}</span>
+            <span className="text-theme-text-tertiary"> · checked against policies as they are now{observed ? `, flow seen ${observed}` : ''}</span>
+            {currentNote && <div className="text-theme-text-tertiary">{currentNote}</div>}
           </div>
         </div>
-      )}
+      ))}
       {rows.length > 0 && (
         <div className="ml-4 space-y-1">
           <div className="flex items-center gap-1 text-theme-text-secondary">
             <ShieldCheck className="w-3 h-3" />
             <span className="text-[10px] font-medium">
-              {rows.length} {rows.length === 1 ? 'policy applies' : 'policies apply'} to {evaluated?.namespace}/{evaluated?.name}
+              {rows.length} {rows.length === 1 ? 'policy applies' : 'policies apply'} to {evaluatedRef}
             </span>
           </div>
+          {explainAdditive && (
+            <div className="text-[10px] text-theme-text-tertiary">
+              NetworkPolicies combine their allow rules: a policy with no matching rule doesn't override another policy's allow.
+            </div>
+          )}
           {rows.map((p, i) => (
             <div key={i} className="flex items-start gap-1.5">
               <StatusDot tone={EFFECT_TONE[p.effect] ?? 'unknown'} className="mt-1 shrink-0" />
               <div className="min-w-0">
                 <span className="text-[10px] text-theme-text-primary font-medium">{p.name}</span>
                 <span className="text-[10px] text-theme-text-tertiary ml-1">({p.kind})</span>
+                <span className="text-[10px] text-theme-text-secondary ml-1">— {EFFECT_LABEL[p.effect] ?? p.effect}</span>
                 <div className="text-[10px] text-theme-text-tertiary">{p.reason}</div>
               </div>
             </div>

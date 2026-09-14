@@ -253,7 +253,7 @@ func TestEvaluateNetworkPolicies(t *testing.T) {
 				"sourceNamespace": "shop", "sourcePodName": "api-0", "sourceKind": "Pod", "port": "8080",
 			},
 			verdict: verdictUndecidable,
-			reason:  "does not carry a protocol",
+			reason:  "TCP, UDP or SCTP",
 		},
 		{
 			name: "a pod nothing selects has no policy",

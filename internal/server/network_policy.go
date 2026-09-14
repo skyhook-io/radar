@@ -98,7 +98,7 @@ func (s *Server) handleEvaluateNetworkPolicies(w http.ResponseWriter, r *http.Re
 	if dir != netpol.DirectionIngress && dir != netpol.DirectionEgress {
 		s.writeJSON(w, PolicyEvaluation{
 			Verdict: verdictUndecidable,
-			Reason:  "the flow record does not say at which end the traffic was dropped, so it is not known which pod's policies apply",
+			Reason:  "the flow record does not say at which end the traffic was dropped, so it is not known which pod's policies to check",
 		})
 		return
 	}
@@ -149,7 +149,7 @@ func (s *Server) handleEvaluateNetworkPolicies(w http.ResponseWriter, r *http.Re
 		synced, known := cache.InformerSynced(string(kind))
 		if !known || !synced || !cache.KindCoversNamespace(string(kind), selNs) {
 			s.writeJSON(w, PolicyEvaluation{Verdict: verdictUndecidable, Evaluated: evaluated,
-				Reason: fmt.Sprintf("Radar can't see %s in %s (not synced or outside the namespaces it watches)", kind, selNs)})
+				Reason: fmt.Sprintf("Radar can't see %s in namespace %s (not synced yet, or outside the namespaces it watches)", kind, selNs)})
 			return
 		}
 	}
@@ -162,12 +162,12 @@ func (s *Server) handleEvaluateNetworkPolicies(w http.ResponseWriter, r *http.Re
 	selected, err := pods.Pods(selNs).Get(selName)
 	if err != nil {
 		s.writeJSON(w, PolicyEvaluation{Verdict: verdictUndecidable, Evaluated: evaluated,
-			Reason: fmt.Sprintf("pod %s/%s no longer exists; policies are evaluated against the pod as it is now", selNs, selName)})
+			Reason: fmt.Sprintf("pod %s/%s no longer exists, and policies can only be checked against a pod that does", selNs, selName)})
 		return
 	}
 	if !protoKnown {
 		s.writeJSON(w, PolicyEvaluation{Verdict: verdictUndecidable, Evaluated: evaluated,
-			Reason: "the flow record does not carry a protocol NetworkPolicy ports describe (TCP, UDP or SCTP), so port rules cannot be applied"})
+			Reason: "the flow record does not say whether this was TCP, UDP or SCTP, so port rules can't be checked"})
 		return
 	}
 	peer, peerDesc := s.resolvePeer(r, cache, peerEnd)
@@ -200,7 +200,7 @@ func (s *Server) handleEvaluateNetworkPolicies(w http.ResponseWriter, r *http.Re
 	cil := s.ciliumPolicies(r, cache, selected, s.namespaceObject(r, cache, selected.Namespace), dir)
 	matches = append(matches, cil.rows...)
 	if cil.state == ciliumApplies || cil.state == ciliumUnknown {
-		verdict, reason = verdictUndecidable, cil.why+"; core NetworkPolicies alone "+describeCore(overall)
+		verdict, reason = verdictUndecidable, cil.why+"; Kubernetes NetworkPolicies alone "+describeCore(overall)
 	}
 
 	s.writeJSON(w, PolicyEvaluation{SelectingPolicies: matches, Verdict: verdict, Reason: reason, Evaluated: evaluated})
@@ -298,7 +298,7 @@ func (f effectFold) verdict() (string, string) {
 	case f.admits > 0:
 		return verdictAdmitted, ""
 	case f.undecidable > 0:
-		return verdictUndecidable, "no policy clearly admits this connection and at least one could not be decided"
+		return verdictUndecidable, "no policy clearly allows this traffic, and at least one could not be checked"
 	default:
 		return verdictDenied, ""
 	}
@@ -309,11 +309,11 @@ func describeCore(f effectFold) string {
 	case f.applicable == 0:
 		return "do not apply to this pod"
 	case f.admits > 0:
-		return "would admit it"
+		return "would allow it"
 	case f.undecidable > 0:
-		return "could not be decided"
+		return "could not be checked"
 	default:
-		return "would not admit it"
+		return "would not allow it"
 	}
 }
 
@@ -368,10 +368,10 @@ func (s *Server) ciliumPolicies(r *http.Request, cache *k8s.ResourceCache, pod *
 					out.state, out.why = ciliumUnknown, kind+" "+obj.GetName()+" "+why
 				}
 			case selects:
-				out.state, out.why = ciliumApplies, "a "+kind+" applies to this pod and Radar does not evaluate Cilium rules"
+				out.state, out.why = ciliumApplies, "a "+kind+" also applies to this pod, and Radar reads only Kubernetes NetworkPolicies"
 				out.rows = append(out.rows, PolicyMatch{
 					Name: obj.GetName(), Namespace: namespace, Kind: kind, Effect: "undecidable",
-					Reason: "a Cilium policy applies to this pod; Radar does not evaluate Cilium rules — the network plugin's own verdict on the flow says what it did",
+					Reason: "Cilium policy; Radar reads only Kubernetes NetworkPolicies, so what this one did to the flow is known only from the plugin's own report",
 				})
 			}
 		}
