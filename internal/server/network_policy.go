@@ -32,6 +32,10 @@ type PolicyEvaluation struct {
 	SelectingPolicies []PolicyMatch `json:"selectingPolicies"`
 	Verdict           string        `json:"verdict"`
 	Reason            string        `json:"reason,omitempty"`
+	// CoreVerdict is what Kubernetes NetworkPolicies alone say when Verdict
+	// was capped to undecidable because policies of another kind also govern
+	// the pod. Empty otherwise.
+	CoreVerdict string `json:"coreVerdict,omitempty"`
 	// Evaluated names what the verdict is about, so the caller can show it.
 	Evaluated EvaluatedConnection `json:"evaluated"`
 }
@@ -199,11 +203,13 @@ func (s *Server) handleEvaluateNetworkPolicies(w http.ResponseWriter, r *http.Re
 	// no longer a verdict about the connection, whichever way it went.
 	cil := s.ciliumPolicies(r, cache, selected, s.namespaceObject(r, cache, selected.Namespace), dir)
 	matches = append(matches, cil.rows...)
+	coreVerdict := ""
 	if cil.state == ciliumApplies || cil.state == ciliumUnknown {
+		coreVerdict = verdict
 		verdict, reason = verdictUndecidable, cil.why+"; Kubernetes NetworkPolicies alone "+describeCore(overall)
 	}
 
-	s.writeJSON(w, PolicyEvaluation{SelectingPolicies: matches, Verdict: verdict, Reason: reason, Evaluated: evaluated})
+	s.writeJSON(w, PolicyEvaluation{SelectingPolicies: matches, Verdict: verdict, Reason: reason, CoreVerdict: coreVerdict, Evaluated: evaluated})
 }
 
 // connectionProtocol maps the flow's protocol onto the ones NetworkPolicy
@@ -238,6 +244,11 @@ func (s *Server) resolvePeer(r *http.Request, cache *k8s.ResourceCache, ep endpo
 	case pkgtraffic.EndpointKindUnknown:
 		return netpol.Peer{IP: ep.ip}, "unidentified " + ep.ip
 	}
+	if ep.kind != pkgtraffic.EndpointKindPod {
+		// A Service, or a kind this evaluator does not know, is not a pod;
+		// a pod that happens to share its name must not stand in for it.
+		return netpol.Peer{IP: ep.ip}, "unresolved (" + ep.kind + ")"
+	}
 	if ep.ns == "" || ep.name == "" {
 		return netpol.Peer{IP: ep.ip}, "unresolved"
 	}
@@ -256,7 +267,9 @@ func (s *Server) resolvePeer(r *http.Request, cache *k8s.ResourceCache, ep endpo
 // and the cache has it; nil otherwise, which the evaluator treats as "labels
 // unknown" rather than "no labels".
 func (s *Server) namespaceObject(r *http.Request, cache *k8s.ResourceCache, name string) *corev1.Namespace {
-	if !s.canRead(r, "", "namespaces", "", "get") {
+	// The namespaced form of the check: a cluster-wide grant satisfies it,
+	// and so does a RoleBinding that grants reading this one Namespace.
+	if !s.canRead(r, "", "namespaces", name, "get") {
 		return nil
 	}
 	nss := cache.Namespaces()

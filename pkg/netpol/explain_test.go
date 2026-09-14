@@ -96,6 +96,16 @@ func TestExplain(t *testing.T) {
 			effect: Admits, reason: "from addresses in 203.0.113.0/24",
 		},
 		{
+			// The reference implementation matches a pod's address against a
+			// range; Cilium by default never does. A hit on a pod source is
+			// therefore no evidence of admission.
+			name: "ipBlock containing a pod source is undecidable on ingress",
+			np: policy("monitoring", "from-pod-range", promLabels, ingressT,
+				[]networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "10.0.0.0/8"}}}}}, nil),
+			dir: DirectionIngress, sel: dst.Pod, peer: radar(), port: 9090,
+			effect: Undecidable, reason: "plugins disagree",
+		},
+		{
 			name: "ipBlock missing the source is undecidable on ingress",
 			np: policy("monitoring", "cidr", promLabels, ingressT,
 				[]networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "192.0.2.0/24"}}}}}, nil),
@@ -114,7 +124,7 @@ func TestExplain(t *testing.T) {
 			np: policy("radar", "egress-cidr", radarLabels, egressT, nil,
 				[]networkingv1.NetworkPolicyEgressRule{{To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "10.0.2.0/24"}}}}}),
 			dir: DirectionEgress, sel: src.Pod, peer: dst.Peer, port: 9090,
-			effect: Undecidable, reason: "may check the Service address",
+			effect: Undecidable, reason: "plugins disagree",
 		},
 		{
 			name: "an unresolved pod peer is undecidable",

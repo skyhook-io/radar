@@ -1302,6 +1302,9 @@ export interface TrafficFlow {
   policyVerdict?: {
     allowedBy?: { kind: string; namespace?: string; name: string }[]
     deniedBy?: { kind: string; namespace?: string; name: string }[]
+    /** Denying references removed before delivery because the viewer may not
+     *  read policies of that kind there; the plugin still named a policy. */
+    withheld?: number
   }
   lastSeen: string // ISO date string
 }

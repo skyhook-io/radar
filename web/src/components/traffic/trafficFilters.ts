@@ -140,6 +140,8 @@ export function isExternalKind(kind: string): boolean {
  * substring test on either misses the other.
  */
 export function isPolicyDropReason(dropReasonDesc: string | undefined, deniedByCount: number): boolean {
+  // deniedByCount includes references withheld for permissions: the plugin
+  // still named a policy.
   if (deniedByCount > 0) return true
   const code = (dropReasonDesc ?? '').toUpperCase()
   return code === 'POLICY_DENIED' || code === 'POLICY_DENY'

@@ -24,6 +24,48 @@ func namespaceLookup(namespaces []string) map[string]bool {
 	return set
 }
 
+// redactPolicyRefs removes, from the plugin's attribution of a flow, every
+// policy the caller may not list — a policy's name is a read of that policy,
+// and a cluster-wide one is a cluster-scoped read that visibility of the
+// flow's namespaces does not imply. The count of removed references is kept
+// so the panel can still say a policy was named.
+func (s *Server) redactPolicyRefs(r *http.Request, pv *traffic.PolicyVerdict) *traffic.PolicyVerdict {
+	if pv == nil {
+		return nil
+	}
+	out := &traffic.PolicyVerdict{}
+	keep := func(refs []traffic.PolicyRef, count *int) []traffic.PolicyRef {
+		var kept []traffic.PolicyRef
+		for _, ref := range refs {
+			group, resource, ok := policyRefResource(ref.Kind)
+			if ok && s.canRead(r, group, resource, ref.Namespace, "list") {
+				kept = append(kept, ref)
+			} else if count != nil {
+				*count++
+			}
+		}
+		return kept
+	}
+	out.AllowedBy = keep(pv.AllowedBy, nil)
+	out.DeniedBy = keep(pv.DeniedBy, &out.Withheld)
+	return out
+}
+
+// policyRefResource maps the policy kinds a network plugin attributes flows
+// to onto the API resource a caller must be able to list to learn their
+// names. A kind Radar does not know is withheld rather than shown.
+func policyRefResource(kind string) (group, resource string, ok bool) {
+	switch kind {
+	case "NetworkPolicy":
+		return "networking.k8s.io", "networkpolicies", true
+	case "CiliumNetworkPolicy":
+		return "cilium.io", "ciliumnetworkpolicies", true
+	case "CiliumClusterwideNetworkPolicy":
+		return "cilium.io", "ciliumclusterwidenetworkpolicies", true
+	}
+	return "", "", false
+}
+
 // flowVisibleForNamespaces reports whether a flow may be shown to a user whose
 // allowed namespaces are `allowed` (nil = all-namespace access). The traffic
 // source can only filter by a single namespace or none, so multi-namespace
@@ -112,6 +154,9 @@ func (s *Server) handleGetTrafficFlows(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		flows = kept
+	}
+	for i := range flows {
+		flows[i].PolicyVerdict = s.redactPolicyRefs(r, flows[i].PolicyVerdict)
 	}
 
 	s.writeJSON(w, trafficFlowsPayload(response, flows))
@@ -223,6 +268,7 @@ func (s *Server) handleTrafficFlowsStream(w http.ResponseWriter, r *http.Request
 			if !flowVisibleForNamespaces(flow, allowed) {
 				continue
 			}
+			flow.PolicyVerdict = s.redactPolicyRefs(r, flow.PolicyVerdict)
 
 			data, err := json.Marshal(flow)
 			if err != nil {

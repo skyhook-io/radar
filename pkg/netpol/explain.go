@@ -174,6 +174,11 @@ func Explain(np *networkingv1.NetworkPolicy, dir Direction, selected *corev1.Pod
 	return Explanation{DoesNotAdmit, fmt.Sprintf("no rule allows %s %s %s %s", flowWord(dir), portText, fromTo(dir), peerText)}
 }
 
+// podRangeCaveat is why an ipBlock is never decisive for a pod at the other
+// end: network plugins disagree on whether address ranges match pod
+// addresses at all.
+const podRangeCaveat = "network plugins disagree on whether address ranges match pod addresses (Cilium doesn't by default), so Radar can't tell whether this rule applies"
+
 type ruleView struct {
 	ports []networkingv1.NetworkPolicyPort
 	peers []networkingv1.NetworkPolicyPeer
@@ -229,11 +234,12 @@ func peerAdmits(entry *networkingv1.NetworkPolicyPeer, target Peer, policyNs str
 			desc += " (except " + strings.Join(entry.IPBlock.Except, ", ") + ")"
 		}
 		if dir == DirectionEgress && !target.External {
-			// Whether the policy sees the pod's address or, for traffic that
-			// went through a Service, the cluster IP is up to the network
-			// plugin; neither a hit nor a miss on the pod's address proves
+			// Whether an address range can select a pod at all is up to the
+			// network plugin: the reference implementation matches the pod's
+			// address, Cilium by default matches only addresses outside the
+			// cluster. Neither a hit nor a miss on the pod's address proves
 			// anything.
-			return triUnknown, desc + ": for a pod destination the network may check the Service address rather than the pod's, so Radar can't tell whether this range matches"
+			return triUnknown, desc + ": " + podRangeCaveat
 		}
 		if !ipBlockWellFormed(entry.IPBlock) {
 			return triUnknown, desc + ": the range or one of its exceptions is not a valid CIDR"
@@ -241,6 +247,12 @@ func peerAdmits(entry *networkingv1.NetworkPolicyPeer, target Peer, policyNs str
 		ips := peerIPs(target)
 		switch ipBlockMatch(entry.IPBlock, ips) {
 		case triYes:
+			if target.Pod != nil {
+				// Same plugin disagreement on ingress: a range that contains
+				// the source pod's address admits it on some plugins and
+				// nothing on others.
+				return triUnknown, desc + ": " + podRangeCaveat
+			}
 			return triYes, desc
 		case triNo:
 			if dir == DirectionEgress {

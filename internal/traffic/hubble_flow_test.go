@@ -69,3 +69,24 @@ func TestConvertHubbleFlowPolicyVerdict(t *testing.T) {
 		}
 	})
 }
+
+func TestConvertHubbleFlowDropReason(t *testing.T) {
+	t.Run("the description wins when the relay fills it", func(t *testing.T) {
+		flow := convertHubbleFlow(&flowpb.Flow{Verdict: flowpb.Verdict_DROPPED, DropReasonDesc: flowpb.DropReason_POLICY_DENIED, DropReason: 133})
+		if flow.DropReasonDesc != "POLICY_DENIED" {
+			t.Fatalf("DropReasonDesc = %q", flow.DropReasonDesc)
+		}
+	})
+	t.Run("an older relay's numeric code is read by its enum name", func(t *testing.T) {
+		flow := convertHubbleFlow(&flowpb.Flow{Verdict: flowpb.Verdict_DROPPED, DropReason: uint32(flowpb.DropReason_POLICY_DENY)})
+		if flow.DropReasonDesc != "POLICY_DENY" {
+			t.Fatalf("DropReasonDesc = %q", flow.DropReasonDesc)
+		}
+	})
+	t.Run("no reason at all stays empty", func(t *testing.T) {
+		flow := convertHubbleFlow(&flowpb.Flow{Verdict: flowpb.Verdict_DROPPED})
+		if flow.DropReasonDesc != "" {
+			t.Fatalf("DropReasonDesc = %q", flow.DropReasonDesc)
+		}
+	})
+}

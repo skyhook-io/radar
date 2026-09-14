@@ -256,6 +256,16 @@ func TestEvaluateNetworkPolicies(t *testing.T) {
 			reason:  "TCP, UDP or SCTP",
 		},
 		{
+			// A Service named like a pod must not be resolved as that pod.
+			name: "a non-pod peer kind is never resolved to a same-named pod",
+			params: map[string]string{
+				"direction": "ingress", "namespace": "shop", "podName": "web-0",
+				"sourceNamespace": "shop", "sourcePodName": "api-0", "sourceKind": "Service", "port": "8080", "protocol": "tcp",
+			},
+			verdict: verdictUndecidable,
+			effects: map[string]string{"allow-api-8080": "undecidable"},
+		},
+		{
 			name: "a pod nothing selects has no policy",
 			params: map[string]string{
 				"direction": "egress", "sourceNamespace": "shop", "sourcePodName": "api-0", "sourceKind": "Pod",
@@ -339,19 +349,19 @@ func TestEvaluateNetworkPolicies_GatedPerCaller(t *testing.T) {
 			grant(p, "list", "networking.k8s.io", "networkpolicies", "shop", true)
 			grant(p, "get", "", "pods", "shop", true)
 			grant(p, "get", "", "pods", "trusted", false)
-			grant(p, "get", "", "namespaces", "", true)
+			grant(p, "get", "", "namespaces", "trusted", true)
 		}, http.StatusOK, verdictUndecidable, "trusted/client-0 (not visible to you)"},
 		{"cannot read namespaces: namespaceSelector stays open", func(p *auth.UserPermissions) {
 			grant(p, "list", "networking.k8s.io", "networkpolicies", "shop", true)
 			grant(p, "get", "", "pods", "shop", true)
 			grant(p, "get", "", "pods", "trusted", true)
-			grant(p, "get", "", "namespaces", "", false)
+			grant(p, "get", "", "namespaces", "trusted", false)
 		}, http.StatusOK, verdictUndecidable, "trusted/client-0"},
 		{"fully granted", func(p *auth.UserPermissions) {
 			grant(p, "list", "networking.k8s.io", "networkpolicies", "shop", true)
 			grant(p, "get", "", "pods", "shop", true)
 			grant(p, "get", "", "pods", "trusted", true)
-			grant(p, "get", "", "namespaces", "", true)
+			grant(p, "get", "", "namespaces", "trusted", true)
 		}, http.StatusOK, verdictAdmitted, "trusted/client-0"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -470,6 +480,10 @@ func TestEvaluateNetworkPolicies_CiliumPresenceCapsVerdict(t *testing.T) {
 	t.Run("a Cilium policy on the pod caps admitted to undecidable and appears as a row", func(t *testing.T) {
 		seed(t, cnp("web-l7", selectsWeb, nil))
 		expect(t, admitted, verdictUndecidable, "web-l7")
+		_, ev := evaluateGet(t, testServer.URL, admitted)
+		if ev.CoreVerdict != verdictAdmitted {
+			t.Fatalf("coreVerdict = %q, want %q", ev.CoreVerdict, verdictAdmitted)
+		}
 	})
 	// Cilium unions its allow rules with core ones: a CNP allow-all admits
 	// what a core default-deny would refuse, so the core denial is no verdict.
@@ -530,6 +544,26 @@ func TestEvaluateNetworkPolicies_CiliumPresenceCapsVerdict(t *testing.T) {
 			map[string]any{"endpointSelector": map[string]any{"matchLabels": map[string]any{"app": "web"}}, "ingress": []any{}},
 		}))
 		expect(t, admitted, verdictUndecidable, "mixed-specs")
+	})
+	t.Run("a caller who cannot list Cilium policies gets undecidable, never the core verdict", func(t *testing.T) {
+		seed(t, cnp("api-only", map[string]any{"endpointSelector": map[string]any{"matchLabels": map[string]any{"app": "api"}}, "ingress": []any{}}, nil))
+		env := newAuthTestServer(t)
+		perms := &auth.UserPermissions{AllowedNamespaces: []string{"shop"}}
+		perms.SetCanI("list", "networking.k8s.io", "networkpolicies", "shop", true)
+		perms.SetCanI("get", "", "pods", "shop", true)
+		perms.SetCanI("get", "", "namespaces", "shop", true)
+		perms.SetCanI("list", "cilium.io", "ciliumnetworkpolicies", "shop", false)
+		perms.SetCanI("list", "cilium.io", "ciliumclusterwidenetworkpolicies", "", false)
+		env.srv.permCache.Set("reader", nil, perms)
+		resp := env.authGet(t, "/api/network-policies/evaluate?direction=ingress&namespace=shop&podName=web-0&sourceNamespace=shop&sourcePodName=api-0&sourceKind=Pod&port=8080&protocol=tcp", "reader", "")
+		defer resp.Body.Close()
+		var ev PolicyEvaluation
+		if err := json.NewDecoder(resp.Body).Decode(&ev); err != nil {
+			t.Fatal(err)
+		}
+		if ev.Verdict != verdictUndecidable || !strings.Contains(ev.Reason, "not permitted") || ev.CoreVerdict != verdictAdmitted {
+			t.Fatalf("verdict = %q core = %q (%s)", ev.Verdict, ev.CoreVerdict, ev.Reason)
+		}
 	})
 	t.Run("a nodeSelector-only policy selects no pod", func(t *testing.T) {
 		seed(t, cnp("nodes", map[string]any{"nodeSelector": map[string]any{"matchLabels": map[string]any{"role": "infra"}}, "ingress": []any{}}, nil))

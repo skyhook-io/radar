@@ -52,6 +52,12 @@ type Flow struct {
 type PolicyVerdict struct {
 	AllowedBy []PolicyRef `json:"allowedBy,omitempty"`
 	DeniedBy  []PolicyRef `json:"deniedBy,omitempty"`
+	// Withheld counts denying references the plugin reported that were
+	// removed before delivery because the caller may not read policies of
+	// that kind there. The verdict still says a policy blocked the flow; only
+	// its identity is kept back. Allowing references the caller may not read
+	// are dropped without a count — they never explain a drop.
+	Withheld int `json:"withheld,omitempty"`
 }
 
 // PolicyRef identifies a policy by kind, namespace and name; a cluster-scoped

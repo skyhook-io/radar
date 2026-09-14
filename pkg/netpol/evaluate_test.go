@@ -128,11 +128,13 @@ func TestEvaluate(t *testing.T) {
 			want: Verdict{Kind: Allowed},
 		},
 		{
-			name: "ipBlock containing the source IP admits",
+			// Whether a range matches a pod's address is plugin-defined (the
+			// reference implementation says yes, Cilium by default no).
+			name: "ipBlock containing a pod source's IP is undecidable, not admission",
 			src:  radar(), dst: []Backend{prom(9090)},
 			policies: []*networkingv1.NetworkPolicy{policy("monitoring", "cidr", promLabels, ingressT,
 				[]networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "10.0.0.0/16"}}}}}, nil)},
-			want: Verdict{Kind: Allowed},
+			want: Verdict{Kind: Unknown},
 		},
 		{
 			name: "ipBlock except carving out the source IP is undecidable, never a denial",
@@ -308,7 +310,7 @@ func TestEvaluate(t *testing.T) {
 			want:     Verdict{Kind: Allowed},
 		},
 		{
-			name: "ipBlock admits a dual-stack source by its address of the block's family",
+			name: "ipBlock against a dual-stack pod source stays undecidable whichever family matches",
 			src: func() Peer {
 				p := radar()
 				p.Pod.Status.PodIPs = []corev1.PodIP{{IP: "10.0.1.5"}, {IP: "fd00::5"}}
@@ -317,7 +319,7 @@ func TestEvaluate(t *testing.T) {
 			dst: []Backend{prom(9090)},
 			policies: []*networkingv1.NetworkPolicy{policy("monitoring", "v6-only", promLabels, ingressT,
 				[]networkingv1.NetworkPolicyIngressRule{{From: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "fd00::/64"}}}}}, nil)},
-			want: Verdict{Kind: Allowed},
+			want: Verdict{Kind: Unknown},
 		},
 		{
 			name: "ipBlock of a family the source has no address in is undecidable",

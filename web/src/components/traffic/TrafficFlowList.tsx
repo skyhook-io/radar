@@ -360,14 +360,20 @@ export function TrafficFlowList({ flows }: TrafficFlowListProps) {
   )
 }
 
+type PolicyVerdictWord = 'admitted' | 'denied' | 'undecidable' | 'no-policy'
+
 interface PolicyEvaluation {
   selectingPolicies: { name: string; namespace?: string; kind: string; effect: string; reason: string }[]
-  verdict: 'admitted' | 'denied' | 'undecidable' | 'no-policy'
+  verdict: PolicyVerdictWord
   reason?: string
+  /** What Kubernetes NetworkPolicies alone said, when the verdict was capped
+   *  because policies of another kind also govern the pod. */
+  coreVerdict?: PolicyVerdictWord
+  evaluated?: { direction?: string; pod?: string; peer?: string; port?: number; protocol?: string }
 }
 
 function isPolicyDrop(flow: TrafficFlow): boolean {
-  return isPolicyDropReason(flow.dropReasonDesc, flow.policyVerdict?.deniedBy?.length ?? 0)
+  return isPolicyDropReason(flow.dropReasonDesc, (flow.policyVerdict?.deniedBy?.length ?? 0) + (flow.policyVerdict?.withheld ?? 0))
 }
 
 const EFFECT_TONE: Record<string, StatusTone> = {
@@ -431,7 +437,7 @@ function PolicyCorrelation({ flow }: { flow: TrafficFlow }) {
   // endpoint is not a NetworkPolicy question.
   const canQuery = isPolicyDrop(flow) && (!direction || (evaluated?.kind === 'Pod' && !!evaluated.namespace && !!evaluated.name))
 
-  const { data, isLoading, error } = useQuery<PolicyEvaluation, Error>({
+  const { data, isLoading, error, dataUpdatedAt } = useQuery<PolicyEvaluation, Error>({
     queryKey: ['policy-evaluate', direction, dst?.namespace, dst?.name, dst?.kind, dst?.ip, src?.namespace, src?.name, src?.kind, src?.ip, flow.port, flow.protocol],
     queryFn: () => {
       const params = new URLSearchParams()
@@ -450,17 +456,21 @@ function PolicyCorrelation({ flow }: { flow: TrafficFlow }) {
     },
     enabled: canQuery,
     staleTime: 30000,
+    // "As they are now" has to stay true while the row is open.
+    refetchInterval: 30000,
   })
+  const checkedAt = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString() : ''
 
   const hubble = flow.policyVerdict
   const hubbleDenied = hubble?.deniedBy ?? []
   const hubbleAllowed = hubble?.allowedBy ?? []
+  const withheld = hubble?.withheld ?? 0
 
   if (!isPolicyDrop(flow)) {
     return (
       <div className="pt-1 border-t border-theme-border/50 text-[10px] text-theme-text-tertiary">
         {flow.dropReasonDesc
-          ? 'Not a policy decision, so current NetworkPolicies were not checked'
+          ? `Radar checks NetworkPolicies only for drops the plugin reports as policy drops; this one was reported as ${flow.dropReasonDesc}`
           : "The plugin did not report why this flow was dropped, so Radar can't tell whether a policy was involved"}
       </div>
     )
@@ -476,7 +486,9 @@ function PolicyCorrelation({ flow }: { flow: TrafficFlow }) {
   // L7) or at the other end — and that is not why the packet was dropped.
   const attribution = hubbleDenied.length > 0
     ? { text: `Blocked by ${hubbleDenied.map((p) => `${p.kind} ${policyRef(p)}`).join(', ')}`, tone: 'unhealthy' as StatusTone }
-    : null
+    : withheld > 0
+      ? { text: `Blocked by ${withheld === 1 ? 'a policy' : `${withheld} policies`} you don't have permission to read`, tone: 'unhealthy' as StatusTone }
+      : null
   const alsoAllowed = hubbleAllowed.length > 0
     ? `The plugin also recorded ${hubbleAllowed.map((p) => `${p.kind} ${policyRef(p)}`).join(', ')} allowing this flow at another layer or at the other end — not the reason for the drop.`
     : ''
@@ -494,7 +506,11 @@ function PolicyCorrelation({ flow }: { flow: TrafficFlow }) {
   // The current check, scoped to what it can establish: which policies
   // allow this traffic at the evaluated pod, now. Never "the connection
   // works" — the flow was dropped, and policies may have changed since.
+  // When another policy kind governs the pod, the Kubernetes reading is
+  // still worth stating — as a reading, not a verdict.
   const v = data?.verdict
+  const core = data?.coreVerdict
+  const capped = v === 'undecidable' && !!core && core !== 'undecidable'
   const current = v === 'admitted'
     ? { text: `A current NetworkPolicy allows this traffic ${intoOutOf} ${evaluatedRef}`, tone: 'healthy' as StatusTone,
         note: "Policies may have changed since the drop; this doesn't confirm a new connection will succeed." }
@@ -502,10 +518,19 @@ function PolicyCorrelation({ flow }: { flow: TrafficFlow }) {
       ? { text: `No current NetworkPolicy allows this traffic ${intoOutOf} ${evaluatedRef}`, tone: 'unhealthy' as StatusTone, note: '' }
       : v === 'no-policy'
         ? { text: `No NetworkPolicy selects ${evaluatedRef} for ${direction === 'egress' ? 'outgoing' : 'incoming'} traffic`, tone: 'neutral' as StatusTone, note: '' }
-        : v === 'undecidable'
-          ? { text: "Radar can't complete the current NetworkPolicy check", tone: 'unknown' as StatusTone, note: '' }
-          : null
-  const currentNote = [current?.note, data?.reason].filter(Boolean).join(' ')
+        : capped
+          ? { text: core === 'admitted'
+                ? `Kubernetes NetworkPolicies alone would allow this traffic ${intoOutOf} ${evaluatedRef} — but another policy kind also applies and was not evaluated`
+                : core === 'denied'
+                  ? `No Kubernetes NetworkPolicy allows this traffic ${intoOutOf} ${evaluatedRef} — but another policy kind also applies and could`
+                  : `No Kubernetes NetworkPolicy selects ${evaluatedRef} — but another policy kind applies and was not evaluated`,
+              tone: 'unknown' as StatusTone, note: '' }
+          : v === 'undecidable'
+            ? { text: "Radar can't complete the current NetworkPolicy check", tone: 'unknown' as StatusTone, note: '' }
+            : null
+  const peerNote = data?.evaluated?.peer && data.evaluated.peer.includes('(') ? `Peer: ${data.evaluated.peer}.` : ''
+  const currentNote = [current?.note, data?.reason, peerNote].filter(Boolean).join(' ')
+  const checkedText = checkedAt ? ` · checked ${checkedAt}` : ''
 
   const rows = data?.selectingPolicies ?? []
   const explainAdditive = rows.length > 1 && rows.some((r) => r.effect === 'does_not_admit')
@@ -534,7 +559,7 @@ function PolicyCorrelation({ flow }: { flow: TrafficFlow }) {
         <div className="ml-4 text-[10px]">
           <span className="text-theme-text-secondary">Current check: </span>
           <span className="text-theme-text-primary">{current.text}</span>
-          <span className="text-theme-text-tertiary">{observed ? ` · flow seen ${observed}` : ''}</span>
+          <span className="text-theme-text-tertiary">{observed ? ` · flow seen ${observed}` : ''}{checkedText}</span>
           {currentNote && <div className="text-theme-text-tertiary">{currentNote}</div>}
         </div>
       ) : (
@@ -542,7 +567,7 @@ function PolicyCorrelation({ flow }: { flow: TrafficFlow }) {
           <StatusDot tone={current.tone} className="mt-1 shrink-0" />
           <div className="min-w-0 text-[10px]">
             <span className="text-theme-text-primary font-medium">{current.text}</span>
-            <span className="text-theme-text-tertiary"> · checked against policies as they are now{observed ? `, flow seen ${observed}` : ''}</span>
+            <span className="text-theme-text-tertiary"> · against policies as they are now{observed ? `, flow seen ${observed}` : ''}{checkedText}</span>
             {currentNote && <div className="text-theme-text-tertiary">{currentNote}</div>}
           </div>
         </div>
