@@ -32,6 +32,15 @@ var (
 	// only reconnect path headless deployments have. Set on any auth-shaped
 	// disconnect, cleared only by a successful connect.
 	runtimeAuthRecoveryOwed atomic.Bool
+	// Recovery debt for non-auth disconnects. Browser sessions already retry
+	// these themselves on a 10s-60s backoff, so this exists for deployments
+	// with no tab attached - MCP-only or API-only - where otherwise nothing
+	// would ever retry and the process stays wedged until a human calls the
+	// API. Kept separate from the auth debt because that one is published to
+	// the browser as authRecoveryOwed to make it stand down; publishing this
+	// one would replace the browser's faster retry with the server's slower
+	// backoff for no gain.
+	runtimeNetworkRecoveryOwed atomic.Bool
 	// Wakes a sleeping worker so a new auth-loss episode isn't stuck waiting
 	// out the previous episode's backoff — worst case the 30min hung-plugin
 	// interval.
@@ -63,7 +72,7 @@ func runRuntimeAuthRecovery() {
 		runtimeAuthRecoveryActive.Store(false)
 		// A demotion racing this exit saw the active flag still true and only
 		// nudged; re-check so its episode isn't stranded without a worker.
-		if runtimeAuthRecoveryStillOwed() {
+		if runtimeRecoveryStillOwed() {
 			startRuntimeAuthRecovery()
 		}
 	}()
@@ -79,7 +88,7 @@ func runRuntimeAuthRecovery() {
 			// the previous episode's backoff.
 			interval = initialInterval
 		}
-		if !runtimeAuthRecoveryOwed.Load() {
+		if !runtimeRecoveryOwed() {
 			return
 		}
 		status := GetConnectionStatus()
@@ -87,6 +96,16 @@ func runRuntimeAuthRecovery() {
 			// The publish-side hook clears the debt on connect; this is a
 			// guard against direct status writes that bypass it.
 			runtimeAuthRecoveryOwed.Store(false)
+			runtimeNetworkRecoveryOwed.Store(false)
+			// A disconnect publishing between the read above and these stores
+			// has just had its debt erased, and its own start call only nudged
+			// because this worker was still marked active. Re-arm from the
+			// current status so the episode keeps a worker; clearing and
+			// looping alone would fall straight back out at the debt check.
+			if current := GetConnectionStatus(); current.State != StateConnected {
+				armRecoveryDebt(current.ErrorType)
+				continue
+			}
 			return
 		}
 		if status.State == StateConnecting || activeContextOperations.Load() != 0 {
@@ -141,8 +160,8 @@ func runRuntimeAuthRecovery() {
 	}
 }
 
-func runtimeAuthRecoveryStillOwed() bool {
-	return runtimeAuthRecoveryOwed.Load() && GetConnectionStatus().State != StateConnected
+func runtimeRecoveryStillOwed() bool {
+	return runtimeRecoveryOwed() && GetConnectionStatus().State != StateConnected
 }
 
 // RuntimeAuthRecoveryOwed reports whether the server-side reconnect loop owns
@@ -207,4 +226,25 @@ func setRuntimeAuthReconnect(fn func(string, uint64) error) {
 	runtimeAuthChecksMu.Lock()
 	defer runtimeAuthChecksMu.Unlock()
 	runtimeAuthReconnect = fn
+}
+
+// runtimeRecoveryOwed reports whether any recovery debt is outstanding, of
+// either shape. One worker serves both: they differ only in what starts them
+// and in whether the browser is told to stand down.
+func runtimeRecoveryOwed() bool {
+	return runtimeAuthRecoveryOwed.Load() || runtimeNetworkRecoveryOwed.Load()
+}
+
+// armRecoveryDebt records which reconnect loop a disconnect owes, from its
+// classification. Auth-shaped failures take the published debt, which also
+// tells the browser to stand down so two retriers do not race the same exec
+// credential plugin. Everything else takes the unpublished one: a browser
+// retries those itself and faster, so this is only the floor for deployments
+// with no tab attached.
+func armRecoveryDebt(errorType string) {
+	if isAuthClassification(errorType) {
+		runtimeAuthRecoveryOwed.Store(true)
+		return
+	}
+	runtimeNetworkRecoveryOwed.Store(true)
 }
