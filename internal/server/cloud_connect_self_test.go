@@ -26,7 +26,7 @@ func TestWizardInstallURLCarriesTheRealTarget(t *testing.T) {
 	if q.Get("method") != "flux" {
 		t.Fatalf("deep link did not select the owning tool's tab: %v", q)
 	}
-	if q.Get("utm_content") != "wizard-deeplink" {
+	if q.Get("utm_content") != "wizard-install-link-known-install" {
 		t.Fatalf("deep link missing lane marker: %v", q)
 	}
 	if u.Host != "app.test.example" || u.Path != "/install" {
@@ -74,7 +74,7 @@ func TestInspectSelfInstallDegradesWithoutIdentity(t *testing.T) {
 		if err != nil || u.Host != "app.test.example" || u.Path != "/install" {
 			t.Fatalf("wizard url = %q (%v)", self.WizardURL, err)
 		}
-		if u.Query().Get("utm_content") != "wizard-generic" {
+		if u.Query().Get("utm_content") != "wizard-install-link-unknown-install" {
 			t.Fatalf("generic wizard link missing lane marker: %q", self.WizardURL)
 		}
 	}

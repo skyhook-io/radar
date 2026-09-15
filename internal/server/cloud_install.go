@@ -70,16 +70,20 @@ const (
 	cloudFlowFailed           = "failed"
 )
 
+// Failure kinds read as a sentence fragment on their own: they travel into
+// the browser-wizard link the user opens next, where the person sees them in
+// the address bar with no other context.
 const (
-	cloudFailConnect           = "connect_failed"
-	cloudFailRejected          = "rejected"
-	cloudFailExpired           = "expired"
-	cloudFailPickupExpired     = "pickup_expired"
-	cloudFailApprovalUnknown   = "approval_unknown"
-	cloudFailCanceled          = "canceled"
+	cloudFailConnectRequest    = "hub_connect_request_failed"
+	cloudFailApprovalPoll      = "hub_approval_poll_failed"
+	cloudFailRejected          = "approval_rejected_in_browser"
+	cloudFailExpired           = "approval_window_expired"
+	cloudFailPickupExpired     = "approved_but_credential_pickup_expired"
+	cloudFailApprovalUnknown   = "approval_outcome_unknown"
+	cloudFailCanceled          = "canceled_before_approval_page"
 	cloudFailCanceledApproved  = "canceled_after_approval"
-	cloudFailProvision         = "provision_failed"
-	cloudFailTunnelUnconfirmed = "tunnel_unconfirmed"
+	cloudFailProvision         = "helm_provision_failed"
+	cloudFailTunnelUnconfirmed = "installed_but_tunnel_not_confirmed"
 )
 
 const (
@@ -503,7 +507,7 @@ func (m *cloudInstallManager) start(req cloudInstallStartRequest) (*cloudInstall
 	if err != nil {
 		flow.state = cloudFlowFailed
 		flow.failure = &cloudInstallFailure{
-			Kind:      cloudFailConnect,
+			Kind:      cloudFailConnectRequest,
 			Message:   fmt.Sprintf("couldn't start the connect flow: %v", err),
 			RetrySafe: true,
 		}
@@ -580,7 +584,7 @@ func (m *cloudInstallManager) run(ctx context.Context, flow *cloudInstallFlow, c
 				ClusterURL: clustersURL,
 			}, false)
 		default:
-			fail(cloudFailConnect, fmt.Sprintf("connect failed: %v", err), &cloudinstall.RecoveryGuidance{
+			fail(cloudFailApprovalPoll, fmt.Sprintf("connect failed: %v", err), &cloudinstall.RecoveryGuidance{
 				Summary:    "Check the clusters list before retrying:",
 				ClusterURL: clustersURL,
 			}, false)

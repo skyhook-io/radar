@@ -357,7 +357,7 @@ func TestCloudInstallApprovalTerminalOutcomes(t *testing.T) {
 		{"rejected", cloud.ErrConnectRejected, cloudFailRejected, true},
 		{"pickup expired", cloud.ErrConnectPickupExpired, cloudFailPickupExpired, false},
 		{"recovery timeout is ambiguous", cloud.ErrConnectRecoveryTimeout, cloudFailApprovalUnknown, false},
-		{"transport", errors.New("hub returned 502"), cloudFailConnect, false},
+		{"transport", errors.New("hub returned 502"), cloudFailApprovalPoll, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

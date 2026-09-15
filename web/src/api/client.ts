@@ -1949,13 +1949,23 @@ export interface CloudConnectInfo {
   freeTier?: string
 }
 
-// Deliberately a bare cross-origin GET: no credentials, no identifiers, no
-// params. The Hub learns only what any HTTP request reveals.
-export function useCloudConnectInfo(apiUrl: string | undefined, enabled: boolean) {
+// Deliberately a bare cross-origin GET: no credentials, no identifiers. The
+// Hub learns what any HTTP request reveals plus `about`, below: the lane the
+// footer renders and this deployment's mode, both closed enums, so nothing
+// about the cluster or the person rides along. Part of the query key so a
+// lane change (a driver install that just became tunneled, say) refetches
+// instead of reusing the other lane's copy.
+export function useCloudConnectInfo(
+  apiUrl: string | undefined,
+  enabled: boolean,
+  about: { lane: "driver" | "wizard"; mode?: DeploymentMode },
+) {
+  const params = new URLSearchParams({ lane: about.lane });
+  if (about.mode) params.set("mode", about.mode);
   return useQuery<CloudConnectInfo>({
-    queryKey: ["cloud-connect-info", apiUrl],
+    queryKey: ["cloud-connect-info", apiUrl, about.lane, about.mode],
     queryFn: async () => {
-      const res = await fetch(`${apiUrl}/api/connect/info`, {
+      const res = await fetch(`${apiUrl}/api/connect/info?${params}`, {
         credentials: "omit",
         signal: AbortSignal.timeout(4000),
       });
