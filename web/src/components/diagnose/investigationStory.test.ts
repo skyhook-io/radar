@@ -49,6 +49,8 @@ describe("splitStory", () => {
   it("keeps indented-code markers and unbalanced closing fences literal", () => {
     const indented = splitStory("Text.\n\n    [[radar:evidence=0]]");
     expect(indented.segments.every((s) => s.kind === "prose")).toBe(true);
+    expect(indented.inlineRefs).toEqual([]);
+    expect(indented.segments.map((s) => s.kind === "prose" && s.markdown).join("\n")).toContain("    [[radar:evidence=0]]");
     const fence = splitStory("```\n````not-a-close\n[[radar:evidence=0]]\n```\n\n[[radar:evidence=1]]");
     expect(fence.segments.filter((s) => s.kind === "placement").map((s) => s.kind === "placement" && s.index)).toEqual([1]);
   });

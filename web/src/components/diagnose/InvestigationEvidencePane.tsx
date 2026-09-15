@@ -867,6 +867,7 @@ export function InvestigationEvidencePane({
             }
             groups={[]}
             totalCount={capturedTotal}
+            keepWhenEmpty
             animateGroupIds={animateGroupIds}
             onViewSource={onViewSource}
             open={resultsOpen || placedCount === 0}
@@ -1073,6 +1074,7 @@ function CollapsedEvidenceCollection({
   open,
   onOpenChange,
   totalCount = groups.length,
+  keepWhenEmpty = false,
   children,
 }: {
   id: string;
@@ -1087,10 +1089,12 @@ function CollapsedEvidenceCollection({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   totalCount?: number;
+  /** Render at zero: the children carry the empty state and the withheld-results note. */
+  keepWhenEmpty?: boolean;
   children?: ReactNode;
 }) {
   const { elementRef, revealAfterToggle } = useDisclosureReveal<HTMLElement>();
-  if (totalCount === 0) return null;
+  if (totalCount === 0 && !keepWhenEmpty) return null;
   const fullRowFlags = investigationEvidenceFullRowFlags(
     groups.map((group) => group.latest.data.type),
   );

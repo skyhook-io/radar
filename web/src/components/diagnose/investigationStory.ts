@@ -111,7 +111,9 @@ export function splitStory(report: string): StorySplit {
       });
       continue;
     }
-    if (/^\s{0,3}>/.test(line)) {
+    // Blockquotes and indented code (four spaces or a tab) are quoted text:
+    // markers there stay literal, never citations.
+    if (/^\s{0,3}>/.test(line) || /^( {4,}|\t)/.test(line)) {
       prose.push(line);
       continue;
     }
