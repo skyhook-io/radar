@@ -1484,7 +1484,7 @@ describe("the agent's contribution is one attributed row", () => {
 
   it("labels the role that says an adverse result is not a live problem", () => {
     const html = renderToStaticMarkup(<AgentRoleChip role="benign" />);
-    expect(html).toContain("Not a problem");
+    expect(html).toContain("Not a live problem");
   });
 
   it("still shows an attributed role when the agent left no sentence", () => {

@@ -11,7 +11,7 @@ export const AGENT_ROLE_LABELS: Readonly<
   cause: "Cause",
   symptom: "Symptom",
   context: "Context",
-  benign: "Not a problem",
+  benign: "Not a live problem",
   demoted: "Less relevant",
   rules_out: "Rules out",
 };
