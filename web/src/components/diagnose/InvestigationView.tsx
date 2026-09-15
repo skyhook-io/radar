@@ -1330,7 +1330,7 @@ export function InvestigationView({
     hasEvidenceCollectedAfterAssessment;
   const showSplitWorkspace = maximized;
   const splitGridClass = showSplitWorkspace
-    ? "@min-[1000px]/investigation:grid-cols-[minmax(300px,380px)_minmax(0,1fr)]"
+    ? "@min-[1000px]/investigation:grid-cols-[minmax(320px,min(30%,520px))_minmax(0,1fr)]"
     : "";
   const splitTabClass = showSplitWorkspace
     ? "@min-[1000px]/investigation:hidden"
