@@ -1657,13 +1657,16 @@ function EvidenceCard({
     observation.summary,
   );
   const canExpand = !compact && (hasEvidenceDetails || meaningfulHistory);
-  // The inline lines give way to the full excerpt only when this card itself
-  // is expanded; `open` is shared across the group, and a compact card that
-  // cannot expand must keep its lines.
-  const inlineLogLines =
-    storyCard && !(open && canExpand) && observation.data.type === "logs"
-      ? (observation.data.logs?.lines ?? []).slice(-2).map(stripAnsi)
+  // A story log card shows the first two selected lines always; expanding
+  // appends the rest inside the same block, so nothing above them moves.
+  const storyLogLines =
+    storyCard && observation.data.type === "logs"
+      ? (observation.data.logs?.lines ?? [])
+          .slice(-VISIBLE_LOG_EVIDENCE_LINES)
+          .map((line) => stripAnsi(line))
       : [];
+  const storyLogHead = storyLogLines.slice(0, 2);
+  const storyLogRest = storyLogLines.slice(2);
   const revealHistory = investigationEvidenceShouldRevealHistory(
     group,
     revealSourceId,
@@ -1844,34 +1847,49 @@ function EvidenceCard({
           ) : null}
         </div>
       </div>
-      {inlineLogLines.length > 0 ? (
-        <div
-          data-story-log-lines
-          className={prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2"}
-        >
-          <TerminalBlock>{inlineLogLines.join("\n")}</TerminalBlock>
-        </div>
-      ) : null}
       {storyCard ? (
-        (storyGaps.length > 0 || storyExcludes.length > 0) && !compact ? (
-          <div
-            className={clsx(
-              "space-y-0.5 text-[11px] text-theme-text-tertiary",
-              prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2",
-            )}
-          >
-            {storyExcludes.map((hypothesis) => (
-              <p key={hypothesis} data-agent-excludes>
-                Rules out: {hypothesis}
-              </p>
-            ))}
-            {storyGaps.map((gap) => (
-              <p key={gap} data-agent-gap>
-                Does not cover: {gap}
-              </p>
-            ))}
-          </div>
-        ) : null
+        <>
+          {(storyGaps.length > 0 || storyExcludes.length > 0) && !compact ? (
+            <div
+              className={clsx(
+                "space-y-0.5 text-[11px] text-theme-text-tertiary",
+                prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2",
+              )}
+            >
+              {storyExcludes.map((hypothesis) => (
+                <p key={hypothesis} data-agent-excludes>
+                  Rules out: {hypothesis}
+                </p>
+              ))}
+              {storyGaps.map((gap) => (
+                <p key={gap} data-agent-gap>
+                  Does not cover: {gap}
+                </p>
+              ))}
+            </div>
+          ) : null}
+          {storyLogHead.length > 0 ? (
+            <div
+              data-story-log-lines
+              className={
+                prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2"
+              }
+            >
+              <div className="overflow-hidden rounded-lg border border-[var(--terminal-border)] bg-[var(--terminal-bg)] font-mono text-xs leading-relaxed text-[var(--terminal-text)]">
+                <pre className="overflow-x-auto whitespace-pre-wrap break-words px-3 py-2.5">
+                  {storyLogHead.join("\n")}
+                </pre>
+                {storyLogRest.length > 0 ? (
+                  <Collapse open={open && canExpand}>
+                    <pre className="overflow-x-auto whitespace-pre-wrap break-words px-3 pb-2.5">
+                      {storyLogRest.join("\n")}
+                    </pre>
+                  </Collapse>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </>
       ) : cardItems.some((item) => item.claim || item.role) ? (
         <div
           className={clsx(
@@ -2517,7 +2535,13 @@ function LogsBody({
           </span>
         ) : null}
       </div>
-      {visibleLines.length > 0 ? (
+      {condensed ? (
+        omittedLines > 0 ? (
+          <p className="text-xs text-theme-text-tertiary">
+            Showing the last {visibleLines.length} of {lines.length} lines.
+          </p>
+        ) : null
+      ) : visibleLines.length > 0 ? (
         <TerminalBlock
           label={
             omittedLines > 0
