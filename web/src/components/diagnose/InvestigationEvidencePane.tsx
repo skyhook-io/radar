@@ -383,6 +383,7 @@ export function InvestigationEvidencePane({
   onOpenResource,
   onOpenTimeline,
   afterEvidence,
+  recordNotes,
   revealRequest,
   onRevealReady,
 }: {
@@ -419,6 +420,8 @@ export function InvestigationEvidencePane({
   onOpenTimeline?: (scope: InvestigationTimelineScope) => void;
   /** Next steps. Under a story they precede the inventory of captured results; otherwise they follow the evidence section. */
   afterEvidence?: ReactNode;
+  /** The agent's notes that reached no card, shown inside Captured results. */
+  recordNotes?: ReactNode;
   /** Explicit Activity → Findings navigation, including repeat clicks. */
   revealRequest?: { sourceId: string; requestId: number };
   onRevealReady?: (sourceId: string) => void;
@@ -792,8 +795,11 @@ export function InvestigationEvidencePane({
     <section
       aria-labelledby="investigation-radar-evidence"
       className={
+        // In the story shape this is no card: the analysis, the steps and the
+        // record are siblings. The element stays only as the container the
+        // cards' queries measure.
         storyMode
-          ? "investigation-evidence @container/evidence space-y-4"
+          ? "@container/evidence space-y-4"
           : "investigation-evidence @container/evidence space-y-3 rounded-xl border p-3"
       }
     >
@@ -849,7 +855,7 @@ export function InvestigationEvidencePane({
         {storyMode && story ? (
           <div
             data-story-card
-            className="rounded-xl border border-theme-border bg-theme-surface p-4"
+            className="investigation-evidence rounded-xl border p-4"
           >
             <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-theme-text-secondary">
               Why
@@ -925,6 +931,14 @@ export function InvestigationEvidencePane({
                 </p>
               ) : null}
               {mainCards}
+              {recordNotes ? (
+                <div data-record-notes>
+                  <div className="mb-1 text-xs font-semibold text-theme-text-secondary">
+                    Notes without a card
+                  </div>
+                  {recordNotes}
+                </div>
+              ) : null}
             </div>
           </CollapsedEvidenceCollection>
         ) : (

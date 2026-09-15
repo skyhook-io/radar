@@ -364,17 +364,18 @@ export function AnalysisStory({
         {teaser && teaser.kind === "prose" ? (
           <div
             aria-hidden
+            inert
             data-story-teaser
             className="relative mt-2 max-h-12 cursor-pointer overflow-hidden"
             onClick={() => setOpen(true)}
           >
             <Markdown
               className={clsx(STORY_PROSE_CLASS, "[&_p]:line-clamp-2")}
-              linkRenderer={() => null}
+              linkRenderer={() => <span />}
             >
               {teaser.markdown}
             </Markdown>
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-theme-surface to-transparent" />
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-[var(--color-investigation-evidence)] to-transparent" />
           </div>
         ) : null}
         {after.length > 0 || trailing ? (

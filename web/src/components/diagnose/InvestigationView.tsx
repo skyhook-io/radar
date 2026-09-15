@@ -1292,6 +1292,32 @@ export function InvestigationView({
   );
   // Reads Radar could not complete for this assessment, one line each, for
   // the Still open block; history qualifiers stay in the record.
+  // The agent's notes per source. In the legacy shape this is Assessment
+  // details; in the story shape the notes sit on the cards, so it appears
+  // only inside Captured results and only when something has no card: a
+  // note that pins to no single observation, or a citation Radar rejected.
+  const assessmentSourcesNode =
+    currentAssessment?.diagnosis &&
+    (rootCauseEvidenceResolution?.links.length ||
+      investigationCase?.items.length ||
+      currentAssessment.diagnosis.unlinkedEvidence ||
+      currentAssessment.diagnosis.evidenceMalformed) ? (
+      <AssessmentSources
+        renderedGroupIds={visibleEvidenceGroupIds}
+        resolution={rootCauseEvidenceResolution}
+        investigationCase={investigationCase}
+        unlinkedEvidence={currentAssessment.diagnosis.unlinkedEvidence}
+        evidenceMalformed={currentAssessment.diagnosis.evidenceMalformed}
+        onViewSource={viewActivitySource}
+      />
+    ) : undefined;
+  const recordNotes =
+    storyShape &&
+    (investigationCase?.items.some((item) => item.placement === "source") ||
+      currentAssessment?.diagnosis?.unlinkedEvidence ||
+      currentAssessment?.diagnosis?.evidenceMalformed)
+      ? assessmentSourcesNode
+      : undefined;
   const assessmentLimits = useMemo(
     () =>
       groupEvidenceCoverage(currentAssessmentProjection.limitations)
@@ -2094,31 +2120,7 @@ export function InvestigationView({
                         diagnosis={currentAssessment.diagnosis}
                         assessmentLimits={storyShape ? assessmentLimits : undefined}
                         assessmentSources={
-                          // In the story shape the agent's notes sit on the
-                          // cards in the analysis and under Captured results;
-                          // a third listing of the same evidence is noise. An
-                          // assessment whose every note was rejected has no
-                          // items and no links, and the loss is the only thing
-                          // there is to say about it.
-                          storyShape
-                            ? undefined
-                            : rootCauseEvidenceResolution?.links.length ||
-                          investigationCase?.items.length ||
-                          currentAssessment.diagnosis.unlinkedEvidence ||
-                          currentAssessment.diagnosis.evidenceMalformed ? (
-                            <AssessmentSources
-                              renderedGroupIds={visibleEvidenceGroupIds}
-                              resolution={rootCauseEvidenceResolution}
-                              investigationCase={investigationCase}
-                              unlinkedEvidence={
-                                currentAssessment.diagnosis?.unlinkedEvidence
-                              }
-                              evidenceMalformed={
-                                currentAssessment.diagnosis?.evidenceMalformed
-                              }
-                              onViewSource={viewActivitySource}
-                            />
-                          ) : undefined
+                          storyShape ? undefined : assessmentSourcesNode
                         }
                         assessmentAction={
                           hasNextSteps ? (
@@ -2254,6 +2256,7 @@ export function InvestigationView({
                     revealRequest={evidenceRevealRequest}
                     onRevealReady={revealEvidenceSource}
                     afterEvidence={nextStepsSection}
+                    recordNotes={recordNotes}
                   />
                 </div>
               )}
