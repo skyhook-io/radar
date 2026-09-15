@@ -245,6 +245,45 @@ describe("InvestigationEvidencePane under a story", () => {
     expect(html).toContain("a newer read");
   });
 
+  it("binds a subject-less earlier citation to that call's own read, never a later one", () => {
+    const early = evidenceRef("a", "b");
+    const later = evidenceRef("c", "d");
+    const bundleResult = (ready: number) => ({
+      resource: {
+        apiVersion: "apps/v1",
+        kind: "Deployment",
+        metadata: { name: "api", namespace: "shop" },
+        status: { replicas: 1, readyReplicas: ready },
+      },
+      issues: [crashIssue],
+      events: [],
+    });
+    const twoBundles = projectInvestigationEvidence(
+      [
+        { timeline: [tool("diag-early", "diagnose", bundleResult(0), { evidenceRef: early })] },
+        { timeline: [tool("diag-later", "diagnose", bundleResult(1), { evidenceRef: later })] },
+      ],
+      target,
+    );
+    const items: DiagnosisEvidenceItem[] = [
+      { status: "linked", ref: early, role: "cause", claim: "" },
+    ];
+    const html = renderToStaticMarkup(
+      <InvestigationEvidencePane
+        projection={twoBundles}
+        investigationCase={resolveInvestigationCase(twoBundles, { evidence: items }, 1)}
+        story={{ report: "Then it was down.\n\n[[radar:evidence=0]]", evidence: items }}
+        collecting={false}
+        animateGroupIds={new Set()}
+        onViewSource={() => {}}
+        onViewActivity={() => {}}
+      />,
+    );
+    const placed = html.slice(html.indexOf('data-story-placement="0"'));
+    expect(placed).toContain('data-evidence-source="turn-0-step-diag-early"');
+    expect(placed).toContain("Captured in turn 1");
+  });
+
   it("keeps the previous layout without a story", () => {
     const html = renderToStaticMarkup(
       <InvestigationEvidencePane

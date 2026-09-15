@@ -2128,6 +2128,34 @@ export function ResultCard({
   );
 }
 
+/**
+ * The whole assessment as text: headline, certainty, what is unresolved, the
+ * technical cause, the story without its markers, and the steps. Copying only
+ * the headline would ship the persuasive half without its caveats.
+ */
+export function assessmentCopyText(diagnosis: Diagnosis): string {
+  const parts: string[] = [];
+  if (diagnosis.summary) parts.push(diagnosis.summary.trim());
+  if (diagnosis.certainty)
+    parts.push(`Certainty (agent): ${CERTAINTY_LABEL[diagnosis.certainty]}`);
+  const unresolved = (diagnosis.unresolved ?? []).filter((item) => item.trim());
+  if (unresolved.length > 0)
+    parts.push(
+      ["Not established:", ...unresolved.map((item) => `- ${item}`)].join("\n"),
+    );
+  if (diagnosis.rootCause) parts.push(`Cause: ${diagnosis.rootCause}`);
+  const story = storyPlainText(diagnosis.report ?? "");
+  if (story) parts.push(story);
+  const steps = diagnosis.steps?.length
+    ? diagnosis.steps.map(
+        (step, index) =>
+          `${index + 1}. [${STEP_KIND_LABEL[step.kind]}] ${step.text}${step.precondition ? ` (only if ${step.precondition})` : ""}`,
+      )
+    : (diagnosis.remediation ?? []).map((text, index) => `${index + 1}. ${text}`);
+  if (steps.length > 0) parts.push(["Next steps:", ...steps].join("\n"));
+  return parts.join("\n\n");
+}
+
 const CERTAINTY_LABEL: Record<NonNullable<Diagnosis["certainty"]>, string> = {
   established: "Established",
   likely: "Likely",
@@ -2168,7 +2196,7 @@ export function AssessmentHeadline({
           {summary}
         </p>
         <CopyButton
-          text={[summary, diagnosis.rootCause].filter(Boolean).join("\n\n")}
+          text={assessmentCopyText(diagnosis)}
           label="Copy assessment"
         />
       </div>

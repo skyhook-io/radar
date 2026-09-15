@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import type { Diagnosis } from "../../api/diagnose";
-import { ResultCard, TurnView, type Turn } from "./parts";
+import { ResultCard, TurnView, assessmentCopyText, type Turn } from "./parts";
 
 const storyDiagnosis: Diagnosis = {
   rootCause: "Auth to MongoDB fails after revision 8.",
@@ -138,6 +138,19 @@ describe("ResultCard under the story contract", () => {
     expect(html).toContain("What blocked a conclusion");
     expect(html).toContain('data-step-kind="investigate"');
     expect(html).not.toContain("Apply…");
+  });
+});
+
+describe("assessmentCopyText", () => {
+  it("copies the headline with its caveats, cause, story and steps", () => {
+    const text = assessmentCopyText(storyDiagnosis);
+    expect(text).toContain("The app cannot log in to its database");
+    expect(text).toContain("Certainty (agent): Likely");
+    expect(text).toContain("Not established:\n- Whether the Atlas password");
+    expect(text).toContain("Cause: Auth to MongoDB fails");
+    expect(text).toContain("So the build changed.");
+    expect(text).not.toContain("[[radar:evidence=0]]");
+    expect(text).toContain("1. [Mitigate] Roll back to revision 7 (only if revision 7 still authenticates)");
   });
 });
 

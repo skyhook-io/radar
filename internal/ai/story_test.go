@@ -21,9 +21,6 @@ func TestDiagnosisFromText_ParsesStoryFields(t *testing.T) {
 	if d.Summary != "The app cannot log in to its database, and it started with the last deploy." {
 		t.Fatalf("summary = %q", d.Summary)
 	}
-	if d.Certainty != CertaintyLikely {
-		t.Fatalf("certainty = %q", d.Certainty)
-	}
 	if len(d.Unresolved) != 3 || d.Unresolved[0] != "Atlas password rotated?" || d.Unresolved[1] != "what would settle it" {
 		t.Fatalf("unresolved = %v (empty dropped, capped at %d)", d.Unresolved, maxDiagnosisUnresolved)
 	}
@@ -34,14 +31,28 @@ func TestDiagnosisFromText_ParsesStoryFields(t *testing.T) {
 	if len(d.Remediation) != 2 || d.Remediation[0] != "Roll back to revision 7" {
 		t.Fatalf("remediation must be derived from steps, got %v", d.Remediation)
 	}
-	if d.RecommendedIndex == nil || *d.RecommendedIndex != 1 || d.RecommendedReason != "reversible" {
-		t.Fatalf("recommended = %v %q", d.RecommendedIndex, d.RecommendedReason)
+	if d.RecommendedIndex != nil {
+		t.Fatalf("a mitigate step with an unverified precondition is not a one-click fix: %v", d.RecommendedIndex)
+	}
+	if d.Certainty != CertaintyLikely {
+		t.Fatalf("certainty = %q", d.Certainty)
 	}
 	if !d.RevisesAssessment {
 		t.Fatal("revises_assessment not parsed")
 	}
 	if !strings.Contains(d.Report, "[[radar:evidence=0]]") || strings.Contains(d.Report, "```json") {
 		t.Fatalf("report must keep placement markers and lose the verdict block: %q", d.Report)
+	}
+}
+
+func TestDiagnosisFromText_EstablishedCannotCoexistWithUnresolved(t *testing.T) {
+	d := diagnosisFromText(caseJSON(`"certainty":"established","unresolved":["whether the password was rotated"],"root_cause":"x"`))
+	if d.Certainty != CertaintyLikely {
+		t.Fatalf("established with open questions must read as likely, got %q", d.Certainty)
+	}
+	d = diagnosisFromText(caseJSON(`"certainty":"established","unresolved":[],"root_cause":"x","steps":[{"text":"roll back","kind":"mitigate"}],"recommended_index":1`))
+	if d.Certainty != CertaintyEstablished || d.RecommendedIndex == nil {
+		t.Fatalf("an unconditional mitigate step stays recommendable: %+v", d)
 	}
 }
 

@@ -29,7 +29,7 @@ const (
 	maxDiagnosisClaimChars     = 200
 	maxDiagnosisSubjectChars   = 253
 	maxDiagnosisHypothesisRune = 200
-	maxDiagnosisSummaryRune    = 320
+	maxDiagnosisSummaryRune    = 240
 	maxDiagnosisUnresolved     = 3
 	maxDiagnosisUnresolvedRune = 200
 	maxDiagnosisSteps          = 6
@@ -134,11 +134,22 @@ func diagnosisFromText(text string) Diagnosis {
 			} else if d.Inconclusive {
 				d.Healthy = false
 			}
+			// "Established" means nothing left would change the answer, which
+			// is exactly what a non-empty unresolved list denies; the two
+			// cannot both be true, and the caveats are the part the reader
+			// must not lose.
+			if d.Certainty == CertaintyEstablished && len(d.Unresolved) > 0 {
+				d.Certainty = CertaintyLikely
+			}
 			// Keep the index only when it points at a real step, and with typed
-			// steps only at one Apply may perform.
+			// steps only at one Apply may perform: a mitigation, and one whose
+			// applicability is not itself in question — a step that is right
+			// "only if" something unverified holds is not a one-click fix.
 			if parsed.RecommendedIndex != nil && *parsed.RecommendedIndex >= 1 &&
 				*parsed.RecommendedIndex <= len(d.Remediation) &&
-				(len(d.Steps) == 0 || d.Steps[*parsed.RecommendedIndex-1].Kind == StepMitigate) {
+				(len(d.Steps) == 0 ||
+					(d.Steps[*parsed.RecommendedIndex-1].Kind == StepMitigate &&
+						d.Steps[*parsed.RecommendedIndex-1].Precondition == "")) {
 				d.RecommendedIndex = parsed.RecommendedIndex
 				d.RecommendedReason = strings.TrimSpace(parsed.RecommendedReason)
 			}

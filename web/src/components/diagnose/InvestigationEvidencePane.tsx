@@ -590,13 +590,20 @@ export function InvestigationEvidencePane({
         const group = projection.groups.find(
           (candidate) => candidate.id === item.source.primaryGroupId,
         );
-        if (group)
+        // The card is the one the cited call itself produced. A later read of
+        // the same thing lives on the same group; substituting it would show
+        // newer evidence under an older claim.
+        const observation =
+          group?.observations.find(
+            (candidate) => candidate.source.id === item.source.id,
+          ) ?? group?.latest;
+        if (group && observation)
           return {
             item: {
               ...item,
               groupId: group.id,
-              observation: group.latest,
-              placement: "card",
+              observation,
+              placement: observation === group.latest ? "card" : "revision",
             },
             domId: `story-${group.id}`,
           };
