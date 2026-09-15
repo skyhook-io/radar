@@ -1630,10 +1630,13 @@ function EvidenceCard({
         )
         .filter(Boolean)
     : [];
-  const inlineLogLines =
-    storyCard && !open && observation.data.type === "logs"
-      ? (observation.data.logs?.lines ?? []).slice(-2).map(stripAnsi)
-      : [];
+  // What a rules_out card excludes is the point of placing it; it stays on
+  // the story card as its one line.
+  const storyExcludes = storyCard
+    ? cardItems
+        .map((item) => excludedByItem?.get(investigationCaseItemKey(item)))
+        .filter((entry): entry is string => Boolean(entry))
+    : [];
   const previousObservations = previousDifferentObservations(
     group,
     citedOrder,
@@ -1653,6 +1656,13 @@ function EvidenceCard({
     observation.summary,
   );
   const canExpand = !compact && (hasEvidenceDetails || meaningfulHistory);
+  // The inline lines give way to the full excerpt only when this card itself
+  // is expanded; `open` is shared across the group, and a compact card that
+  // cannot expand must keep its lines.
+  const inlineLogLines =
+    storyCard && !(open && canExpand) && observation.data.type === "logs"
+      ? (observation.data.logs?.lines ?? []).slice(-2).map(stripAnsi)
+      : [];
   const revealHistory = investigationEvidenceShouldRevealHistory(
     group,
     revealSourceId,
@@ -1842,13 +1852,18 @@ function EvidenceCard({
         </div>
       ) : null}
       {storyCard ? (
-        storyGaps.length > 0 && !compact ? (
+        (storyGaps.length > 0 || storyExcludes.length > 0) && !compact ? (
           <div
             className={clsx(
               "space-y-0.5 text-[11px] text-theme-text-tertiary",
               prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2",
             )}
           >
+            {storyExcludes.map((hypothesis) => (
+              <p key={hypothesis} data-agent-excludes>
+                Rules out: {hypothesis}
+              </p>
+            ))}
             {storyGaps.map((gap) => (
               <p key={gap} data-agent-gap>
                 Does not cover: {gap}
