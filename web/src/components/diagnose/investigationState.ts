@@ -348,6 +348,34 @@ export function investigationAssessmentTurnIndexes(
   return indexes;
 }
 
+/** The two coverage gaps that carry no limitation of their own, named so Still open can say which. */
+export function investigationEvidenceCoverageGaps(
+  projection: Pick<InvestigationEvidenceProjection, "coverage"> & {
+    sources: readonly { id: string; tool: string; confirmedSuccess: boolean }[];
+    groups: readonly {
+      latest: {
+        relevance: "target" | "producer-related" | "broader";
+        source: { id: string };
+      };
+    }[];
+  },
+): { noEvidence: boolean; noTargetDiagnosis: boolean } {
+  const completeDiagnosisSourceIds = new Set(
+    projection.sources
+      .filter((source) => source.tool === "diagnose" && source.confirmedSuccess)
+      .map((source) => source.id),
+  );
+  const hasTargetDiagnosis = projection.groups.some(
+    (group) =>
+      group.latest.relevance !== "broader" &&
+      completeDiagnosisSourceIds.has(group.latest.source.id),
+  );
+  return {
+    noEvidence: projection.coverage.projected === 0,
+    noTargetDiagnosis: !hasTargetDiagnosis,
+  };
+}
+
 export function investigationEvidenceCoverageLimited(
   projection: Pick<
     InvestigationEvidenceProjection,

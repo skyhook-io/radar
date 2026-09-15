@@ -68,6 +68,26 @@ describe("ResultCard under the story contract", () => {
     expect(flagged).toContain("the assessment does not address it");
   });
 
+  it("keeps the inline story on a read-only earlier healthy assessment", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={{
+          ...storyDiagnosis,
+          healthy: true,
+          rootCause: "",
+          remediation: [],
+          unresolved: [],
+          report: "The pod is fine.\n\n[[radar:evidence=0]]\n\n" + "Detail. ".repeat(60),
+        }}
+        section="conclusion"
+        storyInline
+        readOnlyAssessment
+      />,
+    );
+    expect(html).toContain("Full analysis");
+    expect(html).not.toContain("[[radar:evidence=0]]");
+  });
+
   it("lists Radar's own read limits under Still open beside the agent's items", () => {
     const html = renderToStaticMarkup(
       <ResultCard

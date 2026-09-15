@@ -30,6 +30,7 @@ import {
   investigationEvidenceConflictsWithHealthy,
   investigationHealthConflictExplainedBy,
   investigationAssessmentTurnIndexes,
+  investigationEvidenceCoverageGaps,
   investigationHealthSignals,
   investigationIsAssessmentTurn,
   investigationSettledAnswerTurnIndexes,
@@ -1323,15 +1324,17 @@ export function InvestigationView({
     const lines = groupEvidenceCoverage(currentAssessmentProjection.limitations)
       .filter((group) => !group.historyOnly)
       .map((group) => `${group.label}: ${group.summary}`);
-    // The coverage flag also fires when no read produced evidence or Radar's
-    // own diagnose of the workload did not complete; without an explicit
-    // limitation to name, say that in one line so the qualification survives.
-    if (lines.length === 0 && currentAssessmentCoverageLimited)
+    // Two coverage gaps carry no limitation of their own; name the one that
+    // applies so the qualification survives without the old header.
+    const gaps = investigationEvidenceCoverageGaps(currentAssessmentProjection);
+    if (gaps.noEvidence)
+      lines.push("No evidence was recorded for this assessment");
+    else if (gaps.noTargetDiagnosis)
       lines.push(
-        "Radar's own read of this workload did not complete, so this check is partial",
+        "Radar's own diagnose of this workload did not complete, so this check is partial",
       );
     return lines;
-  }, [currentAssessmentProjection, currentAssessmentCoverageLimited]);
+  }, [currentAssessmentProjection]);
   const healthSignals = useMemo(
     () =>
       currentAssessment?.diagnosis?.healthy
@@ -1341,7 +1344,8 @@ export function InvestigationView({
   );
   // While the first assessment is still running the pane keeps the story
   // shape, so the page fills in rather than rearranging when the verdict lands.
-  const storyShell = !currentAssessment && lastTurn?.status === "running";
+  const storyShell =
+    !hosted && !currentAssessment && lastTurn?.status === "running";
   const currentAssessmentEvidenceConflict =
     currentAssessment?.diagnosis?.healthy === true &&
     investigationEvidenceConflictsWithHealthy(projection);

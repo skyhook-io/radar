@@ -3145,6 +3145,56 @@ function AllClearCard({
           ? () => onRevealSource(signal.sourceId!)
           : undefined,
     }));
+  // The analysis disclosure (Activity's read-only copy of an earlier healthy
+  // assessment carries its story inline as plain prose), the action slot and
+  // the disclaimer are the same in both shapes.
+  const trailing = (
+    <>
+      {detailed || assessmentAction || assessmentSources ? (
+        <div>
+          <div
+            className="flex flex-wrap items-center gap-3 pt-2"
+            data-assessment-actions
+          >
+            {(detailed || assessmentSources) && (
+              <button
+                type="button"
+                aria-expanded={showAnalysis}
+                aria-controls={analysisId}
+                onClick={() => {
+                  setShowAnalysis(!showAnalysis);
+                  analysisReveal.revealAfterToggle(!showAnalysis);
+                }}
+                className="flex items-center gap-1.5 rounded-md py-2 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
+              >
+                <CollapseChevron open={showAnalysis} className="h-3.5 w-3.5" />
+                {detailed ? "Full analysis" : "Assessment details"}
+              </button>
+            )}
+            {assessmentAction && (
+              <div className="ml-auto">{assessmentAction}</div>
+            )}
+          </div>
+          <div id={analysisId} ref={analysisReveal.elementRef}>
+            <Collapse open={showAnalysis}>
+              <div className="border-t border-theme-border/60 px-3 py-2">
+                <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_p]:my-1.5 [&_p]:text-theme-text-secondary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
+                  {detailed ? report : ""}
+                </AIMarkdown>
+                {assessmentSources}
+              </div>
+            </Collapse>
+          </div>
+        </div>
+      ) : null}
+      {showDisclaimer ? (
+        <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
+          <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
+          <span>AI-generated — verify if symptoms persist</span>
+        </div>
+      ) : null}
+    </>
+  );
   if (storyShape) {
     const first = flagged[0];
     return (
@@ -3186,11 +3236,7 @@ function AllClearCard({
           limits={assessmentLimits}
           signals={stillOpenSignals}
         />
-        {assessmentAction ? (
-          <div className="flex flex-wrap items-center gap-3 pt-2" data-assessment-actions>
-            {assessmentAction}
-          </div>
-        ) : null}
+        {trailing}
       </div>
     );
   }
@@ -3264,49 +3310,7 @@ function AllClearCard({
           </p>
         ) : null}
       </div>
-      {detailed || assessmentAction || assessmentSources ? (
-        <div>
-          <div
-            className="flex flex-wrap items-center gap-3 pt-2"
-            data-assessment-actions
-          >
-            {(detailed || assessmentSources) && (
-              <button
-                type="button"
-                aria-expanded={showAnalysis}
-                aria-controls={analysisId}
-                onClick={() => {
-                  setShowAnalysis(!showAnalysis);
-                  analysisReveal.revealAfterToggle(!showAnalysis);
-                }}
-                className="flex items-center gap-1.5 rounded-md py-2 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
-              >
-                <CollapseChevron open={showAnalysis} className="h-3.5 w-3.5" />
-                {detailed ? "Full analysis" : "Assessment details"}
-              </button>
-            )}
-            {assessmentAction && (
-              <div className="ml-auto">{assessmentAction}</div>
-            )}
-          </div>
-          <div id={analysisId} ref={analysisReveal.elementRef}>
-            <Collapse open={showAnalysis}>
-              <div className="border-t border-theme-border/60 px-3 py-2">
-                <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_p]:my-1.5 [&_p]:text-theme-text-secondary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
-                  {detailed ? report : ""}
-                </AIMarkdown>
-                {assessmentSources}
-              </div>
-            </Collapse>
-          </div>
-        </div>
-      ) : null}
-      {showDisclaimer ? (
-        <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
-          <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
-          <span>AI-generated — verify if symptoms persist</span>
-        </div>
-      ) : null}
+      {trailing}
     </div>
   );
 }
