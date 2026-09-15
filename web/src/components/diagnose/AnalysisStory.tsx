@@ -246,7 +246,7 @@ export function AnalysisStory({
   const hiddenSegments =
     story.segments.length - (previewEnd - previewStart + 1);
   const foldable = hiddenSegments > 0 || previewStart > 0;
-  const linkRenderer = (href: string | undefined, _children: ReactNode) => {
+  const linkRenderer = (href: string | undefined) => {
     const index = storyReferenceIndex(href);
     if (index === undefined) return null;
     const resolution = story.byIndex.get(index);
