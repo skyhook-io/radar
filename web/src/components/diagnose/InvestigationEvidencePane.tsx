@@ -1657,16 +1657,17 @@ function EvidenceCard({
     observation.summary,
   );
   const canExpand = !compact && (hasEvidenceDetails || meaningfulHistory);
-  // A story log card shows the first two selected lines always; expanding
-  // appends the rest inside the same block, so nothing above them moves.
+  // A story log card shows the newest two selected lines always — the ones a
+  // story cites from a tail. Expanding appends the earlier lines below them,
+  // under a divider, so nothing above them moves.
   const storyLogLines =
     storyCard && observation.data.type === "logs"
       ? (observation.data.logs?.lines ?? [])
           .slice(-VISIBLE_LOG_EVIDENCE_LINES)
           .map((line) => stripAnsi(line))
       : [];
-  const storyLogHead = storyLogLines.slice(0, 2);
-  const storyLogRest = storyLogLines.slice(2);
+  const storyLogHead = storyLogLines.slice(-2);
+  const storyLogRest = storyLogLines.slice(0, -2);
   const revealHistory = investigationEvidenceShouldRevealHistory(
     group,
     revealSourceId,
@@ -1881,6 +1882,9 @@ function EvidenceCard({
                 </pre>
                 {storyLogRest.length > 0 ? (
                   <Collapse open={open && canExpand}>
+                    <div className="border-t border-[var(--terminal-divider)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] text-[var(--terminal-label)]">
+                      Earlier lines
+                    </div>
                     <pre className="overflow-x-auto whitespace-pre-wrap break-words px-3 pb-2.5">
                       {storyLogRest.join("\n")}
                     </pre>
