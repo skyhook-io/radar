@@ -112,7 +112,9 @@ describe("AnalysisStory", () => {
     expect(html).toContain('data-placed="story-group-crash"');
     expect(html).toContain('data-compact="1"');
     expect(html).not.toContain("Intro paragraph.");
-    expect(html).not.toContain("Then a second thought.");
+    // The paragraph behind the fold shows only as the faded, aria-hidden teaser.
+    expect(html).toContain("data-story-teaser");
+    expect(html.split("Then a second thought.").length).toBe(2);
     expect(html).not.toContain("story-group-chart");
     expect(html).toContain("Read the full analysis");
     expect(html).toContain('data-story-open="false"');
@@ -129,6 +131,22 @@ describe("AnalysisStory", () => {
     expect(html).toContain('data-story-lost-support="unlinked"');
     expect(html).toContain("1 cited result could not be shown here.");
     expect(html).toContain("Show less");
+  });
+
+  it("keeps trailing content behind the fold and folds for it alone", () => {
+    const collapsed = render("One paragraph only.");
+    expect(collapsed).not.toContain("Read the full analysis");
+    const withTrailing = renderToStaticMarkup(
+      <AnalysisStory
+        report="One paragraph only."
+        resolveItem={resolver({})}
+        renderPlacement={() => null}
+        onReveal={vi.fn()}
+        trailing={<p data-trailing>Also checked: nothing else.</p>}
+      />,
+    );
+    expect(withTrailing).toContain("Read the full analysis");
+    expect(withTrailing).not.toContain("data-trailing");
   });
 
   it("does not offer a fold when everything already fits the preview", () => {

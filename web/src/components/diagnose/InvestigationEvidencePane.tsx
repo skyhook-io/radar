@@ -5,6 +5,7 @@ import {
   useEffect,
   useId,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -476,6 +477,10 @@ export function InvestigationEvidencePane({
       // nested "Previous observations" collection; open the way to it first.
       const collection = collectionByGroup.get(groupId);
       let settle = 0;
+      if (storyMode && !resultsOpen) {
+        setResultsOpen(true);
+        settle = investigationDisclosureSettleDelay(prefersReducedMotion());
+      }
       if (collection === "workload" || collection === "earlier") {
         setWorkloadOpen(true);
         settle = investigationDisclosureSettleDelay(prefersReducedMotion());
@@ -494,7 +499,7 @@ export function InvestigationEvidencePane({
         });
       }, settle);
     },
-    [onGroupOpenChange, collectionByGroup],
+    [onGroupOpenChange, collectionByGroup, storyMode, resultsOpen],
   );
   const revealCollection = revealRequest
     ? investigationEvidenceRevealCollection(
@@ -526,6 +531,11 @@ export function InvestigationEvidencePane({
     if (revealCollection === "earlier" && !earlierOpen) {
       openingForRevealRequestRef.current = requestId;
       setEarlierOpen(true);
+      return;
+    }
+    if (storyMode && revealCollection && !resultsOpen) {
+      openingForRevealRequestRef.current = requestId;
+      setResultsOpen(true);
       return;
     }
     if (revealCollection === "coverage" && !coverageOpen) {
@@ -562,9 +572,23 @@ export function InvestigationEvidencePane({
     earlierOpen,
     coverageOpen,
     workloadOpen,
+    storyMode,
+    resultsOpen,
   ]);
 
   const coverageGroups = groupEvidenceCoverage(projection.limitations);
+  // A caveat belongs on the claim it bounds: the "does not cover" line shows
+  // under the cause card. A verdict with no cause card (healthy) keeps it on
+  // every placed card, since that is where its scope lives.
+  const storyGapRoles = useMemo(
+    () =>
+      investigationCase?.items.some(
+        (item) => item.role === "cause" && item.placement === "card",
+      )
+        ? new Set(["cause"])
+        : undefined,
+    [investigationCase],
+  );
   const limitationSummary = coverageGroups
     .map((group) => `${group.label}: ${group.summary}`)
     .join(" · ");
@@ -644,12 +668,13 @@ export function InvestigationEvidencePane({
           spanFullRow
           compact={compact}
           noteMode="chip"
+          gapRoles={storyGapRoles}
         />
       );
     },
     // groupsById is rebuilt per render from projection.groups.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [projection.groups, onViewSource],
+    [projection.groups, onViewSource, storyGapRoles],
   );
   const revealStoryTarget = useCallback(
     (target: StoryPlacementTarget) => {
@@ -766,7 +791,11 @@ export function InvestigationEvidencePane({
   const content = (
     <section
       aria-labelledby="investigation-radar-evidence"
-      className="investigation-evidence @container/evidence space-y-3 rounded-xl border p-3"
+      className={
+        storyMode
+          ? "investigation-evidence @container/evidence space-y-4"
+          : "investigation-evidence @container/evidence space-y-3 rounded-xl border p-3"
+      }
     >
       <span className="sr-only" role="status" aria-live="polite">
         {projection.limitations.length > 0
@@ -798,7 +827,7 @@ export function InvestigationEvidencePane({
         </h2>
       )}
 
-      {projection.limitations.length > 0 ? (
+      {projection.limitations.length > 0 && !storyMode ? (
         <CoverageStrip
           groups={coverageGroups}
           visibleGroupIds={new Set(partition.collectionByGroup.keys())}
@@ -818,7 +847,10 @@ export function InvestigationEvidencePane({
         ) : null}
 
         {storyMode && story ? (
-          <div className="rounded-lg border border-theme-border/80 bg-theme-surface px-3 py-3">
+          <div
+            data-story-card
+            className="rounded-xl border border-theme-border bg-theme-surface p-4"
+          >
             <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-theme-text-secondary">
               Why
               <span className="font-normal text-theme-text-tertiary">
@@ -834,6 +866,14 @@ export function InvestigationEvidencePane({
             <AnalysisStory
               report={story.report}
               resolveItem={resolveStoryItem}
+              trailing={
+                visibleRuledOut.length > 0 ? (
+                  <RuledOutBlock
+                    entries={visibleRuledOut}
+                    onReveal={revealCaseItem}
+                  />
+                ) : undefined
+              }
               renderPlacement={renderStoryPlacement}
               onReveal={revealStoryTarget}
               onViewSource={(sourceId) => onViewSource(sourceId)}
@@ -847,7 +887,7 @@ export function InvestigationEvidencePane({
             the withheld counts, where it read as bookkeeping. */}
         {storyMode ? afterEvidence : null}
 
-        {visibleRuledOut.length > 0 ? (
+        {!storyMode && visibleRuledOut.length > 0 ? (
           <RuledOutBlock entries={visibleRuledOut} onReveal={revealCaseItem} />
         ) : null}
 
@@ -856,14 +896,9 @@ export function InvestigationEvidencePane({
             id="investigation-captured-results"
             title="Captured results"
             description={
-              [
-                placedCount > 0
-                  ? `${placedCount} in the analysis`
-                  : "None placed in the analysis",
-                resultsSummary,
-              ]
-                .filter(Boolean)
-                .join(" · ") + " · nothing here is chosen by the agent"
+              placedCount > 0
+                ? `${placedCount} placed in the analysis`
+                : "None placed in the analysis"
             }
             groups={[]}
             totalCount={capturedTotal}
@@ -873,7 +908,24 @@ export function InvestigationEvidencePane({
             open={resultsOpen || placedCount === 0}
             onOpenChange={setResultsOpen}
           >
-            <div className="space-y-4">{mainCards}</div>
+            <div className="space-y-4">
+              {projection.limitations.length > 0 ? (
+                <CoverageStrip
+                  groups={coverageGroups}
+                  visibleGroupIds={new Set(partition.collectionByGroup.keys())}
+                  summary={limitationSummary}
+                  onViewSource={onViewSource}
+                  open={coverageOpen}
+                  onOpenChange={setCoverageOpen}
+                />
+              ) : null}
+              {resultsSummary ? (
+                <p className="text-[11px] text-theme-text-tertiary">
+                  {resultsSummary}
+                </p>
+              ) : null}
+              {mainCards}
+            </div>
           </CollapsedEvidenceCollection>
         ) : (
           mainCards
@@ -950,7 +1002,7 @@ function RuledOutBlock({
         id={headingId}
         className="flex items-center gap-2 text-xs font-semibold text-theme-text-secondary"
       >
-        Ruled out
+        Also checked
         <span className="text-[10px] font-semibold uppercase tracking-wide text-accent-text">
           Agent
         </span>
@@ -1488,6 +1540,7 @@ function EvidenceCard({
   prominence = "primary",
   compact = false,
   placedInStory = false,
+  gapRoles,
   noteMode = "full",
 }: {
   group: InvestigationEvidenceGroup;
@@ -1511,6 +1564,8 @@ function EvidenceCard({
   compact?: boolean;
   /** This card also appears inside the story above. */
   placedInStory?: boolean;
+  /** Roles whose "does not cover" line is shown; undefined shows every gap. */
+  gapRoles?: ReadonlySet<string>;
   /**
    * Inside the story the prose above the card is the agent's reading of it,
    * so the note row keeps only the role chip (and an excluded hypothesis);
@@ -1754,7 +1809,11 @@ function EvidenceCard({
               key={item.index}
               claim={compact || noteMode === "chip" ? "" : item.claim}
               role={item.role}
-              gap={compact ? undefined : item.gap}
+              gap={
+                compact || (gapRoles && !gapRoles.has(item.role))
+                  ? undefined
+                  : item.gap
+              }
               excludes={excludedByItem?.get(investigationCaseItemKey(item))}
               className="pt-1.5"
             />

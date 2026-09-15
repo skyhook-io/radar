@@ -89,7 +89,7 @@ describe("InvestigationEvidencePane under a story", () => {
     expect(html).toContain("data-story");
     expect(html).toContain('id="story-');
     expect(html).toContain("Captured results");
-    expect(html).toContain("1 in the analysis");
+    expect(html).toContain("1 placed in the analysis");
     expect(html).toContain("In the analysis");
     expect(html).not.toContain(">Evidence<");
     // Next steps sit between the story and the inventory.
@@ -193,7 +193,7 @@ describe("InvestigationEvidencePane under a story", () => {
     );
     expect(html).toContain('data-story-placement="0"');
     expect(html).not.toContain("data-story-lost-support");
-    expect(html).toContain("1 in the analysis");
+    expect(html).toContain("1 placed in the analysis");
   });
 
   it("renders a cited earlier read as that read, labelled, when a newer one exists", () => {

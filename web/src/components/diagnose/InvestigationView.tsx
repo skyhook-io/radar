@@ -102,6 +102,7 @@ import { formatInvestigationTarget } from "./target";
 import { parseContextName } from "../../utils/context-name";
 import type { InvestigationSourceExcerpt } from "./investigationSourceFocus";
 import { diagnosisHasStoryShape } from "./investigationStory";
+import { groupEvidenceCoverage } from "./investigationEvidencePresentation";
 
 /** Findings width from which the assessment and next steps sit beside the story. */
 
@@ -1289,6 +1290,15 @@ export function InvestigationView({
   const currentAssessmentCoverageLimited = investigationEvidenceCoverageLimited(
     currentAssessmentProjection,
   );
+  // Reads Radar could not complete for this assessment, one line each, for
+  // the Still open block; history qualifiers stay in the record.
+  const assessmentLimits = useMemo(
+    () =>
+      groupEvidenceCoverage(currentAssessmentProjection.limitations)
+        .filter((group) => !group.historyOnly)
+        .map((group) => `${group.label}: ${group.summary}`),
+    [currentAssessmentProjection],
+  );
   const currentAssessmentEvidenceConflict =
     currentAssessment?.diagnosis?.healthy === true &&
     investigationEvidenceConflictsWithHealthy(projection);
@@ -2082,11 +2092,17 @@ export function InvestigationView({
                           currentAssessmentIdx
                         }
                         diagnosis={currentAssessment.diagnosis}
+                        assessmentLimits={storyShape ? assessmentLimits : undefined}
                         assessmentSources={
-                          // An assessment whose every note was rejected has no
+                          // In the story shape the agent's notes sit on the
+                          // cards in the analysis and under Captured results;
+                          // a third listing of the same evidence is noise. An
+                          // assessment whose every note was rejected has no
                           // items and no links, and the loss is the only thing
                           // there is to say about it.
-                          rootCauseEvidenceResolution?.links.length ||
+                          storyShape
+                            ? undefined
+                            : rootCauseEvidenceResolution?.links.length ||
                           investigationCase?.items.length ||
                           currentAssessment.diagnosis.unlinkedEvidence ||
                           currentAssessment.diagnosis.evidenceMalformed ? (

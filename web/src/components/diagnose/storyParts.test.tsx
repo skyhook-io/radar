@@ -36,28 +36,34 @@ describe("ResultCard under the story contract", () => {
     );
     expect(html).toContain("Likely");
     expect(html).toContain("Auth to MongoDB fails after revision 8.");
-    expect(html).toContain("Not established");
+    expect(html).toContain("Still open");
     expect(html).toContain("Whether the Atlas password was rotated");
     // The story is the host's to render with placed cards: no second copy.
     expect(html).not.toContain("Full analysis");
     expect(html).not.toContain("[[radar:evidence=0]]");
   });
 
-  it("says so when the agent listed nothing unresolved, established or not", () => {
+  it("lists Radar's own read limits under Still open beside the agent's items", () => {
     const html = renderToStaticMarkup(
       <ResultCard
         diagnosis={{ ...storyDiagnosis, unresolved: [] }}
         section="conclusion"
+        assessmentLimits={["Previous logs: could not be read"]}
       />,
     );
-    expect(html).toContain("The agent listed nothing unresolved.");
-    const established = renderToStaticMarkup(
+    expect(html).toContain("Still open");
+    expect(html).toContain("Previous logs: could not be read");
+  });
+
+  it("says nothing when the agent listed nothing unresolved: the certainty word carries it", () => {
+    const html = renderToStaticMarkup(
       <ResultCard
         diagnosis={{ ...storyDiagnosis, unresolved: [], certainty: "established" }}
         section="conclusion"
       />,
     );
-    expect(established).toContain("The agent listed nothing unresolved and calls the cause established.");
+    expect(html).not.toContain("nothing unresolved");
+    expect(html).not.toContain("data-assessment-unresolved");
   });
 
   it("renders typed steps with their kind and precondition and applies only a mitigate step", () => {
@@ -146,7 +152,7 @@ describe("assessmentCopyText", () => {
     const text = assessmentCopyText(storyDiagnosis);
     expect(text).toContain("The app cannot log in to its database");
     expect(text).toContain("Certainty (agent): Likely");
-    expect(text).toContain("Not established:\n- Whether the Atlas password");
+    expect(text).toContain("Still open:\n- Whether the Atlas password");
     expect(text).toContain("Cause: Auth to MongoDB fails");
     expect(text).toContain("So the build changed.");
     expect(text).not.toContain("[[radar:evidence=0]]");

@@ -1974,6 +1974,7 @@ export function ResultCard({
   storyInline = false,
   readOnlyAssessment = false,
   revisedAfter,
+  assessmentLimits,
 }: {
   diagnosis: Diagnosis;
   onApply?: (fix: string) => void;
@@ -1992,6 +1993,8 @@ export function ResultCard({
   readOnlyAssessment?: boolean;
   /** The question that produced this revised assessment, when it replaced an earlier one. */
   revisedAfter?: string;
+  /** Reads Radar could not complete for this assessment; listed under Still open. */
+  assessmentLimits?: string[];
   onCheckStatus?: () => void;
   animate?: boolean;
   /** Additional navigation placed in the assessment action row. */
@@ -2049,6 +2052,7 @@ export function ResultCard({
         assessmentSources={assessmentSources}
         storyInline={storyInline}
         revisedAfter={revisedAfter}
+          assessmentLimits={assessmentLimits}
       />
     );
   // Couldn't-determine is its own honest state — never a confident all-clear, never
@@ -2075,6 +2079,7 @@ export function ResultCard({
           animate={animate}
           storyInline={storyInline}
           revisedAfter={revisedAfter}
+          assessmentLimits={assessmentLimits}
         />
         {section === "full" && (diagnosis.steps?.length ?? 0) > 0 ? (
           <DiagnosisResult
@@ -2130,6 +2135,7 @@ export function ResultCard({
       storyInline={storyInline}
       readOnlyAssessment={readOnlyAssessment}
       revisedAfter={revisedAfter}
+          assessmentLimits={assessmentLimits}
     />
   );
 }
@@ -2147,7 +2153,7 @@ export function assessmentCopyText(diagnosis: Diagnosis): string {
   const unresolved = (diagnosis.unresolved ?? []).filter((item) => item.trim());
   if (unresolved.length > 0)
     parts.push(
-      ["Not established:", ...unresolved.map((item) => `- ${item}`)].join("\n"),
+      ["Still open:", ...unresolved.map((item) => `- ${item}`)].join("\n"),
     );
   if (diagnosis.rootCause) parts.push(`Cause: ${diagnosis.rootCause}`);
   const story = storyPlainText(diagnosis.report ?? "");
@@ -2185,16 +2191,25 @@ export function AssessmentHeadline({
   diagnosis,
   tone,
   revisedAfter,
+  limits = [],
 }: {
   diagnosis: Diagnosis;
   tone: "cause" | "healthy" | "inconclusive";
   revisedAfter?: string;
+  /** Reads Radar could not complete for this assessment; listed under Still open. */
+  assessmentLimits?: string[];
+  /** Reads Radar could not complete for this assessment, one line each. */
+  limits?: string[];
 }) {
   const summary = diagnosis.summary?.trim();
   if (!summary) return null;
-  const unresolved = (diagnosis.unresolved ?? []).filter((item) =>
-    item.trim(),
-  );
+  // One block for everything that qualifies the answer: what the agent left
+  // open and what Radar could not read. The rest of the page states the
+  // answer; this is the only place it argues with itself.
+  const unresolved = [
+    ...(diagnosis.unresolved ?? []).filter((item) => item.trim()),
+    ...limits,
+  ];
   return (
     <div data-assessment-headline className="space-y-2">
       <div className="flex items-start justify-between gap-2">
@@ -2233,11 +2248,11 @@ export function AssessmentHeadline({
       {unresolved.length > 0 ? (
         <div
           data-assessment-unresolved
-          className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2"
+          className="rounded-md border border-theme-border bg-theme-base/40 px-2.5 py-2"
         >
-          <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-500">
+          <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold text-theme-text-secondary">
             <HelpCircle className="h-3 w-3" aria-hidden />
-            {tone === "inconclusive" ? "What blocked a conclusion" : "Not established"}
+            {tone === "inconclusive" ? "What blocked a conclusion" : "Still open"}
           </div>
           <ul className="space-y-0.5 text-xs text-theme-text-primary">
             {unresolved.map((item, index) => (
@@ -2250,16 +2265,6 @@ export function AssessmentHeadline({
             ))}
           </ul>
         </div>
-      ) : tone !== "healthy" ? (
-        <p
-          data-assessment-unresolved="none"
-          className="text-[11px] text-theme-text-tertiary"
-        >
-          The agent listed nothing unresolved
-          {diagnosis.certainty === "established"
-            ? " and calls the cause established."
-            : "."}
-        </p>
       ) : null}
     </div>
   );
@@ -2538,6 +2543,7 @@ function DiagnosisResult({
   storyInline = false,
   readOnlyAssessment = false,
   revisedAfter,
+  assessmentLimits,
 }: {
   diagnosis: Diagnosis;
   onApply?: (fix: string) => void;
@@ -2552,6 +2558,8 @@ function DiagnosisResult({
   storyInline?: boolean;
   readOnlyAssessment?: boolean;
   revisedAfter?: string;
+  /** Reads Radar could not complete for this assessment; listed under Still open. */
+  assessmentLimits?: string[];
 }) {
   // The story contract: a summary headline above, the story rendered by the
   // host (or inline as plain prose), typed steps below.
@@ -2735,6 +2743,7 @@ function DiagnosisResult({
             diagnosis={diagnosis}
             tone="cause"
             revisedAfter={revisedAfter}
+            limits={assessmentLimits}
           />
         </div>
       )}
@@ -3033,6 +3042,7 @@ function AllClearCard({
   assessmentSources,
   storyInline = false,
   revisedAfter,
+  assessmentLimits,
 }: {
   diagnosis: Diagnosis;
   animate: boolean;
@@ -3044,6 +3054,8 @@ function AllClearCard({
   assessmentSources?: ReactNode;
   storyInline?: boolean;
   revisedAfter?: string;
+  /** Reads Radar could not complete for this assessment; listed under Still open. */
+  assessmentLimits?: string[];
 }) {
   const storyShape = !!diagnosis.summary?.trim();
   const [showAnalysis, setShowAnalysis] = useState(false);
@@ -3106,6 +3118,7 @@ function AllClearCard({
             diagnosis={diagnosis}
             tone="healthy"
             revisedAfter={revisedAfter}
+            limits={assessmentLimits}
           />
         ) : (
           <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
@@ -3189,11 +3202,14 @@ function InconclusiveCard({
   animate,
   storyInline = false,
   revisedAfter,
+  assessmentLimits,
 }: {
   diagnosis: Diagnosis;
   animate: boolean;
   storyInline?: boolean;
   revisedAfter?: string;
+  /** Reads Radar could not complete for this assessment; listed under Still open. */
+  assessmentLimits?: string[];
 }) {
   const storyShape = !!diagnosis.summary?.trim();
   const text =
@@ -3218,6 +3234,7 @@ function InconclusiveCard({
             diagnosis={diagnosis}
             tone="inconclusive"
             revisedAfter={revisedAfter}
+            limits={assessmentLimits}
           />
         ) : null}
         {text ? (

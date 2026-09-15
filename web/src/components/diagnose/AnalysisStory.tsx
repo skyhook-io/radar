@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
-import { AlertTriangle, FileSearch } from "lucide-react";
-import { CollapseChevron } from "@skyhook-io/k8s-ui";
+import { AlertTriangle, ChevronDown, FileSearch } from "lucide-react";
+import { Collapse } from "@skyhook-io/k8s-ui";
 
 import { Markdown } from "../ui/Markdown";
 import type { InvestigationCaseItem } from "./investigationCase";
@@ -199,6 +199,7 @@ export function AnalysisStory({
   renderPlacement,
   onReveal,
   onViewSource,
+  trailing,
   defaultOpen = false,
   className,
 }: {
@@ -212,6 +213,8 @@ export function AnalysisStory({
   onReveal: (target: StoryPlacementTarget) => void;
   /** Opens a cited call's raw result in Activity when Radar renders no card for it. */
   onViewSource?: (sourceId: string) => void;
+  /** Rendered at the end of the full analysis, behind the fold. */
+  trailing?: ReactNode;
   defaultOpen?: boolean;
   className?: string;
 }) {
@@ -255,7 +258,7 @@ export function AnalysisStory({
         : Math.max(firstProseAt, 0);
   const hiddenSegments =
     story.segments.length - (previewEnd - previewStart + 1);
-  const foldable = hiddenSegments > 0 || previewStart > 0;
+  const foldable = hiddenSegments > 0 || previewStart > 0 || !!trailing;
   const linkRenderer = (href: string | undefined) => {
     const index = storyReferenceIndex(href);
     if (index === undefined) return null;
@@ -273,7 +276,7 @@ export function AnalysisStory({
     compact: boolean,
   ) => {
     if (segment.kind === "prose") {
-      return (
+      const prose = (
         <Markdown
           key={`prose-${position}`}
           className={clsx(
@@ -285,6 +288,7 @@ export function AnalysisStory({
           {segment.markdown}
         </Markdown>
       );
+      return prose;
     }
     const resolution = story.byIndex.get(segment.index);
     if (!resolution || resolution.kind === "lost") {
@@ -319,15 +323,30 @@ export function AnalysisStory({
       </div>
     );
   };
-  const visible = open
-    ? story.segments.map((segment, position) =>
-        renderSegment(segment, position, false),
-      )
-    : story.segments
-        .slice(previewStart, previewEnd + 1)
-        .map((segment, offset) =>
-          renderSegment(segment, previewStart + offset, true),
-        );
+  // The preview stays mounted in both states; what the fold hides sits in
+  // animated collapses on either side of it, mounted on first open so the
+  // collapsed page carries no hidden prose.
+  const before = story.segments
+    .slice(0, previewStart)
+    .map((segment, position) => renderSegment(segment, position, false));
+  const folded = foldable && !open;
+  const preview = story.segments
+    .slice(previewStart, previewEnd + 1)
+    .map((segment, offset) =>
+      renderSegment(segment, previewStart + offset, !open),
+    );
+  // The hint that more follows: the first two lines of the hidden paragraph
+  // after the preview, faded out. It points at what the fold hides instead of
+  // greying text the reader can already see.
+  const teaser =
+    folded && story.segments[previewEnd + 1]?.kind === "prose"
+      ? story.segments[previewEnd + 1]
+      : undefined;
+  const after = story.segments
+    .slice(previewEnd + 1)
+    .map((segment, offset) =>
+      renderSegment(segment, previewEnd + 1 + offset, false),
+    );
   return (
     <section
       aria-label="Analysis"
@@ -335,8 +354,37 @@ export function AnalysisStory({
       data-story-open={open || !foldable ? "true" : "false"}
       className={clsx("space-y-2", className)}
     >
-      <div id={regionId} className="space-y-2">
-        {visible}
+      <div id={regionId}>
+        {before.length > 0 ? (
+          <Collapse open={open} mountLazily>
+            <div className="space-y-2 pb-2">{before}</div>
+          </Collapse>
+        ) : null}
+        <div className="space-y-2">{preview}</div>
+        {teaser && teaser.kind === "prose" ? (
+          <div
+            aria-hidden
+            data-story-teaser
+            className="relative mt-2 max-h-12 cursor-pointer overflow-hidden"
+            onClick={() => setOpen(true)}
+          >
+            <Markdown
+              className={clsx(STORY_PROSE_CLASS, "[&_p]:line-clamp-2")}
+              linkRenderer={() => null}
+            >
+              {teaser.markdown}
+            </Markdown>
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-theme-surface to-transparent" />
+          </div>
+        ) : null}
+        {after.length > 0 || trailing ? (
+          <Collapse open={open} mountLazily>
+            <div className="space-y-2 pt-2">
+              {after}
+              {trailing}
+            </div>
+          </Collapse>
+        ) : null}
       </div>
       {story.lostItems > 0 ? (
         <p className="text-[11px] text-theme-text-tertiary">
@@ -351,9 +399,15 @@ export function AnalysisStory({
           aria-expanded={open}
           aria-controls={regionId}
           onClick={() => setOpen(!open)}
-          className="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+          className="flex w-full items-center justify-center gap-1.5 rounded-md py-1.5 text-xs font-medium text-accent-text hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
         >
-          <CollapseChevron open={open} className="h-3.5 w-3.5" />
+          <ChevronDown
+            aria-hidden
+            className={clsx(
+              "h-3.5 w-3.5 transition-transform duration-200 motion-reduce:transition-none",
+              open && "rotate-180",
+            )}
+          />
           {open ? "Show less" : "Read the full analysis"}
         </button>
       ) : null}
