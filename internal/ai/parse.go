@@ -339,7 +339,16 @@ func parseCaseItem(raw json.RawMessage) caseItemRequest {
 	// dropped rather than truncated — cutting a sentence mid-clause invents a
 	// claim the agent did not make.
 	claimRequired := role == EvidenceRoleBenign || role == EvidenceRoleDemoted || role == EvidenceRoleRulesOut
-	if (claim == "" && claimRequired) || utf8.RuneCountInString(claim) > maxDiagnosisClaimChars {
+	if utf8.RuneCountInString(claim) > maxDiagnosisClaimChars {
+		// The story places the item; losing the placement over a long note
+		// would cost the reader the card. The note is dropped, the item kept
+		// — unless the note is what the role asserts.
+		if claimRequired {
+			return caseItemRequest{}
+		}
+		claim = ""
+	}
+	if claim == "" && claimRequired {
 		return caseItemRequest{}
 	}
 	item := caseItemRequest{valid: true, ref: ref, role: role, claim: claim}

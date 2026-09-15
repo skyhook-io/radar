@@ -64,7 +64,7 @@ func TestDiagnosisFromText_CaseDropsBadItemsIndividually(t *testing.T) {
 	text := caseJSON(`"root_cause":"x","evidence":[` +
 		`{"ref":"not-a-ref","role":"cause","claim":"a"},` +
 		`{"ref":"` + ref + `","role":"verdict","claim":"a"},` +
-		`{"ref":"` + ref + `","role":"cause","claim":"` + long + `"},` +
+		`{"ref":"` + ref + `","role":"demoted","claim":"` + long + `"},` +
 		`{"ref":"` + ref + `","role":"cause","claim":"a","subject":{"kind":"Pod"}},` +
 		`{"ref":"` + ref + `","role":"cause","claim":"a","subject":{"kind":"Pod","name":"p","stream":"older"}},` +
 		`{"ref":"` + ref + `","role":"context","claim":"fine"}` +
@@ -181,8 +181,8 @@ func TestDiagnosisFromText_CaseRejectsEmptyClaimAndUnwrapsMarkerRef(t *testing.T
 	if !items[2].valid || items[2].ref != ref {
 		t.Errorf("a marker-wrapped ref must be unwrapped, got %+v", items[2])
 	}
-	if items[3].valid {
-		t.Errorf("an over-long claim must be dropped, not truncated: %+v", items[3])
+	if !items[3].valid || items[3].claim != "" {
+		t.Errorf("an over-long claim on a cause keeps the item and loses the note, never truncated: %+v", items[3])
 	}
 	if items[4].valid {
 		t.Errorf("an unknown role must be dropped, not mapped: %+v", items[4])
