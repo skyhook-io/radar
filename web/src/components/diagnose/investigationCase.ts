@@ -345,6 +345,17 @@ function identityMatchesSubject(
   observation: InvestigationEvidenceObservation,
   subject: DiagnosisEvidenceSubject,
 ): boolean {
+  // "The events of namespace X" names a namespace-scoped read whose
+  // observation inherits the resource its call was asked about; the agent
+  // naming the namespace instead is not wrong, so a stated evidence kind plus
+  // a matching namespace is enough for that shape.
+  if (
+    subject.observation !== undefined &&
+    sameKind(subject.kind, "Namespace") &&
+    identity.namespace !== undefined &&
+    identity.namespace === subject.name
+  )
+    return true;
   if (!sameKind(identity.kind, subject.kind) || identity.name !== subject.name)
     return false;
   if (

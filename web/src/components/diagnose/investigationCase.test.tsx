@@ -207,6 +207,11 @@ describe("agent case placement (D-1, D-1b)", () => {
             name: "api",
             observation: "events",
           }),
+          linked(ref, "context", "Namespace-named events land too.", {
+            kind: "Namespace",
+            name: "shop",
+            observation: "events",
+          }),
           linked(
             ref,
             "context",
@@ -237,6 +242,7 @@ describe("agent case placement (D-1, D-1b)", () => {
         kind: "resource",
       },
       "Events only repeat the back-off.": { placement: "card", kind: "events" },
+      "Namespace-named events land too.": { placement: "card", kind: "events" },
       "Ambiguous: two observations share this subject.": {
         placement: "source",
         kind: undefined,
