@@ -82,7 +82,9 @@ export function splitStory(report: string): StorySplit {
   const prose: string[] = [];
   let fence: string | undefined;
   const flush = () => {
-    const markdown = prose.join("\n").trim();
+    // Trim blank lines, not indentation: a segment that opens with indented
+    // code must keep its four spaces to stay code.
+    const markdown = prose.join("\n").replace(/^\n+/, "").trimEnd();
     if (markdown) segments.push({ kind: "prose", markdown });
     prose.length = 0;
   };
