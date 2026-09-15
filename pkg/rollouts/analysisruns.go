@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -61,7 +62,22 @@ func ListAnalysisRuns(ctx context.Context, client dynamic.Interface, namespace, 
 		}
 		summaries = append(summaries, summarizeAnalysisRun(run))
 	}
-	sort.Slice(summaries, func(i, j int) bool { return summaries[i].CreatedAt.After(summaries[j].CreatedAt) })
+	// Runs the controller creates together (a step run and a background run
+	// starting on the same reconcile) share a creation second, so time alone
+	// leaves their order to chance and the list reshuffles between loads.
+	sort.Slice(summaries, func(i, j int) bool {
+		if !summaries[i].CreatedAt.Equal(summaries[j].CreatedAt) {
+			return summaries[i].CreatedAt.After(summaries[j].CreatedAt)
+		}
+		si, sj := summaries[i].StepIndex, summaries[j].StepIndex
+		if si != nil && sj != nil && *si != *sj {
+			return *si > *sj
+		}
+		if (si == nil) != (sj == nil) {
+			return si != nil
+		}
+		return summaries[i].Name < summaries[j].Name
+	})
 	return summaries, nil
 }
 
@@ -104,8 +120,9 @@ func summarizeAnalysisRun(run *unstructured.Unstructured) AnalysisRunSummary {
 	return summary
 }
 
+// The step index orders runs the controller created in the same second, so a
+// label it cannot parse has to be rejected rather than salvaged: a partial read
+// would sort the run under a step it does not belong to.
 func parseInt64(s string) (int64, error) {
-	var n int64
-	_, err := fmt.Sscanf(s, "%d", &n)
-	return n, err
+	return strconv.ParseInt(s, 10, 64)
 }

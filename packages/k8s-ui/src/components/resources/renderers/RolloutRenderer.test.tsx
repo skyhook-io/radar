@@ -175,6 +175,46 @@ describe('RolloutRenderer step display', () => {
   })
 })
 
+describe('RolloutRenderer analysis history availability', () => {
+  const rollout = canaryRollout({ phase: 'Healthy', currentStepIndex: 4 }, 4)
+  const forbidden = Object.assign(new Error('forbidden'), { status: 403 })
+  const oneRun = [
+    { name: 'run-1', phase: 'Successful', createdAt: '2026-01-01T00:00:00Z', metricsTotal: 1, metricsPassing: 1, metricsNotPassing: 0 },
+  ]
+  // Section keeps collapsed content in the DOM and flattens it to zero height,
+  // so "is the text present" says nothing about whether anyone can read it.
+  const historySection = (html: string) => html.slice(html.indexOf('AnalysisRun History'))
+  const isOpen = (html: string) => historySection(html).includes('grid-template-rows:1fr')
+
+  it('says the history could not be read instead of rendering nothing', () => {
+    const html = renderToString(<RolloutRenderer data={rollout} analysisRunHistoryError={forbidden} />)
+    expect(html).toContain('AnalysisRun History')
+    expect(html).toContain('permission')
+    expect(isOpen(html)).toBe(true)
+  })
+
+  // React Query keeps the last good data when a refetch fails, so a refusal can
+  // arrive on top of rows that are already on screen.
+  it('opens and calls itself partial when rows are already showing', () => {
+    const html = renderToString(
+      <RolloutRenderer data={rollout} analysisRunHistoryError={forbidden} analysisRunHistory={oneRun} />
+    )
+    expect(html).toContain('run-1')
+    expect(html).toContain('may be incomplete')
+    expect(isOpen(html)).toBe(true)
+  })
+
+  it('leaves a readable history collapsed, since it is backward-looking', () => {
+    const html = renderToString(<RolloutRenderer data={rollout} analysisRunHistory={oneRun} />)
+    expect(html).toContain('run-1')
+    expect(isOpen(html)).toBe(false)
+  })
+
+  it('renders no history section when there is neither history nor an error', () => {
+    expect(renderToString(<RolloutRenderer data={rollout} />)).not.toContain('AnalysisRun History')
+  })
+})
+
 describe('rolloutProblems', () => {
   it('reports an aborted rollout once, not once per matching branch', () => {
     const problems = rolloutProblems(

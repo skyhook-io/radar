@@ -86,9 +86,21 @@ export function CanaryStepTimeline({ steps, currentStepIndex, stepAnalysisStatus
                     {label}
                   </span>
                   {showAnalysisStatus && analysisLevel && (
-                    <span className={clsx('badge-sm', healthColors[analysisLevel])}>
-                      {stepAnalysisStatus!.status}
-                    </span>
+                    onNavigate && stepAnalysisStatus!.name ? (
+                      <button
+                        onClick={() =>
+                          onNavigate({ kind: 'AnalysisRun', namespace: namespace ?? '', name: stepAnalysisStatus!.name! })
+                        }
+                        className={clsx('badge-sm hover:underline', healthColors[analysisLevel])}
+                        title={stepAnalysisStatus!.name}
+                      >
+                        {stepAnalysisStatus!.status}
+                      </button>
+                    ) : (
+                      <span className={clsx('badge-sm', healthColors[analysisLevel])}>
+                        {stepAnalysisStatus!.status}
+                      </span>
+                    )
                   )}
                 </div>
                 {templateRefs.length > 0 && (
@@ -126,35 +138,61 @@ export function CanaryStepTimeline({ steps, currentStepIndex, stepAnalysisStatus
 export interface BlueGreenPhase {
   label: string
   state: 'completed' | 'current' | 'pending'
+  analysis?: { name?: string; status?: string }
 }
 
 // Same connected-dot visual as CanaryStepTimeline, for blueGreenPhases()'s
 // derived phase list — blueGreen has no steps[] array to iterate, so there's
 // nothing to reuse structurally, but the "linear sequence, top to bottom"
 // visual language should match.
-export function BlueGreenTimeline({ phases }: { phases: BlueGreenPhase[] }) {
+export function BlueGreenTimeline({
+  phases,
+  onNavigate,
+  namespace,
+}: {
+  phases: BlueGreenPhase[]
+  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
+  namespace?: string
+}) {
   if (phases.length === 0) return null
   return (
     <div className="relative">
       <div className="absolute bottom-2 left-[9px] top-2 w-px bg-theme-border" />
       <div className="space-y-0.5">
-        {phases.map((phase, index) => (
-          <div key={index} className="relative flex items-start gap-2 py-1.5 pr-1 text-sm">
-            <StepDot state={phase.state} />
-            <span
-              className={clsx(
-                'pl-1',
-                phase.state === 'current'
-                  ? 'font-medium text-theme-text-primary'
-                  : phase.state === 'completed'
-                    ? 'text-theme-text-secondary'
-                    : 'text-theme-text-tertiary'
-              )}
-            >
-              {phase.label}
-            </span>
-          </div>
-        ))}
+        {phases.map((phase, index) => {
+          const level = phase.analysis?.status ? analysisPhaseLevel(phase.analysis.status) : undefined
+          return (
+            <div key={index} className="relative flex items-start gap-2 py-1.5 pr-1 text-sm">
+              <StepDot state={phase.state} analysisLevel={level} />
+              <span
+                className={clsx(
+                  'pl-1',
+                  phase.state === 'current'
+                    ? 'font-medium text-theme-text-primary'
+                    : phase.state === 'completed'
+                      ? 'text-theme-text-secondary'
+                      : 'text-theme-text-tertiary'
+                )}
+              >
+                {phase.label}
+              </span>
+              {level &&
+                (onNavigate && phase.analysis?.name ? (
+                  <button
+                    onClick={() =>
+                      onNavigate({ kind: 'AnalysisRun', namespace: namespace ?? '', name: phase.analysis!.name! })
+                    }
+                    className={clsx('badge-sm hover:underline', healthColors[level])}
+                    title={phase.analysis.name}
+                  >
+                    {phase.analysis.status}
+                  </button>
+                ) : (
+                  <span className={clsx('badge-sm', healthColors[level])}>{phase.analysis!.status}</span>
+                ))}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
