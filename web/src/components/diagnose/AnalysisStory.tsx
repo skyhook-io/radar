@@ -418,7 +418,7 @@ export function AnalysisStory({
           <ChevronDown
             aria-hidden
             className={clsx(
-              "h-3.5 w-3.5 transition-transform duration-200 motion-reduce:transition-none",
+              "h-3.5 w-3.5 transition-transform duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none",
               open && "rotate-180",
             )}
           />

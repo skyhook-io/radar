@@ -1619,6 +1619,21 @@ function EvidenceCard({
     (item) => item.placement === "revision",
   );
   const agentCause = cardItems.some((item) => item.role === "cause");
+  // A card placed in the story: the prose carries the claim, so the card
+  // shows its role beside the title, its scope line if any, and for a log
+  // stream the decisive lines themselves; the rest waits behind the chevron.
+  const storyCard = noteMode === "chip";
+  const storyGaps = storyCard
+    ? cardItems
+        .map((item) =>
+          item.gap && (!gapRoles || gapRoles.has(item.role)) ? item.gap : "",
+        )
+        .filter(Boolean)
+    : [];
+  const inlineLogLines =
+    storyCard && !open && observation.data.type === "logs"
+      ? (observation.data.logs?.lines ?? []).slice(-2).map(stripAnsi)
+      : [];
   const previousObservations = previousDifferentObservations(
     group,
     citedOrder,
@@ -1673,6 +1688,13 @@ function EvidenceCard({
           <span className="text-sm font-semibold leading-snug text-theme-text-primary">
             {observation.title}
           </span>
+          {storyCard
+            ? cardItems.map((item) =>
+                item.role ? (
+                  <AgentRoleChip key={item.index} role={item.role} />
+                ) : null,
+              )
+            : null}
         </span>
         {observation.relevance === "broader" &&
         resourceRef &&
@@ -1811,7 +1833,30 @@ function EvidenceCard({
           ) : null}
         </div>
       </div>
-      {cardItems.some((item) => item.claim || item.role) ? (
+      {inlineLogLines.length > 0 ? (
+        <div
+          data-story-log-lines
+          className={prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2"}
+        >
+          <TerminalBlock>{inlineLogLines.join("\n")}</TerminalBlock>
+        </div>
+      ) : null}
+      {storyCard ? (
+        storyGaps.length > 0 && !compact ? (
+          <div
+            className={clsx(
+              "space-y-0.5 text-[11px] text-theme-text-tertiary",
+              prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2",
+            )}
+          >
+            {storyGaps.map((gap) => (
+              <p key={gap} data-agent-gap>
+                Does not cover: {gap}
+              </p>
+            ))}
+          </div>
+        ) : null
+      ) : cardItems.some((item) => item.claim || item.role) ? (
         <div
           className={clsx(
             "space-y-1.5",
@@ -1821,7 +1866,7 @@ function EvidenceCard({
           {cardItems.map((item) => (
             <AgentClaimNote
               key={item.index}
-              claim={compact || noteMode === "chip" ? "" : item.claim}
+              claim={compact ? "" : item.claim}
               role={item.role}
               gap={
                 compact || (gapRoles && !gapRoles.has(item.role))
@@ -1846,6 +1891,7 @@ function EvidenceCard({
               {hasEvidenceDetails ? (
                 <EvidenceBody
                   data={observation.data}
+                  condensed={storyCard}
                   cardSummary={observation.summary}
                   changeCoverage={metricsMarkersBySource?.get(
                     observation.source.id,
@@ -1959,11 +2005,14 @@ function EvidenceBody({
   data,
   cardSummary,
   changeCoverage,
+  condensed = false,
 }: {
   data: InvestigationEvidenceData;
   cardSummary?: string;
   /** Change markers for a metrics chart; derived by the pane, never by data. */
   changeCoverage?: MetricsChangeCoverage;
+  /** The card's title already names the stream: skip the repeated badges. */
+  condensed?: boolean;
 }) {
   switch (data.type) {
     case "issue":
@@ -1975,7 +2024,7 @@ function EvidenceBody({
     case "resource":
       return <ResourceBody data={data} />;
     case "logs":
-      return <LogsBody data={data} />;
+      return <LogsBody data={data} condensed={condensed} />;
     case "events":
       return <EventsBody data={data} />;
     case "changes":
@@ -2415,7 +2464,13 @@ function conditionStatusTone(condition: {
   }
 }
 
-function LogsBody({ data }: { data: EvidenceDataOf<"logs"> }) {
+function LogsBody({
+  data,
+  condensed = false,
+}: {
+  data: EvidenceDataOf<"logs">;
+  condensed?: boolean;
+}) {
   const lines = data.logs?.lines ?? [];
   const visibleLines = lines
     .slice(-VISIBLE_LOG_EVIDENCE_LINES)
@@ -2424,12 +2479,16 @@ function LogsBody({ data }: { data: EvidenceDataOf<"logs"> }) {
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-1.5">
-        <Badge tone="structural" size="sm">
-          {data.pod} / {data.container}
-        </Badge>
-        <Badge severity="neutral" size="sm">
-          {data.previous ? "previous instance" : "current instance"}
-        </Badge>
+        {condensed ? null : (
+          <>
+            <Badge tone="structural" size="sm">
+              {data.pod} / {data.container}
+            </Badge>
+            <Badge severity="neutral" size="sm">
+              {data.previous ? "previous instance" : "current instance"}
+            </Badge>
+          </>
+        )}
         {data.logs?.fallback ? (
           <Badge severity="warning" size="sm">
             Unfiltered log tail
