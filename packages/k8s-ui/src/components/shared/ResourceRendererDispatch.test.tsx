@@ -298,6 +298,30 @@ describe('getResourceStatus — colliding plurals', () => {
     })).not.toBeNull()
   })
 
+  it('reads an Argo Rollouts Experiment with the AnalysisPhase vocabulary', () => {
+    expect(getResourceStatus('experiments', {
+      apiVersion: 'argoproj.io/v1alpha1',
+      status: { phase: 'Successful' },
+    })).toMatchObject({ text: 'Successful', level: 'healthy' })
+
+    expect(getResourceStatus('experiments', {
+      apiVersion: 'argoproj.io/v1alpha1',
+      status: { phase: 'Running' },
+    })).toMatchObject({ level: 'degraded' })
+  })
+
+  // Katib ships its own Experiment at kubeflow.org sharing this plural, and it
+  // does not report AnalysisPhase. Falling through to the generic reader is
+  // fine; being scored with Argo's vocabulary is not, because that attaches a
+  // HealthLevel derived from a phase Katib never reports.
+  it('does not score a Katib Experiment with the Argo vocabulary', () => {
+    const katib = getResourceStatus('experiments', {
+      apiVersion: 'kubeflow.org/v1beta1',
+      status: { conditions: [{ type: 'Running', status: 'True' }] },
+    })
+    expect(katib?.level).toBeUndefined()
+  })
+
   it('fabricates no engine status for a third-party backups CRD', () => {
     expect(getResourceStatus('backups', { apiVersion: 'kubevirt.io/v1', status: {} })).toBeNull()
     expect(getResourceStatus('backups', { apiVersion: 'kubevirt.io/v1', status: { phase: 'Running' } }))
