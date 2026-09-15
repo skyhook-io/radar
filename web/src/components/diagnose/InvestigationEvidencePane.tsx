@@ -1634,6 +1634,7 @@ function EvidenceCard({
   // the story card as its one line.
   const storyExcludes = storyCard
     ? cardItems
+        .filter((item) => item.role === "rules_out")
         .map((item) => excludedByItem?.get(investigationCaseItemKey(item)))
         .filter((entry): entry is string => Boolean(entry))
     : [];
