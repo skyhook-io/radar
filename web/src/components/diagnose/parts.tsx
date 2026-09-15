@@ -2725,20 +2725,47 @@ function DiagnosisResult({
           )}
           <div id={stepsId}>
             <ol>
-              {remediationEntries.map((entry) => (
-                <li key={entry.index} value={entry.index + 1}>
-                  <Collapse
-                    open={
-                      !compactActions ||
-                      showAllSteps ||
-                      entry.index === primaryActionIndex
-                    }
-                    mountLazily
-                  >
-                    <div className="pt-2">{renderRemediationStep(entry)}</div>
-                  </Collapse>
-                </li>
-              ))}
+              {remediationEntries.map((entry) => {
+                const expanded =
+                  !compactActions ||
+                  showAllSteps ||
+                  entry.index === primaryActionIndex;
+                const step = typedSteps ? steps[entry.index] : undefined;
+                return (
+                  <li key={entry.index} value={entry.index + 1}>
+                    <Collapse open={expanded} mountLazily>
+                      <div className="pt-2">{renderRemediationStep(entry)}</div>
+                    </Collapse>
+                    {/* A folded step still shows what it is: its kind and
+                        first line, one row each, so the alternatives are
+                        readable before anyone opens them. */}
+                    {!expanded ? (
+                      <button
+                        type="button"
+                        data-step-folded={step?.kind ?? "step"}
+                        onClick={() => {
+                          setShowAllSteps(true);
+                          stepsReveal.revealAfterToggle(true);
+                        }}
+                        className="mt-1.5 flex w-full min-w-0 items-baseline gap-2 rounded-md px-2 py-1 text-left text-xs text-theme-text-secondary hover:bg-theme-hover"
+                      >
+                        {step ? (
+                          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+                            {STEP_KIND_LABEL[step.kind]}
+                          </span>
+                        ) : (
+                          <span className="shrink-0 text-[10px] font-semibold text-theme-text-tertiary">
+                            {entry.index + 1}
+                          </span>
+                        )}
+                        <span className="min-w-0 flex-1 truncate">
+                          {remediationHeadline(entry.text)}
+                        </span>
+                      </button>
+                    ) : null}
+                  </li>
+                );
+              })}
             </ol>
           </div>
           {compactActions && remediation.length > 1 ? (
@@ -3317,6 +3344,17 @@ const COMMAND_BINARIES = new Set([
  * never worth copying; a command is. The prompt asks the agent to wrap
  * commands in backticks, so this is the seam to read them from.
  */
+/** The first sentence of a step, without its markdown, for a one-line row. */
+export function remediationHeadline(step: string): string {
+  const firstLine =
+    step
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line && !line.startsWith("```")) ?? "";
+  const sentence = firstLine.split(/(?<=[.!?:])\s/)[0] ?? firstLine;
+  return sentence.replace(/`/g, "").replace(/\*\*/g, "");
+}
+
 export function remediationCommands(step: string): string[] {
   const commands: string[] = [];
   // One pass in reading order, so button N is the Nth command in the text.

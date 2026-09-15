@@ -633,6 +633,7 @@ export function InvestigationEvidencePane({
           onViewSource={onViewSource}
           spanFullRow
           compact={compact}
+          noteMode="chip"
         />
       );
     },
@@ -1472,6 +1473,7 @@ function EvidenceCard({
   prominence = "primary",
   compact = false,
   placedInStory = false,
+  noteMode = "full",
 }: {
   group: InvestigationEvidenceGroup;
   /**
@@ -1494,6 +1496,12 @@ function EvidenceCard({
   compact?: boolean;
   /** This card also appears inside the story above. */
   placedInStory?: boolean;
+  /**
+   * Inside the story the prose above the card is the agent's reading of it,
+   * so the note row keeps only the role chip (and an excluded hypothesis);
+   * repeating the sentence under the card doubled the text for nothing.
+   */
+  noteMode?: "full" | "chip";
 }) {
   const {
     onOpenResource,
@@ -1729,7 +1737,7 @@ function EvidenceCard({
           {cardItems.map((item) => (
             <AgentClaimNote
               key={item.index}
-              claim={item.claim}
+              claim={noteMode === "chip" ? "" : item.claim}
               role={item.role}
               excludes={excludedByItem?.get(investigationCaseItemKey(item))}
               className="pt-1.5"

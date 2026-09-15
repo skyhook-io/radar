@@ -94,6 +94,13 @@ describe("ResultCard under the story contract", () => {
       />,
     );
     expect(verifyRecommended).not.toContain("Apply…");
+
+    // Folded alternatives stay readable as one-line rows with their kind.
+    const compact = renderToStaticMarkup(
+      <ResultCard diagnosis={storyDiagnosis} section="actions" onApply={onApply} compactActions />,
+    );
+    expect(compact).toContain('data-step-folded="verify"');
+    expect(compact).toContain("Test the stored password with mongosh");
   });
 
   it("keeps the previous shape for a diagnosis without the story fields", () => {
