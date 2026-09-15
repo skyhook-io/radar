@@ -101,6 +101,9 @@ import { parseContextName } from "../../utils/context-name";
 import type { InvestigationSourceExcerpt } from "./investigationSourceFocus";
 import { storyHasPlacements } from "./investigationStory";
 
+/** Findings width from which the assessment and next steps sit beside the story. */
+const WIDE_FINDINGS_MIN_WIDTH = 820;
+
 const RECHECK_QUESTION =
   "Did the fix resolve the issue? Re-check the resource's current status and health now, and say whether it's healthy.";
 
@@ -1323,8 +1326,23 @@ export function InvestigationView({
     assessmentNeedsCurrentStateVerification ||
     hasEvidenceCollectedAfterAssessment;
   const showSplitWorkspace = maximized;
+  // With room to spare, Findings lays the assessment and next steps beside
+  // the story instead of above it, so the headline, the action and the
+  // evidence share one screen. Measured, not assumed: the panel is resizable
+  // and the maximized split leaves Findings anywhere from 500 to 1400 px.
+  const [wideFindings, setWideFindings] = useState(false);
+  useLayoutEffect(() => {
+    const element = evidenceContentRef.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width ?? 0;
+      setWideFindings(width >= WIDE_FINDINGS_MIN_WIDTH);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const splitGridClass = showSplitWorkspace
-    ? "@min-[1000px]/investigation:grid-cols-[minmax(360px,520px)_minmax(0,1fr)]"
+    ? "@min-[1000px]/investigation:grid-cols-[minmax(300px,380px)_minmax(0,1fr)]"
     : "";
   const splitTabClass = showSplitWorkspace
     ? "@min-[1000px]/investigation:hidden"
@@ -1477,6 +1495,53 @@ export function InvestigationView({
       )}
     </div>
   ) : null;
+
+  const nextStepsSection =
+        hasNextSteps && currentAssessment?.diagnosis ? (
+          <section
+            ref={nextStepsRef}
+            tabIndex={-1}
+            aria-labelledby={`${workspaceId}-next-steps`}
+            className="investigation-next-steps rounded-xl border p-4 outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+          >
+            <h2
+              id={`${workspaceId}-next-steps`}
+              className="text-lg font-semibold text-theme-text-primary"
+            >
+              {earlierPlan
+                ? "Earlier proposed steps"
+                : "Next steps"}
+            </h2>
+            <ResultCard
+              diagnosis={currentAssessment.diagnosis}
+              section="actions"
+              compactActions
+              actionNotice={
+                earlierPlan
+                  ? assessmentNeedsCurrentStateVerification
+                    ? "Proposed before the apply attempt. Current state has not been verified."
+                    : "Proposed before the latest evidence. Reassess before applying."
+                  : undefined
+              }
+              onApply={
+                canOfferInvestigationApply({
+                  currentAssessmentIdx,
+                  lastRemediationIdx,
+                  lastApplyAttemptIdx,
+                  localApplyAttemptAssessmentIdx,
+                  interactionsBlocked,
+                  hosted,
+                  hasNewerEvidence:
+                    hasEvidenceCollectedAfterAssessment,
+                })
+                  ? requestApply
+                  : undefined
+              }
+              animate={currentAssessment.animateResult !== false}
+              showDisclaimer={false}
+            />
+          </section>
+        ) : undefined;
 
   return (
     <div
@@ -1940,7 +2005,7 @@ export function InvestigationView({
             }}
             className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 [overflow-anchor:none] [scrollbar-gutter:stable]"
           >
-            <div ref={evidenceContentRef} className="min-w-0 space-y-6">
+            <div ref={evidenceContentRef} className="min-w-0 space-y-4">
               {rebuildingReplay ? (
                 <div className="flex min-h-28 flex-col items-center justify-center rounded-lg border border-dashed border-theme-border px-4 text-center">
                   {historyUnavailablePresentation &&
@@ -1965,10 +2030,22 @@ export function InvestigationView({
                   </p>
                 </div>
               ) : (
-                <>
+                <div
+                  data-findings-layout={wideFindings ? "wide" : "stacked"}
+                  className={
+                    wideFindings
+                      ? "grid grid-cols-[minmax(300px,360px)_minmax(0,1fr)] items-start gap-4"
+                      : "space-y-4"
+                  }
+                >
+                  <div
+                    className={
+                      wideFindings ? "sticky top-0 space-y-3" : "space-y-3"
+                    }
+                  >
                   <section
                     aria-labelledby={`${workspaceId}-assessment-heading`}
-                    className="investigation-assessment rounded-xl border p-4"
+                    className="investigation-assessment rounded-xl border p-3"
                   >
                     <div className="flex flex-wrap items-center gap-1.5">
                       <h2
@@ -2150,6 +2227,8 @@ export function InvestigationView({
                       </span>
                     </button>
                   ) : null}
+                  {wideFindings ? nextStepsSection : null}
+                  </div>
 
                   <InvestigationEvidencePane
                     projection={projection}
@@ -2179,55 +2258,10 @@ export function InvestigationView({
                     onOpenTimeline={stale ? undefined : onOpenTimeline}
                     revealRequest={evidenceRevealRequest}
                     onRevealReady={revealEvidenceSource}
-                    afterEvidence={
-                      hasNextSteps && currentAssessment?.diagnosis ? (
-                        <section
-                          ref={nextStepsRef}
-                          tabIndex={-1}
-                          aria-labelledby={`${workspaceId}-next-steps`}
-                          className="investigation-next-steps rounded-xl border p-4 outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-                        >
-                          <h2
-                            id={`${workspaceId}-next-steps`}
-                            className="text-lg font-semibold text-theme-text-primary"
-                          >
-                            {earlierPlan
-                              ? "Earlier proposed steps"
-                              : "Next steps"}
-                          </h2>
-                          <ResultCard
-                            diagnosis={currentAssessment.diagnosis}
-                            section="actions"
-                            compactActions
-                            actionNotice={
-                              earlierPlan
-                                ? assessmentNeedsCurrentStateVerification
-                                  ? "Proposed before the apply attempt. Current state has not been verified."
-                                  : "Proposed before the latest evidence. Reassess before applying."
-                                : undefined
-                            }
-                            onApply={
-                              canOfferInvestigationApply({
-                                currentAssessmentIdx,
-                                lastRemediationIdx,
-                                lastApplyAttemptIdx,
-                                localApplyAttemptAssessmentIdx,
-                                interactionsBlocked,
-                                hosted,
-                                hasNewerEvidence:
-                                  hasEvidenceCollectedAfterAssessment,
-                              })
-                                ? requestApply
-                                : undefined
-                            }
-                            animate={currentAssessment.animateResult !== false}
-                            showDisclaimer={false}
-                          />
-                        </section>
-                      ) : undefined
-                    }
+                    afterEvidence={wideFindings ? undefined : nextStepsSection}
+                    storyDefaultOpen={wideFindings}
                   />
-                </>
+                </div>
               )}
             </div>
           </div>

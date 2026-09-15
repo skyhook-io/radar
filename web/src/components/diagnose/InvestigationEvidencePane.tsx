@@ -374,6 +374,7 @@ export function InvestigationEvidencePane({
   alsoSelectedGroupIds,
   investigationCase,
   story,
+  storyDefaultOpen = false,
   collecting,
   animateGroupIds,
   onViewSource,
@@ -401,6 +402,8 @@ export function InvestigationEvidencePane({
    * which keep the previous layout.
    */
   story?: { report: string; evidence?: DiagnosisEvidenceItem[] };
+  /** Open the story fully instead of the bounded preview — when the layout has room for it. */
+  storyDefaultOpen?: boolean;
   collecting: boolean;
   animateGroupIds: ReadonlySet<string>;
   onViewSource: (
@@ -763,7 +766,7 @@ export function InvestigationEvidencePane({
   const content = (
     <section
       aria-labelledby="investigation-radar-evidence"
-      className="investigation-evidence @container/evidence space-y-4 rounded-xl border p-4"
+      className="investigation-evidence @container/evidence space-y-3 rounded-xl border p-3"
     >
       <span className="sr-only" role="status" aria-live="polite">
         {projection.limitations.length > 0
@@ -834,6 +837,7 @@ export function InvestigationEvidencePane({
               renderPlacement={renderStoryPlacement}
               onReveal={revealStoryTarget}
               onViewSource={(sourceId) => onViewSource(sourceId)}
+              defaultOpen={storyDefaultOpen}
             />
           </div>
         ) : null}
