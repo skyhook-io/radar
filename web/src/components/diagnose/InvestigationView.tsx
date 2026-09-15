@@ -2018,10 +2018,10 @@ export function InvestigationView({
                   </p>
                 </div>
               ) : (
-                <div className="max-w-[900px] space-y-4">
+                <div className="space-y-4">
                   {/* One column, one reading order: assessment, analysis, next
                       steps. The page already holds four columns; Findings is
-                      not a fifth. Capped so prose stays readable on a wide pane. */}
+                      not a fifth, and it fills the pane it is given. */}
                   <div className="space-y-3">
                   <section
                     aria-labelledby={`${workspaceId}-assessment-heading`}
