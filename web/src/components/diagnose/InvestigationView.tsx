@@ -2038,7 +2038,7 @@ export function InvestigationView({
                   data-findings-layout={wideFindings ? "wide" : "stacked"}
                   className={
                     wideFindings
-                      ? "grid grid-cols-[minmax(300px,360px)_minmax(0,1fr)] items-start gap-4"
+                      ? "grid grid-cols-[minmax(340px,min(42%,560px))_minmax(0,1fr)] items-start gap-4"
                       : "space-y-4"
                   }
                 >

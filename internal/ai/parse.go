@@ -241,7 +241,15 @@ func clampSummary(value string, limit int) string {
 	}
 	runes := []rune(value)[:limit]
 	text := string(runes)
-	if end := strings.LastIndexAny(text, ".!?"); end > limit/2 {
+	// A sentence ends at punctuation followed by a space; "6.5" and
+	// "missing.conf" are not boundaries.
+	end := -1
+	for _, mark := range []string{". ", "! ", "? "} {
+		if i := strings.LastIndex(text, mark); i > end {
+			end = i
+		}
+	}
+	if end > limit/2 {
 		return strings.TrimSpace(text[:end+1])
 	}
 	if space := strings.LastIndex(text, " "); space > limit/2 {

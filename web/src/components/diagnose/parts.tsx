@@ -2653,8 +2653,12 @@ function DiagnosisResult({
             )}
           </span>
           <div className="min-w-0 flex-1">
-            {(isRec || step) && (
-              <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            {/* Labels, then the action cluster pushed to the row's end, then
+                the reason on its own line — so the step text below spans the
+                card instead of wrapping beside the buttons. */}
+            <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+              {(isRec || step) && (
+                <>
                 {step ? (
                   <span className="text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
                     {STEP_KIND_LABEL[step.kind]}
@@ -2666,13 +2670,36 @@ function DiagnosisResult({
                     Recommended
                   </span>
                 )}
-                {isRec && diagnosis.recommendedReason && (
-                  <span className="basis-full text-[11px] leading-snug text-theme-text-tertiary">
-                    {diagnosis.recommendedReason}
-                  </span>
+                </>
+              )}
+              <div className="ml-auto flex shrink-0 items-center gap-0.5">
+                {canApply && isRec && (
+                  <button
+                    onClick={() => onApply!(r)}
+                    className="inline-flex items-center gap-1 rounded-md border border-accent/40 bg-accent/10 px-2 py-1 text-xs font-medium text-accent transition-colors hover:bg-accent/20"
+                  >
+                    <Wrench className="h-3 w-3" />
+                    Apply…
+                  </button>
                 )}
+                {remediationCommands(r).map((command, c, all) => (
+                  <CopyButton
+                    key={c}
+                    text={command}
+                    label={
+                      all.length > 1
+                        ? `Copy command ${c + 1} of step ${i + 1}`
+                        : `Copy command from step ${i + 1}`
+                    }
+                  />
+                ))}
               </div>
-            )}
+              {isRec && diagnosis.recommendedReason && (
+                <span className="basis-full text-[11px] leading-snug text-theme-text-tertiary">
+                  {diagnosis.recommendedReason}
+                </span>
+              )}
+            </div>
             <AIMarkdown className="max-w-[100ch] text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_pre]:my-1.5">
               {r}
             </AIMarkdown>
@@ -2684,36 +2711,6 @@ function DiagnosisResult({
                 Only if {step.precondition.replace(/^(if|when|once)\s+/i, "")}
               </p>
             ) : null}
-          </div>
-          {/* Action cluster: compact Apply (recommended = subtly
-                        filled, others = ghost) sits next to Copy so each row's
-                        actions stay together. The ellipsis signals a confirm
-                        dialog follows — it doesn't apply immediately. */}
-          <div className="flex shrink-0 items-center gap-0.5">
-            {canApply && isRec && (
-              <button
-                onClick={() => onApply!(r)}
-                className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-accent transition-colors ${
-                  isRec
-                    ? "border border-accent/40 bg-accent/10 hover:bg-accent/20"
-                    : "hover:bg-accent/10"
-                }`}
-              >
-                <Wrench className="h-3 w-3" />
-                Apply…
-              </button>
-            )}
-            {remediationCommands(r).map((command, c, all) => (
-              <CopyButton
-                key={c}
-                text={command}
-                label={
-                  all.length > 1
-                    ? `Copy command ${c + 1} of step ${i + 1}`
-                    : `Copy command from step ${i + 1}`
-                }
-              />
-            ))}
           </div>
         </div>
       </div>

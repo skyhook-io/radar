@@ -68,6 +68,14 @@ func TestDiagnosisFromText_VerdictBlockDividesNotesFromStory(t *testing.T) {
 	}
 }
 
+func TestClampSummary_DoesNotCutAtADecimalPoint(t *testing.T) {
+	first := strings.Repeat("word ", 40) + "available."
+	got := clampSummary(first+" Restarting has been failing for about 6.5 hours.", 240)
+	if !strings.HasSuffix(got, "available.") {
+		t.Fatalf("clamp should back up to the previous sentence, got %q", got)
+	}
+}
+
 func TestDiagnosisFromText_RecommendedIndexFollowsTheStepTheAgentNamed(t *testing.T) {
 	// The first step is malformed and dropped; the agent's index 2 names the
 	// surviving mitigate step, which is now first.
