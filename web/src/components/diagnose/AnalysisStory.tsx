@@ -362,20 +362,33 @@ export function AnalysisStory({
         ) : null}
         <div className="space-y-2">{preview}</div>
         {teaser && teaser.kind === "prose" ? (
+          // The inert inner block keeps the teaser out of the tab order and
+          // hit-testing; the click lands on this wrapper instead.
           <div
-            aria-hidden
-            inert
             data-story-teaser
-            className="relative mt-2 max-h-12 cursor-pointer overflow-hidden"
+            className="relative mt-2 cursor-pointer"
             onClick={() => setOpen(true)}
           >
-            <Markdown
-              className={clsx(STORY_PROSE_CLASS, "[&_p]:line-clamp-2")}
-              linkRenderer={() => <span />}
-            >
-              {teaser.markdown}
-            </Markdown>
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-[var(--color-investigation-evidence)] to-transparent" />
+            <div aria-hidden inert className="relative max-h-12 overflow-hidden">
+              <Markdown
+                className={clsx(STORY_PROSE_CLASS, "[&_p]:line-clamp-2")}
+                linkRenderer={(href) => {
+                  const index = storyReferenceIndex(href);
+                  const resolution =
+                    index === undefined ? undefined : story.byIndex.get(index);
+                  return (
+                    <span>
+                      {resolution && resolution.kind !== "lost"
+                        ? (resolution.target.item.observation?.title ?? "")
+                        : ""}
+                    </span>
+                  );
+                }}
+              >
+                {teaser.markdown}
+              </Markdown>
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-[var(--color-investigation-evidence)] to-transparent" />
+            </div>
           </div>
         ) : null}
         {after.length > 0 || trailing ? (
