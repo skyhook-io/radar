@@ -324,7 +324,11 @@ export function canaryStepTemplateRefs(step: any): Array<{ name: string; cluster
 /** Ordered phase list for a blueGreen Rollout — there's no steps[] array to
  *  iterate, so this derives an equivalent sequence from strategy config
  *  crossed with live status. */
-export function blueGreenPhases(data: any): Array<{ label: string; state: 'completed' | 'current' | 'pending' }> {
+export function blueGreenPhases(data: any): Array<{
+  label: string
+  state: 'completed' | 'current' | 'pending'
+  analysis?: { name?: string; status?: string }
+}> {
   const spec = data?.spec?.strategy?.blueGreen || {}
   const status = data?.status || {}
   const bg = status.blueGreen || {}
@@ -347,12 +351,16 @@ export function blueGreenPhases(data: any): Array<{ label: string; state: 'compl
   const previewScaledUp =
     !!bg.scaleUpPreviewCheckPoint || !!bg.prePromotionAnalysisRunStatus || status.phase === 'Paused' || promoted
 
-  const steps: Array<{ label: string; done: boolean }> = [
+  const steps: Array<{ label: string; done: boolean; analysis?: { name?: string; status?: string } }> = [
     { label: 'Preview scaled up', done: previewScaledUp },
   ]
 
   if (spec.prePromotionAnalysis) {
-    steps.push({ label: 'Pre-promotion analysis', done: bg.prePromotionAnalysisRunStatus?.status === 'Successful' || promoted })
+    steps.push({
+      label: 'Pre-promotion analysis',
+      done: bg.prePromotionAnalysisRunStatus?.status === 'Successful' || promoted,
+      analysis: bg.prePromotionAnalysisRunStatus,
+    })
   }
 
   steps.push({
@@ -368,17 +376,21 @@ export function blueGreenPhases(data: any): Array<{ label: string; state: 'compl
   steps.push({ label: 'Active cutover', done: promoted })
 
   if (spec.postPromotionAnalysis) {
-    steps.push({ label: 'Post-promotion analysis', done: bg.postPromotionAnalysisRunStatus?.status === 'Successful' })
+    steps.push({
+      label: 'Post-promotion analysis',
+      done: bg.postPromotionAnalysisRunStatus?.status === 'Successful',
+      analysis: bg.postPromotionAnalysisRunStatus,
+    })
   }
 
   let currentAssigned = false
   return steps.map((s) => {
-    if (s.done) return { label: s.label, state: 'completed' as const }
+    if (s.done) return { label: s.label, state: 'completed' as const, analysis: s.analysis }
     if (!currentAssigned) {
       currentAssigned = true
-      return { label: s.label, state: 'current' as const }
+      return { label: s.label, state: 'current' as const, analysis: s.analysis }
     }
-    return { label: s.label, state: 'pending' as const }
+    return { label: s.label, state: 'pending' as const, analysis: s.analysis }
   })
 }
 
@@ -707,7 +719,11 @@ export function RolloutRenderer({ data, onNavigate, capabilities, onAction, pend
 
       {!isCanary && blueGreenStrategy && blueGreenPhaseList.length > 0 && (
         <Section title="Progression" defaultExpanded>
-          <BlueGreenTimeline phases={blueGreenPhaseList} />
+          <BlueGreenTimeline
+            phases={blueGreenPhaseList}
+            onNavigate={onNavigate}
+            namespace={data?.metadata?.namespace}
+          />
         </Section>
       )}
 
