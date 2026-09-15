@@ -2247,12 +2247,15 @@ export function AssessmentHeadline({
             ))}
           </ul>
         </div>
-      ) : tone !== "healthy" && diagnosis.certainty !== "established" ? (
+      ) : tone !== "healthy" ? (
         <p
           data-assessment-unresolved="none"
           className="text-[11px] text-theme-text-tertiary"
         >
-          The agent listed nothing unresolved.
+          The agent listed nothing unresolved
+          {diagnosis.certainty === "established"
+            ? " and calls the cause established."
+            : "."}
         </p>
       ) : null}
     </div>

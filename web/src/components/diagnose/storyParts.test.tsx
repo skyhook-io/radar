@@ -43,7 +43,7 @@ describe("ResultCard under the story contract", () => {
     expect(html).not.toContain("[[radar:evidence=0]]");
   });
 
-  it("says so when the agent listed nothing unresolved on a non-established verdict", () => {
+  it("says so when the agent listed nothing unresolved, established or not", () => {
     const html = renderToStaticMarkup(
       <ResultCard
         diagnosis={{ ...storyDiagnosis, unresolved: [] }}
@@ -57,7 +57,7 @@ describe("ResultCard under the story contract", () => {
         section="conclusion"
       />,
     );
-    expect(established).not.toContain("The agent listed nothing unresolved.");
+    expect(established).toContain("The agent listed nothing unresolved and calls the cause established.");
   });
 
   it("renders typed steps with their kind and precondition and applies only a mitigate step", () => {
