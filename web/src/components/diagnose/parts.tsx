@@ -62,7 +62,7 @@ import type {
 } from "./investigationCase";
 import { AgentClaimNote } from "./AgentCase";
 import { Badge } from "@skyhook-io/k8s-ui";
-import { storyPlainText } from "./investigationStory";
+import { diagnosisHasStoryShape, storyPlainText } from "./investigationStory";
 
 import { useDisclosureReveal } from "./useDisclosureReveal";
 
@@ -2555,7 +2555,7 @@ function DiagnosisResult({
 }) {
   // The story contract: a summary headline above, the story rendered by the
   // host (or inline as plain prose), typed steps below.
-  const storyShape = !!diagnosis.summary?.trim();
+  const storyShape = diagnosisHasStoryShape(diagnosis);
   const analysisText =
     storyShape && storyInline ? storyPlainText(diagnosis.report) : diagnosis.report;
   const showAnalysisDisclosure = !storyShape || storyInline;

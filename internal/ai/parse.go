@@ -120,7 +120,8 @@ func diagnosisFromText(text string) Diagnosis {
 				}
 				d.Unresolved = append(d.Unresolved, clampRunes(item, maxDiagnosisUnresolvedRune))
 			}
-			d.Steps = parseSteps(parsed.Steps)
+			var stepOrigins []int
+			d.Steps, stepOrigins = parseStepsIndexed(parsed.Steps)
 			if len(d.Steps) > 0 {
 				// One action list: the typed steps are authoritative and the
 				// legacy remediation array is derived from them, so Apply,
@@ -156,13 +157,26 @@ func diagnosisFromText(text string) Diagnosis {
 			// steps only at one Apply may perform: a mitigation, and one whose
 			// applicability is not itself in question — a step that is right
 			// "only if" something unverified holds is not a one-click fix.
-			if parsed.RecommendedIndex != nil && *parsed.RecommendedIndex >= 1 &&
-				*parsed.RecommendedIndex <= len(d.Remediation) &&
-				(len(d.Steps) == 0 ||
-					(d.Steps[*parsed.RecommendedIndex-1].Kind == StepMitigate &&
-						d.Steps[*parsed.RecommendedIndex-1].Precondition == "")) {
-				d.RecommendedIndex = parsed.RecommendedIndex
-				d.RecommendedReason = strings.TrimSpace(parsed.RecommendedReason)
+			// The agent's index counts the steps it wrote, including any the
+			// parser dropped; it is translated to the surviving list and cleared
+			// when the entry it named did not survive, so Apply never runs a
+			// neighbour of the designated step.
+			if parsed.RecommendedIndex != nil && *parsed.RecommendedIndex >= 1 {
+				idx := *parsed.RecommendedIndex
+				if len(d.Steps) > 0 {
+					idx = 0
+					for pos, origin := range stepOrigins {
+						if origin == *parsed.RecommendedIndex-1 {
+							idx = pos + 1
+						}
+					}
+				}
+				if idx >= 1 && idx <= len(d.Remediation) &&
+					(len(d.Steps) == 0 ||
+						(d.Steps[idx-1].Kind == StepMitigate && d.Steps[idx-1].Precondition == "")) {
+					d.RecommendedIndex = &idx
+					d.RecommendedReason = strings.TrimSpace(parsed.RecommendedReason)
+				}
 			}
 		}
 	}
@@ -176,8 +190,15 @@ func diagnosisFromText(text string) Diagnosis {
 // parseSteps reads the typed next steps. A step with an unknown kind or no
 // text is dropped rather than guessed at; the cap cuts, it does not reject.
 func parseSteps(raw json.RawMessage) []DiagnosisStep {
+	steps, _ := parseStepsIndexed(raw)
+	return steps
+}
+
+// parseStepsIndexed also returns, for each kept step, its index in the
+// agent's original array, so an index the agent wrote can be translated.
+func parseStepsIndexed(raw json.RawMessage) ([]DiagnosisStep, []int) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return nil
+		return nil, nil
 	}
 	var parsed []struct {
 		Text         string `json:"text"`
@@ -185,10 +206,11 @@ func parseSteps(raw json.RawMessage) []DiagnosisStep {
 		Precondition string `json:"precondition"`
 	}
 	if json.Unmarshal(raw, &parsed) != nil {
-		return nil
+		return nil, nil
 	}
 	var steps []DiagnosisStep
-	for _, item := range parsed {
+	var origins []int
+	for origin, item := range parsed {
 		if len(steps) == maxDiagnosisSteps {
 			break
 		}
@@ -205,8 +227,9 @@ func parseSteps(raw json.RawMessage) []DiagnosisStep {
 			Kind:         kind,
 			Precondition: clampRunes(strings.TrimSpace(item.Precondition), maxDiagnosisPreconditRune),
 		})
+		origins = append(origins, origin)
 	}
-	return steps
+	return steps, origins
 }
 
 // clampSummary keeps a headline whole: an over-long summary is cut at the

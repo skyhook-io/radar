@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
 import { AlertTriangle, FileSearch } from "lucide-react";
 import { CollapseChevron } from "@skyhook-io/k8s-ui";
@@ -53,15 +53,19 @@ export function resolveStoryPlacements(
 ): {
   segments: StorySegment[];
   byIndex: Map<number, StoryPlacementResolution>;
+  placedAt: Map<number, number>;
   placedCount: number;
   lostItems: number;
 } {
   const { segments } = splitStory(report);
   const byIndex = new Map<number, StoryPlacementResolution>();
+  // The segment position that renders each placed index's card; a repeated
+  // block marker for the same index is a reference back to it, not a second card.
+  const placedAt = new Map<number, number>();
   const placedObservations = new Set<string>();
   const lostIndexes = new Set<number>();
   let placedCount = 0;
-  const resolve = (index: number, block: boolean) => {
+  const resolve = (index: number, block: boolean, position = -1) => {
     const existing = byIndex.get(index);
     if (existing) {
       if (existing.kind === "placed" || existing.kind === "lost") return;
@@ -83,21 +87,22 @@ export function resolveStoryPlacements(
     ) {
       placedObservations.add(observationKey);
       placedCount += 1;
+      placedAt.set(index, position);
       byIndex.set(index, { kind: "placed", target: resolved });
       return;
     }
     if (!existing) byIndex.set(index, { kind: "reference", target: resolved });
   };
-  for (const segment of segments) {
+  segments.forEach((segment, position) => {
     if (segment.kind === "placement") {
-      resolve(segment.index, true);
+      resolve(segment.index, true, position);
     } else {
       for (const match of segment.markdown.matchAll(/#radar-evidence-(\d+)\)/g)) {
         resolve(Number(match[1]), false);
       }
     }
-  }
-  return { segments, byIndex, placedCount, lostItems: lostIndexes.size };
+  });
+  return { segments, byIndex, placedAt, placedCount, lostItems: lostIndexes.size };
 }
 
 const LOSS_COPY: Record<Exclude<StoryPlacementLoss, object>, string> = {
@@ -211,6 +216,11 @@ export function AnalysisStory({
   className?: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  // The wide layout is measured after mount; when it asks for the story open,
+  // open it. Narrowing never closes what the reader opened.
+  useEffect(() => {
+    if (defaultOpen) setOpen(true);
+  }, [defaultOpen]);
   const regionId = useId();
   const story = useMemo(
     () => resolveStoryPlacements(report, resolveItem),
@@ -242,7 +252,7 @@ export function AnalysisStory({
       ? firstPlacedAt - 1
       : firstPlacedAt >= 0
         ? firstPlacedAt
-        : Math.max(previewEnd, 0);
+        : Math.max(firstProseAt, 0);
   const hiddenSegments =
     story.segments.length - (previewEnd - previewStart + 1);
   const foldable = hiddenSegments > 0 || previewStart > 0;
@@ -287,7 +297,10 @@ export function AnalysisStory({
         </div>
       );
     }
-    if (resolution.kind === "reference") {
+    if (
+      resolution.kind === "reference" ||
+      story.placedAt.get(segment.index) !== position
+    ) {
       return (
         <div key={`ref-${position}`}>
           <ReferenceChip target={resolution.target} onReveal={onReveal} />

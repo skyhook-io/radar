@@ -68,6 +68,27 @@ func TestDiagnosisFromText_VerdictBlockDividesNotesFromStory(t *testing.T) {
 	}
 }
 
+func TestDiagnosisFromText_RecommendedIndexFollowsTheStepTheAgentNamed(t *testing.T) {
+	// The first step is malformed and dropped; the agent's index 2 names the
+	// surviving mitigate step, which is now first.
+	d := diagnosisFromText(caseJSON(`"root_cause":"x","steps":[{"text":"","kind":"mitigate"},{"text":"roll back","kind":"mitigate"},{"text":"check","kind":"verify"}],"recommended_index":2`))
+	if d.RecommendedIndex == nil || *d.RecommendedIndex != 1 || d.Remediation[0] != "roll back" {
+		t.Fatalf("recommended index not translated: %v %v", d.RecommendedIndex, d.Remediation)
+	}
+	// The agent's index names the dropped entry: no recommendation.
+	d = diagnosisFromText(caseJSON(`"root_cause":"x","steps":[{"text":"","kind":"mitigate"},{"text":"roll back","kind":"mitigate"}],"recommended_index":1`))
+	if d.RecommendedIndex != nil {
+		t.Fatalf("a dropped step must not leave a recommendation on its neighbour: %v", *d.RecommendedIndex)
+	}
+}
+
+func TestStripPlacementMarkers_HandlesCompact(t *testing.T) {
+	got := stripPlacementMarkers("A.\n\n[[radar:evidence=0|compact]]\n\nB [[radar:evidence=1]].")
+	if strings.Contains(got, "radar:evidence") {
+		t.Fatalf("marker leaked into the explanation source: %q", got)
+	}
+}
+
 func TestDiagnosisFromText_SubjectMayNameAListingWithoutAnEntry(t *testing.T) {
 	ref := testEvidenceRef('a', 'b')
 	d := diagnosisFromText(caseJSON(`"root_cause":"x","evidence":[{"ref":"` + ref + `","role":"context","claim":"c","subject":{"kind":"ConfigMap","namespace":"shop","observation":"resource"}}]`))

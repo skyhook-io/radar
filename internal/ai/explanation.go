@@ -25,7 +25,10 @@ func (r *Run) assessmentForExplanation(seq int) (*Diagnosis, error) {
 		if turn.Type != "turn" {
 			continue
 		}
-		if turn.Apply || turn.ExplainAssessment != 0 || (turn.Question != "" && !turn.Verify) {
+		// A question whose verdict revised the assessment is the assessment
+		// Findings shows, so it can be explained like the initial one.
+		if turn.Apply || turn.ExplainAssessment != 0 ||
+			(turn.Question != "" && !turn.Verify && !ev.Diag.RevisesAssessment) {
 			return nil, ErrInvalidExplanation
 		}
 		assessment := *ev.Diag
@@ -36,7 +39,7 @@ func (r *Run) assessmentForExplanation(seq int) (*Diagnosis, error) {
 
 // placementMarkerRe matches the story's [[radar:evidence=N]] placements. They
 // mean nothing to a model reading the story back, so prompts strip them.
-var placementMarkerRe = regexp.MustCompile(`\[\[radar:evidence=\d+\]\]`)
+var placementMarkerRe = regexp.MustCompile(`\[\[radar:evidence=\d+(?:\|compact)?\]\]`)
 
 func stripPlacementMarkers(report string) string {
 	return strings.TrimSpace(placementMarkerRe.ReplaceAllString(report, ""))

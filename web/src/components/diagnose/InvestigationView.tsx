@@ -30,6 +30,7 @@ import {
   investigationEvidenceConflictsWithHealthy,
   investigationHealthConflictExplainedBy,
   investigationAssessmentTurnIndexes,
+  investigationIsAssessmentTurn,
   investigationSettledAnswerTurnIndexes,
   investigationEndedBeforeConclusion,
   type InvestigationHistoryUnavailableState,
@@ -100,7 +101,7 @@ import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 import { formatInvestigationTarget } from "./target";
 import { parseContextName } from "../../utils/context-name";
 import type { InvestigationSourceExcerpt } from "./investigationSourceFocus";
-import { storyHasPlacements } from "./investigationStory";
+import { diagnosisHasStoryShape } from "./investigationStory";
 
 /** Findings width from which the assessment and next steps sit beside the story. */
 const WIDE_FINDINGS_MIN_WIDTH = 820;
@@ -885,11 +886,10 @@ export function InvestigationView({
   let lastApplyAttemptIdx = -1;
   let lastApplyOutcome: Turn["applyOutcome"];
   turns.forEach((t, i) => {
+    // A revising follow-up is an assessment turn too; its steps are the ones
+    // Findings offers.
     if (
-      t.status === "done" &&
-      !t.apply &&
-      !t.explainAssessment &&
-      (!t.question || t.verify) &&
+      investigationIsAssessmentTurn(t) &&
       (t.diagnosis?.remediation?.length ?? 0) > 0
     )
       lastRemediationIdx = i;
@@ -983,10 +983,7 @@ export function InvestigationView({
   // its own case, its own story. Earlier assessments stay complete in
   // Activity; answers that did not revise the assessment stay there too.
   const paneResolution = rootCauseEvidenceResolution;
-  const storyShape =
-    !!currentAssessment?.diagnosis &&
-    (!!currentAssessment.diagnosis.summary ||
-      storyHasPlacements(currentAssessment.diagnosis.report));
+  const storyShape = diagnosisHasStoryShape(currentAssessment?.diagnosis);
   const visibleEvidenceGroupIds = useMemo(
     () =>
       new Set(
@@ -2284,9 +2281,11 @@ export function InvestigationView({
         context={run.context}
         fix={pendingFix}
         precondition={
-          currentAssessment?.diagnosis?.steps?.find(
-            (step) => step.text === pendingFix,
-          )?.precondition
+          currentAssessment?.diagnosis?.recommendedIndex
+            ? currentAssessment.diagnosis.steps?.[
+                currentAssessment.diagnosis.recommendedIndex - 1
+              ]?.precondition
+            : undefined
         }
         managedBy={run.managedBy}
         confidence={turns[lastRemediationIdx]?.diagnosis?.confidence}

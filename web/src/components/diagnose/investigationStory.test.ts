@@ -46,6 +46,13 @@ describe("splitStory", () => {
     expect(prose).toContain("[[[radar:evidence=3]]](#radar-evidence-3)");
   });
 
+  it("keeps indented-code markers and unbalanced closing fences literal", () => {
+    const indented = splitStory("Text.\n\n    [[radar:evidence=0]]");
+    expect(indented.segments.every((s) => s.kind === "prose")).toBe(true);
+    const fence = splitStory("```\n````not-a-close\n[[radar:evidence=0]]\n```\n\n[[radar:evidence=1]]");
+    expect(fence.segments.filter((s) => s.kind === "placement").map((s) => s.kind === "placement" && s.index)).toEqual([1]);
+  });
+
   it("reads the compact variant as a placement flag", () => {
     const { segments } = splitStory("A.\n[[radar:evidence=2|compact]]\nB [[radar:evidence=2|compact]].");
     expect(segments[1]).toEqual({ kind: "placement", index: 2, compact: true });

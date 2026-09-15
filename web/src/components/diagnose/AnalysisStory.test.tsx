@@ -46,6 +46,25 @@ describe("resolveStoryPlacements", () => {
     expect(story.lostItems).toBe(0);
   });
 
+  it("renders one card for a repeated block marker and keeps the paragraph when nothing places", () => {
+    const repeated = resolveStoryPlacements(
+      "[[radar:evidence=0]]\n\nAgain:\n\n[[radar:evidence=0]]",
+      resolver({ 0: target(0, "a") }),
+    );
+    expect(repeated.placedAt.get(0)).toBe(0);
+    const html = renderToStaticMarkup(
+      <AnalysisStory
+        report={"Opening paragraph.\n\n[[radar:evidence=2]]\n\nMore."}
+        resolveItem={resolver({ 2: "unlinked" })}
+        renderPlacement={() => null}
+        onReveal={vi.fn()}
+        defaultOpen={false}
+      />,
+    );
+    expect(html).toContain("Opening paragraph.");
+    expect(html).toContain('data-story-lost-support="unlinked"');
+  });
+
   it("caps placed cards and reports every distinct lost item once", () => {
     const markers = Array.from({ length: 8 }, (_, i) => `[[radar:evidence=${i}]]`).join(
       "\n\n",

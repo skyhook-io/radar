@@ -12,8 +12,13 @@
  */
 
 export const STORY_PLACEMENT_RE = /\[\[radar:evidence=(\d+)(?:\|(compact))?\]\]/g;
-const BLOCK_PLACEMENT_RE = /^\s*\[\[radar:evidence=(\d+)(?:\|(compact))?\]\]\s*$/;
+// Four or more leading spaces is Markdown indented code, so a marker there
+// stays literal like one inside a fence.
+const BLOCK_PLACEMENT_RE = /^\s{0,3}\[\[radar:evidence=(\d+)(?:\|(compact))?\]\]\s*$/;
 const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
+// A closing fence is bare: same character, at least the opening length, and
+// nothing but whitespace after it. "````not-a-close" is still code.
+const FENCE_CLOSE_RE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
 
 /** Maximum results placed as cards; later placements become references. */
 export const MAX_STORY_PLACEMENTS = 6;
@@ -85,7 +90,8 @@ export function splitStory(report: string): StorySplit {
     const fenceMatch = FENCE_RE.exec(line);
     if (fence) {
       prose.push(line);
-      if (fenceMatch && fenceMatch[1].startsWith(fence[0]) && fenceMatch[1].length >= fence.length) {
+      const close = FENCE_CLOSE_RE.exec(line);
+      if (close && close[1].startsWith(fence[0]) && close[1].length >= fence.length) {
         fence = undefined;
       }
       continue;
@@ -126,6 +132,14 @@ export function splitStory(report: string): StorySplit {
 /** The story without any markers, for copying and for models reading it back. */
 export function storyPlainText(report: string): string {
   return report.replace(STORY_PLACEMENT_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** The one definition of "renders as a story": a summary headline or any marker. */
+export function diagnosisHasStoryShape(
+  diagnosis: { summary?: string; report?: string } | null | undefined,
+): boolean {
+  if (!diagnosis) return false;
+  return !!diagnosis.summary?.trim() || storyHasPlacements(diagnosis.report);
 }
 
 /** True when a report carries the story contract (any placement or reference). */

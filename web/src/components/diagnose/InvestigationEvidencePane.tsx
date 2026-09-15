@@ -866,7 +866,7 @@ export function InvestigationEvidencePane({
                 .join(" · ") + " · nothing here is chosen by the agent"
             }
             groups={[]}
-            totalCount={Math.max(capturedTotal, 1)}
+            totalCount={capturedTotal}
             animateGroupIds={animateGroupIds}
             onViewSource={onViewSource}
             open={resultsOpen || placedCount === 0}
