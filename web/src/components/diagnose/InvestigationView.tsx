@@ -2079,6 +2079,13 @@ export function InvestigationView({
                         section="conclusion"
                         animate={currentAssessment.animateResult !== false}
                         showDisclaimer={false}
+                        revisedAfter={
+                          currentAssessment.question &&
+                          !currentAssessment.verify &&
+                          hasMultipleAssessments
+                            ? currentAssessment.question
+                            : undefined
+                        }
                         coverageLimited={currentAssessmentCoverageLimited}
                         evidenceConflict={currentAssessmentEvidenceConflict}
                         evidenceConflictExplainedBy={
