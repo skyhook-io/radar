@@ -61,6 +61,7 @@ import type {
   InvestigationCaseResolution,
 } from "./investigationCase";
 import { AgentClaimNote } from "./AgentCase";
+import type { InvestigationHealthSignal } from "./investigationState";
 import { Badge } from "@skyhook-io/k8s-ui";
 import { diagnosisHasStoryShape, storyPlainText } from "./investigationStory";
 
@@ -1031,6 +1032,7 @@ export function ApplyDialog({
   resourceLabel,
   context,
   fix,
+  reason,
   precondition,
   managedBy,
   confidence,
@@ -1042,6 +1044,8 @@ export function ApplyDialog({
   resourceLabel: string;
   context: string;
   fix?: string;
+  /** The agent's one-clause case for this step, repeated at the decision. */
+  reason?: string;
   /** The condition the agent attached to this step; shown before the operator confirms. */
   precondition?: string;
   managedBy?: string; // GitOps/Helm owner of the resource, if any
@@ -1105,6 +1109,12 @@ export function ApplyDialog({
             <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary [&_pre]:my-1.5 [&_pre]:whitespace-pre-wrap [&_pre_code]:whitespace-pre-wrap">
               {fixText}
             </AIMarkdown>
+            {reason ? (
+              <p data-apply-reason className="mt-2 text-sm text-theme-text-secondary">
+                <span className="font-medium text-theme-text-primary">Why this step:</span>{" "}
+                {reason}
+              </p>
+            ) : null}
             {precondition ? (
               <p
                 data-apply-precondition
@@ -1975,6 +1985,8 @@ export function ResultCard({
   readOnlyAssessment = false,
   revisedAfter,
   assessmentLimits,
+  healthSignals,
+  onRevealSource,
 }: {
   diagnosis: Diagnosis;
   onApply?: (fix: string) => void;
@@ -1995,6 +2007,8 @@ export function ResultCard({
   revisedAfter?: string;
   /** Reads Radar could not complete for this assessment; listed under Still open. */
   assessmentLimits?: string[];
+  healthSignals?: InvestigationHealthSignal[];
+  onRevealSource?: (sourceId: string) => void;
   onCheckStatus?: () => void;
   animate?: boolean;
   /** Additional navigation placed in the assessment action row. */
@@ -2053,6 +2067,8 @@ export function ResultCard({
         storyInline={storyInline}
         revisedAfter={revisedAfter}
           assessmentLimits={assessmentLimits}
+          healthSignals={healthSignals}
+          onRevealSource={onRevealSource}
       />
     );
   // Couldn't-determine is its own honest state — never a confident all-clear, never
@@ -2080,6 +2096,8 @@ export function ResultCard({
           storyInline={storyInline}
           revisedAfter={revisedAfter}
           assessmentLimits={assessmentLimits}
+          healthSignals={healthSignals}
+          onRevealSource={onRevealSource}
         />
         {section === "full" && (diagnosis.steps?.length ?? 0) > 0 ? (
           <DiagnosisResult
@@ -2136,6 +2154,8 @@ export function ResultCard({
       readOnlyAssessment={readOnlyAssessment}
       revisedAfter={revisedAfter}
           assessmentLimits={assessmentLimits}
+          healthSignals={healthSignals}
+          onRevealSource={onRevealSource}
     />
   );
 }
@@ -2192,14 +2212,15 @@ export function AssessmentHeadline({
   tone,
   revisedAfter,
   limits = [],
+  signals,
 }: {
   diagnosis: Diagnosis;
   tone: "cause" | "healthy" | "inconclusive";
   revisedAfter?: string;
-  /** Reads Radar could not complete for this assessment; listed under Still open. */
-  assessmentLimits?: string[];
   /** Reads Radar could not complete for this assessment, one line each. */
   limits?: string[];
+  /** Adverse Radar cards the agent explained, with its position; first in Still open. */
+  signals?: { text: string; onReveal?: () => void }[];
 }) {
   const summary = diagnosis.summary?.trim();
   if (!summary) return null;
@@ -2210,6 +2231,7 @@ export function AssessmentHeadline({
     ...(diagnosis.unresolved ?? []).filter((item) => item.trim()),
     ...limits,
   ];
+  const stillOpen = (signals ?? []).length > 0 || unresolved.length > 0;
   return (
     <div data-assessment-headline className="space-y-2">
       <div className="flex items-start justify-between gap-2">
@@ -2245,7 +2267,7 @@ export function AssessmentHeadline({
           {diagnosis.rootCause}
         </AIMarkdown>
       ) : null}
-      {unresolved.length > 0 ? (
+      {stillOpen ? (
         <div
           data-assessment-unresolved
           className="rounded-md border border-theme-border bg-theme-base/40 px-2.5 py-2"
@@ -2255,6 +2277,24 @@ export function AssessmentHeadline({
             {tone === "inconclusive" ? "What blocked a conclusion" : "Still open"}
           </div>
           <ul className="space-y-0.5 text-xs text-theme-text-primary">
+            {(signals ?? []).map((signal, index) => (
+              <li key={`signal-${index}`} className="flex gap-1.5" data-health-signal>
+                <span aria-hidden className="text-theme-text-tertiary">
+                  –
+                </span>
+                {signal.onReveal ? (
+                  <button
+                    type="button"
+                    onClick={signal.onReveal}
+                    className="text-left [overflow-wrap:anywhere] hover:text-accent-text"
+                  >
+                    {signal.text}
+                  </button>
+                ) : (
+                  <span className="[overflow-wrap:anywhere]">{signal.text}</span>
+                )}
+              </li>
+            ))}
             {unresolved.map((item, index) => (
               <li key={index} className="flex gap-1.5">
                 <span aria-hidden className="text-theme-text-tertiary">
@@ -2560,6 +2600,8 @@ function DiagnosisResult({
   revisedAfter?: string;
   /** Reads Radar could not complete for this assessment; listed under Still open. */
   assessmentLimits?: string[];
+  healthSignals?: InvestigationHealthSignal[];
+  onRevealSource?: (sourceId: string) => void;
 }) {
   // The story contract: a summary headline above, the story rendered by the
   // host (or inline as plain prose), typed steps below.
@@ -3043,6 +3085,8 @@ function AllClearCard({
   storyInline = false,
   revisedAfter,
   assessmentLimits,
+  healthSignals,
+  onRevealSource,
 }: {
   diagnosis: Diagnosis;
   animate: boolean;
@@ -3056,6 +3100,9 @@ function AllClearCard({
   revisedAfter?: string;
   /** Reads Radar could not complete for this assessment; listed under Still open. */
   assessmentLimits?: string[];
+  /** Adverse Radar cards with the agent's position on each (story shape). */
+  healthSignals?: InvestigationHealthSignal[];
+  onRevealSource?: (sourceId: string) => void;
 }) {
   const storyShape = !!diagnosis.summary?.trim();
   const [showAnalysis, setShowAnalysis] = useState(false);
@@ -3077,6 +3124,76 @@ function AllClearCard({
     !!evidenceConflictExplainedBy &&
     evidenceConflictExplainedBy.length > 0;
   const unexplainedConflict = evidenceConflict && !explained;
+  // Story shape: the summary and the certainty word are the verdict; adverse
+  // Radar cards the agent explained become lines in Still open, and only a
+  // card the agent's verdict never addressed (or contradicts) keeps a header
+  // that names it — so the reader knows exactly how it relates to the answer.
+  const signals = healthSignals ?? [];
+  const flagged = signals.filter(
+    (signal) =>
+      signal.status === "unaddressed" || signal.status === "contradiction",
+  );
+  const stillOpenSignals = signals
+    .filter((signal) => signal.status === "explained" || signal.status === "related")
+    .map((signal) => ({
+      text:
+        signal.status === "explained"
+          ? `Radar flagged ${signal.title} · the agent looked at it and reads it as not a live problem: ${signal.claim}`
+          : `Radar flagged ${signal.title} · the agent reads it as related, but not what matters here: ${signal.claim}`,
+      onReveal:
+        signal.sourceId && onRevealSource
+          ? () => onRevealSource(signal.sourceId!)
+          : undefined,
+    }));
+  if (storyShape) {
+    const first = flagged[0];
+    return (
+      <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
+        {first ? (
+          <div
+            data-health-flag={first.status}
+            className="rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-2 text-xs text-theme-text-primary"
+          >
+            <div className="flex items-center gap-1.5 font-semibold text-amber-500">
+              <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
+              {first.status === "contradiction"
+                ? `The agent calls ${first.title} a ${first.role} and still reports healthy`
+                : `Radar flagged ${first.title}${flagged.length > 1 ? ` and ${flagged.length - 1} more` : ""} · the assessment does not address it`}
+            </div>
+            <p className="mt-1 text-theme-text-secondary">
+              {first.status === "contradiction"
+                ? "Read the card before treating this as an all-clear."
+                : "It may be unrelated to what you asked, or missed. Open it before treating this as an all-clear."}
+              {first.sourceId && onRevealSource ? (
+                <>
+                  {" "}
+                  <button
+                    type="button"
+                    onClick={() => onRevealSource(first.sourceId!)}
+                    className="font-medium text-accent-text hover:underline"
+                  >
+                    View the card
+                  </button>
+                </>
+              ) : null}
+            </p>
+          </div>
+        ) : null}
+        <AssessmentHeadline
+          diagnosis={diagnosis}
+          tone="healthy"
+          revisedAfter={revisedAfter}
+          limits={assessmentLimits}
+          signals={stillOpenSignals}
+        />
+        {assessmentAction ? (
+          <div className="flex flex-wrap items-center gap-3 pt-2" data-assessment-actions>
+            {assessmentAction}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
   return (
     <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
       <div
@@ -3210,6 +3327,8 @@ function InconclusiveCard({
   revisedAfter?: string;
   /** Reads Radar could not complete for this assessment; listed under Still open. */
   assessmentLimits?: string[];
+  healthSignals?: InvestigationHealthSignal[];
+  onRevealSource?: (sourceId: string) => void;
 }) {
   const storyShape = !!diagnosis.summary?.trim();
   const text =

@@ -30,6 +30,7 @@ import {
   investigationEvidenceConflictsWithHealthy,
   investigationHealthConflictExplainedBy,
   investigationAssessmentTurnIndexes,
+  investigationHealthSignals,
   investigationIsAssessmentTurn,
   investigationSettledAnswerTurnIndexes,
   investigationEndedBeforeConclusion,
@@ -1318,13 +1319,29 @@ export function InvestigationView({
       currentAssessment?.diagnosis?.evidenceMalformed)
       ? assessmentSourcesNode
       : undefined;
-  const assessmentLimits = useMemo(
+  const assessmentLimits = useMemo(() => {
+    const lines = groupEvidenceCoverage(currentAssessmentProjection.limitations)
+      .filter((group) => !group.historyOnly)
+      .map((group) => `${group.label}: ${group.summary}`);
+    // The coverage flag also fires when no read produced evidence or Radar's
+    // own diagnose of the workload did not complete; without an explicit
+    // limitation to name, say that in one line so the qualification survives.
+    if (lines.length === 0 && currentAssessmentCoverageLimited)
+      lines.push(
+        "Radar's own read of this workload did not complete, so this check is partial",
+      );
+    return lines;
+  }, [currentAssessmentProjection, currentAssessmentCoverageLimited]);
+  const healthSignals = useMemo(
     () =>
-      groupEvidenceCoverage(currentAssessmentProjection.limitations)
-        .filter((group) => !group.historyOnly)
-        .map((group) => `${group.label}: ${group.summary}`),
-    [currentAssessmentProjection],
+      currentAssessment?.diagnosis?.healthy
+        ? investigationHealthSignals(projection, investigationCase?.items)
+        : [],
+    [currentAssessment, projection, investigationCase],
   );
+  // While the first assessment is still running the pane keeps the story
+  // shape, so the page fills in rather than rearranging when the verdict lands.
+  const storyShell = !currentAssessment && lastTurn?.status === "running";
   const currentAssessmentEvidenceConflict =
     currentAssessment?.diagnosis?.healthy === true &&
     investigationEvidenceConflictsWithHealthy(projection);
@@ -2119,6 +2136,8 @@ export function InvestigationView({
                         }
                         diagnosis={currentAssessment.diagnosis}
                         assessmentLimits={storyShape ? assessmentLimits : undefined}
+                        healthSignals={storyShape ? healthSignals : undefined}
+                        onRevealSource={viewEvidenceSource}
                         assessmentSources={
                           storyShape ? undefined : assessmentSourcesNode
                         }
@@ -2239,6 +2258,7 @@ export function InvestigationView({
                           }
                         : undefined
                     }
+                    storyShell={storyShell}
                     collecting={
                       explanationRequest?.status !== "running" &&
                       (requestPending ||
@@ -2273,6 +2293,7 @@ export function InvestigationView({
         resourceLabel={formatInvestigationTarget(run)}
         context={run.context}
         fix={pendingFix}
+        reason={currentAssessment?.diagnosis?.recommendedReason}
         precondition={
           currentAssessment?.diagnosis?.recommendedIndex
             ? currentAssessment.diagnosis.steps?.[

@@ -43,6 +43,31 @@ describe("ResultCard under the story contract", () => {
     expect(html).not.toContain("[[radar:evidence=0]]");
   });
 
+  it("frames adverse Radar cards on a healthy verdict by the agent's position, without a coloured box", () => {
+    const healthy = { ...storyDiagnosis, healthy: true, rootCause: "", remediation: [], unresolved: [] };
+    const explained = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={healthy}
+        section="conclusion"
+        healthSignals={[{ title: "Readiness probe failing", status: "explained", claim: "never left endpoints", sourceId: "s1" }]}
+        onRevealSource={vi.fn()}
+      />,
+    );
+    expect(explained).toContain("Still open");
+    expect(explained).toContain("reads it as not a live problem: never left endpoints");
+    expect(explained).not.toContain("data-health-flag");
+    expect(explained).not.toContain("conflicts with captured evidence");
+    const flagged = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={healthy}
+        section="conclusion"
+        healthSignals={[{ title: "Readiness probe failing", status: "unaddressed" }]}
+      />,
+    );
+    expect(flagged).toContain('data-health-flag="unaddressed"');
+    expect(flagged).toContain("the assessment does not address it");
+  });
+
   it("lists Radar's own read limits under Still open beside the agent's items", () => {
     const html = renderToStaticMarkup(
       <ResultCard

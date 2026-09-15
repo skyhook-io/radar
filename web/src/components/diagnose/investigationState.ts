@@ -401,8 +401,83 @@ interface HealthConflictGroup {
     tone: string;
     title?: string;
     /** Which turn captured this reading; a note cannot explain a later one. */
-    source?: { turnIndex: number };
+    source?: { turnIndex: number; id?: string };
   };
+}
+
+/**
+ * One adverse Radar card on a healthy verdict, with the agent's position on
+ * it: it read the card as not a live problem (explained), as related but not
+ * what matters (related), never linked a reading to it (unaddressed), or
+ * called it a cause or symptom while still reporting healthy (contradiction).
+ * The reader sees which of the four it is, in words, next to the verdict.
+ */
+export interface InvestigationHealthSignal {
+  groupId?: string;
+  sourceId?: string;
+  title: string;
+  status: "explained" | "related" | "unaddressed" | "contradiction";
+  role?: string;
+  claim?: string;
+}
+
+export function investigationHealthSignals(
+  projection: { groups: readonly HealthConflictGroup[] },
+  caseItems:
+    | readonly {
+        role: string;
+        placement: "card" | "revision" | "source";
+        claim: string;
+        groupId?: string;
+        source?: { turnIndex: number };
+      }[]
+    | undefined,
+): InvestigationHealthSignal[] {
+  const conflicting = investigationHealthConflictGroups(projection);
+  if (conflicting.length === 0) return [];
+  const twins = new Map<string, Set<string>>();
+  for (const group of projection.groups) {
+    if (!group.id || !group.identity) continue;
+    const key = `${group.kind}\u0000${group.identity}`;
+    const ids = twins.get(key) ?? new Set<string>();
+    ids.add(group.id);
+    twins.set(key, ids);
+  }
+  return conflicting.map((group) => {
+    const sameStream =
+      (group.identity && twins.get(`${group.kind}\u0000${group.identity}`)) ||
+      new Set<string>([group.id ?? ""]);
+    const fresh = (caseItems ?? []).filter(
+      (item) =>
+        item.groupId &&
+        sameStream.has(item.groupId) &&
+        item.placement === "card" &&
+        !(
+          group.latest.source !== undefined &&
+          item.source !== undefined &&
+          group.latest.source.turnIndex > item.source.turnIndex
+        ),
+    );
+    const base = {
+      groupId: group.id,
+      sourceId: group.latest.source?.id,
+      title: group.latest.title ?? group.kind,
+    };
+    const asserting = fresh.find(
+      (item) => item.role === "cause" || item.role === "symptom",
+    );
+    if (asserting)
+      return { ...base, status: "contradiction", role: asserting.role };
+    const benign = fresh.find(
+      (item) => item.role === "benign" && item.claim.trim() !== "",
+    );
+    if (benign) return { ...base, status: "explained", claim: benign.claim };
+    const demoted = fresh.find(
+      (item) => item.role === "demoted" && item.claim.trim() !== "",
+    );
+    if (demoted) return { ...base, status: "related", claim: demoted.claim };
+    return { ...base, status: "unaddressed" };
+  });
 }
 
 export function investigationHealthConflictGroups<

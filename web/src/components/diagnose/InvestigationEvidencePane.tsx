@@ -384,6 +384,7 @@ export function InvestigationEvidencePane({
   onOpenTimeline,
   afterEvidence,
   recordNotes,
+  storyShell = false,
   revealRequest,
   onRevealReady,
 }: {
@@ -422,6 +423,8 @@ export function InvestigationEvidencePane({
   afterEvidence?: ReactNode;
   /** The agent's notes that reached no card, shown inside Captured results. */
   recordNotes?: ReactNode;
+  /** No verdict yet, but the story shape is coming: keep its cards in place. */
+  storyShell?: boolean;
   /** Explicit Activity → Findings navigation, including repeat clicks. */
   revealRequest?: { sourceId: string; requestId: number };
   onRevealReady?: (sourceId: string) => void;
@@ -444,7 +447,7 @@ export function InvestigationEvidencePane({
   const [resultsOpen, setResultsOpen] = useState(false);
   const handledRevealRequestRef = useRef<number | undefined>(undefined);
   const openingForRevealRequestRef = useRef<number | undefined>(undefined);
-  const storyMode = story !== undefined;
+  const storyMode = story !== undefined || storyShell;
   const partition = partitionInvestigationEvidence(
     projection.groups,
     rootCauseEvidence,
@@ -852,6 +855,30 @@ export function InvestigationEvidencePane({
           />
         ) : null}
 
+        {storyMode && !story ? (
+          <div
+            data-story-card
+            data-story-shell
+            className="investigation-evidence rounded-xl border p-4"
+          >
+            <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-theme-text-secondary">
+              Why
+              <span className="font-normal text-theme-text-tertiary">
+                the agent&apos;s analysis, with what it saw
+              </span>
+              {collecting ? (
+                <span className="ml-auto inline-flex items-center gap-1.5 text-xs font-normal text-accent-text">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+                  collecting
+                </span>
+              ) : null}
+            </div>
+            <p className="text-sm text-theme-text-tertiary">
+              The analysis will appear here once the agent has read enough to
+              write it; every result it reads lands under Captured results.
+            </p>
+          </div>
+        ) : null}
         {storyMode && story ? (
           <div
             data-story-card
@@ -911,7 +938,7 @@ export function InvestigationEvidencePane({
             keepWhenEmpty
             animateGroupIds={animateGroupIds}
             onViewSource={onViewSource}
-            open={resultsOpen || placedCount === 0}
+            open={resultsOpen || (placedCount === 0 && !collecting && !!story)}
             onOpenChange={setResultsOpen}
           >
             <div className="space-y-4">

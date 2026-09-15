@@ -23,6 +23,7 @@ import {
   investigationIsReadOnly,
   investigationPaneCenteredScrollTop,
   investigationAssessmentTurnIndexes,
+  investigationHealthSignals,
   investigationSettledAnswerTurnIndexes,
   investigationIsAssessmentTurn,
 } from "./investigationState";
@@ -1006,5 +1007,37 @@ describe("investigationSettledAnswerTurnIndexes", () => {
     ).toEqual(new Set([1]));
     const legacy = { ...assessment, diagnosis: { ...assessment.diagnosis, summary: undefined } };
     expect(investigationSettledAnswerTurnIndexes([legacy, answer(false)], 0)).toEqual(new Set());
+  });
+});
+
+describe("investigationHealthSignals", () => {
+  const adverse = (id: string, title: string) => ({
+    id,
+    identity: id,
+    historical: false,
+    kind: "issue",
+    latest: {
+      relevance: "target" as const,
+      tier: "key" as const,
+      tone: "warning",
+      title,
+      source: { turnIndex: 0, id: `src-${id}` },
+    },
+  });
+  it("classifies each adverse card by the agent's position on it", () => {
+    const projection = {
+      groups: [adverse("a", "Readiness probe failing"), adverse("b", "Restarts"), adverse("c", "OOM"), adverse("d", "Evicted")],
+    };
+    const items = [
+      { role: "benign", placement: "card" as const, claim: "Timeouts never removed it from endpoints.", groupId: "a", source: { turnIndex: 0 } },
+      { role: "demoted", placement: "card" as const, claim: "Old restarts.", groupId: "b", source: { turnIndex: 0 } },
+      { role: "symptom", placement: "card" as const, claim: "", groupId: "c", source: { turnIndex: 0 } },
+    ];
+    expect(investigationHealthSignals(projection, items).map((s) => [s.title, s.status])).toEqual([
+      ["Readiness probe failing", "explained"],
+      ["Restarts", "related"],
+      ["OOM", "contradiction"],
+      ["Evicted", "unaddressed"],
+    ]);
   });
 });
