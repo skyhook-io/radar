@@ -845,11 +845,11 @@ export function InvestigationEvidencePane({
         {/* What the agent considered and rejected belongs with the argument
             it belongs to, right after it, not after the evidence list among
             the withheld counts, where it read as bookkeeping. */}
+        {storyMode ? afterEvidence : null}
+
         {visibleRuledOut.length > 0 ? (
           <RuledOutBlock entries={visibleRuledOut} onReveal={revealCaseItem} />
         ) : null}
-
-        {storyMode ? afterEvidence : null}
 
         {storyMode ? (
           <CollapsedEvidenceCollection

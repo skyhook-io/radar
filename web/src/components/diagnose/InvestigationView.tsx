@@ -104,7 +104,6 @@ import type { InvestigationSourceExcerpt } from "./investigationSourceFocus";
 import { diagnosisHasStoryShape } from "./investigationStory";
 
 /** Findings width from which the assessment and next steps sit beside the story. */
-const WIDE_FINDINGS_MIN_WIDTH = 820;
 
 const RECHECK_QUESTION =
   "Did the fix resolve the issue? Re-check the resource's current status and health now, and say whether it's healthy.";
@@ -1330,21 +1329,6 @@ export function InvestigationView({
     assessmentNeedsCurrentStateVerification ||
     hasEvidenceCollectedAfterAssessment;
   const showSplitWorkspace = maximized;
-  // With room to spare, Findings lays the assessment and next steps beside
-  // the story instead of above it, so the headline, the action and the
-  // evidence share one screen. Measured, not assumed: the panel is resizable
-  // and the maximized split leaves Findings anywhere from 500 to 1400 px.
-  const [wideFindings, setWideFindings] = useState(false);
-  useLayoutEffect(() => {
-    const element = evidenceContentRef.current;
-    if (!element || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect.width ?? 0;
-      setWideFindings(width >= WIDE_FINDINGS_MIN_WIDTH);
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
   const splitGridClass = showSplitWorkspace
     ? "@min-[1000px]/investigation:grid-cols-[minmax(300px,380px)_minmax(0,1fr)]"
     : "";
@@ -2034,19 +2018,11 @@ export function InvestigationView({
                   </p>
                 </div>
               ) : (
-                <div
-                  data-findings-layout={wideFindings ? "wide" : "stacked"}
-                  className={
-                    wideFindings
-                      ? "grid grid-cols-[minmax(340px,min(42%,560px))_minmax(0,1fr)] items-start gap-4"
-                      : "space-y-4"
-                  }
-                >
-                  <div
-                    className={
-                      wideFindings ? "sticky top-0 space-y-3" : "space-y-3"
-                    }
-                  >
+                <div className="max-w-[900px] space-y-4">
+                  {/* One column, one reading order: assessment, analysis, next
+                      steps. The page already holds four columns; Findings is
+                      not a fifth. Capped so prose stays readable on a wide pane. */}
+                  <div className="space-y-3">
                   <section
                     aria-labelledby={`${workspaceId}-assessment-heading`}
                     className="investigation-assessment rounded-xl border p-3"
@@ -2231,7 +2207,6 @@ export function InvestigationView({
                       </span>
                     </button>
                   ) : null}
-                  {wideFindings ? nextStepsSection : null}
                   </div>
 
                   <InvestigationEvidencePane
@@ -2262,8 +2237,7 @@ export function InvestigationView({
                     onOpenTimeline={stale ? undefined : onOpenTimeline}
                     revealRequest={evidenceRevealRequest}
                     onRevealReady={revealEvidenceSource}
-                    afterEvidence={wideFindings ? undefined : nextStepsSection}
-                    storyDefaultOpen={wideFindings}
+                    afterEvidence={nextStepsSection}
                   />
                 </div>
               )}
