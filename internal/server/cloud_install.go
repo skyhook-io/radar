@@ -346,6 +346,47 @@ func (m *cloudInstallManager) prepare(ctx context.Context) (*cloudInstallFlow, *
 
 var errFlowActive = errors.New("a Cloud connection flow is already in progress")
 
+// connectRequestFailure turns a failed connect-request creation into a
+// failure the card can show: a headline that says what happened in words,
+// the raw error kept as inspectable detail. Nothing exists at the Hub yet in
+// any of these cases, so starting over is always safe.
+func connectRequestFailure(err error) *cloudInstallFailure {
+	var unreachable *cloud.HubUnreachableError
+	switch {
+	case errors.As(err, &unreachable):
+		return &cloudInstallFailure{
+			Kind:    cloudFailConnectRequest,
+			Message: "Radar couldn't reach Radar Hub, so no connection was requested.",
+			Guidance: &cloudinstall.RecoveryGuidance{
+				Summary: fmt.Sprintf("Check that this machine can reach %s (VPN, proxy, firewall), then start over.", unreachable.HubBase),
+				Inspect: []string{err.Error()},
+			},
+			RetrySafe: true,
+		}
+	default:
+		if status, declined := cloud.HubDeclinedStatus(err); declined {
+			return &cloudInstallFailure{
+				Kind:    cloudFailConnectRequest,
+				Message: fmt.Sprintf("Radar Hub declined the connection request (HTTP %d).", status),
+				Guidance: &cloudinstall.RecoveryGuidance{
+					Summary: "Nothing was created. If this keeps happening, the Hub's response below says why.",
+					Inspect: []string{err.Error()},
+				},
+				RetrySafe: true,
+			}
+		}
+		return &cloudInstallFailure{
+			Kind:    cloudFailConnectRequest,
+			Message: "Radar couldn't start the connection request.",
+			Guidance: &cloudinstall.RecoveryGuidance{
+				Summary: "Nothing was created; it is safe to start over.",
+				Inspect: []string{err.Error()},
+			},
+			RetrySafe: true,
+		}
+	}
+}
+
 func (m *cloudInstallManager) runPrepare(ctx context.Context, flow *cloudInstallFlow) (*cloudInstallBlocked, error) {
 	clients, contextName, err := m.backend.captureClients()
 	if err != nil {
@@ -506,11 +547,7 @@ func (m *cloudInstallManager) start(req cloudInstallStartRequest) (*cloudInstall
 	}
 	if err != nil {
 		flow.state = cloudFlowFailed
-		flow.failure = &cloudInstallFailure{
-			Kind:      cloudFailConnectRequest,
-			Message:   fmt.Sprintf("couldn't start the connect flow: %v", err),
-			RetrySafe: true,
-		}
+		flow.failure = connectRequestFailure(err)
 		return flow, nil
 	}
 
@@ -584,8 +621,9 @@ func (m *cloudInstallManager) run(ctx context.Context, flow *cloudInstallFlow, c
 				ClusterURL: clustersURL,
 			}, false)
 		default:
-			fail(cloudFailApprovalPoll, fmt.Sprintf("connect failed: %v", err), &cloudinstall.RecoveryGuidance{
-				Summary:    "Check the clusters list before retrying:",
+			fail(cloudFailApprovalPoll, "Radar lost track of the connection request while waiting for approval.", &cloudinstall.RecoveryGuidance{
+				Summary:    "An approval may have gone through. Check the clusters list before starting over:",
+				Inspect:    []string{err.Error()},
 				ClusterURL: clustersURL,
 			}, false)
 		}
