@@ -1738,7 +1738,7 @@ function EvidenceCard({
           ) : null}
         </div>
       </div>
-      {!compact && cardItems.some((item) => item.claim || item.role) ? (
+      {cardItems.some((item) => item.claim || item.role) ? (
         <div
           className={clsx(
             "space-y-1.5",
@@ -1748,8 +1748,9 @@ function EvidenceCard({
           {cardItems.map((item) => (
             <AgentClaimNote
               key={item.index}
-              claim={noteMode === "chip" ? "" : item.claim}
+              claim={compact || noteMode === "chip" ? "" : item.claim}
               role={item.role}
+              gap={compact ? undefined : item.gap}
               excludes={excludedByItem?.get(investigationCaseItemKey(item))}
               className="pt-1.5"
             />

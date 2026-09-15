@@ -181,6 +181,28 @@ describe("TurnView and assessments", () => {
     expect(html).not.toContain("[[radar:evidence=0]]");
   });
 
+  it("folds the agent's evidence ledger under the turn, out of Findings", () => {
+    const html = renderToStaticMarkup(
+      <TurnView
+        turn={turn({
+          diagnosis: {
+            rootCause: "x",
+            report: "The story.",
+            remediation: [],
+            notes: "Result A shows one exit; it does not cover the other two.",
+          },
+        })}
+        assessment
+        hideConclusion
+        turnIndex={0}
+      />,
+    );
+    expect(html).toContain("data-turn-working-notes");
+    expect(html).toContain("Evidence ledger");
+    expect(html).toContain("does not cover the other two");
+    expect(html).toContain("Assessment · shown in Findings");
+  });
+
   it("keeps a pointer for the current assessment and the full answer for a plain question", () => {
     const pointer = renderToStaticMarkup(
       <TurnView turn={turn({})} assessment hideConclusion turnIndex={0} />,

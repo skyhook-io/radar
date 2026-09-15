@@ -46,6 +46,15 @@ describe("splitStory", () => {
     expect(prose).toContain("[[[radar:evidence=3]]](#radar-evidence-3)");
   });
 
+  it("reads the compact variant as a placement flag", () => {
+    const { segments } = splitStory("A.\n[[radar:evidence=2|compact]]\nB [[radar:evidence=2|compact]].");
+    expect(segments[1]).toEqual({ kind: "placement", index: 2, compact: true });
+    expect(segments[2]).toEqual({
+      kind: "prose",
+      markdown: "B [[[radar:evidence=2|compact]]](#radar-evidence-2).",
+    });
+  });
+
   it("keeps an unterminated fence literal to the end", () => {
     const { segments } = splitStory("```\n[[radar:evidence=0]]\nstill code");
     expect(segments).toEqual([

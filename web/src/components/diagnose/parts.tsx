@@ -761,6 +761,12 @@ export function TurnView({
         ) : (
           <EmptyResult animate={turn.animateResult !== false} />
         ))}
+      {!turn.explainAssessment &&
+      !turn.apply &&
+      turn.status === "done" &&
+      turn.diagnosis?.notes ? (
+        <WorkingNotes notes={turn.diagnosis.notes} />
+      ) : null}
       {turn.explainAssessment ? null : turn.status === "error" && turn.apply ? (
         <ApplyOutcomeCard
           diagnosis={turn.diagnosis}
@@ -2426,6 +2432,36 @@ export function AssessmentSources({
             : `${unlinkedEvidence} agent notes could not be linked to Radar results and are not shown.`}
         </p>
       ) : null}
+    </div>
+  );
+}
+
+function WorkingNotes({ notes }: { notes: string }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  const reveal = useDisclosureReveal<HTMLDivElement>();
+  return (
+    <div ref={reveal.elementRef} data-turn-working-notes>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => {
+          setOpen(!open);
+          reveal.revealAfterToggle(!open);
+        }}
+        className="flex items-center gap-1.5 rounded-md py-1 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
+      >
+        <CollapseChevron open={open} className="h-3.5 w-3.5" />
+        Evidence ledger
+      </button>
+      <div id={id}>
+        <Collapse open={open}>
+          <AIMarkdown className="py-0.5 text-xs leading-relaxed text-theme-text-tertiary [overflow-wrap:anywhere] [&_li]:text-theme-text-tertiary [&_p]:my-0.5 [&_strong]:font-medium [&_strong]:text-theme-text-secondary">
+            {notes}
+          </AIMarkdown>
+        </Collapse>
+      </div>
     </div>
   );
 }

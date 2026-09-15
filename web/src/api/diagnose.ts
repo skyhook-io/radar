@@ -72,7 +72,8 @@ export interface DiagnosisEvidenceSubject {
   group?: string;
   kind: string;
   namespace?: string;
-  name: string;
+  /** Absent when the subject is a listing cited for what it does not contain. */
+  name?: string;
   container?: string;
   stream?: "current" | "previous";
   /** Evidence kind (resource, logs, events, changes, metrics, …). */
@@ -85,6 +86,8 @@ export interface DiagnosisEvidenceItem {
   ref?: string;
   role?: DiagnosisEvidenceRole;
   claim?: string;
+  /** The agent's own statement of what this result does not cover. */
+  gap?: string;
   subject?: DiagnosisEvidenceSubject;
 }
 
@@ -132,6 +135,8 @@ export interface Diagnosis {
   evidenceMalformed?: boolean;
   ruledOut?: DiagnosisRuledOut[];
   report: string;
+  /** The agent's evidence ledger, written before its verdict block; shown in Activity, never in Findings. */
+  notes?: string;
   remediation: string[];
   recommendedIndex?: number; // 1-based index into remediation of the step Apply performs
   recommendedReason?: string; // why the recommended step is the safe pick

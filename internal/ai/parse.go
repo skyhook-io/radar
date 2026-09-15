@@ -27,11 +27,12 @@ const (
 	maxDiagnosisEvidenceItems  = 8
 	maxDiagnosisRuledOut       = 5
 	maxDiagnosisClaimChars     = 200
+	maxDiagnosisGapRune        = 160
 	maxDiagnosisSubjectChars   = 253
 	maxDiagnosisHypothesisRune = 200
 	maxDiagnosisSummaryRune    = 240
 	maxDiagnosisUnresolved     = 3
-	maxDiagnosisUnresolvedRune = 200
+	maxDiagnosisUnresolvedRune = 280
 	maxDiagnosisSteps          = 6
 	maxDiagnosisPreconditRune  = 200
 )
@@ -59,13 +60,17 @@ var evidenceRoles = map[EvidenceRole]struct{}{
 }
 
 // diagnosisFromText assembles the Diagnosis from the CLI's final text. The
-// prompt asks for a trailing fenced json block {root_cause, remediation,
-// confidence}; we parse the last one. Absent that, the whole text is the report
-// and its first paragraph the root cause.
+// last fenced json block is the verdict and a divider: prose after it is the
+// story, prose before it the agent's working notes. With nothing after the
+// block (the older trailing-block shape) the prose before it is the story.
+// Absent any block, the whole text is the report and its first paragraph the
+// root cause.
 func diagnosisFromText(text string) Diagnosis {
 	text = strings.TrimSpace(text)
 	d := Diagnosis{Report: text}
-	if m := jsonBlockRe.FindAllStringSubmatch(text, -1); len(m) > 0 {
+	if locs := jsonBlockRe.FindAllStringSubmatchIndex(text, -1); len(locs) > 0 {
+		last := locs[len(locs)-1]
+		m := [][]string{{text[last[0]:last[1]], text[last[2]:last[3]]}}
 		var parsed struct {
 			Healthy           *bool           `json:"healthy"`
 			Inconclusive      *bool           `json:"inconclusive"`
@@ -95,7 +100,13 @@ func diagnosisFromText(text string) Diagnosis {
 			d.caseRequest = parseCaseRequest(parsed.Evidence, parsed.RuledOut)
 			d.Remediation = parsed.Remediation
 			d.Confidence = parsed.Confidence
-			d.Report = strings.TrimSpace(jsonBlockRe.ReplaceAllString(text, ""))
+			before := strings.TrimSpace(jsonBlockRe.ReplaceAllString(text[:last[0]], ""))
+			if after := strings.TrimSpace(text[last[1]:]); after != "" {
+				d.Notes = before
+				d.Report = after
+			} else {
+				d.Report = before
+			}
 			d.Summary = clampSummary(strings.TrimSpace(parsed.Summary), maxDiagnosisSummaryRune)
 			if certainty := DiagnosisCertainty(strings.ToLower(strings.TrimSpace(parsed.Certainty))); certainty != "" {
 				if _, known := diagnosisCertainties[certainty]; known {
@@ -317,6 +328,7 @@ func parseCaseItem(raw json.RawMessage) caseItemRequest {
 		Ref     string          `json:"ref"`
 		Role    string          `json:"role"`
 		Claim   string          `json:"claim"`
+		Gap     string          `json:"gap"`
 		Subject json.RawMessage `json:"subject"`
 	}
 	if json.Unmarshal(raw, &parsed) != nil {
@@ -351,7 +363,8 @@ func parseCaseItem(raw json.RawMessage) caseItemRequest {
 	if claim == "" && claimRequired {
 		return caseItemRequest{}
 	}
-	item := caseItemRequest{valid: true, ref: ref, role: role, claim: claim}
+	item := caseItemRequest{valid: true, ref: ref, role: role, claim: claim,
+		gap: clampRunes(strings.TrimSpace(parsed.Gap), maxDiagnosisGapRune)}
 	if len(parsed.Subject) == 0 || string(parsed.Subject) == "null" {
 		return item
 	}
@@ -371,7 +384,7 @@ func parseCaseItem(raw json.RawMessage) caseItemRequest {
 			return caseItemRequest{}
 		}
 	}
-	if subject.Kind == "" || subject.Name == "" ||
+	if subject.Kind == "" ||
 		(subject.Stream != "" && subject.Stream != "current" && subject.Stream != "previous") {
 		return caseItemRequest{}
 	}

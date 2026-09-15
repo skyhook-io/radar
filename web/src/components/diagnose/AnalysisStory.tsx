@@ -295,8 +295,14 @@ export function AnalysisStory({
       );
     }
     return (
-      <div key={`placed-${position}`} data-story-placement={segment.index}>
-        {renderPlacement(resolution.target, { compact })}
+      <div
+        key={`placed-${position}`}
+        data-story-placement={segment.index}
+        data-story-placement-compact={segment.compact ? "1" : undefined}
+      >
+        {renderPlacement(resolution.target, {
+          compact: compact || segment.compact === true,
+        })}
       </div>
     );
   };

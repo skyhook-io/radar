@@ -304,6 +304,37 @@ export function investigationIsAssessmentTurn(
   );
 }
 
+/**
+ * Later turns whose reads do not make the assessment "earlier": a question
+ * the agent answered under the story contract and marked as not revising it.
+ * The contract is only in force when the assessment itself carries a summary;
+ * older runs never asked, so every later read still counts as newer evidence.
+ */
+export function investigationSettledAnswerTurnIndexes(
+  turns: readonly Pick<
+    Turn,
+    "status" | "apply" | "explainAssessment" | "question" | "verify" | "diagnosis"
+  >[],
+  currentAssessmentIdx: number,
+): Set<number> {
+  const settled = new Set<number>();
+  const assessment = turns[currentAssessmentIdx]?.diagnosis;
+  if (!assessment?.summary) return settled;
+  turns.forEach((turn, index) => {
+    if (index <= currentAssessmentIdx) return;
+    if (
+      turn.status === "done" &&
+      turn.diagnosis &&
+      !turn.apply &&
+      !turn.verify &&
+      !turn.explainAssessment &&
+      turn.diagnosis.revisesAssessment !== true
+    )
+      settled.add(index);
+  });
+  return settled;
+}
+
 export function investigationAssessmentTurnIndexes(
   turns: readonly Pick<
     Turn,

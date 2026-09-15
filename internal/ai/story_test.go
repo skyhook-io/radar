@@ -56,6 +56,35 @@ func TestDiagnosisFromText_EstablishedCannotCoexistWithUnresolved(t *testing.T) 
 	}
 }
 
+func TestDiagnosisFromText_VerdictBlockDividesNotesFromStory(t *testing.T) {
+	block := "```json\n{\"summary\":\"s\",\"root_cause\":\"x\"}\n```"
+	d := diagnosisFromText("Notes: one restart, one exit.\n\n" + block + "\n\nThe story.\n\n[[radar:evidence=0]]")
+	if d.Notes != "Notes: one restart, one exit." || d.Report != "The story.\n\n[[radar:evidence=0]]" {
+		t.Fatalf("notes=%q report=%q", d.Notes, d.Report)
+	}
+	old := diagnosisFromText("The story.\n\n" + block)
+	if old.Notes != "" || old.Report != "The story." {
+		t.Fatalf("trailing-block shape: notes=%q report=%q", old.Notes, old.Report)
+	}
+}
+
+func TestDiagnosisFromText_SubjectMayNameAListingWithoutAnEntry(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
+	d := diagnosisFromText(caseJSON(`"root_cause":"x","evidence":[{"ref":"` + ref + `","role":"context","claim":"c","subject":{"kind":"ConfigMap","namespace":"shop","observation":"resource"}}]`))
+	item := d.caseRequest.items[0]
+	if !item.valid || item.subject == nil || item.subject.Kind != "ConfigMap" || item.subject.Name != "" {
+		t.Fatalf("name-less subject rejected: %+v", item)
+	}
+}
+
+func TestDiagnosisFromText_ParsesEvidenceGap(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
+	d := diagnosisFromText(caseJSON(`"root_cause":"x","evidence":[{"ref":"` + ref + `","role":"benign","claim":"Last exit was clean.","gap":"  covers the last termination only  "}]`))
+	if got := d.caseRequest.items[0].gap; got != "covers the last termination only" {
+		t.Fatalf("gap = %q", got)
+	}
+}
+
 func TestDiagnosisFromText_StoryFieldCapsAndValidation(t *testing.T) {
 	d := diagnosisFromText(caseJSON(`"summary":"` + strings.Repeat("s", maxDiagnosisSummaryRune+40) + `","certainty":"certain"`))
 	if len([]rune(d.Summary)) != maxDiagnosisSummaryRune+1 || !strings.HasSuffix(d.Summary, "…") {

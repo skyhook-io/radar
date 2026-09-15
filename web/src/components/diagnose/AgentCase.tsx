@@ -55,10 +55,13 @@ export function AgentClaimNote({
   role,
   excludes,
   subject,
+  gap,
   className,
 }: {
   claim: string;
   role?: DiagnosisEvidenceRole;
+  /** What the agent says this result does not cover; shown beside its reading of it. */
+  gap?: string;
   /**
    * The hypothesis this item excludes. Rendered only for `rules_out`, where
    * the chip frames it as rejected: a hypothesis is a claim the agent
@@ -69,7 +72,7 @@ export function AgentClaimNote({
   subject?: string;
   className?: string;
 }) {
-  if (!claim && !role) return null;
+  if (!claim && !role && !gap) return null;
   return (
     <p
       data-agent-claim
@@ -101,6 +104,14 @@ export function AgentClaimNote({
             ) : null}
             {renderClaim(claim)}
           </>
+        ) : null}
+        {gap ? (
+          <span
+            data-agent-gap
+            className="block text-[11px] text-theme-text-tertiary"
+          >
+            Does not cover: {gap}
+          </span>
         ) : null}
       </span>
     </p>

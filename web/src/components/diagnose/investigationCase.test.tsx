@@ -185,6 +185,57 @@ describe("agent case placement (D-1, D-1b)", () => {
     expect(html).not.toContain("data-agent-claim");
   });
 
+  it("forgives a group on a core kind and a named entry on a listing", () => {
+    const listRef = evidenceRef("c", "d");
+    const withListing = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool("cms", "list_resources", [{ kind: "ConfigMap", name: "kube-root-ca.crt" }], {
+        evidenceRef: listRef,
+        summary: JSON.stringify({ kind: "configmaps", namespace: "shop" }),
+      }),
+    );
+    const resolved = resolveInvestigationCase(
+      withListing,
+      {
+        evidence: [
+          linked(ref, "cause", "The previous log names the error.", {
+            group: "apps",
+            kind: "Pod",
+            namespace: "shop",
+            name: "api-abc",
+            container: "api",
+            stream: "previous",
+            observation: "logs",
+          }),
+          linked(listRef, "context", "Only the CA bundle exists.", {
+            kind: "ConfigMap",
+            namespace: "shop",
+            name: "kube-root-ca.crt",
+            observation: "resource",
+          }),
+          linked(listRef, "rules_out", "No nginx config lives here.", {
+            kind: "ConfigMap",
+            namespace: "shop",
+            observation: "resource",
+          }),
+          linked(ref, "symptom", "BackOff keeps firing on the pod.", {
+            kind: "Pod",
+            namespace: "shop",
+            name: "api-abc",
+            observation: "events",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items.map((item) => item.placement)).toEqual([
+      "card",
+      "card",
+      "card",
+      "card",
+    ]);
+  });
+
   it("pins a subject-bearing item to exactly the observation it names", () => {
     const resolved = resolveInvestigationCase(
       projection,

@@ -11,8 +11,8 @@
  * fixtures pin it on both sides of the wire (see internal/ai/story_test.go).
  */
 
-export const STORY_PLACEMENT_RE = /\[\[radar:evidence=(\d+)\]\]/g;
-const BLOCK_PLACEMENT_RE = /^\s*\[\[radar:evidence=(\d+)\]\]\s*$/;
+export const STORY_PLACEMENT_RE = /\[\[radar:evidence=(\d+)(?:\|(compact))?\]\]/g;
+const BLOCK_PLACEMENT_RE = /^\s*\[\[radar:evidence=(\d+)(?:\|(compact))?\]\]\s*$/;
 const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
 
 /** Maximum results placed as cards; later placements become references. */
@@ -20,7 +20,12 @@ export const MAX_STORY_PLACEMENTS = 6;
 
 export type StorySegment =
   | { kind: "prose"; markdown: string }
-  | { kind: "placement"; index: number };
+  | {
+      kind: "placement";
+      index: number;
+      /** The agent asked for the header only: the reader needs the fact, not the detail. */
+      compact?: boolean;
+    };
 
 export interface StorySplit {
   segments: StorySegment[];
@@ -93,7 +98,11 @@ export function splitStory(report: string): StorySplit {
     const block = BLOCK_PLACEMENT_RE.exec(line);
     if (block) {
       flush();
-      segments.push({ kind: "placement", index: Number(block[1]) });
+      segments.push({
+        kind: "placement",
+        index: Number(block[1]),
+        ...(block[2] ? { compact: true } : {}),
+      });
       continue;
     }
     if (/^\s{0,3}>/.test(line)) {

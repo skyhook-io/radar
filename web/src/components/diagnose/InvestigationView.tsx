@@ -30,6 +30,7 @@ import {
   investigationEvidenceConflictsWithHealthy,
   investigationHealthConflictExplainedBy,
   investigationAssessmentTurnIndexes,
+  investigationSettledAnswerTurnIndexes,
   investigationEndedBeforeConclusion,
   type InvestigationHistoryUnavailableState,
   investigationHistoryUnavailablePresentation,
@@ -1306,10 +1307,16 @@ export function InvestigationView({
       ) ?? undefined
     );
   }, [currentAssessmentEvidenceConflict, projection, investigationCase]);
+  const settledAnswerTurns = useMemo(
+    () => investigationSettledAnswerTurnIndexes(turns, currentAssessmentIdx),
+    [turns, currentAssessmentIdx],
+  );
   const hasEvidenceCollectedAfterAssessment =
     currentAssessmentIdx >= 0 &&
     projection.sources.some(
-      (source) => source.turnIndex > currentAssessmentIdx,
+      (source) =>
+        source.turnIndex > currentAssessmentIdx &&
+        !settledAnswerTurns.has(source.turnIndex),
     );
   const assessmentNeedsCurrentStateVerification =
     investigationAssessmentNeedsCurrentStateVerification({

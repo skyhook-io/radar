@@ -20,7 +20,7 @@ func TestTurnPrompt_MetricsNudgeOnlyOnReadOnlyTurnsWhenConnected(t *testing.T) {
 		!strings.HasSuffix(strings.TrimSpace(p), "which also matches sibling workloads.") {
 		t.Fatalf("initial turn lacks the metrics nudge after the task prompt:\n%s", p)
 	}
-	if p := turnPrompt(initial); strings.Index(p, diagnosisJSONInstruction) > strings.Index(p, "Prometheus is connected") {
+	if p := turnPrompt(initial); strings.Index(p, storyGuidance) > strings.Index(p, "Prometheus is connected") {
 		t.Fatalf("nudge must follow prompt selection, not precede the JSON contract:\n%s", p)
 	}
 

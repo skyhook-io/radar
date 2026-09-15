@@ -65,7 +65,7 @@ func TestDiagnosisFromText_CaseDropsBadItemsIndividually(t *testing.T) {
 		`{"ref":"not-a-ref","role":"cause","claim":"a"},` +
 		`{"ref":"` + ref + `","role":"verdict","claim":"a"},` +
 		`{"ref":"` + ref + `","role":"demoted","claim":"` + long + `"},` +
-		`{"ref":"` + ref + `","role":"cause","claim":"a","subject":{"kind":"Pod"}},` +
+		`{"ref":"` + ref + `","role":"cause","claim":"a","subject":{"name":"p"}},` +
 		`{"ref":"` + ref + `","role":"cause","claim":"a","subject":{"kind":"Pod","name":"p","stream":"older"}},` +
 		`{"ref":"` + ref + `","role":"context","claim":"fine"}` +
 		`],"ruled_out":[{"hypothesis":"","evidence_index":5},{"hypothesis":"h","evidence_index":-1},{"hypothesis":"h"},"not-an-object",{"hypothesis":"kept","evidence_index":5}]`)
@@ -102,7 +102,7 @@ func TestDiagnosisFromText_ParserAcceptsEveryPromptedRole(t *testing.T) {
 		EvidenceRoleRulesOut,
 	}
 	for _, role := range roles {
-		if !strings.Contains(diagnosisJSONInstruction, string(role)) {
+		if !strings.Contains(verdictContract, string(role)) {
 			t.Errorf("role %q is accepted but the prompt never offers it", role)
 		}
 		text := caseJSON(`"root_cause":"x","evidence":[` +

@@ -1112,7 +1112,7 @@ func bindCase(diag *Diagnosis, refLinked func(string) bool) {
 			continue
 		}
 		items[i] = DiagnosisEvidenceItem{
-			Status: EvidenceLinked, Ref: item.ref, Role: item.role, Claim: item.claim,
+			Status: EvidenceLinked, Ref: item.ref, Role: item.role, Claim: item.claim, Gap: item.gap,
 		}
 		if item.subject != nil {
 			subject := *item.subject

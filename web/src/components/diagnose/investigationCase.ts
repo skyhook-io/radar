@@ -33,6 +33,8 @@ export interface InvestigationCaseItem {
   index: number;
   role: DiagnosisEvidenceRole;
   claim: string;
+  /** What the agent says this result does not cover. */
+  gap?: string;
   subject?: DiagnosisEvidenceSubject;
   source: InvestigationEvidenceSource;
   placement: InvestigationCasePlacement;
@@ -131,6 +133,9 @@ export function resolveInvestigationCase(
       index,
       role: entry.role,
       claim: typeof entry.claim === "string" ? entry.claim.trim() : "",
+      ...(typeof entry.gap === "string" && entry.gap.trim()
+        ? { gap: entry.gap.trim() }
+        : {}),
       ...(subject ? { subject } : {}),
       source,
       placement: "source",
@@ -184,11 +189,11 @@ export function resolveInvestigationCase(
 function validCaseSubject(
   value: DiagnosisEvidenceSubject | undefined,
 ): DiagnosisEvidenceSubject | undefined {
-  if (!value || !nonEmptyString(value.kind) || !nonEmptyString(value.name))
-    return undefined;
+  if (!value || !nonEmptyString(value.kind)) return undefined;
   const optional = (field: unknown) =>
     field === undefined || typeof field === "string";
   if (
+    !optional(value.name) ||
     !optional(value.group) ||
     !optional(value.namespace) ||
     !optional(value.container) ||
@@ -211,6 +216,8 @@ interface ObservationSubjectIdentity {
   name: string;
   container?: string;
   stream?: "current" | "previous";
+  /** A listing names a kind (and scope) but no single object. */
+  listing?: boolean;
 }
 
 /**
@@ -262,15 +269,28 @@ function observationSubjectIdentity(
     };
   }
   const args = investigationSourceArgs(observation.source);
-  if (!args || !nonEmptyString(args.kind) || !nonEmptyString(args.name))
-    return undefined;
+  if (!args || !nonEmptyString(args.kind)) return undefined;
   return {
     kind: args.kind,
     group: nonEmptyString(args.group) ? args.group : undefined,
     namespace: nonEmptyString(args.namespace) ? args.namespace : undefined,
-    name: args.name,
+    name: nonEmptyString(args.name) ? args.name : "",
+    ...(nonEmptyString(args.name) ? {} : { listing: true }),
   };
 }
+
+const BUILT_IN_GROUPS = new Set([
+  "",
+  "core",
+  "v1",
+  "apps",
+  "batch",
+  "autoscaling",
+  "policy",
+  "networking.k8s.io",
+  "storage.k8s.io",
+  "rbac.authorization.k8s.io",
+]);
 
 function sameKind(left: string, right: string): boolean {
   return pluralToKind(left).toLowerCase() === pluralToKind(right).toLowerCase();
@@ -292,7 +312,10 @@ function observationMatchesSubject(
     // whose identity ends in that category. An agent-run query is one chart,
     // so a qualifier on it carries no meaning.
     const [kind, qualifier] = subject.observation.toLowerCase().split(":", 2);
-    if (kind !== observation.data.type) return false;
+    // A listing is resources too: "resource" names an inventory card as well.
+    const inventoryAsResource =
+      kind === "resource" && observation.data.type === "inventory";
+    if (kind !== observation.data.type && !inventoryAsResource) return false;
     if (
       qualifier !== undefined &&
       observation.data.type === "metrics" &&
@@ -356,12 +379,39 @@ function identityMatchesSubject(
     identity.namespace === subject.name
   )
     return true;
-  if (!sameKind(identity.kind, subject.kind) || identity.name !== subject.name)
+  // A workload read collects its pods' events, so "the events of Pod X" names
+  // the events observation a diagnose bundle or workload call inherited from
+  // the workload; the ref already fixes the call, uniqueness fixes the card.
+  if (
+    subject.observation !== undefined &&
+    observation.data.type === "events" &&
+    sameKind(subject.kind, "Pod") &&
+    !sameKind(identity.kind, "Pod") &&
+    (identity.namespace === undefined ||
+      subject.namespace === undefined ||
+      identity.namespace === subject.namespace)
+  )
+    return true;
+  if (!sameKind(identity.kind, subject.kind)) return false;
+  // A listing has no name of its own; the agent naming the entry it means
+  // ("ConfigMap kube-root-ca.crt" in the ConfigMaps of a namespace) still
+  // points at that listing, and a subject with no name (a listing cited for
+  // what it does not contain) is a wildcard that uniqueness still gates.
+  if (
+    !identity.listing &&
+    subject.name !== undefined &&
+    identity.name !== subject.name
+  )
     return false;
+  // A built-in group on a core kind ("apps" on a Pod) is the agent
+  // misremembering the API, not naming a different object: no CRD lives in a
+  // built-in group, so nothing else could be meant. A vendor group on a core
+  // kind (a Knative Service) still names a different object.
   if (
     subject.group !== undefined &&
     identity.group !== undefined &&
-    subject.group.toLowerCase() !== identity.group.toLowerCase()
+    subject.group.toLowerCase() !== identity.group.toLowerCase() &&
+    !(identity.group === "" && BUILT_IN_GROUPS.has(subject.group.toLowerCase()))
   ) {
     return false;
   }

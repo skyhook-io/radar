@@ -23,6 +23,7 @@ import {
   investigationIsReadOnly,
   investigationPaneCenteredScrollTop,
   investigationAssessmentTurnIndexes,
+  investigationSettledAnswerTurnIndexes,
   investigationIsAssessmentTurn,
 } from "./investigationState";
 
@@ -986,5 +987,24 @@ describe("adverse evidence and the healthy-conflict banner", () => {
         tone,
       ).toBe(false);
     }
+  });
+});
+
+describe("investigationSettledAnswerTurnIndexes", () => {
+  const assessment = {
+    status: "done" as const,
+    diagnosis: { rootCause: "x", report: "s", remediation: [], summary: "S." },
+  };
+  const answer = (revises?: boolean) => ({
+    status: "done" as const,
+    question: "q",
+    diagnosis: { rootCause: "", report: "a", remediation: [], revisesAssessment: revises },
+  });
+  it("settles non-revising answers under the story contract only", () => {
+    expect(
+      investigationSettledAnswerTurnIndexes([assessment, answer(false), answer(true), { ...answer(), verify: true }], 0),
+    ).toEqual(new Set([1]));
+    const legacy = { ...assessment, diagnosis: { ...assessment.diagnosis, summary: undefined } };
+    expect(investigationSettledAnswerTurnIndexes([legacy, answer(false)], 0)).toEqual(new Set());
   });
 });
