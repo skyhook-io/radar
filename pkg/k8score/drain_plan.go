@@ -74,7 +74,7 @@ func ClassifyPodForDrain(pod corev1.Pod, opts DrainOptions, pdbs []policyv1.PodD
 		return skip("not managed by a controller; would be lost, enable force to evict anyway")
 	}
 	if !opts.DeleteEmptyDirData && d.EmptyDir {
-		return skip("uses emptyDir volumes; their data is lost on eviction, enable deleteEmptyDirData to evict")
+		return skip("uses emptyDir volumes; their data is lost on eviction, enable the Delete emptyDir data option to evict")
 	}
 
 	if bypassesPDB(pod) {

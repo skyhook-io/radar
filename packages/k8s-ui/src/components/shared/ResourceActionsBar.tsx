@@ -143,6 +143,10 @@ interface ResourceActionsBarProps {
   drainPlan?: DrainPlan | null
   isPlanningDrain?: boolean
   drainPlanError?: string | null
+  // The connected backend has no drain-plan endpoint (version skew, e.g. a newer
+  // frontend against an older radar). The dialog falls back to the plan-less
+  // acknowledgement-only mode instead of keeping Drain disabled on a dead request.
+  drainPlanUnsupported?: boolean
 }
 
 export function ResourceActionsBar({
@@ -173,7 +177,7 @@ export function ResourceActionsBar({
   onCordonNode, isCordoningNode,
   onUncordonNode, isUncordoningNode,
   onDrainNode, isDrainingNode,
-  onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError,
+  onPlanDrain, onPlanDrainReset, drainPlan, isPlanningDrain, drainPlanError, drainPlanUnsupported,
 }: ResourceActionsBarProps) {
   const kind = resource.kind.toLowerCase()
   const coreBatchJob = isCoreBatchJob(kind, resource.group)
@@ -194,13 +198,26 @@ export function ResourceActionsBar({
   const [showDrainConfirm, setShowDrainConfirm] = useState(false)
   const [drainOptions, setDrainOptions] = useState<DrainDialogOptions>(DEFAULT_DRAIN_DIALOG_OPTIONS)
 
+  // A backend without the plan endpoint stays unsupported for as long as the dialog is
+  // open: the host reports it through a mutation error, which the next request clears,
+  // so without latching every option change would refire a request known to 404 and
+  // bounce the dialog out of its fallback mode.
+  const [planUnsupported, setPlanUnsupported] = useState(false)
+  useEffect(() => {
+    if (drainPlanUnsupported) setPlanUnsupported(true)
+  }, [drainPlanUnsupported])
+  useEffect(() => {
+    if (!showDrainConfirm) setPlanUnsupported(false)
+  }, [showDrainConfirm])
+  const planSupported = Boolean(onPlanDrain) && !planUnsupported
+
   // Fetch (and refetch on option changes) the read-only plan while the drain dialog is open.
   useEffect(() => {
-    if (showDrainConfirm && onPlanDrain) {
+    if (showDrainConfirm && onPlanDrain && !planUnsupported) {
       onPlanDrain({ name: resource.name, options: drainOptions })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showDrainConfirm, drainOptions.force, drainOptions.deleteEmptyDirData, resource.name])
+  }, [showDrainConfirm, drainOptions.force, drainOptions.deleteEmptyDirData, resource.name, planUnsupported])
 
   // Rollback dialog state
   const [showRevisions, setShowRevisions] = useState(false)
@@ -698,10 +715,11 @@ export function ResourceActionsBar({
         nodeName={resource.name}
         plan={drainPlan}
         loading={Boolean(isPlanningDrain)}
-        error={drainPlanError}
+        error={planSupported ? drainPlanError : null}
         options={drainOptions}
         onOptionsChange={setDrainOptions}
-        planSupported={Boolean(onPlanDrain)}
+        planSupported={planSupported}
+        onRefreshPlan={planSupported ? () => onPlanDrain?.({ name: resource.name, options: drainOptions }) : undefined}
         isDraining={Boolean(isDrainingNode)}
         onClose={() => {
           setShowDrainConfirm(false)

@@ -32,7 +32,7 @@ func TestDrainOptionsFromRequestDefaults(t *testing.T) {
 		wantForce       bool
 		wantTimeout     time.Duration
 	}{
-		{name: "drain keeps its historical emptyDir default", req: DrainRequest{}, emptyDirDefault: true, wantEmptyDir: true, wantTimeout: 60 * time.Second},
+		{name: "drain defaults emptyDir deletion on", req: DrainRequest{}, emptyDirDefault: true, wantEmptyDir: true, wantTimeout: 60 * time.Second},
 		{name: "plan never includes emptyDir data unless asked", req: DrainRequest{}, emptyDirDefault: false, wantEmptyDir: false, wantTimeout: 60 * time.Second},
 		{name: "explicit false overrides the drain default", req: DrainRequest{DeleteEmptyDirData: &no}, emptyDirDefault: true, wantEmptyDir: false, wantTimeout: 60 * time.Second},
 		{name: "explicit true overrides the plan default", req: DrainRequest{DeleteEmptyDirData: &yes, Force: true, Timeout: 120}, emptyDirDefault: false, wantEmptyDir: true, wantForce: true, wantTimeout: 120 * time.Second},

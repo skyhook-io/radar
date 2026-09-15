@@ -5068,6 +5068,30 @@ export function drainPlanBody(options: DrainPlanRequestOptions): string {
   });
 }
 
+/**
+ * The connected radar predates the drain-plan endpoint. Distinguished from a
+ * node-not-found 404 by the body: handlers answer with a JSON error envelope,
+ * while an unknown route gets the router's plain-text 404. Hosts serving a newer
+ * frontend against an older radar (Radar Hub) use this to fall back to the
+ * plan-less drain dialog instead of leaving Drain permanently disabled.
+ */
+export class DrainPlanUnsupportedError extends Error {
+  constructor() {
+    super("This radar does not support drain plans");
+    this.name = "DrainPlanUnsupportedError";
+  }
+}
+
+export function drainPlanFetchError(
+  status: number,
+  body: { error?: string } | null,
+): Error {
+  if (status === 404 && body === null) {
+    return new DrainPlanUnsupportedError();
+  }
+  return new Error(body?.error || `HTTP ${status}`);
+}
+
 // Read-only drain plan: what a drain with these options would do to each pod on the node.
 // Modelled as a mutation because it is a POST with a body and is fetched on demand
 // while the drain dialog is open; it performs no cluster mutation.
@@ -5084,10 +5108,8 @@ export function useDrainPlan() {
         body: drainPlanBody(options),
       });
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
-        throw new Error(error.error || `HTTP ${response.status}`);
+        const body = await response.json().catch(() => null);
+        throw drainPlanFetchError(response.status, body);
       }
       return response.json();
     },
@@ -5180,6 +5202,11 @@ export function describeDrainResult(data: {
   if (errors.length > 0) {
     parts.push(`Failed ${errors.length}: ${listWithOverflow(errors)}`);
   }
+  parts.push(
+    evicted > 0
+      ? "Evictions were accepted; those pods may still be terminating. The node remains cordoned."
+      : "The node remains cordoned.",
+  );
   const detail = parts.join("\n");
   if (errors.length > 0) {
     return {
