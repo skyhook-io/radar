@@ -2277,6 +2277,14 @@ export function AssessmentHeadline({
             {tone === "inconclusive" ? "What blocked a conclusion" : "Still open"}
           </div>
           <ul className="space-y-0.5 text-xs text-theme-text-primary">
+            {unresolved.map((item, index) => (
+              <li key={`open-${index}`} className="flex gap-1.5">
+                <span aria-hidden className="text-theme-text-tertiary">
+                  –
+                </span>
+                <span className="[overflow-wrap:anywhere]">{item}</span>
+              </li>
+            ))}
             {(signals ?? []).map((signal, index) => (
               <li key={`signal-${index}`} className="flex gap-1.5" data-health-signal>
                 <span aria-hidden className="text-theme-text-tertiary">
@@ -2293,14 +2301,6 @@ export function AssessmentHeadline({
                 ) : (
                   <span className="[overflow-wrap:anywhere]">{signal.text}</span>
                 )}
-              </li>
-            ))}
-            {unresolved.map((item, index) => (
-              <li key={index} className="flex gap-1.5">
-                <span aria-hidden className="text-theme-text-tertiary">
-                  –
-                </span>
-                <span className="[overflow-wrap:anywhere]">{item}</span>
               </li>
             ))}
           </ul>
@@ -3196,30 +3196,30 @@ function AllClearCard({
     </>
   );
   if (storyShape) {
-    const first = flagged[0];
     return (
       <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
-        {first ? (
+        {flagged.map((flag) => (
           <div
-            data-health-flag={first.status}
+            key={`${flag.groupId ?? flag.title}-${flag.status}`}
+            data-health-flag={flag.status}
             className="rounded-md border border-amber-500/40 bg-amber-500/5 px-2.5 py-2 text-xs text-theme-text-primary"
           >
             <div className="flex items-center gap-1.5 font-semibold text-amber-500">
               <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
-              {first.status === "contradiction"
-                ? `The agent calls ${first.title} a ${first.role} and still reports healthy`
-                : `Radar flagged ${first.title}${flagged.length > 1 ? ` and ${flagged.length - 1} more` : ""} · the assessment does not address it`}
+              {flag.status === "contradiction"
+                ? `The agent calls ${flag.title} a ${flag.role} and still reports healthy`
+                : `Radar flagged ${flag.title} · the assessment does not address it`}
             </div>
             <p className="mt-1 text-theme-text-secondary">
-              {first.status === "contradiction"
+              {flag.status === "contradiction"
                 ? "Read the card before treating this as an all-clear."
                 : "It may be unrelated to what you asked, or missed. Open it before treating this as an all-clear."}
-              {first.sourceId && onRevealSource ? (
+              {flag.sourceId && onRevealSource ? (
                 <>
                   {" "}
                   <button
                     type="button"
-                    onClick={() => onRevealSource(first.sourceId!)}
+                    onClick={() => onRevealSource(flag.sourceId!)}
                     className="font-medium text-accent-text hover:underline"
                   >
                     View the card
@@ -3228,7 +3228,7 @@ function AllClearCard({
               ) : null}
             </p>
           </div>
-        ) : null}
+        ))}
         <AssessmentHeadline
           diagnosis={diagnosis}
           tone="healthy"
