@@ -2210,10 +2210,7 @@ export function AssessmentHeadline({
           </Tooltip>
         ) : null}
         {revisedAfter ? (
-          <span
-            className="min-w-0 text-theme-text-tertiary"
-            title={revisedAfter}
-          >
+          <span className="min-w-0 text-theme-text-tertiary">
             Revised after: &ldquo;
             {revisedAfter.length > 110
               ? `${revisedAfter.slice(0, 110).trimEnd()}…`

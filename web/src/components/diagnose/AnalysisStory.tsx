@@ -166,7 +166,7 @@ function ReferenceChip({
       type="button"
       onClick={() => onReveal(target)}
       className="inline-flex max-w-full items-baseline gap-1 rounded border border-theme-border bg-theme-base px-1.5 py-px align-baseline text-[11px] font-medium text-accent-text hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-      title={`Show ${title}`}
+      aria-label={`Show ${title}`}
     >
       <span aria-hidden>↑</span>
       <span className="truncate">{title}</span>
