@@ -18,7 +18,7 @@ export function RolloutRenderer({ data, onNavigate }: RolloutRendererProps) {
   const name = data?.metadata?.name ?? ''
   const { data: capabilities } = useRolloutCapabilities(namespace, name)
   const action = useRolloutAction()
-  const { data: analysisRunsResponse } = useRolloutAnalysisRuns(namespace, name)
+  const { data: analysisRunsResponse, error: analysisRunsError } = useRolloutAnalysisRuns(namespace, name)
   const { data: revisions } = useWorkloadRevisions('rollouts', namespace, name)
   const { data: podsResponse } = useWorkloadPods('rollouts', namespace, name)
 
@@ -30,6 +30,7 @@ export function RolloutRenderer({ data, onNavigate }: RolloutRendererProps) {
       onAction={(next: RolloutAction) => action.mutate({ action: next, namespace, name })}
       pendingAction={action.isPending ? action.variables?.action ?? null : null}
       analysisRunHistory={analysisRunsResponse?.items}
+      analysisRunHistoryError={analysisRunsError}
       revisions={revisions}
       pods={podsResponse?.pods}
     />

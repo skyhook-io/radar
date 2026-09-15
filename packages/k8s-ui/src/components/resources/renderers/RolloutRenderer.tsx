@@ -7,6 +7,7 @@ import { ConfirmDialog } from '../../ui/ConfirmDialog'
 import { formatAge, getRolloutStep, analysisPhaseLevel, healthColors } from '../resource-utils'
 import { CanaryStepTimeline, BlueGreenTimeline } from './rollout/CanaryStepTimeline'
 import { ReplicaSetProgression } from './rollout/ReplicaSetProgression'
+import { LookupFailureNote } from './LookupFailureNote'
 import type { WorkloadRevision, WorkloadPodInfo } from '../../../types'
 
 export type RolloutAction = 'abort' | 'retry' | 'promote' | 'promote-full' | 'skip-step'
@@ -63,6 +64,10 @@ interface RolloutRendererProps {
   // subsection just doesn't render; a library consumer that skips the fetch
   // loses nothing else.
   analysisRunHistory?: AnalysisRunHistoryEntry[]
+  // The history fetch's error, so a refusal can be told apart from "no runs".
+  // Without it a caller lacking `list analysisruns` sees the section vanish and
+  // never learns the history exists.
+  analysisRunHistoryError?: unknown
   // Host-fetched — the Rollout's ReplicaSet revision history + its pods, via
   // the generic workload hooks (useWorkloadRevisions/useWorkloadPods) shared
   // with every other workload kind, joined client-side by the host. Read-only
@@ -410,7 +415,7 @@ function analysisStatusClass(status?: string): string {
   return healthColors[analysisPhaseLevel(status)]
 }
 
-export function RolloutRenderer({ data, onNavigate, capabilities, onAction, pendingAction, analysisRunHistory, revisions, pods }: RolloutRendererProps) {
+export function RolloutRenderer({ data, onNavigate, capabilities, onAction, pendingAction, analysisRunHistory, analysisRunHistoryError, revisions, pods }: RolloutRendererProps) {
   const [confirming, setConfirming] = useState<RolloutActionSpec | null>(null)
   const status = data.status || {}
   const spec = data.spec || {}
@@ -740,10 +745,26 @@ export function RolloutRenderer({ data, onNavigate, capabilities, onAction, pend
       )}
 
       {/* Backward-looking, so it sits below the live progression and stays collapsed */}
-      {analysisRunHistory && analysisRunHistory.length > 0 && (
-        <Section title={`AnalysisRun History (${analysisRunHistory.length})`} icon={Activity} defaultExpanded={false}>
+      {(analysisRunHistory?.length || analysisRunHistoryError) && (
+        <Section
+          // Section reads defaultExpanded once, on mount, so a refusal arriving
+          // later would leave its note sealed inside a collapsed section that
+          // still reads as a healthy list. Keying on the refusal remounts the
+          // section so it opens the moment the list stops being trustworthy.
+          key={analysisRunHistoryError ? 'unreadable' : 'readable'}
+          title={analysisRunHistory?.length ? `AnalysisRun History (${analysisRunHistory.length})` : 'AnalysisRun History'}
+          icon={Activity}
+          // History is backward-looking, so it stays out of the way until it
+          // cannot be read.
+          defaultExpanded={!!analysisRunHistoryError}
+        >
+          <LookupFailureNote
+            errors={[analysisRunHistoryError]}
+            what="this Rollout’s analysis history"
+            incomplete={!!analysisRunHistory?.length}
+          />
           <div className="space-y-1">
-            {analysisRunHistory.map((run) => (
+            {(analysisRunHistory ?? []).map((run) => (
               <div key={run.name} className="flex items-center gap-2 rounded px-2 py-1.5 text-sm">
                 <span className={clsx('badge', analysisStatusClass(run.phase))}>{run.phase || 'Unknown'}</span>
                 {onNavigate ? (
