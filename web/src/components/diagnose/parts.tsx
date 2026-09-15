@@ -24,6 +24,8 @@ import {
   Maximize2,
   HelpCircle,
   FileSearch,
+  Search,
+  ListChecks,
 } from "lucide-react";
 import { stringify as toYaml } from "yaml";
 import { codeToHtml } from "shiki";
@@ -59,6 +61,8 @@ import type {
   InvestigationCaseResolution,
 } from "./investigationCase";
 import { AgentClaimNote } from "./AgentCase";
+import { Badge } from "@skyhook-io/k8s-ui";
+import { storyPlainText } from "./investigationStory";
 
 import { useDisclosureReveal } from "./useDisclosureReveal";
 
@@ -616,6 +620,8 @@ export function TurnView({
   onCheckStatus,
   onRetryDiagnosis,
   hideConclusion = false,
+  assessment = false,
+  explanation,
   turnIndex,
   evidenceStepIds,
   onViewEvidence,
@@ -630,9 +636,13 @@ export function TurnView({
   onRetryDiagnosis?: () => void;
   /** Sources and agent items an answer turn cited; answers otherwise show none. */
   assessmentSources?: ReactNode;
-  // In the maximized workspace the pinned turn's conclusion renders in the side rail,
-  // so the transcript suppresses its own copy (reasoning + tool calls still show).
+  // The current assessment is Findings; the transcript keeps a pointer to it
+  // rather than a second copy (reasoning + tool calls still show).
   hideConclusion?: boolean;
+  /** This turn is (or was) an assessment: render its full verdict, never as a conversational answer. */
+  assessment?: boolean;
+  /** A saved plain-language explanation of an earlier assessment, shown with it here. */
+  explanation?: AssessmentExplanation;
   turnIndex?: number;
   evidenceStepIds?: ReadonlySet<string>;
   onViewEvidence?: (sourceId: string) => void;
@@ -644,8 +654,8 @@ export function TurnView({
 }) {
   // A follow-up (a turn the user asked a question on) is a conversational reply,
   // not a fresh diagnosis — render it as a plain answer, never the root-cause
-  // anchor or a remediation card.
-  const followup = !!turn.question && !turn.apply && !turn.verify;
+  // anchor or a remediation card — unless its verdict revised the assessment.
+  const followup = !!turn.question && !turn.apply && !turn.verify && !assessment;
   // Whether the done turn has anything for ResultCard to render — mirrors its
   // branch order exactly (apply → followup → structured/healthy), since a followup
   // ONLY ever renders FollowupAnswer (report/rootCause), never the remediation list.
@@ -726,7 +736,17 @@ export function TurnView({
             onCheckStatus={onCheckStatus}
             animate={turn.animateResult !== false}
           />
-        ) : hideConclusion && hasResult ? null : hasResult ? (
+        ) : hideConclusion && hasResult ? (
+          assessment ? (
+            <p
+              data-turn-assessment-pointer
+              className="flex items-center gap-1.5 text-xs text-theme-text-tertiary"
+            >
+              <Sparkles className="h-3.5 w-3.5 text-accent" aria-hidden />
+              Assessment · shown in Findings
+            </p>
+          ) : null
+        ) : hasResult ? (
           <ResultCard
             diagnosis={turn.diagnosis!}
             onApply={onApply}
@@ -734,6 +754,9 @@ export function TurnView({
             onCheckStatus={onCheckStatus}
             animate={turn.animateResult !== false}
             assessmentSources={assessmentSources}
+            explanation={explanation}
+            storyInline={assessment}
+            readOnlyAssessment={assessment}
           />
         ) : (
           <EmptyResult animate={turn.animateResult !== false} />
@@ -1002,6 +1025,7 @@ export function ApplyDialog({
   resourceLabel,
   context,
   fix,
+  precondition,
   managedBy,
   confidence,
 }: {
@@ -1012,6 +1036,8 @@ export function ApplyDialog({
   resourceLabel: string;
   context: string;
   fix?: string;
+  /** The condition the agent attached to this step; shown before the operator confirms. */
+  precondition?: string;
   managedBy?: string; // GitOps/Helm owner of the resource, if any
   confidence?: number;
 }) {
@@ -1073,6 +1099,18 @@ export function ApplyDialog({
             <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary [&_pre]:my-1.5 [&_pre]:whitespace-pre-wrap [&_pre_code]:whitespace-pre-wrap">
               {fixText}
             </AIMarkdown>
+            {precondition ? (
+              <p
+                data-apply-precondition
+                className="mt-2 flex items-start gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5 text-xs text-theme-text-primary"
+              >
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+                <span>
+                  <span className="font-medium">The agent said this applies only if:</span>{" "}
+                  {precondition}. Radar has not checked that condition.
+                </span>
+              </p>
+            ) : null}
           </div>
         )}
       </div>
@@ -1927,6 +1965,9 @@ export function ResultCard({
   assessmentAction,
   assessmentSources,
   actionNotice,
+  storyInline = false,
+  readOnlyAssessment = false,
+  revisedAfter,
 }: {
   diagnosis: Diagnosis;
   onApply?: (fix: string) => void;
@@ -1935,6 +1976,16 @@ export function ResultCard({
   applyOutcome?: ApplyMutationOutcome;
   followup?: boolean;
   section?: "full" | "conclusion" | "actions";
+  /**
+   * Render the story as plain prose inside this card. Findings renders the
+   * story itself, with placed cards, so it leaves this off; Activity's
+   * read-only copies of earlier assessments turn it on.
+   */
+  storyInline?: boolean;
+  /** An earlier assessment shown for the record: no Apply, labelled as such. */
+  readOnlyAssessment?: boolean;
+  /** The question that produced this revised assessment, when it replaced an earlier one. */
+  revisedAfter?: string;
   onCheckStatus?: () => void;
   animate?: boolean;
   /** Additional navigation placed in the assessment action row. */
@@ -1990,14 +2041,47 @@ export function ResultCard({
         evidenceConflictExplainedBy={evidenceConflictExplainedBy}
         assessmentAction={assessmentAction}
         assessmentSources={assessmentSources}
+        storyInline={storyInline}
+        revisedAfter={revisedAfter}
       />
     );
   // Couldn't-determine is its own honest state — never a confident all-clear, never
-  // the alarming root-cause anchor.
-  if (diagnosis.inconclusive && !diagnosis.rootCause)
-    return section === "actions" ? null : (
+  // the alarming root-cause anchor. With typed steps it can still carry the
+  // next check, which the actions section renders like any other step.
+  if (diagnosis.inconclusive && !diagnosis.rootCause) {
+    if (section === "actions")
+      return (diagnosis.steps?.length ?? 0) > 0 ? (
+        <DiagnosisResult
+          diagnosis={diagnosis}
+          onApply={readOnlyAssessment ? undefined : onApply}
+          section="actions"
+          animate={animate}
+          showDisclaimer={false}
+          compactActions={compactActions}
+          actionNotice={actionNotice}
+          readOnlyAssessment={readOnlyAssessment}
+        />
+      ) : null;
+    return (
       <>
-        <InconclusiveCard diagnosis={diagnosis} animate={animate} />
+        <InconclusiveCard
+          diagnosis={diagnosis}
+          animate={animate}
+          storyInline={storyInline}
+          revisedAfter={revisedAfter}
+        />
+        {section === "full" && (diagnosis.steps?.length ?? 0) > 0 ? (
+          <DiagnosisResult
+            diagnosis={diagnosis}
+            onApply={readOnlyAssessment ? undefined : onApply}
+            section="actions"
+            animate={false}
+            showDisclaimer={false}
+            compactActions={compactActions}
+            actionNotice={actionNotice}
+            readOnlyAssessment={readOnlyAssessment}
+          />
+        ) : null}
         {assessmentSources ? (
           <AssessmentSourceDetails>{assessmentSources}</AssessmentSourceDetails>
         ) : null}
@@ -2006,6 +2090,7 @@ export function ResultCard({
         )}
       </>
     );
+  }
   // A turn with no structured root cause and no remediation (e.g. "looks healthy",
   // or a clarifying question) is not a diagnosis — render it neutrally rather than
   // forcing the alarming root-cause anchor onto a non-problem.
@@ -2027,7 +2112,7 @@ export function ResultCard({
   return (
     <DiagnosisResult
       diagnosis={diagnosis}
-      onApply={onApply}
+      onApply={readOnlyAssessment ? undefined : onApply}
       explanation={explanation}
       section={section}
       animate={animate}
@@ -2036,7 +2121,106 @@ export function ResultCard({
       assessmentAction={assessmentAction}
       assessmentSources={assessmentSources}
       actionNotice={actionNotice}
+      storyInline={storyInline}
+      readOnlyAssessment={readOnlyAssessment}
+      revisedAfter={revisedAfter}
     />
+  );
+}
+
+const CERTAINTY_LABEL: Record<NonNullable<Diagnosis["certainty"]>, string> = {
+  established: "Established",
+  likely: "Likely",
+  suspected: "Suspected",
+};
+
+const STEP_KIND_LABEL: Record<NonNullable<Diagnosis["steps"]>[number]["kind"], string> = {
+  mitigate: "Mitigate",
+  verify: "Verify",
+  investigate: "Investigate",
+};
+
+/**
+ * The headline of an assessment that carries the story contract: the
+ * agent's plain-language summary with its own word for how sure it is, the
+ * technical cause beneath it, and what is still unresolved — which renders
+ * whenever the agent listed anything, and says so when it listed nothing,
+ * because a persuasive story needs its caveats above the fold, not inside it.
+ */
+export function AssessmentHeadline({
+  diagnosis,
+  tone,
+  revisedAfter,
+}: {
+  diagnosis: Diagnosis;
+  tone: "cause" | "healthy" | "inconclusive";
+  revisedAfter?: string;
+}) {
+  const summary = diagnosis.summary?.trim();
+  if (!summary) return null;
+  const unresolved = (diagnosis.unresolved ?? []).filter((item) =>
+    item.trim(),
+  );
+  return (
+    <div data-assessment-headline className="space-y-2">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-[15px] font-semibold leading-snug text-theme-text-primary [overflow-wrap:anywhere] [text-wrap:balance]">
+          {summary}
+        </p>
+        <CopyButton
+          text={[summary, diagnosis.rootCause].filter(Boolean).join("\n\n")}
+          label="Copy assessment"
+        />
+      </div>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-theme-text-secondary">
+        {diagnosis.certainty ? (
+          <Tooltip content="How sure the agent says it is. Radar records the facts; this word is the agent's.">
+            <Badge tone="agent" size="sm">
+              <Sparkles className="h-2.5 w-2.5 shrink-0" aria-hidden />
+              {CERTAINTY_LABEL[diagnosis.certainty]}
+            </Badge>
+          </Tooltip>
+        ) : null}
+        {revisedAfter ? (
+          <span className="text-theme-text-tertiary">
+            Revised after: &ldquo;{revisedAfter}&rdquo;
+          </span>
+        ) : null}
+      </div>
+      {tone === "cause" && diagnosis.rootCause ? (
+        <AIMarkdown className="text-xs leading-relaxed text-theme-text-secondary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-secondary">
+          {diagnosis.rootCause}
+        </AIMarkdown>
+      ) : null}
+      {unresolved.length > 0 ? (
+        <div
+          data-assessment-unresolved
+          className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2"
+        >
+          <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-500">
+            <HelpCircle className="h-3 w-3" aria-hidden />
+            {tone === "inconclusive" ? "What blocked a conclusion" : "Not established"}
+          </div>
+          <ul className="space-y-0.5 text-xs text-theme-text-primary">
+            {unresolved.map((item, index) => (
+              <li key={index} className="flex gap-1.5">
+                <span aria-hidden className="text-theme-text-tertiary">
+                  –
+                </span>
+                <span className="[overflow-wrap:anywhere]">{item}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : tone !== "healthy" && diagnosis.certainty !== "established" ? (
+        <p
+          data-assessment-unresolved="none"
+          className="text-[11px] text-theme-text-tertiary"
+        >
+          The agent listed nothing unresolved.
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -2280,6 +2464,9 @@ function DiagnosisResult({
   assessmentAction,
   assessmentSources,
   actionNotice,
+  storyInline = false,
+  readOnlyAssessment = false,
+  revisedAfter,
 }: {
   diagnosis: Diagnosis;
   onApply?: (fix: string) => void;
@@ -2291,7 +2478,16 @@ function DiagnosisResult({
   assessmentAction?: ReactNode;
   assessmentSources?: ReactNode;
   actionNotice?: string;
+  storyInline?: boolean;
+  readOnlyAssessment?: boolean;
+  revisedAfter?: string;
 }) {
+  // The story contract: a summary headline above, the story rendered by the
+  // host (or inline as plain prose), typed steps below.
+  const storyShape = !!diagnosis.summary?.trim();
+  const analysisText =
+    storyShape && storyInline ? storyPlainText(diagnosis.report) : diagnosis.report;
+  const showAnalysisDisclosure = !storyShape || storyInline;
   const [detail, setDetail] = useState<"analysis" | "explanation" | null>(
     explanation?.status === "running" ? "explanation" : null,
   );
@@ -2327,10 +2523,15 @@ function DiagnosisResult({
   // "Full analysis" (never relabel the report as a causal assessment).
   const rootCause = diagnosis.rootCause;
   const remediation = diagnosis.remediation || [];
+  const steps = diagnosis.steps ?? [];
+  const typedSteps = steps.length === remediation.length && steps.length > 0;
   const hasRemediation = remediation.length > 0;
   const recIdx = diagnosis.recommendedIndex;
   const recValid =
-    recIdx != null && recIdx >= 1 && recIdx <= remediation.length;
+    recIdx != null &&
+    recIdx >= 1 &&
+    recIdx <= remediation.length &&
+    (!typedSteps || steps[recIdx - 1].kind === "mitigate");
   // Apply is offered ONLY when the agent pointed at a safe step (recommended_index).
   // When it returns 0 / none ("needs human judgement"), we honor that and don't
   // offer one-click apply — the steps stay copy-only with a note.
@@ -2351,9 +2552,11 @@ function DiagnosisResult({
     index: number;
   }) => {
     const isRec = recValid && i === recIdx! - 1;
+    const step = typedSteps ? steps[i] : undefined;
     return (
       <div
         key={i}
+        data-step-kind={step?.kind}
         className={
           isRec ? "rounded-lg border border-accent/40 bg-accent/5 p-2.5" : ""
         }
@@ -2366,25 +2569,50 @@ function DiagnosisResult({
                 : "bg-theme-base text-theme-text-tertiary"
             }`}
           >
-            {i + 1}
+            {step ? (
+              step.kind === "mitigate" ? (
+                <Wrench className="h-2.5 w-2.5" aria-hidden />
+              ) : step.kind === "verify" ? (
+                <ListChecks className="h-2.5 w-2.5" aria-hidden />
+              ) : (
+                <Search className="h-2.5 w-2.5" aria-hidden />
+              )
+            ) : (
+              i + 1
+            )}
           </span>
           <div className="min-w-0 flex-1">
-            {isRec && (
-              <div className="mb-1">
-                <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
-                  <Sparkles className="h-3 w-3" />
-                  Recommended
-                </div>
-                {diagnosis.recommendedReason && (
-                  <div className="mt-0.5 max-w-[100ch] text-[11px] leading-snug text-theme-text-tertiary">
+            {(isRec || step) && (
+              <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                {step ? (
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+                    {STEP_KIND_LABEL[step.kind]}
+                  </span>
+                ) : null}
+                {isRec && (
+                  <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
+                    <Sparkles className="h-3 w-3" />
+                    Recommended
+                  </span>
+                )}
+                {isRec && diagnosis.recommendedReason && (
+                  <span className="basis-full text-[11px] leading-snug text-theme-text-tertiary">
                     {diagnosis.recommendedReason}
-                  </div>
+                  </span>
                 )}
               </div>
             )}
             <AIMarkdown className="max-w-[100ch] text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_pre]:my-1.5">
               {r}
             </AIMarkdown>
+            {step?.precondition ? (
+              <p
+                data-step-precondition
+                className="mt-1 text-[11px] leading-snug text-warning-text"
+              >
+                Only if {step.precondition.replace(/^(if|when|once)\s+/i, "")}
+              </p>
+            ) : null}
           </div>
           {/* Action cluster: compact Apply (recommended = subtly
                         filled, others = ghost) sits next to Copy so each row's
@@ -2422,8 +2650,28 @@ function DiagnosisResult({
   };
   return (
     <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
+      {showConclusion && storyShape && (
+        <div
+          className={
+            section === "conclusion"
+              ? ""
+              : "rounded-lg border border-theme-border bg-theme-surface p-3"
+          }
+        >
+          {readOnlyAssessment ? (
+            <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+              Earlier assessment
+            </div>
+          ) : null}
+          <AssessmentHeadline
+            diagnosis={diagnosis}
+            tone="cause"
+            revisedAfter={revisedAfter}
+          />
+        </div>
+      )}
       {/* Likely cause — agent-authored, visually prominent without claiming proof. */}
-      {showConclusion && rootCause && (
+      {showConclusion && !storyShape && rootCause && (
         <div
           className={
             section === "conclusion"
@@ -2469,7 +2717,7 @@ function DiagnosisResult({
           {section !== "actions" && (
             <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-theme-text-secondary">
               <Wrench className="h-3.5 w-3.5 text-accent" />
-              Remediation
+              {typedSteps ? "Next steps" : "Remediation"}
             </div>
           )}
           {actionNotice && (
@@ -2522,10 +2770,12 @@ function DiagnosisResult({
         </div>
       )}
 
-      {/* Full analysis — the agent's detailed evidence, on demand. */}
+      {/* Full analysis — the agent's detailed evidence, on demand. Under the
+          story contract Findings renders the story itself, so only the
+          explanation and sources remain here. */}
       {showConclusion &&
-        (diagnosis.report ||
-          diagnosis.confidence != null ||
+        ((showAnalysisDisclosure && diagnosis.report) ||
+          (showAnalysisDisclosure && diagnosis.confidence != null) ||
           explanation ||
           assessmentAction ||
           assessmentSources) && (
@@ -2534,8 +2784,8 @@ function DiagnosisResult({
               className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-2"
               data-assessment-actions
             >
-              {(diagnosis.report ||
-                diagnosis.confidence != null ||
+              {((showAnalysisDisclosure && diagnosis.report) ||
+                (showAnalysisDisclosure && diagnosis.confidence != null) ||
                 assessmentSources) && (
                 <button
                   type="button"
@@ -2551,7 +2801,9 @@ function DiagnosisResult({
                     open={showAnalysis}
                     className="h-3.5 w-3.5"
                   />
-                  {diagnosis.report ? "Full analysis" : "Assessment details"}
+                  {showAnalysisDisclosure && diagnosis.report
+                    ? "Full analysis"
+                    : "Assessment details"}
                 </button>
               )}
               {explanation && (
@@ -2597,16 +2849,22 @@ function DiagnosisResult({
               <div id={`${analysisId}-analysis`}>
                 <Collapse open={detail === "analysis"} mountLazily>
                   <div className="border-t border-theme-border/60 px-3 py-2">
-                    <p className="mb-2 text-xs text-theme-text-tertiary">
-                      Agent confidence:{" "}
-                      {diagnosis.confidence != null
-                        ? confidenceLabel(diagnosis.confidence)
-                        : "not stated"}
-                      {diagnosis.confidence != null ? " · self-reported" : ""}
-                    </p>
-                    <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary">
-                      {diagnosis.report}
-                    </AIMarkdown>
+                    {showAnalysisDisclosure ? (
+                      <>
+                        <p className="mb-2 text-xs text-theme-text-tertiary">
+                          Agent confidence:{" "}
+                          {diagnosis.confidence != null
+                            ? confidenceLabel(diagnosis.confidence)
+                            : "not stated"}
+                          {diagnosis.confidence != null
+                            ? " · self-reported"
+                            : ""}
+                        </p>
+                        <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary">
+                          {analysisText}
+                        </AIMarkdown>
+                      </>
+                    ) : null}
                     {assessmentSources}
                   </div>
                 </Collapse>
@@ -2678,6 +2936,8 @@ function AllClearCard({
   evidenceConflictExplainedBy,
   assessmentAction,
   assessmentSources,
+  storyInline = false,
+  revisedAfter,
 }: {
   diagnosis: Diagnosis;
   animate: boolean;
@@ -2687,17 +2947,24 @@ function AllClearCard({
   evidenceConflictExplainedBy?: string[];
   assessmentAction?: ReactNode;
   assessmentSources?: ReactNode;
+  storyInline?: boolean;
+  revisedAfter?: string;
 }) {
+  const storyShape = !!diagnosis.summary?.trim();
   const [showAnalysis, setShowAnalysis] = useState(false);
   const analysisReveal = useDisclosureReveal<HTMLDivElement>();
   const analysisId = useId();
   const report =
-    diagnosis.report ||
-    "The agent did not identify a problem in the evidence it checked.";
+    (storyShape && !storyInline ? "" : storyPlainText(diagnosis.report)) ||
+    (storyShape
+      ? ""
+      : "The agent did not identify a problem in the evidence it checked.");
   const detailed = report.length > 320 || report.split("\n").length > 2;
-  const summary = detailed
-    ? "The agent found no active problem in the evidence it reviewed."
-    : report;
+  const summary = storyShape
+    ? ""
+    : detailed
+      ? "The agent found no active problem in the evidence it reviewed."
+      : report;
   const explained =
     evidenceConflict &&
     !!evidenceConflictExplainedBy &&
@@ -2735,11 +3002,21 @@ function AllClearCard({
                   ? "No problem identified in available evidence"
                   : "No problem found in checked evidence"}
           </div>
-          <CopyButton text={report} label="Copy assessment" />
+          {storyShape ? null : (
+            <CopyButton text={report} label="Copy assessment" />
+          )}
         </div>
-        <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
-          {summary}
-        </AIMarkdown>
+        {storyShape ? (
+          <AssessmentHeadline
+            diagnosis={diagnosis}
+            tone="healthy"
+            revisedAfter={revisedAfter}
+          />
+        ) : (
+          <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
+            {summary}
+          </AIMarkdown>
+        )}
         {unexplainedConflict ? (
           <p className="mt-2 text-xs text-theme-text-secondary">
             Radar also captured evidence of an active problem. Review that
@@ -2815,13 +3092,20 @@ function AllClearCard({
 function InconclusiveCard({
   diagnosis,
   animate,
+  storyInline = false,
+  revisedAfter,
 }: {
   diagnosis: Diagnosis;
   animate: boolean;
+  storyInline?: boolean;
+  revisedAfter?: string;
 }) {
+  const storyShape = !!diagnosis.summary?.trim();
   const text =
-    diagnosis.report ||
-    "The investigation couldn't reach a clear conclusion — some information was unavailable or the evidence was ambiguous.";
+    (storyShape && !storyInline ? "" : storyPlainText(diagnosis.report)) ||
+    (storyShape
+      ? ""
+      : "The investigation couldn't reach a clear conclusion — some information was unavailable or the evidence was ambiguous.");
   return (
     <div className={`mt-3 space-y-2 ${animate ? "animate-result-in" : ""}`}>
       <div className="rounded-lg border border-theme-border bg-theme-elevated p-3">
@@ -2830,11 +3114,22 @@ function InconclusiveCard({
             <HelpCircle className="h-3.5 w-3.5" />
             Couldn&apos;t determine
           </div>
-          <CopyButton text={text} label="Copy assessment" />
+          {storyShape ? null : (
+            <CopyButton text={text} label="Copy assessment" />
+          )}
         </div>
-        <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
-          {text}
-        </AIMarkdown>
+        {storyShape ? (
+          <AssessmentHeadline
+            diagnosis={diagnosis}
+            tone="inconclusive"
+            revisedAfter={revisedAfter}
+          />
+        ) : null}
+        {text ? (
+          <AIMarkdown className="mt-2 text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
+            {text}
+          </AIMarkdown>
+        ) : null}
       </div>
       <div className="flex items-start gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
         <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />

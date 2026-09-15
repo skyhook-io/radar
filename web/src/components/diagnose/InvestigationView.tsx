@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 // A view over one durable, server-side investigation run. It SUBSCRIBES to the
 // run's event stream (replay + live) and reconstructs the transcript; it does not
 // own the run's lifetime — the server does. So closing the panel or navigating
@@ -6,7 +5,6 @@ import type { ReactNode } from "react";
 import {
   investigationDisclosureSettleDelay,
   prefersReducedMotion,
-  useDisclosureReveal,
 } from "./useDisclosureReveal";
 import {
   investigationExplanation,
@@ -31,7 +29,7 @@ import {
   investigationEvidenceCoverageLimited,
   investigationEvidenceConflictsWithHealthy,
   investigationHealthConflictExplainedBy,
-  investigationLiveCaseTurnIndex,
+  investigationAssessmentTurnIndexes,
   investigationEndedBeforeConclusion,
   type InvestigationHistoryUnavailableState,
   investigationHistoryUnavailablePresentation,
@@ -53,7 +51,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Badge, Collapse, CollapseChevron } from "@skyhook-io/k8s-ui";
+import { Badge } from "@skyhook-io/k8s-ui";
 import {
   Send,
   AlertTriangle,
@@ -61,6 +59,7 @@ import {
   ArrowRight,
   Activity,
   CheckCircle2,
+  FileClock,
   Files,
   Loader2,
 } from "lucide-react";
@@ -69,7 +68,6 @@ import {
   addTurn,
   stopRun,
   DiagnoseError,
-  type Diagnosis,
   type DiagnoseStreamEvent,
   type RunSummary,
 } from "../../api/diagnose";
@@ -91,12 +89,7 @@ import {
   projectInvestigationEvidence,
   resolveInvestigationRootCauseEvidence,
 } from "./investigationEvidence";
-import {
-  resolveInvestigationCase,
-  investigationCaseItemsStillRendered,
-  mergeInvestigationCases,
-  type InvestigationCaseResolution,
-} from "./investigationCase";
+import { resolveInvestigationCase } from "./investigationCase";
 import {
   InvestigationEvidencePane,
   partitionInvestigationEvidence,
@@ -106,6 +99,7 @@ import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 import { formatInvestigationTarget } from "./target";
 import { parseContextName } from "../../utils/context-name";
 import type { InvestigationSourceExcerpt } from "./investigationSourceFocus";
+import { storyHasPlacements } from "./investigationStory";
 
 const RECHECK_QUESTION =
   "Did the fix resolve the issue? Re-check the resource's current status and health now, and say whether it's healthy.";
@@ -901,26 +895,10 @@ export function InvestigationView({
     }
   });
 
-  // Initial and explicit verification turns update the Evidence-pane assessment.
-  // Ordinary questions remain conversational answers in Activity.
-  const assessmentIndexes: number[] = [];
-  turns.forEach((t, i) => {
-    const dx = t.diagnosis;
-    const structured =
-      !!dx &&
-      (!!dx.rootCause ||
-        (dx.remediation?.length ?? 0) > 0 ||
-        dx.healthy ||
-        dx.inconclusive);
-    if (
-      t.status === "done" &&
-      !t.apply &&
-      !t.explainAssessment &&
-      (!t.question || t.verify) &&
-      structured
-    )
-      assessmentIndexes.push(i);
-  });
+  // Initial and explicit verification turns update the Findings assessment,
+  // and so does a question whose verdict revises it and is complete. Other
+  // questions remain conversational answers in Activity.
+  const assessmentIndexes = investigationAssessmentTurnIndexes(turns);
   const currentAssessmentIdx = assessmentIndexes.at(-1) ?? -1;
   const initialAssessmentIdx = assessmentIndexes[0] ?? -1;
   const hasMultipleAssessments = assessmentIndexes.length > 1;
@@ -997,101 +975,26 @@ export function InvestigationView({
         : undefined,
     [currentAssessment, currentAssessmentIdx, projection],
   );
-  // A follow-up answer that cites evidence takes over the pane's case; the
-  // assessment's own items are then listed read-only under it.
-  const liveCaseTurnIdx = investigationLiveCaseTurnIndex(
-    turns,
-    currentAssessmentIdx,
-  );
-  const liveCaseIsCurrentAssessment = liveCaseTurnIdx === currentAssessmentIdx;
-  // The qualification banner and the "Used for assessment" markers describe the
-  // assessment on screen, so they always read its own resolution. A later turn's
-  // citations only widen the selection (below): replacing the resolution would
-  // drop the assessment's qualification and push its cited evidence back into
-  // the withheld set.
+  // Findings is the newest assessment and nothing else: its own citations,
+  // its own case, its own story. Earlier assessments stay complete in
+  // Activity; answers that did not revise the assessment stay there too.
   const paneResolution = rootCauseEvidenceResolution;
-  // The live turn's own resolution stays available for the live turn's own
-  // receipt: its sources are its, not the assessment's.
-  const liveTurnResolution = useMemo(() => {
-    if (liveCaseIsCurrentAssessment) return rootCauseEvidenceResolution;
-    const diagnosis = turns[liveCaseTurnIdx]?.diagnosis;
-    return diagnosis?.rootCause
-      ? resolveInvestigationRootCauseEvidence(
-          projection,
-          diagnosis.rootCauseEvidence,
-          liveCaseTurnIdx,
-        )
-      : undefined;
-  }, [
-    liveCaseIsCurrentAssessment,
-    rootCauseEvidenceResolution,
-    turns,
-    liveCaseTurnIdx,
-    projection,
-  ]);
-  const followUpSelectedGroupIds = useMemo(() => {
-    if (liveCaseIsCurrentAssessment) return undefined;
-    if (liveTurnResolution?.status !== "linked") return undefined;
-    return liveTurnResolution.links.flatMap((link) =>
-      link.originalGroupId
-        ? [{ groupId: link.originalGroupId, source: link.source }]
-        : [],
-    );
-  }, [liveCaseIsCurrentAssessment, liveTurnResolution]);
-  // The live turn's own case, before anything is carried onto it. Its source
-  // receipt must list what IT cited, not what the merge brought along.
-  const liveTurnCase = useMemo(
-    () =>
-      liveCaseIsCurrentAssessment
-        ? investigationCase
-        : resolveInvestigationCase(
-            projection,
-            turns[liveCaseTurnIdx]?.diagnosis,
-            liveCaseTurnIdx,
-          ),
-    [
-      liveCaseIsCurrentAssessment,
-      investigationCase,
-      projection,
-      turns,
-      liveCaseTurnIdx,
-    ],
-  );
-  const paneCase = useMemo(() => {
-    const live = liveTurnCase;
-    const earlier: InvestigationCaseResolution[] = [];
-    for (let i = turns.length - 1; i >= 0; i -= 1) {
-      const diagnosis = turns[i]?.diagnosis;
-      if (i === liveCaseTurnIdx || !diagnosis) continue;
-      // Reuse the assessment's own resolution rather than resolving it a
-      // second time: same projection, same result, and it keeps the items the
-      // conflict banner reasons about the ones the merge received.
-      earlier.push(
-        i === currentAssessmentIdx && investigationCase
-          ? investigationCase
-          : resolveInvestigationCase(projection, diagnosis, i),
-      );
-    }
-    return mergeInvestigationCases(live, earlier);
-  }, [
-    liveTurnCase,
-    investigationCase,
-    currentAssessmentIdx,
-    projection,
-    turns,
-    liveCaseTurnIdx,
-  ]);
+  const storyShape =
+    !!currentAssessment?.diagnosis &&
+    (!!currentAssessment.diagnosis.summary ||
+      storyHasPlacements(currentAssessment.diagnosis.report));
   const visibleEvidenceGroupIds = useMemo(
     () =>
       new Set(
         partitionInvestigationEvidence(
           projection.groups,
           paneResolution,
-          paneCase,
-          followUpSelectedGroupIds,
+          investigationCase,
+          undefined,
+          storyShape,
         ).collectionByGroup.keys(),
       ),
-    [projection.groups, paneResolution, paneCase, followUpSelectedGroupIds],
+    [projection.groups, paneResolution, investigationCase, storyShape],
   );
   const evidenceStepIdsByTurn = useMemo(
     () =>
@@ -1390,31 +1293,16 @@ export function InvestigationView({
     currentAssessment?.diagnosis?.healthy === true &&
     investigationEvidenceConflictsWithHealthy(projection);
   // The banner qualifies THIS assessment, so only this assessment's own case
-  // may reframe it. `paneCase` also carries a later answer's items and notes
-  // inherited from superseded assessments; neither of those spoke about this
-  // verdict, and letting them soften it would let an unrelated follow-up
-  // retire a warning the reader still needs.
+  // may reframe it — and that is the only case the pane renders.
   const currentAssessmentEvidenceConflictExplainedBy = useMemo(() => {
     if (!currentAssessmentEvidenceConflict) return undefined;
-    // Two conditions, and both are required. The note must belong to THIS
-    // assessment — a later answer or a superseded assessment did not speak
-    // about this verdict. And it must survive into the case the pane actually
-    // renders: the merge lets a later turn take over a group, and a banner
-    // that points at a note the reader cannot find is worse than no banner.
-    const qualifying = investigationCaseItemsStillRendered(
-      investigationCase?.items,
-      paneCase?.items,
-    );
     return (
-      investigationHealthConflictExplainedBy(projection, qualifying) ??
-      undefined
+      investigationHealthConflictExplainedBy(
+        projection,
+        investigationCase?.items,
+      ) ?? undefined
     );
-  }, [
-    currentAssessmentEvidenceConflict,
-    projection,
-    investigationCase,
-    paneCase,
-  ]);
+  }, [currentAssessmentEvidenceConflict, projection, investigationCase]);
   const hasEvidenceCollectedAfterAssessment =
     currentAssessmentIdx >= 0 &&
     projection.sources.some(
@@ -1846,46 +1734,56 @@ export function InvestigationView({
                               ? retryDiagnosis
                               : undefined
                           }
-                          hideConclusion={assessmentIndexes.includes(index)}
+                          assessment={assessmentIndexes.includes(index)}
+                          // The current assessment is Findings; Activity
+                          // keeps a pointer to it and the full verdict of
+                          // every earlier one, so a revision never erases
+                          // what was said before.
+                          hideConclusion={index === currentAssessmentIdx}
+                          explanation={
+                            assessmentIndexes.includes(index) &&
+                            index !== currentAssessmentIdx
+                              ? explanationFor(turn)
+                              : undefined
+                          }
                           assessmentSources={(() => {
-                            // Answer turns show what they cited; the live
-                            // one also drives Findings, earlier ones are
-                            // read-only.
+                            // Every turn with a case shows what it cited;
+                            // only the current assessment's notes annotate
+                            // Findings, the rest are read-only here.
                             if (
-                              !turn.question ||
-                              turn.verify ||
                               turn.apply ||
                               turn.status !== "done" ||
-                              !turn.diagnosis
+                              !turn.diagnosis ||
+                              index === currentAssessmentIdx
                             )
                               return undefined;
-                            const answerCase =
-                              index === liveCaseTurnIdx
-                                ? liveTurnCase
-                                : resolveInvestigationCase(
-                                    projection,
-                                    turn.diagnosis,
-                                    index,
-                                  );
-                            const answerResolution =
-                              index === liveCaseTurnIdx
-                                ? liveTurnResolution
-                                : undefined;
-                            return answerCase?.items.length ||
-                              answerResolution?.links.length ||
-                              turn.diagnosis?.unlinkedEvidence ||
-                              turn.diagnosis?.evidenceMalformed ? (
+                            const turnCase = resolveInvestigationCase(
+                              projection,
+                              turn.diagnosis,
+                              index,
+                            );
+                            const turnResolution = turn.diagnosis.rootCause
+                              ? resolveInvestigationRootCauseEvidence(
+                                  projection,
+                                  turn.diagnosis.rootCauseEvidence,
+                                  index,
+                                )
+                              : undefined;
+                            return turnCase.items.length ||
+                              turnResolution?.links.length ||
+                              turn.diagnosis.unlinkedEvidence ||
+                              turn.diagnosis.evidenceMalformed ? (
                               <AssessmentSources
                                 renderedGroupIds={visibleEvidenceGroupIds}
-                                resolution={answerResolution}
-                                investigationCase={answerCase}
+                                resolution={turnResolution}
+                                investigationCase={turnCase}
                                 unlinkedEvidence={
-                                  turn.diagnosis?.unlinkedEvidence
+                                  turn.diagnosis.unlinkedEvidence
                                 }
                                 evidenceMalformed={
-                                  turn.diagnosis?.evidenceMalformed
+                                  turn.diagnosis.evidenceMalformed
                                 }
-                                readOnly={index !== liveCaseTurnIdx}
+                                readOnly
                                 onViewSource={viewActivitySource}
                               />
                             ) : undefined;
@@ -2145,7 +2043,6 @@ export function InvestigationView({
                               evidenceMalformed={
                                 currentAssessment.diagnosis?.evidenceMalformed
                               }
-                              readOnly={!liveCaseIsCurrentAssessment}
                               onViewSource={viewActivitySource}
                             />
                           ) : undefined
@@ -2230,58 +2127,35 @@ export function InvestigationView({
                     ) : null}
                   </section>
 
-                  <AssessmentHistory
-                    assessments={assessmentIndexes
-                      .filter(
-                        (index) =>
-                          index !== currentAssessmentIdx &&
-                          (index === initialAssessmentIdx ||
-                            (turns[index].diagnosis?.remediation?.length ?? 0) >
-                              0 ||
-                            turns.some(
-                              (turn) =>
-                                turn.explainAssessment ===
-                                turns[index].resultSequence,
-                            )),
-                      )
-                      .map((index) => ({
-                        sequence: turns[index].resultSequence ?? index,
-                        initial: index === initialAssessmentIdx,
-                        diagnosis: turns[index].diagnosis!,
-                        explanation: explanationFor(turns[index]),
-                        sources: (() => {
-                          // Each earlier assessment owns its own items; they
-                          // render read-only here and never annotate cards.
-                          const resolution =
-                            resolveInvestigationRootCauseEvidence(
-                              projection,
-                              turns[index].diagnosis!.rootCauseEvidence,
-                              index,
-                            );
-                          const earlierCase = resolveInvestigationCase(
-                            projection,
-                            turns[index].diagnosis,
-                            index,
-                          );
-                          return resolution.links.length ||
-                            earlierCase.items.length ? (
-                            <AssessmentSources
-                              renderedGroupIds={visibleEvidenceGroupIds}
-                              resolution={resolution}
-                              investigationCase={earlierCase}
-                              readOnly
-                              onViewSource={viewActivitySource}
-                            />
-                          ) : undefined;
-                        })(),
-                      }))}
-                  />
+                  {hasMultipleAssessments ? (
+                    <button
+                      type="button"
+                      data-investigation-earlier-assessments
+                      onClick={viewActivity}
+                      className="flex items-center gap-1.5 self-start rounded-md px-1.5 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+                    >
+                      <FileClock className="h-3.5 w-3.5" aria-hidden />
+                      {assessmentIndexes.length - 1 === 1
+                        ? "1 earlier assessment"
+                        : `${assessmentIndexes.length - 1} earlier assessments`}
+                      <span className="text-theme-text-tertiary">
+                        · in Activity
+                      </span>
+                    </button>
+                  ) : null}
 
                   <InvestigationEvidencePane
                     projection={projection}
                     rootCauseEvidence={paneResolution}
-                    alsoSelectedGroupIds={followUpSelectedGroupIds}
-                    investigationCase={paneCase}
+                    investigationCase={investigationCase}
+                    story={
+                      storyShape && currentAssessment?.diagnosis
+                        ? {
+                            report: currentAssessment.diagnosis.report,
+                            evidence: currentAssessment.diagnosis.evidence,
+                          }
+                        : undefined
+                    }
                     collecting={
                       explanationRequest?.status !== "running" &&
                       (requestPending ||
@@ -2361,105 +2235,14 @@ export function InvestigationView({
         resourceLabel={formatInvestigationTarget(run)}
         context={run.context}
         fix={pendingFix}
+        precondition={
+          currentAssessment?.diagnosis?.steps?.find(
+            (step) => step.text === pendingFix,
+          )?.precondition
+        }
         managedBy={run.managedBy}
         confidence={turns[lastRemediationIdx]?.diagnosis?.confidence}
       />
-    </div>
-  );
-}
-
-function AssessmentHistory({
-  assessments,
-}: {
-  assessments: {
-    sequence: number;
-    diagnosis: Diagnosis;
-    explanation?: AssessmentExplanation;
-    initial: boolean;
-    sources?: ReactNode;
-  }[];
-}) {
-  const reveal = useDisclosureReveal<HTMLDivElement>();
-  const { revealAfterToggle } = reveal;
-  const [open, setOpen] = useState(false);
-  const regionId = useId();
-  const openRequest = assessments.find((item) => item.explanation?.openRequest)
-    ?.explanation?.openRequest;
-  useEffect(() => {
-    if (openRequest) {
-      setOpen(true);
-      revealAfterToggle(true);
-    }
-  }, [openRequest, revealAfterToggle]);
-  if (assessments.length === 0) return null;
-  return (
-    <div data-investigation-assessment-history className="overflow-hidden">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={regionId}
-        onClick={() => {
-          setOpen(!open);
-          reveal.revealAfterToggle(!open);
-        }}
-        className="flex items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-secondary"
-      >
-        <CollapseChevron open={open} className="h-3.5 w-3.5" />
-        <span className="font-medium">
-          Previous assessments · {assessments.length}
-        </span>
-      </button>
-      <div id={regionId} ref={reveal.elementRef}>
-        <Collapse open={open}>
-          <div className="mt-2 space-y-4 border-l border-theme-border pl-3 pb-2">
-            {assessments.map(
-              (
-                { sequence, diagnosis, explanation, initial, sources },
-                index,
-              ) => (
-                <section
-                  key={sequence}
-                  aria-label={
-                    initial
-                      ? "Initial assessment"
-                      : `Earlier assessment ${index + 1}`
-                  }
-                >
-                  <h3 className="text-sm font-medium text-theme-text-secondary">
-                    {initial
-                      ? "Initial assessment"
-                      : `Earlier assessment ${index + 1}`}
-                  </h3>
-                  <ResultCard
-                    diagnosis={diagnosis}
-                    explanation={explanation}
-                    assessmentSources={sources}
-                    section="conclusion"
-                    showDisclaimer={false}
-                  />
-                  {(diagnosis.remediation?.length ?? 0) > 0 && (
-                    <section
-                      aria-label="Earlier proposed steps"
-                      className="mt-3 border-t border-theme-border/60 pt-3"
-                    >
-                      <h3 className="text-sm font-medium text-theme-text-primary">
-                        Earlier proposed steps
-                      </h3>
-                      <ResultCard
-                        diagnosis={diagnosis}
-                        section="actions"
-                        compactActions
-                        actionNotice="From an earlier assessment, not the current recommendation."
-                        showDisclaimer={false}
-                      />
-                    </section>
-                  )}
-                </section>
-              ),
-            )}
-          </div>
-        </Collapse>
-      </div>
     </div>
   );
 }

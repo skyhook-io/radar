@@ -2,12 +2,20 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { clsx } from 'clsx'
 
+import type { ReactNode } from 'react'
+
 interface MarkdownProps {
   children: string
   className?: string
+  /**
+   * Intercepts links before the default anchor renders. Return null to fall
+   * through. Lets a caller turn a reserved href (an in-page evidence
+   * reference, say) into a control instead of an external link.
+   */
+  linkRenderer?: (href: string | undefined, children: ReactNode) => ReactNode | null
 }
 
-export function Markdown({ children, className }: MarkdownProps) {
+export function Markdown({ children, className, linkRenderer }: MarkdownProps) {
   return (
     <div className={clsx('markdown-content', className)}>
       <ReactMarkdown
@@ -28,16 +36,20 @@ export function Markdown({ children, className }: MarkdownProps) {
         p: ({ children }) => (
           <p className="text-theme-text-secondary my-2 leading-relaxed">{children}</p>
         ),
-        a: ({ href, children }) => (
-          <a
-            href={href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-400 hover:text-blue-300 underline underline-offset-2"
-          >
-            {children}
-          </a>
-        ),
+        a: ({ href, children }) => {
+          const custom = linkRenderer?.(href, children)
+          if (custom !== null && custom !== undefined) return <>{custom}</>
+          return (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-400 hover:text-blue-300 underline underline-offset-2"
+            >
+              {children}
+            </a>
+          )
+        },
         ul: ({ children }) => (
           <ul className="list-disc list-outside pl-4 my-2 space-y-1 text-theme-text-secondary">{children}</ul>
         ),

@@ -1,0 +1,182 @@
+import { describe, expect, it, vi } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import type { Diagnosis } from "../../api/diagnose";
+import { ResultCard, TurnView, type Turn } from "./parts";
+
+const storyDiagnosis: Diagnosis = {
+  rootCause: "Auth to MongoDB fails after revision 8.",
+  summary: "The app cannot log in to its database, and it started with the last deploy.",
+  certainty: "likely",
+  unresolved: ["Whether the Atlas password was rotated on the provider side."],
+  report:
+    "The container dies on start.\n\n[[radar:evidence=0]]\n\nSo the build changed.",
+  remediation: ["Roll back to revision 7", "Test the stored password with `mongosh`"],
+  steps: [
+    {
+      text: "Roll back to revision 7",
+      kind: "mitigate",
+      precondition: "revision 7 still authenticates",
+    },
+    { text: "Test the stored password with `mongosh`", kind: "verify" },
+  ],
+  recommendedIndex: 1,
+  recommendedReason: "reversible",
+  confidence: 0.8,
+};
+
+describe("ResultCard under the story contract", () => {
+  it("leads with the summary, the agent's certainty and what is not established", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard diagnosis={storyDiagnosis} section="conclusion" />,
+    );
+    expect(html).toContain("data-assessment-headline");
+    expect(html).toContain(
+      "The app cannot log in to its database, and it started with the last deploy.",
+    );
+    expect(html).toContain("Likely");
+    expect(html).toContain("Auth to MongoDB fails after revision 8.");
+    expect(html).toContain("Not established");
+    expect(html).toContain("Whether the Atlas password was rotated");
+    // The story is the host's to render with placed cards: no second copy.
+    expect(html).not.toContain("Full analysis");
+    expect(html).not.toContain("[[radar:evidence=0]]");
+  });
+
+  it("says so when the agent listed nothing unresolved on a non-established verdict", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={{ ...storyDiagnosis, unresolved: [] }}
+        section="conclusion"
+      />,
+    );
+    expect(html).toContain("The agent listed nothing unresolved.");
+    const established = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={{ ...storyDiagnosis, unresolved: [], certainty: "established" }}
+        section="conclusion"
+      />,
+    );
+    expect(established).not.toContain("The agent listed nothing unresolved.");
+  });
+
+  it("renders typed steps with their kind and precondition and applies only a mitigate step", () => {
+    const onApply = vi.fn();
+    const html = renderToStaticMarkup(
+      <ResultCard diagnosis={storyDiagnosis} section="actions" onApply={onApply} />,
+    );
+    expect(html).toContain('data-step-kind="mitigate"');
+    expect(html).toContain('data-step-kind="verify"');
+    expect(html).toContain("Only if revision 7 still authenticates");
+    const doubled = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={{
+          ...storyDiagnosis,
+          steps: [{ ...storyDiagnosis.steps![0], precondition: "if the crash is deliberate" }],
+          remediation: [storyDiagnosis.remediation[0]],
+        }}
+        section="actions"
+      />,
+    );
+    expect(doubled).toContain("Only if the crash is deliberate");
+    expect(html).toContain("Apply…");
+    const full = renderToStaticMarkup(
+      <ResultCard diagnosis={storyDiagnosis} section="full" onApply={onApply} />,
+    );
+    expect(full).toContain("Next steps");
+    expect(full).not.toContain(">Remediation<");
+
+    const verifyRecommended = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={{ ...storyDiagnosis, recommendedIndex: 2 }}
+        section="actions"
+        onApply={onApply}
+      />,
+    );
+    expect(verifyRecommended).not.toContain("Apply…");
+  });
+
+  it("keeps the previous shape for a diagnosis without the story fields", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={{
+          rootCause: "Image tag is invalid.",
+          report: "Long analysis.",
+          remediation: ["Fix the tag"],
+        }}
+        section="full"
+      />,
+    );
+    expect(html).toContain("Likely cause");
+    expect(html).toContain("Full analysis");
+    expect(html).toContain("Remediation");
+    expect(html).not.toContain("data-assessment-headline");
+  });
+
+  it("shows an inconclusive verdict's blocking question and its verify steps", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={{
+          rootCause: "",
+          inconclusive: true,
+          summary: "Radar could not read the pod logs, so the cause is unknown.",
+          unresolved: ["Whether the container logs show an error on start."],
+          report: "I could not read logs.",
+          remediation: ["Grant `get pods/log` and re-run"],
+          steps: [{ text: "Grant `get pods/log` and re-run", kind: "investigate" }],
+        }}
+        section="full"
+      />,
+    );
+    expect(html).toContain("What blocked a conclusion");
+    expect(html).toContain('data-step-kind="investigate"');
+    expect(html).not.toContain("Apply…");
+  });
+});
+
+describe("TurnView and assessments", () => {
+  const turn = (patch: Partial<Turn>): Turn =>
+    ({
+      status: "done",
+      timeline: [],
+      diagnosis: storyDiagnosis,
+      ...patch,
+    }) as Turn;
+
+  it("renders a revised question turn as an assessment, not a conversational answer", () => {
+    const html = renderToStaticMarkup(
+      <TurnView
+        turn={turn({ question: "could it be the build?" })}
+        assessment
+        turnIndex={1}
+      />,
+    );
+    expect(html).toContain("data-assessment-headline");
+    expect(html).toContain("Earlier assessment");
+    expect(html).not.toContain(">Answer<");
+    // Read-only: Apply is never offered on a copy kept for the record.
+    expect(html).not.toContain("Apply…");
+    // The story is inline here as plain prose, markers stripped.
+    expect(html).toContain("Full analysis");
+    expect(html).not.toContain("[[radar:evidence=0]]");
+  });
+
+  it("keeps a pointer for the current assessment and the full answer for a plain question", () => {
+    const pointer = renderToStaticMarkup(
+      <TurnView turn={turn({})} assessment hideConclusion turnIndex={0} />,
+    );
+    expect(pointer).toContain("Assessment · shown in Findings");
+    expect(pointer).not.toContain("data-assessment-headline");
+    const answer = renderToStaticMarkup(
+      <TurnView
+        turn={turn({
+          question: "what is a PDB?",
+          diagnosis: { rootCause: "", report: "A budget.", remediation: [] },
+        })}
+        turnIndex={2}
+      />,
+    );
+    expect(answer).toContain(">Answer<");
+    expect(answer).toContain("A budget.");
+  });
+});

@@ -273,32 +273,48 @@ export function investigationEvidenceInputsEqual(
 }
 
 /**
- * The turn whose agent case annotates the Evidence pane. A follow-up answer
- * that cites evidence ("chart this and cite it") must reach Findings, so the
- * newest completed non-apply, non-explanation turn carrying a bound case or
- * linked root-cause refs wins; earlier turns keep their case read-only.
+ * Which turns are assessments — the ones Findings may show. The initial turn
+ * and explicit verifications always are; an ordinary question is one only
+ * when its verdict says so with `revisesAssessment` AND carries a complete
+ * verdict (a headline and a finding), because agents restate the root cause
+ * on most answers and a bare flag must never retire what the reader is
+ * looking at. The server enforces the same completeness rule; this mirrors it
+ * so a hosted backend that forgets cannot rewrite Findings by accident.
  */
-export function investigationLiveCaseTurnIndex(
+export function investigationIsAssessmentTurn(
+  turn: Pick<
+    Turn,
+    "status" | "apply" | "explainAssessment" | "question" | "verify" | "diagnosis"
+  >,
+): boolean {
+  const dx = turn.diagnosis;
+  if (!dx || turn.status !== "done" || turn.apply || turn.explainAssessment)
+    return false;
+  const structured =
+    !!dx.rootCause ||
+    (dx.remediation?.length ?? 0) > 0 ||
+    !!dx.healthy ||
+    !!dx.inconclusive;
+  if (!structured) return false;
+  if (!turn.question || turn.verify) return true;
+  return (
+    dx.revisesAssessment === true &&
+    !!dx.summary &&
+    (!!dx.rootCause || !!dx.healthy || !!dx.inconclusive)
+  );
+}
+
+export function investigationAssessmentTurnIndexes(
   turns: readonly Pick<
     Turn,
-    "status" | "apply" | "explainAssessment" | "diagnosis"
+    "status" | "apply" | "explainAssessment" | "question" | "verify" | "diagnosis"
   >[],
-  currentAssessmentIdx: number,
-): number {
-  for (let index = turns.length - 1; index >= 0; index -= 1) {
-    const turn = turns[index];
-    if (turn.status !== "done" || turn.apply || turn.explainAssessment)
-      continue;
-    const diagnosis = turn.diagnosis;
-    if (!diagnosis) continue;
-    if (
-      diagnosis.evidence?.some((item) => item.status === "linked") ||
-      (diagnosis.rootCause && diagnosis.rootCauseEvidence?.status === "linked")
-    ) {
-      return Math.max(index, currentAssessmentIdx);
-    }
-  }
-  return currentAssessmentIdx;
+): number[] {
+  const indexes: number[] = [];
+  turns.forEach((turn, index) => {
+    if (investigationIsAssessmentTurn(turn)) indexes.push(index);
+  });
+  return indexes;
 }
 
 export function investigationEvidenceCoverageLimited(

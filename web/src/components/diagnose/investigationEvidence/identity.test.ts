@@ -471,7 +471,7 @@ describe("root-cause evidence resolution", () => {
     ).toBeUndefined();
   });
 
-  it("fails closed for malformed, unmatched, prior-turn, failed, or partial refs", () => {
+  it("fails closed for malformed, unmatched, later-turn, failed, or partial refs", () => {
     const currentRef = evidenceRef("a", "b");
     const priorRef = evidenceRef("c", "d");
     const failedRef = evidenceRef("a", "e");
@@ -493,9 +493,27 @@ describe("root-cause evidence resolution", () => {
       ],
     );
 
+    // A result read in an earlier turn of the same run is citable — a revised
+    // assessment may rest on it — and resolves to that earlier read.
+    expect(
+      resolveInvestigationRootCauseEvidence(
+        projection,
+        { status: "linked", refs: [priorRef] },
+        1,
+      ),
+    ).toMatchObject({ status: "linked", links: [{ source: { stepId: "old" } }] });
+    // A result read AFTER the assessment turn is not: the assessment could not
+    // have seen it.
+    expect(
+      resolveInvestigationRootCauseEvidence(
+        projection,
+        { status: "linked", refs: [currentRef] },
+        0,
+      ),
+    ).toEqual({ status: "invalid", links: [] });
+
     for (const evidence of [
       { status: "linked" as const, refs: [evidenceRef("a", "z")] },
-      { status: "linked" as const, refs: [priorRef] },
       { status: "linked" as const, refs: [failedRef] },
       { status: "linked" as const, refs: [partialRef] },
       { status: "linked" as const, refs: [currentRef, currentRef] },
@@ -531,7 +549,7 @@ describe("root-cause evidence resolution", () => {
     ).toEqual({ status: "invalid", links: [] });
   });
 
-  it("counts ineligible duplicate refs only in the assessment turn", () => {
+  it("counts duplicate refs across every turn up to the assessment", () => {
     const ref = evidenceRef("a", "b");
     const currentDuplicate = project(
       [tool("prior", "get_resource", deployment, { evidenceRef: ref })],
@@ -562,16 +580,16 @@ describe("root-cause evidence resolution", () => {
       ],
       [tool("current-only", "get_resource", deployment, { evidenceRef: ref })],
     );
+    // A server-issued ref names one payload in one scope; the same ref in two
+    // turns can only be a replay, so run-wide uniqueness is the rule — the
+    // same rule the server binds by.
     expect(
       resolveInvestigationRootCauseEvidence(
         priorDuplicateOnly,
         { status: "linked", refs: [ref] },
         1,
       ),
-    ).toMatchObject({
-      status: "linked",
-      links: [{ source: { stepId: "current-only" } }],
-    });
+    ).toEqual({ status: "invalid", links: [] });
   });
 
   it("rejects a replay that claims refs from different investigation scopes are linked", () => {

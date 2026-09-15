@@ -52,65 +52,6 @@ export interface InvestigationCaseResolution {
 }
 
 /**
- * Notes the agent put on cards in earlier assessments stay on those cards
- * when a later turn takes over the pane's case, unless the later turn
- * addressed the same card; a follow-up about one chart must not strip the
- * initial assessment's reading from everything else. Ordering and the
- * ruled-out list follow the live turn alone, and source-placed notes stay
- * listed under their own assessment. `earlier` is newest first.
- */
-export function mergeInvestigationCases(
-  live: InvestigationCaseResolution | undefined,
-  earlier: readonly (InvestigationCaseResolution | undefined)[],
-): InvestigationCaseResolution | undefined {
-  const liveItems = live?.items ?? [];
-  const covered = new Set(
-    liveItems.flatMap((item) => (item.groupId ? [item.groupId] : [])),
-  );
-  const carried: InvestigationCaseItem[] = [];
-  for (const resolution of earlier) {
-    // The newest assessment that spoke about a group wins it outright, and it
-    // wins with everything it said: a card note and a pinned revision note are
-    // two readings of one group, not rivals. Coverage is therefore taken after
-    // the whole resolution, not as each of its items is carried.
-    const takenHere = new Set<string>();
-    for (const item of resolution?.items ?? []) {
-      if (item.placement === "source" || !item.groupId) continue;
-      if (covered.has(item.groupId)) continue;
-      takenHere.add(item.groupId);
-      carried.push(item);
-    }
-    for (const groupId of takenHere) covered.add(groupId);
-  }
-  if (carried.length === 0) return live;
-  return { items: [...liveItems, ...carried], ruledOut: live?.ruledOut ?? [] };
-}
-
-/**
- * The subset of one assessment's items that survived into the case the pane
- * actually renders. Matching is by value, not object identity: the merge is
- * fed freshly resolved copies of every turn, so an identity test would report
- * that an assessment's own note had vanished the moment any other turn was
- * re-resolved.
- */
-export function investigationCaseItemsStillRendered(
-  assessmentItems: readonly InvestigationCaseItem[] | undefined,
-  renderedItems: readonly InvestigationCaseItem[] | undefined,
-): InvestigationCaseItem[] {
-  if (!assessmentItems?.length || !renderedItems?.length) return [];
-  const key = (item: InvestigationCaseItem) =>
-    [
-      item.index,
-      item.source.id,
-      item.placement,
-      item.groupId ?? "",
-      item.observation ? investigationCaseObservationKey(item.observation) : "",
-    ].join("\u0000");
-  const rendered = new Set(renderedItems.map(key));
-  return assessmentItems.filter((item) => rendered.has(key(item)));
-}
-
-/**
  * One half of a Go↔TS contract: `evidenceRoles` in internal/ai/parse.go and the
  * DiagnosisEvidenceRole union in api/diagnose.ts must list exactly these roles.
  * A role the parser accepts but this set omits is bound server-side and then
@@ -134,10 +75,12 @@ export function investigationCaseObservationKey(
 
 /**
  * Resolves the agent's case for one assessment. Refs are re-validated against
- * the assessment turn exactly like root-cause refs; an item whose ref does not
- * resolve is dropped on its own. Placement follows the observation the
- * (ref, subject) pair names: exactly one match pins the claim to that
- * observation, anything else falls back to the source row.
+ * the run up to and including the assessment turn, exactly like root-cause
+ * refs — a revised assessment may rest on a result read in an earlier turn,
+ * and the observation it resolves to is that earlier read, never a later one.
+ * An item whose ref does not resolve is dropped on its own. Placement follows
+ * the observation the (ref, subject) pair names: exactly one match pins the
+ * claim to that observation, anything else falls back to the source row.
  */
 export function resolveInvestigationCase(
   projection: InvestigationEvidenceProjection,
@@ -151,7 +94,7 @@ export function resolveInvestigationCase(
   if (evidence.length === 0) return { items: [], ruledOut: [] };
   const byRef = new Map<string, InvestigationEvidenceSource[]>();
   for (const source of projection.evidenceRefSources) {
-    if (source.turnIndex !== assessmentTurnIndex || !source.evidenceRef)
+    if (source.turnIndex > assessmentTurnIndex || !source.evidenceRef)
       continue;
     const matches = byRef.get(source.evidenceRef) ?? [];
     matches.push(source);
@@ -159,7 +102,7 @@ export function resolveInvestigationCase(
   }
   const citableSourceIds = new Set(
     projection.citableSources
-      .filter((source) => source.turnIndex === assessmentTurnIndex)
+      .filter((source) => source.turnIndex <= assessmentTurnIndex)
       .map((source) => source.id),
   );
   const items: InvestigationCaseItem[] = [];

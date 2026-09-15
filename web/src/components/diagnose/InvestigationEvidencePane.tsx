@@ -49,6 +49,13 @@ import {
   type TimeSeries,
 } from "@skyhook-io/k8s-ui/components/charts";
 import { apiVersionToGroup } from "../../utils/navigation";
+import {
+  AnalysisStory,
+  resolveStoryPlacements,
+  type StoryPlacementLoss,
+  type StoryPlacementTarget,
+} from "./AnalysisStory";
+import type { DiagnosisEvidenceItem } from "../../api/diagnose";
 import { parseLogLine } from "../../utils/log-format";
 import {
   metricsChangeCoverage,
@@ -197,16 +204,21 @@ export function partitionInvestigationEvidence(
   resolution?: InvestigationRootCauseEvidenceResolution,
   investigationCase?: InvestigationCaseResolution,
   /**
-   * What a later turn cited, with the source that cited it. A follow-up adds
-   * to what the displayed assessment selected and never takes a selection
-   * away. The source travels with it because promoting a broader card needs
-   * one: an id alone selects the group but leaves the broader gate below
-   * unable to find who cited it, and the card stays withheld.
+   * Additional selections with the source that made them. The source travels
+   * with an id because promoting a broader card needs one: an id alone selects
+   * the group but leaves the broader gate below unable to find who cited it,
+   * and the card stays withheld.
    */
   alsoSelected?: readonly {
     groupId: string;
     source: InvestigationEvidenceSource;
   }[],
+  /**
+   * Under a story every captured result about the target belongs in the one
+   * inventory the reader opens to see what Radar recorded; nothing about the
+   * target is folded into a second tier. Broader results stay cited-only.
+   */
+  inventory = false,
 ) {
   // Selection: legacy root-cause links plus every placed agent item, of any
   // role (placement promotes a group into main the way a citation does; the
@@ -279,7 +291,8 @@ export function partitionInvestigationEvidence(
       !group.historical &&
       (selected.has(group.id) ||
         (!broader &&
-          (group.latest.tier === "key" ||
+          (inventory ||
+            group.latest.tier === "key" ||
             (group.latest.tier === "supporting" && adverse(group)))));
     const collection = main
       ? "main"
@@ -360,6 +373,7 @@ export function InvestigationEvidencePane({
   rootCauseEvidence,
   alsoSelectedGroupIds,
   investigationCase,
+  story,
   collecting,
   animateGroupIds,
   onViewSource,
@@ -373,13 +387,20 @@ export function InvestigationEvidencePane({
   projection: InvestigationEvidenceProjection;
   /** Server-validated links for the current root cause; absent without one. */
   rootCauseEvidence?: InvestigationRootCauseEvidenceResolution;
-  /** What a later turn cited; adds to the assessment's selection. */
+  /** Additional selections, with the source that made them. */
   alsoSelectedGroupIds?: readonly {
     groupId: string;
     source: InvestigationEvidenceSource;
   }[];
   /** The current assessment's agent case, resolved against this projection. */
   investigationCase?: InvestigationCaseResolution;
+  /**
+   * The assessment's story: the agent's prose with `[[radar:evidence=N]]`
+   * placements resolved against `investigationCase` and the verdict's
+   * `evidence` array. Absent on backends and runs without the story contract,
+   * which keep the previous layout.
+   */
+  story?: { report: string; evidence?: DiagnosisEvidenceItem[] };
   collecting: boolean;
   animateGroupIds: ReadonlySet<string>;
   onViewSource: (
@@ -392,7 +413,7 @@ export function InvestigationEvidencePane({
   onOpenResource?: (ref: DiagnosisResourceRef) => void;
   /** Opens Radar's Timeline filtered to the resource a changes card is about. */
   onOpenTimeline?: (scope: InvestigationTimelineScope) => void;
-  /** Actions follow the complete evidence section, including its disclosures. */
+  /** Next steps. Under a story they precede the inventory of captured results; otherwise they follow the evidence section. */
   afterEvidence?: ReactNode;
   /** Explicit Activity → Findings navigation, including repeat clicks. */
   revealRequest?: { sourceId: string; requestId: number };
@@ -413,13 +434,16 @@ export function InvestigationEvidencePane({
   const [coverageOpen, setCoverageOpen] = useState(false);
   const [workloadOpen, setWorkloadOpen] = useState(false);
   const [earlierOpen, setEarlierOpen] = useState(false);
+  const [resultsOpen, setResultsOpen] = useState(false);
   const handledRevealRequestRef = useRef<number | undefined>(undefined);
   const openingForRevealRequestRef = useRef<number | undefined>(undefined);
+  const storyMode = story !== undefined;
   const partition = partitionInvestigationEvidence(
     projection.groups,
     rootCauseEvidence,
     investigationCase,
     alsoSelectedGroupIds,
+    storyMode,
   );
   const hasCurrentEvidence =
     partition.main.length + partition.workload.length > 0;
@@ -541,6 +565,193 @@ export function InvestigationEvidencePane({
   const limitationSummary = coverageGroups
     .map((group) => `${group.label}: ${group.summary}`)
     .join(" · ");
+  // Resolves a story placement to the agent item it names, or says why it
+  // cannot: an index Radar does not know, an item the server could not bind,
+  // or a bound item that matches no single observation. Only the last two
+  // distinguish "the agent was wrong" from "Radar could not tell".
+  const resolveStoryItem = useCallback(
+    (index: number): StoryPlacementTarget | StoryPlacementLoss => {
+      const evidence = story?.evidence ?? [];
+      if (!Number.isInteger(index) || index < 0 || index >= evidence.length)
+        return "invalid";
+      if (evidence[index]?.status === "unlinked") return "unlinked";
+      const item = investigationCase?.items.find(
+        (candidate) => candidate.index === index,
+      );
+      if (!item) return "unplaced";
+      if (item.groupId && item.observation)
+        return { item, domId: `story-${item.groupId}` };
+      // A subject-less citation of a call that fans out into several cards
+      // (the diagnose bundle above all) names the call, not one of its
+      // results. Placing the call's primary card is not guessing which claim
+      // the agent meant: it is rendering the headline result of what it
+      // cited, the same card Activity's "Show evidence" opens for that call.
+      if (item.subject === undefined && item.source.primaryGroupId) {
+        const group = projection.groups.find(
+          (candidate) => candidate.id === item.source.primaryGroupId,
+        );
+        if (group)
+          return {
+            item: {
+              ...item,
+              groupId: group.id,
+              observation: group.latest,
+              placement: "card",
+            },
+            domId: `story-${group.id}`,
+          };
+      }
+      // A bound call that produced no card at all (a search, a metrics
+      // table) is not ambiguous, it is unrendered; its raw result is in
+      // Activity and the note at the claim says so.
+      const hasCard = projection.groups.some((group) =>
+        group.observations.some(
+          (observation) => observation.source.id === item.source.id,
+        ),
+      );
+      return hasCard
+        ? "unplaced"
+        : { kind: "nocard", sourceId: item.source.id };
+    },
+    [story?.evidence, investigationCase, projection.groups],
+  );
+  const groupsById = new Map(
+    projection.groups.map((group) => [group.id, group] as const),
+  );
+  const renderStoryPlacement = useCallback(
+    (target: StoryPlacementTarget, { compact }: { compact: boolean }) => {
+      const group = target.item.groupId
+        ? groupsById.get(target.item.groupId)
+        : undefined;
+      if (!group || !target.item.observation) return null;
+      return (
+        <EvidenceCard
+          group={group}
+          observation={target.item.observation}
+          domId={target.domId}
+          animateArrival={false}
+          onViewSource={onViewSource}
+          spanFullRow
+          compact={compact}
+        />
+      );
+    },
+    // groupsById is rebuilt per render from projection.groups.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projection.groups, onViewSource],
+  );
+  const revealStoryTarget = useCallback(
+    (target: StoryPlacementTarget) => {
+      const placed = document.getElementById(target.domId);
+      if (placed) {
+        placed.scrollIntoView({
+          block: "center",
+          behavior: prefersReducedMotion() ? "auto" : "smooth",
+        });
+        (placed as HTMLElement).focus({ preventScroll: true });
+        return;
+      }
+      revealCaseItem(target.item);
+    },
+    [revealCaseItem],
+  );
+  // What the story actually placed, not what the case could have: a cited
+  // card the agent never placed is inventory, and the inventory says so.
+  const storyPlacements = story
+    ? resolveStoryPlacements(story.report, resolveStoryItem)
+    : undefined;
+  const placedCount = storyPlacements?.placedCount ?? 0;
+  const placedGroupIds = new Set(
+    [...(storyPlacements?.byIndex.values() ?? [])].flatMap((entry) =>
+      entry.kind === "placed" && entry.target.item.groupId
+        ? [entry.target.item.groupId]
+        : [],
+    ),
+  );
+  const capturedTotal =
+    partition.main.length + partition.workload.length + partition.earlier.length;
+  const resultsSummary = [
+    partition.hiddenBroader > 0
+      ? `${partition.hiddenBroader} about other resources not shown`
+      : undefined,
+    partition.hiddenMetrics > 0
+      ? `${partition.hiddenMetrics} broader metric ${partition.hiddenMetrics === 1 ? "result" : "results"} not shown`
+      : undefined,
+    projection.limitations.length > 0
+      ? `${projection.limitations.length} ${projection.limitations.length === 1 ? "check" : "checks"} limited`
+      : undefined,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" · ");
+  const mainCards = (
+    <>
+      <div className="grid items-start gap-2.5">
+        {partition.main.map((group) => (
+          <EvidenceCard
+            key={group.id}
+            group={group}
+            spanFullRow
+            animateArrival={animateGroupIds.has(group.id)}
+            onViewSource={onViewSource}
+            placedInStory={placedGroupIds.has(group.id)}
+          />
+        ))}
+      </div>
+
+      {partition.hiddenBroader > 0 ? (
+        <p
+          className="text-xs text-theme-text-tertiary"
+          data-testid="investigation-hidden-evidence"
+        >
+          {partition.hiddenBroader === 1
+            ? "1 result about another resource is not shown; it appears here when the assessment cites it."
+            : `${partition.hiddenBroader} results about other resources are not shown; they appear here when the assessment cites them.`}
+        </p>
+      ) : null}
+
+      {partition.hiddenMetrics > 0 ? (
+        <p
+          className="text-xs text-theme-text-tertiary"
+          data-testid="investigation-hidden-metrics"
+        >
+          {partition.hiddenMetrics === 1
+            ? "1 broader metric result is not shown; it appears here when the assessment cites it."
+            : `${partition.hiddenMetrics} broader metric results are not shown; they appear here when the assessment cites them.`}
+        </p>
+      ) : null}
+
+      {!hasCurrentEvidence ? (
+        <EmptyCollection
+          collecting={collecting}
+          hasEarlierEvidence={partition.earlier.length > 0}
+          onViewActivity={onViewActivity}
+        />
+      ) : null}
+
+      <CollapsedEvidenceCollection
+        id="investigation-workload-evidence"
+        title="More evidence about this resource"
+        description=""
+        groups={partition.workload}
+        totalCount={partition.workload.length + partition.earlier.length}
+        animateGroupIds={animateGroupIds}
+        onViewSource={onViewSource}
+        open={workloadOpen}
+        onOpenChange={setWorkloadOpen}
+      >
+        <CollapsedEvidenceCollection
+          id="investigation-earlier-evidence"
+          title="Previous observations"
+          description="Earlier does not mean resolved."
+          groups={partition.earlier}
+          animateGroupIds={animateGroupIds}
+          onViewSource={onViewSource}
+          open={earlierOpen}
+          onOpenChange={setEarlierOpen}
+        />
+      </CollapsedEvidenceCollection>
+    </>
+  );
   const content = (
     <section
       aria-labelledby="investigation-radar-evidence"
@@ -551,24 +762,30 @@ export function InvestigationEvidencePane({
           ? `Evidence coverage update: ${limitationSummary}`
           : ""}
       </span>
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h2
-              id="investigation-radar-evidence"
-              className="text-lg font-semibold text-theme-text-primary"
-            >
-              Evidence
-            </h2>
-            {collecting ? (
-              <span className="inline-flex items-center gap-1.5 text-xs text-accent-text">
-                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-                collecting
-              </span>
-            ) : null}
+      {!storyMode ? (
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h2
+                id="investigation-radar-evidence"
+                className="text-lg font-semibold text-theme-text-primary"
+              >
+                Evidence
+              </h2>
+              {collecting ? (
+                <span className="inline-flex items-center gap-1.5 text-xs text-accent-text">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+                  collecting
+                </span>
+              ) : null}
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        <h2 id="investigation-radar-evidence" className="sr-only">
+          Analysis and evidence
+        </h2>
+      )}
 
       {projection.limitations.length > 0 ? (
         <CoverageStrip
@@ -589,77 +806,65 @@ export function InvestigationEvidencePane({
           />
         ) : null}
 
-        {/* What the agent considered and rejected belongs with the conclusion
-            it argues for, not after the evidence list among the withheld
-            counts, where it read as bookkeeping. */}
+        {storyMode && story ? (
+          <div className="rounded-lg border border-theme-border/80 bg-theme-surface px-3 py-3">
+            <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-theme-text-secondary">
+              Why
+              <span className="font-normal text-theme-text-tertiary">
+                the agent&apos;s analysis, with what it saw
+              </span>
+              {collecting ? (
+                <span className="ml-auto inline-flex items-center gap-1.5 text-xs font-normal text-accent-text">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+                  collecting
+                </span>
+              ) : null}
+            </div>
+            <AnalysisStory
+              report={story.report}
+              resolveItem={resolveStoryItem}
+              renderPlacement={renderStoryPlacement}
+              onReveal={revealStoryTarget}
+              onViewSource={(sourceId) => onViewSource(sourceId)}
+            />
+          </div>
+        ) : null}
+
+        {/* What the agent considered and rejected belongs with the argument
+            it belongs to, right after it, not after the evidence list among
+            the withheld counts, where it read as bookkeeping. */}
         {visibleRuledOut.length > 0 ? (
           <RuledOutBlock entries={visibleRuledOut} onReveal={revealCaseItem} />
         ) : null}
 
-        <div className="grid items-start gap-2.5">
-          {partition.main.map((group) => (
-            <EvidenceCard
-              key={group.id}
-              group={group}
-              spanFullRow
-              animateArrival={animateGroupIds.has(group.id)}
-              onViewSource={onViewSource}
-            />
-          ))}
-        </div>
+        {storyMode ? afterEvidence : null}
 
-        {partition.hiddenBroader > 0 ? (
-          <p
-            className="text-xs text-theme-text-tertiary"
-            data-testid="investigation-hidden-evidence"
-          >
-            {partition.hiddenBroader === 1
-              ? "1 result about another resource is not shown; it appears here when the assessment cites it."
-              : `${partition.hiddenBroader} results about other resources are not shown; they appear here when the assessment cites them.`}
-          </p>
-        ) : null}
-
-        {partition.hiddenMetrics > 0 ? (
-          <p
-            className="text-xs text-theme-text-tertiary"
-            data-testid="investigation-hidden-metrics"
-          >
-            {partition.hiddenMetrics === 1
-              ? "1 broader metric result is not shown; it appears here when the assessment cites it."
-              : `${partition.hiddenMetrics} broader metric results are not shown; they appear here when the assessment cites them.`}
-          </p>
-        ) : null}
-
-        {!hasCurrentEvidence ? (
-          <EmptyCollection
-            collecting={collecting}
-            hasEarlierEvidence={partition.earlier.length > 0}
-            onViewActivity={onViewActivity}
-          />
-        ) : null}
-
-        <CollapsedEvidenceCollection
-          id="investigation-workload-evidence"
-          title="More evidence about this workload"
-          description=""
-          groups={partition.workload}
-          totalCount={partition.workload.length + partition.earlier.length}
-          animateGroupIds={animateGroupIds}
-          onViewSource={onViewSource}
-          open={workloadOpen}
-          onOpenChange={setWorkloadOpen}
-        >
+        {storyMode ? (
           <CollapsedEvidenceCollection
-            id="investigation-earlier-evidence"
-            title="Previous observations"
-            description="Earlier does not mean resolved."
-            groups={partition.earlier}
+            id="investigation-captured-results"
+            title="Captured results"
+            description={
+              [
+                placedCount > 0
+                  ? `${placedCount} in the analysis`
+                  : "None placed in the analysis",
+                resultsSummary,
+              ]
+                .filter(Boolean)
+                .join(" · ") + " · nothing here is chosen by the agent"
+            }
+            groups={[]}
+            totalCount={Math.max(capturedTotal, 1)}
             animateGroupIds={animateGroupIds}
             onViewSource={onViewSource}
-            open={earlierOpen}
-            onOpenChange={setEarlierOpen}
-          />
-        </CollapsedEvidenceCollection>
+            open={resultsOpen || placedCount === 0}
+            onOpenChange={setResultsOpen}
+          >
+            <div className="space-y-4">{mainCards}</div>
+          </CollapsedEvidenceCollection>
+        ) : (
+          mainCards
+        )}
       </div>
     </section>
   );
@@ -704,7 +909,7 @@ export function InvestigationEvidencePane({
       }}
     >
       {content}
-      {afterEvidence}
+      {storyMode ? null : afterEvidence}
     </EvidenceNavigationContext.Provider>
   );
 }
@@ -1259,13 +1464,22 @@ export function investigationEvidenceShouldRevealHistory(
 
 function EvidenceCard({
   group,
+  observation: observationOverride,
   domId = group.id,
   animateArrival,
   onViewSource,
   spanFullRow = false,
   prominence = "primary",
+  compact = false,
+  placedInStory = false,
 }: {
   group: InvestigationEvidenceGroup;
+  /**
+   * Render this exact observation instead of the group's current one — a
+   * story places the read the agent cited, which may since have been
+   * superseded, and says so rather than swapping in today's.
+   */
+  observation?: InvestigationEvidenceObservation;
   /** Stable layout/scroll identity when an existing card changes section. */
   domId?: string;
   animateArrival: boolean;
@@ -1276,6 +1490,10 @@ function EvidenceCard({
   /** Fill both columns when this card has no compact row partner. */
   spanFullRow?: boolean;
   prominence?: "primary" | "supporting" | "secondary";
+  /** Header and summary only; the collapsed story preview must never slice a card. */
+  compact?: boolean;
+  /** This card also appears inside the story above. */
+  placedInStory?: boolean;
 }) {
   const {
     onOpenResource,
@@ -1295,7 +1513,9 @@ function EvidenceCard({
     [onGroupOpenChange, group.id],
   );
   const { elementRef, revealAfterToggle } = useDisclosureReveal<HTMLElement>();
-  const observation = group.latest;
+  const observation = observationOverride ?? group.latest;
+  const supersededRead =
+    observationOverride !== undefined && observationOverride !== group.latest;
   const displaySummary =
     observation.data.type === "crash" && observation.summary
       ? parseLogLine(observation.summary).content
@@ -1325,7 +1545,7 @@ function EvidenceCard({
     observation.data,
     observation.summary,
   );
-  const canExpand = hasEvidenceDetails || meaningfulHistory;
+  const canExpand = !compact && (hasEvidenceDetails || meaningfulHistory);
   const revealHistory = investigationEvidenceShouldRevealHistory(
     group,
     revealSourceId,
@@ -1381,7 +1601,16 @@ function EvidenceCard({
             {displaySummary}
           </span>
         ) : null}
-        {group.historical ? (
+        {supersededRead ? (
+          <span className="mt-0.5 block text-xs text-theme-text-tertiary">
+            Captured in turn {observation.source.turnIndex + 1} · a newer read
+            of this exists in Captured results
+          </span>
+        ) : placedInStory ? (
+          <span className="mt-0.5 block text-xs text-theme-text-tertiary">
+            In the analysis
+          </span>
+        ) : group.historical ? (
           <span className="mt-0.5 block text-xs text-theme-text-tertiary">
             Previous observation · not confirmed by the latest check
           </span>
@@ -1490,7 +1719,7 @@ function EvidenceCard({
           ) : null}
         </div>
       </div>
-      {cardItems.some((item) => item.claim || item.role) ? (
+      {!compact && cardItems.some((item) => item.claim || item.role) ? (
         <div
           className={clsx(
             "space-y-1.5",

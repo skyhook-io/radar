@@ -94,10 +94,35 @@ export interface DiagnosisRuledOut {
   evidenceIndex: number;
 }
 
+export type DiagnosisCertainty = "established" | "likely" | "suspected";
+export type DiagnosisStepKind = "mitigate" | "verify" | "investigate";
+
+/** One typed next step; `remediation` mirrors `steps[].text` when steps are present. */
+export interface DiagnosisStep {
+  text: string;
+  kind: DiagnosisStepKind;
+  /** The condition under which this step is the right one, when the agent named one. */
+  precondition?: string;
+}
+
 export interface Diagnosis {
   healthy?: boolean;
   inconclusive?: boolean; // investigated but couldn't determine — distinct from healthy
   rootCause: string;
+  /**
+   * The plain-language headline; `rootCause` stays the technical one-liner.
+   * Present only on turns from a backend that emits the story contract; its
+   * absence selects the previous rendering.
+   */
+  summary?: string;
+  /** The agent's own word for how sure it is; rendered in the agent tone, never as a Radar mark. */
+  certainty?: DiagnosisCertainty;
+  /** What would change the answer or could not be verified. Rendered above the story fold. */
+  unresolved?: string[];
+  /** A follow-up answer that replaces the assessment on screen (server-validated as a complete verdict). */
+  revisesAssessment?: boolean;
+  /** Typed next steps; absent on older runs, where `remediation` is the only list. */
+  steps?: DiagnosisStep[];
   rootCauseEvidence?: RootCauseEvidence;
   /** The agent's case over Radar's evidence; absent from hosted backends and older runs. */
   evidence?: DiagnosisEvidenceItem[];

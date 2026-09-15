@@ -22,7 +22,8 @@ import {
   investigationInteractionsBlocked,
   investigationIsReadOnly,
   investigationPaneCenteredScrollTop,
-  investigationLiveCaseTurnIndex,
+  investigationAssessmentTurnIndexes,
+  investigationIsAssessmentTurn,
 } from "./investigationState";
 
 describe("investigation terminal presentation", () => {
@@ -817,85 +818,57 @@ describe("investigation action gating", () => {
   });
 });
 
-describe("investigationLiveCaseTurnIndex", () => {
-  const linkedItem = {
-    status: "linked" as const,
-    ref: "ev_x",
-    role: "context" as const,
-    claim: "c",
-  };
+describe("investigationAssessmentTurnIndexes", () => {
   const assessment = {
     status: "done" as const,
     diagnosis: { healthy: true, rootCause: "", report: "", remediation: [] },
   };
-  it("keeps the assessment when no later turn cites evidence", () => {
-    const answer = {
+  it("keeps the assessment across answers that only restate a root cause", () => {
+    // Agents restate the cause on most answers; without an explicit revision
+    // signal every question would rewrite Findings.
+    const restating = {
       status: "done" as const,
-      question: "why?",
-      diagnosis: { rootCause: "", report: "because", remediation: [] },
+      question: "get the secret",
+      diagnosis: { rootCause: "Secret x does not exist", report: "", remediation: [] },
     };
-    expect(investigationLiveCaseTurnIndex([assessment, answer], 0)).toBe(0);
+    expect(investigationAssessmentTurnIndexes([assessment, restating])).toEqual([0]);
+    expect(investigationIsAssessmentTurn(restating)).toBe(false);
   });
-  it("moves to an answer turn that carries a bound case or linked root-cause refs", () => {
-    const cited = {
+  it("accepts a question turn only when it revises with a complete verdict", () => {
+    const revised = {
       status: "done" as const,
-      question: "chart it and cite it",
+      question: "could it be OOM?",
       diagnosis: {
-        rootCause: "",
+        rootCause: "The container is OOM-killed.",
+        summary: "The app runs out of memory.",
+        revisesAssessment: true,
         report: "",
         remediation: [],
-        evidence: [linkedItem],
       },
     };
-    expect(investigationLiveCaseTurnIndex([assessment, cited], 0)).toBe(1);
-    const legacy = {
-      status: "done" as const,
-      question: "what broke?",
-      diagnosis: {
-        rootCause: "x",
-        report: "",
-        remediation: [],
-        rootCauseEvidence: { status: "linked" as const, refs: ["ev_x"] },
-      },
+    expect(investigationAssessmentTurnIndexes([assessment, revised])).toEqual([0, 1]);
+    const flagOnly = {
+      ...revised,
+      diagnosis: { ...revised.diagnosis, summary: undefined },
     };
-    expect(investigationLiveCaseTurnIndex([assessment, legacy], 0)).toBe(1);
-    const unlinkedOnly = {
-      ...cited,
-      diagnosis: {
-        ...cited.diagnosis,
-        evidence: [{ status: "unlinked" as const }],
-      },
+    expect(investigationIsAssessmentTurn(flagOnly)).toBe(false);
+    const noVerdict = {
+      ...revised,
+      diagnosis: { rootCause: "", summary: "Words.", revisesAssessment: true, report: "", remediation: ["x"] },
     };
-    expect(investigationLiveCaseTurnIndex([assessment, unlinkedOnly], 0)).toBe(
-      0,
-    );
+    expect(investigationIsAssessmentTurn(noVerdict)).toBe(false);
   });
-  it("ignores apply, explanation, running, and superseded turns", () => {
-    const cited = {
-      status: "done" as const,
-      question: "cite",
-      diagnosis: {
-        rootCause: "",
-        report: "",
-        remediation: [],
-        evidence: [linkedItem],
-      },
-    };
+  it("always takes verifications and never apply, explanation or running turns", () => {
+    const verify = { ...assessment, question: "re-check", verify: true };
     expect(
-      investigationLiveCaseTurnIndex(
-        [
-          assessment,
-          { ...cited, apply: true },
-          { ...cited, explainAssessment: 2 },
-          { ...cited, status: "running" as const },
-        ],
-        0,
-      ),
-    ).toBe(0);
-    // A newer assessment after the cited answer is the current one.
-    expect(
-      investigationLiveCaseTurnIndex([assessment, cited, assessment], 2),
-    ).toBe(2);
+      investigationAssessmentTurnIndexes([
+        assessment,
+        { ...assessment, apply: true },
+        { ...assessment, explainAssessment: 2 },
+        { ...assessment, status: "running" as const },
+        verify,
+      ]),
+    ).toEqual([0, 4]);
   });
 });
 

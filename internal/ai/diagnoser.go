@@ -151,7 +151,11 @@ func turnPrompt(req Request) string {
 		// Restate the structured/citation contract on every read-only turn. Some
 		// agent hosts compress resumed context, and verification must never silently
 		// lose the exact evidence links established on the opening turn.
-		prompt = req.Question + "\n\n" + diagnosisJSONInstruction
+		if req.Verify {
+			prompt = req.Question + "\n\n" + storyInstruction + diagnosisJSONInstruction
+		} else {
+			prompt = req.Question + "\n\n" + followUpRevisionInstruction + diagnosisJSONInstruction
+		}
 	}
 	if nudge := metricsNudge(req.Metrics); nudge != "" {
 		prompt += "\n\n" + nudge
@@ -289,6 +293,32 @@ type caseRequest struct {
 	malformed bool
 }
 
+type DiagnosisCertainty string
+
+const (
+	CertaintyEstablished DiagnosisCertainty = "established"
+	CertaintyLikely      DiagnosisCertainty = "likely"
+	CertaintySuspected   DiagnosisCertainty = "suspected"
+)
+
+type DiagnosisStepKind string
+
+const (
+	StepMitigate    DiagnosisStepKind = "mitigate"
+	StepVerify      DiagnosisStepKind = "verify"
+	StepInvestigate DiagnosisStepKind = "investigate"
+)
+
+// DiagnosisStep is one typed next step. Kind says what the step is for —
+// changing the cluster, settling an unresolved question, or gathering more
+// information — so the UI never presents a diagnostic check as a fix, and the
+// precondition travels with the step into the Apply confirmation.
+type DiagnosisStep struct {
+	Text         string            `json:"text"`
+	Kind         DiagnosisStepKind `json:"kind"`
+	Precondition string            `json:"precondition,omitempty"`
+}
+
 // Diagnosis is the engine's final result.
 type Diagnosis struct {
 	Healthy bool `json:"healthy,omitempty"`
@@ -296,8 +326,29 @@ type Diagnosis struct {
 	// (RBAC walls, missing data, ambiguous evidence) — distinct from Healthy ("I
 	// verified it's fine") and from a root cause. The UI renders this as its own
 	// honest "couldn't determine" state rather than a false all-clear.
-	Inconclusive      bool               `json:"inconclusive,omitempty"`
-	RootCause         string             `json:"rootCause"`
+	Inconclusive bool   `json:"inconclusive,omitempty"`
+	RootCause    string `json:"rootCause"`
+	// Summary is the plain-language headline a person reads first; RootCause
+	// stays the technical one-liner that explanations, previews and Apply
+	// consume. Report is the story: the agent's prose, which may place Radar
+	// results with [[radar:evidence=N]] markers the frontend resolves against
+	// Evidence by index. Absent on older runs and hosted backends.
+	Summary string `json:"summary,omitempty"`
+	// Certainty qualifies Summary in the agent's own words and is rendered as
+	// such; it never becomes a Radar mark.
+	Certainty DiagnosisCertainty `json:"certainty,omitempty"`
+	// Unresolved lists what would change the answer or could not be verified.
+	// The UI renders it above the story fold whenever it is present, and shows
+	// its absence explicitly, because a story is persuasive whether or not it
+	// is right.
+	Unresolved []string `json:"unresolved,omitempty"`
+	// RevisesAssessment marks a follow-up answer that replaces the assessment
+	// on screen. The server keeps it only on a complete verdict; a bare flag
+	// can never retire the assessment a reader is looking at.
+	RevisesAssessment bool `json:"revisesAssessment,omitempty"`
+	// Steps are the typed next steps. When present, Remediation is derived from
+	// them so Apply, recommended_index and the UI all read one list.
+	Steps             []DiagnosisStep    `json:"steps,omitempty"`
 	Report            string             `json:"report"`
 	RootCauseEvidence *RootCauseEvidence `json:"rootCauseEvidence,omitempty"`
 	// Evidence is the agent's case over Radar's facts: role + one-sentence claim
@@ -795,6 +846,13 @@ func (d Diagnosis) structured() bool {
 	return d.RootCause != "" || len(d.Remediation) > 0 || d.Healthy || d.Inconclusive
 }
 
+// completeVerdict reports whether the turn carries everything Findings shows
+// as an assessment: a headline and a verdict. Only such a turn may replace the
+// assessment on screen.
+func (d Diagnosis) completeVerdict() bool {
+	return d.Summary != "" && (d.RootCause != "" || d.Healthy || d.Inconclusive)
+}
+
 func taskPrompt(req Request) string {
 	ns := req.Namespace
 	if ns == "" {
@@ -814,26 +872,37 @@ func taskPrompt(req Request) string {
 	if req.Group != "" {
 		toolGuidance += fmt.Sprintf(" Pass `group=%s` to every Radar tool that accepts an API group so same-kind resources cannot be confused.", req.Group)
 	}
-	return taskOpening(target, req.Health) + toolGuidance + " " + diagnosisJSONInstruction
+	return taskOpening(target, req.Health) + toolGuidance + " " + storyInstruction + diagnosisJSONInstruction
 }
 
+// storyInstruction shapes the prose half of the reply: an on-call engineer
+// reads it top to bottom, and Radar renders the results it places inline. It
+// is deliberately separate from the JSON contract below so a follow-up can
+// restate the contract without re-asking for a story.
+const storyInstruction = "WRITE YOUR REPLY AS THE STORY AN ON-CALL ENGINEER READS TOP TO BOTTOM: what is wrong, why, what you checked, what you ruled out, and what you could not verify. " +
+	"Keep it to 3-6 short paragraphs; short bold lead-ins are fine; never restate Radar results as bullet lists or paste tool output into prose - place the result instead. " +
+	"PLACING EVIDENCE: right after the sentence a Radar result supports, put [[radar:evidence=N]] ALONE on its own line, where N is the 0-based index of that result in the evidence array of your final JSON; Radar renders that result's full card there, so the sentence above it should make one claim the card can be checked against. " +
+	"Place the result that establishes the cause first and 2-5 results in total; to mention a placed result again, put the same marker inline in the sentence. A marker inside a code span or code block is not a placement. " +
+	"End the story with what you could not verify and what would settle it; if nothing would change your answer, say so in one clause. "
+
 const diagnosisJSONInstruction = "Finish your reply with a fenced ```json block: " +
-	`{"healthy": boolean, "inconclusive": boolean, "root_cause": string, "root_cause_evidence_refs": [string], "evidence": [{"ref": string, "role": "cause"|"symptom"|"context"|"benign"|"demoted"|"rules_out", "claim": string, "subject": {"group": string, "kind": string, "namespace": string, "name": string, "container": string, "stream": "current"|"previous", "observation": string}}], "ruled_out": [{"hypothesis": string, "evidence_index": number}], "remediation": [string], "recommended_index": number, "recommended_reason": string, "confidence": number 0..1}. ` +
-	"Set healthy=true ONLY when your checks actively verified the resource is fine; then leave root_cause and remediation empty and recommended_index 0. " +
-	"Set inconclusive=true when you investigated but could NOT determine the cause (RBAC-denied reads, missing data, ambiguous evidence); then, in your PROSE before the JSON block, say what you checked and what blocked you, leave root_cause and remediation empty, and set recommended_index 0. healthy and inconclusive are mutually exclusive; do not set healthy=true merely because you found nothing. " +
-	"In root_cause_evidence_refs, include at most 3 specific successful Radar checks from THIS TURN, most decisive first. Copy each ref EXACTLY from that result's [[radar:evidence-ref=ev_...]] marker; never invent, alter, or reuse a ref from an earlier turn. For a root cause, cite the discriminating check that establishes WHY, not only a generic symptom. Use an empty array when root_cause is empty. If no successful relevant check supports the root cause, use an empty root_cause_evidence_refs array and lower confidence or set inconclusive=true rather than fabricating support. " +
-	"In evidence, make your case over the Radar checks from THIS TURN: at most 8 items, each citing one ref copied EXACTLY from a [[radar:evidence-ref=ev_...]] marker (refs may repeat with different subjects), a role, and a claim of ONE sentence (200 characters max) saying what that result shows. Roles: cause (establishes why), symptom (what the problem looks like), context (related, checked, worth seeing), benign (this result looks adverse but is NOT an active problem, and the claim says why it is expected or already resolved), demoted (directly related but less relevant, and the claim says why), rules_out (the cited result itself contradicts a hypothesis; never use rules_out for absence of evidence). Use benign, not demoted or rules_out, when you are calling a workload healthy despite adverse evidence Radar captured: only benign states that the evidence does not indicate a live problem. Roles order the Findings list; they never hide a card. When a cited result covers more than one resource, pod, container, or log stream, set subject to name the exact one the claim is about (kind and name required; add group, namespace, container, stream, and observation — the evidence kind such as logs, events, changes, metrics, resource; a diagnose bundle's vitals charts are named metrics:cpu, metrics:memory, or metrics:restarts — as needed); omit subject when the result is about one thing. In ruled_out, list at most 5 hypotheses you dropped, each with evidence_index pointing (0-based) at the evidence item whose result contradicted it. Healthy and inconclusive assessments should still cite context items for what you checked and found fine. When you set healthy=true, Radar compares your verdict against what it captured and warns the operator if any active-problem evidence stands unaddressed, so you MUST cite each such result and mark it benign with the reason it is not a live problem: a failing probe or readiness condition, a restart or crash, an unready or unavailable workload, an error or panic in a log stream, a Warning event, a failed DNS or network check. Citing only the results that look fine leaves that warning in place, which is the correct outcome when you have not explained the adverse ones. Use empty arrays when you have nothing to add. " +
-	"recommended_index is the 1-based index into the remediation array of the SINGLE step you " +
-	"most recommend applying — the safest, most targeted, deterministic one (exactly what an " +
-	"'Apply' action will perform). Use 0 when no step is a safe automatic fix (e.g. the change " +
-	"requires human judgement or info you don't have). recommended_reason is ONE short clause on WHY that step is the safe pick (reversible, lowest blast radius, most targeted) — empty when recommended_index is 0. Order remediation so each item is one " +
-	"self-contained, copy-pasteable step, and make the recommended one specific enough to apply " +
-	"verbatim. In root_cause and each remediation string USE GitHub-flavored markdown — wrap " +
-	"field paths, resource/image/configmap names, values, and commands in backticks. Use INLINE " +
-	"code (single backticks) for commands, even long single-line ones; only use a fenced " +
-	"```bash block for genuinely multi-line scripts, and when you do, the opening ```bash, each " +
-	"script line, and the closing ``` must EACH be on their own line — never put the command on " +
-	"the same line as ```bash or open a fence mid-sentence."
+	`{"summary": string, "certainty": "established"|"likely"|"suspected", "unresolved": [string], "healthy": boolean, "inconclusive": boolean, "root_cause": string, "root_cause_evidence_refs": [string], "evidence": [{"ref": string, "role": "cause"|"symptom"|"context"|"benign"|"demoted"|"rules_out", "claim": string, "subject": {"group": string, "kind": string, "namespace": string, "name": string, "container": string, "stream": "current"|"previous", "observation": string}}], "ruled_out": [{"hypothesis": string, "evidence_index": number}], "steps": [{"text": string, "kind": "mitigate"|"verify"|"investigate", "precondition": string}], "recommended_index": number, "recommended_reason": string, "revises_assessment": boolean, "confidence": number 0..1}. ` +
+	"summary is ONE or two plain sentences a person unfamiliar with Kubernetes can act on: what is wrong and why, naming the workload; no field paths or command syntax. " +
+	"certainty: established when the placed evidence proves BOTH the mechanism and its cause; likely when the mechanism is proven and the cause is the best explanation left; suspected otherwise. " +
+	"unresolved: up to 3 short items naming the competing explanation, what you could not verify, and what would settle it; use an empty array ONLY when nothing would change your answer. " +
+	"Set healthy=true ONLY when your checks actively verified the resource is fine; then leave root_cause and steps empty, keep the story to three sentences of what you checked with those results placed, and set recommended_index 0. " +
+	"Set inconclusive=true when you investigated but could NOT determine the cause (RBAC-denied reads, missing data, ambiguous evidence); then say in the story what you checked and what blocked you, leave root_cause empty, put the blocking question first in unresolved, and offer verify or investigate steps; inconclusive and healthy are mutually exclusive, and finding nothing is not health. " +
+	"In root_cause_evidence_refs, include at most 3 specific successful Radar checks from THIS INVESTIGATION, most decisive first. Copy each ref EXACTLY from that result's [[radar:evidence-ref=ev_...]] marker; never invent or alter a ref. For a root cause, cite the discriminating check that establishes WHY, not only a generic symptom. Use an empty array when root_cause is empty. If no successful relevant check supports the root cause, use an empty root_cause_evidence_refs array and lower certainty or set inconclusive=true rather than fabricating support. " +
+	"In evidence, list the Radar checks your story places or relies on: at most 8 items, each citing one ref copied EXACTLY from a [[radar:evidence-ref=ev_...]] marker (refs may repeat with different subjects), a role, and optionally a claim of ONE sentence (200 characters max) saying what that result shows; the claim is REQUIRED for benign, demoted and rules_out. Roles: cause (establishes why), symptom (what the problem looks like), context (related, checked, worth seeing), benign (this result looks adverse but is NOT an active problem, and the claim says why it is expected or already resolved), demoted (directly related but less relevant, and the claim says why), rules_out (the cited result itself contradicts a hypothesis; never use rules_out for absence of evidence). Use benign, not demoted or rules_out, when you are calling a workload healthy despite adverse evidence Radar captured: only benign states that the evidence does not indicate a live problem. Roles never hide a card. When a cited result covers more than one resource, pod, container, or log stream, set subject to name the exact one the claim is about (kind and name required; add group, namespace, container, stream, and observation - the evidence kind such as logs, events, changes, metrics, resource; a diagnose bundle's vitals charts are named metrics:cpu, metrics:memory, or metrics:restarts - as needed); omit subject when the result is about one thing. A diagnose bundle is never about one thing: give every citation of it a subject naming the result you mean (the workload resource, a Pod, its events, its changes, or metrics:cpu / metrics:memory / metrics:restarts), or Radar can only show the bundle's main card. In ruled_out, list at most 5 hypotheses you dropped, each with evidence_index pointing (0-based) at the evidence item whose result contradicted it. When you set healthy=true, Radar compares your verdict against what it captured and warns the operator if any active-problem evidence stands unaddressed, so you MUST cite each such result and mark it benign with the reason it is not a live problem: a failing probe or readiness condition, a restart or crash, an unready or unavailable workload, an error or panic in a log stream, a Warning event, a failed DNS or network check. Citing only the results that look fine leaves that warning in place, which is the correct outcome when you have not explained the adverse ones. Use empty arrays when you have nothing to add. " +
+	"steps: 1-6 next steps, each one self-contained and copy-pasteable. kind is mitigate when the step changes the cluster to restore service, verify when it is a check that settles an unresolved item, investigate when it gathers more information; these are purposes, not an order. precondition is the condition under which the step is the right one (\"if revision 7 still authenticates\"), empty when there is none. A mitigate step whose precondition is unverified must say so. " +
+	"recommended_index is the 1-based index into steps of the SINGLE mitigate step you most recommend applying - the safest, most targeted, deterministic one (exactly what an 'Apply' action will perform). Use 0 when no step is a safe automatic fix (the change requires human judgement or information you do not have) or when the only steps are verify/investigate. recommended_reason is ONE short clause on WHY that step is the safe pick (reversible, lowest blast radius, most targeted) - empty when recommended_index is 0. Make the recommended step specific enough to apply verbatim. " +
+	"In root_cause and each step text USE GitHub-flavored markdown - wrap field paths, resource/image/configmap names, values, and commands in backticks. Use INLINE code (single backticks) for commands, even long single-line ones; only use a fenced ```bash block for genuinely multi-line scripts, and when you do, the opening ```bash, each script line, and the closing ``` must EACH be on their own line - never put the command on the same line as ```bash or open a fence mid-sentence. " +
+	"revises_assessment is for follow-up turns only and is false on an initial or verification turn."
+
+// followUpRevisionInstruction keeps Findings stable across ordinary questions.
+// Saved runs show agents restating the root cause on most answers; without an
+// explicit signal every "what is a PDB?" would rewrite the assessment.
+const followUpRevisionInstruction = "This is a follow-up question. Answer it in prose. Set revises_assessment=true and re-issue summary, the full story and every verdict field ONLY if the cause, certainty, unresolved list, recommended step, recovery status, or evidence coverage changed because of what you found now; then place evidence with [[radar:evidence=N]] as before, and you may cite results from earlier turns of this investigation. Otherwise leave summary, root_cause, steps, evidence, ruled_out and unresolved empty, set revises_assessment=false, and do NOT restate the earlier assessment. "
 
 func taskOpening(target string, health *ResourceHealthSignal) string {
 	frame := healthFrame(target, health)

@@ -918,7 +918,15 @@ func (r *Run) finishTurnWithBarrier(diag Diagnosis, turnErr error, apply bool, t
 	if !apply {
 		r.bindRootCauseEvidenceLocked(&diag)
 	}
-	if diag.RootCause != "" {
+	// A revision must be a complete verdict; the flag alone can never retire
+	// the assessment the reader is looking at.
+	if diag.RevisesAssessment && !diag.completeVerdict() {
+		log.Printf("[ai] run %s: revises_assessment set without a complete verdict; treating the turn as an answer", r.ID)
+		diag.RevisesAssessment = false
+	}
+	if diag.Summary != "" && (diag.RootCause != "" || diag.Healthy || diag.Inconclusive) {
+		r.preview = diag.Summary
+	} else if diag.RootCause != "" {
 		r.preview = diag.RootCause
 	} else if diag.Healthy {
 		r.preview = "Healthy"
@@ -932,12 +940,18 @@ func (r *Run) finishTurnWithBarrier(diag Diagnosis, turnErr error, apply bool, t
 }
 
 // bindRootCauseEvidenceLocked promotes the model's private reference request
-// only when every ref maps to exactly one complete, confirmed-success result in
-// the current turn AND to the exact clean producer payload Radar's private MCP
-// transport recorded while that turn's scope was active. The model-visible ref
-// is correlation data, not authority. The method scans canonical retained events
-// while r.mu is held, so a callback rejected after Stop/context-switch can never
-// become proof. Radar's read-tool allowlist is retained as defense in depth.
+// only when every ref maps to exactly one complete, confirmed-success read
+// result of this run. A ref from the current turn must also match the exact
+// clean producer payload Radar's private MCP transport recorded while the
+// turn's scope was active; a ref from an earlier turn is accepted on the
+// persisted RadarEvidence flag, which only that turn's stream validator could
+// have set against its own live lease. Widening to the run lets a revised
+// assessment keep the observations it still rests on — a previous log or a
+// resource state that may no longer be re-readable — while the frontend shows
+// when each was captured. The model-visible ref is correlation data, not
+// authority. The method scans canonical retained events while r.mu is held, so
+// a callback rejected after Stop/context-switch can never become proof. Radar's
+// read-tool allowlist is retained as defense in depth.
 //
 // The same match table binds the agent's case (Evidence, RuledOut) for every
 // assessment, healthy and inconclusive included; a failed item is dropped on
@@ -952,12 +966,10 @@ func (r *Run) bindRootCauseEvidenceLocked(diag *Diagnosis) {
 		diag.evidenceScope = ""
 		diag.issuedEvidence = nil
 	}()
-	matches := r.turnEvidenceMatchesLocked(diag)
-	scopeValid := evidenceScopeRe.MatchString(diag.evidenceScope)
-	scopePrefix := "ev_" + diag.evidenceScope + "_"
+	matches := r.runEvidenceMatchesLocked(diag)
 	refLinked := func(ref string) bool {
 		candidate := matches[ref]
-		return scopeValid && strings.HasPrefix(ref, scopePrefix) && candidate.count == 1 && candidate.valid
+		return candidate.count == 1 && candidate.valid
 	}
 	bindRootCauseRefs(diag, refLinked)
 	bindCase(diag, refLinked)
@@ -968,7 +980,7 @@ type evidenceMatch struct {
 	valid bool
 }
 
-func (r *Run) turnEvidenceMatchesLocked(diag *Diagnosis) map[string]evidenceMatch {
+func (r *Run) runEvidenceMatchesLocked(diag *Diagnosis) map[string]evidenceMatch {
 	turnStart := len(r.events)
 	for i := len(r.events) - 1; i >= 0; i-- {
 		if r.events[i].Event.Type == "turn" {
@@ -976,45 +988,72 @@ func (r *Run) turnEvidenceMatchesLocked(diag *Diagnosis) map[string]evidenceMatc
 			break
 		}
 	}
+	scopeValid := evidenceScopeRe.MatchString(diag.evidenceScope)
+	scopePrefix := "ev_" + diag.evidenceScope + "_"
 	// Claude omits the tool name from terminal result rows, so establish one
-	// unambiguous tool identity per host call ID across the current turn before
+	// unambiguous tool identity per host call ID within each turn before
 	// evaluating marker-bearing results. Codex/Cursor repeat the name on done;
 	// accepting that exact terminal identity also keeps a dropped running event
-	// from needlessly invalidating otherwise complete evidence.
+	// from needlessly invalidating otherwise complete evidence. Call IDs repeat
+	// across turns, so the key carries the turn.
 	type toolIdentity struct {
 		name      string
 		known     bool
 		conflicts bool
 	}
-	toolsByStepID := make(map[string]toolIdentity)
-	for _, retained := range r.events[turnStart:] {
+	type stepKey struct {
+		turn int
+		id   string
+	}
+	toolsByStep := make(map[stepKey]toolIdentity)
+	turnOf := make([]int, len(r.events))
+	turn := 0
+	for i, retained := range r.events {
+		if retained.Event.Type == "turn" {
+			turn++
+		}
+		turnOf[i] = turn
 		step := retained.Event.Step
 		if retained.Event.Type != "step" || step == nil || step.ID == "" || step.Tool == "" {
 			continue
 		}
 		tool := normalizeRadarToolName(step.Tool)
-		identity := toolsByStepID[step.ID]
+		key := stepKey{turn, step.ID}
+		identity := toolsByStep[key]
 		if !identity.known {
 			identity.name = tool
 			identity.known = true
 		} else if identity.name != tool {
 			identity.conflicts = true
 		}
-		toolsByStepID[step.ID] = identity
+		toolsByStep[key] = identity
 	}
 
 	matches := make(map[string]evidenceMatch)
-	for _, retained := range r.events[turnStart:] {
+	for i, retained := range r.events {
 		step := retained.Event.Step
 		if retained.Event.Type != "step" || step == nil || step.EvidenceRef == "" {
 			continue
 		}
 		candidate := matches[step.EvidenceRef]
 		candidate.count++
-		tool := toolsByStepID[step.ID]
-		issuedPayload, issued := diag.issuedEvidence[step.EvidenceRef]
+		tool := toolsByStep[stepKey{turnOf[i], step.ID}]
+		current := i >= turnStart
+		// The current turn is proven against the private transport snapshot
+		// taken as this turn closed. An earlier turn's snapshot is gone; its
+		// proof is the RadarEvidence flag its own validator persisted, and its
+		// ref must not carry this turn's scope (a marker minted now cannot have
+		// been observed then).
+		var authenticated bool
+		if current {
+			issuedPayload, issued := diag.issuedEvidence[step.EvidenceRef]
+			authenticated = scopeValid && strings.HasPrefix(step.EvidenceRef, scopePrefix) &&
+				issued && step.Result == issuedPayload
+		} else {
+			authenticated = !scopeValid || !strings.HasPrefix(step.EvidenceRef, scopePrefix)
+		}
 		candidate.valid = candidate.count == 1 &&
-			issued && step.Result == issuedPayload &&
+			authenticated &&
 			step.RadarEvidence &&
 			step.ID != "" && tool.known && !tool.conflicts && isRadarReadTool(tool.name) &&
 			step.Status == "done" &&
