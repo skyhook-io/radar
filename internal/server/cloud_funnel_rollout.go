@@ -13,29 +13,25 @@ import (
 )
 
 // cloudFunnelRolloutPercent stages the Cloud funnel's exposure. It is compiled
-// in and raised by successive releases until it reaches 100 and this file is
-// deleted — deliberately not a remote flag service, because Radar makes no
-// network calls it doesn't announce and a rollout gate is not a reason to
-// start.
+// in — deliberately not a remote flag service, because Radar makes no network
+// calls it doesn't announce and a rollout gate is not a reason to start. The
+// ramp is complete at 100; the mechanism stays so exposure can be pulled back
+// in a release without rebuilding the gate.
 //
 // Raising it only ever adds installs: the bucket is `hash % 100 < percent`, so
 // anyone already inside a lower percentage stays inside a higher one. Older
 // releases keep whatever value they were built with, so during a ramp the fleet
 // runs several percentages at once.
-const cloudFunnelRolloutPercent = 30
+const cloudFunnelRolloutPercent = 100
 
 // cloudFunnelInCohort decides whether this installation sees the Cloud
 // funnel during the staged rollout. RADAR_CLOUD_FUNNEL=on|off overrides in
 // either direction (support, demos, opting a friendly cluster in early, or
 // opting out permanently).
 //
-// Bucketing hashes a random install ID persisted in settings — local-only,
-// never transmitted. In-cluster pods are excluded from the ramp instead of
-// bucketed: without durable storage the bucket would re-roll on every
-// restart and the funnel would flicker in and out; those installs join when
-// the gate reaches 100 and is removed. The risky driver lane is local-only
-// anyway, so the ramp cohort is exactly the population it needs feedback
-// from.
+// Bucketing hashes a sticky per-install key (see bucketKey) — local-only,
+// never transmitted. Local and in-cluster installs are both bucketed; they
+// differ only in where the key comes from.
 func cloudFunnelInCohort() bool {
 	switch strings.ToLower(os.Getenv("RADAR_CLOUD_FUNNEL")) {
 	case "on", "1", "true":
