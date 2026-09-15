@@ -196,6 +196,55 @@ describe("InvestigationEvidencePane under a story", () => {
     expect(html).toContain("1 in the analysis");
   });
 
+  it("renders a cited earlier read as that read, labelled, when a newer one exists", () => {
+    const early = evidenceRef("a", "b");
+    const later = evidenceRef("c", "d");
+    const twoReads = projectInvestigationEvidence(
+      [
+        {
+          timeline: [
+            tool("issues-early", "issues", { issues: [crashIssue], total: 1, total_matched: 1 }, {
+              evidenceRef: early,
+            }),
+          ],
+        },
+        {
+          timeline: [
+            tool(
+              "issues-later",
+              "issues",
+              {
+                issues: [{ ...crashIssue, message: "The API container keeps restarting, 40 times now." }],
+                total: 1,
+                total_matched: 1,
+              },
+              { evidenceRef: later },
+            ),
+          ],
+        },
+      ],
+      target,
+    );
+    const items: DiagnosisEvidenceItem[] = [
+      { status: "linked", ref: early, role: "cause", claim: "" },
+    ];
+    // A revised assessment in turn 1 citing the read from turn 0.
+    const html = renderToStaticMarkup(
+      <InvestigationEvidencePane
+        projection={twoReads}
+        investigationCase={resolveInvestigationCase(twoReads, { evidence: items }, 1)}
+        story={{ report: "It was crashing then.\n\n[[radar:evidence=0]]", evidence: items }}
+        collecting={false}
+        animateGroupIds={new Set()}
+        onViewSource={() => {}}
+        onViewActivity={() => {}}
+      />,
+    );
+    expect(html).toContain('data-story-placement="0"');
+    expect(html).toContain("Captured in turn 1");
+    expect(html).toContain("a newer read");
+  });
+
   it("keeps the previous layout without a story", () => {
     const html = renderToStaticMarkup(
       <InvestigationEvidencePane
