@@ -6,12 +6,16 @@ import { ResultCard, TurnView, assessmentCopyText, type Turn } from "./parts";
 
 const storyDiagnosis: Diagnosis = {
   rootCause: "Auth to MongoDB fails after revision 8.",
-  summary: "The app cannot log in to its database, and it started with the last deploy.",
+  summary:
+    "The app cannot log in to its database, and it started with the last deploy.",
   certainty: "likely",
   unresolved: ["Whether the Atlas password was rotated on the provider side."],
   report:
     "The container dies on start.\n\n[[radar:evidence=0]]\n\nSo the build changed.",
-  remediation: ["Roll back to revision 7", "Test the stored password with `mongosh`"],
+  remediation: [
+    "Roll back to revision 7",
+    "Test the stored password with `mongosh`",
+  ],
   steps: [
     {
       text: "Roll back to revision 7",
@@ -44,24 +48,41 @@ describe("ResultCard under the story contract", () => {
   });
 
   it("frames adverse Radar cards on a healthy verdict by the agent's position, without a coloured box", () => {
-    const healthy = { ...storyDiagnosis, healthy: true, rootCause: "", remediation: [], unresolved: [] };
+    const healthy = {
+      ...storyDiagnosis,
+      healthy: true,
+      rootCause: "",
+      remediation: [],
+      unresolved: [],
+    };
     const explained = renderToStaticMarkup(
       <ResultCard
         diagnosis={healthy}
         section="conclusion"
-        healthSignals={[{ title: "Readiness probe failing", status: "explained", claim: "never left endpoints", sourceId: "s1" }]}
+        healthSignals={[
+          {
+            title: "Readiness probe failing",
+            status: "explained",
+            claim: "never left endpoints",
+            sourceId: "s1",
+          },
+        ]}
         onRevealSource={vi.fn()}
       />,
     );
     expect(explained).toContain("Still open");
-    expect(explained).toContain("reads it as not a live problem: never left endpoints");
+    expect(explained).toContain(
+      "reads it as not a live problem: never left endpoints",
+    );
     expect(explained).not.toContain("data-health-flag");
     expect(explained).not.toContain("conflicts with captured evidence");
     const flagged = renderToStaticMarkup(
       <ResultCard
         diagnosis={healthy}
         section="conclusion"
-        healthSignals={[{ title: "Readiness probe failing", status: "unaddressed" }]}
+        healthSignals={[
+          { title: "Readiness probe failing", status: "unaddressed" },
+        ]}
       />,
     );
     expect(flagged).toContain('data-health-flag="unaddressed"');
@@ -77,7 +98,9 @@ describe("ResultCard under the story contract", () => {
           rootCause: "",
           remediation: [],
           unresolved: [],
-          report: "The pod is fine.\n\n[[radar:evidence=0]]\n\n" + "Detail. ".repeat(60),
+          report:
+            "The pod is fine.\n\n[[radar:evidence=0]]\n\n" +
+            "Detail. ".repeat(60),
         }}
         section="conclusion"
         storyInline
@@ -103,7 +126,11 @@ describe("ResultCard under the story contract", () => {
   it("says nothing when the agent listed nothing unresolved: the certainty word carries it", () => {
     const html = renderToStaticMarkup(
       <ResultCard
-        diagnosis={{ ...storyDiagnosis, unresolved: [], certainty: "established" }}
+        diagnosis={{
+          ...storyDiagnosis,
+          unresolved: [],
+          certainty: "established",
+        }}
         section="conclusion"
       />,
     );
@@ -114,7 +141,11 @@ describe("ResultCard under the story contract", () => {
   it("renders typed steps with their kind and precondition and applies only a mitigate step", () => {
     const onApply = vi.fn();
     const html = renderToStaticMarkup(
-      <ResultCard diagnosis={storyDiagnosis} section="actions" onApply={onApply} />,
+      <ResultCard
+        diagnosis={storyDiagnosis}
+        section="actions"
+        onApply={onApply}
+      />,
     );
     expect(html).toContain('data-step-kind="mitigate"');
     expect(html).toContain('data-step-kind="verify"');
@@ -123,7 +154,12 @@ describe("ResultCard under the story contract", () => {
       <ResultCard
         diagnosis={{
           ...storyDiagnosis,
-          steps: [{ ...storyDiagnosis.steps![0], precondition: "if the crash is deliberate" }],
+          steps: [
+            {
+              ...storyDiagnosis.steps![0],
+              precondition: "if the crash is deliberate",
+            },
+          ],
           remediation: [storyDiagnosis.remediation[0]],
         }}
         section="actions"
@@ -132,7 +168,11 @@ describe("ResultCard under the story contract", () => {
     expect(doubled).toContain("Only if the crash is deliberate");
     expect(html).toContain("Apply…");
     const full = renderToStaticMarkup(
-      <ResultCard diagnosis={storyDiagnosis} section="full" onApply={onApply} />,
+      <ResultCard
+        diagnosis={storyDiagnosis}
+        section="full"
+        onApply={onApply}
+      />,
     );
     expect(full).toContain("Next steps");
     expect(full).not.toContain(">Remediation<");
@@ -148,7 +188,12 @@ describe("ResultCard under the story contract", () => {
 
     // Folded alternatives stay readable as one-line rows with their kind.
     const compact = renderToStaticMarkup(
-      <ResultCard diagnosis={storyDiagnosis} section="actions" onApply={onApply} compactActions />,
+      <ResultCard
+        diagnosis={storyDiagnosis}
+        section="actions"
+        onApply={onApply}
+        compactActions
+      />,
     );
     expect(compact).toContain('data-step-folded="verify"');
     expect(compact).toContain("Test the stored password with mongosh");
@@ -177,11 +222,14 @@ describe("ResultCard under the story contract", () => {
         diagnosis={{
           rootCause: "",
           inconclusive: true,
-          summary: "Radar could not read the pod logs, so the cause is unknown.",
+          summary:
+            "Radar could not read the pod logs, so the cause is unknown.",
           unresolved: ["Whether the container logs show an error on start."],
           report: "I could not read logs.",
           remediation: ["Grant `get pods/log` and re-run"],
-          steps: [{ text: "Grant `get pods/log` and re-run", kind: "investigate" }],
+          steps: [
+            { text: "Grant `get pods/log` and re-run", kind: "investigate" },
+          ],
         }}
         section="full"
       />,
@@ -193,6 +241,27 @@ describe("ResultCard under the story contract", () => {
 });
 
 describe("assessmentCopyText", () => {
+  it("carries Radar's own qualifications so the pasted text is no more confident than the screen", () => {
+    const text = assessmentCopyText(storyDiagnosis, {
+      limits: ["Change history: incomplete"],
+      signals: [
+        "Radar flagged Warning event · the agent reads it as not a live problem: probe timeout",
+      ],
+      flags: [
+        "Radar flagged CrashLoopBackOff · no explanation is linked to it",
+      ],
+    });
+    expect(text).toContain(
+      "Radar flagged:\n- Radar flagged CrashLoopBackOff · no explanation is linked to it\nRead those cards before treating this as an all-clear.",
+    );
+    expect(text).toContain("- Change history: incomplete");
+    expect(text).toContain(
+      "- Radar flagged Warning event · the agent reads it as not a live problem: probe timeout",
+    );
+    expect(text.indexOf("Radar flagged:")).toBeLessThan(
+      text.indexOf("Still open:"),
+    );
+  });
   it("copies the headline with its caveats, cause, story and steps", () => {
     const text = assessmentCopyText(storyDiagnosis);
     expect(text).toContain("The app cannot log in to its database");
@@ -201,7 +270,9 @@ describe("assessmentCopyText", () => {
     expect(text).toContain("Cause: Auth to MongoDB fails");
     expect(text).toContain("So the build changed.");
     expect(text).not.toContain("[[radar:evidence=0]]");
-    expect(text).toContain("1. [Mitigate] Roll back to revision 7 (only if revision 7 still authenticates)");
+    expect(text).toContain(
+      "1. [Mitigate] Roll back to revision 7 (only if revision 7 still authenticates)",
+    );
   });
 });
 

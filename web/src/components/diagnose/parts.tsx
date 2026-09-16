@@ -2173,12 +2173,37 @@ export function ResultCard({
  * technical cause, the story without its markers, and the steps. Copying only
  * the headline would ship the persuasive half without its caveats.
  */
-export function assessmentCopyText(diagnosis: Diagnosis): string {
+export function assessmentCopyText(
+  diagnosis: Diagnosis,
+  radar: {
+    /** Reads Radar could not complete, as shown in Still open. */
+    limits?: readonly string[];
+    /** Adverse Radar cards the agent explained, as shown in Still open. */
+    signals?: readonly string[];
+    /** Adverse Radar cards nothing explains, as shown above a healthy verdict. */
+    flags?: readonly string[];
+  } = {},
+): string {
   const parts: string[] = [];
   if (diagnosis.summary) parts.push(diagnosis.summary.trim());
   if (diagnosis.certainty)
     parts.push(`Certainty (agent): ${CERTAINTY_LABEL[diagnosis.certainty]}`);
-  const unresolved = (diagnosis.unresolved ?? []).filter((item) => item.trim());
+  // The pasted text must not read more confident than the screen: Radar's
+  // own qualifications travel with the agent's.
+  const flags = (radar.flags ?? []).filter((item) => item.trim());
+  if (flags.length > 0)
+    parts.push(
+      [
+        "Radar flagged:",
+        ...flags.map((item) => `- ${item}`),
+        "Read those cards before treating this as an all-clear.",
+      ].join("\n"),
+    );
+  const unresolved = [
+    ...(diagnosis.unresolved ?? []),
+    ...(radar.limits ?? []),
+    ...(radar.signals ?? []),
+  ].filter((item) => item.trim());
   if (unresolved.length > 0)
     parts.push(
       ["Still open:", ...unresolved.map((item) => `- ${item}`)].join("\n"),
@@ -2251,6 +2276,7 @@ export function AssessmentHeadline({
   revisedAfter,
   limits = [],
   signals,
+  flags,
 }: {
   diagnosis: Diagnosis;
   tone: "cause" | "healthy" | "inconclusive";
@@ -2259,6 +2285,8 @@ export function AssessmentHeadline({
   limits?: string[];
   /** Adverse Radar cards the agent explained, with its position; first in Still open. */
   signals?: { text: string; onReveal?: () => void }[];
+  /** Adverse Radar cards nothing explains; shown above a healthy verdict, copied with it. */
+  flags?: string[];
 }) {
   const summary = diagnosis.summary?.trim();
   if (!summary) return null;
@@ -2277,7 +2305,11 @@ export function AssessmentHeadline({
           {summary}
         </p>
         <CopyButton
-          text={assessmentCopyText(diagnosis)}
+          text={assessmentCopyText(diagnosis, {
+            limits,
+            signals: (signals ?? []).map((signal) => signal.text),
+            flags,
+          })}
           label="Copy assessment"
         />
       </div>
@@ -3291,6 +3323,11 @@ function AllClearCard({
           diagnosis={diagnosis}
           tone="healthy"
           revisedAfter={revisedAfter}
+          flags={flagged.map((flag) =>
+            flag.status === "contradiction"
+              ? `The agent calls ${flag.title} a ${flag.role} and still reports healthy`
+              : `Radar flagged ${flag.title} · no explanation is linked to it`,
+          )}
           limits={assessmentLimits}
           signals={stillOpenSignals}
         />
@@ -3649,25 +3686,48 @@ function looksLikeCommand(span: string): boolean {
 }
 
 function CopyButton({ text, label }: { text: string; label: string }) {
-  const [copied, setCopied] = useState(false);
+  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  const copied = state === "copied";
   return (
     <Tooltip
-      content={copied ? "Copied" : label}
+      content={
+        state === "copied"
+          ? "Copied"
+          : state === "failed"
+            ? "Copy failed"
+            : label
+      }
       delay={100}
       wrapperClassName="shrink-0"
     >
       <button
-        onClick={() => {
-          navigator.clipboard?.writeText(text);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1200);
+        onClick={async () => {
+          // Report what happened, not what was attempted: the write can be
+          // denied or unavailable, and "Copied" over an empty clipboard is worse
+          // than no button.
+          try {
+            if (!navigator.clipboard) throw new Error("clipboard unavailable");
+            await navigator.clipboard.writeText(text);
+            setState("copied");
+          } catch {
+            setState("failed");
+          }
+          setTimeout(() => setState("idle"), 1200);
         }}
         className="shrink-0 rounded p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-        aria-label={copied ? `${label} — copied` : label}
+        aria-label={
+          state === "copied"
+            ? `${label} — copied`
+            : state === "failed"
+              ? `${label} — copy failed`
+              : label
+        }
         aria-live="polite"
       >
         {copied ? (
           <Check className="h-3.5 w-3.5 text-emerald-400" />
+        ) : state === "failed" ? (
+          <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
         ) : (
           <Copy className="h-3.5 w-3.5" />
         )}

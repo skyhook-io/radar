@@ -1,5 +1,4 @@
 import { clsx } from "clsx";
-import { Sparkles } from "lucide-react";
 import { Badge } from "@skyhook-io/k8s-ui";
 
 import type { DiagnosisEvidenceRole } from "../../api/diagnose";
@@ -29,8 +28,7 @@ export function AgentRoleChip({ role }: { role: DiagnosisEvidenceRole }) {
       // and the badge's own baseline comes from the sparkle, landing 1px high.
       wrapperClassName="shrink-0 align-[-1px]"
     >
-      <Badge tone="agent" size="sm">
-        <Sparkles className="h-2.5 w-2.5 shrink-0" aria-hidden />
+      <Badge tone="structural" size="sm">
         {AGENT_ROLE_LABELS[role]}
       </Badge>
     </Tooltip>
