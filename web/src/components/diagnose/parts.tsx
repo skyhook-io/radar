@@ -2111,8 +2111,6 @@ export function ResultCard({
           revisedAfter={revisedAfter}
           assessmentLimits={assessmentLimits}
           assessmentCopy={assessmentCopy}
-          healthSignals={healthSignals}
-          onRevealSource={onRevealSource}
         />
         {section === "full" && (diagnosis.steps?.length ?? 0) > 0 ? (
           <DiagnosisResult
@@ -2170,8 +2168,6 @@ export function ResultCard({
       revisedAfter={revisedAfter}
       assessmentLimits={assessmentLimits}
       assessmentCopy={assessmentCopy}
-      healthSignals={healthSignals}
-      onRevealSource={onRevealSource}
     />
   );
 }
@@ -2794,8 +2790,6 @@ function DiagnosisResult({
   /** Reads Radar could not complete for this assessment; listed under Still open. */
   assessmentLimits?: string[];
   assessmentCopy?: Pick<AssessmentCopyRadar, "context" | "receipts">;
-  healthSignals?: InvestigationHealthSignal[];
-  onRevealSource?: (sourceId: string) => void;
 }) {
   // The story contract: a summary headline above, the story rendered by the
   // host (or inline as plain prose), typed steps below.
@@ -3277,6 +3271,17 @@ function DiagnosisResult({
   );
 }
 
+/** The banner line and the clipboard line for one adverse Radar card must be the same words. */
+function healthFlagSentence(flag: {
+  status: string;
+  title: string;
+  role?: string;
+}): string {
+  return flag.status === "contradiction"
+    ? `The agent calls ${flag.title} a ${flag.role} and still reports healthy`
+    : `Radar flagged ${flag.title} · no explanation is linked to it`;
+}
+
 function AllClearCard({
   diagnosis,
   animate,
@@ -3310,7 +3315,7 @@ function AllClearCard({
   healthSignals?: InvestigationHealthSignal[];
   onRevealSource?: (sourceId: string) => void;
 }) {
-  const storyShape = !!diagnosis.summary?.trim();
+  const storyShape = diagnosisHasStoryShape(diagnosis);
   const [showAnalysis, setShowAnalysis] = useState(false);
   const analysisReveal = useDisclosureReveal<HTMLDivElement>();
   const analysisId = useId();
@@ -3414,9 +3419,7 @@ function AllClearCard({
           >
             <div className="flex items-center gap-1.5 font-semibold text-amber-500">
               <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
-              {flag.status === "contradiction"
-                ? `The agent calls ${flag.title} a ${flag.role} and still reports healthy`
-                : `Radar flagged ${flag.title} · no explanation is linked to it`}
+              {healthFlagSentence(flag)}
             </div>
             <p className="mt-1 text-theme-text-secondary">
               {flag.status === "contradiction"
@@ -3441,11 +3444,7 @@ function AllClearCard({
           diagnosis={diagnosis}
           tone="healthy"
           revisedAfter={revisedAfter}
-          flags={flagged.map((flag) =>
-            flag.status === "contradiction"
-              ? `The agent calls ${flag.title} a ${flag.role} and still reports healthy`
-              : `Radar flagged ${flag.title} · no explanation is linked to it`,
-          )}
+          flags={flagged.map(healthFlagSentence)}
           limits={assessmentLimits}
           copy={assessmentCopy}
           signals={stillOpenSignals}
@@ -3486,23 +3485,11 @@ function AllClearCard({
                   ? "No problem identified in available evidence"
                   : "No problem found in checked evidence"}
           </div>
-          {storyShape ? null : (
-            <CopyButton text={report} label="Copy assessment" />
-          )}
+          <CopyButton text={report} label="Copy assessment" />
         </div>
-        {storyShape ? (
-          <AssessmentHeadline
-            diagnosis={diagnosis}
-            tone="healthy"
-            revisedAfter={revisedAfter}
-            limits={assessmentLimits}
-            copy={assessmentCopy}
-          />
-        ) : (
-          <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
-            {summary}
-          </AIMarkdown>
-        )}
+        <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
+          {summary}
+        </AIMarkdown>
         {unexplainedConflict ? (
           <p className="mt-2 text-xs text-theme-text-secondary">
             Radar also captured evidence of an active problem. Review that
@@ -3548,10 +3535,8 @@ function InconclusiveCard({
   /** Reads Radar could not complete for this assessment; listed under Still open. */
   assessmentLimits?: string[];
   assessmentCopy?: Pick<AssessmentCopyRadar, "context" | "receipts">;
-  healthSignals?: InvestigationHealthSignal[];
-  onRevealSource?: (sourceId: string) => void;
 }) {
-  const storyShape = !!diagnosis.summary?.trim();
+  const storyShape = diagnosisHasStoryShape(diagnosis);
   const text =
     (storyShape && !storyInline ? "" : storyPlainText(diagnosis.report)) ||
     (storyShape
@@ -3764,12 +3749,6 @@ const COMMAND_BINARIES = new Set([
   "skyhook",
 ]);
 
-/**
- * The commands inside a remediation step, in order: every fenced block and
- * every inline code span that reads as a shell invocation. A step's prose is
- * never worth copying; a command is. The prompt asks the agent to wrap
- * commands in backticks, so this is the seam to read them from.
- */
 /** The first sentence of a step, without its markdown, for a one-line row. */
 export function remediationHeadline(step: string): string {
   const firstLine =
@@ -3783,6 +3762,12 @@ export function remediationHeadline(step: string): string {
   return sentence.replace(/`/g, "").replace(/\*\*/g, "").replace(/:$/, "");
 }
 
+/**
+ * The commands inside a remediation step, in order: every fenced block and
+ * every inline code span that reads as a shell invocation. A step's prose is
+ * never worth copying; a command is. The prompt asks the agent to wrap
+ * commands in backticks, so this is the seam to read them from.
+ */
 export function remediationCommands(step: string): string[] {
   const commands: string[] = [];
   // One pass in reading order, so button N is the Nth command in the text.

@@ -89,6 +89,27 @@ describe("ResultCard under the story contract", () => {
     expect(flagged).toContain("no explanation is linked to it");
   });
 
+  it("keeps the flag banner on a healthy verdict whose story places cards but has no summary", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={{
+          ...storyDiagnosis,
+          healthy: true,
+          summary: "",
+          rootCause: "",
+          remediation: [],
+          unresolved: [],
+        }}
+        section="conclusion"
+        healthSignals={[
+          { title: "Readiness probe failing", status: "unaddressed" },
+        ]}
+      />,
+    );
+    expect(html).toContain('data-health-flag="unaddressed"');
+    expect(html).not.toContain("[[radar:evidence=0]]");
+  });
+
   it("keeps the inline story on a read-only earlier healthy assessment", () => {
     const html = renderToStaticMarkup(
       <ResultCard

@@ -109,8 +109,6 @@ import type { InvestigationSourceExcerpt } from "./investigationSourceFocus";
 import { diagnosisHasStoryShape } from "./investigationStory";
 import { groupEvidenceCoverage } from "./investigationEvidencePresentation";
 
-/** Findings width from which the assessment and next steps sit beside the story. */
-
 const RECHECK_QUESTION =
   "Did the fix resolve the issue? Re-check the resource's current status and health now, and say whether it's healthy.";
 
@@ -996,7 +994,6 @@ export function InvestigationView({
           projection.groups,
           paneResolution,
           investigationCase,
-          undefined,
           storyShape,
         ).collectionByGroup.keys(),
       ),
@@ -1293,8 +1290,6 @@ export function InvestigationView({
     currentAssessmentProjection,
     kind,
   );
-  // Reads Radar could not complete for this assessment, one line each, for
-  // the Still open block; history qualifiers stay in the record.
   // The agent's notes per source. In the legacy shape this is Assessment
   // details; in the story shape the notes sit on the cards, so it appears
   // only inside Captured results and only when something has no card: a
@@ -1328,7 +1323,7 @@ export function InvestigationView({
       .filter((group) => !group.historyOnly && !group.bookkeepingOnly)
       .map((group) => `${group.label}: ${group.summary}`);
     // Two coverage gaps carry no limitation of their own; name the one that
-    // applies so the qualification survives without the old header.
+    // applies.
     const gaps = investigationEvidenceCoverageGaps(
       currentAssessmentProjection,
       kind,

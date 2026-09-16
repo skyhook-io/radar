@@ -32,6 +32,7 @@ import {
   DiffViewer,
   StatusDot,
   TerminalBlock,
+  TerminalBlockLabel,
   defaultConditionTone,
   displayKind,
   formatRelativeAgeTime,
@@ -205,16 +206,6 @@ export function partitionInvestigationEvidence(
   resolution?: InvestigationRootCauseEvidenceResolution,
   investigationCase?: InvestigationCaseResolution,
   /**
-   * Additional selections with the source that made them. The source travels
-   * with an id because promoting a broader card needs one: an id alone selects
-   * the group but leaves the broader gate below unable to find who cited it,
-   * and the card stays withheld.
-   */
-  alsoSelected?: readonly {
-    groupId: string;
-    source: InvestigationEvidenceSource;
-  }[],
-  /**
    * Under a story every captured result about the target belongs in the one
    * inventory the reader opens to see what Radar recorded; nothing about the
    * target is folded into a second tier. Broader results stay cited-only.
@@ -231,7 +222,6 @@ export function partitionInvestigationEvidence(
       ? resolution.links.map((link) => link.originalGroupId)
       : []),
     ...caseByGroup.keys(),
-    ...(alsoSelected ?? []).map((entry) => entry.groupId),
   ]);
   const collections: Record<EvidenceCollection, InvestigationEvidenceGroup[]> =
     {
@@ -264,9 +254,7 @@ export function partitionInvestigationEvidence(
     if (broader && !namedByAgent) {
       const citingSource =
         resolution?.links.find((item) => item.originalGroupId === group.id)
-          ?.source ??
-        caseByGroup.get(group.id)?.[0]?.source ??
-        alsoSelected?.find((entry) => entry.groupId === group.id)?.source;
+          ?.source ?? caseByGroup.get(group.id)?.[0]?.source;
       const focused = evidenceKindIsFocused(group.latest.data.type);
       const sourceGroups = citingSource
         ? groups.filter(
@@ -372,10 +360,8 @@ export function investigationEvidenceRevealCollection(
 export function InvestigationEvidencePane({
   projection,
   rootCauseEvidence,
-  alsoSelectedGroupIds,
   investigationCase,
   story,
-  storyDefaultOpen = false,
   collecting,
   animateGroupIds,
   onViewSource,
@@ -391,11 +377,6 @@ export function InvestigationEvidencePane({
   projection: InvestigationEvidenceProjection;
   /** Server-validated links for the current root cause; absent without one. */
   rootCauseEvidence?: InvestigationRootCauseEvidenceResolution;
-  /** Additional selections, with the source that made them. */
-  alsoSelectedGroupIds?: readonly {
-    groupId: string;
-    source: InvestigationEvidenceSource;
-  }[];
   /** The current assessment's agent case, resolved against this projection. */
   investigationCase?: InvestigationCaseResolution;
   /**
@@ -406,7 +387,6 @@ export function InvestigationEvidencePane({
    */
   story?: { report: string; evidence?: DiagnosisEvidenceItem[] };
   /** Open the story fully instead of the bounded preview — when the layout has room for it. */
-  storyDefaultOpen?: boolean;
   collecting: boolean;
   animateGroupIds: ReadonlySet<string>;
   onViewSource: (
@@ -444,7 +424,9 @@ export function InvestigationEvidencePane({
   const [coverageOpen, setCoverageOpen] = useState(false);
   const [workloadOpen, setWorkloadOpen] = useState(false);
   const [earlierOpen, setEarlierOpen] = useState(false);
-  const [resultsOpen, setResultsOpen] = useState(false);
+  // Null until the reader touches the fold: with nothing placed above it, a
+  // finished story opens Captured results by itself, and it stays theirs to close.
+  const [resultsOpen, setResultsOpen] = useState<boolean | null>(null);
   const handledRevealRequestRef = useRef<number | undefined>(undefined);
   const openingForRevealRequestRef = useRef<number | undefined>(undefined);
   const storyMode = story !== undefined || storyShell;
@@ -452,7 +434,6 @@ export function InvestigationEvidencePane({
     projection.groups,
     rootCauseEvidence,
     investigationCase,
-    alsoSelectedGroupIds,
     storyMode,
   );
   const hasCurrentEvidence =
@@ -626,10 +607,9 @@ export function InvestigationEvidencePane({
         // The card is the one the cited call itself produced. A later read of
         // the same thing lives on the same group; substituting it would show
         // newer evidence under an older claim.
-        const observation =
-          group?.observations.find(
-            (candidate) => candidate.source.id === item.source.id,
-          ) ?? group?.latest;
+        const observation = group?.observations.find(
+          (candidate) => candidate.source.id === item.source.id,
+        );
         if (group && observation)
           return {
             item: {
@@ -725,6 +705,8 @@ export function InvestigationEvidencePane({
     ? resolveStoryPlacements(story.report, resolveStoryItem, resolveStoryRef)
     : undefined;
   const placedCount = storyPlacements?.placedCount ?? 0;
+  const resultsShown =
+    resultsOpen ?? (placedCount === 0 && !collecting && !!story);
   const placedGroupIds = new Set(
     [...(storyPlacements?.byIndex.values() ?? [])].flatMap((entry) =>
       entry.kind === "placed" && entry.target.item.groupId
@@ -879,10 +861,10 @@ export function InvestigationEvidencePane({
           />
         ) : null}
 
-        {storyMode && !story ? (
+        {storyMode ? (
           <div
             data-story-card
-            data-story-shell
+            data-story-shell={story ? undefined : ""}
             className="investigation-evidence rounded-xl border p-4"
           >
             <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-theme-text-secondary">
@@ -897,52 +879,32 @@ export function InvestigationEvidencePane({
                 </span>
               ) : null}
             </div>
-            <p className="text-sm text-theme-text-tertiary">
-              The analysis appears when the investigation finishes.
-            </p>
-          </div>
-        ) : null}
-        {storyMode && story ? (
-          <div
-            data-story-card
-            className="investigation-evidence rounded-xl border p-4"
-          >
-            <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-theme-text-secondary">
-              Why
-              <span className="font-normal text-theme-text-tertiary">
-                · Agent analysis
-              </span>
-              {collecting ? (
-                <span className="ml-auto inline-flex items-center gap-1.5 text-xs font-normal text-accent-text">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
-                  collecting
-                </span>
-              ) : null}
-            </div>
-            <AnalysisStory
-              report={story.report}
-              resolveItem={resolveStoryItem}
-              resolveRef={resolveStoryRef}
-              trailing={
-                visibleRuledOut.length > 0 ? (
-                  <RuledOutBlock
-                    entries={visibleRuledOut}
-                    onReveal={revealCaseItem}
-                  />
-                ) : undefined
-              }
-              renderPlacement={renderStoryPlacement}
-              onReveal={revealStoryTarget}
-              openRequest={storyOpenRequest}
-              onViewSource={(sourceId) => onViewSource(sourceId)}
-              defaultOpen={storyDefaultOpen}
-            />
+            {story ? (
+              <AnalysisStory
+                report={story.report}
+                resolveItem={resolveStoryItem}
+                resolveRef={resolveStoryRef}
+                trailing={
+                  visibleRuledOut.length > 0 ? (
+                    <RuledOutBlock
+                      entries={visibleRuledOut}
+                      onReveal={revealCaseItem}
+                    />
+                  ) : undefined
+                }
+                renderPlacement={renderStoryPlacement}
+                onReveal={revealStoryTarget}
+                openRequest={storyOpenRequest}
+                onViewSource={(sourceId) => onViewSource(sourceId)}
+              />
+            ) : (
+              <p className="text-sm text-theme-text-tertiary">
+                The analysis appears when the investigation finishes.
+              </p>
+            )}
           </div>
         ) : null}
 
-        {/* What the agent considered and rejected belongs with the argument
-            it belongs to, right after it, not after the evidence list among
-            the withheld counts, where it read as bookkeeping. */}
         {storyMode ? afterEvidence : null}
 
         {!storyMode && visibleRuledOut.length > 0 ? (
@@ -968,7 +930,7 @@ export function InvestigationEvidencePane({
             keepWhenEmpty
             animateGroupIds={animateGroupIds}
             onViewSource={onViewSource}
-            open={resultsOpen || (placedCount === 0 && !collecting && !!story)}
+            open={resultsShown}
             onOpenChange={setResultsOpen}
           >
             <div className="space-y-4">
@@ -1740,6 +1702,9 @@ function EvidenceCard({
           .slice(-VISIBLE_LOG_EVIDENCE_LINES)
           .map((line) => stripAnsi(line))
       : [];
+  // A story log card shows the newest two selected lines always — the ones a
+  // story cites from a tail. Expanding appends the earlier lines below them,
+  // under a divider, so nothing above them moves.
   const storyLogHead = storyLogLines.slice(-2);
   const storyLogRest = storyLogLines.slice(0, -2);
   // A story log card carries its cited lines inline, so the only thing left to
@@ -1748,9 +1713,6 @@ function EvidenceCard({
   const hasExpandableBody =
     (hasEvidenceDetails && !inlineLogs) || meaningfulHistory;
   const canExpand = !compact && (hasExpandableBody || storyLogLines.length > 2);
-  // A story log card shows the newest two selected lines always — the ones a
-  // story cites from a tail. Expanding appends the earlier lines below them,
-  // under a divider, so nothing above them moves.
   const revealHistory = investigationEvidenceShouldRevealHistory(
     group,
     revealSourceId,
@@ -1954,28 +1916,29 @@ function EvidenceCard({
               ))}
             </div>
           ) : null}
-          {storyLogHead.length > 0 ? (
+          {storyLogHead.length > 0 && !compact ? (
             <div
               data-story-log-lines
               className={
                 prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2"
               }
             >
-              <div className="overflow-hidden rounded-lg border border-[var(--terminal-border)] bg-[var(--terminal-bg)] font-mono text-xs leading-relaxed text-[var(--terminal-text)]">
-                <pre className="overflow-x-auto whitespace-pre-wrap break-words px-3 py-2.5">
-                  {storyLogHead.join("\n")}
-                </pre>
-                {storyLogRest.length > 0 ? (
-                  <Collapse open={open && canExpand}>
-                    <div className="border-t border-[var(--terminal-divider)] px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] text-[var(--terminal-label)]">
-                      Earlier lines
-                    </div>
-                    <pre className="overflow-x-auto whitespace-pre-wrap break-words px-3 pb-2.5">
-                      {storyLogRest.join("\n")}
-                    </pre>
-                  </Collapse>
-                ) : null}
-              </div>
+              <TerminalBlock
+                footer={
+                  storyLogRest.length > 0 ? (
+                    <Collapse open={open && canExpand}>
+                      <TerminalBlockLabel divider>
+                        Earlier lines
+                      </TerminalBlockLabel>
+                      <pre className="overflow-x-auto whitespace-pre-wrap break-words px-3 pb-2.5 font-mono text-xs leading-relaxed text-[var(--terminal-text)]">
+                        {storyLogRest.join("\n")}
+                      </pre>
+                    </Collapse>
+                  ) : null
+                }
+              >
+                {storyLogHead.join("\n")}
+              </TerminalBlock>
             </div>
           ) : null}
         </>
