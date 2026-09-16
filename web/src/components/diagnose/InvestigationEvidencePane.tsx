@@ -699,8 +699,13 @@ export function InvestigationEvidencePane({
   );
   // What the story actually placed, not what the case could have: a cited
   // card the agent never placed is inventory, and the inventory says so.
+  // A marker written in the ledger's ref form names the item carrying that ref.
+  const resolveStoryRef = (ref: string): number | undefined => {
+    const index = (story?.evidence ?? []).findIndex((item) => item.ref === ref);
+    return index >= 0 ? index : undefined;
+  };
   const storyPlacements = story
-    ? resolveStoryPlacements(story.report, resolveStoryItem)
+    ? resolveStoryPlacements(story.report, resolveStoryItem, resolveStoryRef)
     : undefined;
   const placedCount = storyPlacements?.placedCount ?? 0;
   const placedGroupIds = new Set(
@@ -901,6 +906,7 @@ export function InvestigationEvidencePane({
             <AnalysisStory
               report={story.report}
               resolveItem={resolveStoryItem}
+              resolveRef={resolveStoryRef}
               trailing={
                 visibleRuledOut.length > 0 ? (
                   <RuledOutBlock

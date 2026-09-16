@@ -3,6 +3,7 @@ package ai
 import (
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -19,6 +20,13 @@ var (
 	// picking the first would be choosing an interpretation rather than
 	// removing a wrapper.
 	wrappedEvidenceRefRe = regexp.MustCompile(`^\[\[radar:evidence-ref=(ev_[a-z2-7]{26,128}_[a-z2-7]{26,128})\]\]$`)
+	// The ledger marks each tool result with [[radar:evidence-ref=ev_…]]; an
+	// agent that copies that form into the story meant the placement marker,
+	// so a ref that names a cited item becomes [[radar:evidence=N]] and reads
+	// the same everywhere downstream.
+	storyRefMarkerRe = regexp.MustCompile(`\[\[radar:evidence-ref=(ev_[a-z2-7]{26,128}_[a-z2-7]{26,128})(\|compact)?\]\]`)
+	// No marker of any kind belongs in the headline fields.
+	anyStoryMarkerRe = regexp.MustCompile(` ?\[\[radar:[^\]]*\]\]`)
 )
 
 const (
@@ -107,7 +115,9 @@ func diagnosisFromText(text string) Diagnosis {
 			} else {
 				d.Report = before
 			}
-			d.Summary = clampSummary(strings.TrimSpace(parsed.Summary), maxDiagnosisSummaryRune)
+			d.Report = canonicalStoryMarkers(d.Report, d.caseRequest.items)
+			d.RootCause = stripStoryMarkers(d.RootCause)
+			d.Summary = clampSummary(stripStoryMarkers(parsed.Summary), maxDiagnosisSummaryRune)
 			if certainty := DiagnosisCertainty(strings.ToLower(strings.TrimSpace(parsed.Certainty))); certainty != "" {
 				if _, known := diagnosisCertainties[certainty]; known {
 					d.Certainty = certainty
@@ -431,4 +441,23 @@ func unwrapEvidenceRef(ref string) string {
 		return m[1]
 	}
 	return ref
+}
+
+func canonicalStoryMarkers(report string, items []caseItemRequest) string {
+	if !strings.Contains(report, "[[radar:evidence-ref=") {
+		return report
+	}
+	return storyRefMarkerRe.ReplaceAllStringFunc(report, func(marker string) string {
+		m := storyRefMarkerRe.FindStringSubmatch(marker)
+		for i, item := range items {
+			if item.ref == m[1] {
+				return "[[radar:evidence=" + strconv.Itoa(i) + m[2] + "]]"
+			}
+		}
+		return marker
+	})
+}
+
+func stripStoryMarkers(text string) string {
+	return strings.TrimSpace(anyStoryMarkerRe.ReplaceAllString(text, ""))
 }

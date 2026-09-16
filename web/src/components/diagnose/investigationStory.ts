@@ -11,10 +11,30 @@
  * fixtures pin it on both sides of the wire (see internal/ai/story_test.go).
  */
 
-export const STORY_PLACEMENT_RE = /\[\[radar:evidence=(\d+)(?:\|(compact))?\]\]/g;
+// An agent that writes the ledger's ref form, [[radar:evidence-ref=ev_…]],
+// meant a placement; the parser rewrites a cited ref to its index, and one
+// nothing cites reaches here as a ref the resolver cannot place. Either way
+// it is a marker, never literal text.
+export const STORY_PLACEMENT_RE =
+  /\[\[radar:evidence(?:=(\d+)|-ref=([A-Za-z0-9_]+))(?:\|(compact))?\]\]/g;
 // Four or more leading spaces is Markdown indented code, so a marker there
 // stays literal like one inside a fence.
-const BLOCK_PLACEMENT_RE = /^\s{0,3}\[\[radar:evidence=(\d+)(?:\|(compact))?\]\]\s*$/;
+const BLOCK_PLACEMENT_RE =
+  /^\s{0,3}\[\[radar:evidence(?:=(\d+)|-ref=([A-Za-z0-9_]+))(?:\|(compact))?\]\]\s*$/;
+/** A reference the story cannot resolve renders as a placement Radar cannot identify. */
+export const UNRESOLVED_STORY_INDEX = -1;
+export type StoryRefResolver = (ref: string) => number | undefined;
+function markerIndex(
+  index: string | undefined,
+  ref: string | undefined,
+  resolveRef: StoryRefResolver | undefined,
+): number {
+  if (index !== undefined) return Number(index);
+  const resolved = ref && resolveRef ? resolveRef(ref) : undefined;
+  return resolved === undefined || resolved < 0
+    ? UNRESOLVED_STORY_INDEX
+    : resolved;
+}
 const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
 // A closing fence is bare: same character, at least the opening length, and
 // nothing but whitespace after it. "````not-a-close" is still code.
@@ -43,8 +63,10 @@ export function storyReferenceHref(index: number): string {
   return `#radar-evidence-${index}`;
 }
 
-export function storyReferenceIndex(href: string | undefined): number | undefined {
-  const match = href ? /^#radar-evidence-(\d+)$/.exec(href) : null;
+export function storyReferenceIndex(
+  href: string | undefined,
+): number | undefined {
+  const match = href ? /^#radar-evidence-(-?\d+)$/.exec(href) : null;
   return match ? Number(match[1]) : undefined;
 }
 
@@ -54,7 +76,11 @@ export function storyReferenceIndex(href: string | undefined): number | undefine
  * contains none: the span state at each marker is the parity of backticks
  * before it.
  */
-function rewriteInlineMarkers(line: string, inlineRefs: number[]): string {
+function rewriteInlineMarkers(
+  line: string,
+  inlineRefs: number[],
+  resolveRef: StoryRefResolver | undefined,
+): string {
   let out = "";
   let cursor = 0;
   let backticks = 0;
@@ -67,7 +93,7 @@ function rewriteInlineMarkers(line: string, inlineRefs: number[]): string {
     if (backticks % 2 === 1) {
       out += match[0];
     } else {
-      const index = Number(match[1]);
+      const index = markerIndex(match[1], match[2], resolveRef);
       inlineRefs.push(index);
       out += `[${match[0]}](${storyReferenceHref(index)})`;
     }
@@ -76,7 +102,10 @@ function rewriteInlineMarkers(line: string, inlineRefs: number[]): string {
   return out + line.slice(cursor);
 }
 
-export function splitStory(report: string): StorySplit {
+export function splitStory(
+  report: string,
+  resolveRef?: StoryRefResolver,
+): StorySplit {
   const segments: StorySegment[] = [];
   const inlineRefs: number[] = [];
   const prose: string[] = [];
@@ -93,7 +122,11 @@ export function splitStory(report: string): StorySplit {
     if (fence) {
       prose.push(line);
       const close = FENCE_CLOSE_RE.exec(line);
-      if (close && close[1].startsWith(fence[0]) && close[1].length >= fence.length) {
+      if (
+        close &&
+        close[1].startsWith(fence[0]) &&
+        close[1].length >= fence.length
+      ) {
         fence = undefined;
       }
       continue;
@@ -108,8 +141,8 @@ export function splitStory(report: string): StorySplit {
       flush();
       segments.push({
         kind: "placement",
-        index: Number(block[1]),
-        ...(block[2] ? { compact: true } : {}),
+        index: markerIndex(block[1], block[2], resolveRef),
+        ...(block[3] ? { compact: true } : {}),
       });
       continue;
     }
@@ -127,7 +160,7 @@ export function splitStory(report: string): StorySplit {
       flush();
       continue;
     }
-    prose.push(rewriteInlineMarkers(line, inlineRefs));
+    prose.push(rewriteInlineMarkers(line, inlineRefs, resolveRef));
   }
   flush();
   return { segments, inlineRefs };
@@ -135,7 +168,10 @@ export function splitStory(report: string): StorySplit {
 
 /** The story without any markers, for copying and for models reading it back. */
 export function storyPlainText(report: string): string {
-  return report.replace(STORY_PLACEMENT_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+  return report
+    .replace(STORY_PLACEMENT_RE, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /** The one definition of "renders as a story": a summary headline or any marker. */

@@ -39,7 +39,7 @@ func (r *Run) assessmentForExplanation(seq int) (*Diagnosis, error) {
 
 // placementMarkerRe matches the story's [[radar:evidence=N]] placements. They
 // mean nothing to a model reading the story back, so prompts strip them.
-var placementMarkerRe = regexp.MustCompile(`\[\[radar:evidence=\d+(?:\|compact)?\]\]`)
+var placementMarkerRe = regexp.MustCompile(`\[\[radar:evidence(?:=\d+|-ref=[a-z0-9_]+)(?:\|compact)?\]\]`)
 
 func stripPlacementMarkers(report string) string {
 	return strings.TrimSpace(placementMarkerRe.ReplaceAllString(report, ""))

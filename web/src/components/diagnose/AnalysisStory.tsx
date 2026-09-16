@@ -10,6 +10,7 @@ import {
   splitStory,
   storyReferenceIndex,
   type StorySegment,
+  type StoryRefResolver,
 } from "./investigationStory";
 
 /**
@@ -50,6 +51,7 @@ function isLoss(
 export function resolveStoryPlacements(
   report: string,
   resolveItem: (index: number) => StoryPlacementTarget | StoryPlacementLoss,
+  resolveRef?: StoryRefResolver,
 ): {
   segments: StorySegment[];
   byIndex: Map<number, StoryPlacementResolution>;
@@ -57,7 +59,7 @@ export function resolveStoryPlacements(
   placedCount: number;
   lostItems: number;
 } {
-  const { segments } = splitStory(report);
+  const { segments } = splitStory(report, resolveRef);
   const byIndex = new Map<number, StoryPlacementResolution>();
   // The segment position that renders each placed index's card; a repeated
   // block marker for the same index is a reference back to it, not a second card.
@@ -98,7 +100,7 @@ export function resolveStoryPlacements(
       resolve(segment.index, true, position);
     } else {
       for (const match of segment.markdown.matchAll(
-        /#radar-evidence-(\d+)\)/g,
+        /#radar-evidence-(-?\d+)\)/g,
       )) {
         resolve(Number(match[1]), false);
       }
@@ -204,6 +206,7 @@ const STORY_PROSE_CLASS =
 export function AnalysisStory({
   report,
   resolveItem,
+  resolveRef,
   renderPlacement,
   onReveal,
   onViewSource,
@@ -213,6 +216,8 @@ export function AnalysisStory({
 }: {
   report: string;
   resolveItem: (index: number) => StoryPlacementTarget | StoryPlacementLoss;
+  /** Maps a ledger ref an agent wrote as a marker to its evidence index. */
+  resolveRef?: StoryRefResolver;
   /** Renders the card for a placed item; `compact` when it sits in the collapsed preview. */
   renderPlacement: (
     target: StoryPlacementTarget,
@@ -234,7 +239,7 @@ export function AnalysisStory({
   }, [defaultOpen]);
   const regionId = useId();
   const story = useMemo(
-    () => resolveStoryPlacements(report, resolveItem),
+    () => resolveStoryPlacements(report, resolveItem, resolveRef),
     [report, resolveItem],
   );
   const firstPlacedAt = story.segments.findIndex(

@@ -5,6 +5,7 @@ import {
   storyPlainText,
   storyReferenceHref,
   storyReferenceIndex,
+  UNRESOLVED_STORY_INDEX,
 } from "./investigationStory";
 
 describe("splitStory", () => {
@@ -17,7 +18,8 @@ describe("splitStory", () => {
       { kind: "placement", index: 0 },
       {
         kind: "prose",
-        markdown: "As [[[radar:evidence=0]]](#radar-evidence-0) shows, auth fails.",
+        markdown:
+          "As [[[radar:evidence=0]]](#radar-evidence-0) shows, auth fails.",
       },
       { kind: "placement", index: 2 },
       { kind: "prose", markdown: "Done." },
@@ -40,7 +42,9 @@ describe("splitStory", () => {
     const { segments, inlineRefs } = splitStory(report);
     expect(segments.filter((s) => s.kind === "placement")).toEqual([]);
     expect(inlineRefs).toEqual([3]);
-    const prose = segments.map((s) => (s.kind === "prose" ? s.markdown : "")).join("\n");
+    const prose = segments
+      .map((s) => (s.kind === "prose" ? s.markdown : ""))
+      .join("\n");
     expect(prose).toContain("`[[radar:evidence=1]]`");
     expect(prose).toContain("> [[radar:evidence=4]]");
     expect(prose).toContain("[[[radar:evidence=3]]](#radar-evidence-3)");
@@ -50,13 +54,39 @@ describe("splitStory", () => {
     const indented = splitStory("Text.\n\n    [[radar:evidence=0]]");
     expect(indented.segments.every((s) => s.kind === "prose")).toBe(true);
     expect(indented.inlineRefs).toEqual([]);
-    expect(indented.segments.map((s) => s.kind === "prose" && s.markdown).join("\n")).toContain("    [[radar:evidence=0]]");
-    const fence = splitStory("```\n````not-a-close\n[[radar:evidence=0]]\n```\n\n[[radar:evidence=1]]");
-    expect(fence.segments.filter((s) => s.kind === "placement").map((s) => s.kind === "placement" && s.index)).toEqual([1]);
+    expect(
+      indented.segments.map((s) => s.kind === "prose" && s.markdown).join("\n"),
+    ).toContain("    [[radar:evidence=0]]");
+    const fence = splitStory(
+      "```\n````not-a-close\n[[radar:evidence=0]]\n```\n\n[[radar:evidence=1]]",
+    );
+    expect(
+      fence.segments
+        .filter((s) => s.kind === "placement")
+        .map((s) => s.kind === "placement" && s.index),
+    ).toEqual([1]);
   });
 
+  it("resolves a ref-form marker to its item, and flags one nothing cites", () => {
+    const ref = "ev_" + "a".repeat(26) + "_" + "b".repeat(26);
+    const stray = "ev_" + "c".repeat(26) + "_" + "d".repeat(26);
+    const resolve = (candidate: string) => (candidate === ref ? 2 : undefined);
+    const { segments, inlineRefs } = splitStory(
+      `The log shows it:\n\n[[radar:evidence-ref=${ref}]]\n\nSee [[radar:evidence-ref=${ref}|compact]] and [[radar:evidence-ref=${stray}]].`,
+      resolve,
+    );
+    expect(segments[1]).toEqual({ kind: "placement", index: 2 });
+    expect(inlineRefs).toEqual([2, UNRESOLVED_STORY_INDEX]);
+    expect(segments[2]).toMatchObject({ kind: "prose" });
+    const inline = (segments[2] as { markdown: string }).markdown;
+    expect(inline).toContain("](#radar-evidence-2)");
+    expect(inline).toContain(`](#radar-evidence-${UNRESOLVED_STORY_INDEX})`);
+    expect(storyPlainText(`x [[radar:evidence-ref=${ref}]] y`)).toBe("x  y");
+  });
   it("reads the compact variant as a placement flag", () => {
-    const { segments } = splitStory("A.\n[[radar:evidence=2|compact]]\nB [[radar:evidence=2|compact]].");
+    const { segments } = splitStory(
+      "A.\n[[radar:evidence=2|compact]]\nB [[radar:evidence=2|compact]].",
+    );
     expect(segments[1]).toEqual({ kind: "placement", index: 2, compact: true });
     expect(segments[2]).toEqual({
       kind: "prose",
@@ -74,7 +104,9 @@ describe("splitStory", () => {
   it("round-trips reference hrefs and strips markers for plain text", () => {
     expect(storyReferenceIndex(storyReferenceHref(7))).toBe(7);
     expect(storyReferenceIndex("#other")).toBeUndefined();
-    expect(storyPlainText("A.\n\n[[radar:evidence=0]]\n\nB [[radar:evidence=1]].")).toBe("A.\n\nB .");
+    expect(
+      storyPlainText("A.\n\n[[radar:evidence=0]]\n\nB [[radar:evidence=1]]."),
+    ).toBe("A.\n\nB .");
     expect(storyHasPlacements("no markers")).toBe(false);
     expect(storyHasPlacements("x [[radar:evidence=0]]")).toBe(true);
   });

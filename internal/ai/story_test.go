@@ -239,3 +239,22 @@ func TestExplanationPromptCarriesSummaryAndStripsMarkers(t *testing.T) {
 		t.Fatalf("placement markers must be stripped for the explaining model: %s", prompt)
 	}
 }
+
+func TestDiagnosisFromText_RefMarkersBecomeIndexMarkersAndLeaveTheHeadline(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
+	other := testEvidenceRef('c', 'd')
+	body := "```json\n{\"summary\":\"The pod crashes [[radar:evidence-ref=" + ref + "]].\",\"root_cause\":\"nginx exits [[radar:evidence-ref=" + ref + "]] on start.\",\"certainty\":\"established\",\"evidence\":[{\"ref\":\"" + ref + "\",\"role\":\"cause\",\"claim\":\"The log names it.\"}]}\n```\nThe log shows it:\n\n[[radar:evidence-ref=" + ref + "]]\n\nAlso [[radar:evidence-ref=" + ref + "|compact]] inline, and one nothing cites [[radar:evidence-ref=" + other + "]]."
+	d := diagnosisFromText(body)
+	if d.Summary != "The pod crashes." {
+		t.Fatalf("summary kept a marker: %q", d.Summary)
+	}
+	if d.RootCause != "nginx exits on start." {
+		t.Fatalf("root_cause kept a marker: %q", d.RootCause)
+	}
+	if !strings.Contains(d.Report, "\n[[radar:evidence=0]]\n") || !strings.Contains(d.Report, "[[radar:evidence=0|compact]]") {
+		t.Fatalf("ref markers not canonicalised: %q", d.Report)
+	}
+	if !strings.Contains(d.Report, "[[radar:evidence-ref="+other+"]]") {
+		t.Fatalf("an uncited ref must stay for the renderer to flag: %q", d.Report)
+	}
+}
