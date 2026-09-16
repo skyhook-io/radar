@@ -18,7 +18,7 @@ require (
 	github.com/klauspost/compress v1.20.0
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/prometheus/client_golang v1.24.1
-	github.com/prometheus/client_model v0.6.2
+	github.com/prometheus/client_model v0.6.3
 	github.com/prometheus/common v0.71.0
 	github.com/skyhook-io/radar/pkg v0.0.0
 	github.com/wailsapp/wails/v2 v2.15.0
