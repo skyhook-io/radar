@@ -1568,12 +1568,11 @@ function ToolRow({
         // The arguments give way first: they are still readable expanded,
         // while the reason is the one thing this row exists to say. It still
         // clips at the row's edge; the full text is a hover and a click away.
-        <span
-          className="investigation-tool-reason min-w-0 truncate text-[11px] text-semantic-error"
-          title={errorReason}
-        >
-          {middleTruncate(errorReason)}
-        </span>
+        <Tooltip content={errorReason} wrapperClassName="min-w-0 truncate">
+          <span className="investigation-tool-reason block min-w-0 truncate text-[11px] text-semantic-error">
+            {middleTruncate(errorReason)}
+          </span>
+        </Tooltip>
       )}
       {durationLabel && (
         <span className="ml-auto shrink-0 text-[11px] text-theme-text-tertiary">

@@ -28,7 +28,7 @@ describe("InvestigationResourceEvidence", () => {
       },
     });
     expect(html).toMatch(/colspan="2"/i);
-    expect(html).toMatch(/<pre[^>]*>dynamic_resources:\n  ads_config:/);
+    expect(html).toMatch(/<pre[^>]*>dynamic_resources:\n {2}ads_config:/);
     expect(html).toContain("LOG_LEVEL");
   });
   it("keeps every ConfigMap key inspectable in a bounded table and hides sensitive-looking values", () => {

@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
 import { AlertTriangle, ChevronDown, FileSearch } from "lucide-react";
+import { Tooltip } from "../ui/Tooltip";
 import { Collapse } from "@skyhook-io/k8s-ui";
 
 import { Markdown } from "../ui/Markdown";
@@ -200,15 +201,19 @@ function LostSupport({
   }
   // Loud enough to notice, quiet enough to read past: the reason on hover.
   return (
-    <span
-      role="note"
-      data-story-lost-support={reason}
-      title={LOSS_COPY[reason]}
-      className="inline-flex items-center gap-1 rounded border border-dashed border-theme-border px-1 py-px align-baseline text-[11px] text-theme-text-tertiary"
-    >
-      <AlertTriangle className="h-3 w-3 shrink-0 text-amber-500" aria-hidden />
-      unverified
-    </span>
+    <Tooltip content={LOSS_COPY[reason]} wrapperClassName="align-baseline">
+      <span
+        role="note"
+        data-story-lost-support={reason}
+        className="inline-flex items-center gap-1 rounded border border-dashed border-theme-border px-1 py-px align-baseline text-[11px] text-theme-text-tertiary"
+      >
+        <AlertTriangle
+          className="h-3 w-3 shrink-0 text-amber-500"
+          aria-hidden
+        />
+        unverified
+      </span>
+    </Tooltip>
   );
 }
 
@@ -287,7 +292,7 @@ export function AnalysisStory({
   const regionId = useId();
   const story = useMemo(
     () => resolveStoryPlacements(report, resolveItem, resolveRef),
-    [report, resolveItem],
+    [report, resolveItem, resolveRef],
   );
   const firstPlacedAt = story.segments.findIndex(
     (segment) =>
