@@ -1,6 +1,6 @@
 import { type ReactNode, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { AlertTriangle, ArrowUpRight, Check, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
+import { AlertTriangle, ArrowUpRight, Check, Copy, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
 import type { BlockedExit } from './cloudConnectHandoff'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import {
@@ -75,6 +75,21 @@ function BlockedView({
   onExit: () => void
 }) {
   const copy = blockedCopy(blocked, exit)
+  // The person who can act is usually not the one reading this. The card's
+  // own text — what Radar tried, why it stopped, the refusals, the link — is
+  // exactly the message they would write to their platform team, so hand it
+  // to them verbatim rather than making them retype it.
+  const cardRef = useRef<HTMLDivElement | null>(null)
+  const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
+  const copyForTeam = () => {
+    const body = cardRef.current?.innerText ?? copy.title
+    const note = `Radar Cloud — connecting this cluster from Radar was blocked\n\n${body}\n\n${exit.label}: ${exit.href}`
+    navigator.clipboard
+      .writeText(note)
+      .then(() => setCopied('done'))
+      .catch(() => setCopied('failed'))
+    setTimeout(() => setCopied('idle'), 2000)
+  }
   const icon =
     blocked.reason === 'gitops' ? (
       <GitBranch className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
@@ -85,7 +100,7 @@ function BlockedView({
     )
   return (
     <div className="px-8 pt-6 pb-5">
-      <div className="card-inner-lg flex gap-2.5">
+      <div ref={cardRef} className="card-inner-lg flex gap-2.5">
         {icon}
         <div className="min-w-0 space-y-3">
           <div className="text-[13px] font-semibold text-theme-text-primary">{copy.title}</div>
@@ -106,6 +121,23 @@ function BlockedView({
         >
           {exit.label}
         </a>
+        <button
+          type="button"
+          onClick={copyForTeam}
+          className="inline-flex items-center gap-1.5 text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+        >
+          {copied === 'done' ? (
+            <>
+              <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Copied
+            </>
+          ) : copied === 'failed' ? (
+            'Couldn’t copy — select the text above'
+          ) : (
+            <>
+              <Copy className="w-3.5 h-3.5" /> Copy for your platform team
+            </>
+          )}
+        </button>
         <button
           onClick={onExit}
           className="ml-auto text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
@@ -237,8 +269,9 @@ function blockedCopy(blocked: CloudInstallBlocked, exit: BlockedExit): { title: 
   // Fresh offered on "nothing running" alone: say what was not confirmed.
   const unconfirmedNext = (
     <>
-      Radar found no Radar running in this cluster but couldn’t read Helm’s release records, so an admin with cluster
-      access should confirm nothing is installed before running a fresh install. {installNext}
+      An admin with cluster access should confirm nothing is installed — Radar couldn’t read Helm’s release records —
+      then get the install command from Radar Cloud: it asks for a cluster name, then shows the Helm, Argo CD or Flux
+      instructions to review before running.
     </>
   )
   const next = exit.install ? (a?.releaseUnread ? unconfirmedNext : installNext) : unknownNext
@@ -262,7 +295,15 @@ function blockedCopy(blocked: CloudInstallBlocked, exit: BlockedExit): { title: 
         title: 'The cluster blocked part of this install',
         tried,
         why: 'The cluster refused: something already there conflicts with the install, or a policy rejects it. More permission wouldn’t change that.',
-        next: exit.install ? <>After the refusals above are resolved: {installNext}</> : next,
+        next: exit.install ? (
+          <>
+            Once the refusals above are resolved, have an admin with cluster access get the install command from Radar
+            Cloud: it asks for a cluster name, then shows the Helm, Argo CD or Flux instructions to review before
+            running.
+          </>
+        ) : (
+          next
+        ),
       }
   }
 }
