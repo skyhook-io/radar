@@ -1560,14 +1560,18 @@ function ToolRow({
         {prettyTool(step.tool)}
       </span>
       {step.summary && !open && (
-        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-theme-text-tertiary">
+        <span className="min-w-0 flex-1 shrink-[4] truncate font-mono text-[11px] text-theme-text-tertiary">
           {argumentsPreview}
         </span>
       )}
       {errorReason && !open && (
         // The arguments give way first: they are still readable expanded,
-        // while the reason is the one thing this row exists to say.
-        <span className="investigation-tool-reason max-w-full shrink-0 truncate text-[11px] text-semantic-error">
+        // while the reason is the one thing this row exists to say. It still
+        // clips at the row's edge; the full text is a hover and a click away.
+        <span
+          className="investigation-tool-reason min-w-0 truncate text-[11px] text-semantic-error"
+          title={errorReason}
+        >
           {middleTruncate(errorReason)}
         </span>
       )}

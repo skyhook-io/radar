@@ -1,4 +1,7 @@
-import { apiVersionToGroup, knownKindForPluralWithGroup } from "../../../utils/navigation";
+import {
+  apiVersionToGroup,
+  knownKindForPluralWithGroup,
+} from "../../../utils/navigation";
 import { adaptChanges } from "./adapters/changes";
 import { adaptDiagnose } from "./adapters/diagnose";
 import { adaptEvents } from "./adapters/events";
@@ -10,7 +13,11 @@ import {
   adaptPrometheusRules,
   adaptQueryPrometheus,
 } from "./adapters/prometheus";
-import { adaptGetResource, adaptListResources } from "./adapters/resource";
+import {
+  adaptGetResource,
+  adaptListResources,
+  adaptListNamespaces,
+} from "./adapters/resource";
 import { adaptNeighborhood, adaptTopology } from "./adapters/topology";
 import {
   investigationEvidenceRefRe,
@@ -58,6 +65,7 @@ const ADAPTERS: Record<
   issues: adaptIssues,
   get_resource: adaptGetResource,
   list_resources: adaptListResources,
+  list_namespaces: adaptListNamespaces,
   get_events: adaptEvents,
   get_pod_logs: adaptPodLogs,
   get_changes: adaptChanges,

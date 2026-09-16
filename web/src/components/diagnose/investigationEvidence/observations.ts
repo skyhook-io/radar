@@ -174,6 +174,7 @@ const INVESTIGATION_RESULT_LABELS: Readonly<Record<string, string>> = {
   issues: "Issue scan",
   get_resource: "Resource details",
   list_resources: "Resource inventory",
+  list_namespaces: "Namespace inventory",
   get_events: "Kubernetes events",
   get_pod_logs: "Container logs",
   get_changes: "Recent changes",

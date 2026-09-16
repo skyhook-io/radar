@@ -708,9 +708,10 @@ describe("tool row duration and failure reason", () => {
     expect(args?.[1]).toContain("flex-1");
     expect(args?.[1]).toContain("truncate");
     const reason = html.match(
-      /<span class="investigation-tool-reason ([^"]*)">([^<]*)</,
+      /<span class="investigation-tool-reason ([^"]*)"[^>]*>([^<]*)</,
     );
-    expect(reason?.[1]).toContain("shrink-0");
+    expect(reason?.[1]).toContain("min-w-0");
+    expect(reason?.[1]).toContain("truncate");
     expect(reason?.[2]).toBe(
       "resource not found: secret &quot;dev/does-not-exist&quot; not found",
     );

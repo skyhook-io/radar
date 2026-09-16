@@ -198,6 +198,34 @@ export function adaptGetResource(
     );
   }
 }
+// A namespace listing is an inventory like any other; its entries carry no
+// kind of their own, so the card gets one.
+export function adaptListNamespaces(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+  payload: unknown,
+): void {
+  if (!Array.isArray(payload)) {
+    invalidPayload(builder, source);
+    return;
+  }
+  adaptListResources(
+    builder,
+    source,
+    payload.map((entry) => {
+      const item = record(entry);
+      return item
+        ? {
+            kind: "Namespace",
+            name: item.name,
+            status: item.status,
+            terminating: item.status === "Terminating",
+          }
+        : entry;
+    }),
+  );
+}
+
 export function adaptListResources(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,

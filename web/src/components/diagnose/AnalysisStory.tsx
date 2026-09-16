@@ -137,22 +137,26 @@ function LostSupport({
 }) {
   if (typeof reason !== "string") {
     return (
+      // A result with no card is not a loss the reader must weigh; the
+      // sentence above already makes its claim. One quiet link to the raw
+      // result, in the register of an inline reference.
       <span
         role="note"
         data-story-lost-support="nocard"
-        className="my-1 inline-flex flex-wrap items-center gap-1.5 rounded-md border border-dashed border-theme-border px-2 py-1 text-[11px] text-theme-text-tertiary"
+        className="inline-flex items-center gap-1 text-[11px] text-theme-text-tertiary"
       >
         <FileSearch className="h-3 w-3 shrink-0" aria-hidden />
-        No card for this result.
         {onViewSource ? (
           <button
             type="button"
             onClick={() => onViewSource(reason.sourceId)}
-            className="font-medium text-accent-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+            className="hover:text-accent-text hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
           >
-            View it in Activity
+            Result in Activity
           </button>
-        ) : null}
+        ) : (
+          "Result in Activity"
+        )}
       </span>
     );
   }
