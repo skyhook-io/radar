@@ -444,8 +444,46 @@ interface HealthConflictGroup {
     tier: "key" | "supporting" | "context" | "checked";
     tone: string;
     title?: string;
+    summary?: string;
     /** Which turn captured this reading; a note cannot explain a later one. */
     source?: { turnIndex: number; id?: string };
+  };
+}
+
+// Group ids that are the same observation for the reader's question. Two
+// routes: a shared display identity (a log stream read through two calls),
+// and for events, the same warning recorded at two scopes — the Deployment's
+// event feed and its Pod's carry one readiness failure as two cards.
+function healthTwinIds(
+  groups: readonly HealthConflictGroup[],
+): (group: HealthConflictGroup) => Set<string> {
+  const byKey = new Map<string, Set<string>>();
+  const keysOf = (group: HealthConflictGroup): string[] => {
+    const keys: string[] = [];
+    if (group.identity) keys.push(`${group.kind}\u0000${group.identity}`);
+    if (group.kind === "events" && group.latest.summary) {
+      const warning = group.latest.summary
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 160);
+      if (warning) keys.push(`events\u0000warning\u0000${warning}`);
+    }
+    return keys;
+  };
+  for (const group of groups) {
+    if (!group.id) continue;
+    for (const key of keysOf(group)) {
+      const ids = byKey.get(key) ?? new Set<string>();
+      ids.add(group.id);
+      byKey.set(key, ids);
+    }
+  }
+  return (group) => {
+    const ids = new Set<string>([group.id ?? ""]);
+    for (const key of keysOf(group))
+      for (const id of byKey.get(key) ?? []) ids.add(id);
+    return ids;
   };
 }
 
@@ -479,18 +517,9 @@ export function investigationHealthSignals(
 ): InvestigationHealthSignal[] {
   const conflicting = investigationHealthConflictGroups(projection);
   if (conflicting.length === 0) return [];
-  const twins = new Map<string, Set<string>>();
-  for (const group of projection.groups) {
-    if (!group.id || !group.identity) continue;
-    const key = `${group.kind}\u0000${group.identity}`;
-    const ids = twins.get(key) ?? new Set<string>();
-    ids.add(group.id);
-    twins.set(key, ids);
-  }
+  const twinsOf = healthTwinIds(projection.groups);
   return conflicting.map((group) => {
-    const sameStream =
-      (group.identity && twins.get(`${group.kind}\u0000${group.identity}`)) ||
-      new Set<string>([group.id ?? ""]);
+    const sameStream = twinsOf(group);
     const fresh = (caseItems ?? []).filter(
       (item) =>
         item.groupId &&
@@ -576,19 +605,10 @@ export function investigationHealthConflictExplainedBy(
   // agent addressed the stream: it explained one card, and the conflict is
   // recorded on its twin. Group ids that share an identity are the same
   // underlying observation for this question.
-  const twins = new Map<string, Set<string>>();
-  for (const group of projection.groups) {
-    if (!group.id || !group.identity) continue;
-    const key = `${group.kind}\u0000${group.identity}`;
-    const ids = twins.get(key) ?? new Set<string>();
-    ids.add(group.id);
-    twins.set(key, ids);
-  }
+  const twinsOf = healthTwinIds(projection.groups);
   const titles: string[] = [];
   for (const group of conflicting) {
-    const sameStream =
-      (group.identity && twins.get(`${group.kind}\u0000${group.identity}`)) ||
-      new Set<string>([group.id ?? ""]);
+    const sameStream = twinsOf(group);
     const onGroup = caseItems.filter(
       (item) => item.groupId && sameStream.has(item.groupId),
     );
