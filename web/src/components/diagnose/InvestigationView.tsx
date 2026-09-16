@@ -1291,6 +1291,7 @@ export function InvestigationView({
     "Findings: current assessment, Radar evidence, and next steps";
   const currentAssessmentCoverageLimited = investigationEvidenceCoverageLimited(
     currentAssessmentProjection,
+    kind,
   );
   // Reads Radar could not complete for this assessment, one line each, for
   // the Still open block; history qualifiers stay in the record.
@@ -1326,15 +1327,18 @@ export function InvestigationView({
       .map((group) => `${group.label}: ${group.summary}`);
     // Two coverage gaps carry no limitation of their own; name the one that
     // applies so the qualification survives without the old header.
-    const gaps = investigationEvidenceCoverageGaps(currentAssessmentProjection);
+    const gaps = investigationEvidenceCoverageGaps(
+      currentAssessmentProjection,
+      kind,
+    );
     if (gaps.noEvidence)
       lines.push("No evidence was recorded for this assessment");
     else if (gaps.noTargetDiagnosis)
       lines.push(
-        "Radar's own diagnose of this workload did not complete, so this check is partial",
+        "Radar's full diagnose of this workload was not collected, so this check is partial",
       );
     return lines;
-  }, [currentAssessmentProjection]);
+  }, [currentAssessmentProjection, kind]);
   const healthSignals = useMemo(
     () =>
       currentAssessment?.diagnosis?.healthy
@@ -1542,51 +1546,48 @@ export function InvestigationView({
   ) : null;
 
   const nextStepsSection =
-        hasNextSteps && currentAssessment?.diagnosis ? (
-          <section
-            ref={nextStepsRef}
-            tabIndex={-1}
-            aria-labelledby={`${workspaceId}-next-steps`}
-            className="investigation-next-steps rounded-xl border p-4 outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-          >
-            <h2
-              id={`${workspaceId}-next-steps`}
-              className="text-lg font-semibold text-theme-text-primary"
-            >
-              {earlierPlan
-                ? "Earlier proposed steps"
-                : "Next steps"}
-            </h2>
-            <ResultCard
-              diagnosis={currentAssessment.diagnosis}
-              section="actions"
-              compactActions
-              actionNotice={
-                earlierPlan
-                  ? assessmentNeedsCurrentStateVerification
-                    ? "Proposed before the apply attempt. Current state has not been verified."
-                    : "Proposed before the latest evidence. Reassess before applying."
-                  : undefined
-              }
-              onApply={
-                canOfferInvestigationApply({
-                  currentAssessmentIdx,
-                  lastRemediationIdx,
-                  lastApplyAttemptIdx,
-                  localApplyAttemptAssessmentIdx,
-                  interactionsBlocked,
-                  hosted,
-                  hasNewerEvidence:
-                    hasEvidenceCollectedAfterAssessment,
-                })
-                  ? requestApply
-                  : undefined
-              }
-              animate={currentAssessment.animateResult !== false}
-              showDisclaimer={false}
-            />
-          </section>
-        ) : undefined;
+    hasNextSteps && currentAssessment?.diagnosis ? (
+      <section
+        ref={nextStepsRef}
+        tabIndex={-1}
+        aria-labelledby={`${workspaceId}-next-steps`}
+        className="investigation-next-steps rounded-xl border p-4 outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      >
+        <h2
+          id={`${workspaceId}-next-steps`}
+          className="text-lg font-semibold text-theme-text-primary"
+        >
+          {earlierPlan ? "Earlier proposed steps" : "Next steps"}
+        </h2>
+        <ResultCard
+          diagnosis={currentAssessment.diagnosis}
+          section="actions"
+          compactActions
+          actionNotice={
+            earlierPlan
+              ? assessmentNeedsCurrentStateVerification
+                ? "Proposed before the apply attempt. Current state has not been verified."
+                : "Proposed before the latest evidence. Reassess before applying."
+              : undefined
+          }
+          onApply={
+            canOfferInvestigationApply({
+              currentAssessmentIdx,
+              lastRemediationIdx,
+              lastApplyAttemptIdx,
+              localApplyAttemptAssessmentIdx,
+              interactionsBlocked,
+              hosted,
+              hasNewerEvidence: hasEvidenceCollectedAfterAssessment,
+            })
+              ? requestApply
+              : undefined
+          }
+          animate={currentAssessment.animateResult !== false}
+          showDisclaimer={false}
+        />
+      </section>
+    ) : undefined;
 
   return (
     <div
@@ -2080,174 +2081,179 @@ export function InvestigationView({
                       steps. The page already holds four columns; Findings is
                       not a fifth, and it fills the pane it is given. */}
                   <div className="space-y-3">
-                  <section
-                    aria-labelledby={`${workspaceId}-assessment-heading`}
-                    className="investigation-assessment rounded-xl border p-3"
-                  >
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <h2
-                        id={`${workspaceId}-assessment-heading`}
-                        className="text-lg font-semibold text-theme-text-primary"
-                      >
-                        {assessmentNeedsCurrentStateVerification
-                          ? "Assessment before apply"
-                          : hasEvidenceCollectedAfterAssessment
-                            ? "Earlier assessment"
-                            : !currentAssessment
-                              ? "Assessment"
-                              : currentAssessment.verify
-                                ? "Verification result"
-                                : currentAssessmentIdx ===
-                                      initialAssessmentIdx &&
-                                    hasMultipleAssessments
-                                  ? "Initial assessment"
-                                  : "Assessment"}
-                      </h2>
-                      {assessmentNeedsCurrentStateVerification ? (
-                        <Badge severity="warning" size="sm">
-                          Current state unverified
-                        </Badge>
-                      ) : null}
-                      {hasEvidenceCollectedAfterAssessment &&
-                      !assessmentNeedsCurrentStateVerification ? (
-                        <Badge severity="info" size="sm">
-                          Newer evidence below
-                        </Badge>
-                      ) : null}
-                      {verificationRunning || verificationPending ? (
-                        <Badge severity="info" size="sm">
-                          Verifying…
-                        </Badge>
-                      ) : null}
-                    </div>
-                    {assessmentNeedsCurrentStateVerification ? (
-                      <p className="mt-0.5 text-xs text-theme-text-tertiary">
-                        {verificationRunning || verificationPending
-                          ? "This assessment predates the apply attempt. Radar is checking the current state now."
-                          : "This assessment predates the apply attempt; cluster state after it has not been verified."}
-                      </p>
-                    ) : hasEvidenceCollectedAfterAssessment ? (
-                      <p className="mt-0.5 text-xs text-theme-text-tertiary">
-                        Some evidence below was collected after this assessment.
-                        Validate the conclusion against it before acting.
-                      </p>
-                    ) : null}
-                    {currentAssessment?.diagnosis ? (
-                      <ResultCard
-                        key={
-                          currentAssessment.resultSequence ??
-                          currentAssessmentIdx
-                        }
-                        diagnosis={currentAssessment.diagnosis}
-                        assessmentLimits={storyShape ? assessmentLimits : undefined}
-                        healthSignals={storyShape ? healthSignals : undefined}
-                        onRevealSource={viewEvidenceSource}
-                        assessmentSources={
-                          storyShape ? undefined : assessmentSourcesNode
-                        }
-                        assessmentAction={
-                          hasNextSteps ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const section = nextStepsRef.current;
-                                const scroller = evidenceScrollRef.current;
-                                if (!section || !scroller) return;
-                                section.focus({ preventScroll: true });
-                                scroller.scrollTo({
-                                  top:
-                                    scroller.scrollTop +
-                                    section.getBoundingClientRect().top -
-                                    scroller.getBoundingClientRect().top -
-                                    12,
-                                  behavior: prefersReducedMotion()
-                                    ? "auto"
-                                    : "smooth",
-                                });
-                              }}
-                              className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
-                            >
-                              {earlierPlan
-                                ? "Earlier proposed steps ↓"
-                                : "Next steps ↓"}
-                            </button>
-                          ) : null
-                        }
-                        explanation={explanationFor(currentAssessment)}
-                        section="conclusion"
-                        animate={currentAssessment.animateResult !== false}
-                        showDisclaimer={false}
-                        revisedAfter={
-                          currentAssessment.question &&
-                          !currentAssessment.verify &&
-                          hasMultipleAssessments
-                            ? currentAssessment.question
-                            : undefined
-                        }
-                        coverageLimited={currentAssessmentCoverageLimited}
-                        evidenceConflict={currentAssessmentEvidenceConflict}
-                        evidenceConflictExplainedBy={
-                          currentAssessmentEvidenceConflictExplainedBy
-                        }
-                      />
-                    ) : (
-                      <div className="mt-2 flex items-center gap-2 rounded-md bg-theme-surface/60 px-2.5 py-2 text-xs text-theme-text-tertiary">
-                        {busy || requestPending ? (
-                          <span
-                            className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent"
-                            aria-hidden
-                          />
-                        ) : (
-                          <Activity
-                            className="h-3.5 w-3.5 shrink-0"
-                            aria-hidden
-                          />
-                        )}
-                        <span>
-                          {busy || requestPending
-                            ? "Forming an assessment as evidence arrives…"
-                            : "The agent did not provide a final assessment."}
-                        </span>
-                      </div>
-                    )}
-                    {displayedStatusCheckError ? (
-                      <div className="mt-2 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-theme-text-secondary">
-                        <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-400" />
-                        <span className="min-w-0 flex-1">
-                          {applyOutcomeUncertain && !displayedVerificationError
-                            ? displayedStatusCheckError
-                            : `Verification did not complete: ${displayedStatusCheckError}`}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={checkStatus}
-                          disabled={interactionsBlocked}
-                          className="shrink-0 rounded-md border border-theme-border px-2 py-1 font-medium text-theme-text-primary hover:bg-theme-hover disabled:opacity-50"
-                        >
-                          {applyOutcomeUncertain && !displayedVerificationError
-                            ? "Check current status"
-                            : "Check current status again"}
-                        </button>
-                      </div>
-                    ) : null}
-                  </section>
-
-                  {hasMultipleAssessments ? (
-                    <button
-                      type="button"
-                      data-investigation-earlier-assessments
-                      onClick={viewActivity}
-                      className="flex items-center gap-1.5 self-start rounded-md px-1.5 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+                    <section
+                      aria-labelledby={`${workspaceId}-assessment-heading`}
+                      className="investigation-assessment rounded-xl border p-3"
                     >
-                      <FileClock className="h-3.5 w-3.5" aria-hidden />
-                      {assessmentIndexes.length - 1 === 1
-                        ? "1 earlier assessment"
-                        : `${assessmentIndexes.length - 1} earlier assessments`}
-                      <span className="text-theme-text-tertiary">
-                        · in Activity
-                      </span>
-                    </button>
-                  ) : null}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <h2
+                          id={`${workspaceId}-assessment-heading`}
+                          className="text-lg font-semibold text-theme-text-primary"
+                        >
+                          {assessmentNeedsCurrentStateVerification
+                            ? "Assessment before apply"
+                            : hasEvidenceCollectedAfterAssessment
+                              ? "Earlier assessment"
+                              : !currentAssessment
+                                ? "Assessment"
+                                : currentAssessment.verify
+                                  ? "Verification result"
+                                  : currentAssessmentIdx ===
+                                        initialAssessmentIdx &&
+                                      hasMultipleAssessments
+                                    ? "Initial assessment"
+                                    : "Assessment"}
+                        </h2>
+                        {assessmentNeedsCurrentStateVerification ? (
+                          <Badge severity="warning" size="sm">
+                            Current state unverified
+                          </Badge>
+                        ) : null}
+                        {hasEvidenceCollectedAfterAssessment &&
+                        !assessmentNeedsCurrentStateVerification ? (
+                          <Badge severity="info" size="sm">
+                            Newer evidence below
+                          </Badge>
+                        ) : null}
+                        {verificationRunning || verificationPending ? (
+                          <Badge severity="info" size="sm">
+                            Verifying…
+                          </Badge>
+                        ) : null}
+                      </div>
+                      {assessmentNeedsCurrentStateVerification ? (
+                        <p className="mt-0.5 text-xs text-theme-text-tertiary">
+                          {verificationRunning || verificationPending
+                            ? "This assessment predates the apply attempt. Radar is checking the current state now."
+                            : "This assessment predates the apply attempt; cluster state after it has not been verified."}
+                        </p>
+                      ) : hasEvidenceCollectedAfterAssessment ? (
+                        <p className="mt-0.5 text-xs text-theme-text-tertiary">
+                          Some evidence below was collected after this
+                          assessment. Validate the conclusion against it before
+                          acting.
+                        </p>
+                      ) : null}
+                      {currentAssessment?.diagnosis ? (
+                        <ResultCard
+                          key={
+                            currentAssessment.resultSequence ??
+                            currentAssessmentIdx
+                          }
+                          diagnosis={currentAssessment.diagnosis}
+                          assessmentLimits={
+                            storyShape ? assessmentLimits : undefined
+                          }
+                          healthSignals={storyShape ? healthSignals : undefined}
+                          onRevealSource={viewEvidenceSource}
+                          assessmentSources={
+                            storyShape ? undefined : assessmentSourcesNode
+                          }
+                          assessmentAction={
+                            hasNextSteps ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const section = nextStepsRef.current;
+                                  const scroller = evidenceScrollRef.current;
+                                  if (!section || !scroller) return;
+                                  section.focus({ preventScroll: true });
+                                  scroller.scrollTo({
+                                    top:
+                                      scroller.scrollTop +
+                                      section.getBoundingClientRect().top -
+                                      scroller.getBoundingClientRect().top -
+                                      12,
+                                    behavior: prefersReducedMotion()
+                                      ? "auto"
+                                      : "smooth",
+                                  });
+                                }}
+                                className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
+                              >
+                                {earlierPlan
+                                  ? "Earlier proposed steps ↓"
+                                  : "Next steps ↓"}
+                              </button>
+                            ) : null
+                          }
+                          explanation={explanationFor(currentAssessment)}
+                          section="conclusion"
+                          animate={currentAssessment.animateResult !== false}
+                          showDisclaimer={false}
+                          revisedAfter={
+                            currentAssessment.question &&
+                            !currentAssessment.verify &&
+                            hasMultipleAssessments
+                              ? currentAssessment.question
+                              : undefined
+                          }
+                          coverageLimited={currentAssessmentCoverageLimited}
+                          evidenceConflict={currentAssessmentEvidenceConflict}
+                          evidenceConflictExplainedBy={
+                            currentAssessmentEvidenceConflictExplainedBy
+                          }
+                        />
+                      ) : (
+                        <div className="mt-2 flex items-center gap-2 rounded-md bg-theme-surface/60 px-2.5 py-2 text-xs text-theme-text-tertiary">
+                          {busy || requestPending ? (
+                            <span
+                              className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent"
+                              aria-hidden
+                            />
+                          ) : (
+                            <Activity
+                              className="h-3.5 w-3.5 shrink-0"
+                              aria-hidden
+                            />
+                          )}
+                          <span>
+                            {busy || requestPending
+                              ? "Forming an assessment as evidence arrives…"
+                              : "The agent did not provide a final assessment."}
+                          </span>
+                        </div>
+                      )}
+                      {displayedStatusCheckError ? (
+                        <div className="mt-2 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-theme-text-secondary">
+                          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-400" />
+                          <span className="min-w-0 flex-1">
+                            {applyOutcomeUncertain &&
+                            !displayedVerificationError
+                              ? displayedStatusCheckError
+                              : `Verification did not complete: ${displayedStatusCheckError}`}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={checkStatus}
+                            disabled={interactionsBlocked}
+                            className="shrink-0 rounded-md border border-theme-border px-2 py-1 font-medium text-theme-text-primary hover:bg-theme-hover disabled:opacity-50"
+                          >
+                            {applyOutcomeUncertain &&
+                            !displayedVerificationError
+                              ? "Check current status"
+                              : "Check current status again"}
+                          </button>
+                        </div>
+                      ) : null}
+                    </section>
+
+                    {hasMultipleAssessments ? (
+                      <button
+                        type="button"
+                        data-investigation-earlier-assessments
+                        onClick={viewActivity}
+                        className="flex items-center gap-1.5 self-start rounded-md px-1.5 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+                      >
+                        <FileClock className="h-3.5 w-3.5" aria-hidden />
+                        {assessmentIndexes.length - 1 === 1
+                          ? "1 earlier assessment"
+                          : `${assessmentIndexes.length - 1} earlier assessments`}
+                        <span className="text-theme-text-tertiary">
+                          · in Activity
+                        </span>
+                      </button>
+                    ) : null}
                   </div>
 
                   <InvestigationEvidencePane

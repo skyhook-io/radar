@@ -1,5 +1,6 @@
 // Pure presentation decisions over the durable transcript and evidence projection.
 // Keep React/DOM orchestration in InvestigationView; these rules have no UI runtime.
+import { isDiagnosableWorkloadKind } from "./investigationEvidence/observations";
 import { evidenceKindIsAdverse } from "./investigationEvidenceKinds";
 import {
   DiagnoseError,
@@ -284,7 +285,12 @@ export function investigationEvidenceInputsEqual(
 export function investigationIsAssessmentTurn(
   turn: Pick<
     Turn,
-    "status" | "apply" | "explainAssessment" | "question" | "verify" | "diagnosis"
+    | "status"
+    | "apply"
+    | "explainAssessment"
+    | "question"
+    | "verify"
+    | "diagnosis"
   >,
 ): boolean {
   const dx = turn.diagnosis;
@@ -313,7 +319,12 @@ export function investigationIsAssessmentTurn(
 export function investigationSettledAnswerTurnIndexes(
   turns: readonly Pick<
     Turn,
-    "status" | "apply" | "explainAssessment" | "question" | "verify" | "diagnosis"
+    | "status"
+    | "apply"
+    | "explainAssessment"
+    | "question"
+    | "verify"
+    | "diagnosis"
   >[],
   currentAssessmentIdx: number,
 ): Set<number> {
@@ -338,7 +349,12 @@ export function investigationSettledAnswerTurnIndexes(
 export function investigationAssessmentTurnIndexes(
   turns: readonly Pick<
     Turn,
-    "status" | "apply" | "explainAssessment" | "question" | "verify" | "diagnosis"
+    | "status"
+    | "apply"
+    | "explainAssessment"
+    | "question"
+    | "verify"
+    | "diagnosis"
   >[],
 ): number[] {
   const indexes: number[] = [];
@@ -359,7 +375,15 @@ export function investigationEvidenceCoverageGaps(
       };
     }[];
   },
+  targetKind?: string,
 ): { noEvidence: boolean; noTargetDiagnosis: boolean } {
+  // Diagnose covers workloads only; a target it cannot bundle (an HPA, a
+  // Service) is read through get_resource and issues, and that is complete.
+  if (targetKind !== undefined && !isDiagnosableWorkloadKind(targetKind))
+    return {
+      noEvidence: projection.coverage.projected === 0,
+      noTargetDiagnosis: false,
+    };
   const completeDiagnosisSourceIds = new Set(
     projection.sources
       .filter((source) => source.tool === "diagnose" && source.confirmedSuccess)
@@ -393,21 +417,13 @@ export function investigationEvidenceCoverageLimited(
       };
     }[];
   },
+  targetKind?: string,
 ): boolean {
-  const completeDiagnosisSourceIds = new Set(
-    projection.sources
-      .filter((source) => source.tool === "diagnose" && source.confirmedSuccess)
-      .map((source) => source.id),
-  );
-  const hasTargetDiagnosis = projection.groups.some(
-    (group) =>
-      group.latest.relevance !== "broader" &&
-      completeDiagnosisSourceIds.has(group.latest.source.id),
-  );
+  const gaps = investigationEvidenceCoverageGaps(projection, targetKind);
   return (
     projection.limitations.length > 0 ||
-    projection.coverage.projected === 0 ||
-    !hasTargetDiagnosis
+    gaps.noEvidence ||
+    gaps.noTargetDiagnosis
   );
 }
 

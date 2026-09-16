@@ -14,6 +14,7 @@ import {
   investigationClosedEventIsLive,
   investigationClosedRunIsUnavailable,
   investigationEvidenceInputsEqual,
+  investigationEvidenceCoverageGaps,
   investigationEvidenceCoverageLimited,
   investigationEvidenceConflictsWithHealthy,
   investigationHealthConflictExplainedBy,
@@ -172,6 +173,38 @@ describe("investigation terminal presentation", () => {
 });
 
 describe("investigation evidence projection stability", () => {
+  it("does not call a resource read partial when Diagnose cannot bundle the kind", () => {
+    const projection = {
+      limitations: [],
+      coverage: { attempted: 1, projected: 1, limited: 0, checked: 0 },
+      sources: [
+        { id: "resource", tool: "get_resource", confirmedSuccess: true },
+      ],
+      groups: [
+        {
+          latest: { relevance: "target" as const, source: { id: "resource" } },
+        },
+      ],
+    };
+    expect(
+      investigationEvidenceCoverageGaps(projection, "HorizontalPodAutoscaler"),
+    ).toEqual({ noEvidence: false, noTargetDiagnosis: false });
+    expect(
+      investigationEvidenceCoverageLimited(
+        projection,
+        "HorizontalPodAutoscaler",
+      ),
+    ).toBe(false);
+    expect(investigationEvidenceCoverageGaps(projection, "Deployment")).toEqual(
+      {
+        noEvidence: false,
+        noTargetDiagnosis: true,
+      },
+    );
+    expect(investigationEvidenceCoverageLimited(projection, "Deployment")).toBe(
+      true,
+    );
+  });
   it("treats zero projected producer evidence as limited coverage", () => {
     expect(
       investigationEvidenceCoverageLimited({
@@ -831,9 +864,15 @@ describe("investigationAssessmentTurnIndexes", () => {
     const restating = {
       status: "done" as const,
       question: "get the secret",
-      diagnosis: { rootCause: "Secret x does not exist", report: "", remediation: [] },
+      diagnosis: {
+        rootCause: "Secret x does not exist",
+        report: "",
+        remediation: [],
+      },
     };
-    expect(investigationAssessmentTurnIndexes([assessment, restating])).toEqual([0]);
+    expect(investigationAssessmentTurnIndexes([assessment, restating])).toEqual(
+      [0],
+    );
     expect(investigationIsAssessmentTurn(restating)).toBe(false);
   });
   it("accepts a question turn only when it revises with a complete verdict", () => {
@@ -848,7 +887,9 @@ describe("investigationAssessmentTurnIndexes", () => {
         remediation: [],
       },
     };
-    expect(investigationAssessmentTurnIndexes([assessment, revised])).toEqual([0, 1]);
+    expect(investigationAssessmentTurnIndexes([assessment, revised])).toEqual([
+      0, 1,
+    ]);
     const flagOnly = {
       ...revised,
       diagnosis: { ...revised.diagnosis, summary: undefined },
@@ -856,7 +897,13 @@ describe("investigationAssessmentTurnIndexes", () => {
     expect(investigationIsAssessmentTurn(flagOnly)).toBe(false);
     const noVerdict = {
       ...revised,
-      diagnosis: { rootCause: "", summary: "Words.", revisesAssessment: true, report: "", remediation: ["x"] },
+      diagnosis: {
+        rootCause: "",
+        summary: "Words.",
+        revisesAssessment: true,
+        report: "",
+        remediation: ["x"],
+      },
     };
     expect(investigationIsAssessmentTurn(noVerdict)).toBe(false);
   });
@@ -999,14 +1046,32 @@ describe("investigationSettledAnswerTurnIndexes", () => {
   const answer = (revises?: boolean) => ({
     status: "done" as const,
     question: "q",
-    diagnosis: { rootCause: "", report: "a", remediation: [], revisesAssessment: revises },
+    diagnosis: {
+      rootCause: "",
+      report: "a",
+      remediation: [],
+      revisesAssessment: revises,
+    },
   });
   it("settles non-revising answers under the story contract only", () => {
     expect(
-      investigationSettledAnswerTurnIndexes([assessment, answer(false), answer(true), { ...answer(), verify: true }], 0),
+      investigationSettledAnswerTurnIndexes(
+        [
+          assessment,
+          answer(false),
+          answer(true),
+          { ...answer(), verify: true },
+        ],
+        0,
+      ),
     ).toEqual(new Set([1]));
-    const legacy = { ...assessment, diagnosis: { ...assessment.diagnosis, summary: undefined } };
-    expect(investigationSettledAnswerTurnIndexes([legacy, answer(false)], 0)).toEqual(new Set());
+    const legacy = {
+      ...assessment,
+      diagnosis: { ...assessment.diagnosis, summary: undefined },
+    };
+    expect(
+      investigationSettledAnswerTurnIndexes([legacy, answer(false)], 0),
+    ).toEqual(new Set());
   });
 });
 
@@ -1026,14 +1091,42 @@ describe("investigationHealthSignals", () => {
   });
   it("classifies each adverse card by the agent's position on it", () => {
     const projection = {
-      groups: [adverse("a", "Readiness probe failing"), adverse("b", "Restarts"), adverse("c", "OOM"), adverse("d", "Evicted")],
+      groups: [
+        adverse("a", "Readiness probe failing"),
+        adverse("b", "Restarts"),
+        adverse("c", "OOM"),
+        adverse("d", "Evicted"),
+      ],
     };
     const items = [
-      { role: "benign", placement: "card" as const, claim: "Timeouts never removed it from endpoints.", groupId: "a", source: { turnIndex: 0 } },
-      { role: "demoted", placement: "card" as const, claim: "Old restarts.", groupId: "b", source: { turnIndex: 0 } },
-      { role: "symptom", placement: "card" as const, claim: "", groupId: "c", source: { turnIndex: 0 } },
+      {
+        role: "benign",
+        placement: "card" as const,
+        claim: "Timeouts never removed it from endpoints.",
+        groupId: "a",
+        source: { turnIndex: 0 },
+      },
+      {
+        role: "demoted",
+        placement: "card" as const,
+        claim: "Old restarts.",
+        groupId: "b",
+        source: { turnIndex: 0 },
+      },
+      {
+        role: "symptom",
+        placement: "card" as const,
+        claim: "",
+        groupId: "c",
+        source: { turnIndex: 0 },
+      },
     ];
-    expect(investigationHealthSignals(projection, items).map((s) => [s.title, s.status])).toEqual([
+    expect(
+      investigationHealthSignals(projection, items).map((s) => [
+        s.title,
+        s.status,
+      ]),
+    ).toEqual([
       ["Readiness probe failing", "explained"],
       ["Restarts", "related"],
       ["OOM", "contradiction"],
