@@ -2202,6 +2202,8 @@ export interface AssessmentCopyRadar {
     title: string;
     role?: string;
     lines: readonly string[];
+    /** The agent's statement of what this result does not cover. */
+    gap?: string;
   }[];
 }
 
@@ -2277,6 +2279,7 @@ export function assessmentCopyText(
             ...receipt.lines
               .filter((line) => line.trim())
               .map((line) => `  > ${line.trim()}`),
+            ...(receipt.gap ? [`  Not shown: ${receipt.gap}`] : []),
           ].join("\n"),
         ),
       ].join("\n"),

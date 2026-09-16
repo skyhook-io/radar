@@ -1136,96 +1136,83 @@ describe("investigationHealthSignals", () => {
 });
 
 describe("investigationHealthSignals twins across scopes", () => {
-  it("lets a benign note on the Pod's copy of a warning explain the Deployment's copy", () => {
-    const warning =
-      "Unhealthy: Readiness probe failed: check failed http://localhost:9898/readyz";
-    const groups = [
-      {
-        id: "events-deploy",
-        identity: "deployment demo/podinfo",
-        historical: false,
-        kind: "events",
-        latest: {
-          relevance: "target" as const,
-          tier: "key" as const,
-          tone: "warning",
-          title: "Kubernetes events",
-          summary: warning,
-          source: { turnIndex: 0, id: "s1" },
-        },
-      },
-      {
-        id: "events-pod",
-        identity: "pod demo/podinfo-1",
-        historical: false,
-        kind: "events",
-        latest: {
-          relevance: "target" as const,
-          tier: "supporting" as const,
-          tone: "warning",
-          title: "Kubernetes events",
-          summary: warning,
-          source: { turnIndex: 0, id: "s2" },
-        },
-      },
-    ];
-    const items = [
-      {
-        role: "benign",
-        placement: "card" as const,
-        claim:
-          "Probe timeouts during a node stall; the pod has been Ready since.",
-        groupId: "events-pod",
-        source: { turnIndex: 0 },
-      },
-    ];
-    const signals = investigationHealthSignals({ groups }, items);
-    expect(signals.map((signal) => [signal.groupId, signal.status])).toEqual([
-      ["events-deploy", "explained"],
-      ["events-pod", "explained"],
-    ]);
-    expect(investigationHealthConflictExplainedBy({ groups }, items)).toEqual([
-      "Kubernetes events",
-      "Kubernetes events",
-    ]);
+  const warning = {
+    reason: "Unhealthy",
+    message:
+      "Readiness probe failed: check failed http://localhost:9898/readyz",
+    type: "Warning",
+  };
+  const eventsGroup = (
+    id: string,
+    identity: string,
+    patch: {
+      relevance?: "target" | "producer-related" | "broader";
+      events?: (typeof warning)[];
+    } = {},
+  ) => ({
+    id,
+    identity,
+    historical: false,
+    kind: "events",
+    latest: {
+      relevance: patch.relevance ?? ("target" as const),
+      tier: "key" as const,
+      tone: "warning",
+      title: "Kubernetes events",
+      summary: `${warning.reason}: ${warning.message} · ${identity}`,
+      data: { type: "events", events: patch.events ?? [warning] },
+      source: { turnIndex: 0, id },
+    },
   });
+  const benignOnPod = [
+    {
+      role: "benign",
+      placement: "card" as const,
+      claim:
+        "Probe timeouts during a node stall; the pod has been Ready since.",
+      groupId: "events-pod",
+      source: { turnIndex: 0 },
+    },
+  ];
 
-  it("does not let the same warning on another workload borrow the explanation", () => {
-    const warning = "Unhealthy: Readiness probe failed: connection refused";
-    const group = (id: string, identity: string) => ({
-      id,
-      identity,
-      historical: false,
-      kind: "events",
-      latest: {
-        relevance: "target" as const,
-        tier: "key" as const,
-        tone: "warning",
-        title: "Kubernetes events",
-        summary: warning,
-        source: { turnIndex: 0, id },
-      },
-    });
+  it("lets a benign note on the Pod's copy of a warning explain the Deployment's copy", () => {
     const groups = [
-      group("events-other", "pod demo/frontend-5b7c-q2"),
-      group("events-pod", "pod demo/podinfo-676569b68b-6278c"),
-    ];
-    const items = [
-      {
-        role: "benign",
-        placement: "card" as const,
-        claim: "Probe timeouts during a node stall.",
-        groupId: "events-pod",
-        source: { turnIndex: 0 },
-      },
+      eventsGroup("events-deploy", "deployment demo/podinfo"),
+      eventsGroup("events-pod", "pod demo/podinfo-676569b68b-6278c"),
     ];
     expect(
-      investigationHealthSignals({ groups }, items).map((signal) => [
+      investigationHealthSignals({ groups }, benignOnPod).map((signal) => [
         signal.groupId,
         signal.status,
       ]),
     ).toEqual([
-      ["events-other", "unaddressed"],
+      ["events-deploy", "explained"],
+      ["events-pod", "explained"],
+    ]);
+    expect(
+      investigationHealthConflictExplainedBy({ groups }, benignOnPod),
+    ).toEqual(["Kubernetes events", "Kubernetes events"]);
+  });
+
+  it("keeps a different warning, another namespace, or a broader card as its own signal", () => {
+    const groups = [
+      eventsGroup("events-deploy", "deployment demo/podinfo", {
+        events: [{ ...warning, message: "Liveness probe failed: timeout" }],
+      }),
+      eventsGroup("events-elsewhere", "deployment other/podinfo"),
+      eventsGroup("events-broader", "deployment demo/frontend", {
+        relevance: "broader",
+      }),
+      eventsGroup("events-pod", "pod demo/podinfo-676569b68b-6278c"),
+    ];
+    expect(
+      investigationHealthSignals({ groups }, benignOnPod).map((signal) => [
+        signal.groupId,
+        signal.status,
+      ]),
+    ).toEqual([
+      ["events-deploy", "unaddressed"],
+      ["events-elsewhere", "unaddressed"],
       ["events-pod", "explained"],
     ]);
   });

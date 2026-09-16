@@ -1428,6 +1428,7 @@ export function InvestigationView({
           title: observation.title,
           role: item.role ? AGENT_ROLE_LABELS[item.role] : undefined,
           lines,
+          gap: item.gap || undefined,
         };
       }),
     };
@@ -1448,16 +1449,28 @@ export function InvestigationView({
     const id = window.setInterval(() => setRunningTick((t) => t + 1), 1000);
     return () => window.clearInterval(id);
   }, [turnRunning]);
+  // A finished read is not what the agent is doing eight seconds later; after
+  // a quiet spell the label says it is thinking rather than naming a stale read.
+  const lastTool = [...(lastTurn?.timeline ?? [])]
+    .reverse()
+    .find((item) => item.kind === "tool");
+  const toolSignature = lastTool
+    ? `${lastTool.id}:${lastTool.status}`
+    : undefined;
+  const toolChangedAtRef = useRef<number>(Date.now());
+  useEffect(() => {
+    toolChangedAtRef.current = Date.now();
+  }, [toolSignature]);
   const investigatingLabel = (() => {
     const items = lastTurn?.timeline ?? [];
     const reads = items.filter((item) => item.kind === "tool").length;
+    const quietFor = Date.now() - toolChangedAtRef.current;
     let current = "Investigating";
-    for (let i = items.length - 1; i >= 0; i -= 1) {
-      const item = items[i];
-      if (item.kind === "tool" && item.tool) {
-        current = describeToolCall(item.tool, item.summary);
-        break;
-      }
+    if (lastTool && lastTool.kind === "tool" && lastTool.tool) {
+      current =
+        lastTool.status === "running" || quietFor < 8000
+          ? describeToolCall(lastTool.tool, lastTool.summary)
+          : "Thinking";
     }
     const elapsed = runningSinceRef.current
       ? Math.round((Date.now() - runningSinceRef.current) / 1000)

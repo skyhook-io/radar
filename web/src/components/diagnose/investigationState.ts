@@ -445,6 +445,11 @@ interface HealthConflictGroup {
     tone: string;
     title?: string;
     summary?: string;
+    /** The card's payload; an events card carries the events it summarises. */
+    data?: {
+      type: string;
+      events?: readonly { reason: string; message: string; type?: string }[];
+    };
     /** Which turn captured this reading; a note cannot explain a later one. */
     source?: { turnIndex: number; id?: string };
   };
@@ -452,34 +457,34 @@ interface HealthConflictGroup {
 
 // Group ids that are the same observation for the reader's question. Two
 // routes: a shared display identity (a log stream read through two calls),
-// and for events, the same warning recorded at two scopes — the Deployment's
-// event feed and its Pod's carry one readiness failure as two cards.
+// and for events, the same warning recorded at two scopes about the
+// investigated workload — its Deployment's event feed and its Pod's carry one
+// readiness failure as two cards. The event's own reason and message decide,
+// within one namespace and only among cards about this target; a name never
+// does.
 function healthTwinIds(
   groups: readonly HealthConflictGroup[],
 ): (group: HealthConflictGroup) => Set<string> {
   const byKey = new Map<string, Set<string>>();
-  // "pod shop/api-7d4-x1" and "deployment shop/api" name one workload: same
-  // namespace, and the shorter name is the longer one's prefix at a dash. The
-  // same warning on an unrelated resource stays its own signal.
-  const workloadOf = (identity: string): string | undefined => {
-    const match = /^\S+\s+([^/\s]+)\/(\S+)$/.exec(identity);
-    if (!match) return undefined;
-    const [, namespace, name] = match;
-    const base = name.replace(/(-[a-z0-9]{1,10}){1,2}$/, "");
-    return `${namespace}/${base}`;
-  };
   const keysOf = (group: HealthConflictGroup): string[] => {
     const keys: string[] = [];
     if (group.identity) keys.push(`${group.kind}\u0000${group.identity}`);
-    if (group.kind === "events" && group.latest.summary && group.identity) {
-      const warning = group.latest.summary
-        .toLowerCase()
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 160);
-      const workload = workloadOf(group.identity);
-      if (warning && workload)
-        keys.push(`events\u0000warning\u0000${workload}\u0000${warning}`);
+    if (
+      group.kind === "events" &&
+      group.latest.relevance !== "broader" &&
+      group.identity &&
+      group.latest.data?.type === "events"
+    ) {
+      const events = group.latest.data.events ?? [];
+      const lead =
+        events.find((event) => event.type === "Warning") ?? events[0];
+      const namespace = /^\S+\s+([^/\s]+)\//.exec(group.identity)?.[1];
+      if (lead && namespace) {
+        const message = lead.message.toLowerCase().replace(/\s+/g, " ").trim();
+        keys.push(
+          `events\u0000${namespace}\u0000${lead.reason.toLowerCase()}\u0000${message}`,
+        );
+      }
     }
     return keys;
   };

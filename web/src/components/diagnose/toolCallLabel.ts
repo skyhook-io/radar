@@ -13,15 +13,17 @@ export function describeToolCall(tool: string, args?: string): string {
     `${what}${a.namespace ? ` in ${a.namespace}` : ""}`;
   switch (tool) {
     case "diagnose":
-      return target ? `Diagnosing ${kind ?? "resource"} ${target}` : "Diagnosing";
+      return target
+        ? `Diagnosing ${kind ?? "resource"} ${target}`
+        : "Diagnosing";
     case "get_resource":
-      return target ? `Reading ${kind ?? "resource"} ${target}` : "Reading a resource";
+      return target
+        ? `Reading ${kind ?? "resource"} ${target}`
+        : "Reading a resource";
     case "list_resources":
       return scoped(`Listing ${a.kind ? pluralLabel(a.kind) : "resources"}`);
     case "get_events":
-      return target
-        ? `Reading events for ${target}`
-        : scoped("Reading events");
+      return target ? `Reading events for ${target}` : scoped("Reading events");
     case "get_pod_logs":
       return `Reading logs for pod ${target ?? ""}${a.container ? ` / ${a.container}` : ""}${a.previous ? " (previous instance)" : ""}`.trim();
     case "get_workload_logs":
@@ -57,7 +59,9 @@ export function describeToolCall(tool: string, args?: string): string {
     case "list_namespaces":
       return "Listing namespaces";
     case "list_packages":
-      return a.chart ? `Looking up packages matching “${a.chart}”` : "Looking up packages";
+      return a.chart
+        ? `Looking up packages matching “${a.chart}”`
+        : "Looking up packages";
     case "top_resources":
       return "Ranking resources";
     case "get_dashboard":
@@ -69,13 +73,17 @@ export function describeToolCall(tool: string, args?: string): string {
     case "apply_resource":
       return "Applying the change";
     case "patch_resource":
-      return target ? `Patching ${kind ?? "resource"} ${target}` : "Patching a resource";
+      return target
+        ? `Patching ${kind ?? "resource"} ${target}`
+        : "Patching a resource";
     case "manage_workload":
     case "manage_rollout":
     case "manage_node":
     case "manage_gitops":
     case "manage_cronjob":
-      return target ? `Changing ${kind ?? "resource"} ${target}` : "Changing a resource";
+      return target
+        ? `Changing ${kind ?? "resource"} ${target}`
+        : "Changing a resource";
     default:
       return prettyTool(tool);
   }
@@ -117,7 +125,8 @@ function parseArgs(args: string | undefined): ToolArgs {
 // label reads best capitalised and singular.
 function kindLabel(kind: string | undefined): string | undefined {
   if (!kind) return undefined;
-  const singular = kind.endsWith("s") && kind.length > 3 ? kind.slice(0, -1) : kind;
+  const singular =
+    kind.endsWith("s") && kind.length > 3 ? kind.slice(0, -1) : kind;
   return singular.charAt(0).toUpperCase() + singular.slice(1);
 }
 

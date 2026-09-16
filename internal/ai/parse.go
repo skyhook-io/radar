@@ -447,15 +447,45 @@ func canonicalStoryMarkers(report string, items []caseItemRequest) string {
 	if !strings.Contains(report, "[[radar:evidence-ref=") {
 		return report
 	}
-	return storyRefMarkerRe.ReplaceAllStringFunc(report, func(marker string) string {
-		m := storyRefMarkerRe.FindStringSubmatch(marker)
-		for i, item := range items {
-			if item.ref == m[1] {
+	// A ref cited by two items (one diagnose result, two subjects) names no
+	// single card; it stays a ref for the renderer to flag.
+	indexByRef := map[string]int{}
+	for i, item := range items {
+		if _, dup := indexByRef[item.ref]; dup {
+			indexByRef[item.ref] = -1
+			continue
+		}
+		indexByRef[item.ref] = i
+	}
+	rewrite := func(text string) string {
+		return storyRefMarkerRe.ReplaceAllStringFunc(text, func(marker string) string {
+			m := storyRefMarkerRe.FindStringSubmatch(marker)
+			if i, ok := indexByRef[m[1]]; ok && i >= 0 {
 				return "[[radar:evidence=" + strconv.Itoa(i) + m[2] + "]]"
 			}
+			return marker
+		})
+	}
+	// Fenced code and inline code are the agent quoting something; the
+	// renderer keeps them literal, so the parser must not rewrite them either.
+	lines := strings.Split(report, "\n")
+	inFence := false
+	for n, line := range lines {
+		trimmed := strings.TrimLeft(line, " ")
+		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+			inFence = !inFence
+			continue
 		}
-		return marker
-	})
+		if inFence {
+			continue
+		}
+		parts := strings.Split(line, "`")
+		for i := 0; i < len(parts); i += 2 {
+			parts[i] = rewrite(parts[i])
+		}
+		lines[n] = strings.Join(parts, "`")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func stripStoryMarkers(text string) string {

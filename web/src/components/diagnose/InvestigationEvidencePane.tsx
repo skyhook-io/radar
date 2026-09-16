@@ -701,8 +701,11 @@ export function InvestigationEvidencePane({
   // card the agent never placed is inventory, and the inventory says so.
   // A marker written in the ledger's ref form names the item carrying that ref.
   const resolveStoryRef = (ref: string): number | undefined => {
-    const index = (story?.evidence ?? []).findIndex((item) => item.ref === ref);
-    return index >= 0 ? index : undefined;
+    const matches = (story?.evidence ?? [])
+      .map((item, index) => (item.ref === ref ? index : -1))
+      .filter((index) => index >= 0);
+    // Two items on one ref name no single card; the renderer flags it.
+    return matches.length === 1 ? matches[0] : undefined;
   };
   const storyPlacements = story
     ? resolveStoryPlacements(story.report, resolveStoryItem, resolveStoryRef)
@@ -881,8 +884,7 @@ export function InvestigationEvidencePane({
               ) : null}
             </div>
             <p className="text-sm text-theme-text-tertiary">
-              The analysis appears when the investigation finishes. Results
-              collected so far are under Captured results.
+              The analysis appears when the investigation finishes.
             </p>
           </div>
         ) : null}

@@ -258,3 +258,12 @@ func TestDiagnosisFromText_RefMarkersBecomeIndexMarkersAndLeaveTheHeadline(t *te
 		t.Fatalf("an uncited ref must stay for the renderer to flag: %q", d.Report)
 	}
 }
+
+func TestDiagnosisFromText_RefMarkerStaysWhenAmbiguousOrQuoted(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
+	body := "```json\n{\"summary\":\"x\",\"root_cause\":\"y\",\"evidence\":[{\"ref\":\"" + ref + "\",\"role\":\"cause\",\"claim\":\"logs\",\"subject\":{\"kind\":\"Pod\",\"name\":\"a\",\"observation\":\"logs\"}},{\"ref\":\"" + ref + "\",\"role\":\"symptom\",\"claim\":\"events\",\"subject\":{\"kind\":\"Pod\",\"name\":\"a\",\"observation\":\"events\"}}]}\n```\nSee [[radar:evidence-ref=" + ref + "]] here, and `[[radar:evidence-ref=" + ref + "]]` quoted, and\n```\n[[radar:evidence-ref=" + ref + "]]\n```\n"
+	d := diagnosisFromText(body)
+	if strings.Contains(d.Report, "[[radar:evidence=") {
+		t.Fatalf("an ambiguous or quoted ref must not be rewritten: %q", d.Report)
+	}
+}

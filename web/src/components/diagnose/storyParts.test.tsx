@@ -287,6 +287,7 @@ describe("assessmentCopyText", () => {
           title: "Current logs · api-7d4 / api",
           role: "Cause",
           lines: ["MongoServerError: Authentication failed.", ""],
+          gap: "Only the previous container instance was checked.",
         },
       ],
     });
@@ -294,7 +295,7 @@ describe("assessmentCopyText", () => {
       text.startsWith("**Deployment shop/api** · prod-east · via Claude Code"),
     ).toBe(true);
     expect(text).toContain(
-      "Evidence (Radar):\n- **Current logs · api-7d4 / api** · Cause\n  > MongoServerError: Authentication failed.",
+      "Evidence (Radar):\n- **Current logs · api-7d4 / api** · Cause\n  > MongoServerError: Authentication failed.\n  Not shown: Only the previous container instance was checked.",
     );
     expect(text).toContain("Next step: [Mitigate] Roll back to revision 7");
     expect(text).not.toContain("So the build changed.");
