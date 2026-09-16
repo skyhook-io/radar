@@ -75,6 +75,9 @@ func cloudHandshakeHeaders(cfg Config, selfUpgrade bool) http.Header {
 	if cfg.Namespace != "" {
 		headers.Set("X-Radar-Namespace", cfg.Namespace)
 	}
+	if cfg.Release != "" {
+		headers.Set("X-Radar-Release", cfg.Release)
+	}
 	// Validate before send — the value comes from a ConfigMap on the
 	// cluster, and a corrupted ConfigMap shouldn't be able to inject
 	// header smuggling. Reject silently on bad shape; hub falls back

@@ -541,12 +541,14 @@ func main() {
 			cancel()
 			namespace := os.Getenv("MY_POD_NAMESPACE")
 			deploymentName := os.Getenv("MY_DEPLOYMENT_NAME")
+			helmRelease := os.Getenv("RADAR_HELM_RELEASE")
 			runErr := cloud.Run(rootCtx, cloud.Config{
 				URL:                *cloudURL,
 				Token:              *cloudToken,
 				ClusterID:          *cloudClusterName,
 				ClusterName:        *cloudClusterName,
 				Namespace:          namespace,
+				Release:            helmRelease,
 				APIServerURL:       apiServerURL,
 				InsecureSkipVerify: *cloudInsecureSkipVerify,
 				// Ask the apiserver whether this ServiceAccount may actually

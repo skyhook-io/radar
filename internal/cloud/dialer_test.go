@@ -91,3 +91,16 @@ func TestWatchSelfUpgradeAdvertisementIgnoresTransientMismatch(t *testing.T) {
 		t.Fatal("watcher did not exit on context cancellation")
 	}
 }
+
+func TestCloudHandshakeHeaders_Release(t *testing.T) {
+	with := cloudHandshakeHeaders(Config{Token: "rhc_test", Release: "radar-prod"}, false)
+	if got := with.Get("X-Radar-Release"); got != "radar-prod" {
+		t.Fatalf("X-Radar-Release = %q, want radar-prod", got)
+	}
+	// Non-Helm installs have no release; the header must be absent, not
+	// empty, so the hub keeps whatever it last stored.
+	without := cloudHandshakeHeaders(Config{Token: "rhc_test"}, false)
+	if _, ok := without["X-Radar-Release"]; ok {
+		t.Fatal("X-Radar-Release sent with no release configured")
+	}
+}
