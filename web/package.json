@@ -29,7 +29,7 @@
     "lint": "eslint src && node scripts/check-no-native-title.mjs"
   },
   "dependencies": {
-    "@fontsource-variable/dm-sans": "^5.2.8",
+    "@fontsource-variable/dm-sans": "^5.3.0",
     "@fontsource/dm-mono": "^5.3.0",
     "@monaco-editor/react": "^4.7.0",
     "diff": "^9.0.0",
