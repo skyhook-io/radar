@@ -281,7 +281,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 	})
 
 	// Initialize Prometheus metrics client (must come before SetManualURL)
-	prometheuspkg.Initialize(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
+	prometheuspkg.Initialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 
 	if cfg.PrometheusURL != "" {
 		u, err := url.Parse(cfg.PrometheusURL)
@@ -319,14 +319,14 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 	}
 
 	k8s.RegisterTrafficFuncs(traffic.Reset, func() error {
-		return traffic.ReinitializeWithConfig(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
+		return traffic.ReinitializeWithConfig(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 	})
 
 	// Reinitialize carries the current manual URL + headers forward (including any
 	// applied live via /integrations/prometheus). Re-applying the captured startup
 	// cfg here would revert a live change on context switch, so we don't.
 	k8s.RegisterPrometheusFuncs(prometheuspkg.Reset, func() error {
-		prometheuspkg.Reinitialize(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
+		prometheuspkg.Reinitialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 		return nil
 	})
 	// Reinitialize only builds the new client; discovery for the new cluster has
