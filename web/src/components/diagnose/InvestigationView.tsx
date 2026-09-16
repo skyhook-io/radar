@@ -1325,7 +1325,9 @@ export function InvestigationView({
       : undefined;
   const assessmentLimits = useMemo(() => {
     const lines = groupEvidenceCoverage(currentAssessmentProjection.limitations)
-      .filter((group) => !group.historyOnly)
+      // A capped preview or a history bound is bookkeeping for the record; Still
+      // open keeps the reads Radar could not complete.
+      .filter((group) => !group.historyOnly && !group.bookkeepingOnly)
       .map((group) => `${group.label}: ${group.summary}`);
     // Two coverage gaps carry no limitation of their own; name the one that
     // applies so the qualification survives without the old header.

@@ -2996,7 +2996,9 @@ function DiagnosisResult({
                 ? recValid
                   ? "Show only recommended step"
                   : "Show only first step"
-                : `Show ${hiddenStepCount} more ${hiddenStepCount === 1 ? "step" : "steps"}`}
+                : hiddenStepCount === 1
+                  ? "Expand the other step"
+                  : "Expand all steps"}
             </button>
           ) : null}
           {!actionNotice && !recValid && (

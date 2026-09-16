@@ -1174,7 +1174,7 @@ describe("ResultCard conclusion states", () => {
     expect(html.match(/data-step-folded=/g)).toHaveLength(2);
     expect(html).toContain("Inspect the registry.");
     expect(html).toContain("Restart the rollout.");
-    expect(html).toContain("Show 2 more steps");
+    expect(html).toContain("Expand all steps");
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("grid-template-rows:0fr");
     expect(html).toContain("motion-reduce:transition-none");
