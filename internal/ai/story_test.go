@@ -119,7 +119,7 @@ func TestDiagnosisFromText_StoryFieldCapsAndValidation(t *testing.T) {
 	if len([]rune(d.Summary)) != maxDiagnosisSummaryRune+1 || !strings.HasSuffix(d.Summary, "…") {
 		t.Fatalf("summary not clamped with an ellipsis: %d %q", len([]rune(d.Summary)), d.Summary[len(d.Summary)-6:])
 	}
-	sentence := strings.Repeat("Word ", 40) + "end. " + strings.Repeat("more ", 40)
+	sentence := strings.Repeat("Word ", 30) + "end. " + strings.Repeat("more ", 40)
 	d = diagnosisFromText(caseJSON(`"summary":"` + sentence + `"`))
 	if !strings.HasSuffix(d.Summary, "end.") {
 		t.Fatalf("an over-long summary must cut at the last whole sentence, got %q", d.Summary)

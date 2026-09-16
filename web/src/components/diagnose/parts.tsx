@@ -2341,7 +2341,7 @@ export function AssessmentHeadline({
         ) : null}
       </div>
       {tone === "cause" && diagnosis.rootCause ? (
-        <AIMarkdown className="text-xs leading-relaxed text-theme-text-secondary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-secondary">
+        <AIMarkdown className="text-[13px] leading-relaxed text-theme-text-secondary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-secondary">
           {diagnosis.rootCause}
         </AIMarkdown>
       ) : null}
@@ -2832,23 +2832,28 @@ function DiagnosisResult({
                   />
                 ))}
               </div>
-              {isRec && diagnosis.recommendedReason && (
-                <span className="basis-full text-[11px] leading-snug text-theme-text-tertiary">
-                  {diagnosis.recommendedReason}
-                </span>
-              )}
             </div>
-            <AIMarkdown className="max-w-[100ch] text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_pre]:my-1.5">
-              {r}
-            </AIMarkdown>
+            {/* The condition and the reason are read before the command is
+                copied, so they precede it at a size that is meant to be read. */}
             {step?.precondition ? (
               <p
                 data-step-precondition
-                className="mt-1 text-[11px] leading-snug text-warning-text"
+                className="mb-1.5 text-[13px] leading-snug text-warning-text"
               >
                 Only if {step.precondition.replace(/^(if|when|once)\s+/i, "")}
               </p>
             ) : null}
+            {isRec && diagnosis.recommendedReason && (
+              <p
+                data-recommended-reason
+                className="mb-1.5 text-[13px] leading-snug text-theme-text-secondary"
+              >
+                {diagnosis.recommendedReason}
+              </p>
+            )}
+            <AIMarkdown className="max-w-[100ch] text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_pre]:my-1.5">
+              {r}
+            </AIMarkdown>
           </div>
         </div>
       </div>

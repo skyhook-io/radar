@@ -28,7 +28,11 @@ export function AgentRoleChip({ role }: { role: DiagnosisEvidenceRole }) {
       // and the badge's own baseline comes from the sparkle, landing 1px high.
       wrapperClassName="shrink-0 align-[-1px]"
     >
-      <Badge tone="structural" size="sm">
+      <Badge
+        tone="structural"
+        size="sm"
+        className="border-theme-border-light font-medium text-theme-text-primary"
+      >
         {AGENT_ROLE_LABELS[role]}
       </Badge>
     </Tooltip>

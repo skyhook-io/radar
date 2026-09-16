@@ -1659,6 +1659,23 @@ function EvidenceCard({
         )
         .filter(Boolean)
     : [];
+  // A compact card keeps its single row; the agent's note on what the result
+  // does not show rides on the subtitle as a hint, read on hover.
+  const gapHint =
+    compact && storyGaps.length > 0 ? (
+      <Tooltip
+        content={storyGaps.map((gap) => `Not shown: ${gap}`).join(" · ")}
+        wrapperClassName="inline-flex align-[-2px]"
+      >
+        <span
+          data-agent-gap-hint
+          className="inline-flex items-center gap-0.5 text-theme-text-tertiary"
+        >
+          <Info className="h-3 w-3" aria-hidden />
+          not shown
+        </span>
+      </Tooltip>
+    ) : null;
   // What a rules_out card excludes is the point of placing it; it stays on
   // the story card as its one line.
   const storyExcludes = storyCard
@@ -1753,7 +1770,7 @@ function EvidenceCard({
             {resourceIdentity} · {resourceRef.kind}
           </span>
         ) : null}
-        {displaySummary ? (
+        {displaySummary || gapHint ? (
           <span
             className={clsx(
               "mt-0.5 block text-xs leading-relaxed text-theme-text-secondary",
@@ -1762,6 +1779,8 @@ function EvidenceCard({
             )}
           >
             {displaySummary}
+            {displaySummary && gapHint ? " · " : null}
+            {gapHint}
           </span>
         ) : null}
         {supersededRead ? (

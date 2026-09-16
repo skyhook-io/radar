@@ -30,7 +30,7 @@ const (
 	maxDiagnosisGapRune        = 160
 	maxDiagnosisSubjectChars   = 253
 	maxDiagnosisHypothesisRune = 200
-	maxDiagnosisSummaryRune    = 240
+	maxDiagnosisSummaryRune    = 180
 	maxDiagnosisUnresolved     = 3
 	maxDiagnosisUnresolvedRune = 280
 	maxDiagnosisSteps          = 6
