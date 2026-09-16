@@ -65,7 +65,7 @@ describe("ResultCard under the story contract", () => {
       />,
     );
     expect(flagged).toContain('data-health-flag="unaddressed"');
-    expect(flagged).toContain("the assessment does not address it");
+    expect(flagged).toContain("no explanation is linked to it");
   });
 
   it("keeps the inline story on a read-only earlier healthy assessment", () => {
@@ -249,7 +249,7 @@ describe("TurnView and assessments", () => {
       />,
     );
     expect(html).toContain("data-turn-working-notes");
-    expect(html).toContain("Evidence ledger");
+    expect(html).toContain("Evidence considered");
     expect(html).toContain("does not cover the other two");
     expect(html).toContain("Assessment · shown in Findings");
   });

@@ -85,6 +85,8 @@ import {
   mergeStartupSignal,
   upsertTool,
   type Turn,
+  remediationHeadline,
+  prettyTool,
 } from "./parts";
 import {
   investigationActivitySourceDomId,
@@ -1389,6 +1391,28 @@ export function InvestigationView({
   const earlierPlan =
     assessmentNeedsCurrentStateVerification ||
     hasEvidenceCollectedAfterAssessment;
+  // The jump link names the decision it leads to, not the section.
+  const nextStepLabel = (() => {
+    const dx = currentAssessment?.diagnosis;
+    if (!dx) return "Next steps ↓";
+    const index = dx.recommendedIndex ? dx.recommendedIndex - 1 : 0;
+    const text =
+      dx.steps?.[index]?.text ?? dx.remediation?.[index] ?? dx.remediation?.[0];
+    if (!text) return "Next steps ↓";
+    const headline = remediationHeadline(text);
+    return `Next: ${headline.length > 56 ? `${headline.slice(0, 56).trimEnd()}…` : headline} ↓`;
+  })();
+  // While the agent works, name the read in flight instead of describing the
+  // pane's mechanics.
+  const investigatingLabel = (() => {
+    const items = lastTurn?.timeline ?? [];
+    for (let i = items.length - 1; i >= 0; i -= 1) {
+      const item = items[i];
+      if (item.kind === "tool" && item.tool)
+        return `Investigating · ${prettyTool(item.tool)}`;
+    }
+    return "Investigating…";
+  })();
   const showSplitWorkspace = maximized;
   const splitGridClass = showSplitWorkspace
     ? "@min-[1000px]/investigation:grid-cols-[minmax(320px,min(30%,520px))_minmax(0,1fr)]"
@@ -2173,7 +2197,7 @@ export function InvestigationView({
                               >
                                 {earlierPlan
                                   ? "Earlier proposed steps ↓"
-                                  : "Next steps ↓"}
+                                  : nextStepLabel}
                               </button>
                             ) : null
                           }
@@ -2209,7 +2233,7 @@ export function InvestigationView({
                           )}
                           <span>
                             {busy || requestPending
-                              ? "Forming an assessment as evidence arrives…"
+                              ? investigatingLabel
                               : "The agent did not provide a final assessment."}
                           </span>
                         </div>

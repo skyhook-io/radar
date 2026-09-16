@@ -1,9 +1,9 @@
 import { useCallback, useLayoutEffect, useRef } from "react";
 
-// Shared Collapse uses a 200 ms grid-row transition. Keep a small paint margin
+// Shared Collapse uses a 300 ms grid-row transition. Keep a small paint margin
 // before moving focus so the destination is stationary. Reduced-motion users get
 // an immediate disclosure and focus hand-off because Collapse disables motion.
-export const INVESTIGATION_DISCLOSURE_SETTLE_MS = 220;
+export const INVESTIGATION_DISCLOSURE_SETTLE_MS = 320;
 export function prefersReducedMotion(): boolean {
   return (
     typeof window !== "undefined" &&

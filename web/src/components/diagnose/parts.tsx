@@ -656,7 +656,8 @@ export function TurnView({
   // A follow-up (a turn the user asked a question on) is a conversational reply,
   // not a fresh diagnosis — render it as a plain answer, never the root-cause
   // anchor or a remediation card — unless its verdict revised the assessment.
-  const followup = !!turn.question && !turn.apply && !turn.verify && !assessment;
+  const followup =
+    !!turn.question && !turn.apply && !turn.verify && !assessment;
   // Whether the done turn has anything for ResultCard to render — mirrors its
   // branch order exactly (apply → followup → structured/healthy), since a followup
   // ONLY ever renders FollowupAnswer (report/rootCause), never the remediation list.
@@ -1110,8 +1111,13 @@ export function ApplyDialog({
               {fixText}
             </AIMarkdown>
             {reason ? (
-              <p data-apply-reason className="mt-2 text-sm text-theme-text-secondary">
-                <span className="font-medium text-theme-text-primary">Why this step:</span>{" "}
+              <p
+                data-apply-reason
+                className="mt-2 text-sm text-theme-text-secondary"
+              >
+                <span className="font-medium text-theme-text-primary">
+                  Why this step:
+                </span>{" "}
                 {reason}
               </p>
             ) : null}
@@ -1122,7 +1128,9 @@ export function ApplyDialog({
               >
                 <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
                 <span>
-                  <span className="font-medium">The agent said this applies only if:</span>{" "}
+                  <span className="font-medium">
+                    The agent said this applies only if:
+                  </span>{" "}
                   {precondition}. Radar has not checked that condition.
                 </span>
               </p>
@@ -2066,9 +2074,9 @@ export function ResultCard({
         assessmentSources={assessmentSources}
         storyInline={storyInline}
         revisedAfter={revisedAfter}
-          assessmentLimits={assessmentLimits}
-          healthSignals={healthSignals}
-          onRevealSource={onRevealSource}
+        assessmentLimits={assessmentLimits}
+        healthSignals={healthSignals}
+        onRevealSource={onRevealSource}
       />
     );
   // Couldn't-determine is its own honest state — never a confident all-clear, never
@@ -2153,9 +2161,9 @@ export function ResultCard({
       storyInline={storyInline}
       readOnlyAssessment={readOnlyAssessment}
       revisedAfter={revisedAfter}
-          assessmentLimits={assessmentLimits}
-          healthSignals={healthSignals}
-          onRevealSource={onRevealSource}
+      assessmentLimits={assessmentLimits}
+      healthSignals={healthSignals}
+      onRevealSource={onRevealSource}
     />
   );
 }
@@ -2183,7 +2191,9 @@ export function assessmentCopyText(diagnosis: Diagnosis): string {
         (step, index) =>
           `${index + 1}. [${STEP_KIND_LABEL[step.kind]}] ${step.text}${step.precondition ? ` (only if ${step.precondition})` : ""}`,
       )
-    : (diagnosis.remediation ?? []).map((text, index) => `${index + 1}. ${text}`);
+    : (diagnosis.remediation ?? []).map(
+        (text, index) => `${index + 1}. ${text}`,
+      );
   if (steps.length > 0) parts.push(["Next steps:", ...steps].join("\n"));
   return parts.join("\n\n");
 }
@@ -2194,7 +2204,35 @@ const CERTAINTY_LABEL: Record<NonNullable<Diagnosis["certainty"]>, string> = {
   suspected: "Suspected",
 };
 
-const STEP_KIND_LABEL: Record<NonNullable<Diagnosis["steps"]>[number]["kind"], string> = {
+// The word is the agent's; the clause says what kind of Radar evidence sits
+// behind it, so a reader knows what the word licenses them to do.
+const CERTAINTY_DEFINITION: Record<
+  NonNullable<Diagnosis["certainty"]>,
+  string
+> = {
+  established:
+    "The agent's word. It found the cause stated outright in Radar's results — a log line, an event, a condition — not just consistent with them.",
+  likely:
+    "The agent's word. Radar's results fit this explanation, but none of them states the cause outright.",
+  suspected:
+    "The agent's word. A plausible reading on thin or indirect evidence; treat it as a lead, not a finding.",
+};
+const HEALTHY_DEFINITION: Record<
+  NonNullable<Diagnosis["certainty"]>,
+  string
+> = {
+  established:
+    "The agent found no live problem, and Radar's results show that directly — the pod state, logs and events it read.",
+  likely:
+    "The agent found no live problem; Radar's results fit that reading but do not show it outright.",
+  suspected:
+    "The agent leans healthy on thin or indirect evidence; treat it as a lead, not a finding.",
+};
+
+const STEP_KIND_LABEL: Record<
+  NonNullable<Diagnosis["steps"]>[number]["kind"],
+  string
+> = {
   mitigate: "Mitigate",
   verify: "Verify",
   investigate: "Investigate",
@@ -2245,10 +2283,18 @@ export function AssessmentHeadline({
       </div>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-theme-text-secondary">
         {diagnosis.certainty ? (
-          <Tooltip content="How sure the agent says it is. Radar records the facts; this word is the agent's.">
+          <Tooltip
+            content={
+              tone === "healthy"
+                ? HEALTHY_DEFINITION[diagnosis.certainty]
+                : CERTAINTY_DEFINITION[diagnosis.certainty]
+            }
+          >
             <Badge tone="agent" size="sm">
               <Sparkles className="h-2.5 w-2.5 shrink-0" aria-hidden />
-              {CERTAINTY_LABEL[diagnosis.certainty]}
+              {tone === "healthy"
+                ? "Healthy"
+                : CERTAINTY_LABEL[diagnosis.certainty]}
             </Badge>
           </Tooltip>
         ) : null}
@@ -2274,7 +2320,9 @@ export function AssessmentHeadline({
         >
           <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold text-theme-text-secondary">
             <HelpCircle className="h-3 w-3" aria-hidden />
-            {tone === "inconclusive" ? "What blocked a conclusion" : "Still open"}
+            {tone === "inconclusive"
+              ? "What blocked a conclusion"
+              : "Still open"}
           </div>
           <ul className="space-y-0.5 text-xs text-theme-text-primary">
             {unresolved.map((item, index) => (
@@ -2286,7 +2334,11 @@ export function AssessmentHeadline({
               </li>
             ))}
             {(signals ?? []).map((signal, index) => (
-              <li key={`signal-${index}`} className="flex gap-1.5" data-health-signal>
+              <li
+                key={`signal-${index}`}
+                className="flex gap-1.5"
+                data-health-signal
+              >
                 <span aria-hidden className="text-theme-text-tertiary">
                   –
                 </span>
@@ -2299,7 +2351,9 @@ export function AssessmentHeadline({
                     {signal.text}
                   </button>
                 ) : (
-                  <span className="[overflow-wrap:anywhere]">{signal.text}</span>
+                  <span className="[overflow-wrap:anywhere]">
+                    {signal.text}
+                  </span>
                 )}
               </li>
             ))}
@@ -2429,11 +2483,11 @@ export function AssessmentSources({
                 </div>
                 <button
                   type="button"
-                  aria-label={`View ${prettyTool(source.tool)} source used for this assessment`}
+                  aria-label={`View ${prettyTool(source.tool)} result used for this assessment`}
                   onClick={() => onViewSource(source.id)}
                   className="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-accent-text hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
                 >
-                  View source
+                  View result
                 </button>
               </div>
               {notes.length > 0 ? (
@@ -2498,7 +2552,7 @@ function WorkingNotes({ notes }: { notes: string }) {
         className="flex items-center gap-1.5 rounded-md py-1 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary"
       >
         <CollapseChevron open={open} className="h-3.5 w-3.5" />
-        Evidence ledger
+        Evidence considered
       </button>
       <div id={id}>
         <Collapse open={open}>
@@ -2607,7 +2661,9 @@ function DiagnosisResult({
   // host (or inline as plain prose), typed steps below.
   const storyShape = diagnosisHasStoryShape(diagnosis);
   const analysisText =
-    storyShape && storyInline ? storyPlainText(diagnosis.report) : diagnosis.report;
+    storyShape && storyInline
+      ? storyPlainText(diagnosis.report)
+      : diagnosis.report;
   const showAnalysisDisclosure = !storyShape || storyInline;
   const [detail, setDetail] = useState<"analysis" | "explanation" | null>(
     explanation?.status === "running" ? "explanation" : null,
@@ -2709,17 +2765,17 @@ function DiagnosisResult({
             <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
               {(isRec || step) && (
                 <>
-                {step ? (
-                  <span className="text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
-                    {STEP_KIND_LABEL[step.kind]}
-                  </span>
-                ) : null}
-                {isRec && (
-                  <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
-                    <Sparkles className="h-3 w-3" />
-                    Recommended
-                  </span>
-                )}
+                  {step ? (
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+                      {STEP_KIND_LABEL[step.kind]}
+                    </span>
+                  ) : null}
+                  {isRec && (
+                    <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
+                      <Sparkles className="h-3 w-3" />
+                      Recommended
+                    </span>
+                  )}
                 </>
               )}
               <div className="ml-auto flex shrink-0 items-center gap-0.5">
@@ -3134,7 +3190,9 @@ function AllClearCard({
       signal.status === "unaddressed" || signal.status === "contradiction",
   );
   const stillOpenSignals = signals
-    .filter((signal) => signal.status === "explained" || signal.status === "related")
+    .filter(
+      (signal) => signal.status === "explained" || signal.status === "related",
+    )
     .map((signal) => ({
       text:
         signal.status === "explained"
@@ -3208,7 +3266,7 @@ function AllClearCard({
               <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
               {flag.status === "contradiction"
                 ? `The agent calls ${flag.title} a ${flag.role} and still reports healthy`
-                : `Radar flagged ${flag.title} · the assessment does not address it`}
+                : `Radar flagged ${flag.title} · no explanation is linked to it`}
             </div>
             <p className="mt-1 text-theme-text-secondary">
               {flag.status === "contradiction"
@@ -3560,7 +3618,9 @@ export function remediationHeadline(step: string): string {
       .map((line) => line.trim())
       .find((line) => line && !line.startsWith("```")) ?? "";
   const sentence = firstLine.split(/(?<=[.!?:])\s/)[0] ?? firstLine;
-  return sentence.replace(/`/g, "").replace(/\*\*/g, "");
+  // A step written as "Confirm recovery:" expects its command to follow; as a
+  // folded title the colon dangles.
+  return sentence.replace(/`/g, "").replace(/\*\*/g, "").replace(/:$/, "");
 }
 
 export function remediationCommands(step: string): string[] {

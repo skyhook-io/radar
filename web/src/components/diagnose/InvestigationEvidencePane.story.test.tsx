@@ -9,7 +9,12 @@ import {
 } from "./investigationEvidence";
 import type { DiagnosisEvidenceItem } from "../../api/diagnose";
 
-const target = { kind: "Deployment", group: "apps", namespace: "shop", name: "api" };
+const target = {
+  kind: "Deployment",
+  group: "apps",
+  namespace: "shop",
+  name: "api",
+};
 
 function evidenceRef(scope: string, nonce: string): string {
   return `ev_${scope.repeat(26)}_${nonce.repeat(26)}`;
@@ -19,7 +24,9 @@ function tool(
   id: string,
   name: string,
   result: unknown,
-  patch: Partial<Extract<InvestigationEvidenceTimelineItem, { kind: "tool" }>> = {},
+  patch: Partial<
+    Extract<InvestigationEvidenceTimelineItem, { kind: "tool" }>
+  > = {},
 ): Extract<InvestigationEvidenceTimelineItem, { kind: "tool" }> {
   return {
     kind: "tool",
@@ -55,9 +62,14 @@ describe("InvestigationEvidencePane under a story", () => {
     [
       {
         timeline: [
-          tool("issues", "issues", { issues: [crashIssue], total: 1, total_matched: 1 }, {
-            evidenceRef: ref,
-          }),
+          tool(
+            "issues",
+            "issues",
+            { issues: [crashIssue], total: 1, total_matched: 1 },
+            {
+              evidenceRef: ref,
+            },
+          ),
         ],
       },
     ],
@@ -67,7 +79,11 @@ describe("InvestigationEvidencePane under a story", () => {
     { status: "linked", ref, role: "cause", claim: "" },
     { status: "unlinked" },
   ];
-  const investigationCase = resolveInvestigationCase(projection, { evidence }, 0);
+  const investigationCase = resolveInvestigationCase(
+    projection,
+    { evidence },
+    0,
+  );
   const render = (report: string) =>
     renderToStaticMarkup(
       <InvestigationEvidencePane
@@ -89,7 +105,7 @@ describe("InvestigationEvidencePane under a story", () => {
     expect(html).toContain("data-story");
     expect(html).toContain('id="story-');
     expect(html).toContain("Captured results");
-    expect(html).toContain("1 placed in the analysis");
+    expect(html).toContain("1 shown above");
     expect(html).toContain("In the analysis");
     expect(html).not.toContain(">Evidence<");
     // Next steps sit between the story and the inventory.
@@ -101,11 +117,15 @@ describe("InvestigationEvidencePane under a story", () => {
     expect(inventory).toBeGreaterThan(steps);
     // The inventory is collapsed once the story placed something.
     expect(html).toMatch(/aria-controls="investigation-captured-results"[^>]*/);
-    expect(html).toMatch(/aria-expanded="false"[^>]*aria-controls="investigation-captured-results"/);
+    expect(html).toMatch(
+      /aria-expanded="false"[^>]*aria-controls="investigation-captured-results"/,
+    );
   });
 
   it("shows lost support at the sentence and opens the inventory when nothing was placed", () => {
-    const html = render("Nothing placed, but see [[radar:evidence=1]] and [[radar:evidence=7]].");
+    const html = render(
+      "Nothing placed, but see [[radar:evidence=1]] and [[radar:evidence=7]].",
+    );
     expect(html).toContain('data-story-lost-support="unlinked"');
     expect(html).toContain('data-story-lost-support="invalid"');
   });
@@ -116,26 +136,48 @@ describe("InvestigationEvidencePane under a story", () => {
       [
         {
           timeline: [
-            tool("issues", "issues", { issues: [crashIssue], total: 1, total_matched: 1 }, {
-              evidenceRef: ref,
-            }),
-            tool("search", "search", { results: [], total: 0 }, {
-              evidenceRef: searchRef,
-              summary: JSON.stringify({ query: "metrics-server" }),
-            }),
+            tool(
+              "issues",
+              "issues",
+              { issues: [crashIssue], total: 1, total_matched: 1 },
+              {
+                evidenceRef: ref,
+              },
+            ),
+            tool(
+              "search",
+              "search",
+              { results: [], total: 0 },
+              {
+                evidenceRef: searchRef,
+                summary: JSON.stringify({ query: "metrics-server" }),
+              },
+            ),
           ],
         },
       ],
       target,
     );
     const items: DiagnosisEvidenceItem[] = [
-      { status: "linked", ref: searchRef, role: "rules_out", claim: "Nothing named metrics-server exists." },
+      {
+        status: "linked",
+        ref: searchRef,
+        role: "rules_out",
+        claim: "Nothing named metrics-server exists.",
+      },
     ];
     const html = renderToStaticMarkup(
       <InvestigationEvidencePane
         projection={withSearch}
-        investigationCase={resolveInvestigationCase(withSearch, { evidence: items }, 0)}
-        story={{ report: "No metrics-server anywhere.\n\n[[radar:evidence=0]]", evidence: items }}
+        investigationCase={resolveInvestigationCase(
+          withSearch,
+          { evidence: items },
+          0,
+        )}
+        story={{
+          report: "No metrics-server anywhere.\n\n[[radar:evidence=0]]",
+          evidence: items,
+        }}
         collecting={false}
         animateGroupIds={new Set()}
         onViewSource={() => {}}
@@ -144,8 +186,10 @@ describe("InvestigationEvidencePane under a story", () => {
     );
     expect(html).toContain('data-story-lost-support="nocard"');
     expect(html).toContain("View it in Activity");
-    expect(html).toContain("None placed in the analysis");
-    expect(html).toMatch(/aria-expanded="true"[^>]*aria-controls="investigation-captured-results"/);
+    expect(html).toContain("None shown above");
+    expect(html).toMatch(
+      /aria-expanded="true"[^>]*aria-controls="investigation-captured-results"/,
+    );
   });
 
   it("places a subject-less citation of a fan-out call on that call's primary card", () => {
@@ -184,7 +228,10 @@ describe("InvestigationEvidencePane under a story", () => {
       <InvestigationEvidencePane
         projection={bundle}
         investigationCase={bundleCase}
-        story={{ report: "Radar's bundle says so.\n\n[[radar:evidence=0]]", evidence: items }}
+        story={{
+          report: "Radar's bundle says so.\n\n[[radar:evidence=0]]",
+          evidence: items,
+        }}
         collecting={false}
         animateGroupIds={new Set()}
         onViewSource={() => {}}
@@ -193,7 +240,7 @@ describe("InvestigationEvidencePane under a story", () => {
     );
     expect(html).toContain('data-story-placement="0"');
     expect(html).not.toContain("data-story-lost-support");
-    expect(html).toContain("1 placed in the analysis");
+    expect(html).toContain("1 shown above");
   });
 
   it("renders a cited earlier read as that read, labelled, when a newer one exists", () => {
@@ -203,9 +250,14 @@ describe("InvestigationEvidencePane under a story", () => {
       [
         {
           timeline: [
-            tool("issues-early", "issues", { issues: [crashIssue], total: 1, total_matched: 1 }, {
-              evidenceRef: early,
-            }),
+            tool(
+              "issues-early",
+              "issues",
+              { issues: [crashIssue], total: 1, total_matched: 1 },
+              {
+                evidenceRef: early,
+              },
+            ),
           ],
         },
         {
@@ -214,7 +266,13 @@ describe("InvestigationEvidencePane under a story", () => {
               "issues-later",
               "issues",
               {
-                issues: [{ ...crashIssue, message: "The API container keeps restarting, 40 times now." }],
+                issues: [
+                  {
+                    ...crashIssue,
+                    message:
+                      "The API container keeps restarting, 40 times now.",
+                  },
+                ],
                 total: 1,
                 total_matched: 1,
               },
@@ -232,8 +290,15 @@ describe("InvestigationEvidencePane under a story", () => {
     const html = renderToStaticMarkup(
       <InvestigationEvidencePane
         projection={twoReads}
-        investigationCase={resolveInvestigationCase(twoReads, { evidence: items }, 1)}
-        story={{ report: "It was crashing then.\n\n[[radar:evidence=0]]", evidence: items }}
+        investigationCase={resolveInvestigationCase(
+          twoReads,
+          { evidence: items },
+          1,
+        )}
+        story={{
+          report: "It was crashing then.\n\n[[radar:evidence=0]]",
+          evidence: items,
+        }}
         collecting={false}
         animateGroupIds={new Set()}
         onViewSource={() => {}}
@@ -260,8 +325,20 @@ describe("InvestigationEvidencePane under a story", () => {
     });
     const twoBundles = projectInvestigationEvidence(
       [
-        { timeline: [tool("diag-early", "diagnose", bundleResult(0), { evidenceRef: early })] },
-        { timeline: [tool("diag-later", "diagnose", bundleResult(1), { evidenceRef: later })] },
+        {
+          timeline: [
+            tool("diag-early", "diagnose", bundleResult(0), {
+              evidenceRef: early,
+            }),
+          ],
+        },
+        {
+          timeline: [
+            tool("diag-later", "diagnose", bundleResult(1), {
+              evidenceRef: later,
+            }),
+          ],
+        },
       ],
       target,
     );
@@ -271,8 +348,15 @@ describe("InvestigationEvidencePane under a story", () => {
     const html = renderToStaticMarkup(
       <InvestigationEvidencePane
         projection={twoBundles}
-        investigationCase={resolveInvestigationCase(twoBundles, { evidence: items }, 1)}
-        story={{ report: "Then it was down.\n\n[[radar:evidence=0]]", evidence: items }}
+        investigationCase={resolveInvestigationCase(
+          twoBundles,
+          { evidence: items },
+          1,
+        )}
+        story={{
+          report: "Then it was down.\n\n[[radar:evidence=0]]",
+          evidence: items,
+        }}
         collecting={false}
         animateGroupIds={new Set()}
         onViewSource={() => {}}
@@ -298,6 +382,92 @@ describe("InvestigationEvidencePane under a story", () => {
     );
     expect(html).toContain(">Evidence<");
     expect(html).not.toContain("Captured results");
-    expect(html.indexOf("data-next-steps")).toBeGreaterThan(html.indexOf("More evidence about this resource"));
+    expect(html.indexOf("data-next-steps")).toBeGreaterThan(
+      html.indexOf("More evidence about this resource"),
+    );
+  });
+});
+
+describe("story log card", () => {
+  const ref = evidenceRef("c", "d");
+  const projection = projectInvestigationEvidence(
+    [
+      {
+        timeline: [
+          tool(
+            "wl",
+            "get_workload_logs",
+            {
+              workload: "deployments/shop/api",
+              pods: 1,
+              logs: [
+                {
+                  pod: "api-68c7b766dc-fmphn",
+                  container: "api",
+                  logs: {
+                    lines: [
+                      "2026-09-07T08:00:19Z boot",
+                      "2026-09-07T08:00:20Z connecting",
+                      "2026-09-07T08:00:21Z MongoServerError: Authentication failed.",
+                    ],
+                    totalLines: 50,
+                    matchedLines: 0,
+                    fallback: true,
+                  },
+                },
+              ],
+            },
+            {
+              evidenceRef: ref,
+              summary: JSON.stringify({
+                namespace: "shop",
+                name: "api",
+                kind: "deployment",
+              }),
+            },
+          ),
+        ],
+      },
+    ],
+    target,
+  );
+  const evidence: DiagnosisEvidenceItem[] = [
+    {
+      status: "linked",
+      ref,
+      role: "cause",
+      claim: "The log names the failure.",
+    },
+  ];
+  const investigationCase = resolveInvestigationCase(
+    projection,
+    { evidence },
+    0,
+  );
+  const html = renderToStaticMarkup(
+    <InvestigationEvidencePane
+      projection={projection}
+      investigationCase={investigationCase}
+      story={{
+        report: "The API cannot log in.\n\n[[radar:evidence=0]]\n",
+        evidence,
+      }}
+      collecting={false}
+      animateGroupIds={new Set()}
+      onViewSource={() => {}}
+      onViewActivity={() => {}}
+    />,
+  );
+  const story = html.slice(
+    html.indexOf('aria-label="Analysis"'),
+    html.indexOf("investigation-captured-results"),
+  );
+
+  it("shows the cited lines inline and keeps retrieval bookkeeping out of the story", () => {
+    expect(story).toContain("MongoServerError: Authentication failed.");
+    expect(story).toContain("Earlier lines");
+    expect(story).not.toContain("matched the filter");
+    expect(story).not.toContain("filter matched nothing");
+    expect(html).toContain("0 of 50 read lines matched the filter");
   });
 });

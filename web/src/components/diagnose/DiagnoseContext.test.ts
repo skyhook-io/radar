@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  investigationPanelFillsViewport,
   investigationWorkspaceNavigationState,
   investigationWorkspacePath,
   investigationWorkspaceRestorePath,
@@ -91,5 +92,14 @@ describe("investigation workspace routes", () => {
     expect(workspaceRunIDFromPath("/investigations")).toBeNull();
     expect(workspaceRunIDFromPath("/investigations/%2Fbad")).toBeNull();
     expect(workspaceRunIDFromPath("/investigations/%ZZ")).toBeNull();
+  });
+});
+
+describe("investigationPanelFillsViewport", () => {
+  it("fills the content area once less than a useful strip of the app would show beside the drawer", () => {
+    expect(investigationPanelFillsViewport(1440, 560)).toBe(false);
+    expect(investigationPanelFillsViewport(900, 560)).toBe(false);
+    expect(investigationPanelFillsViewport(856, 560)).toBe(true);
+    expect(investigationPanelFillsViewport(1200, 1000)).toBe(true);
   });
 });

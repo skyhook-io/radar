@@ -711,7 +711,9 @@ export function InvestigationEvidencePane({
     ),
   );
   const capturedTotal =
-    partition.main.length + partition.workload.length + partition.earlier.length;
+    partition.main.length +
+    partition.workload.length +
+    partition.earlier.length;
   const resultsSummary = [
     partition.hiddenBroader > 0
       ? `${partition.hiddenBroader} about other resources not shown`
@@ -864,7 +866,7 @@ export function InvestigationEvidencePane({
             <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-theme-text-secondary">
               Why
               <span className="font-normal text-theme-text-tertiary">
-                the agent&apos;s analysis, with what it saw
+                · Agent analysis
               </span>
               {collecting ? (
                 <span className="ml-auto inline-flex items-center gap-1.5 text-xs font-normal text-accent-text">
@@ -874,8 +876,8 @@ export function InvestigationEvidencePane({
               ) : null}
             </div>
             <p className="text-sm text-theme-text-tertiary">
-              The analysis will appear here once the agent has read enough to
-              write it; every result it reads lands under Captured results.
+              The analysis appears when the investigation finishes. Results
+              collected so far are under Captured results.
             </p>
           </div>
         ) : null}
@@ -887,7 +889,7 @@ export function InvestigationEvidencePane({
             <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-theme-text-secondary">
               Why
               <span className="font-normal text-theme-text-tertiary">
-                the agent&apos;s analysis, with what it saw
+                · Agent analysis
               </span>
               {collecting ? (
                 <span className="ml-auto inline-flex items-center gap-1.5 text-xs font-normal text-accent-text">
@@ -928,11 +930,16 @@ export function InvestigationEvidencePane({
           <CollapsedEvidenceCollection
             id="investigation-captured-results"
             title="Captured results"
-            description={
+            description={[
               placedCount > 0
-                ? `${placedCount} placed in the analysis`
-                : "None placed in the analysis"
-            }
+                ? `${placedCount} shown above`
+                : collecting
+                  ? `${capturedTotal} collected so far`
+                  : "None shown above",
+              resultsSummary,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
             groups={[]}
             totalCount={capturedTotal}
             keepWhenEmpty
@@ -951,11 +958,6 @@ export function InvestigationEvidencePane({
                   open={coverageOpen}
                   onOpenChange={setCoverageOpen}
                 />
-              ) : null}
-              {resultsSummary ? (
-                <p className="text-[11px] text-theme-text-tertiary">
-                  {resultsSummary}
-                </p>
               ) : null}
               {mainCards}
               {recordNotes ? (
@@ -1420,7 +1422,7 @@ function CoverageGroupRow({
         </p>
         {single.sources.at(-1) ? (
           <SourceButton
-            ariaLabel={`View source for ${group.label}`}
+            ariaLabel={`View result for ${group.label}`}
             buttonLabel={
               single.sources.length > 1 ? "View latest in Activity" : undefined
             }
@@ -1500,7 +1502,7 @@ function CoverageGroupRow({
                 </p>
                 {limitation.sources.at(-1) ? (
                   <SourceButton
-                    ariaLabel={`View source for ${limitation.source}`}
+                    ariaLabel={`View result for ${limitation.source}`}
                     buttonLabel={
                       limitation.sources.length > 1
                         ? "View latest in Activity"
@@ -1683,10 +1685,6 @@ function EvidenceCard({
     observation.data,
     observation.summary,
   );
-  const canExpand = !compact && (hasEvidenceDetails || meaningfulHistory);
-  // A story log card shows the newest two selected lines always — the ones a
-  // story cites from a tail. Expanding appends the earlier lines below them,
-  // under a divider, so nothing above them moves.
   const storyLogLines =
     storyCard && observation.data.type === "logs"
       ? (observation.data.logs?.lines ?? [])
@@ -1695,6 +1693,15 @@ function EvidenceCard({
       : [];
   const storyLogHead = storyLogLines.slice(-2);
   const storyLogRest = storyLogLines.slice(0, -2);
+  // A story log card carries its cited lines inline, so the only thing left to
+  // expand is the earlier lines; the record keeps the full logs body.
+  const inlineLogs = storyCard && observation.data.type === "logs";
+  const hasExpandableBody =
+    (hasEvidenceDetails && !inlineLogs) || meaningfulHistory;
+  const canExpand = !compact && (hasExpandableBody || storyLogLines.length > 2);
+  // A story log card shows the newest two selected lines always — the ones a
+  // story cites from a tail. Expanding appends the earlier lines below them,
+  // under a divider, so nothing above them moves.
   const revealHistory = investigationEvidenceShouldRevealHistory(
     group,
     revealSourceId,
@@ -1853,7 +1860,7 @@ function EvidenceCard({
             <EvidenceCaveat data={observation.data} />
           ) : null}
           <SourceButton
-            ariaLabel={`View source for ${observation.title}`}
+            ariaLabel={`View result for ${observation.title}`}
             compact
             onClick={() =>
               onViewSource(
@@ -1891,7 +1898,7 @@ function EvidenceCard({
               ))}
               {storyGaps.map((gap) => (
                 <p key={gap} data-agent-gap>
-                  Does not cover: {gap}
+                  Not shown: {gap}
                 </p>
               ))}
             </div>
@@ -1944,7 +1951,7 @@ function EvidenceCard({
           ))}
         </div>
       ) : null}
-      {canExpand ? (
+      {canExpand && hasExpandableBody ? (
         <div id={bodyId}>
           <Collapse open={open}>
             <div
@@ -1953,7 +1960,7 @@ function EvidenceCard({
                 prominence === "primary" ? "px-3 py-3" : "px-2.5 py-2.5",
               )}
             >
-              {hasEvidenceDetails ? (
+              {hasEvidenceDetails && !inlineLogs ? (
                 <EvidenceBody
                   data={observation.data}
                   condensed={storyCard}
@@ -2555,14 +2562,14 @@ function LogsBody({
           </>
         )}
         {data.logs?.fallback ? (
-          <Badge severity="warning" size="sm">
-            Unfiltered log tail
+          <Badge severity="neutral" size="sm">
+            Log tail · filter matched nothing
           </Badge>
         ) : null}
         {data.logs ? (
           <span className="text-xs text-theme-text-tertiary">
-            {data.logs.matchedLines} matching lines · {data.logs.totalLines}{" "}
-            processed from the requested log tail
+            {data.logs.matchedLines} of {data.logs.totalLines} read lines
+            matched the filter
           </span>
         ) : null}
       </div>
@@ -3794,7 +3801,7 @@ function RevisionHistory({
                     )}
                   </div>
                   <SourceButton
-                    ariaLabel={`View source for ${phaseLabel(observation.source.phase).toLowerCase()} observation of ${observation.title}`}
+                    ariaLabel={`View result for ${phaseLabel(observation.source.phase).toLowerCase()} observation of ${observation.title}`}
                     onClick={() =>
                       onViewSource(
                         observation.source.id,
@@ -3868,7 +3875,7 @@ function EvidenceIcon({
 
 function SourceButton({
   ariaLabel,
-  buttonLabel = "View source",
+  buttonLabel = "View result",
   compact = false,
   onClick,
 }: {

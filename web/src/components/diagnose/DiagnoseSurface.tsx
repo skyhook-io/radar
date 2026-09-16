@@ -46,10 +46,7 @@ import {
 import { AgentSetupNotice } from "./AgentSetupNotice";
 import { ConsentCard } from "./parts";
 import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
-import {
-  type RunSummary,
-  type ExecutionProfile,
-} from "../../api/diagnose";
+import { type RunSummary, type ExecutionProfile } from "../../api/diagnose";
 import { routePath } from "../../api/config";
 import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
 import { useContexts } from "../../api/client";
@@ -399,13 +396,17 @@ export function DiagnoseSurface({
   }, []);
   // Injected settings action: undefined = Radar's own Settings dialog;
   // null = hide the gear + links.
-  const { consentCopy, onOpenSettings: hostOpenSettings, renderRunActions } =
-    useDiagnoseCustomization();
+  const {
+    consentCopy,
+    onOpenSettings: hostOpenSettings,
+    renderRunActions,
+  } = useDiagnoseCustomization();
   const { embedded } = useNavCustomization();
   const openSettings =
     hostOpenSettings === undefined ? openDiagnoseSettings : hostOpenSettings;
   const {
     maximized,
+    fullWidthForced,
     setMaximized,
     panelWidth: width,
     setPanelWidth: setWidth,
@@ -421,8 +422,7 @@ export function DiagnoseSurface({
     view: d.view,
     surfaceWidth,
   });
-  const historyOverlay =
-    !persistentHistory && historyOverlayOpen;
+  const historyOverlay = !persistentHistory && historyOverlayOpen;
   const { shouldRender: historyOverlayPresent, isOpen: historySlideOpen } =
     useAnimatedUnmount(historyOverlay);
   const dismissHistory = useCallback(() => {
@@ -541,9 +541,11 @@ export function DiagnoseSurface({
 
   // Absolute within the body frame: maximized fills it; docked is a right slot.
   // topInset clears the header (the frame spans the full column incl. the header).
-  const positionStyle: React.CSSProperties = maximized
-    ? { top: topInset, left: 0, right: 0, bottom: 0 }
-    : { top: topInset, right: 0, bottom: 0, width, maxWidth: "100%" };
+  // A forced fill keeps the docked single-pane layout; only the frame grows.
+  const positionStyle: React.CSSProperties =
+    maximized || fullWidthForced
+      ? { top: topInset, left: 0, right: 0, bottom: 0 }
+      : { top: topInset, right: 0, bottom: 0, width, maxWidth: "100%" };
 
   // The detail pane (right side when expanded; the whole body when docked).
   // Keyed by run id so toggling Expand doesn't remount a focused run's view.
@@ -769,11 +771,14 @@ export function DiagnoseSurface({
             <div
               className={`items-center gap-1 ${headerPresentation.runActionsClass || "flex"}`}
             >
-              {renderRunActions?.({ run: visibleRunDetail, onRunUpdated: d.updateRunSummary })}
+              {renderRunActions?.({
+                run: visibleRunDetail,
+                onRunUpdated: d.updateRunSummary,
+              })}
               <InvestigationMenu run={visibleRunDetail} />
             </div>
           )}
-          {(!maximized || d.canRestoreWorkspace) && (
+          {!fullWidthForced && (!maximized || d.canRestoreWorkspace) && (
             <Tooltip
               content={maximized ? "Restore" : "Expand"}
               position="bottom"

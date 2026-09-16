@@ -110,7 +110,7 @@ export function AgentClaimNote({
             data-agent-gap
             className="block text-[11px] text-theme-text-tertiary"
           >
-            Does not cover: {gap}
+            Not shown: {gap}
           </span>
         ) : null}
       </span>

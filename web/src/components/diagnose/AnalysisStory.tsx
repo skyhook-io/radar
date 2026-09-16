@@ -97,12 +97,20 @@ export function resolveStoryPlacements(
     if (segment.kind === "placement") {
       resolve(segment.index, true, position);
     } else {
-      for (const match of segment.markdown.matchAll(/#radar-evidence-(\d+)\)/g)) {
+      for (const match of segment.markdown.matchAll(
+        /#radar-evidence-(\d+)\)/g,
+      )) {
         resolve(Number(match[1]), false);
       }
     }
   });
-  return { segments, byIndex, placedAt, placedCount, lostItems: lostIndexes.size };
+  return {
+    segments,
+    byIndex,
+    placedAt,
+    placedCount,
+    lostItems: lostIndexes.size,
+  };
 }
 
 const LOSS_COPY: Record<Exclude<StoryPlacementLoss, object>, string> = {
@@ -236,7 +244,7 @@ export function AnalysisStory({
   );
   // The preview is the prose immediately before the first placed card plus
   // that card; with nothing placed, the first prose block. Everything else
-  // is what "Read the full analysis" reveals.
+  // is what "Expand" reveals.
   const firstProseAt = story.segments.findIndex(
     (segment) => segment.kind === "prose",
   );
@@ -279,10 +287,7 @@ export function AnalysisStory({
       const prose = (
         <Markdown
           key={`prose-${position}`}
-          className={clsx(
-            STORY_PROSE_CLASS,
-            compact && "[&_p]:line-clamp-6",
-          )}
+          className={clsx(STORY_PROSE_CLASS, compact && "[&_p]:line-clamp-6")}
           linkRenderer={linkRenderer}
         >
           {segment.markdown}
@@ -369,7 +374,11 @@ export function AnalysisStory({
             className="relative mt-2 cursor-pointer"
             onClick={() => setOpen(true)}
           >
-            <div aria-hidden inert className="relative max-h-12 overflow-hidden">
+            <div
+              aria-hidden
+              inert
+              className="relative max-h-12 overflow-hidden"
+            >
               <Markdown
                 className={clsx(STORY_PROSE_CLASS, "[&_p]:line-clamp-2")}
                 linkRenderer={(href) => {
@@ -422,7 +431,7 @@ export function AnalysisStory({
               open && "rotate-180",
             )}
           />
-          {open ? "Show less" : "Read the full analysis"}
+          {open ? "Collapse" : "Expand"}
         </button>
       ) : null}
     </section>

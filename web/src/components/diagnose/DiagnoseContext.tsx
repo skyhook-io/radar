@@ -116,6 +116,7 @@ interface DiagnoseLayoutCtx {
   dismissForNavigation: () => void;
   contentGutter: number; // px right-gutter for the content area when docked (0 = overlay/closed)
   maximized: boolean;
+  fullWidthForced: boolean; // the viewport cannot show the app beside the panel
   setMaximized: Dispatch<SetStateAction<boolean>>;
   panelWidth: number;
   setPanelWidth: Dispatch<SetStateAction<number>>;
@@ -161,6 +162,17 @@ const EFFORT_KEY = "radar-ai-effort";
 // panel width and could push the app to near-zero. We don't fight to keep every-
 // thing on screen on small displays — below this, the panel floats over instead.
 const MIN_APP_LEFT_OF_PANEL = 900;
+// An overlay that leaves less than this much of the app visible beside it
+// hides what it overlays without showing more of itself; fill the content
+// area instead. Radar's own minimum width is about 856px, so this is the
+// drawer's floor: below it the investigation is the screen.
+const MIN_APP_PEEK_BESIDE_OVERLAY = 320;
+export function investigationPanelFillsViewport(
+  viewportWidth: number,
+  panelWidth: number,
+): boolean {
+  return viewportWidth - panelWidth < MIN_APP_PEEK_BESIDE_OVERLAY;
+}
 
 const AGENT_LABELS: Record<string, string> = {
   claude: "Claude Code",
@@ -249,8 +261,7 @@ function safeWorkspaceReturn(
   if (typeof value !== "string" || !value.startsWith("/")) return null;
   try {
     const url = new URL(value, origin);
-    if (url.origin !== origin || url.pathname.startsWith("//"))
-      return null;
+    if (url.origin !== origin || url.pathname.startsWith("//")) return null;
     return `${url.pathname}${url.search}${url.hash}`;
   } catch {
     return null;
@@ -430,6 +441,7 @@ function RoutedDiagnoseProvider({
   );
   // Too tight to push (given the current, resizable panel width) → overlay instead.
   const narrow = viewportW - width < MIN_APP_LEFT_OF_PANEL;
+  const fullWidthForced = investigationPanelFillsViewport(viewportW, width);
 
   useEffect(() => {
     let live = true;
@@ -661,12 +673,15 @@ function RoutedDiagnoseProvider({
   const startRunRef = useRef<(t: Target) => void>(() => {});
   startRunRef.current = (t: Target) => {
     const seq = ++startSeqRef.current;
-    createRun({ ...t, kind: knownKindForPluralWithGroup(t.kind, t.group) ?? t.kind }, {
-      agent: selectedAgent || undefined,
-      profile: hosted ? undefined : effectiveProfile,
-      model: model || undefined,
-      effort: effort || undefined,
-    })
+    createRun(
+      { ...t, kind: knownKindForPluralWithGroup(t.kind, t.group) ?? t.kind },
+      {
+        agent: selectedAgent || undefined,
+        profile: hosted ? undefined : effectiveProfile,
+        model: model || undefined,
+        effort: effort || undefined,
+      },
+    )
       .then((run) => {
         setRuns((prev) =>
           prev.some((r) => r.id === run.id) ? prev : [run, ...prev],
@@ -1042,6 +1057,7 @@ function RoutedDiagnoseProvider({
       dismissForNavigation,
       contentGutter,
       maximized,
+      fullWidthForced,
       setMaximized,
       panelWidth: width,
       setPanelWidth: setWidth,
@@ -1057,6 +1073,7 @@ function RoutedDiagnoseProvider({
       dismissForNavigation,
       contentGutter,
       maximized,
+      fullWidthForced,
       width,
       narrow,
       runningKeys,
