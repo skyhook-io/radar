@@ -1287,9 +1287,6 @@ export function InvestigationView({
       : verificationError;
   const displayedStatusCheckError =
     displayedVerificationError || applyOutcomeUncertain;
-  const currentKeyFindingCount = projection.groups.filter(
-    (group) => !group.historical && group.latest.tier === "key",
-  ).length;
   const findingsTabAccessibleLabel =
     "Findings: current assessment, Radar evidence, and next steps";
   const currentAssessmentCoverageLimited = investigationEvidenceCoverageLimited(
@@ -1436,15 +1433,42 @@ export function InvestigationView({
     };
   }, [investigationCase, run, agentLabel]);
   // While the agent works, name the read in flight instead of describing the
-  // pane's mechanics.
+  // pane's mechanics, with how many reads so far and how long it has been.
+  // The clock starts when this client sees the turn running; a replay of a
+  // finished turn never shows it.
+  const turnRunning = lastTurn?.status === "running";
+  const runningSinceRef = useRef<number | undefined>(undefined);
+  const [, setRunningTick] = useState(0);
+  useEffect(() => {
+    if (!turnRunning) {
+      runningSinceRef.current = undefined;
+      return;
+    }
+    runningSinceRef.current ??= Date.now();
+    const id = window.setInterval(() => setRunningTick((t) => t + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [turnRunning]);
   const investigatingLabel = (() => {
     const items = lastTurn?.timeline ?? [];
+    const reads = items.filter((item) => item.kind === "tool").length;
+    let current = "Investigating";
     for (let i = items.length - 1; i >= 0; i -= 1) {
       const item = items[i];
-      if (item.kind === "tool" && item.tool)
-        return `${describeToolCall(item.tool, item.summary)}…`;
+      if (item.kind === "tool" && item.tool) {
+        current = describeToolCall(item.tool, item.summary);
+        break;
+      }
     }
-    return "Investigating…";
+    const elapsed = runningSinceRef.current
+      ? Math.round((Date.now() - runningSinceRef.current) / 1000)
+      : 0;
+    return [
+      `${current}…`,
+      reads > 0 ? `${reads} ${reads === 1 ? "read" : "reads"}` : undefined,
+      elapsed >= 2 ? `${elapsed} s` : undefined,
+    ]
+      .filter(Boolean)
+      .join(" · ");
   })();
   const showSplitWorkspace = maximized;
   const splitGridClass = showSplitWorkspace
@@ -1995,9 +2019,7 @@ export function InvestigationView({
                                   : "Assessment ready"}
                               </span>
                               <span className="block text-[11px] text-theme-text-tertiary">
-                                {currentKeyFindingCount > 0
-                                  ? `${currentKeyFindingCount} ${currentKeyFindingCount === 1 ? "key finding" : "key findings"} ready to review`
-                                  : "Findings compiled from Radar results"}
+                                Assessment, evidence and next steps
                               </span>
                             </span>
                             <span className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-accent-text">
