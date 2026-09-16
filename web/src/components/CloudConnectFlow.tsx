@@ -2,6 +2,7 @@ import { type ReactNode, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { AlertTriangle, ArrowUpRight, Check, Copy, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
 import type { BlockedExit } from './cloudConnectHandoff'
+import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import {
   ApiError,
@@ -84,11 +85,12 @@ function BlockedView({
   const copyForTeam = () => {
     const body = cardRef.current?.innerText ?? copy.title
     const note = `Radar Cloud — connecting this cluster from Radar was blocked\n\n${body}\n\n${exit.label}: ${exit.href}`
-    navigator.clipboard
-      .writeText(note)
-      .then(() => setCopied('done'))
-      .catch(() => setCopied('failed'))
-    setTimeout(() => setCopied('idle'), 2000)
+    // copyText also serves Radar on a plain-HTTP non-loopback address, where
+    // the async Clipboard API is missing and the legacy command still works.
+    void copyText(note).then((ok) => {
+      setCopied(ok ? 'done' : 'failed')
+      setTimeout(() => setCopied('idle'), 2000)
+    })
   }
   const icon =
     blocked.reason === 'gitops' ? (
