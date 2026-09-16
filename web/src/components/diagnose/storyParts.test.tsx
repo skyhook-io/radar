@@ -264,15 +264,41 @@ describe("assessmentCopyText", () => {
   });
   it("copies the headline with its caveats, cause, story and steps", () => {
     const text = assessmentCopyText(storyDiagnosis);
-    expect(text).toContain("The app cannot log in to its database");
-    expect(text).toContain("Certainty (agent): Likely");
+    expect(text).toContain("**The app cannot log in to its database");
+    expect(text).toContain("— Likely (agent's word)");
     expect(text).toContain("Still open:\n- Whether the Atlas password");
-    expect(text).toContain("Cause: Auth to MongoDB fails");
+    expect(text).toContain("Auth to MongoDB fails");
     expect(text).toContain("So the build changed.");
     expect(text).not.toContain("[[radar:evidence=0]]");
     expect(text).toContain(
       "1. [Mitigate] Roll back to revision 7 (only if revision 7 still authenticates)",
     );
+  });
+
+  it("writes a channel-ready note with context, receipts and the one next step", () => {
+    const text = assessmentCopyText(storyDiagnosis, {
+      context: {
+        target: "Deployment shop/api",
+        cluster: "prod-east",
+        agent: "Claude Code",
+      },
+      receipts: [
+        {
+          title: "Current logs · api-7d4 / api",
+          role: "Cause",
+          lines: ["MongoServerError: Authentication failed.", ""],
+        },
+      ],
+    });
+    expect(
+      text.startsWith("**Deployment shop/api** · prod-east · via Claude Code"),
+    ).toBe(true);
+    expect(text).toContain(
+      "Evidence (Radar):\n- **Current logs · api-7d4 / api** · Cause\n  > MongoServerError: Authentication failed.",
+    );
+    expect(text).toContain("Next step: [Mitigate] Roll back to revision 7");
+    expect(text).not.toContain("So the build changed.");
+    expect(text).toContain("open the investigation in Radar.");
   });
 });
 

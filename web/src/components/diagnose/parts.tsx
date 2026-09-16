@@ -1993,6 +1993,7 @@ export function ResultCard({
   readOnlyAssessment = false,
   revisedAfter,
   assessmentLimits,
+  assessmentCopy,
   healthSignals,
   onRevealSource,
 }: {
@@ -2015,6 +2016,7 @@ export function ResultCard({
   revisedAfter?: string;
   /** Reads Radar could not complete for this assessment; listed under Still open. */
   assessmentLimits?: string[];
+  assessmentCopy?: Pick<AssessmentCopyRadar, "context" | "receipts">;
   healthSignals?: InvestigationHealthSignal[];
   onRevealSource?: (sourceId: string) => void;
   onCheckStatus?: () => void;
@@ -2075,6 +2077,7 @@ export function ResultCard({
         storyInline={storyInline}
         revisedAfter={revisedAfter}
         assessmentLimits={assessmentLimits}
+        assessmentCopy={assessmentCopy}
         healthSignals={healthSignals}
         onRevealSource={onRevealSource}
       />
@@ -2104,6 +2107,7 @@ export function ResultCard({
           storyInline={storyInline}
           revisedAfter={revisedAfter}
           assessmentLimits={assessmentLimits}
+          assessmentCopy={assessmentCopy}
           healthSignals={healthSignals}
           onRevealSource={onRevealSource}
         />
@@ -2162,6 +2166,7 @@ export function ResultCard({
       readOnlyAssessment={readOnlyAssessment}
       revisedAfter={revisedAfter}
       assessmentLimits={assessmentLimits}
+      assessmentCopy={assessmentCopy}
       healthSignals={healthSignals}
       onRevealSource={onRevealSource}
     />
@@ -2173,21 +2178,69 @@ export function ResultCard({
  * technical cause, the story without its markers, and the steps. Copying only
  * the headline would ship the persuasive half without its caveats.
  */
+/** What Radar adds to the agent's verdict when the assessment is copied for a channel. */
+export interface AssessmentCopyRadar {
+  /** Reads Radar could not complete, as shown in Still open. */
+  limits?: readonly string[];
+  /** Adverse Radar cards the agent explained, as shown in Still open. */
+  signals?: readonly string[];
+  /** Adverse Radar cards nothing explains, as shown above a healthy verdict. */
+  flags?: readonly string[];
+  /** Where and when: the header line a reader in a channel needs first. */
+  context?: {
+    target: string;
+    cluster?: string;
+    startedAt?: string;
+    agent?: string;
+  };
+  /** The placed cards, as short excerpts: the receipts behind the headline. */
+  receipts?: readonly {
+    title: string;
+    role?: string;
+    lines: readonly string[];
+  }[];
+}
+
+/**
+ * The assessment as Markdown for a channel or a ticket: context, headline,
+ * cause, the receipts, what is still open, the next step. The full story and
+ * every captured result stay in Radar; the text says so.
+ */
 export function assessmentCopyText(
   diagnosis: Diagnosis,
-  radar: {
-    /** Reads Radar could not complete, as shown in Still open. */
-    limits?: readonly string[];
-    /** Adverse Radar cards the agent explained, as shown in Still open. */
-    signals?: readonly string[];
-    /** Adverse Radar cards nothing explains, as shown above a healthy verdict. */
-    flags?: readonly string[];
-  } = {},
+  radar: AssessmentCopyRadar = {},
 ): string {
   const parts: string[] = [];
-  if (diagnosis.summary) parts.push(diagnosis.summary.trim());
-  if (diagnosis.certainty)
+  if (radar.context) {
+    const when = radar.context.startedAt
+      ? new Date(radar.context.startedAt).toLocaleString(undefined, {
+          dateStyle: "medium",
+          timeStyle: "short",
+        })
+      : undefined;
+    parts.push(
+      [
+        `**${radar.context.target}**`,
+        radar.context.cluster,
+        when,
+        radar.context.agent ? `via ${radar.context.agent}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    );
+  }
+  if (diagnosis.summary) {
+    const certainty = diagnosis.healthy
+      ? "Healthy"
+      : diagnosis.certainty
+        ? CERTAINTY_LABEL[diagnosis.certainty]
+        : undefined;
+    parts.push(
+      `**${diagnosis.summary.trim()}**${certainty ? ` — ${certainty} (agent's word)` : ""}`,
+    );
+  } else if (diagnosis.certainty) {
     parts.push(`Certainty (agent): ${CERTAINTY_LABEL[diagnosis.certainty]}`);
+  }
   // The pasted text must not read more confident than the screen: Radar's
   // own qualifications travel with the agent's.
   const flags = (radar.flags ?? []).filter((item) => item.trim());
@@ -2208,9 +2261,26 @@ export function assessmentCopyText(
     parts.push(
       ["Still open:", ...unresolved.map((item) => `- ${item}`)].join("\n"),
     );
-  if (diagnosis.rootCause) parts.push(`Cause: ${diagnosis.rootCause}`);
-  const story = storyPlainText(diagnosis.report ?? "");
-  if (story) parts.push(story);
+  if (diagnosis.rootCause) parts.push(storyPlainText(diagnosis.rootCause));
+  const receipts = (radar.receipts ?? []).filter((receipt) => receipt.title);
+  if (receipts.length > 0) {
+    parts.push(
+      [
+        "Evidence (Radar):",
+        ...receipts.map((receipt) =>
+          [
+            `- **${receipt.title}**${receipt.role ? ` · ${receipt.role}` : ""}`,
+            ...receipt.lines
+              .filter((line) => line.trim())
+              .map((line) => `  > ${line.trim()}`),
+          ].join("\n"),
+        ),
+      ].join("\n"),
+    );
+  } else if (!radar.context) {
+    const story = storyPlainText(diagnosis.report ?? "");
+    if (story) parts.push(story);
+  }
   const steps = diagnosis.steps?.length
     ? diagnosis.steps.map(
         (step, index) =>
@@ -2219,7 +2289,33 @@ export function assessmentCopyText(
     : (diagnosis.remediation ?? []).map(
         (text, index) => `${index + 1}. ${text}`,
       );
-  if (steps.length > 0) parts.push(["Next steps:", ...steps].join("\n"));
+  if (steps.length > 0) {
+    if (radar.context) {
+      // A channel gets the recommended step; the rest wait in Radar.
+      const lead = diagnosis.recommendedIndex
+        ? diagnosis.recommendedIndex - 1
+        : 0;
+      const first = steps[lead] ?? steps[0];
+      const rest = steps.length - 1;
+      parts.push(
+        [
+          `Next step: ${first.replace(/^\d+\. /, "")}`,
+          diagnosis.recommendedReason
+            ? `Why: ${diagnosis.recommendedReason}`
+            : undefined,
+          rest > 0
+            ? `${rest} more ${rest === 1 ? "step" : "steps"} in Radar.`
+            : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
+    } else parts.push(["Next steps:", ...steps].join("\n"));
+  }
+  if (radar.context)
+    parts.push(
+      "Full analysis and every captured result: open the investigation in Radar.",
+    );
   return parts.join("\n\n");
 }
 
@@ -2277,6 +2373,7 @@ export function AssessmentHeadline({
   limits = [],
   signals,
   flags,
+  copy,
 }: {
   diagnosis: Diagnosis;
   tone: "cause" | "healthy" | "inconclusive";
@@ -2287,6 +2384,8 @@ export function AssessmentHeadline({
   signals?: { text: string; onReveal?: () => void }[];
   /** Adverse Radar cards nothing explains; shown above a healthy verdict, copied with it. */
   flags?: string[];
+  /** Context and receipts for the channel copy. */
+  copy?: Pick<AssessmentCopyRadar, "context" | "receipts">;
 }) {
   const summary = diagnosis.summary?.trim();
   if (!summary) return null;
@@ -2309,8 +2408,9 @@ export function AssessmentHeadline({
             limits,
             signals: (signals ?? []).map((signal) => signal.text),
             flags,
+            ...copy,
           })}
-          label="Copy assessment"
+          label="Copy for a channel"
         />
       </div>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-theme-text-secondary">
@@ -2670,6 +2770,7 @@ function DiagnosisResult({
   readOnlyAssessment = false,
   revisedAfter,
   assessmentLimits,
+  assessmentCopy,
 }: {
   diagnosis: Diagnosis;
   onApply?: (fix: string) => void;
@@ -2686,6 +2787,7 @@ function DiagnosisResult({
   revisedAfter?: string;
   /** Reads Radar could not complete for this assessment; listed under Still open. */
   assessmentLimits?: string[];
+  assessmentCopy?: Pick<AssessmentCopyRadar, "context" | "receipts">;
   healthSignals?: InvestigationHealthSignal[];
   onRevealSource?: (sourceId: string) => void;
 }) {
@@ -2879,6 +2981,7 @@ function DiagnosisResult({
             tone="cause"
             revisedAfter={revisedAfter}
             limits={assessmentLimits}
+            copy={assessmentCopy}
           />
         </div>
       )}
@@ -3180,6 +3283,7 @@ function AllClearCard({
   storyInline = false,
   revisedAfter,
   assessmentLimits,
+  assessmentCopy,
   healthSignals,
   onRevealSource,
 }: {
@@ -3195,6 +3299,7 @@ function AllClearCard({
   revisedAfter?: string;
   /** Reads Radar could not complete for this assessment; listed under Still open. */
   assessmentLimits?: string[];
+  assessmentCopy?: Pick<AssessmentCopyRadar, "context" | "receipts">;
   /** Adverse Radar cards with the agent's position on each (story shape). */
   healthSignals?: InvestigationHealthSignal[];
   onRevealSource?: (sourceId: string) => void;
@@ -3336,6 +3441,7 @@ function AllClearCard({
               : `Radar flagged ${flag.title} · no explanation is linked to it`,
           )}
           limits={assessmentLimits}
+          copy={assessmentCopy}
           signals={stillOpenSignals}
         />
         {trailing}
@@ -3384,6 +3490,7 @@ function AllClearCard({
             tone="healthy"
             revisedAfter={revisedAfter}
             limits={assessmentLimits}
+            copy={assessmentCopy}
           />
         ) : (
           <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
@@ -3426,6 +3533,7 @@ function InconclusiveCard({
   storyInline = false,
   revisedAfter,
   assessmentLimits,
+  assessmentCopy,
 }: {
   diagnosis: Diagnosis;
   animate: boolean;
@@ -3433,6 +3541,7 @@ function InconclusiveCard({
   revisedAfter?: string;
   /** Reads Radar could not complete for this assessment; listed under Still open. */
   assessmentLimits?: string[];
+  assessmentCopy?: Pick<AssessmentCopyRadar, "context" | "receipts">;
   healthSignals?: InvestigationHealthSignal[];
   onRevealSource?: (sourceId: string) => void;
 }) {
@@ -3460,6 +3569,7 @@ function InconclusiveCard({
             tone="inconclusive"
             revisedAfter={revisedAfter}
             limits={assessmentLimits}
+            copy={assessmentCopy}
           />
         ) : null}
         {text ? (

@@ -43,6 +43,8 @@ import {
   canInvestigateFurther,
 } from "./investigationState";
 import type { AssessmentExplanation } from "./parts";
+import { describeToolCall } from "./toolCallLabel";
+import { AGENT_ROLE_LABELS } from "./AgentCase";
 import {
   Fragment,
   useCallback,
@@ -86,7 +88,6 @@ import {
   upsertTool,
   type Turn,
   remediationHeadline,
-  prettyTool,
 } from "./parts";
 import {
   investigationActivitySourceDomId,
@@ -1404,6 +1405,36 @@ export function InvestigationView({
     const headline = remediationHeadline(text);
     return `Next: ${headline.length > 56 ? `${headline.slice(0, 56).trimEnd()}…` : headline} ↓`;
   })();
+  // What a reader in a channel needs with the verdict: where, when, and the
+  // receipts behind it, cause first, at most three.
+  const assessmentCopy = useMemo(() => {
+    const items = [...(investigationCase?.items ?? [])]
+      .filter((item) => item.placement === "card" && item.observation)
+      .sort((a, b) => Number(b.role === "cause") - Number(a.role === "cause"))
+      .slice(0, 3);
+    return {
+      context: {
+        target: formatInvestigationTarget(run),
+        cluster: run.context,
+        startedAt: run.createdAt,
+        agent: agentLabel,
+      },
+      receipts: items.map((item) => {
+        const observation = item.observation!;
+        const lines =
+          observation.data.type === "logs"
+            ? (observation.data.logs?.lines ?? []).slice(-2)
+            : observation.summary
+              ? [observation.summary]
+              : [];
+        return {
+          title: observation.title,
+          role: item.role ? AGENT_ROLE_LABELS[item.role] : undefined,
+          lines,
+        };
+      }),
+    };
+  }, [investigationCase, run, agentLabel]);
   // While the agent works, name the read in flight instead of describing the
   // pane's mechanics.
   const investigatingLabel = (() => {
@@ -1411,7 +1442,7 @@ export function InvestigationView({
     for (let i = items.length - 1; i >= 0; i -= 1) {
       const item = items[i];
       if (item.kind === "tool" && item.tool)
-        return `Investigating · ${prettyTool(item.tool)}`;
+        return `${describeToolCall(item.tool, item.summary)}…`;
     }
     return "Investigating…";
   })();
@@ -2170,6 +2201,7 @@ export function InvestigationView({
                           assessmentLimits={
                             storyShape ? assessmentLimits : undefined
                           }
+                          assessmentCopy={assessmentCopy}
                           healthSignals={storyShape ? healthSignals : undefined}
                           onRevealSource={viewEvidenceSource}
                           assessmentSources={
