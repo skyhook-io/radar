@@ -458,16 +458,28 @@ function healthTwinIds(
   groups: readonly HealthConflictGroup[],
 ): (group: HealthConflictGroup) => Set<string> {
   const byKey = new Map<string, Set<string>>();
+  // "pod shop/api-7d4-x1" and "deployment shop/api" name one workload: same
+  // namespace, and the shorter name is the longer one's prefix at a dash. The
+  // same warning on an unrelated resource stays its own signal.
+  const workloadOf = (identity: string): string | undefined => {
+    const match = /^\S+\s+([^/\s]+)\/(\S+)$/.exec(identity);
+    if (!match) return undefined;
+    const [, namespace, name] = match;
+    const base = name.replace(/(-[a-z0-9]{1,10}){1,2}$/, "");
+    return `${namespace}/${base}`;
+  };
   const keysOf = (group: HealthConflictGroup): string[] => {
     const keys: string[] = [];
     if (group.identity) keys.push(`${group.kind}\u0000${group.identity}`);
-    if (group.kind === "events" && group.latest.summary) {
+    if (group.kind === "events" && group.latest.summary && group.identity) {
       const warning = group.latest.summary
         .toLowerCase()
         .replace(/\s+/g, " ")
         .trim()
         .slice(0, 160);
-      if (warning) keys.push(`events\u0000warning\u0000${warning}`);
+      const workload = workloadOf(group.identity);
+      if (warning && workload)
+        keys.push(`events\u0000warning\u0000${workload}\u0000${warning}`);
     }
     return keys;
   };

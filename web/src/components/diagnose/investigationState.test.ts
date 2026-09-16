@@ -1189,4 +1189,44 @@ describe("investigationHealthSignals twins across scopes", () => {
       "Kubernetes events",
     ]);
   });
+
+  it("does not let the same warning on another workload borrow the explanation", () => {
+    const warning = "Unhealthy: Readiness probe failed: connection refused";
+    const group = (id: string, identity: string) => ({
+      id,
+      identity,
+      historical: false,
+      kind: "events",
+      latest: {
+        relevance: "target" as const,
+        tier: "key" as const,
+        tone: "warning",
+        title: "Kubernetes events",
+        summary: warning,
+        source: { turnIndex: 0, id },
+      },
+    });
+    const groups = [
+      group("events-other", "pod demo/frontend-5b7c-q2"),
+      group("events-pod", "pod demo/podinfo-676569b68b-6278c"),
+    ];
+    const items = [
+      {
+        role: "benign",
+        placement: "card" as const,
+        claim: "Probe timeouts during a node stall.",
+        groupId: "events-pod",
+        source: { turnIndex: 0 },
+      },
+    ];
+    expect(
+      investigationHealthSignals({ groups }, items).map((signal) => [
+        signal.groupId,
+        signal.status,
+      ]),
+    ).toEqual([
+      ["events-other", "unaddressed"],
+      ["events-pod", "explained"],
+    ]);
+  });
 });
