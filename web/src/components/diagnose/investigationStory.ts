@@ -50,6 +50,8 @@ export type StorySegment =
       index: number;
       /** The agent asked for the header only: the reader needs the fact, not the detail. */
       compact?: boolean;
+      /** Placed by Radar under the paragraph that first mentioned it inline. */
+      auto?: boolean;
     };
 
 export interface StorySplit {

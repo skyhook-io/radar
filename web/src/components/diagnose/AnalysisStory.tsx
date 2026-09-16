@@ -59,53 +59,91 @@ export function resolveStoryPlacements(
   placedCount: number;
   lostItems: number;
 } {
-  const { segments } = splitStory(report, resolveRef);
+  const { segments: written } = splitStory(report, resolveRef);
   const byIndex = new Map<number, StoryPlacementResolution>();
   // The segment position that renders each placed index's card; a repeated
-  // block marker for the same index is a reference back to it, not a second card.
+  // marker for the same index is a reference back to it, not a second card.
   const placedAt = new Map<number, number>();
   const placedObservations = new Set<string>();
   const lostIndexes = new Set<number>();
   let placedCount = 0;
-  const resolve = (index: number, block: boolean, position = -1) => {
+  // A marker on its own line places its card there. A marker inside a
+  // sentence places the card under that paragraph when nothing else does:
+  // the reader wants the receipt beside the claim, and whether the agent
+  // put the marker on its own line is a formatting detail the page must not
+  // depend on. An index the agent does place on its own line somewhere keeps
+  // that spot, so an early inline mention of it stays a reference.
+  const blockIndexes = new Set(
+    written
+      .filter((segment) => segment.kind === "placement")
+      .map((segment) => (segment as { index: number }).index),
+  );
+  const target = (index: number): StoryPlacementTarget | undefined => {
     const existing = byIndex.get(index);
-    if (existing) {
-      if (existing.kind === "placed" || existing.kind === "lost") return;
-      if (!block) return;
-    }
+    if (existing) return existing.kind === "lost" ? undefined : existing.target;
     const resolved = resolveItem(index);
     if (isLoss(resolved)) {
       byIndex.set(index, { kind: "lost", reason: resolved });
       lostIndexes.add(index);
-      return;
+      return undefined;
     }
-    const observationKey = resolved.item.observation
+    byIndex.set(index, { kind: "reference", target: resolved });
+    return resolved;
+  };
+  const observationKey = (index: number, resolved: StoryPlacementTarget) =>
+    resolved.item.observation
       ? `${resolved.item.observation.source.id}#${resolved.item.observation.revision}`
       : `item-${index}`;
-    if (
-      block &&
-      !placedObservations.has(observationKey) &&
-      placedCount < MAX_STORY_PLACEMENTS
-    ) {
-      placedObservations.add(observationKey);
-      placedCount += 1;
-      placedAt.set(index, position);
-      byIndex.set(index, { kind: "placed", target: resolved });
-      return;
-    }
-    if (!existing) byIndex.set(index, { kind: "reference", target: resolved });
+  const place = (
+    index: number,
+    resolved: StoryPlacementTarget,
+    position: number,
+  ): boolean => {
+    const key = observationKey(index, resolved);
+    if (placedObservations.has(key) || placedCount >= MAX_STORY_PLACEMENTS)
+      return false;
+    placedObservations.add(key);
+    placedCount += 1;
+    placedAt.set(index, position);
+    byIndex.set(index, { kind: "placed", target: resolved });
+    return true;
   };
-  segments.forEach((segment, position) => {
+  const segments: StorySegment[] = [];
+  for (const segment of written) {
     if (segment.kind === "placement") {
-      resolve(segment.index, true, position);
-    } else {
-      for (const match of segment.markdown.matchAll(
-        /#radar-evidence-(-?\d+)\)/g,
-      )) {
-        resolve(Number(match[1]), false);
-      }
+      const resolved = target(segment.index);
+      const position = segments.length;
+      segments.push(segment);
+      if (resolved && !placedAt.has(segment.index))
+        place(segment.index, resolved, position);
+      continue;
     }
-  });
+    let markdown = segment.markdown;
+    const autoPlaced: number[] = [];
+    for (const match of markdown.matchAll(/#radar-evidence-(-?\d+)\)/g)) {
+      const index = Number(match[1]);
+      const resolved = target(index);
+      if (!resolved || blockIndexes.has(index) || placedAt.has(index)) continue;
+      // The card lands right under this paragraph, so the sentence keeps its
+      // words and drops the marker: the card's own title says what it is.
+      if (place(index, resolved, segments.length + 1 + autoPlaced.length))
+        autoPlaced.push(index);
+    }
+    for (const index of autoPlaced) {
+      markdown = markdown
+        .replace(
+          new RegExp(
+            `\\s?\\[\\[\\[radar:evidence[^\\]]*\\]\\]\\]\\(#radar-evidence-${index}\\)`,
+          ),
+          "",
+        )
+        .replace(/[ \t]+([,.;:!?])/g, "$1")
+        .replace(/[ \t]{2,}/g, " ");
+    }
+    segments.push({ kind: "prose", markdown });
+    for (const index of autoPlaced)
+      segments.push({ kind: "placement", index, auto: true });
+  }
   return {
     segments,
     byIndex,
@@ -160,14 +198,16 @@ function LostSupport({
       </span>
     );
   }
+  // Loud enough to notice, quiet enough to read past: the reason on hover.
   return (
     <span
       role="note"
       data-story-lost-support={reason}
-      className="my-1 inline-flex items-center gap-1.5 rounded-md border border-dashed border-theme-border px-2 py-1 text-[11px] text-theme-text-tertiary"
+      title={LOSS_COPY[reason]}
+      className="inline-flex items-center gap-1 rounded border border-dashed border-theme-border px-1 py-px align-baseline text-[11px] text-theme-text-tertiary"
     >
-      <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />
-      Support unavailable · {LOSS_COPY[reason]}
+      <AlertTriangle className="h-3 w-3 shrink-0 text-amber-500" aria-hidden />
+      unverified
     </span>
   );
 }
@@ -175,9 +215,12 @@ function LostSupport({
 function ReferenceChip({
   target,
   onReveal,
+  direction = "up",
 }: {
   target: StoryPlacementTarget;
   onReveal: (target: StoryPlacementTarget) => void;
+  /** Where the card is from here: above, below, or in Captured results. */
+  direction?: "up" | "down";
 }) {
   const title = target.item.observation?.title ?? "the cited result";
   return (
@@ -187,7 +230,7 @@ function ReferenceChip({
       className="inline-flex max-w-full items-baseline gap-1 rounded border border-theme-border bg-theme-base px-1.5 py-px align-baseline text-[11px] font-medium text-accent-text hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
       aria-label={`Show ${title}`}
     >
-      <span aria-hidden>↑</span>
+      <span aria-hidden>{direction === "down" ? "↓" : "↑"}</span>
       <span className="truncate">{title}</span>
     </button>
   );
@@ -276,7 +319,7 @@ export function AnalysisStory({
   const hiddenSegments =
     story.segments.length - (previewEnd - previewStart + 1);
   const foldable = hiddenSegments > 0 || previewStart > 0 || !!trailing;
-  const linkRenderer = (href: string | undefined) => {
+  const linkRendererAt = (position: number) => (href: string | undefined) => {
     const index = storyReferenceIndex(href);
     if (index === undefined) return null;
     const resolution = story.byIndex.get(index);
@@ -285,7 +328,14 @@ export function AnalysisStory({
       return (
         <LostSupport reason={resolution.reason} onViewSource={onViewSource} />
       );
-    return <ReferenceChip target={resolution.target} onReveal={onReveal} />;
+    const at = story.placedAt.get(index);
+    return (
+      <ReferenceChip
+        target={resolution.target}
+        onReveal={onReveal}
+        direction={at !== undefined && at > position ? "down" : "up"}
+      />
+    );
   };
   const renderSegment = (
     segment: StorySegment,
@@ -297,7 +347,7 @@ export function AnalysisStory({
         <Markdown
           key={`prose-${position}`}
           className={clsx(STORY_PROSE_CLASS, compact && "[&_p]:line-clamp-6")}
-          linkRenderer={linkRenderer}
+          linkRenderer={linkRendererAt(position)}
         >
           {segment.markdown}
         </Markdown>

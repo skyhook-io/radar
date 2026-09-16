@@ -65,10 +65,64 @@ describe("resolveStoryPlacements", () => {
     expect(html).toContain('data-story-lost-support="unlinked"');
   });
 
-  it("caps placed cards and reports every distinct lost item once", () => {
-    const markers = Array.from({ length: 8 }, (_, i) => `[[radar:evidence=${i}]]`).join(
-      "\n\n",
+  it("places a card under the paragraph that first mentions it inline, and drops that marker from the sentence", () => {
+    const story = resolveStoryPlacements(
+      "Envoy boots [[radar:evidence=0]] then hangs on xDS.\n\nLater, see [[radar:evidence=0]] again.",
+      resolver({ 0: target(0, "a") }),
     );
+    expect(story.segments.map((segment) => segment.kind)).toEqual([
+      "prose",
+      "placement",
+      "prose",
+    ]);
+    expect(story.segments[1]).toEqual({
+      kind: "placement",
+      index: 0,
+      auto: true,
+    });
+    expect(story.placedAt.get(0)).toBe(1);
+    expect((story.segments[0] as { markdown: string }).markdown).toBe(
+      "Envoy boots then hangs on xDS.",
+    );
+    expect((story.segments[2] as { markdown: string }).markdown).toContain(
+      "#radar-evidence-0",
+    );
+    const html = renderToStaticMarkup(
+      <AnalysisStory
+        report={
+          "Envoy boots [[radar:evidence=0]] then hangs on xDS.\n\nLater, see [[radar:evidence=0]] again."
+        }
+        resolveItem={resolver({ 0: target(0, "a") })}
+        renderPlacement={() => <div data-card>card</div>}
+        onReveal={vi.fn()}
+        defaultOpen
+      />,
+    );
+    expect(html).toContain("data-card");
+    expect(html).toContain("↑");
+  });
+
+  it("keeps an inline mention a reference when the agent places that card on its own line later, pointing down", () => {
+    const html = renderToStaticMarkup(
+      <AnalysisStory
+        report={
+          "First [[radar:evidence=0]] here.\n\nThen:\n\n[[radar:evidence=0]]"
+        }
+        resolveItem={resolver({ 0: target(0, "a") })}
+        renderPlacement={() => <div data-card>card</div>}
+        onReveal={vi.fn()}
+        defaultOpen
+      />,
+    );
+    expect(html).toContain("↓");
+    expect(html.match(/data-card/g)).toHaveLength(1);
+  });
+
+  it("caps placed cards and reports every distinct lost item once", () => {
+    const markers = Array.from(
+      { length: 8 },
+      (_, i) => `[[radar:evidence=${i}]]`,
+    ).join("\n\n");
     const table: Record<number, StoryPlacementTarget | StoryPlacementLoss> = {};
     for (let i = 0; i < 8; i += 1) table[i] = target(i, `o${i}`);
     const story = resolveStoryPlacements(markers, resolver(table));
