@@ -179,9 +179,26 @@ type cloudInstallPlanSummary struct {
 // cloudInstallBlocked explains why the driver lane cannot serve this cluster.
 // It is returned by prepare without retaining a flow.
 type cloudInstallBlocked struct {
-	Reason   string   `json:"reason"` // gitops | preflight | unsupported
+	Reason string `json:"reason"` // gitops | preflight | unsupported
+	// Cause narrows a preflight refusal to what would unblock it:
+	// permissions | cluster | verification (cloudinstall.BlockCause).
+	Cause    string   `json:"cause,omitempty"`
 	Message  string   `json:"message"`
 	Blocking []string `json:"blocking,omitempty"`
+}
+
+// preflightBlockedMessage is the body under the blocked card's headline. The
+// blocking lines render right below it, so it says what kind of stop this is
+// and who can clear it, not what the lines already say.
+func preflightBlockedMessage(cause cloudinstall.BlockCause) string {
+	switch cause {
+	case cloudinstall.BlockCausePermissions:
+		return "Your Kubernetes credentials lack permissions this install needs. Ask someone with those permissions to connect this cluster, or hand them the install command from the browser wizard."
+	case cloudinstall.BlockCauseVerification:
+		return "The rendered chart hides some Secret values, so Radar can't confirm every change it would make and won't make them blind. Use the browser wizard to review and run the Helm install yourself."
+	default:
+		return "Something already on the cluster, or a cluster policy, refused the changes listed below. Resolve them with your platform operator, then try connecting again."
+	}
 }
 
 type cloudInstallFlow struct {
@@ -440,7 +457,8 @@ func (m *cloudInstallManager) runPrepare(ctx context.Context, flow *cloudInstall
 	if !pf.OK() {
 		return &cloudInstallBlocked{
 			Reason:   "preflight",
-			Message:  "Your current Kubernetes identity cannot perform the exact planned Radar operation. Ask a platform operator to connect this cluster instead.",
+			Cause:    string(pf.Cause()),
+			Message:  preflightBlockedMessage(pf.Cause()),
 			Blocking: pf.Blocking,
 		}, nil
 	}

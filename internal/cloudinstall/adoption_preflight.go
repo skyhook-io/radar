@@ -90,7 +90,7 @@ func AdoptionPreflight(
 	current, err := parseAdoptionManifest(opts.CurrentManifest, opts.Namespace, mapper)
 	if err != nil {
 		if meta.IsNoMatchError(err) {
-			result.Blocking = append(result.Blocking, fmt.Sprintf("map current Helm manifest to this cluster: %v", err))
+			result.blockRefused(fmt.Sprintf("map current Helm manifest to this cluster: %v", err))
 			return result, nil
 		}
 		return result, fmt.Errorf("adoption preflight: parse current Helm manifest: %w", err)
@@ -98,7 +98,7 @@ func AdoptionPreflight(
 	target, err := parseAdoptionManifest(opts.TargetManifest, opts.Namespace, mapper)
 	if err != nil {
 		if meta.IsNoMatchError(err) {
-			result.Blocking = append(result.Blocking, fmt.Sprintf("map target Helm manifest to this cluster: %v", err))
+			result.blockRefused(fmt.Sprintf("map target Helm manifest to this cluster: %v", err))
 			return result, nil
 		}
 		return result, fmt.Errorf("adoption preflight: parse target Helm manifest: %w", err)
@@ -136,7 +136,7 @@ func recordHiddenSecretBlocker(manifest, mutationKind string, result *PreflightR
 	if !strings.Contains(manifest, "# HIDDEN: The Secret output has been suppressed") {
 		return false
 	}
-	result.Blocking = append(result.Blocking,
+	result.blockUnverifiable(
 		fmt.Sprintf("inspect rendered chart Secrets: the prepared target hid at least one Secret, so Radar cannot prove the exact %s mutations", mutationKind))
 	return true
 }
@@ -273,7 +273,7 @@ func preflightChartMutations(
 				return proof, err
 			}
 		case current[key].object == nil:
-			result.Blocking = append(result.Blocking,
+			result.blockRefused(
 				fmt.Sprintf("create %s: an object already exists but is not owned by the current Helm release", desired.description()))
 		default:
 			original := current[key]
@@ -570,7 +570,7 @@ func requireMutationPermission(ctx context.Context, kc kubernetes.Interface, res
 		detail += ": " + reason
 	}
 	if check.blocking {
-		result.Blocking = append(result.Blocking, detail)
+		result.blockDenied(detail)
 	} else {
 		result.Advisory = append(result.Advisory, detail)
 	}
@@ -582,10 +582,35 @@ func recordMutationError(result *PreflightResult, preflightName, description str
 		return nil
 	}
 	if isActionableKubernetesError(err) {
-		result.Blocking = append(result.Blocking, fmt.Sprintf("%s: %v", description, err))
+		line := fmt.Sprintf("%s: %v", description, err)
+		if isAuthorizationDenial(err) {
+			result.blockDenied(line)
+		} else {
+			result.blockRefused(line)
+		}
 		return nil
 	}
 	return fmt.Errorf("%s: %s: %w", preflightName, description, err)
+}
+
+// isAuthorizationDenial tells a permission 403 from an admission webhook's:
+// both are Forbidden, but a permission denial is written by the apiserver
+// itself in one of two fixed sentences, whatever backend produced the no —
+// the authorizer's `User "x" cannot <verb> resource "r" in API group "g"`,
+// or RBAC escalation prevention's `is attempting to grant RBAC permissions
+// not currently held` when the caller may create a Role or binding but not
+// one broader than their own. Someone with more permission clears either.
+// An admission denial carries the webhook's own message, and more
+// permission would not change its answer.
+func isAuthorizationDenial(err error) bool {
+	if !apierrors.IsForbidden(err) {
+		return false
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "is attempting to grant RBAC permissions not currently held") {
+		return true
+	}
+	return strings.Contains(msg, " cannot ") && strings.Contains(msg, " resource ")
 }
 
 func isActionableKubernetesError(err error) bool {

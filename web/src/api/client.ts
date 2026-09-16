@@ -1895,6 +1895,8 @@ export interface CloudInstallFailure {
 
 export interface CloudInstallBlocked {
   reason: 'gitops' | 'preflight' | 'unsupported'
+  // Preflight only: what would unblock it.
+  cause?: 'permissions' | 'cluster' | 'verification'
   message: string
   blocking?: string[]
 }

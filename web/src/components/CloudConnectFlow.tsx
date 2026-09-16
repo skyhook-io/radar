@@ -85,8 +85,23 @@ function BlockedView({
     blocked.reason === 'gitops'
       ? 'This install is managed by GitOps'
       : blocked.reason === 'preflight'
-        ? 'Your Kubernetes identity can’t install this'
+        ? blocked.cause === 'permissions'
+          ? 'Missing Kubernetes permissions'
+          : blocked.cause === 'verification'
+            ? 'Radar can’t check every install change'
+            : 'This cluster blocked part of the install'
         : 'This cluster can’t be connected from here'
+  // The browser wizard is offered only where it changes the outcome: a
+  // person with broader permissions can run it, and a human can check what
+  // Radar could not prove. A cluster refusal would meet the wizard's Helm
+  // command the same way, and GitOps and unsupported refusals named a target
+  // a generic link cannot carry, so offering it would contradict the message.
+  const browserAlternative =
+    blocked.reason === 'preflight' && blocked.cause !== 'cluster'
+  const browserLabel =
+    blocked.cause === 'permissions'
+      ? 'Get the install command from the browser wizard →'
+      : 'Install from the browser wizard instead →'
   return (
     <div className="px-8 pt-6 pb-5">
       <div className="card-inner-lg flex gap-2.5">
@@ -107,19 +122,14 @@ function BlockedView({
         </div>
       </div>
       <div className="mt-4 flex items-center gap-4">
-        {/* Only a preflight denial has a legitimate browser alternative —
-            someone with more Kubernetes permission can run the wizard. GitOps
-            and unsupported refusals named a specific reason and target that a
-            generic signup link cannot carry, so offering it would contradict
-            the message directly above. */}
-        {blocked.reason === 'preflight' && (
+        {browserAlternative && (
           <a
             href={signupUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="text-[12.5px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline underline-offset-2"
           >
-            Connect through the browser wizard instead →
+            {browserLabel}
           </a>
         )}
         <button onClick={onExit} className="text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">

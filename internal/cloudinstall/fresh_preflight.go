@@ -74,7 +74,7 @@ func FreshInstallPreflight(
 	target, err := parseAdoptionManifest(opts.TargetManifest, opts.Namespace, mapper)
 	if err != nil {
 		if meta.IsNoMatchError(err) {
-			result.Blocking = append(result.Blocking, fmt.Sprintf("map target Helm manifest to this cluster: %v", err))
+			result.blockRefused(fmt.Sprintf("map target Helm manifest to this cluster: %v", err))
 			return result, nil
 		}
 		return result, fmt.Errorf("fresh-install preflight: parse target Helm manifest: %w", err)

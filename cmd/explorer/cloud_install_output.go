@@ -83,13 +83,32 @@ func printCloudPermissionFailure(
 	prepared *cloudinstall.PreparedProvision,
 	clusterName string,
 ) {
-	fmt.Fprintf(w, "%s Your current Kubernetes identity cannot perform the exact planned Radar operation.\n", cliui.New(w).Marker(cliui.Failure))
-	fmt.Fprintln(w, "Blocked while trying to:")
+	marker := cliui.New(w).Marker(cliui.Failure)
+	cause := pf.Cause()
+	switch cause {
+	case cloudinstall.BlockCausePermissions:
+		fmt.Fprintf(w, "%s Your Kubernetes credentials lack permissions this install needs.\n", marker)
+	case cloudinstall.BlockCauseVerification:
+		fmt.Fprintf(w, "%s Radar can't check every change this install would make, so it won't make them blind.\n", marker)
+	default:
+		fmt.Fprintf(w, "%s The cluster blocked part of the planned install.\n", marker)
+	}
+	fmt.Fprintln(w, "Blocked on:")
 	for _, detail := range pf.Blocking {
 		fmt.Fprintf(w, "  • %s\n", detail)
 	}
-	fmt.Fprintln(w, "\nRadar's connected mode provisions Kubernetes impersonation RBAC, so a sufficiently privileged platform operator must run this step.")
-	fmt.Fprintf(w, "Ask them to run `radar cloud install` against this Kubernetes cluster (your context %q; theirs may be named differently).\n", contextName)
+	fmt.Fprintln(w)
+	switch cause {
+	case cloudinstall.BlockCausePermissions:
+		fmt.Fprintln(w, "Radar's connected mode provisions Kubernetes impersonation RBAC, so someone with those permissions has to run this step.")
+		fmt.Fprintf(w, "Ask them to run `radar cloud install` against this Kubernetes cluster (your context %q; theirs may be named differently).\n", contextName)
+	case cloudinstall.BlockCauseVerification:
+		// Running this command again meets the same hidden-Secret marker, so
+		// the way forward is the wizard's Helm command, reviewed by a person.
+		fmt.Fprintln(w, "The rendered chart hides some Secret values. Install from the browser wizard instead: it shows the Helm command for this cluster to review and run by hand.")
+	default:
+		fmt.Fprintln(w, "Resolve these with your platform operator, then run `radar cloud install` again.")
+	}
 	fmt.Fprintf(w, "Preserve Hub %q, namespace %q, Helm release %q, Radar cluster name %q, and chart target %q.\n",
 		hubURL, prepared.Namespace(), prepared.ReleaseName(), clusterName, prepared.ChartVersion())
 }
