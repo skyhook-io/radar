@@ -123,11 +123,11 @@ function parseArgs(args: string | undefined): ToolArgs {
 
 // Arguments carry kinds as "deployment", "Deployment" or "configmaps"; the
 // label reads best capitalised and singular.
+// Capitalise and otherwise leave the word alone: stripping an "s" turns
+// Ingress into Ingres.
 function kindLabel(kind: string | undefined): string | undefined {
   if (!kind) return undefined;
-  const singular =
-    kind.endsWith("s") && kind.length > 3 ? kind.slice(0, -1) : kind;
-  return singular.charAt(0).toUpperCase() + singular.slice(1);
+  return kind.charAt(0).toUpperCase() + kind.slice(1);
 }
 
 function pluralLabel(kind: string): string {

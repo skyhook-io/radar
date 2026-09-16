@@ -682,15 +682,29 @@ export function InvestigationEvidencePane({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [projection.groups, onViewSource, storyGapRoles],
   );
+  // A card behind the story's fold stays mounted but inert once the fold has
+  // been opened and closed; a reveal has to open the fold first, then land.
+  const [storyOpenRequest, setStoryOpenRequest] = useState(0);
   const revealStoryTarget = useCallback(
     (target: StoryPlacementTarget) => {
       const placed = document.getElementById(target.domId);
       if (placed) {
-        placed.scrollIntoView({
-          block: "center",
-          behavior: prefersReducedMotion() ? "auto" : "smooth",
-        });
-        (placed as HTMLElement).focus({ preventScroll: true });
+        const land = () => {
+          placed.scrollIntoView({
+            block: "center",
+            behavior: prefersReducedMotion() ? "auto" : "smooth",
+          });
+          (placed as HTMLElement).focus({ preventScroll: true });
+        };
+        if (placed.closest("[inert]")) {
+          setStoryOpenRequest((n) => n + 1);
+          window.setTimeout(
+            land,
+            investigationDisclosureSettleDelay(prefersReducedMotion()),
+          );
+          return;
+        }
+        land();
         return;
       }
       revealCaseItem(target.item);
@@ -919,6 +933,7 @@ export function InvestigationEvidencePane({
               }
               renderPlacement={renderStoryPlacement}
               onReveal={revealStoryTarget}
+              openRequest={storyOpenRequest}
               onViewSource={(sourceId) => onViewSource(sourceId)}
               defaultOpen={storyDefaultOpen}
             />
@@ -1651,7 +1666,16 @@ function EvidenceCard({
       : observation.summary;
   const citedOrder = citedOrderByGroup?.get(group.id);
   const caseItems = caseByGroup?.get(group.id) ?? [];
-  const cardItems = caseItems.filter((item) => item.placement === "card");
+  // Annotations belong to the observation on screen: a card rendering an
+  // earlier read shows the note the agent attached to that read, not the
+  // latest one's.
+  const cardItems = caseItems.filter((item) =>
+    observationOverride
+      ? item.observation !== undefined &&
+        item.observation.source.id === observation.source.id &&
+        item.observation.revision === observation.revision
+      : item.placement === "card",
+  );
   const revisionItems = caseItems.filter(
     (item) => item.placement === "revision",
   );

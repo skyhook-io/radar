@@ -78,6 +78,17 @@ export function storyReferenceIndex(
  * contains none: the span state at each marker is the parity of backticks
  * before it.
  */
+// A code span opens with a run of backticks and closes with a run of the same
+// length; a run of another length inside it is literal. Counting single
+// backticks would open a span at `` and never close it.
+function codeSpanAfter(text: string, openRun: number): number {
+  for (const run of text.match(/`+/g) ?? []) {
+    if (openRun === 0) openRun = run.length;
+    else if (run.length === openRun) openRun = 0;
+  }
+  return openRun;
+}
+
 function rewriteInlineMarkers(
   line: string,
   inlineRefs: number[],
@@ -85,14 +96,14 @@ function rewriteInlineMarkers(
 ): string {
   let out = "";
   let cursor = 0;
-  let backticks = 0;
+  let openRun = 0;
   STORY_PLACEMENT_RE.lastIndex = 0;
   for (const match of line.matchAll(STORY_PLACEMENT_RE)) {
     const start = match.index ?? 0;
     const before = line.slice(cursor, start);
-    backticks += (before.match(/`/g) ?? []).length;
+    openRun = codeSpanAfter(before, openRun);
     out += before;
-    if (backticks % 2 === 1) {
+    if (openRun > 0) {
       out += match[0];
     } else {
       const index = markerIndex(match[1], match[2], resolveRef);

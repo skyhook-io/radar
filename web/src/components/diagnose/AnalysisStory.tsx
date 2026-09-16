@@ -91,9 +91,11 @@ export function resolveStoryPlacements(
     byIndex.set(index, { kind: "reference", target: resolved });
     return resolved;
   };
+  // Revisions count within a group, so one call's resource, logs and events
+  // share a source and a revision; the group tells them apart.
   const observationKey = (index: number, resolved: StoryPlacementTarget) =>
     resolved.item.observation
-      ? `${resolved.item.observation.source.id}#${resolved.item.observation.revision}`
+      ? `${resolved.item.groupId ?? ""}|${resolved.item.observation.source.id}#${resolved.item.observation.revision}`
       : `item-${index}`;
   const place = (
     index: number,
@@ -264,6 +266,7 @@ export function AnalysisStory({
   onViewSource,
   trailing,
   defaultOpen = false,
+  openRequest = 0,
   className,
 }: {
   report: string;
@@ -281,6 +284,8 @@ export function AnalysisStory({
   /** Rendered at the end of the full analysis, behind the fold. */
   trailing?: ReactNode;
   defaultOpen?: boolean;
+  /** Bumped by the host when a reveal needs the story open first. */
+  openRequest?: number;
   className?: string;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -289,6 +294,9 @@ export function AnalysisStory({
   useEffect(() => {
     if (defaultOpen) setOpen(true);
   }, [defaultOpen]);
+  useEffect(() => {
+    if (openRequest > 0) setOpen(true);
+  }, [openRequest]);
   const regionId = useId();
   const story = useMemo(
     () => resolveStoryPlacements(report, resolveItem, resolveRef),
@@ -402,7 +410,7 @@ export function AnalysisStory({
   const preview = story.segments
     .slice(previewStart, previewEnd + 1)
     .map((segment, offset) =>
-      renderSegment(segment, previewStart + offset, !open),
+      renderSegment(segment, previewStart + offset, folded),
     );
   // The hint that more follows: the first two lines of the hidden paragraph
   // after the preview, faded out. It points at what the fold hides instead of

@@ -475,15 +475,25 @@ function healthTwinIds(
       group.identity &&
       group.latest.data?.type === "events"
     ) {
+      // The whole adverse set has to match: a Pod card with warning A is not
+      // the Deployment card that carries A and B.
       const events = group.latest.data.events ?? [];
-      const lead =
-        events.find((event) => event.type === "Warning") ?? events[0];
+      const warnings = events.filter(
+        (event) => event.type === undefined || event.type === "Warning",
+      );
       const namespace = /^\S+\s+([^/\s]+)\//.exec(group.identity)?.[1];
-      if (lead && namespace) {
-        const message = lead.message.toLowerCase().replace(/\s+/g, " ").trim();
-        keys.push(
-          `events\u0000${namespace}\u0000${lead.reason.toLowerCase()}\u0000${message}`,
-        );
+      if (warnings.length > 0 && namespace) {
+        const set = [
+          ...new Set(
+            warnings.map(
+              (event) =>
+                `${event.reason.toLowerCase()}|${event.message.toLowerCase().replace(/\s+/g, " ").trim()}`,
+            ),
+          ),
+        ]
+          .sort()
+          .join("\u0001");
+        keys.push(`events\u0000${namespace}\u0000${set}`);
       }
     }
     return keys;

@@ -94,10 +94,10 @@ export function resolveInvestigationCase(
 ): InvestigationCaseResolution {
   const evidence = diagnosis?.evidence ?? [];
   if (evidence.length === 0) return { items: [], ruledOut: [] };
+  const targetPods = new Set(projection.targetPods);
   const byRef = new Map<string, InvestigationEvidenceSource[]>();
   for (const source of projection.evidenceRefSources) {
-    if (source.turnIndex > assessmentTurnIndex || !source.evidenceRef)
-      continue;
+    if (source.turnIndex > assessmentTurnIndex || !source.evidenceRef) continue;
     const matches = byRef.get(source.evidenceRef) ?? [];
     matches.push(source);
     byRef.set(source.evidenceRef, matches);
@@ -148,7 +148,12 @@ export function resolveInvestigationCase(
               (observation) =>
                 observation.source.id === source.id &&
                 (!subject ||
-                  observationMatchesSubject(group, observation, subject)),
+                  observationMatchesSubject(
+                    group,
+                    observation,
+                    subject,
+                    targetPods,
+                  )),
             )
             .map((observation) => ({ group, observation })),
         );
@@ -305,6 +310,7 @@ function observationMatchesSubject(
   group: InvestigationEvidenceGroup,
   observation: InvestigationEvidenceObservation,
   subject: DiagnosisEvidenceSubject,
+  targetPods: ReadonlySet<string>,
 ): boolean {
   if (subject.observation !== undefined) {
     // A diagnose bundle captures several vitals charts for one resource, so
@@ -332,7 +338,7 @@ function observationMatchesSubject(
   // the rest.
   if (identities.length === 0) return subject.observation !== undefined;
   return identities.some((identity) =>
-    identityMatchesSubject(identity, observation, subject),
+    identityMatchesSubject(identity, observation, subject, targetPods),
   );
 }
 
@@ -367,6 +373,7 @@ function identityMatchesSubject(
   identity: ObservationSubjectIdentity,
   observation: InvestigationEvidenceObservation,
   subject: DiagnosisEvidenceSubject,
+  targetPods: ReadonlySet<string>,
 ): boolean {
   // "The events of namespace X" names a namespace-scoped read whose
   // observation inherits the resource its call was asked about; the agent
@@ -389,7 +396,14 @@ function identityMatchesSubject(
     !sameKind(identity.kind, "Pod") &&
     (identity.namespace === undefined ||
       subject.namespace === undefined ||
-      identity.namespace === subject.namespace)
+      identity.namespace === subject.namespace) &&
+    // The Pod has to be the workload's own, or named by the events: a Pod
+    // nothing here establishes is not this card.
+    (subject.name === undefined ||
+      targetPods.has(subject.name) ||
+      observation.data.events.some((event) =>
+        event.message.includes(subject.name!),
+      ))
   )
     return true;
   if (!sameKind(identity.kind, subject.kind)) return false;

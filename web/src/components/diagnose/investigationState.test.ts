@@ -1194,6 +1194,29 @@ describe("investigationHealthSignals twins across scopes", () => {
     ).toEqual(["Kubernetes events", "Kubernetes events"]);
   });
 
+  it("does not let a card with one warning explain a card that carries that warning and another", () => {
+    const extra = {
+      reason: "BackOff",
+      message: "Back-off restarting failed container",
+      type: "Warning",
+    };
+    const groups = [
+      eventsGroup("events-deploy", "deployment demo/podinfo", {
+        events: [warning, extra],
+      }),
+      eventsGroup("events-pod", "pod demo/podinfo-676569b68b-6278c"),
+    ];
+    expect(
+      investigationHealthSignals({ groups }, benignOnPod).map((signal) => [
+        signal.groupId,
+        signal.status,
+      ]),
+    ).toEqual([
+      ["events-deploy", "unaddressed"],
+      ["events-pod", "explained"],
+    ]);
+  });
+
   it("keeps a different warning, another namespace, or a broader card as its own signal", () => {
     const groups = [
       eventsGroup("events-deploy", "deployment demo/podinfo", {

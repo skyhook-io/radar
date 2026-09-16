@@ -118,6 +118,31 @@ describe("resolveStoryPlacements", () => {
     expect(html.match(/data-card/g)).toHaveLength(1);
   });
 
+  it("places two cards that share one source and revision when they are different groups", () => {
+    const shared = (index: number, group: string): StoryPlacementTarget => ({
+      item: {
+        index,
+        role: "context",
+        claim: "",
+        placement: "card",
+        groupId: group,
+        source: { id: "src-bundle" },
+        observation: {
+          source: { id: "src-bundle" },
+          revision: 1,
+          title: group,
+        },
+      } as unknown as InvestigationCaseItem,
+      domId: `story-${group}`,
+    });
+    const story = resolveStoryPlacements(
+      "[[radar:evidence=0]]\n\n[[radar:evidence=1]]",
+      resolver({ 0: shared(0, "logs"), 1: shared(1, "events") }),
+    );
+    expect(story.placedCount).toBe(2);
+    expect(story.byIndex.get(1)?.kind).toBe("placed");
+  });
+
   it("caps placed cards and reports every distinct lost item once", () => {
     const markers = Array.from(
       { length: 8 },

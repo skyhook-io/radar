@@ -142,6 +142,7 @@ const diagnoseBundle = {
     },
   },
   pods: 1,
+  podNames: ["api-abc"],
   relatedIssues: [criticalIssue],
   logsCurrent: [
     { pod: "api-abc", container: "api", logs: logs(["ERROR auth failed"]) },

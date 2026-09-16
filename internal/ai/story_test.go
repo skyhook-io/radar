@@ -267,3 +267,16 @@ func TestDiagnosisFromText_RefMarkerStaysWhenAmbiguousOrQuoted(t *testing.T) {
 		t.Fatalf("an ambiguous or quoted ref must not be rewritten: %q", d.Report)
 	}
 }
+
+func TestCanonicalStoryMarkers_RespectsCodeSpansAndFences(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
+	items := []caseItemRequest{{ref: ref, valid: true}}
+	in := "A `` [[radar:evidence-ref=" + ref + "]] `` span, then [[radar:evidence-ref=" + ref + "]] out.\n~~~\n[[radar:evidence-ref=" + ref + "]]\n~~~\n[[radar:evidence-ref=" + ref + "]]"
+	out := canonicalStoryMarkers(in, items)
+	if strings.Count(out, "[[radar:evidence=0]]") != 2 {
+		t.Fatalf("expected the two markers outside code to be rewritten, got %q", out)
+	}
+	if strings.Count(out, "[[radar:evidence-ref=") != 2 {
+		t.Fatalf("expected the two quoted markers to stay, got %q", out)
+	}
+}

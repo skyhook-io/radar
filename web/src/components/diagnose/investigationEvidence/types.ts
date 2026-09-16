@@ -500,6 +500,8 @@ export interface InvestigationEvidenceProjection {
   /** Complete confirmed-success sources eligible for server-authored links. */
   citableSources: InvestigationEvidenceSource[];
   coverage: InvestigationEvidenceCoverage;
+  /** Pods a producer established as the target's own, by name. */
+  targetPods: string[];
 }
 export interface InvestigationRootCauseEvidenceLink {
   source: InvestigationEvidenceSource;

@@ -2108,6 +2108,7 @@ describe("InvestigationEvidencePane honest result states", () => {
       sources: [],
       evidenceRefSources: [],
       citableSources: [],
+      targetPods: [],
       coverage: { attempted: 0, projected: 0, limited: 0, checked: 0 },
     };
     const collecting = render(empty, true);

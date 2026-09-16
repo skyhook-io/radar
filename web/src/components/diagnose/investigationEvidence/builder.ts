@@ -416,6 +416,7 @@ export function projectInvestigationEvidence(
     sources: builder.sources,
     evidenceRefSources,
     citableSources,
+    targetPods: [...builder.establishedTargetPods],
     coverage: {
       attempted: builder.sources.length,
       projected: builder.projectedSources.size,

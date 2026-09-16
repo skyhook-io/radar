@@ -2,6 +2,18 @@ import { describe, expect, it } from "vitest";
 import { describeToolCall } from "./toolCallLabel";
 
 describe("describeToolCall", () => {
+  it("never invents a singular from a kind", () => {
+    expect(
+      describeToolCall(
+        "get_resource",
+        JSON.stringify({ kind: "Ingress", namespace: "web", name: "edge" }),
+      ),
+    ).toBe("Reading Ingress web/edge");
+    expect(
+      describeToolCall("list_resources", JSON.stringify({ kind: "ingresses" })),
+    ).toBe("Listing Ingresses");
+  });
+
   it("names the target from the call's arguments", () => {
     expect(
       describeToolCall(

@@ -83,6 +83,16 @@ describe("splitStory", () => {
     expect(inline).toContain(`](#radar-evidence-${UNRESOLVED_STORY_INDEX})`);
     expect(storyPlainText(`x [[radar:evidence-ref=${ref}]] y`)).toBe("x  y");
   });
+  it("keeps a marker inside a double-backtick code span literal", () => {
+    const { segments, inlineRefs } = splitStory(
+      "Write `` [[radar:evidence=0]] `` to place, then see [[radar:evidence=0]].",
+    );
+    expect(inlineRefs).toEqual([0]);
+    expect((segments[0] as { markdown: string }).markdown).toContain(
+      "`` [[radar:evidence=0]] ``",
+    );
+  });
+
   it("reads the compact variant as a placement flag", () => {
     const { segments } = splitStory(
       "A.\n[[radar:evidence=2|compact]]\nB [[radar:evidence=2|compact]].",

@@ -468,24 +468,64 @@ func canonicalStoryMarkers(report string, items []caseItemRequest) string {
 	}
 	// Fenced code and inline code are the agent quoting something; the
 	// renderer keeps them literal, so the parser must not rewrite them either.
+	// A fence closes on a bare run of the same character at least as long as
+	// it opened with; a code span closes on a backtick run of the same length.
 	lines := strings.Split(report, "\n")
-	inFence := false
+	fenceChar, fenceLen := byte(0), 0
 	for n, line := range lines {
 		trimmed := strings.TrimLeft(line, " ")
-		if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
-			inFence = !inFence
+		if run := leadingRun(trimmed); run >= 3 && (trimmed[0] == '`' || trimmed[0] == '~') {
+			if fenceLen == 0 {
+				fenceChar, fenceLen = trimmed[0], run
+				continue
+			}
+			if trimmed[0] == fenceChar && run >= fenceLen && strings.TrimSpace(trimmed[run:]) == "" {
+				fenceChar, fenceLen = 0, 0
+				continue
+			}
+		}
+		if fenceLen > 0 {
 			continue
 		}
-		if inFence {
-			continue
-		}
-		parts := strings.Split(line, "`")
-		for i := 0; i < len(parts); i += 2 {
-			parts[i] = rewrite(parts[i])
-		}
-		lines[n] = strings.Join(parts, "`")
+		lines[n] = rewriteOutsideCodeSpans(line, rewrite)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func leadingRun(text string) int {
+	n := 0
+	for n < len(text) && text[n] == text[0] {
+		n++
+	}
+	return n
+}
+
+var backtickRunRe = regexp.MustCompile("`+")
+
+func rewriteOutsideCodeSpans(line string, rewrite func(string) string) string {
+	var out strings.Builder
+	openRun, cursor := 0, 0
+	for _, loc := range backtickRunRe.FindAllStringIndex(line, -1) {
+		segment := line[cursor:loc[0]]
+		if openRun == 0 {
+			segment = rewrite(segment)
+		}
+		out.WriteString(segment)
+		out.WriteString(line[loc[0]:loc[1]])
+		run := loc[1] - loc[0]
+		if openRun == 0 {
+			openRun = run
+		} else if run == openRun {
+			openRun = 0
+		}
+		cursor = loc[1]
+	}
+	tail := line[cursor:]
+	if openRun == 0 {
+		tail = rewrite(tail)
+	}
+	out.WriteString(tail)
+	return out.String()
 }
 
 func stripStoryMarkers(text string) string {
