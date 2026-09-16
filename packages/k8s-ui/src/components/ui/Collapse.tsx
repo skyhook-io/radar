@@ -38,7 +38,9 @@ export function Collapse({
   return (
     <div
       className={clsx(
-        'grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none',
+        // 300 ms with a decelerating curve (Material's standard easing): fast to
+        // start, settling gently — the pace polished disclosure UIs use.
+        'grid transition-[grid-template-rows] duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none',
         className,
       )}
       style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
@@ -65,7 +67,7 @@ export function CollapseChevron({ open, className }: { open: boolean; className?
     <ChevronRight
       aria-hidden="true"
       className={clsx(
-        'shrink-0 text-theme-text-tertiary transition-transform duration-200 motion-reduce:transition-none',
+        'shrink-0 text-theme-text-tertiary transition-transform duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none',
         open && 'rotate-90',
         className,
       )}

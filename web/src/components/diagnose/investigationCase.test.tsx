@@ -18,9 +18,6 @@ import {
 import {
   resolveInvestigationCase,
   type InvestigationCaseResolution,
-  investigationCaseItemsStillRendered,
-  mergeInvestigationCases,
-  type InvestigationCaseItem,
 } from "./investigationCase";
 import { AssessmentSources, ResultCard, assessmentSourceRows } from "./parts";
 import type { Diagnosis, DiagnosisEvidenceItem } from "../../api/diagnose";
@@ -188,6 +185,57 @@ describe("agent case placement (D-1, D-1b)", () => {
     expect(html).not.toContain("data-agent-claim");
   });
 
+  it("forgives a group on a core kind and a named entry on a listing", () => {
+    const listRef = evidenceRef("c", "d");
+    const withListing = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool("cms", "list_resources", [{ kind: "ConfigMap", name: "kube-root-ca.crt" }], {
+        evidenceRef: listRef,
+        summary: JSON.stringify({ kind: "configmaps", namespace: "shop" }),
+      }),
+    );
+    const resolved = resolveInvestigationCase(
+      withListing,
+      {
+        evidence: [
+          linked(ref, "cause", "The previous log names the error.", {
+            group: "apps",
+            kind: "Pod",
+            namespace: "shop",
+            name: "api-abc",
+            container: "api",
+            stream: "previous",
+            observation: "logs",
+          }),
+          linked(listRef, "context", "Only the CA bundle exists.", {
+            kind: "ConfigMap",
+            namespace: "shop",
+            name: "kube-root-ca.crt",
+            observation: "resource",
+          }),
+          linked(listRef, "rules_out", "No nginx config lives here.", {
+            kind: "ConfigMap",
+            namespace: "shop",
+            observation: "resource",
+          }),
+          linked(ref, "symptom", "BackOff keeps firing on the pod.", {
+            kind: "Pod",
+            namespace: "shop",
+            name: "api-abc",
+            observation: "events",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items.map((item) => item.placement)).toEqual([
+      "card",
+      "card",
+      "card",
+      "card",
+    ]);
+  });
+
   it("pins a subject-bearing item to exactly the observation it names", () => {
     const resolved = resolveInvestigationCase(
       projection,
@@ -208,6 +256,11 @@ describe("agent case placement (D-1, D-1b)", () => {
           linked(ref, "context", "Events only repeat the back-off.", {
             kind: "Deployment",
             name: "api",
+            observation: "events",
+          }),
+          linked(ref, "context", "Namespace-named events land too.", {
+            kind: "Namespace",
+            name: "shop",
             observation: "events",
           }),
           linked(
@@ -240,6 +293,7 @@ describe("agent case placement (D-1, D-1b)", () => {
         kind: "resource",
       },
       "Events only repeat the back-off.": { placement: "card", kind: "events" },
+      "Namespace-named events land too.": { placement: "card", kind: "events" },
       "Ambiguous: two observations share this subject.": {
         placement: "source",
         kind: undefined,
@@ -1069,130 +1123,6 @@ describe("follow-up answers that cite evidence", () => {
   });
 });
 
-describe("carrying earlier assessments' card notes", () => {
-  const item = (
-    index: number,
-    groupId: string | undefined,
-    placement: "card" | "revision" | "source",
-    role: "cause" | "context" | "demoted" = "context",
-  ) =>
-    ({
-      index,
-      role,
-      claim: `claim ${index}`,
-      source: { id: `s${index}` },
-      placement,
-      groupId,
-    }) as unknown as InvestigationCaseItem;
-
-  it("keeps an earlier turn's note on a card the live turn did not address", () => {
-    const live = {
-      items: [item(0, "chart", "card")],
-      ruledOut: [],
-    } as unknown as InvestigationCaseResolution;
-    const first = {
-      items: [
-        item(0, "logs", "card", "demoted"),
-        item(1, "chart", "card", "cause"),
-        item(2, undefined, "source"),
-        item(3, "deploy", "revision"),
-      ],
-      ruledOut: [{ hypothesis: "x" }],
-    } as unknown as InvestigationCaseResolution;
-    const merged = mergeInvestigationCases(live, [first]);
-    expect(merged?.items.map((entry) => [entry.groupId, entry.role])).toEqual([
-      ["chart", "context"],
-      ["logs", "demoted"],
-      ["deploy", "context"],
-    ]);
-    expect(merged?.ruledOut).toEqual([]);
-  });
-
-  it("lets the newer earlier turn win a card and leaves a lone live case untouched", () => {
-    const live = {
-      items: [],
-      ruledOut: [],
-    } as unknown as InvestigationCaseResolution;
-    const newer = {
-      items: [item(0, "logs", "card", "context")],
-      ruledOut: [],
-    } as unknown as InvestigationCaseResolution;
-    const older = {
-      items: [item(0, "logs", "card", "demoted"), item(1, "pod", "card")],
-      ruledOut: [],
-    } as unknown as InvestigationCaseResolution;
-    const merged = mergeInvestigationCases(live, [newer, older]);
-    expect(merged?.items.map((entry) => [entry.groupId, entry.role])).toEqual([
-      ["logs", "context"],
-      ["pod", "context"],
-    ]);
-    expect(mergeInvestigationCases(live, [])).toBe(live);
-    expect(mergeInvestigationCases(undefined, [])).toBeUndefined();
-  });
-
-  it("recognises its own surviving notes across a re-resolved merge", () => {
-    // The pane feeds the merge freshly resolved copies of every turn, so the
-    // assessment's own items arrive equal but not identical. An identity test
-    // reported them as gone, which silently retired the conflict banner's
-    // reframing whenever any unrelated follow-up arrived.
-    const assessmentItems = [
-      item(0, "logs", "card", "demoted"),
-      item(1, "crash", "card", "demoted"),
-    ];
-    const reResolved = assessmentItems.map(
-      (entry) => ({ ...entry }) as InvestigationCaseItem,
-    );
-    expect(reResolved[0]).not.toBe(assessmentItems[0]);
-    expect(
-      investigationCaseItemsStillRendered(assessmentItems, reResolved).map(
-        (entry) => entry.groupId,
-      ),
-    ).toEqual(["logs", "crash"]);
-    // A note the merge dropped is correctly reported as gone.
-    expect(
-      investigationCaseItemsStillRendered(assessmentItems, [reResolved[0]]).map(
-        (entry) => entry.groupId,
-      ),
-    ).toEqual(["logs"]);
-    expect(investigationCaseItemsStillRendered(assessmentItems, [])).toEqual(
-      [],
-    );
-  });
-
-  it("carries every note the winning assessment left on a card, not just the first", () => {
-    // A card note and a note pinned to a superseded read are two readings of
-    // one group by the same assessment. Taking coverage per item dropped the
-    // second, so a visible Cause note could vanish behind a revision note.
-    const live = {
-      items: [item(0, "other", "card", "context")],
-      ruledOut: [],
-    } as unknown as InvestigationCaseResolution;
-    const winner = {
-      items: [
-        item(1, "logs", "revision", "context"),
-        item(2, "logs", "card", "cause"),
-      ],
-      ruledOut: [],
-    } as unknown as InvestigationCaseResolution;
-    const older = {
-      items: [item(3, "logs", "card", "demoted")],
-      ruledOut: [],
-    } as unknown as InvestigationCaseResolution;
-    const merged = mergeInvestigationCases(live, [winner, older]);
-    expect(
-      merged?.items.map((entry) => [
-        entry.groupId,
-        entry.placement,
-        entry.role,
-      ]),
-    ).toEqual([
-      ["other", "card", "context"],
-      ["logs", "revision", "context"],
-      ["logs", "card", "cause"],
-    ]);
-  });
-});
-
 describe("agent case robustness", () => {
   const ref = evidenceRef("a", "b");
 
@@ -1294,7 +1224,7 @@ describe("agent case robustness", () => {
     );
   });
 
-  it("keeps valid items when siblings are unlinked, malformed, foreign, or from another turn", () => {
+  it("keeps valid items when siblings are unlinked or malformed, and places an earlier turn's read", () => {
     const stale = evidenceRef("a", "z");
     const projection = projectInvestigationEvidence(
       [
@@ -1346,6 +1276,7 @@ describe("agent case robustness", () => {
     );
     expect(resolved.items.map((item) => [item.index, item.placement])).toEqual([
       [1, "card"],
+      [4, "revision"],
       [5, "source"],
     ]);
     expect(resolved.ruledOut.map((entry) => entry.hypothesis)).toEqual([
@@ -1553,7 +1484,7 @@ describe("the agent's contribution is one attributed row", () => {
 
   it("labels the role that says an adverse result is not a live problem", () => {
     const html = renderToStaticMarkup(<AgentRoleChip role="benign" />);
-    expect(html).toContain("Not a problem");
+    expect(html).toContain("Not a live problem");
   });
 
   it("still shows an attributed role when the agent left no sentence", () => {

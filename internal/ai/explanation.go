@@ -3,6 +3,7 @@ package ai
 import (
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 )
 
@@ -24,7 +25,10 @@ func (r *Run) assessmentForExplanation(seq int) (*Diagnosis, error) {
 		if turn.Type != "turn" {
 			continue
 		}
-		if turn.Apply || turn.ExplainAssessment != 0 || (turn.Question != "" && !turn.Verify) {
+		// A question whose verdict revised the assessment is the assessment
+		// Findings shows, so it can be explained like the initial one.
+		if turn.Apply || turn.ExplainAssessment != 0 ||
+			(turn.Question != "" && !turn.Verify && !ev.Diag.RevisesAssessment) {
 			return nil, ErrInvalidExplanation
 		}
 		assessment := *ev.Diag
@@ -33,15 +37,26 @@ func (r *Run) assessmentForExplanation(seq int) (*Diagnosis, error) {
 	return nil, ErrInvalidExplanation
 }
 
+// placementMarkerRe matches the story's [[radar:evidence=N]] placements. They
+// mean nothing to a model reading the story back, so prompts strip them.
+var placementMarkerRe = regexp.MustCompile(`\[\[radar:evidence=\d+(?:\|compact)?\]\]`)
+
+func stripPlacementMarkers(report string) string {
+	return strings.TrimSpace(placementMarkerRe.ReplaceAllString(report, ""))
+}
+
 func explanationPrompt(assessment Diagnosis) string {
 	context, _ := json.Marshal(struct {
+		Summary       string   `json:"summary,omitempty"`
 		Assessment    string   `json:"assessment"`
+		Unresolved    []string `json:"unresolved,omitempty"`
 		Analysis      string   `json:"analysis"`
 		NextSteps     []string `json:"nextSteps"`
 		EvidenceNotes []string `json:"evidenceNotes,omitempty"`
 		RuledOut      []string `json:"ruledOut,omitempty"`
 	}{
-		assessment.RootCause, assessment.Report, assessment.Remediation,
+		assessment.Summary, assessment.RootCause, assessment.Unresolved,
+		stripPlacementMarkers(assessment.Report), assessment.Remediation,
 		explanationEvidenceNotes(assessment), explanationRuledOut(assessment),
 	})
 	return `Explain the saved assessment below in plain language for an application developer who is not a Kubernetes expert. This is clarification, not a new investigation.

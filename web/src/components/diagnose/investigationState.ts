@@ -1,5 +1,6 @@
 // Pure presentation decisions over the durable transcript and evidence projection.
 // Keep React/DOM orchestration in InvestigationView; these rules have no UI runtime.
+import { isDiagnosableWorkloadKind } from "./investigationEvidence/observations";
 import { evidenceKindIsAdverse } from "./investigationEvidenceKinds";
 import {
   DiagnoseError,
@@ -273,32 +274,130 @@ export function investigationEvidenceInputsEqual(
 }
 
 /**
- * The turn whose agent case annotates the Evidence pane. A follow-up answer
- * that cites evidence ("chart this and cite it") must reach Findings, so the
- * newest completed non-apply, non-explanation turn carrying a bound case or
- * linked root-cause refs wins; earlier turns keep their case read-only.
+ * Which turns are assessments — the ones Findings may show. The initial turn
+ * and explicit verifications always are; an ordinary question is one only
+ * when its verdict says so with `revisesAssessment` AND carries a complete
+ * verdict (a headline and a finding), because agents restate the root cause
+ * on most answers and a bare flag must never retire what the reader is
+ * looking at. The server enforces the same completeness rule; this mirrors it
+ * so a hosted backend that forgets cannot rewrite Findings by accident.
  */
-export function investigationLiveCaseTurnIndex(
+export function investigationIsAssessmentTurn(
+  turn: Pick<
+    Turn,
+    | "status"
+    | "apply"
+    | "explainAssessment"
+    | "question"
+    | "verify"
+    | "diagnosis"
+  >,
+): boolean {
+  const dx = turn.diagnosis;
+  if (!dx || turn.status !== "done" || turn.apply || turn.explainAssessment)
+    return false;
+  const structured =
+    !!dx.rootCause ||
+    (dx.remediation?.length ?? 0) > 0 ||
+    !!dx.healthy ||
+    !!dx.inconclusive;
+  if (!structured) return false;
+  if (!turn.question || turn.verify) return true;
+  return (
+    dx.revisesAssessment === true &&
+    !!dx.summary &&
+    (!!dx.rootCause || !!dx.healthy || !!dx.inconclusive)
+  );
+}
+
+/**
+ * Later turns whose reads do not make the assessment "earlier": a question
+ * the agent answered under the story contract and marked as not revising it.
+ * The contract is only in force when the assessment itself carries a summary;
+ * older runs never asked, so every later read still counts as newer evidence.
+ */
+export function investigationSettledAnswerTurnIndexes(
   turns: readonly Pick<
     Turn,
-    "status" | "apply" | "explainAssessment" | "diagnosis"
+    | "status"
+    | "apply"
+    | "explainAssessment"
+    | "question"
+    | "verify"
+    | "diagnosis"
   >[],
   currentAssessmentIdx: number,
-): number {
-  for (let index = turns.length - 1; index >= 0; index -= 1) {
-    const turn = turns[index];
-    if (turn.status !== "done" || turn.apply || turn.explainAssessment)
-      continue;
-    const diagnosis = turn.diagnosis;
-    if (!diagnosis) continue;
+): Set<number> {
+  const settled = new Set<number>();
+  const assessment = turns[currentAssessmentIdx]?.diagnosis;
+  if (!assessment?.summary) return settled;
+  turns.forEach((turn, index) => {
+    if (index <= currentAssessmentIdx) return;
     if (
-      diagnosis.evidence?.some((item) => item.status === "linked") ||
-      (diagnosis.rootCause && diagnosis.rootCauseEvidence?.status === "linked")
-    ) {
-      return Math.max(index, currentAssessmentIdx);
-    }
-  }
-  return currentAssessmentIdx;
+      turn.status === "done" &&
+      turn.diagnosis &&
+      !turn.apply &&
+      !turn.verify &&
+      !turn.explainAssessment &&
+      turn.diagnosis.revisesAssessment !== true
+    )
+      settled.add(index);
+  });
+  return settled;
+}
+
+export function investigationAssessmentTurnIndexes(
+  turns: readonly Pick<
+    Turn,
+    | "status"
+    | "apply"
+    | "explainAssessment"
+    | "question"
+    | "verify"
+    | "diagnosis"
+  >[],
+): number[] {
+  const indexes: number[] = [];
+  turns.forEach((turn, index) => {
+    if (investigationIsAssessmentTurn(turn)) indexes.push(index);
+  });
+  return indexes;
+}
+
+/** The two coverage gaps that carry no limitation of their own, named so Still open can say which. */
+export function investigationEvidenceCoverageGaps(
+  projection: Pick<InvestigationEvidenceProjection, "coverage"> & {
+    sources: readonly { id: string; tool: string; confirmedSuccess: boolean }[];
+    groups: readonly {
+      latest: {
+        relevance: "target" | "producer-related" | "broader";
+        source: { id: string };
+      };
+    }[];
+  },
+  targetKind?: string,
+): { noEvidence: boolean; noTargetDiagnosis: boolean } {
+  // Diagnose covers workloads only; a target it cannot bundle (an HPA, a
+  // Service) is read through get_resource and issues, and that is complete.
+  if (targetKind !== undefined && !isDiagnosableWorkloadKind(targetKind))
+    return {
+      noEvidence: projection.coverage.projected === 0,
+      noTargetDiagnosis: false,
+    };
+  const completeDiagnosisSourceIds = new Set(
+    projection.sources
+      .filter((source) => source.tool === "diagnose" && source.confirmedSuccess)
+      .map((source) => source.id),
+  );
+  const hasTargetDiagnosis = projection.groups.some(
+    (group) =>
+      group.latest.relevance !== "broader" &&
+      completeDiagnosisSourceIds.has(group.latest.source.id),
+  );
+  return {
+    noEvidence: projection.coverage.projected === 0,
+    noTargetDiagnosis: !hasTargetDiagnosis,
+  };
 }
 
 export function investigationEvidenceCoverageLimited(
@@ -318,21 +417,13 @@ export function investigationEvidenceCoverageLimited(
       };
     }[];
   },
+  targetKind?: string,
 ): boolean {
-  const completeDiagnosisSourceIds = new Set(
-    projection.sources
-      .filter((source) => source.tool === "diagnose" && source.confirmedSuccess)
-      .map((source) => source.id),
-  );
-  const hasTargetDiagnosis = projection.groups.some(
-    (group) =>
-      group.latest.relevance !== "broader" &&
-      completeDiagnosisSourceIds.has(group.latest.source.id),
-  );
+  const gaps = investigationEvidenceCoverageGaps(projection, targetKind);
   return (
     projection.limitations.length > 0 ||
-    projection.coverage.projected === 0 ||
-    !hasTargetDiagnosis
+    gaps.noEvidence ||
+    gaps.noTargetDiagnosis
   );
 }
 
@@ -354,8 +445,83 @@ interface HealthConflictGroup {
     tone: string;
     title?: string;
     /** Which turn captured this reading; a note cannot explain a later one. */
-    source?: { turnIndex: number };
+    source?: { turnIndex: number; id?: string };
   };
+}
+
+/**
+ * One adverse Radar card on a healthy verdict, with the agent's position on
+ * it: it read the card as not a live problem (explained), as related but not
+ * what matters (related), never linked a reading to it (unaddressed), or
+ * called it a cause or symptom while still reporting healthy (contradiction).
+ * The reader sees which of the four it is, in words, next to the verdict.
+ */
+export interface InvestigationHealthSignal {
+  groupId?: string;
+  sourceId?: string;
+  title: string;
+  status: "explained" | "related" | "unaddressed" | "contradiction";
+  role?: string;
+  claim?: string;
+}
+
+export function investigationHealthSignals(
+  projection: { groups: readonly HealthConflictGroup[] },
+  caseItems:
+    | readonly {
+        role: string;
+        placement: "card" | "revision" | "source";
+        claim: string;
+        groupId?: string;
+        source?: { turnIndex: number };
+      }[]
+    | undefined,
+): InvestigationHealthSignal[] {
+  const conflicting = investigationHealthConflictGroups(projection);
+  if (conflicting.length === 0) return [];
+  const twins = new Map<string, Set<string>>();
+  for (const group of projection.groups) {
+    if (!group.id || !group.identity) continue;
+    const key = `${group.kind}\u0000${group.identity}`;
+    const ids = twins.get(key) ?? new Set<string>();
+    ids.add(group.id);
+    twins.set(key, ids);
+  }
+  return conflicting.map((group) => {
+    const sameStream =
+      (group.identity && twins.get(`${group.kind}\u0000${group.identity}`)) ||
+      new Set<string>([group.id ?? ""]);
+    const fresh = (caseItems ?? []).filter(
+      (item) =>
+        item.groupId &&
+        sameStream.has(item.groupId) &&
+        item.placement === "card" &&
+        !(
+          group.latest.source !== undefined &&
+          item.source !== undefined &&
+          group.latest.source.turnIndex > item.source.turnIndex
+        ),
+    );
+    const base = {
+      groupId: group.id,
+      sourceId: group.latest.source?.id,
+      title: group.latest.title ?? group.kind,
+    };
+    const asserting = fresh.find(
+      (item) => item.role === "cause" || item.role === "symptom",
+    );
+    if (asserting)
+      return { ...base, status: "contradiction", role: asserting.role };
+    const benign = fresh.find(
+      (item) => item.role === "benign" && item.claim.trim() !== "",
+    );
+    if (benign) return { ...base, status: "explained", claim: benign.claim };
+    const demoted = fresh.find(
+      (item) => item.role === "demoted" && item.claim.trim() !== "",
+    );
+    if (demoted) return { ...base, status: "related", claim: demoted.claim };
+    return { ...base, status: "unaddressed" };
+  });
 }
 
 export function investigationHealthConflictGroups<

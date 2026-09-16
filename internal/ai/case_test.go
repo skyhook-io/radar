@@ -64,8 +64,8 @@ func TestDiagnosisFromText_CaseDropsBadItemsIndividually(t *testing.T) {
 	text := caseJSON(`"root_cause":"x","evidence":[` +
 		`{"ref":"not-a-ref","role":"cause","claim":"a"},` +
 		`{"ref":"` + ref + `","role":"verdict","claim":"a"},` +
-		`{"ref":"` + ref + `","role":"cause","claim":"` + long + `"},` +
-		`{"ref":"` + ref + `","role":"cause","claim":"a","subject":{"kind":"Pod"}},` +
+		`{"ref":"` + ref + `","role":"demoted","claim":"` + long + `"},` +
+		`{"ref":"` + ref + `","role":"cause","claim":"a","subject":{"name":"p"}},` +
 		`{"ref":"` + ref + `","role":"cause","claim":"a","subject":{"kind":"Pod","name":"p","stream":"older"}},` +
 		`{"ref":"` + ref + `","role":"context","claim":"fine"}` +
 		`],"ruled_out":[{"hypothesis":"","evidence_index":5},{"hypothesis":"h","evidence_index":-1},{"hypothesis":"h"},"not-an-object",{"hypothesis":"kept","evidence_index":5}]`)
@@ -102,7 +102,7 @@ func TestDiagnosisFromText_ParserAcceptsEveryPromptedRole(t *testing.T) {
 		EvidenceRoleRulesOut,
 	}
 	for _, role := range roles {
-		if !strings.Contains(diagnosisJSONInstruction, string(role)) {
+		if !strings.Contains(verdictContract, string(role)) {
 			t.Errorf("role %q is accepted but the prompt never offers it", role)
 		}
 		text := caseJSON(`"root_cause":"x","evidence":[` +
@@ -152,30 +152,37 @@ func TestDiagnosisFromText_CaseCapsAndMalformedArrays(t *testing.T) {
 
 // The parser must reject what it cannot understand without inventing a
 // reading of it: no truncated claims, no unknown role mapped onto a known
-// one, and an empty claim treated as the non-answer it is. Only the marker
-// wrapper is unwrapped, because that text is Radar's own, quoted back.
+// one. The story carries the argument, so a cause may come without a claim;
+// the qualifying roles may not, since a bare "benign" would satisfy the
+// banner's explained-by check while saying nothing. Only the marker wrapper
+// is unwrapped, because that text is Radar's own, quoted back.
 func TestDiagnosisFromText_CaseRejectsEmptyClaimAndUnwrapsMarkerRef(t *testing.T) {
 	ref := testEvidenceRef('a', 'b')
 	long := strings.Repeat("x", maxDiagnosisClaimChars+1)
 	d := diagnosisFromText(caseJSON(`"root_cause":"x","evidence":[` +
-		`{"ref":"` + ref + `","role":"cause","claim":""},` +
+		`{"ref":"` + ref + `","role":"benign","claim":""},` +
 		`{"ref":"` + ref + `","role":"cause","claim":"   "},` +
 		`{"ref":"[[radar:evidence-ref=` + ref + `]]","role":"cause","claim":"Pasted the whole marker."},` +
 		`{"ref":"` + ref + `","role":"cause","claim":"` + long + `"},` +
-		`{"ref":"` + ref + `","role":"verdict","claim":"An unknown role."}` +
+		`{"ref":"` + ref + `","role":"verdict","claim":"An unknown role."},` +
+		`{"ref":"` + ref + `","role":"demoted","claim":""},` +
+		`{"ref":"` + ref + `","role":"rules_out","claim":""}` +
 		`]`))
 	items := d.caseRequest.items
-	if len(items) != 5 {
-		t.Fatalf("items = %d, want 5 positions", len(items))
+	if len(items) != 7 {
+		t.Fatalf("items = %d, want 7 positions", len(items))
 	}
-	if items[0].valid || items[1].valid {
-		t.Errorf("an empty claim must be rejected: %+v %+v", items[0], items[1])
+	if items[0].valid || items[5].valid || items[6].valid {
+		t.Errorf("benign, demoted and rules_out need a reason: %+v %+v %+v", items[0], items[5], items[6])
+	}
+	if !items[1].valid || items[1].claim != "" {
+		t.Errorf("a cause without a claim is the story's to explain: %+v", items[1])
 	}
 	if !items[2].valid || items[2].ref != ref {
 		t.Errorf("a marker-wrapped ref must be unwrapped, got %+v", items[2])
 	}
-	if items[3].valid {
-		t.Errorf("an over-long claim must be dropped, not truncated: %+v", items[3])
+	if !items[3].valid || items[3].claim != "" {
+		t.Errorf("an over-long claim on a cause keeps the item and loses the note, never truncated: %+v", items[3])
 	}
 	if items[4].valid {
 		t.Errorf("an unknown role must be dropped, not mapped: %+v", items[4])

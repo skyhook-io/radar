@@ -1266,7 +1266,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     );
     projection.groups[0].latest.tone = "neutral";
     const html = render(projection);
-    expect(html).toContain("More evidence about this workload");
+    expect(html).toContain("More evidence about this resource");
     expect(html).not.toContain("with warnings or errors");
     expect(
       investigationEvidenceRevealCollection(
@@ -1748,7 +1748,7 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(receipt).toBeDefined();
 
     const html = render(projection);
-    expect(html).toContain("More evidence about this workload");
+    expect(html).toContain("More evidence about this resource");
     expect(html).toContain("No warning events");
     expect(html).not.toContain("What Radar did not find");
     expect(html).not.toContain(`${receipt!.id}-body`);

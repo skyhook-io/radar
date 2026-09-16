@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 // A view over one durable, server-side investigation run. It SUBSCRIBES to the
 // run's event stream (replay + live) and reconstructs the transcript; it does not
 // own the run's lifetime — the server does. So closing the panel or navigating
@@ -6,7 +5,6 @@ import type { ReactNode } from "react";
 import {
   investigationDisclosureSettleDelay,
   prefersReducedMotion,
-  useDisclosureReveal,
 } from "./useDisclosureReveal";
 import {
   investigationExplanation,
@@ -31,7 +29,11 @@ import {
   investigationEvidenceCoverageLimited,
   investigationEvidenceConflictsWithHealthy,
   investigationHealthConflictExplainedBy,
-  investigationLiveCaseTurnIndex,
+  investigationAssessmentTurnIndexes,
+  investigationEvidenceCoverageGaps,
+  investigationHealthSignals,
+  investigationIsAssessmentTurn,
+  investigationSettledAnswerTurnIndexes,
   investigationEndedBeforeConclusion,
   type InvestigationHistoryUnavailableState,
   investigationHistoryUnavailablePresentation,
@@ -53,7 +55,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Badge, Collapse, CollapseChevron } from "@skyhook-io/k8s-ui";
+import { Badge } from "@skyhook-io/k8s-ui";
 import {
   Send,
   AlertTriangle,
@@ -61,6 +63,7 @@ import {
   ArrowRight,
   Activity,
   CheckCircle2,
+  FileClock,
   Files,
   Loader2,
 } from "lucide-react";
@@ -69,7 +72,6 @@ import {
   addTurn,
   stopRun,
   DiagnoseError,
-  type Diagnosis,
   type DiagnoseStreamEvent,
   type RunSummary,
 } from "../../api/diagnose";
@@ -91,12 +93,7 @@ import {
   projectInvestigationEvidence,
   resolveInvestigationRootCauseEvidence,
 } from "./investigationEvidence";
-import {
-  resolveInvestigationCase,
-  investigationCaseItemsStillRendered,
-  mergeInvestigationCases,
-  type InvestigationCaseResolution,
-} from "./investigationCase";
+import { resolveInvestigationCase } from "./investigationCase";
 import {
   InvestigationEvidencePane,
   partitionInvestigationEvidence,
@@ -106,6 +103,10 @@ import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 import { formatInvestigationTarget } from "./target";
 import { parseContextName } from "../../utils/context-name";
 import type { InvestigationSourceExcerpt } from "./investigationSourceFocus";
+import { diagnosisHasStoryShape } from "./investigationStory";
+import { groupEvidenceCoverage } from "./investigationEvidencePresentation";
+
+/** Findings width from which the assessment and next steps sit beside the story. */
 
 const RECHECK_QUESTION =
   "Did the fix resolve the issue? Re-check the resource's current status and health now, and say whether it's healthy.";
@@ -887,11 +888,10 @@ export function InvestigationView({
   let lastApplyAttemptIdx = -1;
   let lastApplyOutcome: Turn["applyOutcome"];
   turns.forEach((t, i) => {
+    // A revising follow-up is an assessment turn too; its steps are the ones
+    // Findings offers.
     if (
-      t.status === "done" &&
-      !t.apply &&
-      !t.explainAssessment &&
-      (!t.question || t.verify) &&
+      investigationIsAssessmentTurn(t) &&
       (t.diagnosis?.remediation?.length ?? 0) > 0
     )
       lastRemediationIdx = i;
@@ -901,26 +901,10 @@ export function InvestigationView({
     }
   });
 
-  // Initial and explicit verification turns update the Evidence-pane assessment.
-  // Ordinary questions remain conversational answers in Activity.
-  const assessmentIndexes: number[] = [];
-  turns.forEach((t, i) => {
-    const dx = t.diagnosis;
-    const structured =
-      !!dx &&
-      (!!dx.rootCause ||
-        (dx.remediation?.length ?? 0) > 0 ||
-        dx.healthy ||
-        dx.inconclusive);
-    if (
-      t.status === "done" &&
-      !t.apply &&
-      !t.explainAssessment &&
-      (!t.question || t.verify) &&
-      structured
-    )
-      assessmentIndexes.push(i);
-  });
+  // Initial and explicit verification turns update the Findings assessment,
+  // and so does a question whose verdict revises it and is complete. Other
+  // questions remain conversational answers in Activity.
+  const assessmentIndexes = investigationAssessmentTurnIndexes(turns);
   const currentAssessmentIdx = assessmentIndexes.at(-1) ?? -1;
   const initialAssessmentIdx = assessmentIndexes[0] ?? -1;
   const hasMultipleAssessments = assessmentIndexes.length > 1;
@@ -997,101 +981,23 @@ export function InvestigationView({
         : undefined,
     [currentAssessment, currentAssessmentIdx, projection],
   );
-  // A follow-up answer that cites evidence takes over the pane's case; the
-  // assessment's own items are then listed read-only under it.
-  const liveCaseTurnIdx = investigationLiveCaseTurnIndex(
-    turns,
-    currentAssessmentIdx,
-  );
-  const liveCaseIsCurrentAssessment = liveCaseTurnIdx === currentAssessmentIdx;
-  // The qualification banner and the "Used for assessment" markers describe the
-  // assessment on screen, so they always read its own resolution. A later turn's
-  // citations only widen the selection (below): replacing the resolution would
-  // drop the assessment's qualification and push its cited evidence back into
-  // the withheld set.
+  // Findings is the newest assessment and nothing else: its own citations,
+  // its own case, its own story. Earlier assessments stay complete in
+  // Activity; answers that did not revise the assessment stay there too.
   const paneResolution = rootCauseEvidenceResolution;
-  // The live turn's own resolution stays available for the live turn's own
-  // receipt: its sources are its, not the assessment's.
-  const liveTurnResolution = useMemo(() => {
-    if (liveCaseIsCurrentAssessment) return rootCauseEvidenceResolution;
-    const diagnosis = turns[liveCaseTurnIdx]?.diagnosis;
-    return diagnosis?.rootCause
-      ? resolveInvestigationRootCauseEvidence(
-          projection,
-          diagnosis.rootCauseEvidence,
-          liveCaseTurnIdx,
-        )
-      : undefined;
-  }, [
-    liveCaseIsCurrentAssessment,
-    rootCauseEvidenceResolution,
-    turns,
-    liveCaseTurnIdx,
-    projection,
-  ]);
-  const followUpSelectedGroupIds = useMemo(() => {
-    if (liveCaseIsCurrentAssessment) return undefined;
-    if (liveTurnResolution?.status !== "linked") return undefined;
-    return liveTurnResolution.links.flatMap((link) =>
-      link.originalGroupId
-        ? [{ groupId: link.originalGroupId, source: link.source }]
-        : [],
-    );
-  }, [liveCaseIsCurrentAssessment, liveTurnResolution]);
-  // The live turn's own case, before anything is carried onto it. Its source
-  // receipt must list what IT cited, not what the merge brought along.
-  const liveTurnCase = useMemo(
-    () =>
-      liveCaseIsCurrentAssessment
-        ? investigationCase
-        : resolveInvestigationCase(
-            projection,
-            turns[liveCaseTurnIdx]?.diagnosis,
-            liveCaseTurnIdx,
-          ),
-    [
-      liveCaseIsCurrentAssessment,
-      investigationCase,
-      projection,
-      turns,
-      liveCaseTurnIdx,
-    ],
-  );
-  const paneCase = useMemo(() => {
-    const live = liveTurnCase;
-    const earlier: InvestigationCaseResolution[] = [];
-    for (let i = turns.length - 1; i >= 0; i -= 1) {
-      const diagnosis = turns[i]?.diagnosis;
-      if (i === liveCaseTurnIdx || !diagnosis) continue;
-      // Reuse the assessment's own resolution rather than resolving it a
-      // second time: same projection, same result, and it keeps the items the
-      // conflict banner reasons about the ones the merge received.
-      earlier.push(
-        i === currentAssessmentIdx && investigationCase
-          ? investigationCase
-          : resolveInvestigationCase(projection, diagnosis, i),
-      );
-    }
-    return mergeInvestigationCases(live, earlier);
-  }, [
-    liveTurnCase,
-    investigationCase,
-    currentAssessmentIdx,
-    projection,
-    turns,
-    liveCaseTurnIdx,
-  ]);
+  const storyShape = diagnosisHasStoryShape(currentAssessment?.diagnosis);
   const visibleEvidenceGroupIds = useMemo(
     () =>
       new Set(
         partitionInvestigationEvidence(
           projection.groups,
           paneResolution,
-          paneCase,
-          followUpSelectedGroupIds,
+          investigationCase,
+          undefined,
+          storyShape,
         ).collectionByGroup.keys(),
       ),
-    [projection.groups, paneResolution, paneCase, followUpSelectedGroupIds],
+    [projection.groups, paneResolution, investigationCase, storyShape],
   );
   const evidenceStepIdsByTurn = useMemo(
     () =>
@@ -1385,40 +1291,89 @@ export function InvestigationView({
     "Findings: current assessment, Radar evidence, and next steps";
   const currentAssessmentCoverageLimited = investigationEvidenceCoverageLimited(
     currentAssessmentProjection,
+    kind,
   );
+  // Reads Radar could not complete for this assessment, one line each, for
+  // the Still open block; history qualifiers stay in the record.
+  // The agent's notes per source. In the legacy shape this is Assessment
+  // details; in the story shape the notes sit on the cards, so it appears
+  // only inside Captured results and only when something has no card: a
+  // note that pins to no single observation, or a citation Radar rejected.
+  const assessmentSourcesNode =
+    currentAssessment?.diagnosis &&
+    (rootCauseEvidenceResolution?.links.length ||
+      investigationCase?.items.length ||
+      currentAssessment.diagnosis.unlinkedEvidence ||
+      currentAssessment.diagnosis.evidenceMalformed) ? (
+      <AssessmentSources
+        renderedGroupIds={visibleEvidenceGroupIds}
+        resolution={rootCauseEvidenceResolution}
+        investigationCase={investigationCase}
+        unlinkedEvidence={currentAssessment.diagnosis.unlinkedEvidence}
+        evidenceMalformed={currentAssessment.diagnosis.evidenceMalformed}
+        onViewSource={viewActivitySource}
+      />
+    ) : undefined;
+  const recordNotes =
+    storyShape &&
+    (investigationCase?.items.some((item) => item.placement === "source") ||
+      currentAssessment?.diagnosis?.unlinkedEvidence ||
+      currentAssessment?.diagnosis?.evidenceMalformed)
+      ? assessmentSourcesNode
+      : undefined;
+  const assessmentLimits = useMemo(() => {
+    const lines = groupEvidenceCoverage(currentAssessmentProjection.limitations)
+      .filter((group) => !group.historyOnly)
+      .map((group) => `${group.label}: ${group.summary}`);
+    // Two coverage gaps carry no limitation of their own; name the one that
+    // applies so the qualification survives without the old header.
+    const gaps = investigationEvidenceCoverageGaps(
+      currentAssessmentProjection,
+      kind,
+    );
+    if (gaps.noEvidence)
+      lines.push("No evidence was recorded for this assessment");
+    else if (gaps.noTargetDiagnosis)
+      lines.push(
+        "Radar's full diagnose of this workload was not collected, so this check is partial",
+      );
+    return lines;
+  }, [currentAssessmentProjection, kind]);
+  const healthSignals = useMemo(
+    () =>
+      currentAssessment?.diagnosis?.healthy
+        ? investigationHealthSignals(projection, investigationCase?.items)
+        : [],
+    [currentAssessment, projection, investigationCase],
+  );
+  // While the first assessment is still running the pane keeps the story
+  // shape, so the page fills in rather than rearranging when the verdict lands.
+  const storyShell =
+    !hosted && !currentAssessment && lastTurn?.status === "running";
   const currentAssessmentEvidenceConflict =
     currentAssessment?.diagnosis?.healthy === true &&
     investigationEvidenceConflictsWithHealthy(projection);
   // The banner qualifies THIS assessment, so only this assessment's own case
-  // may reframe it. `paneCase` also carries a later answer's items and notes
-  // inherited from superseded assessments; neither of those spoke about this
-  // verdict, and letting them soften it would let an unrelated follow-up
-  // retire a warning the reader still needs.
+  // may reframe it — and that is the only case the pane renders.
   const currentAssessmentEvidenceConflictExplainedBy = useMemo(() => {
     if (!currentAssessmentEvidenceConflict) return undefined;
-    // Two conditions, and both are required. The note must belong to THIS
-    // assessment — a later answer or a superseded assessment did not speak
-    // about this verdict. And it must survive into the case the pane actually
-    // renders: the merge lets a later turn take over a group, and a banner
-    // that points at a note the reader cannot find is worse than no banner.
-    const qualifying = investigationCaseItemsStillRendered(
-      investigationCase?.items,
-      paneCase?.items,
-    );
     return (
-      investigationHealthConflictExplainedBy(projection, qualifying) ??
-      undefined
+      investigationHealthConflictExplainedBy(
+        projection,
+        investigationCase?.items,
+      ) ?? undefined
     );
-  }, [
-    currentAssessmentEvidenceConflict,
-    projection,
-    investigationCase,
-    paneCase,
-  ]);
+  }, [currentAssessmentEvidenceConflict, projection, investigationCase]);
+  const settledAnswerTurns = useMemo(
+    () => investigationSettledAnswerTurnIndexes(turns, currentAssessmentIdx),
+    [turns, currentAssessmentIdx],
+  );
   const hasEvidenceCollectedAfterAssessment =
     currentAssessmentIdx >= 0 &&
     projection.sources.some(
-      (source) => source.turnIndex > currentAssessmentIdx,
+      (source) =>
+        source.turnIndex > currentAssessmentIdx &&
+        !settledAnswerTurns.has(source.turnIndex),
     );
   const assessmentNeedsCurrentStateVerification =
     investigationAssessmentNeedsCurrentStateVerification({
@@ -1436,7 +1391,7 @@ export function InvestigationView({
     hasEvidenceCollectedAfterAssessment;
   const showSplitWorkspace = maximized;
   const splitGridClass = showSplitWorkspace
-    ? "@min-[1000px]/investigation:grid-cols-[minmax(360px,520px)_minmax(0,1fr)]"
+    ? "@min-[1000px]/investigation:grid-cols-[minmax(320px,min(30%,520px))_minmax(0,1fr)]"
     : "";
   const splitTabClass = showSplitWorkspace
     ? "@min-[1000px]/investigation:hidden"
@@ -1589,6 +1544,50 @@ export function InvestigationView({
       )}
     </div>
   ) : null;
+
+  const nextStepsSection =
+    hasNextSteps && currentAssessment?.diagnosis ? (
+      <section
+        ref={nextStepsRef}
+        tabIndex={-1}
+        aria-labelledby={`${workspaceId}-next-steps`}
+        className="investigation-next-steps rounded-xl border p-4 outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      >
+        <h2
+          id={`${workspaceId}-next-steps`}
+          className="text-lg font-semibold text-theme-text-primary"
+        >
+          {earlierPlan ? "Earlier proposed steps" : "Next steps"}
+        </h2>
+        <ResultCard
+          diagnosis={currentAssessment.diagnosis}
+          section="actions"
+          compactActions
+          actionNotice={
+            earlierPlan
+              ? assessmentNeedsCurrentStateVerification
+                ? "Proposed before the apply attempt. Current state has not been verified."
+                : "Proposed before the latest evidence. Reassess before applying."
+              : undefined
+          }
+          onApply={
+            canOfferInvestigationApply({
+              currentAssessmentIdx,
+              lastRemediationIdx,
+              lastApplyAttemptIdx,
+              localApplyAttemptAssessmentIdx,
+              interactionsBlocked,
+              hosted,
+              hasNewerEvidence: hasEvidenceCollectedAfterAssessment,
+            })
+              ? requestApply
+              : undefined
+          }
+          animate={currentAssessment.animateResult !== false}
+          showDisclaimer={false}
+        />
+      </section>
+    ) : undefined;
 
   return (
     <div
@@ -1846,46 +1845,56 @@ export function InvestigationView({
                               ? retryDiagnosis
                               : undefined
                           }
-                          hideConclusion={assessmentIndexes.includes(index)}
+                          assessment={assessmentIndexes.includes(index)}
+                          // The current assessment is Findings; Activity
+                          // keeps a pointer to it and the full verdict of
+                          // every earlier one, so a revision never erases
+                          // what was said before.
+                          hideConclusion={index === currentAssessmentIdx}
+                          explanation={
+                            assessmentIndexes.includes(index) &&
+                            index !== currentAssessmentIdx
+                              ? explanationFor(turn)
+                              : undefined
+                          }
                           assessmentSources={(() => {
-                            // Answer turns show what they cited; the live
-                            // one also drives Findings, earlier ones are
-                            // read-only.
+                            // Every turn with a case shows what it cited;
+                            // only the current assessment's notes annotate
+                            // Findings, the rest are read-only here.
                             if (
-                              !turn.question ||
-                              turn.verify ||
                               turn.apply ||
                               turn.status !== "done" ||
-                              !turn.diagnosis
+                              !turn.diagnosis ||
+                              index === currentAssessmentIdx
                             )
                               return undefined;
-                            const answerCase =
-                              index === liveCaseTurnIdx
-                                ? liveTurnCase
-                                : resolveInvestigationCase(
-                                    projection,
-                                    turn.diagnosis,
-                                    index,
-                                  );
-                            const answerResolution =
-                              index === liveCaseTurnIdx
-                                ? liveTurnResolution
-                                : undefined;
-                            return answerCase?.items.length ||
-                              answerResolution?.links.length ||
-                              turn.diagnosis?.unlinkedEvidence ||
-                              turn.diagnosis?.evidenceMalformed ? (
+                            const turnCase = resolveInvestigationCase(
+                              projection,
+                              turn.diagnosis,
+                              index,
+                            );
+                            const turnResolution = turn.diagnosis.rootCause
+                              ? resolveInvestigationRootCauseEvidence(
+                                  projection,
+                                  turn.diagnosis.rootCauseEvidence,
+                                  index,
+                                )
+                              : undefined;
+                            return turnCase.items.length ||
+                              turnResolution?.links.length ||
+                              turn.diagnosis.unlinkedEvidence ||
+                              turn.diagnosis.evidenceMalformed ? (
                               <AssessmentSources
                                 renderedGroupIds={visibleEvidenceGroupIds}
-                                resolution={answerResolution}
-                                investigationCase={answerCase}
+                                resolution={turnResolution}
+                                investigationCase={turnCase}
                                 unlinkedEvidence={
-                                  turn.diagnosis?.unlinkedEvidence
+                                  turn.diagnosis.unlinkedEvidence
                                 }
                                 evidenceMalformed={
-                                  turn.diagnosis?.evidenceMalformed
+                                  turn.diagnosis.evidenceMalformed
                                 }
-                                readOnly={index !== liveCaseTurnIdx}
+                                readOnly
                                 onViewSource={viewActivitySource}
                               />
                             ) : undefined;
@@ -2042,7 +2051,7 @@ export function InvestigationView({
             }}
             className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-3 py-3 [overflow-anchor:none] [scrollbar-gutter:stable]"
           >
-            <div ref={evidenceContentRef} className="min-w-0 space-y-6">
+            <div ref={evidenceContentRef} className="min-w-0 space-y-4">
               {rebuildingReplay ? (
                 <div className="flex min-h-28 flex-col items-center justify-center rounded-lg border border-dashed border-theme-border px-4 text-center">
                   {historyUnavailablePresentation &&
@@ -2067,221 +2076,199 @@ export function InvestigationView({
                   </p>
                 </div>
               ) : (
-                <>
-                  <section
-                    aria-labelledby={`${workspaceId}-assessment-heading`}
-                    className="investigation-assessment rounded-xl border p-4"
-                  >
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <h2
-                        id={`${workspaceId}-assessment-heading`}
-                        className="text-lg font-semibold text-theme-text-primary"
-                      >
-                        {assessmentNeedsCurrentStateVerification
-                          ? "Assessment before apply"
-                          : hasEvidenceCollectedAfterAssessment
-                            ? "Earlier assessment"
-                            : !currentAssessment
-                              ? "Assessment"
-                              : currentAssessment.verify
-                                ? "Verification result"
-                                : currentAssessmentIdx ===
-                                      initialAssessmentIdx &&
-                                    hasMultipleAssessments
-                                  ? "Initial assessment"
-                                  : "Assessment"}
-                      </h2>
-                      {assessmentNeedsCurrentStateVerification ? (
-                        <Badge severity="warning" size="sm">
-                          Current state unverified
-                        </Badge>
-                      ) : null}
-                      {hasEvidenceCollectedAfterAssessment &&
-                      !assessmentNeedsCurrentStateVerification ? (
-                        <Badge severity="info" size="sm">
-                          Newer evidence below
-                        </Badge>
-                      ) : null}
-                      {verificationRunning || verificationPending ? (
-                        <Badge severity="info" size="sm">
-                          Verifying…
-                        </Badge>
-                      ) : null}
-                    </div>
-                    {assessmentNeedsCurrentStateVerification ? (
-                      <p className="mt-0.5 text-xs text-theme-text-tertiary">
-                        {verificationRunning || verificationPending
-                          ? "This assessment predates the apply attempt. Radar is checking the current state now."
-                          : "This assessment predates the apply attempt; cluster state after it has not been verified."}
-                      </p>
-                    ) : hasEvidenceCollectedAfterAssessment ? (
-                      <p className="mt-0.5 text-xs text-theme-text-tertiary">
-                        Some evidence below was collected after this assessment.
-                        Validate the conclusion against it before acting.
-                      </p>
-                    ) : null}
-                    {currentAssessment?.diagnosis ? (
-                      <ResultCard
-                        key={
-                          currentAssessment.resultSequence ??
-                          currentAssessmentIdx
-                        }
-                        diagnosis={currentAssessment.diagnosis}
-                        assessmentSources={
-                          // An assessment whose every note was rejected has no
-                          // items and no links, and the loss is the only thing
-                          // there is to say about it.
-                          rootCauseEvidenceResolution?.links.length ||
-                          investigationCase?.items.length ||
-                          currentAssessment.diagnosis.unlinkedEvidence ||
-                          currentAssessment.diagnosis.evidenceMalformed ? (
-                            <AssessmentSources
-                              renderedGroupIds={visibleEvidenceGroupIds}
-                              resolution={rootCauseEvidenceResolution}
-                              investigationCase={investigationCase}
-                              unlinkedEvidence={
-                                currentAssessment.diagnosis?.unlinkedEvidence
-                              }
-                              evidenceMalformed={
-                                currentAssessment.diagnosis?.evidenceMalformed
-                              }
-                              readOnly={!liveCaseIsCurrentAssessment}
-                              onViewSource={viewActivitySource}
-                            />
-                          ) : undefined
-                        }
-                        assessmentAction={
-                          hasNextSteps ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const section = nextStepsRef.current;
-                                const scroller = evidenceScrollRef.current;
-                                if (!section || !scroller) return;
-                                section.focus({ preventScroll: true });
-                                scroller.scrollTo({
-                                  top:
-                                    scroller.scrollTop +
-                                    section.getBoundingClientRect().top -
-                                    scroller.getBoundingClientRect().top -
-                                    12,
-                                  behavior: prefersReducedMotion()
-                                    ? "auto"
-                                    : "smooth",
-                                });
-                              }}
-                              className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
-                            >
-                              {earlierPlan
-                                ? "Earlier proposed steps ↓"
-                                : "Next steps ↓"}
-                            </button>
-                          ) : null
-                        }
-                        explanation={explanationFor(currentAssessment)}
-                        section="conclusion"
-                        animate={currentAssessment.animateResult !== false}
-                        showDisclaimer={false}
-                        coverageLimited={currentAssessmentCoverageLimited}
-                        evidenceConflict={currentAssessmentEvidenceConflict}
-                        evidenceConflictExplainedBy={
-                          currentAssessmentEvidenceConflictExplainedBy
-                        }
-                      />
-                    ) : (
-                      <div className="mt-2 flex items-center gap-2 rounded-md bg-theme-surface/60 px-2.5 py-2 text-xs text-theme-text-tertiary">
-                        {busy || requestPending ? (
-                          <span
-                            className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent"
-                            aria-hidden
-                          />
-                        ) : (
-                          <Activity
-                            className="h-3.5 w-3.5 shrink-0"
-                            aria-hidden
-                          />
-                        )}
-                        <span>
-                          {busy || requestPending
-                            ? "Forming an assessment as evidence arrives…"
-                            : "The agent did not provide a final assessment."}
-                        </span>
-                      </div>
-                    )}
-                    {displayedStatusCheckError ? (
-                      <div className="mt-2 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-theme-text-secondary">
-                        <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-400" />
-                        <span className="min-w-0 flex-1">
-                          {applyOutcomeUncertain && !displayedVerificationError
-                            ? displayedStatusCheckError
-                            : `Verification did not complete: ${displayedStatusCheckError}`}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={checkStatus}
-                          disabled={interactionsBlocked}
-                          className="shrink-0 rounded-md border border-theme-border px-2 py-1 font-medium text-theme-text-primary hover:bg-theme-hover disabled:opacity-50"
+                <div className="space-y-4">
+                  {/* One column, one reading order: assessment, analysis, next
+                      steps. The page already holds four columns; Findings is
+                      not a fifth, and it fills the pane it is given. */}
+                  <div className="space-y-3">
+                    <section
+                      aria-labelledby={`${workspaceId}-assessment-heading`}
+                      className="investigation-assessment rounded-xl border p-3"
+                    >
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <h2
+                          id={`${workspaceId}-assessment-heading`}
+                          className="text-lg font-semibold text-theme-text-primary"
                         >
-                          {applyOutcomeUncertain && !displayedVerificationError
-                            ? "Check current status"
-                            : "Check current status again"}
-                        </button>
+                          {assessmentNeedsCurrentStateVerification
+                            ? "Assessment before apply"
+                            : hasEvidenceCollectedAfterAssessment
+                              ? "Earlier assessment"
+                              : !currentAssessment
+                                ? "Assessment"
+                                : currentAssessment.verify
+                                  ? "Verification result"
+                                  : currentAssessmentIdx ===
+                                        initialAssessmentIdx &&
+                                      hasMultipleAssessments
+                                    ? "Initial assessment"
+                                    : "Assessment"}
+                        </h2>
+                        {assessmentNeedsCurrentStateVerification ? (
+                          <Badge severity="warning" size="sm">
+                            Current state unverified
+                          </Badge>
+                        ) : null}
+                        {hasEvidenceCollectedAfterAssessment &&
+                        !assessmentNeedsCurrentStateVerification ? (
+                          <Badge severity="info" size="sm">
+                            Newer evidence below
+                          </Badge>
+                        ) : null}
+                        {verificationRunning || verificationPending ? (
+                          <Badge severity="info" size="sm">
+                            Verifying…
+                          </Badge>
+                        ) : null}
                       </div>
-                    ) : null}
-                  </section>
-
-                  <AssessmentHistory
-                    assessments={assessmentIndexes
-                      .filter(
-                        (index) =>
-                          index !== currentAssessmentIdx &&
-                          (index === initialAssessmentIdx ||
-                            (turns[index].diagnosis?.remediation?.length ?? 0) >
-                              0 ||
-                            turns.some(
-                              (turn) =>
-                                turn.explainAssessment ===
-                                turns[index].resultSequence,
-                            )),
-                      )
-                      .map((index) => ({
-                        sequence: turns[index].resultSequence ?? index,
-                        initial: index === initialAssessmentIdx,
-                        diagnosis: turns[index].diagnosis!,
-                        explanation: explanationFor(turns[index]),
-                        sources: (() => {
-                          // Each earlier assessment owns its own items; they
-                          // render read-only here and never annotate cards.
-                          const resolution =
-                            resolveInvestigationRootCauseEvidence(
-                              projection,
-                              turns[index].diagnosis!.rootCauseEvidence,
-                              index,
-                            );
-                          const earlierCase = resolveInvestigationCase(
-                            projection,
-                            turns[index].diagnosis,
-                            index,
-                          );
-                          return resolution.links.length ||
-                            earlierCase.items.length ? (
-                            <AssessmentSources
-                              renderedGroupIds={visibleEvidenceGroupIds}
-                              resolution={resolution}
-                              investigationCase={earlierCase}
-                              readOnly
-                              onViewSource={viewActivitySource}
+                      {assessmentNeedsCurrentStateVerification ? (
+                        <p className="mt-0.5 text-xs text-theme-text-tertiary">
+                          {verificationRunning || verificationPending
+                            ? "This assessment predates the apply attempt. Radar is checking the current state now."
+                            : "This assessment predates the apply attempt; cluster state after it has not been verified."}
+                        </p>
+                      ) : hasEvidenceCollectedAfterAssessment ? (
+                        <p className="mt-0.5 text-xs text-theme-text-tertiary">
+                          Some evidence below was collected after this
+                          assessment. Validate the conclusion against it before
+                          acting.
+                        </p>
+                      ) : null}
+                      {currentAssessment?.diagnosis ? (
+                        <ResultCard
+                          key={
+                            currentAssessment.resultSequence ??
+                            currentAssessmentIdx
+                          }
+                          diagnosis={currentAssessment.diagnosis}
+                          assessmentLimits={
+                            storyShape ? assessmentLimits : undefined
+                          }
+                          healthSignals={storyShape ? healthSignals : undefined}
+                          onRevealSource={viewEvidenceSource}
+                          assessmentSources={
+                            storyShape ? undefined : assessmentSourcesNode
+                          }
+                          assessmentAction={
+                            hasNextSteps ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const section = nextStepsRef.current;
+                                  const scroller = evidenceScrollRef.current;
+                                  if (!section || !scroller) return;
+                                  section.focus({ preventScroll: true });
+                                  scroller.scrollTo({
+                                    top:
+                                      scroller.scrollTop +
+                                      section.getBoundingClientRect().top -
+                                      scroller.getBoundingClientRect().top -
+                                      12,
+                                    behavior: prefersReducedMotion()
+                                      ? "auto"
+                                      : "smooth",
+                                  });
+                                }}
+                                className="ml-auto rounded-md px-2 py-1 text-xs font-medium text-accent-text hover:bg-theme-hover"
+                              >
+                                {earlierPlan
+                                  ? "Earlier proposed steps ↓"
+                                  : "Next steps ↓"}
+                              </button>
+                            ) : null
+                          }
+                          explanation={explanationFor(currentAssessment)}
+                          section="conclusion"
+                          animate={currentAssessment.animateResult !== false}
+                          showDisclaimer={false}
+                          revisedAfter={
+                            currentAssessment.question &&
+                            !currentAssessment.verify &&
+                            hasMultipleAssessments
+                              ? currentAssessment.question
+                              : undefined
+                          }
+                          coverageLimited={currentAssessmentCoverageLimited}
+                          evidenceConflict={currentAssessmentEvidenceConflict}
+                          evidenceConflictExplainedBy={
+                            currentAssessmentEvidenceConflictExplainedBy
+                          }
+                        />
+                      ) : (
+                        <div className="mt-2 flex items-center gap-2 rounded-md bg-theme-surface/60 px-2.5 py-2 text-xs text-theme-text-tertiary">
+                          {busy || requestPending ? (
+                            <span
+                              className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent"
+                              aria-hidden
                             />
-                          ) : undefined;
-                        })(),
-                      }))}
-                  />
+                          ) : (
+                            <Activity
+                              className="h-3.5 w-3.5 shrink-0"
+                              aria-hidden
+                            />
+                          )}
+                          <span>
+                            {busy || requestPending
+                              ? "Forming an assessment as evidence arrives…"
+                              : "The agent did not provide a final assessment."}
+                          </span>
+                        </div>
+                      )}
+                      {displayedStatusCheckError ? (
+                        <div className="mt-2 flex items-center gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-theme-text-secondary">
+                          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-400" />
+                          <span className="min-w-0 flex-1">
+                            {applyOutcomeUncertain &&
+                            !displayedVerificationError
+                              ? displayedStatusCheckError
+                              : `Verification did not complete: ${displayedStatusCheckError}`}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={checkStatus}
+                            disabled={interactionsBlocked}
+                            className="shrink-0 rounded-md border border-theme-border px-2 py-1 font-medium text-theme-text-primary hover:bg-theme-hover disabled:opacity-50"
+                          >
+                            {applyOutcomeUncertain &&
+                            !displayedVerificationError
+                              ? "Check current status"
+                              : "Check current status again"}
+                          </button>
+                        </div>
+                      ) : null}
+                    </section>
+
+                    {hasMultipleAssessments ? (
+                      <button
+                        type="button"
+                        data-investigation-earlier-assessments
+                        onClick={viewActivity}
+                        className="flex items-center gap-1.5 self-start rounded-md px-1.5 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+                      >
+                        <FileClock className="h-3.5 w-3.5" aria-hidden />
+                        {assessmentIndexes.length - 1 === 1
+                          ? "1 earlier assessment"
+                          : `${assessmentIndexes.length - 1} earlier assessments`}
+                        <span className="text-theme-text-tertiary">
+                          · in Activity
+                        </span>
+                      </button>
+                    ) : null}
+                  </div>
 
                   <InvestigationEvidencePane
                     projection={projection}
                     rootCauseEvidence={paneResolution}
-                    alsoSelectedGroupIds={followUpSelectedGroupIds}
-                    investigationCase={paneCase}
+                    investigationCase={investigationCase}
+                    story={
+                      storyShape && currentAssessment?.diagnosis
+                        ? {
+                            report: currentAssessment.diagnosis.report,
+                            evidence: currentAssessment.diagnosis.evidence,
+                          }
+                        : undefined
+                    }
+                    storyShell={storyShell}
                     collecting={
                       explanationRequest?.status !== "running" &&
                       (requestPending ||
@@ -2298,55 +2285,10 @@ export function InvestigationView({
                     onOpenTimeline={stale ? undefined : onOpenTimeline}
                     revealRequest={evidenceRevealRequest}
                     onRevealReady={revealEvidenceSource}
-                    afterEvidence={
-                      hasNextSteps && currentAssessment?.diagnosis ? (
-                        <section
-                          ref={nextStepsRef}
-                          tabIndex={-1}
-                          aria-labelledby={`${workspaceId}-next-steps`}
-                          className="investigation-next-steps rounded-xl border p-4 outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
-                        >
-                          <h2
-                            id={`${workspaceId}-next-steps`}
-                            className="text-lg font-semibold text-theme-text-primary"
-                          >
-                            {earlierPlan
-                              ? "Earlier proposed steps"
-                              : "Next steps"}
-                          </h2>
-                          <ResultCard
-                            diagnosis={currentAssessment.diagnosis}
-                            section="actions"
-                            compactActions
-                            actionNotice={
-                              earlierPlan
-                                ? assessmentNeedsCurrentStateVerification
-                                  ? "Proposed before the apply attempt. Current state has not been verified."
-                                  : "Proposed before the latest evidence. Reassess before applying."
-                                : undefined
-                            }
-                            onApply={
-                              canOfferInvestigationApply({
-                                currentAssessmentIdx,
-                                lastRemediationIdx,
-                                lastApplyAttemptIdx,
-                                localApplyAttemptAssessmentIdx,
-                                interactionsBlocked,
-                                hosted,
-                                hasNewerEvidence:
-                                  hasEvidenceCollectedAfterAssessment,
-                              })
-                                ? requestApply
-                                : undefined
-                            }
-                            animate={currentAssessment.animateResult !== false}
-                            showDisclaimer={false}
-                          />
-                        </section>
-                      ) : undefined
-                    }
+                    afterEvidence={nextStepsSection}
+                    recordNotes={recordNotes}
                   />
-                </>
+                </div>
               )}
             </div>
           </div>
@@ -2361,105 +2303,17 @@ export function InvestigationView({
         resourceLabel={formatInvestigationTarget(run)}
         context={run.context}
         fix={pendingFix}
+        reason={currentAssessment?.diagnosis?.recommendedReason}
+        precondition={
+          currentAssessment?.diagnosis?.recommendedIndex
+            ? currentAssessment.diagnosis.steps?.[
+                currentAssessment.diagnosis.recommendedIndex - 1
+              ]?.precondition
+            : undefined
+        }
         managedBy={run.managedBy}
         confidence={turns[lastRemediationIdx]?.diagnosis?.confidence}
       />
-    </div>
-  );
-}
-
-function AssessmentHistory({
-  assessments,
-}: {
-  assessments: {
-    sequence: number;
-    diagnosis: Diagnosis;
-    explanation?: AssessmentExplanation;
-    initial: boolean;
-    sources?: ReactNode;
-  }[];
-}) {
-  const reveal = useDisclosureReveal<HTMLDivElement>();
-  const { revealAfterToggle } = reveal;
-  const [open, setOpen] = useState(false);
-  const regionId = useId();
-  const openRequest = assessments.find((item) => item.explanation?.openRequest)
-    ?.explanation?.openRequest;
-  useEffect(() => {
-    if (openRequest) {
-      setOpen(true);
-      revealAfterToggle(true);
-    }
-  }, [openRequest, revealAfterToggle]);
-  if (assessments.length === 0) return null;
-  return (
-    <div data-investigation-assessment-history className="overflow-hidden">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={regionId}
-        onClick={() => {
-          setOpen(!open);
-          reveal.revealAfterToggle(!open);
-        }}
-        className="flex items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-secondary"
-      >
-        <CollapseChevron open={open} className="h-3.5 w-3.5" />
-        <span className="font-medium">
-          Previous assessments · {assessments.length}
-        </span>
-      </button>
-      <div id={regionId} ref={reveal.elementRef}>
-        <Collapse open={open}>
-          <div className="mt-2 space-y-4 border-l border-theme-border pl-3 pb-2">
-            {assessments.map(
-              (
-                { sequence, diagnosis, explanation, initial, sources },
-                index,
-              ) => (
-                <section
-                  key={sequence}
-                  aria-label={
-                    initial
-                      ? "Initial assessment"
-                      : `Earlier assessment ${index + 1}`
-                  }
-                >
-                  <h3 className="text-sm font-medium text-theme-text-secondary">
-                    {initial
-                      ? "Initial assessment"
-                      : `Earlier assessment ${index + 1}`}
-                  </h3>
-                  <ResultCard
-                    diagnosis={diagnosis}
-                    explanation={explanation}
-                    assessmentSources={sources}
-                    section="conclusion"
-                    showDisclaimer={false}
-                  />
-                  {(diagnosis.remediation?.length ?? 0) > 0 && (
-                    <section
-                      aria-label="Earlier proposed steps"
-                      className="mt-3 border-t border-theme-border/60 pt-3"
-                    >
-                      <h3 className="text-sm font-medium text-theme-text-primary">
-                        Earlier proposed steps
-                      </h3>
-                      <ResultCard
-                        diagnosis={diagnosis}
-                        section="actions"
-                        compactActions
-                        actionNotice="From an earlier assessment, not the current recommendation."
-                        showDisclaimer={false}
-                      />
-                    </section>
-                  )}
-                </section>
-              ),
-            )}
-          </div>
-        </Collapse>
-      </div>
     </div>
   );
 }
