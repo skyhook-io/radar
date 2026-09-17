@@ -280,3 +280,26 @@ func TestCanonicalStoryMarkers_RespectsCodeSpansAndFences(t *testing.T) {
 		t.Fatalf("expected the two quoted markers to stay, got %q", out)
 	}
 }
+
+func TestCanonicalStoryMarkers_SpansAcrossLinesAndQuotedBlocks(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
+	items := []caseItemRequest{{ref: ref, valid: true}}
+	marker := "[[radar:evidence-ref=" + ref + "]]"
+	in := strings.Join([]string{
+		"Quoted `example",
+		marker,
+		"end` here.",
+		"",
+		"> " + marker,
+		"    " + marker,
+		"     ```",
+		marker,
+	}, "\n")
+	out := canonicalStoryMarkers(in, items)
+	if strings.Count(out, "[[radar:evidence=0]]") != 1 {
+		t.Fatalf("expected only the marker after the indented non-fence to be rewritten, got %q", out)
+	}
+	if !strings.HasSuffix(out, "\n[[radar:evidence=0]]") {
+		t.Fatalf("expected the last line rewritten, got %q", out)
+	}
+}

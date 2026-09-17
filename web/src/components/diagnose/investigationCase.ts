@@ -369,6 +369,13 @@ function observationIdentities(
   return identities;
 }
 
+// Pod names are DNS labels, so a name is a whole word between characters
+// that cannot be part of one; "api" inside "api-other" names another Pod.
+function namesPod(text: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^A-Za-z0-9.-])${escaped}(?![A-Za-z0-9.-])`).test(text);
+}
+
 function identityMatchesSubject(
   identity: ObservationSubjectIdentity,
   observation: InvestigationEvidenceObservation,
@@ -397,12 +404,12 @@ function identityMatchesSubject(
     (identity.namespace === undefined ||
       subject.namespace === undefined ||
       identity.namespace === subject.namespace) &&
-    // The Pod has to be the workload's own, or named by the events: a Pod
-    // nothing here establishes is not this card.
+    // The Pod has to be the target's own on events the target's read produced,
+    // or named whole by an event: a Pod nothing here establishes is not this card.
     (subject.name === undefined ||
-      targetPods.has(subject.name) ||
+      (targetPods.has(subject.name) && observation.relevance !== "broader") ||
       observation.data.events.some((event) =>
-        event.message.includes(subject.name!),
+        namesPod(event.message, subject.name!),
       ))
   )
     return true;

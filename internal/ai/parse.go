@@ -470,13 +470,19 @@ func canonicalStoryMarkers(report string, items []caseItemRequest) string {
 	// renderer keeps them literal, so the parser must not rewrite them either.
 	// A fence closes on a bare run of the same character at least as long as
 	// it opened with; a code span closes on a backtick run of the same length.
+	// The grammar is the tokenizer's (investigationStory.ts): a fence indents
+	// at most three spaces, a blockquote or indented code line is quoted text,
+	// and a code span may run across lines until the paragraph ends.
 	lines := strings.Split(report, "\n")
 	fenceChar, fenceLen := byte(0), 0
+	openRun := 0
 	for n, line := range lines {
 		trimmed := strings.TrimLeft(line, " ")
-		if run := leadingRun(trimmed); run >= 3 && (trimmed[0] == '`' || trimmed[0] == '~') {
+		indent := len(line) - len(trimmed)
+		if run := leadingRun(trimmed); indent <= 3 && run >= 3 && (trimmed[0] == '`' || trimmed[0] == '~') {
 			if fenceLen == 0 {
 				fenceChar, fenceLen = trimmed[0], run
+				openRun = 0
 				continue
 			}
 			if trimmed[0] == fenceChar && run >= fenceLen && strings.TrimSpace(trimmed[run:]) == "" {
@@ -487,10 +493,19 @@ func canonicalStoryMarkers(report string, items []caseItemRequest) string {
 		if fenceLen > 0 {
 			continue
 		}
-		lines[n] = rewriteOutsideCodeSpans(line, rewrite)
+		if strings.TrimSpace(line) == "" {
+			openRun = 0
+			continue
+		}
+		if quotedLineRe.MatchString(line) {
+			continue
+		}
+		lines[n], openRun = rewriteOutsideCodeSpans(line, openRun, rewrite)
 	}
 	return strings.Join(lines, "\n")
 }
+
+var quotedLineRe = regexp.MustCompile(`^( {0,3}>| {4,}|\t)`)
 
 func leadingRun(text string) int {
 	n := 0
@@ -502,9 +517,9 @@ func leadingRun(text string) int {
 
 var backtickRunRe = regexp.MustCompile("`+")
 
-func rewriteOutsideCodeSpans(line string, rewrite func(string) string) string {
+func rewriteOutsideCodeSpans(line string, openRun int, rewrite func(string) string) (string, int) {
 	var out strings.Builder
-	openRun, cursor := 0, 0
+	cursor := 0
 	for _, loc := range backtickRunRe.FindAllStringIndex(line, -1) {
 		segment := line[cursor:loc[0]]
 		if openRun == 0 {
@@ -525,7 +540,7 @@ func rewriteOutsideCodeSpans(line string, rewrite func(string) string) string {
 		tail = rewrite(tail)
 	}
 	out.WriteString(tail)
-	return out.String()
+	return out.String(), openRun
 }
 
 func stripStoryMarkers(text string) string {

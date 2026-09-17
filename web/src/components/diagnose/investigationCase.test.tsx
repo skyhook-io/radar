@@ -190,10 +190,15 @@ describe("agent case placement (D-1, D-1b)", () => {
     const listRef = evidenceRef("c", "d");
     const withListing = project(
       tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
-      tool("cms", "list_resources", [{ kind: "ConfigMap", name: "kube-root-ca.crt" }], {
-        evidenceRef: listRef,
-        summary: JSON.stringify({ kind: "configmaps", namespace: "shop" }),
-      }),
+      tool(
+        "cms",
+        "list_resources",
+        [{ kind: "ConfigMap", name: "kube-root-ca.crt" }],
+        {
+          evidenceRef: listRef,
+          summary: JSON.stringify({ kind: "configmaps", namespace: "shop" }),
+        },
+      ),
     );
     const resolved = resolveInvestigationCase(
       withListing,
@@ -234,6 +239,65 @@ describe("agent case placement (D-1, D-1b)", () => {
       "card",
       "card",
       "card",
+    ]);
+  });
+
+  it("binds a Pod subject to events only for the target's own pod or a pod an event names whole", () => {
+    const workerRef = evidenceRef("e", "f");
+    const canaryBundle = {
+      ...diagnoseBundle,
+      events: [
+        {
+          reason: "BackOff",
+          message: "Back-off restarting failed container in pod api-abc-canary",
+          type: "Warning",
+          count: 4,
+          lastTimestamp: "2026-09-02T10:00:00Z",
+        },
+      ],
+    };
+    const withWorker = project(
+      tool("diag", "diagnose", canaryBundle, { evidenceRef: ref }),
+      tool(
+        "ev",
+        "get_events",
+        { events: [] },
+        {
+          evidenceRef: workerRef,
+          summary: JSON.stringify({
+            kind: "Deployment",
+            namespace: "shop",
+            name: "worker",
+          }),
+        },
+      ),
+    );
+    const podEvents = (name: string, cite = ref) =>
+      linked(cite, "symptom", `${name} keeps backing off.`, {
+        kind: "Pod",
+        namespace: "shop",
+        name,
+        observation: "events",
+      });
+    const resolved = resolveInvestigationCase(
+      withWorker,
+      {
+        evidence: [
+          podEvents("api-abc"),
+          podEvents("api-abc-canary"),
+          podEvents("abc-canary"),
+          podEvents("api-zzz"),
+          podEvents("api-abc", workerRef),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items.map((item) => item.placement)).toEqual([
+      "card",
+      "card",
+      "source",
+      "source",
+      "source",
     ]);
   });
 

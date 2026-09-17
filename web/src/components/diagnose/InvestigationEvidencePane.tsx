@@ -1588,7 +1588,10 @@ function EvidenceCard({
   /** Fill both columns when this card has no compact row partner. */
   spanFullRow?: boolean;
   prominence?: "primary" | "supporting" | "secondary";
-  /** Header and summary only; the collapsed story preview must never slice a card. */
+  /**
+   * Header and summary only, so the collapsed story preview never slices a
+   * card. A story log card keeps its cited lines: they are the card.
+   */
   compact?: boolean;
   /** This card also appears inside the story above. */
   placedInStory?: boolean;
@@ -1916,7 +1919,7 @@ function EvidenceCard({
               ))}
             </div>
           ) : null}
-          {storyLogHead.length > 0 && !compact ? (
+          {storyLogHead.length > 0 ? (
             <div
               data-story-log-lines
               className={

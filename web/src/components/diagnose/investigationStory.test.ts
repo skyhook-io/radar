@@ -93,6 +93,20 @@ describe("splitStory", () => {
     );
   });
 
+  it("keeps a marker literal inside a code span that runs across lines", () => {
+    const split = splitStory(
+      "Quoted `example\n[[radar:evidence=0]]\nend` here.\n\n[[radar:evidence=0]]",
+    );
+    expect(split.segments.map((segment) => segment.kind)).toEqual([
+      "prose",
+      "placement",
+    ]);
+    expect(split.inlineRefs).toEqual([]);
+    expect((split.segments[0] as { markdown: string }).markdown).toContain(
+      "[[radar:evidence=0]]\nend`",
+    );
+  });
+
   it("reads the compact variant as a placement flag", () => {
     const { segments } = splitStory(
       "A.\n[[radar:evidence=2|compact]]\nB [[radar:evidence=2|compact]].",

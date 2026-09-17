@@ -89,14 +89,16 @@ function codeSpanAfter(text: string, openRun: number): number {
   return openRun;
 }
 
+// A code span may run across lines within one paragraph, so the open run
+// travels from line to line and a blank line ends it with the paragraph.
 function rewriteInlineMarkers(
   line: string,
   inlineRefs: number[],
   resolveRef: StoryRefResolver | undefined,
-): string {
+  openRun: number,
+): { text: string; openRun: number } {
   let out = "";
   let cursor = 0;
-  let openRun = 0;
   STORY_PLACEMENT_RE.lastIndex = 0;
   for (const match of line.matchAll(STORY_PLACEMENT_RE)) {
     const start = match.index ?? 0;
@@ -112,7 +114,8 @@ function rewriteInlineMarkers(
     }
     cursor = start + match[0].length;
   }
-  return out + line.slice(cursor);
+  const tail = line.slice(cursor);
+  return { text: out + tail, openRun: codeSpanAfter(tail, openRun) };
 }
 
 export function splitStory(
@@ -123,7 +126,9 @@ export function splitStory(
   const inlineRefs: number[] = [];
   const prose: string[] = [];
   let fence: string | undefined;
+  let openRun = 0;
   const flush = () => {
+    openRun = 0;
     // Trim blank lines, not indentation: a segment that opens with indented
     // code must keep its four spaces to stay code.
     const markdown = prose.join("\n").replace(/^\n+/, "").trimEnd();
@@ -149,7 +154,7 @@ export function splitStory(
       prose.push(line);
       continue;
     }
-    const block = BLOCK_PLACEMENT_RE.exec(line);
+    const block = openRun === 0 ? BLOCK_PLACEMENT_RE.exec(line) : null;
     if (block) {
       flush();
       segments.push({
@@ -173,7 +178,14 @@ export function splitStory(
       flush();
       continue;
     }
-    prose.push(rewriteInlineMarkers(line, inlineRefs, resolveRef));
+    const rewritten = rewriteInlineMarkers(
+      line,
+      inlineRefs,
+      resolveRef,
+      openRun,
+    );
+    openRun = rewritten.openRun;
+    prose.push(rewritten.text);
   }
   flush();
   return { segments, inlineRefs };
