@@ -793,7 +793,11 @@ export function adaptDiscoverMetrics(
       tier: evidenceTierForRelevance("checked", "broader"),
       relevance: "broader",
       tone: "neutral",
-      title: label ? `Values of ${label}` : "Metric names",
+      title: label
+        ? `Values of ${label}`
+        : match
+          ? `Metric names matching ${match}`
+          : "Metric names",
       summary: `${value.count} ${label ? "values" : "metrics"} · last hour${value.truncated === true ? " · truncated" : ""}`,
       data: {
         type: "receipt",

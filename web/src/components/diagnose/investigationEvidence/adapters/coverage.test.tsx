@@ -439,7 +439,7 @@ describe("metric discovery receipt", () => {
       ),
     ]);
     const [group] = groupsOf(projection.groups, "receipt");
-    expect(group.latest.title).toBe("Metric names");
+    expect(group.latest.title).toBe('Metric names matching {namespace="shop"}');
     expect(group.latest.summary).toBe("42 metrics · last hour");
   });
 });
