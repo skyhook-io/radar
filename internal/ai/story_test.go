@@ -77,6 +77,20 @@ func TestClampSummary_DoesNotCutAtADecimalPoint(t *testing.T) {
 	}
 }
 
+func TestDiagnosisFromText_StoryJSONFenceIsNotTheVerdict(t *testing.T) {
+	text := "ledger line\n\n```json\n{\"summary\": \"The replica count is wrong.\", \"root_cause\": \"spec.replicas is 0.\"}\n```\n\nSet it back:\n\n```json\n{\"spec\": {\"replicas\": 2}}\n```\n"
+	d := diagnosisFromText(text)
+	if d.Summary != "The replica count is wrong." || d.RootCause != "spec.replicas is 0." {
+		t.Fatalf("expected the verdict block to win over the quoted patch, got summary %q root cause %q", d.Summary, d.RootCause)
+	}
+	if !strings.Contains(d.Report, "\"replicas\": 2") || !strings.HasPrefix(d.Report, "Set it back:") {
+		t.Fatalf("expected the story to keep the quoted patch, got %q", d.Report)
+	}
+	if d.Notes != "ledger line" {
+		t.Fatalf("expected the ledger before the verdict, got %q", d.Notes)
+	}
+}
+
 func TestClampSummary_CutsAtAWordWhenNoSentenceEnds(t *testing.T) {
 	got := clampSummary(strings.Repeat("word ", 40)+"tail", 180)
 	if !strings.HasSuffix(got, "…") {

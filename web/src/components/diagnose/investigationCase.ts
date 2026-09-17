@@ -311,7 +311,7 @@ function isBuiltInGroup(group: string): boolean {
   return LEGACY_BUILT_IN_GROUPS.has(group) || group.endsWith(".k8s.io");
 }
 
-function sameKind(left: string, right: string): boolean {
+export function sameKind(left: string, right: string): boolean {
   return pluralToKind(left).toLowerCase() === pluralToKind(right).toLowerCase();
 }
 

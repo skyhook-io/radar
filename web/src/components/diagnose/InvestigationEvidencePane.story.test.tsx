@@ -652,6 +652,17 @@ describe("story card defaults", () => {
         [{ subject: { kind: "Namespace", namespace: "other", name: "prod" } }],
       )[0].matches,
     ).toBe(0);
+    // A mixed listing holding a Service and a Deployment of one name shows
+    // the row of the kind the citation states.
+    expect(
+      namedInventoryRows(
+        [
+          { kind: "Service", namespace: "shop", name: "api" },
+          { kind: "Deployment", namespace: "shop", name: "api" },
+        ],
+        [{ subject: { kind: "Deployment", namespace: "shop", name: "api" } }],
+      )[0].row?.kind,
+    ).toBe("Deployment");
     expect(
       namedInventoryRows(
         [{ kind: "APIService", name: "v1.apps" }],

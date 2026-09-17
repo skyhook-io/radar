@@ -101,6 +101,7 @@ import {
   investigationCaseObservationKey,
   type InvestigationCaseItem,
   type InvestigationCaseResolution,
+  sameKind,
 } from "./investigationCase";
 import type { DiagnosisEvidenceRole } from "../../api/diagnose";
 
@@ -3365,6 +3366,7 @@ export function namedInventoryRows(
     const matches = resources.filter(
       (resource) =>
         resource.name === subject.name &&
+        sameKind(resource.kind, subject.kind) &&
         (namespace === undefined ||
           (resource.namespace ?? scopeNamespace) === namespace),
     );

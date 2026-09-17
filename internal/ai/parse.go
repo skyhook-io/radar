@@ -67,8 +67,23 @@ var evidenceRoles = map[EvidenceRole]struct{}{
 	EvidenceRoleRulesOut: {},
 }
 
+var verdictFields = []string{"root_cause", "summary", "healthy", "inconclusive", "steps", "evidence", "remediation"}
+
+func isVerdictBlock(block string) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(block), &fields) != nil {
+		return false
+	}
+	for _, field := range verdictFields {
+		if _, ok := fields[field]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // diagnosisFromText assembles the Diagnosis from the CLI's final text. The
-// last fenced json block is the verdict and a divider: prose after it is the
+// last fenced json block that carries a verdict field is the verdict and a divider: prose after it is the
 // story, prose before it the agent's working notes. With nothing after the
 // block (the older trailing-block shape) the prose before it is the story.
 // Absent any block, the whole text is the report and its first paragraph the
@@ -77,7 +92,16 @@ func diagnosisFromText(text string) Diagnosis {
 	text = strings.TrimSpace(text)
 	d := Diagnosis{Report: text}
 	if locs := jsonBlockRe.FindAllStringSubmatchIndex(text, -1); len(locs) > 0 {
+		// The story follows the verdict and may quote a patch or a spec in a
+		// json fence of its own, so the verdict is the last block that carries
+		// a verdict field, not merely the last block.
 		last := locs[len(locs)-1]
+		for i := len(locs) - 1; i >= 0; i-- {
+			if isVerdictBlock(text[locs[i][2]:locs[i][3]]) {
+				last = locs[i]
+				break
+			}
+		}
 		m := [][]string{{text[last[0]:last[1]], text[last[2]:last[3]]}}
 		var parsed struct {
 			Healthy           *bool           `json:"healthy"`
