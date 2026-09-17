@@ -35,10 +35,10 @@ function markerIndex(
     ? UNRESOLVED_STORY_INDEX
     : resolved;
 }
-const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
+const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/;
 // A closing fence is bare: same character, at least the opening length, and
 // nothing but whitespace after it. "````not-a-close" is still code.
-const FENCE_CLOSE_RE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
+const FENCE_CLOSE_RE = /^ {0,3}(`{3,}|~{3,})\s*$/;
 
 /** Maximum results placed as cards; later placements become references. */
 export const MAX_STORY_PLACEMENTS = 6;
@@ -150,7 +150,23 @@ export function splitStory(
       continue;
     }
     if (fenceMatch) {
+      // A fence interrupts a paragraph, and with it any open code span.
       fence = fenceMatch[1];
+      openRun = 0;
+      prose.push(line);
+      continue;
+    }
+    // A blank line outside a fence ends a paragraph. Prose is segmented per
+    // paragraph so the collapsed preview can show exactly the paragraph
+    // before the first placed card, and a line clamp applies to one
+    // paragraph rather than to everything before the card.
+    if (line.trim() === "") {
+      flush();
+      continue;
+    }
+    // Blockquotes and indented code (four spaces or a tab) are quoted text:
+    // markers there stay literal, never citations or placements.
+    if (/^ {0,3}>/.test(line) || /^( {4,}|\t)/.test(line)) {
       prose.push(line);
       continue;
     }
@@ -162,20 +178,6 @@ export function splitStory(
         index: markerIndex(block[1], block[2], resolveRef),
         ...(block[3] ? { compact: true } : {}),
       });
-      continue;
-    }
-    // Blockquotes and indented code (four spaces or a tab) are quoted text:
-    // markers there stay literal, never citations.
-    if (/^\s{0,3}>/.test(line) || /^( {4,}|\t)/.test(line)) {
-      prose.push(line);
-      continue;
-    }
-    // A blank line outside a fence ends a paragraph. Prose is segmented per
-    // paragraph so the collapsed preview can show exactly the paragraph
-    // before the first placed card, and a line clamp applies to one
-    // paragraph rather than to everything before the card.
-    if (line.trim() === "") {
-      flush();
       continue;
     }
     const rewritten = rewriteInlineMarkers(

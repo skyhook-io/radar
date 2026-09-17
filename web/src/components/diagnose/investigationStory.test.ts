@@ -107,6 +107,27 @@ describe("splitStory", () => {
     );
   });
 
+  it("closes an open span at a fence, at a whitespace-only line, and keeps tab-indented lines literal", () => {
+    const kinds = (report: string) =>
+      splitStory(report).segments.map((segment) => segment.kind);
+    expect(kinds("Quoted `example\n~~~\nx\n~~~\n[[radar:evidence=0]]")).toEqual(
+      ["prose", "placement"],
+    );
+    expect(kinds("Quoted `example\n    \n[[radar:evidence=0]]")).toEqual([
+      "prose",
+      "placement",
+    ]);
+    // A tab-indented fence is indented code, so the marker between two of
+    // them stands on its own line in prose.
+    expect(kinds("\t~~~\n[[radar:evidence=0]]\n\t~~~")).toEqual([
+      "prose",
+      "placement",
+      "prose",
+    ]);
+    expect(kinds("\t[[radar:evidence=0]]")).toEqual(["prose"]);
+    expect(splitStory("\t[[radar:evidence=0]]").inlineRefs).toEqual([]);
+  });
+
   it("reads the compact variant as a placement flag", () => {
     const { segments } = splitStory(
       "A.\n[[radar:evidence=2|compact]]\nB [[radar:evidence=2|compact]].",

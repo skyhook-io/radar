@@ -281,6 +281,26 @@ func TestCanonicalStoryMarkers_RespectsCodeSpansAndFences(t *testing.T) {
 	}
 }
 
+func TestCanonicalStoryMarkers_FenceAndBlankLineCloseASpan(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
+	items := []caseItemRequest{{ref: ref, valid: true}}
+	marker := "[[radar:evidence-ref=" + ref + "]]"
+	for _, in := range []string{
+		"Quoted `example\n~~~\nx\n~~~\n" + marker,
+		"Quoted `example\n    \n" + marker,
+	} {
+		if out := canonicalStoryMarkers(in, items); !strings.HasSuffix(out, "\n[[radar:evidence=0]]") {
+			t.Fatalf("expected the marker after the break to be rewritten, got %q", out)
+		}
+	}
+	if out := canonicalStoryMarkers("\t~~~\n"+marker+"\n\t~~~", items); !strings.Contains(out, "\n[[radar:evidence=0]]\n") {
+		t.Fatalf("expected a tab-indented fence to be indented code, not a fence, got %q", out)
+	}
+	if out := canonicalStoryMarkers("\t"+marker, items); strings.Contains(out, "[[radar:evidence=0]]") {
+		t.Fatalf("expected tab-indented code to stay literal, got %q", out)
+	}
+}
+
 func TestCanonicalStoryMarkers_SpansAcrossLinesAndQuotedBlocks(t *testing.T) {
 	ref := testEvidenceRef('a', 'b')
 	items := []caseItemRequest{{ref: ref, valid: true}}
