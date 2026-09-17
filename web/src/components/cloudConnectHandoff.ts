@@ -148,7 +148,8 @@ export function composeAdminNote(blocked: CloudInstallBlocked, exit: BlockedExit
       because = `the install is managed by ${tool}, so connecting it is a values change in the repository — Radar Cloud generates the patch`
       break
     case 'unsupported':
-      because = `Radar reported: ${blocked.message.replace(/\s+/g, ' ').trim()}`
+      // The server's message ends its own sentence; the clause adds the period.
+      because = `Radar reported: ${blocked.message.replace(/\s+/g, ' ').trim().replace(/\.$/, '')}`
       break
     default:
       switch (blocked.cause) {

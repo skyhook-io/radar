@@ -141,11 +141,11 @@ function CopyForAdmin({ note }: { note: string }) {
   const noteRef = useRef<HTMLPreElement | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
   // The panel is anchored above the action row inside the dialog's scroll
-  // area, and an absolutely positioned box cannot be scrolled to above the
-  // top of that area: whatever extends past it is simply gone, close button
-  // included. So the panel's ceiling is measured — the row's distance from
-  // the top of the scroll content — rather than guessed from the viewport.
-  // A normal note fits and shows whole; only a longer one scrolls inside.
+  // area. A hover panel taller than the room visible above the row is only
+  // partly on screen, and scrolling to see the rest moves it out from under
+  // the pointer and closes it. So the ceiling is measured — the row's
+  // distance from the visible top of the scroller — rather than guessed. A
+  // normal note fits and shows whole; only a longer one scrolls inside.
   const [maxHeight, setMaxHeight] = useState<number>()
   const shown = previewing || pinned
   useEffect(() => {
@@ -155,9 +155,9 @@ function CopyForAdmin({ note }: { note: string }) {
     const row = wrapper?.offsetParent as HTMLElement | null | undefined
     const scroller = row?.closest<HTMLElement>('.overflow-y-auto')
     if (!wrapper || !row || !scroller) return
-    const rowTop = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
+    const visibleRoom = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top
     const gap = wrapper.getBoundingClientRect().bottom - (wrapper.firstElementChild?.getBoundingClientRect().bottom ?? 0)
-    setMaxHeight(Math.max(120, Math.floor(rowTop - gap - 8)))
+    setMaxHeight(Math.max(96, Math.floor(visibleRoom - gap - 8)))
   }, [shown])
   // Leaving closes on a short delay that entering the panel cancels, so the
   // pointer can cross the row's own space on its way up into the panel.
