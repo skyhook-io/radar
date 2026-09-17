@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -132,7 +133,7 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	}
 
 	if len(detail.History) > 0 {
-		result["history"] = detail.History
+		result["history"] = newestHelmRevisions(detail.History, defaultHelmHistoryLimit)
 	}
 	if len(detail.Hooks) > 0 {
 		result["hooks"] = detail.Hooks
@@ -334,6 +335,21 @@ func cloneHelmValue(value any) any {
 	default:
 		return value
 	}
+}
+
+// A release's stored history can run to hundreds of revisions; the detail
+// read carries the newest few so the Findings card can show the trail, and
+// include=history carries all of it.
+const defaultHelmHistoryLimit = 10
+
+func newestHelmRevisions(history []helm.HelmRevision, limit int) []helm.HelmRevision {
+	if len(history) <= limit {
+		return history
+	}
+	sorted := make([]helm.HelmRevision, len(history))
+	copy(sorted, history)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Revision > sorted[j].Revision })
+	return sorted[:limit]
 }
 
 // parseIncludes parses a comma-separated include string into a set.

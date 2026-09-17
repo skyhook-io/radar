@@ -17,6 +17,7 @@ import {
 } from "../diagnoseEvidenceTypes";
 import { investigationResourceEvidenceSummary } from "../investigationResourceEvidenceModel";
 import { kindToPluralWithGroup } from "../../../utils/navigation";
+import { pluralToKind } from "@skyhook-io/k8s-ui";
 import { stableHash } from "./identity";
 import { nonEmptyString, parseJSON, record, stringArray } from "./parse";
 import {
@@ -197,6 +198,9 @@ export function investigationResultLabel(
   source: InvestigationEvidenceSource,
 ): string {
   return INVESTIGATION_RESULT_LABELS[source.tool] ?? "Investigation result";
+}
+export function sameKind(left: string, right: string): boolean {
+  return pluralToKind(left).toLowerCase() === pluralToKind(right).toLowerCase();
 }
 export function resourceMatchesTarget(
   target: InvestigationEvidenceTarget,

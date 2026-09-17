@@ -1,3 +1,4 @@
+import { sameKind } from "./observations";
 import type {
   DiagnosisEvidenceRole,
   DiagnosisEvidenceSubject,
@@ -48,8 +49,15 @@ export function storyExcerpt(
     return { kind: "lines", head: lines.slice(-2), rest: lines.slice(0, -2) };
   }
   if (options.compact) return undefined;
-  const named = (name: string) =>
-    items.some((item) => item.subject?.name === name);
+  const named = (row: { kind: string; namespace?: string; name: string }) =>
+    items.some(
+      (item) =>
+        item.subject?.name === row.name &&
+        sameKind(item.subject.kind, row.kind) &&
+        (!item.subject.namespace ||
+          row.namespace === undefined ||
+          item.subject.namespace === row.namespace),
+    );
   switch (data.type) {
     case "metrics":
       // A chart placed as the cause or the symptom is the card.
@@ -68,13 +76,13 @@ export function storyExcerpt(
     }
     case "ranking": {
       const rows = data.rows
-        .filter((row) => row.target || named(row.name))
+        .filter((row) => row.target || named(row))
         .slice(0, 3);
       return rows.length > 0 ? { kind: "ranking", rows } : undefined;
     }
     case "posture": {
       const findings = data.findings
-        .filter((finding) => finding.target || named(finding.name))
+        .filter((finding) => finding.target || named(finding))
         .slice(0, 3);
       return findings.length > 0 ? { kind: "posture", findings } : undefined;
     }

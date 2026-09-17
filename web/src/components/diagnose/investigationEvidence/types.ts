@@ -321,6 +321,13 @@ export interface InvestigationPostureFinding {
   remediation?: string;
   /** The investigated resource itself. */
   target: boolean;
+  /** The workload that owns the finding's resource, when the scan names one. */
+  managedBy?: {
+    kind: string;
+    group?: string;
+    namespace?: string;
+    name: string;
+  };
 }
 export interface InvestigationPermissionRule {
   verbs: string[];

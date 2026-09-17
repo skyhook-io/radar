@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { groupsOf, project, tool } from "../evidenceFixtures";
+import { deployment, groupsOf, project, tool } from "../evidenceFixtures";
 import { RankingBody } from "../bodies/ranking";
 import { PostureBody } from "../bodies/posture";
 import { InventoryBody, namedInventoryRows } from "../bodies/inventory";
@@ -230,6 +230,75 @@ describe("posture cards (audit, upgrade readiness)", () => {
   });
 });
 
+describe("posture scans that did not finish", () => {
+  it("records a capped audit and a paged upgrade check as limits, and says on the receipt when inputs were missing", () => {
+    const projection = project([
+      tool("diagnose", "diagnose", {
+        resource: deployment,
+        resourceContext: { tier: "basic" },
+      }),
+      tool(
+        "audit",
+        "get_cluster_audit",
+        {
+          findings: [
+            {
+              resource: "Deployment/other/web",
+              check: "noLimits",
+              severity: "medium",
+              message: "No limits",
+            },
+          ],
+          truncated: true,
+          missingInputs: ["networkpolicies"],
+        },
+        { summary: JSON.stringify({ namespace: "shop" }) },
+      ),
+      tool(
+        "upgrade",
+        "get_cluster_upgrade_readiness",
+        {
+          currentVersion: "1.35.7",
+          targetVersion: "1.36",
+          check: {
+            id: "removed-apis",
+            title: "Removed APIs",
+            category: "api",
+            status: "fail",
+            findings: [],
+            findingsTruncated: 5,
+          },
+        },
+        {
+          summary: JSON.stringify({
+            targetVersion: "1.36",
+            check: "removed-apis",
+          }),
+        },
+      ),
+    ]);
+    expect(projection.limitations.map((limit) => limit.message)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("hit its cap"),
+        expect.stringContaining(
+          "Inputs missing from the scan: networkpolicies",
+        ),
+        expect.stringContaining("5 more findings past this page"),
+      ]),
+    );
+    const receipt = groupsOf(projection.groups, "receipt").find(
+      (group) =>
+        group.latest.data.type === "receipt" &&
+        group.latest.data.checked === "posture",
+    )!;
+    const data = receipt.latest.data;
+    if (data.type !== "receipt") throw new Error("expected receipt");
+    expect(data.message).toContain(
+      "Not every check ran: inputs missing for networkpolicies",
+    );
+  });
+});
+
 describe("listing cards (helm releases, packages, search)", () => {
   it("lists Helm releases with their status and chart", () => {
     const projection = project([
@@ -283,8 +352,16 @@ describe("listing cards (helm releases, packages, search)", () => {
               namespace: "shop",
               releaseName: "podinfo",
               version: "6.15.0",
-              health: { status: "healthy" },
+              health: "healthy",
               sources: ["H", "F"],
+            },
+            {
+              chart: "redis",
+              namespace: "shop",
+              releaseName: "redis",
+              version: "1.0.0",
+              health: "unhealthy",
+              sources: ["H"],
             },
           ],
           sourceLegend: { H: "Helm", F: "Flux" },
@@ -294,6 +371,7 @@ describe("listing cards (helm releases, packages, search)", () => {
     ]);
     const [group] = groupsOf(projection.groups, "inventory");
     expect(group.latest.title).toBe("Packages in shop");
+    expect(group.latest.tone).toBe("warning");
     const data = group.latest.data;
     if (data.type !== "inventory") throw new Error("expected inventory");
     expect(data.resources[0]).toMatchObject({
@@ -301,6 +379,7 @@ describe("listing cards (helm releases, packages, search)", () => {
       name: "podinfo",
       status: "6.15.0 · Helm, Flux",
     });
+    expect(data.resources[1].issue).toBe("unhealthy");
   });
 
   it("keeps a cluster-wide Helm listing and a package listing as separate cards", () => {
@@ -331,7 +410,7 @@ describe("listing cards (helm releases, packages, search)", () => {
               namespace: "shop",
               releaseName: "podinfo",
               version: "6.15.0",
-              health: { status: "healthy" },
+              health: "healthy",
               sources: ["H"],
             },
           ],

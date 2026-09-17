@@ -2,7 +2,7 @@ import { nonEmptyString, parseJSON, record } from "../parse";
 import {
   invalidPayload,
   evidenceTierForRelevance,
-  resourceMatchesTarget,
+  sameKind,
   scopeFromArgs,
   type ProjectionBuilder,
 } from "../observations";
@@ -10,7 +10,6 @@ import type {
   InvestigationEvidenceSource,
   InvestigationRankingRow,
 } from "../types";
-import { apiVersionToGroup } from "../../../../utils/navigation";
 
 function quantity(milli: unknown, unit: "m" | "Mi"): string {
   return typeof milli === "number" ? `${milli}${unit}` : "";
@@ -52,16 +51,13 @@ export function adaptTopResources(
     const namespace = nonEmptyString(item.namespace)
       ? item.namespace
       : undefined;
+    // Rows carry kind, namespace and name and no API group; the kinds a
+    // ranking holds (pods, the built-in workloads, nodes) are not ambiguous.
     const target =
       (item.kind === "Pod" && builder.establishedTargetPods.has(item.name)) ||
-      resourceMatchesTarget(builder.target, {
-        kind: item.kind,
-        group: nonEmptyString(item.apiVersion)
-          ? apiVersionToGroup(item.apiVersion)
-          : undefined,
-        namespace,
-        name: item.name,
-      });
+      (sameKind(item.kind, builder.target.kind) &&
+        (namespace ?? "") === (builder.target.namespace ?? "") &&
+        item.name === builder.target.name);
     return [
       {
         kind: item.kind,

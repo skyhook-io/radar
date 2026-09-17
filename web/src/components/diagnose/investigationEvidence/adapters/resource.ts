@@ -272,7 +272,8 @@ export function adaptListResources(
     return (
       health === "unhealthy" ||
       health === "degraded" ||
-      (resource.summaryContext?.issueCount ?? 0) > 0
+      (resource.summaryContext?.issueCount ?? 0) > 0 ||
+      nonEmptyString(resource.issue)
     );
   });
   // Listings of different things share an argument shape (a cluster-wide

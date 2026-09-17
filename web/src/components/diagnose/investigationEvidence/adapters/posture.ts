@@ -46,9 +46,16 @@ function keep(
         checked: "posture",
         scope,
         message:
-          findings.length > 0
-            ? `${findings.length} finding${findings.length === 1 ? "" : "s"} elsewhere in the scan.`
-            : undefined,
+          [
+            findings.length > 0
+              ? `${findings.length} finding${findings.length === 1 ? "" : "s"} elsewhere in the scan.`
+              : undefined,
+            missing.length > 0
+              ? `Not every check ran: inputs missing for ${missing.join(", ")}.`
+              : undefined,
+          ]
+            .filter(Boolean)
+            .join(" ") || undefined,
       },
     });
     return;
@@ -112,6 +119,14 @@ export function adaptClusterAudit(
       target: relevance === "target",
     });
     relevances.push(relevance);
+  }
+  if (value.truncated === true) {
+    builder.limit(
+      source,
+      "Posture findings",
+      "The scan hit its cap; findings past it were not returned. A namespace-scoped scan shows the rest.",
+      "unknown",
+    );
   }
   keep(
     builder,
@@ -192,15 +207,17 @@ export function adaptUpgradeReadiness(
     });
     const ref = refOf(named);
     // A finding on an object the workload owns (its HPA, its Ingress) is a
-    // finding about the workload.
-    let relevance = relevanceOf(builder, ref);
-    if (
-      relevance === "broader" &&
+    // finding about the workload, and the workload's name reaches it.
+    const owner =
+      resource &&
       managedBy &&
       nonEmptyString(managedBy.kind) &&
       nonEmptyString(managedBy.name)
-    ) {
-      relevance = relevanceOf(builder, refOf(managedBy));
+        ? refOf(managedBy)
+        : undefined;
+    let relevance = relevanceOf(builder, ref);
+    if (relevance === "broader" && owner) {
+      relevance = relevanceOf(builder, owner);
     }
     const evidence = record(item.evidence);
     findings.push({
@@ -224,8 +241,20 @@ export function adaptUpgradeReadiness(
         ? { remediation: item.remediation }
         : {}),
       target: relevance === "target",
+      ...(owner ? { managedBy: owner } : {}),
     });
     relevances.push(relevance);
+  }
+  if (
+    typeof check.findingsTruncated === "number" &&
+    check.findingsTruncated > 0
+  ) {
+    builder.limit(
+      source,
+      label,
+      `${check.findingsTruncated} more finding${check.findingsTruncated === 1 ? "" : "s"} past this page were not returned; the next page has them.`,
+      "unknown",
+    );
   }
   keep(builder, source, "upgrade", findings, relevances, [], label);
 }

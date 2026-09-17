@@ -15,7 +15,7 @@ export {
   isInvestigationEvidenceRef,
   resolveInvestigationRootCauseEvidence,
 } from "./identity";
-export { evidenceSemanticSnapshot } from "./observations";
+export { evidenceSemanticSnapshot, sameKind } from "./observations";
 export type {
   InvestigationAccessCheck,
   InvestigationAlertInstance,

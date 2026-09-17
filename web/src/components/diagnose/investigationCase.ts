@@ -1,5 +1,3 @@
-import { pluralToKind } from "@skyhook-io/k8s-ui";
-
 import type {
   DiagnosisEvidenceItem,
   DiagnosisEvidenceRole,
@@ -10,6 +8,7 @@ import {
   investigationEvidenceSubjectRef,
   investigationSourceArgs,
   isInvestigationEvidenceRef,
+  sameKind,
   type InvestigationEvidenceData,
   type InvestigationEvidenceGroup,
   type InvestigationEvidenceObservation,
@@ -326,9 +325,7 @@ function isBuiltInGroup(group: string): boolean {
   return LEGACY_BUILT_IN_GROUPS.has(group) || group.endsWith(".k8s.io");
 }
 
-export function sameKind(left: string, right: string): boolean {
-  return pluralToKind(left).toLowerCase() === pluralToKind(right).toLowerCase();
-}
+export { sameKind };
 
 /**
  * Whether a listing row is the entry a citation names. A package row carries
@@ -432,6 +429,33 @@ function observationIdentities(
 ): ObservationSubjectIdentity[] {
   const stated = observationSubjectIdentity(observation);
   const identities = stated ? [stated] : [];
+  // A ranking is also each row it ranks and a posture card each resource its
+  // findings name, with the workload that owns that resource: a citation of
+  // the workload reaches the finding on its HPA, and a card of mixed kinds
+  // accepts no name it does not hold.
+  if (
+    observation.data.type === "ranking" ||
+    observation.data.type === "posture"
+  ) {
+    const rows =
+      observation.data.type === "ranking"
+        ? observation.data.rows
+        : observation.data.findings.flatMap((finding) =>
+            finding.managedBy ? [finding, finding.managedBy] : [finding],
+          );
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const key = `${row.kind}/${row.namespace ?? ""}/${row.name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      identities.push({
+        kind: row.kind,
+        group: "group" in row ? row.group : undefined,
+        namespace: row.namespace ?? "",
+        name: row.name,
+      });
+    }
+  }
   if (observation.data.type === "logs" && stated) {
     const args = investigationSourceArgs(observation.source);
     if (args && nonEmptyString(args.kind) && nonEmptyString(args.name)) {
@@ -525,7 +549,10 @@ function identityMatchesSubject(
   ) {
     return false;
   }
+  // The object declaring a package lives where it lives, not in the
+  // listing's scope.
   if (
+    !namesHeldEntry &&
     subject.namespace !== undefined &&
     identity.namespace !== undefined &&
     subject.namespace !== identity.namespace

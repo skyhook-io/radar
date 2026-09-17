@@ -71,7 +71,9 @@ export function adaptListPackages(
       const sources = (stringArray(item.sources) ?? []).map((code) =>
         nonEmptyString(legend[code]) ? legend[code] : code,
       );
-      const health = record(item.health);
+      const health = nonEmptyString(item.health)
+        ? item.health.toLowerCase()
+        : undefined;
       const status = [
         nonEmptyString(item.version) ? item.version : undefined,
         sources.length > 0 ? sources.join(", ") : undefined,
@@ -83,7 +85,9 @@ export function adaptListPackages(
         name: nonEmptyString(item.releaseName) ? item.releaseName : item.chart,
         namespace: item.namespace,
         status,
-        ...(nonEmptyString(health?.issue) ? { issue: health.issue } : {}),
+        ...(health === "degraded" || health === "unhealthy"
+          ? { issue: health }
+          : {}),
       };
     }),
     { title: namespace ? `Packages in ${namespace}` : "Installed packages" },
