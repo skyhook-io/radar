@@ -140,9 +140,13 @@ export function CloudFunnelButton() {
   // "already connected" and point at it than to offer a click that ends blocked.
   const discovered = useCloudInstallDiscover(open && lane === 'driver', clusterInfo.data?.context)
   // The server ranks these: one it can link to first. A failed lookup is
-  // not a verdict — the CTA returns and the plan does its own inspection.
-  const alreadyConnected = discovered.data?.connected[0]
-  const discoverPending = lane === 'driver' && discovered.isPending && discovered.fetchStatus !== 'idle'
+  // not a verdict — the CTA returns and the plan does its own inspection —
+  // and neither is the previous opening's answer: this component outlives
+  // the dialog, so a reopen refetches over cached data, and the gate must
+  // hold for that refetch too (isFetching, not isPending) while a refetch
+  // that fails must not keep showing what it found last time.
+  const alreadyConnected = discovered.isError ? undefined : discovered.data?.connected[0]
+  const discoverPending = lane === 'driver' && discovered.isFetching
 
   // The flow is server-owned: polling here both drives the live progress view
   // and re-attaches to an ongoing flow after a reload or modal close.
@@ -344,7 +348,7 @@ export function CloudFunnelButton() {
               self={inCluster ? self.data : undefined}
               clusterName={clusterInfo.data?.context}
               alreadyConnected={alreadyConnected}
-              connectedCount={discovered.data?.connected.length ?? 0}
+              connectedCount={alreadyConnected ? (discovered.data?.connected.length ?? 0) : 0}
               discoverPending={discoverPending}
               clustersUrl={`${appUrl}/clusters`}
               // Also covers the capabilities query: until it resolves, lane
