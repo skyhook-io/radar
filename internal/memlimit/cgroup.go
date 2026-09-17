@@ -69,13 +69,16 @@ func containsController(list, name string) bool {
 // stop, folding each finite value into limit.
 func minAlongPath(start, stop, file string, parse func(string) (int64, bool), limit int64) int64 {
 	start, stop = filepath.Clean(start), filepath.Clean(stop)
+	if !strings.HasPrefix(start, stop) {
+		return limit
+	}
 	for dir := start; ; dir = filepath.Dir(dir) {
 		if b, err := os.ReadFile(filepath.Join(dir, file)); err == nil {
 			if v, ok := parse(strings.TrimSpace(string(b))); ok && v < limit {
 				limit = v
 			}
 		}
-		if dir == stop || !strings.HasPrefix(dir, stop) || dir == filepath.Dir(dir) {
+		if dir == stop || dir == filepath.Dir(dir) {
 			return limit
 		}
 	}
