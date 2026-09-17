@@ -1,7 +1,7 @@
 import { type ReactNode, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { AlertTriangle, ArrowUpRight, Check, Copy, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
-import type { BlockedExit } from './cloudConnectHandoff'
+import { type AdminNoteContext, type BlockedExit, composeAdminNote } from './cloudConnectHandoff'
 import { Tooltip } from './ui/Tooltip'
 import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
@@ -23,19 +23,22 @@ export function CloudConnectFlow({
   status,
   blocked,
   exit,
+  where,
   onStatus,
   onExit,
 }: {
   status: CloudInstallStatus
   blocked: CloudInstallBlocked | null
   exit: BlockedExit
+  // Which cluster this is, for the note a blocked person hands to an admin.
+  where?: AdminNoteContext
   // Push a mutation's status response into the shared query state.
   onStatus: (st: CloudInstallStatus) => void
   // Leave the flow view (back to the pitch, or close after dismiss).
   onExit: () => void
 }) {
   if (blocked) {
-    return <BlockedView blocked={blocked} exit={exit} onExit={onExit} />
+    return <BlockedView blocked={blocked} exit={exit} where={where} onExit={onExit} />
   }
 
   switch (status.state) {
@@ -70,34 +73,25 @@ export function CloudConnectFlow({
 function BlockedView({
   blocked,
   exit,
+  where,
   onExit,
 }: {
   blocked: CloudInstallBlocked
   exit: BlockedExit
+  where?: AdminNoteContext
   onExit: () => void
 }) {
   const copy = blockedCopy(blocked, exit)
-  // The person who can act is usually not the one reading this. The card's
-  // own text — what Radar tried, why it stopped, the refusals, the link — is
-  // exactly the message they would send to whoever administers the cluster,
-  // so hand it to them verbatim rather than making them retype it.
-  const cardRef = useRef<HTMLDivElement | null>(null)
+  // The person who can act is usually not the one reading this card. What
+  // they need is an ask with the link and the evidence — not the card's
+  // second-person explanation — so the note is composed on its own and the
+  // tooltip shows exactly what will be copied.
+  const note = composeAdminNote(blocked, exit, where)
   const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
-  // The note is the card's rendered text plus a header and the link, so it
-  // can only be composed once the card is in the DOM; the tooltip shows the
-  // exact text on hover so "copy" never means something other than what is
-  // previewed.
-  const [note, setNote] = useState('')
-  const composeNote = () => {
-    const body = cardRef.current?.innerText ?? copy.title
-    const composed = `Radar Cloud — connecting this cluster from Radar was blocked\n\n${body}\n\n${exit.label}: ${exit.href}`
-    setNote(composed)
-    return composed
-  }
   const copyForAdmin = () => {
     // copyText also serves Radar on a plain-HTTP non-loopback address, where
     // the async Clipboard API is missing and the legacy command still works.
-    void copyText(composeNote()).then((ok) => {
+    void copyText(note).then((ok) => {
       setCopied(ok ? 'done' : 'failed')
       setTimeout(() => setCopied('idle'), 2000)
     })
@@ -112,7 +106,7 @@ function BlockedView({
     )
   return (
     <div className="px-8 pt-6 pb-5">
-      <div ref={cardRef} className="card-inner-lg flex gap-2.5">
+      <div className="card-inner-lg flex gap-2.5">
         {icon}
         <div className="min-w-0 space-y-3">
           <div className="text-[13px] font-semibold text-theme-text-primary">{copy.title}</div>
@@ -151,8 +145,6 @@ function BlockedView({
           <button
             type="button"
             onClick={copyForAdmin}
-            onMouseEnter={composeNote}
-            onFocus={composeNote}
             className="inline-flex items-center gap-1.5 text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary transition-colors"
           >
             {copied === 'done' ? (

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError, type CloudInstallAttempted } from '../api/client'
-import { exitFor, handoffForBlocked, handoffForPrepareError, isHandoffOutcome, signupUrlFor } from './cloudConnectHandoff'
+import { composeAdminNote, exitFor, handoffForBlocked, handoffForPrepareError, isHandoffOutcome, signupUrlFor } from './cloudConnectHandoff'
 
 const APP = 'https://app.test.example'
 const UTM = 'utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal'
@@ -136,5 +136,65 @@ describe('isHandoffOutcome', () => {
     ]) {
       expect(isHandoffOutcome(kind)).toBe(true)
     }
+  })
+})
+
+describe('composeAdminNote — an ask, then the link, then the evidence', () => {
+  const where = { context: 'prod-east', cluster: 'arn:aws:eks:us-east-1:1:cluster/prod-east' }
+
+  it('asks for a permissions block, naming the identity and trimming the refusal to what and why', () => {
+    const blocked = {
+      reason: 'preflight' as const,
+      cause: 'permissions' as const,
+      identity: 'system:serviceaccount:default:limited',
+      message: '',
+      attempted: attempted({ stage: 'inspect', releaseUnread: true }),
+      blocking: [
+        'inspect Helm release "radar" in namespace "radar": failed to inspect existing release: query: failed to query with labels: secrets is forbidden: User "system:serviceaccount:default:limited" cannot list resource "secrets" in API group "" in the namespace "radar"',
+      ],
+    }
+    const exit = exitFor(APP, CARD, handoffForBlocked('preflight', blocked.attempted))
+    const note = composeAdminNote(blocked, exit, where)
+    expect(note).toMatch(/^Request to connect cluster prod-east to Radar Cloud\n/)
+    expect(note).toContain("the identity in use (system:serviceaccount:default:limited) doesn't have the permissions to install it")
+    expect(note).toContain('Nothing in the cluster was changed. Could someone with cluster access connect it?')
+    expect(note).toContain('Install command (sign in, name the cluster, pick Helm / Argo CD / Flux):\n' + exit.href)
+    expect(note).toContain("Details: Radar found no Radar running in the cluster and stopped while reading Helm's release records.")
+    expect(note).toContain('inspect Helm release "radar" in namespace "radar" — User "system:serviceaccount:default:limited" cannot list resource "secrets" in API group "" in the namespace "radar".')
+    expect(note).toContain('Please confirm nothing is already installed before a fresh install.')
+    // Never the card's second person.
+    expect(note).not.toMatch(/\byour\b/i)
+  })
+
+  it('asks for a GitOps values patch from the verified tool', () => {
+    const blocked = { reason: 'gitops' as const, message: 'managed by Flux', attempted: attempted({ mode: 'gitops', stage: 'inspect', method: 'flux' }) }
+    const exit = exitFor(APP, CARD, handoffForBlocked('gitops', blocked.attempted))
+    const note = composeAdminNote(blocked, exit, where)
+    expect(note).toContain('the install is managed by Flux, so connecting it is a values change in the repository')
+    expect(note).toContain('Values patch for Flux (sign in, name the cluster')
+    expect(note).toContain('&method=flux&')
+  })
+
+  it('quotes the refusal and sends the admin to Radar Cloud when Radar had no target', () => {
+    const blocked = { reason: 'unsupported' as const, message: 'Multiple Radar installations were found in this cluster.  Use `radar cloud install` to pick one.' }
+    const exit = exitFor(APP, CARD, handoffForBlocked('unsupported'))
+    const note = composeAdminNote(blocked, exit, { cluster: 'kind-dev' })
+    expect(note).toContain('Request to connect cluster kind-dev to Radar Cloud')
+    expect(note).toContain('Radar reported: Multiple Radar installations were found in this cluster. Use `radar cloud install` to pick one.')
+    expect(note).toContain('Could someone with cluster access connect it from Radar Cloud?')
+    expect(note).toContain('Radar Cloud:\n' + exit.href)
+  })
+
+  it('keeps the whole line when a refusal has no error chain to trim', () => {
+    const blocked = {
+      reason: 'preflight' as const,
+      cause: 'cluster' as const,
+      message: '',
+      attempted: attempted({}),
+      blocking: ['create Deployment "radar" in namespace "radar": an object already exists but is not owned by the current Helm release'],
+    }
+    const note = composeAdminNote(blocked, exitFor(APP, CARD, handoffForBlocked('preflight', blocked.attempted)))
+    expect(note).toContain('the cluster refused part of the install — a policy, or something already there (details below)')
+    expect(note).toContain('Details: Radar found no Radar running in the cluster and stopped at the dry run. create Deployment "radar" in namespace "radar": an object already exists but is not owned by the current Helm release.')
   })
 })

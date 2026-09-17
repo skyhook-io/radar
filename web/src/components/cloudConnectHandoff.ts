@@ -122,3 +122,93 @@ function installHref(appUrl: string, content: string, handoff: Handoff | null | 
   const url = `${appUrl}/install?${params.toString()}&${SIGNUP_QUERY.slice(1)}&utm_content=${content}`
   return handoff && isHandoffOutcome(handoff.outcome) ? `${url}&radar_outcome=${handoff.outcome}` : url
 }
+
+// The note a blocked person hands to whoever administers the cluster. An
+// ask, not a diagnostic: the request first, the link second, the evidence
+// last — and written about the attempt rather than in the reader's or the
+// sender's voice, so it can be pasted as-is or trimmed to a sentence.
+export interface AdminNoteContext {
+  context?: string
+  cluster?: string
+}
+
+export function composeAdminNote(blocked: CloudInstallBlocked, exit: BlockedExit, where: AdminNoteContext = {}): string {
+  const a = blocked.attempted
+  const name = where.context || where.cluster || 'this cluster'
+  const identity = blocked.identity ? ` (${blocked.identity})` : ''
+  const tool = a?.method === 'argocd' ? 'Argo CD' : a?.method === 'flux' ? 'Flux' : 'a GitOps controller'
+
+  let because: string
+  switch (blocked.reason) {
+    case 'gitops':
+      because = `the install is managed by ${tool}, so connecting it is a values change in the repository — Radar Cloud generates the patch`
+      break
+    case 'unsupported':
+      because = `Radar reported: ${blocked.message.replace(/\s+/g, ' ').trim()}`
+      break
+    default:
+      switch (blocked.cause) {
+        case 'permissions':
+          because = `the identity in use${identity} doesn't have the permissions to install it`
+          break
+        case 'verification':
+          because = 'the Radar version in use can\'t install this chart version from there'
+          break
+        default:
+          because = 'the cluster refused part of the install — a policy, or something already there (details below)'
+      }
+  }
+
+  const ask = exit.install
+    ? 'Could someone with cluster access connect it?'
+    : 'Could someone with cluster access connect it from Radar Cloud?'
+  const linkLabel = !exit.install
+    ? 'Radar Cloud:'
+    : blocked.reason === 'gitops'
+      ? `Values patch for ${tool} (sign in, name the cluster; it also shows the one command that creates the token Secret):`
+      : 'Install command (sign in, name the cluster, pick Helm / Argo CD / Flux):'
+
+  const details: string[] = []
+  if (a) {
+    const target = `release ${a.release} in namespace ${a.namespace}`
+    const stage =
+      a.stage === 'inspect'
+        ? "stopped while reading Helm's release records"
+        : a.stage === 'prepare'
+          ? 'stopped while preparing the chart'
+          : 'stopped at the dry run'
+    details.push(
+      a.mode === 'gitops'
+        ? `Radar found ${target} and traced how it is managed.`
+        : a.mode === 'adopt'
+          ? `Radar found ${target} and ${stage}.`
+          : a.partialScan
+            ? `Radar could only check namespace ${a.namespace} for an existing install and ${stage}.`
+            : `Radar found no Radar running in the cluster and ${stage}.`,
+    )
+  } else if (blocked.reason === 'preflight') {
+    details.push('Radar was looking for an existing Radar install when it stopped.')
+  }
+  for (const line of blocked.blocking ?? []) details.push(trimRefusal(line))
+  if (a?.releaseUnread) details.push('Please confirm nothing is already installed before a fresh install.')
+  if (a?.partialScan) details.push('Please check the rest of the cluster for an existing install first.')
+
+  return [
+    `Request to connect cluster ${name} to Radar Cloud`,
+    '',
+    `Connecting it from Radar was blocked: ${because}. Nothing in the cluster was changed. ${ask}`,
+    '',
+    linkLabel,
+    exit.href,
+    ...(details.length ? ['', `Details: ${details.join(' ')}`] : []),
+  ].join('\n')
+}
+
+// A refusal line is a Go error chain — "create Namespace "radar": namespaces
+// "radar" is forbidden: ValidatingAdmissionPolicy … denied request: <reason>".
+// Keep what was attempted and why it was refused; drop the wrapping between.
+function trimRefusal(line: string): string {
+  const parts = line.split(': ').map((p) => p.trim()).filter(Boolean)
+  if (parts.length <= 2) return line.trim().replace(/\.?$/, '.')
+  return `${parts[0]} — ${parts[parts.length - 1]}`.replace(/\.?$/, '.')
+}

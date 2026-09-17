@@ -1913,6 +1913,9 @@ export interface CloudInstallAttempted {
 
 export interface CloudInstallBlocked {
   reason: 'gitops' | 'preflight' | 'unsupported'
+  // The Kubernetes user the attempt acted as; absent when the API server
+  // would not say.
+  identity?: string
   // Preflight only: what would unblock it, and the Helm operation that was
   // dry-run — the plan card never renders when preflight blocks, so the
   // blocked card states what Radar tried itself.

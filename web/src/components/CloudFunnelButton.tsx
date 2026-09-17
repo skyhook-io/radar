@@ -234,7 +234,8 @@ export function CloudFunnelButton() {
   // relabel the CTA (and the link) for cluster B, and a blocked view left
   // armed would reopen on B with A's refusal, feeding it back into the
   // outcome on Back.
-  const contextName = useClusterInfo().data?.context
+  const clusterInfo = useClusterInfo()
+  const contextName = clusterInfo.data?.context
   useEffect(() => {
     setHandoff(null)
     setBlocked(null)
@@ -307,6 +308,7 @@ export function CloudFunnelButton() {
               status={flowForView}
               blocked={blocked}
               exit={exitFor(appUrl, 'driver-blocked-card-browser-link', outcomeOf(flowForView))}
+              where={{ context: clusterInfo.data?.context, cluster: clusterInfo.data?.cluster }}
               onStatus={applyStatus}
               onExit={() => exitFlow(outcomeOf(flowForView))}
             />

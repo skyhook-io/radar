@@ -38,6 +38,7 @@ import (
 	"sync"
 	"time"
 
+	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
@@ -139,6 +140,10 @@ type cloudInstallBackend struct {
 	provision        func(ctx context.Context, c cloudInstallClients, prepared preparedInstall, cfg cloudinstall.ProvisionConfig) error
 	newConnectClient func() cloudConnectClient
 	connectMetadata  func(ctx context.Context, c cloudInstallClients, clusterName string) cloud.ConnectMetadata
+	// whoAmI names the identity the clients act as, for the note a blocked
+	// person hands to an admin. Best effort: empty when the API server does
+	// not answer, never an error.
+	whoAmI func(ctx context.Context, c cloudInstallClients) string
 }
 
 type cloudInstallConnected struct {
@@ -185,6 +190,9 @@ type cloudInstallBlocked struct {
 	// Cause narrows a preflight refusal to what would unblock it:
 	// permissions | cluster | verification (cloudinstall.BlockCause).
 	Cause string `json:"cause,omitempty"`
+	// Identity is the Kubernetes user the attempt acted as, so the note the
+	// person hands to an admin can name it without parsing a refusal line.
+	Identity string `json:"identity,omitempty"`
 	// Attempted is the Helm operation preflight dry-ran, so the card can say
 	// what Radar tried before saying why it stopped; the plan card that would
 	// have shown it never renders when preflight blocks.
@@ -337,6 +345,18 @@ func newCloudInstallManager(cfg CloudConnectConfig) *cloudInstallManager {
 		newConnectClient: func() cloudConnectClient {
 			return cloud.NewConnectClient(cfg.HubAPIURL)
 		},
+		whoAmI: func(ctx context.Context, c cloudInstallClients) string {
+			if c.Kubernetes == nil {
+				return ""
+			}
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			review, err := c.Kubernetes.AuthenticationV1().SelfSubjectReviews().Create(ctx, &authenticationv1.SelfSubjectReview{}, metav1.CreateOptions{})
+			if err != nil {
+				return ""
+			}
+			return review.Status.UserInfo.Username
+		},
 		connectMetadata: func(ctx context.Context, c cloudInstallClients, clusterName string) cloud.ConnectMetadata {
 			meta := cloud.ConnectMetadata{
 				DeploymentMode: "in-cluster",
@@ -393,6 +413,9 @@ func (m *cloudInstallManager) prepare(ctx context.Context) (*cloudInstallFlow, *
 	blocked, err := m.runPrepare(ctx, flow)
 	if blocked != nil || err != nil {
 		m.clearFlow(flow)
+		if blocked != nil && m.backend.whoAmI != nil {
+			blocked.Identity = m.backend.whoAmI(ctx, flow.clients)
+		}
 		return nil, blocked, err
 	}
 	return flow, nil, nil
