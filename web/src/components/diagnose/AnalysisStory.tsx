@@ -192,10 +192,19 @@ function removeInlineMarker(markdown: string, index: number): string {
   if (!match) return markdown;
   let before = markdown.slice(0, match.index);
   let after = markdown.slice(match.index + match[0].length);
-  if (/\s$/.test(before) && (/^[,.;:!?]/.test(after) || after === ""))
-    before = before.replace(/\s+$/, "");
-  else if (/^\s/.test(after) && (/\s$/.test(before) || before === ""))
-    after = after.replace(/^\s+/, "");
+  // Spaces and tabs only: a newline, and the two spaces of a hard break
+  // before it, are the agent's.
+  if (/^[ \t]{2,}\n/.test(after)) before = before.replace(/[ \t]+$/, "");
+  else if (
+    /[ \t]$/.test(before) &&
+    (/^[,.;:!?]/.test(after) || after === "" || after.startsWith("\n"))
+  )
+    before = before.replace(/[ \t]+$/, "");
+  else if (
+    /^[ \t]/.test(after) &&
+    (/[ \t]$/.test(before) || before === "" || before.endsWith("\n"))
+  )
+    after = after.replace(/^[ \t]+/, "");
   return before + after;
 }
 

@@ -705,8 +705,10 @@ export function InvestigationEvidencePane({
         placed.focus({ preventScroll: true });
       };
       const placed = document.getElementById(target.domId);
+      // A twin's chip shares its sibling's card, so the card's position, not
+      // the item's own kind, says whether the story holds it.
       const placedInStory =
-        storyPlacements?.byIndex.get(target.item.index)?.kind === "placed";
+        storyPlacements?.placedAt.has(target.item.index) ?? false;
       if (placed && !placed.closest("[inert]")) {
         land(placed);
         return;

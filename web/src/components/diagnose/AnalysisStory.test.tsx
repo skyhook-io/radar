@@ -155,6 +155,13 @@ describe("resolveStoryPlacements", () => {
       },
       { kind: "placement", index: 0, auto: true, compact: true },
     ]);
+    const breaks = (report: string) =>
+      (
+        resolveStoryPlacements(report, resolver({ 0: target(0, "a") }))
+          .segments[0] as { markdown: string }
+      ).markdown;
+    expect(breaks("Says [[radar:evidence=0]]  \nnext")).toBe("Says  \nnext");
+    expect(breaks("Says  \n[[radar:evidence=0]] next")).toBe("Says  \nnext");
   });
 
   it("keeps the agent's own-line placement when a twin item on the same card was mentioned inline first", () => {
