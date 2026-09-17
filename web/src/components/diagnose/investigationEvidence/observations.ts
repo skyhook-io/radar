@@ -586,10 +586,33 @@ function resourceObservationSummary(
   if (context?.statusSummary?.phase) return context.statusSummary.phase;
   if (context?.issueSummary?.topReason) return context.issueSummary.topReason;
   return (
+    workloadReadinessFromResource(resource) ||
     investigationResourceEvidenceSummary(resource) ||
     warnings[0] ||
     resource.metadata.namespace
   );
+}
+
+// A workload read that carried no context still states its own readiness;
+// a row that names only its namespace says nothing.
+function workloadReadinessFromResource(
+  resource: InvestigationKubernetesResource,
+): string | undefined {
+  const spec = record(resource.spec);
+  const status = record(resource.status);
+  const count = (value: unknown): number | undefined =>
+    typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  if (resource.kind === "Deployment" || resource.kind === "StatefulSet") {
+    const desired = count(spec?.replicas) ?? (spec ? 1 : undefined);
+    if (desired === undefined) return undefined;
+    return `${count(status?.readyReplicas) ?? 0}/${desired} replicas ready`;
+  }
+  if (resource.kind === "DaemonSet") {
+    const desired = count(status?.desiredNumberScheduled);
+    if (desired === undefined) return undefined;
+    return `${count(status?.numberReady) ?? 0}/${desired} pods ready`;
+  }
+  return undefined;
 }
 // A scaler that cannot act (no metrics, cannot read the target) or is pinned
 // at its ceiling is a captured Radar fact about the workload, so it lifts the

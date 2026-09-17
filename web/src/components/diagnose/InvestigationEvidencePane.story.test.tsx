@@ -475,6 +475,65 @@ describe("story log card", () => {
   });
 });
 
+describe("story card gap clause", () => {
+  it("puts the clause on a compact card's row and under a full card without a label", () => {
+    const ref = evidenceRef("q", "r");
+    const projection = projectInvestigationEvidence(
+      [
+        {
+          timeline: [
+            tool(
+              "issues",
+              "issues",
+              { issues: [crashIssue], total: 1, total_matched: 1 },
+              {
+                evidenceRef: ref,
+              },
+            ),
+          ],
+        },
+      ],
+      target,
+    );
+    const evidence: DiagnosisEvidenceItem[] = [
+      {
+        status: "linked",
+        ref,
+        role: "cause",
+        claim: "",
+        gap: "this pod only, not the other replicas",
+      },
+    ];
+    const render = (report: string) =>
+      renderToStaticMarkup(
+        <InvestigationEvidencePane
+          projection={projection}
+          investigationCase={resolveInvestigationCase(
+            projection,
+            { evidence },
+            0,
+          )}
+          story={{ report, evidence }}
+          collecting={false}
+          animateGroupIds={new Set()}
+          onViewSource={() => {}}
+          onViewActivity={() => {}}
+        />,
+      );
+    const compact = render("It crashes.\n\n[[radar:evidence=0|compact]]");
+    expect(compact).toContain("data-agent-gap-hint");
+    expect(compact).toContain("this pod only, not the other replicas");
+    expect(compact).not.toContain("not shown");
+    const full = render("It crashes.\n\n[[radar:evidence=0]]");
+    // The record under Captured results keeps its labelled form.
+    const story = full.slice(0, full.indexOf("Captured results"));
+    expect(story).toMatch(
+      /data-agent-gap[^>]*>this pod only, not the other replicas</,
+    );
+    expect(story).not.toContain("Not shown:");
+  });
+});
+
 describe("story card defaults", () => {
   it("shows the row a citation names on a listing card, inline", () => {
     const listRef = evidenceRef("k", "l");

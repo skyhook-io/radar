@@ -1681,20 +1681,17 @@ function EvidenceCard({
         )
         .filter(Boolean)
     : [];
-  // A compact card keeps its single row; the agent's note on what the result
-  // does not show rides on the subtitle as a hint, read on hover.
+  // A compact card keeps its single row; the agent's clause on what the
+  // result does not cover rides on it after the status, cut to the row, whole
+  // on hover. The clause is written to stand alone, so it carries no label.
   const gapHint =
     compact && storyGaps.length > 0 ? (
       <Tooltip
-        content={storyGaps.map((gap) => `Not shown: ${gap}`).join(" · ")}
-        wrapperClassName="inline-flex align-[-2px]"
+        content={storyGaps.join(" · ")}
+        wrapperClassName="inline min-w-0"
       >
-        <span
-          data-agent-gap-hint
-          className="inline-flex items-center gap-0.5 text-theme-text-tertiary"
-        >
-          <Info className="h-3 w-3" aria-hidden />
-          not shown
+        <span data-agent-gap-hint className="text-theme-text-tertiary">
+          {storyGaps.join(" · ")}
         </span>
       </Tooltip>
     ) : null;
@@ -1812,8 +1809,12 @@ function EvidenceCard({
           <span
             className={clsx(
               "mt-0.5 block text-xs leading-relaxed text-theme-text-secondary",
-              !open && !inlineSecretKeys && "line-clamp-2",
-              "[overflow-wrap:anywhere]",
+              gapHint
+                ? "truncate"
+                : [
+                    !open && !inlineSecretKeys && "line-clamp-2",
+                    "[overflow-wrap:anywhere]",
+                  ],
             )}
           >
             {displaySummary}
@@ -1955,7 +1956,7 @@ function EvidenceCard({
               ))}
               {storyGaps.map((gap) => (
                 <p key={gap} data-agent-gap>
-                  Not shown: {gap}
+                  {gap}
                 </p>
               ))}
             </div>
