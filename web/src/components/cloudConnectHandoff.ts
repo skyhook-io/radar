@@ -207,7 +207,12 @@ export function composeAdminNote(blocked: CloudInstallBlocked, exit: BlockedExit
 
 // The note is text a person reads and forwards, so its link carries only what
 // the page needs to open in the right place (an existing release to adopt,
-// the install method); the card's own button keeps the attribution params.
+// the install method) plus one short marker saying it arrived by handoff;
+// the card's own button keeps the full attribution params. The Hub stashes
+// the target and method across sign-in, so the admin still lands on the
+// prefilled install page.
+export const HANDOFF_VIA = 'admin_handoff'
+
 function plainLink(href: string): string {
   try {
     const url = new URL(href)
@@ -216,6 +221,7 @@ function plainLink(href: string): string {
       const v = url.searchParams.get(key)
       if (v) keep.set(key, v)
     }
+    keep.set('via', HANDOFF_VIA)
     url.search = keep.toString()
     return url.toString()
   } catch {

@@ -159,7 +159,9 @@ describe('composeAdminNote — an ask, then the link, then the evidence', () => 
     expect(note).toContain("the identity in use (system:serviceaccount:default:limited) doesn't have the permissions to install it")
     expect(note).toContain('Nothing in the cluster was changed. Could someone with cluster access connect it?')
     // The link a person reads carries only what the page needs — no attribution.
-    expect(note).toContain('Open Radar Cloud to get the install command (sign in, name the cluster, pick Helm / Argo CD / Flux):\n' + `${APP}/install?method=helm`)
+    // The link a person reads keeps what the page needs to land prefilled,
+    // plus one marker that the arrival came by handoff — no utm noise.
+    expect(note).toContain('Open Radar Cloud to get the install command (sign in, name the cluster, pick Helm / Argo CD / Flux):\n' + `${APP}/install?method=helm&via=admin_handoff`)
     expect(note).not.toContain('utm_')
     expect(note).not.toContain('radar_outcome')
     expect(note).toContain("Details: No Radar install was found in the cluster; the check stopped while reading Helm's release records.")
@@ -175,7 +177,7 @@ describe('composeAdminNote — an ask, then the link, then the evidence', () => 
     const note = composeAdminNote(blocked, exit, where)
     expect(note).toContain('the install is managed by Flux, so connecting it is a values change in the repository')
     expect(note).toContain('Open Radar Cloud to get the values patch for Flux (sign in, name the cluster')
-    expect(note).toContain(`${APP}/install?existing=1&ns=radar&release=radar&method=flux`)
+    expect(note).toContain(`${APP}/install?existing=1&ns=radar&release=radar&method=flux&via=admin_handoff`)
     expect(note).toContain('Details: The release radar in namespace radar is managed by Flux.')
   })
 
@@ -186,7 +188,7 @@ describe('composeAdminNote — an ask, then the link, then the evidence', () => 
     expect(note).toContain('Request to connect cluster kind-dev to Radar Cloud')
     expect(note).toContain('Radar reported: Multiple Radar installations were found in this cluster. Use `radar cloud install` to pick one.')
     expect(note).toContain('Could someone with cluster access connect it from Radar Cloud?')
-    expect(note).toContain('Open Radar Cloud:\n' + `${APP}/signup`)
+    expect(note).toContain('Open Radar Cloud:\n' + `${APP}/signup?via=admin_handoff`)
   })
 
   it('keeps the whole line when a refusal has no error chain to trim', () => {
