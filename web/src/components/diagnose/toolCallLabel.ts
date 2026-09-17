@@ -1,5 +1,3 @@
-import { prettyTool } from "./parts";
-
 // One readable sentence for a tool call in flight, from the call's arguments:
 // "Reading logs for pod shop/api-7d4 / api" tells the reader what the agent
 // is looking at; "Get Pod Logs" tells them which tool ran.
@@ -132,4 +130,8 @@ function kindLabel(kind: string | undefined): string | undefined {
 function pluralLabel(kind: string): string {
   const base = kindLabel(kind) ?? kind;
   return base.endsWith("s") ? base : `${base}s`;
+}
+
+export function prettyTool(tool: string): string {
+  return tool.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
