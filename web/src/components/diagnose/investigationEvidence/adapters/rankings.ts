@@ -137,7 +137,7 @@ export function adaptTopResources(
         ? "this workload's pods aren't in these results"
         : undefined,
       skipped > 0
-        ? `${skipped} ${skipped === 1 ? "pod" : "pods"} omitted: no metrics`
+        ? `${skipped} ${value.kind === "nodes" ? (skipped === 1 ? "node" : "nodes") : skipped === 1 ? "pod" : "pods"} omitted: no metrics`
         : undefined,
     ]
       .filter(Boolean)

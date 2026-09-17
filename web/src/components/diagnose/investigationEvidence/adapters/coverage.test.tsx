@@ -136,12 +136,29 @@ describe("ranking card (top_resources)", () => {
           }),
         },
       ),
+      tool(
+        "top-nodes",
+        "top_resources",
+        {
+          kind: "nodes",
+          sort: "cpu",
+          metricsAvailable: true,
+          skippedNoMetrics: 1,
+          items: [
+            { kind: "Node", name: "worker-a", cpuMilli: 900, memoryMi: 4000 },
+          ],
+        },
+        { summary: JSON.stringify({ kind: "nodes", sort: "cpu" }) },
+      ),
     ]);
-    const [own, other] = groupsOf(projection.groups, "ranking");
+    const [own, other, nodes] = groupsOf(projection.groups, "ranking");
     expect(own.latest.summary).toBe(
       "1 ranked · in shop · this workload's pods aren't in these results · 3 pods omitted: no metrics",
     );
     expect(other.latest.summary).toBe("1 ranked · in other");
+    expect(nodes.latest.summary).toBe(
+      "1 ranked · cluster-wide · 1 node omitted: no metrics",
+    );
   });
 
   it("records a limit, not a card, when live metrics were unavailable", () => {
