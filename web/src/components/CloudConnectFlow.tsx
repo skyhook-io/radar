@@ -165,7 +165,12 @@ function CopyForAdmin({ note }: { note: string }) {
         <div
           id="admin-note-preview"
           role="tooltip"
-          className="absolute inset-x-0 bottom-full z-20 mb-3 rounded-xl border border-theme-border bg-theme-elevated p-4 shadow-theme-lg"
+          // Anchored above the action row inside the dialog's scroll area, so
+          // a panel taller than the space above it would be clipped at the
+          // top with no way to scroll to it. The cap keeps a normal note
+          // whole with no scrollbar and lets only an unusually long one
+          // scroll inside the panel instead of disappearing.
+          className="absolute inset-x-0 bottom-full z-20 mb-3 flex max-h-[min(26rem,calc(100vh-14rem))] flex-col rounded-xl border border-theme-border bg-theme-elevated p-4 shadow-theme-lg"
         >
           <div className="mb-1.5 flex items-center justify-between text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
             <span>{pinned ? 'Select and copy' : 'What gets copied'}</span>
@@ -185,7 +190,7 @@ function CopyForAdmin({ note }: { note: string }) {
           </div>
           <pre
             ref={noteRef}
-            className="select-text whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-theme-text-primary"
+            className="min-h-0 select-text overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-theme-text-primary"
           >
             {note}
           </pre>
