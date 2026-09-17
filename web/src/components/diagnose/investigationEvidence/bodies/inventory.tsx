@@ -47,11 +47,14 @@ export function namedInventoryRows(
     seen.add(key);
     // A row without a namespace lives in the listing's scope, or in none
     // (a cluster-scoped kind); neither satisfies a namespace the citation
-    // states unless it is the scope itself.
+    // states unless it is the scope itself. A package row's namespace is
+    // where the package runs, while the agent names the object that declares
+    // it (a Flux HelmRelease in flux-system), so a package is named by name.
     const matches = resources.filter(
       (resource) =>
         listingRowNamesSubject(resource, subject) &&
         (namespace === undefined ||
+          resource.kind === "Package" ||
           (resource.namespace ?? scopeNamespace) === namespace),
     );
     out.push({

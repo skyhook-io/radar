@@ -358,7 +358,7 @@ describe("listing cards (helm releases, packages, search)", () => {
         subject: {
           group: "helm.toolkit.fluxcd.io",
           kind: "HelmRelease",
-          namespace: "shop",
+          namespace: "flux-system",
           name: "podinfo",
         },
       },
