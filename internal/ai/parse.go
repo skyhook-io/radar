@@ -197,13 +197,6 @@ func diagnosisFromText(text string) Diagnosis {
 	return d
 }
 
-// parseSteps reads the typed next steps. A step with an unknown kind or no
-// text is dropped rather than guessed at; the cap cuts, it does not reject.
-func parseSteps(raw json.RawMessage) []DiagnosisStep {
-	steps, _ := parseStepsIndexed(raw)
-	return steps
-}
-
 // parseStepsIndexed also returns, for each kept step, its index in the
 // agent's original array, so an index the agent wrote can be translated.
 func parseStepsIndexed(raw json.RawMessage) ([]DiagnosisStep, []int) {

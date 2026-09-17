@@ -26,7 +26,7 @@ export { ConfirmDialog } from "./ConfirmDialog";
 export { HealthRing } from "./HealthRing";
 export { MetricsChart, MetricsSparkline } from "./MetricsChart";
 export * from "./drawer-components";
-export { Collapse, CollapseChevron } from "./Collapse";
+export { Collapse, CollapseChevron, COLLAPSE_DURATION_MS } from "./Collapse";
 export { ResourceBar } from "./ResourceBar";
 export { ForceDeleteConfirmDialog } from "./ForceDeleteConfirmDialog";
 export { InClusterConsentDialog } from "./InClusterConsentDialog";

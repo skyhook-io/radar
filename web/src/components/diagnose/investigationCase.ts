@@ -296,7 +296,9 @@ function observationSubjectIdentity(
   };
 }
 
-const BUILT_IN_GROUPS = new Set([
+// No CRD lives in a built-in API group: the core group under its three
+// spellings, the four legacy unsuffixed groups, or any group under k8s.io.
+const LEGACY_BUILT_IN_GROUPS = new Set([
   "",
   "core",
   "v1",
@@ -304,10 +306,10 @@ const BUILT_IN_GROUPS = new Set([
   "batch",
   "autoscaling",
   "policy",
-  "networking.k8s.io",
-  "storage.k8s.io",
-  "rbac.authorization.k8s.io",
 ]);
+function isBuiltInGroup(group: string): boolean {
+  return LEGACY_BUILT_IN_GROUPS.has(group) || group.endsWith(".k8s.io");
+}
 
 function sameKind(left: string, right: string): boolean {
   return pluralToKind(left).toLowerCase() === pluralToKind(right).toLowerCase();
@@ -445,7 +447,7 @@ function identityMatchesSubject(
     subject.group !== undefined &&
     identity.group !== undefined &&
     subject.group.toLowerCase() !== identity.group.toLowerCase() &&
-    !(identity.group === "" && BUILT_IN_GROUPS.has(subject.group.toLowerCase()))
+    !(identity.group === "" && isBuiltInGroup(subject.group.toLowerCase()))
   ) {
     return false;
   }

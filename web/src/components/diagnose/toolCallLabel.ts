@@ -121,8 +121,7 @@ function parseArgs(args: string | undefined): ToolArgs {
   }
 }
 
-// Arguments carry kinds as "deployment", "Deployment" or "configmaps"; the
-// label reads best capitalised and singular.
+// Arguments carry kinds as "deployment", "Deployment" or "configmaps".
 // Capitalise and otherwise leave the word alone: stripping an "s" turns
 // Ingress into Ingres.
 function kindLabel(kind: string | undefined): string | undefined {

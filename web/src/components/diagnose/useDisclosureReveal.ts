@@ -1,9 +1,10 @@
 import { useCallback, useLayoutEffect, useRef } from "react";
+import { COLLAPSE_DURATION_MS } from "@skyhook-io/k8s-ui";
 
-// Shared Collapse uses a 300 ms grid-row transition. Keep a small paint margin
-// before moving focus so the destination is stationary. Reduced-motion users get
-// an immediate disclosure and focus hand-off because Collapse disables motion.
-export const INVESTIGATION_DISCLOSURE_SETTLE_MS = 320;
+// A small paint margin past the shared Collapse transition before moving
+// focus, so the destination is stationary. Reduced-motion users get an
+// immediate disclosure and focus hand-off because Collapse disables motion.
+export const INVESTIGATION_DISCLOSURE_SETTLE_MS = COLLAPSE_DURATION_MS + 20;
 export function prefersReducedMotion(): boolean {
   return (
     typeof window !== "undefined" &&

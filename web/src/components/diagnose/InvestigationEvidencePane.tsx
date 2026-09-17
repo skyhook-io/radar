@@ -668,16 +668,29 @@ export function InvestigationEvidencePane({
   // What the story actually placed, not what the case could have: a cited
   // card the agent never placed is inventory, and the inventory says so.
   // A marker written in the ledger's ref form names the item carrying that ref.
-  const resolveStoryRef = (ref: string): number | undefined => {
-    const matches = (story?.evidence ?? [])
-      .map((item, index) => (item.ref === ref ? index : -1))
-      .filter((index) => index >= 0);
-    // Two items on one ref name no single card; the renderer flags it.
-    return matches.length === 1 ? matches[0] : undefined;
-  };
-  const storyPlacements = story
-    ? resolveStoryPlacements(story.report, resolveStoryItem, resolveStoryRef)
-    : undefined;
+  const storyEvidence = story?.evidence;
+  const resolveStoryRef = useCallback(
+    (ref: string): number | undefined => {
+      const matches = (storyEvidence ?? [])
+        .map((item, index) => (item.ref === ref ? index : -1))
+        .filter((index) => index >= 0);
+      // Two items on one ref name no single card; the renderer flags it.
+      return matches.length === 1 ? matches[0] : undefined;
+    },
+    [storyEvidence],
+  );
+  const storyReport = story?.report;
+  const storyPlacements = useMemo(
+    () =>
+      storyReport === undefined
+        ? undefined
+        : resolveStoryPlacements(
+            storyReport,
+            resolveStoryItem,
+            resolveStoryRef,
+          ),
+    [storyReport, resolveStoryItem, resolveStoryRef],
+  );
   const placedCount = storyPlacements?.placedCount ?? 0;
   // A card behind the fold may be mounted and inert, or not mounted at all
   // before the fold first opens; either way the fold opens first and the

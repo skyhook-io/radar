@@ -1,6 +1,6 @@
-import { useState, type ReactNode } from 'react'
-import { ChevronRight } from 'lucide-react'
-import { clsx } from 'clsx'
+import { useState, type ReactNode } from "react";
+import { ChevronRight } from "lucide-react";
+import { clsx } from "clsx";
 
 // Animated show/hide using the grid-template-rows 0fr→1fr technique — the
 // app-wide standard for expand/collapse (drawers, checks, audit, resources
@@ -19,31 +19,35 @@ import { clsx } from 'clsx'
 // resource rows, each with a drift panel) — otherwise every collapsed instance
 // pays its render cost up front. Off by default so the common single-instance
 // case keeps the simplest behavior.
+// The transition length the classes below encode (Tailwind needs the literal
+// `duration-300`); consumers that wait for a disclosure to settle read this.
+export const COLLAPSE_DURATION_MS = 300;
+
 export function Collapse({
   open,
   children,
   className,
   mountLazily = false,
 }: {
-  open: boolean
-  children: ReactNode
-  className?: string
-  mountLazily?: boolean
+  open: boolean;
+  children: ReactNode;
+  className?: string;
+  mountLazily?: boolean;
 }) {
   // Latch: once opened, stay mounted. Conditional setState-in-render is the
   // supported pattern for deriving state from props without an extra commit.
-  const [hasOpened, setHasOpened] = useState(open)
-  if (mountLazily && open && !hasOpened) setHasOpened(true)
-  const render = !mountLazily || hasOpened
+  const [hasOpened, setHasOpened] = useState(open);
+  if (mountLazily && open && !hasOpened) setHasOpened(true);
+  const render = !mountLazily || hasOpened;
   return (
     <div
       className={clsx(
         // 300 ms with a decelerating curve (Material's standard easing): fast to
         // start, settling gently — the pace polished disclosure UIs use.
-        'grid transition-[grid-template-rows] duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none',
+        "grid transition-[grid-template-rows] duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none",
         className,
       )}
-      style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
+      style={{ gridTemplateRows: open ? "1fr" : "0fr" }}
     >
       {/* `relative` is load-bearing. Collapsed content is still laid out at full
           height and only clipped by `overflow-hidden` — but an absolutely-positioned
@@ -53,24 +57,32 @@ export function Collapse({
           and extends the enclosing scroll container's scrollable overflow: the drawer
           scrolls past its own content into blank space. Anchoring here puts those
           boxes back inside the clip, so a collapsed section contributes nothing. */}
-      <div className="relative overflow-hidden" inert={!open || undefined}>{render ? children : null}</div>
+      <div className="relative overflow-hidden" inert={!open || undefined}>
+        {render ? children : null}
+      </div>
     </div>
-  )
+  );
 }
 
 // CollapseChevron is the disclosure caret that pairs with <Collapse>: a single
 // ChevronRight that rotates 90° when open, rather than swapping between two
 // icons. Matches the drawer Section / ExpandableSection affordance so every
 // collapsible surface animates the same way.
-export function CollapseChevron({ open, className }: { open: boolean; className?: string }) {
+export function CollapseChevron({
+  open,
+  className,
+}: {
+  open: boolean;
+  className?: string;
+}) {
   return (
     <ChevronRight
       aria-hidden="true"
       className={clsx(
-        'shrink-0 text-theme-text-tertiary transition-transform duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none',
-        open && 'rotate-90',
+        "shrink-0 text-theme-text-tertiary transition-transform duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none",
+        open && "rotate-90",
         className,
       )}
     />
-  )
+  );
 }
