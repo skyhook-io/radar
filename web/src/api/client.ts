@@ -1,6 +1,6 @@
 import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
 import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
 import type {
   AppHistory,
@@ -22,6 +22,7 @@ import type {
 } from '@skyhook-io/k8s-ui'
 import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
 import { showApiError, showApiSuccess } from '../components/ui/Toast'
+import { nextGoneState, initialGoneState, isSuppressed, releaseForProbe } from './gone-suppression'
 import { useIsAuthEnabled, useNamespacedCapabilities } from '../contexts/CapabilitiesContext'
 import type {
   Topology,
@@ -2597,6 +2598,39 @@ export function fetchResourceWithRelationships<T>(
   );
 }
 
+/**
+ * Disables refetching for a resource the server has said is gone. Shared by
+ * the two resource-detail hooks so a 404'd target behaves the same in both.
+ */
+function useGoneSuppression(identity: string) {
+  const [state, setState] = useState(initialGoneState);
+
+  useEffect(() => {
+    setState(initialGoneState);
+  }, [identity]);
+
+  const observe = (error: unknown) => {
+    setState((prev) =>
+      nextGoneState(prev, { type: "settled", isGone: isNotFoundError(error), now: Date.now() }),
+    );
+  };
+
+  // Wake up once the cooldown is over so the query re-enables and probes.
+  const suppressedUntil = state.suppressedUntil;
+  useEffect(() => {
+    if (suppressedUntil === null) return;
+    const delay = suppressedUntil - Date.now();
+    if (delay <= 0) {
+      setState(releaseForProbe);
+      return;
+    }
+    const timer = setTimeout(() => setState(releaseForProbe), delay);
+    return () => clearTimeout(timer);
+  }, [suppressedUntil]);
+
+  return { quiet: isSuppressed(state, Date.now()), observe };
+}
+
 export function useResource<T>(
   kind: string,
   namespace: string,
@@ -2604,21 +2638,28 @@ export function useResource<T>(
   group?: string,
   options?: { enabled?: boolean; refetchInterval?: number | false },
 ) {
+  const identity = `${kind}/${namespace}/${name}/${group ?? ""}`;
+  const gone = useGoneSuppression(identity);
   const query = useQuery<ResourceWithRelationships<T>>({
     queryKey: ["resource", kind, namespace, name, group],
     queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
-    enabled: (options?.enabled ?? true) && Boolean(kind && name), // namespace can be empty for cluster-scoped resources
+    enabled: (options?.enabled ?? true) && Boolean(kind && name) && !gone.quiet, // namespace can be empty for cluster-scoped resources
     refetchInterval: options?.refetchInterval,
     // Kind still completing its initial sync: stay in loading and poll until
     // it becomes readable instead of erroring out (deep links during startup).
     retry: (failureCount, error) => {
       if (isStillLoadingError(error)) return true;
       if (isKindSyncFailed(error)) return false;
-      return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
+      // A 404 is the server's final answer; asking twice cannot change it.
+      if (isNotFoundError(error)) return false;
+      return failureCount < 1; // one retry for other errors, 4xx included, unlike the QueryClient default
     },
     retryDelay: (failureCount, error) =>
       isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   });
+
+  const queryError = query.error;
+  useEffect(() => { gone.observe(queryError); }, [queryError, identity]);
 
   // Extract resource and relationships from the response
   return {
@@ -2637,20 +2678,29 @@ export function useResourceWithRelationships<T>(
   name: string,
   group?: string,
 ) {
-  return useQuery<ResourceWithRelationships<T>>({
+  const identity = `${kind}/${namespace}/${name}/${group ?? ""}`;
+  const gone = useGoneSuppression(identity);
+  const query = useQuery<ResourceWithRelationships<T>>({
     queryKey: ["resource", kind, namespace, name, group],
     queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
-    enabled: Boolean(kind && name),
+    enabled: Boolean(kind && name) && !gone.quiet,
     // Deep-linked detail views can mount while the kind's informer is still
     // completing its initial sync: keep polling instead of erroring out.
     retry: (failureCount, error) => {
       if (isStillLoadingError(error)) return true;
       if (isKindSyncFailed(error)) return false;
-      return failureCount < 1; // one retry, 4xx included, unlike the QueryClient default
+      // A 404 is the server's final answer; asking twice cannot change it.
+      if (isNotFoundError(error)) return false;
+      return failureCount < 1; // one retry for other errors, 4xx included, unlike the QueryClient default
     },
     retryDelay: (failureCount, error) =>
       isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   });
+
+  const queryError = query.error;
+  useEffect(() => { gone.observe(queryError); }, [queryError, identity]);
+
+  return query;
 }
 
 // List resources - queryKey includes group for cache sharing with ResourcesView
