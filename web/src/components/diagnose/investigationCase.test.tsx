@@ -400,6 +400,100 @@ describe("agent case placement (D-1, D-1b)", () => {
     ]);
   });
 
+  it("does not hold the evidence word against a result that yielded one observation", () => {
+    const metricsRef = evidenceRef("m", "a");
+    const upgradeRef = evidenceRef("u", "b");
+    const projection = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "names",
+        "discover_metrics",
+        {
+          match: "container_restarts",
+          count: 0,
+          metrics: [],
+          truncated: false,
+        },
+        {
+          evidenceRef: metricsRef,
+          summary: JSON.stringify({ match: "container_restarts" }),
+        },
+      ),
+      tool(
+        "upgrade",
+        "get_cluster_upgrade_readiness",
+        {
+          currentVersion: "1.35.7",
+          targetVersion: "1.36",
+          check: {
+            id: "webhooks",
+            title: "Admission webhooks",
+            category: "api",
+            status: "fail",
+            findings: [
+              {
+                title: "Webhook has no failure policy",
+                level: "blocker",
+                resource: {
+                  kind: "ValidatingWebhookConfiguration",
+                  name: "kyverno",
+                },
+              },
+            ],
+          },
+        },
+        {
+          evidenceRef: upgradeRef,
+          summary: JSON.stringify({ targetVersion: "1.36" }),
+        },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(
+            metricsRef,
+            "context",
+            "No metric name contains container_restarts.",
+            {
+              kind: "Pod",
+              namespace: "shop",
+              name: "api-abc",
+              observation: "metrics",
+            },
+          ),
+          linked(
+            upgradeRef,
+            "context",
+            "None of the findings concern this workload.",
+            {
+              group: "apps",
+              kind: "Deployment",
+              namespace: "shop",
+              name: "api",
+              observation: "resource",
+            },
+          ),
+          linked(ref, "symptom", "The bundle's events.", {
+            kind: "Pod",
+            namespace: "shop",
+            name: "api-abc",
+            observation: "startup",
+          }),
+        ],
+      },
+      0,
+    );
+    // The bundle yields many observations, so a word it cannot satisfy still
+    // leaves that item at its source.
+    expect(resolved.items.map((item) => item.placement)).toEqual([
+      "card",
+      "card",
+      "source",
+    ]);
+  });
+
   it("binds a Pod subject to events only for the target's own pod or a pod an event names whole", () => {
     const workerRef = evidenceRef("e", "f");
     const canaryBundle = {

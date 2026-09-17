@@ -141,22 +141,23 @@ export function resolveInvestigationCase(
       source,
       placement: "source",
     };
+    const produced = projection.groups.flatMap((group) =>
+      group.observations
+        .filter((observation) => observation.source.id === source.id)
+        .map((observation) => ({ group, observation })),
+    );
     const candidates = subjectUnusable
       ? []
-      : projection.groups.flatMap((group) =>
-          group.observations
-            .filter(
-              (observation) =>
-                observation.source.id === source.id &&
-                (!subject ||
-                  observationMatchesSubject(
-                    group,
-                    observation,
-                    subject,
-                    targetPods,
-                  )),
-            )
-            .map((observation) => ({ group, observation })),
+      : produced.filter(
+          ({ group, observation }) =>
+            !subject ||
+            observationMatchesSubject(
+              group,
+              observation,
+              subject,
+              targetPods,
+              produced.length === 1,
+            ),
         );
     if (candidates.length === 1) {
       const { group, observation } = candidates[0];
@@ -372,14 +373,20 @@ const RESOURCE_SHAPED: ReadonlySet<InvestigationEvidenceData["type"]> = new Set<
  * A discriminator the agent omits is a wildcard, and so is one the producer
  * did not state; every discriminator both sides supply must match. Uniqueness
  * of the match, not completeness of the subject, is what places a claim.
+ *
+ * The evidence word tells observations of one call apart. A call that
+ * yielded a single observation (a receipt for a metric search, a scan with
+ * nothing about the target) has nothing to tell apart, so the word the agent
+ * chose for it is not held against it; what it names still has to match.
  */
 function observationMatchesSubject(
   group: InvestigationEvidenceGroup,
   observation: InvestigationEvidenceObservation,
   subject: DiagnosisEvidenceSubject,
   targetPods: ReadonlySet<string>,
+  sole: boolean,
 ): boolean {
-  if (subject.observation !== undefined) {
+  if (subject.observation !== undefined && !sole) {
     // A diagnose bundle captures several vitals charts for one resource, so
     // "metrics" alone cannot name one; "metrics:<category>" picks the chart
     // whose identity ends in that category. An agent-run query is one chart,
