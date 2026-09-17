@@ -1545,22 +1545,31 @@ export function getRolloutStatus(rollout: any): StatusBadge {
   return rolloutActivityBadge(getWorkloadRolloutActivity(rollout, 'rollout'))
 }
 
-export function getAnalysisRunStatus(run: any): StatusBadge {
-  const phase = run.status?.phase || 'Unknown'
+/** The AnalysisPhase vocabulary (AnalysisRun, Experiment, and a Rollout's
+ *  analysis slots all report it) mapped onto HealthLevel. Shared so a caller
+ *  holding only the phase string lands on the same tone as one holding the
+ *  whole run. */
+export function analysisPhaseLevel(phase?: string): HealthLevel {
   switch (phase) {
     case 'Successful':
-      return { text: 'Successful', color: healthColors.healthy, level: 'healthy' }
+      return 'healthy'
     case 'Running':
     case 'Pending':
-      return { text: phase, color: healthColors.degraded, level: 'degraded' }
+      return 'degraded'
     case 'Inconclusive':
-      return { text: 'Inconclusive', color: healthColors.alert, level: 'alert' }
+      return 'alert'
     case 'Failed':
     case 'Error':
-      return { text: phase, color: healthColors.unhealthy, level: 'unhealthy' }
+      return 'unhealthy'
     default:
-      return { text: phase, color: healthColors.unknown, level: 'unknown' }
+      return 'unknown'
   }
+}
+
+export function getAnalysisRunStatus(run: any): StatusBadge {
+  const phase = run.status?.phase || 'Unknown'
+  const level = analysisPhaseLevel(phase)
+  return { text: phase, color: healthColors[level], level }
 }
 
 // Counts only verdict-bearing metrics: Argo excludes dryRun results from the run's

@@ -1893,8 +1893,31 @@ export interface CloudInstallFailure {
   retrySafe: boolean
 }
 
+// What Radar did before it stopped: the operation it planned, how far it got,
+// and what it could establish about the cluster. Evidence for the card, and
+// the input to the exit it offers — the two are decided separately.
+export interface CloudInstallAttempted {
+  mode: 'fresh' | 'adopt' | 'gitops'
+  namespace: string
+  release: string
+  stage: 'inspect' | 'prepare' | 'preflight'
+  // Discovery saw only the default namespace; a fresh plan is not proof that
+  // no Radar exists elsewhere.
+  partialScan?: boolean
+  // A complete scan found no Radar running, but Helm's release records could
+  // not be read, so a leftover release cannot be ruled out.
+  releaseUnread?: boolean
+  // GitOps only: the Hub install-page tab of the verified owning controller.
+  method?: 'argocd' | 'flux' | ''
+}
+
 export interface CloudInstallBlocked {
   reason: 'gitops' | 'preflight' | 'unsupported'
+  // Preflight only: what would unblock it, and the Helm operation that was
+  // dry-run — the plan card never renders when preflight blocks, so the
+  // blocked card states what Radar tried itself.
+  cause?: 'permissions' | 'cluster' | 'verification'
+  attempted?: CloudInstallAttempted
   message: string
   blocking?: string[]
 }
@@ -1949,13 +1972,23 @@ export interface CloudConnectInfo {
   freeTier?: string
 }
 
-// Deliberately a bare cross-origin GET: no credentials, no identifiers, no
-// params. The Hub learns only what any HTTP request reveals.
-export function useCloudConnectInfo(apiUrl: string | undefined, enabled: boolean) {
+// Deliberately a bare cross-origin GET: no credentials, no identifiers. The
+// Hub learns what any HTTP request reveals plus `about`, below: the lane the
+// footer renders and this deployment's mode, both closed enums, so nothing
+// about the cluster or the person rides along. Part of the query key so a
+// lane change (a driver install that just became tunneled, say) refetches
+// instead of reusing the other lane's copy.
+export function useCloudConnectInfo(
+  apiUrl: string | undefined,
+  enabled: boolean,
+  about: { lane: "driver" | "wizard"; mode?: DeploymentMode },
+) {
+  const params = new URLSearchParams({ lane: about.lane });
+  if (about.mode) params.set("mode", about.mode);
   return useQuery<CloudConnectInfo>({
-    queryKey: ["cloud-connect-info", apiUrl],
+    queryKey: ["cloud-connect-info", apiUrl, about.lane, about.mode],
     queryFn: async () => {
-      const res = await fetch(`${apiUrl}/api/connect/info`, {
+      const res = await fetch(`${apiUrl}/api/connect/info?${params}`, {
         credentials: "omit",
         signal: AbortSignal.timeout(4000),
       });
@@ -4861,6 +4894,31 @@ export function useRolloutCapabilities(
   });
 }
 
+export interface AnalysisRunSummary {
+  name: string;
+  phase: string;
+  message?: string;
+  trigger?: string;
+  stepIndex?: number;
+  createdAt: string;
+  metricsTotal: number;
+  metricsPassing: number;
+  metricsNotPassing: number;
+}
+
+export function useRolloutAnalysisRuns(
+  namespace: string,
+  name: string,
+  enabled = true,
+) {
+  return useQuery<{ items: AnalysisRunSummary[] }>({
+    queryKey: ["rollout-analysisruns", namespace, name],
+    queryFn: () => fetchJSON(`/rollouts/${namespace}/${name}/analysisruns`),
+    enabled: Boolean(namespace && name && enabled),
+    staleTime: 10000,
+  });
+}
+
 // Fallbacks only. The server reports what it actually did — including when it found
 // nothing to do — so its message is preferred over anything asserted here.
 const ROLLOUT_ACTION_MESSAGES: Record<
@@ -5043,6 +5101,30 @@ export function drainPlanBody(options: DrainPlanRequestOptions): string {
   });
 }
 
+/**
+ * The connected radar predates the drain-plan endpoint. Distinguished from a
+ * node-not-found 404 by the body: handlers answer with a JSON error envelope,
+ * while an unknown route gets the router's plain-text 404. Hosts serving a newer
+ * frontend against an older radar (Radar Hub) use this to fall back to the
+ * plan-less drain dialog instead of leaving Drain permanently disabled.
+ */
+export class DrainPlanUnsupportedError extends Error {
+  constructor() {
+    super("This radar does not support drain plans");
+    this.name = "DrainPlanUnsupportedError";
+  }
+}
+
+export function drainPlanFetchError(
+  status: number,
+  body: { error?: string } | null,
+): Error {
+  if (status === 404 && body === null) {
+    return new DrainPlanUnsupportedError();
+  }
+  return new Error(body?.error || `HTTP ${status}`);
+}
+
 // Read-only drain plan: what a drain with these options would do to each pod on the node.
 // Modelled as a mutation because it is a POST with a body and is fetched on demand
 // while the drain dialog is open; it performs no cluster mutation.
@@ -5059,10 +5141,8 @@ export function useDrainPlan() {
         body: drainPlanBody(options),
       });
       if (!response.ok) {
-        const error = await response
-          .json()
-          .catch(() => ({ error: "Unknown error" }));
-        throw new Error(error.error || `HTTP ${response.status}`);
+        const body = await response.json().catch(() => null);
+        throw drainPlanFetchError(response.status, body);
       }
       return response.json();
     },
@@ -5155,6 +5235,11 @@ export function describeDrainResult(data: {
   if (errors.length > 0) {
     parts.push(`Failed ${errors.length}: ${listWithOverflow(errors)}`);
   }
+  parts.push(
+    evicted > 0
+      ? "Evictions were accepted; those pods may still be terminating. The node remains cordoned."
+      : "The node remains cordoned.",
+  );
   const detail = parts.join("\n");
   if (errors.length > 0) {
     return {

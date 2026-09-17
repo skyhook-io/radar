@@ -23,6 +23,7 @@ import { toCanvas } from 'html-to-image'
 
 import { AlertTriangle, ChevronsDownUp, ChevronsUpDown, Download, Info, Layers, LayoutGrid, Loader2, Maximize, Minus, Pause, Play, Plus, RotateCw, Shield } from 'lucide-react'
 import { PaneLoader } from '../ui/PaneLoader'
+import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { TopologyOverlayBar } from './TopologyOverlayBar'
 import { Input } from '../ui/Input'
 import { Tooltip } from '../ui/Tooltip'
@@ -315,6 +316,8 @@ export function TopologyGraph({
   const [fitViewCounter, setFitViewCounter] = useState(0)
   const [isExporting, setIsExporting] = useState(false)
   const [showLegend, setShowLegend] = useState(false)
+  const [warningsOpen, setWarningsOpen] = useState(false)
+  const warningsDisclosure = useDisclosure(warningsOpen)
   const prevStructureRef = useRef<string>('')
   const layoutVersionRef = useRef(0) // Used to invalidate stale layout results
   // Saved node positions for preservation across topology updates.
@@ -1064,10 +1067,16 @@ export function TopologyGraph({
                         ? 'Large retained run history is summarized to keep the graph readable.'
                         : 'Some resources failed to load. Data may be incomplete.'}
                   </span>
-                  <details className="mt-1">
-                    <summary className="text-xs text-amber-400/80 hover:text-amber-400">
-                      Show details ({topology.warnings.length})
-                    </summary>
+                  <button
+                    {...warningsDisclosure.buttonProps}
+                    type="button"
+                    onClick={() => setWarningsOpen((v) => !v)}
+                    className="mt-1 flex items-center gap-1 text-xs text-amber-400/80 hover:text-amber-400"
+                  >
+                    <CollapseChevron open={warningsOpen} inheritColor className="h-3 w-3" />
+                    Show details ({topology.warnings.length})
+                  </button>
+                  <Collapse open={warningsOpen} id={warningsDisclosure.panelId}>
                     <ul className="mt-1 text-xs text-theme-text-tertiary space-y-0.5">
                       {rbacWarnings.length > 0 && otherWarnings.length > 0 && (
                         <li className="text-amber-400/60 font-medium mt-1">RBAC restrictions:</li>
@@ -1088,7 +1097,7 @@ export function TopologyGraph({
                         <li key={`other-${i}`} className="font-mono">{w}</li>
                       ))}
                     </ul>
-                  </details>
+                  </Collapse>
                 </div>
               </div>
             </div>

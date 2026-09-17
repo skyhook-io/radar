@@ -63,8 +63,8 @@ describe('curated column ownership', () => {
   // Brace-counting, not parsing: assert the extraction actually saw the whole
   // table, or a silently-missed key would let the guard above pass vacuously.
   it('extracted every curated key', () => {
-    expect(CURATED.length).toBe(236)
-    expect(OWNED.size).toBe(198)
+    expect(CURATED.length).toBe(239)
+    expect(OWNED.size).toBe(201)
     expect(CURATED).toContain('pods')
     expect(CURATED).toContain('crossplanemanagedresources')
     expect([...OWNED]).toContain('awsmanagedcontrolplanes')
@@ -121,7 +121,7 @@ describe('every declaration resolves', () => {
     .map(m => [m[1], m[2].split(',').map(g => g.trim().replace(/'/g, ''))] as const)
 
   it('covers the whole ownership table', () => {
-    expect(DECLARED.length).toBe(198)
+    expect(DECLARED.length).toBe(201)
   })
 
   it.each(DECLARED)('%s is curated under each group it claims', (key, groups) => {

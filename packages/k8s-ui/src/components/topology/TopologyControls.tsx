@@ -3,6 +3,8 @@ import { FolderTree, ShieldCheck, ChevronDown, Check } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { TopologyMode, GroupingMode } from '../../types/core'
 import { Tooltip } from '../ui/Tooltip'
+import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
+import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 
 interface TopologyControlsProps {
   viewMode: TopologyMode
@@ -37,6 +39,7 @@ export function TopologyControls({
   leadingSlot,
 }: TopologyControlsProps) {
   const [groupOpen, setGroupOpen] = useState(false)
+  const { shouldRender: groupRender, isOpen: groupShown } = useAnimatedUnmount(groupOpen, overlayExitMs('menu'))
   const groupRef = useRef<HTMLDivElement>(null)
   const groupTriggerRef = useRef<HTMLButtonElement>(null)
   const groupItemRefs = useRef<(HTMLButtonElement | null)[]>([])
@@ -53,20 +56,25 @@ export function TopologyControls({
     if (restoreFocus) groupTriggerRef.current?.focus()
   }, [])
 
-  // On open, move focus onto the active option so the menu is keyboard-navigable
-  // (parity with the native <select> this replaced). Click-outside closes it.
+  // On open, move focus onto the active option so the menu is keyboard-navigable.
+  // The items exist only once the presence hook has mounted the menu, so this
+  // waits for `groupRender`.
   useEffect(() => {
-    if (!groupOpen) return
+    if (!groupOpen || !groupRender) return
     const active = Math.max(0, groupOptions.findIndex((o) => o.value === groupingMode))
     groupItemRefs.current[active]?.focus()
+    // groupOptions/groupingMode are read once at open; re-running on their
+    // identity change would steal focus mid-interaction.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupOpen, groupRender])
+
+  useEffect(() => {
+    if (!groupOpen) return
     const onDown = (e: MouseEvent) => {
       if (groupRef.current && !groupRef.current.contains(e.target as Node)) setGroupOpen(false)
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
-    // groupOptions/groupingMode are read once at open; re-running on their
-    // identity change would steal focus mid-interaction.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupOpen])
 
   const onGroupMenuKey = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -123,8 +131,19 @@ export function TopologyControls({
           {currentGroupLabel}
           <ChevronDown className="w-3 h-3 text-theme-text-tertiary" />
         </button>
-        {groupOpen && (
-          <div role="menu" onKeyDown={onGroupMenuKey} className="absolute right-0 top-full mt-1 z-50 min-w-[160px] rounded-lg border border-theme-border bg-theme-surface py-1 shadow-xl">
+        {groupRender && (
+          <div
+            role="menu"
+            onKeyDown={onGroupMenuKey}
+            inert={!groupOpen}
+            className={clsx(
+              'absolute right-0 top-full mt-1 z-50 min-w-[160px] origin-top-right rounded-lg border border-theme-border bg-theme-surface py-1 shadow-xl',
+              TRANSITION_MENU,
+              groupShown ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]',
+              !groupOpen && 'pointer-events-none',
+            )}
+            style={overlayTransitionStyle(groupShown, 'menu')}
+          >
             {groupOptions.map((o, idx) => (
               <button
                 key={o.value}

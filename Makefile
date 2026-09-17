@@ -289,6 +289,13 @@ beyla-demo-down:
 beyla-demo-status:
 	./scripts/beyla-demo.sh status
 
+.PHONY: workload-metrics-demo workload-metrics-demo-check
+workload-metrics-demo:
+	bash scripts/workload-metrics-demo.sh up
+
+workload-metrics-demo-check:
+	bash scripts/workload-metrics-demo.sh check
+
 # Bootstrap a kind cluster with Cilium + Hubble Relay and traffic workloads,
 # for exercising every Hubble connection lane: direct in-cluster dial
 # (plaintext and TLS/SAN-discovery via `tls`), and the port-forward fallback

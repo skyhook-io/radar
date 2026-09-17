@@ -17,6 +17,8 @@ import {
 } from '../../utils/log-format'
 import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
 import { copyText } from '../../utils/clipboard'
+import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
+import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import {
   LOG_EXPORT_FORMAT_LABELS,
   LOG_EXPORT_FORMATS,
@@ -202,6 +204,7 @@ export function LogCore({
     new Set(['error', 'warn', 'info', 'debug'])
   )
   const [showDownloadMenu, setShowDownloadMenu] = useState(false)
+  const downloadMenu = useAnimatedUnmount(showDownloadMenu, overlayExitMs('menu'))
   const [exportScope, setExportScope] = useState<'visible' | 'all'>('visible')
   const [exportFormat, setExportFormat] = useState<LogExportFormat>(() => {
     try {
@@ -210,7 +213,9 @@ export function LogCore({
     } catch { return 'txt' }
   })
   const [showTsMenu, setShowTsMenu] = useState(false)
+  const tsMenu = useAnimatedUnmount(showTsMenu, overlayExitMs('menu'))
   const [showStructuredMenu, setShowStructuredMenu] = useState(false)
+  const structuredMenu = useAnimatedUnmount(showStructuredMenu, overlayExitMs('menu'))
   const [structuredMode, setStructuredMode] = useState<StructuredMode>(() => {
     try {
       const v = localStorage.getItem('radar-logs-structured-mode') as StructuredMode | null
@@ -297,9 +302,11 @@ export function LogCore({
     () => ({ format: exportFormat, showTimestamps, showPodName }),
     [exportFormat, showTimestamps, showPodName],
   )
+  // Keyed on presence, not logical open, so the preview doesn't flip to
+  // "nothing to export" while the popover is still fading out.
   const exportPreview = useMemo(
-    () => showDownloadMenu ? previewLogExport(exportEntries, exportOptions) : [],
-    [showDownloadMenu, exportEntries, exportOptions],
+    () => downloadMenu.shouldRender ? previewLogExport(exportEntries, exportOptions) : [],
+    [downloadMenu.shouldRender, exportEntries, exportOptions],
   )
   // Offering a scope that resolves to the same lines is a choice about nothing.
   const scopeIsMeaningful = displayEntries.length !== bufferEntries.length
@@ -309,8 +316,12 @@ export function LogCore({
   // silently exporting the whole buffer on a later visit.
   const toggleExportMenu = useCallback(() => {
     setShowDownloadMenu(prev => !prev)
-    setExportScope('visible')
   }, [])
+  // The reset lands once the popover has left the DOM, not at logical close,
+  // so the preview doesn't re-scope while the popover is still fading out.
+  useEffect(() => {
+    if (!downloadMenu.shouldRender) setExportScope('visible')
+  }, [downloadMenu.shouldRender])
 
   const handleExportCopy = useCallback(() => {
     closeExportMenu()
@@ -620,8 +631,14 @@ export function LogCore({
                   </span>
                 </button>
               </Tooltip>
-              {showStructuredMenu && (
-                <div className={`absolute top-full right-0 mt-1 w-56 ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50`}>
+              {structuredMenu.shouldRender && (
+                <div
+                  inert={!showStructuredMenu}
+                  className={`absolute top-full right-0 mt-1 w-56 origin-top-right ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50 ${TRANSITION_MENU} ${
+                    structuredMenu.isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]'
+                  } ${showStructuredMenu ? '' : 'pointer-events-none'}`}
+                  style={overlayTransitionStyle(structuredMenu.isOpen, 'menu')}
+                >
                   <div className={`px-3 py-1.5 text-[10px] uppercase tracking-wide ${palette.textTertiary} border-b ${palette.border}`}>
                     Structured display
                   </div>
@@ -673,8 +690,14 @@ export function LogCore({
                 </span>
               </button>
             </Tooltip>
-            {showTsMenu && (
-              <div className={`absolute top-full right-0 mt-1 w-44 ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50`}>
+            {tsMenu.shouldRender && (
+              <div
+                inert={!showTsMenu}
+                className={`absolute top-full right-0 mt-1 w-44 origin-top-right ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50 ${TRANSITION_MENU} ${
+                  tsMenu.isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]'
+                } ${showTsMenu ? '' : 'pointer-events-none'}`}
+                style={overlayTransitionStyle(tsMenu.isOpen, 'menu')}
+              >
                 <div className={`px-3 py-1.5 text-[10px] uppercase tracking-wide ${palette.textTertiary} border-b ${palette.border}`}>
                   Timestamp format
                 </div>
@@ -769,8 +792,16 @@ export function LogCore({
               <Download className="w-4 h-4" />
             </button>
           </Tooltip>
-          {showDownloadMenu && (
-            <div role="dialog" aria-label="Export logs" className={`absolute top-full right-0 mt-1 w-[23rem] ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50 p-3 space-y-2.5`}>
+          {downloadMenu.shouldRender && (
+            <div
+              role="dialog"
+              aria-label="Export logs"
+              inert={!showDownloadMenu}
+              className={`absolute top-full right-0 mt-1 w-[23rem] origin-top-right ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50 p-3 space-y-2.5 ${TRANSITION_MENU} ${
+                downloadMenu.isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]'
+              } ${showDownloadMenu ? '' : 'pointer-events-none'}`}
+              style={overlayTransitionStyle(downloadMenu.isOpen, 'menu')}
+            >
               <div className="flex items-center gap-3">
                 <span id="log-export-scope-label" className={exportLabelCls}>Lines</span>
                 {scopeIsMeaningful ? (

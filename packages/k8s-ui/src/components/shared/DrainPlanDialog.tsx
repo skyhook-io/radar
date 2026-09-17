@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Info, Loader2, RefreshCw } from 'lucide-react'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Badge, type BadgeSeverity } from '../ui/Badge'
 import { AlertBanner } from '../ui/drawer-components'
+import { Tooltip } from '../ui/Tooltip'
 import { pluralize } from '../../utils/pluralize'
 
 // Shapes returned by POST /api/nodes/{name}/drain-plan.
@@ -60,23 +60,21 @@ export interface CanConfirmDrainInput {
   loading: boolean
   /** the last plan request failed; with plan support the drain stays disabled until a plan is shown again */
   error?: string | null
-  acknowledgedEmptyDir: boolean
-  /** false when the host cannot compute plans (no onPlanDrain); the dialog then only gates on the acknowledgement */
+  /** false when the host cannot compute plans (no onPlanDrain); the dialog then confirms without one */
   planSupported: boolean
 }
 
 /**
  * Whether the destructive Drain button may be enabled. With plan support the
- * operator must see a current plan first. Enabling deleteEmptyDirData always
- * requires an explicit acknowledgement: the plan is an estimate, and a pod that
- * starts using emptyDir between the estimate and the drain would still lose its data.
+ * operator must see a current plan first. Deleting emptyDir data is its own
+ * deliberate choice, off by default and warned about by name, so it does not
+ * gate the button a second time.
  */
-export function canConfirmDrain({ plan, nodeName, options, loading, error, acknowledgedEmptyDir, planSupported }: CanConfirmDrainInput): boolean {
+export function canConfirmDrain({ plan, nodeName, options, loading, error, planSupported }: CanConfirmDrainInput): boolean {
   if (loading) return false
   if (planSupported && error) return false
   const current = planMatches(plan, nodeName, options) ? plan : null
   if (planSupported && !current) return false
-  if (options.deleteEmptyDirData && !acknowledgedEmptyDir) return false
   return true
 }
 
@@ -92,6 +90,10 @@ const OUTCOME_LABEL: Record<DrainOutcome, string> = {
   skip: 'skip',
 }
 
+const ESTIMATE_CAVEAT =
+  'An estimate, not a guarantee: the drain re-lists live state when it runs, and pods, budgets and permissions can change until then. ' +
+  'Evictions a budget refuses are retried until the drain deadline (60 seconds, shared by all evictions); a pod covered by more than one budget is refused outright.'
+
 interface DrainPlanContentProps {
   nodeName: string
   plan?: DrainPlan | null
@@ -100,21 +102,20 @@ interface DrainPlanContentProps {
   options: DrainDialogOptions
   onOptionsChange: (options: DrainDialogOptions) => void
   planSupported: boolean
-  acknowledgedEmptyDir: boolean
-  onAcknowledgeEmptyDir: (acknowledged: boolean) => void
+  /** Recompute the plan with the current options; also the retry after a failed plan. */
+  onRefreshPlan?: () => void
 }
 
 /**
  * The body of the drain dialog: options, the plan table and the emptyDir
- * acknowledgement. Presentational, so it renders without a DOM (tests use
+ * warning. Presentational, so it renders without a DOM (tests use
  * react-dom/server); the enclosing dialog owns the confirm gating.
  */
 export function DrainPlanContent({
-  nodeName, plan, loading, error, options, onOptionsChange, planSupported, acknowledgedEmptyDir, onAcknowledgeEmptyDir,
+  nodeName, plan, loading, error, options, onOptionsChange, planSupported, onRefreshPlan,
 }: DrainPlanContentProps) {
   const current = planMatches(plan, nodeName, options) ? plan : null
   const atRisk = current ? emptyDirPodsAtRisk(current) : []
-  const needsAck = options.deleteEmptyDirData
 
   return (
     <div className="flex flex-col gap-3 text-sm text-theme-text-secondary">
@@ -146,17 +147,53 @@ export function DrainPlanContent({
       )}
 
       {planSupported && !loading && error && (
-        <AlertBanner variant="error" title="Could not compute the drain plan" message={error} />
+        <AlertBanner variant="error" title="Could not compute the drain plan" message={error}>
+          {onRefreshPlan && (
+            <button
+              type="button"
+              onClick={onRefreshPlan}
+              className="mt-2 rounded border border-theme-border bg-theme-surface px-2 py-1 text-xs text-theme-text-primary transition-colors hover:bg-theme-hover"
+            >
+              Try again
+            </button>
+          )}
+        </AlertBanner>
       )}
 
       {planSupported && !loading && !error && current && (
         <>
-          <div className="text-theme-text-primary">
-            {pluralize(current.summary.evict, 'pod')} to evict,{' '}
-            {current.pdbsEvaluated
-              ? `${current.summary.mayBlock} may block on a PodDisruptionBudget`
-              : 'PodDisruptionBudgets not evaluated'}
-            , {current.summary.skip} skipped. This is an estimate from {new Date(current.generatedAt).toLocaleTimeString()}; the drain re-lists live state when it runs, and pods, budgets and permissions can change until then.
+          <div className="flex items-start justify-between gap-2">
+            <div className="text-theme-text-primary">
+              {pluralize(current.summary.evict, 'pod')} to evict,{' '}
+              {current.pdbsEvaluated
+                ? `${current.summary.mayBlock} may block on a PodDisruptionBudget`
+                : 'PodDisruptionBudgets not evaluated'}
+              , {current.summary.skip} skipped.
+            </div>
+            <div className="flex items-center gap-1 shrink-0 text-xs text-theme-text-tertiary">
+              <span>Estimated at {new Date(current.generatedAt).toLocaleTimeString()}</span>
+              <Tooltip content={ESTIMATE_CAVEAT} className="max-w-xs">
+                <button
+                  type="button"
+                  aria-label="About this estimate"
+                  className="p-0.5 rounded text-theme-text-tertiary transition-colors hover:text-theme-text-secondary"
+                >
+                  <Info className="w-3.5 h-3.5" />
+                </button>
+              </Tooltip>
+              {onRefreshPlan && (
+                <Tooltip content="Recompute the plan">
+                  <button
+                    type="button"
+                    aria-label="Recompute the plan"
+                    onClick={onRefreshPlan}
+                    className="p-1 rounded text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
+                </Tooltip>
+              )}
+            </div>
           </div>
 
           {!current.pdbsEvaluated && (
@@ -192,25 +229,18 @@ export function DrainPlanContent({
         </>
       )}
 
-      {needsAck && (
-        <AlertBanner variant="error" title="emptyDir data will be discarded">
-          <label className="flex items-start gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={acknowledgedEmptyDir}
-              onChange={(e) => onAcknowledgeEmptyDir(e.target.checked)}
-              className="mt-0.5 rounded border-theme-border"
-            />
-            <span>
-              {current && atRisk.length > 0
-                ? `Discard the emptyDir data of ${pluralize(atRisk.length, 'pod')}: ${atRisk.map((p) => `${p.namespace}/${p.name}`).join(', ')}.`
-                : current
-                  ? 'No pod on this node uses emptyDir right now; any that does when the drain runs will lose that data.'
-                  : 'Discard the emptyDir data of every evicted pod that uses emptyDir volumes.'}{' '}
-              I understand this data cannot be recovered.
-            </span>
-          </label>
-        </AlertBanner>
+      {options.deleteEmptyDirData && (
+        <AlertBanner
+          variant="warning"
+          title="emptyDir data will be discarded"
+          message={
+            current && atRisk.length > 0
+              ? `${pluralize(atRisk.length, 'pod')} that would be evicted ${atRisk.length === 1 ? 'uses' : 'use'} emptyDir: ${atRisk.map((p) => `${p.namespace}/${p.name}`).join(', ')}. That data cannot be recovered.`
+              : current
+                ? 'No pod that would be evicted uses emptyDir right now. Any that does when the drain runs loses that data, which cannot be recovered.'
+                : 'Every evicted pod that uses emptyDir volumes loses that data, which cannot be recovered.'
+          }
+        />
       )}
     </div>
   )
@@ -227,22 +257,16 @@ interface DrainPlanDialogProps {
   onConfirm: (options: DrainDialogOptions) => void
   onClose: () => void
   isDraining: boolean
-  /** Whether the host can compute plans. Without it the dialog still gates emptyDir on an acknowledgement. */
+  /** Whether the host can compute plans. Without it the dialog confirms without one. */
   planSupported: boolean
+  /** Recompute the plan with the current options; also the retry after a failed plan. */
+  onRefreshPlan?: () => void
 }
 
 export function DrainPlanDialog({
-  open, nodeName, plan, loading, error, options, onOptionsChange, onConfirm, onClose, isDraining, planSupported,
+  open, nodeName, plan, loading, error, options, onOptionsChange, onConfirm, onClose, isDraining, planSupported, onRefreshPlan,
 }: DrainPlanDialogProps) {
-  const [acknowledgedEmptyDir, setAcknowledgedEmptyDir] = useState(false)
-
-  // Any change of the options invalidates the acknowledgement: the operator
-  // acknowledges a specific set of pods, not the checkbox in the abstract.
-  useEffect(() => {
-    setAcknowledgedEmptyDir(false)
-  }, [options.force, options.deleteEmptyDirData, open, plan?.generatedAt])
-
-  const confirmEnabled = canConfirmDrain({ plan, nodeName, options, loading, error, acknowledgedEmptyDir, planSupported })
+  const confirmEnabled = canConfirmDrain({ plan, nodeName, options, loading, error, planSupported })
 
   return (
     <ConfirmDialog
@@ -266,8 +290,7 @@ export function DrainPlanDialog({
         options={options}
         onOptionsChange={onOptionsChange}
         planSupported={planSupported}
-        acknowledgedEmptyDir={acknowledgedEmptyDir}
-        onAcknowledgeEmptyDir={setAcknowledgedEmptyDir}
+        onRefreshPlan={onRefreshPlan}
       />
     </ConfirmDialog>
   )

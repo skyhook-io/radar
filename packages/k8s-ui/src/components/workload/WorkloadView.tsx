@@ -7,6 +7,7 @@ import { FetchResult } from '../ui/FetchResult'
 import { PaneLoader } from '../ui/PaneLoader'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { clsx } from 'clsx'
+import { Collapse } from '../ui/Collapse'
 import {
   ArrowLeft,
   ArrowRight,
@@ -2949,20 +2950,15 @@ function PodListFrame({
         {children}
       </div>
       {hasOverflow && (
-        <div
-          className={clsx(
-            'grid transition-[grid-template-rows,opacity] duration-200',
-            expanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0',
-          )}
-          style={{ transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)' }}
-          aria-hidden={!expanded || undefined}
-        >
-          <div className={clsx('min-h-0 overflow-hidden', expanded && 'max-h-[26rem] overflow-y-auto pr-1')} inert={!expanded || undefined}>
+        <Collapse open={expanded}>
+          {/* Long overflow lists scroll inside a capped box once open; the
+              cap comes off while closed so the collapse measures to zero. */}
+          <div className={clsx(expanded && 'max-h-[26rem] overflow-y-auto pr-1')}>
             <div className="space-y-2">
               {overflow}
             </div>
           </div>
-        </div>
+        </Collapse>
       )}
       {toggle}
     </div>

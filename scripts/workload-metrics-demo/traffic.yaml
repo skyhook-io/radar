@@ -1,0 +1,32 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generateName: workload-http-
+  namespace: radar-metrics-fixture
+spec:
+  activeDeadlineSeconds: 900
+  ttlSecondsAfterFinished: 86400
+  backoffLimit: 0
+  template:
+    metadata:
+      labels: {app: workload-demo-traffic}
+      annotations: {sidecar.istio.io/inject: 'false'}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: traffic
+          image: busybox:1.37.0
+          command:
+            - sh
+            - -c
+            - |
+              deadline=$(($(date +%s) + 600))
+              while [ "$(date +%s)" -lt "$deadline" ]; do
+                for url in http://web:8080/ http://web:8080/ http://web:8080/fail http://web:8081/ http://web.demo:80/ http://web.demo:80/boom http://web.demo:8080/; do
+                  wget -q -T 2 -O /dev/null "$url" || true
+                done
+                sleep 1
+              done
+          resources:
+            requests: {cpu: 10m, memory: 8Mi}
+            limits: {cpu: 100m, memory: 32Mi}

@@ -2,6 +2,8 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ComponentT
 import { Loader2, MoreVertical } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Tooltip } from './Tooltip'
+import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
+import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 
 export interface RowActionItem {
   key: string
@@ -25,20 +27,21 @@ interface RowActionMenuProps {
 
 export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true }: RowActionMenuProps) {
   const [open, setOpen] = useState(false)
+  const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs('menu'))
   // Flip the menu above the trigger when it would otherwise spill past the
   // viewport bottom. The GitOps table's bottom rows sit at the end of a scroll
   // container with the app's fixed overlay buttons below them, so a
   // downward-opening menu there clips its lowest items with no way to scroll
-  // them into view. Measured after open (useLayoutEffect, pre-paint, no flicker).
+  // them into view. Measured once the menu is mounted (useLayoutEffect,
+  // pre-paint, no flicker). The last placement is kept through the exit
+  // transition — resetting at logical close would snap the menu to the other
+  // side mid-fade — and re-measured on the next open.
   const [openUp, setOpenUp] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useLayoutEffect(() => {
-    if (!open) {
-      setOpenUp(false)
-      return
-    }
+    if (!open || !shouldRender) return
     const trigger = ref.current?.getBoundingClientRect()
     const menuH = menuRef.current?.offsetHeight ?? 0
     if (!trigger) return
@@ -46,7 +49,7 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
     // Flip up only when there's not enough room below AND enough room above,
     // so a tall menu near the top doesn't get clipped at the other end.
     setOpenUp(menuH + 8 > spaceBelow && trigger.top > menuH + 8)
-  }, [open])
+  }, [open, shouldRender])
 
   useEffect(() => {
     if (!open) return
@@ -89,14 +92,23 @@ export function RowActionMenu({ items, ariaLabel = 'Row actions', compact = true
       >
         <MoreVertical className={iconSize} />
       </button>
-      {open && (
+      {shouldRender && (
         <div
           ref={menuRef}
           role="menu"
+          inert={!open}
           className={clsx(
             'absolute right-0 z-50 min-w-[180px] rounded-lg border border-theme-border bg-theme-surface py-1 shadow-xl',
-            openUp ? 'bottom-full mb-1' : 'top-full mt-1',
+            openUp ? 'bottom-full mb-1 origin-bottom-right' : 'top-full mt-1 origin-top-right',
+            TRANSITION_MENU,
+            isOpen
+              ? 'opacity-100 translate-y-0 scale-100'
+              : openUp
+                ? 'opacity-0 translate-y-1 scale-[0.97]'
+                : 'opacity-0 -translate-y-1 scale-[0.97]',
+            !open && 'pointer-events-none',
           )}
+          style={overlayTransitionStyle(isOpen, 'menu')}
           onClick={(e) => e.stopPropagation()}
         >
           {items.map((item) => {

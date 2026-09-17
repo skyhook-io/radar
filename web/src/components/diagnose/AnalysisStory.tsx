@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
+import { TRANSITION_CHEVRON } from "@skyhook-io/k8s-ui/utils/animation";
 import { AlertTriangle, ChevronDown, FileSearch } from "lucide-react";
 import { Tooltip } from "../ui/Tooltip";
 import { Collapse } from "@skyhook-io/k8s-ui";
@@ -554,7 +555,8 @@ export function AnalysisStory({
           <ChevronDown
             aria-hidden
             className={clsx(
-              "h-3.5 w-3.5 transition-transform duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none",
+              "h-3.5 w-3.5",
+              TRANSITION_CHEVRON,
               open && "rotate-180",
             )}
           />

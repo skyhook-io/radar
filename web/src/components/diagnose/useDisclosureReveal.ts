@@ -1,17 +1,15 @@
 import { useCallback, useLayoutEffect, useRef } from "react";
-import { COLLAPSE_DURATION_MS } from "@skyhook-io/k8s-ui";
+import {
+  DURATION_DISCLOSURE,
+  prefersReducedMotion as sharedPrefersReducedMotion,
+} from "@skyhook-io/k8s-ui/utils/animation";
 
-// A small paint margin past the shared Collapse transition before moving
-// focus, so the destination is stationary. Reduced-motion users get an
-// immediate disclosure and focus hand-off because Collapse disables motion.
-export const INVESTIGATION_DISCLOSURE_SETTLE_MS = COLLAPSE_DURATION_MS + 20;
-export function prefersReducedMotion(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches
-  );
-}
+// Shared Collapse runs DURATION_DISCLOSURE. Keep a small paint margin before
+// moving focus so the destination is stationary; derived from the token so a
+// timing change cannot leave this stale. Reduced-motion users get an immediate
+// disclosure and focus hand-off because Collapse disables motion.
+export const INVESTIGATION_DISCLOSURE_SETTLE_MS = DURATION_DISCLOSURE + 20;
+export const prefersReducedMotion = sharedPrefersReducedMotion;
 
 export function investigationDisclosureSettleDelay(
   reducedMotion: boolean,

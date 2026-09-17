@@ -1,10 +1,11 @@
 import { createContext, useContext, useState } from 'react'
-import { ChevronRight, Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers, X, Minus } from 'lucide-react'
+import { Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers, X, Minus } from 'lucide-react'
 import { clsx } from 'clsx'
 import { formatAge, formatDuration, formatResources } from '../resources/resource-utils'
 import { getEffectiveResources } from '../../utils/extended-resources'
 import { Tooltip } from './Tooltip'
 import { getKindColorClass } from '../ui/Badge'
+import { Collapse, CollapseChevron, useDisclosure } from './Collapse'
 
 // ============================================================================
 // UI COMPONENTS
@@ -86,26 +87,22 @@ interface SectionProps {
 
 export function Section({ title, icon: Icon, children, defaultExpanded = true, contentClassName }: SectionProps) {
   const [expanded, setExpanded] = useState(defaultExpanded)
+  const { panelId, buttonProps } = useDisclosure(expanded)
 
   return (
     <div className="border-b-subtle pb-4 last:border-0">
       <button
+        {...buttonProps}
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-2 w-full text-left mb-2 hover:text-theme-text-primary transition-colors"
       >
-        <ChevronRight className={clsx('w-4 h-4 text-theme-text-tertiary transition-transform duration-200', expanded && 'rotate-90')} />
+        <CollapseChevron open={expanded} className="w-4 h-4" />
         {Icon && <Icon className="w-4 h-4 text-theme-text-secondary" />}
         <span className="text-sm font-medium text-theme-text-secondary">{title}</span>
       </button>
-      <div
-        className="grid transition-[grid-template-rows] duration-200 ease-out"
-        style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
-      >
-        {/* `relative` is load-bearing — see the note in ui/Collapse.tsx. */}
-        <div className="relative overflow-hidden">
-          <div className={contentClassName ?? 'pl-6'}>{children}</div>
-        </div>
-      </div>
+      <Collapse open={expanded} id={panelId}>
+        <div className={contentClassName ?? 'pl-6'}>{children}</div>
+      </Collapse>
     </div>
   )
 }
@@ -118,25 +115,21 @@ interface ExpandableSectionProps {
 
 export function ExpandableSection({ title, children, defaultExpanded = true }: ExpandableSectionProps) {
   const [expanded, setExpanded] = useState(defaultExpanded)
+  const { panelId, buttonProps } = useDisclosure(expanded)
 
   return (
     <div>
       <button
+        {...buttonProps}
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-2 text-sm text-theme-text-secondary hover:text-theme-text-primary transition-colors mb-1"
       >
-        <ChevronRight className={clsx('w-3.5 h-3.5 transition-transform duration-200', expanded && 'rotate-90')} />
+        <CollapseChevron open={expanded} className="w-3.5 h-3.5" />
         {title}
       </button>
-      <div
-        className="grid transition-[grid-template-rows] duration-200 ease-out"
-        style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
-      >
-        {/* `relative` is load-bearing — see the note in ui/Collapse.tsx. */}
-        <div className="relative overflow-hidden">
-          <div className="ml-5">{children}</div>
-        </div>
-      </div>
+      <Collapse open={expanded} id={panelId}>
+        <div className="ml-5">{children}</div>
+      </Collapse>
     </div>
   )
 }

@@ -18,6 +18,10 @@ type Client struct {
 	t Transport
 }
 
+const MaxWorkloadQueryBytes = 16000
+
+var ErrWorkloadQueryTooLarge = errors.New("Pod-name selection or workload size exceeds Radar's safe metrics query limit")
+
 // NewClient wraps the given Transport.
 func NewClient(t Transport) *Client {
 	return &Client{t: t}
@@ -28,15 +32,78 @@ func (c *Client) Query(ctx context.Context, promQL string) (*QueryResult, error)
 	return c.issueQuery(ctx, "/api/v1/query", url.Values{"query": {promQL}})
 }
 
+// QueryEvidence rejects partial answers rather than inferring identity from them.
+func (c *Client) QueryEvidence(ctx context.Context, promQL string) (*QueryResult, error) {
+	if len(promQL) > MaxWorkloadQueryBytes {
+		return nil, ErrWorkloadQueryTooLarge
+	}
+	body, err := c.t.Do(ctx, "POST", "/api/v1/query", url.Values{"query": {promQL}, "timeout": {"8s"}})
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		Status    string          `json:"status"`
+		Data      json.RawMessage `json:"data"`
+		Warnings  []string        `json:"warnings"`
+		Infos     []string        `json:"infos"`
+		IsPartial bool            `json:"isPartial"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, err
+	}
+	if response.Status != "success" || len(response.Warnings) != 0 || len(response.Infos) != 0 || response.IsPartial {
+		return nil, errors.New("metrics attribution probe did not return complete evidence")
+	}
+	return parseQueryResult(response.Data)
+}
+
 // QueryRange executes a PromQL range query.
 func (c *Client) QueryRange(ctx context.Context, promQL string, start, end time.Time, step time.Duration) (*QueryResult, error) {
+	return c.queryRange(ctx, promQL, start, end, step, false)
+}
+
+func (c *Client) QueryWorkloadRange(ctx context.Context, promQL string, start, end time.Time, step time.Duration) (*QueryResult, error) {
+	if len(promQL) > MaxWorkloadQueryBytes {
+		return nil, ErrWorkloadQueryTooLarge
+	}
+	return c.queryRange(ctx, promQL, start, end, step, true)
+}
+
+func (c *Client) queryRange(ctx context.Context, promQL string, start, end time.Time, step time.Duration, complete bool) (*QueryResult, error) {
 	params := url.Values{
 		"query": {promQL},
 		"start": {strconv.FormatInt(start.Unix(), 10)},
 		"end":   {strconv.FormatInt(end.Unix(), 10)},
 		"step":  {fmt.Sprintf("%.0f", step.Seconds())},
 	}
+	if complete {
+		return c.issueCompleteQuery(ctx, "POST", "/api/v1/query_range", params)
+	}
 	return c.issueQuery(ctx, "/api/v1/query_range", params)
+}
+
+var ErrPartialResponse = errors.New("metrics backend returned a partial response")
+var ErrQueryWarning = errors.New("metrics backend returned a query warning")
+
+func (c *Client) issueCompleteQuery(ctx context.Context, method, path string, params url.Values) (*QueryResult, error) {
+	body, err := c.t.Do(ctx, method, path, params)
+	if err != nil {
+		return nil, err
+	}
+	var response promResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, err
+	}
+	if response.Status != "success" {
+		return nil, fmt.Errorf("metrics query failed: %s", response.Error)
+	}
+	if response.IsPartial {
+		return nil, ErrPartialResponse
+	}
+	if len(response.Warnings) > 0 {
+		return nil, ErrQueryWarning
+	}
+	return parseQueryResult(response.Data)
 }
 
 func (c *Client) issueQuery(ctx context.Context, path string, params url.Values) (*QueryResult, error) {
@@ -212,6 +279,16 @@ const (
 //
 // Uses a 3-second timeout regardless of the context deadline to fail fast.
 func (c *Client) Probe(ctx context.Context) (bool, ProbeReason) {
+	return c.probe(ctx, true)
+}
+
+// ProbeQueryAPI checks query health without requiring scrape metadata. Explicit
+// remote-write endpoints may deliberately omit up while retaining workload data.
+func (c *Client) ProbeQueryAPI(ctx context.Context) (bool, ProbeReason) {
+	return c.probe(ctx, false)
+}
+
+func (c *Client) probe(ctx context.Context, requireTargets bool) (bool, ProbeReason) {
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
@@ -221,6 +298,12 @@ func (c *Client) Probe(ctx context.Context) (bool, ProbeReason) {
 		if errors.As(err, &httpErr) {
 			if httpErr.StatusCode == 401 || httpErr.StatusCode == 403 {
 				return false, ProbeReasonAuthError
+			}
+			var response struct {
+				Status string `json:"status"`
+			}
+			if json.Unmarshal(httpErr.Body, &response) == nil && response.Status == "error" {
+				return false, ProbeReasonPromError
 			}
 			// The server answered; whatever is wrong, the network path is not
 			// it — callers reasoning about reachability must not treat this
@@ -237,7 +320,8 @@ func (c *Client) Probe(ctx context.Context) (bool, ProbeReason) {
 	var pr struct {
 		Status string `json:"status"`
 		Data   struct {
-			Result []json.RawMessage `json:"result"`
+			ResultType string            `json:"resultType"`
+			Result     []json.RawMessage `json:"result"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &pr); err != nil {
@@ -246,7 +330,10 @@ func (c *Client) Probe(ctx context.Context) (bool, ProbeReason) {
 	if pr.Status != "success" {
 		return false, ProbeReasonPromError
 	}
-	if len(pr.Data.Result) == 0 {
+	if !requireTargets && pr.Data.ResultType != "vector" {
+		return false, ProbeReasonNotPrometheus
+	}
+	if requireTargets && len(pr.Data.Result) == 0 {
 		return false, ProbeReasonEmptyInstance
 	}
 	return true, ""

@@ -732,6 +732,19 @@ func GetClient() *kubernetes.Clientset {
 	return k8sClient
 }
 
+// GetClientInterface returns the clientset as kubernetes.Interface, or an
+// untyped nil when no client exists. Callers that store the result in an
+// interface must use this rather than GetClient(): a nil *Clientset wrapped in
+// an interface is non-nil, so "client == nil" guards downstream never fire and
+// the first API call panics.
+func GetClientInterface() kubernetes.Interface {
+	c := GetClient()
+	if c == nil {
+		return nil
+	}
+	return c
+}
+
 func GetClientSafetySnapshot() (*kubernetes.Clientset, string) {
 	clientMu.RLock()
 	defer clientMu.RUnlock()

@@ -103,6 +103,8 @@ func newFakeRollouts(objs ...runtime.Object) *fake.FakeDynamicClient {
 	scheme.AddKnownTypeWithName(GVR.GroupVersion().WithKind("RolloutList"), &unstructured.UnstructuredList{})
 	scheme.AddKnownTypeWithName(replicaSetGVR.GroupVersion().WithKind("ReplicaSet"), &unstructured.Unstructured{})
 	scheme.AddKnownTypeWithName(replicaSetGVR.GroupVersion().WithKind("ReplicaSetList"), &unstructured.UnstructuredList{})
+	scheme.AddKnownTypeWithName(analysisRunGVR.GroupVersion().WithKind("AnalysisRun"), &unstructured.Unstructured{})
+	scheme.AddKnownTypeWithName(analysisRunGVR.GroupVersion().WithKind("AnalysisRunList"), &unstructured.UnstructuredList{})
 	scheme.AddKnownTypeWithName(schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}.GroupVersion().WithKind("Deployment"), &unstructured.Unstructured{})
 	scheme.AddKnownTypeWithName(schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}.GroupVersion().WithKind("DeploymentList"), &unstructured.UnstructuredList{})
 	// Registered unstructured, not via corev1.AddToScheme: the dynamic fake is

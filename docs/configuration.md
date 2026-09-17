@@ -128,6 +128,11 @@ edit the deployment and restart Radar. `RADAR_KUBECOST_URL` does not carry an
 API key over from the config file; set `RADAR_KUBECOST_API_KEY` explicitly when
 the environment-managed endpoint requires one. The currency override remains separate.
 
+For workload charts, see [Workload metrics](workload-metrics.md)
+for the per-chart data requirements, automatic endpoint discovery and attribution,
+optional scope overrides, and coverage limits. Finding a Prometheus endpoint does
+not imply that it contains application HTTP metrics.
+
 ### Settings File (`~/.radar/settings.json`)
 
 User preferences for the UI. Managed via the Settings dialog or `PUT /api/settings`.
@@ -214,8 +219,10 @@ Radar keeps every file isolated rather than merging their cluster and user maps.
 This prevents identical user or cluster names in different files from selecting
 the wrong credentials. Context names remain unchanged unless two files use the
 same name; later collisions receive a source suffix in the context switcher.
-Saved namespace selections and integration credentials are keyed by that visible
-context name. If adding an earlier source causes a collision suffix to appear,
+Saved namespace selections are keyed by that visible context name. Integration
+credentials have separate binding rules; they are not general per-context profiles
+(see [integration settings](#integration-settings-when-switching-clusters)).
+If adding an earlier source causes a collision suffix to appear,
 the renamed context does not inherit preferences stored under its former name;
 Radar reports the rename in startup logs and diagnostics so it can be reconfigured.
 
@@ -247,6 +254,52 @@ Switching contexts in the UI never rewrites your kubeconfig — `kubectl` keeps 
 ### Expired credentials
 
 If an active context's credentials expire or are rejected, Radar disconnects cluster-backed work and retries automatically. After you re-authenticate, exec-based credentials are re-probed and static credentials are reloaded from kubeconfig on disk, so Radar can reconnect without a restart. Retries start after 30 seconds and back off to 5 minutes; a credential plugin that stops responding is retried less frequently.
+
+### Integration settings when switching clusters
+
+Local Radar does not yet maintain a complete set of integration settings for each
+cluster. A context switch reconnects Kubernetes and invalidates cached discovery;
+it does not switch every saved endpoint, tool preference and credential.
+
+| Setting | Local context-switch behavior |
+|---|---|
+| Namespace selection | Remembered per visible kubeconfig context |
+| Prometheus URL and headers, including tenant/auth headers | Radar-wide; the manual URL and headers remain selected after switching contexts |
+| Prometheus auto-discovery | Runs for the selected cluster when no manual URL or headers are configured |
+| Workload-metrics identity evidence / scope assertion | Evidence is rechecked; a connection change discards the process-local assertion |
+| Argo CD auto-discovery token | Bound to its kubeconfig source identity; this protects reuse but is not a saved profile for every cluster |
+| Kubecost auto-discovery API key / cluster-ID override | Bound to the configured context; an explicit central URL's key can be reused across contexts |
+
+If different clusters use different Prometheus backends or tenants, update the URL
+and headers together in **Settings → Metrics**. Changing only the URL retains
+saved headers; explicitly replace or clear them when moving to another endpoint.
+Headers require an explicit URL and are not sent during auto-discovery.
+The new workload charts recheck identity, but older name-based metrics are not
+protected by that attribution contract. See [Workload metrics](workload-metrics.md).
+
+In-cluster Radar has no context switcher. Configure the integration for that
+installation, using Secret-backed environment variables for credentials where
+supported; local config persistence is not a replacement for deployment configuration.
+
+## Workload metrics overrides by run mode
+
+Workload metrics normally use automatic identity matching. The optional
+`--prometheus-single-cluster` and repeatable `--prometheus-cluster-label` flags
+replace that matching for workload request/resource charts, history and Pod
+comparison only. They do not scope rightsizing, node/HPA/PVC or legacy
+network/storage queries. Leave both unset for automatic matching.
+
+| Run mode | How to configure an explicit override |
+|---|---|
+| Local CLI / `kubectl radar` | Supply the flag on each launch that needs it. These overrides have no `config.json` key or environment-variable equivalent. |
+| Desktop | Automatic matching is supported; these overrides are not exposed in Desktop's flag parser or Settings. Use standalone CLI Radar if an explicit override is required. |
+| In-cluster OSS | The operator supplies `traffic.prometheusSingleCluster` or `traffic.prometheusClusterLabels` through Helm/GitOps, which applies them at process startup. |
+| Radar Cloud | The installation's operator configures the same agent Helm values; this is not a viewer preference or a Hub authentication setting. |
+
+Changing the Kubernetes connection, logical metrics backend or headers clears
+an active override and resumes automatic matching. A new local port-forward to
+the same discovered Service is not a different backend. Only reapply an override
+after verifying the new connection's scope. See [operator override details](workload-metrics.md#optional-operator-override).
 
 ## Startup Context
 

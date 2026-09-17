@@ -3,6 +3,7 @@ import Editor from '@monaco-editor/react'
 import { AlertTriangle, Download, FileText, RotateCw } from 'lucide-react'
 import { PaneLoader, ensureMonacoRuntime } from '@skyhook-io/k8s-ui'
 import { formatBytes } from '../../utils/format'
+import { Disclosure } from '../ui/Disclosure'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 
 // A curated inline viewer for text files inside a pod container, rendered in
@@ -296,12 +297,11 @@ function PreviewErrorState({
       </div>
 
       {shape.details && (
-        <details className="mt-4 text-xs text-theme-text-tertiary">
-          <summary className="cursor-pointer hover:text-theme-text-secondary">Technical details</summary>
+        <Disclosure className="mt-4 text-xs text-theme-text-tertiary" summaryClassName="hover:text-theme-text-secondary" summary="Technical details">
           <div className="mt-2 font-mono whitespace-pre-wrap text-left bg-theme-elevated/40 p-3 rounded max-w-xl">
             {shape.details}
           </div>
-        </details>
+        </Disclosure>
       )}
     </div>
   )

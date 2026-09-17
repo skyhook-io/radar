@@ -325,14 +325,14 @@ func TestEnsureConnected_RetiredClientAborts(t *testing.T) {
 func TestMarkConnected_DropsStaleGeneration(t *testing.T) {
 	c := &Client{discoveryGen: 5}
 
-	if c.markConnected("http://stale", "", 4) { // started under an older generation
+	if c.markConnected("http://stale", "", "stale", 4) { // started under an older generation
 		t.Fatal("markConnected committed a stale-generation result")
 	}
 	if c.baseURL != "" {
 		t.Fatalf("stale-generation result was published: baseURL=%q", c.baseURL)
 	}
 
-	if !c.markConnected("http://fresh", "/bp", 5) { // current generation
+	if !c.markConnected("http://fresh", "/bp", "fresh", 5) { // current generation
 		t.Fatal("markConnected rejected a current-generation result")
 	}
 	if c.baseURL != "http://fresh" || c.basePath != "/bp" {
@@ -341,7 +341,7 @@ func TestMarkConnected_DropsStaleGeneration(t *testing.T) {
 
 	// A client retired by Reinitialize must not commit, even at the current gen.
 	retiredC := &Client{discoveryGen: 5, retired: true}
-	if retiredC.markConnected("http://x", "", 5) {
+	if retiredC.markConnected("http://x", "", "x", 5) {
 		t.Fatal("retired client committed a result")
 	}
 	if retiredC.baseURL != "" {

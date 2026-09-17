@@ -744,6 +744,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// Argo Rollouts progressive-delivery control plane. Rollback and
 			// revision history are served by the /workloads routes above.
 			r.Get("/rollouts/{namespace}/{name}/capabilities", s.handleRolloutCapabilities)
+			r.Get("/rollouts/{namespace}/{name}/analysisruns", s.handleRolloutAnalysisRuns)
 			r.Post("/rollouts/{namespace}/{name}/{action}", s.handleRolloutOperation)
 
 			// ArgoCD routes
@@ -4083,14 +4084,12 @@ func (s *Server) handleApplyResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "failed to read request body")
+	body, ok := s.readBoundedTextBody(w, r, maxYAMLApplyRequestBytes)
+	if !ok {
 		return
 	}
-	defer r.Body.Close()
 
-	yamlContent := strings.TrimSpace(string(body))
+	yamlContent := strings.TrimSpace(body)
 	if yamlContent == "" {
 		s.writeError(w, http.StatusBadRequest, "request body is empty")
 		return
@@ -4119,6 +4118,19 @@ func (s *Server) handleApplyResource(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Validate the whole request before reaching for a cluster client.
+	docs := k8s.SplitYAMLDocuments(yamlContent)
+	if len(docs) > maxYAMLApplyDocuments {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("apply supports at most %d YAML documents", maxYAMLApplyDocuments))
+		return
+	}
+	for index := range reviewedResourceVersions {
+		if index < 0 || index >= len(docs) {
+			s.writeError(w, http.StatusBadRequest, "reviewedVersions contains an invalid document index")
+			return
+		}
+	}
+
 	client, contextName := s.getDynamicClientSnapshotForRequest(r)
 	if client == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
@@ -4127,15 +4139,6 @@ func (s *Server) handleApplyResource(w http.ResponseWriter, r *http.Request) {
 	if reviewedContext != "" && reviewedContext != contextName {
 		s.writeError(w, http.StatusConflict, "cluster context changed after review; review the YAML again before applying")
 		return
-	}
-
-	// Split multi-document YAML
-	docs := k8s.SplitYAMLDocuments(yamlContent)
-	for index := range reviewedResourceVersions {
-		if index < 0 || index >= len(docs) {
-			s.writeError(w, http.StatusBadRequest, "reviewedVersions contains an invalid document index")
-			return
-		}
 	}
 
 	var results []k8s.ApplyResourceResult

@@ -9,7 +9,7 @@ import {
 import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
-import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
+import { TRANSITION_BACKDROP, TRANSITION_PANEL, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import { apiUrl, getAuthHeaders, getCredentialsMode, routePath } from '../../api/config'
 import {
   useCloudRole, useVersionCheck, useClusterInfo, usePrometheusStatus, useArgoStatus, useCapabilities,
@@ -135,7 +135,7 @@ export function SettingsDialog({
 }: SettingsDialogProps) {
   const queryClient = useQueryClient()
   const dialogRef = useRef<HTMLDivElement>(null)
-  const { shouldRender, isOpen } = useAnimatedUnmount(open, 200)
+  const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs('dialog'))
   const { data: versionInfo } = useVersionCheck()
   // Radar configuration (kubeconfig, port, integrations…) is host-level and
   // affects every user of this instance, so it's gated to owners. Personal
@@ -473,6 +473,7 @@ export function SettingsDialog({
           TRANSITION_BACKDROP,
           isOpen ? 'opacity-100' : 'opacity-0'
         )}
+        style={overlayTransitionStyle(isOpen, 'dialog')}
         onClick={() => requestCloseRef.current()}
       />
 
@@ -499,6 +500,7 @@ export function SettingsDialog({
           TRANSITION_PANEL,
           isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
         )}
+        style={overlayTransitionStyle(isOpen, 'dialog')}
       >
         {/* Header — spans both panes */}
         <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
@@ -628,6 +630,7 @@ export function SettingsDialog({
               locked={!canEditConfig}
             >
               <PrometheusConfigField
+                local={deploymentMode === 'local'}
                 value={editedConfig.prometheusUrl ?? ''}
                 configuredHeaderKeys={configData?.prometheusHeaderKeys ?? []}
                 onChange={(v) => updateConfigField('prometheusUrl', v || undefined)}
@@ -1908,11 +1911,13 @@ type CurrencySaveState =
 type HeaderRow = { key: string; value: string }
 
 function PrometheusConfigField({
+  local,
   value,
   onChange,
   configuredHeaderKeys,
   onApplied,
 }: {
+  local: boolean
   value: string
   onChange: (value: string) => void
   configuredHeaderKeys: string[]
@@ -1990,14 +1995,14 @@ function PrometheusConfigField({
   return (
     <div>
       <p className="text-xs text-theme-text-tertiary mb-3">
-        Powers the CPU / memory graphs, usage history, and rightsizing hints on workload and node pages.
+        Connect existing Prometheus-compatible data for resource usage, workload HTTP metrics and rightsizing. Available charts depend on collected metrics.
       </p>
       <label className="block text-sm font-medium text-theme-text-primary mb-1">
-        Server URL
+        Metrics backend URL
       </label>
       <p className="text-xs text-theme-text-tertiary mb-1">
-        Manual PromQL-compatible query URL — works with Prometheus, VictoriaMetrics, Thanos, and
-        Mimir. Set this to skip auto-discovery.
+        Base URL reachable from Radar, not your browser — Prometheus, VictoriaMetrics, Thanos or
+        Mimir. Include any backend path prefix, but not /api/v1/query. Leave empty for cluster discovery; headers require a URL.
       </p>
       <div className="flex items-center gap-2">
         <Input
@@ -2006,7 +2011,7 @@ function PrometheusConfigField({
           placeholder="http://prometheus-server.monitoring:9090"
           className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
         />
-        <Tooltip content="Apply this URL to the running server now — no restart" wrapperClassName="shrink-0">
+        <Tooltip content="Apply the connection now — no restart. Changing the URL or headers clears any workload scope override and resumes automatic identity matching." wrapperClassName="shrink-0">
           <button
             onClick={handleApply}
             disabled={apply.status === 'applying'}
@@ -2037,6 +2042,12 @@ function PrometheusConfigField({
           Applies immediately — no restart needed.
         </p>
       )}
+      <p className="mt-2 text-xs text-theme-text-tertiary">
+        {local
+          ? 'Saved URL and headers apply across all local cluster contexts.'
+          : 'Changes affect this Radar installation. Use deployment settings for configuration that survives Pod replacement.'}
+        {' URL changes do not clear headers. Replace or clear credentials before switching backends.'}
+      </p>
 
       {/* Auth headers — for token / multi-tenant backends (Bearer, X-Scope-OrgID). */}
       <div className="mt-3">
@@ -2104,7 +2115,8 @@ function PrometheusConfigField({
             <p className="text-xs text-theme-text-tertiary">
               Saved when you click Apply now. Entered headers replace all stored
               ones — values are hidden, so re-enter any you want to keep. Leave
-              blank to keep existing headers unchanged.
+              all rows blank to keep existing headers unchanged. To clear all saved
+              headers, remove every row and click Apply now.
             </p>
           </div>
         )}

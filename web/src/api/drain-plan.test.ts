@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { describeDrainResult, drainPlanBody, drainPlanPath } from "./client";
+import {
+  describeDrainResult,
+  DrainPlanUnsupportedError,
+  drainPlanBody,
+  drainPlanFetchError,
+  drainPlanPath,
+} from "./client";
 
 describe("drain plan request", () => {
   it("targets the read-only plan endpoint, never the drain", () => {
@@ -17,6 +23,14 @@ describe("drain plan request", () => {
       deleteEmptyDirData: true,
       force: true,
     });
+  });
+
+  it("reads a plain-text 404 as an unsupported endpoint, not as a missing node", () => {
+    expect(drainPlanFetchError(404, null)).toBeInstanceOf(DrainPlanUnsupportedError);
+    const nodeGone = drainPlanFetchError(404, { error: 'nodes "worker-1" not found' });
+    expect(nodeGone).not.toBeInstanceOf(DrainPlanUnsupportedError);
+    expect(nodeGone.message).toBe('nodes "worker-1" not found');
+    expect(drainPlanFetchError(503, null).message).toBe("HTTP 503");
   });
 });
 
@@ -45,8 +59,28 @@ describe("describeDrainResult", () => {
     expect(r.detail).not.toContain("ns/p5");
   });
 
-  it("reports a clean drain as success", () => {
+  it("reports a clean drain as success and says what success means", () => {
     const r = describeDrainResult({ evictedPods: ["a", "b"] });
-    expect(r).toEqual({ title: "Node drained: 2 evicted, 0 skipped", detail: "", failed: false });
+    expect(r.failed).toBe(false);
+    expect(r.title).toBe("Node drained: 2 evicted, 0 skipped");
+    expect(r.detail).toContain("those pods may still be terminating");
+    expect(r.detail).toContain("node remains cordoned");
+  });
+
+  it("never claims evictions were accepted when nothing was evicted", () => {
+    const allFailed = describeDrainResult({
+      evictedPods: [],
+      errors: ["shop/web-1: timed out waiting for PDB to allow eviction"],
+    });
+    expect(allFailed.detail).not.toContain("accepted");
+    expect(allFailed.detail).toContain("node remains cordoned");
+
+    const skipOnly = describeDrainResult({
+      evictedPods: [],
+      skippedPods: [
+        { namespace: "shop", name: "agent", outcome: "skip", reason: "managed by a DaemonSet", emptyDir: false, pdbChecked: false },
+      ],
+    });
+    expect(skipOnly.detail).not.toContain("accepted");
   });
 });

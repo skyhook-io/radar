@@ -2,7 +2,7 @@ import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent, type React
 import { createPortal } from 'react-dom'
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
-import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
+import { TRANSITION_BACKDROP, TRANSITION_PANEL, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 
 interface DialogPortalProps {
   open: boolean
@@ -27,7 +27,10 @@ interface DialogPortalProps {
  */
 export function DialogPortal({ open, onClose, children, className, closable = true }: DialogPortalProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
-  const { shouldRender, isOpen } = useAnimatedUnmount(open, 200)
+  // The unmount window is the exit duration: shorter than the entrance, and
+  // exactly what the panel transition below runs — a mismatch here cut the
+  // close at two-thirds (200ms window under a 300ms panel).
+  const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs('dialog'))
 
   // Bubble phase lets nested editors and menus consume Escape before the dialog closes.
   const handleDialogKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -81,6 +84,7 @@ export function DialogPortal({ open, onClose, children, className, closable = tr
           TRANSITION_BACKDROP,
           isOpen ? 'opacity-100' : 'opacity-0',
         )}
+        style={overlayTransitionStyle(isOpen, 'dialog')}
         onClick={closable ? onClose : undefined}
       />
       <div
@@ -95,6 +99,7 @@ export function DialogPortal({ open, onClose, children, className, closable = tr
           isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95',
           className,
         )}
+        style={overlayTransitionStyle(isOpen, 'dialog')}
       >
         {children}
       </div>

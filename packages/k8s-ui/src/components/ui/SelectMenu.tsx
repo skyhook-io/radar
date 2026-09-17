@@ -1,6 +1,8 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Check, ChevronDown, Search } from 'lucide-react'
 import { clsx } from 'clsx'
+import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
+import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 
 export interface SelectMenuOption {
   value: string
@@ -29,6 +31,7 @@ export function SelectMenu({
   id?: string
 }) {
   const [open, setOpen] = useState(false)
+  const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs('menu'))
   const [query, setQuery] = useState('')
   const [highlightedIndex, setHighlightedIndex] = useState(0)
   const listboxId = useId()
@@ -62,17 +65,21 @@ export function SelectMenu({
     }
   }, [open])
 
+  // Reset once the list has actually left the DOM — clearing at logical close
+  // would re-filter the options mid-fade.
   useEffect(() => {
-    if (!open) setQuery('')
-  }, [open])
+    if (!shouldRender) setQuery('')
+  }, [shouldRender])
 
   useEffect(() => {
     if (!open || !query) return
     if (listRef.current) listRef.current.scrollTop = 0
   }, [open, query])
 
+  // The list mounts a commit after `open` (presence hook), so this waits for
+  // `shouldRender` too — on `open` alone listRef is still null.
   useEffect(() => {
-    if (!open) return
+    if (!open || !shouldRender) return
     if (!searchPlaceholder) {
       triggerRef.current?.focus()
       return
@@ -80,7 +87,7 @@ export function SelectMenu({
     listRef.current
       ?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]')
       ?.scrollIntoView({ block: 'nearest' })
-  }, [open, searchPlaceholder])
+  }, [open, shouldRender, searchPlaceholder])
 
   return (
     <div
@@ -139,12 +146,17 @@ export function SelectMenu({
         <span className="truncate">{selected?.label}</span>
         <ChevronDown className={clsx('h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform', open && 'rotate-180')} />
       </button>
-      {open && (
+      {shouldRender && (
         <div
+          inert={!open}
           className={clsx(
             'absolute top-full z-50 mt-1 min-w-full overflow-hidden rounded-md border border-theme-border bg-theme-surface shadow-theme-lg',
-            searchPlaceholder ? 'left-0 right-0' : 'right-0'
+            searchPlaceholder ? 'left-0 right-0 origin-top-left' : 'right-0 origin-top-right',
+            TRANSITION_MENU,
+            isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]',
+            !open && 'pointer-events-none',
           )}
+          style={overlayTransitionStyle(isOpen, 'menu')}
         >
           {searchPlaceholder && (
             <div

@@ -11,10 +11,67 @@ type PreflightResult struct {
 	// Advisory lists non-fatal permission probes or exact checks Kubernetes cannot
 	// perform yet (for example, admission inside a not-yet-created namespace).
 	Advisory []string
+	// Denied and Unverifiable are subsets of Blocking, kept so a presenter can
+	// say what kind of stop this is without parsing the lines. Denied is the
+	// caller's identity lacking a permission (an access review said no, or the
+	// dry run came back 403). Unverifiable is Radar unable to prove the exact
+	// mutation (the prepared chart hid a Secret). Everything else in Blocking
+	// is the cluster refusing the change itself: an admission webhook, an
+	// object already owned by something else, an API the cluster does not
+	// serve.
+	Denied       []string
+	Unverifiable []string
 }
 
 // OK reports whether the install may proceed (no blocking denials).
 func (r PreflightResult) OK() bool { return len(r.Blocking) == 0 }
+
+// BlockCause is the one-word answer to "why can't this install proceed",
+// chosen so the person is told the thing that would actually unblock them.
+type BlockCause string
+
+const (
+	// BlockCausePermissions: every blocker is a permission the caller lacks.
+	// Someone with broader access can do this exact install.
+	BlockCausePermissions BlockCause = "permissions"
+	// BlockCauseCluster: at least one blocker is the cluster refusing the
+	// change. More permission would not help; something has to be resolved.
+	BlockCauseCluster BlockCause = "cluster"
+	// BlockCauseVerification: nothing was refused, but Radar could not prove
+	// what the install would do, so it declines to do it blind. Today this can
+	// only mean the Radar chart rendered something this binary's installer
+	// refuses to apply unseen — a Radar version/chart mismatch, not anything
+	// about the person or their cluster — so present it as Radar's limitation.
+	BlockCauseVerification BlockCause = "verification"
+)
+
+// Cause classifies a blocked result. A cluster refusal outranks a denial
+// because permission alone would not clear it; a denial outranks
+// verification because the denial is the actionable one.
+func (r PreflightResult) Cause() BlockCause {
+	if r.OK() {
+		return ""
+	}
+	if len(r.Blocking) > len(r.Denied)+len(r.Unverifiable) {
+		return BlockCauseCluster
+	}
+	if len(r.Denied) > 0 {
+		return BlockCausePermissions
+	}
+	return BlockCauseVerification
+}
+
+func (r *PreflightResult) blockRefused(line string) { r.Blocking = append(r.Blocking, line) }
+
+func (r *PreflightResult) blockDenied(line string) {
+	r.Blocking = append(r.Blocking, line)
+	r.Denied = append(r.Denied, line)
+}
+
+func (r *PreflightResult) blockUnverifiable(line string) {
+	r.Blocking = append(r.Blocking, line)
+	r.Unverifiable = append(r.Unverifiable, line)
+}
 
 type preflightCheck struct {
 	desc     string

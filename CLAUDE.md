@@ -248,6 +248,7 @@ Handlers emit `{"error": "..."}` via `s.writeError(w, status, msg)`. Status conv
 - **403** RBAC denied (nil lister or apiserver Forbidden)
 - **404** resource doesn't exist — check via `apierrors.IsNotFound(err)`
 - **409** operation already in progress (sync running, etc.)
+- **413** request body over the route's cap — the body is bounded *before* it is read (`readBoundedTextBody` for raw YAML, `decodeBoundedJSONBody` for JSON), so nothing has parsed it yet and 400 would wrongly blame the content. Reserve 400 for input that was read and found invalid — including caps counted after parsing, like the YAML document limit
 - **503** cache/connection not ready — most cluster-touching handlers call `s.requireConnected(w)` at the top
 - **500** unexpected — always `log.Printf("[module] Failed to <action> %s/%s: %v", ns, name, err)` before returning
 
@@ -275,6 +276,7 @@ Centralized `@layer components` classes in `theme/components.css` (Tailwind util
 - Buttons: `.btn-brand` — not hand-rolled `bg-blue-*`
 - Badges: `<Badge severity="...">` or `<Badge kind="...">` — never hand-write color strings
 - Shadows: `shadow-theme-sm/md/lg` — not raw Tailwind shadows
+- Motion: `<Collapse>` / `<CollapseChevron>` / `useDisclosure` for anything that expands in place; `useAnimatedUnmount(open, overlayExitMs(kind))` + `overlayTransitionStyle` for menus, dialogs, sheets. All timing comes from `packages/k8s-ui/src/utils/animation.ts` — never an inline duration or curve, never `open && (...)` for a disclosure, no native `<details>`. See DESIGN.md §7 Motion.
 
 ### Printer columns (uncurated CRDs)
 

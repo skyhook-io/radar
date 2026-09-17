@@ -31,6 +31,8 @@ import { stringify as toYaml } from "yaml";
 import { codeToHtml } from "shiki";
 import { DialogPortal } from "@skyhook-io/k8s-ui/components/ui/DialogPortal";
 import { parseContextName } from "../../utils/context-name";
+import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from "../../utils/animation";
+import { useAnimatedUnmount } from "../../hooks/useAnimatedUnmount";
 import { useTheme } from "../../context/ThemeContext";
 import { type DiagnoseConsentCopy } from "../../context/DiagnoseCustomization";
 import {
@@ -197,6 +199,9 @@ function SelectMenu({
   hint?: string;
 }) {
   const [open, setOpen] = useState(false);
+  // Presence outlives `open` by the menu exit so the list can fade out; the
+  // click-away backdrop only exists while logically open.
+  const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs("menu"));
   const current = options.find((o) => o.value === value) ?? options[0];
   return (
     <div>
@@ -214,14 +219,19 @@ function SelectMenu({
           <ChevronDown className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
         </button>
         {open && (
-          <>
-            <div
-              className="fixed inset-0 z-10"
-              onClick={() => setOpen(false)}
-            />
+          <div
+            className="fixed inset-0 z-10"
+            onClick={() => setOpen(false)}
+          />
+        )}
+        {shouldRender && (
             <ul
               role="listbox"
-              className="absolute left-0 right-0 z-20 mt-1 max-h-72 overflow-y-auto rounded-md border border-theme-border bg-theme-surface py-1 shadow-theme-lg"
+              inert={!open || undefined}
+              className={`absolute left-0 right-0 z-20 mt-1 max-h-72 origin-top overflow-y-auto rounded-md border border-theme-border bg-theme-surface py-1 shadow-theme-lg ${TRANSITION_MENU} ${
+                isOpen ? "opacity-100 translate-y-0 scale-100" : "opacity-0 -translate-y-1 scale-[0.97]"
+              } ${open ? "" : "pointer-events-none"}`}
+              style={overlayTransitionStyle(isOpen, "menu")}
             >
               {options.map((o) => {
                 const sel = o.value === value;
@@ -254,7 +264,6 @@ function SelectMenu({
                 );
               })}
             </ul>
-          </>
         )}
       </div>
       {hint && (

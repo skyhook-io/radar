@@ -51,6 +51,13 @@ type Config struct {
 	// error if the field is absent when an upgrade is requested.
 	Namespace string
 
+	// Release is the Helm release name Radar was installed under, from
+	// RADAR_HELM_RELEASE (set by the chart from .Release.Name). Sent to the
+	// hub so the dashboard's token-rotation command targets this release
+	// instead of assuming `radar`. Empty for non-Helm installs; the hub keeps
+	// its last stored value then.
+	Release string
+
 	// APIServerURL is the externally-reachable URL of this cluster's
 	// kube-apiserver, sent to the hub so it can correlate this cluster
 	// with references from other surfaces (most notably Argo CD's

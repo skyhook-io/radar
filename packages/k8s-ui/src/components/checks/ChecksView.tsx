@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertCircle, AlertOctagon, AlertTriangle, ChevronDown, ChevronRight, ExternalLink, EyeOff, Info, Layers, MoreHorizontal, Search, ShieldCheck, Wrench, X } from 'lucide-react'
+import { AlertCircle, AlertOctagon, AlertTriangle, ChevronDown, ExternalLink, EyeOff, Info, Layers, MoreHorizontal, Search, ShieldCheck, Wrench, X } from 'lucide-react'
 import { AlertBanner, CardBody, CardSection, ClusterName, EmptyState, FilterPill, DistributionBar, DistributionLegendChip, Input, NEUTRAL_CHIP_CLASS, renderProse } from '../ui'
+import { Collapse, CollapseChevron, useDisclosure, disclosurePanelId } from '../ui/Collapse'
 import { useFilterState, defineFilterSchema } from '../../filter-state'
 import type { CheckMeta, CheckReference } from '../audit'
 import { CHECK_SEVERITIES, CHECK_SEVERITY_RANK, type Check, type CheckSeverity, type EffectiveCheckFinding, type CheckResourceRef } from './types'
@@ -14,6 +15,8 @@ import {
   SEVERITY_SOLID_CLASS,
   SEVERITY_TEXT_CLASS,
 } from './severity'
+import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
+import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 
 const CATEGORIES: readonly string[] = ['Security', 'Reliability', 'Efficiency']
 
@@ -537,6 +540,7 @@ export function CheckCardShell({
   const Container = as
   const sev = normalizeCheckSeverity(severity)
   const SeverityIcon = CHECK_SEVERITY_ICON[sev]
+  const { panelId, buttonProps } = useDisclosure(open)
   return (
     <Container
       className={[
@@ -557,9 +561,9 @@ export function CheckCardShell({
           open/closed. Collapsed: neutral row + rail. Expanded: severity-tinted
           band + solid pill — the tint is a focus signal, not per-row alarm. */}
       <div
+        {...buttonProps}
         role="button"
         tabIndex={0}
-        aria-expanded={open}
         onClick={onToggle}
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return
@@ -585,18 +589,15 @@ export function CheckCardShell({
           {SEVERITY_LABEL[sev]}
         </span>
         {renderActions?.()}
-        <ChevronRight className={`h-4 w-4 shrink-0 text-theme-text-tertiary transition-transform duration-200 ${open ? 'rotate-90' : ''}`} />
+        <CollapseChevron open={open} className="h-4 w-4" />
       </div>
 
-      {/* Kept mounted (not `open &&`) so the grid-rows transition animates the
-          collapse too, matching IssueRow; inert when closed so SR + tab skip
-          the clipped content. Body sits on the card surface (not a recessed grey
+      {/* Kept mounted (Collapse's default, not `open &&`) so the collapse
+          animates too. Body sits on the card surface (not a recessed grey
           panel) so its text keeps enough contrast. */}
-      <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: open ? '1fr' : '0fr' }}>
-        <div className="overflow-hidden" inert={!open || undefined}>
-          <div className="flex flex-col divide-y divide-theme-border/70 border-t border-theme-border bg-theme-surface py-4 pl-6 pr-4 [&>*]:py-4 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">{children}</div>
-        </div>
-      </div>
+      <Collapse open={open} id={panelId}>
+        <div className="flex flex-col divide-y divide-theme-border/70 border-t border-theme-border bg-theme-surface py-4 pl-6 pr-4 [&>*]:py-4 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">{children}</div>
+      </Collapse>
     </Container>
   )
 }
@@ -631,6 +632,9 @@ export function CheckClusterBreakdownShell<T extends CheckClusterBreakdownGroup>
   const [showAllClusters, setShowAllClusters] = useState(false)
   const shown = showAllClusters ? groups : groups.slice(0, clusterCap)
   const hiddenClusters = groups.length - shown.length
+  // Group rows are mapped inline, so they can't each call useDisclosure; one
+  // generated prefix plus the group id keeps aria-controls unique.
+  const panelBase = useId()
 
   return (
     <section className="flex flex-col gap-1.5">
@@ -643,6 +647,7 @@ export function CheckClusterBreakdownShell<T extends CheckClusterBreakdownGroup>
               <button
                 type="button"
                 aria-expanded={isOpen}
+                aria-controls={disclosurePanelId(panelBase, group.id)}
                 onClick={() =>
                   setOpenClusters((prev) => {
                     const next = new Set(prev)
@@ -653,7 +658,7 @@ export function CheckClusterBreakdownShell<T extends CheckClusterBreakdownGroup>
                 }
                 className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-theme-hover/50"
               >
-                <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform duration-200 ${isOpen ? '' : '-rotate-90'}`} />
+                <CollapseChevron open={isOpen} className="h-3.5 w-3.5" />
                 <span className="min-w-0 max-w-[260px] truncate text-sm font-medium text-theme-text-primary">{group.label}</span>
                 {group.environment && (
                   <span className="shrink-0 rounded bg-theme-elevated px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-theme-text-secondary ring-1 ring-theme-border">
@@ -663,11 +668,9 @@ export function CheckClusterBreakdownShell<T extends CheckClusterBreakdownGroup>
                 <span className="flex-1" />
                 <span className="shrink-0 text-xs tabular-nums text-theme-text-secondary">{group.count}</span>
               </button>
-              <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: isOpen ? '1fr' : '0fr' }}>
-                <div className="overflow-hidden" inert={!isOpen || undefined}>
-                  <div className="px-2.5 pb-2 pl-7">{renderGroupBody(group)}</div>
-                </div>
-              </div>
+              <Collapse open={isOpen} id={disclosurePanelId(panelBase, group.id)}>
+                <div className="px-2.5 pb-2 pl-7">{renderGroupBody(group)}</div>
+              </Collapse>
             </li>
           )
         })}
@@ -906,6 +909,10 @@ function ClusterFilter({
   onClear: () => void
 }) {
   const [menu, setMenu] = useState<{ top: number; left: number } | null>(null)
+  // `menu` is the logical open state; the placement outlives it so the exit
+  // transition plays where the menu was. Re-measured on the next open.
+  const placementRef = useRef<{ top: number; left: number } | null>(null)
+  const { shouldRender, isOpen } = useAnimatedUnmount(menu != null, overlayExitMs('menu'))
   const btnRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     if (!menu) return
@@ -933,9 +940,13 @@ function ClusterFilter({
       return
     }
     const r = btnRef.current?.getBoundingClientRect()
-    if (r) setMenu({ top: r.bottom + 4, left: r.left })
+    if (r) {
+      placementRef.current = { top: r.bottom + 4, left: r.left }
+      setMenu(placementRef.current)
+    }
   }
   const active = selected.size > 0
+  const placement = menu ?? placementRef.current
 
   return (
     <>
@@ -953,14 +964,20 @@ function ClusterFilter({
         Clusters
         <ChevronDown className="h-3 w-3" />
       </button>
-      {menu &&
+      {shouldRender && placement &&
         createPortal(
           <div
             data-cluster-menu
             role="listbox"
             aria-multiselectable
-            className="fixed z-[60] max-h-80 w-64 overflow-auto rounded-lg border border-theme-border bg-theme-surface py-1 shadow-xl"
-            style={{ top: menu.top, left: menu.left }}
+            inert={!menu}
+            className={[
+              'fixed z-[60] max-h-80 w-64 origin-top-left overflow-auto rounded-lg border border-theme-border bg-theme-surface py-1 shadow-xl',
+              TRANSITION_MENU,
+              isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]',
+              !menu && 'pointer-events-none',
+            ].filter(Boolean).join(' ')}
+            style={{ top: placement.top, left: placement.left, ...overlayTransitionStyle(isOpen, 'menu') }}
           >
             {active && (
               <button
@@ -1003,6 +1020,9 @@ function ClusterFilter({
 // it; position captured at open time, any scroll/resize closes it.
 function RowMenu({ items }: { items: { label: string; onClick: () => void }[] }) {
   const [menu, setMenu] = useState<{ top: number; right: number } | null>(null)
+  // See ClusterFilter: placement outlives the logical open state for the exit.
+  const placementRef = useRef<{ top: number; right: number } | null>(null)
+  const { shouldRender, isOpen } = useAnimatedUnmount(menu != null, overlayExitMs('menu'))
   const btnRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
@@ -1029,8 +1049,12 @@ function RowMenu({ items }: { items: { label: string; onClick: () => void }[] })
       return
     }
     const r = btnRef.current?.getBoundingClientRect()
-    if (r) setMenu({ top: r.bottom + 4, right: window.innerWidth - r.right })
+    if (r) {
+      placementRef.current = { top: r.bottom + 4, right: window.innerWidth - r.right }
+      setMenu(placementRef.current)
+    }
   }
+  const placement = menu ?? placementRef.current
 
   return (
     <>
@@ -1046,12 +1070,18 @@ function RowMenu({ items }: { items: { label: string; onClick: () => void }[] })
       >
         <MoreHorizontal className="h-4 w-4" />
       </button>
-      {menu &&
+      {shouldRender && placement &&
         createPortal(
           <div
             role="menu"
-            className="fixed z-[60] min-w-48 rounded-lg border border-theme-border bg-theme-surface py-1 shadow-xl"
-            style={{ top: menu.top, right: menu.right }}
+            inert={!menu}
+            className={[
+              'fixed z-[60] min-w-48 origin-top-right rounded-lg border border-theme-border bg-theme-surface py-1 shadow-xl',
+              TRANSITION_MENU,
+              isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]',
+              !menu && 'pointer-events-none',
+            ].filter(Boolean).join(' ')}
+            style={{ top: placement.top, right: placement.right, ...overlayTransitionStyle(isOpen, 'menu') }}
             onClick={(e) => e.stopPropagation()}
           >
             {items.map((it, i) => (

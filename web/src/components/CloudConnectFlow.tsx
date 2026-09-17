@@ -1,6 +1,7 @@
-import { useRef, useState } from 'react'
+import { type ReactNode, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { AlertTriangle, ArrowUpRight, Check, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
+import type { BlockedExit } from './cloudConnectHandoff'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import {
   ApiError,
@@ -19,20 +20,20 @@ import { showApiError } from './ui/Toast'
 export function CloudConnectFlow({
   status,
   blocked,
-  signupUrl,
+  exit,
   onStatus,
   onExit,
 }: {
   status: CloudInstallStatus
   blocked: CloudInstallBlocked | null
-  signupUrl: string
+  exit: BlockedExit
   // Push a mutation's status response into the shared query state.
   onStatus: (st: CloudInstallStatus) => void
   // Leave the flow view (back to the pitch, or close after dismiss).
   onExit: () => void
 }) {
   if (blocked) {
-    return <BlockedView blocked={blocked} signupUrl={signupUrl} onExit={onExit} />
+    return <BlockedView blocked={blocked} exit={exit} onExit={onExit} />
   }
 
   switch (status.state) {
@@ -66,13 +67,14 @@ export function CloudConnectFlow({
 
 function BlockedView({
   blocked,
-  signupUrl,
+  exit,
   onExit,
 }: {
   blocked: CloudInstallBlocked
-  signupUrl: string
+  exit: BlockedExit
   onExit: () => void
 }) {
+  const copy = blockedCopy(blocked, exit)
   const icon =
     blocked.reason === 'gitops' ? (
       <GitBranch className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
@@ -81,53 +83,188 @@ function BlockedView({
     ) : (
       <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />
     )
-  const title =
-    blocked.reason === 'gitops'
-      ? 'This install is managed by GitOps'
-      : blocked.reason === 'preflight'
-        ? 'Your Kubernetes identity can’t install this'
-        : 'This cluster can’t be connected from here'
   return (
     <div className="px-8 pt-6 pb-5">
       <div className="card-inner-lg flex gap-2.5">
         {icon}
-        <div className="min-w-0">
-          <div className="text-[13px] font-semibold text-theme-text-primary">{title}</div>
-          <p className="mt-1 text-[12px] leading-relaxed text-theme-text-secondary">{blocked.message}</p>
-          {blocked.blocking && blocked.blocking.length > 0 && (
-            <ul className="mt-2 space-y-1 text-[11.5px] text-theme-text-tertiary">
-              {blocked.blocking.map((line) => (
-                <li key={line} className="flex items-start gap-1.5">
-                  <span className="mt-[6px] w-1 h-1 rounded-full bg-amber-500 shrink-0" />
-                  {line}
-                </li>
-              ))}
-            </ul>
-          )}
+        <div className="min-w-0 space-y-3">
+          <div className="text-[13px] font-semibold text-theme-text-primary">{copy.title}</div>
+          <BlockedSection label="What Radar tried">{copy.tried}</BlockedSection>
+          <BlockedSection label="Why it stopped">
+            {copy.why}
+            {blocked.blocking && blocked.blocking.length > 0 && <BlockingLines lines={blocked.blocking} />}
+          </BlockedSection>
+          <BlockedSection label="What to do">{copy.next}</BlockedSection>
         </div>
       </div>
       <div className="mt-4 flex items-center gap-4">
-        {/* Only a preflight denial has a legitimate browser alternative —
-            someone with more Kubernetes permission can run the wizard. GitOps
-            and unsupported refusals named a specific reason and target that a
-            generic signup link cannot carry, so offering it would contradict
-            the message directly above. */}
-        {blocked.reason === 'preflight' && (
-          <a
-            href={signupUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[12.5px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline underline-offset-2"
-          >
-            Connect through the browser wizard instead →
-          </a>
-        )}
-        <button onClick={onExit} className="text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">
+        <a
+          href={exit.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="px-5 py-2 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[13.5px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all"
+        >
+          {exit.label}
+        </a>
+        <button
+          onClick={onExit}
+          className="ml-auto text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
+        >
           Back
         </button>
       </div>
     </div>
   )
+}
+
+function BlockedSection({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <div className="text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">{label}</div>
+      <div className="mt-0.5 text-[12px] leading-relaxed text-theme-text-secondary">{children}</div>
+    </div>
+  )
+}
+
+function BlockingLines({ lines }: { lines: string[] }) {
+  return (
+    <ul className="mt-1.5 space-y-1 text-[11.5px] text-theme-text-tertiary">
+      {lines.map((line) => (
+        <li key={line} className="flex items-start gap-1.5">
+          <span className="mt-[6px] w-1 h-1 rounded-full bg-amber-500 shrink-0" />
+          {line}
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+// The blocked card stands in for the plan card the person never saw, so it
+// carries what Radar did first, then why it stopped, then the way forward.
+// Three short labeled parts, not one paragraph. Every card ends the same way
+// — an admin with cluster access, in Radar Cloud — and the exit says whether
+// that is a deep-linked install command or Radar Cloud itself.
+function blockedCopy(blocked: CloudInstallBlocked, exit: BlockedExit): { title: string; tried: ReactNode; why: ReactNode; next: ReactNode } {
+  const a = blocked.attempted
+  const release = a && (
+    <>
+      release <code className="font-mono text-[11px] text-theme-text-primary">{a.release}</code> in namespace{' '}
+      <code className="font-mono text-[11px] text-theme-text-primary">{a.namespace}</code>
+    </>
+  )
+  const operation = a?.mode === 'adopt' ? 'a Helm upgrade of your existing' : 'a fresh Helm install of'
+  // What Radar did is told by the stage it reached, not by the plan it had:
+  // a target can be known from discovery before any chart was rendered or
+  // dry-run, and the card must not claim work that did not happen.
+  const tried =
+    !a ? (
+      <>Radar was looking for an existing Radar install in this cluster, as your kubeconfig identity. Nothing was changed.</>
+    ) : a.mode === 'gitops' ? (
+      <>Radar found {release} and traced how it is managed before planning anything. Nothing was changed.</>
+    ) : a.stage === 'inspect' ? (
+      a.mode === 'adopt' ? (
+        <>
+          Radar found {release} and was reading its Helm state, as your kubeconfig identity, before planning anything.
+          Nothing was changed.
+        </>
+      ) : (
+        <>
+          Radar found no Radar running anywhere in this cluster and was checking Helm’s release records in namespace{' '}
+          <code className="font-mono text-[11px] text-theme-text-primary">{a.namespace}</code>, as your kubeconfig
+          identity, before planning anything. Nothing was changed.
+        </>
+      )
+    ) : a.stage === 'prepare' ? (
+      <>
+        Radar planned {operation} {release} with the Cloud connection enabled and was preparing the chart, as your
+        kubeconfig identity. Nothing was changed.
+      </>
+    ) : (
+      <>
+        Radar prepared {operation} {release} with the Cloud connection enabled, and dry-ran it against the cluster as
+        your kubeconfig identity. Nothing was changed.
+      </>
+    )
+
+  // Where the exit is an install command, Radar Cloud asks for a cluster name
+  // first, then shows the instructions — say so, rather than promising a
+  // command on the next screen.
+  const installNext = (
+    <>
+      Have an admin with cluster access get the install command from Radar Cloud: it asks for a cluster name, then
+      shows the Helm, Argo CD or Flux instructions to review before running.
+    </>
+  )
+  const genericNext = (
+    <>
+      Have an admin with cluster access resolve the issue above, then connect — or recover — this cluster from Radar
+      Cloud.
+    </>
+  )
+  const unknownNext = (
+    <>
+      Have an admin with cluster access connect it from Radar Cloud.{' '}
+      {a?.partialScan ? (
+        <>
+          Radar could only check namespace{' '}
+          <code className="font-mono text-[11px] text-theme-text-primary">{a.namespace}</code> for an existing install,
+          so they should check the rest of the cluster first.
+        </>
+      ) : (
+        <>Radar couldn’t tell whether it is already installed here, so they should check first.</>
+      )}
+    </>
+  )
+
+  if (blocked.reason === 'gitops') {
+    return {
+      title: 'This install is managed by GitOps',
+      tried,
+      why: blocked.message,
+      next: exit.install ? (
+        <>
+          Have an admin with repo access get the values patch from Radar Cloud: it asks for a cluster name, then shows
+          the patch for your controller and the one command that creates the token Secret.
+        </>
+      ) : (
+        genericNext
+      ),
+    }
+  }
+  if (blocked.reason === 'unsupported') {
+    return { title: 'Radar can’t connect this cluster from here', tried, why: blocked.message, next: genericNext }
+  }
+  // Fresh offered on "nothing running" alone: say what was not confirmed.
+  const unconfirmedNext = (
+    <>
+      Radar found no Radar running in this cluster but couldn’t read Helm’s release records, so an admin with cluster
+      access should confirm nothing is installed before running a fresh install. {installNext}
+    </>
+  )
+  const next = exit.install ? (a?.releaseUnread ? unconfirmedNext : installNext) : unknownNext
+  switch (blocked.cause) {
+    case 'permissions':
+      return {
+        title: 'Your Kubernetes identity can’t do this install',
+        tried,
+        why: 'Your credentials lack permissions this needs (below). Anyone with them can complete this exact install.',
+        next,
+      }
+    case 'verification':
+      return {
+        title: 'This version of Radar can’t install this chart version from here',
+        tried,
+        why: 'The chart renders something this Radar build can’t check before applying, so it won’t install it unseen. A limitation of this Radar, not of your cluster or your access.',
+        next,
+      }
+    default:
+      return {
+        title: 'The cluster blocked part of this install',
+        tried,
+        why: 'The cluster refused: something already there conflicts with the install, or a policy rejects it. More permission wouldn’t change that.',
+        next: exit.install ? <>After the refusals above are resolved: {installNext}</> : next,
+      }
+  }
 }
 
 function PlanCard({
@@ -348,7 +485,7 @@ function ConsentRow({
   checked: boolean
   onChange: (v: boolean) => void
   tone: 'emerald' | 'amber'
-  children: React.ReactNode
+  children: ReactNode
 }) {
   return (
     <label className="mt-3 flex items-start gap-2 cursor-pointer">

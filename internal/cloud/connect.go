@@ -123,6 +123,27 @@ func (c *ConnectClient) do(req *http.Request) (*http.Response, error) {
 	return client.Do(req)
 }
 
+// HubUnreachableError is a transport failure on the way to the Hub: the
+// request never arrived, so nothing was created there. Presenters can say so
+// instead of showing the dial error as the headline.
+type HubUnreachableError struct {
+	HubBase string
+	Err     error
+}
+
+func (e *HubUnreachableError) Error() string { return fmt.Sprintf("reaching %s: %v", e.HubBase, e.Err) }
+func (e *HubUnreachableError) Unwrap() error { return e.Err }
+
+// HubDeclinedStatus reports the HTTP status when err is the Hub answering a
+// request with something other than success, as opposed to not answering.
+func HubDeclinedStatus(err error) (int, bool) {
+	var statusErr *connectHTTPError
+	if errors.As(err, &statusErr) {
+		return statusErr.statusCode, true
+	}
+	return 0, false
+}
+
 // Create initiates a connect request. The returned device_secret is the
 // credential Radar uses to poll; it is never sent in a URL.
 func (c *ConnectClient) Create(ctx context.Context, meta ConnectMetadata) (*CreateResponse, error) {
@@ -146,7 +167,7 @@ func (c *ConnectClient) Create(ctx context.Context, meta ConnectMetadata) (*Crea
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.do(req)
 	if err != nil {
-		return nil, fmt.Errorf("reaching %s: %w", c.HubBase, err)
+		return nil, &HubUnreachableError{HubBase: c.HubBase, Err: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {

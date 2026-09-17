@@ -4,8 +4,11 @@ import { clsx } from 'clsx'
 import { AlertBanner, Section, PropertyList, Property, ConditionsSection, PodTemplateSection, type ConditionTone } from '../../ui/drawer-components'
 import { Tooltip } from '../../ui/Tooltip'
 import { ConfirmDialog } from '../../ui/ConfirmDialog'
-import { formatAge, getRolloutStep } from '../resource-utils'
-import { BADGE_INACTIVE } from '../../../utils/badge-colors'
+import { formatAge, getRolloutStep, analysisPhaseLevel, healthColors } from '../resource-utils'
+import { CanaryStepTimeline, BlueGreenTimeline } from './rollout/CanaryStepTimeline'
+import { ReplicaSetProgression } from './rollout/ReplicaSetProgression'
+import { LookupFailureNote } from './LookupFailureNote'
+import type { WorkloadRevision, WorkloadPodInfo } from '../../../types'
 
 export type RolloutAction = 'abort' | 'retry' | 'promote' | 'promote-full' | 'skip-step'
 
@@ -38,12 +41,39 @@ export interface RolloutActionSpec {
   confirm?: RolloutActionConfirm
 }
 
+export interface AnalysisRunHistoryEntry {
+  name: string
+  phase: string
+  message?: string
+  trigger?: string
+  stepIndex?: number
+  createdAt: string
+  metricsTotal: number
+  metricsPassing: number
+  metricsNotPassing: number
+}
+
 interface RolloutRendererProps {
   data: any
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
   capabilities?: RolloutCapabilities
   onAction?: (action: RolloutAction) => void
   pendingAction?: RolloutAction | null
+  // Host-fetched — full AnalysisRun history (not just the 4 "active" slots
+  // rolloutAnalysisRuns already covers). Omitted entirely, the History
+  // subsection just doesn't render; a library consumer that skips the fetch
+  // loses nothing else.
+  analysisRunHistory?: AnalysisRunHistoryEntry[]
+  // The history fetch's error, so a refusal can be told apart from "no runs".
+  // Without it a caller lacking `list analysisruns` sees the section vanish and
+  // never learns the history exists.
+  analysisRunHistoryError?: unknown
+  // Host-fetched — the Rollout's ReplicaSet revision history + its pods, via
+  // the generic workload hooks (useWorkloadRevisions/useWorkloadPods) shared
+  // with every other workload kind, joined client-side by the host. Read-only
+  // here; the rollback action stays exclusively in the existing history dialog.
+  revisions?: WorkloadRevision[]
+  pods?: WorkloadPodInfo[]
 }
 
 // Has the controller reconciled the template as it stands? A rollback changes the
@@ -281,6 +311,94 @@ export function canaryStepLabel(step: any): string {
   return key ? `Unrecognized step: ${key}` : 'Unknown step'
 }
 
+/** AnalysisTemplate/ClusterAnalysisTemplate references on either a canary
+ *  step's analysis.templates[] array, or a single Experiment spec.analyses[]
+ *  entry — the Experiment entry carries templateName/clusterScope flat on
+ *  itself rather than nested under its own templates array, so it's wrapped
+ *  into a one-element list to share the same mapping below. Both shapes use
+ *  the SAME field name for the ref (templateName) regardless of scope —
+ *  clusterScope is a separate boolean on the entry, not a distinct field
+ *  name, so it's read directly rather than inferred from which field is set. */
+export function canaryStepTemplateRefs(step: any): Array<{ name: string; clusterScoped: boolean }> {
+  const templates = step?.analysis?.templates || step?.templates || (step?.templateName ? [step] : [])
+  return templates
+    .map((t: any) => (t.templateName ? { name: t.templateName, clusterScoped: !!t.clusterScope } : null))
+    .filter(Boolean)
+}
+
+/** Ordered phase list for a blueGreen Rollout — there's no steps[] array to
+ *  iterate, so this derives an equivalent sequence from strategy config
+ *  crossed with live status. */
+export function blueGreenPhases(data: any): Array<{
+  label: string
+  state: 'completed' | 'current' | 'pending'
+  analysis?: { name?: string; status?: string }
+}> {
+  const spec = data?.spec?.strategy?.blueGreen || {}
+  const status = data?.status || {}
+  const bg = status.blueGreen || {}
+  // previewSelector is transient — Argo Rollouts clears it once there's no
+  // active preview to track (a settled, fully-promoted blueGreen commonly
+  // has none), so activeSelector === previewSelector alone under-detects
+  // completion for anything but the narrow just-promoted window. currentPodHash
+  // is a generic, always-populated status field (used by every strategy, not
+  // just blueGreen) naming the newest ReplicaSet's hash — activeSelector
+  // matching IT is the more durable "the latest revision is live" signal,
+  // true both right after cutover and indefinitely after.
+  const promoted = !!bg.activeSelector && (bg.activeSelector === status.currentPodHash || bg.activeSelector === bg.previewSelector)
+
+  // scaleUpPreviewCheckPoint is only set in a narrow preview-replica-count
+  // configuration and is absent on most real blueGreen Rollouts (confirmed
+  // live) — pre-promotion analysis existing at all, or the Rollout having
+  // reached ANY blueGreen pause, are both proof the preview already scaled
+  // up (neither can happen before it does), so either is equally valid
+  // "done" evidence even when the checkpoint field itself is never set.
+  const previewScaledUp =
+    !!bg.scaleUpPreviewCheckPoint || !!bg.prePromotionAnalysisRunStatus || status.phase === 'Paused' || promoted
+
+  const steps: Array<{ label: string; done: boolean; analysis?: { name?: string; status?: string } }> = [
+    { label: 'Preview scaled up', done: previewScaledUp },
+  ]
+
+  if (spec.prePromotionAnalysis) {
+    steps.push({
+      label: 'Pre-promotion analysis',
+      done: bg.prePromotionAnalysisRunStatus?.status === 'Successful' || promoted,
+      analysis: bg.prePromotionAnalysisRunStatus,
+    })
+  }
+
+  steps.push({
+    label:
+      spec.autoPromotionEnabled === false
+        ? 'Awaiting manual promotion'
+        : spec.autoPromotionSeconds !== undefined
+          ? `Auto-promote after ${spec.autoPromotionSeconds}s`
+          : 'Awaiting promotion',
+    done: promoted,
+  })
+
+  steps.push({ label: 'Active cutover', done: promoted })
+
+  if (spec.postPromotionAnalysis) {
+    steps.push({
+      label: 'Post-promotion analysis',
+      done: bg.postPromotionAnalysisRunStatus?.status === 'Successful',
+      analysis: bg.postPromotionAnalysisRunStatus,
+    })
+  }
+
+  let currentAssigned = false
+  return steps.map((s) => {
+    if (s.done) return { label: s.label, state: 'completed' as const, analysis: s.analysis }
+    if (!currentAssigned) {
+      currentAssigned = true
+      return { label: s.label, state: 'current' as const, analysis: s.analysis }
+    }
+    return { label: s.label, state: 'pending' as const, analysis: s.analysis }
+  })
+}
+
 /** Populated analysis slots, in the order the controller runs them. */
 export function rolloutAnalysisRuns(
   status: any
@@ -294,23 +412,10 @@ export function rolloutAnalysisRuns(
 }
 
 function analysisStatusClass(status?: string): string {
-  switch (status) {
-    case 'Successful':
-      return 'status-healthy'
-    case 'Running':
-    case 'Pending':
-      return 'status-degraded'
-    case 'Inconclusive':
-      return 'status-alert'
-    case 'Failed':
-    case 'Error':
-      return 'status-unhealthy'
-    default:
-      return 'status-unknown'
-  }
+  return healthColors[analysisPhaseLevel(status)]
 }
 
-export function RolloutRenderer({ data, onNavigate, capabilities, onAction, pendingAction }: RolloutRendererProps) {
+export function RolloutRenderer({ data, onNavigate, capabilities, onAction, pendingAction, analysisRunHistory, analysisRunHistoryError, revisions, pods }: RolloutRendererProps) {
   const [confirming, setConfirming] = useState<RolloutActionSpec | null>(null)
   const status = data.status || {}
   const spec = data.spec || {}
@@ -339,6 +444,7 @@ export function RolloutRenderer({ data, onNavigate, capabilities, onAction, pend
   const analysisRuns = rolloutAnalysisRuns(status)
   const problems = rolloutProblems(data)
   const actions = onAction ? rolloutActions(data, capabilities) : []
+  const blueGreenPhaseList = blueGreenStrategy ? blueGreenPhases(data) : []
 
   // Phase badge color
   const phaseColor = (() => {
@@ -443,7 +549,27 @@ export function RolloutRenderer({ data, onNavigate, capabilities, onAction, pend
               <Property label="Canary Service" value={canaryStrategy.canaryService} />
               <Property label="Stable Service" value={canaryStrategy.stableService} />
               {status.canary?.currentExperiment && (
-                <Property label="Running Experiment" value={status.canary.currentExperiment} />
+                <Property
+                  label="Running Experiment"
+                  value={
+                    onNavigate ? (
+                      <button
+                        onClick={() =>
+                          onNavigate({
+                            kind: 'Experiment',
+                            namespace: data?.metadata?.namespace ?? '',
+                            name: status.canary.currentExperiment,
+                          })
+                        }
+                        className="font-mono text-xs text-brand hover:underline"
+                      >
+                        {status.canary.currentExperiment}
+                      </button>
+                    ) : (
+                      status.canary.currentExperiment
+                    )
+                  }
+                />
               )}
             </>
           ) : blueGreenStrategy ? (
@@ -584,54 +710,91 @@ export function RolloutRenderer({ data, onNavigate, capabilities, onAction, pend
         </Section>
       )}
 
-      {/* Canary Steps visual */}
       {isCanary && steps.length > 0 && (
         <Section title={`Canary Steps (${steps.length})`} defaultExpanded>
+          <CanaryStepTimeline
+            steps={steps}
+            currentStepIndex={currentStepIndex}
+            stepAnalysisStatus={analysisRuns.find((r) => r.label === 'Step analysis')}
+            onNavigate={onNavigate}
+            namespace={data?.metadata?.namespace}
+          />
+        </Section>
+      )}
+
+      {!isCanary && blueGreenStrategy && blueGreenPhaseList.length > 0 && (
+        <Section title="Progression" defaultExpanded>
+          <BlueGreenTimeline
+            phases={blueGreenPhaseList}
+            onNavigate={onNavigate}
+            namespace={data?.metadata?.namespace}
+          />
+        </Section>
+      )}
+
+      {(revisions?.length ?? 0) > 0 && (
+        <Section title={`ReplicaSets (${revisions!.length})`}>
+          <ReplicaSetProgression
+            revisions={revisions!}
+            pods={pods}
+            isRollout
+            namespace={data?.metadata?.namespace ?? ''}
+            onNavigate={onNavigate}
+          />
+        </Section>
+      )}
+
+      {/* Backward-looking, so it sits below the live progression and stays collapsed */}
+      {(analysisRunHistory?.length || analysisRunHistoryError) && (
+        <Section
+          // Section reads defaultExpanded once, on mount, so a refusal arriving
+          // later would leave its note sealed inside a collapsed section that
+          // still reads as a healthy list. Keying on the refusal remounts the
+          // section so it opens the moment the list stops being trustworthy.
+          key={analysisRunHistoryError ? 'unreadable' : 'readable'}
+          title={analysisRunHistory?.length ? `AnalysisRun History (${analysisRunHistory.length})` : 'AnalysisRun History'}
+          icon={Activity}
+          // History is backward-looking, so it stays out of the way until it
+          // cannot be read.
+          defaultExpanded={!!analysisRunHistoryError}
+        >
+          <LookupFailureNote
+            errors={[analysisRunHistoryError]}
+            what="this Rollout’s analysis history"
+            incomplete={!!analysisRunHistory?.length}
+          />
           <div className="space-y-1">
-            {steps.map((step: any, index: number) => {
-              const isCompleted = currentStepIndex !== undefined && index < currentStepIndex
-              const isCurrent = currentStepIndex !== undefined && index === currentStepIndex
-              const isPending = currentStepIndex === undefined || index > currentStepIndex
-
-              const stepLabel = canaryStepLabel(step)
-
-              return (
-                <div
-                  key={index}
-                  className={clsx(
-                    'flex items-center gap-2 px-2 py-1.5 rounded text-sm',
-                    isCurrent && 'bg-blue-500/10 border border-blue-500/30',
-                    isCompleted && 'opacity-80',
-                    isPending && 'opacity-50'
-                  )}
-                >
-                  {/* Status indicator */}
+            {(analysisRunHistory ?? []).map((run) => (
+              <div key={run.name} className="flex items-center gap-2 rounded px-2 py-1.5 text-sm">
+                <span className={clsx('badge', analysisStatusClass(run.phase))}>{run.phase || 'Unknown'}</span>
+                {onNavigate ? (
+                  <button
+                    onClick={() =>
+                      onNavigate({ kind: 'AnalysisRun', namespace: data?.metadata?.namespace ?? '', name: run.name })
+                    }
+                    className="font-mono text-xs text-brand hover:underline"
+                  >
+                    {run.name}
+                  </button>
+                ) : (
+                  <span className="font-mono text-xs text-theme-text-secondary">{run.name}</span>
+                )}
+                {run.trigger && <span className="text-xs text-theme-text-tertiary">{run.trigger}</span>}
+                {run.metricsTotal > 0 && (
                   <span
                     className={clsx(
-                      'w-5 h-5 rounded-full flex items-center justify-center text-xs shrink-0',
-                      isCompleted && 'status-green',
-                      isCurrent && 'status-blue',
-                      isPending && BADGE_INACTIVE
+                      'ml-auto text-xs',
+                      run.metricsNotPassing > 0 ? 'text-amber-400' : 'text-theme-text-tertiary'
                     )}
                   >
-                    {isCompleted ? '\u2713' : isCurrent ? '\u25CF' : '\u25CB'}
+                    {run.metricsPassing}/{run.metricsTotal} passing
                   </span>
-
-                  {/* Step index */}
-                  <span className="text-theme-text-tertiary text-xs w-4 shrink-0">{index}</span>
-
-                  {/* Step label */}
-                  <span
-                    className={clsx(
-                      'text-sm',
-                      isCurrent ? 'text-theme-text-primary font-medium' : 'text-theme-text-secondary'
-                    )}
-                  >
-                    {stepLabel}
-                  </span>
-                </div>
-              )
-            })}
+                )}
+                <span className={clsx('text-xs text-theme-text-tertiary', run.metricsTotal === 0 && 'ml-auto')}>
+                  {formatAge(run.createdAt)}
+                </span>
+              </div>
+            ))}
           </div>
         </Section>
       )}

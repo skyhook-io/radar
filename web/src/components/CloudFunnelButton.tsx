@@ -5,6 +5,14 @@ import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Coll
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { Tooltip } from './ui/Tooltip'
 import { CloudConnectFlow } from './CloudConnectFlow'
+import {
+  type Handoff,
+  exitFor,
+  handoffForBlocked,
+  handoffForPrepareError,
+  isHandoffOutcome,
+  signupUrlFor as buildSignupUrl,
+} from './cloudConnectHandoff'
 import { showApiError } from './ui/Toast'
 import {
   ApiError,
@@ -27,8 +35,10 @@ import {
 //
 // The only outbound call is the Hub's own copy, fetched when the dialog opens
 // (never on a poll or a timer) and falling back per-field to the constants
-// below. Conversion is otherwise measured on the receiving end: utm_content
-// distinguishes which lane sent the user.
+// below. The request names the lane the footer renders and where this Radar
+// runs, both closed enums. The links into the Hub carry utm_content naming
+// the link that was clicked and, after an in-app attempt that did not connect,
+// radar_outcome saying what happened; see cloudConnectHandoff.ts.
 const FALLBACK_APP_URL = 'https://app.radarhq.io'
 
 // Rendered until (or unless) the Hub states its own. Keeping the compiled-in
@@ -47,8 +57,6 @@ const DEFAULT_ASSURANCES = [
   'SOC 2 Type II',
   '3 clusters free, no card required',
 ]
-const SIGNUP_QUERY = '?utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal'
-
 // Other OSS surfaces (a GitOps app that deploys to another cluster, say)
 // point at Radar Cloud by asking this button to open its dialog, so there
 // is one pitch and one flow. The button is mounted whenever Radar runs
@@ -89,25 +97,33 @@ export function CloudFunnelButton() {
   const [seen, setSeen] = useState(readSeen)
   const [inFlowView, setInFlowView] = useState(false)
   const [blocked, setBlocked] = useState<CloudInstallBlocked | null>(null)
-  // Set once an in-app attempt has actually failed, so the CTA reads "Try
-  // again" instead of implying a first attempt. Survives closing the modal
-  // (the failure belongs to the cluster, not the dialog session) but not a
-  // reload, and is reset below when the kubeconfig context changes — it must
-  // never describe a cluster the user has switched away from.
-  const [prepareFailed, setPrepareFailed] = useState(false)
+  // Set once an in-app attempt has ended without connecting, naming what
+  // happened (a flow failure kind, a blocked plan, a canceled plan, or the
+  // prepare call itself failing) and whether it is worth trying again. It
+  // relabels the CTA "Try again" for a retryable failure and lets the browser
+  // link say what the person is coming from. Survives closing the modal (the
+  // outcome belongs to the cluster, not the dialog session) but not a reload,
+  // and is reset below when the kubeconfig context changes — it must never
+  // describe a cluster the user has switched away from.
+  const [handoff, setHandoff] = useState<Handoff | null>(null)
+  const prepareFailed = handoff?.retryable ?? false
 
   const capabilities = useCapabilities()
   const lane = capabilities.data?.cloudConnect?.lane ?? 'wizard'
   const appUrl = capabilities.data?.cloudConnect?.appUrl || FALLBACK_APP_URL
-  // utm_content distinguishes the lane that opened the Hub — measured Hub-side
-  // only when the user actually navigates there; Radar transmits nothing.
-  const signupUrlFor = (content: string) => `${appUrl}/signup${SIGNUP_QUERY}&utm_content=${content}`
-  const signupUrl = signupUrlFor('funnel-cta')
+  // utm_content names the link that was clicked. It travels only in the link
+  // the user opens; Radar sends nothing on its own. Only the blocked card may
+  // deep-link the install page (see exitFor); the pitch buttons and the
+  // footer link go to signup.
+  const signupUrl = buildSignupUrl(appUrl, 'wizard-signup-button')
 
   // Only while the dialog is open — never on the capabilities poll. The Hub
   // learns that someone opened it, which is congruent with what the dialog is
   // for; it must not learn that Radar is merely running.
-  const connectInfo = useCloudConnectInfo(capabilities.data?.cloudConnect?.apiUrl, open)
+  const connectInfo = useCloudConnectInfo(capabilities.data?.cloudConnect?.apiUrl, open, {
+    lane,
+    mode: capabilities.data?.deployment?.mode,
+  })
 
   // In-cluster Radar can't install its own connection, but it knows exactly
   // which install it is — so the wizard link can carry the real target, and a
@@ -145,7 +161,7 @@ export function CloudFunnelButton() {
       // Anything else failed before a flow existed. Return to the pitch rather
       // than leaving the flow view armed, where a later status change would
       // pull the user into a screen they did not ask for.
-      exitFlow(true)
+      exitFlow(handoffForPrepareError(err))
       showApiError('Could not inspect this cluster for Cloud connect', err instanceof Error ? err.message : undefined)
     },
     // No meta.errorMessage: the global handler cannot tell a single-flight 409
@@ -163,18 +179,42 @@ export function CloudFunnelButton() {
 
   const startConnect = () => {
     setBlocked(null)
-    setPrepareFailed(false)
+    setHandoff(null)
     setInFlowView(true)
     prepare.mutate()
   }
 
-  // A flow that ended in failure returns to a pitch whose CTA must not read
-  // like a first attempt. The caller passes the outcome because dismissing
-  // already overwrote the status by this point.
-  const exitFlow = (failed = false) => {
-    if (failed) setPrepareFailed(true)
+  // A flow that ended without connecting returns to a pitch whose CTA must
+  // not read like a first attempt, and whose browser link knows what happened.
+  // The caller passes the outcome because dismissing already overwrote the
+  // status by this point. Every exit sets it, null included, so a connected
+  // flow clears what an earlier attempt left behind.
+  const exitFlow = (outcome: Handoff | null = null) => {
+    setHandoff(outcome)
     setInFlowView(false)
     setBlocked(null)
+  }
+
+  // What the person is coming from. A blocked plan is read from local state,
+  // not the status: the status query keeps serving its last polled value
+  // (idle, usually) while the blocked view is up. A blocked plan counts as an
+  // attempt: the user tried the in-app path and was refused, and the wizard
+  // is the right next step for a GitOps-owned install. A failed flow carries
+  // the server's kind and its own verdict on retrying — the failed card
+  // already honors retrySafe, and the pitch must not contradict it two clicks
+  // later. Leaving a live plan is the user canceling it, not a failure. Only
+  // a connected flow, or no flow at all, leaves nothing to carry.
+  const outcomeOf = (st: CloudInstallStatus): Handoff | null => {
+    if (blocked) return handoffForBlocked(blocked.reason, blocked.attempted)
+    if (st.state === 'failed') {
+      return {
+        outcome: isHandoffOutcome(st.failure?.kind) ? st.failure.kind : 'failure_kind_unknown',
+        retryable: st.failure?.retrySafe ?? false,
+      }
+    }
+    if (st.state === 'blocked' && st.blocked) return handoffForBlocked(st.blocked.reason, st.blocked.attempted)
+    if (st.state === 'connected' || st.state === 'idle') return null
+    return { outcome: 'install_plan_canceled', retryable: false }
   }
 
   useEffect(() => {
@@ -188,13 +228,16 @@ export function CloudFunnelButton() {
     if (open && lane === 'driver' && flowLive) setInFlowView(true)
   }, [open, lane, flowLive])
 
-  // prepareFailed outlives the dialog but must not outlive the cluster it
-  // describes: a context switch swaps every query cache, yet this component
-  // stays mounted, so without the reset cluster A's failure would relabel the
-  // CTA for cluster B.
+  // handoff and a blocked plan outlive the dialog but must not outlive the
+  // cluster they describe: a context switch swaps every query cache, yet this
+  // component stays mounted, so without the reset cluster A's outcome would
+  // relabel the CTA (and the link) for cluster B, and a blocked view left
+  // armed would reopen on B with A's refusal, feeding it back into the
+  // outcome on Back.
   const contextName = useClusterInfo().data?.context
   useEffect(() => {
-    setPrepareFailed(false)
+    setHandoff(null)
+    setBlocked(null)
   }, [contextName])
 
   // The server owns the "nothing to pitch" decision: an already-tunneled
@@ -263,9 +306,9 @@ export function CloudFunnelButton() {
             <CloudConnectFlow
               status={flowForView}
               blocked={blocked}
-              signupUrl={signupUrlFor('flow-escape')}
+              exit={exitFor(appUrl, 'driver-blocked-card-browser-link', outcomeOf(flowForView))}
               onStatus={applyStatus}
-              onExit={() => exitFlow(flowForView.state === 'failed')}
+              onExit={() => exitFlow(outcomeOf(flowForView))}
             />
           </div>
         ) : (
@@ -276,10 +319,12 @@ export function CloudFunnelButton() {
             <ModalFooter
               lane={lane}
               signupUrl={signupUrl}
-              // driver-escape after a failed attempt, driver-alt before one, so
-              // the Hub can tell "prefers the browser" from "app path broke".
-              driverEscapeUrl={signupUrlFor(prepareFailed ? 'driver-escape' : 'driver-alt')}
+              // One link name whether or not an attempt preceded the click; the
+              // outcome, when present, is what says an attempt happened.
+              driverBrowserUrl={buildSignupUrl(appUrl, 'driver-footer-browser-link', handoff)}
               prepareFailed={prepareFailed}
+              // A prepare error's reason, kept on the pitch after its toast is gone.
+              prepareError={handoff?.detail}
               assurances={connectInfo.data?.assurances}
               notice={connectInfo.data?.notice}
               self={inCluster ? self.data : undefined}
@@ -331,8 +376,9 @@ function Eyebrow() {
 function ModalFooter({
   lane,
   signupUrl,
-  driverEscapeUrl,
+  driverBrowserUrl,
   prepareFailed,
+  prepareError,
   assurances,
   notice,
   self,
@@ -342,10 +388,11 @@ function ModalFooter({
 }: {
   lane: 'driver' | 'wizard'
   signupUrl: string
-  // Same destination as signupUrl, distinct utm_content: the caller encodes
-  // whether this render follows a failed in-app attempt.
-  driverEscapeUrl: string
+  // Same destination as signupUrl, distinct utm_content, and the outcome of
+  // an in-app attempt when one preceded this render.
+  driverBrowserUrl: string
   prepareFailed: boolean
+  prepareError?: string
   // Live copy from the Hub; undefined until (or unless) it arrives.
   assurances?: string[]
   notice?: string
@@ -424,7 +471,7 @@ function ModalFooter({
                 a recovery path — install-averse operators need the door before
                 anything fails, or they close the modal instead. */}
             <a
-              href={driverEscapeUrl}
+              href={driverBrowserUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="whitespace-nowrap text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary hover:underline underline-offset-2 transition-colors"
@@ -448,6 +495,15 @@ function ModalFooter({
           Maybe later
         </button>
       </div>
+      {/* The last attempt's stop, when Radar could not even inspect the
+          cluster: the toast that first said so is gone in seconds, and "Try
+          again" alone does not say what to try again for. The footer link
+          above is the way around it. */}
+      {lane === 'driver' && prepareError && (
+        <p className="mt-2.5 text-[11.5px] leading-relaxed text-amber-600 dark:text-amber-400">
+          Radar couldn’t inspect this cluster: {prepareError}
+        </p>
+      )}
       {/* Mechanics, not marketing: a falsifiable claim the plan card then
           fulfills. Sits next to the button whose click it de-risks. */}
       {lane === 'driver' && (

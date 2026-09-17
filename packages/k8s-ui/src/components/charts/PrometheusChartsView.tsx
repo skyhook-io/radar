@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { clsx } from "clsx";
 import { BarChart3, Wifi, WifiOff, Loader2 } from "lucide-react";
+import { Collapse, CollapseChevron, useDisclosure } from "../ui/Collapse";
 import { AreaChart } from "./AreaChart";
 import { PaneLoader } from "../ui/PaneLoader";
 import { MetricsSummary } from "./MetricsSummary";
@@ -339,19 +341,36 @@ export function PrometheusChartsView({
                 {metrics.hint}
               </p>
             )}
-            {metrics?.query && (
-              <details className="mt-3 w-full max-w-lg text-left">
-                <summary className="cursor-pointer text-xs text-theme-text-quaternary hover:text-theme-text-tertiary">
-                  Diagnostics: show PromQL query
-                </summary>
-                <div className="mt-2 break-all rounded border border-theme-border bg-theme-base p-2 font-mono text-xs text-theme-text-secondary">
-                  {metrics.query}
-                </div>
-              </details>
-            )}
+            {metrics?.query && <QueryDiagnostics query={metrics.query} />}
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// The PromQL behind an empty chart, for the reader who wants to run it
+// themselves. Lives on the shared disclosure so it opens like every other
+// fold in the app instead of the browser's default <details> jump.
+function QueryDiagnostics({ query }: { query: string }) {
+  const [open, setOpen] = useState(false);
+  const { panelId, buttonProps } = useDisclosure(open);
+  return (
+    <div className="mt-3 w-full max-w-lg text-left">
+      <button
+        {...buttonProps}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1 text-xs text-theme-text-quaternary hover:text-theme-text-tertiary"
+      >
+        <CollapseChevron open={open} className="h-3 w-3" />
+        Diagnostics: show PromQL query
+      </button>
+      <Collapse open={open} id={panelId}>
+        <div className="mt-2 break-all rounded border border-theme-border bg-theme-base p-2 font-mono text-xs text-theme-text-secondary">
+          {query}
+        </div>
+      </Collapse>
     </div>
   );
 }

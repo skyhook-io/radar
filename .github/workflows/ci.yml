@@ -27,6 +27,11 @@ jobs:
       - name: Run tests
         run: go test ./...
 
+      - name: Evaluate workload PromQL in Prometheus
+        env:
+          RADAR_TEST_PROMTOOL_IMAGE: prom/prometheus:v3.5.0
+        run: go test ./prom -run '^TestWorkload(History)?PromQL$' -count=1
+
       - name: Build
         run: go build ./...
 
@@ -105,6 +110,9 @@ jobs:
       - name: Test
         run: npm run test
         working-directory: web
+
+      - name: Test metrics evidence capture
+        run: node --test scripts/workload-metrics-demo/capture.test.mjs
 
       - name: Lint
         run: npm run lint

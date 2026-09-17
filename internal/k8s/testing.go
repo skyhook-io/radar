@@ -391,6 +391,24 @@ func SetTestPolicyReportIndex(idx *policyreports.Index) *policyreports.Index {
 //
 // This is intended for integration tests only.
 func ResetTestState() {
+	// Join the old recovery worker before replacing hooks or state it may still use.
+	runtimeAuthRecoveryOwed.Store(false)
+	deadline := time.Now().Add(connectionTestOperationTimeout() + time.Second)
+	for runtimeAuthRecoveryActive.Load() {
+		select {
+		case runtimeAuthRecoveryNudge <- struct{}{}:
+		default:
+		}
+		if time.Now().After(deadline) {
+			panic("runtime authentication recovery worker did not stop during test cleanup")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-runtimeAuthRecoveryNudge:
+	default:
+	}
+
 	policyReportIndex.Store(nil)
 
 	// Reset resource cache
@@ -426,23 +444,6 @@ func ResetTestState() {
 	runtimeAuthRecoveryMaxInterval = defaultRuntimeAuthRecoveryMaxInterval
 	runtimeAuthRecoveryHungInterval = defaultRuntimeAuthRecoveryHungInterval
 	runtimeAuthChecksMu.Unlock()
-	// Clear the debt and nudge rather than forcing the active flag: a
-	// surviving worker wakes, sees no debt, and exits through its own defer.
-	// Forcing the flag false would let a second worker coexist with it. With
-	// no worker alive, drain instead — a stray token would give the next
-	// test's worker a spurious immediate tick.
-	runtimeAuthRecoveryOwed.Store(false)
-	if runtimeAuthRecoveryActive.Load() {
-		select {
-		case runtimeAuthRecoveryNudge <- struct{}{}:
-		default:
-		}
-	} else {
-		select {
-		case <-runtimeAuthRecoveryNudge:
-		default:
-		}
-	}
 	activeContextOperations.Store(0)
 	clientMu.Lock()
 	k8sConfig = nil

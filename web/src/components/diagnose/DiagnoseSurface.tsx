@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { Tooltip } from "../ui/Tooltip";
 import { useAnimatedUnmount } from "../../hooks/useAnimatedUnmount";
-import { TRANSITION_BACKDROP, TRANSITION_DRAWER } from "../../utils/animation";
+import { TRANSITION_BACKDROP, TRANSITION_DRAWER, overlayTransitionStyle } from "../../utils/animation";
 import {
   useDiagnose,
   useDiagnoseLayout,
@@ -824,6 +824,7 @@ export function DiagnoseSurface({
             aria-hidden="true"
             onClick={dismissHistory}
             className={`absolute inset-0 z-10 bg-black/20 ${TRANSITION_BACKDROP} motion-reduce:transition-none ${historySlideOpen ? "opacity-100" : "opacity-0"} ${historyOverlay ? "" : "pointer-events-none"}`}
+            style={overlayTransitionStyle(historySlideOpen, "drawer")}
           />
         )}
         {showHistory && (

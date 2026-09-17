@@ -25,13 +25,13 @@ pass() {
 
 assert_contains() {
   local pattern="$1" label="$2"
-  if echo "$OUT" | grep -Eq -- "$pattern"; then pass "$label"
+  if grep -Eq -- "$pattern" <<< "$OUT"; then pass "$label"
   else fail "$label — no match for: $pattern"; fi
 }
 
 assert_not_contains() {
   local pattern="$1" label="$2"
-  if echo "$OUT" | grep -Eq -- "$pattern"; then fail "$label — unexpected match for: $pattern"
+  if grep -Eq -- "$pattern" <<< "$OUT"; then fail "$label — unexpected match for: $pattern"
   else pass "$label"; fi
 }
 
@@ -83,6 +83,7 @@ assert_not_contains '--timeline-max-size='            "no sqlite max-size arg"
 echo
 
 render "prometheusHeadersFromEnv — flag and secret env stay separate" \
+  --set traffic.prometheusUrl=http://prometheus.monitoring:9090 \
   --set traffic.prometheusHeaders.X-Scope-OrgID=tenant-1 \
   --set traffic.prometheusHeadersFromEnv.Authorization=PROMETHEUS_TOKEN \
   --set 'env[0].name=PROMETHEUS_TOKEN' \
@@ -105,7 +106,7 @@ render "OIDC prefixes ending in colon stay string args" \
   --set auth.oidc.clientSecret=secret \
   --set auth.oidc.usernamePrefix=oidc-user: \
   --set auth.oidc.groupsPrefix=oidc-groups:
-if echo "$OUT" | yq 'select(.kind == "Deployment") | .spec.template.spec.containers[0].args[] | select(type != "!!str")' | grep -q .; then
+if yq 'select(.kind == "Deployment") | .spec.template.spec.containers[0].args[] | select(type != "!!str")' <<< "$OUT" | grep . > /dev/null; then
   fail "OIDC prefix args parse as non-string YAML values"
 else
   pass "OIDC prefix args parse as strings"
@@ -212,7 +213,7 @@ render "defaults — no RBAC reads (viewRBAC=false)"
 # The base radar ClusterRole should NOT include rbac.authorization.k8s.io reads
 # at default settings. This is the single test that pins the secure default.
 HELM_BASE=$(echo "$OUT" | awk '/^kind: ClusterRole$/,/^---$/{ if ($0 ~ /^---$/) exit; print }' | awk '/^  name: radar$/,EOF')
-if echo "$OUT" | awk '/  name: radar$/,/^---$/' | grep -Eq 'apiGroups: \["rbac.authorization.k8s.io"\]'; then
+if awk '/  name: radar$/,/^---$/' <<< "$OUT" | grep -E 'apiGroups: \["rbac.authorization.k8s.io"\]' > /dev/null; then
   fail "default ClusterRole still grants rbac.authorization.k8s.io reads — viewRBAC should gate this"
 else
   pass "no rbac.authorization.k8s.io reads in default ClusterRole"

@@ -30,7 +30,7 @@ import { ApplicationsView } from './components/applications/ApplicationsView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { PortForwardProvider, PortForwardIndicator, PortForwardPanel } from './components/portforward/PortForwardManager'
 import { DockProvider, BottomDock, useDock, useDockReservedHeight, useOpenLocalTerminal } from './components/dock'
-import { DURATION_DOCK } from '@skyhook-io/k8s-ui/utils/animation'
+import { DURATION_DOCK, overlayExitMs } from '@skyhook-io/k8s-ui/utils/animation'
 import { ContextSwitcher } from './components/ContextSwitcher'
 import { NamespaceSwitcher, type NamespaceSwitcherHandle } from './components/NamespaceSwitcher'
 import { CloudFunnelButton } from './components/CloudFunnelButton'
@@ -680,9 +680,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Animation hooks for smooth mount/unmount transitions
   const resourceDrawer = useAnimatedUnmount(!!routeSelectedResource, 300)
   const helmDrawer = useAnimatedUnmount(!!(mainView === 'helm' && selectedHelmRelease), 300)
-  const helpOverlay = useAnimatedUnmount(showHelp, 300)
-  const commandPaletteAnim = useAnimatedUnmount(showCommandPalette, 300)
-  const diagnosticsOverlay = useAnimatedUnmount(showDiagnostics, 300)
+  // Dialog-kind overlays wait their exit duration (shorter than the entrance);
+  // drawers keep the symmetric slide.
+  const helpOverlay = useAnimatedUnmount(showHelp, overlayExitMs('dialog'))
+  const commandPaletteAnim = useAnimatedUnmount(showCommandPalette, overlayExitMs('dialog'))
+  const diagnosticsOverlay = useAnimatedUnmount(showDiagnostics, overlayExitMs('dialog'))
 
   // Hold last valid values so drawers can animate out before data disappears
   const lastResourceRef = useRef(routeSelectedResource)

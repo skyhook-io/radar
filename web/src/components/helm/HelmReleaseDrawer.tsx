@@ -4,7 +4,7 @@ import { FetchResult, useDockReservedHeight, compareVersions } from '@skyhook-io
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
-import { X, Copy, Check, RefreshCw, Package, Code, History, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch, AlertTriangle, RotateCcw, Clock, GitCompare, ExternalLink, ChevronRight, SlidersHorizontal, Eye, Loader2 } from 'lucide-react'
+import { X, Copy, Check, RefreshCw, Package, Code, History, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch, AlertTriangle, RotateCcw, Clock, GitCompare, ExternalLink, SlidersHorizontal, Eye, Loader2 } from 'lucide-react'
 import yaml from 'yaml'
 import { useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
@@ -25,6 +25,8 @@ import { ManifestViewer } from './ManifestViewer'
 import { ValuesViewer } from './ValuesViewer'
 import { OwnedResources } from './OwnedResources'
 import { TrackChartSourceDialog } from './TrackChartSourceDialog'
+import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
+import { Disclosure } from '../ui/Disclosure'
 
 interface HelmReleaseDrawerProps {
   release: SelectedHelmRelease
@@ -117,7 +119,6 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const [showTrackSource, setShowTrackSource] = useState(false)
   const [selectedVersion, setSelectedVersion] = useState<string | null>(null)
   const [adjustValues, setAdjustValues] = useState(false)
-  const [renderAdjustValues, setRenderAdjustValues] = useState(false)
   const [editedUpgradeYaml, setEditedUpgradeYaml] = useState('')
   const [upgradeYamlError, setUpgradeYamlError] = useState<string | null>(null)
   const [upgradeValuesSeeded, setUpgradeValuesSeeded] = useState(false)
@@ -357,7 +358,6 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     setUpgradeProgress([])
     setSelectedVersion(null)
     setAdjustValues(false)
-    setRenderAdjustValues(false)
     setEditedUpgradeYaml('')
     editedUpgradeYamlRef.current = ''
     setUpgradeYamlError(null)
@@ -383,7 +383,6 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
       return
     }
 
-    setRenderAdjustValues(true)
     setEditedUpgradeYaml('')
     editedUpgradeYamlRef.current = ''
     setUpgradeYamlError(null)
@@ -911,24 +910,15 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                 aria-controls="helm-upgrade-values-panel"
                 className="flex items-center gap-1.5 text-sm font-medium text-theme-text-secondary hover:text-theme-text-primary disabled:opacity-50"
               >
-                <ChevronRight className={clsx('w-4 h-4 transition-transform duration-200', adjustValues && 'rotate-90')} />
+                <CollapseChevron open={adjustValues} className="w-4 h-4" />
                 <SlidersHorizontal className="w-3.5 h-3.5" />
                 Adjust your values (optional)
               </button>
             </Tooltip>
-            <div
-              id="helm-upgrade-values-panel"
-              className={`issue-details-motion ${adjustValues ? 'issue-details-motion-open' : ''}`}
-              onTransitionEnd={(event) => {
-                if (event.target !== event.currentTarget) return
-                if (event.propertyName !== 'grid-template-rows') return
-                if (!adjustValues) {
-                  setRenderAdjustValues(false)
-                }
-              }}
-            >
-              <div className="overflow-hidden">
-                {renderAdjustValues && (
+            {/* unmountOnExit: the editor (uncontrolled textarea + seeded values)
+                must reset between opens, and the values query only runs while
+                the panel is open. */}
+            <Collapse open={adjustValues} unmountOnExit id="helm-upgrade-values-panel">
                   <div className="mt-2">
                     <p className="mb-2 text-xs text-theme-text-tertiary">
                       These are your current settings — edit them to carry into {targetVersion}. What you see here is exactly what gets applied.
@@ -988,9 +978,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                       </Tooltip>
                     </div>
                   </div>
-                )}
-              </div>
-            </div>
+            </Collapse>
           </div>
         )}
         {upgradeProgress.length > 0 && <ProgressLog entries={upgradeProgress} />}
@@ -1138,14 +1126,11 @@ function HelmOperationBanner({
           </div>
           <p className="mt-1 text-sm text-theme-text-secondary">{operation.message}</p>
           {hasRawMessage && (
-            <details className="mt-2">
-              <summary className="cursor-pointer select-none text-xs font-medium text-theme-text-tertiary hover:text-theme-text-secondary">
-                Show raw Helm error
-              </summary>
+            <Disclosure className="mt-2" summaryClassName="select-none text-xs font-medium text-theme-text-tertiary hover:text-theme-text-secondary" summary="Show raw Helm error">
               <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded bg-theme-base/60 p-2 font-mono text-[11px] leading-relaxed text-theme-text-tertiary">
                 {rawMessage}
               </pre>
-            </details>
+            </Disclosure>
           )}
           {operation.failureDescription && !hasRawMessage && (
             <Tooltip content={operation.failureDescription} wrapperClassName="mt-1 flex">

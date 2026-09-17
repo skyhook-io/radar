@@ -1,4 +1,4 @@
-import { ServerOff, RefreshCw, Loader2, Copy, Check, TerminalSquare, ChevronRight } from 'lucide-react'
+import { ServerOff, RefreshCw, Loader2, Copy, Check, TerminalSquare } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { ConnectionState } from '../context/ConnectionContext'
 import { ContextSwitcher } from './ContextSwitcher'
@@ -6,6 +6,7 @@ import { parseContextName } from '../utils/context-name'
 import { useOpenLocalTerminal, ClusterName } from '@skyhook-io/k8s-ui'
 import { useAuthMe, useContexts } from '../api/client'
 import { Tooltip } from './ui/Tooltip'
+import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import { allShellSafe, awsProfileFlag } from '../utils/shell-safe'
 import { apiUrl } from '../api/config'
 import { useCapabilitiesContext } from '../contexts/CapabilitiesContext'
@@ -459,18 +460,16 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
                   onClick={() => setShowRawError((open) => !open)}
                   className="flex items-center gap-1 text-xs font-medium text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
                 >
-                  <ChevronRight className={`h-3.5 w-3.5 transition-transform duration-200 ${showRawError ? 'rotate-90' : ''}`} />
+                  <CollapseChevron open={showRawError} className="h-3.5 w-3.5" />
                   Raw error
                 </button>
-                <div className={`issue-details-motion ${showRawError ? 'issue-details-motion-open' : ''}`}>
-                  <div className="overflow-hidden">
-                    <div id="connection-raw-error" className="mt-2 bg-theme-elevated border border-theme-border rounded-md p-3 overflow-auto max-h-32">
-                      <code className="text-xs text-theme-text-tertiary font-mono whitespace-pre-wrap break-words">
-                        {connection.error}
-                      </code>
-                    </div>
+                <Collapse open={showRawError} id="connection-raw-error">
+                  <div className="mt-2 bg-theme-elevated border border-theme-border rounded-md p-3 overflow-auto max-h-32">
+                    <code className="text-xs text-theme-text-tertiary font-mono whitespace-pre-wrap break-words">
+                      {connection.error}
+                    </code>
                   </div>
-                </div>
+                </Collapse>
               </div>
             )}
           </div>

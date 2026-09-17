@@ -121,6 +121,8 @@ import {
   PVCRenderer,
   RolloutRenderer,
   AnalysisRunRenderer,
+  AnalysisTemplateRenderer,
+  ExperimentRenderer,
   CertificateRenderer,
   WorkflowRenderer,
   PersistentVolumeRenderer,
@@ -428,7 +430,7 @@ const KNOWN_KINDS = new Set([
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
   'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'cronworkflows',
   'hpas', 'horizontalpodautoscalers', 'nodes', 'persistentvolumeclaims',
-  'rollouts', 'analysisruns', 'certificates', 'workflows', 'persistentvolumes',
+  'rollouts', 'analysisruns', 'analysistemplates', 'clusteranalysistemplates', 'experiments', 'certificates', 'workflows', 'persistentvolumes',
   'storageclasses', 'certificaterequests', 'clusterissuers', 'issuers',
   'orders', 'challenges',
   'gateways', 'gatewayclasses', 'httproutes', 'grpcroutes', 'tcproutes', 'tlsroutes', 'sealedsecrets', 'workflowtemplates', 'clusterworkflowtemplates',
@@ -680,7 +682,8 @@ export function ResourceRendererDispatch({
     kind === 'clusters' || kind === 'backups' || kind === 'scheduledbackups' || kind === 'poolers'
     || kind === 'objectstores' || kind === 'databases' || kind === 'publications'
     || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs'
-    || kind === 'policies' || kind === 'rollouts' || kind === 'machines' || kind === 'machinesets'
+    || kind === 'policies' || kind === 'rollouts' || kind === 'experiments'
+    || kind === 'machines' || kind === 'machinesets'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
     (kind === 'clusters' && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'cluster.x-k8s.io')))
@@ -693,6 +696,11 @@ export function ResourceRendererDispatch({
       && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'messaging.knative.dev')))
     || (kind === 'policies' && isApiGroup(data?.apiVersion, 'kyverno.io'))
     || (kind === 'rollouts' && isArgoRolloutResource(data))
+    // Katib (kubeflow.org) ships its own, unrelated Experiment CRD sharing
+    // this plural — without this gate it got the Argo Rollouts Experiment
+    // renderer's mostly-empty status view instead of its actual resource
+    // details, the same collision shape as every other check in this block.
+    || (kind === 'experiments' && isApiGroup(data?.apiVersion, 'argoproj.io'))
     || ((kind === 'machines' || kind === 'machinesets')
       && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io'))
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
@@ -789,6 +797,8 @@ export function ResourceRendererDispatch({
         {kind === 'persistentvolumeclaims' && <PVCComp data={data} onNavigate={onNavigate} />}
         {kind === 'rollouts' && isArgoRolloutResource(data) && <RolloutComp data={data} onNavigate={onNavigate} />}
         {kind === 'analysisruns' && <AnalysisRunRenderer data={data} onNavigate={onNavigate} />}
+        {(kind === 'analysistemplates' || kind === 'clusteranalysistemplates') && <AnalysisTemplateRenderer data={data} />}
+        {kind === 'experiments' && isApiGroup(data?.apiVersion, 'argoproj.io') && <ExperimentRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'certificates' && !data?.apiVersion?.includes('networking.internal.knative.dev') && <CertificateRenderer data={data} />}
         {kind === 'workflows' && <WorkflowRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'persistentvolumes' && <PersistentVolumeRenderer data={data} onNavigate={onNavigate} />}
@@ -1110,6 +1120,10 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'nodes') return getNodeStatus(data)
   if (k === 'persistentvolumeclaims') return getPVCStatus(data)
   if (k === 'analysisruns') return getAnalysisRunStatus(data)
+  // Same collision guard as the render branch above — Katib's unrelated
+  // Experiment CRD (kubeflow.org) shares this plural and doesn't report the
+  // AnalysisPhase vocabulary getAnalysisRunStatus expects.
+  if (k === 'experiments' && isApiGroup(data?.apiVersion, 'argoproj.io')) return getAnalysisRunStatus(data)
   if (k === 'workflows') return getWorkflowStatus(data)
   if (k === 'cronworkflows') return getCronWorkflowStatus(data)
   if (k === 'certificates') {

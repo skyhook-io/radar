@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
-import { Package, ChevronDown, ChevronRight, Search } from 'lucide-react'
+import { Package, Search } from 'lucide-react'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
+import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { Input } from '../../ui/Input'
 import { formatAge } from '../resource-utils'
 import { formatTrivyImage } from './trivy-shared'
@@ -14,6 +15,7 @@ const INITIAL_SHOW_COUNT = 100
 export function SbomReportRenderer({ data }: SbomReportRendererProps) {
   const [showAll, setShowAll] = useState(false)
   const [expanded, setExpanded] = useState(true)
+  const { panelId, buttonProps } = useDisclosure(expanded)
   const [searchTerm, setSearchTerm] = useState('')
 
   const report = data.report || {}
@@ -63,13 +65,17 @@ export function SbomReportRenderer({ data }: SbomReportRendererProps) {
       {bom.length > 0 && (
         <Section title="Components">
           <button
+            {...buttonProps}
             onClick={() => setExpanded(!expanded)}
             className="flex items-center gap-1 text-xs text-theme-text-secondary hover:text-theme-text-primary mb-2"
           >
-            {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+            <CollapseChevron open={expanded} className="w-3.5 h-3.5" />
             {bom.length} components
           </button>
-          {expanded && (
+          {/* The table can run to hundreds of rows; unmount it while closed
+              so a collapsed report stays cheap. Filters live above, so
+              nothing is lost. */}
+          <Collapse open={expanded} unmountOnExit id={panelId}>
             <div className="overflow-x-auto -mx-1">
               {/* Search */}
               <div className="flex items-center gap-2 mb-2 px-1">
@@ -131,7 +137,7 @@ export function SbomReportRenderer({ data }: SbomReportRendererProps) {
                 </button>
               )}
             </div>
-          )}
+          </Collapse>
         </Section>
       )}
     </>

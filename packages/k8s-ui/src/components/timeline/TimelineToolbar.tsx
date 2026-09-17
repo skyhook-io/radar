@@ -18,6 +18,8 @@ import {
 import { SearchBox } from '../ui/SearchBox'
 import { type ShortcutScope } from '../../hooks/useKeyboardShortcuts'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
+import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
+import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import { pluralize } from '../../utils/pluralize'
 import type { TimelineEvent, TimeRange } from '../../types'
 import type { TimelineGrouping } from '../../utils/resource-hierarchy'
@@ -475,6 +477,7 @@ function SegmentedRadioGroup<T extends string>({
  */
 export function ViewMenu({ viewOptions }: { viewOptions: TimelineViewOptions }) {
   const [open, setOpen] = useState(false)
+  const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs('menu'))
   const rootRef = useRef<HTMLDivElement | null>(null)
   usePopoverDismiss(open, setOpen, rootRef)
 
@@ -497,11 +500,18 @@ export function ViewMenu({ viewOptions }: { viewOptions: TimelineViewOptions }) 
         <ChevronDown className="w-3.5 h-3.5 text-theme-text-tertiary" />
       </button>
 
-      {open && (
+      {shouldRender && (
         <div
           role="menu"
           aria-label="View options"
-          className="absolute right-0 top-full z-50 mt-1 min-w-[14rem] rounded-lg border border-theme-border bg-theme-elevated p-2 shadow-theme-lg"
+          inert={!open}
+          className={clsx(
+            'absolute right-0 top-full z-50 mt-1 min-w-[14rem] origin-top-right rounded-lg border border-theme-border bg-theme-elevated p-2 shadow-theme-lg',
+            TRANSITION_MENU,
+            isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]',
+            !open && 'pointer-events-none',
+          )}
+          style={overlayTransitionStyle(isOpen, 'menu')}
         >
           <span className="block px-2 pb-1 text-[10px] font-bold uppercase tracking-[0.08em] text-theme-text-tertiary">Sort</span>
           <SegmentedRadioGroup
@@ -634,10 +644,11 @@ function usePopoverDismiss(
  */
 function KindsMenu({ kindFilter, onKindFilterChange, kindOptions }: KindsMenuProps) {
   const [open, setOpen] = useState(false)
+  const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs('menu'))
   const [search, setSearch] = useState('')
   const rootRef = useRef<HTMLDivElement | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
-  const [anchor, setAnchor] = useState<{ left: number; top: number; maxHeight: number } | null>(null)
+  const [anchor, setAnchor] = useState<{ left: number; top: number; maxHeight: number; flipUp: boolean } | null>(null)
   const activeCount = kindFilter.length
   const selected = useMemo(() => new Set(kindFilter), [kindFilter])
 
@@ -645,9 +656,11 @@ function KindsMenu({ kindFilter, onKindFilterChange, kindOptions }: KindsMenuPro
   // clips absolutely-positioned children. Portal the popover to the body and pin
   // it to the button with fixed coords so it escapes the clip. Dismiss must treat
   // BOTH the chip and the portaled panel as "inside".
+  // The anchor is kept through the exit transition (clearing it at logical
+  // close would unmount the panel mid-fade) and re-placed on the next open.
   const PANEL_WIDTH = 256
   useLayoutEffect(() => {
-    if (!open) { setAnchor(null); return }
+    if (!open) return
     const place = () => {
       const r = rootRef.current?.getBoundingClientRect()
       if (!r) return
@@ -666,11 +679,13 @@ function KindsMenu({ kindFilter, onKindFilterChange, kindOptions }: KindsMenuPro
       const top = flipUp
         ? Math.max(4, r.top - 4 - Math.min(panelH, maxHeight))
         : r.bottom + 4
-      setAnchor({ left, top, maxHeight })
+      setAnchor({ left, top, maxHeight, flipUp })
     }
     place()
     // Re-place after the panel mounts so the first open can measure its height and
-    // flip; the initial pass runs with panelH=0 (panel not yet in the DOM).
+    // flip; the initial pass runs with panelH=0 (panel not yet in the DOM). The
+    // presence hook mounts the panel a tick after `open`, hence `shouldRender` in
+    // the deps: the pass that runs once it is in the DOM does the real measurement.
     const raf = requestAnimationFrame(place)
     window.addEventListener('scroll', place, true)
     window.addEventListener('resize', place)
@@ -679,7 +694,7 @@ function KindsMenu({ kindFilter, onKindFilterChange, kindOptions }: KindsMenuPro
       window.removeEventListener('scroll', place, true)
       window.removeEventListener('resize', place)
     }
-  }, [open])
+  }, [open, shouldRender])
 
   useEffect(() => {
     if (!open) return
@@ -731,11 +746,29 @@ function KindsMenu({ kindFilter, onKindFilterChange, kindOptions }: KindsMenuPro
         <ChevronDown className="w-3.5 h-3.5 text-theme-text-tertiary" />
       </button>
 
-      {open && anchor && createPortal(
+      {shouldRender && anchor && createPortal(
         <div
           ref={panelRef}
-          style={{ position: 'fixed', left: anchor.left, top: anchor.top, width: PANEL_WIDTH, maxHeight: anchor.maxHeight }}
-          className="z-50 overflow-y-auto rounded-md border border-theme-border bg-theme-surface shadow-theme-lg"
+          inert={!open}
+          style={{
+            position: 'fixed',
+            left: anchor.left,
+            top: anchor.top,
+            width: PANEL_WIDTH,
+            maxHeight: anchor.maxHeight,
+            ...overlayTransitionStyle(isOpen, 'menu'),
+          }}
+          className={clsx(
+            'z-50 overflow-y-auto rounded-md border border-theme-border bg-theme-surface shadow-theme-lg',
+            anchor.flipUp ? 'origin-bottom-left' : 'origin-top-left',
+            TRANSITION_MENU,
+            isOpen
+              ? 'opacity-100 translate-y-0 scale-100'
+              : anchor.flipUp
+                ? 'opacity-0 translate-y-1 scale-[0.97]'
+                : 'opacity-0 -translate-y-1 scale-[0.97]',
+            !open && 'pointer-events-none',
+          )}
         >
           <MultiSelectPicker
             items={kindOptions}

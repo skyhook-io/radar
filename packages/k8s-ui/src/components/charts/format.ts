@@ -7,6 +7,10 @@ export function formatMetricValue(value: number, unit: string): string {
   if (value < 0) return `-${formatMetricValue(-value, unit)}`
 
   switch (unit) {
+    case 'percent':
+      return `${value.toFixed(value < 1 ? 2 : 1)}%`
+    case 'requests/s':
+      return `${value.toFixed(value < 1 ? 3 : 1)} req/s`
     case 'cores': {
       if (value < 0.0001) return '< 0.1m'
       if (value < 0.001) return `${(value * 1000).toFixed(1)}m`

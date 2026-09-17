@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 import { clsx } from 'clsx'
-import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
+import { TRANSITION_BACKDROP, TRANSITION_PANEL, overlayTransitionStyle } from '../../utils/animation'
 import { useActiveShortcuts, type ShortcutCategory } from '../../hooks/useKeyboardShortcuts'
 
 interface ShortcutHelpOverlayProps {
@@ -232,6 +232,7 @@ export function ShortcutHelpOverlay({ onClose, currentView, isOpen = true }: Sho
           TRANSITION_BACKDROP,
           isOpen ? 'opacity-100' : 'opacity-0'
         )}
+        style={overlayTransitionStyle(isOpen, 'dialog')}
         onClick={onClose}
       />
 
@@ -243,6 +244,7 @@ export function ShortcutHelpOverlay({ onClose, currentView, isOpen = true }: Sho
           TRANSITION_PANEL,
           isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-[0.97]'
         )}
+        style={overlayTransitionStyle(isOpen, 'dialog')}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-theme-border">

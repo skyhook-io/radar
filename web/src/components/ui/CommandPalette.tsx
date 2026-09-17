@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
-import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
+import { TRANSITION_BACKDROP, TRANSITION_PANEL, overlayTransitionStyle } from '../../utils/animation'
 import { Search, X, ChevronRight } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useCommandItems, bestScore, type CommandItem, type CommandItemCallbacks } from './command-items'
@@ -130,15 +130,19 @@ export function CommandPalette({ onClose, isOpen = true, ...callbacks }: Command
           TRANSITION_BACKDROP,
           isOpen ? 'opacity-100' : 'opacity-0'
         )}
+        style={overlayTransitionStyle(isOpen, 'dialog')}
         onClick={onClose}
       />
 
       {/* Panel */}
-      <div className={clsx(
-        'relative w-full max-w-lg mx-4 dialog overflow-hidden',
-        TRANSITION_PANEL,
-        isOpen ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-[0.97] translate-y-3'
-      )}>
+      <div
+        className={clsx(
+          'relative w-full max-w-lg mx-4 dialog overflow-hidden',
+          TRANSITION_PANEL,
+          isOpen ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-[0.97] translate-y-3'
+        )}
+        style={overlayTransitionStyle(isOpen, 'dialog')}
+      >
         {/* Search input */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-theme-border">
           <Search className="w-5 h-5 text-theme-text-secondary shrink-0" />

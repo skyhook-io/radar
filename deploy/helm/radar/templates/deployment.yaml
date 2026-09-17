@@ -99,6 +99,15 @@ spec:
             {{- if .Values.traffic.prometheusUrl }}
             - --prometheus-url={{ .Values.traffic.prometheusUrl }}
             {{- end }}
+            {{- if .Values.traffic.prometheusSingleCluster }}
+            - --prometheus-single-cluster
+            {{- end }}
+            {{- range $k, $v := .Values.traffic.prometheusClusterLabels }}
+            - {{ printf "--prometheus-cluster-label=%s=%s" $k $v | quote }}
+            {{- end }}
+            {{- if .Values.traffic.beylaJobSelector }}
+            - {{ printf "--beyla-job-selector=%s" .Values.traffic.beylaJobSelector | quote }}
+            {{- end }}
             {{- if .Values.cost.currency }}
             - --opencost-currency={{ .Values.cost.currency }}
             {{- end }}
@@ -317,6 +326,11 @@ spec:
               value: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
             - name: MY_DEPLOYMENT_NAME
               value: {{ include "radar.fullname" . }}
+            # The Helm release name, reported to Radar Cloud on connect so the
+            # dashboard's token-rotation command targets this release instead
+            # of assuming `radar`. Read-only self-description, like the two above.
+            - name: RADAR_HELM_RELEASE
+              value: {{ .Release.Name | quote }}
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
