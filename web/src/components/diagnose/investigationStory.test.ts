@@ -10,7 +10,7 @@ import {
 
 describe("splitStory", () => {
   it("places a marker on its own line and references one inside a sentence", () => {
-    const { segments, inlineRefs } = splitStory(
+    const { segments } = splitStory(
       "The pod crashes.\n\n[[radar:evidence=0]]\n\nAs [[radar:evidence=0]] shows, auth fails.\n  [[radar:evidence=2]]  \nDone.",
     );
     expect(segments).toEqual([
@@ -24,7 +24,7 @@ describe("splitStory", () => {
       { kind: "placement", index: 2 },
       { kind: "prose", markdown: "Done." },
     ]);
-    expect(inlineRefs).toEqual([0]);
+    expect(JSON.stringify(segments)).toContain("#radar-evidence-0)");
   });
 
   it("treats markers inside fences, inline code and blockquotes as literal text", () => {
@@ -39,9 +39,9 @@ describe("splitStory", () => {
       "[[radar:evidence=5]]",
       "~~~",
     ].join("\n");
-    const { segments, inlineRefs } = splitStory(report);
+    const { segments } = splitStory(report);
     expect(segments.filter((s) => s.kind === "placement")).toEqual([]);
-    expect(inlineRefs).toEqual([3]);
+    expect(JSON.stringify(segments)).toContain("#radar-evidence-3)");
     const prose = segments
       .map((s) => (s.kind === "prose" ? s.markdown : ""))
       .join("\n");
@@ -53,7 +53,7 @@ describe("splitStory", () => {
   it("keeps indented-code markers and unbalanced closing fences literal", () => {
     const indented = splitStory("Text.\n\n    [[radar:evidence=0]]");
     expect(indented.segments.every((s) => s.kind === "prose")).toBe(true);
-    expect(indented.inlineRefs).toEqual([]);
+    expect(JSON.stringify(indented.segments)).not.toContain("#radar-evidence");
     expect(
       indented.segments.map((s) => s.kind === "prose" && s.markdown).join("\n"),
     ).toContain("    [[radar:evidence=0]]");
@@ -71,12 +71,13 @@ describe("splitStory", () => {
     const ref = "ev_" + "a".repeat(26) + "_" + "b".repeat(26);
     const stray = "ev_" + "c".repeat(26) + "_" + "d".repeat(26);
     const resolve = (candidate: string) => (candidate === ref ? 2 : undefined);
-    const { segments, inlineRefs } = splitStory(
+    const { segments } = splitStory(
       `The log shows it:\n\n[[radar:evidence-ref=${ref}]]\n\nSee [[radar:evidence-ref=${ref}|compact]] and [[radar:evidence-ref=${stray}]].`,
       resolve,
     );
     expect(segments[1]).toEqual({ kind: "placement", index: 2 });
-    expect(inlineRefs).toEqual([2, UNRESOLVED_STORY_INDEX]);
+    expect(JSON.stringify(segments)).toContain("#radar-evidence-2)");
+    expect(JSON.stringify(segments)).toContain("#radar-evidence--1)");
     expect(segments[2]).toMatchObject({ kind: "prose" });
     const inline = (segments[2] as { markdown: string }).markdown;
     expect(inline).toContain("](#radar-evidence-2)");
@@ -84,10 +85,10 @@ describe("splitStory", () => {
     expect(storyPlainText(`x [[radar:evidence-ref=${ref}]] y`)).toBe("x  y");
   });
   it("keeps a marker inside a double-backtick code span literal", () => {
-    const { segments, inlineRefs } = splitStory(
+    const { segments } = splitStory(
       "Write `` [[radar:evidence=0]] `` to place, then see [[radar:evidence=0]].",
     );
-    expect(inlineRefs).toEqual([0]);
+    expect(JSON.stringify(segments)).toContain("#radar-evidence-0)");
     expect((segments[0] as { markdown: string }).markdown).toContain(
       "`` [[radar:evidence=0]] ``",
     );
@@ -101,7 +102,7 @@ describe("splitStory", () => {
       "prose",
       "placement",
     ]);
-    expect(split.inlineRefs).toEqual([]);
+    expect(JSON.stringify(split.segments)).not.toContain("#radar-evidence");
     expect((split.segments[0] as { markdown: string }).markdown).toContain(
       "[[radar:evidence=0]]\nend`",
     );
@@ -125,7 +126,9 @@ describe("splitStory", () => {
       "prose",
     ]);
     expect(kinds("\t[[radar:evidence=0]]")).toEqual(["prose"]);
-    expect(splitStory("\t[[radar:evidence=0]]").inlineRefs).toEqual([]);
+    expect(
+      JSON.stringify(splitStory("\t[[radar:evidence=0]]").segments),
+    ).not.toContain("#radar-evidence");
   });
 
   it("reads the compact variant as a placement flag", () => {

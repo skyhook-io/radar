@@ -33,7 +33,7 @@ export interface StoryPlacementTarget {
   domId: string;
 }
 
-export type StoryPlacementResolution =
+type StoryPlacementResolution =
   | { kind: "placed"; target: StoryPlacementTarget }
   | { kind: "reference"; target: StoryPlacementTarget }
   | { kind: "lost"; reason: StoryPlacementLoss };
@@ -319,7 +319,6 @@ export function AnalysisStory({
   onReveal,
   onViewSource,
   trailing,
-  defaultOpen = false,
   openRequest = 0,
   className,
 }: {
@@ -337,17 +336,14 @@ export function AnalysisStory({
   onViewSource?: (sourceId: string) => void;
   /** Rendered at the end of the full analysis, behind the fold. */
   trailing?: ReactNode;
-  defaultOpen?: boolean;
   /** Bumped by the host when a reveal needs the story open first. */
   openRequest?: number;
   className?: string;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  // An open requested before mount opens the story from its first render.
+  const [open, setOpen] = useState(openRequest > 0);
   // The wide layout is measured after mount; when it asks for the story open,
   // open it. Narrowing never closes what the reader opened.
-  useEffect(() => {
-    if (defaultOpen) setOpen(true);
-  }, [defaultOpen]);
   useEffect(() => {
     if (openRequest > 0) setOpen(true);
   }, [openRequest]);

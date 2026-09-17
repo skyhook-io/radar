@@ -31,7 +31,11 @@ import { stringify as toYaml } from "yaml";
 import { codeToHtml } from "shiki";
 import { DialogPortal } from "@skyhook-io/k8s-ui/components/ui/DialogPortal";
 import { parseContextName } from "../../utils/context-name";
-import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from "../../utils/animation";
+import {
+  TRANSITION_MENU,
+  overlayExitMs,
+  overlayTransitionStyle,
+} from "../../utils/animation";
 import { useAnimatedUnmount } from "../../hooks/useAnimatedUnmount";
 import { useTheme } from "../../context/ThemeContext";
 import { type DiagnoseConsentCopy } from "../../context/DiagnoseCustomization";
@@ -201,7 +205,10 @@ function SelectMenu({
   const [open, setOpen] = useState(false);
   // Presence outlives `open` by the menu exit so the list can fade out; the
   // click-away backdrop only exists while logically open.
-  const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs("menu"));
+  const { shouldRender, isOpen } = useAnimatedUnmount(
+    open,
+    overlayExitMs("menu"),
+  );
   const current = options.find((o) => o.value === value) ?? options[0];
   return (
     <div>
@@ -219,51 +226,50 @@ function SelectMenu({
           <ChevronDown className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
         </button>
         {open && (
-          <div
-            className="fixed inset-0 z-10"
-            onClick={() => setOpen(false)}
-          />
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
         )}
         {shouldRender && (
-            <ul
-              role="listbox"
-              inert={!open || undefined}
-              className={`absolute left-0 right-0 z-20 mt-1 max-h-72 origin-top overflow-y-auto rounded-md border border-theme-border bg-theme-surface py-1 shadow-theme-lg ${TRANSITION_MENU} ${
-                isOpen ? "opacity-100 translate-y-0 scale-100" : "opacity-0 -translate-y-1 scale-[0.97]"
-              } ${open ? "" : "pointer-events-none"}`}
-              style={overlayTransitionStyle(isOpen, "menu")}
-            >
-              {options.map((o) => {
-                const sel = o.value === value;
-                return (
-                  <li key={o.value}>
-                    <button
-                      role="option"
-                      aria-selected={sel}
-                      onClick={() => {
-                        onChange(o.value);
-                        setOpen(false);
-                      }}
-                      className="flex w-full items-start gap-2 px-2.5 py-1.5 text-left hover:bg-theme-hover"
-                    >
-                      <Check
-                        className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${sel ? "text-accent" : "opacity-0"}`}
-                      />
-                      <span className="min-w-0">
-                        <span className="block text-xs font-medium text-theme-text-primary">
-                          {o.label}
-                        </span>
-                        {o.description && (
-                          <span className="block text-[11px] leading-snug text-theme-text-tertiary">
-                            {o.description}
-                          </span>
-                        )}
+          <ul
+            role="listbox"
+            inert={!open || undefined}
+            className={`absolute left-0 right-0 z-20 mt-1 max-h-72 origin-top overflow-y-auto rounded-md border border-theme-border bg-theme-surface py-1 shadow-theme-lg ${TRANSITION_MENU} ${
+              isOpen
+                ? "opacity-100 translate-y-0 scale-100"
+                : "opacity-0 -translate-y-1 scale-[0.97]"
+            } ${open ? "" : "pointer-events-none"}`}
+            style={overlayTransitionStyle(isOpen, "menu")}
+          >
+            {options.map((o) => {
+              const sel = o.value === value;
+              return (
+                <li key={o.value}>
+                  <button
+                    role="option"
+                    aria-selected={sel}
+                    onClick={() => {
+                      onChange(o.value);
+                      setOpen(false);
+                    }}
+                    className="flex w-full items-start gap-2 px-2.5 py-1.5 text-left hover:bg-theme-hover"
+                  >
+                    <Check
+                      className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${sel ? "text-accent" : "opacity-0"}`}
+                    />
+                    <span className="min-w-0">
+                      <span className="block text-xs font-medium text-theme-text-primary">
+                        {o.label}
                       </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+                      {o.description && (
+                        <span className="block text-[11px] leading-snug text-theme-text-tertiary">
+                          {o.description}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         )}
       </div>
       {hint && (
@@ -2187,7 +2193,7 @@ export function ResultCard({
  * the headline would ship the persuasive half without its caveats.
  */
 /** What Radar adds to the agent's verdict when the assessment is copied for a channel. */
-export interface AssessmentCopyRadar {
+interface AssessmentCopyRadar {
   /** Reads Radar could not complete, as shown in Still open. */
   limits?: readonly string[];
   /** Adverse Radar cards the agent explained, as shown in Still open. */
@@ -2377,7 +2383,7 @@ const STEP_KIND_LABEL: Record<
  * whenever the agent listed anything, and says so when it listed nothing,
  * because a persuasive story needs its caveats above the fold, not inside it.
  */
-export function AssessmentHeadline({
+function AssessmentHeadline({
   diagnosis,
   tone,
   revisedAfter,

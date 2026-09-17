@@ -58,7 +58,6 @@ describe("resolveStoryPlacements", () => {
         resolveItem={resolver({ 2: "unlinked" })}
         renderPlacement={() => null}
         onReveal={vi.fn()}
-        defaultOpen={false}
       />,
     );
     expect(html).toContain("Opening paragraph.");
@@ -95,7 +94,7 @@ describe("resolveStoryPlacements", () => {
         resolveItem={resolver({ 0: target(0, "a") })}
         renderPlacement={() => <div data-card>card</div>}
         onReveal={vi.fn()}
-        defaultOpen
+        openRequest={1}
       />,
     );
     expect(html).toContain("data-card");
@@ -111,7 +110,7 @@ describe("resolveStoryPlacements", () => {
         resolveItem={resolver({ 0: target(0, "a") })}
         renderPlacement={() => <div data-card>card</div>}
         onReveal={vi.fn()}
-        defaultOpen
+        openRequest={1}
       />,
     );
     expect(html).toContain("↓");
@@ -192,7 +191,7 @@ describe("resolveStoryPlacements", () => {
         resolveItem={resolver(table)}
         renderPlacement={() => <div data-card>card</div>}
         onReveal={vi.fn()}
-        defaultOpen
+        openRequest={1}
       />,
     );
     expect(html.match(/data-card/g)).toHaveLength(6);
@@ -207,7 +206,7 @@ describe("resolveStoryPlacements", () => {
         resolveItem={resolver(table)}
         renderPlacement={() => <div data-card>card</div>}
         onReveal={vi.fn()}
-        defaultOpen
+        openRequest={1}
       />,
     );
     expect(ownLine.match(/data-card/g)).toHaveLength(6);
@@ -251,7 +250,7 @@ describe("AnalysisStory", () => {
           </div>
         )}
         onReveal={vi.fn()}
-        defaultOpen={open}
+        openRequest={open ? 1 : 0}
       />,
     );
 

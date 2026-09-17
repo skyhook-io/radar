@@ -15,7 +15,7 @@
 // meant a placement; the parser rewrites a cited ref to its index, and one
 // nothing cites reaches here as a ref the resolver cannot place. Either way
 // it is a marker, never literal text.
-export const STORY_PLACEMENT_RE =
+const STORY_PLACEMENT_RE =
   /\[\[radar:evidence(?:=(\d+)|-ref=([A-Za-z0-9_]+))(?:\|(compact))?\]\]/g;
 // Four or more leading spaces is Markdown indented code, so a marker there
 // stays literal like one inside a fence.
@@ -54,10 +54,8 @@ export type StorySegment =
       auto?: boolean;
     };
 
-export interface StorySplit {
+interface StorySplit {
   segments: StorySegment[];
-  /** Every marker that appeared inline, in order, including repeats. */
-  inlineRefs: number[];
 }
 
 /** The href an inline reference is rewritten to; the Markdown link renderer reads it back. */
@@ -93,7 +91,6 @@ function codeSpanAfter(text: string, openRun: number): number {
 // travels from line to line and a blank line ends it with the paragraph.
 function rewriteInlineMarkers(
   line: string,
-  inlineRefs: number[],
   resolveRef: StoryRefResolver | undefined,
   openRun: number,
 ): { text: string; openRun: number } {
@@ -109,7 +106,6 @@ function rewriteInlineMarkers(
       out += match[0];
     } else {
       const index = markerIndex(match[1], match[2], resolveRef);
-      inlineRefs.push(index);
       out += `[${match[0]}](${storyReferenceHref(index)})`;
     }
     cursor = start + match[0].length;
@@ -123,7 +119,6 @@ export function splitStory(
   resolveRef?: StoryRefResolver,
 ): StorySplit {
   const segments: StorySegment[] = [];
-  const inlineRefs: number[] = [];
   const prose: string[] = [];
   let fence: string | undefined;
   let openRun = 0;
@@ -180,17 +175,12 @@ export function splitStory(
       });
       continue;
     }
-    const rewritten = rewriteInlineMarkers(
-      line,
-      inlineRefs,
-      resolveRef,
-      openRun,
-    );
+    const rewritten = rewriteInlineMarkers(line, resolveRef, openRun);
     openRun = rewritten.openRun;
     prose.push(rewritten.text);
   }
   flush();
-  return { segments, inlineRefs };
+  return { segments };
 }
 
 /** The story without any markers, for copying and for models reading it back. */
