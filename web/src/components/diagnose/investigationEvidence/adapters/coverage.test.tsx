@@ -373,7 +373,9 @@ describe("listing cards (helm releases, packages, search)", () => {
       />,
     );
     const first = html.indexOf("podinfo");
-    expect(html.indexOf('data-inventory-row="cited"')).toBeLessThan(first);
+    const marker = html.indexOf('data-inventory-row="cited"');
+    expect(marker).toBeGreaterThan(-1);
+    expect(marker).toBeLessThan(first);
     expect(first).toBeLessThan(html.indexOf("argo-cd"));
     expect(html.match(/shop\/podinfo/g)).toHaveLength(1);
   });

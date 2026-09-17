@@ -6,7 +6,7 @@ import {
   type InvestigationResourceSummary,
   type InvestigationEvidenceSource,
 } from "..";
-import { listingRowNamesSubject } from "../../investigationCase";
+import { listingRowNamesSubject, sameKind } from "../../investigationCase";
 import type { EvidenceDataOf } from "../cardParts";
 
 // The rows the citations on a card name, in citation order: one row when the
@@ -48,13 +48,17 @@ export function namedInventoryRows(
     // A row without a namespace lives in the listing's scope, or in none
     // (a cluster-scoped kind); neither satisfies a namespace the citation
     // states unless it is the scope itself. A package row's namespace is
-    // where the package runs, while the agent names the object that declares
-    // it (a Flux HelmRelease in flux-system), so a package is named by name.
+    // where the package runs, while the object the agent names as declaring
+    // it (a Flux HelmRelease in flux-system) lives elsewhere, so that
+    // namespace is not held against a package; a subject that names the
+    // package as a Package means the namespace it says.
+    const declaringObject = (resource: InvestigationResourceSummary) =>
+      resource.kind === "Package" && !sameKind(subject.kind, "Package");
     const matches = resources.filter(
       (resource) =>
         listingRowNamesSubject(resource, subject) &&
         (namespace === undefined ||
-          resource.kind === "Package" ||
+          declaringObject(resource) ||
           (resource.namespace ?? scopeNamespace) === namespace),
     );
     out.push({
@@ -131,9 +135,10 @@ export function InventoryBody({
   data: EvidenceDataOf<"inventory">;
   cited?: readonly InvestigationResourceSummary[];
 }) {
+  const lead = [...new Set(cited)];
   const rows = [
-    ...cited,
-    ...data.resources.filter((resource) => !cited.includes(resource)),
+    ...lead,
+    ...data.resources.filter((resource) => !lead.includes(resource)),
   ];
   return (
     <div className="max-h-72 overflow-y-auto rounded-md border border-theme-border">
@@ -142,7 +147,7 @@ export function InventoryBody({
           key={`${resource.kind}-${resource.namespace ?? ""}-${resource.name}`}
           resource={resource}
           divider={index > 0}
-          cited={cited.includes(resource)}
+          cited={lead.includes(resource)}
         />
       ))}
     </div>

@@ -352,8 +352,8 @@ export function listingRowNamesSubject(
 // call returns about a resource is "resource" to it, whether Radar draws that
 // as a resource card, a listing, a ranking, a posture card, a Helm release, a
 // permissions check or a neighborhood. The kinds a diagnose bundle yields
-// beside its resource (startup, crash, receipts) stay out so "resource" still
-// picks one observation of that bundle.
+// beside its resource (startup, crash, dns, network, receipts) stay out so
+// "resource" still picks one observation of that bundle.
 const RESOURCE_SHAPED: ReadonlySet<InvestigationEvidenceData["type"]> = new Set<
   InvestigationEvidenceData["type"]
 >([
@@ -365,8 +365,6 @@ const RESOURCE_SHAPED: ReadonlySet<InvestigationEvidenceData["type"]> = new Set<
   "permissions",
   "topology",
   "relationships",
-  "dns",
-  "network",
 ]);
 
 /**
@@ -374,10 +372,11 @@ const RESOURCE_SHAPED: ReadonlySet<InvestigationEvidenceData["type"]> = new Set<
  * did not state; every discriminator both sides supply must match. Uniqueness
  * of the match, not completeness of the subject, is what places a claim.
  *
- * The evidence word tells observations of one call apart. A call that
- * yielded a single observation (a receipt for a metric search, a scan with
- * nothing about the target) has nothing to tell apart, so the word the agent
- * chose for it is not held against it; what it names still has to match.
+ * The evidence word tells observations of one call apart, and a receipt is
+ * not a kind of its own: it is what a call of any kind returned when it found
+ * nothing (a metric search, a scan with nothing about the target). A call
+ * whose only observation is a receipt is not held to the word; what the
+ * subject names still has to match.
  */
 function observationMatchesSubject(
   group: InvestigationEvidenceGroup,
@@ -386,7 +385,8 @@ function observationMatchesSubject(
   targetPods: ReadonlySet<string>,
   sole: boolean,
 ): boolean {
-  if (subject.observation !== undefined && !sole) {
+  const soleReceipt = sole && observation.data.type === "receipt";
+  if (subject.observation !== undefined && !soleReceipt) {
     // A diagnose bundle captures several vitals charts for one resource, so
     // "metrics" alone cannot name one; "metrics:<category>" picks the chart
     // whose identity ends in that category. An agent-run query is one chart,

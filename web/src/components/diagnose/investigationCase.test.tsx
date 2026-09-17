@@ -400,7 +400,7 @@ describe("agent case placement (D-1, D-1b)", () => {
     ]);
   });
 
-  it("does not hold the evidence word against a result that yielded one observation", () => {
+  it("does not hold the evidence word against a call whose only observation is a receipt", () => {
     const metricsRef = evidenceRef("m", "a");
     const upgradeRef = evidenceRef("u", "b");
     const projection = project(
@@ -492,6 +492,110 @@ describe("agent case placement (D-1, D-1b)", () => {
       "card",
       "source",
     ]);
+  });
+
+  it("holds a bare read to the evidence word: 'logs' does not name a resource card", () => {
+    const readRef = evidenceRef("r", "a");
+    const projection = project(
+      tool("read", "get_resource", deployment, {
+        evidenceRef: readRef,
+        summary: JSON.stringify({
+          kind: "deployment",
+          namespace: "shop",
+          name: "api",
+        }),
+      }),
+    );
+    const resolved = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(readRef, "context", "Zero ready.", {
+            group: "apps",
+            kind: "Deployment",
+            namespace: "shop",
+            name: "api",
+            observation: "logs",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items[0].placement).toBe("source");
+  });
+
+  it("leads a cited package listing with one row when two aliases name it, and holds a Package subject to its namespace", () => {
+    const pkgRef = evidenceRef("k", "e");
+    const projection = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "pkgs",
+        "list_packages",
+        {
+          packages: [
+            {
+              chart: "podinfo",
+              namespace: "prod",
+              releaseName: "podinfo",
+              version: "6.15.0",
+              health: { status: "healthy" },
+              sources: ["H"],
+            },
+            {
+              chart: "redis",
+              namespace: "prod",
+              releaseName: "redis",
+              version: "1.0.0",
+              health: { status: "healthy" },
+              sources: ["H"],
+            },
+          ],
+          sourceLegend: { H: "Helm" },
+        },
+        { evidenceRef: pkgRef, summary: JSON.stringify({}) },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(pkgRef, "context", "Declared by Flux.", {
+            group: "helm.toolkit.fluxcd.io",
+            kind: "HelmRelease",
+            namespace: "flux-system",
+            name: "podinfo",
+            observation: "resource",
+          }),
+          linked(pkgRef, "context", "Installed by Helm.", {
+            kind: "HelmRelease",
+            namespace: "prod",
+            name: "podinfo",
+            observation: "resource",
+          }),
+          linked(pkgRef, "context", "Another namespace's package.", {
+            kind: "Package",
+            namespace: "staging",
+            name: "podinfo",
+            observation: "resource",
+          }),
+        ],
+      },
+      0,
+    );
+    // All three bind to the listing; only the two declaring-object aliases
+    // name the prod row, and it leads the list once.
+    expect(resolved.items.map((item) => item.placement)).toEqual([
+      "card",
+      "card",
+      "card",
+    ]);
+    const html = render(projection, resolved);
+    const cited = html.match(/data-inventory-row="cited"/g) ?? [];
+    expect(cited).toHaveLength(1);
+    const marker = html.indexOf('data-inventory-row="cited"');
+    expect(marker).toBeGreaterThan(-1);
+    expect(marker).toBeLessThan(html.indexOf("prod/redis"));
+    expect(html.match(/prod\/podinfo/g)).toHaveLength(1);
   });
 
   it("binds a Pod subject to events only for the target's own pod or a pod an event names whole", () => {
