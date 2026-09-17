@@ -2,6 +2,7 @@ import { type ReactNode, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { AlertTriangle, ArrowUpRight, Check, Copy, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
 import type { BlockedExit } from './cloudConnectHandoff'
+import { Tooltip } from './ui/Tooltip'
 import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import {
@@ -82,12 +83,21 @@ function BlockedView({
   // so hand it to them verbatim rather than making them retype it.
   const cardRef = useRef<HTMLDivElement | null>(null)
   const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
-  const copyForTeam = () => {
+  // The note is the card's rendered text plus a header and the link, so it
+  // can only be composed once the card is in the DOM; the tooltip shows the
+  // exact text on hover so "copy" never means something other than what is
+  // previewed.
+  const [note, setNote] = useState('')
+  const composeNote = () => {
     const body = cardRef.current?.innerText ?? copy.title
-    const note = `Radar Cloud — connecting this cluster from Radar was blocked\n\n${body}\n\n${exit.label}: ${exit.href}`
+    const composed = `Radar Cloud — connecting this cluster from Radar was blocked\n\n${body}\n\n${exit.label}: ${exit.href}`
+    setNote(composed)
+    return composed
+  }
+  const copyForAdmin = () => {
     // copyText also serves Radar on a plain-HTTP non-loopback address, where
     // the async Clipboard API is missing and the legacy command still works.
-    void copyText(note).then((ok) => {
+    void copyText(composeNote()).then((ok) => {
       setCopied(ok ? 'done' : 'failed')
       setTimeout(() => setCopied('idle'), 2000)
     })
@@ -123,23 +133,41 @@ function BlockedView({
         >
           {exit.label}
         </a>
-        <button
-          type="button"
-          onClick={copyForTeam}
-          className="inline-flex items-center gap-1.5 text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+        <Tooltip
+          position="top"
+          delay={200}
+          className="max-w-md"
+          content={
+            <div className="space-y-1.5">
+              <div className="text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+                What gets copied
+              </div>
+              <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[10.5px] leading-snug text-theme-text-secondary">
+                {note}
+              </pre>
+            </div>
+          }
         >
-          {copied === 'done' ? (
-            <>
-              <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Copied
-            </>
-          ) : copied === 'failed' ? (
-            'Couldn’t copy — select the text above'
-          ) : (
-            <>
-              <Copy className="w-3.5 h-3.5" /> Copy for a cluster admin
-            </>
-          )}
-        </button>
+          <button
+            type="button"
+            onClick={copyForAdmin}
+            onMouseEnter={composeNote}
+            onFocus={composeNote}
+            className="inline-flex items-center gap-1.5 text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+          >
+            {copied === 'done' ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Copied
+              </>
+            ) : copied === 'failed' ? (
+              'Couldn’t copy — select the text above'
+            ) : (
+              <>
+                <Copy className="w-3.5 h-3.5" /> Copy for a cluster admin
+              </>
+            )}
+          </button>
+        </Tooltip>
         <button
           onClick={onExit}
           className="ml-auto text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
