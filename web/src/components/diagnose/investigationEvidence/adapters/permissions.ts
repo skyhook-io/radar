@@ -18,6 +18,7 @@ import {
   type InvestigationEvidenceSource,
   type InvestigationKubernetesResource,
   type InvestigationPermissionBinding,
+  InvestigationPermissionRule,
   type InvestigationPermissionSubject,
 } from "../types";
 
@@ -248,6 +249,22 @@ export function adaptSubjectPermissions(
   }
   const truncated = value.truncated === true;
   const flatRulesCount = value.flatRules.length;
+  const rules: InvestigationPermissionRule[] = value.flatRules
+    .slice(0, 200)
+    .map((entry) => {
+      const rule = record(entry)!;
+      return {
+        verbs: stringArray(rule.verbs) ?? [],
+        apiGroups: stringArray(rule.apiGroups) ?? [],
+        resources: stringArray(rule.resources) ?? [],
+        ...(stringArray(rule.resourceNames)?.length
+          ? { resourceNames: stringArray(rule.resourceNames) }
+          : {}),
+        ...(stringArray(rule.nonResourceURLs)?.length
+          ? { nonResourceURLs: stringArray(rule.nonResourceURLs) }
+          : {}),
+      };
+    });
   const usedByPods = stringArray(value.usedByPods) ?? [];
   builder.observe(`permissions:subject:${subjectKey}`, "permissions", source, {
     tier: evidenceTierForRelevance("context", relevance),
@@ -260,6 +277,7 @@ export function adaptSubjectPermissions(
       subject,
       bindings,
       flatRulesCount,
+      rules,
       truncated,
       usedByPods,
       podsTotal: value.podsTotal as number | undefined,

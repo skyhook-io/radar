@@ -265,6 +265,36 @@ export interface InvestigationHelmRelease {
   managedByFluxHelmRelease?: string;
   lastOperation?: InvestigationHelmOperation;
   resources: InvestigationHelmOwnedResource[];
+  /** Newest first; the tool returns the release's stored revisions. */
+  history?: InvestigationHelmRevision[];
+  hooks?: InvestigationHelmHook[];
+  /** User-supplied values as the tool returned them, secrets already redacted. */
+  values?: Record<string, unknown>;
+}
+export interface InvestigationHelmRevision {
+  revision: number;
+  status: string;
+  chart: string;
+  appVersion?: string;
+  description?: string;
+  updated: string;
+}
+export interface InvestigationHelmHook {
+  name: string;
+  kind: string;
+  namespace?: string;
+  events: string[];
+  weight: number;
+  status?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+export interface InvestigationPermissionRule {
+  verbs: string[];
+  apiGroups: string[];
+  resources: string[];
+  resourceNames?: string[];
+  nonResourceURLs?: string[];
 }
 export interface InvestigationPermissionSubject {
   kind: string;
@@ -405,6 +435,8 @@ export type InvestigationEvidenceData =
       /** Present for the subject-permissions response shape. */
       bindings?: InvestigationPermissionBinding[];
       flatRulesCount?: number;
+      /** The effective rules themselves, up to the tool's cap. */
+      rules?: InvestigationPermissionRule[];
       truncated?: boolean;
       usedByPods?: string[];
       podsTotal?: number;

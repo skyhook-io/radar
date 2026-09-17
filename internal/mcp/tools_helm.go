@@ -131,6 +131,9 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 		result["managedByFluxHelmRelease"] = detail.ManagedByFluxHelmRelease
 	}
 
+	if len(detail.History) > 0 {
+		result["history"] = detail.History
+	}
 	if len(detail.Hooks) > 0 {
 		result["hooks"] = detail.Hooks
 	}

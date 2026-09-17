@@ -10,7 +10,7 @@ import {
 import { apiVersionToGroup } from "../../../../utils/navigation";
 import { Tooltip } from "../../../ui/Tooltip";
 import { EvidenceNavigationContext } from "../navigation";
-import { type EvidenceDataOf, ResourceFact } from "../cardParts";
+import { type EvidenceDataOf, ResourceFact, severityBadge } from "../cardParts";
 
 function helmStatusSeverity(status: string) {
   const normalized = status.toLowerCase();
@@ -19,6 +19,16 @@ function helmStatusSeverity(status: string) {
   if (normalized.startsWith("pending") || normalized === "uninstalling")
     return "info" as const;
   return "warning" as const;
+}
+
+// Scalars read as they are; a nested object shows the keys it holds, not its
+// contents, which is enough to see what was overridden.
+function helmValueText(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value !== "object") return String(value);
+  if (Array.isArray(value)) return `[${value.length} items]`;
+  const keys = Object.keys(value as Record<string, unknown>);
+  return `{ ${keys.slice(0, 6).join(", ")}${keys.length > 6 ? ", …" : ""} }`;
 }
 
 export function HelmBody({ data }: { data: EvidenceDataOf<"helm"> }) {
@@ -126,6 +136,111 @@ export function HelmBody({ data }: { data: EvidenceDataOf<"helm"> }) {
         <p className="text-xs text-theme-text-tertiary">
           Managed by Flux HelmRelease {release.managedByFluxHelmRelease}
         </p>
+      ) : null}
+      {release.hooks && release.hooks.length > 0 ? (
+        <div>
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+            Hooks
+          </div>
+          <div className="rounded-md border border-theme-border">
+            {release.hooks.map((hook, index) => (
+              <div
+                key={`${hook.kind}-${hook.namespace ?? ""}-${hook.name}-${index}`}
+                data-helm-hook
+                className={clsx(
+                  "flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-2.5 py-1.5 text-xs",
+                  index > 0 && "border-t border-theme-border/60",
+                )}
+              >
+                <Badge tone="structural" size="sm">
+                  {hook.kind}
+                </Badge>
+                <span className="min-w-0 truncate font-mono text-theme-text-secondary">
+                  {hook.name}
+                </span>
+                <span className="text-theme-text-tertiary">
+                  {hook.events.join(", ")}
+                </span>
+                {hook.status ? (
+                  <Badge severity={severityBadge(hook.status)} size="sm">
+                    {hook.status}
+                  </Badge>
+                ) : null}
+                {hook.completedAt ? (
+                  <span className="ml-auto shrink-0 text-theme-text-tertiary">
+                    {formatRelativeAgeTime(hook.completedAt)}
+                  </span>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {release.history && release.history.length > 0 ? (
+        <div>
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+            History
+          </div>
+          <div className="rounded-md border border-theme-border">
+            {release.history.map((rev, index) => (
+              <div
+                key={rev.revision}
+                data-helm-revision={rev.revision}
+                className={clsx(
+                  "flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-2.5 py-1.5 text-xs",
+                  index > 0 && "border-t border-theme-border/60",
+                  rev.revision === release.revision && "bg-theme-hover/40",
+                )}
+              >
+                <span className="font-mono text-theme-text-primary">
+                  rev {rev.revision}
+                </span>
+                <Badge severity={helmStatusSeverity(rev.status)} size="sm">
+                  {rev.status}
+                </Badge>
+                <span className="font-mono text-theme-text-secondary">
+                  {rev.chart}
+                </span>
+                {rev.description ? (
+                  <span className="min-w-0 truncate text-theme-text-tertiary">
+                    {rev.description}
+                  </span>
+                ) : null}
+                <span className="ml-auto shrink-0 text-theme-text-tertiary">
+                  {formatRelativeAgeTime(rev.updated)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {release.values && Object.keys(release.values).length > 0 ? (
+        <div>
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+            Values set by the user
+          </div>
+          <div className="rounded-md border border-theme-border font-mono text-xs">
+            {Object.entries(release.values)
+              .slice(0, 40)
+              .map(([key, value], index) => (
+                <div
+                  key={key}
+                  data-helm-value={key}
+                  className={clsx(
+                    "flex min-w-0 gap-2 px-2.5 py-1",
+                    index > 0 && "border-t border-theme-border/60",
+                  )}
+                >
+                  <span className="shrink-0 text-theme-text-secondary">
+                    {key}
+                  </span>
+                  <span className="min-w-0 truncate text-theme-text-primary">
+                    {helmValueText(value)}
+                  </span>
+                </div>
+              ))}
+          </div>
+        </div>
       ) : null}
       {release.resources.length > 0 ? (
         <div className="max-h-52 overflow-y-auto rounded-md border border-theme-border">
@@ -304,6 +419,48 @@ export function PermissionsBody({
           No RoleBinding or ClusterRoleBinding grants this subject anything.
         </p>
       )}
+      {data.rules && data.rules.length > 0 ? (
+        <div>
+          <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+            Effective rules
+          </div>
+          <div className="max-h-60 overflow-y-auto rounded-md border border-theme-border">
+            {data.rules.slice(0, 60).map((rule, index) => (
+              <div
+                key={index}
+                data-permission-rule
+                className={clsx(
+                  "flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-2.5 py-1.5 font-mono text-xs",
+                  index > 0 && "border-t border-theme-border/60",
+                )}
+              >
+                <span className="text-theme-text-primary">
+                  {rule.verbs.join(", ")}
+                </span>
+                <span className="text-theme-text-tertiary">on</span>
+                <span className="min-w-0 truncate text-theme-text-secondary">
+                  {rule.nonResourceURLs?.length
+                    ? rule.nonResourceURLs.join(", ")
+                    : rule.resources.join(", ")}
+                  {rule.resourceNames?.length
+                    ? ` [${rule.resourceNames.join(", ")}]`
+                    : ""}
+                </span>
+                {rule.apiGroups.length > 0 ? (
+                  <span className="ml-auto shrink-0 text-theme-text-tertiary">
+                    {rule.apiGroups.map((g) => g || "core").join(", ")}
+                  </span>
+                ) : null}
+              </div>
+            ))}
+            {data.rules.length > 60 ? (
+              <div className="border-t border-theme-border/60 px-2.5 py-1.5 text-xs text-theme-text-tertiary">
+                {data.rules.length - 60} more rules in the result
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       {usedByPods.length > 0 ? (
         <p className="text-xs leading-relaxed text-theme-text-secondary [overflow-wrap:anywhere]">
           <span className="text-theme-text-tertiary">Used by pods: </span>

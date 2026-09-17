@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { investigationEvidenceSubjectRef } from "../index";
 import { groupsOf, project, tool } from "../evidenceFixtures";
+import { renderToStaticMarkup } from "react-dom/server";
+import { HelmBody } from "../bodies/platform";
 
 const helmRelease = {
   name: "shop",
@@ -238,5 +240,66 @@ describe("helm release adapter", () => {
     expect(
       projection.limitations.map((limitation) => limitation.source),
     ).toEqual(["Helm release", "Helm resources", "Helm operation"]);
+  });
+});
+
+describe("helm release card detail", () => {
+  it("keeps hooks, the newest ten revisions and the user's values, and renders them", () => {
+    const projection = project([
+      tool("helm", "get_helm_release", {
+        ...helmRelease,
+        history: [
+          {
+            revision: 5,
+            status: "superseded",
+            chart: "shop-1.4.0",
+            updated: "2026-09-01T07:00:00Z",
+          },
+          {
+            revision: 7,
+            status: "deployed",
+            chart: "shop-1.4.2",
+            updated: "2026-09-07T07:00:00Z",
+            description: "Upgrade complete",
+          },
+          {
+            revision: 6,
+            status: "failed",
+            chart: "shop-1.4.1",
+            updated: "2026-09-03T07:00:00Z",
+            description: "pre-upgrade hooks failed",
+          },
+        ],
+        hooks: [
+          {
+            name: "shop-test-connection",
+            kind: "Pod",
+            events: ["test"],
+            weight: 0,
+            status: "Succeeded",
+            completedAt: "2026-09-07T07:01:00Z",
+          },
+        ],
+        values: {
+          replicaCount: 2,
+          ui: { color: "#34577c", message: "hi" },
+          tags: ["a", "b"],
+        },
+      }),
+    ]);
+    const [group] = groupsOf(projection.groups, "helm");
+    const data = group.latest.data;
+    if (data.type !== "helm") throw new Error("expected a helm card");
+    expect(data.release.history?.map((rev) => rev.revision)).toEqual([7, 6, 5]);
+    expect(data.release.hooks?.[0].name).toBe("shop-test-connection");
+    const html = renderToStaticMarkup(<HelmBody data={data} />);
+    expect(html).toContain('data-helm-revision="6"');
+    expect(html).toContain("pre-upgrade hooks failed");
+    expect(html).toContain("data-helm-hook");
+    expect(html).toContain("shop-test-connection");
+    expect(html).toContain("Values set by the user");
+    expect(html).toContain("replicaCount");
+    expect(html).toContain("{ color, message }");
+    expect(html).toContain("[2 items]");
   });
 });
