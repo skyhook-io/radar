@@ -58,11 +58,24 @@ export function adaptTopResources(
       (sameKind(item.kind, builder.target.kind) &&
         (namespace ?? "") === (builder.target.namespace ?? "") &&
         item.name === builder.target.name);
+    const ownerRaw = record(item.owner);
+    const owner =
+      ownerRaw && nonEmptyString(ownerRaw.kind) && nonEmptyString(ownerRaw.name)
+        ? {
+            kind: ownerRaw.kind,
+            ...(nonEmptyString(ownerRaw.group)
+              ? { group: ownerRaw.group }
+              : {}),
+            ...(namespace ? { namespace } : {}),
+            name: ownerRaw.name,
+          }
+        : undefined;
     return [
       {
         kind: item.kind,
         namespace,
         name: item.name,
+        ...(owner ? { owner } : {}),
         cpu: quantity(item.cpuMilli, "m"),
         memory: quantity(item.memoryMi, "Mi"),
         ...(typeof item.cpuLimitMilli === "number" && item.cpuLimitMilli > 0
@@ -91,12 +104,44 @@ export function adaptTopResources(
     ? "producer-related"
     : "broader";
   const targetRows = rows.filter((row) => row.target).length;
+  // A pod ranking of the workload's own namespace that holds none of its
+  // established pods says so on the card, so the reader does not scan for a
+  // row that is not there. "Not in these results" is all that is known: a
+  // capped ranking omits low consumers, and the tool's skipped count does
+  // not say which pods it skipped.
+  const rankedNamespace = nonEmptyString(args?.namespace)
+    ? args.namespace
+    : undefined;
+  const targetPodsAbsent =
+    value.kind === "pods" &&
+    targetRows === 0 &&
+    builder.establishedTargetPods.size > 0 &&
+    (rankedNamespace === undefined ||
+      rankedNamespace === builder.target.namespace);
+  const skipped =
+    typeof value.skippedNoMetrics === "number" && value.skippedNoMetrics > 0
+      ? value.skippedNoMetrics
+      : 0;
   builder.observe(`ranking:${value.kind}:${sort}:${scope}`, "ranking", source, {
     tier: evidenceTierForRelevance("context", relevance),
     relevance,
     tone: "neutral",
     title: `Top ${value.kind} by ${sort}`,
-    summary: `${rows.length} ranked${targetRows > 0 ? ` · ${targetRows === 1 ? "this workload's row" : `${targetRows} of its pods`} marked` : ""} · ${nonEmptyString(args?.namespace) ? `in ${args.namespace}` : "cluster-wide"}`,
+    summary: [
+      `${rows.length} ranked`,
+      targetRows > 0
+        ? `${targetRows === 1 ? "this workload's row" : `${targetRows} of its pods`} marked`
+        : undefined,
+      rankedNamespace ? `in ${rankedNamespace}` : "cluster-wide",
+      targetPodsAbsent
+        ? "this workload's pods aren't in these results"
+        : undefined,
+      skipped > 0
+        ? `${skipped} ${skipped === 1 ? "pod" : "pods"} omitted: no metrics`
+        : undefined,
+    ]
+      .filter(Boolean)
+      .join(" · "),
     data: { type: "ranking", kind: value.kind, sort, rows, scope },
   });
 }

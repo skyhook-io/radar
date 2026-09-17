@@ -4,6 +4,7 @@ import { deployment, groupsOf, project, tool } from "../evidenceFixtures";
 import { RankingBody } from "../bodies/ranking";
 import { PostureBody } from "../bodies/posture";
 import { InventoryBody, namedInventoryRows } from "../bodies/inventory";
+import { severityBadge } from "../cardParts";
 
 const targetBundle = {
   resource: {
@@ -42,6 +43,7 @@ describe("ranking card (top_resources)", () => {
               kind: "Pod",
               namespace: "shop",
               name: "api-7f6-abc",
+              owner: { group: "apps", kind: "Deployment", name: "api" },
               cpuMilli: 40,
               memoryMi: 512,
               memoryLimitMi: 600,
@@ -68,10 +70,78 @@ describe("ranking card (top_resources)", () => {
       ["api-7f6-abc", true],
     ]);
     const html = renderToStaticMarkup(<RankingBody data={data} />);
+    expect(data.rows[1].owner).toEqual({
+      group: "apps",
+      kind: "Deployment",
+      namespace: "shop",
+      name: "api",
+    });
     expect(html).toContain('data-ranking-row="target"');
     expect(html).toContain("512Mi");
     expect(html).toContain("/600Mi");
     expect(html).toContain("3 restarts");
+  });
+
+  it("says when a pod ranking of the workload's namespace holds none of its pods, and how many the tool skipped", () => {
+    const projection = project([
+      tool("diag", "diagnose", targetBundle),
+      tool(
+        "top",
+        "top_resources",
+        {
+          kind: "pods",
+          sort: "cpu",
+          metricsAvailable: true,
+          skippedNoMetrics: 3,
+          items: [
+            {
+              kind: "Pod",
+              namespace: "shop",
+              name: "worker-1",
+              cpuMilli: 120,
+              memoryMi: 900,
+            },
+          ],
+        },
+        {
+          summary: JSON.stringify({
+            kind: "pods",
+            namespace: "shop",
+            sort: "cpu",
+          }),
+        },
+      ),
+      tool(
+        "top-other",
+        "top_resources",
+        {
+          kind: "pods",
+          sort: "cpu",
+          metricsAvailable: true,
+          items: [
+            {
+              kind: "Pod",
+              namespace: "other",
+              name: "worker-2",
+              cpuMilli: 120,
+              memoryMi: 900,
+            },
+          ],
+        },
+        {
+          summary: JSON.stringify({
+            kind: "pods",
+            namespace: "other",
+            sort: "cpu",
+          }),
+        },
+      ),
+    ]);
+    const [own, other] = groupsOf(projection.groups, "ranking");
+    expect(own.latest.summary).toBe(
+      "1 ranked · in shop · this workload's pods aren't in these results · 3 pods omitted: no metrics",
+    );
+    expect(other.latest.summary).toBe("1 ranked · in other");
   });
 
   it("records a limit, not a card, when live metrics were unavailable", () => {
@@ -139,6 +209,53 @@ describe("posture cards (audit, upgrade readiness)", () => {
     expect(html).toContain('data-posture-finding="target"');
     expect(html).toContain("runAsRoot");
     expect(html).toContain("Set runAsNonRoot: true.");
+  });
+
+  it("keeps two expansions of one upgrade scan as two cards", () => {
+    const check = (id: string, kind: string) => ({
+      currentVersion: "1.36.1",
+      targetVersion: "1.37",
+      check: {
+        id,
+        title: id,
+        category: "api",
+        status: "fail",
+        findings: [
+          {
+            title: `${id} finding`,
+            level: "blocker",
+            resource: { kind, namespace: "shop", name: "api" },
+          },
+        ],
+      },
+    });
+    const projection = project([
+      tool("diag", "diagnose", targetBundle),
+      tool(
+        "u1",
+        "get_cluster_upgrade_readiness",
+        check("removed-apis", "Deployment"),
+        {
+          summary: JSON.stringify({
+            targetVersion: "1.37",
+            check: "removed-apis",
+          }),
+        },
+      ),
+      tool(
+        "u2",
+        "get_cluster_upgrade_readiness",
+        check("webhooks", "Deployment"),
+        {
+          summary: JSON.stringify({ targetVersion: "1.37", check: "webhooks" }),
+        },
+      ),
+    ]);
+    const cards = groupsOf(projection.groups, "posture");
+    expect(cards).toHaveLength(2);
+    expect(cards.map((card) => card.observations.length)).toEqual([1, 1]);
+    expect(severityBadge("blocker")).toBe("error");
+    expect(severityBadge("review")).toBe("info");
   });
 
   it("files a scan with nothing about the target as a receipt", () => {

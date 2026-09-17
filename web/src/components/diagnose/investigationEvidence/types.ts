@@ -307,6 +307,8 @@ export interface InvestigationRankingRow {
   status?: string;
   /** The investigated resource itself, or one of its own pods. */
   target: boolean;
+  /** The workload a ranked pod belongs to, when the tool reports one. */
+  owner?: { kind: string; group?: string; namespace?: string; name: string };
 }
 /** A configuration or upgrade finding about one resource. */
 export interface InvestigationPostureFinding {

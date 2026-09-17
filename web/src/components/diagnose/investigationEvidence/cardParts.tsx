@@ -261,11 +261,17 @@ function evidenceIcon(type: InvestigationEvidenceData["type"]) {
 
 export function severityBadge(value: string) {
   const tone = value.toLowerCase();
-  if (tone === "error" || tone === "critical" || tone === "failed")
+  if (
+    tone === "error" ||
+    tone === "critical" ||
+    tone === "failed" ||
+    tone === "blocker"
+  )
     return "error" as const;
   if (tone === "alert" || tone === "high") return "alert" as const;
   if (tone === "warning" || tone === "medium") return "warning" as const;
-  if (tone === "info" || tone === "low") return "info" as const;
+  if (tone === "info" || tone === "low" || tone === "review")
+    return "info" as const;
   return "neutral" as const;
 }
 

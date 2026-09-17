@@ -429,17 +429,20 @@ function observationIdentities(
 ): ObservationSubjectIdentity[] {
   const stated = observationSubjectIdentity(observation);
   const identities = stated ? [stated] : [];
-  // A ranking is also each row it ranks and a posture card each resource its
-  // findings name, with the workload that owns that resource: a citation of
-  // the workload reaches the finding on its HPA, and a card of mixed kinds
-  // accepts no name it does not hold.
+  // A ranking is also each row it ranks and the workload each pod belongs
+  // to; a posture card each resource its findings name and the workload that
+  // owns it: a citation of the workload reaches its pods' rows and the
+  // finding on its HPA, and a card of mixed kinds accepts no name it does
+  // not hold.
   if (
     observation.data.type === "ranking" ||
     observation.data.type === "posture"
   ) {
     const rows =
       observation.data.type === "ranking"
-        ? observation.data.rows
+        ? observation.data.rows.flatMap((row) =>
+            row.owner ? [row, row.owner] : [row],
+          )
         : observation.data.findings.flatMap((finding) =>
             finding.managedBy ? [finding, finding.managedBy] : [finding],
           );

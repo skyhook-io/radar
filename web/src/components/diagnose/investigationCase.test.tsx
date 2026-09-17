@@ -699,6 +699,63 @@ describe("agent case placement (D-1, D-1b)", () => {
     ]);
   });
 
+  it("reaches a pod ranking through the workload its marked pods belong to", () => {
+    const rankRef = evidenceRef("t", "b");
+    const projection = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "top",
+        "top_resources",
+        {
+          kind: "pods",
+          sort: "memory",
+          metricsAvailable: true,
+          items: [
+            {
+              kind: "Pod",
+              namespace: "shop",
+              name: "worker-1",
+              cpuMilli: 9,
+              memoryMi: 400,
+            },
+            {
+              kind: "Pod",
+              namespace: "shop",
+              name: "api-abc",
+              owner: { group: "apps", kind: "Deployment", name: "api" },
+              cpuMilli: 5,
+              memoryMi: 300,
+            },
+          ],
+        },
+        {
+          evidenceRef: rankRef,
+          summary: JSON.stringify({
+            kind: "pods",
+            namespace: "shop",
+            sort: "memory",
+          }),
+        },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(rankRef, "context", "The API pod is second by memory.", {
+            group: "apps",
+            kind: "Deployment",
+            namespace: "shop",
+            name: "api",
+            observation: "resource",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items[0].placement).toBe("card");
+  });
+
   it("marks the investigated workload's own row in a workload ranking", () => {
     const rankRef = evidenceRef("t", "a");
     const projection = project(

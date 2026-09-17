@@ -35,41 +35,53 @@ function keep(
   }
   if (kept.length === 0) {
     if (!source.confirmedSuccess) return;
-    builder.observe(`posture:${origin}:receipt:${scope}`, "receipt", source, {
-      tier: evidenceTierForRelevance("checked", "producer-related"),
-      relevance: "producer-related",
-      tone: "neutral",
-      title: `No ${label.toLowerCase()} on this resource`,
-      summary: scope,
-      data: {
-        type: "receipt",
-        checked: "posture",
-        scope,
-        message:
-          [
-            findings.length > 0
-              ? `${findings.length} finding${findings.length === 1 ? "" : "s"} elsewhere in the scan.`
-              : undefined,
-            missing.length > 0
-              ? `Not every check ran: inputs missing for ${missing.join(", ")}.`
-              : undefined,
-          ]
-            .filter(Boolean)
-            .join(" ") || undefined,
+    builder.observe(
+      `posture:${origin}:receipt:${source.args ?? scope}`,
+      "receipt",
+      source,
+      {
+        tier: evidenceTierForRelevance("checked", "producer-related"),
+        relevance: "producer-related",
+        tone: "neutral",
+        title: `No ${label.toLowerCase()} on this resource`,
+        summary: scope,
+        data: {
+          type: "receipt",
+          checked: "posture",
+          scope,
+          message:
+            [
+              findings.length > 0
+                ? `${findings.length} finding${findings.length === 1 ? "" : "s"} elsewhere in the scan.`
+                : undefined,
+              missing.length > 0
+                ? `Not every check ran: inputs missing for ${missing.join(", ")}.`
+                : undefined,
+            ]
+              .filter(Boolean)
+              .join(" ") || undefined,
+        },
       },
-    });
+    );
     return;
   }
   const onTarget = kept.filter((finding) => finding.target).length;
   const relevance = onTarget > 0 ? "target" : "producer-related";
-  builder.observe(`posture:${origin}:${scope}`, "posture", source, {
-    tier: evidenceTierForRelevance("context", relevance),
-    relevance,
-    tone: "neutral",
-    title: label,
-    summary: `${kept.length} finding${kept.length === 1 ? "" : "s"}${onTarget > 0 ? ` · ${onTarget} on this resource` : ""} · ${scope}`,
-    data: { type: "posture", source: origin, findings: kept, scope },
-  });
+  // Two expansions of one scan differ in what they asked for (an upgrade
+  // check id, an audit category), which the scope alone does not carry.
+  builder.observe(
+    `posture:${origin}:${source.args ?? scope}`,
+    "posture",
+    source,
+    {
+      tier: evidenceTierForRelevance("context", relevance),
+      relevance,
+      tone: "neutral",
+      title: label,
+      summary: `${kept.length} finding${kept.length === 1 ? "" : "s"}${onTarget > 0 ? ` · ${onTarget} on this resource` : ""} · ${scope}`,
+      data: { type: "posture", source: origin, findings: kept, scope },
+    },
+  );
 }
 
 function relevanceOf(
