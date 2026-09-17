@@ -345,6 +345,12 @@ function observationMatchesSubject(
       return false;
     }
   }
+  // One rules result holds many rules and none states a resource; the rule's
+  // name is the handle that tells them apart.
+  if (observation.data.type === "alerts" && subject.name !== undefined)
+    return (
+      observation.data.rule.name.toLowerCase() === subject.name.toLowerCase()
+    );
   const identities = observationIdentities(observation);
   // An observation that states no resource of its own (an agent-run query
   // whose selectors do not name the target exactly, a topology summary) can
@@ -391,6 +397,23 @@ function namesPod(text: string, name: string): boolean {
   return new RegExp(`(^|[^A-Za-z0-9.-])${escaped}(?![A-Za-z0-9.-])`).test(text);
 }
 
+// Naming an entry the listing does not hold points at nothing: the item stays
+// at its source rather than borrowing the whole listing as its card.
+function listingHasEntry(
+  observation: InvestigationEvidenceObservation,
+  subject: DiagnosisEvidenceSubject,
+): boolean {
+  if (observation.data.type !== "inventory") return true;
+  return observation.data.resources.some(
+    (resource) =>
+      sameKind(resource.kind, subject.kind) &&
+      resource.name === subject.name &&
+      (subject.namespace === undefined ||
+        resource.namespace === undefined ||
+        resource.namespace === subject.namespace),
+  );
+}
+
 function identityMatchesSubject(
   identity: ObservationSubjectIdentity,
   observation: InvestigationEvidenceObservation,
@@ -433,12 +456,11 @@ function identityMatchesSubject(
   // ("ConfigMap kube-root-ca.crt" in the ConfigMaps of a namespace) still
   // points at that listing, and a subject with no name (a listing cited for
   // what it does not contain) is a wildcard that uniqueness still gates.
-  if (
-    !identity.listing &&
-    subject.name !== undefined &&
-    identity.name !== subject.name
-  )
-    return false;
+  if (subject.name !== undefined) {
+    if (!identity.listing) {
+      if (identity.name !== subject.name) return false;
+    } else if (!listingHasEntry(observation, subject)) return false;
+  }
   // A built-in group on a core kind ("apps" on a Pod) is the agent
   // misremembering the API, not naming a different object: no CRD lives in a
   // built-in group, so nothing else could be meant. A vendor group on a core

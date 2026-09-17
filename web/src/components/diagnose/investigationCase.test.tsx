@@ -301,6 +301,105 @@ describe("agent case placement (D-1, D-1b)", () => {
     ]);
   });
 
+  it("binds an alert citation to the rule it names when one result holds several rules", () => {
+    const rulesRef = evidenceRef("i", "j");
+    const rule = (name: string) => ({
+      group: "kubernetes-apps",
+      type: "alerting",
+      name,
+      query: "vector(1)",
+      state: "firing",
+      health: "ok",
+      labels: { severity: "warning" },
+      annotations: { summary: name },
+      alerts: [
+        {
+          state: "firing",
+          activeAt: "2026-09-07T07:58:00Z",
+          value: "1e+00",
+          labels: {
+            alertname: name,
+            namespace: "shop",
+            pod: "api-abc",
+            container: "api",
+          },
+        },
+      ],
+    });
+    const withRules = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "rules",
+        "get_prometheus_rules",
+        {
+          count: 2,
+          rules: [
+            rule("KubePodCrashLooping"),
+            rule("KubeDeploymentReplicasMismatch"),
+          ],
+        },
+        { evidenceRef: rulesRef, summary: JSON.stringify({ state: "firing" }) },
+      ),
+    );
+    const cite = (name?: string) =>
+      linked(rulesRef, "symptom", "The rule is firing for this pod.", {
+        kind: "PrometheusRule",
+        namespace: "shop",
+        ...(name ? { name } : {}),
+        observation: "alerts",
+      });
+    const resolved = resolveInvestigationCase(
+      withRules,
+      {
+        evidence: [
+          cite("KubeDeploymentReplicasMismatch"),
+          cite("KubePodCrashLooping"),
+          cite(),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items.map((item) => item.placement)).toEqual([
+      "card",
+      "card",
+      "source",
+    ]);
+    expect(resolved.items[0].observation?.title).toContain(
+      "KubeDeploymentReplicasMismatch",
+    );
+  });
+
+  it("keeps a named entry the listing does not hold at its source", () => {
+    const listRef = evidenceRef("c", "d");
+    const withListing = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "cms",
+        "list_resources",
+        [{ kind: "ConfigMap", name: "kube-root-ca.crt" }],
+        {
+          evidenceRef: listRef,
+          summary: JSON.stringify({ kind: "configmaps", namespace: "shop" }),
+        },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      withListing,
+      {
+        evidence: [
+          linked(listRef, "context", "The nginx config is mounted from here.", {
+            kind: "ConfigMap",
+            namespace: "shop",
+            name: "nginx-config",
+            observation: "resource",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items.map((item) => item.placement)).toEqual(["source"]);
+  });
+
   it("places a Namespace citation on a namespace listing, whose call names no kind", () => {
     const nsRef = evidenceRef("g", "h");
     const withNamespaces = project(

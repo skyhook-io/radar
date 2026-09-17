@@ -471,3 +471,166 @@ describe("story log card", () => {
     expect(html).toContain("0 of 50 read lines matched the filter");
   });
 });
+
+describe("story card defaults", () => {
+  it("shows the row a citation names on a listing card, inline", () => {
+    const listRef = evidenceRef("k", "l");
+    const projection = projectInvestigationEvidence(
+      [
+        {
+          timeline: [
+            tool(
+              "cms",
+              "list_resources",
+              [
+                { kind: "ConfigMap", name: "kube-root-ca.crt" },
+                { kind: "ConfigMap", name: "nginx-config" },
+              ],
+              {
+                evidenceRef: listRef,
+                summary: JSON.stringify({
+                  kind: "configmaps",
+                  namespace: "shop",
+                }),
+              },
+            ),
+          ],
+        },
+      ],
+      target,
+    );
+    const evidence: DiagnosisEvidenceItem[] = [
+      {
+        status: "linked",
+        ref: listRef,
+        role: "context",
+        claim: "",
+        subject: {
+          kind: "ConfigMap",
+          namespace: "shop",
+          name: "nginx-config",
+          observation: "resource",
+        },
+      },
+    ];
+    const html = renderToStaticMarkup(
+      <InvestigationEvidencePane
+        projection={projection}
+        investigationCase={resolveInvestigationCase(
+          projection,
+          { evidence },
+          0,
+        )}
+        story={{
+          report: "The config exists.\n\n[[radar:evidence=0]]",
+          evidence,
+        }}
+        collecting={false}
+        animateGroupIds={new Set()}
+        onViewSource={() => {}}
+        onViewActivity={() => {}}
+      />,
+    );
+    const start = html.indexOf("data-story-inventory-row");
+    expect(start).toBeGreaterThan(-1);
+    const row = html.slice(
+      start,
+      html.indexOf("</div>", html.indexOf("nginx-config", start)),
+    );
+    expect(row).toContain("nginx-config");
+    expect(row).not.toContain("kube-root-ca.crt");
+  });
+
+  it("shows the chart inline on a metrics card placed as the symptom", () => {
+    const promRef = evidenceRef("m", "n");
+    const projection = projectInvestigationEvidence(
+      [
+        {
+          timeline: [
+            tool(
+              "diag",
+              "diagnose",
+              {
+                resource: {
+                  apiVersion: "apps/v1",
+                  kind: "Deployment",
+                  metadata: { namespace: "shop", name: "api" },
+                  spec: { replicas: 1 },
+                  status: { replicas: 1, readyReplicas: 1 },
+                },
+                pods: 1,
+                podNames: ["api-1"],
+                events: [],
+              },
+              { evidenceRef: evidenceRef("o", "p") },
+            ),
+            tool(
+              "prom",
+              "query_prometheus",
+              {
+                query:
+                  'sum(container_memory_working_set_bytes{namespace="shop",pod=~"^(api-1)$"})',
+                type: "range",
+                start: "2026-09-06T07:17:23Z",
+                end: "2026-09-06T09:17:23Z",
+                step: "25s",
+                resultType: "matrix",
+                seriesCount: 1,
+                series: [
+                  {
+                    labels: { pod: "api-1" },
+                    dataPoints: [
+                      { timestamp: 1_788_679_043, value: 169_377_792 },
+                      { timestamp: 1_788_679_068, value: 171_401_216 },
+                    ],
+                  },
+                ],
+                selectors: [
+                  {
+                    metric: "container_memory_working_set_bytes",
+                    matchers: [
+                      { label: "namespace", op: "=", value: "shop" },
+                      { label: "pod", op: "=~", value: "^(api-1)$" },
+                    ],
+                  },
+                ],
+              },
+              { evidenceRef: promRef, summary: "{}" },
+            ),
+          ],
+        },
+      ],
+      target,
+    );
+    const evidence: DiagnosisEvidenceItem[] = [
+      {
+        status: "linked",
+        ref: promRef,
+        role: "symptom",
+        claim: "",
+        subject: {
+          kind: "Deployment",
+          namespace: "shop",
+          name: "api",
+          observation: "metrics",
+        },
+      },
+    ];
+    const html = renderToStaticMarkup(
+      <InvestigationEvidencePane
+        projection={projection}
+        investigationCase={resolveInvestigationCase(
+          projection,
+          { evidence },
+          0,
+        )}
+        story={{ report: "Memory climbs.\n\n[[radar:evidence=0]]", evidence }}
+        collecting={false}
+        animateGroupIds={new Set()}
+        onViewSource={() => {}}
+        onViewActivity={() => {}}
+      />,
+    );
+    expect(html).toContain("data-story-metrics");
+  });
+});

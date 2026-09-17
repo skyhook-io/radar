@@ -76,6 +76,7 @@ import {
   investigationSourceArgs,
   type InvestigationEvidenceData,
   type InvestigationEvidenceGroup,
+  type InvestigationResourceSummary,
   type InvestigationEvidenceObservation,
   type InvestigationEvidenceProjection,
   type InvestigationRootCauseEvidenceResolution,
@@ -1734,8 +1735,28 @@ function EvidenceCard({
   // A story log card carries its cited lines inline, so the only thing left to
   // expand is the earlier lines; the record keeps the full logs body.
   const inlineLogs = storyCard && observation.data.type === "logs";
+  // A chart placed as the cause or the symptom is the card: it shows inline,
+  // and the fold has nothing left to add.
+  const inlineMetrics =
+    storyCard &&
+    observation.data.type === "metrics" &&
+    cardItems.some((item) => item.role === "cause" || item.role === "symptom");
+  // The row a citation names is the part of a listing the sentence rests on.
+  const storyInventoryRow =
+    storyCard && observation.data.type === "inventory"
+      ? observation.data.resources.find((resource) =>
+          cardItems.some(
+            (item) =>
+              item.subject?.name !== undefined &&
+              item.subject.name === resource.name &&
+              (item.subject.namespace === undefined ||
+                resource.namespace === undefined ||
+                item.subject.namespace === resource.namespace),
+          ),
+        )
+      : undefined;
   const hasExpandableBody =
-    (hasEvidenceDetails && !inlineLogs) || meaningfulHistory;
+    (hasEvidenceDetails && !inlineLogs && !inlineMetrics) || meaningfulHistory;
   const canExpand = !compact && (hasExpandableBody || storyLogLines.length > 2);
   const revealHistory = investigationEvidenceShouldRevealHistory(
     group,
@@ -1965,6 +1986,33 @@ function EvidenceCard({
               </TerminalBlock>
             </div>
           ) : null}
+          {storyInventoryRow ? (
+            <div
+              data-story-inventory-row
+              className={
+                prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2"
+              }
+            >
+              <div className="rounded-md border border-theme-border">
+                <InventoryRow resource={storyInventoryRow} />
+              </div>
+            </div>
+          ) : null}
+          {inlineMetrics && observation.data.type === "metrics" ? (
+            <div
+              data-story-metrics
+              className={
+                prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2"
+              }
+            >
+              <MetricsBody
+                data={observation.data}
+                changeCoverage={metricsMarkersBySource?.get(
+                  observation.source.id,
+                )}
+              />
+            </div>
+          ) : null}
         </>
       ) : cardItems.some((item) => item.claim || item.role) ? (
         <div
@@ -1998,7 +2046,7 @@ function EvidenceCard({
                 prominence === "primary" ? "px-3 py-3" : "px-2.5 py-2.5",
               )}
             >
-              {hasEvidenceDetails && !inlineLogs ? (
+              {hasEvidenceDetails && !inlineLogs && !inlineMetrics ? (
                 <EvidenceBody
                   data={observation.data}
                   condensed={storyCard}
@@ -3255,46 +3303,61 @@ function MetricsBody({
   );
 }
 
+function InventoryRow({
+  resource,
+  divider = false,
+}: {
+  resource: InvestigationResourceSummary;
+  divider?: boolean;
+}) {
+  return (
+    <div
+      className={clsx(
+        "flex min-w-0 items-center gap-2 px-2.5 py-1.5",
+        divider && "border-t border-theme-border/60",
+      )}
+    >
+      <StatusDot
+        tone={mapHealthToTone(resource.summaryContext?.health ?? "")}
+        className="shrink-0"
+      />
+      <Badge tone="structural" size="sm">
+        {resource.kind}
+      </Badge>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-mono text-xs text-theme-text-secondary">
+          {resource.namespace ? `${resource.namespace}/` : ""}
+          {resource.name}
+        </span>
+        {resource.issue ? (
+          <span className="block truncate text-xs text-warning-text">
+            {resource.issue}
+          </span>
+        ) : null}
+      </span>
+      {resource.ready || resource.status ? (
+        <span className="ml-auto shrink-0 font-mono text-xs text-theme-text-tertiary">
+          {resource.ready || resource.status}
+        </span>
+      ) : null}
+      {(resource.summaryContext?.issueCount ?? 0) > 0 ? (
+        <Badge severity="warning" size="sm">
+          {resource.summaryContext?.issueCount} issues
+        </Badge>
+      ) : null}
+    </div>
+  );
+}
+
 function InventoryBody({ data }: { data: EvidenceDataOf<"inventory"> }) {
   return (
     <div className="max-h-72 overflow-y-auto rounded-md border border-theme-border">
       {data.resources.map((resource, index) => (
-        <div
+        <InventoryRow
           key={`${resource.kind}-${resource.namespace ?? ""}-${resource.name}`}
-          className={clsx(
-            "flex min-w-0 items-center gap-2 px-2.5 py-1.5",
-            index > 0 && "border-t border-theme-border/60",
-          )}
-        >
-          <StatusDot
-            tone={mapHealthToTone(resource.summaryContext?.health ?? "")}
-            className="shrink-0"
-          />
-          <Badge tone="structural" size="sm">
-            {resource.kind}
-          </Badge>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate font-mono text-xs text-theme-text-secondary">
-              {resource.namespace ? `${resource.namespace}/` : ""}
-              {resource.name}
-            </span>
-            {resource.issue ? (
-              <span className="block truncate text-xs text-warning-text">
-                {resource.issue}
-              </span>
-            ) : null}
-          </span>
-          {resource.ready || resource.status ? (
-            <span className="ml-auto shrink-0 font-mono text-xs text-theme-text-tertiary">
-              {resource.ready || resource.status}
-            </span>
-          ) : null}
-          {(resource.summaryContext?.issueCount ?? 0) > 0 ? (
-            <Badge severity="warning" size="sm">
-              {resource.summaryContext?.issueCount} issues
-            </Badge>
-          ) : null}
-        </div>
+          resource={resource}
+          divider={index > 0}
+        />
       ))}
     </div>
   );
