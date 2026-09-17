@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError, type CloudInstallAttempted } from '../api/client'
-import { composeAdminNote, exitFor, handoffForBlocked, handoffForPrepareError, isHandoffOutcome, signupUrlFor } from './cloudConnectHandoff'
+import { composeAdminNote, composeFailureNote, exitFor, needsAdminHandoff, handoffForBlocked, handoffForPrepareError, isHandoffOutcome, signupUrlFor } from './cloudConnectHandoff'
 
 const APP = 'https://app.test.example'
 const UTM = 'utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal'
@@ -204,5 +204,41 @@ describe('composeAdminNote — an ask, then the link, then the evidence', () => 
     const note = composeAdminNote(blocked, exitFor(APP, CARD, handoffForBlocked('preflight', blocked.attempted)))
     expect(note).toContain('the cluster refused part of the install — a policy, or something already there (details below)')
     expect(note).toContain('Details: No Radar install was found in the cluster; the dry run of the install stopped. create Deployment "radar" in namespace "radar": an object already exists but is not owned by the current Helm release.')
+  })
+})
+
+describe('composeFailureNote — finishing a connection the Hub already approved', () => {
+  const guidance = {
+    summary: 'Hub cluster "abc123" already exists. Do not rerun the installer; first inspect the existing attempt.',
+    lines: ['The Helm upgrade did not start, so there was no rollback to verify.'],
+    inspect: ['helm status radar -n radar', 'kubectl -n radar get secret/radar-cloud-config'],
+    clusterUrl: 'https://app.radarhq.io/c/abc123?utm_source=x',
+  }
+
+  it('is offered only after the Hub approved and Helm ran', () => {
+    expect(needsAdminHandoff({ kind: 'helm_provision_failed', message: 'x', retrySafe: false })).toBe(true)
+    expect(needsAdminHandoff({ kind: 'installed_but_tunnel_not_confirmed', message: 'x', retrySafe: false })).toBe(true)
+    for (const kind of ['hub_connect_request_failed', 'approval_rejected_in_browser', 'approved_but_credential_pickup_expired', 'canceled_after_approval']) {
+      expect(needsAdminHandoff({ kind, message: 'x', retrySafe: false })).toBe(false)
+    }
+    expect(needsAdminHandoff(undefined)).toBe(false)
+  })
+
+  it('asks to finish the install, links the cluster page, and carries the operator guidance', () => {
+    const note = composeFailureNote(
+      { kind: 'helm_provision_failed', message: 'helm install failed: timed out waiting for the condition', retrySafe: false, guidance },
+      { context: 'prod-east' },
+    )
+    expect(note).toMatch(/^Request to finish connecting cluster prod-east to Radar Cloud\n/)
+    expect(note).toContain('the Helm install of Radar failed. helm install failed: timed out waiting for the condition Could someone with cluster access take it from here?')
+    expect(note).toContain('The cluster in Radar Cloud (its page shows the recovery options):\nhttps://app.radarhq.io/c/abc123?via=admin_handoff')
+    expect(note).toContain('Details: Hub cluster "abc123" already exists. Do not rerun the installer; first inspect the existing attempt. The Helm upgrade did not start, so there was no rollback to verify.')
+    expect(note).toContain('To inspect:\n  helm status radar -n radar\n  kubectl -n radar get secret/radar-cloud-config')
+  })
+
+  it('names the tunnel case for what it is', () => {
+    const note = composeFailureNote({ kind: 'installed_but_tunnel_not_confirmed', message: 'No tunnel within 5 minutes.', retrySafe: false }, {})
+    expect(note).toContain('Radar was installed by Helm, but its connection to Radar Cloud could not be confirmed. No tunnel within 5 minutes.')
+    expect(note).toContain('cluster this cluster to Radar Cloud')
   })
 })

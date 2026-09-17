@@ -1,4 +1,4 @@
-import { ApiError, type CloudInstallAttempted, type CloudInstallBlocked } from '../api/client'
+import { ApiError, type CloudInstallAttempted, type CloudInstallBlocked, type CloudInstallFailure } from '../api/client'
 
 // The Cloud dialog's links into the Hub. utm_content names the link that was
 // clicked. After an in-app connect attempt that did not end connected, the
@@ -240,4 +240,36 @@ function trimRefusal(line: string): string {
   const parts = line.split(': ').map((p) => p.trim()).filter(Boolean)
   if (parts.length <= 2) return line.trim().replace(/\.?$/, '.')
   return `${parts[0]} — ${parts[parts.length - 1]}`.replace(/\.?$/, '.')
+}
+
+// Failures after the Hub approved — Helm ran, or ran and the tunnel never
+// came up — are the ones whose guidance is written for an operator: inspect
+// commands, "keep this Hub cluster, don't rerun". A person who cannot act
+// on that hands it over the same way a blocked one does, as a request to
+// finish the connection rather than start one.
+export const HANDOFF_FAILURE_KINDS = new Set(['helm_provision_failed', 'installed_but_tunnel_not_confirmed'])
+
+export function needsAdminHandoff(failure: CloudInstallFailure | undefined): boolean {
+  return !!failure && HANDOFF_FAILURE_KINDS.has(failure.kind)
+}
+
+export function composeFailureNote(failure: CloudInstallFailure, where: AdminNoteContext = {}): string {
+  const name = where.context || where.cluster || 'this cluster'
+  const g = failure.guidance
+  const stage =
+    failure.kind === 'installed_but_tunnel_not_confirmed'
+      ? 'Radar was installed by Helm, but its connection to Radar Cloud could not be confirmed'
+      : 'the Helm install of Radar failed'
+  const lines: string[] = [
+    `Request to finish connecting cluster ${name} to Radar Cloud`,
+    '',
+    `Connecting it from Radar got as far as the install: ${stage}. ${failure.message.replace(/\s+/g, ' ').trim()} Could someone with cluster access take it from here?`,
+  ]
+  if (g?.clusterUrl) lines.push('', 'The cluster in Radar Cloud (its page shows the recovery options):', plainLink(g.clusterUrl))
+  const details: string[] = []
+  if (g?.summary && g.summary !== failure.message) details.push(g.summary)
+  for (const l of g?.lines ?? []) details.push(l)
+  if (details.length) lines.push('', `Details: ${details.join(' ')}`)
+  if (g?.inspect?.length) lines.push('', 'To inspect:', ...g.inspect.map((c) => `  ${c}`))
+  return lines.join('\n')
 }

@@ -1,7 +1,7 @@
 import { type ReactNode, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { AlertTriangle, ArrowUpRight, Check, Copy, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
-import { type AdminNoteContext, type BlockedExit, composeAdminNote } from './cloudConnectHandoff'
+import { type AdminNoteContext, type BlockedExit, composeAdminNote, composeFailureNote, needsAdminHandoff } from './cloudConnectHandoff'
 import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import {
@@ -63,7 +63,7 @@ export function CloudConnectFlow({
     case 'connected':
       return <ConnectedCard status={status} onStatus={onStatus} onExit={onExit} />
     case 'failed':
-      return <FailedCard status={status} onStatus={onStatus} onExit={onExit} />
+      return <FailedCard status={status} where={where} onStatus={onStatus} onExit={onExit} />
     default:
       return null
   }
@@ -83,39 +83,9 @@ function BlockedView({
   const copy = blockedCopy(blocked, exit)
   // The person who can act is usually not the one reading this card. What
   // they need is an ask with the link and the evidence — not the card's
-  // second-person explanation — so the note is composed on its own and the
-  // tooltip shows exactly what will be copied.
+  // second-person explanation — so the note is composed on its own; the
+  // CopyForAdmin action previews exactly what will be copied.
   const note = composeAdminNote(blocked, exit, where)
-  const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
-  // The preview is a block of text laid over the card, not a hint: the
-  // shared tooltip's translucent dark chip at 320px would need scrolling and
-  // sit poorly on the card, so this is its own panel — card-wide, on the
-  // elevated surface, sized to the note. When the clipboard is refused the
-  // panel is the fallback, so it stays open with the note selected: the
-  // pointer leaving the button must not take the text away.
-  const [previewing, setPreviewing] = useState(false)
-  const [pinned, setPinned] = useState(false)
-  const noteRef = useRef<HTMLPreElement | null>(null)
-  const copyForAdmin = () => {
-    // copyText also serves Radar on a plain-HTTP non-loopback address, where
-    // the async Clipboard API is missing and the legacy command still works.
-    void copyText(note).then((ok) => {
-      setCopied(ok ? 'done' : 'failed')
-      if (ok) {
-        setTimeout(() => setCopied('idle'), 2000)
-        return
-      }
-      setPinned(true)
-      const pre = noteRef.current
-      const selection = window.getSelection()
-      if (pre && selection) {
-        selection.removeAllRanges()
-        const range = document.createRange()
-        range.selectNodeContents(pre)
-        selection.addRange(range)
-      }
-    })
-  }
   const icon =
     blocked.reason === 'gitops' ? (
       <GitBranch className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
@@ -139,36 +109,6 @@ function BlockedView({
         </div>
       </div>
       <div className="relative mt-4 flex items-center gap-4">
-        {(previewing || pinned) && (
-          <div
-            id="blocked-admin-note-preview"
-            role="tooltip"
-            className="absolute inset-x-0 bottom-full z-20 mb-3 rounded-xl border border-theme-border bg-theme-elevated p-4 shadow-theme-lg"
-          >
-            <div className="mb-1.5 flex items-center justify-between text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
-              <span>{pinned ? 'Select and copy' : 'What gets copied'}</span>
-              {pinned && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPinned(false)
-                    setCopied('idle')
-                  }}
-                  aria-label="Close"
-                  className="rounded p-0.5 text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              )}
-            </div>
-            <pre
-              ref={noteRef}
-              className="select-text whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-theme-text-primary"
-            >
-              {note}
-            </pre>
-          </div>
-        )}
         <a
           href={exit.href}
           target="_blank"
@@ -177,28 +117,7 @@ function BlockedView({
         >
           {exit.label}
         </a>
-        <button
-          type="button"
-          onClick={copyForAdmin}
-          onMouseEnter={() => setPreviewing(true)}
-          onMouseLeave={() => setPreviewing(false)}
-          onFocus={() => setPreviewing(true)}
-          onBlur={() => setPreviewing(false)}
-          aria-describedby={previewing ? 'blocked-admin-note-preview' : undefined}
-          className="inline-flex items-center gap-1.5 text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary transition-colors"
-        >
-          {copied === 'done' ? (
-            <>
-              <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Copied
-            </>
-          ) : copied === 'failed' ? (
-            'Couldn’t copy — the note is selected above, press ⌘C / Ctrl+C'
-          ) : (
-            <>
-              <Copy className="w-3.5 h-3.5" /> Copy for a cluster admin
-            </>
-          )}
-        </button>
+        <CopyForAdmin note={note} />
         <button
           onClick={onExit}
           className="ml-auto text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
@@ -207,6 +126,94 @@ function BlockedView({
         </button>
       </div>
     </div>
+  )
+}
+
+// The person who can act is usually not the one reading a stop card. This
+// hands them the composed note: a preview panel on hover or focus (card-wide,
+// on the elevated surface, sized to the note — a block of text laid over the
+// card, not a hint), and when the clipboard is refused the panel pins open
+// with the note selected so copying is one keystroke.
+function CopyForAdmin({ note }: { note: string }) {
+  const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
+  const [previewing, setPreviewing] = useState(false)
+  const [pinned, setPinned] = useState(false)
+  const noteRef = useRef<HTMLPreElement | null>(null)
+  const copy = () => {
+    // copyText also serves Radar on a plain-HTTP non-loopback address, where
+    // the async Clipboard API is missing and the legacy command still works.
+    void copyText(note).then((ok) => {
+      setCopied(ok ? 'done' : 'failed')
+      if (ok) {
+        setTimeout(() => setCopied('idle'), 2000)
+        return
+      }
+      setPinned(true)
+      const pre = noteRef.current
+      const selection = window.getSelection()
+      if (pre && selection) {
+        selection.removeAllRanges()
+        const range = document.createRange()
+        range.selectNodeContents(pre)
+        selection.addRange(range)
+      }
+    })
+  }
+  return (
+    <>
+      {(previewing || pinned) && (
+        <div
+          id="admin-note-preview"
+          role="tooltip"
+          className="absolute inset-x-0 bottom-full z-20 mb-3 rounded-xl border border-theme-border bg-theme-elevated p-4 shadow-theme-lg"
+        >
+          <div className="mb-1.5 flex items-center justify-between text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+            <span>{pinned ? 'Select and copy' : 'What gets copied'}</span>
+            {pinned && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPinned(false)
+                  setCopied('idle')
+                }}
+                aria-label="Close"
+                className="rounded p-0.5 text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+          <pre
+            ref={noteRef}
+            className="select-text whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-theme-text-primary"
+          >
+            {note}
+          </pre>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={copy}
+        onMouseEnter={() => setPreviewing(true)}
+        onMouseLeave={() => setPreviewing(false)}
+        onFocus={() => setPreviewing(true)}
+        onBlur={() => setPreviewing(false)}
+        aria-describedby={previewing || pinned ? 'admin-note-preview' : undefined}
+        className="inline-flex items-center gap-1.5 text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+      >
+        {copied === 'done' ? (
+          <>
+            <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Copied
+          </>
+        ) : copied === 'failed' ? (
+          'Couldn’t copy — the note is selected above, press ⌘C / Ctrl+C'
+        ) : (
+          <>
+            <Copy className="w-3.5 h-3.5" /> Copy for a cluster admin
+          </>
+        )}
+      </button>
+    </>
   )
 }
 
@@ -746,16 +753,22 @@ function ConnectedCard({
 
 function FailedCard({
   status,
+  where,
   onStatus,
   onExit,
 }: {
   status: CloudInstallStatus
+  where?: AdminNoteContext
   onStatus: (st: CloudInstallStatus) => void
   onExit: () => void
 }) {
   const dismiss = useDismiss(status, onStatus, onExit)
   const failure = status.failure
   if (!failure) return null
+  // After the Hub approved, the guidance is written for an operator — inspect
+  // commands, keep this Hub cluster, don't rerun. Hand it over the same way a
+  // blocked card does, as a request to finish the connection.
+  const handoff = needsAdminHandoff(failure)
   return (
     <div className="px-8 pt-6 pb-5">
       <div className="flex items-start gap-2.5 mb-3">
@@ -768,13 +781,14 @@ function FailedCard({
           showSummary={failure.guidance.summary !== failure.message}
         />
       )}
-      <div className="mt-4 flex items-center gap-4">
+      <div className="relative mt-4 flex items-center gap-4">
         <button
           onClick={dismiss}
           className="px-4 py-1.5 rounded-[10px] bg-theme-elevated hover:bg-theme-hover border border-theme-border text-[12.5px] font-semibold text-theme-text-primary transition-colors"
         >
           {failure.retrySafe ? 'Start over' : 'Close'}
         </button>
+        {handoff && <CopyForAdmin note={composeFailureNote(failure, where)} />}
       </div>
     </div>
   )
