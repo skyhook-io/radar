@@ -139,6 +139,38 @@ function CopyForAdmin({ note }: { note: string }) {
   const [previewing, setPreviewing] = useState(false)
   const [pinned, setPinned] = useState(false)
   const noteRef = useRef<HTMLPreElement | null>(null)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  // The panel is anchored above the action row inside the dialog's scroll
+  // area, and an absolutely positioned box cannot be scrolled to above the
+  // top of that area: whatever extends past it is simply gone, close button
+  // included. So the panel's ceiling is measured — the row's distance from
+  // the top of the scroll content — rather than guessed from the viewport.
+  // A normal note fits and shows whole; only a longer one scrolls inside.
+  const [maxHeight, setMaxHeight] = useState<number>()
+  const shown = previewing || pinned
+  useEffect(() => {
+    if (!shown) return
+    const wrapper = panelRef.current
+    // The positioned ancestor the panel is anchored to — the action row.
+    const row = wrapper?.offsetParent as HTMLElement | null | undefined
+    const scroller = row?.closest<HTMLElement>('.overflow-y-auto')
+    if (!wrapper || !row || !scroller) return
+    const rowTop = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop
+    const gap = wrapper.getBoundingClientRect().bottom - (wrapper.firstElementChild?.getBoundingClientRect().bottom ?? 0)
+    setMaxHeight(Math.max(120, Math.floor(rowTop - gap - 8)))
+  }, [shown])
+  // Leaving closes on a short delay that entering the panel cancels, so the
+  // pointer can cross the row's own space on its way up into the panel.
+  const closeTimer = useRef<number | undefined>(undefined)
+  const enter = () => {
+    window.clearTimeout(closeTimer.current)
+    setPreviewing(true)
+  }
+  const leave = () => {
+    window.clearTimeout(closeTimer.current)
+    closeTimer.current = window.setTimeout(() => setPreviewing(false), 200)
+  }
+  useEffect(() => () => window.clearTimeout(closeTimer.current), [])
   const copy = () => {
     // copyText also serves Radar on a plain-HTTP non-loopback address, where
     // the async Clipboard API is missing and the legacy command still works.
@@ -165,22 +197,14 @@ function CopyForAdmin({ note }: { note: string }) {
     // gap between button and panel is padding rather than margin, so moving
     // the pointer up into the panel (to scroll a long note) never counts as
     // leaving.
-    <span
-      className="contents"
-      onMouseEnter={() => setPreviewing(true)}
-      onMouseLeave={() => setPreviewing(false)}
-    >
-      {(previewing || pinned) && (
-        <div className="absolute inset-x-0 bottom-full z-20 pb-3">
+    <span className="contents" onMouseEnter={enter} onMouseLeave={leave}>
+      {shown && (
+        <div ref={panelRef} className="absolute inset-x-0 bottom-full z-20 pb-3">
         <div
           id="admin-note-preview"
           role="tooltip"
-          // Anchored above the action row inside the dialog's scroll area, so
-          // a panel taller than the space above it would be clipped at the
-          // top with no way to scroll to it. The cap keeps a normal note
-          // whole with no scrollbar and lets only an unusually long one
-          // scroll inside the panel instead of disappearing.
-          className="flex max-h-[min(26rem,calc(100vh-14rem))] flex-col rounded-xl border border-theme-border bg-theme-elevated p-4 shadow-theme-lg"
+          style={maxHeight ? { maxHeight } : undefined}
+          className="flex flex-col rounded-xl border border-theme-border bg-theme-elevated p-4 shadow-theme-lg"
         >
           <div className="mb-1.5 flex items-center justify-between text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
             <span>{pinned ? 'Select and copy' : 'What gets copied'}</span>
@@ -212,7 +236,7 @@ function CopyForAdmin({ note }: { note: string }) {
         onClick={copy}
         onFocus={() => setPreviewing(true)}
         onBlur={() => setPreviewing(false)}
-        aria-describedby={previewing || pinned ? 'admin-note-preview' : undefined}
+        aria-describedby={shown ? 'admin-note-preview' : undefined}
         className="inline-flex items-center gap-1.5 text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary transition-colors"
       >
         {copied === 'done' ? (
