@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError, type CloudInstallAttempted } from '../api/client'
-import { composeAdminNote, composeFailureNote, exitFor, needsAdminHandoff, handoffForBlocked, handoffForPrepareError, isHandoffOutcome, signupUrlFor } from './cloudConnectHandoff'
+import { SELF_HOSTED_DOCS_URL, composeAdminNote, composeFailureNote, exitFor, trimRefusal, needsAdminHandoff, handoffForBlocked, handoffForPrepareError, isHandoffOutcome, signupUrlFor } from './cloudConnectHandoff'
 
 const APP = 'https://app.test.example'
 const UTM = 'utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal'
@@ -169,6 +169,9 @@ describe('composeAdminNote — an ask, then the link, then the evidence', () => 
     expect(note).toContain("Details: No Radar install was found in the cluster; the check stopped while reading Helm's release records.")
     expect(note).toContain('inspect Helm release "radar" in namespace "radar" — User "system:serviceaccount:default:limited" cannot list resource "secrets" in API group "" in the namespace "radar".')
     expect(note).toContain('Please confirm nothing is already installed before a fresh install.')
+    // The object of the request and the answer to "no SaaS", before the evidence.
+    expect(note.indexOf('What it is: Radar, the open-source Kubernetes tool')).toBeLessThan(note.indexOf('Details:'))
+    expect(note).toContain(`can be self-hosted in-house: ${SELF_HOSTED_DOCS_URL}`)
     // Never the card's second person.
     expect(note).not.toMatch(/\byour\b/i)
   })
@@ -192,6 +195,12 @@ describe('composeAdminNote — an ask, then the link, then the evidence', () => 
     expect(note).not.toContain('..')
     expect(note).toContain('Could someone with cluster access connect it from Radar Cloud?')
     expect(note).toContain('Open Radar Cloud:\n' + `${APP}/signup?via=admin_handoff`)
+  })
+
+  it('trims a refusal to what was attempted and why, for the card as for the note', () => {
+    expect(
+      trimRefusal('inspect Helm release "radar" in namespace "radar": failed to inspect existing release: query: failed to query with labels: secrets is forbidden: User "u" cannot list resource "secrets" in API group "" in the namespace "radar"'),
+    ).toBe('inspect Helm release "radar" in namespace "radar" — User "u" cannot list resource "secrets" in API group "" in the namespace "radar".')
   })
 
   it('keeps the whole line when a refusal has no error chain to trim', () => {

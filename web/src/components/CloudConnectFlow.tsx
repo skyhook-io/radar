@@ -1,9 +1,10 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { AlertTriangle, ArrowUpRight, Check, Copy, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
-import { type AdminNoteContext, type BlockedExit, composeAdminNote, composeFailureNote, needsAdminHandoff } from './cloudConnectHandoff'
+import { type AdminNoteContext, type BlockedExit, composeAdminNote, composeFailureNote, needsAdminHandoff, trimRefusal } from './cloudConnectHandoff'
 import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
+import { Tooltip } from './ui/Tooltip'
 import {
   ApiError,
   cancelCloudInstall,
@@ -264,15 +265,22 @@ function BlockedSection({ label, children }: { label: string; children: ReactNod
   )
 }
 
+// Each line is a Go error chain; the card shows what was attempted and why
+// it was refused, with the whole chain a hover away.
 function BlockingLines({ lines }: { lines: string[] }) {
   return (
     <ul className="mt-1.5 space-y-1 text-[11.5px] text-theme-text-tertiary">
-      {lines.map((line) => (
-        <li key={line} className="flex items-start gap-1.5">
-          <span className="mt-[6px] w-1 h-1 rounded-full bg-amber-500 shrink-0" />
-          {line}
-        </li>
-      ))}
+      {lines.map((line) => {
+        const shown = trimRefusal(line)
+        return (
+          <li key={line} className="flex items-start gap-1.5">
+            <span className="mt-[6px] w-1 h-1 rounded-full bg-amber-500 shrink-0" />
+            <Tooltip content={line} position="bottom" className="max-w-md whitespace-normal" disabled={shown === line}>
+              <span>{shown}</span>
+            </Tooltip>
+          </li>
+        )
+      })}
     </ul>
   )
 }

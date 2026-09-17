@@ -7,6 +7,7 @@ import { Tooltip } from './ui/Tooltip'
 import { CloudConnectFlow } from './CloudConnectFlow'
 import {
   type Handoff,
+  SELF_HOSTED_DOCS_URL,
   exitFor,
   handoffForBlocked,
   handoffForPrepareError,
@@ -70,7 +71,6 @@ export function openCloudFunnel() {
 }
 const ABOUT_URL = 'https://radarhq.io/about'
 const PRICING_URL = 'https://radarhq.io/pricing'
-const SELF_HOSTED_DOCS_URL = 'https://radarhq.io/docs/cloud/self-hosted/'
 const SEEN_KEY = 'radar.cloudFunnel.seen'
 
 // localStorage access can throw (SecurityError) where storage is denied —

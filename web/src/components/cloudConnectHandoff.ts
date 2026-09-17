@@ -136,6 +136,17 @@ export interface AdminNoteContext {
   cluster?: string
 }
 
+// A cold reader gets the object of the request and the answer to "no SaaS"
+// in one place: what runs in the cluster, the trust boundary (Radar dials
+// out; what comes back through that session is Radar's own API, bounded by
+// the ServiceAccount it runs as), and that the control plane can be run
+// in-house.
+export const SELF_HOSTED_DOCS_URL = 'https://radarhq.io/docs/cloud/self-hosted/'
+const WHAT_IT_IS = [
+  'What it is: Radar, the open-source Kubernetes tool, installed in the cluster as a Helm chart. It opens an outbound connection to a hosted control plane (nothing listens inbound); Radar Cloud users reach this Radar only through that connection, with the permissions of the ServiceAccount it runs as.',
+  `If a hosted service is not an option, the same control plane can be self-hosted in-house: ${SELF_HOSTED_DOCS_URL}`,
+].join(' ')
+
 export function composeAdminNote(blocked: CloudInstallBlocked, exit: BlockedExit, where: AdminNoteContext = {}): string {
   const a = blocked.attempted
   const name = where.context || where.cluster || 'this cluster'
@@ -206,6 +217,8 @@ export function composeAdminNote(blocked: CloudInstallBlocked, exit: BlockedExit
     '',
     linkLabel,
     plainLink(exit.href),
+    '',
+    WHAT_IT_IS,
     ...(details.length ? ['', `Details: ${details.join(' ')}`] : []),
   ].join('\n')
 }
@@ -237,7 +250,7 @@ function plainLink(href: string): string {
 // A refusal line is a Go error chain — "create Namespace "radar": namespaces
 // "radar" is forbidden: ValidatingAdmissionPolicy … denied request: <reason>".
 // Keep what was attempted and why it was refused; drop the wrapping between.
-function trimRefusal(line: string): string {
+export function trimRefusal(line: string): string {
   const parts = line.split(': ').map((p) => p.trim()).filter(Boolean)
   if (parts.length <= 2) return line.trim().replace(/\.?$/, '.')
   return `${parts[0]} — ${parts[parts.length - 1]}`.replace(/\.?$/, '.')
@@ -267,6 +280,7 @@ export function composeFailureNote(failure: CloudInstallFailure, where: AdminNot
     `Connecting it from Radar got as far as the install: ${stage}. ${failure.message.replace(/\s+/g, ' ').trim()} Could someone with cluster access take it from here?`,
   ]
   if (g?.clusterUrl) lines.push('', 'The cluster in Radar Cloud (its page shows the recovery options):', plainLink(g.clusterUrl))
+  lines.push('', WHAT_IT_IS)
   const details: string[] = []
   if (g?.summary && g.summary !== failure.message) details.push(g.summary)
   for (const l of g?.lines ?? []) details.push(l)
