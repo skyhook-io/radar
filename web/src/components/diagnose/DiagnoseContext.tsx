@@ -64,6 +64,9 @@ export type DiagnoseView = "home" | "investigation";
 //                     existed (the engine is decided once, at startup)
 //  - "off":           not available in this deployment (proxy/OIDC auth, --no-mcp,
 //                     or an embed host) — no install nudge would help
+//  - "unknown":       the agents probe hasn't answered (in flight, or it failed
+//                     and was swallowed). Nothing about the machine or the
+//                     deployment is established yet, so say nothing about either
 export type DiagnoseSetup =
   "ready" | "needs-install" | "needs-restart" | "off" | "unknown";
 
