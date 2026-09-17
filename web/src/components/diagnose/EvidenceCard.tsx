@@ -1,5 +1,5 @@
-import { PostureFindingRow } from "./investigationEvidence/bodies/posture";
-import { RankingRow } from "./investigationEvidence/bodies/ranking";
+import { StoryExcerpt } from "./StoryExcerpt";
+import { storyExcerpt } from "./investigationEvidence/excerpt";
 import {
   type InvestigationCaseItem,
   investigationCaseObservationKey,
@@ -12,13 +12,7 @@ import {
   useId,
 } from "react";
 import { clsx } from "clsx";
-import {
-  Collapse,
-  CollapseChevron,
-  TerminalBlock,
-  TerminalBlockLabel,
-  stripAnsi,
-} from "@skyhook-io/k8s-ui";
+import { Collapse, CollapseChevron } from "@skyhook-io/k8s-ui";
 import { parseLogLine } from "../../utils/log-format";
 import { evidenceDisplaySnapshot } from "./investigationEvidencePresentation";
 import {
@@ -43,13 +37,7 @@ import {
   uniquePrimarySources,
   phaseLabel,
 } from "./investigationEvidence/cardParts";
-import { VISIBLE_LOG_EVIDENCE_LINES } from "./investigationEvidence/bodies/streams";
-import {
-  InventoryRow,
-  listingScopeNamespace,
-  namedInventoryRows,
-} from "./investigationEvidence/bodies/inventory";
-import { MetricsBody } from "./investigationEvidence/bodies/metrics";
+import { listingScopeNamespace } from "./investigationEvidence/bodies/inventory";
 import {
   EvidenceBody,
   evidenceHasDetails,
@@ -189,64 +177,20 @@ export function EvidenceCard({
     observation.data,
     observation.summary,
   );
-  const storyLogLines =
-    storyCard && observation.data.type === "logs"
-      ? (observation.data.logs?.lines ?? [])
-          .slice(-VISIBLE_LOG_EVIDENCE_LINES)
-          .map((line) => stripAnsi(line))
-      : [];
-  // A story log card shows the newest two selected lines always — the ones a
-  // story cites from a tail. Expanding appends the earlier lines below them,
-  // under a divider, so nothing above them moves.
-  const storyLogHead = storyLogLines.slice(-2);
-  const storyLogRest = storyLogLines.slice(0, -2);
-  // A story log card carries its cited lines inline, so the only thing left to
-  // expand is the earlier lines; the record keeps the full logs body.
-  const inlineLogs = storyCard && observation.data.type === "logs";
-  // A chart placed as the cause or the symptom is the card: it shows inline,
-  // and the fold has nothing left to add.
-  const inlineMetrics =
-    storyCard &&
-    !compact &&
-    observation.data.type === "metrics" &&
-    cardItems.some((item) => item.role === "cause" || item.role === "symptom");
-  // Each row a citation names is the part of the listing the sentence rests
-  // on; an entry the listing does not hold is often the point, so the card
-  // says so rather than showing another row.
-  // A ranking placed in the story shows the rows about this workload; a
-  // posture card shows the findings on it. Both fall back to the rows a
-  // citation names.
-  const storyRankingRows =
-    storyCard && !compact && observation.data.type === "ranking"
-      ? observation.data.rows
-          .filter(
-            (row) =>
-              row.target ||
-              cardItems.some((item) => item.subject?.name === row.name),
-          )
-          .slice(0, 3)
-      : [];
-  const storyPostureFindings =
-    storyCard && !compact && observation.data.type === "posture"
-      ? observation.data.findings
-          .filter(
-            (finding) =>
-              finding.target ||
-              cardItems.some((item) => item.subject?.name === finding.name),
-          )
-          .slice(0, 3)
-      : [];
-  const storyInventoryRows =
-    storyCard && !compact && observation.data.type === "inventory"
-      ? namedInventoryRows(
-          observation.data.resources,
-          cardItems,
-          listingScopeNamespace(observation.source),
-        )
-      : [];
+  const excerpt = storyCard
+    ? storyExcerpt(observation, cardItems, {
+        compact,
+        scopeNamespace: listingScopeNamespace(observation.source),
+      })
+    : undefined;
+  // A card whose content shows inline has nothing left behind the fold but
+  // the earlier lines or the history.
+  const inlineLogs = excerpt?.kind === "lines";
+  const inlineMetrics = excerpt?.kind === "chart";
+  const storyLogRest = excerpt?.kind === "lines" ? excerpt.rest : [];
   const hasExpandableBody =
     (hasEvidenceDetails && !inlineLogs && !inlineMetrics) || meaningfulHistory;
-  const canExpand = !compact && (hasExpandableBody || storyLogLines.length > 2);
+  const canExpand = !compact && (hasExpandableBody || storyLogRest.length > 0);
   const revealHistory = investigationEvidenceShouldRevealHistory(
     group,
     revealSourceId,
@@ -459,116 +403,17 @@ export function EvidenceCard({
               ))}
             </div>
           ) : null}
-          {storyLogHead.length > 0 ? (
-            <div
-              data-story-log-lines
-              className={
-                prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2"
-              }
-            >
-              <TerminalBlock
-                footer={
-                  storyLogRest.length > 0 ? (
-                    <Collapse open={open && canExpand}>
-                      <TerminalBlockLabel divider>
-                        Earlier lines
-                      </TerminalBlockLabel>
-                      <pre className="overflow-x-auto whitespace-pre-wrap break-words px-3 pb-2.5 font-mono text-xs leading-relaxed text-[var(--terminal-text)]">
-                        {storyLogRest.join("\n")}
-                      </pre>
-                    </Collapse>
-                  ) : null
-                }
-              >
-                {storyLogHead.join("\n")}
-              </TerminalBlock>
-            </div>
-          ) : null}
-          {storyInventoryRows.length > 0 ? (
-            <div
-              data-story-inventory-rows
-              className={
-                prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2"
-              }
-            >
-              <div className="rounded-md border border-theme-border">
-                {storyInventoryRows.map((entry, index) =>
-                  entry.row ? (
-                    <InventoryRow
-                      key={entry.key}
-                      resource={entry.row}
-                      divider={index > 0}
-                    />
-                  ) : (
-                    <p
-                      key={entry.key}
-                      data-story-inventory-absent={
-                        entry.matches === 0 ? "" : undefined
-                      }
-                      className={clsx(
-                        "px-2.5 py-1.5 font-mono text-xs text-theme-text-secondary",
-                        index > 0 && "border-t border-theme-border/60",
-                      )}
-                    >
-                      {entry.matches === 0
-                        ? `Not in this listing: ${entry.label}`
-                        : `${entry.label}: ${entry.matches} entries match in this listing`}
-                    </p>
-                  ),
-                )}
-              </div>
-            </div>
-          ) : null}
-          {storyRankingRows.length > 0 ? (
-            <div
-              data-story-ranking-rows
-              className={
-                prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2"
-              }
-            >
-              <div className="rounded-md border border-theme-border">
-                {storyRankingRows.map((row, index) => (
-                  <RankingRow
-                    key={`${row.namespace ?? ""}/${row.name}`}
-                    row={row}
-                    divider={index > 0}
-                  />
-                ))}
-              </div>
-            </div>
-          ) : null}
-          {storyPostureFindings.length > 0 ? (
-            <div
-              data-story-posture-findings
-              className={
-                prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2"
-              }
-            >
-              <div className="rounded-md border border-theme-border">
-                {storyPostureFindings.map((finding, index) => (
-                  <PostureFindingRow
-                    key={`${finding.name}-${finding.check}`}
-                    finding={finding}
-                    divider={index > 0}
-                  />
-                ))}
-              </div>
-            </div>
-          ) : null}
-          {inlineMetrics && observation.data.type === "metrics" ? (
-            <div
-              data-story-metrics
-              className={
-                prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2"
-              }
-            >
-              <MetricsBody
-                data={observation.data}
-                changeCoverage={metricsMarkersBySource?.get(
-                  observation.source.id,
-                )}
-              />
-            </div>
+          {excerpt ? (
+            <StoryExcerpt
+              excerpt={excerpt}
+              data={observation.data}
+              prominence={prominence}
+              open={open}
+              canExpand={canExpand}
+              changeCoverage={metricsMarkersBySource?.get(
+                observation.source.id,
+              )}
+            />
           ) : null}
         </>
       ) : cardItems.some((item) => item.claim || item.role) ? (

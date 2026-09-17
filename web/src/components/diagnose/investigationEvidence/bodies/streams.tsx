@@ -1,3 +1,4 @@
+import { VISIBLE_LOG_EVIDENCE_LINES } from "../excerpt";
 import { useContext } from "react";
 import {
   Badge,
@@ -12,7 +13,7 @@ import { Tooltip } from "../../../ui/Tooltip";
 import { EvidenceNavigationContext } from "../navigation";
 import type { EvidenceDataOf } from "../cardParts";
 
-export const VISIBLE_LOG_EVIDENCE_LINES = 12;
+export { VISIBLE_LOG_EVIDENCE_LINES } from "../excerpt";
 
 export function LogsBody({
   data,
