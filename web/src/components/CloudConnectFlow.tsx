@@ -1,4 +1,4 @@
-import { type ReactNode, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { AlertTriangle, ArrowUpRight, Check, Copy, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
 import { type AdminNoteContext, type BlockedExit, composeAdminNote, composeFailureNote, needsAdminHandoff } from './cloudConnectHandoff'
@@ -144,24 +144,34 @@ function CopyForAdmin({ note }: { note: string }) {
     // the async Clipboard API is missing and the legacy command still works.
     void copyText(note).then((ok) => {
       setCopied(ok ? 'done' : 'failed')
-      if (ok) {
-        setTimeout(() => setCopied('idle'), 2000)
-        return
-      }
-      setPinned(true)
-      const pre = noteRef.current
-      const selection = window.getSelection()
-      if (pre && selection) {
-        selection.removeAllRanges()
-        const range = document.createRange()
-        range.selectNodeContents(pre)
-        selection.addRange(range)
-      }
+      if (ok) setTimeout(() => setCopied('idle'), 2000)
+      else setPinned(true)
     })
   }
+  // The panel may not be mounted when the clipboard refuses (the pointer has
+  // left the button), so the selection waits for the pinned render.
+  useEffect(() => {
+    if (!pinned) return
+    const pre = noteRef.current
+    const selection = window.getSelection()
+    if (!pre || !selection) return
+    selection.removeAllRanges()
+    const range = document.createRange()
+    range.selectNodeContents(pre)
+    selection.addRange(range)
+  }, [pinned])
   return (
-    <>
+    // Hover is tracked on this wrapper, which contains the panel, and the
+    // gap between button and panel is padding rather than margin, so moving
+    // the pointer up into the panel (to scroll a long note) never counts as
+    // leaving.
+    <span
+      className="contents"
+      onMouseEnter={() => setPreviewing(true)}
+      onMouseLeave={() => setPreviewing(false)}
+    >
       {(previewing || pinned) && (
+        <div className="absolute inset-x-0 bottom-full z-20 pb-3">
         <div
           id="admin-note-preview"
           role="tooltip"
@@ -170,7 +180,7 @@ function CopyForAdmin({ note }: { note: string }) {
           // top with no way to scroll to it. The cap keeps a normal note
           // whole with no scrollbar and lets only an unusually long one
           // scroll inside the panel instead of disappearing.
-          className="absolute inset-x-0 bottom-full z-20 mb-3 flex max-h-[min(26rem,calc(100vh-14rem))] flex-col rounded-xl border border-theme-border bg-theme-elevated p-4 shadow-theme-lg"
+          className="flex max-h-[min(26rem,calc(100vh-14rem))] flex-col rounded-xl border border-theme-border bg-theme-elevated p-4 shadow-theme-lg"
         >
           <div className="mb-1.5 flex items-center justify-between text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
             <span>{pinned ? 'Select and copy' : 'What gets copied'}</span>
@@ -195,12 +205,11 @@ function CopyForAdmin({ note }: { note: string }) {
             {note}
           </pre>
         </div>
+        </div>
       )}
       <button
         type="button"
         onClick={copy}
-        onMouseEnter={() => setPreviewing(true)}
-        onMouseLeave={() => setPreviewing(false)}
         onFocus={() => setPreviewing(true)}
         onBlur={() => setPreviewing(false)}
         aria-describedby={previewing || pinned ? 'admin-note-preview' : undefined}
@@ -218,7 +227,7 @@ function CopyForAdmin({ note }: { note: string }) {
           </>
         )}
       </button>
-    </>
+    </span>
   )
 }
 
@@ -793,7 +802,13 @@ function FailedCard({
         >
           {failure.retrySafe ? 'Start over' : 'Close'}
         </button>
-        {handoff && <CopyForAdmin note={composeFailureNote(failure, where)} />}
+        {handoff && (
+          <CopyForAdmin
+            // The flow's own record of the cluster: a context switch after
+            // the install started must not relabel the note for another.
+            note={composeFailureNote(failure, { context: status.plan?.contextName ?? where?.context, cluster: where?.cluster })}
+          />
+        )}
       </div>
     </div>
   )
