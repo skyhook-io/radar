@@ -1477,13 +1477,17 @@ export function InvestigationView({
     const elapsed = runningSinceRef.current
       ? Math.round((Date.now() - runningSinceRef.current) / 1000)
       : 0;
-    return [
-      `${current}…`,
-      reads > 0 ? `${reads} ${reads === 1 ? "read" : "reads"}` : undefined,
-      elapsed >= 2 ? `${elapsed} s` : undefined,
-    ]
-      .filter(Boolean)
-      .join(" · ");
+    // The tool text changes width as it changes; the counters sit apart on
+    // the right so they never move with it.
+    return {
+      current: `${current}…`,
+      meta: [
+        reads > 0 ? `${reads} ${reads === 1 ? "read" : "reads"}` : undefined,
+        elapsed >= 2 ? `${elapsed} s` : undefined,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    };
   })();
   const showSplitWorkspace = maximized;
   const splitGridClass = showSplitWorkspace
@@ -2302,11 +2306,22 @@ export function InvestigationView({
                               aria-hidden
                             />
                           )}
-                          <span>
-                            {busy || requestPending
-                              ? investigatingLabel
-                              : "The agent did not provide a final assessment."}
-                          </span>
+                          {busy || requestPending ? (
+                            <>
+                              <span className="min-w-0 flex-1 truncate">
+                                {investigatingLabel.current}
+                              </span>
+                              {investigatingLabel.meta ? (
+                                <span className="shrink-0 tabular-nums text-theme-text-tertiary/80">
+                                  {investigatingLabel.meta}
+                                </span>
+                              ) : null}
+                            </>
+                          ) : (
+                            <span>
+                              The agent did not provide a final assessment.
+                            </span>
+                          )}
                         </div>
                       )}
                       {displayedStatusCheckError ? (
