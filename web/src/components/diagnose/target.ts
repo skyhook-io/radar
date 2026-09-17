@@ -1,6 +1,9 @@
 import { resourceKey } from "@skyhook-io/k8s-ui";
 
-import { kindToPluralWithGroup, knownKindForPluralWithGroup } from "../../utils/navigation";
+import {
+  kindToPluralWithGroup,
+  knownKindForPluralWithGroup,
+} from "../../utils/navigation";
 
 export interface InvestigationTargetIdentity {
   kind: string;
@@ -31,7 +34,10 @@ export function runTargetKey(
 export function formatInvestigationTarget(
   target: InvestigationTargetIdentity,
 ): string {
-  const canonicalKind = knownKindForPluralWithGroup(target.kind, target.group) ?? target.kind;
-  const kind = target.group ? `${canonicalKind}.${target.group}` : canonicalKind;
+  const canonicalKind =
+    knownKindForPluralWithGroup(target.kind, target.group) ?? target.kind;
+  const kind = target.group
+    ? `${canonicalKind}.${target.group}`
+    : canonicalKind;
   return `${kind} ${target.namespace ? `${target.namespace}/` : ""}${target.name}`;
 }

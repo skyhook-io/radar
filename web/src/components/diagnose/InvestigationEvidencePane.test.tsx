@@ -4,14 +4,16 @@ import { describe, expect, it, vi } from "vitest";
 import {
   INVESTIGATION_DISCLOSURE_SETTLE_MS,
   InvestigationEvidencePane,
-  VISIBLE_LOG_EVIDENCE_LINES,
-  partitionInvestigationEvidence,
   investigationDisclosureSettleDelay,
   investigationDisclosureScrollTop,
+} from "./InvestigationEvidencePane";
+import { VISIBLE_LOG_EVIDENCE_LINES } from "./investigationEvidence/bodies/streams";
+import {
+  partitionInvestigationEvidence,
   investigationEvidenceFullRowFlags,
   investigationEvidenceRevealCollection,
   investigationEvidenceShouldRevealHistory,
-} from "./InvestigationEvidencePane";
+} from "./investigationEvidencePartition";
 import {
   investigationEvidenceSourceDomId,
   investigationEvidenceStepIdsByTurn,

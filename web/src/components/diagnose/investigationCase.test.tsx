@@ -2,12 +2,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { AgentClaimNote, AgentRoleChip } from "./AgentCase";
 import { describe, expect, it, vi } from "vitest";
 
+import { InvestigationEvidencePane } from "./InvestigationEvidencePane";
 import {
-  InvestigationEvidencePane,
   investigationCaseByGroup,
   investigationEvidenceShouldRevealHistory,
   partitionInvestigationEvidence,
-} from "./InvestigationEvidencePane";
+} from "./investigationEvidencePartition";
 import {
   projectInvestigationEvidence,
   resolveInvestigationRootCauseEvidence,

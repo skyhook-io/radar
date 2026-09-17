@@ -501,7 +501,10 @@ describe("root-cause evidence resolution", () => {
         { status: "linked", refs: [priorRef] },
         1,
       ),
-    ).toMatchObject({ status: "linked", links: [{ source: { stepId: "old" } }] });
+    ).toMatchObject({
+      status: "linked",
+      links: [{ source: { stepId: "old" } }],
+    });
     // A result read AFTER the assessment turn is not: the assessment could not
     // have seen it.
     expect(

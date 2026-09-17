@@ -25,7 +25,11 @@ import {
 } from "lucide-react";
 import { Tooltip } from "../ui/Tooltip";
 import { useAnimatedUnmount } from "../../hooks/useAnimatedUnmount";
-import { TRANSITION_BACKDROP, TRANSITION_DRAWER, overlayTransitionStyle } from "../../utils/animation";
+import {
+  TRANSITION_BACKDROP,
+  TRANSITION_DRAWER,
+  overlayTransitionStyle,
+} from "../../utils/animation";
 import {
   useDiagnose,
   useDiagnoseLayout,

@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import {
-  InvestigationEvidencePane,
-  namedInventoryRows,
-} from "./InvestigationEvidencePane";
+import { InvestigationEvidencePane } from "./InvestigationEvidencePane";
+import { namedInventoryRows } from "./investigationEvidence/bodies/inventory";
 import { resolveInvestigationCase } from "./investigationCase";
 import {
   projectInvestigationEvidence,

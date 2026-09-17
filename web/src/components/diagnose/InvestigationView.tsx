@@ -99,9 +99,9 @@ import {
 import { resolveInvestigationCase } from "./investigationCase";
 import {
   InvestigationEvidencePane,
-  partitionInvestigationEvidence,
   type InvestigationTimelineScope,
 } from "./InvestigationEvidencePane";
+import { partitionInvestigationEvidence } from "./investigationEvidencePartition";
 import type { DiagnosisResourceRef } from "./diagnoseEvidenceTypes";
 import { formatInvestigationTarget } from "./target";
 import { parseContextName } from "../../utils/context-name";
