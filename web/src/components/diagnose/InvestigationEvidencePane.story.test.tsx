@@ -566,6 +566,33 @@ describe("story card defaults", () => {
       },
       { key: "/missing", label: "missing", matches: 0, row: undefined },
     ]);
+    // Rows of a namespace-scoped listing omit their namespace: the scope is
+    // theirs, and only that namespace satisfies a namespaced citation.
+    const scoped = [{ kind: "ConfigMap", name: "config" }];
+    expect(
+      namedInventoryRows(
+        scoped,
+        [{ subject: { kind: "ConfigMap", namespace: "shop", name: "config" } }],
+        "shop",
+      )[0].matches,
+    ).toBe(1);
+    expect(
+      namedInventoryRows(
+        scoped,
+        [
+          {
+            subject: { kind: "ConfigMap", namespace: "other", name: "config" },
+          },
+        ],
+        "shop",
+      )[0].matches,
+    ).toBe(0);
+    expect(
+      namedInventoryRows(
+        [{ kind: "Namespace", name: "prod" }],
+        [{ subject: { kind: "Namespace", namespace: "other", name: "prod" } }],
+      )[0].matches,
+    ).toBe(0);
   });
 
   it("shows the chart inline on a metrics card placed as the symptom", () => {

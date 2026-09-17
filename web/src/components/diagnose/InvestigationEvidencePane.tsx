@@ -1750,7 +1750,11 @@ function EvidenceCard({
   // says so rather than showing another row.
   const storyInventoryRows =
     storyCard && !compact && observation.data.type === "inventory"
-      ? namedInventoryRows(observation.data.resources, cardItems)
+      ? namedInventoryRows(
+          observation.data.resources,
+          cardItems,
+          listingScopeNamespace(observation.source),
+        )
       : [];
   const hasExpandableBody =
     (hasEvidenceDetails && !inlineLogs && !inlineMetrics) || meaningfulHistory;
@@ -3326,9 +3330,18 @@ function MetricsBody({
 // The rows the citations on a card name, in citation order: one row when the
 // name picks exactly one entry, otherwise a line saying the entry is absent
 // or which entries the name could mean.
+function listingScopeNamespace(
+  source: InvestigationEvidenceSource,
+): string | undefined {
+  const namespace = investigationSourceArgs(source)?.namespace;
+  return typeof namespace === "string" && namespace ? namespace : undefined;
+}
+
 export function namedInventoryRows(
   resources: InvestigationResourceSummary[],
   items: readonly { subject?: DiagnosisEvidenceSubject }[],
+  /** The namespace the listing call was scoped to; rows omit it then. */
+  scopeNamespace?: string,
 ): {
   key: string;
   label: string;
@@ -3348,12 +3361,14 @@ export function namedInventoryRows(
     const key = `${subject.namespace ?? ""}/${subject.name}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    // A row without a namespace lives in the listing's scope, or in none
+    // (a cluster-scoped kind); neither satisfies a namespace the citation
+    // states unless it is the scope itself.
     const matches = resources.filter(
       (resource) =>
         resource.name === subject.name &&
         (subject.namespace === undefined ||
-          resource.namespace === undefined ||
-          resource.namespace === subject.namespace),
+          (resource.namespace ?? scopeNamespace) === subject.namespace),
     );
     out.push({
       key,
