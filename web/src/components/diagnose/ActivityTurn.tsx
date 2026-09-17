@@ -664,7 +664,7 @@ function RunningStatus({ label }: { label: string }) {
           · still working — no update for {sinceChange}s
         </span>
       )}
-      {counter && (
+      {counter && !stalled && (
         <span className="ml-auto shrink-0 tabular-nums text-theme-text-tertiary">
           {counter}
         </span>

@@ -1072,6 +1072,33 @@ describe("agent case placement (D-1, D-1b)", () => {
     ]);
   });
 
+  it.each(["issue", "issues"])(
+    "pins a %s citation to the issue observation",
+    (observation) => {
+      const resolved = resolveInvestigationCase(
+        projection,
+        {
+          evidence: [
+            linked(ref, "symptom", "The issue is the symptom.", {
+              kind: "Deployment",
+              group: "apps",
+              namespace: "shop",
+              name: "api",
+              observation,
+            }),
+          ],
+        },
+        0,
+      );
+      expect(resolved.items[0].placement).toBe("card");
+      expect(
+        projection.groups.find(
+          (group) => group.id === resolved.items[0].groupId,
+        )?.kind,
+      ).toBe("issue");
+    },
+  );
+
   it("pins a subject-bearing item to exactly the observation it names", () => {
     const resolved = resolveInvestigationCase(
       projection,

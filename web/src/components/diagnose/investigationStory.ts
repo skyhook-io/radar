@@ -48,7 +48,7 @@ export type StorySegment =
   | {
       kind: "placement";
       index: number;
-      /** The agent asked for the header only: the reader needs the fact, not the detail. */
+      /** Header and role only, except logs retain their last two selected lines. */
       compact?: boolean;
       /** Placed by Radar under the paragraph that first mentioned it inline. */
       auto?: boolean;

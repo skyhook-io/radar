@@ -434,6 +434,28 @@ describe("posture scans that did not finish", () => {
 });
 
 describe("listing cards (helm releases, packages, search)", () => {
+  it.each([null, []])("accepts an empty Helm result: %j", (payload) => {
+    const projection = project([
+      tool("helm", "list_helm_releases", payload, {
+        summary: JSON.stringify({ namespace: "shop" }),
+      }),
+    ]);
+    expect(projection.groups).toHaveLength(0);
+    expect(projection.limitations).toEqual([
+      expect.objectContaining({
+        source: "Resource inventory",
+        kind: "unknown",
+      }),
+    ]);
+  });
+
+  it.each([{}, "", 0])("rejects malformed Helm results: %j", (payload) => {
+    const projection = project([tool("helm", "list_helm_releases", payload)]);
+    expect(projection.limitations).toEqual([
+      expect.objectContaining({ source: "Helm releases", kind: "unknown" }),
+    ]);
+  });
+
   it("lists Helm releases with their status and chart", () => {
     const projection = project([
       tool(

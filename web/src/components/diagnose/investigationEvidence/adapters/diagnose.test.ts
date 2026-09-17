@@ -264,7 +264,7 @@ describe("diagnose metrics evidence", () => {
     expect(groups.map((group) => group.latest.title)).toEqual([
       "CPU usage · Deployment shop/api",
       "Memory working set · Deployment shop/api",
-      "Restarts · Deployment shop/api",
+      "Restarts in trailing 1h · Deployment shop/api",
     ]);
     for (const group of groups) {
       expect(group.latest.relevance).toBe("target");
@@ -289,6 +289,12 @@ describe("diagnose metrics evidence", () => {
       expect(investigationEvidenceSubjectRef(data)).toEqual(data.subject);
     }
     const [cpu, , restarts] = groups;
+    expect(restarts.latest.title).toContain("Restarts in trailing 1h");
+    expect(restarts.latest.data).toMatchObject({
+      type: "metrics",
+      label: "Restarts in trailing 1h",
+      unit: "count",
+    });
     expect(cpu.latest.summary).toBe("2 current pods · 60m window · 1m2s step");
     const cpuData = cpu.latest.data;
     if (cpuData.type !== "metrics") throw new Error("expected metrics");
@@ -562,7 +568,7 @@ describe("diagnose metrics evidence", () => {
     ]);
     const groups = groupsOf(projection.groups, "metrics");
     expect(groups.map((group) => group.latest.title)).toEqual([
-      "Restarts · Deployment shop/api",
+      "Restarts in trailing 1h · Deployment shop/api",
     ]);
     expect(
       projection.limitations.some(

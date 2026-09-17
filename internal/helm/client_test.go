@@ -1655,6 +1655,20 @@ generated: "2026-05-05T00:00:00Z"
 	}
 }
 
+func TestListReleasesAcrossNamespacesEmptySerializesAsArray(t *testing.T) {
+	releases, err := (&Client{}).ListReleasesAcrossNamespaces([]string{}, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(releases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "[]" {
+		t.Fatalf("empty releases JSON = %s, want []", data)
+	}
+}
+
 func TestResolveUpgradeChartPath_AmbiguousWithoutHintOrAffinity(t *testing.T) {
 	client := testHelmClientWithRepos(t)
 

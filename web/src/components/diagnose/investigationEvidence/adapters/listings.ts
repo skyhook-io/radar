@@ -13,6 +13,8 @@ export function adaptListHelmReleases(
   source: InvestigationEvidenceSource,
   payload: unknown,
 ): void {
+  // Retained runs may contain the Helm producer's nil-slice encoding.
+  if (payload === null) payload = [];
   if (!Array.isArray(payload)) {
     invalidPayload(builder, source);
     return;

@@ -388,7 +388,8 @@ function observationMatchesSubject(
     // "metrics" alone cannot name one; "metrics:<category>" picks the chart
     // whose identity ends in that category. An agent-run query is one chart,
     // so a qualifier on it carries no meaning.
-    const [kind, qualifier] = subject.observation.toLowerCase().split(":", 2);
+    const [word, qualifier] = subject.observation.toLowerCase().split(":", 2);
+    const kind = word === "issues" ? "issue" : word;
     if (
       kind !== observation.data.type &&
       !(kind === "resource" && RESOURCE_SHAPED.has(observation.data.type))

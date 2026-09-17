@@ -351,7 +351,7 @@ func (c *Client) ListReleasesAcrossNamespaces(namespaces []string, username stri
 	if namespaces == nil {
 		return c.ListReleasesAsUser("", username, groups)
 	}
-	var all []HelmRelease
+	all := make([]HelmRelease, 0)
 	var lastForbidden error
 	authorized := false
 	for _, ns := range namespaces {
