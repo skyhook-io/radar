@@ -134,12 +134,12 @@ type cloudInstallClients struct {
 // cloudInstallBackend is the seam between the flow manager's state machine and
 // the real discovery/prepare/preflight/provision/Hub machinery.
 type cloudInstallBackend struct {
-	captureClients   func() (cloudInstallClients, string, error)
-	contextSource    func(name string) (sourceFile, inFileName string, ok bool)
-	inspectPlan      func(ctx context.Context, c cloudInstallClients, namespace, release string) (cloudinstall.InstallPlan, error)
+	captureClients func() (cloudInstallClients, string, error)
+	contextSource  func(name string) (sourceFile, inFileName string, ok bool)
+	inspectPlan    func(ctx context.Context, c cloudInstallClients, namespace, release string) (cloudinstall.InstallPlan, error)
 	// discover is the workload half of inspectPlan on its own: the chart's
 	// Deployments and what their args say, without reading Helm storage.
-	discover func(ctx context.Context, c cloudInstallClients) (cloudinstall.DiscoveryResult, error)
+	discover         func(ctx context.Context, c cloudInstallClients) (cloudinstall.DiscoveryResult, error)
 	prepare          func(ctx context.Context, c cloudInstallClients, cfg cloudinstall.PrepareConfig) (preparedInstall, error)
 	preflight        func(ctx context.Context, c cloudInstallClients, prepared preparedInstall) (cloudinstall.PreflightResult, error)
 	provision        func(ctx context.Context, c cloudInstallClients, prepared preparedInstall, cfg cloudinstall.ProvisionConfig) error
