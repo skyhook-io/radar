@@ -275,7 +275,13 @@ function BlockingLines({ lines }: { lines: string[] }) {
         return (
           <li key={line} className="flex items-start gap-1.5">
             <span className="mt-[6px] w-1 h-1 rounded-full bg-amber-500 shrink-0" />
-            <Tooltip content={line} position="bottom" className="max-w-md whitespace-normal" disabled={shown === line}>
+            <Tooltip
+              content={line}
+              position="bottom"
+              className="max-w-md whitespace-normal"
+              // Off when the trim only added the period, so the hover never repeats the line.
+              disabled={shown === line.trim().replace(/\.?$/, '.')}
+            >
               <span>{shown}</span>
             </Tooltip>
           </li>
