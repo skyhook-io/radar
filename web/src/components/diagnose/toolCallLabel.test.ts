@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeToolCall } from "./toolCallLabel";
+import { describeToolCall, investigationRunningLabel } from "./toolCallLabel";
 
 describe("describeToolCall", () => {
   it("never invents a singular from a kind", () => {
@@ -47,5 +47,51 @@ describe("describeToolCall", () => {
       "Reading recent changes",
     );
     expect(describeToolCall("some_new_tool", undefined)).toBe("Some New Tool");
+  });
+});
+
+describe("investigationRunningLabel", () => {
+  const read = {
+    tool: "get_resource",
+    status: "done",
+    summary: JSON.stringify({
+      kind: "deployment",
+      namespace: "shop",
+      name: "api",
+    }),
+  };
+  it("names the call in flight, keeps a finished one briefly, then thinks", () => {
+    expect(
+      investigationRunningLabel({
+        lastTool: { ...read, status: "running" },
+        reads: 1,
+        quietFor: 20000,
+        elapsedSeconds: 9,
+      }),
+    ).toEqual({
+      current: "Reading Deployment shop/api…",
+      meta: "1 read · 9 s",
+    });
+    expect(
+      investigationRunningLabel({
+        lastTool: read,
+        reads: 3,
+        quietFor: 7999,
+        elapsedSeconds: 30,
+      }).current,
+    ).toBe("Reading Deployment shop/api…");
+    expect(
+      investigationRunningLabel({
+        lastTool: read,
+        reads: 3,
+        quietFor: 8000,
+        elapsedSeconds: 30,
+      }),
+    ).toEqual({ current: "Thinking…", meta: "3 reads · 30 s" });
+  });
+  it("says Investigating with nothing read yet and omits a timer under two seconds", () => {
+    expect(
+      investigationRunningLabel({ reads: 0, quietFor: 0, elapsedSeconds: 1 }),
+    ).toEqual({ current: "Investigating…", meta: "" });
   });
 });

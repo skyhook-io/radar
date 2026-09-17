@@ -43,7 +43,7 @@ import {
   canInvestigateFurther,
 } from "./investigationState";
 import type { AssessmentExplanation } from "./parts";
-import { describeToolCall } from "./toolCallLabel";
+import { investigationRunningLabel } from "./toolCallLabel";
 import { AGENT_ROLE_LABELS } from "./AgentCase";
 import {
   Fragment,
@@ -1458,37 +1458,20 @@ export function InvestigationView({
     toolSeenRef.current = toolSignature;
     toolChangedAtRef.current = Date.now();
   }, [toolSignature]);
-  const investigatingLabel = (() => {
-    const items = lastTurn?.timeline ?? [];
-    const reads = items.filter((item) => item.kind === "tool").length;
+  const investigatingLabel = investigationRunningLabel({
+    lastTool: lastTool && lastTool.kind === "tool" ? lastTool : undefined,
+    reads: (lastTurn?.timeline ?? []).filter((item) => item.kind === "tool")
+      .length,
     // The render that first shows a changed tool is not quiet yet; the effect
     // that stamps the change runs after it.
-    const quietFor =
+    quietFor:
       toolSeenRef.current === toolSignature
         ? Date.now() - toolChangedAtRef.current
-        : 0;
-    let current = "Investigating";
-    if (lastTool && lastTool.kind === "tool" && lastTool.tool) {
-      current =
-        lastTool.status === "running" || quietFor < 8000
-          ? describeToolCall(lastTool.tool, lastTool.summary)
-          : "Thinking";
-    }
-    const elapsed = runningSinceRef.current
+        : 0,
+    elapsedSeconds: runningSinceRef.current
       ? Math.round((Date.now() - runningSinceRef.current) / 1000)
-      : 0;
-    // The tool text changes width as it changes; the counters sit apart on
-    // the right so they never move with it.
-    return {
-      current: `${current}…`,
-      meta: [
-        reads > 0 ? `${reads} ${reads === 1 ? "read" : "reads"}` : undefined,
-        elapsed >= 2 ? `${elapsed} s` : undefined,
-      ]
-        .filter(Boolean)
-        .join(" · "),
-    };
-  })();
+      : 0,
+  });
   const showSplitWorkspace = maximized;
   const splitGridClass = showSplitWorkspace
     ? "@min-[1000px]/investigation:grid-cols-[minmax(320px,min(30%,520px))_minmax(0,1fr)]"
