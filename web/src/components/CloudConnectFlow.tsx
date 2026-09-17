@@ -78,8 +78,8 @@ function BlockedView({
   const copy = blockedCopy(blocked, exit)
   // The person who can act is usually not the one reading this. The card's
   // own text — what Radar tried, why it stopped, the refusals, the link — is
-  // exactly the message they would write to their platform team, so hand it
-  // to them verbatim rather than making them retype it.
+  // exactly the message they would send to whoever administers the cluster,
+  // so hand it to them verbatim rather than making them retype it.
   const cardRef = useRef<HTMLDivElement | null>(null)
   const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
   const copyForTeam = () => {
@@ -136,7 +136,7 @@ function BlockedView({
             'Couldn’t copy — select the text above'
           ) : (
             <>
-              <Copy className="w-3.5 h-3.5" /> Copy for your platform team
+              <Copy className="w-3.5 h-3.5" /> Copy for a cluster admin
             </>
           )}
         </button>
