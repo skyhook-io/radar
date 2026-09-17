@@ -446,12 +446,7 @@ describe("root-cause evidence resolution", () => {
   it("keeps an unadapted successful Radar check linkable to Activity", () => {
     const ref = evidenceRef("a", "b");
     const projection = project([
-      tool(
-        "metrics-1",
-        "discover_metrics",
-        { result: [1] },
-        { evidenceRef: ref },
-      ),
+      tool("metrics-1", "get_dashboard", { result: [1] }, { evidenceRef: ref }),
     ]);
 
     expect(projection.groups).toHaveLength(0);

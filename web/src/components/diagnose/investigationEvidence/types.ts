@@ -69,7 +69,9 @@ export type InvestigationEvidenceKind =
   | "alerts"
   | "helm"
   | "permissions"
-  | "metrics";
+  | "metrics"
+  | "ranking"
+  | "posture";
 export type InvestigationSemanticDomain = "issue" | "startup" | "crash" | "dns";
 export interface InvestigationEvidenceSource {
   /** DOM-safe stable identity derived from turn index + the agent step ID. */
@@ -138,6 +140,8 @@ export interface InvestigationResourceSummary {
   name: string;
   namespace?: string;
   status?: string;
+  /** For a search hit: the field that matched and the text around it. */
+  match?: string;
   ready?: string;
   issue?: string;
   age?: string;
@@ -289,6 +293,35 @@ export interface InvestigationHelmHook {
   startedAt?: string;
   completedAt?: string;
 }
+/** One row of a live-metrics ranking, as the tool returned it. */
+export interface InvestigationRankingRow {
+  kind: string;
+  namespace?: string;
+  name: string;
+  cpu: string;
+  memory: string;
+  cpuLimit?: string;
+  memoryLimit?: string;
+  restarts?: number;
+  ready?: string;
+  status?: string;
+  /** The investigated resource itself, or one of its own pods. */
+  target: boolean;
+}
+/** A configuration or upgrade finding about one resource. */
+export interface InvestigationPostureFinding {
+  kind: string;
+  group?: string;
+  namespace?: string;
+  name: string;
+  check: string;
+  severity: string;
+  category?: string;
+  message: string;
+  remediation?: string;
+  /** The investigated resource itself. */
+  target: boolean;
+}
 export interface InvestigationPermissionRule {
   verbs: string[];
   apiGroups: string[];
@@ -408,9 +441,30 @@ export type InvestigationEvidenceData =
       scope: string;
     }
   | {
+      type: "ranking";
+      /** What was ranked: pods, workloads or nodes. */
+      kind: string;
+      sort: string;
+      rows: InvestigationRankingRow[];
+      scope: string;
+    }
+  | {
+      type: "posture";
+      source: "audit" | "upgrade";
+      findings: InvestigationPostureFinding[];
+      scope: string;
+    }
+  | {
       type: "receipt";
       checked:
-        "issues" | "events" | "changes" | "inventory" | "logs" | "alerts";
+        | "issues"
+        | "events"
+        | "changes"
+        | "inventory"
+        | "logs"
+        | "alerts"
+        | "metrics"
+        | "posture";
       scope: string;
       /**
        * Only when there is something to add. The card already shows the title

@@ -1,3 +1,5 @@
+import { PostureFindingRow } from "./investigationEvidence/bodies/posture";
+import { RankingRow } from "./investigationEvidence/bodies/ranking";
 import {
   type InvestigationCaseItem,
   investigationCaseObservationKey,
@@ -211,6 +213,29 @@ export function EvidenceCard({
   // Each row a citation names is the part of the listing the sentence rests
   // on; an entry the listing does not hold is often the point, so the card
   // says so rather than showing another row.
+  // A ranking placed in the story shows the rows about this workload; a
+  // posture card shows the findings on it. Both fall back to the rows a
+  // citation names.
+  const storyRankingRows =
+    storyCard && !compact && observation.data.type === "ranking"
+      ? observation.data.rows
+          .filter(
+            (row) =>
+              row.target ||
+              cardItems.some((item) => item.subject?.name === row.name),
+          )
+          .slice(0, 3)
+      : [];
+  const storyPostureFindings =
+    storyCard && !compact && observation.data.type === "posture"
+      ? observation.data.findings
+          .filter(
+            (finding) =>
+              finding.target ||
+              cardItems.some((item) => item.subject?.name === finding.name),
+          )
+          .slice(0, 3)
+      : [];
   const storyInventoryRows =
     storyCard && !compact && observation.data.type === "inventory"
       ? namedInventoryRows(
@@ -491,6 +516,42 @@ export function EvidenceCard({
                     </p>
                   ),
                 )}
+              </div>
+            </div>
+          ) : null}
+          {storyRankingRows.length > 0 ? (
+            <div
+              data-story-ranking-rows
+              className={
+                prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2"
+              }
+            >
+              <div className="rounded-md border border-theme-border">
+                {storyRankingRows.map((row, index) => (
+                  <RankingRow
+                    key={`${row.namespace ?? ""}/${row.name}`}
+                    row={row}
+                    divider={index > 0}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {storyPostureFindings.length > 0 ? (
+            <div
+              data-story-posture-findings
+              className={
+                prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2"
+              }
+            >
+              <div className="rounded-md border border-theme-border">
+                {storyPostureFindings.map((finding, index) => (
+                  <PostureFindingRow
+                    key={`${finding.name}-${finding.check}`}
+                    finding={finding}
+                    divider={index > 0}
+                  />
+                ))}
               </div>
             </div>
           ) : null}

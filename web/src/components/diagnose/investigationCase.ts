@@ -276,6 +276,19 @@ function observationSubjectIdentity(
   const args = investigationSourceArgs(observation.source);
   // A listing whose call names no kind (list_namespaces) is still a listing
   // of the one kind its rows carry.
+  // A ranking is a listing of what it ranked; a posture card is a listing of
+  // the resources its findings are about.
+  if (data.type === "ranking" || data.type === "posture") {
+    const rows = data.type === "ranking" ? data.rows : data.findings;
+    const kinds = new Set(rows.map((row) => row.kind));
+    if (kinds.size !== 1) return undefined;
+    return {
+      kind: [...kinds][0],
+      namespace: nonEmptyString(args?.namespace) ? args.namespace : undefined,
+      name: "",
+      listing: true,
+    };
+  }
   if (data.type === "inventory" && !nonEmptyString(args?.kind)) {
     const kinds = new Set(data.resources.map((resource) => resource.kind));
     if (kinds.size !== 1) return undefined;
@@ -334,7 +347,10 @@ function observationMatchesSubject(
     const [kind, qualifier] = subject.observation.toLowerCase().split(":", 2);
     // A listing is resources too: "resource" names an inventory card as well.
     const inventoryAsResource =
-      kind === "resource" && observation.data.type === "inventory";
+      kind === "resource" &&
+      (observation.data.type === "inventory" ||
+        observation.data.type === "ranking" ||
+        observation.data.type === "posture");
     if (kind !== observation.data.type && !inventoryAsResource) return false;
     if (
       qualifier !== undefined &&

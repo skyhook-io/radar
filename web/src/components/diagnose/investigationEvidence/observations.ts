@@ -185,6 +185,13 @@ const INVESTIGATION_RESULT_LABELS: Readonly<Record<string, string>> = {
   get_helm_release: "Helm release",
   get_subject_permissions: "Permissions",
   query_prometheus: "Prometheus query",
+  top_resources: "Resource ranking",
+  get_cluster_audit: "Posture findings",
+  get_cluster_upgrade_readiness: "Upgrade readiness",
+  list_helm_releases: "Helm releases",
+  list_packages: "Installed packages",
+  search: "Search results",
+  discover_metrics: "Metric discovery",
 };
 export function investigationResultLabel(
   source: InvestigationEvidenceSource,

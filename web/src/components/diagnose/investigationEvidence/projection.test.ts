@@ -1774,7 +1774,7 @@ describe("strict evidence adapters", () => {
 
   it("keeps unknown tools in Activity and limits invalid known contracts", () => {
     const result = project([
-      tool("other", "discover_metrics", { data: "ignored" }),
+      tool("other", "get_dashboard", { data: "ignored" }),
       tool("bad-events", "get_events", { events: [{ nope: true }] }),
     ]);
     expect(result.sources.map((source) => source.stepId)).toEqual([

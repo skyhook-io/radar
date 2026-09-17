@@ -230,6 +230,7 @@ export function adaptListResources(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
   payload: unknown,
+  options: { title?: string } = {},
 ): void {
   if (!Array.isArray(payload)) {
     invalidPayload(builder, source);
@@ -254,7 +255,7 @@ export function adaptListResources(
   const namespace = nonEmptyString(args?.namespace)
     ? args.namespace
     : undefined;
-  const title = namespace ? `${noun} in ${namespace}` : noun;
+  const title = options.title ?? (namespace ? `${noun} in ${namespace}` : noun);
   if (resources.length === 0) {
     // list_resources intentionally returns [] for some RBAC-filtered reads;
     // even a successful transport outcome therefore cannot prove absence.

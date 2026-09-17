@@ -14,6 +14,8 @@ import {
   Package,
   ScrollText,
   ShieldAlert,
+  ShieldCheck,
+  BarChart3,
   type LucideIcon,
 } from "lucide-react";
 
@@ -153,6 +155,26 @@ export const EVIDENCE_KIND_TRAITS: Readonly<
     fullRow: false,
     icon: ListTree,
     caveat: undefined,
+  },
+  // A ranking is live numbers at the moment of the read; the target's own row
+  // is a fact about it, the rest is where it stands among neighbours.
+  ranking: {
+    adverse: false,
+    focused: false,
+    fullRow: true,
+    icon: BarChart3,
+    caveat:
+      "Ranked by live metrics at the moment of the read; a position is not a cause.",
+  },
+  // Posture findings are configuration checks, never an active failure; they
+  // stay in their own lane so a check is not read as an outage.
+  posture: {
+    adverse: false,
+    focused: false,
+    fullRow: true,
+    icon: ShieldCheck,
+    caveat:
+      "Posture findings are configuration checks, not evidence of an active failure.",
   },
   // A receipt records a check that found nothing, so it can never contradict.
   receipt: {

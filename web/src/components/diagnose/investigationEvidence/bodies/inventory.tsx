@@ -96,6 +96,11 @@ export function InventoryRow({
             {resource.issue}
           </span>
         ) : null}
+        {resource.match ? (
+          <span className="block truncate font-mono text-[11px] text-theme-text-tertiary">
+            {resource.match}
+          </span>
+        ) : null}
       </span>
       {resource.ready || resource.status ? (
         <span className="ml-auto shrink-0 font-mono text-xs text-theme-text-tertiary">

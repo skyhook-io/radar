@@ -18,6 +18,8 @@ import {
 import { InventoryBody } from "./inventory";
 import { AlertsBody, MetricsBody } from "./metrics";
 import { HelmBody, PermissionsBody } from "./platform";
+import { RankingBody } from "./ranking";
+import { PostureBody } from "./posture";
 
 export function EvidenceBody({
   data,
@@ -72,6 +74,10 @@ export function EvidenceBody({
       return <PermissionsBody data={data} />;
     case "metrics":
       return <MetricsBody data={data} changeCoverage={changeCoverage} />;
+    case "ranking":
+      return <RankingBody data={data} />;
+    case "posture":
+      return <PostureBody data={data} />;
   }
 }
 
