@@ -139,7 +139,10 @@ export function CloudFunnelButton() {
   // another machine. The plan would refuse to install over it; better to say
   // "already connected" and point at it than to offer a click that ends blocked.
   const discovered = useCloudInstallDiscover(open && lane === 'driver', clusterInfo.data?.context)
+  // The server ranks these: one it can link to first. A failed lookup is
+  // not a verdict — the CTA returns and the plan does its own inspection.
   const alreadyConnected = discovered.data?.connected[0]
+  const discoverPending = lane === 'driver' && discovered.isPending && discovered.fetchStatus !== 'idle'
 
   // The flow is server-owned: polling here both drives the live progress view
   // and re-attaches to an ongoing flow after a reload or modal close.
@@ -342,6 +345,8 @@ export function CloudFunnelButton() {
               clusterName={clusterInfo.data?.context}
               alreadyConnected={alreadyConnected}
               connectedCount={discovered.data?.connected.length ?? 0}
+              discoverPending={discoverPending}
+              clustersUrl={`${appUrl}/clusters`}
               // Also covers the capabilities query: until it resolves, lane
               // defaults to wizard and Radar does not yet know it is
               // in-cluster, so the CTA would escape before classification.
@@ -400,6 +405,8 @@ function ModalFooter({
   clusterName,
   alreadyConnected,
   connectedCount = 0,
+  discoverPending = false,
+  clustersUrl,
   onConnect,
   onLater,
 }: {
@@ -424,6 +431,13 @@ function ModalFooter({
   // Driver lane: a Radar in the cluster that already carries Cloud settings.
   alreadyConnected?: CloudInstallConnectedRadar
   connectedCount?: number
+  // True while that lookup is in flight: a click now would start the very
+  // plan the lookup exists to pre-empt, and the flow view would then hide
+  // its answer.
+  discoverPending?: boolean
+  // The configured Hub's clusters list — where to look when an install's
+  // settings say it is connected but not where.
+  clustersUrl?: string
   onConnect: () => void
   onLater: () => void
 }) {
@@ -492,29 +506,36 @@ function ModalFooter({
               <code className="font-mono text-[11px] text-theme-text-primary">{alreadyConnected.hubHost}</code> — open that one to see
               this cluster.
             </>
-          ) : (
+          ) : alreadyConnected.clusterUrl ? (
             <>configured to connect. Open Radar Cloud to see it; if it isn’t there, its page shows the recovery options.</>
+          ) : (
+            <>
+              with Cloud settings Radar can’t read from here. Look for it in Radar Cloud; if it isn’t there, an admin can
+              recover the pairing with <code className="font-mono text-[11px] text-theme-text-primary">radar cloud status</code>.
+            </>
           )}
           {connectedCount > 1 && <> {connectedCount - 1} more install{connectedCount > 2 ? 's' : ''} carry Cloud settings too.</>}
         </div>
       )}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2.5">
         {lane === 'driver' && alreadyConnected ? (
-          alreadyConnected.clusterUrl && (
+          // Another Hub is named, not linked: the link would open ours.
+          !alreadyConnected.hubHost && (
             <a
-              href={alreadyConnected.clusterUrl}
+              href={alreadyConnected.clusterUrl || clustersUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="whitespace-nowrap px-6 py-2.5 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[14px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all"
             >
-              Open in Radar Cloud
+              {alreadyConnected.clusterUrl ? 'Open in Radar Cloud' : 'Open Radar Cloud'}
             </a>
           )
         ) : lane === 'driver' ? (
           <>
             <button
               onClick={onConnect}
-              className="whitespace-nowrap px-6 py-2.5 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[14px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all"
+              disabled={discoverPending}
+              className={`whitespace-nowrap px-6 py-2.5 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[14px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all ${discoverPending ? 'opacity-60 pointer-events-none' : ''}`}
             >
               {/* Trailing ellipsis: further input follows the click — the
                   inspect step and a plan the user approves in the browser. */}

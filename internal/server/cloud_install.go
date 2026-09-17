@@ -35,6 +35,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -448,7 +449,23 @@ func (m *cloudInstallManager) discoverConnected(ctx context.Context) (*cloudInst
 		}
 		out.Connected = append(out.Connected, m.connectedRadar(t))
 	}
+	// The dialog leads with the first entry: one it can link to, before one
+	// it can only name, before one whose settings say nothing about where.
+	sort.SliceStable(out.Connected, func(i, j int) bool {
+		return connectedRank(out.Connected[i]) < connectedRank(out.Connected[j])
+	})
 	return out, nil
+}
+
+func connectedRank(c cloudInstallConnectedRadar) int {
+	switch {
+	case c.ClusterURL != "":
+		return 0
+	case c.HubHost != "":
+		return 1
+	default:
+		return 2
+	}
 }
 
 // connectedRadar links a Deployment to its cluster page only when its
