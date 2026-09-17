@@ -42,7 +42,10 @@ export function namedInventoryRows(
     if (!subject?.name) continue;
     // Agents write namespace "" for a cluster-scoped kind; that states none.
     const namespace = subject.namespace || undefined;
-    const key = `${namespace ?? ""}/${subject.name}`;
+    // Kind is part of what a subject names once a package can be named by
+    // its declaring object: "Package staging/podinfo" and "HelmRelease
+    // staging/podinfo" ask different questions of the same listing.
+    const key = `${subject.kind}/${namespace ?? ""}/${subject.name}`;
     if (seen.has(key)) continue;
     seen.add(key);
     // A row without a namespace lives in the listing's scope, or in none

@@ -614,14 +614,14 @@ describe("story card defaults", () => {
         ],
       ),
     ).toEqual([
-      { key: "/config", label: "config", matches: 2, row: undefined },
+      { key: "ConfigMap//config", label: "config", matches: 2, row: undefined },
       {
-        key: "b/config",
+        key: "ConfigMap/b/config",
         label: "b/config",
         matches: 1,
         row: { kind: "ConfigMap", namespace: "b", name: "config" },
       },
-      { key: "/missing", label: "missing", matches: 0, row: undefined },
+      { key: "ConfigMap//missing", label: "missing", matches: 0, row: undefined },
     ]);
     // Rows of a namespace-scoped listing omit their namespace: the scope is
     // theirs, and only that namespace satisfies a namespaced citation.
@@ -667,7 +667,7 @@ describe("story card defaults", () => {
         [{ subject: { kind: "APIService", namespace: "", name: "v1.apps" } }],
       )[0],
     ).toEqual({
-      key: "/v1.apps",
+      key: "APIService//v1.apps",
       label: "v1.apps",
       matches: 1,
       row: { kind: "APIService", name: "v1.apps" },

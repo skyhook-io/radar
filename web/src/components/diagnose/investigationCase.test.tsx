@@ -20,6 +20,7 @@ import {
   type InvestigationCaseResolution,
 } from "./investigationCase";
 import { AssessmentSources, ResultCard, assessmentSourceRows } from "./parts";
+import { namedInventoryRows } from "./investigationEvidence/bodies/inventory";
 import type { Diagnosis, DiagnosisEvidenceItem } from "../../api/diagnose";
 
 const onViewSource = vi.fn();
@@ -589,6 +590,20 @@ describe("agent case placement (D-1, D-1b)", () => {
       "card",
       "card",
     ]);
+    const listing = projection.groups.find(
+      (group) => group.latest.data.type === "inventory",
+    )!.latest.data;
+    if (listing.type !== "inventory") throw new Error("expected inventory");
+    expect(
+      namedInventoryRows(listing.resources, resolved.items).map(
+        (named) => named.matches,
+      ),
+    ).toEqual([1, 1, 0]);
+    expect(
+      namedInventoryRows(listing.resources, [...resolved.items].reverse()).map(
+        (named) => named.matches,
+      ),
+    ).toEqual([0, 1, 1]);
     const html = render(projection, resolved);
     const cited = html.match(/data-inventory-row="cited"/g) ?? [];
     expect(cited).toHaveLength(1);
