@@ -367,9 +367,15 @@ describe("agent case placement (D-1, D-1b)", () => {
     expect(resolved.items[0].observation?.title).toContain(
       "KubeDeploymentReplicasMismatch",
     );
+    const wrongCase = resolveInvestigationCase(
+      withRules,
+      { evidence: [cite("kubepodcrashlooping")] },
+      0,
+    );
+    expect(wrongCase.items.map((item) => item.placement)).toEqual(["source"]);
   });
 
-  it("keeps a named entry the listing does not hold at its source", () => {
+  it("still binds a named entry the listing does not hold to the listing", () => {
     const listRef = evidenceRef("c", "d");
     const withListing = project(
       tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
@@ -397,7 +403,7 @@ describe("agent case placement (D-1, D-1b)", () => {
       },
       0,
     );
-    expect(resolved.items.map((item) => item.placement)).toEqual(["source"]);
+    expect(resolved.items.map((item) => item.placement)).toEqual(["card"]);
   });
 
   it("places a Namespace citation on a namespace listing, whose call names no kind", () => {

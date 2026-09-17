@@ -57,7 +57,10 @@ import {
   type StoryPlacementLoss,
   type StoryPlacementTarget,
 } from "./AnalysisStory";
-import type { DiagnosisEvidenceItem } from "../../api/diagnose";
+import type {
+  DiagnosisEvidenceItem,
+  DiagnosisEvidenceSubject,
+} from "../../api/diagnose";
 import { parseLogLine } from "../../utils/log-format";
 import {
   metricsChangeCoverage,
@@ -1739,22 +1742,16 @@ function EvidenceCard({
   // and the fold has nothing left to add.
   const inlineMetrics =
     storyCard &&
+    !compact &&
     observation.data.type === "metrics" &&
     cardItems.some((item) => item.role === "cause" || item.role === "symptom");
-  // The row a citation names is the part of a listing the sentence rests on.
-  const storyInventoryRow =
-    storyCard && observation.data.type === "inventory"
-      ? observation.data.resources.find((resource) =>
-          cardItems.some(
-            (item) =>
-              item.subject?.name !== undefined &&
-              item.subject.name === resource.name &&
-              (item.subject.namespace === undefined ||
-                resource.namespace === undefined ||
-                item.subject.namespace === resource.namespace),
-          ),
-        )
-      : undefined;
+  // Each row a citation names is the part of the listing the sentence rests
+  // on; an entry the listing does not hold is often the point, so the card
+  // says so rather than showing another row.
+  const storyInventoryRows =
+    storyCard && !compact && observation.data.type === "inventory"
+      ? namedInventoryRows(observation.data.resources, cardItems)
+      : [];
   const hasExpandableBody =
     (hasEvidenceDetails && !inlineLogs && !inlineMetrics) || meaningfulHistory;
   const canExpand = !compact && (hasExpandableBody || storyLogLines.length > 2);
@@ -1986,15 +1983,38 @@ function EvidenceCard({
               </TerminalBlock>
             </div>
           ) : null}
-          {storyInventoryRow ? (
+          {storyInventoryRows.length > 0 ? (
             <div
-              data-story-inventory-row
+              data-story-inventory-rows
               className={
                 prominence === "primary" ? "px-3 pb-2.5" : "px-2.5 pb-2"
               }
             >
               <div className="rounded-md border border-theme-border">
-                <InventoryRow resource={storyInventoryRow} />
+                {storyInventoryRows.map((entry, index) =>
+                  entry.row ? (
+                    <InventoryRow
+                      key={entry.key}
+                      resource={entry.row}
+                      divider={index > 0}
+                    />
+                  ) : (
+                    <p
+                      key={entry.key}
+                      data-story-inventory-absent={
+                        entry.matches === 0 ? "" : undefined
+                      }
+                      className={clsx(
+                        "px-2.5 py-1.5 font-mono text-xs text-theme-text-secondary",
+                        index > 0 && "border-t border-theme-border/60",
+                      )}
+                    >
+                      {entry.matches === 0
+                        ? `Not in this listing: ${entry.label}`
+                        : `${entry.label}: ${entry.matches} entries match in this listing`}
+                    </p>
+                  ),
+                )}
               </div>
             </div>
           ) : null}
@@ -3301,6 +3321,50 @@ function MetricsBody({
       ) : null}
     </div>
   );
+}
+
+// The rows the citations on a card name, in citation order: one row when the
+// name picks exactly one entry, otherwise a line saying the entry is absent
+// or which entries the name could mean.
+export function namedInventoryRows(
+  resources: InvestigationResourceSummary[],
+  items: readonly { subject?: DiagnosisEvidenceSubject }[],
+): {
+  key: string;
+  label: string;
+  matches: number;
+  row?: InvestigationResourceSummary;
+}[] {
+  const seen = new Set<string>();
+  const out: {
+    key: string;
+    label: string;
+    matches: number;
+    row?: InvestigationResourceSummary;
+  }[] = [];
+  for (const item of items) {
+    const subject = item.subject;
+    if (!subject?.name) continue;
+    const key = `${subject.namespace ?? ""}/${subject.name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const matches = resources.filter(
+      (resource) =>
+        resource.name === subject.name &&
+        (subject.namespace === undefined ||
+          resource.namespace === undefined ||
+          resource.namespace === subject.namespace),
+    );
+    out.push({
+      key,
+      label: subject.namespace
+        ? `${subject.namespace}/${subject.name}`
+        : subject.name,
+      matches: matches.length,
+      row: matches.length === 1 ? matches[0] : undefined,
+    });
+  }
+  return out;
 }
 
 function InventoryRow({

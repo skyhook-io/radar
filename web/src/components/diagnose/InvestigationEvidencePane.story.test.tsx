@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { InvestigationEvidencePane } from "./InvestigationEvidencePane";
+import {
+  InvestigationEvidencePane,
+  namedInventoryRows,
+} from "./InvestigationEvidencePane";
 import { resolveInvestigationCase } from "./investigationCase";
 import {
   projectInvestigationEvidence,
@@ -531,14 +534,38 @@ describe("story card defaults", () => {
         onViewActivity={() => {}}
       />,
     );
-    const start = html.indexOf("data-story-inventory-row");
+    const start = html.indexOf("data-story-inventory-rows");
     expect(start).toBeGreaterThan(-1);
-    const row = html.slice(
-      start,
-      html.indexOf("</div>", html.indexOf("nginx-config", start)),
-    );
-    expect(row).toContain("nginx-config");
-    expect(row).not.toContain("kube-root-ca.crt");
+    // The inline block ends where the folded body (every row) begins.
+    const block = html.slice(start, html.indexOf('-body"', start));
+    expect(block).toContain("nginx-config");
+    expect(block).not.toContain("kube-root-ca.crt");
+  });
+
+  it("says when a cited entry is absent from the listing, or which entries a name could mean", () => {
+    expect(
+      namedInventoryRows(
+        [
+          { kind: "ConfigMap", namespace: "a", name: "config" },
+          { kind: "ConfigMap", namespace: "b", name: "config" },
+        ],
+        [
+          { subject: { kind: "ConfigMap", name: "config" } },
+          { subject: { kind: "ConfigMap", namespace: "b", name: "config" } },
+          { subject: { kind: "ConfigMap", name: "missing" } },
+          { subject: { kind: "ConfigMap", name: "missing" } },
+        ],
+      ),
+    ).toEqual([
+      { key: "/config", label: "config", matches: 2, row: undefined },
+      {
+        key: "b/config",
+        label: "b/config",
+        matches: 1,
+        row: { kind: "ConfigMap", namespace: "b", name: "config" },
+      },
+      { key: "/missing", label: "missing", matches: 0, row: undefined },
+    ]);
   });
 
   it("shows the chart inline on a metrics card placed as the symptom", () => {
