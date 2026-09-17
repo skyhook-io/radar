@@ -242,6 +242,164 @@ describe("agent case placement (D-1, D-1b)", () => {
     ]);
   });
 
+  it("places a resource-shaped result cited as 'resource': a Helm release, a permissions check, a neighborhood, a packages entry", () => {
+    const helmRef = evidenceRef("h", "a");
+    const permRef = evidenceRef("p", "b");
+    const graphRef = evidenceRef("g", "c");
+    const pkgRef = evidenceRef("k", "d");
+    const projection = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "helm",
+        "get_helm_release",
+        {
+          name: "shop",
+          namespace: "shop",
+          chart: "shop",
+          chartVersion: "1.4.2",
+          status: "deployed",
+          revision: 7,
+          updated: "2026-09-07T07:00:00Z",
+          resources: [
+            {
+              kind: "Deployment",
+              apiVersion: "apps/v1",
+              name: "api",
+              namespace: "shop",
+            },
+          ],
+        },
+        {
+          evidenceRef: helmRef,
+          summary: JSON.stringify({ namespace: "shop", name: "shop" }),
+        },
+      ),
+      tool(
+        "perm",
+        "get_subject_permissions",
+        {
+          subject: {
+            kind: "ServiceAccount",
+            namespace: "shop",
+            name: "default",
+          },
+          usedByPods: ["api-abc"],
+          bindings: [],
+          flatRules: [],
+        },
+        {
+          evidenceRef: permRef,
+          summary: JSON.stringify({
+            kind: "ServiceAccount",
+            namespace: "shop",
+            name: "default",
+          }),
+        },
+      ),
+      tool(
+        "graph",
+        "get_neighborhood",
+        {
+          root: { kind: "Service", group: "", namespace: "shop", name: "api" },
+          subgraph: {
+            nodes: [
+              {
+                id: "service/shop/api",
+                kind: "Service",
+                name: "api",
+                data: { namespace: "shop" },
+              },
+              {
+                id: "deployment/shop/api",
+                kind: "Deployment",
+                name: "api",
+                data: { namespace: "shop" },
+              },
+            ],
+            edges: [
+              {
+                source: "service/shop/api",
+                target: "deployment/shop/api",
+                type: "exposes",
+              },
+            ],
+          },
+          truncated: false,
+        },
+        {
+          evidenceRef: graphRef,
+          summary: JSON.stringify({
+            kind: "Service",
+            namespace: "shop",
+            name: "api",
+          }),
+        },
+      ),
+      tool(
+        "pkgs",
+        "list_packages",
+        {
+          packages: [
+            {
+              chart: "shop",
+              namespace: "shop",
+              releaseName: "shop",
+              version: "1.4.2",
+              health: { status: "healthy" },
+              sources: ["H", "F"],
+            },
+          ],
+          sourceLegend: { H: "Helm", F: "Flux" },
+        },
+        { evidenceRef: pkgRef, summary: JSON.stringify({}) },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(helmRef, "context", "Deployed at revision 7.", {
+            kind: "HelmRelease",
+            namespace: "shop",
+            name: "shop",
+            observation: "resource",
+          }),
+          linked(permRef, "context", "Only implicit discovery grants.", {
+            kind: "ServiceAccount",
+            namespace: "shop",
+            name: "default",
+            observation: "resource",
+          }),
+          linked(graphRef, "context", "The Service is the only neighbour.", {
+            kind: "Service",
+            namespace: "shop",
+            name: "api",
+            observation: "resource",
+          }),
+          linked(
+            pkgRef,
+            "context",
+            "The package is healthy from every source.",
+            {
+              group: "helm.toolkit.fluxcd.io",
+              kind: "HelmRelease",
+              namespace: "shop",
+              name: "shop",
+              observation: "resource",
+            },
+          ),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items.map((item) => item.placement)).toEqual([
+      "card",
+      "card",
+      "card",
+      "card",
+    ]);
+  });
+
   it("binds a Pod subject to events only for the target's own pod or a pod an event names whole", () => {
     const workerRef = evidenceRef("e", "f");
     const canaryBundle = {

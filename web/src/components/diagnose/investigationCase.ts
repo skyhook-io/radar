@@ -10,6 +10,7 @@ import {
   investigationEvidenceSubjectRef,
   investigationSourceArgs,
   isInvestigationEvidenceRef,
+  type InvestigationEvidenceData,
   type InvestigationEvidenceGroup,
   type InvestigationEvidenceObservation,
   type InvestigationEvidenceProjection,
@@ -328,6 +329,28 @@ export function sameKind(left: string, right: string): boolean {
   return pluralToKind(left).toLowerCase() === pluralToKind(right).toLowerCase();
 }
 
+// The vocabulary the agent places with names evidence kinds a reader would
+// distinguish (logs, events, changes, metrics, alerts, issue); everything a
+// call returns about a resource is "resource" to it, whether Radar draws that
+// as a resource card, a listing, a ranking, a posture card, a Helm release, a
+// permissions check or a neighborhood. The kinds a diagnose bundle yields
+// beside its resource (startup, crash, receipts) stay out so "resource" still
+// picks one observation of that bundle.
+const RESOURCE_SHAPED: ReadonlySet<InvestigationEvidenceData["type"]> = new Set<
+  InvestigationEvidenceData["type"]
+>([
+  "resource",
+  "inventory",
+  "ranking",
+  "posture",
+  "helm",
+  "permissions",
+  "topology",
+  "relationships",
+  "dns",
+  "network",
+]);
+
 /**
  * A discriminator the agent omits is a wildcard, and so is one the producer
  * did not state; every discriminator both sides supply must match. Uniqueness
@@ -345,13 +368,11 @@ function observationMatchesSubject(
     // whose identity ends in that category. An agent-run query is one chart,
     // so a qualifier on it carries no meaning.
     const [kind, qualifier] = subject.observation.toLowerCase().split(":", 2);
-    // A listing is resources too: "resource" names an inventory card as well.
-    const inventoryAsResource =
-      kind === "resource" &&
-      (observation.data.type === "inventory" ||
-        observation.data.type === "ranking" ||
-        observation.data.type === "posture");
-    if (kind !== observation.data.type && !inventoryAsResource) return false;
+    if (
+      kind !== observation.data.type &&
+      !(kind === "resource" && RESOURCE_SHAPED.has(observation.data.type))
+    )
+      return false;
     if (
       qualifier !== undefined &&
       observation.data.type === "metrics" &&
@@ -448,7 +469,17 @@ function identityMatchesSubject(
       ))
   )
     return true;
-  if (!sameKind(identity.kind, subject.kind)) return false;
+  // A listing of packages carries a kind of Radar's own; the agent names an
+  // entry by the kind it knows it as (the Flux HelmRelease, the chart). Naming
+  // an entry the listing holds is naming the listing.
+  const namesHeldEntry =
+    identity.listing &&
+    subject.name !== undefined &&
+    observation.data.type === "inventory" &&
+    observation.data.resources.some(
+      (resource) => resource.name === subject.name,
+    );
+  if (!namesHeldEntry && !sameKind(identity.kind, subject.kind)) return false;
   // A subject with no name (a listing cited for what it does not contain) is
   // a wildcard that uniqueness still gates. A listing has no name of its own; the agent naming the entry it means
   // ("ConfigMap kube-root-ca.crt" in the ConfigMaps of a namespace) still
