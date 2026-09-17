@@ -247,12 +247,12 @@ function blockedCopy(blocked: CloudInstallBlocked, exit: BlockedExit): { title: 
       </>
     )
 
-  // Where the exit is an install command, Radar Cloud asks for a cluster name
+  // Where the exit is an install command, Radar Cloud confirms the cluster name (prefilled from the context)
   // first, then shows the instructions — say so, rather than promising a
   // command on the next screen.
   const installNext = (
     <>
-      Have an admin with cluster access get the install command from Radar Cloud: it asks for a cluster name, then
+      Have an admin with cluster access get the install command from Radar Cloud: it confirms the cluster name, then
       shows the Helm, Argo CD or Flux instructions to review before running.
     </>
   )
@@ -284,7 +284,7 @@ function blockedCopy(blocked: CloudInstallBlocked, exit: BlockedExit): { title: 
       why: blocked.message,
       next: exit.install ? (
         <>
-          Have an admin with repo access get the values patch from Radar Cloud: it asks for a cluster name, then shows
+          Have an admin with repo access get the values patch from Radar Cloud: it confirms the cluster name, then shows
           the patch for your controller and the one command that creates the token Secret.
         </>
       ) : (
@@ -299,7 +299,7 @@ function blockedCopy(blocked: CloudInstallBlocked, exit: BlockedExit): { title: 
   const unconfirmedNext = (
     <>
       An admin with cluster access should confirm nothing is installed — Radar couldn’t read Helm’s release records —
-      then get the install command from Radar Cloud: it asks for a cluster name, then shows the Helm, Argo CD or Flux
+      then get the install command from Radar Cloud: it confirms the cluster name, then shows the Helm, Argo CD or Flux
       instructions to review before running.
     </>
   )
@@ -327,7 +327,7 @@ function blockedCopy(blocked: CloudInstallBlocked, exit: BlockedExit): { title: 
         next: exit.install ? (
           <>
             Once the refusals above are resolved, have an admin with cluster access get the install command from Radar
-            Cloud: it asks for a cluster name, then shows the Helm, Argo CD or Flux instructions to review before
+            Cloud: it confirms the cluster name, then shows the Helm, Argo CD or Flux instructions to review before
             running.
           </>
         ) : (

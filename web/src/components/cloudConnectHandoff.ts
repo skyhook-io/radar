@@ -84,7 +84,10 @@ export interface BlockedExit {
   install: boolean
 }
 
-export function exitFor(appUrl: string, content: string, handoff: Handoff | null | undefined): BlockedExit {
+// clusterName is the kubeconfig context, offered to the Hub as the cluster's
+// name (`name=`) so the install page opens with its form already filled in;
+// the person can still change it there.
+export function exitFor(appUrl: string, content: string, handoff: Handoff | null | undefined, clusterName?: string): BlockedExit {
   const generic = { href: signupUrlFor(appUrl, content, handoff), label: 'Open Radar Cloud', install: false }
   const t = handoff?.target
   if (!t) return generic
@@ -93,6 +96,7 @@ export function exitFor(appUrl: string, content: string, handoff: Handoff | null
   // happens to know is not an invitation to install over it.
   if (handoff?.outcome === BLOCKED_OUTCOMES.unsupported) return generic
   const params = new URLSearchParams()
+  if (clusterName) params.set('name', clusterName)
   switch (t.mode) {
     case 'adopt':
       params.set('existing', '1')
@@ -165,8 +169,8 @@ export function composeAdminNote(blocked: CloudInstallBlocked, exit: BlockedExit
   const linkLabel = !exit.install
     ? 'Open Radar Cloud:'
     : blocked.reason === 'gitops'
-      ? `Open Radar Cloud to get the values patch for ${tool} (sign in, name the cluster; it also shows the one command that creates the token Secret):`
-      : 'Open Radar Cloud to get the install command (sign in, name the cluster, pick Helm / Argo CD / Flux):'
+      ? `Open Radar Cloud to get the values patch for ${tool} (sign in, confirm the cluster name; it also shows the one command that creates the token Secret):`
+      : 'Open Radar Cloud to get the install command (sign in, confirm the cluster name, pick Helm / Argo CD / Flux):'
 
   // Observations, not Radar narrating itself: what was found, where it stopped.
   const details: string[] = []
@@ -217,7 +221,7 @@ function plainLink(href: string): string {
   try {
     const url = new URL(href)
     const keep = new URLSearchParams()
-    for (const key of ['existing', 'ns', 'release', 'method']) {
+    for (const key of ['name', 'existing', 'ns', 'release', 'method']) {
       const v = url.searchParams.get(key)
       if (v) keep.set(key, v)
     }

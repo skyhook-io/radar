@@ -307,7 +307,7 @@ export function CloudFunnelButton() {
             <CloudConnectFlow
               status={flowForView}
               blocked={blocked}
-              exit={exitFor(appUrl, 'driver-blocked-card-browser-link', outcomeOf(flowForView))}
+              exit={exitFor(appUrl, 'driver-blocked-card-browser-link', outcomeOf(flowForView), clusterInfo.data?.context)}
               where={{ context: clusterInfo.data?.context, cluster: clusterInfo.data?.cluster }}
               onStatus={applyStatus}
               onExit={() => exitFlow(outcomeOf(flowForView))}

@@ -35,13 +35,15 @@ describe('signupUrlFor', () => {
 })
 
 describe('exitFor — every blocked card has one exit, chosen by what Radar established', () => {
-  it('adopts a release Radar found, pinned to the Helm tab', () => {
+  it('adopts a release Radar found, pinned to the Helm tab, named after the context', () => {
     const h = handoffForBlocked('preflight', attempted({ mode: 'adopt', namespace: 'monitoring', release: 'radar-prod', stage: 'inspect' }))
-    const exit = exitFor(APP, CARD, h)
+    const exit = exitFor(APP, CARD, h, 'prod-east')
     expect(exit).toMatchObject({ install: true, label: 'Get the install command' })
     expect(exit.href).toBe(
-      `${APP}/install?existing=1&ns=monitoring&release=radar-prod&method=helm&${UTM}&utm_content=${CARD}&radar_outcome=blocked_preflight_checks_failed`,
+      `${APP}/install?name=prod-east&existing=1&ns=monitoring&release=radar-prod&method=helm&${UTM}&utm_content=${CARD}&radar_outcome=blocked_preflight_checks_failed`,
     )
+    // Without a context there is simply no name to suggest.
+    expect(exitFor(APP, CARD, h).href).not.toContain('name=')
   })
 
   it('offers a fresh install only from a complete plan whose discovery saw the whole cluster', () => {
@@ -153,7 +155,7 @@ describe('composeAdminNote — an ask, then the link, then the evidence', () => 
         'inspect Helm release "radar" in namespace "radar": failed to inspect existing release: query: failed to query with labels: secrets is forbidden: User "system:serviceaccount:default:limited" cannot list resource "secrets" in API group "" in the namespace "radar"',
       ],
     }
-    const exit = exitFor(APP, CARD, handoffForBlocked('preflight', blocked.attempted))
+    const exit = exitFor(APP, CARD, handoffForBlocked('preflight', blocked.attempted), where.context)
     const note = composeAdminNote(blocked, exit, where)
     expect(note).toMatch(/^Request to connect cluster prod-east to Radar Cloud\n/)
     expect(note).toContain("the identity in use (system:serviceaccount:default:limited) doesn't have the permissions to install it")
@@ -161,7 +163,7 @@ describe('composeAdminNote — an ask, then the link, then the evidence', () => 
     // The link a person reads carries only what the page needs — no attribution.
     // The link a person reads keeps what the page needs to land prefilled,
     // plus one marker that the arrival came by handoff — no utm noise.
-    expect(note).toContain('Open Radar Cloud to get the install command (sign in, name the cluster, pick Helm / Argo CD / Flux):\n' + `${APP}/install?method=helm&via=admin_handoff`)
+    expect(note).toContain('Open Radar Cloud to get the install command (sign in, confirm the cluster name, pick Helm / Argo CD / Flux):\n' + `${APP}/install?name=prod-east&method=helm&via=admin_handoff`)
     expect(note).not.toContain('utm_')
     expect(note).not.toContain('radar_outcome')
     expect(note).toContain("Details: No Radar install was found in the cluster; the check stopped while reading Helm's release records.")
@@ -176,7 +178,7 @@ describe('composeAdminNote — an ask, then the link, then the evidence', () => 
     const exit = exitFor(APP, CARD, handoffForBlocked('gitops', blocked.attempted))
     const note = composeAdminNote(blocked, exit, where)
     expect(note).toContain('the install is managed by Flux, so connecting it is a values change in the repository')
-    expect(note).toContain('Open Radar Cloud to get the values patch for Flux (sign in, name the cluster')
+    expect(note).toContain('Open Radar Cloud to get the values patch for Flux (sign in, confirm the cluster name')
     expect(note).toContain(`${APP}/install?existing=1&ns=radar&release=radar&method=flux&via=admin_handoff`)
     expect(note).toContain('Details: The release radar in namespace radar is managed by Flux.')
   })
