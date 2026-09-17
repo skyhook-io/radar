@@ -27,7 +27,8 @@ const (
 )
 
 // Apply sets GOMEMLIMIT from the cgroup memory limit when one is readable and
-// keeps it in sync with in-place changes for the life of ctx. An explicit
+// keeps it in sync with in-place changes for the life of ctx — a limit that
+// appears, changes or disappears after startup is followed. An explicit
 // GOMEMLIMIT env var wins — including GOMEMLIMIT=off, which the runtime reports
 // the same as unset — and a process outside a cgroup limit (a laptop, a pod
 // with no limit set) is left alone: there is no sensible default that is right
@@ -36,13 +37,13 @@ func Apply(ctx context.Context) {
 	if os.Getenv("GOMEMLIMIT") != "" || debug.SetMemoryLimit(-1) != math.MaxInt64 {
 		return
 	}
-	target, ok := fromCgroup()
-	if !ok {
-		return
+	current := int64(math.MaxInt64)
+	if target, ok := fromCgroup(); ok {
+		debug.SetMemoryLimit(target)
+		log.Printf("[memlimit] GOMEMLIMIT set to %dMiB from cgroup memory limit", target>>20)
+		current = target
 	}
-	debug.SetMemoryLimit(target)
-	log.Printf("[memlimit] GOMEMLIMIT set to %dMiB from cgroup memory limit", target>>20)
-	go refresh(ctx, target)
+	go refresh(ctx, current)
 }
 
 func fromCgroup() (int64, bool) {
@@ -72,10 +73,13 @@ func refresh(ctx context.Context, current int64) {
 				continue
 			}
 			debug.SetMemoryLimit(desired)
-			if ok {
-				log.Printf("[memlimit] GOMEMLIMIT updated %dMiB -> %dMiB after cgroup limit change", current>>20, desired>>20)
-			} else {
+			switch {
+			case !ok:
 				log.Printf("[memlimit] GOMEMLIMIT cleared: cgroup memory limit removed")
+			case current == math.MaxInt64:
+				log.Printf("[memlimit] GOMEMLIMIT set to %dMiB: cgroup memory limit added", desired>>20)
+			default:
+				log.Printf("[memlimit] GOMEMLIMIT updated %dMiB -> %dMiB after cgroup limit change", current>>20, desired>>20)
 			}
 			current = desired
 		}
