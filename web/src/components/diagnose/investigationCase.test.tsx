@@ -783,6 +783,37 @@ describe("agent case placement (D-1, D-1b)", () => {
     expect(resolved.items[0].placement).toBe("card");
   });
 
+  it("keeps an ordinary listing's held entry to the listing's namespace", () => {
+    const listRef = evidenceRef("c", "e");
+    const projection = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "cms",
+        "list_resources",
+        [{ kind: "ConfigMap", name: "kube-root-ca.crt" }],
+        {
+          evidenceRef: listRef,
+          summary: JSON.stringify({ kind: "configmaps", namespace: "shop" }),
+        },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(listRef, "context", "Another namespace's CA bundle.", {
+            kind: "ConfigMap",
+            namespace: "prod",
+            name: "kube-root-ca.crt",
+            observation: "resource",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items[0].placement).toBe("source");
+  });
+
   it("binds a Pod subject to events only for the target's own pod or a pod an event names whole", () => {
     const workerRef = evidenceRef("e", "f");
     const canaryBundle = {

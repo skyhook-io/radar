@@ -550,9 +550,18 @@ function identityMatchesSubject(
     return false;
   }
   // The object declaring a package lives where it lives, not in the
-  // listing's scope.
+  // listing's scope; every other held entry is named in the scope it has.
+  const namesDeclaredPackage =
+    namesHeldEntry &&
+    !sameKind(subject.kind, "Package") &&
+    observation.data.type === "inventory" &&
+    observation.data.resources.some(
+      (resource) =>
+        resource.kind === "Package" &&
+        listingRowNamesSubject(resource, subject),
+    );
   if (
-    !namesHeldEntry &&
+    !namesDeclaredPackage &&
     subject.namespace !== undefined &&
     identity.namespace !== undefined &&
     subject.namespace !== identity.namespace
