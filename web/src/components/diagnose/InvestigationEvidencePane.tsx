@@ -1684,17 +1684,7 @@ function EvidenceCard({
   // A compact card keeps its single row; the agent's clause on what the
   // result does not cover rides on it after the status, cut to the row, whole
   // on hover. The clause is written to stand alone, so it carries no label.
-  const gapHint =
-    compact && storyGaps.length > 0 ? (
-      <Tooltip
-        content={storyGaps.join(" · ")}
-        wrapperClassName="inline min-w-0"
-      >
-        <span data-agent-gap-hint className="text-theme-text-tertiary">
-          {storyGaps.join(" · ")}
-        </span>
-      </Tooltip>
-    ) : null;
+  const gapOnRow = compact && storyGaps.length > 0;
   // What a rules_out card excludes is the point of placing it; it stays on
   // the story card as its one line.
   const storyExcludes = storyCard
@@ -1805,21 +1795,28 @@ function EvidenceCard({
             {resourceIdentity} · {resourceRef.kind}
           </span>
         ) : null}
-        {displaySummary || gapHint ? (
+        {gapOnRow ? (
+          <Tooltip
+            content={storyGaps.join(" · ")}
+            wrapperClassName="mt-0.5 w-full min-w-0"
+          >
+            <span className="min-w-0 flex-1 truncate text-xs leading-relaxed text-theme-text-secondary">
+              {displaySummary}
+              {displaySummary ? " · " : null}
+              <span data-agent-gap-hint className="text-theme-text-tertiary">
+                {storyGaps.join(" · ")}
+              </span>
+            </span>
+          </Tooltip>
+        ) : displaySummary ? (
           <span
             className={clsx(
               "mt-0.5 block text-xs leading-relaxed text-theme-text-secondary",
-              gapHint
-                ? "truncate"
-                : [
-                    !open && !inlineSecretKeys && "line-clamp-2",
-                    "[overflow-wrap:anywhere]",
-                  ],
+              !open && !inlineSecretKeys && "line-clamp-2",
+              "[overflow-wrap:anywhere]",
             )}
           >
             {displaySummary}
-            {displaySummary && gapHint ? " · " : null}
-            {gapHint}
           </span>
         ) : null}
         {supersededRead ? (
