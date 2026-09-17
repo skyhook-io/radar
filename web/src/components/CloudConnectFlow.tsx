@@ -90,14 +90,30 @@ function BlockedView({
   // The preview is a block of text laid over the card, not a hint: the
   // shared tooltip's translucent dark chip at 320px would need scrolling and
   // sit poorly on the card, so this is its own panel — card-wide, on the
-  // elevated surface, sized to the note.
+  // elevated surface, sized to the note. When the clipboard is refused the
+  // panel is the fallback, so it stays open with the note selected: the
+  // pointer leaving the button must not take the text away.
   const [previewing, setPreviewing] = useState(false)
+  const [pinned, setPinned] = useState(false)
+  const noteRef = useRef<HTMLPreElement | null>(null)
   const copyForAdmin = () => {
     // copyText also serves Radar on a plain-HTTP non-loopback address, where
     // the async Clipboard API is missing and the legacy command still works.
     void copyText(note).then((ok) => {
       setCopied(ok ? 'done' : 'failed')
-      setTimeout(() => setCopied('idle'), 2000)
+      if (ok) {
+        setTimeout(() => setCopied('idle'), 2000)
+        return
+      }
+      setPinned(true)
+      const pre = noteRef.current
+      const selection = window.getSelection()
+      if (pre && selection) {
+        selection.removeAllRanges()
+        const range = document.createRange()
+        range.selectNodeContents(pre)
+        selection.addRange(range)
+      }
     })
   }
   const icon =
@@ -123,16 +139,32 @@ function BlockedView({
         </div>
       </div>
       <div className="relative mt-4 flex items-center gap-4">
-        {previewing && (
+        {(previewing || pinned) && (
           <div
             id="blocked-admin-note-preview"
             role="tooltip"
             className="absolute inset-x-0 bottom-full z-20 mb-3 rounded-xl border border-theme-border bg-theme-elevated p-4 shadow-theme-lg"
           >
-            <div className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
-              What gets copied
+            <div className="mb-1.5 flex items-center justify-between text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+              <span>{pinned ? 'Select and copy' : 'What gets copied'}</span>
+              {pinned && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPinned(false)
+                    setCopied('idle')
+                  }}
+                  aria-label="Close"
+                  className="rounded p-0.5 text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              )}
             </div>
-            <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-theme-text-primary">
+            <pre
+              ref={noteRef}
+              className="select-text whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-theme-text-primary"
+            >
               {note}
             </pre>
           </div>
@@ -160,7 +192,7 @@ function BlockedView({
               <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Copied
             </>
           ) : copied === 'failed' ? (
-            'Couldn’t copy — select the text above'
+            'Couldn’t copy — the note is selected above, press ⌘C / Ctrl+C'
           ) : (
             <>
               <Copy className="w-3.5 h-3.5" /> Copy for a cluster admin
