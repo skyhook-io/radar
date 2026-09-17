@@ -54,8 +54,10 @@ describe("resolveStoryPlacements", () => {
     expect(repeated.placedAt.get(0)).toBe(0);
     const html = renderToStaticMarkup(
       <AnalysisStory
-        report={"Opening paragraph.\n\n[[radar:evidence=2]]\n\nMore."}
-        resolveItem={resolver({ 2: "unlinked" })}
+        placements={resolveStoryPlacements(
+          "Opening paragraph.\n\n[[radar:evidence=2]]\n\nMore.",
+          resolver({ 2: "unlinked" }),
+        )}
         renderPlacement={() => null}
         onReveal={vi.fn()}
       />,
@@ -88,10 +90,10 @@ describe("resolveStoryPlacements", () => {
     );
     const html = renderToStaticMarkup(
       <AnalysisStory
-        report={
-          "Envoy boots [[radar:evidence=0]] then hangs on xDS.\n\nLater, see [[radar:evidence=0]] again."
-        }
-        resolveItem={resolver({ 0: target(0, "a") })}
+        placements={resolveStoryPlacements(
+          "Envoy boots [[radar:evidence=0]] then hangs on xDS.\n\nLater, see [[radar:evidence=0]] again.",
+          resolver({ 0: target(0, "a") }),
+        )}
         renderPlacement={() => <div data-card>card</div>}
         onReveal={vi.fn()}
         openRequest={1}
@@ -104,10 +106,10 @@ describe("resolveStoryPlacements", () => {
   it("keeps an inline mention a reference when the agent places that card on its own line later, pointing down", () => {
     const html = renderToStaticMarkup(
       <AnalysisStory
-        report={
-          "First [[radar:evidence=0]] here.\n\nThen:\n\n[[radar:evidence=0]]"
-        }
-        resolveItem={resolver({ 0: target(0, "a") })}
+        placements={resolveStoryPlacements(
+          "First [[radar:evidence=0]] here.\n\nThen:\n\n[[radar:evidence=0]]",
+          resolver({ 0: target(0, "a") }),
+        )}
         renderPlacement={() => <div data-card>card</div>}
         onReveal={vi.fn()}
         openRequest={1}
@@ -187,8 +189,10 @@ describe("resolveStoryPlacements", () => {
     ).join("\n\n");
     const html = renderToStaticMarkup(
       <AnalysisStory
-        report={`${markers}\n\nSee [[radar:evidence=7]] here.`}
-        resolveItem={resolver(table)}
+        placements={resolveStoryPlacements(
+          `${markers}\n\nSee [[radar:evidence=7]] here.`,
+          resolver(table),
+        )}
         renderPlacement={() => <div data-card>card</div>}
         onReveal={vi.fn()}
         openRequest={1}
@@ -199,11 +203,12 @@ describe("resolveStoryPlacements", () => {
 
     const ownLine = renderToStaticMarkup(
       <AnalysisStory
-        report={Array.from(
-          { length: 7 },
-          (_, i) => `[[radar:evidence=${i}]]`,
-        ).join("\n\n")}
-        resolveItem={resolver(table)}
+        placements={resolveStoryPlacements(
+          Array.from({ length: 7 }, (_, i) => `[[radar:evidence=${i}]]`).join(
+            "\n\n",
+          ),
+          resolver(table),
+        )}
         renderPlacement={() => <div data-card>card</div>}
         onReveal={vi.fn()}
         openRequest={1}
@@ -238,12 +243,14 @@ describe("AnalysisStory", () => {
   const render = (report: string, open = false) =>
     renderToStaticMarkup(
       <AnalysisStory
-        report={report}
-        resolveItem={resolver({
-          0: target(0, "crash"),
-          1: target(1, "chart"),
-          2: "unlinked",
-        })}
+        placements={resolveStoryPlacements(
+          report,
+          resolver({
+            0: target(0, "crash"),
+            1: target(1, "chart"),
+            2: "unlinked",
+          }),
+        )}
         renderPlacement={(t, { compact }) => (
           <div data-placed={t.domId} data-compact={compact ? "1" : "0"}>
             {t.item.observation?.title}
@@ -288,8 +295,7 @@ describe("AnalysisStory", () => {
     expect(collapsed).not.toContain("Expand");
     const withTrailing = renderToStaticMarkup(
       <AnalysisStory
-        report="One paragraph only."
-        resolveItem={resolver({})}
+        placements={resolveStoryPlacements("One paragraph only.", resolver({}))}
         renderPlacement={() => null}
         onReveal={vi.fn()}
         trailing={<p data-trailing>Also checked: nothing else.</p>}

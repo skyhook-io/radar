@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { clsx } from "clsx";
 import { TRANSITION_CHEVRON } from "@skyhook-io/k8s-ui/utils/animation";
 import { AlertTriangle, ChevronDown, FileSearch } from "lucide-react";
@@ -50,17 +50,20 @@ function isLoss(
  * marker reference it, and anything unresolvable is a visible loss. Dedupe is
  * by resolved observation, not by index — two items can address one read.
  */
-export function resolveStoryPlacements(
-  report: string,
-  resolveItem: (index: number) => StoryPlacementTarget | StoryPlacementLoss,
-  resolveRef?: StoryRefResolver,
-): {
+/** The resolved story: what each marker became and where each card sits. */
+export interface StoryPlacements {
   segments: StorySegment[];
   byIndex: Map<number, StoryPlacementResolution>;
   placedAt: Map<number, number>;
   placedCount: number;
   lostItems: number;
-} {
+}
+
+export function resolveStoryPlacements(
+  report: string,
+  resolveItem: (index: number) => StoryPlacementTarget | StoryPlacementLoss,
+  resolveRef?: StoryRefResolver,
+): StoryPlacements {
   const { segments: written } = splitStory(report, resolveRef);
   const byIndex = new Map<number, StoryPlacementResolution>();
   // The segment position that renders each placed index's card; a repeated
@@ -312,9 +315,7 @@ const STORY_PROSE_CLASS =
  * why the summary and the unresolved list live above it.
  */
 export function AnalysisStory({
-  report,
-  resolveItem,
-  resolveRef,
+  placements: story,
   renderPlacement,
   onReveal,
   onViewSource,
@@ -322,10 +323,8 @@ export function AnalysisStory({
   openRequest = 0,
   className,
 }: {
-  report: string;
-  resolveItem: (index: number) => StoryPlacementTarget | StoryPlacementLoss;
-  /** Maps a ledger ref an agent wrote as a marker to its evidence index. */
-  resolveRef?: StoryRefResolver;
+  /** Resolved once by the host, which also needs it for its own counts. */
+  placements: StoryPlacements;
   /** Renders the card for a placed item; `compact` when it sits in the collapsed preview. */
   renderPlacement: (
     target: StoryPlacementTarget,
@@ -348,10 +347,6 @@ export function AnalysisStory({
     if (openRequest > 0) setOpen(true);
   }, [openRequest]);
   const regionId = useId();
-  const story = useMemo(
-    () => resolveStoryPlacements(report, resolveItem, resolveRef),
-    [report, resolveItem, resolveRef],
-  );
   const firstPlacedAt = story.segments.findIndex(
     (segment) =>
       segment.kind === "placement" &&

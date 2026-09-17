@@ -600,11 +600,9 @@ export function InvestigationEvidencePane({
                 </span>
               ) : null}
             </div>
-            {story ? (
+            {story && storyPlacements ? (
               <AnalysisStory
-                report={story.report}
-                resolveItem={resolveStoryItem}
-                resolveRef={resolveStoryRef}
+                placements={storyPlacements}
                 trailing={
                   visibleRuledOut.length > 0 ? (
                     <RuledOutBlock
