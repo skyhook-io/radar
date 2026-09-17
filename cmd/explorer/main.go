@@ -258,7 +258,7 @@ func main() {
 		startupMode = "Radar Cloud"
 	}
 	log.Printf("Radar %s starting (mode=%s, auth=%s)...", version, startupMode, *authMode)
-	memlimit.Apply(context.Background())
+	memlimit.Apply()
 
 	// Validate flags
 	switch *authMode {
