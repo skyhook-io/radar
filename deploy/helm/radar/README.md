@@ -217,8 +217,10 @@ trend charts remain unavailable for Kubecost.
 | `argocd.token` | Inline Argo CD API token (dev only — lands in the release state) | `""` |
 | `argocd.url` | Explicit `argocd-server` URL; blank auto-discovers in-cluster | `""` |
 | `argocd.insecureTls` | Skip TLS verification for a self-signed `argocd-server` | `false` |
-| `resources.limits.memory` | Memory limit | `512Mi` |
-| `resources.requests.memory` | Memory request | `128Mi` |
+| `resources.requests.cpu` | CPU request | `200m` |
+| `resources.requests.memory` | Memory request | `256Mi` |
+| `resources.limits.cpu` | CPU limit | `2` |
+| `resources.limits.memory` | Memory limit. Radar sets `GOMEMLIMIT` to 75% of the container's cgroup limit at startup, so the GC collects harder as it approaches the limit; set `GOMEMLIMIT` under `env` to override | `1Gi` |
 
 See `values.yaml` for all configuration options.
 

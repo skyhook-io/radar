@@ -24,6 +24,7 @@ import (
 	"github.com/skyhook-io/radar/internal/diagnosecli"
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
+	"github.com/skyhook-io/radar/internal/memlimit"
 	"github.com/skyhook-io/radar/internal/reachability"
 	"github.com/skyhook-io/radar/internal/server"
 	versionpkg "github.com/skyhook-io/radar/internal/version"
@@ -257,6 +258,7 @@ func main() {
 		startupMode = "Radar Cloud"
 	}
 	log.Printf("Radar %s starting (mode=%s, auth=%s)...", version, startupMode, *authMode)
+	memlimit.Apply(context.Background())
 
 	// Validate flags
 	switch *authMode {
