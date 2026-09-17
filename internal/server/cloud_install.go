@@ -478,12 +478,12 @@ func (m *cloudInstallManager) connectedRadar(t cloudinstall.RadarTarget) cloudIn
 	if !rt.CloudURLConfigured || rt.CloudURLUnresolved || rt.CloudURL == "" {
 		return c
 	}
-	target, err := url.Parse(rt.CloudURL)
-	if err != nil || target.Host == "" {
+	origin, err := cloud.HubOriginFromWebSocketURL(rt.CloudURL)
+	if err != nil {
 		return c
 	}
-	if configured, err := url.Parse(m.cfg.HubAPIURL); err != nil || !strings.EqualFold(configured.Host, target.Host) {
-		c.HubHost = target.Host
+	if !sameHubOrigin(origin, m.cfg.HubAPIURL) {
+		c.HubHost = hostOf(origin)
 		return c
 	}
 	if rt.ClusterNameConfigured && !rt.ClusterNameUnresolved && rt.ClusterName != "" {
@@ -492,6 +492,37 @@ func (m *cloudInstallManager) connectedRadar(t cloudinstall.RadarTarget) cloudIn
 		c.ClusterURL = cloud.ClustersURL(m.cfg.HubAppURL)
 	}
 	return c
+}
+
+// sameHubOrigin compares two Hub origins by scheme, host and effective port,
+// so https://api.example and https://api.example:443 are one Hub.
+func sameHubOrigin(a, b string) bool {
+	ua, errA := url.Parse(a)
+	ub, errB := url.Parse(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return strings.EqualFold(ua.Scheme, ub.Scheme) &&
+		strings.EqualFold(ua.Hostname(), ub.Hostname()) &&
+		effectivePort(ua) == effectivePort(ub)
+}
+
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return "443"
+	}
+	return "80"
+}
+
+func hostOf(origin string) string {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return origin
+	}
+	return u.Host
 }
 
 func (m *cloudInstallManager) prepare(ctx context.Context) (*cloudInstallFlow, *cloudInstallBlocked, error) {
@@ -1138,7 +1169,7 @@ func (s *Server) handleCloudInstallDiscover(w http.ResponseWriter, r *http.Reque
 	discovered, err := s.cloudInstall.discoverConnected(ctx)
 	w.Header().Set("Cache-Control", "no-store")
 	if err != nil {
-		log.Printf("[cloud-install] discover failed: %v", err)
+		log.Printf("[cloud-install] Failed to discover Radar installs: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

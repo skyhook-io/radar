@@ -1070,8 +1070,9 @@ func TestDiscoverConnectedNamesAlreadyCloudDeployments(t *testing.T) {
 				}},
 			},
 			ClusterWide: []cloudinstall.RadarTarget{
+				// An explicit default port is still our Hub.
 				{Namespace: "radar", DeploymentName: "radar", ReleaseName: "radar", Runtime: cloudinstall.DeploymentRuntime{
-					AlreadyCloud: true, CloudURLConfigured: true, CloudURL: "wss://api.test.example/agent",
+					AlreadyCloud: true, CloudURLConfigured: true, CloudURL: "wss://api.test.example:443/agent",
 					ClusterNameConfigured: true, ClusterName: "abc123",
 				}},
 				{Namespace: "tools", DeploymentName: "radar", ReleaseName: "radar", Runtime: cloudinstall.DeploymentRuntime{}},
