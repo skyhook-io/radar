@@ -136,8 +136,12 @@ export function resolveStoryPlacements(
     }
     let markdown = segment.markdown;
     const autoPlaced: number[] = [];
-    for (const match of markdown.matchAll(/#radar-evidence-(-?\d+)\)/g)) {
-      const index = Number(match[1]);
+    const autoCompact = new Set<number>();
+    for (const match of markdown.matchAll(
+      /\[\[\[radar:evidence([^\]]*)\]\]\]\(#radar-evidence-(-?\d+)\)/g,
+    )) {
+      const index = Number(match[2]);
+      if (match[1].endsWith("|compact")) autoCompact.add(index);
       const resolved = target(index);
       if (
         !resolved ||
@@ -151,20 +155,16 @@ export function resolveStoryPlacements(
       if (place(index, resolved, segments.length + 1 + autoPlaced.length))
         autoPlaced.push(index);
     }
-    for (const index of autoPlaced) {
-      markdown = markdown
-        .replace(
-          new RegExp(
-            `\\s?\\[\\[\\[radar:evidence[^\\]]*\\]\\]\\]\\(#radar-evidence-${index}\\)`,
-          ),
-          "",
-        )
-        .replace(/[ \t]+([,.;:!?])/g, "$1")
-        .replace(/[ \t]{2,}/g, " ");
-    }
+    for (const index of autoPlaced)
+      markdown = removeInlineMarker(markdown, index);
     segments.push({ kind: "prose", markdown });
     for (const index of autoPlaced)
-      segments.push({ kind: "placement", index, auto: true });
+      segments.push({
+        kind: "placement",
+        index,
+        auto: true,
+        ...(autoCompact.has(index) ? { compact: true } : {}),
+      });
   }
   // A twin item that was only ever mentioned inline still points at the card
   // its sibling placed.
@@ -180,6 +180,23 @@ export function resolveStoryPlacements(
     placedCount,
     lostItems: lostIndexes.size,
   };
+}
+
+// Only the hole the marker leaves is tidied: a space before punctuation or a
+// doubled space there. The rest of the paragraph, including a two-space hard
+// line break, is the agent's.
+function removeInlineMarker(markdown: string, index: number): string {
+  const match = new RegExp(
+    `\\[\\[\\[radar:evidence[^\\]]*\\]\\]\\]\\(#radar-evidence-${index}\\)`,
+  ).exec(markdown);
+  if (!match) return markdown;
+  let before = markdown.slice(0, match.index);
+  let after = markdown.slice(match.index + match[0].length);
+  if (/\s$/.test(before) && (/^[,.;:!?]/.test(after) || after === ""))
+    before = before.replace(/\s+$/, "");
+  else if (/^\s/.test(after) && (/\s$/.test(before) || before === ""))
+    after = after.replace(/^\s+/, "");
+  return before + after;
 }
 
 const LOSS_COPY: Record<Exclude<StoryPlacementLoss, object>, string> = {

@@ -369,8 +369,9 @@ function observationIdentities(
   return identities;
 }
 
-// Pod names are DNS labels, so a name is a whole word between characters
-// that cannot be part of one; "api" inside "api-other" names another Pod.
+// Pod names are DNS subdomains (letters, digits, hyphens, dots), so a name
+// is a whole word between characters that cannot be part of one; "api"
+// inside "api-other" names another Pod.
 function namesPod(text: string, name: string): boolean {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(^|[^A-Za-z0-9.-])${escaped}(?![A-Za-z0-9.-])`).test(text);

@@ -665,32 +665,6 @@ export function InvestigationEvidencePane({
   // A card behind the story's fold stays mounted but inert once the fold has
   // been opened and closed; a reveal has to open the fold first, then land.
   const [storyOpenRequest, setStoryOpenRequest] = useState(0);
-  const revealStoryTarget = useCallback(
-    (target: StoryPlacementTarget) => {
-      const placed = document.getElementById(target.domId);
-      if (placed) {
-        const land = () => {
-          placed.scrollIntoView({
-            block: "center",
-            behavior: prefersReducedMotion() ? "auto" : "smooth",
-          });
-          (placed as HTMLElement).focus({ preventScroll: true });
-        };
-        if (placed.closest("[inert]")) {
-          setStoryOpenRequest((n) => n + 1);
-          window.setTimeout(
-            land,
-            investigationDisclosureSettleDelay(prefersReducedMotion()),
-          );
-          return;
-        }
-        land();
-        return;
-      }
-      revealCaseItem(target.item);
-    },
-    [revealCaseItem],
-  );
   // What the story actually placed, not what the case could have: a cited
   // card the agent never placed is inventory, and the inventory says so.
   // A marker written in the ledger's ref form names the item carrying that ref.
@@ -705,6 +679,38 @@ export function InvestigationEvidencePane({
     ? resolveStoryPlacements(story.report, resolveStoryItem, resolveStoryRef)
     : undefined;
   const placedCount = storyPlacements?.placedCount ?? 0;
+  // A card behind the fold may be mounted and inert, or not mounted at all
+  // before the fold first opens; either way the fold opens first and the
+  // card is found once it has settled.
+  const revealStoryTarget = useCallback(
+    (target: StoryPlacementTarget) => {
+      const land = (placed: HTMLElement) => {
+        placed.scrollIntoView({
+          block: "center",
+          behavior: prefersReducedMotion() ? "auto" : "smooth",
+        });
+        placed.focus({ preventScroll: true });
+      };
+      const placed = document.getElementById(target.domId);
+      const placedInStory =
+        storyPlacements?.byIndex.get(target.item.index)?.kind === "placed";
+      if (placed && !placed.closest("[inert]")) {
+        land(placed);
+        return;
+      }
+      if (placed || placedInStory) {
+        setStoryOpenRequest((n) => n + 1);
+        window.setTimeout(() => {
+          const settled = document.getElementById(target.domId);
+          if (settled) land(settled);
+          else revealCaseItem(target.item);
+        }, investigationDisclosureSettleDelay(prefersReducedMotion()));
+        return;
+      }
+      revealCaseItem(target.item);
+    },
+    [revealCaseItem, storyPlacements],
+  );
   const resultsShown =
     resultsOpen ?? (placedCount === 0 && !collecting && !!story);
   const placedGroupIds = new Set(

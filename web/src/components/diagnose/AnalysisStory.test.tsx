@@ -143,6 +143,20 @@ describe("resolveStoryPlacements", () => {
     expect(story.byIndex.get(1)?.kind).toBe("placed");
   });
 
+  it("keeps the compact flag of an inline marker it auto-places, and tidies only the marker's hole", () => {
+    const story = resolveStoryPlacements(
+      "Line one  \nline two says [[radar:evidence=0|compact]], then more.",
+      resolver({ 0: target(0, "a") }),
+    );
+    expect(story.segments).toEqual([
+      {
+        kind: "prose",
+        markdown: "Line one  \nline two says, then more.",
+      },
+      { kind: "placement", index: 0, auto: true, compact: true },
+    ]);
+  });
+
   it("keeps the agent's own-line placement when a twin item on the same card was mentioned inline first", () => {
     const story = resolveStoryPlacements(
       "Inline [[radar:evidence=1]] first.\n\nLater:\n\n[[radar:evidence=0]]",

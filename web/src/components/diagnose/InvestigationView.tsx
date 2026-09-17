@@ -1453,13 +1453,20 @@ export function InvestigationView({
     ? `${lastTool.id}:${lastTool.status}`
     : undefined;
   const toolChangedAtRef = useRef<number>(Date.now());
+  const toolSeenRef = useRef(toolSignature);
   useEffect(() => {
+    toolSeenRef.current = toolSignature;
     toolChangedAtRef.current = Date.now();
   }, [toolSignature]);
   const investigatingLabel = (() => {
     const items = lastTurn?.timeline ?? [];
     const reads = items.filter((item) => item.kind === "tool").length;
-    const quietFor = Date.now() - toolChangedAtRef.current;
+    // The render that first shows a changed tool is not quiet yet; the effect
+    // that stamps the change runs after it.
+    const quietFor =
+      toolSeenRef.current === toolSignature
+        ? Date.now() - toolChangedAtRef.current
+        : 0;
     let current = "Investigating";
     if (lastTool && lastTool.kind === "tool" && lastTool.tool) {
       current =
