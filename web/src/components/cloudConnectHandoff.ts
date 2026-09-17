@@ -163,31 +163,32 @@ export function composeAdminNote(blocked: CloudInstallBlocked, exit: BlockedExit
     ? 'Could someone with cluster access connect it?'
     : 'Could someone with cluster access connect it from Radar Cloud?'
   const linkLabel = !exit.install
-    ? 'Radar Cloud:'
+    ? 'Open Radar Cloud:'
     : blocked.reason === 'gitops'
-      ? `Values patch for ${tool} (sign in, name the cluster; it also shows the one command that creates the token Secret):`
-      : 'Install command (sign in, name the cluster, pick Helm / Argo CD / Flux):'
+      ? `Open Radar Cloud to get the values patch for ${tool} (sign in, name the cluster; it also shows the one command that creates the token Secret):`
+      : 'Open Radar Cloud to get the install command (sign in, name the cluster, pick Helm / Argo CD / Flux):'
 
+  // Observations, not Radar narrating itself: what was found, where it stopped.
   const details: string[] = []
   if (a) {
     const target = `release ${a.release} in namespace ${a.namespace}`
     const stage =
       a.stage === 'inspect'
-        ? "stopped while reading Helm's release records"
+        ? "the check stopped while reading Helm's release records"
         : a.stage === 'prepare'
-          ? 'stopped while preparing the chart'
-          : 'stopped at the dry run'
+          ? 'the check stopped while preparing the chart'
+          : 'the dry run of the install stopped'
     details.push(
       a.mode === 'gitops'
-        ? `Radar found ${target} and traced how it is managed.`
+        ? `The ${target} is managed by ${tool}.`
         : a.mode === 'adopt'
-          ? `Radar found ${target} and ${stage}.`
+          ? `An existing ${target} was found; ${stage}.`
           : a.partialScan
-            ? `Radar could only check namespace ${a.namespace} for an existing install and ${stage}.`
-            : `Radar found no Radar running in the cluster and ${stage}.`,
+            ? `Only namespace ${a.namespace} could be checked for an existing install; ${stage}.`
+            : `No Radar install was found in the cluster; ${stage}.`,
     )
   } else if (blocked.reason === 'preflight') {
-    details.push('Radar was looking for an existing Radar install when it stopped.')
+    details.push('The check for an existing Radar install did not complete.')
   }
   for (const line of blocked.blocking ?? []) details.push(trimRefusal(line))
   if (a?.releaseUnread) details.push('Please confirm nothing is already installed before a fresh install.')
@@ -199,9 +200,27 @@ export function composeAdminNote(blocked: CloudInstallBlocked, exit: BlockedExit
     `Connecting it from Radar was blocked: ${because}. Nothing in the cluster was changed. ${ask}`,
     '',
     linkLabel,
-    exit.href,
+    plainLink(exit.href),
     ...(details.length ? ['', `Details: ${details.join(' ')}`] : []),
   ].join('\n')
+}
+
+// The note is text a person reads and forwards, so its link carries only what
+// the page needs to open in the right place (an existing release to adopt,
+// the install method); the card's own button keeps the attribution params.
+function plainLink(href: string): string {
+  try {
+    const url = new URL(href)
+    const keep = new URLSearchParams()
+    for (const key of ['existing', 'ns', 'release', 'method']) {
+      const v = url.searchParams.get(key)
+      if (v) keep.set(key, v)
+    }
+    url.search = keep.toString()
+    return url.toString()
+  } catch {
+    return href
+  }
 }
 
 // A refusal line is a Go error chain — "create Namespace "radar": namespaces
