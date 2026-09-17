@@ -593,6 +593,17 @@ describe("story card defaults", () => {
         [{ subject: { kind: "Namespace", namespace: "other", name: "prod" } }],
       )[0].matches,
     ).toBe(0);
+    expect(
+      namedInventoryRows(
+        [{ kind: "APIService", name: "v1.apps" }],
+        [{ subject: { kind: "APIService", namespace: "", name: "v1.apps" } }],
+      )[0],
+    ).toEqual({
+      key: "/v1.apps",
+      label: "v1.apps",
+      matches: 1,
+      row: { kind: "APIService", name: "v1.apps" },
+    });
   });
 
   it("shows the chart inline on a metrics card placed as the symptom", () => {

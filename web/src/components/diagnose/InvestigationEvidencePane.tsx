@@ -3358,7 +3358,9 @@ export function namedInventoryRows(
   for (const item of items) {
     const subject = item.subject;
     if (!subject?.name) continue;
-    const key = `${subject.namespace ?? ""}/${subject.name}`;
+    // Agents write namespace "" for a cluster-scoped kind; that states none.
+    const namespace = subject.namespace || undefined;
+    const key = `${namespace ?? ""}/${subject.name}`;
     if (seen.has(key)) continue;
     seen.add(key);
     // A row without a namespace lives in the listing's scope, or in none
@@ -3367,14 +3369,12 @@ export function namedInventoryRows(
     const matches = resources.filter(
       (resource) =>
         resource.name === subject.name &&
-        (subject.namespace === undefined ||
-          (resource.namespace ?? scopeNamespace) === subject.namespace),
+        (namespace === undefined ||
+          (resource.namespace ?? scopeNamespace) === namespace),
     );
     out.push({
       key,
-      label: subject.namespace
-        ? `${subject.namespace}/${subject.name}`
-        : subject.name,
+      label: namespace ? `${namespace}/${subject.name}` : subject.name,
       matches: matches.length,
       row: matches.length === 1 ? matches[0] : undefined,
     });
