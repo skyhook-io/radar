@@ -176,6 +176,22 @@ describe("resolveStoryPlacements", () => {
     );
     expect(html.match(/data-card/g)).toHaveLength(6);
     expect(html).toContain('data-story-ref-direction="down"');
+
+    const ownLine = renderToStaticMarkup(
+      <AnalysisStory
+        report={Array.from(
+          { length: 7 },
+          (_, i) => `[[radar:evidence=${i}]]`,
+        ).join("\n\n")}
+        resolveItem={resolver(table)}
+        renderPlacement={() => <div data-card>card</div>}
+        onReveal={vi.fn()}
+        defaultOpen
+      />,
+    );
+    expect(ownLine.match(/data-card/g)).toHaveLength(6);
+    expect(ownLine).toContain('data-story-ref-direction="down"');
+    expect(ownLine).not.toContain('data-story-ref-direction="up"');
   });
 
   it("caps placed cards and reports every distinct lost item once", () => {

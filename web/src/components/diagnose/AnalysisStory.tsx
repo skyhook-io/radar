@@ -405,13 +405,15 @@ export function AnalysisStory({
         </div>
       );
     }
-    if (
-      resolution.kind === "reference" ||
-      story.placedAt.get(segment.index) !== position
-    ) {
+    const at = story.placedAt.get(segment.index);
+    if (resolution.kind === "reference" || at !== position) {
       return (
         <div key={`ref-${position}`}>
-          <ReferenceChip target={resolution.target} onReveal={onReveal} />
+          <ReferenceChip
+            target={resolution.target}
+            onReveal={onReveal}
+            direction={at === undefined || at > position ? "down" : "up"}
+          />
         </div>
       );
     }
