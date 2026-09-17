@@ -37,7 +37,10 @@ import {
   uniquePrimarySources,
   phaseLabel,
 } from "./investigationEvidence/cardParts";
-import { listingScopeNamespace } from "./investigationEvidence/bodies/inventory";
+import {
+  listingScopeNamespace,
+  namedInventoryRows,
+} from "./investigationEvidence/bodies/inventory";
 import {
   EvidenceBody,
   evidenceHasDetails,
@@ -183,6 +186,14 @@ export function EvidenceCard({
         scopeNamespace: listingScopeNamespace(observation.source),
       })
     : undefined;
+  const citedRows =
+    observation.data.type === "inventory"
+      ? namedInventoryRows(
+          observation.data.resources,
+          cardItems,
+          listingScopeNamespace(observation.source),
+        ).flatMap((named) => (named.row ? [named.row] : []))
+      : undefined;
   // A card whose content shows inline has nothing left behind the fold but
   // the earlier lines or the history.
   const inlineLogs = excerpt?.kind === "lines";
@@ -456,6 +467,7 @@ export function EvidenceCard({
                   changeCoverage={metricsMarkersBySource?.get(
                     observation.source.id,
                   )}
+                  citedRows={citedRows}
                 />
               ) : null}
               {meaningfulHistory ? (

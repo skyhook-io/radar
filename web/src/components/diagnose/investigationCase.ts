@@ -329,6 +329,23 @@ export function sameKind(left: string, right: string): boolean {
   return pluralToKind(left).toLowerCase() === pluralToKind(right).toLowerCase();
 }
 
+/**
+ * Whether a listing row is the entry a citation names. A package row carries
+ * a kind of Radar's own, so the agent names it by the kind it knows the
+ * package as (the Flux HelmRelease, the chart); every other row is named by
+ * its kind.
+ */
+export function listingRowNamesSubject(
+  row: { kind: string; name: string },
+  subject: { kind: string; name?: string },
+): boolean {
+  return (
+    subject.name !== undefined &&
+    row.name === subject.name &&
+    (row.kind === "Package" || sameKind(row.kind, subject.kind))
+  );
+}
+
 // The vocabulary the agent places with names evidence kinds a reader would
 // distinguish (logs, events, changes, metrics, alerts, issue); everything a
 // call returns about a resource is "resource" to it, whether Radar draws that
@@ -469,15 +486,13 @@ function identityMatchesSubject(
       ))
   )
     return true;
-  // A listing of packages carries a kind of Radar's own; the agent names an
-  // entry by the kind it knows it as (the Flux HelmRelease, the chart). Naming
-  // an entry the listing holds is naming the listing.
+  // Naming an entry the listing holds is naming the listing, whatever kind
+  // the listing itself goes by.
   const namesHeldEntry =
     identity.listing &&
-    subject.name !== undefined &&
     observation.data.type === "inventory" &&
-    observation.data.resources.some(
-      (resource) => resource.name === subject.name,
+    observation.data.resources.some((resource) =>
+      listingRowNamesSubject(resource, subject),
     );
   if (!namesHeldEntry && !sameKind(identity.kind, subject.kind)) return false;
   // A subject with no name (a listing cited for what it does not contain) is

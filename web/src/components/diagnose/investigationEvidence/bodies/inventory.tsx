@@ -6,7 +6,7 @@ import {
   type InvestigationResourceSummary,
   type InvestigationEvidenceSource,
 } from "..";
-import { sameKind } from "../../investigationCase";
+import { listingRowNamesSubject } from "../../investigationCase";
 import type { EvidenceDataOf } from "../cardParts";
 
 // The rows the citations on a card name, in citation order: one row when the
@@ -50,8 +50,7 @@ export function namedInventoryRows(
     // states unless it is the scope itself.
     const matches = resources.filter(
       (resource) =>
-        resource.name === subject.name &&
-        sameKind(resource.kind, subject.kind) &&
+        listingRowNamesSubject(resource, subject) &&
         (namespace === undefined ||
           (resource.namespace ?? scopeNamespace) === namespace),
     );
@@ -68,15 +67,19 @@ export function namedInventoryRows(
 export function InventoryRow({
   resource,
   divider = false,
+  cited = false,
 }: {
   resource: InvestigationResourceSummary;
   divider?: boolean;
+  cited?: boolean;
 }) {
   return (
     <div
+      data-inventory-row={cited ? "cited" : undefined}
       className={clsx(
         "flex min-w-0 items-center gap-2 px-2.5 py-1.5",
         divider && "border-t border-theme-border/60",
+        cited && "bg-theme-hover/40",
       )}
     >
       <StatusDot
@@ -116,14 +119,27 @@ export function InventoryRow({
   );
 }
 
-export function InventoryBody({ data }: { data: EvidenceDataOf<"inventory"> }) {
+// The rows the card's citations name lead the listing, so the entry a claim
+// is about is in view without scrolling a long inventory for it.
+export function InventoryBody({
+  data,
+  cited = [],
+}: {
+  data: EvidenceDataOf<"inventory">;
+  cited?: readonly InvestigationResourceSummary[];
+}) {
+  const rows = [
+    ...cited,
+    ...data.resources.filter((resource) => !cited.includes(resource)),
+  ];
   return (
     <div className="max-h-72 overflow-y-auto rounded-md border border-theme-border">
-      {data.resources.map((resource, index) => (
+      {rows.map((resource, index) => (
         <InventoryRow
           key={`${resource.kind}-${resource.namespace ?? ""}-${resource.name}`}
           resource={resource}
           divider={index > 0}
+          cited={cited.includes(resource)}
         />
       ))}
     </div>

@@ -275,12 +275,20 @@ export function adaptListResources(
       (resource.summaryContext?.issueCount ?? 0) > 0
     );
   });
-  builder.observe(`inventory:${source.args ?? scope}`, "inventory", source, {
-    tier: "context",
-    relevance: "broader",
-    tone: hasAdverseResource ? "warning" : "neutral",
-    title,
-    summary: `${resources.length} returned${nonEmptyString(args?.group) ? ` · ${args.group}` : ""}`,
-    data: { type: "inventory", resources, scope },
-  });
+  // Listings of different things share an argument shape (a cluster-wide
+  // package list and a cluster-wide Helm list are both "{}"), so the tool is
+  // part of what makes one listing the same card as an earlier read.
+  builder.observe(
+    `inventory:${source.tool}:${source.args ?? scope}`,
+    "inventory",
+    source,
+    {
+      tier: "context",
+      relevance: "broader",
+      tone: hasAdverseResource ? "warning" : "neutral",
+      title,
+      summary: `${resources.length} returned${nonEmptyString(args?.group) ? ` · ${args.group}` : ""}`,
+      data: { type: "inventory", resources, scope },
+    },
+  );
 }

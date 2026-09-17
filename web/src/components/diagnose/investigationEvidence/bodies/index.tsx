@@ -1,5 +1,8 @@
 import type { MetricsChangeCoverage } from "../../investigationMetrics";
-import type { InvestigationEvidenceData } from "..";
+import type {
+  InvestigationEvidenceData,
+  InvestigationResourceSummary,
+} from "..";
 import { investigationResourceEvidenceHasDetails } from "../../investigationResourceEvidenceModel";
 import {
   CrashBody,
@@ -26,6 +29,7 @@ export function EvidenceBody({
   cardSummary,
   changeCoverage,
   condensed = false,
+  citedRows,
 }: {
   data: InvestigationEvidenceData;
   cardSummary?: string;
@@ -33,6 +37,8 @@ export function EvidenceBody({
   changeCoverage?: MetricsChangeCoverage;
   /** The card's title already names the stream: skip the repeated badges. */
   condensed?: boolean;
+  /** Listing rows the card's citations name; they lead the inventory. */
+  citedRows?: readonly InvestigationResourceSummary[];
 }) {
   switch (data.type) {
     case "issue":
@@ -58,7 +64,7 @@ export function EvidenceBody({
     case "topology":
       return <TopologyBody data={data} />;
     case "inventory":
-      return <InventoryBody data={data} />;
+      return <InventoryBody data={data} cited={citedRows} />;
     case "receipt":
       // The title and the scope above it are the answer. A body appears only
       // when it adds the reason or the limit, so an absent one renders nothing

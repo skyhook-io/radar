@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { groupsOf, project, tool } from "../evidenceFixtures";
 import { RankingBody } from "../bodies/ranking";
 import { PostureBody } from "../bodies/posture";
-import { InventoryBody } from "../bodies/inventory";
+import { InventoryBody, namedInventoryRows } from "../bodies/inventory";
 
 const targetBundle = {
   resource: {
@@ -301,6 +301,81 @@ describe("listing cards (helm releases, packages, search)", () => {
       name: "podinfo",
       status: "6.15.0 · Helm, Flux",
     });
+  });
+
+  it("keeps a cluster-wide Helm listing and a package listing as separate cards", () => {
+    const projection = project([
+      tool(
+        "helm",
+        "list_helm_releases",
+        [
+          {
+            name: "podinfo",
+            namespace: "shop",
+            chart: "podinfo",
+            chartVersion: "6.15.0",
+            status: "deployed",
+            revision: 1,
+            updated: "2026-09-07T07:00:00Z",
+          },
+        ],
+        { summary: JSON.stringify({}) },
+      ),
+      tool(
+        "pkgs",
+        "list_packages",
+        {
+          packages: [
+            {
+              chart: "podinfo",
+              namespace: "shop",
+              releaseName: "podinfo",
+              version: "6.15.0",
+              health: { status: "healthy" },
+              sources: ["H"],
+            },
+          ],
+          sourceLegend: { H: "Helm" },
+        },
+        { summary: JSON.stringify({}) },
+      ),
+    ]);
+    expect(
+      groupsOf(projection.groups, "inventory").map(
+        (group) => group.latest.title,
+      ),
+    ).toEqual(["Helm releases", "Installed packages"]);
+  });
+
+  it("leads a listing with the rows its citations name, named by the kind the agent knows them as", () => {
+    const rows = [
+      { kind: "Package", name: "argo-cd", status: "v3" },
+      { kind: "Package", name: "flux", status: "v2" },
+      { kind: "Package", namespace: "shop", name: "podinfo", status: "6.15.0" },
+    ];
+    const named = namedInventoryRows(rows, [
+      {
+        subject: {
+          group: "helm.toolkit.fluxcd.io",
+          kind: "HelmRelease",
+          namespace: "shop",
+          name: "podinfo",
+        },
+      },
+    ]);
+    expect(named).toEqual([
+      expect.objectContaining({ matches: 1, row: rows[2] }),
+    ]);
+    const html = renderToStaticMarkup(
+      <InventoryBody
+        data={{ type: "inventory", resources: rows, scope: "cluster" }}
+        cited={[rows[2]]}
+      />,
+    );
+    const first = html.indexOf("podinfo");
+    expect(html.indexOf('data-inventory-row="cited"')).toBeLessThan(first);
+    expect(first).toBeLessThan(html.indexOf("argo-cd"));
+    expect(html.match(/shop\/podinfo/g)).toHaveLength(1);
   });
 
   it("lists search hits with the field that matched, and renders it", () => {
