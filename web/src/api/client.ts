@@ -2048,6 +2048,36 @@ export function useCloudConnectSelf(enabled: boolean) {
   })
 }
 
+// What the driver-lane dialog learns about the cluster when it opens: the
+// chart's Deployments already carrying Cloud connection settings, so a
+// cluster that is already connected is pointed at rather than re-offered.
+export interface CloudInstallConnectedRadar {
+  namespace: string
+  deployment: string
+  release?: string
+  // The Hub the Deployment names, when it is not the one this Radar uses.
+  hubHost?: string
+  // The cluster's page in Radar Cloud, when its Hub is ours and its id is known.
+  clusterUrl?: string
+}
+
+export interface CloudInstallDiscovered {
+  connected: CloudInstallConnectedRadar[]
+  partialScan: boolean
+}
+
+// Keyed by context: a switch must not describe the previous cluster.
+export function useCloudInstallDiscover(enabled: boolean, contextName: string | undefined) {
+  return useQuery<CloudInstallDiscovered>({
+    queryKey: ['cloud-install-discover', contextName],
+    queryFn: () => fetchJSON('/cloud/install/discover'),
+    enabled,
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+  })
+}
+
 export function prepareCloudInstall(): Promise<CloudInstallStatus> {
   return fetchJSON('/cloud/install/prepare', { method: 'POST' })
 }

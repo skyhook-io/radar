@@ -18,12 +18,14 @@ import {
   ApiError,
   cloudInstallActive,
   type CloudConnectSelf,
+  type CloudInstallConnectedRadar,
   type CloudInstallBlocked,
   type CloudInstallStatus,
   prepareCloudInstall,
   useCapabilities,
   useCloudConnectInfo,
   useCloudConnectSelf,
+  useCloudInstallDiscover,
   useCloudInstallStatus,
   useClusterInfo,
 } from '../api/client'
@@ -109,6 +111,7 @@ export function CloudFunnelButton() {
   const prepareFailed = handoff?.retryable ?? false
 
   const capabilities = useCapabilities()
+  const clusterInfo = useClusterInfo()
   const lane = capabilities.data?.cloudConnect?.lane ?? 'wizard'
   const appUrl = capabilities.data?.cloudConnect?.appUrl || FALLBACK_APP_URL
   // utm_content names the link that was clicked. It travels only in the link
@@ -130,6 +133,13 @@ export function CloudFunnelButton() {
   // GitOps-owned install can be told the imperative command isn't for it.
   const inCluster = capabilities.data?.deployment?.mode === 'in-cluster'
   const self = useCloudConnectSelf(open && inCluster)
+
+  // Each time the dialog opens, look for a Radar in the cluster that already
+  // carries Cloud settings — installed by a colleague after a handoff, or from
+  // another machine. The plan would refuse to install over it; better to say
+  // "already connected" and point at it than to offer a click that ends blocked.
+  const discovered = useCloudInstallDiscover(open && lane === 'driver', clusterInfo.data?.context)
+  const alreadyConnected = discovered.data?.connected[0]
 
   // The flow is server-owned: polling here both drives the live progress view
   // and re-attaches to an ongoing flow after a reload or modal close.
@@ -234,7 +244,6 @@ export function CloudFunnelButton() {
   // relabel the CTA (and the link) for cluster B, and a blocked view left
   // armed would reopen on B with A's refusal, feeding it back into the
   // outcome on Back.
-  const clusterInfo = useClusterInfo()
   const contextName = clusterInfo.data?.context
   useEffect(() => {
     setHandoff(null)
@@ -330,6 +339,9 @@ export function CloudFunnelButton() {
               assurances={connectInfo.data?.assurances}
               notice={connectInfo.data?.notice}
               self={inCluster ? self.data : undefined}
+              clusterName={clusterInfo.data?.context}
+              alreadyConnected={alreadyConnected}
+              connectedCount={discovered.data?.connected.length ?? 0}
               // Also covers the capabilities query: until it resolves, lane
               // defaults to wizard and Radar does not yet know it is
               // in-cluster, so the CTA would escape before classification.
@@ -385,6 +397,9 @@ function ModalFooter({
   notice,
   self,
   selfLoading,
+  clusterName,
+  alreadyConnected,
+  connectedCount = 0,
   onConnect,
   onLater,
 }: {
@@ -402,6 +417,13 @@ function ModalFooter({
   self?: CloudConnectSelf
   // True while in-cluster self-classification is still in flight.
   selfLoading?: boolean
+  // The kubeconfig context, named under the CTA so the click is about a
+  // specific cluster — kept out of the button, whose width must not depend
+  // on the name.
+  clusterName?: string
+  // Driver lane: a Radar in the cluster that already carries Cloud settings.
+  alreadyConnected?: CloudInstallConnectedRadar
+  connectedCount?: number
   onConnect: () => void
   onLater: () => void
 }) {
@@ -458,8 +480,37 @@ function ModalFooter({
       {notice && (
         <div className="mb-3.5 card-inner p-3 text-[12px] leading-relaxed text-theme-text-secondary">{notice}</div>
       )}
+      {lane === 'driver' && alreadyConnected && (
+        <div className="mb-3.5 card-inner p-3 text-[12px] leading-relaxed text-theme-text-secondary">
+          <span className="font-semibold text-theme-text-primary">This cluster is already connected to Radar Cloud.</span>{' '}
+          Radar found release{' '}
+          <code className="font-mono text-[11px] text-theme-text-primary">{alreadyConnected.release || alreadyConnected.deployment}</code>{' '}
+          in namespace <code className="font-mono text-[11px] text-theme-text-primary">{alreadyConnected.namespace}</code>{' '}
+          {alreadyConnected.hubHost ? (
+            <>
+              configured for a Radar Cloud at{' '}
+              <code className="font-mono text-[11px] text-theme-text-primary">{alreadyConnected.hubHost}</code> — open that one to see
+              this cluster.
+            </>
+          ) : (
+            <>configured to connect. Open Radar Cloud to see it; if it isn’t there, its page shows the recovery options.</>
+          )}
+          {connectedCount > 1 && <> {connectedCount - 1} more install{connectedCount > 2 ? 's' : ''} carry Cloud settings too.</>}
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2.5">
-        {lane === 'driver' ? (
+        {lane === 'driver' && alreadyConnected ? (
+          alreadyConnected.clusterUrl && (
+            <a
+              href={alreadyConnected.clusterUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="whitespace-nowrap px-6 py-2.5 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[14px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all"
+            >
+              Open in Radar Cloud
+            </a>
+          )
+        ) : lane === 'driver' ? (
           <>
             <button
               onClick={onConnect}
@@ -494,7 +545,7 @@ function ModalFooter({
           </a>
         )}
         <button onClick={onLater} className="ml-auto whitespace-nowrap text-[12px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">
-          Maybe later
+          {lane === 'driver' && alreadyConnected ? 'Close' : 'Maybe later'}
         </button>
       </div>
       {/* The last attempt's stop, when Radar could not even inspect the
@@ -508,10 +559,11 @@ function ModalFooter({
       )}
       {/* Mechanics, not marketing: a falsifiable claim the plan card then
           fulfills. Sits next to the button whose click it de-risks. */}
-      {lane === 'driver' && (
+      {lane === 'driver' && !alreadyConnected && (
         <p className="mt-2.5 text-[11px] leading-relaxed text-theme-text-tertiary">
-          Nothing installs on click. Radar inspects the cluster and shows you a plan; you approve it in
-          the browser before anything changes.
+          Nothing installs on click. Radar inspects{' '}
+          {clusterName ? <span className="text-theme-text-secondary">{clusterName}</span> : 'the cluster'} and shows
+          you a plan; you approve it in the browser before anything changes.
         </p>
       )}
       {/* A 2-column grid, not flex-wrap: the long data-locality chip cannot

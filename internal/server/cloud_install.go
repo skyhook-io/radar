@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -135,6 +136,9 @@ type cloudInstallBackend struct {
 	captureClients   func() (cloudInstallClients, string, error)
 	contextSource    func(name string) (sourceFile, inFileName string, ok bool)
 	inspectPlan      func(ctx context.Context, c cloudInstallClients, namespace, release string) (cloudinstall.InstallPlan, error)
+	// discover is the workload half of inspectPlan on its own: the chart's
+	// Deployments and what their args say, without reading Helm storage.
+	discover func(ctx context.Context, c cloudInstallClients) (cloudinstall.DiscoveryResult, error)
 	prepare          func(ctx context.Context, c cloudInstallClients, cfg cloudinstall.PrepareConfig) (preparedInstall, error)
 	preflight        func(ctx context.Context, c cloudInstallClients, prepared preparedInstall) (cloudinstall.PreflightResult, error)
 	provision        func(ctx context.Context, c cloudInstallClients, prepared preparedInstall, cfg cloudinstall.ProvisionConfig) error
@@ -316,6 +320,11 @@ func newCloudInstallManager(cfg CloudConnectConfig) *cloudInstallManager {
 		inspectPlan: func(ctx context.Context, c cloudInstallClients, namespace, release string) (cloudinstall.InstallPlan, error) {
 			return cloudinstall.InspectInstallPlan(ctx, c.Kubernetes, c.Dynamic, c.Helm, namespace, release, false)
 		},
+		discover: func(ctx context.Context, c cloudInstallClients) (cloudinstall.DiscoveryResult, error) {
+			return cloudinstall.DiscoverRadarTargets(ctx, c.Kubernetes, c.Dynamic, cloudinstall.DiscoveryOptions{
+				Namespace: cloudinstall.DefaultInstallNamespace, ReleaseName: cloudinstall.DefaultReleaseName, ClusterWide: true,
+			})
+		},
 		prepare: func(ctx context.Context, c cloudInstallClients, cfg cloudinstall.PrepareConfig) (preparedInstall, error) {
 			return cloudinstall.Prepare(ctx, c.Helm, c.Kubernetes, cfg)
 		},
@@ -399,6 +408,75 @@ func (m *cloudInstallManager) commandTarget(contextName string) cloudinstall.Com
 // prepare runs discovery → classification → chart prepare → preflight, with no
 // Hub contact. On success the flow is retained in "ready"; a blocked result
 // retains nothing.
+// cloudInstallDiscovered is what the dialog learns about the cluster when it
+// opens, before anyone clicks: the chart's Deployments that already carry
+// Cloud connection settings. A person whose cluster is already connected —
+// by a colleague, or by themselves from another machine — is told so and
+// pointed at it, instead of being offered an install that would be refused.
+type cloudInstallDiscovered struct {
+	Connected []cloudInstallConnectedRadar `json:"connected"`
+	// PartialScan: listing Deployments cluster-wide was refused, so only the
+	// default namespace was checked.
+	PartialScan bool `json:"partialScan"`
+}
+
+type cloudInstallConnectedRadar struct {
+	Namespace  string `json:"namespace"`
+	Deployment string `json:"deployment"`
+	Release    string `json:"release,omitempty"`
+	// HubHost is the Hub the Deployment's --cloud-url names, when it is one
+	// other than the Hub this Radar is configured for.
+	HubHost string `json:"hubHost,omitempty"`
+	// ClusterURL is the cluster's page in the configured Hub's frontend, when
+	// the Deployment names that Hub and its cluster id is a literal value.
+	ClusterURL string `json:"clusterUrl,omitempty"`
+}
+
+func (m *cloudInstallManager) discoverConnected(ctx context.Context) (*cloudInstallDiscovered, error) {
+	clients, _, err := m.backend.captureClients()
+	if err != nil {
+		return nil, err
+	}
+	result, err := m.backend.discover(ctx, clients)
+	if err != nil {
+		return nil, err
+	}
+	out := &cloudInstallDiscovered{Connected: []cloudInstallConnectedRadar{}, PartialScan: result.ClusterWideError != nil}
+	for _, t := range cloudinstall.DiscoveredTargets(result, false) {
+		if !t.Runtime.AlreadyCloud {
+			continue
+		}
+		out.Connected = append(out.Connected, m.connectedRadar(t))
+	}
+	return out, nil
+}
+
+// connectedRadar links a Deployment to its cluster page only when its
+// --cloud-url names the Hub this Radar is configured for: the frontend origin
+// of any other Hub is not derivable from its API origin, so that one is named
+// by host and not linked.
+func (m *cloudInstallManager) connectedRadar(t cloudinstall.RadarTarget) cloudInstallConnectedRadar {
+	c := cloudInstallConnectedRadar{Namespace: t.Namespace, Deployment: t.DeploymentName, Release: t.ReleaseName}
+	rt := t.Runtime
+	if !rt.CloudURLConfigured || rt.CloudURLUnresolved || rt.CloudURL == "" {
+		return c
+	}
+	target, err := url.Parse(rt.CloudURL)
+	if err != nil || target.Host == "" {
+		return c
+	}
+	if configured, err := url.Parse(m.cfg.HubAPIURL); err != nil || !strings.EqualFold(configured.Host, target.Host) {
+		c.HubHost = target.Host
+		return c
+	}
+	if rt.ClusterNameConfigured && !rt.ClusterNameUnresolved && rt.ClusterName != "" {
+		c.ClusterURL = cloud.ClusterURL(m.cfg.HubAppURL, rt.ClusterName)
+	} else {
+		c.ClusterURL = cloud.ClustersURL(m.cfg.HubAppURL)
+	}
+	return c
+}
+
 func (m *cloudInstallManager) prepare(ctx context.Context) (*cloudInstallFlow, *cloudInstallBlocked, error) {
 	flow := &cloudInstallFlow{id: newCloudFlowID(), state: cloudFlowPreparing}
 	m.mu.Lock()
@@ -1029,6 +1107,25 @@ func (s *Server) handleCloudInstallPrepare(w http.ResponseWriter, r *http.Reques
 		_ = flow
 		s.writeJSON(w, s.cloudInstall.status())
 	}
+}
+
+func (s *Server) handleCloudInstallDiscover(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCloudConnectDriver(w, r, false) {
+		return
+	}
+	if !s.requireConnected(w) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), cloudInstallRequestTimeout)
+	defer cancel()
+	discovered, err := s.cloudInstall.discoverConnected(ctx)
+	w.Header().Set("Cache-Control", "no-store")
+	if err != nil {
+		log.Printf("[cloud-install] discover failed: %v", err)
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, discovered)
 }
 
 func (s *Server) handleCloudInstallStart(w http.ResponseWriter, r *http.Request) {

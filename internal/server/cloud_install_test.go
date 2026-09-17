@@ -1058,3 +1058,50 @@ func TestGitOpsBlockedCarriesTheVerifiedOwnersMethod(t *testing.T) {
 		t.Fatal("a stale-only candidate list must not pick a method")
 	}
 }
+
+func TestDiscoverConnectedNamesAlreadyCloudDeployments(t *testing.T) {
+	m := newCloudInstallManager(CloudConnectConfig{HubAPIURL: "https://api.test.example", HubAppURL: "https://app.test.example"})
+	m.backend.captureClients = func() (cloudInstallClients, string, error) { return cloudInstallClients{}, "kind-dev", nil }
+	m.backend.discover = func(context.Context, cloudInstallClients) (cloudinstall.DiscoveryResult, error) {
+		return cloudinstall.DiscoveryResult{
+			Namespace: []cloudinstall.RadarTarget{
+				{Namespace: "radar", DeploymentName: "radar", ReleaseName: "radar", Runtime: cloudinstall.DeploymentRuntime{
+					AlreadyCloud: true, CloudURLConfigured: true, CloudURL: "wss://api.test.example/agent",
+					ClusterNameConfigured: true, ClusterName: "abc123",
+				}},
+			},
+			ClusterWide: []cloudinstall.RadarTarget{
+				{Namespace: "tools", DeploymentName: "radar", ReleaseName: "radar", Runtime: cloudinstall.DeploymentRuntime{}},
+				{Namespace: "ops", DeploymentName: "radar", Runtime: cloudinstall.DeploymentRuntime{
+					AlreadyCloud: true, CloudURLConfigured: true, CloudURL: "wss://hub.corp.example/agent",
+					ClusterNameConfigured: true, ClusterName: "def456",
+				}},
+				{Namespace: "staging", DeploymentName: "radar", ReleaseName: "radar", Runtime: cloudinstall.DeploymentRuntime{
+					AlreadyCloud: true, CloudURLConfigured: true, CloudURL: "wss://api.test.example/agent",
+					ClusterNameConfigured: true, ClusterNameUnresolved: true,
+				}},
+			},
+			ClusterWideError: errors.New("forbidden"),
+		}, nil
+	}
+
+	got, err := m.discoverConnected(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.PartialScan {
+		t.Fatal("a refused cluster-wide list must be reported as a partial scan")
+	}
+	if len(got.Connected) != 3 {
+		t.Fatalf("connected = %+v, want the three Deployments carrying Cloud settings", got.Connected)
+	}
+	if got.Connected[0].ClusterURL != "https://app.test.example/c/abc123" || got.Connected[0].HubHost != "" {
+		t.Errorf("configured Hub + literal cluster id should deep-link: %+v", got.Connected[0])
+	}
+	if got.Connected[1].ClusterURL != "" || got.Connected[1].HubHost != "hub.corp.example" {
+		t.Errorf("another Hub is named by host, never linked through ours: %+v", got.Connected[1])
+	}
+	if got.Connected[2].ClusterURL != "https://app.test.example/clusters" {
+		t.Errorf("a cluster id read from a Secret ref falls back to the clusters list: %+v", got.Connected[2])
+	}
+}

@@ -554,6 +554,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// the gate (local + no auth + no tunnel). prepare/start are
 			// registered above, outside the 60s timeout.
 			r.Get("/cloud/install/status", s.handleCloudInstallStatus)
+			r.Get("/cloud/install/discover", s.handleCloudInstallDiscover)
 			r.Post("/cloud/install/cancel", s.handleCloudInstallCancel)
 			r.Post("/cloud/install/dismiss", s.handleCloudInstallDismiss)
 			r.Get("/cloud/connect/self", s.handleCloudConnectSelf)
