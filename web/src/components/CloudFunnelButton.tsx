@@ -501,7 +501,7 @@ function ModalFooter({
       {lane === 'driver' && alreadyConnected && (
         <div className="mb-3.5 card-inner p-3 text-[12px] leading-relaxed text-theme-text-secondary">
           <span className="font-semibold text-theme-text-primary">This cluster is already connected to Radar Cloud.</span>{' '}
-          Radar found release{' '}
+          Found release{' '}
           <code className="font-mono text-[11px] text-theme-text-primary">{alreadyConnected.release || alreadyConnected.deployment}</code>{' '}
           in namespace <code className="font-mono text-[11px] text-theme-text-primary">{alreadyConnected.namespace}</code>{' '}
           {alreadyConnected.hubHost ? (
