@@ -301,6 +301,43 @@ describe("agent case placement (D-1, D-1b)", () => {
     ]);
   });
 
+  it("places a Namespace citation on a namespace listing, whose call names no kind", () => {
+    const nsRef = evidenceRef("g", "h");
+    const withNamespaces = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "ns",
+        "list_namespaces",
+        [
+          { name: "shop", status: "Active" },
+          { name: "capi-system", status: "Terminating" },
+        ],
+        { evidenceRef: nsRef, summary: "{}" },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      withNamespaces,
+      {
+        evidence: [
+          linked(nsRef, "context", "Only two namespaces exist.", {
+            kind: "Namespace",
+            observation: "resource",
+          }),
+          linked(nsRef, "rules_out", "shop is not terminating.", {
+            kind: "Namespace",
+            name: "shop",
+            observation: "resource",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items.map((item) => item.placement)).toEqual([
+      "card",
+      "card",
+    ]);
+  });
+
   it("pins a subject-bearing item to exactly the observation it names", () => {
     const resolved = resolveInvestigationCase(
       projection,

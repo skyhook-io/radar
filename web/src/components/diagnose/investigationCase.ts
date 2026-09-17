@@ -274,6 +274,18 @@ function observationSubjectIdentity(
     };
   }
   const args = investigationSourceArgs(observation.source);
+  // A listing whose call names no kind (list_namespaces) is still a listing
+  // of the one kind its rows carry.
+  if (data.type === "inventory" && !nonEmptyString(args?.kind)) {
+    const kinds = new Set(data.resources.map((resource) => resource.kind));
+    if (kinds.size !== 1) return undefined;
+    return {
+      kind: [...kinds][0],
+      namespace: nonEmptyString(args?.namespace) ? args.namespace : undefined,
+      name: "",
+      listing: true,
+    };
+  }
   if (!args || !nonEmptyString(args.kind)) return undefined;
   return {
     kind: args.kind,
