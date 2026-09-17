@@ -2,7 +2,6 @@ import { type ReactNode, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { AlertTriangle, ArrowUpRight, Check, Copy, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
 import { type AdminNoteContext, type BlockedExit, composeAdminNote } from './cloudConnectHandoff'
-import { Tooltip } from './ui/Tooltip'
 import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import {
@@ -88,6 +87,11 @@ function BlockedView({
   // tooltip shows exactly what will be copied.
   const note = composeAdminNote(blocked, exit, where)
   const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
+  // The preview is a block of text laid over the card, not a hint: the
+  // shared tooltip's translucent dark chip at 320px would need scrolling and
+  // sit poorly on the card, so this is its own panel — card-wide, on the
+  // elevated surface, sized to the note.
+  const [previewing, setPreviewing] = useState(false)
   const copyForAdmin = () => {
     // copyText also serves Radar on a plain-HTTP non-loopback address, where
     // the async Clipboard API is missing and the legacy command still works.
@@ -118,7 +122,21 @@ function BlockedView({
           <BlockedSection label="What to do">{copy.next}</BlockedSection>
         </div>
       </div>
-      <div className="mt-4 flex items-center gap-4">
+      <div className="relative mt-4 flex items-center gap-4">
+        {previewing && (
+          <div
+            id="blocked-admin-note-preview"
+            role="tooltip"
+            className="absolute inset-x-0 bottom-full z-20 mb-3 rounded-xl border border-theme-border bg-theme-elevated p-4 shadow-theme-lg"
+          >
+            <div className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+              What gets copied
+            </div>
+            <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-theme-text-primary">
+              {note}
+            </pre>
+          </div>
+        )}
         <a
           href={exit.href}
           target="_blank"
@@ -127,39 +145,28 @@ function BlockedView({
         >
           {exit.label}
         </a>
-        <Tooltip
-          position="top"
-          delay={200}
-          className="max-w-md"
-          content={
-            <div className="space-y-1.5">
-              <div className="text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
-                What gets copied
-              </div>
-              <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[10.5px] leading-snug text-theme-text-secondary">
-                {note}
-              </pre>
-            </div>
-          }
+        <button
+          type="button"
+          onClick={copyForAdmin}
+          onMouseEnter={() => setPreviewing(true)}
+          onMouseLeave={() => setPreviewing(false)}
+          onFocus={() => setPreviewing(true)}
+          onBlur={() => setPreviewing(false)}
+          aria-describedby={previewing ? 'blocked-admin-note-preview' : undefined}
+          className="inline-flex items-center gap-1.5 text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary transition-colors"
         >
-          <button
-            type="button"
-            onClick={copyForAdmin}
-            className="inline-flex items-center gap-1.5 text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary transition-colors"
-          >
-            {copied === 'done' ? (
-              <>
-                <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Copied
-              </>
-            ) : copied === 'failed' ? (
-              'Couldn’t copy — select the text above'
-            ) : (
-              <>
-                <Copy className="w-3.5 h-3.5" /> Copy for a cluster admin
-              </>
-            )}
-          </button>
-        </Tooltip>
+          {copied === 'done' ? (
+            <>
+              <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Copied
+            </>
+          ) : copied === 'failed' ? (
+            'Couldn’t copy — select the text above'
+          ) : (
+            <>
+              <Copy className="w-3.5 h-3.5" /> Copy for a cluster admin
+            </>
+          )}
+        </button>
         <button
           onClick={onExit}
           className="ml-auto text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
