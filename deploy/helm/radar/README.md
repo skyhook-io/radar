@@ -220,7 +220,7 @@ trend charts remain unavailable for Kubecost.
 | `resources.requests.cpu` | CPU request | `200m` |
 | `resources.requests.memory` | Memory request | `256Mi` |
 | `resources.limits.cpu` | CPU limit | `2` |
-| `resources.limits.memory` | Memory limit. Radar sets `GOMEMLIMIT` to 75% of the container's cgroup limit at startup, so the GC collects harder as it approaches the limit; set `GOMEMLIMIT` under `env` to override | `1Gi` |
+| `resources.limits.memory` | Memory limit. Radar sets `GOMEMLIMIT` to 85% of the container's cgroup limit at startup, so the GC collects harder as it approaches the limit; set `GOMEMLIMIT` under `env` to override | `1Gi` |
 
 See `values.yaml` for all configuration options.
 

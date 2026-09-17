@@ -10,27 +10,30 @@ import (
 	"context"
 	"log"
 	"math"
+	"os"
 	"runtime/debug"
 	"time"
 )
 
 const (
 	// headroom is the fraction of the cgroup limit handed to GOMEMLIMIT. The
-	// limit governs Go-managed memory only (heap, stacks, runtime structures),
-	// not total RSS, and the GC death-spirals when pinned right at the OOM
-	// boundary.
-	headroom = 0.75
+	// limit governs Go-managed memory only (heap, stacks, runtime structures);
+	// the binary's mapped pages, SQLite's own allocator and page cache also
+	// count against the cgroup, and the GC death-spirals when pinned right at
+	// the OOM boundary.
+	headroom = 0.85
 	// refreshInterval bounds how long an in-place pod resize goes unnoticed.
 	refreshInterval = 30 * time.Second
 )
 
 // Apply sets GOMEMLIMIT from the cgroup memory limit when one is readable and
 // keeps it in sync with in-place changes for the life of ctx. An explicit
-// GOMEMLIMIT env var wins, and a process outside a cgroup limit (a laptop, a
-// pod with no limit set) is left alone: there is no sensible default that is
-// right for both a 16Gi workstation and a 256Mi sidecar.
+// GOMEMLIMIT env var wins — including GOMEMLIMIT=off, which the runtime reports
+// the same as unset — and a process outside a cgroup limit (a laptop, a pod
+// with no limit set) is left alone: there is no sensible default that is right
+// for both a 16Gi workstation and a 256Mi sidecar.
 func Apply(ctx context.Context) {
-	if debug.SetMemoryLimit(-1) != math.MaxInt64 {
+	if os.Getenv("GOMEMLIMIT") != "" || debug.SetMemoryLimit(-1) != math.MaxInt64 {
 		return
 	}
 	target, ok := fromCgroup()
@@ -50,8 +53,9 @@ func fromCgroup() (int64, bool) {
 	return int64(float64(limit) * headroom), true
 }
 
-// refresh only acts on a successful cgroup read, so a transient read failure
-// keeps the current value rather than flapping.
+// refresh follows the cgroup limit, including its removal: a limit that has
+// gone away hands the runtime back to its default rather than pinning the GC
+// to a cap nobody enforces any more.
 func refresh(ctx context.Context, current int64) {
 	ticker := time.NewTicker(refreshInterval)
 	defer ticker.Stop()
@@ -61,11 +65,18 @@ func refresh(ctx context.Context, current int64) {
 			return
 		case <-ticker.C:
 			desired, ok := fromCgroup()
-			if !ok || desired == current {
+			if !ok {
+				desired = math.MaxInt64
+			}
+			if desired == current {
 				continue
 			}
 			debug.SetMemoryLimit(desired)
-			log.Printf("[memlimit] GOMEMLIMIT updated %dMiB -> %dMiB after cgroup limit change", current>>20, desired>>20)
+			if ok {
+				log.Printf("[memlimit] GOMEMLIMIT updated %dMiB -> %dMiB after cgroup limit change", current>>20, desired>>20)
+			} else {
+				log.Printf("[memlimit] GOMEMLIMIT cleared: cgroup memory limit removed")
+			}
 			current = desired
 		}
 	}
