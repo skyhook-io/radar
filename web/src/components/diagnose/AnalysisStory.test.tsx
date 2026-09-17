@@ -143,6 +143,41 @@ describe("resolveStoryPlacements", () => {
     expect(story.byIndex.get(1)?.kind).toBe("placed");
   });
 
+  it("keeps the agent's own-line placement when a twin item on the same card was mentioned inline first", () => {
+    const story = resolveStoryPlacements(
+      "Inline [[radar:evidence=1]] first.\n\nLater:\n\n[[radar:evidence=0]]",
+      resolver({ 0: target(0, "a"), 1: target(1, "a") }),
+    );
+    expect(story.segments.map((segment) => segment.kind)).toEqual([
+      "prose",
+      "prose",
+      "placement",
+    ]);
+    expect(story.byIndex.get(1)?.kind).toBe("reference");
+    expect(story.placedAt.get(1)).toBe(2);
+    expect(story.placedCount).toBe(1);
+  });
+
+  it("points a chip past the placement cap down, to Captured results", () => {
+    const table: Record<number, StoryPlacementTarget | StoryPlacementLoss> = {};
+    for (let i = 0; i < 8; i += 1) table[i] = target(i, `o${i}`);
+    const markers = Array.from(
+      { length: 6 },
+      (_, i) => `[[radar:evidence=${i}]]`,
+    ).join("\n\n");
+    const html = renderToStaticMarkup(
+      <AnalysisStory
+        report={`${markers}\n\nSee [[radar:evidence=7]] here.`}
+        resolveItem={resolver(table)}
+        renderPlacement={() => <div data-card>card</div>}
+        onReveal={vi.fn()}
+        defaultOpen
+      />,
+    );
+    expect(html.match(/data-card/g)).toHaveLength(6);
+    expect(html).toContain('data-story-ref-direction="down"');
+  });
+
   it("caps placed cards and reports every distinct lost item once", () => {
     const markers = Array.from(
       { length: 8 },

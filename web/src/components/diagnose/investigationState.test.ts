@@ -1148,6 +1148,7 @@ describe("investigationHealthSignals twins across scopes", () => {
     patch: {
       relevance?: "target" | "producer-related" | "broader";
       events?: (typeof warning)[];
+      turnIndex?: number;
     } = {},
   ) => ({
     id,
@@ -1161,7 +1162,7 @@ describe("investigationHealthSignals twins across scopes", () => {
       title: "Kubernetes events",
       summary: `${warning.reason}: ${warning.message} · ${identity}`,
       data: { type: "events", events: patch.events ?? [warning] },
-      source: { turnIndex: 0, id },
+      source: { turnIndex: patch.turnIndex ?? 0, id },
     },
   });
   const benignOnPod = [
@@ -1192,6 +1193,38 @@ describe("investigationHealthSignals twins across scopes", () => {
     expect(
       investigationHealthConflictExplainedBy({ groups }, benignOnPod),
     ).toEqual(["Kubernetes events", "Kubernetes events"]);
+  });
+
+  it("does not let an earlier turn's note on the Pod explain the Deployment's copy captured later", () => {
+    const groups = [
+      eventsGroup("events-deploy", "deployment demo/podinfo", { turnIndex: 1 }),
+      eventsGroup("events-pod", "pod demo/podinfo-676569b68b-6278c"),
+    ];
+    expect(
+      investigationHealthSignals({ groups }, benignOnPod).map((signal) => [
+        signal.groupId,
+        signal.status,
+      ]),
+    ).toEqual([
+      ["events-deploy", "unaddressed"],
+      ["events-pod", "explained"],
+    ]);
+  });
+
+  it("never twins a cluster-scoped card with a namespaced one", () => {
+    const groups = [
+      eventsGroup("events-node", "node worker-1"),
+      eventsGroup("events-pod", "pod demo/podinfo-676569b68b-6278c"),
+    ];
+    expect(
+      investigationHealthSignals({ groups }, benignOnPod).map((signal) => [
+        signal.groupId,
+        signal.status,
+      ]),
+    ).toEqual([
+      ["events-node", "unaddressed"],
+      ["events-pod", "explained"],
+    ]);
   });
 
   it("does not let a card with one warning explain a card that carries that warning and another", () => {

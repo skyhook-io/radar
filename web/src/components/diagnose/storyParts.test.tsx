@@ -283,6 +283,38 @@ describe("assessmentCopyText", () => {
       text.indexOf("Still open:"),
     );
   });
+  it("names the recommended step and counts the rest for a legacy remediation list", () => {
+    const text = assessmentCopyText(
+      {
+        ...storyDiagnosis,
+        steps: undefined,
+        remediation: ["a", "b", "c"],
+        recommendedIndex: 2,
+      },
+      { context: { target: "Deployment shop/api" } },
+    );
+    expect(text).toContain("Next step: b");
+    expect(text).toContain("2 more steps in Radar.");
+  });
+
+  it("puts the healthy word on the headline and the flags before Still open", () => {
+    const text = assessmentCopyText(
+      {
+        ...storyDiagnosis,
+        healthy: true,
+        summary: "Fine.",
+        rootCause: "",
+        unresolved: ["One thing."],
+      },
+      { flags: ["Radar flagged BackOff · no explanation is linked to it"] },
+    );
+    expect(text).toContain("**Fine.**");
+    expect(text).toContain("Healthy");
+    expect(text.indexOf("Radar flagged:")).toBeLessThan(
+      text.indexOf("Still open:"),
+    );
+  });
+
   it("copies the headline with its caveats, cause, story and steps", () => {
     const text = assessmentCopyText(storyDiagnosis);
     expect(text).toContain("**The app cannot log in to its database");

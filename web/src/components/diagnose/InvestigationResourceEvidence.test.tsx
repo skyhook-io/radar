@@ -16,6 +16,21 @@ function render(resource: InvestigationKubernetesResource): string {
 }
 
 describe("InvestigationResourceEvidence", () => {
+  it("hides a multi-line sensitive value instead of rendering it as a block", () => {
+    const html = render({
+      apiVersion: "v1",
+      kind: "ConfigMap",
+      metadata: { namespace: "dev", name: "certs" },
+      data: {
+        "tls.key":
+          "-----BEGIN RSA PRIVATE KEY-----\nMIIEabc\n-----END RSA PRIVATE KEY-----",
+      },
+    });
+    expect(html).toContain("Value hidden");
+    expect(html).not.toMatch(/<pre[^>]*>-----BEGIN/);
+    expect(html).not.toContain("MIIEabc");
+  });
+
   it("renders a file-shaped ConfigMap value as a block under its key", () => {
     const html = render({
       apiVersion: "v1",

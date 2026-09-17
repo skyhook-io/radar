@@ -65,7 +65,6 @@ export function resolveStoryPlacements(
   // The segment position that renders each placed index's card; a repeated
   // marker for the same index is a reference back to it, not a second card.
   const placedAt = new Map<number, number>();
-  const placedObservations = new Set<string>();
   const lostIndexes = new Set<number>();
   let placedCount = 0;
   // A marker on its own line places its card there. A marker inside a
@@ -97,20 +96,34 @@ export function resolveStoryPlacements(
     resolved.item.observation
       ? `${resolved.item.groupId ?? ""}|${resolved.item.observation.source.id}#${resolved.item.observation.revision}`
       : `item-${index}`;
+  // Two items on one observation (a twin) share its card: the second points
+  // at the card the first placed, wherever that is.
+  const positionByKey = new Map<string, number>();
   const place = (
     index: number,
     resolved: StoryPlacementTarget,
     position: number,
   ): boolean => {
     const key = observationKey(index, resolved);
-    if (placedObservations.has(key) || placedCount >= MAX_STORY_PLACEMENTS)
+    const twin = positionByKey.get(key);
+    if (twin !== undefined) {
+      placedAt.set(index, twin);
       return false;
-    placedObservations.add(key);
+    }
+    if (placedCount >= MAX_STORY_PLACEMENTS) return false;
+    positionByKey.set(key, position);
     placedCount += 1;
     placedAt.set(index, position);
     byIndex.set(index, { kind: "placed", target: resolved });
     return true;
   };
+  // An observation the agent places on its own line somewhere keeps that
+  // spot even when a twin item on it is mentioned inline first.
+  const blockKeys = new Set<string>();
+  for (const index of blockIndexes) {
+    const resolved = target(index);
+    if (resolved) blockKeys.add(observationKey(index, resolved));
+  }
   const segments: StorySegment[] = [];
   for (const segment of written) {
     if (segment.kind === "placement") {
@@ -126,7 +139,13 @@ export function resolveStoryPlacements(
     for (const match of markdown.matchAll(/#radar-evidence-(-?\d+)\)/g)) {
       const index = Number(match[1]);
       const resolved = target(index);
-      if (!resolved || blockIndexes.has(index) || placedAt.has(index)) continue;
+      if (
+        !resolved ||
+        blockIndexes.has(index) ||
+        blockKeys.has(observationKey(index, resolved)) ||
+        placedAt.has(index)
+      )
+        continue;
       // The card lands right under this paragraph, so the sentence keeps its
       // words and drops the marker: the card's own title says what it is.
       if (place(index, resolved, segments.length + 1 + autoPlaced.length))
@@ -146,6 +165,13 @@ export function resolveStoryPlacements(
     segments.push({ kind: "prose", markdown });
     for (const index of autoPlaced)
       segments.push({ kind: "placement", index, auto: true });
+  }
+  // A twin item that was only ever mentioned inline still points at the card
+  // its sibling placed.
+  for (const [index, resolution] of byIndex) {
+    if (resolution.kind !== "reference" || placedAt.has(index)) continue;
+    const at = positionByKey.get(observationKey(index, resolution.target));
+    if (at !== undefined) placedAt.set(index, at);
   }
   return {
     segments,
@@ -234,6 +260,7 @@ function ReferenceChip({
     <button
       type="button"
       onClick={() => onReveal(target)}
+      data-story-ref-direction={direction}
       className="inline-flex max-w-full items-baseline gap-1 rounded border border-theme-border bg-theme-base px-1.5 py-px align-baseline text-[11px] font-medium text-accent-text hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
       aria-label={`Show ${title}`}
     >
@@ -346,7 +373,7 @@ export function AnalysisStory({
       <ReferenceChip
         target={resolution.target}
         onReveal={onReveal}
-        direction={at !== undefined && at > position ? "down" : "up"}
+        direction={at === undefined || at > position ? "down" : "up"}
       />
     );
   };

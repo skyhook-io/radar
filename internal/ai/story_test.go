@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/skyhook-io/radar/internal/investigationrefs"
 )
@@ -73,6 +74,20 @@ func TestClampSummary_DoesNotCutAtADecimalPoint(t *testing.T) {
 	got := clampSummary(first+" Restarting has been failing for about 6.5 hours.", 240)
 	if !strings.HasSuffix(got, "available.") {
 		t.Fatalf("clamp should back up to the previous sentence, got %q", got)
+	}
+}
+
+func TestClampSummary_CutsAtAWordWhenNoSentenceEnds(t *testing.T) {
+	got := clampSummary(strings.Repeat("word ", 40)+"tail", 180)
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("expected an ellipsis, got %q", got)
+	}
+	body := strings.TrimSuffix(got, "…")
+	if strings.HasSuffix(body, " ") || !strings.HasSuffix(body, "word") {
+		t.Fatalf("expected the clamp to end on a whole word with no trailing space, got %q", got)
+	}
+	if utf8.RuneCountInString(got) > 181 {
+		t.Fatalf("expected at most the limit plus the ellipsis, got %d runes", utf8.RuneCountInString(got))
 	}
 }
 
