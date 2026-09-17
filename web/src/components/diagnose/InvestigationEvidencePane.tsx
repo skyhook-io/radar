@@ -1795,10 +1795,8 @@ function EvidenceCard({
             {observation.title}
           </span>
           {storyCard
-            ? cardItems.map((item) =>
-                item.role ? (
-                  <AgentRoleChip key={item.index} role={item.role} />
-                ) : null,
+            ? [...new Set(cardItems.map((item) => item.role))].map((role) =>
+                role ? <AgentRoleChip key={role} role={role} /> : null,
               )
             : null}
         </span>
