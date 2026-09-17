@@ -100,7 +100,7 @@ export function adaptTopResources(
     relevance,
     tone: "neutral",
     title: `Top ${value.kind} by ${sort}`,
-    summary: `${rows.length} ranked${targetRows > 0 ? ` · ${targetRows === 1 ? "this workload's row" : `${targetRows} of its pods`} marked` : ""} · ${scope}`,
+    summary: `${rows.length} ranked${targetRows > 0 ? ` · ${targetRows === 1 ? "this workload's row" : `${targetRows} of its pods`} marked` : ""} · ${nonEmptyString(args?.namespace) ? `in ${args.namespace}` : "cluster-wide"}`,
     data: { type: "ranking", kind: value.kind, sort, rows, scope },
   });
 }
