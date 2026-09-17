@@ -23,7 +23,7 @@ import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
 import { MyPermissionsContent } from './MyPermissionsDialog'
 import { PrivacySection } from './PrivacySection'
 import { ConfigToggle, SubHeading } from './controls'
-import { useDiagnose } from '../diagnose/DiagnoseContext'
+import { useDiagnose, type DiagnoseSetup } from '../diagnose/DiagnoseContext'
 import { currencyOptionsForValue } from './currency-options'
 import { UpdateNotification } from '../ui/UpdateNotification'
 import {
@@ -924,7 +924,7 @@ export function SettingsDialog({
                   )}
                 </div>
               ) : (
-                <AIUnavailableNotice />
+                <AIUnavailableNotice setupState={diag.setupState} />
               )}
             </div>
 
@@ -1417,11 +1417,41 @@ function OverviewStatus({ tone }: { tone: OverviewTone }) {
   return <span className={clsx('w-2 h-2 rounded-full shrink-0', cls)} />
 }
 
-// AIUnavailableNotice is the body of the AI investigations tab when no supported agent
-// CLI is installed — the heading/description are provided by the tab itself, so
-// this is just the enable explainer (keeping the feature discoverable to whoever
-// would set it up).
-function AIUnavailableNotice() {
+// AIUnavailableNotice is the body of the AI investigations tab when the agent,
+// model and effort controls have nothing to configure. The tab supplies the
+// heading, so this is just the explainer.
+//
+// It must say WHICH of the reasons applies. "No supported agent CLI found" is a
+// claim about the user's machine, and on the needs-restart path it is false: the
+// CLI was detected, Radar just resolved its engine before that happened.
+function AIUnavailableNotice({ setupState }: { setupState: DiagnoseSetup }) {
+  if (setupState === 'off') {
+    return (
+      <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
+        <p className="text-sm font-medium text-theme-text-primary">
+          Not available in this deployment
+        </p>
+        <p className="mt-1 text-xs text-theme-text-tertiary">
+          Investigations run a local agent CLI against Radar&apos;s own MCP endpoint, which
+          needs MCP mounted and authentication disabled. A Radar started with{' '}
+          <span className="font-mono">--no-mcp</span>, or with authentication on, can&apos;t
+          offer them.
+        </p>
+      </div>
+    )
+  }
+  if (setupState === 'needs-restart') {
+    return (
+      <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
+        <p className="text-sm font-medium text-theme-text-primary">Restart Radar to finish setup</p>
+        <p className="mt-1 text-xs text-theme-text-tertiary">
+          A supported agent CLI is installed, but Radar started before it was and picks its
+          engine once at startup. Restart Radar and this tab will show the agent, model, and
+          effort controls.
+        </p>
+      </div>
+    )
+  }
   return (
     <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
       <p className="text-sm font-medium text-theme-text-primary">No supported agent CLI found</p>
@@ -1431,7 +1461,9 @@ function AIUnavailableNotice() {
         <span className="text-theme-text-secondary">Cursor</span> (
         <span className="font-mono">cursor-agent</span>), or{' '}
         <span className="text-theme-text-secondary">OpenCode</span>, then restart Radar — this tab
-        will show the agent, model, and effort controls.
+        will show the agent, model, and effort controls. Already installed one? Radar looks
+        for it on the PATH it was started with; start Radar from a terminal where the CLI
+        works, or set <span className="font-mono">RADAR_AI_CLI_BIN</span> to its full path.
       </p>
     </div>
   )
