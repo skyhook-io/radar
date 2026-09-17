@@ -26,7 +26,7 @@ func (a *claudeAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(
 	default:
 		return nil, nil, fmt.Errorf("ai: Claude does not support execution profile %q", s.profile)
 	}
-	cfgPath, cleanup, err := writeMCPConfig(s.mcpURL)
+	cfgPath, cleanup, err := writeMCPConfig(s.mcpURL, s.mcpToken)
 	if err != nil {
 		return nil, nil, err
 	}

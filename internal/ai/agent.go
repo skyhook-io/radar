@@ -40,6 +40,7 @@ const (
 // turnSpec is everything an Agent needs to build one turn, independent of CLI.
 type turnSpec struct {
 	mcpURL       string // radar MCP endpoint (read-only or full) to point the agent at
+	mcpToken     string // bearer token for the full local endpoint; empty for read-only/externally authenticated
 	prompt       string // the user/turn prompt
 	systemPrompt string // SRE+security framing; set only on the first turn (empty on resume)
 	sessionID    string // resume target; empty means a fresh session
