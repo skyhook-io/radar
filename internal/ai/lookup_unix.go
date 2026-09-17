@@ -34,5 +34,4 @@ func agentBinDirs() []string {
 	)
 }
 
-// executableNames is the set of filenames an agent CLI can have in a directory.
 func executableNames(name string) []string { return []string{name} }

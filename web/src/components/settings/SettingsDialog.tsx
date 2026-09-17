@@ -1425,6 +1425,19 @@ function OverviewStatus({ tone }: { tone: OverviewTone }) {
 // claim about the user's machine, and on the needs-restart path it is false: the
 // CLI was detected, Radar just resolved its engine before that happened.
 function AIUnavailableNotice({ setupState }: { setupState: DiagnoseSetup }) {
+  if (setupState === 'unknown') {
+    // The agent probe hasn't answered (in flight, or it failed and was swallowed).
+    // Saying anything about the CLI or the deployment here would be a guess.
+    return (
+      <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
+        <p className="text-sm font-medium text-theme-text-primary">Checking this Radar&apos;s setup</p>
+        <p className="mt-1 text-xs text-theme-text-tertiary">
+          If this doesn&apos;t resolve, Radar couldn&apos;t reach its own agents endpoint. Reopen
+          Settings, or reload the page, to try again.
+        </p>
+      </div>
+    )
+  }
   if (setupState === 'off') {
     return (
       <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
@@ -1463,7 +1476,8 @@ function AIUnavailableNotice({ setupState }: { setupState: DiagnoseSetup }) {
         <span className="text-theme-text-secondary">OpenCode</span>, then restart Radar — this tab
         will show the agent, model, and effort controls. Already installed one? Radar looks
         for it on the PATH it was started with; start Radar from a terminal where the CLI
-        works, or set <span className="font-mono">RADAR_AI_CLI_BIN</span> to its full path.
+        works, or set <span className="font-mono">RADAR_AI_CLI_BIN</span> to the CLI&apos;s full
+        path before starting Radar.
       </p>
     </div>
   )

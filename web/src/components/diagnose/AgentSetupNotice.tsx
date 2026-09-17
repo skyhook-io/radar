@@ -4,11 +4,10 @@ import { copyText } from "@skyhook-io/k8s-ui/utils/clipboard";
 import { SUPPORTED_AGENTS, type AgentInstall } from "./agentCatalog";
 import { type DiagnoseSetup } from "./DiagnoseContext";
 
-// The variable and a literal path, not a shell command line: Radar also runs on
-// Windows, where `VAR=value cmd` is not valid. A literal path rather than
-// `$(which claude)` because the installs this hint is aimed at are often exposed
-// as a shell alias, which `which` and `command -v` print instead of a path.
-const CLI_BIN_EXAMPLE = "RADAR_AI_CLI_BIN=/full/path/to/claude";
+// Just the variable name. Every `VAR=value` form is shell-specific — Windows needs
+// `set` or `$env:` — so a copyable assignment would be wrong for some readers; the
+// name is the part worth copying exactly, and the prose carries the value.
+const CLI_BIN_VAR = "RADAR_AI_CLI_BIN";
 
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
@@ -113,21 +112,18 @@ export function AgentSetupNotice({
             </p>
             <p className="mt-1 text-xs text-theme-text-secondary">
               Radar looks for the CLI on the PATH it was started with, plus the
-              usual install directories. A desktop or app-menu launch often gets
-              a shorter PATH than your terminal. Start Radar from a terminal
-              where the CLI works, or set{" "}
-              <code className="font-mono text-theme-text-primary">
-                RADAR_AI_CLI_BIN
-              </code>{" "}
-              to its full path before starting Radar:
+              usual install directories. A launch from a shortcut or a service
+              often gets a shorter PATH than your terminal. Start Radar from a
+              terminal where the CLI works, or set this variable to the
+              CLI&apos;s full path before starting Radar:
             </p>
             <div className="mt-2 flex items-center gap-1.5 rounded-md bg-theme-elevated px-2 py-1.5">
               <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-xs text-theme-text-secondary">
-                {CLI_BIN_EXAMPLE}
+                {CLI_BIN_VAR}
               </code>
               <CopyButton
-                text={CLI_BIN_EXAMPLE}
-                label="Copy the RADAR_AI_CLI_BIN example"
+                text={CLI_BIN_VAR}
+                label="Copy the RADAR_AI_CLI_BIN variable name"
               />
             </div>
           </div>
