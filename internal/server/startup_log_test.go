@@ -173,3 +173,56 @@ func TestStartupLogColorDisabledForNonTerminal(t *testing.T) {
 		t.Fatal("startupLogColorEnabled(buffer) = true, want false")
 	}
 }
+
+func TestStartupAIStatusExplainsWhyItIsOff(t *testing.T) {
+	cases := []struct {
+		name    string
+		summary startupLogSummary
+		want    string
+	}{
+		{
+			name:    "enabled names the agent",
+			summary: startupLogSummary{mcpEnabled: true, aiAgent: "claude"},
+			want:    "enabled via claude",
+		},
+		{
+			name:    "no CLI found points at the override",
+			summary: startupLogSummary{mcpEnabled: true},
+			want:    "RADAR_AI_CLI_BIN",
+		},
+		{
+			name:    "--no-mcp names the flag",
+			summary: startupLogSummary{},
+			want:    "--no-mcp",
+		},
+		{
+			name:    "auth enabled says so instead of blaming a missing CLI",
+			summary: startupLogSummary{mcpEnabled: true, authMode: "OIDC"},
+			want:    "authentication is enabled",
+		},
+		{
+			name: "a broken override is named instead of blamed on a missing CLI",
+			summary: startupLogSummary{
+				mcpEnabled:    true,
+				aiCLIOverride: "/opt/typo/claude",
+			},
+			want: "RADAR_AI_CLI_BIN is set to /opt/typo/claude",
+		},
+		{
+			name: "in-cluster does not tell a container to install a CLI",
+			summary: startupLogSummary{
+				mcpEnabled: true,
+				kubeconfig: k8s.KubeconfigSummary{Mode: "in-cluster"},
+			},
+			want: "no agent CLI in this container",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := startupAIStatus(c.summary)
+			if !strings.Contains(got, c.want) {
+				t.Errorf("startupAIStatus = %q, want it to contain %q", got, c.want)
+			}
+		})
+	}
+}
