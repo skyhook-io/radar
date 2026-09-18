@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // informerEventID derives a deterministic id from the resource's observable
@@ -99,8 +101,11 @@ func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEve
 // clusters with a same-named resource created at the same instant would collide
 // in one persistent store without it.
 func NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
-	// Create deterministic ID from event attributes to avoid duplicates
-	hashInput := fmt.Sprintf("historical:%s:%s/%s/%s:%d:%s", clusterContext, kind, namespace, name, ts.UnixNano(), reason)
+	identityKind := kind
+	if group := historicalCollisionGroup(kind, apiVersion); group != "" {
+		identityKind = group + "/" + kind
+	}
+	hashInput := fmt.Sprintf("historical:%s:%s/%s/%s:%d:%s", clusterContext, identityKind, namespace, name, ts.UnixNano(), reason)
 	hash := sha256.Sum256([]byte(hashInput))
 	id := fmt.Sprintf("hist-%x", hash[:8]) // Use first 8 bytes for shorter ID
 
@@ -119,6 +124,23 @@ func NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name string
 		Owner:       owner,
 		Labels:      labels,
 	}
+}
+
+// Generic unstructured Kinds already shipped group-less historical IDs. Only
+// the typed-extractor collision path can be qualified without duplicating that
+// persisted history when an upgrade re-extracts resources.
+func historicalCollisionGroup(kind, apiVersion string) string {
+	switch kind {
+	case "Pod", "Deployment", "ReplicaSet", "StatefulSet", "DaemonSet",
+		"Service", "Ingress", "CronJob", "HorizontalPodAutoscaler", "Job":
+	default:
+		return ""
+	}
+	gv, err := schema.ParseGroupVersion(apiVersion)
+	if err != nil || gv.Group == "" || gv.Group == resourceid.GroupForBuiltinKind(kind) {
+		return ""
+	}
+	return gv.Group
 }
 
 // ExtractOwner gets the controller owner reference from an object
