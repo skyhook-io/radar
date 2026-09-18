@@ -5,19 +5,26 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 )
 
 // NodeDebugPodResult contains the coordinates of a created debug pod.
 type NodeDebugPodResult struct {
-	PodName       string `json:"podName"`
-	Namespace     string `json:"namespace"`
-	ContainerName string `json:"containerName"`
-	NodeName      string `json:"nodeName"`
+	PodName       string    `json:"podName"`
+	UID           types.UID `json:"uid"`
+	Namespace     string    `json:"namespace"`
+	ContainerName string    `json:"containerName"`
+	NodeName      string    `json:"nodeName"`
 }
 
 var nodeNameSanitizer = regexp.MustCompile(`[^a-z0-9-]`)
@@ -115,6 +122,7 @@ func CreateNodeDebugPod(ctx context.Context, client kubernetes.Interface, nodeNa
 
 	return &NodeDebugPodResult{
 		PodName:       created.Name,
+		UID:           created.UID,
 		Namespace:     created.Namespace,
 		ContainerName: containerName,
 		NodeName:      nodeName,
@@ -148,7 +156,9 @@ func WaitForPodRunning(ctx context.Context, client kubernetes.Interface, namespa
 	}
 }
 
-// DeleteNodeDebugPods deletes all debug pods for the given node. Matches both
+// DeleteNodeDebugPods is a node-wide maintenance operation, not terminal cleanup.
+// Interactive callers must use DeleteNodeDebugPod with the creation result.
+// It deletes all debug pods for the given node. Matches both
 // the current "radarhq.io/debug-node" label and the legacy "radar.skyhook.io/
 // debug-node" label so a Radar binary upgraded mid-debug-session can still
 // GC in-flight privileged pods created by the prior version.
@@ -175,4 +185,43 @@ func DeleteNodeDebugPods(ctx context.Context, client kubernetes.Interface, nodeN
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// ValidateNodeDebugPodIdentity allows callers to reject malformed identities before
+// accessing the cluster. Values are never normalized: cleanup must preserve the
+// exact identity returned by creation, including the API server's UUID-form UID.
+func ValidateNodeDebugPodIdentity(namespace, podName string, uid types.UID) error {
+	if namespace == "" || podName == "" || uid == "" {
+		return fmt.Errorf("debug pod namespace, name and UID are required")
+	}
+	if errs := apivalidation.ValidateNamespaceName(namespace, false); len(errs) > 0 {
+		return fmt.Errorf("invalid debug pod namespace: %s", strings.Join(errs, "; "))
+	}
+	if errs := apivalidation.NameIsDNSSubdomain(podName, false); len(errs) > 0 {
+		return fmt.Errorf("invalid debug pod name: %s", strings.Join(errs, "; "))
+	}
+	if len(uid) != 36 || uuid.Validate(string(uid)) != nil {
+		return fmt.Errorf("invalid debug pod UID: must be a hyphenated UUID")
+	}
+	return nil
+}
+
+// DeleteNodeDebugPod deletes only the pod identified by namespace, name and UID.
+// The UID precondition protects replacement pods, including after a context switch.
+func DeleteNodeDebugPod(ctx context.Context, client kubernetes.Interface, namespace, podName string, uid types.UID) error {
+	if err := ValidateNodeDebugPodIdentity(namespace, podName, uid); err != nil {
+		return err
+	}
+	if client == nil {
+		return fmt.Errorf("kubernetes client not initialized")
+	}
+	gracePeriod := int64(0)
+	err := client.CoreV1().Pods(namespace).Delete(ctx, podName, metav1.DeleteOptions{
+		GracePeriodSeconds: &gracePeriod,
+		Preconditions:      &metav1.Preconditions{UID: &uid},
+	})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
 }

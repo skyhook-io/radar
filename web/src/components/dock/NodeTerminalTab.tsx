@@ -1,4 +1,4 @@
-import { NodeTerminalTab as SharedNodeTerminalTab } from '@skyhook-io/k8s-ui'
+import { NodeTerminalTab as SharedNodeTerminalTab, type NodeTerminalTabProps as SharedNodeTerminalTabProps } from '@skyhook-io/k8s-ui'
 import { apiUrl, getWsUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 
 interface NodeTerminalTabProps {
@@ -21,14 +21,16 @@ export function NodeTerminalTab({ nodeName, isActive }: NodeTerminalTabProps) {
     return response.json()
   }
 
-  const cleanupNodeDebugPod = async (name: string) => {
+  const cleanupNodeDebugPod: SharedNodeTerminalTabProps['cleanupNodeDebugPod'] = async (name, pod) => {
+    const query = new URLSearchParams({ namespace: pod.namespace, podName: pod.podName, uid: pod.uid })
     try {
-      await fetch(apiUrl(`/nodes/${encodeURIComponent(name)}/debug`), {
+      const response = await fetch(apiUrl(`/nodes/${encodeURIComponent(name)}/debug?${query}`), {
         method: 'DELETE',
         credentials: getCredentialsMode(),
         headers: getAuthHeaders(),
         keepalive: true,
       })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
     } catch (err) {
       console.warn(`[NodeTerminal] Failed to cleanup debug pod for node ${name}:`, err)
     }
