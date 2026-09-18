@@ -81,4 +81,11 @@ func bindCase(v *Verdict, request caseRequest, linked func(string) bool) {
 		}
 		v.RuledOut = append(v.RuledOut, entry)
 	}
+	// A hypothesis past the cap is a loss only if it would have been shown:
+	// one pointing at an unlinked or missing item was never going to be.
+	for _, entry := range request.overflowRuledOut {
+		if entry.EvidenceIndex < len(items) && items[entry.EvidenceIndex].Status == Linked {
+			v.OmittedEntries++
+		}
+	}
 }

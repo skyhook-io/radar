@@ -37,6 +37,10 @@ var roles = func() map[EvidenceRole]struct{} {
 // A non-revising follow-up may answer with nothing but revises_assessment,
 // so that field marks a verdict block too; without it the block would read as
 // quoted prose and its extension fields would be lost.
+// Every subject field is an identifier the frontend resolves against a
+// captured result; nothing a cluster names is longer than a DNS name.
+const maxIdentifierRunes = 253
+
 var verdictFields = []string{"root_cause", "summary", "healthy", "inconclusive", "steps", "evidence", "remediation", "revises_assessment"}
 
 // Parsed is the model's final text as read, before binding. Citations are the
@@ -85,6 +89,9 @@ type caseRequest struct {
 	// malformed is set when the agent sent an evidence field that is not a
 	// list, so the whole case was unreadable and no count describes it.
 	malformed bool
+	// overflowRuledOut holds the hypotheses past the cap; the binder counts
+	// the ones whose item linked, since only those would have been shown.
+	overflowRuledOut []RuledOut
 }
 
 func isVerdictBlock(block string) bool {
@@ -182,13 +189,19 @@ func Parse(text string) Parsed {
 	}
 	for _, item := range parsed.Unresolved {
 		item = strings.TrimSpace(item)
-		if item == "" || len(d.Unresolved) == MaxUnresolved {
+		if item == "" {
 			continue
 		}
-		d.Unresolved = append(d.Unresolved, clampRunes(item, MaxUnresolvedRunes))
+		if len(d.Unresolved) == MaxUnresolved {
+			d.OmittedEntries++
+			continue
+		}
+		d.Unresolved = append(d.Unresolved, item)
 	}
 	var stepOrigins []int
-	d.Steps, stepOrigins = parseStepsIndexed(parsed.Steps)
+	var omittedSteps int
+	d.Steps, stepOrigins, omittedSteps = parseStepsIndexed(parsed.Steps)
+	d.OmittedEntries += omittedSteps
 	if len(d.Steps) > 0 {
 		// One action list: the typed steps are authoritative and the legacy
 		// remediation array is derived from them, so Apply, recommended_index
@@ -270,24 +283,29 @@ func extensionFields(block []byte) map[string]json.RawMessage {
 }
 
 // parseStepsIndexed also returns, for each kept step, its index in the
-// agent's original array, so an index the agent wrote can be translated.
-func parseStepsIndexed(raw json.RawMessage) ([]Step, []int) {
+// agent's original array, so an index the agent wrote can be translated, and
+// how many valid steps the cap left out.
+func parseStepsIndexed(raw json.RawMessage) ([]Step, []int, int) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return nil, nil
+		return nil, nil, 0
 	}
-	var parsed []struct {
-		Text         string `json:"text"`
-		Kind         string `json:"kind"`
-		Precondition string `json:"precondition"`
-	}
-	if json.Unmarshal(raw, &parsed) != nil {
-		return nil, nil
+	// Entries are read one at a time, like evidence items, so one malformed
+	// step neither hides its valid neighbours nor their loss.
+	var rawSteps []json.RawMessage
+	if json.Unmarshal(raw, &rawSteps) != nil {
+		return nil, nil, 0
 	}
 	var steps []Step
 	var origins []int
-	for origin, item := range parsed {
-		if len(steps) == MaxSteps {
-			break
+	omitted := 0
+	for origin, rawStep := range rawSteps {
+		var item struct {
+			Text         string `json:"text"`
+			Kind         string `json:"kind"`
+			Precondition string `json:"precondition"`
+		}
+		if json.Unmarshal(rawStep, &item) != nil {
+			continue
 		}
 		text := strings.TrimSpace(item.Text)
 		kind := StepKind(strings.ToLower(strings.TrimSpace(item.Kind)))
@@ -297,14 +315,18 @@ func parseStepsIndexed(raw json.RawMessage) ([]Step, []int) {
 		if _, known := stepKinds[kind]; !known {
 			continue
 		}
+		if len(steps) == MaxSteps {
+			omitted++
+			continue
+		}
 		steps = append(steps, Step{
 			Text:         text,
 			Kind:         kind,
-			Precondition: clampRunes(strings.TrimSpace(item.Precondition), MaxPreconditionRunes),
+			Precondition: strings.TrimSpace(item.Precondition),
 		})
 		origins = append(origins, origin)
 	}
-	return steps, origins
+	return steps, origins, omitted
 }
 
 // clampSummary keeps a headline whole: an over-long summary is cut at the
@@ -331,17 +353,6 @@ func clampSummary(value string, limit int) string {
 		return strings.TrimSpace(text[:space]) + "…"
 	}
 	return strings.TrimSpace(text) + "…"
-}
-
-// clampRunes cuts a free-text field at a rune budget. Unlike claims, these
-// fields are headlines and caveats where a cut sentence still reads as one;
-// the alternative, dropping the whole field, would hide the caveat entirely.
-func clampRunes(value string, limit int) string {
-	if utf8.RuneCountInString(value) <= limit {
-		return value
-	}
-	runes := []rune(value)
-	return strings.TrimSpace(string(runes[:limit]))
 }
 
 func parseReferenceRequest(raw json.RawMessage) referenceRequest {
@@ -402,12 +413,15 @@ func parseCaseRequest(evidenceRaw, ruledOutRaw json.RawMessage) caseRequest {
 	var rawRuledOut []json.RawMessage
 	if len(ruledOutRaw) > 0 && json.Unmarshal(ruledOutRaw, &rawRuledOut) == nil {
 		for _, raw := range rawRuledOut {
+			entry, ok := parseRuledOut(raw)
+			if !ok {
+				continue
+			}
 			if len(request.ruledOut) == MaxRuledOut {
-				break
+				request.overflowRuledOut = append(request.overflowRuledOut, entry)
+				continue
 			}
-			if entry, ok := parseRuledOut(raw); ok {
-				request.ruledOut = append(request.ruledOut, entry)
-			}
+			request.ruledOut = append(request.ruledOut, entry)
 		}
 	}
 	return request
@@ -422,8 +436,7 @@ func parseRuledOut(raw json.RawMessage) (RuledOut, bool) {
 		return RuledOut{}, false
 	}
 	hypothesis := strings.TrimSpace(parsed.Hypothesis)
-	if hypothesis == "" || utf8.RuneCountInString(hypothesis) > MaxHypothesisRunes ||
-		parsed.EvidenceIndex == nil || *parsed.EvidenceIndex < 0 {
+	if hypothesis == "" || parsed.EvidenceIndex == nil || *parsed.EvidenceIndex < 0 {
 		return RuledOut{}, false
 	}
 	return RuledOut{Hypothesis: hypothesis, EvidenceIndex: *parsed.EvidenceIndex}, true
@@ -453,24 +466,12 @@ func parseCaseItem(raw json.RawMessage) caseItemRequest {
 	// roles that qualify or exclude something: an empty benign claim would
 	// satisfy the frontend's "the agent explained this card" check while
 	// saying nothing, quietly softening a warning banner, and a bare demoted
-	// or rules_out label asserts without a reason. An over-long claim is
-	// dropped rather than truncated — cutting a sentence mid-clause invents a
-	// claim the agent did not make.
-	claimRequired := role == RoleBenign || role == RoleDemoted || role == RoleRulesOut
-	if utf8.RuneCountInString(claim) > MaxClaimRunes {
-		// The story places the item; losing the placement over a long note
-		// would cost the reader the card. The note is dropped, the item kept
-		// — unless the note is what the role asserts.
-		if claimRequired {
-			return caseItemRequest{}
-		}
-		claim = ""
-	}
-	if claim == "" && claimRequired {
+	// or rules_out label asserts without a reason. A long claim is kept whole:
+	// cutting a sentence mid-clause invents a claim the agent did not make.
+	if claim == "" && (role == RoleBenign || role == RoleDemoted || role == RoleRulesOut) {
 		return caseItemRequest{}
 	}
-	item := caseItemRequest{valid: true, ref: ref, role: role, claim: claim,
-		gap: clampRunes(strings.TrimSpace(parsed.Gap), MaxGapRunes)}
+	item := caseItemRequest{valid: true, ref: ref, role: role, claim: claim, gap: strings.TrimSpace(parsed.Gap)}
 	if len(parsed.Subject) == 0 || string(parsed.Subject) == "null" {
 		return item
 	}
@@ -481,12 +482,12 @@ func parseCaseItem(raw json.RawMessage) caseItemRequest {
 	for _, field := range []string{
 		subject.Kind, subject.Name, subject.Container, subject.Stream, subject.Observation,
 	} {
-		if utf8.RuneCountInString(field) > MaxSubjectFieldRunes {
+		if utf8.RuneCountInString(field) > maxIdentifierRunes {
 			return caseItemRequest{}
 		}
 	}
 	for _, field := range []*string{subject.Group, subject.Namespace} {
-		if field != nil && utf8.RuneCountInString(*field) > MaxSubjectFieldRunes {
+		if field != nil && utf8.RuneCountInString(*field) > maxIdentifierRunes {
 			return caseItemRequest{}
 		}
 	}

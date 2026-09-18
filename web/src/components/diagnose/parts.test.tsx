@@ -1571,4 +1571,16 @@ describe("assessment provenance disclosure", () => {
     expect(shown).not.toContain("WITHHELD_CLAIM");
     expect(shown).toContain("1 agent note on an evidence card");
   });
+
+  it("discloses entries a count cap left out even when nothing else was lost", () => {
+    const only = renderToStaticMarkup(
+      <AssessmentSources omittedEntries={2} onViewSource={noop} />,
+    );
+    expect(only).toContain(
+      "2 next steps, open items or ruled-out hypotheses went past the page",
+    );
+    expect(
+      renderToStaticMarkup(<AssessmentSources onViewSource={noop} />),
+    ).toBe("");
+  });
 });

@@ -1,6 +1,7 @@
 package investigation
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -67,5 +68,22 @@ func TestPreviewAndExplanationShape(t *testing.T) {
 	}
 	if !(Verdict{Inconclusive: true}).Structured() || (Verdict{Report: strings.Repeat("x", 10)}).Structured() {
 		t.Fatal("structured means a conclusion, not prose")
+	}
+}
+
+// A saved verdict replays by JSON, never by re-parsing: a record without the
+// count reads as no loss, and one carrying it keeps it.
+func TestVerdictJSONRoundTripWithAndWithoutOmittedEntries(t *testing.T) {
+	var old Verdict
+	if err := json.Unmarshal([]byte(`{"rootCause":"x","report":"r","remediation":null,"confidence":null}`), &old); err != nil || old.OmittedEntries != 0 || old.RootCause != "x" {
+		t.Fatalf("older record: %v %+v", err, old)
+	}
+	out, _ := json.Marshal(Verdict{RootCause: "x", OmittedEntries: 2})
+	var back Verdict
+	if json.Unmarshal(out, &back) != nil || back.OmittedEntries != 2 || !strings.Contains(string(out), `"omittedEntries":2`) {
+		t.Fatalf("round trip lost the count: %s", out)
+	}
+	if out, _ := json.Marshal(Verdict{RootCause: "x"}); strings.Contains(string(out), "omittedEntries") {
+		t.Fatalf("a verdict with no loss must not carry the field: %s", out)
 	}
 }

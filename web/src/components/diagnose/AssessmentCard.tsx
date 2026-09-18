@@ -446,6 +446,7 @@ export function AssessmentSources({
   investigationCase,
   unlinkedEvidence = 0,
   evidenceMalformed = false,
+  omittedEntries = 0,
   readOnly = false,
   renderedGroupIds,
   onViewSource,
@@ -464,6 +465,12 @@ export function AssessmentSources({
    * and no count describes how many were lost.
    */
   evidenceMalformed?: boolean;
+  /**
+   * Next steps, open items and ruled-out hypotheses the server left out of
+   * the record because the list ran past the page's limit. They were valid;
+   * the reader learns the list was longer than what is shown.
+   */
+  omittedEntries?: number;
   readOnly?: boolean;
   /**
    * Groups the Evidence pane actually rendered. A card-placed note whose card
@@ -475,7 +482,12 @@ export function AssessmentSources({
   onViewSource: (sourceId: string) => void;
 }) {
   const rows = assessmentSourceRows(resolution, investigationCase);
-  if (rows.length === 0 && unlinkedEvidence === 0 && !evidenceMalformed)
+  if (
+    rows.length === 0 &&
+    unlinkedEvidence === 0 &&
+    !evidenceMalformed &&
+    omittedEntries === 0
+  )
     return null;
   return (
     <div className="mt-3 border-t border-theme-border/60 pt-2">
@@ -564,6 +576,13 @@ export function AssessmentSources({
           {unlinkedEvidence === 1
             ? "1 agent note could not be linked to a Radar result and is not shown."
             : `${unlinkedEvidence} agent notes could not be linked to Radar results and are not shown.`}
+        </p>
+      ) : null}
+      {omittedEntries > 0 ? (
+        <p className="mt-2 text-[11px] text-theme-text-tertiary">
+          {omittedEntries === 1
+            ? "1 next step, open item or ruled-out hypothesis went past the page's limit and is not shown."
+            : `${omittedEntries} next steps, open items or ruled-out hypotheses went past the page's limits and are not shown.`}
         </p>
       ) : null}
     </div>

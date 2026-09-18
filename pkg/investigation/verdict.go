@@ -1,21 +1,17 @@
 package investigation
 
-// Caps on what a verdict may carry. They bound what the page renders and what
-// a store persists; the prompt states the same numbers so the model is asked
-// for what the parser keeps.
+// Caps on the shape of the page: how many cards, hypotheses, steps and open
+// items a Findings page holds, and how long its headline is. The prompt states
+// the same numbers. Text fields other than the headline are never cut: a
+// clamped qualification is a different claim, so a long one is kept whole and
+// a list that overflows says how much it lost (OmittedEntries).
 const (
-	MaxRootCauseRefs     = 3
-	MaxEvidenceItems     = 8
-	MaxRuledOut          = 5
-	MaxClaimRunes        = 200
-	MaxGapRunes          = 160
-	MaxSubjectFieldRunes = 253
-	MaxHypothesisRunes   = 200
-	MaxSummaryRunes      = 180
-	MaxUnresolved        = 3
-	MaxUnresolvedRunes   = 280
-	MaxSteps             = 6
-	MaxPreconditionRunes = 200
+	MaxRootCauseRefs = 3
+	MaxEvidenceItems = 8
+	MaxRuledOut      = 5
+	MaxSteps         = 6
+	MaxUnresolved    = 3
+	MaxSummaryRunes  = 180
 )
 
 // LinkStatus is server-authored provenance for a citation.
@@ -184,8 +180,13 @@ type Verdict struct {
 	// how much was lost.
 	EvidenceMalformed bool       `json:"evidenceMalformed,omitempty"`
 	RuledOut          []RuledOut `json:"ruledOut,omitempty"`
-	Remediation       []string   `json:"remediation"`
-	Confidence        *float64   `json:"confidence"`
+	// OmittedEntries counts the valid steps, unresolved items and ruled-out
+	// hypotheses a count cap left out, so a reader learns the list was longer
+	// than the page shows. Malformed entries were never valid and are not
+	// counted; evidence losses are UnlinkedEvidence.
+	OmittedEntries int      `json:"omittedEntries,omitempty"`
+	Remediation    []string `json:"remediation"`
+	Confidence     *float64 `json:"confidence"`
 	// RecommendedIndex is the 1-based index into Remediation of the single
 	// step the agent recommends applying (what an Apply action performs).
 	// 0/nil = no safe automatic fix. Pointing into the list (vs restating the

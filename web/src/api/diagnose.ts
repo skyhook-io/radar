@@ -137,6 +137,8 @@ export interface Diagnosis {
   unlinkedEvidence?: number;
   /** The agent's evidence field was not a list, so none of it could be read. */
   evidenceMalformed?: boolean;
+  /** Valid next steps, open items and ruled-out hypotheses a count cap left out of this record. */
+  omittedEntries?: number;
   ruledOut?: DiagnosisRuledOut[];
   report: string;
   /** The agent's evidence ledger, written before its verdict block; shown in Activity, never in Findings. */

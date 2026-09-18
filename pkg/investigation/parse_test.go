@@ -153,6 +153,9 @@ func TestParse_StoryFields(t *testing.T) {
 	if len(d.Unresolved) != 3 || d.Unresolved[0] != "Atlas password rotated?" || d.Unresolved[1] != "what would settle it" {
 		t.Fatalf("unresolved = %v (empty dropped, capped at %d)", d.Unresolved, MaxUnresolved)
 	}
+	if d.OmittedEntries != 0 {
+		t.Fatalf("an empty entry is not a lost one: omitted = %d", d.OmittedEntries)
+	}
 	if len(d.Steps) != 2 || d.Steps[0].Kind != StepMitigate || d.Steps[1].Kind != StepVerify ||
 		d.Steps[0].Precondition != "if revision 7 still authenticates" {
 		t.Fatalf("steps = %+v (empty text and unknown kind dropped, kind lower-cased)", d.Steps)
@@ -280,8 +283,8 @@ func TestParse_StoryFieldCapsAndValidation(t *testing.T) {
 		t.Fatalf("unknown certainty must be dropped, got %q", d.Certainty)
 	}
 	d = Parse(verdictJSON(`"steps":[` + strings.Repeat(`{"text":"x","kind":"verify"},`, MaxSteps+2) + `{"text":"last","kind":"verify"}]`)).Verdict
-	if len(d.Steps) != MaxSteps {
-		t.Fatalf("steps not capped: %d", len(d.Steps))
+	if len(d.Steps) != MaxSteps || d.OmittedEntries != 3 {
+		t.Fatalf("steps not capped with the overflow counted: %d steps, %d omitted", len(d.Steps), d.OmittedEntries)
 	}
 }
 
@@ -436,11 +439,10 @@ func TestParse_CaseWithoutTouchingRootCauseRefs(t *testing.T) {
 
 func TestParse_CaseDropsBadItemsIndividually(t *testing.T) {
 	ref := testRef('a', 'b')
-	long := strings.Repeat("x", MaxClaimRunes+1)
 	text := verdictJSON(`"root_cause":"x","evidence":[` +
 		`{"ref":"not-a-ref","role":"cause","claim":"a"},` +
 		`{"ref":"` + ref + `","role":"verdict","claim":"a"},` +
-		`{"ref":"` + ref + `","role":"demoted","claim":"` + long + `"},` +
+		`{"ref":"` + ref + `","role":"demoted","claim":"","subject":{"kind":"Pod","name":"p","name":"` + strings.Repeat("n", maxIdentifierRunes+1) + `"}},` +
 		`{"ref":"` + ref + `","role":"cause","claim":"a","subject":{"name":"p"}},` +
 		`{"ref":"` + ref + `","role":"cause","claim":"a","subject":{"kind":"Pod","name":"p","stream":"older"}},` +
 		`{"ref":"` + ref + `","role":"context","claim":"fine"}` +
@@ -449,7 +451,7 @@ func TestParse_CaseDropsBadItemsIndividually(t *testing.T) {
 	if len(request.items) != 6 {
 		t.Fatalf("items = %d, want 6 (positions preserved)", len(request.items))
 	}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if request.items[i].valid {
 			t.Errorf("item %d should be invalid: %+v", i, request.items[i])
 		}
@@ -498,8 +500,8 @@ func TestParse_CaseCapsAndMalformedArrays(t *testing.T) {
 	if len(request.items) != MaxEvidenceItems {
 		t.Fatalf("items = %d, want cap %d", len(request.items), MaxEvidenceItems)
 	}
-	if len(request.ruledOut) != MaxRuledOut {
-		t.Fatalf("ruled out = %d, want cap %d", len(request.ruledOut), MaxRuledOut)
+	if len(request.ruledOut) != MaxRuledOut || len(request.overflowRuledOut) != 2 {
+		t.Fatalf("ruled out = %d (overflow %d), want cap %d with 2 held for the binder", len(request.ruledOut), len(request.overflowRuledOut), MaxRuledOut)
 	}
 	if request.dropped != 3 {
 		t.Fatalf("dropped = %d, want the 3 items the cap cut", request.dropped)
@@ -517,19 +519,20 @@ func TestParse_CaseCapsAndMalformedArrays(t *testing.T) {
 }
 
 // The parser must reject what it cannot understand without inventing a
-// reading of it: no truncated claims, no unknown role mapped onto a known
-// one. The story carries the argument, so a cause may come without a claim;
-// the qualifying roles may not, since a bare "benign" would satisfy the
-// banner's explained-by check while saying nothing. Only the marker wrapper
-// is unwrapped, because that text is Radar's own, quoted back.
+// reading of it: no unknown role mapped onto a known one, and never a cut
+// claim, since a cut qualification is a different claim. The story carries
+// the argument, so a cause may come without a claim; the qualifying roles may
+// not, since a bare "benign" would satisfy the banner's explained-by check
+// while saying nothing. Only the marker wrapper is unwrapped, because that
+// text is Radar's own, quoted back.
 func TestParse_CaseRejectsEmptyClaimAndUnwrapsMarkerRef(t *testing.T) {
 	ref := testRef('a', 'b')
-	long := strings.Repeat("x", MaxClaimRunes+1)
+	long := strings.Repeat("x", 1000)
 	items := Parse(verdictJSON(`"root_cause":"x","evidence":[` +
 		`{"ref":"` + ref + `","role":"benign","claim":""},` +
 		`{"ref":"` + ref + `","role":"cause","claim":"   "},` +
 		`{"ref":"[[radar:evidence-ref=` + ref + `]]","role":"cause","claim":"Pasted the whole marker."},` +
-		`{"ref":"` + ref + `","role":"cause","claim":"` + long + `"},` +
+		`{"ref":"` + ref + `","role":"benign","claim":"` + long + `"},` +
 		`{"ref":"` + ref + `","role":"verdict","claim":"An unknown role."},` +
 		`{"ref":"` + ref + `","role":"demoted","claim":""},` +
 		`{"ref":"` + ref + `","role":"rules_out","claim":""}` +
@@ -546,8 +549,13 @@ func TestParse_CaseRejectsEmptyClaimAndUnwrapsMarkerRef(t *testing.T) {
 	if !items[2].valid || items[2].ref != ref {
 		t.Errorf("a marker-wrapped ref must be unwrapped, got %+v", items[2])
 	}
-	if !items[3].valid || items[3].claim != "" {
-		t.Errorf("an over-long claim on a cause keeps the item and loses the note, never truncated: %+v", items[3])
+	if !items[3].valid || items[3].claim != long {
+		t.Errorf("a long benign claim is kept whole, neither cut nor dropped: %+v", items[3])
+	}
+	bound := Parse(verdictJSON(`"healthy":true,"evidence":[{"ref":"` + ref + `","role":"benign","claim":"` + long + `"}]`))
+	Bind(&bound.Verdict, bound.Citations, linkedSet(ref))
+	if len(bound.Verdict.Evidence) != 1 || bound.Verdict.Evidence[0].Status != Linked || bound.Verdict.Evidence[0].Claim != long {
+		t.Errorf("a long benign claim must reach the page linked and whole: %+v", bound.Verdict.Evidence)
 	}
 	if items[4].valid {
 		t.Errorf("an unknown role must be dropped, not mapped: %+v", items[4])
@@ -631,5 +639,47 @@ func TestParse_HandsBackExtensionFields(t *testing.T) {
 	}
 	if p := Parse(verdictJSON(`"root_cause":"x"`)); p.Extensions != nil {
 		t.Fatalf("no extensions must read as nil, got %v", p.Extensions)
+	}
+}
+
+// Count caps count what they leave out, after validation: a malformed entry
+// in the tail was never a valid one and is not counted; a valid one is.
+func TestParse_CountCapsCountValidOverflowOnly(t *testing.T) {
+	ref := testRef('a', 'b')
+	steps := strings.Repeat(`{"text":"s","kind":"verify"},`, MaxSteps) + `{"text":"","kind":"verify"},{"text":"x","kind":"guess"},{"text":42,"kind":"verify"},{"text":"kept count","kind":"mitigate"}`
+	ruled := strings.Repeat(`{"hypothesis":"h","evidence_index":0},`, MaxRuledOut) + `{"hypothesis":"","evidence_index":0},{"hypothesis":"past the case","evidence_index":9},{"hypothesis":"` + strings.Repeat("long ", 100) + `","evidence_index":0}`
+	unresolved := strings.Repeat(`"open",`, MaxUnresolved) + `"","one more"`
+	d := Parse(verdictJSON(`"root_cause":"x","evidence":[{"ref":"` + ref + `","role":"context","claim":"c"}],"steps":[` + steps + `],"ruled_out":[` + ruled + `],"unresolved":[` + unresolved + `]`))
+	Bind(&d.Verdict, d.Citations, linkedSet(ref))
+	if d.Verdict.OmittedEntries != 3 {
+		t.Fatalf("omitted = %d, want one valid step, one hypothesis on a linked item and one valid unresolved item", d.Verdict.OmittedEntries)
+	}
+	unlinked := Parse(verdictJSON(`"root_cause":"x","evidence":[{"ref":"` + ref + `","role":"context","claim":"c"}],"ruled_out":[` + ruled + `]`))
+	Bind(&unlinked.Verdict, unlinked.Citations, linkedSet())
+	if unlinked.Verdict.OmittedEntries != 0 {
+		t.Fatalf("a hypothesis on an item that did not link was never going to be shown: omitted = %d", unlinked.Verdict.OmittedEntries)
+	}
+	if len(d.Verdict.Steps) != MaxSteps || len(d.Verdict.Unresolved) != MaxUnresolved || len(d.Citations.theCase.ruledOut) != MaxRuledOut {
+		t.Fatalf("caps not held: %d steps, %d unresolved, %d ruled out", len(d.Verdict.Steps), len(d.Verdict.Unresolved), len(d.Citations.theCase.ruledOut))
+	}
+	// One malformed step never hides its neighbours: the valid ones are kept.
+	mixed := Parse(verdictJSON(`"root_cause":"x","steps":[{"text":"first","kind":"verify"},{"text":42,"kind":"verify"},{"text":"third","kind":"mitigate"}]`)).Verdict
+	if len(mixed.Steps) != 2 || mixed.Steps[1].Text != "third" || mixed.OmittedEntries != 0 {
+		t.Fatalf("a malformed step took its neighbours with it: %+v", mixed)
+	}
+	if d := Parse(verdictJSON(`"root_cause":"x","steps":[{"text":"one","kind":"verify"}]`)).Verdict; d.OmittedEntries != 0 {
+		t.Fatalf("a list inside its cap reports no loss, got %d", d.OmittedEntries)
+	}
+}
+
+// Text other than the headline is never cut: a long hypothesis, gap or
+// precondition is what the agent wrote, whole.
+func TestParse_TextFieldsAreKeptWhole(t *testing.T) {
+	long := strings.TrimSpace(strings.Repeat("because the node drained at that second ", 30))
+	ref := testRef('a', 'b')
+	p := Parse(verdictJSON(`"root_cause":"x","unresolved":["` + long + `"],"steps":[{"text":"roll back","kind":"mitigate","precondition":"` + long + `"}],` +
+		`"evidence":[{"ref":"` + ref + `","role":"context","claim":"c","gap":"` + long + `"}],"ruled_out":[{"hypothesis":"` + long + `","evidence_index":0}]`))
+	if p.Verdict.Unresolved[0] != long || p.Verdict.Steps[0].Precondition != long || p.Citations.theCase.items[0].gap != long || p.Citations.theCase.ruledOut[0].Hypothesis != long {
+		t.Fatal("a text field was cut or dropped")
 	}
 }

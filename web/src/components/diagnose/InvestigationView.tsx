@@ -1300,13 +1300,15 @@ export function InvestigationView({
     (rootCauseEvidenceResolution?.links.length ||
       investigationCase?.items.length ||
       currentAssessment.diagnosis.unlinkedEvidence ||
-      currentAssessment.diagnosis.evidenceMalformed) ? (
+      currentAssessment.diagnosis.evidenceMalformed ||
+      currentAssessment.diagnosis.omittedEntries) ? (
       <AssessmentSources
         renderedGroupIds={visibleEvidenceGroupIds}
         resolution={rootCauseEvidenceResolution}
         investigationCase={investigationCase}
         unlinkedEvidence={currentAssessment.diagnosis.unlinkedEvidence}
         evidenceMalformed={currentAssessment.diagnosis.evidenceMalformed}
+        omittedEntries={currentAssessment.diagnosis.omittedEntries}
         onViewSource={viewActivitySource}
       />
     ) : undefined;
@@ -1314,7 +1316,8 @@ export function InvestigationView({
     storyShape &&
     (investigationCase?.items.some((item) => item.placement === "source") ||
       currentAssessment?.diagnosis?.unlinkedEvidence ||
-      currentAssessment?.diagnosis?.evidenceMalformed)
+      currentAssessment?.diagnosis?.evidenceMalformed ||
+      currentAssessment?.diagnosis?.omittedEntries)
       ? assessmentSourcesNode
       : undefined;
   const assessmentLimits = useMemo(() => {
@@ -1966,7 +1969,8 @@ export function InvestigationView({
                             return turnCase.items.length ||
                               turnResolution?.links.length ||
                               turn.diagnosis.unlinkedEvidence ||
-                              turn.diagnosis.evidenceMalformed ? (
+                              turn.diagnosis.evidenceMalformed ||
+                              turn.diagnosis.omittedEntries ? (
                               <AssessmentSources
                                 renderedGroupIds={visibleEvidenceGroupIds}
                                 resolution={turnResolution}
@@ -1977,6 +1981,7 @@ export function InvestigationView({
                                 evidenceMalformed={
                                   turn.diagnosis.evidenceMalformed
                                 }
+                                omittedEntries={turn.diagnosis.omittedEntries}
                                 readOnly
                                 onViewSource={viewActivitySource}
                               />
