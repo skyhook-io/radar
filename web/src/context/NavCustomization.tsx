@@ -1,8 +1,8 @@
-// Slot-based customization of Radar's top nav.
+// Slot-based customization of Radar's top bar.
 //
 // Lets library consumers (e.g. Radar Hub) swap out the brand area, the
 // context picker, and append items on the right of the action bar —
-// without forking App.tsx or building a parallel nav.
+// without forking App.tsx or rebuilding Radar's action chrome.
 //
 // The `embedded` flag hides chrome that only makes sense for Radar's
 // standalone OSS binary: GitHub star link, update-from-GitHub notifier,
@@ -83,26 +83,27 @@ interface NavCustomizationBase {
    */
   onHostNavigate?: (url: string) => void;
   /**
-   * Chrome level for embedded hosts. Default ('full', or omitted) renders
-   * Radar's top bar + the view-switcher. 'none' suppresses BOTH — the host
-   * drives view navigation and cluster/namespace scope from its OWN chrome, and
-   * Radar renders just the active view's content full-bleed. Radar Hub uses this
-   * to surface per-cluster views (Topology / Resources / Traffic / Cost) that
-   * don't aggregate to the fleet as native cloud destinations under one chrome,
-   * gated by a cluster picker — instead of a second, redundant in-cluster nav.
-   * Only meaningful with `embedded: true`.
+   * Chrome level for embedded hosts. Embedded hosts own primary view
+   * navigation in either mode. Default ('full', or omitted) retains Radar's
+   * top bar for the brand, context, and action slots. 'none' suppresses the top
+   * bar too, so the host owns all chrome and Radar renders only the active
+   * view's content full-bleed. Radar Hub uses this to surface per-cluster views
+   * (Topology / Resources / Traffic / Cost) as native cloud destinations under
+   * one host-owned chrome, gated by a cluster picker. Only meaningful with
+   * `embedded: true`.
    */
   chrome?: 'full' | 'none';
 }
 
 /**
- * Slot-based customization of Radar's top nav.
+ * Slot-based customization of Radar's top bar.
  *
  * Standalone-mode consumers pass `embedded: false` (or omit it) and may
  * optionally append items via `rightExtras`. Embedded-mode consumers must
  * supply `rightExtras` — Radar's OSS chrome (GitHub star, update notifier,
  * built-in UserMenu) is hidden, so the host app owns the right side of the
- * nav and must render its own user/auth UI there.
+ * top bar and must render its own user/auth UI there. Embedded hosts provide
+ * primary view navigation outside Radar.
  */
 export type NavCustomization =
   | (NavCustomizationBase & {

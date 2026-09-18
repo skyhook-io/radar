@@ -49,9 +49,8 @@ type NavRailView =
 //                content under the cursor).
 //
 // In embedded mode (Radar Hub) this rail is not rendered at all — the host
-// owns the left chrome via its own fleet LeftRail, and Radar falls back to
-// its top-bar pill nav. That keeps the @skyhook-io/radar-app surface
-// non-breaking and avoids triple-stacked left chrome.
+// owns primary view navigation via its own fleet LeftRail. That keeps the
+// @skyhook-io/radar-app surface non-breaking and avoids stacked chrome.
 
 interface NavItemDef {
   view: NavRailView;
@@ -66,8 +65,7 @@ interface NavItemDef {
 // sits there — next to Cost, its spend-lever sibling. It renders on every
 // cluster (like Issues/Topology): the view itself reads the cluster's capacity
 // posture across all node managers, not just Karpenter. The rail's vertical
-// room lets us surface the views the 8-slot pill bar dropped (Issues,
-// Applications, Cost).
+// room lets us surface every supported standalone destination.
 const NAV_ITEMS: NavItemDef[] = [
   { view: "home", icon: Home, label: "Home" },
   { view: "resources", icon: List, label: "Resources" },
