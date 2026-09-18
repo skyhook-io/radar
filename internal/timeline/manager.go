@@ -205,20 +205,22 @@ func InitStore(cfg StoreConfig) error {
 				globalStoreErr = fmt.Errorf("PostgreSQL timeline store requires a DSN")
 				return
 			}
-			store, err := NewPostgresStore(cfg.DSN)
-			if err != nil {
-				globalStoreErr = fmt.Errorf("PostgreSQL timeline store failed to initialize: %w", err)
-				return
-			}
-			setGlobalStore(store)
-			if cfg.RetentionAge > 0 {
-				store.StartCleanupLoop(cfg.RetentionAge, time.Hour, 0)
-				log.Printf("Initialized PostgreSQL timeline store (retention: %s)", cfg.RetentionAge)
-			} else {
-				log.Printf("Initialized PostgreSQL timeline store (retention: disabled — events table will grow unbounded)")
+			if !openPostgresStore(cfg) {
+				// A database outage costs the timeline, not the cluster views.
+				// Aborting here takes down workloads, logs and everything else
+				// that never touches this store. Leaving it unset is the state
+				// every caller already handles, and the worker reopens it when
+				// the database answers. Still no fall back to memory: that one
+				// looks healthy and loses history on the next restart.
+				startPostgresReconnect(cfg)
 			}
 		}
-		observationStartNanos.Store(time.Now().UnixNano())
+		// Only claim observation coverage once a store exists. A degraded start
+		// records nothing until it reconnects, and marking it here would tell
+		// consumers history covers a window that is empty.
+		if GetStore() != nil {
+			observationStartNanos.Store(time.Now().UnixNano())
+		}
 	})
 	return globalStoreErr
 }
@@ -330,6 +332,8 @@ func setGlobalStore(s EventStore) {
 func ResetStore() {
 	globalStoreInitMu.Lock()
 	defer globalStoreInitMu.Unlock()
+
+	stopPostgresReconnect()
 
 	globalStoreMu.Lock()
 	defer globalStoreMu.Unlock()

@@ -860,6 +860,11 @@ func generationBumpSignalsSpecChange(kind string, oldObj, newObj any) bool {
 func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string, oldObj, newObj any, precomputedDiff *DiffInfo, diffPrecomputed bool) {
 	store := timeline.GetStore()
 	if store == nil {
+		// No store means a configured backend could not be opened. Count the
+		// event the same way a failed write is counted, so a timeline that is
+		// quietly losing history still moves the drop counter an operator
+		// watches.
+		timeline.RecordDrop(kind, namespace, name, timeline.DropReasonStoreDown, op, clusterContext)
 		return
 	}
 

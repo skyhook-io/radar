@@ -310,6 +310,17 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	collectSafe("timeline", &errs, func() {
 		store := timeline.GetStore()
 		if store == nil {
+			// A missing timeline with no explanation is the hardest kind of
+			// failure to chase, so report the reason rather than omitting the
+			// section entirely.
+			if reason := timeline.TimelineUnavailableReason(); reason != "" {
+				snap.Timeline = &DiagTimeline{
+					StorageType:    "unavailable",
+					Degraded:       true,
+					DegradedReason: reason,
+					TotalDrops:     timeline.GetTotalDropCount(),
+				}
+			}
 			return
 		}
 		stats := store.Stats()
