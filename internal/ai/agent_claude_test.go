@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 
@@ -26,6 +27,12 @@ func TestClaudeExecutionProfiles(t *testing.T) {
 	}
 	if safeguarded.Env == nil {
 		t.Error("safeguarded Claude must use a minimized environment")
+	}
+	if strings.Contains(safeguardedArgs, " go") || safeguarded.Stdin == nil {
+		t.Errorf("the prompt must reach Claude over stdin, not as an argument: %q", safeguardedArgs)
+	}
+	if body, _ := io.ReadAll(safeguarded.Stdin); string(body) != "go" {
+		t.Errorf("stdin carries %q, want the prompt", body)
 	}
 
 	fullLocal, cleanupFullLocal, err := a.command(context.Background(), turnSpec{
