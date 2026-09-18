@@ -2175,3 +2175,45 @@ func TestPortKey_PairsEveryLabelShape(t *testing.T) {
 		}
 	}
 }
+
+// A refused proxy dial tested nothing, so it must not be scored as a route
+// outcome. Before this, an identity without the services/proxy subresource -
+// the default for Radar's own ServiceAccount - turned every laptop-vantage
+// trace into a confident "couldn't get through" about a healthy workload.
+func TestProbeService_ProxyDenialIsASkipNotAFailure(t *testing.T) {
+	origSvc := serviceProxyProbe
+	serviceProxyProbe = func(_ context.Context, _ kubernetes.Interface, ns, name string, port int32, _ string, vantage probe.Vantage) probe.Result {
+		return probe.Result{
+			Layer: probe.LayerHTTP, Target: fmt.Sprintf("port %d", port), Vantage: vantage, Path: probe.PathAPIServer,
+			Skipped: true, SkipClass: probe.SkipClassDenied,
+			Reason: "Permission denied. Your identity lacks get services/proxy or get pods/proxy in this namespace.",
+		}
+	}
+	t.Cleanup(func() { serviceProxyProbe = origSvc })
+
+	tr := &Trace{
+		Subject: ResourceRef{Kind: "Service", Namespace: "ns", Name: "svc"},
+		Downstream: []Hop{{
+			Resource: ResourceRef{Kind: "Service", Namespace: "ns", Name: "svc"},
+			Config:   &HopConfig{ServiceType: "ClusterIP", ClusterIP: "10.0.0.1", Ports: []PortMap{{Port: 80}}},
+		}},
+	}
+	runProbes(context.Background(), tr, Options{Probe: true, ProbeBudget: 500 * time.Millisecond}, fake.NewClientset())
+
+	for _, p := range tr.Downstream[0].Probes {
+		if p.Path != probe.PathAPIServer {
+			continue
+		}
+		if !p.Skipped {
+			t.Errorf("a denied proxy dial must be a skip, got a scored result: %+v", p)
+		}
+		if p.SkipClass != probe.SkipClassDenied {
+			t.Errorf("skip class = %q, want %q - the UI needs it to say 'not permitted' rather than 'couldn't test'", p.SkipClass, probe.SkipClassDenied)
+		}
+	}
+	for _, r := range tr.Routes {
+		if r.Outcome == OutcomeUnreachable {
+			t.Errorf("a permissions gap condemned the route: %+v", r)
+		}
+	}
+}
