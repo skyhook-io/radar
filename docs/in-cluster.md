@@ -321,11 +321,11 @@ Some features require additional permissions. Most are disabled by default for s
 
 | Feature | Value | Default | Description |
 |---------|-------|---------|-------------|
-| Secrets | `rbac.secrets: true` | `false` | Show secrets in resource list |
+| Secrets | `rbac.secrets: true` | `false` | Cluster-wide `get/list/watch` on **all** Secrets, whose values Radar shows in plaintext. Also what enables the Helm view, since Helm stores release records as Secrets; it can't be narrowed to those because Helm's release Secrets are found by label, and Kubernetes RBAC can't scope a `list` by label. **Prefer [authentication](authentication.md)**: it grants the same reads automatically and re-checks each one against the requesting user's own RBAC (cloud mode and `rbac.helm` also auto-enable it). Set this flag directly only where everyone who can reach Radar is trusted with every Secret in the cluster |
 | Terminal | `rbac.podExec: true` | `false` | Shell access to pods |
 | Port Forward | `rbac.portForward: true` | `false` | Port forwarding to pods/services. Also the traffic-source fallback (Hubble/Caretta): Radar dials the relay/metrics Service directly first, so this is only needed when a NetworkPolicy or routing blocks that direct path |
 | Logs | `rbac.podLogs: true` | `true` | View pod logs |
-| Helm Write | `rbac.helm: true` | `false` | Install/upgrade/rollback/uninstall Helm releases (grants broad write access; auto-enables secrets). When auth or cloud is on, also emits a split helm add-on: `radar-helm` (CRDs/storage/PDBs/namespaces, bound to owner+member) and `radar-helm-admin` (RBAC/webhooks/APIServices, owner-only) — see [authentication.md](authentication.md#cloud-mode-helm-bindings) |
+| Helm Write | `rbac.helm: true` | `false` | Install/upgrade/rollback/uninstall Helm releases (grants broad write access; auto-enables secrets). When auth or cloud is on, also emits a split helm add-on: `radar-helm` (CRDs/storage/PDBs/namespaces, bound to owner+member) and `radar-helm-admin` (RBAC/webhooks/APIServices, owner-only) — see [authentication.md](authentication.md#cloud-mode-helm-bindings). Not needed to view releases, which is `rbac.secrets` |
 | RBAC view | `rbac.viewRBAC: true` | `false` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings in the resource browser. Off by default: cache-served reads bypass per-user RBAC, so granting this exposes the cluster's authorization graph to every authenticated Radar user |
 | Webhooks view | `rbac.viewWebhooks: true` | `false` | Show admission webhook configurations. Off by default because they expose the cluster's admission-control posture; auto-enabled when auth or cloud mode enforces each user's own RBAC |
 | Node runtime evidence | `rbac.viewNodeRuntime: true` | `false` | Let upgrade-impact checks inspect kubelet metrics and effective configuration through `nodes/proxy`. Enable only for a trusted no-auth audience; authenticated users need this permission on their own Kubernetes identity |
@@ -338,7 +338,7 @@ Enable features as needed:
 ```yaml
 # values.yaml
 rbac:
-  secrets: false      # Keep disabled unless needed
+  secrets: false      # Also enables the Helm view; read the trade-off above first
   podExec: true       # Enable terminal feature
   podLogs: true       # Enable log viewer (default)
   portForward: true   # Enable port forwarding
