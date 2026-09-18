@@ -93,6 +93,12 @@ scoop install radar
 irm https://get.radarhq.io/install.ps1 | iex
 ```
 
+**Custom install location (macOS/Linux):**
+```bash
+curl -fsSL https://get.radarhq.io | INSTALL_DIR="$HOME/.local/bin" sh
+```
+Quick install writes to `/usr/local/bin` unless `INSTALL_DIR` says otherwise. The directory is created if missing, and needs to be on your `PATH` for `radar` and `kubectl radar` to resolve.
+
 **Direct download** — [GitHub Releases](https://github.com/skyhook-io/radar/releases) for macOS, Linux, or Windows.
 
 #### Desktop App

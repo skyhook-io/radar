@@ -42,6 +42,24 @@ jobs:
           sh ./install.sh
           /usr/local/bin/kubectl-radar --version
 
+      - name: Install to a custom INSTALL_DIR
+        run: |
+          INSTALL_DIR="$RUNNER_TEMP/radar-custom/bin" sh ./install.sh
+          "$RUNNER_TEMP/radar-custom/bin/kubectl-radar" --version
+          "$RUNNER_TEMP/radar-custom/bin/radar" --version
+
+      - name: Reject a relative INSTALL_DIR before doing any work
+        run: |
+          cd "$RUNNER_TEMP"
+          if INSTALL_DIR="radar-relative/bin" sh "$GITHUB_WORKSPACE/install.sh"; then
+            echo "Expected a relative INSTALL_DIR to fail the install" >&2
+            exit 1
+          fi
+          if [ -e "$RUNNER_TEMP/radar-relative" ]; then
+            echo "Rejected install should not have created any directories" >&2
+            exit 1
+          fi
+
   windows:
     name: Windows installers
     runs-on: windows-latest
