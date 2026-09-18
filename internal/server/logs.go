@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -76,6 +77,10 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	if container != "" {
 		// Fetch logs for specific container
 		logContent, err := s.fetchContainerLogs(r.Context(), client, namespace, podName, container, tailLines, previous, sinceSeconds)
+		if errors.Is(err, ErrLogsUnavailable) {
+			s.writeError(w, http.StatusGone, ErrLogsUnavailable.Error())
+			return
+		}
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to fetch logs: %v", err))
 			return
@@ -85,7 +90,9 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 		// Fetch logs for all containers
 		for _, c := range containers {
 			logContent, err := s.fetchContainerLogs(r.Context(), client, namespace, podName, c, tailLines, previous, sinceSeconds)
-			if err != nil {
+			if errors.Is(err, ErrLogsUnavailable) {
+				logs[c] = ""
+			} else if err != nil {
 				logs[c] = fmt.Sprintf("Error fetching logs: %v", err)
 			} else {
 				logs[c] = logContent
@@ -239,7 +246,27 @@ func (s *Server) fetchContainerLogs(ctx context.Context, client kubernetes.Inter
 		return "", err
 	}
 
+	if body := string(content); isLogsUnavailableNotice(body) {
+		return "", ErrLogsUnavailable
+	}
+
 	return string(content), nil
+}
+
+// ErrLogsUnavailable means the container ran but the kubelet no longer holds
+// its output. Distinct from "no logs yet" and from a failure to reach the
+// cluster: nothing the caller does will produce these lines.
+var ErrLogsUnavailable = errors.New("the container's log file is no longer on the node")
+
+// isLogsUnavailableNotice recognises the kubelet's own apology for a log file
+// it has already collected. The apiserver returns it with a 200 and it is the
+// entire body, so without this it reaches the reader styled as a line their
+// workload printed. Matched on the stable prefix rather than the whole string,
+// which carries a container id.
+//
+// Ref: kubelet returns "unable to retrieve container logs for <containerID>".
+func isLogsUnavailableNotice(body string) bool {
+	return strings.HasPrefix(strings.TrimSpace(body), "unable to retrieve container logs for")
 }
 
 // parseLogLine extracts timestamp from a log line (format: 2024-01-20T10:30:00.123456789Z content)

@@ -65,6 +65,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const [selectedPods, setSelectedPods] = useState<Set<string>>(new Set())
   const [isLoading, setIsLoading] = useState(false)
   const [fetchError, setFetchError] = useState<string | null>(null)
+  const [fetchErrorTone, setFetchErrorTone] = useState<'failure' | 'state'>('failure')
   const [emptyMessage, setEmptyMessage] = useState<string | null>(null)
   const [emptyCommand, setEmptyCommand] = useState<string | null>(null)
   const [showPodFilter, setShowPodFilter] = useState(false)
@@ -99,6 +100,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const loadLogs = useCallback(async () => {
     setIsLoading(true)
     setFetchError(null)
+      setFetchErrorTone('failure')
     try {
       const result = await fetchAll({ container: selectedContainer || undefined, tailLines, sinceSeconds })
       const resultPods = result.pods ?? []
@@ -126,6 +128,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       })))
     } catch (err) {
       console.error('Failed to fetch workload logs:', err)
+      // 404/410 mean the cluster has nothing to give, not that Radar broke.
+      const status = (err as { status?: number } | null)?.status
+      setFetchErrorTone(status === 404 || status === 410 ? 'state' : 'failure')
       setFetchError(err instanceof Error ? err.message : 'Failed to fetch logs')
     } finally {
       setIsLoading(false)
@@ -378,6 +383,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       emptyMessage={emptyMessage || (pods.length === 0 ? 'No pods found' : 'No logs available')}
       emptyCommand={emptyCommand}
       errorMessage={fetchError || bodyNotice}
+      errorTone={fetchError ? fetchErrorTone : 'failure'}
       notice={bannerNotice}
       forceDark={forceDark}
     />

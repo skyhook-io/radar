@@ -61,6 +61,12 @@ interface LogCoreProps {
   emptyCommand?: string | null
   errorMessage?: string | null
   /**
+   * 'failure' when Radar could not do its job, 'state' when the cluster simply
+   * has nothing to give. Red is reserved for the first: spending it on an
+   * ordinary pod state trains the reader to ignore it.
+   */
+  errorTone?: 'failure' | 'state'
+  /**
    * Shown above the log body while it keeps rendering, for a stream that
    * stopped after lines had already arrived. Replacing them would discard the
    * last thing the workload said before it went quiet.
@@ -157,6 +163,7 @@ export function LogCore({
   emptyMessage = 'No logs available',
   emptyCommand,
   errorMessage,
+  errorTone = 'failure',
   notice,
   forceDark,
 }: LogCoreProps) {
@@ -1003,7 +1010,7 @@ export function LogCore({
           </div>
         </div>
       ) : errorMessage ? (
-        <div className={`${EMPTY_STATE_CLASS} ${palette.textError}`}>
+        <div className={`${EMPTY_STATE_CLASS} ${errorTone === 'state' ? palette.textTertiary : palette.textError}`}>
           <Terminal className="w-8 h-8" />
           <span>{errorMessage}</span>
         </div>

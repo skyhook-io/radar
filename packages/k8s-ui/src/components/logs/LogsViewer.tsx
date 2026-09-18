@@ -53,6 +53,7 @@ export function LogsViewer({
   const [selectedContainer, setSelectedContainer] = useState(initialContainer || containers[0] || '')
   const [isLoading, setIsLoading] = useState(false)
   const [fetchError, setFetchError] = useState<string | null>(null)
+  const [fetchErrorTone, setFetchErrorTone] = useState<'failure' | 'state'>('failure')
   const [logRange, setLogRange] = useState('500')
   const [showPrevious, setShowPrevious] = useState(false)
   const { showError, showSuccess } = useToast()
@@ -61,7 +62,11 @@ export function LogsViewer({
   const { entries, append, set, clear } = useLogBuffer()
   const { isStreaming, streamError, streamEnded, connecting, startStreaming, stopStreaming } = useLogStream()
 
-  const willAutoStream = autoStream && !!createStream
+  // Following and reading the previous run are mutually exclusive: a container
+  // that already exited cannot be followed. Without this the auto-stream
+  // re-arms after the previous-run fetch, clears the buffer and refills it
+  // from the current run, leaving the checkbox ticked over the wrong logs.
+  const willAutoStream = autoStream && !!createStream && !showPrevious
   // Tracks the container we've already auto-started for, so re-renders don't
   // re-open the stream, and a container switch arms a fresh auto-start.
   const autoStartedForRef = useRef<string | null>(null)
@@ -72,6 +77,7 @@ export function LogsViewer({
     if (!selectedContainer) return
     setIsLoading(true)
     setFetchError(null)
+    setFetchErrorTone('failure')
     try {
       const data = await fetchLogs({ container: selectedContainer, tailLines, sinceSeconds, previous: showPrevious })
       const logText = data[selectedContainer] ?? Object.values(data)[0] ?? ''
@@ -81,6 +87,9 @@ export function LogsViewer({
       }))
     } catch (err) {
       console.error('Failed to fetch logs:', err)
+      // 404/410 mean the cluster has nothing to give, not that Radar broke.
+      const status = (err as { status?: number } | null)?.status
+      setFetchErrorTone(status === 404 || status === 410 ? 'state' : 'failure')
       setFetchError(err instanceof Error ? err.message : 'Failed to fetch logs')
     } finally {
       setIsLoading(false)
@@ -178,7 +187,9 @@ export function LogsViewer({
   // loading state rather than the empty-logs placeholder.
   const isConnecting = willAutoStream && connecting && entries.length === 0
 
-  const streamNotice = placeStreamNotice(streamError, streamEnded, entries.length > 0)
+  const streamNotice = showPrevious
+    ? { body: null, banner: null }
+    : placeStreamNotice(streamError, streamEnded, entries.length > 0)
   const bodyNotice = streamNotice.body
     ? [streamNoticeHeadline(streamNotice.body.tone, false), streamNotice.body.detail].filter(Boolean).join(' ')
     : null
@@ -191,6 +202,7 @@ export function LogsViewer({
       entries={entries}
       isLoading={isLoading || isConnecting}
       errorMessage={fetchError || bodyNotice}
+      errorTone={fetchError ? fetchErrorTone : 'failure'}
       notice={bannerNotice}
       isStreaming={isStreaming}
       onStartStream={createStream ? handleStartStreaming : undefined}
