@@ -420,3 +420,27 @@ above, which happen either way.
 - [CLI reference](https://radarhq.io/docs/configuration/cli) — Commands and operator-facing flags
 - [In-Cluster Deployment](in-cluster.md) — Deploy Radar inside your cluster with Helm
 - [Authentication & Authorization](authentication.md) — Proxy and OIDC auth for shared deployments
+
+## Streaming lists (WatchListClient)
+
+Kubernetes 1.34+ apiservers offer streamed initial lists (the `WatchListClient`
+client feature), which trade client-side startup latency for lower apiserver
+memory during large LISTs. At large-cluster scale the trade is severe for a
+visibility tool: measured 13-16x slower initial informer sync, which holds
+Radar's first paint for minutes ([#1303](https://github.com/skyhook-io/radar/issues/1303)).
+
+**Radar therefore disables streamed lists by default** and syncs with plain
+LISTs — the behavior every Kubernetes client had before 1.34.
+
+Who might want streaming back on: self-hosted clusters whose apiserver runs
+with tight memory limits *and* holds very large object counts. The symptom of
+plain LISTs there is an apiserver memory spike at Radar startup. To re-enable
+streaming, set the standard client-go feature env var when launching Radar:
+
+```bash
+KUBE_FEATURE_WatchListClient=true radar
+```
+
+The effective policy is logged at startup (`Streaming lists (WatchListClient): …`)
+and reported in the diagnostics snapshot (`Ctrl+Shift+D` → Config), so support
+can always tell which mode a session ran in.
