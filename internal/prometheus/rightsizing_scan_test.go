@@ -578,15 +578,6 @@ func TestEnrichScanHPAHonoursCoverageEndToEnd(t *testing.T) {
 			}
 			t.Cleanup(core.Stop)
 			cache := &k8s.ResourceCache{ResourceCache: core}
-			// HPAs load on the deferred path, and the evidence gate refuses to
-			// read them until that phase reports done.
-			deadline := time.Now().Add(10 * time.Second)
-			for !cache.IsDeferredSynced() {
-				if time.Now().After(deadline) {
-					t.Fatal("deferred informers never reported synced")
-				}
-				time.Sleep(20 * time.Millisecond)
-			}
 
 			workloads := map[string]*scanWorkload{
 				workloadIdentity("Deployment", "team-a", "api"): {
@@ -600,7 +591,7 @@ func TestEnrichScanHPAHonoursCoverageEndToEnd(t *testing.T) {
 			}
 			// A kind mapped to a nil namespace list is the cluster-wide scope; an
 			// absent key yields an empty list, which is a different branch.
-			enrichScanHPA(cache, map[string][]string{"Deployment": nil}, workloads)
+			enrichScanHPA(context.Background(), cache, map[string][]string{"Deployment": nil}, workloads)
 
 			a := workloads[workloadIdentity("Deployment", "team-a", "api")].workload
 			b := workloads[workloadIdentity("Deployment", "team-b", "other")].workload
@@ -614,5 +605,100 @@ func TestEnrichScanHPAHonoursCoverageEndToEnd(t *testing.T) {
 				t.Error("the HPA targets this Deployment's CPU; that must survive the coverage check")
 			}
 		})
+	}
+}
+
+func utilizationHPA(namespace, name string) *autoscalingv2.HorizontalPodAutoscaler {
+	utilization := int32(80)
+	return &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: name},
+			Metrics: []autoscalingv2.MetricSpec{{
+				Type: autoscalingv2.ResourceMetricSourceType,
+				Resource: &autoscalingv2.ResourceMetricSource{
+					Name:   "cpu",
+					Target: autoscalingv2.MetricTarget{AverageUtilization: &utilization},
+				},
+			}},
+		},
+	}
+}
+
+// stalledDeferredCache watches HPAs cluster-wide alongside a second deferred
+// informer that never starts. The HPA informer syncs normally; the deferred
+// phase as a whole never reports done — the shape of a cluster where one
+// deferred kind timed out, which is permanent for the process lifetime.
+func stalledDeferredCache(t *testing.T, hpa *autoscalingv2.HorizontalPodAutoscaler) *k8s.ResourceCache {
+	t.Helper()
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{
+		Client:          fake.NewClientset(hpa),
+		ResourceTypes:   map[string]bool{k8score.HorizontalPodAutoscalers: true, k8score.Jobs: true},
+		DeferredTypes:   map[string]bool{k8score.HorizontalPodAutoscalers: true, k8score.Jobs: true},
+		DebugSyncDelays: map[string]time.Duration{k8score.Jobs: time.Hour},
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache: %v", err)
+	}
+	t.Cleanup(core.Stop)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if synced, known := core.InformerSynced(k8score.HorizontalPodAutoscalers); known && synced {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("HPA informer never synced")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cache := &k8s.ResourceCache{ResourceCache: core}
+	if cache.IsDeferredSynced() {
+		t.Fatal("deferred phase reported done; this cache must reproduce a stalled one")
+	}
+	return cache
+}
+
+// A readable, fully synced HPA informer is evidence even when an unrelated
+// deferred informer is stuck. Gating on the deferred phase instead withheld a
+// correct reduction and blamed autoscaling for it.
+func TestEnrichScanHPAIgnoresUnrelatedDeferredInformers(t *testing.T) {
+	cache := stalledDeferredCache(t, utilizationHPA("team-a", "api"))
+	key := workloadIdentity("Deployment", "team-a", "api")
+	workloads := map[string]*scanWorkload{
+		key: {
+			kind: "Deployment", namespace: "team-a", name: "api",
+			workload: rightsizingWorkload{hpaManaged: map[string]bool{}},
+		},
+	}
+	enrichScanHPA(context.Background(), cache, map[string][]string{"Deployment": nil}, workloads)
+
+	got := workloads[key].workload
+	if !got.hpaAvailable {
+		t.Error("the HPA informer is synced and cluster-wide; an unrelated stuck kind must not withhold its answer")
+	}
+	if !got.hpaManaged["cpu"] {
+		t.Error("the HPA targets this Deployment's CPU and must be seen")
+	}
+}
+
+// The single-workload path carries the same gate as the scan.
+func TestLoadHPAManagedResourcesIgnoresUnrelatedDeferredInformers(t *testing.T) {
+	cache := stalledDeferredCache(t, utilizationHPA("team-a", "api"))
+	managed, available := loadHPAManagedResources(context.Background(), cache, "Deployment", "team-a", "api")
+	if !available {
+		t.Error("the HPA informer is synced and cluster-wide; an unrelated stuck kind must not withhold its answer")
+	}
+	if !managed["cpu"] {
+		t.Error("the HPA targets this Deployment's CPU and must be seen")
+	}
+}
+
+// A kind this cache never watched still has no evidence to offer: the nil
+// lister is the answer, and the unknown informer key must not be read as one.
+func TestLoadHPAManagedResourcesReportsAnUnwatchedKind(t *testing.T) {
+	cache := scopeTestCache(t, map[string]bool{k8score.Pods: true})
+	if _, available := loadHPAManagedResources(context.Background(), cache, "Deployment", "team-a", "api"); available {
+		t.Error("HPAs are not watched here, so no autoscaler was ever ruled out")
 	}
 }

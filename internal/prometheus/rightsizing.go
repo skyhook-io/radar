@@ -288,7 +288,7 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		return rightsizingWorkload{}, errCacheNotReady
 	}
 
-	hpaManaged, hpaAvailable := loadHPAManagedResources(cache, kind, namespace, name)
+	hpaManaged, hpaAvailable := loadHPAManagedResources(ctx, cache, kind, namespace, name)
 	workload := rightsizingWorkload{
 		containers:    extractRuntimeContainers(podTemplate),
 		currentPodOOM: map[string]bool{},
@@ -332,9 +332,17 @@ func collectCurrentPodOOM(dst map[string]bool, statuses []corev1.ContainerStatus
 	}
 }
 
-func loadHPAManagedResources(cache *k8s.ResourceCache, kind, namespace, name string) (map[string]bool, bool) {
+func loadHPAManagedResources(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name string) (map[string]bool, bool) {
 	managed := map[string]bool{}
-	if !cache.IsDeferredSynced() || cache.HorizontalPodAutoscalers() == nil {
+	if cache.HorizontalPodAutoscalers() == nil {
+		return managed, false
+	}
+	// Only this informer's sync state says whether the HPA inventory is
+	// readable. The deferred phase as a whole reports false while any unrelated
+	// kind is warming, and permanently once one fails, which would withhold a
+	// correct recommendation for a reason that has nothing to do with
+	// autoscaling.
+	if !waitForInformerSynced(ctx, cache, string(k8score.HorizontalPodAutoscalers)) {
 		return managed, false
 	}
 	// A namespace-scoped informer answers an empty list for every namespace it
