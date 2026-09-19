@@ -1,4 +1,4 @@
-suite: Cloud integration read baseline
+suite: Radar Cloud integration read baseline
 templates:
   - cloud-rbac-integration-read.yaml
 set:

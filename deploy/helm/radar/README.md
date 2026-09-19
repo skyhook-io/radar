@@ -126,9 +126,9 @@ applies to GitOps users: manage the Secret with SealedSecrets / SOPS /
 External Secrets and reference it via `cloud.existingSecret`; Helm never
 touches its contents.
 
-### Cloud default integration reads
+### Radar Cloud default integration reads
 
-Cloud's default viewer/member/owner bindings receive explicit `get/list/watch`
+Radar Cloud's default viewer/member/owner bindings receive explicit `get/list/watch`
 grants for Radar's curated integrations, in addition to their existing roles.
 These are full-object Kubernetes permissions: inline configuration in specs and
 status is visible, not just Radar's summaries. The baseline adds no writes,
@@ -157,7 +157,7 @@ The [permission table](files/integration-read-baseline.yaml) records exact tuple
 and intentional exceptions. See [the policy and upgrade guide](../../../docs/cloud-rbac-baseline.md)
 for sensitive-resource exclusions, enterprise group bindings and rollout details.
 An **installed chart upgrade** is needed to apply these grants; updating only the
-Radar binary (including Cloud self-upgrade) does not update RBAC. Missing new keys
+Radar binary (including Radar Cloud self-upgrade) does not update RBAC. Missing new keys
 on an older `--reuse-values` installation default to enabled; set explicit false
 before upgrading if the added visibility is unwanted.
 

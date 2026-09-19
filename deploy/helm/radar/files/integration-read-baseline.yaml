@@ -1,4 +1,4 @@
-# Explicit Cloud caller policy, NOT the connector service account's collection rules.
+# Explicit Radar Cloud caller policy, NOT the connector service account's collection rules.
 # Additions require review. Catalog coverage tests never generate authorization.
 # All grant rows mean get/list/watch on full objects, not redacted projections.
 # Existing grants are preserved; withhold does not revoke rights from other roles.
@@ -81,19 +81,40 @@ entries:
     reason: "report.secrets[].match contains secret-detection excerpts; examples are masked but default access is deferred pending masking guarantees."
     source: "https://aquasecurity.github.io/trivy-operator/v0.21.1/docs/crds/exposedsecret-report/"
   - group: "argoproj.io"
-    resources: ["clusteranalysistemplates","clusterworkflowtemplates"]
+    resources: ["clusteranalysistemplates"]
     scope: Cluster
     collection: "argo"
-    decision: grant
-    reason: "Operational configuration and status; full inline configuration is intentionally readable."
-    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+    decision: withhold
+    reason: "spec.metrics[].provider.prometheus.authentication.oauth2.clientSecret is a literal credential, not a Secret reference."
+    source: "https://github.com/argoproj/argo-rollouts/blob/v1.9.1/pkg/apis/rollouts/v1alpha1/analysis_types.go#L269"
   - group: "argoproj.io"
-    resources: ["analysisruns","analysistemplates","applications","applicationsets","appprojects","cronworkflows","experiments","rollouts","workflows","workflowtemplates"]
+    resources: ["clusterworkflowtemplates"]
+    scope: Cluster
+    collection: "argo"
+    decision: withhold
+    reason: "Artifact OSS configuration can contain a literal securityToken; workflow templates also accept raw resource manifests."
+    source: "https://github.com/argoproj/argo-workflows/blob/v3.6.10/pkg/apis/workflow/v1alpha1/workflow_types.go#L2936"
+  - group: "argoproj.io"
+    resources: ["analysisruns","analysistemplates"]
+    scope: Namespaced
+    collection: "argo"
+    decision: withhold
+    reason: "spec.metrics[].provider.prometheus.authentication.oauth2.clientSecret is a literal credential, not a Secret reference."
+    source: "https://github.com/argoproj/argo-rollouts/blob/v1.9.1/pkg/apis/rollouts/v1alpha1/analysis_types.go#L269"
+  - group: "argoproj.io"
+    resources: ["applications","applicationsets","appprojects","experiments","rollouts"]
     scope: Namespaced
     collection: "argo"
     decision: grant
     reason: "Operational configuration and status; full inline configuration is intentionally readable."
     source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "argoproj.io"
+    resources: ["cronworkflows","workflows","workflowtemplates"]
+    scope: Namespaced
+    collection: "argo"
+    decision: withhold
+    reason: "Artifact OSS configuration can contain a literal securityToken; Workflow status can also retain captured output and parameters."
+    source: "https://github.com/argoproj/argo-workflows/blob/v3.6.10/pkg/apis/workflow/v1alpha1/workflow_types.go#L2936"
   - group: "autoscaling.k8s.io"
     resources: ["verticalpodautoscalers"]
     scope: Namespaced
@@ -319,12 +340,26 @@ entries:
     reason: "Operational configuration and status; full inline configuration is intentionally readable."
     source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
   - group: "infrastructure.cluster.x-k8s.io"
-    resources: ["awsmachines","awsmachinetemplates","awsmanagedclusters","awsmanagedmachinepools","azuremachines","azuremachinetemplates","azuremanagedclusters","azuremanagedcontrolplanes","azuremanagedmachinepools","gcpmachines","gcpmachinetemplates","gcpmanagedclusters","gcpmanagedcontrolplanes","gcpmanagedmachinepools"]
+    resources: ["awsmachines","awsmachinetemplates","awsmanagedclusters","awsmanagedmachinepools","azuremanagedclusters","azuremanagedcontrolplanes","azuremanagedmachinepools","gcpmanagedclusters","gcpmanagedcontrolplanes","gcpmanagedmachinepools"]
     scope: Namespaced
     collection: "clusterApi"
     decision: grant
     reason: "Operational configuration and status; full inline configuration is intentionally readable."
     source: "packages/k8s-ui/src/components/resources/ResourcesView.tsx (curated columns)"
+  - group: "infrastructure.cluster.x-k8s.io"
+    resources: ["azuremachines","azuremachinetemplates"]
+    scope: Namespaced
+    collection: "clusterApi"
+    decision: withhold
+    reason: "Machine spec.vmExtensions[].protectedSettings can contain extension credentials; machine templates embed the same fields."
+    source: "https://github.com/kubernetes-sigs/cluster-api-provider-azure/blob/66e943dab45ea1947b6e3eea2cfdf4605c4a85b2/config/crd/bases/infrastructure.cluster.x-k8s.io_azuremachines.yaml"
+  - group: "infrastructure.cluster.x-k8s.io"
+    resources: ["gcpmachines","gcpmachinetemplates"]
+    scope: Namespaced
+    collection: "clusterApi"
+    decision: withhold
+    reason: "Machine rootDiskEncryptionKey and additional-disk encryptionKey can contain suppliedKey.rawKey encryption material; templates embed the same fields."
+    source: "https://github.com/kubernetes-sigs/cluster-api-provider-gcp/blob/13cd6ef4c304f3c230696bdfd235b37fda1abb7b/config/crd/bases/infrastructure.cluster.x-k8s.io_gcpmachines.yaml"
   - group: "jobset.x-k8s.io"
     resources: ["jobsets"]
     scope: Namespaced
@@ -711,7 +746,7 @@ entries:
     reason: "Covered by the existing cluster-read add-on and its existing collection/tier gates."
     source: "pkg/topology/cluster_scoped_kinds.go; existing cloud-rbac-cluster-read.yaml"
   - group: "traefik.containo.us"
-    resources: ["ingressroutes","ingressroutetcps","ingressrouteudps","middlewaretcps","serverstransports","serverstransporttcps","tlsoptions","tlsstores","traefikservices"]
+    resources: ["ingressroutes","ingressroutetcps","ingressrouteudps","middlewaretcps","serverstransports","tlsoptions","tlsstores","traefikservices"]
     scope: Namespaced
     collection: "traefik"
     decision: grant
@@ -724,6 +759,13 @@ entries:
     decision: grant
     reason: "Kubernetes BasicAuth references a Secret; spec.plugin and forwardAuth configuration remain visible under the inline-config policy."
     source: "https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/basicauth/"
+  - group: "traefik.containo.us"
+    resources: ["serverstransporttcps"]
+    scope: Namespaced
+    collection: "traefik"
+    decision: withhold
+    reason: "Exact legacy-group schema is unverified; the reviewed ServersTransportTCP definition uses traefik.io and does not establish this tuple's safety."
+    source: "https://github.com/traefik/traefik/blob/v2.11.0/docs/content/reference/dynamic-configuration/traefik.io_serverstransporttcps.yaml"
   - group: "traefik.io"
     resources: ["ingressroutes","ingressroutetcps","ingressrouteudps","middlewaretcps","serverstransports","serverstransporttcps","tlsoptions","tlsstores","traefikservices"]
     scope: Namespaced

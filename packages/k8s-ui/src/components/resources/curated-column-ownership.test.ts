@@ -29,7 +29,7 @@ function objectKeys(declName: string): string[] {
 const CURATED = objectKeys('const KNOWN_COLUMNS')
 const OWNED = new Set(objectKeys('const CURATED_COLUMN_GROUPS'))
 
-describe('Cloud integration read baseline coverage', () => {
+describe('Radar Cloud integration read baseline coverage', () => {
   const root = join(__dirname, '../../../../..')
   const policy = parse(readFileSync(join(root, 'deploy/helm/radar/files/integration-read-baseline.yaml'), 'utf8')) as {
     entries: { group: string; resources: string[]; scope: string; decision: string }[]

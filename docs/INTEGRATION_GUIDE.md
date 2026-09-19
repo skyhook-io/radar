@@ -30,7 +30,7 @@ don't assume every discoverable resource has a CRD object.
   per-group read-access toggles; don't rely on an opt-in wildcard or request write
   permissions for a read-only integration. The chart coverage test checks groups,
   not every resource/verb or rendered toggle combination.
-- [ ] Make an explicit Cloud caller-permission decision in
+- [ ] Make an explicit Radar Cloud caller-permission decision in
   `deploy/helm/radar/files/integration-read-baseline.yaml`: grant, existing, or
   withhold with a reason. Check exact scope and credential-bearing fields; a
   collection grant or renderer is not permission approval. See

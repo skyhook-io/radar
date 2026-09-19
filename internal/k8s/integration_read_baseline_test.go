@@ -99,6 +99,11 @@ func TestIntegrationReadBaselineCatalogCoverage(t *testing.T) {
 		}
 	}
 	for _, key := range []string{
+		"argoproj.io/analysisruns", "argoproj.io/analysistemplates", "argoproj.io/clusteranalysistemplates",
+		"argoproj.io/workflows", "argoproj.io/workflowtemplates", "argoproj.io/clusterworkflowtemplates", "argoproj.io/cronworkflows",
+		"infrastructure.cluster.x-k8s.io/azuremachines", "infrastructure.cluster.x-k8s.io/azuremachinetemplates",
+		"infrastructure.cluster.x-k8s.io/gcpmachines", "infrastructure.cluster.x-k8s.io/gcpmachinetemplates",
+		"traefik.containo.us/serverstransporttcps",
 		"external-secrets.io/secretstores", "external-secrets.io/clustersecretstores",
 		"keda.sh/triggerauthentications", "keda.sh/clustertriggerauthentications", "kyverno.io/updaterequests",
 		"bootstrap.cluster.x-k8s.io/kubeadmconfigs", "bootstrap.cluster.x-k8s.io/kubeadmconfigtemplates",
