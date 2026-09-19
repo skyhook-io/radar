@@ -18,7 +18,7 @@ func TestGetRightsizingRequiresScope(t *testing.T) {
 	if err == nil {
 		t.Fatal("scope must be required so a bare call never triggers the cluster scan")
 	}
-	for _, want := range []string{"workload", "namespace", "cluster", "45s"} {
+	for _, want := range []string{"workload", "namespace", "cluster", "3 minutes"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the error should teach all three call shapes and the scan's cost, missing %q: %v", want, err)
 		}
@@ -1524,5 +1524,17 @@ func TestScanReliabilityPriority(t *testing.T) {
 	want := []string{"limit", "oom", "throttled", "grow", "partial-grow", "cut", "bursty", "hpa", "idle", "failed-risk", "steady"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("priority order = %v, want %v", names, want)
+	}
+}
+
+func TestRunningScanGuidanceSuppliesExactContinuation(t *testing.T) {
+	input := getRightsizingInput{Scope: "namespace", Namespaces: []string{"a", "b"}, Classification: "increase", Limit: 7, Refresh: true}
+	out := rightsizingResponse{RightsizingScanProgress: prometheuspkg.RightsizingScanProgress{ScanID: "rs_example", ScanStatus: "running"}, NamespacesWithoutWorkloads: []string{"a"}, Reason: "no_workloads", Remediation: "wrong"}
+	setRightsizingScanGuidance(&out, input)
+	if out.State != prometheuspkg.RightsizingScanPartial || out.Reason != "scan_in_progress" || out.Remediation != "" || len(out.NamespacesWithoutWorkloads) != 0 {
+		t.Fatalf("running scan claims final evidence: %+v", out)
+	}
+	if out.NextCall == nil || out.NextCall.Tool != "get_rightsizing" || out.NextCall.Arguments.ScanID != "rs_example" || out.NextCall.Arguments.Refresh || out.NextCall.Arguments.Limit != 7 || out.NextCall.Arguments.Classification != "increase" || len(out.NextCall.Arguments.Namespaces) != 2 {
+		t.Fatalf("invalid continuation: %+v", out.NextCall)
 	}
 }

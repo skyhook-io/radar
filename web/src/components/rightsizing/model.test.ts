@@ -31,6 +31,7 @@ function response(
   scaledToZero = false,
 ): RightsizingScanResponse {
   return {
+    scanId: 'rs_test', scanStatus: 'finished', deadlineAt: '2026-09-19T10:03:00Z',
     state: 'complete',
     scannedAt: '2026-07-12T10:00:00Z',
     window: '7d',
@@ -40,7 +41,7 @@ function response(
       workloadsEvaluated: 1,
       workloadsWithData: 1,
       batches: 1,
-      completedBatches: 1,
+      attemptedBatches: 1, completedBatches: 1,
     },
     workloads: [
       {

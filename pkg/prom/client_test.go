@@ -479,3 +479,15 @@ func TestClient_Probe_ReasonSeparatesAnsweredFromUnreachable(t *testing.T) {
 		}
 	})
 }
+
+func TestQueryAtAnchorsInstantEvidence(t *testing.T) {
+	tr := fakeProm(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("time") != "1700000000" || r.URL.Query().Get("query") != "up" {
+			t.Errorf("unanchored instant query: %s", r.URL)
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	})
+	if _, err := NewClient(tr).QueryAt(context.Background(), "up", time.Unix(1700000000, 0)); err != nil {
+		t.Fatal(err)
+	}
+}

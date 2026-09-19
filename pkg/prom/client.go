@@ -32,6 +32,11 @@ func (c *Client) Query(ctx context.Context, promQL string) (*QueryResult, error)
 	return c.issueQuery(ctx, "/api/v1/query", url.Values{"query": {promQL}})
 }
 
+// QueryAt executes an instant query at a fixed evidence time.
+func (c *Client) QueryAt(ctx context.Context, promQL string, at time.Time) (*QueryResult, error) {
+	return c.issueQuery(ctx, "/api/v1/query", url.Values{"query": {promQL}, "time": {strconv.FormatInt(at.Unix(), 10)}})
+}
+
 // QueryEvidence rejects partial answers rather than inferring identity from them.
 func (c *Client) QueryEvidence(ctx context.Context, promQL string) (*QueryResult, error) {
 	if len(promQL) > MaxWorkloadQueryBytes {

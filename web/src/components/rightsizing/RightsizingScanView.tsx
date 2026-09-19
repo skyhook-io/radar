@@ -184,7 +184,7 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
   const hiddenSystem = rows.length - rows.filter((row) => !row.system).length
   const onlySystemRowsAreHidden = !includeSystem && rows.length > 0 && scopeRows.length === 0
   const surfaceState = getRightsizingScanSurfaceState({
-    statusLoading,
+    statusLoading: statusLoading || scan.isLoading,
     hasStatus: Boolean(promStatus),
     connected: promStatus?.connected === true,
     pending: scan.isPending,
@@ -232,12 +232,12 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
             {result && (
               <button
                 type="button"
-                onClick={runScan}
-                disabled={scan.isPending}
+                onClick={scan.isPending ? scan.stop : runScan}
+                disabled={scan.isStopping}
                 className="btn-brand inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium"
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${scan.isPending ? 'animate-spin' : ''}`} />
-                {scan.isPending ? 'Scanning…' : 'Run again'}
+                {scan.isStopping ? 'Stopping…' : scan.isPending ? 'Stop scan' : 'Run again'}
               </button>
             )}
           </div>
@@ -286,19 +286,19 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
           <CenteredState
             loading
             title="Analyzing CPU and memory requests…"
-            body="Comparing 7 days of CPU and memory usage with configured requests. Larger clusters can take up to a minute."
+            body="Comparing 7 days of CPU and memory usage with configured requests. Results appear as batches finish; scans run for up to three minutes."
           />
         ) : surfaceState === 'fatal_error' ? (
           <CenteredState
-            title="Rightsizing scan failed"
+            title={scan.statusError ? "Could not retrieve scan status" : "Rightsizing scan failed"}
             body={errorMessage(scan.error)}
             action={
               <button
                 type="button"
-                onClick={runScan}
+                onClick={scan.statusError ? () => void scan.retryStatus() : runScan}
                 className="btn-brand px-3 py-1.5 text-xs font-medium"
               >
-                Try again
+                {scan.statusError ? 'Retry status' : 'Try again'}
               </button>
             }
           />
@@ -309,8 +309,8 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
             action={
               <button
                 type="button"
-                onClick={runScan}
-                disabled={scan.isPending}
+                onClick={scan.isPending ? scan.stop : runScan}
+                disabled={scan.isStopping}
                 className="btn-brand px-3 py-1.5 text-xs font-medium"
               >
                 Try again
@@ -319,16 +319,16 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
           />
         ) : result ? (
           <div
-            className={`flex flex-col gap-4 transition-opacity ${scan.isPending ? 'opacity-70' : ''}`}
+            className="flex flex-col gap-4"
           >
             {scan.error && (
-              <Notice
-                tone="warning"
-                text={`Refresh failed; showing results from ${formatScanTime(result.scannedAt)}. ${errorMessage(scan.error)}`}
-              />
+              <div className="flex items-center gap-3">
+                <Notice tone="warning" text={`${scan.statusError ? 'Could not retrieve scan status. The scan may still be running.' : 'Could not start or stop the scan.'} ${errorMessage(scan.error)}`} />
+                <button type="button" className="btn-brand-muted shrink-0 px-3 py-1.5 text-xs" onClick={() => void scan.retryStatus()}>Retry status</button>
+              </div>
             )}
             {scan.isPending && (
-              <Notice text="Scanning the current scope. Previous results remain visible until the scan completes." />
+              <Notice text={`${scan.progress?.coverage.workloadsDiscovered ? `Scanning — ${scan.progress.coverage.workloadsEvaluated} of ${scan.progress.coverage.workloadsDiscovered} workloads attempted.` : 'Preparing scan…'} Results and rankings update as batches finish. You can leave this page and return.${scan.showingPrevious ? ' Showing previous results until the first batch is ready.' : ''}`} />
             )}
             <ScanSummary
               namespaces={namespaces}
@@ -337,8 +337,10 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
               selected={classFilter}
               onSelect={(value) => setFilter('rfClass', value === 'actions' ? undefined : value)}
             />
-            <ScanNotices key={result.scannedAt} result={result} />
-            {result.reason === 'only_daemonsets_without_nodes' ? (
+            {!scan.isPending && <ScanNotices key={result.scannedAt} result={result} />}
+            {scan.isPending && rows.length === 0 ? (
+              <CenteredState loading title="Preparing recommendations…" body="The scan is running. Recommendations appear after each batch finishes." />
+            ) : result.reason === 'only_daemonsets_without_nodes' ? (
               <EmptyState
                 variant="card"
                 headline="Only DaemonSets with no nodes in this scope"
@@ -369,7 +371,9 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
                   onClear={clearFilters}
                   active={activeFilters}
                 />
-                {filteredRows.length === 0 ? (
+                {filteredRows.length === 0 && scan.isPending ? (
+                  <EmptyState variant="card" headline="No matching results yet" body="The scan is still running. More workloads may match these filters as batches finish." />
+                ) : filteredRows.length === 0 ? (
                   <ScanEmptyState
                     counts={counts}
                     classFilter={classFilter}
@@ -571,7 +575,7 @@ export function ScanSummary({
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-theme-text-tertiary">
         <span>
           {result.coverage.workloadsEvaluated} of {result.coverage.workloadsDiscovered} workloads
-          attempted
+          attempted{result.scanStatus === 'running' ? ' so far' : ''}
           {' · '}
           {result.coverage.workloadsWithData} with usage data · {result.window} window
         </span>
@@ -624,7 +628,7 @@ export function ScanNotices({ result }: { result: ScanResult }) {
       `${pluralize(daemonSetsWithoutNodes, 'DaemonSet')} ${daemonSetsWithoutNodes === 1 ? 'runs' : 'run'} on no node right now and ${daemonSetsWithoutNodes === 1 ? 'is' : 'are'} not listed. Open one from Resources to see recommendations from its retained history.`,
     )
   const warnings = result.warnings ?? []
-  const deadlineExceeded = warnings.some((warning) => warning.code === 'scan_deadline_exceeded')
+  const deadlineExceeded = result.scanStatus === 'timed_out' || warnings.some((warning) => warning.code === 'scan_deadline_exceeded')
   for (const warning of warnings) {
     if (warning.code !== 'scan_deadline_exceeded') notices.push(warningMessage(warning.code))
   }
@@ -633,7 +637,7 @@ export function ScanNotices({ result }: { result: ScanResult }) {
   const details = [...new Set(notices)]
   const singleNote = details.length === 1 && !deadlineExceeded
   const hasDetails = details.length > 0 && !singleNote
-  const summary = singleNote
+  const summary = result.scanStatus === 'cancelled' ? 'Scan stopped. Available recommendations are shown. Run again to start a new scan.' : singleNote
     ? details[0]
     : deadlineExceeded
       ? 'The scan reached its time limit. Available recommendations are shown. For a narrower scan, select namespaces in the top bar and run again.'
@@ -1089,6 +1093,9 @@ function unavailableMessage(reason?: string): string {
     return 'Deployment history cannot be mapped because kube_replicaset_owner is unavailable from kube-state-metrics.'
   if (reason === 'owner_metrics_query_failed')
     return 'Radar found Prometheus, but could not query kube-state-metrics ownership data.'
+  if (reason === 'scan_capacity_exceeded') return 'This scope is too large for one scan. Select fewer namespaces in the top bar and run again.'
+  if (reason === 'scan_cancelled') return 'The scan was stopped before any workloads were evaluated. Run again to start a new scan.'
+  if (reason === 'scan_deadline_exceeded') return 'The scan reached its three-minute time limit. Select fewer namespaces in the top bar and run again.'
   if (reason === 'scan_incomplete')
     return 'The scan could not evaluate any workloads in the current scope.'
   return 'Prometheus or kube-state-metrics does not expose the metrics required for this scan.'
