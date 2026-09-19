@@ -1803,6 +1803,9 @@ func fetchPodContainerLogs(ctx context.Context, client kubernetes.Interface, nam
 	if err != nil {
 		return nil, false, err
 	}
+	if isLogsUnavailableNotice(string(content)) {
+		return nil, false, errLogsUnavailable
+	}
 	clipped := bounded && int64(len(content)) > maxSnapshotSourceBytes
 	if clipped {
 		content = content[:maxSnapshotSourceBytes]
