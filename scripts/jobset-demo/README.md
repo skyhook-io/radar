@@ -68,8 +68,9 @@ installing or applying anything.
   owner references, labels, and lifecycle evidence, with bounded waits for cache
   synchronization;
 - exact basic-tier execution summaries through REST AI detail and MCP
-  `get_resource`, including full GVK, namespace/name, stage, condition/reason, declared and
-  observed counts, and explicit zero global counters versus absent per-Job arrays.
+  `get_resource`, including full GVK, namespace/name, subject generation, phase/outcome, native state,
+  condition/reason, requested suspension, and JobSet-specific counts/recreation
+  counters with explicit observed zeros.
 
 Every namespaced API request explicitly selects `jobset-demo`, independently of
 Radar's saved namespace view filter.
@@ -82,13 +83,14 @@ kubectl config use-context kind-radar-jobset-demo
 ./scripts/visual-test-start.sh
 ```
 
-The execution assertions expect `running` for both the three-member run and
-the active initializer: a withheld dependent role does not make the whole run
-suspended or failed. The terminal scenario expects `failed` with the exact
+The execution assertions expect `active` for both the three-member run and
+the initializer: a withheld dependent role does not make the whole run suspended
+or failed. The terminal scenario expects `finished` / `failed` with the exact
 controller failure-policy reason. All three retain explicit observed zero Job
-counts and zero global restart totals, including the counted field that the
-controller omits at zero. Per-Job arrays stay absent until materialized; their
-absence does not imply incomplete role coverage.
+counts and zero recreation totals. Omitted per-Job restart arrays mean zero for
+reported roles; missing role status means unavailable individual totals.
+The shared phase does not claim Pod readiness; the fixture separately verifies
+ready and active counts. See [the schema contract](../../docs/execution-context.md).
 
 ## Proof boundary
 

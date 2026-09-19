@@ -366,22 +366,26 @@ mcp_get_jobset() {
   jq -er '.result.content[0].text | fromjson' <<<"${event}"
 }
 
-assert_radar_execution() {
-  local name="$1" stage="$2" roles="$3" jobs="$4" active="$5" failed="$6"
-  local expected rest_response mcp_response rest_execution mcp_execution
-  expected="$(jq -cnS --arg stage "${stage}" --argjson roles "${roles}" --argjson jobs "${jobs}" \
+radar_execution_matches() {
+  local name="$1" phase="$2" roles="$3" jobs="$4" ready="$5" active="$6" failed="$7"
+  local expected generation rest_response mcp_response rest_execution mcp_execution
+  generation="$(kc -n "${DEMO_NS}" get jobset "${name}" -o jsonpath='{.metadata.generation}')" || \
+    { warn "Unable to read JobSet '${name}' generation" >&2; return 1; }
+  expected="$(jq -cnS --arg phase "${phase}" --argjson generation "${generation}" \
+    --argjson roles "${roles}" --argjson jobs "${jobs}" --argjson ready "${ready}" \
     --argjson active "${active}" --argjson failed "${failed}" '
-    {controller:"jobset", stage:$stage,
-     counts:{declaredRoles:$roles, declaredJobs:$jobs, observedRoles:$roles,
-             readyJobs:$active, activeJobs:$active, succeededJobs:0, failedJobs:$failed, suspendedJobs:0},
-     restarts:{global:0, globalCountTowardsMax:0}}
-    + if $stage == "failed" then
-        {state:{condition:"Failed", status:"True", reason:"FailJobSetFailurePolicyAction"}}
+    {controller:"jobset", subjectGeneration:$generation, phase:$phase, suspendRequested:false,
+     jobset:{declaredRoles:$roles, declaredJobs:$jobs, observedRoles:$roles,
+             jobs:{ready:$ready, active:$active, succeeded:0, failed:$failed, suspended:0},
+             restarts:{global:0, globalCountTowardsMax:0, individual:0, individualCountTowardsMax:0}}}
+    + if $phase == "finished" then
+        {outcome:"failed", nativeState:"Failed",
+         primaryCondition:{type:"Failed", status:"True", reason:"FailJobSetFailurePolicyAction"}}
       else {} end')"
   rest_response="$(curl -fsS --connect-timeout 5 --max-time 15 \
     "${RADAR_URL}/api/ai/resources/jobsets/${DEMO_NS}/${name}?group=jobset.x-k8s.io")" || \
-    fail "REST AI resource request failed for JobSet '${name}'"
-  mcp_response="$(mcp_get_jobset "${name}")" || fail "MCP get_resource failed for JobSet '${name}'"
+    { warn "REST AI resource request failed for JobSet '${name}'" >&2; return 1; }
+  mcp_response="$(mcp_get_jobset "${name}")" || { warn "MCP get_resource failed for JobSet '${name}'" >&2; return 1; }
 
   local response
   for response in "${rest_response}" "${mcp_response}"; do
@@ -389,17 +393,17 @@ assert_radar_execution() {
       .resource.apiVersion == "jobset.x-k8s.io/v1alpha2" and .resource.kind == "JobSet" and
       .resource.metadata.name == $name and .resource.metadata.namespace == $namespace and
       .resourceContext.tier == "basic"
-    ' <<<"${response}" >/dev/null || fail "REST/MCP returned the wrong JobSet identity or context tier for '${name}'"
+    ' <<<"${response}" >/dev/null || { warn "REST/MCP returned the wrong JobSet identity or context tier for '${name}'" >&2; return 1; }
   done
   rest_execution="$(jq -ceS '.resourceContext.execution' <<<"${rest_response}")" || \
-    fail "REST execution context is missing for JobSet '${name}'"
+    { warn "REST execution context is missing for JobSet '${name}'" >&2; return 1; }
   mcp_execution="$(jq -ceS '.resourceContext.execution' <<<"${mcp_response}")" || \
-    fail "MCP execution context is missing for JobSet '${name}'"
+    { warn "MCP execution context is missing for JobSet '${name}'" >&2; return 1; }
   if [ "${rest_execution}" != "${expected}" ] || [ "${mcp_execution}" != "${expected}" ]; then
     printf 'Expected: %s\nREST: %s\nMCP: %s\n' "${expected}" "${rest_execution}" "${mcp_execution}" >&2
-    fail "REST/MCP execution context differs from '${name}' controller-earned state"
+    { warn "REST/MCP execution context differs from '${name}' controller-earned state" >&2; return 1; }
   fi
-  ok "${name}: REST and MCP agree on ${stage}, ${roles} roles, ${active} active and ${failed} failed Jobs"
+  ok "${name}: REST and MCP agree on ${phase}, ${roles} roles, ${active} active and ${failed} failed Jobs"
 }
 
 radar_health_ready() {
@@ -474,9 +478,9 @@ cmd_verify_radar() {
     ([.[] | select(.metadata.labels["jobset.sigs.k8s.io/jobset-name"] == "dependency-held" and .status.phase == "Running")] | length) == 1 and
     ([.[] | select(.metadata.labels["jobset.sigs.k8s.io/jobset-name"] == "terminal-failure" and .status.phase == "Failed")] | length) == 1
   ' <<<"${pods}" >/dev/null || fail "Radar did not expose the expected controller-created Pods"
-  assert_radar_execution roles-running running 2 3 3 0
-  assert_radar_execution dependency-held running 2 3 1 0
-  assert_radar_execution terminal-failure failed 1 1 0 1
+  wait_until "Radar execution projection" radar_execution_matches roles-running active 2 3 3 3 0
+  wait_until "Radar execution projection" radar_execution_matches dependency-held active 2 3 1 1 0
+  wait_until "Radar execution projection" radar_execution_matches terminal-failure finished 1 1 0 0 1
   ok "Radar returned real JobSet lineage and exact matching REST/MCP execution context"
 }
 

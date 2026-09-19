@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
 
@@ -42,29 +44,38 @@ func TestForResourceAggregatesObservedRolesAcrossReconcileGap(t *testing.T) {
 	if got == nil {
 		t.Fatal("execution summary is nil")
 	}
-	if got.Stage != resourcecontext.ExecutionRunning {
-		t.Fatalf("stage = %q, want running", got.Stage)
+	if got.Phase != resourcecontext.ExecutionActive {
+		t.Fatalf("phase = %q, want active", got.Phase)
 	}
-	if got.State != nil {
-		t.Fatalf("running state should not invent a condition: %+v", got.State)
+	if got.PrimaryCondition != nil {
+		t.Fatalf("running state should not invent a condition: %+v", got.PrimaryCondition)
 	}
-	if got.Counts.DeclaredRoles != 3 || got.Counts.DeclaredJobs != 7 {
-		t.Fatalf("declared counts = %+v, want 3 roles / 7 Jobs", got.Counts)
+	if got.JobSet.DeclaredRoles != 3 || got.JobSet.DeclaredJobs != 7 {
+		t.Fatalf("declared counts = %+v, want 3 roles / 7 Jobs", got.JobSet)
 	}
-	assertInt64Pointer(t, "observedRoles", got.Counts.ObservedRoles, 2)
-	assertInt64Pointer(t, "readyJobs", got.Counts.ReadyJobs, 3)
-	assertInt64Pointer(t, "activeJobs", got.Counts.ActiveJobs, 4)
-	assertInt64Pointer(t, "succeededJobs", got.Counts.SucceededJobs, 0)
-	assertInt64Pointer(t, "failedJobs", got.Counts.FailedJobs, 1)
-	assertInt64Pointer(t, "suspendedJobs", got.Counts.SuspendedJobs, 0)
-	if got.Restarts == nil {
+	assertInt64Pointer(t, "observedRoles", got.JobSet.ObservedRoles, 2)
+	if got.JobSet.Jobs.Ready != 3 {
+		t.Fatalf("unexpected child-Job count: %d", got.JobSet.Jobs.Ready)
+	}
+	if got.JobSet.Jobs.Active != 4 {
+		t.Fatalf("unexpected child-Job count: %d", got.JobSet.Jobs.Active)
+	}
+	if got.JobSet.Jobs.Succeeded != 0 {
+		t.Fatalf("unexpected child-Job count: %d", got.JobSet.Jobs.Succeeded)
+	}
+	if got.JobSet.Jobs.Failed != 1 {
+		t.Fatalf("unexpected child-Job count: %d", got.JobSet.Jobs.Failed)
+	}
+	if got.JobSet.Jobs.Suspended != 0 {
+		t.Fatalf("unexpected child-Job count: %d", got.JobSet.Jobs.Suspended)
+	}
+	if got.JobSet.Restarts == nil {
 		t.Fatal("restart summary is nil")
 	}
-	assertInt64Pointer(t, "globalRestarts", got.Restarts.Global, 2)
-	assertInt64Pointer(t, "global restarts counted", got.Restarts.GlobalCountTowardsMax, 0)
-	if got.Restarts.Individual != nil || got.Restarts.IndividualRoles != nil {
-		t.Fatalf("absent per-Job restart arrays were materialized: %+v", got.Restarts)
-	}
+	assertInt64Pointer(t, "globalRestarts", got.JobSet.Restarts.Global, 2)
+	assertInt64Pointer(t, "global restarts counted", got.JobSet.Restarts.GlobalCountTowardsMax, 0)
+	assertInt64Pointer(t, "unmaterialized individual restarts", got.JobSet.Restarts.Individual, 0)
+	assertInt64Pointer(t, "unmaterialized counted individual restarts", got.JobSet.Restarts.IndividualCountTowardsMax, 0)
 }
 
 func TestFailedChildJobIsNotTerminalExecutionFailure(t *testing.T) {
@@ -80,10 +91,12 @@ func TestFailedChildJobIsNotTerminalExecutionFailure(t *testing.T) {
 	}}
 
 	got := ForResource(obj, resourcecontext.TierBasic)
-	if got.Stage != resourcecontext.ExecutionPending {
-		t.Fatalf("stage = %q, want pending; a child failure may be recoverable by JobSet policy", got.Stage)
+	if got.Phase != resourcecontext.ExecutionActive {
+		t.Fatalf("phase = %q, want active; a child failure may be recoverable by JobSet policy", got.Phase)
 	}
-	assertInt64Pointer(t, "failedJobs", got.Counts.FailedJobs, 1)
+	if got.JobSet.Jobs.Failed != 1 {
+		t.Fatalf("unexpected child-Job count: %d", got.JobSet.Jobs.Failed)
+	}
 }
 
 func TestObservedZeroDiffersFromUnreportedStatus(t *testing.T) {
@@ -92,14 +105,14 @@ func TestObservedZeroDiffersFromUnreportedStatus(t *testing.T) {
 		map[string]any{"name": "workers"},
 	}}
 	unreportedSummary := ForResource(unreported, resourcecontext.TierBasic)
-	if unreportedSummary.Stage != resourcecontext.ExecutionSubmitted {
-		t.Fatalf("unreported stage = %q, want submitted", unreportedSummary.Stage)
+	if unreportedSummary.Phase != resourcecontext.ExecutionUnknown {
+		t.Fatalf("unreported phase = %q, want unknown", unreportedSummary.Phase)
 	}
-	if unreportedSummary.Counts.DeclaredJobs != 1 {
-		t.Fatalf("documented default replicas = %d, want 1", unreportedSummary.Counts.DeclaredJobs)
+	if unreportedSummary.JobSet.DeclaredJobs != 1 {
+		t.Fatalf("documented default replicas = %d, want 1", unreportedSummary.JobSet.DeclaredJobs)
 	}
-	if unreportedSummary.Counts.ObservedRoles != nil || unreportedSummary.Counts.ActiveJobs != nil {
-		t.Fatalf("unreported status became observed zero: %+v", unreportedSummary.Counts)
+	if unreportedSummary.JobSet.ObservedRoles != nil || unreportedSummary.JobSet.Jobs != nil {
+		t.Fatalf("unreported status became observed zero: %+v", unreportedSummary.JobSet)
 	}
 
 	observed := unreported.DeepCopy()
@@ -110,83 +123,129 @@ func TestObservedZeroDiffersFromUnreportedStatus(t *testing.T) {
 		},
 	}}
 	observedSummary := ForResource(observed, resourcecontext.TierBasic)
-	if observedSummary.Stage != resourcecontext.ExecutionPending {
-		t.Fatalf("observed stage = %q, want pending", observedSummary.Stage)
+	if observedSummary.Phase != resourcecontext.ExecutionPending {
+		t.Fatalf("observed phase = %q, want pending", observedSummary.Phase)
 	}
-	assertInt64Pointer(t, "observedRoles", observedSummary.Counts.ObservedRoles, 1)
-	assertInt64Pointer(t, "activeJobs", observedSummary.Counts.ActiveJobs, 0)
+	assertInt64Pointer(t, "observedRoles", observedSummary.JobSet.ObservedRoles, 1)
+	if observedSummary.JobSet.Jobs.Active != 0 {
+		t.Fatalf("unexpected child-Job count: %d", observedSummary.JobSet.Jobs.Active)
+	}
 }
 
 func TestRestartCountersNeedObservedStatus(t *testing.T) {
 	obj := newJobSet("jobset.x-k8s.io/v1alpha2", "JobSet")
-	if got := ForResource(obj, resourcecontext.TierBasic); got.Restarts != nil {
-		t.Fatalf("unobserved JobSet has restart counts: %+v", got.Restarts)
+	if got := ForResource(obj, resourcecontext.TierBasic); got.JobSet.Restarts != nil {
+		t.Fatalf("unobserved JobSet has restart counts: %+v", got.JobSet.Restarts)
 	}
 	obj.Object["status"] = map[string]any{"restarts": int64(0)}
 	got := ForResource(obj, resourcecontext.TierBasic)
-	assertInt64Pointer(t, "global", got.Restarts.Global, 0)
-	assertInt64Pointer(t, "global counted", got.Restarts.GlobalCountTowardsMax, 0)
+	assertInt64Pointer(t, "global", got.JobSet.Restarts.Global, 0)
+	assertInt64Pointer(t, "global counted", got.JobSet.Restarts.GlobalCountTowardsMax, 0)
 	obj.Object["status"].(map[string]any)["restartsCountTowardsMax"] = int64(2)
 	got = ForResource(obj, resourcecontext.TierBasic)
-	assertInt64Pointer(t, "explicit global counted", got.Restarts.GlobalCountTowardsMax, 2)
+	assertInt64Pointer(t, "explicit global counted", got.JobSet.Restarts.GlobalCountTowardsMax, 2)
 }
 
-func TestIndividualRestartAggregateRecordsMaterializedRoleArrays(t *testing.T) {
+func TestIndividualRestartAggregateIncludesImplicitZeroRoles(t *testing.T) {
 	obj := loadFixture(t, "partial-running.yaml")
 	statuses := obj.Object["status"].(map[string]any)["replicatedJobsStatus"].([]any)
 	statuses[0].(map[string]any)["jobRestarts"] = []any{int64(2)}
 	statuses[0].(map[string]any)["jobRestartsCountTowardsMax"] = []any{int64(1)}
 
 	got := ForResource(obj, resourcecontext.TierBasic)
-	if got.Restarts == nil {
+	if got.JobSet.Restarts == nil {
 		t.Fatal("restart summary is nil")
 	}
-	assertInt64Pointer(t, "individual restarts", got.Restarts.Individual, 2)
-	assertInt64Pointer(t, "individual restart roles", got.Restarts.IndividualRoles, 1)
-	assertInt64Pointer(t, "individual counted restarts", got.Restarts.IndividualCountTowardsMax, 1)
-	assertInt64Pointer(t, "individual counted roles", got.Restarts.IndividualCountedRoles, 1)
-	assertInt64Pointer(t, "observed roles", got.Counts.ObservedRoles, 2)
-	if *got.Restarts.IndividualRoles == *got.Counts.ObservedRoles {
-		t.Fatal("fixture should preserve which roles carry explicit per-Job restart arrays")
-	}
+	assertInt64Pointer(t, "individual restarts", got.JobSet.Restarts.Individual, 2)
+	assertInt64Pointer(t, "individual counted restarts", got.JobSet.Restarts.IndividualCountTowardsMax, 1)
+	assertInt64Pointer(t, "observed roles", got.JobSet.ObservedRoles, 2)
 }
 
-func TestJobSetStagePrecedence(t *testing.T) {
+func TestJobSetPhasePrecedence(t *testing.T) {
 	for _, test := range []struct {
-		name          string
-		terminalState string
-		suspend       bool
-		conditions    []any
-		active        int64
-		ready         int64
-		want          resourcecontext.ExecutionStage
+		name, terminalState string
+		suspend             bool
+		conditions          []any
+		active, ready       int64
+		want                resourcecontext.ExecutionPhase
+		outcome             resourcecontext.ExecutionOutcome
+		primary             string
 	}{
-		{name: "terminal failure wins", terminalState: "Failed", suspend: true, active: 2, want: resourcecontext.ExecutionFailed},
-		{name: "terminal completion wins", terminalState: "Completed", active: 2, want: resourcecontext.ExecutionCompleted},
-		{name: "failed condition", conditions: []any{condition("Failed", "True", "ReachedMaxRestarts")}, active: 2, want: resourcecontext.ExecutionFailed},
-		{name: "completed condition", conditions: []any{condition("Completed", "True", "AllJobsCompleted")}, active: 2, want: resourcecontext.ExecutionCompleted},
-		{name: "suspended condition", conditions: []any{condition("Suspended", "True", "SuspendedJobs")}, active: 2, want: resourcecontext.ExecutionSuspended},
-		{name: "suspend wins over restart", suspend: true, conditions: []any{condition("RestartingJobSet", "True", "FailurePolicy_retry")}, active: 2, want: resourcecontext.ExecutionSuspended},
-		{name: "restarting wins over live counts", conditions: []any{condition("RestartingJobSet", "True", "FailurePolicy_retry")}, active: 2, want: resourcecontext.ExecutionRestarting},
-		{name: "startup wins over live counts", conditions: []any{condition("StartupPolicyInProgress", "True", "InOrderStartupPolicyInProgress")}, active: 1, want: resourcecontext.ExecutionStarting},
-		{name: "active without ready is starting", active: 1, want: resourcecontext.ExecutionStarting},
-		{name: "ready is running", ready: 1, want: resourcecontext.ExecutionRunning},
+		{name: "terminal failure wins", terminalState: "Failed", suspend: true, active: 2, want: resourcecontext.ExecutionFinished, outcome: resourcecontext.ExecutionFailed},
+		{name: "terminal completion with active cleanup", terminalState: "Completed", active: 2, want: resourcecontext.ExecutionFinished, outcome: resourcecontext.ExecutionSucceeded},
+		{name: "unknown native terminal does not fall through", terminalState: "FutureTerminal", active: 2, conditions: []any{condition("Failed", "True", "Failure")}, want: resourcecontext.ExecutionUnknown},
+		{name: "failed condition", conditions: []any{condition("Failed", "True", "ReachedMaxRestarts")}, active: 2, want: resourcecontext.ExecutionFinished, outcome: resourcecontext.ExecutionFailed, primary: "Failed"},
+		{name: "completed condition", conditions: []any{condition("Completed", "True", "AllJobsCompleted")}, want: resourcecontext.ExecutionFinished, outcome: resourcecontext.ExecutionSucceeded, primary: "Completed"},
+		{name: "observed suspension during resume lag", conditions: []any{condition("Suspended", "True", "SuspendedJobs")}, active: 2, want: resourcecontext.ExecutionSuspended, primary: "Suspended"},
+		{name: "in-order resume progresses with retained suspension", conditions: []any{condition("Suspended", "True", "SuspendedJobs"), condition("StartupPolicyInProgress", "True", "InOrderStartupPolicyInProgress")}, active: 1, want: resourcecontext.ExecutionActive, primary: "StartupPolicyInProgress"},
+		{name: "observed suspension beats retained startup when requested", suspend: true, conditions: []any{condition("Suspended", "True", "SuspendedJobs"), condition("StartupPolicyInProgress", "True", "InOrderStartupPolicyInProgress")}, want: resourcecontext.ExecutionSuspended, primary: "Suspended"},
+		{name: "suspend request does not override observed restart", suspend: true, conditions: []any{condition("RestartingJobSet", "True", "FailurePolicy_retry")}, active: 2, want: resourcecontext.ExecutionActive, primary: "RestartingJobSet"},
+		{name: "suspend request does not override active", suspend: true, active: 2, want: resourcecontext.ExecutionActive},
+		{name: "suspend request does not override pending", suspend: true, want: resourcecontext.ExecutionPending},
+		{name: "startup evidence", conditions: []any{condition("StartupPolicyInProgress", "True", "InOrderStartupPolicyInProgress")}, active: 1, want: resourcecontext.ExecutionActive, primary: "StartupPolicyInProgress"},
+		{name: "active without ready", active: 1, want: resourcecontext.ExecutionActive},
+		{name: "ready without active is not proof of running Pods", ready: 1, want: resourcecontext.ExecutionActive},
+		{name: "false terminal condition", conditions: []any{condition("Failed", "False", "Recovered")}, active: 1, want: resourcecontext.ExecutionActive},
+		{name: "unknown suspension condition", conditions: []any{condition("Suspended", "Unknown", "Reconciling")}, want: resourcecontext.ExecutionPending},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			obj := jobSetWithObservedCounts(test.active, test.ready)
 			obj.Object["spec"].(map[string]any)["suspend"] = test.suspend
 			status := obj.Object["status"].(map[string]any)
-			if test.terminalState != "" {
-				status["terminalState"] = test.terminalState
-			}
-			if len(test.conditions) > 0 {
-				status["conditions"] = test.conditions
-			}
+			status["terminalState"] = test.terminalState
+			status["conditions"] = test.conditions
 			got := ForResource(obj, resourcecontext.TierBasic)
-			if got.Stage != test.want {
-				t.Fatalf("stage = %q, want %q", got.Stage, test.want)
+			if got.Phase != test.want || got.Outcome != test.outcome {
+				t.Fatalf("phase/outcome = %s/%s, want %s/%s", got.Phase, got.Outcome, test.want, test.outcome)
+			}
+			if (got.Phase == resourcecontext.ExecutionFinished) != (got.Outcome != "") {
+				t.Fatalf("invalid terminal invariant: %+v", got)
+			}
+			if got.NativeState != test.terminalState {
+				t.Fatalf("native state = %q", got.NativeState)
+			}
+			if got.SuspendRequested == nil || *got.SuspendRequested != test.suspend {
+				t.Fatalf("lost requested suspension: %+v", got.SuspendRequested)
+			}
+			if test.primary == "" {
+				if got.PrimaryCondition != nil {
+					t.Fatalf("invented condition: %+v", got.PrimaryCondition)
+				}
+			} else if got.PrimaryCondition == nil || got.PrimaryCondition.Type != test.primary {
+				t.Fatalf("primary condition = %+v", got.PrimaryCondition)
 			}
 		})
+	}
+}
+
+func TestUnreportedActivityRemainsUnknown(t *testing.T) {
+	for _, status := range []map[string]any{nil, {}, {"restarts": int64(0)}} {
+		obj := newJobSet("jobset.x-k8s.io/v1alpha2", "JobSet")
+		obj.Object["spec"] = map[string]any{"suspend": true}
+		if status != nil {
+			obj.Object["status"] = status
+		}
+		got := ForResource(obj, resourcecontext.TierBasic)
+		if got.Phase != resourcecontext.ExecutionUnknown || got.Outcome != "" || got.JobSet.Jobs != nil || got.SuspendRequested == nil || !*got.SuspendRequested {
+			t.Fatalf("unreported activity became known: %+v", got)
+		}
+	}
+}
+
+func TestGenerationAndDeletionPreserveReportedEvidence(t *testing.T) {
+	obj := loadFixture(t, "terminal-failed.yaml")
+	obj.SetGeneration(4)
+	obj.Object["status"].(map[string]any)["conditions"].([]any)[0].(map[string]any)["observedGeneration"] = int64(3)
+	got := ForResource(obj, resourcecontext.TierBasic)
+	if got.SubjectGeneration != 4 || got.PrimaryCondition.ObservedGeneration != 3 || got.Outcome != resourcecontext.ExecutionFailed {
+		t.Fatalf("generation evidence lost: %+v", got)
+	}
+	before := ForResource(jobSetWithObservedCounts(1, 0), resourcecontext.TierBasic)
+	deleting := jobSetWithObservedCounts(1, 0)
+	now := metav1.Now()
+	deleting.SetDeletionTimestamp(&now)
+	if after := ForResource(deleting, resourcecontext.TierBasic); !reflect.DeepEqual(before, after) {
+		t.Fatalf("deletion invented execution state: before=%+v after=%+v", before, after)
 	}
 }
 
@@ -195,35 +254,34 @@ func TestAuthoritativeConditionDetailIsTieredAndBounded(t *testing.T) {
 	basic := ForResource(obj, resourcecontext.TierBasic)
 	diagnostic := ForResource(obj, resourcecontext.TierDiagnostic)
 
-	if basic.State == nil || basic.State.Condition != "Failed" || basic.State.Status != "True" || basic.State.Reason != "ReachedMaxRestarts" {
-		t.Fatalf("basic state lost authoritative condition/reason: %+v", basic.State)
+	if basic.PrimaryCondition == nil || basic.PrimaryCondition.Type != "Failed" || basic.PrimaryCondition.Status != "True" || basic.PrimaryCondition.Reason != "ReachedMaxRestarts" {
+		t.Fatalf("basic state lost authoritative condition/reason: %+v", basic.PrimaryCondition)
 	}
-	if basic.State.Message != "" || basic.State.LastTransitionTime != "" {
-		t.Fatalf("basic tier leaked diagnostic detail: %+v", basic.State)
+	if basic.PrimaryCondition.Message != "" || basic.PrimaryCondition.LastTransitionTime != "" {
+		t.Fatalf("basic tier leaked diagnostic detail: %+v", basic.PrimaryCondition)
 	}
-	if diagnostic.State == nil || !strings.Contains(diagnostic.State.Message, "restart limit") || diagnostic.State.LastTransitionTime != "2026-08-31T10:15:00Z" {
-		t.Fatalf("diagnostic state missing message/time: %+v", diagnostic.State)
+	if diagnostic.PrimaryCondition == nil || !strings.Contains(diagnostic.PrimaryCondition.Message, "restart limit") || diagnostic.PrimaryCondition.LastTransitionTime != "2026-08-31T10:15:00Z" {
+		t.Fatalf("diagnostic state missing message/time: %+v", diagnostic.PrimaryCondition)
 	}
-	if diagnostic.Restarts == nil {
+	if diagnostic.JobSet.Restarts == nil {
 		t.Fatal("restart summary is nil")
 	}
-	assertInt64Pointer(t, "global restarts", diagnostic.Restarts.Global, 0)
-	assertInt64Pointer(t, "global restarts counted", diagnostic.Restarts.GlobalCountTowardsMax, 0)
-	assertInt64Pointer(t, "individual restarts", diagnostic.Restarts.Individual, 3)
-	assertInt64Pointer(t, "individual restart roles", diagnostic.Restarts.IndividualRoles, 1)
-	assertInt64Pointer(t, "individual restarts counted", diagnostic.Restarts.IndividualCountTowardsMax, 2)
-	assertInt64Pointer(t, "individual counted roles", diagnostic.Restarts.IndividualCountedRoles, 1)
+	assertInt64Pointer(t, "global restarts", diagnostic.JobSet.Restarts.Global, 0)
+	assertInt64Pointer(t, "global restarts counted", diagnostic.JobSet.Restarts.GlobalCountTowardsMax, 0)
+	assertInt64Pointer(t, "individual restarts", diagnostic.JobSet.Restarts.Individual, 3)
+	assertInt64Pointer(t, "individual restarts counted", diagnostic.JobSet.Restarts.IndividualCountTowardsMax, 2)
 
 	long := strings.Repeat("界", 300)
 	obj.Object["status"].(map[string]any)["conditions"].([]any)[0].(map[string]any)["message"] = long
 	diagnostic = ForResource(obj, resourcecontext.TierDiagnostic)
-	if len(diagnostic.State.Message) > maxStateMessageBytes || !strings.HasSuffix(diagnostic.State.Message, "…") {
-		t.Fatalf("diagnostic message was not UTF-8 safely bounded: %d bytes, %q", len(diagnostic.State.Message), diagnostic.State.Message)
+	if len(diagnostic.PrimaryCondition.Message) > maxStateMessageBytes || !strings.HasSuffix(diagnostic.PrimaryCondition.Message, "…") {
+		t.Fatalf("diagnostic message was not UTF-8 safely bounded: %d bytes, %q", len(diagnostic.PrimaryCondition.Message), diagnostic.PrimaryCondition.Message)
 	}
 }
 
 func TestExecutionSummaryOutputBudget(t *testing.T) {
 	obj := loadFixture(t, "terminal-failed.yaml")
+	obj.SetGeneration(1)
 	obj.Object["status"].(map[string]any)["conditions"].([]any)[0].(map[string]any)["message"] = strings.Repeat("controller evidence ", 1000)
 
 	for _, test := range []struct {

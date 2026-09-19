@@ -1553,30 +1553,21 @@ coverage, or support for other Kueue API versions.
 | TrainJob | `trainer.kubeflow.org/v1alpha1` | Complete / Failed / Suspended conditions + active child jobs |
 
 For an exact `jobset.x-k8s.io/v1alpha2` JobSet, the REST AI resource endpoint
-and MCP `get_resource` also project `resourceContext.execution`: a normalized
-stage, its authoritative controller condition/reason when condition-derived,
-declared role/Job totals, controller-reported per-state Job aggregates, and
-observed-role coverage. Restart counters retain JobSet's global/per-Job and
-counts-toward-limit distinctions. With observed global restart status, an omitted
-global counted value is zero. Per-Job aggregates are emitted when arrays are
-present; their role counts describe array presence, not completeness (untouched
-roles use implicit zero arrays). Declared versus observed role counts can expose
-a spec/status reconcile gap; the pinned controller normally reports all roles.
-Controller-native roles, policies, templates, and conditions remain on the
-returned resource. Radar does not infer child Job names or skip the Job→Pod
-ownership layer from naming conventions.
+and MCP `get_resource` project `resourceContext.execution`: a shared root phase,
+terminal outcome, selected condition/native state, subject generation, and
+requested suspension. JobSet role counts, child-Job aggregates, and global/per-Job
+recreation counters live under `execution.jobset`. See the
+[execution context contract](execution-context.md) for precedence, missing-versus-zero
+semantics, and the boundary between shared fields and controller-specific detail.
 
-`running` requires at least one ready Job; active Jobs with none ready are
-`starting`, because active can include Pending Pods. Neither stage proves every
-member is healthy. Terminal controller evidence wins; otherwise `Suspended=True`
-or a requested `spec.suspend` produces `suspended` (the latter has no condition
-state). A resume request can retain the observed suspended state until the
-controller reconciles. Suspension does not identify its actor or cause: Kueue
-can also suspend a JobSet, and admission evidence belongs to its Workload.
-`restarting` is a global restart condition, not an individual member restart.
-Selected condition messages are bounded inside diagnostic-tier `execution.state`;
-this does not remove conditions from the resource or `statusSummary`. The current
-JobSet integration exposes basic-tier REST/MCP detail, not JobSet `diagnose`.
+`active` includes startup, retries, and cleanup; it does not prove Pods are Running.
+A requested `spec.suspend` is separate from observed `Suspended=True`, including
+resume lag. Root outcomes come from root evidence, never from failed child counts.
+Suspension does not identify its actor: Kueue can suspend a JobSet, and admission
+evidence belongs to its Workload. Controller-native roles, policies, templates,
+and conditions remain on the returned resource. Radar does not infer child names
+or skip the Job→Pod ownership layer. The current integration exposes basic-tier
+REST/MCP detail, not JobSet `diagnose`.
 
 Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share kind names with other resources — Radar disambiguates by API group in tables, filters, and status badges.
 

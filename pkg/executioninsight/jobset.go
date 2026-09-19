@@ -1,5 +1,5 @@
 // Package executioninsight projects controller-owned execution facts into a
-// compact, controller-neutral summary. It does not discover or infer children.
+// shared lifecycle with typed controller detail. It does not infer children.
 package executioninsight
 
 import (
@@ -21,14 +21,6 @@ var jobSetV1Alpha2 = schema.GroupVersionKind{
 
 const maxStateMessageBytes = 256
 
-type executionCondition struct {
-	Type               string
-	Status             string
-	Reason             string
-	Message            string
-	LastTransitionTime string
-}
-
 // ForResource returns an execution summary only for an exact supported GVK.
 func ForResource(obj runtime.Object, tier resourcecontext.ContextTier) *resourcecontext.ExecutionSummary {
 	u, ok := obj.(*unstructured.Unstructured)
@@ -36,25 +28,28 @@ func ForResource(obj runtime.Object, tier resourcecontext.ContextTier) *resource
 		return nil
 	}
 
-	counts, observed := jobSetCounts(u)
+	detail := jobSetCounts(u)
 	conditions := jobSetConditions(u)
-	_, hasStatus, _ := unstructured.NestedMap(u.Object, "status")
-	stage, state := jobSetStage(u, conditions, counts, observed, hasStatus, tier)
-
-	summary := &resourcecontext.ExecutionSummary{
-		Controller: "jobset",
-		Stage:      stage,
-		State:      state,
-		Counts:     &counts,
-		Restarts:   jobSetRestarts(u),
+	nativeState, _, _ := unstructured.NestedString(u.Object, "status", "terminalState")
+	suspendRequested, _, _ := unstructured.NestedBool(u.Object, "spec", "suspend")
+	phase, outcome, primary := jobSetPhase(nativeState, conditions, detail.Jobs, suspendRequested, tier)
+	detail.Restarts = jobSetRestarts(u)
+	return &resourcecontext.ExecutionSummary{
+		Controller:        resourcecontext.ExecutionControllerJobSet,
+		SubjectGeneration: u.GetGeneration(),
+		Phase:             phase,
+		Outcome:           outcome,
+		PrimaryCondition:  primary,
+		NativeState:       nativeState,
+		SuspendRequested:  &suspendRequested,
+		JobSet:            &detail,
 	}
-	return summary
 }
 
-func jobSetCounts(u *unstructured.Unstructured) (resourcecontext.ExecutionCounts, bool) {
-	counts := resourcecontext.ExecutionCounts{}
+func jobSetCounts(u *unstructured.Unstructured) resourcecontext.JobSetExecution {
+	detail := resourcecontext.JobSetExecution{}
 	replicatedJobs, _, _ := unstructured.NestedSlice(u.Object, "spec", "replicatedJobs")
-	counts.DeclaredRoles = int64(len(replicatedJobs))
+	detail.DeclaredRoles = int64(len(replicatedJobs))
 	for _, item := range replicatedJobs {
 		role, ok := item.(map[string]any)
 		if !ok {
@@ -64,15 +59,14 @@ func jobSetCounts(u *unstructured.Unstructured) (resourcecontext.ExecutionCounts
 		if !found {
 			replicas = 1
 		}
-		counts.DeclaredJobs += replicas
+		detail.DeclaredJobs += replicas
 	}
-
 	statuses, observed, _ := unstructured.NestedSlice(u.Object, "status", "replicatedJobsStatus")
 	if !observed {
-		return counts, false
+		return detail
 	}
-
-	var observedRoles, ready, active, succeeded, failed, suspended int64
+	jobs := &resourcecontext.ChildJobCounts{}
+	var observedRoles int64
 	for _, item := range statuses {
 		status, ok := item.(map[string]any)
 		if !ok {
@@ -83,19 +77,15 @@ func jobSetCounts(u *unstructured.Unstructured) (resourcecontext.ExecutionCounts
 			continue
 		}
 		observedRoles++
-		ready += int64Field(status, "ready")
-		active += int64Field(status, "active")
-		succeeded += int64Field(status, "succeeded")
-		failed += int64Field(status, "failed")
-		suspended += int64Field(status, "suspended")
+		jobs.Ready += int64Field(status, "ready")
+		jobs.Active += int64Field(status, "active")
+		jobs.Succeeded += int64Field(status, "succeeded")
+		jobs.Failed += int64Field(status, "failed")
+		jobs.Suspended += int64Field(status, "suspended")
 	}
-	counts.ObservedRoles = &observedRoles
-	counts.ReadyJobs = &ready
-	counts.ActiveJobs = &active
-	counts.SucceededJobs = &succeeded
-	counts.FailedJobs = &failed
-	counts.SuspendedJobs = &suspended
-	return counts, true
+	detail.ObservedRoles = &observedRoles
+	detail.Jobs = jobs
+	return detail
 }
 
 func int64Field(object map[string]any, field string) int64 {
@@ -103,8 +93,8 @@ func int64Field(object map[string]any, field string) int64 {
 	return value
 }
 
-func jobSetRestarts(u *unstructured.Unstructured) *resourcecontext.ExecutionRestartCounts {
-	restarts := &resourcecontext.ExecutionRestartCounts{}
+func jobSetRestarts(u *unstructured.Unstructured) *resourcecontext.JobSetRestartCounts {
+	restarts := &resourcecontext.JobSetRestartCounts{}
 	if value, found, _ := unstructured.NestedInt64(u.Object, "status", "restarts"); found {
 		restarts.Global = &value
 	}
@@ -113,29 +103,24 @@ func jobSetRestarts(u *unstructured.Unstructured) *resourcecontext.ExecutionRest
 		restarts.GlobalCountTowardsMax = &value
 	}
 
-	statuses, _, _ := unstructured.NestedSlice(u.Object, "status", "replicatedJobsStatus")
-	var individual, individualRoles, individualCounted, individualCountedRoles int64
+	statuses, observed, _ := unstructured.NestedSlice(u.Object, "status", "replicatedJobsStatus")
+	var individual, individualCounted int64
 	for _, item := range statuses {
 		status, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
 		if values, found, _ := unstructured.NestedSlice(status, "jobRestarts"); found {
-			individualRoles++
 			individual += sumInt64Slice(values)
 		}
 		if values, found, _ := unstructured.NestedSlice(status, "jobRestartsCountTowardsMax"); found {
-			individualCountedRoles++
 			individualCounted += sumInt64Slice(values)
 		}
 	}
-	if individualRoles > 0 {
+	// Unmaterialized arrays are zero for reported roles in JobSet.
+	if observed {
 		restarts.Individual = &individual
-		restarts.IndividualRoles = &individualRoles
-	}
-	if individualCountedRoles > 0 {
 		restarts.IndividualCountTowardsMax = &individualCounted
-		restarts.IndividualCountedRoles = &individualCountedRoles
 	}
 
 	if restarts.Global == nil && restarts.GlobalCountTowardsMax == nil &&
@@ -155,12 +140,12 @@ func sumInt64Slice(values []any) int64 {
 	return total
 }
 
-func jobSetConditions(u *unstructured.Unstructured) map[string]executionCondition {
+func jobSetConditions(u *unstructured.Unstructured) map[string]resourcecontext.ConditionSummary {
 	raw, ok, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	if !ok {
 		return nil
 	}
-	conditions := make(map[string]executionCondition, len(raw))
+	conditions := make(map[string]resourcecontext.ConditionSummary, len(raw))
 	for _, item := range raw {
 		condition, ok := item.(map[string]any)
 		if !ok {
@@ -170,12 +155,13 @@ func jobSetConditions(u *unstructured.Unstructured) map[string]executionConditio
 		if conditionType == "" {
 			continue
 		}
-		conditions[conditionType] = executionCondition{
+		conditions[conditionType] = resourcecontext.ConditionSummary{
 			Type:               conditionType,
 			Status:             stringField(condition, "status"),
 			Reason:             stringField(condition, "reason"),
 			Message:            stringField(condition, "message"),
 			LastTransitionTime: stringField(condition, "lastTransitionTime"),
+			ObservedGeneration: int64Field(condition, "observedGeneration"),
 		}
 	}
 	return conditions
@@ -186,75 +172,65 @@ func stringField(object map[string]any, field string) string {
 	return value
 }
 
-func jobSetStage(
-	u *unstructured.Unstructured,
-	conditions map[string]executionCondition,
-	counts resourcecontext.ExecutionCounts,
-	observed, hasStatus bool,
+func jobSetPhase(
+	nativeState string,
+	conditions map[string]resourcecontext.ConditionSummary,
+	jobs *resourcecontext.ChildJobCounts,
+	suspendRequested bool,
 	tier resourcecontext.ContextTier,
-) (resourcecontext.ExecutionStage, *resourcecontext.ExecutionState) {
-	terminalState, _, _ := unstructured.NestedString(u.Object, "status", "terminalState")
-	switch terminalState {
+) (resourcecontext.ExecutionPhase, resourcecontext.ExecutionOutcome, *resourcecontext.ConditionSummary) {
+	switch nativeState {
 	case "Failed":
-		return resourcecontext.ExecutionFailed, stateForTrueCondition(conditions, "Failed", tier)
+		return resourcecontext.ExecutionFinished, resourcecontext.ExecutionFailed, conditionForExecution(conditions, "Failed", tier)
 	case "Completed":
-		return resourcecontext.ExecutionCompleted, stateForTrueCondition(conditions, "Completed", tier)
+		return resourcecontext.ExecutionFinished, resourcecontext.ExecutionSucceeded, conditionForExecution(conditions, "Completed", tier)
+	case "":
+	default:
+		return resourcecontext.ExecutionUnknown, "", nil
 	}
-
-	if condition, ok := trueCondition(conditions, "Failed"); ok {
-		return resourcecontext.ExecutionFailed, executionState(condition, tier)
+	for _, terminal := range []struct {
+		condition string
+		outcome   resourcecontext.ExecutionOutcome
+	}{{"Failed", resourcecontext.ExecutionFailed}, {"Completed", resourcecontext.ExecutionSucceeded}} {
+		if condition := conditionForExecution(conditions, terminal.condition, tier); condition != nil {
+			return resourcecontext.ExecutionFinished, terminal.outcome, condition
+		}
 	}
-	if condition, ok := trueCondition(conditions, "Completed"); ok {
-		return resourcecontext.ExecutionCompleted, executionState(condition, tier)
+	// In-order resume retains Suspended until every role has started.
+	if !suspendRequested {
+		if condition := conditionForExecution(conditions, "StartupPolicyInProgress", tier); condition != nil {
+			return resourcecontext.ExecutionActive, "", condition
+		}
 	}
-	if condition, ok := trueCondition(conditions, "Suspended"); ok {
-		return resourcecontext.ExecutionSuspended, executionState(condition, tier)
+	if condition := conditionForExecution(conditions, "Suspended", tier); condition != nil {
+		return resourcecontext.ExecutionSuspended, "", condition
 	}
-	if suspended, found, _ := unstructured.NestedBool(u.Object, "spec", "suspend"); found && suspended {
-		return resourcecontext.ExecutionSuspended, nil
+	for _, conditionType := range []string{"RestartingJobSet", "StartupPolicyInProgress"} {
+		if condition := conditionForExecution(conditions, conditionType, tier); condition != nil {
+			return resourcecontext.ExecutionActive, "", condition
+		}
 	}
-	if condition, ok := trueCondition(conditions, "RestartingJobSet"); ok {
-		return resourcecontext.ExecutionRestarting, executionState(condition, tier)
+	if jobs == nil {
+		return resourcecontext.ExecutionUnknown, "", nil
 	}
-	if condition, ok := trueCondition(conditions, "StartupPolicyInProgress"); ok {
-		return resourcecontext.ExecutionStarting, executionState(condition, tier)
+	if jobs.Ready > 0 || jobs.Active > 0 || jobs.Succeeded > 0 || jobs.Failed > 0 || jobs.Suspended > 0 {
+		return resourcecontext.ExecutionActive, "", nil
 	}
-	if observed && *counts.ReadyJobs > 0 {
-		return resourcecontext.ExecutionRunning, nil
-	}
-	if observed && *counts.ActiveJobs > 0 {
-		return resourcecontext.ExecutionStarting, nil
-	}
-	if hasStatus {
-		return resourcecontext.ExecutionPending, nil
-	}
-	return resourcecontext.ExecutionSubmitted, nil
+	return resourcecontext.ExecutionPending, "", nil
 }
 
-func trueCondition(conditions map[string]executionCondition, conditionType string) (executionCondition, bool) {
+func conditionForExecution(conditions map[string]resourcecontext.ConditionSummary, conditionType string, tier resourcecontext.ContextTier) *resourcecontext.ConditionSummary {
 	condition, ok := conditions[conditionType]
-	return condition, ok && condition.Status == "True"
-}
-
-func stateForTrueCondition(conditions map[string]executionCondition, conditionType string, tier resourcecontext.ContextTier) *resourcecontext.ExecutionState {
-	condition, ok := trueCondition(conditions, conditionType)
-	if !ok {
+	if !ok || condition.Status != "True" {
 		return nil
 	}
-	return executionState(condition, tier)
-}
-
-func executionState(condition executionCondition, tier resourcecontext.ContextTier) *resourcecontext.ExecutionState {
-	state := &resourcecontext.ExecutionState{
-		Condition: condition.Type,
-		Status:    condition.Status,
-		Reason:    condition.Reason,
-	}
 	if tier == resourcecontext.TierDiagnostic {
-		state.Message = truncateMessage(condition.Message)
-		state.LastTransitionTime = condition.LastTransitionTime
+		condition.Message = truncateMessage(condition.Message)
+	} else {
+		condition.Message = ""
+		condition.LastTransitionTime = ""
 	}
-	return state
+	return &condition
 }
 
 func truncateMessage(message string) string {

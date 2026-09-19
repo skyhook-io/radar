@@ -412,65 +412,68 @@ type KueueConcurrentAdmission struct {
 	ParentRef  *ContextRef `json:"parentRef,omitempty"`
 }
 
-// ExecutionSummary is a compact, controller-neutral projection of one
-// execution controller's declared and observed state. Controller-native role,
-// policy, and child-resource detail stays on the returned Kubernetes object.
+// ExecutionSummary describes the root's last reported execution, not Pod
+// readiness or object deletion. Exactly one detail block matches Controller.
 type ExecutionSummary struct {
-	Controller string                  `json:"controller"`
-	Stage      ExecutionStage          `json:"stage"`
-	State      *ExecutionState         `json:"state,omitempty"`
-	Counts     *ExecutionCounts        `json:"counts,omitempty"`
-	Restarts   *ExecutionRestartCounts `json:"restarts,omitempty"`
+	Controller        ExecutionController `json:"controller"`
+	SubjectGeneration int64               `json:"subjectGeneration,omitempty"`
+	Phase             ExecutionPhase      `json:"phase"`
+	Outcome           ExecutionOutcome    `json:"outcome,omitempty"`
+	PrimaryCondition  *ConditionSummary   `json:"primaryCondition,omitempty"`
+	NativeState       string              `json:"nativeState,omitempty"`
+	SuspendRequested  *bool               `json:"suspendRequested,omitempty"`
+	JobSet            *JobSetExecution    `json:"jobset,omitempty"`
 }
 
-type ExecutionStage string
+type ExecutionController string
+
+const ExecutionControllerJobSet ExecutionController = "jobset"
+
+// Active includes startup, retries and cleanup; it does not prove user code
+// is running. Finished requires an outcome; all other phases omit it.
+type ExecutionPhase string
 
 const (
-	ExecutionSubmitted  ExecutionStage = "submitted"
-	ExecutionPending    ExecutionStage = "pending"
-	ExecutionStarting   ExecutionStage = "starting"
-	ExecutionRunning    ExecutionStage = "running"
-	ExecutionRestarting ExecutionStage = "restarting"
-	ExecutionSuspended  ExecutionStage = "suspended"
-	ExecutionCompleted  ExecutionStage = "completed"
-	ExecutionFailed     ExecutionStage = "failed"
+	ExecutionPending   ExecutionPhase = "pending"
+	ExecutionActive    ExecutionPhase = "active"
+	ExecutionSuspended ExecutionPhase = "suspended"
+	ExecutionFinished  ExecutionPhase = "finished"
+	ExecutionUnknown   ExecutionPhase = "unknown"
 )
 
-// ExecutionState preserves the controller condition selected as the evidence
-// for Stage. This block includes messages and transition times only at the
-// diagnostic tier; the resource and other context blocks keep their own detail.
-type ExecutionState struct {
-	Condition          string `json:"condition"`
-	Status             string `json:"status"`
-	Reason             string `json:"reason,omitempty"`
-	Message            string `json:"message,omitempty"`
-	LastTransitionTime string `json:"lastTransitionTime,omitempty"`
+type ExecutionOutcome string
+
+const (
+	ExecutionSucceeded ExecutionOutcome = "succeeded"
+	ExecutionFailed    ExecutionOutcome = "failed"
+)
+
+type JobSetExecution struct {
+	DeclaredRoles int64                `json:"declaredRoles"`
+	DeclaredJobs  int64                `json:"declaredJobs"`
+	ObservedRoles *int64               `json:"observedRoles,omitempty"`
+	Jobs          *ChildJobCounts      `json:"jobs,omitempty"`
+	Restarts      *JobSetRestartCounts `json:"restarts,omitempty"`
 }
 
-// ExecutionCounts keeps desired and observed facts separate. Observed fields
-// are pointers so an unreported status is distinguishable from an observed
-// zero; role counts expose whether a controller snapshot is partial.
-type ExecutionCounts struct {
-	DeclaredRoles int64  `json:"declaredRoles"`
-	DeclaredJobs  int64  `json:"declaredJobs"`
-	ObservedRoles *int64 `json:"observedRoles,omitempty"`
-	ReadyJobs     *int64 `json:"readyJobs,omitempty"`
-	ActiveJobs    *int64 `json:"activeJobs,omitempty"`
-	SucceededJobs *int64 `json:"succeededJobs,omitempty"`
-	FailedJobs    *int64 `json:"failedJobs,omitempty"`
-	SuspendedJobs *int64 `json:"suspendedJobs,omitempty"`
+// ChildJobCounts uses the child-Job semantics shared by JobSet and TrainJob.
+// Ready can include completed Pods, active can include Pending Pods, and the
+// counters overlap. A nil block distinguishes unreported status from zero.
+type ChildJobCounts struct {
+	Ready     int64 `json:"ready"`
+	Active    int64 `json:"active"`
+	Succeeded int64 `json:"succeeded"`
+	Failed    int64 `json:"failed"`
+	Suspended int64 `json:"suspended"`
 }
 
-// ExecutionRestartCounts keeps independent global and per-member counters
-// separate. IndividualRoles fields count statuses with explicit restart arrays,
-// not coverage: controllers can omit zero-valued arrays for untouched roles.
-type ExecutionRestartCounts struct {
+// JobSetRestartCounts separates global and individual Job recreation and the
+// counts charged to the restart limit. These are not in-place/container retries.
+type JobSetRestartCounts struct {
 	Global                    *int64 `json:"global,omitempty"`
 	GlobalCountTowardsMax     *int64 `json:"globalCountTowardsMax,omitempty"`
 	Individual                *int64 `json:"individual,omitempty"`
-	IndividualRoles           *int64 `json:"individualRoles,omitempty"`
 	IndividualCountTowardsMax *int64 `json:"individualCountTowardsMax,omitempty"`
-	IndividualCountedRoles    *int64 `json:"individualCountedRoles,omitempty"`
 }
 
 type PodSummary struct {

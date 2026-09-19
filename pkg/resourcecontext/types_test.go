@@ -136,7 +136,7 @@ func TestResourceContextFieldOrdering(t *testing.T) {
 			Source: SchedulingSourceKueue, Domain: SchedulingDomainAdmission,
 			Subject: ContextRef{Kind: "Workload", Name: "trainer"}, Decision: SchedulingDecisionUnsatisfied,
 		}}},
-		Execution:     &ExecutionSummary{Controller: "jobset", Stage: ExecutionRunning},
+		Execution:     &ExecutionSummary{Controller: "jobset", Phase: ExecutionActive},
 		IssueSummary:  &IssueSummary{Count: 1},
 		AuditSummary:  &AuditSummary{Count: 2},
 		PolicySummary: &PolicySummary{},
@@ -270,32 +270,21 @@ func TestResourceContextRoundTrip(t *testing.T) {
 			},
 		}}},
 		Execution: &ExecutionSummary{
-			Controller: "jobset",
-			Stage:      ExecutionRestarting,
-			State: &ExecutionState{
-				Condition:          "RestartingJobSet",
-				Status:             "True",
-				Reason:             "FailurePolicy_retry-workers",
-				Message:            "restarting after worker failure",
+			Controller:        ExecutionControllerJobSet,
+			SubjectGeneration: 4,
+			Phase:             ExecutionActive,
+			PrimaryCondition: &ConditionSummary{
+				Type: "RestartingJobSet", Status: "True", Reason: "FailurePolicy_retry-workers",
+				ObservedGeneration: 3, Message: "restarting after worker failure",
 				LastTransitionTime: "2026-08-31T10:15:00Z",
 			},
-			Counts: &ExecutionCounts{
-				DeclaredRoles: 2,
-				DeclaredJobs:  5,
-				ObservedRoles: int64Ptr(2),
-				ReadyJobs:     int64Ptr(1),
-				ActiveJobs:    int64Ptr(3),
-				SucceededJobs: int64Ptr(0),
-				FailedJobs:    int64Ptr(1),
-				SuspendedJobs: int64Ptr(0),
-			},
-			Restarts: &ExecutionRestartCounts{
-				Global:                    int64Ptr(1),
-				GlobalCountTowardsMax:     int64Ptr(1),
-				Individual:                int64Ptr(2),
-				IndividualRoles:           int64Ptr(2),
-				IndividualCountTowardsMax: int64Ptr(1),
-				IndividualCountedRoles:    int64Ptr(2),
+			JobSet: &JobSetExecution{
+				DeclaredRoles: 2, DeclaredJobs: 5, ObservedRoles: int64Ptr(2),
+				Jobs: &ChildJobCounts{Ready: 1, Active: 3, Failed: 1},
+				Restarts: &JobSetRestartCounts{
+					Global: int64Ptr(1), GlobalCountTowardsMax: int64Ptr(1),
+					Individual: int64Ptr(2), IndividualCountTowardsMax: int64Ptr(1),
+				},
 			},
 		},
 		IssueSummary: &IssueSummary{
@@ -396,12 +385,27 @@ func TestSchedulingProviderFactsMarshalWithoutNavigableRefs(t *testing.T) {
 }
 
 func TestExecutionSummaryOmitsUnavailableCounts(t *testing.T) {
-	b, err := json.Marshal(ExecutionSummary{Controller: "rayservice", Stage: ExecutionRunning})
+	b, err := json.Marshal(ExecutionSummary{Controller: ExecutionControllerJobSet, Phase: ExecutionUnknown, JobSet: &JobSetExecution{DeclaredRoles: 1, DeclaredJobs: 2}})
 	if err != nil {
-		t.Fatalf("marshal: %v", err)
+		t.Fatal(err)
 	}
-	if strings.Contains(string(b), `"counts"`) {
-		t.Fatalf("unavailable counts serialized as observed zero: %s", b)
+	for _, field := range []string{`"jobs"`, `"restarts"`, `"observedRoles"`, `"outcome"`, `"suspendRequested"`} {
+		if strings.Contains(string(b), field) {
+			t.Fatalf("unavailable field %s serialized: %s", field, b)
+		}
+	}
+}
+
+func TestExecutionSummaryPreservesExplicitFalseAndZero(t *testing.T) {
+	requested := false
+	b, err := json.Marshal(ExecutionSummary{Controller: ExecutionControllerJobSet, Phase: ExecutionPending, SuspendRequested: &requested, JobSet: &JobSetExecution{Jobs: &ChildJobCounts{}, Restarts: &JobSetRestartCounts{Individual: int64Ptr(0)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"suspendRequested":false`, `"active":0`, `"ready":0`, `"failed":0`, `"individual":0`} {
+		if !strings.Contains(string(b), field) {
+			t.Fatalf("known field %s omitted: %s", field, b)
+		}
 	}
 }
 

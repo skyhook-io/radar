@@ -1882,8 +1882,8 @@ func TestBuild_PassesThroughExecutionSummary(t *testing.T) {
 	}}
 	execution := &ExecutionSummary{
 		Controller: "jobset",
-		Stage:      ExecutionPending,
-		Counts:     &ExecutionCounts{DeclaredRoles: 2, DeclaredJobs: 5},
+		Phase:      ExecutionPending,
+		JobSet:     &JobSetExecution{DeclaredRoles: 2, DeclaredJobs: 5},
 	}
 	rc := Build(context.Background(), obj, Options{Tier: TierBasic, Execution: execution})
 	if rc.Execution != execution {
