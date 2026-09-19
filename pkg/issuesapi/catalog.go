@@ -94,7 +94,7 @@ var categoryDescription = map[Category]string{
 	// Scheduling
 	CategoryUnschedulable:            "Pods can't be placed on any node — none satisfies their CPU/memory requests, node selector, affinity, taints, or topology constraints.",
 	CategoryQuotaExceeded:            "A ResourceQuota or LimitRange rejected the workload — the namespace is out of its CPU, memory, or object budget.",
-	CategoryAdmissionWebhookBlocking: "An admission webhook is rejecting the resource — a validating or mutating webhook denied or errored on the request.",
+	CategoryAdmissionWebhookBlocking: "An admission webhook denied the request or its call failed, blocking resource creation.",
 	// Startup
 	CategoryImagePullFailed:     "A container image can't be pulled — wrong name/tag, a private registry without credentials, or the registry is unreachable (ImagePullBackOff).",
 	CategoryContainerWaiting:    "A container is stuck Waiting and never reached Running — blocked on config, secrets, volumes, its image, or a pod sandbox / IP from the CNI.",

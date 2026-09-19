@@ -1211,16 +1211,16 @@ func replicaSetDeploymentOwnerName(rs *appsv1.ReplicaSet) (string, bool) {
 // (e.g. transient "object is being deleted") so we don't over-report.
 func classifyAdmissionFailure(msg string) (string, bool) {
 	lower := strings.ToLower(msg)
-	if _, ok := ParseAdmissionWebhookBackendFailure(msg); ok {
+	if admissionWebhookCallFailurePattern.MatchString(strings.TrimSpace(msg)) {
 		return "WebhookUnavailable", true
 	}
 	switch {
+	case admissionWebhookDenialPattern.MatchString(strings.TrimSpace(msg)):
+		return "WebhookDenied", true
 	case strings.Contains(lower, "exceeded quota"), strings.Contains(lower, "failed quota"):
 		return "QuotaExceeded", true
 	case strings.Contains(lower, "violates podsecurity"), strings.Contains(lower, "violates pod security"):
 		return "PodSecurityViolation", true
-	case strings.Contains(lower, "admission webhook") && strings.Contains(lower, "denied"):
-		return "WebhookDenied", true
 	case strings.Contains(lower, "forbidden") && (strings.Contains(lower, "limitrange") ||
 		strings.Contains(lower, "maximum") || strings.Contains(lower, "minimum")):
 		return "LimitRangeViolation", true
@@ -1248,10 +1248,12 @@ type AdmissionWebhookBackendFailure struct {
 }
 
 var (
-	admissionWebhookURLPattern      = regexp.MustCompile(`https?://[^\s"]+`)
-	admissionWebhookNamePattern     = regexp.MustCompile(`(?i)failed calling webhook "([^"]+)"`)
-	admissionNoEndpointsNamePattern = regexp.MustCompile(`(?i)no endpoints available for service "([a-z0-9]([-a-z0-9]*[a-z0-9])?)"`)
-	admissionServiceNotFoundPattern = regexp.MustCompile(`(?i)services? "([a-z0-9]([-a-z0-9]*[a-z0-9])?)" not found`)
+	admissionWebhookDenialPattern      = regexp.MustCompile(`(?i)^(?:(?:error creating:|create pod \S+ in statefulset \S+ failed error:)\s*)?admission webhook "[^"\r\n]+" denied the request`)
+	admissionWebhookCallFailurePattern = regexp.MustCompile(`(?i)^(?:(?:error creating:|create pod \S+ in statefulset \S+ failed error:)\s*)?(?:internal error occurred:\s*)?failed calling webhook "[^"\r\n]+":\s*\S`)
+	admissionWebhookURLPattern         = regexp.MustCompile(`https?://[^\s"]+`)
+	admissionWebhookNamePattern        = regexp.MustCompile(`(?i)failed calling webhook "([^"]+)"`)
+	admissionNoEndpointsNamePattern    = regexp.MustCompile(`(?i)no endpoints available for service "([a-z0-9]([-a-z0-9]*[a-z0-9])?)"`)
+	admissionServiceNotFoundPattern    = regexp.MustCompile(`(?i)services? "([a-z0-9]([-a-z0-9]*[a-z0-9])?)" not found`)
 )
 
 func ParseAdmissionWebhookBackendFailure(message string) (AdmissionWebhookBackendFailure, bool) {

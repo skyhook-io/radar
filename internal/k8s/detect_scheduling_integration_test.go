@@ -11,6 +11,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -786,6 +787,49 @@ func TestDetectAdmissionProblems_JobAndDaemonSetCrossCheck(t *testing.T) {
 		}
 		if p.Name == "ds-ok" {
 			t.Errorf("fully-scheduled DaemonSet must be skipped: %+v", p)
+		}
+	}
+}
+
+func TestDetectAdmissionProblems_WebhookCallFailures(t *testing.T) {
+	defer ResetTestState()
+	now := metav1.Now()
+	message := `Error creating: Internal error occurred: failed calling webhook "external.example.com": failed to call webhook: Post "https://external.example.com/validate": context deadline exceeded`
+	metadata := func(name string) metav1.ObjectMeta { return metav1.ObjectMeta{Name: name, Namespace: "test"} }
+	objects := []runtime.Object{
+		&appsv1.ReplicaSet{ObjectMeta: metadata("rs"), Spec: appsv1.ReplicaSetSpec{Replicas: ptr32(1)}},
+		&appsv1.StatefulSet{ObjectMeta: metadata("sts"), Spec: appsv1.StatefulSetSpec{Replicas: ptr32(1)}},
+		&appsv1.DaemonSet{ObjectMeta: metadata("ds"), Status: appsv1.DaemonSetStatus{DesiredNumberScheduled: 1}},
+		&batchv1.Job{ObjectMeta: metadata("job")},
+		&appsv1.Deployment{ObjectMeta: metadata("deployment"), Spec: appsv1.DeploymentSpec{Replicas: ptr32(1)}, Status: appsv1.DeploymentStatus{Conditions: []appsv1.DeploymentCondition{{Type: appsv1.DeploymentReplicaFailure, Status: corev1.ConditionTrue, Reason: "FailedCreate", Message: message, LastTransitionTime: now}}}},
+		&appsv1.ReplicaSet{ObjectMeta: metadata("recovered"), Spec: appsv1.ReplicaSetSpec{Replicas: ptr32(1)}, Status: appsv1.ReplicaSetStatus{Replicas: 1}},
+		&appsv1.ReplicaSet{ObjectMeta: metadata("stale"), Spec: appsv1.ReplicaSetSpec{Replicas: ptr32(1)}},
+	}
+	for _, subject := range []struct{ kind, name string }{{"ReplicaSet", "rs"}, {"StatefulSet", "sts"}, {"DaemonSet", "ds"}, {"Job", "job"}, {"ReplicaSet", "recovered"}, {"ReplicaSet", "stale"}} {
+		last := now
+		if subject.name == "stale" {
+			last = metav1.NewTime(now.Add(-time.Hour))
+		}
+		objects = append(objects, &corev1.Event{ObjectMeta: metadata(subject.name + "-event"), InvolvedObject: corev1.ObjectReference{APIVersion: "apps/v1", Kind: subject.kind, Namespace: "test", Name: subject.name}, Reason: "FailedCreate", Type: corev1.EventTypeWarning, Message: message, LastTimestamp: last})
+		if subject.kind == "Job" {
+			objects[len(objects)-1].(*corev1.Event).InvolvedObject.APIVersion = "batch/v1"
+		}
+	}
+	if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+		t.Fatal(err)
+	}
+	problems := DetectAdmissionProblems(GetResourceCache(), "test")
+	for _, subject := range []struct{ kind, name string }{{"ReplicaSet", "rs"}, {"StatefulSet", "sts"}, {"DaemonSet", "ds"}, {"Job", "job"}, {"Deployment", "deployment"}} {
+		if !findProblem(problems, subject.kind, "test", subject.name, "WebhookUnavailable") {
+			t.Errorf("missing %s call-failure issue: %+v", subject.kind, problems)
+		}
+	}
+	for _, problem := range problems {
+		if problem.Name == "recovered" || problem.Name == "stale" {
+			t.Errorf("inactive call failure surfaced: %+v", problem)
+		}
+		if !strings.Contains(problem.Message, message) {
+			t.Errorf("raw error lost: %+v", problem)
 		}
 	}
 }
