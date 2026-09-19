@@ -71,10 +71,10 @@ mark_cluster() {
 restore_previous_context() {
   [ "${RESTORE_CONTEXT}" = "true" ] || return 0
   if [ -z "${PREVIOUS_CONTEXT}" ]; then
-    kubectl config unset current-context >/dev/null 2>&1 || true
-  elif kubectl config get-contexts "${PREVIOUS_CONTEXT}" >/dev/null 2>&1 && \
-    [ "$(kubectl config current-context 2>/dev/null || true)" != "${PREVIOUS_CONTEXT}" ]; then
-    kubectl config use-context "${PREVIOUS_CONTEXT}" >/dev/null 2>&1 || true
+    kubectl config unset current-context >/dev/null 2>&1 || warn "Unable to restore the unset current-context" >&2
+  elif [ "$(kubectl config current-context 2>/dev/null || true)" != "${PREVIOUS_CONTEXT}" ]; then
+    kubectl config set current-context "${PREVIOUS_CONTEXT}" >/dev/null 2>&1 || \
+      warn "Unable to restore current-context '${PREVIOUS_CONTEXT}'" >&2
   fi
 }
 

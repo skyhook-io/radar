@@ -37,14 +37,17 @@ require_cmd() {
 kc() { kubectl --context "${KUBECTL_CTX}" "$@"; }
 
 cluster_exists() {
-  kind get clusters 2>/dev/null | grep -qx "${CLUSTER_NAME}"
+  local clusters
+  clusters="$(kind get clusters)" || fail "Unable to list kind clusters. Check that Docker is running and accessible."
+  grep -Fx "${CLUSTER_NAME}" <<<"${clusters}" >/dev/null
 }
 
 cluster_owned() {
-  local owner cluster
-  owner="$(kc -n kube-system get configmap "${MARKER_NAME}" -o jsonpath='{.data.owner}' 2>/dev/null || true)"
-  cluster="$(kc -n kube-system get configmap "${MARKER_NAME}" -o jsonpath='{.data.clusterName}' 2>/dev/null || true)"
-  [ "${owner}" = "${MARKER_VALUE}" ] && [ "${cluster}" = "${CLUSTER_NAME}" ]
+  local marker
+  marker="$(kc -n kube-system get configmap "${MARKER_NAME}" --ignore-not-found --request-timeout=10s -o json)" || \
+    fail "Unable to verify ownership: context '${KUBECTL_CTX}' is missing or unreachable in the active kubeconfig. If missing, restore it with: kind export kubeconfig --name '${CLUSTER_NAME}'"
+  [ -n "${marker}" ] && jq -e --arg owner "${MARKER_VALUE}" --arg cluster "${CLUSTER_NAME}" \
+    '.data.owner == $owner and .data.clusterName == $cluster' <<<"${marker}" >/dev/null
 }
 
 require_owned_cluster() {
@@ -66,10 +69,10 @@ mark_cluster() {
 restore_previous_context() {
   [ "${RESTORE_CONTEXT}" = "true" ] || return 0
   if [ -z "${PREVIOUS_CONTEXT}" ]; then
-    kubectl config unset current-context >/dev/null 2>&1 || true
-  elif kubectl config get-contexts "${PREVIOUS_CONTEXT}" >/dev/null 2>&1 && \
-    [ "$(kubectl config current-context 2>/dev/null || true)" != "${PREVIOUS_CONTEXT}" ]; then
-    kubectl config use-context "${PREVIOUS_CONTEXT}" >/dev/null 2>&1 || true
+    kubectl config unset current-context >/dev/null 2>&1 || warn "Unable to restore the unset current-context" >&2
+  elif [ "$(kubectl config current-context 2>/dev/null || true)" != "${PREVIOUS_CONTEXT}" ]; then
+    kubectl config set current-context "${PREVIOUS_CONTEXT}" >/dev/null 2>&1 || \
+      warn "Unable to restore current-context '${PREVIOUS_CONTEXT}'" >&2
   fi
 }
 
@@ -106,7 +109,10 @@ wait_until() {
     fi
     sleep 2
   done
-  fail "Timed out after ${WAIT_SECONDS}s waiting for ${description}"
+  warn "Last controller snapshot for '${description}':" >&2
+  kc -n "${DEMO_NS}" get jobsets.jobset.x-k8s.io,jobs,pods --request-timeout=10s -o json | \
+    jq -c '.items[:10][] | {kind, name: .metadata.name, terminalState: .status.terminalState, roles: .status.replicatedJobsStatus, phase: .status.phase, conditions: .status.conditions}' >&2 || true
+  fail "Timed out after ${WAIT_SECONDS}s waiting for ${description}. Inspect the lane with CLUSTER_NAME='${CLUSTER_NAME}' $0 status"
 }
 
 jobset_condition_is() {
@@ -202,6 +208,15 @@ assert_group_lineage() {
   ' >/dev/null || fail "${name} Pods do not preserve their parent Jobs' group lineage"
 }
 
+roles_status_ready() {
+  kc -n "${DEMO_NS}" get jobsets.jobset.x-k8s.io roles-running -o json | jq -e '
+    ([.spec.replicatedJobs[].groupName] | unique) == ["training"] and
+    any(.status.replicatedJobsStatus[]?; .name == "leader" and .ready == 1 and .active == 1) and
+    any(.status.replicatedJobsStatus[]?; .name == "workers" and .ready == 2 and .active == 2) and
+    (.status.terminalState // "") == ""
+  ' >/dev/null
+}
+
 verify_roles_running() {
   local name="roles-running"
   wait_until "${name} Jobs" count_is job_count 3 "${name}"
@@ -217,12 +232,7 @@ verify_roles_running() {
   ' >/dev/null || fail "${name} Jobs do not expose the expected per-role indexes"
   assert_pod_ownership_and_labels "${name}" 3
   assert_group_lineage "${name}"
-  kc -n "${DEMO_NS}" get jobsets.jobset.x-k8s.io "${name}" -o json | jq -e '
-    ([.spec.replicatedJobs[].groupName] | unique) == ["training"] and
-    any(.status.replicatedJobsStatus[]?; .name == "leader" and .ready == 1 and .active == 1) and
-    any(.status.replicatedJobsStatus[]?; .name == "workers" and .ready == 2 and .active == 2) and
-    (.status.terminalState // "") == ""
-  ' >/dev/null || fail "${name} status does not report the ready/active leader and worker roles"
+  wait_until "${name} ready/active role status" roles_status_ready
   ok "${name}: one leader and two workers are Running with controller-owned role/group/index lineage"
 }
 
@@ -262,6 +272,28 @@ verify_terminal_failure() {
   ok "${name}: the real failure policy produced Failed=True/FailJobSetFailurePolicyAction"
 }
 
+jobset_webhook_ready() {
+  kc apply --dry-run=server -f - >/dev/null 2>&1 <<'EOF'
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: radar-jobset-webhook-probe
+  namespace: default
+spec:
+  replicatedJobs:
+  - name: worker
+    replicas: 1
+    template:
+      spec:
+        template:
+          spec:
+            restartPolicy: Never
+            containers:
+            - name: worker
+              image: registry.k8s.io/pause:3.10
+EOF
+}
+
 install_jobset() {
   step "Installing JobSet ${JOBSET_VERSION}"
   kc apply --server-side -f "${JOBSET_MANIFEST}" >/dev/null
@@ -272,7 +304,8 @@ install_jobset() {
   image="$(kc -n jobset-system get deployment jobset-controller-manager -o jsonpath='{.spec.template.spec.containers[0].image}')"
   [ "${image}" = "registry.k8s.io/jobset/jobset:${JOBSET_VERSION}" ] || \
     fail "JobSet controller image is '${image}', expected registry.k8s.io/jobset/jobset:${JOBSET_VERSION}"
-  ok "JobSet controller is Ready with the pinned image"
+  wait_until "JobSet admission webhook" jobset_webhook_ready
+  ok "JobSet controller and admission webhook are Ready with the pinned image"
 }
 
 apply_fixtures() {
@@ -304,6 +337,24 @@ cmd_verify() {
   ok "JobSet running roles, dependency hold, terminal failure, and ownership lineage verified"
 }
 
+radar_health_ready() {
+  curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/health" 2>/dev/null | \
+    jq -e '.status == "healthy"' >/dev/null 2>&1
+}
+
+radar_crd_discovery_ready() {
+  curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/cluster-info" 2>/dev/null | \
+    jq -e '.crdDiscoveryStatus == "ready"' >/dev/null 2>&1
+}
+
+radar_inventory_ready() {
+  local kind="$1" group="$2" live cached projection
+  projection='map({metadata: (.metadata | {namespace, name, uid, ownerReferences, labels}), status: (.status | {phase, terminalState, replicatedJobsStatus, conditions: [.conditions[]? | {type, status, reason}]})}) | sort_by(.metadata.name)'
+  live="$(kc -n "${DEMO_NS}" get "${kind}${group:+.${group}}" --request-timeout=10s -o json | jq -cS ".items | ${projection}")" || return 1
+  cached="$(curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/resources/${kind}?group=${group}&namespace=${DEMO_NS}" | jq -cS "${projection}")" || return 1
+  [ "${live}" = "${cached}" ]
+}
+
 cmd_verify_radar() {
   require_cmd kind "https://kind.sigs.k8s.io/"
   require_cmd kubectl "https://kubernetes.io/docs/tasks/tools/"
@@ -314,10 +365,16 @@ cmd_verify_radar() {
   step "Verifying Radar API at ${RADAR_URL}"
 
   local response jobs pods
-  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/health")"
-  jq -e '.status == "healthy"' <<<"${response}" >/dev/null || fail "Radar health response is not healthy"
+  wait_until "Radar health endpoint" radar_health_ready
+  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/cluster-info")" || fail "Radar cluster-info request failed"
+  jq -e --arg context "${KUBECTL_CTX}" '.context == $context and .cluster == $context' <<<"${response}" >/dev/null || \
+    fail "Radar is not connected to the expected context and cluster '${KUBECTL_CTX}'"
+  wait_until "Radar CRD discovery" radar_crd_discovery_ready
+  wait_until "Radar JobSet identities, ownership and status" radar_inventory_ready jobsets jobset.x-k8s.io
+  wait_until "Radar Job identities, ownership and status" radar_inventory_ready jobs batch
+  wait_until "Radar Pod identities, ownership and status" radar_inventory_ready pods ""
 
-  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/jobsets?group=jobset.x-k8s.io")"
+  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/jobsets?group=jobset.x-k8s.io&namespace=${DEMO_NS}")" || fail "Radar jobsets list request failed"
   jq -e '
     type == "array" and length == 3 and
     all(.[]; .apiVersion == "jobset.x-k8s.io/v1alpha2") and
@@ -327,7 +384,7 @@ cmd_verify_radar() {
       any(.status.conditions[]?; .type == "Failed" and .status == "True" and .reason == "FailJobSetFailurePolicyAction"))
   ' <<<"${response}" >/dev/null || fail "Radar did not return the three group-pure reconciled JobSets"
 
-  jobs="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/jobs?namespace=${DEMO_NS}")"
+  jobs="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/jobs?namespace=${DEMO_NS}")" || fail "Radar jobs list request failed"
   jq -e '
     type == "array" and
     ([.[] | select(.metadata.labels["jobset.sigs.k8s.io/jobset-name"] == "roles-running")] | length) == 3 and
@@ -340,7 +397,7 @@ cmd_verify_radar() {
     ([.[] | select(.metadata.labels["jobset.sigs.k8s.io/jobset-name"] == "terminal-failure")] | length) == 1
   ' <<<"${jobs}" >/dev/null || fail "Radar did not expose the expected controller-created child Jobs"
 
-  pods="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/pods?namespace=${DEMO_NS}")"
+  pods="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/pods?namespace=${DEMO_NS}")" || fail "Radar pods list request failed"
   jq -e '
     type == "array" and
     ([.[] | select(.metadata.labels["jobset.sigs.k8s.io/jobset-name"] == "roles-running" and .status.phase == "Running")] | length) == 3 and
@@ -370,7 +427,7 @@ cmd_up() {
   else
     step "Creating dedicated kind cluster '${CLUSTER_NAME}'"
     kind create cluster --name "${CLUSTER_NAME}" --image "${KIND_NODE_IMAGE}" --wait 60s
-    mark_cluster
+    mark_cluster || fail "Cluster created but ownership could not be recorded. Inspect it before manual cleanup: kind delete cluster --name ${CLUSTER_NAME}"
     assert_cluster_contract
     ok "Cluster created and ownership marker recorded"
   fi
@@ -386,6 +443,7 @@ cmd_up() {
 cmd_down() {
   require_cmd kind "https://kind.sigs.k8s.io/"
   require_cmd kubectl "https://kubernetes.io/docs/tasks/tools/"
+  require_cmd jq "https://jqlang.github.io/jq/download/"
   if ! cluster_exists; then
     ok "Cluster '${CLUSTER_NAME}' does not exist"
     return

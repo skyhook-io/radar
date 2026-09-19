@@ -4,7 +4,6 @@
 .PHONY: cilium-demo cilium-demo-down cilium-demo-status
 .PHONY: gpu-ecosystem-demo gpu-ecosystem-demo-down gpu-ecosystem-demo-status
 .PHONY: kubecost-demo kubecost-demo-down kubecost-demo-status
-
 .PHONY: jobset-demo jobset-demo-down jobset-demo-reset jobset-demo-status jobset-demo-verify
 .PHONY: release release-binaries-dry docker docker-test docker-multiarch docker-push
 .PHONY: desktop desktop-binary desktop-dev desktop-package-darwin desktop-package-windows desktop-package-linux
@@ -514,7 +513,6 @@ help:
 	@echo "  make gpu-ecosystem-demo - 37 GPU, batch, and AI/ML resource fixtures"
 	@echo "  make kubecost-demo    - Kubecost 3 current-cost API and Radar connection lanes"
 	@echo "  make kueue-demo      - Live Kueue admission and pre-Pod blocker fixtures"
-
 	@echo "  make jobset-demo      - Live JobSet role, dependency, and failure fixtures"
 	@echo "  make calico-demo      - Real Calico, both API groups, staged policies"
 	@echo ""

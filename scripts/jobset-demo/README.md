@@ -13,7 +13,7 @@ breadth suite into a controller-heavy mega-cluster.
 ## Quick start
 
 ```bash
-# Prerequisites: Docker, kind, kubectl, jq
+# Prerequisites: Docker, kind, kubectl, jq, curl
 make jobset-demo              # normally 2-4 minutes on the first run
 make jobset-demo-status
 
@@ -22,9 +22,11 @@ make jobset-demo-status
 make build
 kind get kubeconfig --name radar-jobset-demo > /tmp/radar-jobset-demo.kubeconfig
 ./radar --kubeconfig /tmp/radar-jobset-demo.kubeconfig --port 9332 --no-browser
+# In a second terminal
 RADAR_URL=http://127.0.0.1:9332 ./scripts/jobset-demo.sh verify-radar
 
-# When done
+# When done, stop Radar with Ctrl-C in its terminal, then:
+rm /tmp/radar-jobset-demo.kubeconfig
 make jobset-demo-down
 ```
 
@@ -58,10 +60,16 @@ installing or applying anything.
 
 `verify-radar` expects an already-running Radar and checks:
 
-- the health endpoint;
+- health and CRD discovery readiness, and the expected demo context/cluster;
 - exactly three group-pure `jobset.x-k8s.io/v1alpha2` JobSets;
 - the running, dependency-held, and terminal-failure states returned by Radar;
-- the controller-created Jobs and Pods returned by Radar's core resource APIs.
+- the controller-created Jobs and Pods returned by Radar's core resource APIs;
+- matching Kubernetes and Radar resource inventories, including exact UIDs,
+  owner references, labels, and lifecycle evidence, with bounded waits for cache
+  synchronization.
+
+Every namespaced API request explicitly selects `jobset-demo`, independently of
+Radar's saved namespace view filter.
 
 For visual testing, select the dedicated context before starting the normal
 visual workflow and restore the previous context afterward:
@@ -80,6 +88,7 @@ those objects through Radar's group-aware APIs.
 
 It does **not** prove:
 
+- normalized execution context, MCP projections, or UI rendering/drilldown;
 - GPU hardware, device plugins, DRA allocation, utilization, or cost;
 - Kueue admission, quota, preemption, or topology-aware scheduling;
 - framework-specific semantics for Ray, Kubeflow Training, MPI, PyTorch, or inference;
