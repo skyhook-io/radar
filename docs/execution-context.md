@@ -18,6 +18,11 @@ a supported root with insufficient status has `phase: unknown`.
 | `suspendRequested` | Optional requested suspension; false is distinct from unsupported/unavailable |
 | `jobset` | Typed JobSet quantities and recreation counters |
 
+`outcome` is an extensible string vocabulary: consumers must preserve unfamiliar
+values as unclassified outcomes rather than map them to success or failure. New
+values require an adapter backed by authoritative root evidence; the existing
+values retain their meanings. No speculative cancellation taxonomy is encoded.
+
 `pending` means status supports waiting with no activity visible in this snapshot,
 not that the root never ran or that quota is blocking it. `active` includes
 startup, retries and cleanup, not a guarantee of Running Pods or healthy user
@@ -58,8 +63,9 @@ retains in-place restart fields and individual array details.
 
 The phase precedence is:
 
-1. Known terminalState: finished with its outcome, plus a matching true condition
-   if present. An unrecognized nonempty terminalState stays unknown and visible.
+1. Known terminalState: authoritative over contradictory conditions; finished
+   with its outcome, plus a matching true condition if present. Raw conditions
+   remain on the resource; this precedence does not claim which evidence is newer. An unrecognized nonempty terminalState stays unknown and visible.
 2. Otherwise, true Failed or Completed condition: finished with outcome.
 3. True StartupPolicyInProgress with no suspension requested: active. In-order
    resume retains Suspended=True until all roles start; startup evidence takes
