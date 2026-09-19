@@ -514,7 +514,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name:        "get_rightsizing",
 		InputSchema: rightsizingInputSchema(),
-		Description: "Recommend CPU/memory requests for Deployments, StatefulSets, and DaemonSets using 7 days of usage. scope=workload is cheap and precise; namespace/cluster scans can take 45s. Scans rank safety risks and increases before reductions. Scan once, then inspect workloads. Check confidence, missing evidence, and manual-review reasons. Request reductions do not directly imply bill savings.",
+		Description: "Recommend CPU/memory requests for Deployments, StatefulSets, and DaemonSets using 7 days of usage. scope=workload is cheap and precise; namespace/cluster scans run in the background for up to 3 minutes. Follow nextCall while scanStatus=running. Results are retained up to 15 minutes; use refresh=true after changes. Scans rank safety risks and increases before reductions. Scan once, then inspect workloads. Check confidence, missing evidence, and manual-review reasons. Request reductions do not directly imply bill savings.",
 		Annotations: readOnly,
 	}, logToolCall("get_rightsizing", handleGetRightsizing))
 

@@ -728,6 +728,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// through this gate before querying — see prometheusAuthGate.
 			prometheuspkg.SetAuthGate(s.prometheusAuthGate)
 			r.Post("/prometheus/rightsizing/scan", s.handleRightsizingScan)
+			r.Get("/prometheus/rightsizing/scan", s.handleRightsizingScan)
+			r.Get("/prometheus/rightsizing/scan/{scanId}", s.handleRightsizingScan)
+			r.Delete("/prometheus/rightsizing/scan/{scanId}", s.handleRightsizingScan)
 			prometheuspkg.RegisterRoutes(r)
 
 			// OpenCost routes
@@ -1197,6 +1200,7 @@ func (s *Server) Handler() http.Handler {
 
 // Stop gracefully stops the server and releases the listening port.
 func (s *Server) Stop() {
+	prometheuspkg.RightsizingScans().Invalidate()
 	StopAllLocalTermSessions()
 	if s.aiRuns != nil {
 		s.aiRuns.Shutdown() // cancel investigations so agent children don't outlive us

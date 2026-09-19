@@ -2,8 +2,11 @@ package server
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 )
@@ -14,18 +17,53 @@ func (s *Server) handleRightsizingScan(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-
-	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) && hasExplicitNamespaceFilter(r) {
+	ctx, cancel := context.WithTimeout(r.Context(), rightsizingScanTimeout)
+	defer cancel()
+	r = r.WithContext(ctx)
+	manager := prometheuspkg.RightsizingScans()
+	generation := manager.Generation()
+	id := chi.URLParam(r, "scanId")
+	var namespaces []string
+	if id != "" {
+		original, err := manager.Namespaces(ctx, id, generation)
+		if err != nil {
+			s.writeRightsizingScanError(w, err)
+			return
+		}
+		namespaces = s.getUserNamespaces(r, original)
+	} else {
+		namespaces = s.parseNamespacesForUser(r)
+	}
+	if noNamespaceAccess(namespaces) && (id != "" || hasExplicitNamespaceFilter(r)) {
 		s.writeError(w, http.StatusForbidden, "no access to the requested namespace(s)")
 		return
 	}
+	request := prometheuspkg.RightsizingScanRequest{
+		Generation: generation, Namespaces: namespaces, Scope: s.resolveRightsizingScanScope(r, namespaces),
+		ID: id, Start: r.Method == http.MethodPost, Refresh: r.Method == http.MethodPost, Cancel: r.Method == http.MethodDelete,
+	}
+	if request.Cancel {
+		request.Wait = 5 * time.Second
+	}
+	result, err := manager.Resolve(ctx, request)
+	if err != nil {
+		s.writeRightsizingScanError(w, err)
+		return
+	}
+	s.writeJSON(w, result)
+}
 
-	scope := s.resolveRightsizingScanScope(r, namespaces)
-	ctx, cancel := context.WithTimeout(r.Context(), rightsizingScanTimeout)
-	defer cancel()
-
-	s.writeJSON(w, prometheuspkg.ScanRightsizing(ctx, scope))
+func (s *Server) writeRightsizingScanError(w http.ResponseWriter, err error) {
+	status := http.StatusServiceUnavailable
+	switch {
+	case errors.Is(err, prometheuspkg.ErrRightsizingScanNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, prometheuspkg.ErrRightsizingScanScopeChanged):
+		status = http.StatusConflict
+	case errors.Is(err, prometheuspkg.ErrRightsizingScanBusy):
+		w.Header().Set("Retry-After", "5")
+	}
+	s.writeError(w, status, err.Error())
 }
 
 // serverScanAuthorizer answers scope questions for the requesting user.

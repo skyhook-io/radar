@@ -34,19 +34,21 @@ const (
 const (
 	rightsizingDefaultLimit = 20
 	rightsizingMaxLimit     = 100
-	rightsizingScanBudget   = 45 * time.Second
+	rightsizingScanBudget   = 20 * time.Second
 	// Skipped DaemonSets are named so they can be drilled into; a managed
 	// cluster can carry dozens, so the list is capped and the count stays exact.
 	skippedDaemonSetsMax = 50
 )
 
 type getRightsizingInput struct {
+	ScanID         string   `json:"scan_id,omitempty" jsonschema:"scan only: retrieve this existing scan with the same scope and namespaces; never starts a replacement. Omit to reuse the latest scan or start one."`
+	Refresh        bool     `json:"refresh,omitempty" jsonschema:"scan only: start fresh instead of reusing a retained result (up to 15 minutes old). An already running scan is reused. Cannot combine with scan_id."`
 	Classification string   `json:"classification,omitempty" jsonschema:"scan only: reduction, increase, review, need_data, or in_range; filters before limit and returns all rows of matching workloads; does not reduce scan effort"`
-	Scope          string   `json:"scope" jsonschema:"required. workload for one workload (needs kind, name, namespace) - cheap and precise. namespace scans one namespace (needs namespace). cluster scans every Deployment/StatefulSet/DaemonSet and runs 7-day range queries, taking up to 45s - call it once to find candidates, then drill in with scope=workload"`
+	Scope          string   `json:"scope" jsonschema:"required. workload for one workload (needs kind, name, namespace) - cheap and precise. namespace scans one namespace (needs namespace). cluster scans every Deployment/StatefulSet/DaemonSet and runs 7-day range queries, running in the background for up to 3 minutes. Follow nextCall while scanStatus=running; retained results are reused for up to 15 minutes unless refresh=true"`
 	Kind           string   `json:"kind,omitempty" jsonschema:"for scope=workload: Deployment, StatefulSet, or DaemonSet"`
 	Name           string   `json:"name,omitempty" jsonschema:"for scope=workload: the workload name"`
 	Namespace      string   `json:"namespace,omitempty" jsonschema:"one namespace: required for scope=workload, and for scope=namespace unless namespaces is set; rejected for scope=cluster"`
-	Namespaces     []string `json:"namespaces,omitempty" jsonschema:"for scope=namespace only, instead of namespace: scan several namespaces in one call. The 45s budget is shared, so this saves calls, not scan time"`
+	Namespaces     []string `json:"namespaces,omitempty" jsonschema:"for scope=namespace only, instead of namespace: scan several namespaces in one call. The background scan budget is shared across these namespaces"`
 	IncludeAll     bool     `json:"include_all,omitempty" jsonschema:"also return correctly-sized and unevidenced containers (default false, which returns only oversized, under_requested, and missing_request rows and reports the rest as omitted counts). Ignored for scope=workload, which returns every row of the named workload"`
 	Limit          int      `json:"limit,omitempty" jsonschema:"max workloads returned, ranked by safety priority then replica-weighted impact (default 20, max 100). Rejected for scope=workload"`
 }
@@ -150,6 +152,7 @@ func rowHasIncompleteEvidence(row prometheuspkg.RightsizingRow) bool {
 }
 
 type rightsizingCoverage struct {
+	AttemptedBatches       int      `json:"attemptedBatches"`
 	WorkloadsDiscovered    int      `json:"workloadsDiscovered"`
 	WorkloadsEvaluated     int      `json:"workloadsEvaluated"`
 	WorkloadsWithData      int      `json:"workloadsWithData"`
@@ -163,6 +166,7 @@ type rightsizingCoverage struct {
 
 func newRightsizingCoverage(coverage prometheuspkg.RightsizingScanCoverage) *rightsizingCoverage {
 	return &rightsizingCoverage{
+		AttemptedBatches:       coverage.AttemptedBatches,
 		WorkloadsDiscovered:    coverage.WorkloadsDiscovered,
 		WorkloadsEvaluated:     coverage.WorkloadsEvaluated,
 		WorkloadsWithData:      coverage.WorkloadsWithData,
@@ -176,6 +180,8 @@ func newRightsizingCoverage(coverage prometheuspkg.RightsizingScanCoverage) *rig
 }
 
 type rightsizingResponse struct {
+	prometheuspkg.RightsizingScanProgress
+	NextCall             *rightsizingNextCall                   `json:"nextCall,omitempty"`
 	ClassificationCounts map[prometheuspkg.RightsizingClass]int `json:"classificationCounts,omitempty"`
 	Scope                string                                 `json:"scope"`
 	State                prometheuspkg.RightsizingScanState     `json:"state"`
@@ -205,8 +211,19 @@ type rightsizingResponse struct {
 	Guidance                   []string                               `json:"guidance,omitempty"`
 }
 
+type rightsizingNextCall struct {
+	Tool      string              `json:"tool"`
+	Arguments getRightsizingInput `json:"arguments"`
+}
+
 func handleGetRightsizing(ctx context.Context, _ *mcp.CallToolRequest, input getRightsizingInput) (*mcp.CallToolResult, any, error) {
 	scope := strings.ToLower(strings.TrimSpace(input.Scope))
+	if input.ScanID != "" && input.Refresh {
+		return nil, nil, errors.New("refresh cannot be combined with scan_id")
+	}
+	if scope == "workload" && (input.ScanID != "" || input.Refresh) {
+		return nil, nil, errors.New("scan_id and refresh apply only to namespace and cluster scans")
+	}
 	if input.Classification != "" {
 		if scope == "workload" {
 			return nil, nil, errors.New("classification applies only to namespace and cluster scans")
@@ -240,7 +257,7 @@ func errRightsizingScope(given string) error {
 
 const rightsizingScopeHelp = `use scope="workload" with kind+name+namespace for one workload (cheap), ` +
 	`scope="namespace" with namespace to scan one namespace, or scope="cluster" to scan every ` +
-	`Deployment/StatefulSet/DaemonSet (7-day range queries, up to 45s — call it once, then drill in with scope="workload")`
+	`Deployment/StatefulSet/DaemonSet (7-day range queries, up to 3 minutes in the background — follow nextCall while running, then drill in with scope="workload")`
 
 func errUnsupportedRightsizingKind(kind string) error {
 	return fmt.Errorf("rightsizing supports only Deployment, StatefulSet, and DaemonSet, not %q — recommendations are per container template, so Pods are the wrong granularity", kind)
@@ -387,9 +404,11 @@ func rightsizingScanScope(ctx context.Context, input getRightsizingInput, scope 
 	scanCtx, cancel := context.WithTimeout(ctx, rightsizingScanBudget)
 	defer cancel()
 
+	manager := prometheuspkg.RightsizingScans()
+	generation := manager.Generation()
 	allowed := scopedNamespacesForUser(scanCtx, requested)
 	if scanCtx.Err() != nil {
-		return toJSONResult(rightsizingScanUnavailable(scope, namespace, prometheuspkg.ReasonScanDeadlineExceeded))
+		return nil, nil, fmt.Errorf("could not authorize scan scope within the request budget: %w", scanCtx.Err())
 	}
 	var excluded []excludedNamespace
 	if listForm {
@@ -398,28 +417,24 @@ func rightsizingScanScope(ctx context.Context, input getRightsizingInput, scope 
 	if allowed != nil && len(allowed) == 0 {
 		out := rightsizingScanUnavailable(scope, namespace, deniedScopeReason(requested))
 		out.ExcludedNamespaces = excluded
+		setRightsizingScanGuidance(&out, input)
 		return toJSONResult(out)
 	}
 
 	scanScope := prometheuspkg.ResolveScanScope(allowed, mcpScanAuthorizer{ctx: scanCtx})
 
 	if scanCtx.Err() != nil {
-		return toJSONResult(rightsizingScanUnavailable(scope, namespace, prometheuspkg.ReasonScanDeadlineExceeded))
+		return nil, nil, fmt.Errorf("could not authorize scan scope within the request budget: %w", scanCtx.Err())
 	}
-	scan := prometheuspkg.ScanRightsizing(scanCtx, scanScope)
-	// The engine records a breached budget as a warning and stops batching, but
-	// the state it lands on reads as a failed query. Name the deadline so the
-	// remediation says "narrow the scan" instead of "check Prometheus health".
-	// Only when the scan did not finish: a budget that expires on the way out
-	// of a complete scan would otherwise tell the caller to narrow a scan that
-	// had already answered everything.
-	// Nor on a partial scan no batch of which the deadline cut: its cause is
-	// RBAC or a query gap, and the budget may simply have expired after it
-	// returned.
-	deadlineCut := hasWarningCode(scan.Warnings, prometheuspkg.ReasonScanDeadlineExceeded)
-	if scanCtx.Err() != nil && (scan.State == prometheuspkg.RightsizingScanUnavailable || deadlineCut) {
-		scan.Reason = prometheuspkg.ReasonScanDeadlineExceeded
+	snapshot, err := manager.Resolve(scanCtx, prometheuspkg.RightsizingScanRequest{
+		Generation: generation, Namespaces: allowed, Scope: scanScope, ID: input.ScanID,
+		Start: input.ScanID == "", Refresh: input.Refresh, Wait: rightsizingScanBudget,
+	})
+	if err != nil {
+		return nil, nil, err
 	}
+	scan := *snapshot
+	deadlineCut := scan.ScanStatus == "timed_out"
 	// Both narrowings land here, after the scan, because the second one is the
 	// scope the engine resolved: the namespace check above is a broad sentinel
 	// that per-kind access can still deny outright, and the informer cache can
@@ -440,12 +455,13 @@ func rightsizingScanScope(ctx context.Context, input getRightsizingInput, scope 
 	coverage := scan.Coverage
 
 	out := rightsizingResponse{
-		Scope:     scope,
-		State:     scan.State,
-		Window:    scan.Window,
-		Source:    scan.Source,
-		Namespace: namespace,
-		Reason:    scan.Reason,
+		RightsizingScanProgress: scan.RightsizingScanProgress,
+		Scope:                   scope,
+		State:                   scan.State,
+		Window:                  scan.Window,
+		Source:                  scan.Source,
+		Namespace:               namespace,
+		Reason:                  scan.Reason,
 		// Counters are always emitted: "0 of 1 batches succeeded" is precisely
 		// the case a reader needs, and omitempty would hide it.
 		Coverage: newRightsizingCoverage(coverage),
@@ -477,9 +493,10 @@ func rightsizingScanScope(ctx context.Context, input getRightsizingInput, scope 
 			reason:              out.Reason,
 			effectiveNamespaces: clusterNamespaceScope(scope, out.NamespaceScope),
 		})
+		setRightsizingScanGuidance(&out, input)
 		return toJSONResult(out)
 	}
-	if listForm && scanCoveredEveryWorkload(scan.Coverage) {
+	if listForm && scan.ScanStatus != "running" && scanCoveredEveryWorkload(scan.Coverage) {
 		out.NamespacesWithoutWorkloads = namespacesWithoutWorkloads(scanned, scan.Workloads, scan.Coverage.SkippedDaemonSets)
 	}
 
@@ -545,9 +562,23 @@ func rightsizingScanScope(ctx context.Context, input getRightsizingInput, scope 
 		namespacesWithoutWorkloads: out.NamespacesWithoutWorkloads,
 		workloadsShown:             len(out.Workloads) > 0,
 		deadlineExceeded:           deadlineCut,
-		batchQueryFailed:           hasBatchQueryFailure(scan.Warnings),
+		batchQueryFailed:           scan.ScanStatus != "cancelled" && hasBatchQueryFailure(scan.Warnings),
 	})
+	setRightsizingScanGuidance(&out, input)
 	return toJSONResult(out)
+}
+
+func setRightsizingScanGuidance(out *rightsizingResponse, input getRightsizingInput) {
+	if out.ScanStatus == "running" {
+		out.State, out.Reason, out.Remediation = prometheuspkg.RightsizingScanPartial, "scan_in_progress", ""
+		out.NamespacesWithoutWorkloads = nil
+		next := input
+		next.ScanID, next.Refresh = out.ScanID, false
+		out.NextCall = &rightsizingNextCall{Tool: "get_rightsizing", Arguments: next}
+		out.Guidance = []string{"Scan still running. Coverage, counts, and rankings describe only workloads evaluated so far. Wait 5 seconds, then use nextCall to retrieve progress without repeating completed queries."}
+	} else if out.ScanID != "" {
+		out.Guidance = append(out.Guidance, "This is a retained snapshot from evaluatedAt. Reuse scan_id to change filters without rescanning; omit scan_id and set refresh=true to scan again after changes.")
+	}
 }
 
 type rowGapCounts struct {
@@ -1008,6 +1039,10 @@ func rightsizingRemediation(scope, reason string) string {
 		// narrowed by RBAC or informer coverage, so it must not assert that a
 		// query broke. guidance names whichever cause this response carries.
 		return "The scan ran but did not cover everything: either some usage, restart or throttle evidence was missing or its query did not answer (the warnings name which), or coverage.restrictedKinds, unavailableKinds or partiallyCachedKinds narrowed what it could read. Treat the affected containers as unjudged rather than correctly sized."
+	case "scan_capacity_exceeded":
+		return "This scan exceeds the retained-result limit. Select fewer namespaces and scan again."
+	case "scan_cancelled":
+		return "The scan was stopped. Available recommendations are retained; omit scan_id and set refresh=true to start a new scan."
 	case "scan_incomplete":
 		return "The scan did not finish every batch within its budget — coverage.workloadsEvaluated reports evaluated workloads; coverage.successfulBatches counts batches whose queries all succeeded, not batches attempted. The returned rows are a subset; narrow with scope=\"namespace\" or target one workload with scope=\"workload\" for a complete answer."
 	case "no_containers":
@@ -1032,7 +1067,7 @@ func rightsizingRemediation(scope, reason string) string {
 		// no access to it either.
 		return "radar is pinned to a single namespace with --namespace-scope, so the requested scope is outside what it can see. This is a startup flag, not a permissions problem — restart radar without --namespace-scope to scan cluster-wide."
 	case prometheuspkg.ReasonScanDeadlineExceeded:
-		return "The scan ran out of its 45-second budget before finishing. Narrow it with scope=\"namespace\", or target one workload with scope=\"workload\"."
+		return "The scan ran out of its three-minute budget before finishing. Narrow it with scope=\"namespace\", or target one workload with scope=\"workload\"."
 	default:
 		return ""
 	}

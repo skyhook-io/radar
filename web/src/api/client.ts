@@ -3364,6 +3364,7 @@ export interface RightsizingScanCoverage {
   workloadsWithData: number;
   batches: number;
   completedBatches: number;
+  attemptedBatches: number;
   restrictedKinds?: string[];
   unavailableKinds?: string[];
   partiallyCachedKinds?: string[];
@@ -3371,6 +3372,11 @@ export interface RightsizingScanCoverage {
 }
 
 export interface RightsizingScanResponse {
+  scanId: string;
+  scanStatus: 'running' | 'finished' | 'cancelled' | 'timed_out';
+  deadlineAt: string;
+  expiresAt?: string;
+  pollAfterSeconds?: number;
   state: RightsizingScanState;
   scannedAt: string;
   window: string;
@@ -3663,55 +3669,83 @@ export function usePrometheusRightsizing(
 
 const RIGHTSIZING_SCAN_CACHE_TIME = 5 * 60 * 1000;
 
-export function getRightsizingScanCacheConfig(
-  namespaces: string[],
-  context = "",
-): {
-  namespaceKey: string;
-  queryKey: readonly ["prometheus-rightsizing-scan", string, string];
-  queryFn: typeof skipToken;
-  gcTime: number;
-} {
-  const namespaceKey = [...namespaces].sort().join(",");
+export function getRightsizingScanCacheConfig(namespaces: string[], context = "", identity = "") {
+  const namespaceKey = [...new Set(namespaces)].sort().join(",");
   return {
     namespaceKey,
-    queryKey: ["prometheus-rightsizing-scan", context, namespaceKey] as const,
-    queryFn: skipToken,
+    queryKey: ["prometheus-rightsizing-scan", getApiBase(), identity, context, namespaceKey] as const,
     gcTime: RIGHTSIZING_SCAN_CACHE_TIME,
   };
 }
 
-// A fleet rightsizing scan is intentionally manual. It can query seven days of
-// Prometheus history for many containers, so navigation alone must never run it.
+// Navigation retrieves a retained scan; only an explicit POST starts work.
 export function useRightsizingScan(namespaces: string[], context = "") {
   const queryClient = useQueryClient();
-  const { namespaceKey, ...snapshotOptions } = getRightsizingScanCacheConfig(
-    namespaces,
-    context,
-  );
-  const scanScope = { namespaceKey, queryKey: snapshotOptions.queryKey };
-  const snapshot = useQuery<RightsizingScanResponse>(snapshotOptions);
-  const mutation = useMutation({
-    mutationFn: async (startedScope: typeof scanScope) => {
-      const params = new URLSearchParams();
-      if (startedScope.namespaceKey)
-        params.set("namespaces", startedScope.namespaceKey);
-      const query = params.toString();
-      return fetchJSON<RightsizingScanResponse>(
-        `/prometheus/rightsizing/scan${query ? `?${query}` : ""}`,
-        {
-          method: "POST",
-        },
-      );
-    },
-    onSuccess: (result, startedScope) =>
-      queryClient.setQueryData(startedScope.queryKey, result),
+  const { data: auth } = useAuthMe();
+  const identity = JSON.stringify([auth?.username, [...(auth?.groups ?? [])].sort()]);
+  const { namespaceKey, ...cache } = getRightsizingScanCacheConfig(namespaces, context, identity);
+  const scope = JSON.stringify(cache.queryKey);
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
+  const previous = useRef<{ scope: string; result: RightsizingScanResponse } | null>(null);
+  const params = new URLSearchParams();
+  if (namespaceKey) params.set('namespaces', namespaceKey);
+  const path = `/prometheus/rightsizing/scan?${params}`;
+  const snapshot = useQuery<RightsizingScanResponse | null>({
+    ...cache,
+    enabled: Boolean(context && auth),
+    queryFn: ({ signal }) => fetchJSON(path, { signal }),
+    refetchOnMount: 'always',
+    retry: (count, error) => !(error instanceof ApiError && [403, 404, 409].includes(error.status)) && count < 1,
+    refetchInterval: (query) => !query.state.error && query.state.data?.scanStatus === 'running' ? 5000 : false,
   });
+  const mutation = useMutation({
+    mutationFn: async (started: { scope: string; path: string; queryKey: typeof cache.queryKey; previousScanId?: string }) => {
+      await queryClient.cancelQueries({ queryKey: started.queryKey });
+      if (currentScope.current !== started.scope) throw new Error('Scan scope changed; run the scan again.');
+      return fetchJSON<RightsizingScanResponse>(started.path, { method: 'POST' });
+    },
+    onSuccess: (result, started) => queryClient.setQueryData(started.queryKey, result),
+    onError: (_error, started) => {
+      // A lost POST response may still have started a scan. Read before retrying.
+      void queryClient.invalidateQueries({ queryKey: started.queryKey });
+    },
+  });
+  const stop = useMutation({
+    mutationFn: async (started: { id: string; scope: string; queryKey: typeof cache.queryKey }) => {
+      await queryClient.cancelQueries({ queryKey: started.queryKey });
+      if (currentScope.current !== started.scope) throw new Error('Scan scope changed.');
+      return fetchJSON<RightsizingScanResponse>(`/prometheus/rightsizing/scan/${encodeURIComponent(started.id)}`, { method: 'DELETE' });
+    },
+    onSuccess: (result, started) => queryClient.setQueryData(started.queryKey, result),
+  });
+  const inaccessible = snapshot.error instanceof ApiError && [403, 404, 409].includes(snapshot.error.status);
+  const current = inaccessible ? null : snapshot.data;
+  useEffect(() => {
+    if (inaccessible) {
+      previous.current = null;
+      queryClient.setQueryData(cache.queryKey, null);
+    } else if (current && current.coverage.workloadsEvaluated > 0) {
+      previous.current = { scope, result: current };
+    }
+  }, [current, inaccessible, scope, queryClient, cache.queryKey]);
+  const showingPrevious = current?.scanStatus === 'running' && current.coverage.workloadsEvaluated === 0 && previous.current?.scope === scope;
+  const startRecovered = current && current.scanId !== mutation.variables?.previousScanId;
+  const stopRecovered = current && (current.scanId !== stop.variables?.id || current.scanStatus !== 'running');
   return {
-    ...mutation,
-    data: snapshot.data,
-    mutate: () => mutation.mutate(scanScope),
-    mutateAsync: () => mutation.mutateAsync(scanScope),
+    data: showingPrevious ? previous.current!.result : current,
+    progress: current,
+    showingPrevious,
+    isStarting: mutation.isPending,
+    isPending: mutation.isPending || current?.scanStatus === 'running',
+    isLoading: snapshot.isLoading,
+    statusError: snapshot.error,
+    error: snapshot.error || (stop.variables?.scope === scope && !stopRecovered ? stop.error : null) || (mutation.variables?.scope === scope && !startRecovered ? mutation.error : null),
+    reset: () => { mutation.reset(); stop.reset(); },
+    mutateAsync: () => mutation.mutateAsync({ scope, path, queryKey: cache.queryKey, previousScanId: current?.scanId }),
+    retryStatus: () => snapshot.refetch(),
+    stop: () => { if (!mutation.isPending && current?.scanStatus === 'running') stop.mutate({ id: current.scanId, scope, queryKey: cache.queryKey }); },
+    isStopping: stop.isPending,
   };
 }
 

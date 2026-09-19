@@ -4,7 +4,8 @@ import type { RightsizingRow, RightsizingScanResponse } from '../../api/client'
 import { FitWhy, ScanNotices, ScanSummary } from './RightsizingScanView'
 
 const scan: RightsizingScanResponse = {
-  state: 'complete',
+  scanId: 'rs_test', scanStatus: 'finished', deadlineAt: '2026-09-19T10:03:00Z',
+    state: 'complete',
   scannedAt: '2026-09-19T06:52:54Z',
   window: '7d',
   source: 'radar',
@@ -13,7 +14,7 @@ const scan: RightsizingScanResponse = {
     workloadsEvaluated: 120,
     workloadsWithData: 47,
     batches: 3,
-    completedBatches: 3,
+    attemptedBatches: 3, completedBatches: 3,
   },
   workloads: [],
 }
@@ -30,7 +31,7 @@ describe('rightsizing scan notices', () => {
       coverage: {
         ...scan.coverage,
         workloadsEvaluated: 100,
-        completedBatches: 0,
+        attemptedBatches: 1, completedBatches: 0,
         daemonSetsWithoutNodes: 27,
       },
       warnings: ['cpu_query_failed', 'memory_query_failed', 'scan_deadline_exceeded'].map(

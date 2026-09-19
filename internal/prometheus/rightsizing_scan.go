@@ -3,6 +3,7 @@ package prometheus
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"strings"
@@ -127,6 +128,7 @@ type RightsizingScanCoverage struct {
 	WorkloadsWithData   int      `json:"workloadsWithData"`
 	Batches             int      `json:"batches"`
 	CompletedBatches    int      `json:"completedBatches"`
+	AttemptedBatches    int      `json:"attemptedBatches"`
 	RestrictedKinds     []string `json:"restrictedKinds,omitempty"`
 	UnavailableKinds    []string `json:"unavailableKinds,omitempty"`
 
@@ -164,6 +166,7 @@ type RightsizingScanWorkload struct {
 }
 
 type RightsizingScanResponse struct {
+	RightsizingScanProgress
 	State     RightsizingScanState      `json:"state"`
 	ScannedAt time.Time                 `json:"scannedAt"`
 	Window    string                    `json:"window"`
@@ -203,15 +206,12 @@ type scanBatchEvidence struct {
 	errors       map[string]error
 }
 
-func ScanRightsizing(ctx context.Context, scope RightsizingScanScope) RightsizingScanResponse {
-	now := time.Now().UTC()
-	resp := newRightsizingScanResponse(now, scope)
-	client := GetClient()
+func runRightsizingScan(ctx context.Context, scope RightsizingScanScope, client *Client, cache *k8s.ResourceCache, publish func(RightsizingScanResponse)) RightsizingScanResponse {
+	resp := newRightsizingScanResponse(time.Now().UTC(), scope)
 	if client == nil {
 		resp.Reason = "prometheus_unavailable"
 		return resp
 	}
-	cache := k8s.GetResourceCache()
 	if cache == nil {
 		resp.Reason = "resource_cache_unavailable"
 		return resp
@@ -224,7 +224,28 @@ func ScanRightsizing(ctx context.Context, scope RightsizingScanScope) Rightsizin
 	resp.Coverage.DaemonSetsWithoutNodes = len(skippedDaemonSets)
 	sort.Strings(skippedDaemonSets)
 	resp.Coverage.SkippedDaemonSets = skippedDaemonSets
-	return computeRightsizingScan(ctx, client, workloads, resp)
+	resp.Coverage.WorkloadsDiscovered = len(workloads)
+	publish(resp)
+	rows := 0
+	for _, workload := range workloads {
+		rows += 2 * len(workload.workload.containers)
+	}
+	if rows > rightsizingScanMaxRows {
+		resp.Reason = "scan_capacity_exceeded"
+		return resp
+	}
+	if len(workloads) == 0 {
+		return computeRightsizingScanProgress(ctx, nil, workloads, resp, publish)
+	}
+	querier, err := client.newScanQuerier(ctx, resp.ScannedAt.Truncate(rightsizingStep))
+	if err != nil {
+		resp.Reason = "prometheus_unavailable"
+		if ctx.Err() == nil {
+			appendScanWarning(&resp, "prometheus_unavailable", err.Error())
+		}
+		return resp
+	}
+	return computeRightsizingScanProgress(ctx, querier, workloads, resp, publish)
 }
 
 // scanCacheCoverage is the slice of the resource cache the scope clamp needs.
@@ -302,6 +323,10 @@ func newRightsizingScanResponse(now time.Time, scope RightsizingScanScope) Right
 }
 
 func computeRightsizingScan(ctx context.Context, client rightsizingScanQuerier, workloads []scanWorkload, resp RightsizingScanResponse) RightsizingScanResponse {
+	return computeRightsizingScanProgress(ctx, client, workloads, resp, func(RightsizingScanResponse) {})
+}
+
+func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQuerier, workloads []scanWorkload, resp RightsizingScanResponse, publish func(RightsizingScanResponse)) RightsizingScanResponse {
 	sortScanWorkloads(workloads)
 	resp.Coverage.WorkloadsDiscovered = len(workloads)
 	if len(workloads) == 0 {
@@ -333,7 +358,9 @@ func computeRightsizingScan(ctx context.Context, client rightsizingScanQuerier, 
 	ksm, err := client.Query(ctx, `count(kube_pod_owner)`)
 	if err != nil {
 		resp.Reason = "owner_metrics_query_failed"
-		appendScanWarning(&resp, "owner_metrics_query_failed", err.Error())
+		if ctx.Err() == nil {
+			appendScanWarning(&resp, "owner_metrics_query_failed", err.Error())
+		}
 		return resp
 	}
 	if firstValue(ksm) == nil || *firstValue(ksm) <= 0 {
@@ -343,6 +370,9 @@ func computeRightsizingScan(ctx context.Context, client rightsizingScanQuerier, 
 	replicaSetOwnersQueryFailed := false
 	if hasScanKind(workloads, "Deployment") {
 		replicaSetOwners, queryErr := client.Query(ctx, `count(kube_replicaset_owner)`)
+		if queryErr != nil && ctx.Err() != nil {
+			return resp
+		}
 		if queryErr != nil || firstValue(replicaSetOwners) == nil || *firstValue(replicaSetOwners) <= 0 {
 			resp.Coverage.UnavailableKinds = appendUniqueSorted(resp.Coverage.UnavailableKinds, "Deployment")
 			workloads = withoutScanKind(workloads, "Deployment")
@@ -361,6 +391,7 @@ func computeRightsizingScan(ctx context.Context, client rightsizingScanQuerier, 
 	}
 
 	resp.Coverage.Batches = (len(workloads) + rightsizingScanBatchSize - 1) / rightsizingScanBatchSize
+	publish(resp)
 	for start := 0; start < len(workloads); start += rightsizingScanBatchSize {
 		if err := ctx.Err(); err != nil {
 			appendScanWarning(&resp, ReasonScanDeadlineExceeded, err.Error())
@@ -368,17 +399,21 @@ func computeRightsizingScan(ctx context.Context, client rightsizingScanQuerier, 
 		}
 		end := min(start+rightsizingScanBatchSize, len(workloads))
 		batch := workloads[start:end]
+		batchStarted := time.Now()
 		evidence := queryRightsizingScanBatch(ctx, client, batch, resp.ScannedAt)
+		resp.Coverage.AttemptedBatches++
+		log.Printf("[rightsizing] batch=%d workloads=%d duration=%s query_failures=%d", resp.Coverage.AttemptedBatches, len(batch), time.Since(batchStarted).Round(time.Millisecond), len(evidence.errors))
 		if len(evidence.errors) == 0 {
 			resp.Coverage.CompletedBatches++
 		} else {
-			for key, queryErr := range evidence.errors {
-				appendScanWarning(&resp, key+"_query_failed", queryErr.Error())
-			}
-			// The loop-top check never sees a deadline that cut the last batch:
-			// its queries fail with the context error and there is no next pass.
+			// An interrupted batch is not backend failure evidence. Keep only
+			// the batches that completed before cancellation or the scan deadline.
 			if err := ctx.Err(); err != nil {
 				appendScanWarning(&resp, ReasonScanDeadlineExceeded, err.Error())
+				break
+			}
+			for key, queryErr := range evidence.errors {
+				appendScanWarning(&resp, key+"_query_failed", queryErr.Error())
 			}
 		}
 		for _, workload := range batch {
@@ -392,6 +427,7 @@ func computeRightsizingScan(ctx context.Context, client rightsizingScanQuerier, 
 				appendScanWarning(&resp, ReasonOOMEvidenceUnavailable, "Restart history was incomplete for some memory recommendations.")
 			}
 		}
+		publish(resp)
 	}
 
 	switch {
@@ -433,17 +469,17 @@ func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerie
 	sem := make(chan struct{}, 2)
 	for _, key := range []string{"cpu", "memory", "throttle"} {
 		key := key
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			mu.Lock()
+			out.errors[key] = ctx.Err()
+			mu.Unlock()
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				mu.Lock()
-				out.errors[key] = ctx.Err()
-				mu.Unlock()
-				return
-			}
 			result, err := client.QueryRange(ctx, queries[key], start, end, rightsizingStep)
 			<-sem
 			mu.Lock()
@@ -466,17 +502,17 @@ func queryRightsizingScanBatch(ctx context.Context, client rightsizingScanQuerie
 	wg.Wait()
 	for _, key := range []string{"restart_activity", "termination_history"} {
 		key := key
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			mu.Lock()
+			out.errors[key] = ctx.Err()
+			mu.Unlock()
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				mu.Lock()
-				out.errors[key] = ctx.Err()
-				mu.Unlock()
-				return
-			}
 			result, err := client.Query(ctx, queries[key])
 			<-sem
 			mu.Lock()
