@@ -64,6 +64,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const [selectedPods, setSelectedPods] = useState<Set<string>>(new Set())
   const [isLoading, setIsLoading] = useState(false)
   const [fetchError, setFetchError] = useState<string | null>(null)
+  const [fetchErrorTone, setFetchErrorTone] = useState<'failure' | 'state'>('failure')
   const [emptyMessage, setEmptyMessage] = useState<string | null>(null)
   const [emptyCommand, setEmptyCommand] = useState<string | null>(null)
   const [showPodFilter, setShowPodFilter] = useState(false)
@@ -72,7 +73,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
 
   const { tailLines, sinceSeconds } = parseLogRange(logRange)
   const { entries, append, set, clear } = useLogBuffer()
-  const { isStreaming, streamError, connecting, startStreaming, stopStreaming } = useLogStream()
+  const { isStreaming, streamError, streamEnded, connecting, startStreaming, stopStreaming } = useLogStream()
 
   const willAutoStream = autoStream && !!createStream
   // null sentinel so the initial selectedContainer ('' = all) still arms once.
@@ -98,6 +99,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const loadLogs = useCallback(async () => {
     setIsLoading(true)
     setFetchError(null)
+      setFetchErrorTone('failure')
     try {
       const result = await fetchAll({ container: selectedContainer || undefined, tailLines, sinceSeconds })
       const resultPods = result.pods ?? []
@@ -125,6 +127,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       })))
     } catch (err) {
       console.error('Failed to fetch workload logs:', err)
+      // 404 means the cluster has nothing to give, not that Radar broke.
+      const status = (err as { status?: number } | null)?.status
+      setFetchErrorTone(status === 404 ? 'state' : 'failure')
       setFetchError(err instanceof Error ? err.message : 'Failed to fetch logs')
     } finally {
       setIsLoading(false)
@@ -353,6 +358,18 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   // loading state rather than the empty-logs placeholder.
   const isConnecting = willAutoStream && connecting && entries.length === 0
 
+  const stopped = streamError ?? (streamEnded !== null ? streamEnded : null)
+  const stoppedHeadline = streamError
+    ? 'Live updates stopped. Select Stream to retry.'
+    : 'Live updates ended.'
+  const hasLines = entries.length > 0
+  const notice = stopped !== null && hasLines
+    ? { headline: stoppedHeadline, detail: stopped || null, tone: (streamError ? 'failure' : 'state') as 'failure' | 'state' }
+    : null
+  const bodyMessage = stopped !== null && !hasLines
+    ? [stoppedHeadline, stopped].filter(Boolean).join(' ')
+    : null
+
   return (
     <LogCore
       entries={filteredEntries}
@@ -368,7 +385,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       showPodName
       emptyMessage={emptyMessage || (pods.length === 0 ? 'No pods found' : 'No logs available')}
       emptyCommand={emptyCommand}
-      errorMessage={fetchError || (entries.length === 0 ? streamError : null)}
+      errorMessage={fetchError || bodyMessage}
+      errorTone={fetchError ? fetchErrorTone : 'state'}
+      notice={notice}
       forceDark={forceDark}
     />
   )

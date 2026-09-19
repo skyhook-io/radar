@@ -52,15 +52,20 @@ export function LogsViewer({
   const [selectedContainer, setSelectedContainer] = useState(initialContainer || containers[0] || '')
   const [isLoading, setIsLoading] = useState(false)
   const [fetchError, setFetchError] = useState<string | null>(null)
+  const [fetchErrorTone, setFetchErrorTone] = useState<'failure' | 'state'>('failure')
   const [logRange, setLogRange] = useState('500')
   const [showPrevious, setShowPrevious] = useState(false)
   const { showError, showSuccess } = useToast()
 
   const { tailLines, sinceSeconds } = parseLogRange(logRange)
   const { entries, append, set, clear } = useLogBuffer()
-  const { isStreaming, streamError, connecting, startStreaming, stopStreaming } = useLogStream()
+  const { isStreaming, streamError, streamEnded, connecting, startStreaming, stopStreaming } = useLogStream()
 
-  const willAutoStream = autoStream && !!createStream
+  // Following a container and reading a run that already exited are mutually
+  // exclusive. Without this the auto-stream re-arms after the previous-run
+  // fetch and refills the buffer from the run that is still going, leaving the
+  // checkbox ticked over the wrong logs.
+  const willAutoStream = autoStream && !!createStream && !showPrevious
   // Tracks the container we've already auto-started for, so re-renders don't
   // re-open the stream, and a container switch arms a fresh auto-start.
   const autoStartedForRef = useRef<string | null>(null)
@@ -71,6 +76,7 @@ export function LogsViewer({
     if (!selectedContainer) return
     setIsLoading(true)
     setFetchError(null)
+    setFetchErrorTone('failure')
     try {
       const data = await fetchLogs({ container: selectedContainer, tailLines, sinceSeconds, previous: showPrevious })
       const logText = data[selectedContainer] ?? Object.values(data)[0] ?? ''
@@ -80,6 +86,9 @@ export function LogsViewer({
       }))
     } catch (err) {
       console.error('Failed to fetch logs:', err)
+      // 404 means the cluster has nothing to give, not that Radar broke.
+      const status = (err as { status?: number } | null)?.status
+      setFetchErrorTone(status === 404 ? 'state' : 'failure')
       setFetchError(err instanceof Error ? err.message : 'Failed to fetch logs')
     } finally {
       setIsLoading(false)
@@ -106,6 +115,9 @@ export function LogsViewer({
 
   const handleStartStreaming = useCallback(() => {
     if (!createStream) return
+    // A failure from the run just left must not outlive it, or the stream
+    // delivers lines into a buffer the reader never sees.
+    setFetchError(null)
     // The stream replays the last N lines (TailLines + Follow); clear first so
     // they don't duplicate lines already in the buffer (the snapshot on the
     // manual path, or an earlier stream on restart).
@@ -177,13 +189,30 @@ export function LogsViewer({
   // loading state rather than the empty-logs placeholder.
   const isConnecting = willAutoStream && connecting && entries.length === 0
 
+  // A stream stops two ways and both look identical on screen. With lines
+  // already there the message goes above them, never in place of them: those
+  // lines are the last thing the workload said.
+  const stopped = streamError ?? (streamEnded !== null ? streamEnded : null)
+  const stoppedHeadline = streamError
+    ? 'Live updates stopped. Select Stream to retry.'
+    : 'Live updates ended.'
+  const hasLines = entries.length > 0
+  const notice = stopped !== null && hasLines
+    ? { headline: stoppedHeadline, detail: stopped || null, tone: (streamError ? 'failure' : 'state') as 'failure' | 'state' }
+    : null
+  const bodyMessage = stopped !== null && !hasLines
+    ? [stoppedHeadline, stopped].filter(Boolean).join(' ')
+    : null
+
   return (
     <LogCore
       entries={entries}
       isLoading={isLoading || isConnecting}
-      errorMessage={fetchError || (entries.length === 0 ? streamError : null)}
+      errorMessage={fetchError || bodyMessage}
+      errorTone={fetchError ? fetchErrorTone : 'state'}
+      notice={notice}
       isStreaming={isStreaming}
-      onStartStream={createStream ? handleStartStreaming : undefined}
+      onStartStream={createStream && !showPrevious ? handleStartStreaming : undefined}
       onStopStream={handleStopStreaming}
       onRefresh={loadLogs}
       onDownload={downloadLogs}
