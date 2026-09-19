@@ -407,7 +407,7 @@ export type InvestigationEvidenceData =
   | {
       type: "logs";
       pod: string;
-      container: string;
+      container?: string;
       /** Namespace the producing call actually read; absent when unstated. */
       namespace?: string;
       previous: boolean;

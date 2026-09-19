@@ -39,9 +39,13 @@ export function adaptPodLogs(
   const warnings = stringArray(value?.warnings) ?? [];
   const args = record(source.args ? parseJSON(source.args) : undefined);
   const pod = nonEmptyString(args?.name) ? args.name : "Pod";
-  const container = nonEmptyString(args?.container)
-    ? args.container
-    : "default container";
+  // Saved runs from before the producer returned identity may still name the
+  // requested container in their arguments. Otherwise its identity is unknown.
+  const container = nonEmptyString(value?.container)
+    ? value.container
+    : nonEmptyString(args?.container)
+      ? args.container
+      : undefined;
   addLogs(
     builder,
     source,

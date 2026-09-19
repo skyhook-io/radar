@@ -13,6 +13,66 @@ import {
   workloadLogsPayload,
 } from "../evidenceFixtures";
 
+describe("pod logs container identity", () => {
+  const payload = {
+    lines: ["ERROR missing configuration"],
+    totalLines: 1,
+    matchedLines: 1,
+    fallback: false,
+  };
+
+  it.each([
+    ["resolved identity", { ...payload, container: "app" }, {}, "app"],
+    [
+      "producer identity wins",
+      { ...payload, container: "app" },
+      { container: "proxy" },
+      "app",
+    ],
+    ["saved explicit request", payload, { container: "app" }, "app"],
+    ["saved unspecified request", payload, {}, undefined],
+  ])("uses %s", (_name, result, args, expected) => {
+    const projection = project([
+      tool("logs", "get_pod_logs", result, {
+        summary: JSON.stringify({ namespace: "shop", name: "api", ...args }),
+      }),
+    ]);
+    const observation = groupsOf(projection.groups, "logs")[0].latest;
+    expect(observation.data).toMatchObject({
+      type: "logs",
+      container: expected,
+    });
+    expect(observation.title).toContain(expected ?? "container unknown");
+  });
+
+  it("does not merge separate unknown streams or current and previous instances", () => {
+    const projection = project([
+      tool("unknown-1", "get_pod_logs", payload),
+      tool("unknown-2", "get_pod_logs", payload),
+      tool("current", "get_pod_logs", { ...payload, container: "app" }),
+      tool(
+        "previous",
+        "get_pod_logs",
+        { ...payload, container: "app" },
+        {
+          summary: JSON.stringify({
+            namespace: "shop",
+            name: "api",
+            previous: true,
+          }),
+        },
+      ),
+    ]);
+    const groups = groupsOf(projection.groups, "logs");
+    expect(groups).toHaveLength(4);
+    expect(new Set(groups.map((group) => group.identity)).size).toBe(4);
+    expect(groups.slice(2).map((group) => group.identity)).toEqual([
+      "logs:current:api:app",
+      "logs:previous:api:app",
+    ]);
+  });
+});
+
 // The get_workload_logs response shape, with the stream rows fetchPodLogs
 // emits per pod and container.
 

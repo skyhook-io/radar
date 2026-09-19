@@ -14,6 +14,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -685,7 +686,7 @@ type getChangesInput struct {
 type podLogsInput struct {
 	Namespace string `json:"namespace" jsonschema:"pod namespace"`
 	Name      string `json:"name" jsonschema:"pod name"`
-	Container string `json:"container,omitempty" jsonschema:"container name, defaults to first container"`
+	Container string `json:"container,omitempty" jsonschema:"container name; optional for single-container pods, specify for multi-container pods"`
 	TailLines int    `json:"tail_lines,omitempty" jsonschema:"number of lines to fetch from the end (default 200)"`
 	Grep      string `json:"grep,omitempty" jsonschema:"optional regex; when set, only matching lines are returned, like kubectl logs | grep PATTERN; when omitted, lines are auto-filtered for diagnostic relevance"`
 	Since     string `json:"since,omitempty" jsonschema:"only return logs newer than this duration (e.g. 30s, 10m, 1h), like kubectl logs --since"`
@@ -2001,6 +2002,14 @@ func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLo
 	}
 	if input.Container != "" {
 		opts.Container = input.Container
+	} else {
+		// Pin an unambiguous container so the returned evidence names the stream
+		// actually requested. Pod metadata may be forbidden while pods/log is
+		// allowed; preserve that read without inventing a container identity.
+		pod, err := clientset.CoreV1().Pods(input.Namespace).Get(ctx, input.Name, metav1.GetOptions{})
+		if err == nil && len(pod.Spec.Containers) == 1 {
+			opts.Container = pod.Spec.Containers[0].Name
+		}
 	}
 
 	stream, err := clientset.CoreV1().Pods(input.Namespace).GetLogs(input.Name, opts).Stream(ctx)
@@ -2022,7 +2031,7 @@ func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLo
 		return nil, nil, fmt.Errorf("invalid grep regex: %w", err)
 	}
 
-	warnings := computePodLogsWarnings(input.Namespace, input.Name, input.Container, input.Previous, rawLines)
+	warnings := computePodLogsWarnings(input.Namespace, input.Name, opts.Container, input.Previous, rawLines)
 	var narrowHint string
 	// Heuristic: if we received tailLines or more raw lines, the kubectl
 	// stream was likely capped (there may be older lines we didn't fetch).
@@ -2032,11 +2041,9 @@ func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLo
 			rawLines,
 		)
 	}
-	if narrowHint == "" && len(warnings) == 0 {
-		return toJSONResult(filtered)
-	}
 	return toJSONResult(podLogsResponseMCP{
 		FilteredLogs: filtered,
+		Container:    opts.Container,
 		NarrowHint:   narrowHint,
 		Warnings:     warnings,
 	})
@@ -2167,9 +2174,10 @@ func countLines(s string) int {
 }
 
 // podLogsResponseMCP embeds FilteredLogs so the JSON shape stays identical
-// except for added narrowHint + warnings fields.
+// except for stream identity, narrowing hints, and warnings.
 type podLogsResponseMCP struct {
 	aicontext.FilteredLogs
+	Container  string   `json:"container,omitempty"`
 	NarrowHint string   `json:"narrowHint,omitempty"`
 	Warnings   []string `json:"warnings,omitempty"`
 }

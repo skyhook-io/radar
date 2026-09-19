@@ -33,7 +33,7 @@ export function LogsBody({
         {condensed ? null : (
           <>
             <Badge tone="structural" size="sm">
-              {data.pod} / {data.container}
+              {data.pod} / {data.container ?? "container unknown"}
             </Badge>
             <Badge severity="neutral" size="sm">
               {data.previous ? "previous instance" : "current instance"}

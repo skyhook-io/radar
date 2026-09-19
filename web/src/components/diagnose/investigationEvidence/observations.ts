@@ -912,19 +912,20 @@ export function changesSubjectFromArgs(
 export function addLogs(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
-  value: DiagnosisPodLogEntry,
+  value: Omit<DiagnosisPodLogEntry, "container"> & { container?: string },
   previous: boolean,
   warnings: string[] = [],
   relevance: InvestigationEvidenceRelevance = "broader",
   namespace?: string,
 ): void {
   const lines = (value.logs?.lines ?? []).map((line) => stripAnsi(line));
+  const containerLabel = value.container ?? "container unknown";
   const normalizedWarnings = warnings.map((warning) => stripAnsi(warning));
   const normalizedError = value.error ? stripAnsi(value.error) : undefined;
   if (lines.length === 0) {
     builder.limit(
       source,
-      `${value.pod} / ${value.container}`,
+      `${value.pod} / ${containerLabel}`,
       value.error ||
         "No log lines were available. This does not mean the container is healthy.",
       value.error ? "error" : "unknown",
@@ -941,7 +942,9 @@ export function addLogs(
     ),
   );
   const selectedEvidence = value.logs?.fallback !== true && diagnosticSignal;
-  const identity = `logs:${previous ? "previous" : "current"}:${value.pod}:${value.container}`;
+  // Unknown streams from separate reads need not belong to the same container.
+  const streamIdentity = value.container ?? `unknown:${source.id}`;
+  const identity = `logs:${previous ? "previous" : "current"}:${value.pod}:${streamIdentity}`;
   builder.observe(identity, "logs", source, {
     // FilterLogs' raw-tail fallback is useful provenance, but the producer did
     // not select it as diagnostic signal. Keep it in Context; only filtered
@@ -952,7 +955,7 @@ export function addLogs(
     ),
     relevance,
     tone: selectedEvidence || normalizedError ? "warning" : "neutral",
-    title: `${previous ? "Previous" : "Current"} logs · ${value.pod} / ${value.container}`,
+    title: `${previous ? "Previous" : "Current"} logs · ${value.pod} / ${containerLabel}`,
     summary:
       lines.length > 0
         ? `${lines.length} selected line${lines.length === 1 ? "" : "s"}`
@@ -971,7 +974,7 @@ export function addLogs(
   if (normalizedError) {
     builder.limit(
       source,
-      `${value.pod} / ${value.container}`,
+      `${value.pod} / ${containerLabel}`,
       normalizedError,
       "error",
     );
