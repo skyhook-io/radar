@@ -70,6 +70,7 @@ func RunChecks(input *CheckInput) *ScanResults {
 	}
 
 	// --- Reliability checks ---
+	findings = append(findings, checkTLSCertificateExpiry(tr, input.Secrets, time.Now())...)
 	// singleReplica's eligibility filter (HPA-managed deployments are out of
 	// scope) needs the HPA inventory to be authoritative — nil means
 	// unlisted, and an HPA-managed 1-replica deployment would otherwise be a

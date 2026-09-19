@@ -211,6 +211,15 @@ var CheckRegistry = map[string]CheckMeta{
 		Remediation: "Set imagePullPolicy: Always when using mutable tags, or pin to immutable digests.",
 		References:  []Reference{refImages},
 	},
+	"tlsCertificateExpiry": {
+		ID:          "tlsCertificateExpiry",
+		Title:       "TLS certificate expiring",
+		Category:    CategoryReliability,
+		Description: "A kubernetes.io/tls Secret contains a parseable leaf certificate with fewer than 30 days remaining. Fewer than 7 days or an expired certificate is High severity. Missing or malformed leaf certificates and sealed-secrets encryption keys are not evaluated. This checks the stored leaf certificate, not whether a service is using it or whether renewal is failing.",
+		Remediation: "Renew or replace the certificate through its issuing system. For controller-managed Secrets, inspect the controller's renewal status; do not hand-edit the Secret. Verify the serving endpoint uses the renewed certificate.",
+		References:  []Reference{refSecrets},
+	},
+
 	"singleReplica": {
 		ID:          "singleReplica",
 		Title:       "Single replica",
@@ -445,9 +454,10 @@ var nonMediumDefault = map[string]string{
 	// the settings catalog doesn't UNDER-call them — under-calling severity is
 	// the dangerous error on a posture surface. The queue still shows each
 	// finding's exact severity.
-	"sensitiveHostPath": sevHigh,
-	"stuckTerminating":  sevHigh,
-	"crossplaneStuck":   sevHigh,
+	"sensitiveHostPath":    sevHigh,
+	"stuckTerminating":     sevHigh,
+	"crossplaneStuck":      sevHigh,
+	"tlsCertificateExpiry": sevHigh,
 }
 
 // Stamp DefaultSeverity onto the catalog so the Hub's Checks settings can show
