@@ -413,7 +413,11 @@ type KueueConcurrentAdmission struct {
 }
 
 // ExecutionSummary describes the root's last reported execution, not Pod
-// readiness or object deletion. Exactly one detail block matches Controller.
+// readiness or object deletion. Exactly one detail block matches Controller;
+// quantities stay there because controllers count different units and populations.
+// SubjectGeneration survives AI minification. PrimaryCondition.ObservedGeneration
+// applies only to that condition, not to counters or the whole snapshot.
+// SuspendRequested is intent: nil means unavailable, false means not requested.
 type ExecutionSummary struct {
 	Controller        ExecutionController `json:"controller"`
 	SubjectGeneration int64               `json:"subjectGeneration,omitempty"`
@@ -429,8 +433,10 @@ type ExecutionController string
 
 const ExecutionControllerJobSet ExecutionController = "jobset"
 
-// Active includes startup, retries and cleanup; it does not prove user code
-// is running. Finished requires an outcome; all other phases omit it.
+// Pending requires observed inactivity; absent evidence is Unknown. Active
+// includes startup, retries and cleanup, not proof that user code is running.
+// Suspended requires controller evidence, not just requested intent. Finished
+// requires a root outcome; all other phases omit it. Child failures are not root outcomes.
 type ExecutionPhase string
 
 const (
@@ -441,6 +447,8 @@ const (
 	ExecutionUnknown   ExecutionPhase = "unknown"
 )
 
+// ExecutionOutcome is extensible. Consumers must retain unfamiliar values as
+// unclassified outcomes rather than coerce them to success or failure.
 type ExecutionOutcome string
 
 const (
@@ -448,6 +456,9 @@ const (
 	ExecutionFailed    ExecutionOutcome = "failed"
 )
 
+// JobSetExecution keeps declarations separate from reported child-Job counts.
+// ObservedRoles counts reported entries, not identity completeness or freshness.
+// Nil observed groups mean unavailable; present zero values mean observed zero.
 type JobSetExecution struct {
 	DeclaredRoles int64                `json:"declaredRoles"`
 	DeclaredJobs  int64                `json:"declaredJobs"`

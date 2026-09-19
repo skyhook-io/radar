@@ -22,6 +22,9 @@ var jobSetV1Alpha2 = schema.GroupVersionKind{
 const maxStateMessageBytes = 256
 
 // ForResource returns an execution summary only for an exact supported GVK.
+// The mapping follows JobSet v0.12.0; the served API version does not identify
+// the controller release. Basic tier omits condition messages/times; diagnostic
+// tier retains them with bounded messages.
 func ForResource(obj runtime.Object, tier resourcecontext.ContextTier) *resourcecontext.ExecutionSummary {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok || u.GroupVersionKind() != jobSetV1Alpha2 {
@@ -57,6 +60,7 @@ func jobSetCounts(u *unstructured.Unstructured) resourcecontext.JobSetExecution 
 		}
 		replicas, found, _ := unstructured.NestedInt64(role, "replicas")
 		if !found {
+			// Match the controller default for omitted replicas.
 			replicas = 1
 		}
 		detail.DeclaredJobs += replicas
@@ -179,6 +183,8 @@ func jobSetPhase(
 	suspendRequested bool,
 	tier resourcecontext.ContextTier,
 ) (resourcecontext.ExecutionPhase, resourcecontext.ExecutionOutcome, *resourcecontext.ConditionSummary) {
+	// terminalState is authoritative even when conditions disagree; this is not
+	// a claim about freshness. Unknown native values must not fall through.
 	switch nativeState {
 	case "Failed":
 		return resourcecontext.ExecutionFinished, resourcecontext.ExecutionFailed, conditionForExecution(conditions, "Failed", tier)
@@ -210,6 +216,8 @@ func jobSetPhase(
 			return resourcecontext.ExecutionActive, "", condition
 		}
 	}
+	// Child activity cannot prove a root outcome. Missing counts also cannot
+	// establish inactivity, including when only restart totals are reported.
 	if jobs == nil {
 		return resourcecontext.ExecutionUnknown, "", nil
 	}

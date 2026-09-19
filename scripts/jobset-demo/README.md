@@ -90,7 +90,9 @@ controller failure-policy reason. All three retain explicit observed zero Job
 counts and zero recreation totals. Omitted per-Job restart arrays mean zero for
 reported roles; missing role status means unavailable individual totals.
 The shared phase does not claim Pod readiness; the fixture separately verifies
-ready and active counts. See [the schema contract](../../docs/execution-context.md).
+ready and active counts. Schema invariants are documented alongside the
+[types](../../pkg/resourcecontext/types.go) and
+[JobSet adapter](../../pkg/executioninsight/jobset.go).
 
 ## Proof boundary
 
