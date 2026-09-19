@@ -331,6 +331,7 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
               <Notice text="Scanning the current scope. Previous results remain visible until the scan completes." />
             )}
             <ScanSummary
+              namespaces={namespaces}
               result={result}
               counts={counts}
               selected={classFilter}
@@ -524,21 +525,28 @@ function FirstRunState({ namespaces, onRun }: { namespaces: string[]; onRun: () 
   )
 }
 
-function ScanSummary({
+export function ScanSummary({
+  namespaces,
   result,
   counts,
   selected,
   onSelect,
 }: {
+  namespaces: string[]
   result: ScanResult
   counts: ReturnType<typeof scanClassCounts>
   selected: ClassFilter
   onSelect: (value: ClassFilter) => void
 }) {
-  const evaluated = result.coverage.workloadsEvaluated ?? result.workloads.length
-  const discovered = result.coverage.workloadsDiscovered ?? result.workloads.length
   return (
     <section className="rounded-xl border border-theme-border bg-theme-surface p-4 shadow-theme-sm">
+      <p className="mb-3 break-words text-xs text-theme-text-secondary">
+        Scanned scope:{' '}
+        <span className="font-medium text-theme-text-primary">
+          {namespaces.length ? namespaces.join(', ') : 'All visible namespaces'}
+        </span>
+        <span className="text-theme-text-tertiary"> · Change scan scope in the top bar</span>
+      </p>
       <div className="grid gap-2 md:grid-cols-3">
         {(Object.keys(ACTION_META) as Array<keyof typeof ACTION_META>).map((key) => {
           const meta = ACTION_META[key]
@@ -552,7 +560,7 @@ function ScanSummary({
               <div className="flex items-center justify-between gap-2">
                 <span className="text-sm font-medium text-theme-text-primary">{meta.label}</span>
                 <Badge severity={meta.severity} size="sm">
-                  {counts[key]} containers
+                  {pluralize(counts[key], 'container')}
                 </Badge>
               </div>
               <p className="mt-1 text-xs text-theme-text-tertiary">{meta.helper}</p>
@@ -562,7 +570,10 @@ function ScanSummary({
       </div>
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-theme-text-tertiary">
         <span>
-          {evaluated} of {discovered} visible workloads evaluated · {result.window || '7d'} history
+          {result.coverage.workloadsEvaluated} of {result.coverage.workloadsDiscovered} workloads
+          attempted
+          {' · '}
+          {result.coverage.workloadsWithData} with usage data · {result.window} window
         </span>
         <span className="flex items-center gap-3">
           <button
@@ -570,14 +581,14 @@ function ScanSummary({
             onClick={() => onSelect('in_range')}
             className="hover:text-theme-text-primary"
           >
-            {counts.in_range} containers · no meaningful change
+            {pluralize(counts.in_range, 'container')} · no meaningful change
           </button>
           <button
             type="button"
             onClick={() => onSelect('need_data')}
             className="hover:text-theme-text-primary"
           >
-            {counts.need_data} containers · not analyzed
+            {pluralize(counts.need_data, 'container')} · needs evidence
           </button>
           {selected !== 'actions' && (
             <button
@@ -696,6 +707,7 @@ function ScanFilters(props: {
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-theme-border p-3">
+      <span className="text-xs font-medium text-theme-text-secondary">Filter results</span>
       <SearchBox
         value={props.search}
         onChange={props.onSearch}
@@ -705,12 +717,12 @@ function ScanFilters(props: {
         className="mr-auto w-60 2xl:w-72"
       />
       <SelectMenu
-        ariaLabel="Filter by namespace"
+        ariaLabel="Filter results by namespace"
         value={props.namespace}
         onChange={props.onNamespace}
-        className="w-40 2xl:w-48"
+        className="w-52"
         options={[
-          { value: '', label: 'All namespaces' },
+          { value: '', label: 'All scanned namespaces' },
           ...props.namespaces.map((value) => ({ value, label: value })),
         ]}
       />
