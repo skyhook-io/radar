@@ -39,20 +39,21 @@ export function classifyRows(
   replicas = 1,
   scaledToZero = false,
 ): ScanClass {
-  if (rows.some((row) => row.queryError || row.fit === 'insufficient_history')) return 'need_data'
+  const evidenced = rows.filter((row) => !row.queryError && row.fit !== 'insufficient_history')
+  if (evidenced.length === 0) return 'need_data'
   if (scaledToZero) return 'review'
   if (
-    rows.some(
+    evidenced.some(
       (row) =>
         (row.fit === 'under_requested' || row.fit === 'missing_request') && row.recommendedRequest,
     )
   )
     return 'increase'
-  if (rows.some(needsManualReview)) return 'review'
-  const impact = calculateImpact(rows, replicas)
+  if (evidenced.some(needsManualReview)) return 'review'
+  const impact = calculateImpact(evidenced, replicas)
   if (-impact.cpuChange >= MIN_CPU_REDUCTION || -impact.memoryChange >= MIN_MEMORY_REDUCTION)
     return 'reduction'
-  return 'in_range'
+  return evidenced.length === rows.length ? 'in_range' : 'need_data'
 }
 
 function needsManualReview(row: RightsizingRow): boolean {

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { RightsizingScanResponse, RightsizingRow } from '../../api/client'
-import { calculateImpact, classifyRows, flattenScanResults, scanClassCounts } from './model'
+import {
+  calculateImpact,
+  classifyRows,
+  flattenScanResults,
+  isActionableClass,
+  scanClassCounts,
+} from './model'
 
 function metric(overrides: Partial<RightsizingRow> = {}): RightsizingRow {
   return {
@@ -150,6 +156,77 @@ describe('rightsizing scan model', () => {
   it('keeps incomplete history out of no-change results', () => {
     expect(classifyRows([metric({ fit: 'insufficient_history' })])).toBe('need_data')
     expect(classifyRows([metric({ queryError: 'query failed' })])).toBe('need_data')
+  })
+
+  describe.each([
+    ['failed query', { queryError: 'usage query failed' }],
+    ['short history', { fit: 'insufficient_history' as const }],
+  ])('with %s on one resource', (_label, missing) => {
+    it.each([
+      [
+        'increase',
+        {
+          fit: 'under_requested' as const,
+          recommendedRequest: '1Gi',
+          recommendedRequestValue: 1024 ** 3,
+        },
+      ],
+      ['review', { currentPodOOM: true }],
+      ['review', { hpaManaged: true, recommendationReason: 'hpa_managed' }],
+      [
+        'reduction',
+        {
+          fit: 'oversized' as const,
+          currentRequestValue: 1024 ** 3,
+          recommendedRequest: '512Mi',
+          recommendedRequestValue: 512 * 1024 ** 2,
+        },
+      ],
+      ['need_data', {}],
+    ])('retains %s from the other resource', (classification, known) => {
+      const cpu = metric(missing)
+      const memory = metric({ resource: 'memory', ...known })
+      const rows = flattenScanResults(response([cpu, memory]))
+      expect(rows).toHaveLength(1)
+      expect(rows[0].classification).toBe(classification)
+      expect(rows[0].cpu).toBe(cpu)
+      expect(rows[0].memory).toBe(memory)
+      expect(scanClassCounts(rows)[rows[0].classification]).toBe(1)
+      const actions = rows.filter((row) => isActionableClass(row.classification))
+      expect(actions).toHaveLength(classification === 'need_data' ? 0 : 1)
+    })
+  })
+
+  it('retains a known CPU increase when memory has no evidence', () => {
+    const cpu = metric({
+      fit: 'under_requested',
+      recommendedRequest: '200m',
+      recommendedRequestValue: 0.2,
+      currentRequestValue: 0.1,
+    })
+    const memory = metric({ resource: 'memory', fit: 'insufficient_history' })
+    const [row] = flattenScanResults(response([cpu, memory], 3))
+    expect(row.classification).toBe('increase')
+    expect(row.impact.cpuChange).toBeCloseTo(0.3)
+    expect(row.impact.memoryChange).toBe(0)
+    expect(row.memory).toBe(memory)
+  })
+
+  it('keeps empty and entirely unevidenced containers in need_data', () => {
+    expect(classifyRows([])).toBe('need_data')
+    expect(
+      classifyRows([
+        metric({ queryError: 'usage query failed' }),
+        metric({ resource: 'memory', fit: 'insufficient_history' }),
+      ]),
+    ).toBe('need_data')
+    expect(
+      classifyRows(
+        [metric({ fit: 'insufficient_history' }), metric({ resource: 'memory' })],
+        0,
+        true,
+      ),
+    ).toBe('review')
   })
 
   it('keeps workloads with no current replicas in review', () => {

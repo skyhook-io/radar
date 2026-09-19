@@ -271,7 +271,7 @@ Rows also carry `pool: {name, source}` and `capacityType` (`spot`, `preemptible`
 
 ### How scan scopes rank workloads
 
-`scope=namespace` and `scope=cluster` apply the Rightsizing screen's ordering rule, at a coarser grain — the screen ranks each **container** as its own entry while these scopes return **workloads**, so a workload's containers are summed here and the top-N can legitimately differ from the screen's. MCP classification also retains known actionable evidence when another resource lacks data; the current UI classifier instead places that container in `need_data`. The rule is:
+`scope=namespace` and `scope=cluster` apply the Rightsizing screen's ordering rule, at a coarser grain — the screen ranks each **container** as its own entry while these scopes return **workloads**, so a workload's containers are summed here and the top-N can legitimately differ from the screen's. Both surfaces retain known actionable evidence when another resource lacks data; missing evidence yields `need_data` only when no actionable classification can be established from the available evidence. The rule is:
 
 1. **`classification`** — `reduction`, then `increase`, then `review`, then `need_data`, then `in_range`.
 2. **`requestDelta`** — the replica-weighted absolute request change (`{cpu, memory}`, formatted quantities such as `-2250m`), normalized so a CPU change and a memory change are comparable.
