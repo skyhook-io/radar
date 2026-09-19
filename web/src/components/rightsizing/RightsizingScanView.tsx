@@ -237,11 +237,11 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
               <button
                 type="button"
                 onClick={scan.isPending ? scan.stop : runScan}
-                disabled={scan.isStopping}
+                disabled={scan.isStarting || scan.isStopping}
                 className="btn-brand inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium"
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${scan.isPending ? 'animate-spin' : ''}`} />
-                {scan.isStopping ? 'Stopping…' : scan.isPending ? 'Stop scan' : 'Run again'}
+                {scan.isStarting ? 'Starting…' : scan.isStopping ? 'Stopping…' : scan.isPending ? 'Stop scan' : 'Run again'}
               </button>
             )}
           </div>

@@ -3700,7 +3700,7 @@ export function useRightsizingScan(namespaces: string[], context = "") {
     refetchInterval: (query) => !query.state.error && query.state.data?.scanStatus === 'running' ? 5000 : false,
   });
   const mutation = useMutation({
-    mutationFn: async (started: { scope: string; path: string; queryKey: typeof cache.queryKey }) => {
+    mutationFn: async (started: { scope: string; path: string; queryKey: typeof cache.queryKey; previousScanId?: string }) => {
       await queryClient.cancelQueries({ queryKey: started.queryKey });
       if (currentScope.current !== started.scope) throw new Error('Scan scope changed; run the scan again.');
       return fetchJSON<RightsizingScanResponse>(started.path, { method: 'POST' });
@@ -3730,18 +3730,21 @@ export function useRightsizingScan(namespaces: string[], context = "") {
     }
   }, [current, inaccessible, scope, queryClient, cache.queryKey]);
   const showingPrevious = current?.scanStatus === 'running' && current.coverage.workloadsEvaluated === 0 && previous.current?.scope === scope;
+  const startRecovered = current && current.scanId !== mutation.variables?.previousScanId;
+  const stopRecovered = current && (current.scanId !== stop.variables?.id || current.scanStatus !== 'running');
   return {
     data: showingPrevious ? previous.current!.result : current,
     progress: current,
     showingPrevious,
+    isStarting: mutation.isPending,
     isPending: mutation.isPending || current?.scanStatus === 'running',
     isLoading: snapshot.isLoading,
     statusError: snapshot.error,
-    error: snapshot.error || (stop.variables?.scope === scope ? stop.error : null) || (mutation.variables?.scope === scope ? mutation.error : null),
+    error: snapshot.error || (stop.variables?.scope === scope && !stopRecovered ? stop.error : null) || (mutation.variables?.scope === scope && !startRecovered ? mutation.error : null),
     reset: () => { mutation.reset(); stop.reset(); },
-    mutateAsync: () => mutation.mutateAsync({ scope, path, queryKey: cache.queryKey }),
+    mutateAsync: () => mutation.mutateAsync({ scope, path, queryKey: cache.queryKey, previousScanId: current?.scanId }),
     retryStatus: () => snapshot.refetch(),
-    stop: () => { if (current) stop.mutate({ id: current.scanId, scope, queryKey: cache.queryKey }); },
+    stop: () => { if (!mutation.isPending && current?.scanStatus === 'running') stop.mutate({ id: current.scanId, scope, queryKey: cache.queryKey }); },
     isStopping: stop.isPending,
   };
 }
