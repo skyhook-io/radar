@@ -37,6 +37,15 @@ describe('PVC usage availability', () => {
     statusResult = { error: new ApiError('forbidden', 403) }
     expect(render()).toContain('Metrics access denied')
   })
+  it('keeps older agent unavailable responses from becoming zero gauges', () => {
+    usageResult = { data: { ...measured, status: undefined, hasData: false, capacity: 0 } }
+    expect(render()).toContain('Usage measurements are unavailable')
+    expect(render()).not.toContain('width:')
+  })
+  it('retains older agent valid measurements', () => {
+    usageResult = { data: { ...measured, status: undefined } }
+    expect(render()).toContain('width:0%')
+  })
   it('renders valid zero usage as a measurement', () => {
     usageResult = { data: measured }
     expect(render().replaceAll('<!-- -->', '')).toContain('(0%)')

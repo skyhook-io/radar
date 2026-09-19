@@ -3273,7 +3273,8 @@ export type PrometheusTimeRange =
 
 // PVC usage at a moment in time, derived from kubelet_volume_stats_*.
 export interface PrometheusPVCUsage {
-  status: "available" | "no_series" | "invalid_data" | "query_failed";
+  // Hub packages the frontend independently from per-cluster agent upgrades.
+  status?: "available" | "no_series" | "invalid_data" | "query_failed";
   namespace: string;
   name: string;
   used: number;
@@ -3634,7 +3635,6 @@ export function usePrometheusClusterMetrics(
   });
 }
 
-// Fetch PVC usage with an explicit measurement-availability state.
 export function usePrometheusPVCUsage(
   namespace: string,
   name: string,

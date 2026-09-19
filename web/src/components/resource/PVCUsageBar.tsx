@@ -30,6 +30,8 @@ export function PVCUsageBar({ namespace, name }: { namespace: string; name: stri
     unavailable = 'No usage measurements reported for this volume.'
   } else if (usage.status === 'invalid_data') {
     unavailable = 'Volume usage measurements are invalid. Used space is unknown.'
+  } else if (!usage.hasData) {
+    unavailable = 'Usage measurements are unavailable.'
   }
 
   if (unavailable || !usage) {
