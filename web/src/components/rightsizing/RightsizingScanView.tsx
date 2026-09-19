@@ -86,11 +86,6 @@ const ACTION_META: Record<
   'increase' | 'reduction' | 'review',
   { label: string; severity: 'warning' | 'info' | 'neutral'; helper: string }
 > = {
-  reduction: {
-    label: 'Reduce requests',
-    severity: RIGHTSIZING_ACTION_SEVERITY.reduction,
-    helper: 'Reclaim meaningful capacity',
-  },
   increase: {
     label: 'Increase or add',
     severity: RIGHTSIZING_ACTION_SEVERITY.increase,
@@ -100,6 +95,11 @@ const ACTION_META: Record<
     label: 'Review first',
     severity: RIGHTSIZING_ACTION_SEVERITY.review,
     helper: 'Check safety signals or workloads with no replicas',
+  },
+  reduction: {
+    label: 'Reduce requests',
+    severity: RIGHTSIZING_ACTION_SEVERITY.reduction,
+    helper: 'Reclaim meaningful capacity',
   },
 }
 
@@ -369,31 +369,17 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
                   active={activeFilters}
                 />
                 {filteredRows.length === 0 ? (
-                  <EmptyState
-                    tone="filtered"
-                    headline={
-                      onlySystemRowsAreHidden
-                        ? 'System workloads are hidden'
-                        : 'No results match the current filters'
-                    }
-                    body={
-                      onlySystemRowsAreHidden
-                        ? 'This scope contains only Kubernetes system workloads. Include them to review platform requests.'
-                        : 'Choose another result type or clear a filter.'
-                    }
-                    action={
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onlySystemRowsAreHidden ? setFilter('rfScope', 'all') : clearFilters()
-                        }
-                        className="badge badge-sm border border-theme-border bg-theme-elevated text-theme-text-primary"
-                      >
-                        {onlySystemRowsAreHidden
-                          ? 'Include system workloads'
-                          : 'Show recommended actions'}
-                      </button>
-                    }
+                  <ScanEmptyState
+                    counts={counts}
+                    classFilter={classFilter}
+                    hasResultFilters={Boolean(search || kindFilter || namespaceFilter)}
+                    onlySystemRowsAreHidden={onlySystemRowsAreHidden}
+                    hasQueryErrors={scopeRows.some(
+                      (row) => row.cpu?.queryError || row.memory?.queryError,
+                    )}
+                    onSelect={(value) => setFilter('rfClass', value)}
+                    onClear={clearFilters}
+                    onIncludeSystem={() => setFilter('rfScope', 'all')}
                   />
                 ) : (
                   <div>
@@ -435,6 +421,77 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
         ) : null}
       </div>
     </div>
+  )
+}
+
+export function ScanEmptyState({
+  counts,
+  classFilter,
+  hasResultFilters,
+  onlySystemRowsAreHidden,
+  hasQueryErrors,
+  onSelect,
+  onClear,
+  onIncludeSystem,
+}: {
+  counts: ReturnType<typeof scanClassCounts>
+  classFilter: ClassFilter
+  hasResultFilters: boolean
+  onlySystemRowsAreHidden: boolean
+  hasQueryErrors: boolean
+  onSelect: (value: ScanClass) => void
+  onClear: () => void
+  onIncludeSystem: () => void
+}) {
+  let headline = 'No results match the current filters'
+  let body = 'Choose another result type or clear a filter.'
+  let actionLabel = 'Clear filters'
+  let onAction = onClear
+  if (onlySystemRowsAreHidden) {
+    headline = 'System workloads are hidden'
+    body =
+      'This scope contains only Kubernetes system workloads. Include them to review platform requests.'
+    actionLabel = 'Include system workloads'
+    onAction = onIncludeSystem
+  } else if (
+    classFilter === 'actions' &&
+    !hasResultFilters &&
+    counts.increase + counts.reduction + counts.review === 0
+  ) {
+    if (counts.need_data > 0) {
+      headline =
+        counts.in_range > 0
+          ? 'No actionable changes in available evidence'
+          : 'Not enough evidence for recommendations'
+      body =
+        counts.in_range > 0
+          ? `${pluralize(counts.in_range, 'container')} had no meaningful request changes; ${pluralize(counts.need_data, 'container')} still ${counts.need_data === 1 ? 'needs' : 'need'} evidence. This is not a complete assessment.`
+          : hasQueryErrors
+            ? 'Some metrics queries failed. Inspect affected containers, then retry the scan or select fewer namespaces in the top bar.'
+            : 'There is not enough usable CPU and memory history to recommend changes yet. Inspect the containers to see which resource needs more history.'
+      actionLabel = 'View containers needing evidence'
+      onAction = () => onSelect('need_data')
+    } else {
+      headline = 'No actionable changes'
+      body = `No meaningful request changes were found among the ${pluralize(counts.in_range, 'evaluated container')}. This does not assess workloads outside the scan coverage.`
+      actionLabel = 'View evaluated containers'
+      onAction = () => onSelect('in_range')
+    }
+  }
+  return (
+    <EmptyState
+      headline={headline}
+      body={body}
+      action={
+        <button
+          type="button"
+          onClick={onAction}
+          className="badge badge-sm border border-theme-border bg-theme-elevated text-theme-text-primary"
+        >
+          {actionLabel}
+        </button>
+      }
+    />
   )
 }
 

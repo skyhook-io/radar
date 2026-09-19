@@ -24,11 +24,11 @@ export interface RightsizingScanRow {
 }
 
 const CLASS_RANK: Record<ScanClass, number> = {
-  reduction: 0,
   increase: 1,
-  review: 2,
-  need_data: 3,
-  in_range: 4,
+  reduction: 2,
+  review: 3,
+  need_data: 4,
+  in_range: 5,
 }
 
 const MIN_CPU_REDUCTION = 0.05
@@ -59,13 +59,34 @@ export function classifyRows(
 function needsManualReview(row: RightsizingRow): boolean {
   return (
     row.hpaManaged ||
+    needsSafetyReview(row) ||
+    row.recommendationReason === 'hpa_evidence_unavailable' ||
+    row.recommendationReason === 'oom_evidence_unavailable'
+  )
+}
+
+function needsSafetyReview(row: RightsizingRow): boolean {
+  return (
     row.currentPodOOM === true ||
     row.windowOomEvidence === true ||
     row.limitConflict === true ||
-    row.recommendationReason === 'hpa_evidence_unavailable' ||
-    row.recommendationReason === 'oom_evidence_unavailable' ||
-    (isReduction(row) && (row.bursty || (row.throttleRatio ?? 0) >= 0.1))
+    (isReduction(row) && (row.bursty === true || (row.throttleRatio ?? 0) >= 0.1))
   )
+}
+
+function scanPriority(row: RightsizingScanRow): number {
+  if (
+    !row.scaledToZero &&
+    [row.cpu, row.memory].some(
+      (resource) =>
+        resource &&
+        !resource.queryError &&
+        resource.fit !== 'insufficient_history' &&
+        needsSafetyReview(resource),
+    )
+  )
+    return 0
+  return CLASS_RANK[row.classification]
 }
 
 function isReduction(row: RightsizingRow): boolean {
@@ -118,7 +139,7 @@ export function flattenScanResults(scan: RightsizingScanResponse): RightsizingSc
   }
   return result.sort(
     (a, b) =>
-      CLASS_RANK[a.classification] - CLASS_RANK[b.classification] ||
+      scanPriority(a) - scanPriority(b) ||
       impactScore(b) - impactScore(a) ||
       a.namespace.localeCompare(b.namespace) ||
       a.name.localeCompare(b.name) ||

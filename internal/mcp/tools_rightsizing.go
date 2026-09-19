@@ -119,7 +119,8 @@ type rightsizingWorkloadDTO struct {
 	// rankKey breaks impact ties on identity so repeated scans return the same
 	// order; an agent comparing two runs would otherwise read reshuffling as
 	// change. Built once, not per comparison.
-	rankKey string
+	rankKey  string
+	priority int
 }
 
 // rightsizingOmissions counts rows withheld from the response. Categories are
@@ -754,6 +755,7 @@ type filteredRows struct {
 	// filtered out of the response still decides how the workload ranks.
 	classification prometheuspkg.RightsizingClass
 	impact         prometheuspkg.RightsizingImpact
+	priority       int
 	// incompleteEvidence reads the RAW rows, not what survived filtering, so
 	// include_all=true still reports partial when evidence was missing.
 	incompleteEvidence       bool
@@ -776,6 +778,7 @@ func filterRightsizingRows(rows []prometheuspkg.RightsizingRow, includeAll, keep
 	var result filteredRows
 	result.rows = make([]rightsizingRowDTO, 0, len(rows))
 	result.classification, result.impact = prometheuspkg.ClassifyWorkload(rows, replicas, scaledToZero)
+	result.priority = prometheuspkg.RightsizingPriority(result.classification, rows, scaledToZero)
 	keep := make([]bool, len(rows))
 	containerKept := map[string]bool{}
 	for i, row := range rows {
@@ -893,18 +896,19 @@ func selectRightsizingWorkloads(workloads []prometheuspkg.RightsizingScanWorkloa
 			RequestDelta:             &rightsizingRequestDelta{CPU: impact.CPU, Memory: impact.Memory},
 			LiveInventoryUnavailable: filtered.liveInventoryUnavailable,
 			Rows:                     filtered.rows,
+			priority:                 filtered.priority,
 			rankKey:                  workload.Namespace + "/" + workload.Kind + "/" + workload.Name,
 		})
 	}
-	// Class first, then replica-weighted absolute change — the Rightsizing
+	// Safety/action priority first, then replica-weighted absolute change — the Rightsizing
 	// screen's ordering rule, applied to a different unit: the screen ranks
 	// each CONTAINER as its own entry while this tool returns workloads, so
 	// two containers' reductions add up here and the top-N can legitimately
 	// differ from the screen's. Same rule, coarser grain — not a parity bug.
 	sort.SliceStable(ranked, func(i, j int) bool {
 		return prometheuspkg.RightsizingRankLess(
-			ranked[i].Classification, *ranked[i].Impact, ranked[i].rankKey,
-			ranked[j].Classification, *ranked[j].Impact, ranked[j].rankKey,
+			ranked[i].priority, *ranked[i].Impact, ranked[i].rankKey,
+			ranked[j].priority, *ranked[j].Impact, ranked[j].rankKey,
 		)
 	})
 	return ranked, omitted, incompleteEvidence, counts

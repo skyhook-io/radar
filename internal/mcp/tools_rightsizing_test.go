@@ -166,22 +166,19 @@ func TestScanRankingFollowsReplicaWeightedImpact(t *testing.T) {
 	}
 }
 
-// Class decides the order before impact does, and the screen leads with
-// reductions — the tool is answering "where is the waste", so a reduction sorts
-// above an increase even when the increase is proportionally larger.
 func TestScanRankingOrdersByClassBeforeImpact(t *testing.T) {
 	increase := filterRightsizingRows(
-		[]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitUnderRequested, 0.05, 4)}, false, false, 10, false)
+		[]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitUnderRequested, 0.05, 0.1)}, false, false, 1, false)
 	reduction := filterRightsizingRows(
-		[]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 4, 3.9)}, false, false, 1, false)
+		[]prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitOversized, 4, 1)}, false, false, 100, false)
 
-	if prometheuspkg.ImpactScore(increase.impact) <= prometheuspkg.ImpactScore(reduction.impact) {
-		t.Fatal("test setup: the increase should carry the larger raw impact")
+	if prometheuspkg.ImpactScore(increase.impact) >= prometheuspkg.ImpactScore(reduction.impact) {
+		t.Fatal("test setup: the reduction should carry the larger raw impact")
 	}
 	if !prometheuspkg.RightsizingRankLess(
-		reduction.classification, reduction.impact, "a",
-		increase.classification, increase.impact, "b") {
-		t.Error("a reduction must sort above an increase — class outranks impact, matching the Rightsizing screen")
+		increase.priority, increase.impact, "a",
+		reduction.priority, reduction.impact, "b") {
+		t.Error("an increase must sort above a reduction, matching the Rightsizing screen")
 	}
 }
 
@@ -564,8 +561,8 @@ func TestBlockedRecommendationsRankBelowRealOnes(t *testing.T) {
 		t.Errorf("a blocked recommendation has no impact to rank on, got %v", prometheuspkg.ImpactScore(blockedRows.impact))
 	}
 	if !prometheuspkg.RightsizingRankLess(
-		realRows.classification, realRows.impact, "a",
-		blockedRows.classification, blockedRows.impact, "b") {
+		realRows.priority, realRows.impact, "a",
+		blockedRows.priority, blockedRows.impact, "b") {
 		t.Error("a real recommendation must rank above a blocked one")
 	}
 }
@@ -636,8 +633,8 @@ func TestBlockedRowsClassifyAsUnactionable(t *testing.T) {
 		t.Errorf("a missing request WITH a recommendation is an increase, got %q", actionable.classification)
 	}
 	if !prometheuspkg.RightsizingRankLess(
-		actionable.classification, actionable.impact, "a",
-		blockedRows.classification, blockedRows.impact, "b") {
+		actionable.priority, actionable.impact, "a",
+		blockedRows.priority, blockedRows.impact, "b") {
 		t.Error("an actionable increase must rank above a blocked row")
 	}
 }
@@ -1409,7 +1406,7 @@ func TestClassificationSelectionKeepsAllMatchingRowsAndWholeScanGaps(t *testing.
 	if counts[prometheuspkg.ClassNeedData] != 1 || counts[prometheuspkg.ClassInRange] != 1 {
 		t.Fatalf("default row omissions changed evaluated counts: %+v", counts)
 	}
-	if len(all) == 0 || all[0].Name != "large-cut" {
+	if len(all) == 0 || all[0].Name != "oom" {
 		t.Fatalf("unexpected default ranking: %+v", all)
 	}
 }
@@ -1486,5 +1483,46 @@ func TestEmptyRightsizingScanEmitsZeroClassificationCounts(t *testing.T) {
 	want := map[string]int{"reduction": 0, "increase": 0, "review": 0, "need_data": 0, "in_range": 0}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("empty evaluated population must explicitly report all zero counts: got %v", got)
+	}
+}
+
+func TestScanReliabilityPriority(t *testing.T) {
+	cut := rightsizingRow(prometheuspkg.FitOversized, 10, 1)
+	grow := rightsizingRow(prometheuspkg.FitUnderRequested, .1, .2)
+	oom := rightsizingRow(prometheuspkg.FitBalanced, 1, 1)
+	oom.CurrentPodOOM = true
+	limit := rightsizingRow(prometheuspkg.FitBalanced, 1, 1)
+	limit.LimitConflict = true
+	bursty, throttled := cut, cut
+	bursty.Bursty = true
+	ratio := .2
+	throttled.ThrottleRatio = &ratio
+	hpa := rightsizingRow(prometheuspkg.FitBalanced, 1, 1)
+	hpa.HPAManaged = true
+	failed := oom
+	failed.QueryError = "failed"
+	missing := rightsizingRow(prometheuspkg.FitInsufficientHistory, 1, 0)
+	missing.Resource = "memory"
+	workloads := []prometheuspkg.RightsizingScanWorkload{
+		{Name: "cut", Replicas: 1, Rows: []prometheuspkg.RightsizingRow{cut}},
+		{Name: "grow", Replicas: 1, Rows: []prometheuspkg.RightsizingRow{grow}},
+		{Name: "hpa", Replicas: 1, Rows: []prometheuspkg.RightsizingRow{hpa}},
+		{Name: "oom", Replicas: 1, Rows: []prometheuspkg.RightsizingRow{oom}},
+		{Name: "limit", Replicas: 1, Rows: []prometheuspkg.RightsizingRow{limit}},
+		{Name: "bursty", Replicas: 1, Rows: []prometheuspkg.RightsizingRow{bursty}},
+		{Name: "throttled", Replicas: 1, Rows: []prometheuspkg.RightsizingRow{throttled}},
+		{Name: "idle", ScaledToZero: true, Rows: []prometheuspkg.RightsizingRow{oom}},
+		{Name: "failed-risk", Replicas: 1, Rows: []prometheuspkg.RightsizingRow{failed}},
+		{Name: "partial-grow", Replicas: 1, Rows: []prometheuspkg.RightsizingRow{grow, missing}},
+		{Name: "steady", Replicas: 1, Rows: []prometheuspkg.RightsizingRow{rightsizingRow(prometheuspkg.FitBalanced, 1, 1)}},
+	}
+	got, _, _, _ := selectRightsizingWorkloads(workloads, getRightsizingInput{IncludeAll: true})
+	var names []string
+	for _, workload := range got {
+		names = append(names, workload.Name)
+	}
+	want := []string{"bursty", "limit", "oom", "throttled", "grow", "partial-grow", "cut", "hpa", "idle", "failed-risk", "steady"}
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("priority order = %v, want %v", names, want)
 	}
 }

@@ -28,18 +28,33 @@ const (
 	minMemoryReduction = 64 * 1024 * 1024
 )
 
-func classRank(class RightsizingClass) int {
+// RightsizingPriority keeps observed safety risks ahead of increases and
+// savings. Routine autoscaler or idle-workload review is not an incident signal.
+func RightsizingPriority(class RightsizingClass, rows []RightsizingRow, scaledToZero bool) int {
+	if !scaledToZero {
+		for _, row := range rows {
+			if RowUnevidenced(row) {
+				continue
+			}
+			for _, reason := range ManualReviewReasons(row) {
+				switch reason {
+				case "current_pod_oom", "oom_in_window", "limit_conflict", "bursty_reduction", "throttled_reduction":
+					return 0
+				}
+			}
+		}
+	}
 	switch class {
-	case ClassReduction:
-		return 0
 	case ClassIncrease:
 		return 1
-	case ClassReview:
+	case ClassReduction:
 		return 2
-	case ClassNeedData:
+	case ClassReview:
 		return 3
-	default:
+	case ClassNeedData:
 		return 4
+	default:
+		return 5
 	}
 }
 
@@ -122,7 +137,7 @@ func isReduction(row RightsizingRow) bool {
 // rank. The order here is precedence, not sort order: missing evidence beats
 // every verdict drawn from it, and an under-requested container decides the
 // class over an oversized one because under-requesting is the failure that
-// takes the workload down. Sorting then leads with reductions — see classRank.
+// takes the workload down. Sorting separately prioritizes observed safety risks.
 func ClassifyRows(rows []RightsizingRow, replicas int, scaledToZero bool) RightsizingClass {
 	if slices.ContainsFunc(rows, RowUnevidenced) {
 		return ClassNeedData
@@ -184,12 +199,12 @@ func ImpactScore(impact RightsizingImpact) float64 {
 }
 
 // RightsizingRankLess orders two classified workloads the way the Rightsizing
-// screen does: class first, then replica-weighted impact, then identity so the
+// screen does: safety/action priority, then replica-weighted impact, then identity so the
 // order is stable across calls.
-func RightsizingRankLess(aClass RightsizingClass, aImpact RightsizingImpact, aKey string,
-	bClass RightsizingClass, bImpact RightsizingImpact, bKey string) bool {
-	if rankA, rankB := classRank(aClass), classRank(bClass); rankA != rankB {
-		return rankA < rankB
+func RightsizingRankLess(aPriority int, aImpact RightsizingImpact, aKey string,
+	bPriority int, bImpact RightsizingImpact, bKey string) bool {
+	if aPriority != bPriority {
+		return aPriority < bPriority
 	}
 	if scoreA, scoreB := ImpactScore(aImpact), ImpactScore(bImpact); scoreA != scoreB {
 		return scoreA > scoreB

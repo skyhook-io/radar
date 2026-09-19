@@ -302,3 +302,43 @@ describe('rightsizing scan model', () => {
     expect(scanClassCounts(rows).increase).toBe(1)
   })
 })
+
+it('ranks known safety risks and increases above savings, while routine reviews stay lower', () => {
+  const make = (name: string, rows: RightsizingRow[], scaledToZero = false) => ({
+    ...response(rows, scaledToZero ? 0 : 1, 'shop', scaledToZero).workloads[0],
+    name,
+  })
+  const cut = metric({
+    fit: 'oversized',
+    currentRequestValue: 10,
+    recommendedRequestValue: 1,
+    recommendedRequest: '1',
+  })
+  const grow = metric({
+    fit: 'under_requested',
+    currentRequestValue: 0.1,
+    recommendedRequestValue: 0.2,
+    recommendedRequest: '200m',
+  })
+  const risk = metric({ resource: 'memory', currentPodOOM: true })
+  const workloads = [
+    make('cut', [cut]),
+    make('grow', [grow]),
+    make('hpa', [metric({ hpaManaged: true })]),
+    make('oom', [risk]),
+    make('limit', [metric({ limitConflict: true })]),
+    make('bursty', [{ ...cut, bursty: true }]),
+    make('throttled', [{ ...cut, throttleRatio: 0.2 }]),
+    make('idle', [risk], true),
+    make('failed-risk', [metric({ queryError: 'failed', currentPodOOM: true })]),
+    make('partial-grow', [grow, metric({ resource: 'memory', queryError: 'failed' })]),
+    make('steady', [metric()]),
+  ]
+  const rows = flattenScanResults({ ...response([]), workloads })
+  const names = rows.map((row) => row.name)
+  expect(new Set(names.slice(0, 4))).toEqual(new Set(['oom', 'limit', 'bursty', 'throttled']))
+  expect(names.slice(4, 6)).toEqual(['grow', 'partial-grow'])
+  expect(names[6]).toBe('cut')
+  expect(names.slice(7, 9)).toEqual(['hpa', 'idle'])
+  expect(names.slice(9)).toEqual(['failed-risk', 'steady'])
+})
