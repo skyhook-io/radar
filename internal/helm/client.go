@@ -56,6 +56,10 @@ type Client struct {
 	mu         sync.RWMutex
 	settings   *cli.EnvSettings
 	kubeconfig string
+	// chartPathLocator is a test seam for chart transport. Production callers
+	// leave it nil and use locateChartPath, which wires Helm's registry client
+	// for OCI references.
+	chartPathLocator func(*action.Configuration, string, string) (string, error)
 	// restConfig, when set, is the explicit rest.Config all actions target —
 	// used by callers that resolve the cluster themselves before Radar's k8s
 	// singleton is up (the CLI install driver), so Helm can't diverge onto a
@@ -2776,7 +2780,7 @@ func (c *Client) loadTargetChart(actionConfig *action.Configuration, rel *releas
 	// OCI pulls need a registry client on the action; Radar's action config
 	// doesn't carry one by default. Wire it from the user's helm registry login.
 	if registry.IsOCI(chartPath) {
-		rc, err := c.newRegistryClientConcrete()
+		rc, err := c.newRegistryClientForChartPull()
 		if err != nil {
 			return nil, fmt.Errorf("failed to build OCI registry client: %w", err)
 		}
@@ -2897,6 +2901,59 @@ func (c *Client) resolveUpgradeChartPathWithOCIResolver(chartName, targetVersion
 
 func isAbsoluteChartURL(path string) bool {
 	return strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") || registry.IsOCI(path)
+}
+
+// resolveOCIChartURL accepts either a complete OCI chart reference or a
+// registry/repository prefix. InstallWizard sends the selected repository URL
+// and the chart name separately, so append the name only when it is not already
+// the final path component.
+func resolveOCIChartURL(source, chartName string) (string, error) {
+	source = strings.TrimSuffix(strings.TrimSpace(source), "/")
+	chartName = strings.Trim(strings.TrimSpace(chartName), "/")
+	if !registry.IsOCI(source) {
+		return "", fmt.Errorf("chart source %q is not an OCI reference", source)
+	}
+	if chartName == "" {
+		return "", fmt.Errorf("chart name is empty")
+	}
+	chartPath := source
+	lastSlash := strings.LastIndex(chartPath, "/")
+	if lastSlash >= 0 {
+		lastComponent := chartPath[lastSlash+1:]
+		if selector := strings.IndexAny(lastComponent, ":@"); selector >= 0 {
+			chartPath = chartPath[:lastSlash+1] + lastComponent[:selector]
+		}
+	}
+	if strings.HasSuffix(chartPath, "/"+chartName) {
+		return source, nil
+	}
+	return source + "/" + chartName, nil
+}
+
+// locateChartPath resolves one exact chart version. OCI pulls require a
+// registry client explicitly; Radar builds it from Helm's existing registry
+// credential store and never changes the configured OCI source inventory.
+func (c *Client) locateChartPath(actionConfig *action.Configuration, chartURL, version string) (string, error) {
+	if c.chartPathLocator != nil {
+		return c.chartPathLocator(actionConfig, chartURL, version)
+	}
+	if actionConfig == nil {
+		var err error
+		actionConfig, err = c.getActionConfig("")
+		if err != nil {
+			return "", err
+		}
+	}
+	locator := action.NewInstall(actionConfig)
+	locator.Version = version
+	if registry.IsOCI(chartURL) {
+		registryClient, err := c.newRegistryClientForChartPull()
+		if err != nil {
+			return "", fmt.Errorf("failed to build OCI registry client: %w", err)
+		}
+		locator.SetRegistryClient(registryClient)
+	}
+	return locator.ChartPathOptions.LocateChart(chartURL, c.settings)
 }
 
 // BatchCheckUpgrades checks for upgrades for all releases at once (more efficient)
@@ -3358,6 +3415,31 @@ func (c *Client) SearchCharts(query string, allVersions bool) (*ChartSearchResul
 
 // GetChartDetail returns detailed information about a specific chart version
 func (c *Client) GetChartDetail(repoName, chartName, version string) (*ChartDetail, error) {
+	if registry.IsOCI(repoName) {
+		chartURL, err := resolveOCIChartURL(repoName, chartName)
+		if err != nil {
+			return nil, err
+		}
+		chartPath, err := c.locateChartPath(nil, chartURL, version)
+		if err != nil {
+			return nil, fmt.Errorf("failed to locate OCI chart: %w", err)
+		}
+		loadedChart, err := loader.Load(chartPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load OCI chart: %w", err)
+		}
+		return chartDetailFromChart(loadedChart, ChartInfo{
+			Name:        loadedChart.Metadata.Name,
+			Version:     loadedChart.Metadata.Version,
+			AppVersion:  loadedChart.Metadata.AppVersion,
+			Description: loadedChart.Metadata.Description,
+			Icon:        loadedChart.Metadata.Icon,
+			Repository:  repoName,
+			Home:        loadedChart.Metadata.Home,
+			Deprecated:  loadedChart.Metadata.Deprecated,
+		}), nil
+	}
+
 	repoFile := c.settings.RepositoryConfig
 	f, err := repo.LoadFile(repoFile)
 	if err != nil {
@@ -3409,20 +3491,11 @@ func (c *Client) GetChartDetail(repoName, chartName, version string) (*ChartDeta
 
 	// Download and load the chart to get README and values
 	chartURL := chartVersion.URLs[0]
-	if !strings.HasPrefix(chartURL, "http://") && !strings.HasPrefix(chartURL, "https://") {
+	if !isAbsoluteChartURL(chartURL) {
 		chartURL = strings.TrimSuffix(repoEntry.URL, "/") + "/" + chartURL
 	}
 
-	// Use ChartPathOptions to locate/download
-	actionConfig, err := c.getActionConfig("")
-	if err != nil {
-		return nil, err
-	}
-
-	client := action.NewInstall(actionConfig)
-	client.Version = chartVersion.Version
-
-	cp, err := client.ChartPathOptions.LocateChart(chartURL, c.settings)
+	cp, err := c.locateChartPath(nil, chartURL, chartVersion.Version)
 	if err != nil {
 		// If we can't download, return basic info from index
 		return &ChartDetail{
@@ -3437,10 +3510,11 @@ func (c *Client) GetChartDetail(repoName, chartName, version string) (*ChartDeta
 		}, nil
 	}
 
-	// Build detail response
-	detail := &ChartDetail{
-		ChartInfo: chartVersionToInfo(chartVersion, repoName),
-	}
+	return chartDetailFromChart(chart, chartVersionToInfo(chartVersion, repoName)), nil
+}
+
+func chartDetailFromChart(chart *chart.Chart, info ChartInfo) *ChartDetail {
+	detail := &ChartDetail{ChartInfo: info}
 
 	// Extract README
 	for _, f := range chart.Files {
@@ -3476,7 +3550,7 @@ func (c *Client) GetChartDetail(repoName, chartName, version string) (*ChartDeta
 	detail.Sources = chart.Metadata.Sources
 	detail.Keywords = chart.Metadata.Keywords
 
-	return detail, nil
+	return detail
 }
 
 // Install installs a new Helm release
@@ -3500,11 +3574,19 @@ func (c *Client) InstallAsUser(req *InstallRequest, username string, groups []st
 func (c *Client) installWith(actionConfig *action.Configuration, req *InstallRequest) (*HelmRelease, error) {
 
 	var chartURL string
+	resolvedVersion := req.Version
 
 	// Check if the repository is a URL (for ArtifactHub installs) or a local repo name
 	isRepoURL := strings.HasPrefix(req.Repository, "http://") || strings.HasPrefix(req.Repository, "https://")
+	isOCI := registry.IsOCI(req.Repository)
 
-	if isRepoURL {
+	if isOCI {
+		var err error
+		chartURL, err = resolveOCIChartURL(req.Repository, req.ChartName)
+		if err != nil {
+			return nil, err
+		}
+	} else if isRepoURL {
 		// Direct URL - fetch the repository index to find the chart
 		repoURL := strings.TrimSuffix(req.Repository, "/")
 
@@ -3561,10 +3643,11 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 		if chartVersion == nil {
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
+		resolvedVersion = chartVersion.Version
 
 		// Build chart URL
 		chartURL = chartVersion.URLs[0]
-		if !strings.HasPrefix(chartURL, "http://") && !strings.HasPrefix(chartURL, "https://") {
+		if !isAbsoluteChartURL(chartURL) {
 			chartURL = repoURL + "/" + chartURL
 		}
 	} else {
@@ -3616,10 +3699,11 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 		if chartVersion == nil {
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
+		resolvedVersion = chartVersion.Version
 
 		// Build chart URL
 		chartURL = chartVersion.URLs[0]
-		if !strings.HasPrefix(chartURL, "http://") && !strings.HasPrefix(chartURL, "https://") {
+		if !isAbsoluteChartURL(chartURL) {
 			chartURL = strings.TrimSuffix(repoEntry.URL, "/") + "/" + chartURL
 		}
 	}
@@ -3629,10 +3713,7 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 		return nil, err
 	}
 
-	// action.Install carries ChartPathOptions; instantiated here as a locator only.
-	locator := action.NewInstall(actionConfig)
-	locator.Version = req.Version
-	cp, err := locator.ChartPathOptions.LocateChart(chartURL, c.settings)
+	cp, err := c.locateChartPath(actionConfig, chartURL, resolvedVersion)
 	if err != nil {
 		return nil, fmt.Errorf("failed to locate chart: %w", err)
 	}
@@ -3680,11 +3761,20 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 	}
 
 	var chartURL string
+	resolvedVersion := req.Version
 
 	// Check if the repository is a URL (for ArtifactHub installs) or a local repo name
 	isRepoURL := strings.HasPrefix(req.Repository, "http://") || strings.HasPrefix(req.Repository, "https://")
+	isOCI := registry.IsOCI(req.Repository)
 
-	if isRepoURL {
+	if isOCI {
+		var err error
+		chartURL, err = resolveOCIChartURL(req.Repository, req.ChartName)
+		if err != nil {
+			return nil, err
+		}
+		sendProgress("resolving", "Resolving chart from OCI registry...", chartURL)
+	} else if isRepoURL {
 		sendProgress("fetching", "Fetching repository index...", req.Repository)
 
 		repoURL := strings.TrimSuffix(req.Repository, "/")
@@ -3740,9 +3830,10 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		if chartVersion == nil {
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
+		resolvedVersion = chartVersion.Version
 
 		chartURL = chartVersion.URLs[0]
-		if !strings.HasPrefix(chartURL, "http://") && !strings.HasPrefix(chartURL, "https://") {
+		if !isAbsoluteChartURL(chartURL) {
 			chartURL = repoURL + "/" + chartURL
 		}
 	} else {
@@ -3793,9 +3884,10 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		if chartVersion == nil {
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
+		resolvedVersion = chartVersion.Version
 
 		chartURL = chartVersion.URLs[0]
-		if !strings.HasPrefix(chartURL, "http://") && !strings.HasPrefix(chartURL, "https://") {
+		if !isAbsoluteChartURL(chartURL) {
 			chartURL = strings.TrimSuffix(repoEntry.URL, "/") + "/" + chartURL
 		}
 	}
@@ -3810,37 +3902,48 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 
 	sendProgress("downloading", fmt.Sprintf("Downloading chart %s-%s...", req.ChartName, req.Version), chartURL)
 
-	// Download the chart archive directly via HTTP, bypassing the Helm SDK's
-	// ChartPathOptions.LocateChart / ChartDownloader machinery. That code loads
-	// every locally-registered repo's cached index file and fails with "no cached
-	// repo found" if any index file is stale or missing (e.g. a bitnami repo
-	// entry exists in repositories.yaml but the index cache was deleted).
-	chartResp, err := httpClient.Get(chartURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download chart: %w", err)
-	}
-	defer chartResp.Body.Close()
-	if chartResp.StatusCode != 200 {
-		return nil, fmt.Errorf("failed to download chart: server returned %d", chartResp.StatusCode)
-	}
+	var loadedChart *chart.Chart
+	if registry.IsOCI(chartURL) {
+		chartPath, err := c.locateChartPath(actionConfig, chartURL, resolvedVersion)
+		if err != nil {
+			return nil, fmt.Errorf("failed to locate chart: %w", err)
+		}
+		sendProgress("loading", "Loading chart...", chartPath)
+		loadedChart, err = loader.Load(chartPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load chart: %w", err)
+		}
+	} else {
+		// Preserve the existing direct HTTP path. Helm's ChartDownloader loads all
+		// locally registered indexes and can fail because an unrelated cache entry
+		// is stale or missing.
+		chartResp, err := httpClient.Get(chartURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to download chart: %w", err)
+		}
+		defer chartResp.Body.Close()
+		if chartResp.StatusCode != 200 {
+			return nil, fmt.Errorf("failed to download chart: server returned %d", chartResp.StatusCode)
+		}
 
-	tmpChart, err := os.CreateTemp("", "helm-chart-*.tgz")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create temp file for chart: %w", err)
-	}
-	defer os.Remove(tmpChart.Name())
-	defer tmpChart.Close()
+		tmpChart, err := os.CreateTemp("", "helm-chart-*.tgz")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create temp file for chart: %w", err)
+		}
+		defer os.Remove(tmpChart.Name())
+		defer tmpChart.Close()
 
-	if _, err := tmpChart.ReadFrom(chartResp.Body); err != nil {
-		return nil, fmt.Errorf("failed to write chart to temp file: %w", err)
-	}
-	tmpChart.Close()
+		if _, err := tmpChart.ReadFrom(chartResp.Body); err != nil {
+			return nil, fmt.Errorf("failed to write chart to temp file: %w", err)
+		}
+		tmpChart.Close()
 
-	sendProgress("loading", "Loading chart...", tmpChart.Name())
+		sendProgress("loading", "Loading chart...", tmpChart.Name())
 
-	chart, err := loader.Load(tmpChart.Name())
-	if err != nil {
-		return nil, fmt.Errorf("failed to load chart: %w", err)
+		loadedChart, err = loader.Load(tmpChart.Name())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load chart: %w", err)
+		}
 	}
 
 	switch mode {
@@ -3855,7 +3958,7 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		sendProgress("installing", fmt.Sprintf("Recovering prior failed release %s in %s...", req.ReleaseName, req.Namespace), "")
 	}
 
-	rel, err := runInstallOrUpgrade(actionConfig, req, chart, mode)
+	rel, err := runInstallOrUpgrade(actionConfig, req, loadedChart, mode)
 	if err != nil {
 		return nil, fmt.Errorf("install failed: %w", err)
 	}

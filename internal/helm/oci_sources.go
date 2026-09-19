@@ -154,9 +154,8 @@ type ociTagLister interface {
 	Tags(ref string) ([]string, error)
 }
 
-// newRegistryClientConcrete builds a helm OCI registry client that authenticates
-// from the user's existing `helm registry login` store (settings.RegistryConfig).
-// Radar stores no registry secrets of its own.
+// newRegistryClientConcrete builds the timeout-bounded helm OCI registry client
+// used for registry probes. Radar stores no registry secrets of its own.
 func (c *Client) newRegistryClientConcrete() (*registry.Client, error) {
 	return registry.NewClient(
 		registry.ClientOptEnableCache(true),
@@ -164,6 +163,16 @@ func (c *Client) newRegistryClientConcrete() (*registry.Client, error) {
 		// Bound every request (incl. dial) so an unreachable registered registry
 		// can't stall the synchronous upgrade check.
 		registry.ClientOptHTTPClient(&http.Client{Timeout: ociProbeTimeout}),
+	)
+}
+
+// newRegistryClientForChartPull builds a helm OCI registry client for chart
+// downloads. Pulls intentionally use helm's normal transport without the short
+// timeout that bounds synchronous registry probes.
+func (c *Client) newRegistryClientForChartPull() (*registry.Client, error) {
+	return registry.NewClient(
+		registry.ClientOptEnableCache(true),
+		registry.ClientOptCredentialsFile(c.settings.RegistryConfig),
 	)
 }
 
