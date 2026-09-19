@@ -438,20 +438,37 @@ export function parseLogfmt(content: string): Record<string, string> | null {
 }
 
 /**
- * Handle SSE error events from log streams.
- * Parses server-sent error data and logs it, then calls onClose.
+ * Handle SSE error events from log streams. Logs the failure, calls onClose,
+ * and returns the message to show the reader.
+ *
+ * Once the stream is open, a failure the handler can explain arrives as an SSE
+ * `error` event carrying the reason. The browser fires the same listener for a
+ * dropped connection, which has no body at all. Only the body separates the
+ * two, so `prefix` is the transport wording and is used only when the server
+ * said nothing.
  */
-export function handleSSEError(event: Event, prefix: string, onClose: () => void): void {
+export function handleSSEError(event: Event, prefix: string, onClose?: () => void): string {
   const me = event as MessageEvent
-  if (me.data) {
-    try {
-      const data = JSON.parse(me.data)
-      console.error(`${prefix}:`, data.error || data.message || me.data)
-    } catch {
-      console.error(`${prefix}:`, me.data)
-    }
-  } else {
+  if (!me.data) {
     console.error(`${prefix} connection error`)
+    onClose?.()
+    return prefix
   }
-  onClose()
+
+  let reason: string | undefined
+  try {
+    const data = JSON.parse(me.data) as Record<string, unknown> | null
+    for (const key of ['error', 'message']) {
+      const val = data?.[key]
+      if (typeof val === 'string' && val) {
+        reason = val
+        break
+      }
+    }
+  } catch {
+    reason = me.data
+  }
+  console.error(`${prefix}:`, reason || me.data)
+  onClose?.()
+  return reason || prefix
 }
