@@ -31,6 +31,82 @@ import { ThemeProvider } from "../../context/ThemeContext";
 
 const noop = vi.fn();
 
+describe("explanations without a root cause", () => {
+  it("keeps inconclusive explanation, sources and action in one control row", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={
+          {
+            inconclusive: true,
+            summary: "Not enough evidence",
+            report: "Logs unavailable",
+            rootCause: "",
+            remediation: [],
+          } as Diagnosis
+        }
+        explanation={{ status: "idle", onGenerate: noop }}
+        assessmentSources={<span>Saved sources</span>}
+        assessmentAction={<button>Next steps</button>}
+      />,
+    );
+    expect(html.match(/data-assessment-actions/g)).toHaveLength(1);
+    const row = html.slice(
+      html.indexOf("data-assessment-actions"),
+      html.indexOf("data-assessment-actions") + 6000,
+    );
+    expect(row).toContain("Assessment details");
+    expect(row).toContain("Explain simply");
+    expect(row).toContain("Next steps");
+  });
+  it.each(["healthy", "inconclusive"] as const)(
+    "offers Explain for a %s assessment",
+    (state) => {
+      const diagnosis = {
+        [state]: true,
+        summary: "Saved assessment",
+        report: "Saved analysis",
+        rootCause: "",
+        remediation: [],
+      } as Diagnosis;
+      const html = renderToStaticMarkup(
+        <ResultCard
+          diagnosis={diagnosis}
+          explanation={{ status: "idle", onGenerate: noop }}
+          section="conclusion"
+        />,
+      );
+      expect(html.match(/Explain simply/g)).toHaveLength(1);
+      expect(html).not.toContain('disabled=""');
+      const running = renderToStaticMarkup(
+        <ResultCard
+          diagnosis={diagnosis}
+          explanation={{ status: "running" }}
+          section="conclusion"
+        />,
+      );
+      expect(running).toContain("Explaining this assessment");
+      expect(
+        renderToStaticMarkup(
+          <ResultCard
+            diagnosis={diagnosis}
+            explanation={{ status: "idle", onGenerate: noop }}
+            section="actions"
+          />,
+        ),
+      ).not.toContain("Explain simply");
+      expect(
+        renderToStaticMarkup(
+          <ResultCard
+            diagnosis={diagnosis}
+            explanation={{ status: "idle", onGenerate: noop }}
+            followup
+          />,
+        ),
+      ).not.toContain("Explain simply");
+    },
+  );
+});
+
 it("keeps earlier remediation copyable without suggesting it is executable", () => {
   const html = renderToStaticMarkup(
     <ResultCard

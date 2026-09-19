@@ -34,6 +34,53 @@ import { groupEvidenceCoverage } from "./investigationEvidencePresentation";
 import { metricsChangeMarkers } from "./investigationMetrics";
 
 const onViewSource = vi.fn();
+
+describe("coverage already summarized by the assessment", () => {
+  it("removes only the repeated collapsed preview, retaining source details and new gaps", () => {
+    const projection = project(
+      tool(
+        "logs-denied",
+        "get_pod_logs",
+        { error: "pods/log is forbidden" },
+        { isError: true },
+      ),
+      tool("issues-cut", "issues", {}, { truncated: true }),
+    );
+    const groups = groupEvidenceCoverage(projection.limitations);
+    const line = `${groups[0].label}: ${groups[0].summary}`;
+    const renderStory = (summarizedLimits: string[], summary = "Assessment") =>
+      renderToStaticMarkup(
+        <InvestigationEvidencePane
+          projection={projection}
+          story={{ summary, report: "Analysis [[radar:evidence=0]]" }}
+          summarizedLimits={summarizedLimits}
+          collecting={false}
+          animateGroupIds={new Set()}
+          onViewSource={onViewSource}
+          onViewActivity={() => {}}
+        />,
+      );
+    const preview = (html: string) =>
+      html.match(
+        /<button[^>]*aria-controls="investigation-evidence-coverage"[\s\S]*?<\/button>/,
+      )?.[0] ?? "";
+    const firstSummary = renderToStaticMarkup(<>{groups[0].summary}</>);
+    expect(preview(renderStory([]))).toContain(firstSummary);
+    const html = renderStory([line]);
+    expect(preview(html)).not.toContain(firstSummary);
+    expect(preview(html)).toContain(groups[1].summary);
+    expect(html).toContain('aria-label="View result for Container logs"');
+    expect(html).toContain("Evidence coverage update:");
+    const allSummarized = renderStory(
+      groups.map((g) => `${g.label}: ${g.summary}`),
+    );
+    expect(preview(allSummarized)).not.toContain("line-clamp-2");
+    expect(preview(allSummarized)).toContain("Evidence coverage is incomplete");
+    for (const summary of ["", "   "]) {
+      expect(preview(renderStory([line], summary))).toContain(firstSummary);
+    }
+  });
+});
 const target = {
   kind: "Deployment",
   group: "apps",

@@ -233,3 +233,16 @@ func TestExplanationPrompt(t *testing.T) {
 		t.Fatalf("empty case must not appear in the prompt: %s", bare)
 	}
 }
+
+func TestExplanationPromptPreservesHealthyAndInconclusive(t *testing.T) {
+	for _, verdict := range []Verdict{{Healthy: true}, {Inconclusive: true}} {
+		prompt := ExplanationPrompt(verdict)
+		want := `"healthy":true`
+		if verdict.Inconclusive {
+			want = `"inconclusive":true`
+		}
+		if !strings.Contains(prompt, want) || !strings.Contains(prompt, "Do not recheck the cluster or call tools") {
+			t.Fatalf("missing assessment state or tool boundary: %s", prompt)
+		}
+	}
+}

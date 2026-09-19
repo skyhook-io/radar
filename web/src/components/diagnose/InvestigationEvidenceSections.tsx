@@ -318,7 +318,7 @@ export function CoverageStrip({
               ? "Change history is limited"
               : "Evidence coverage is incomplete"}
           </span>
-          {!historyOnly && !open ? (
+          {!historyOnly && !open && summary ? (
             <span className="line-clamp-2 text-xs text-theme-text-tertiary [overflow-wrap:anywhere]">
               {summary}
             </span>

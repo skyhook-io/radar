@@ -71,6 +71,7 @@ export function InvestigationEvidencePane({
   afterEvidence,
   recordNotes,
   storyShell = false,
+  summarizedLimits = [],
   revealRequest,
   onRevealReady,
 }: {
@@ -85,7 +86,11 @@ export function InvestigationEvidencePane({
    * `evidence` array. Absent on backends and runs without the story contract,
    * which keep the previous layout.
    */
-  story?: { report: string; evidence?: DiagnosisEvidenceItem[] };
+  story?: {
+    summary?: string;
+    report: string;
+    evidence?: DiagnosisEvidenceItem[];
+  };
   /** Open the story fully instead of the bounded preview — when the layout has room for it. */
   collecting: boolean;
   animateGroupIds: ReadonlySet<string>;
@@ -105,6 +110,8 @@ export function InvestigationEvidencePane({
   recordNotes?: ReactNode;
   /** No verdict yet, but the story shape is coming: keep its cards in place. */
   storyShell?: boolean;
+  /** Coverage lines already visible in the current assessment's Still open list. */
+  summarizedLimits?: readonly string[];
   /** Explicit Activity → Findings navigation, including repeat clicks. */
   revealRequest?: { sourceId: string; requestId: number };
   onRevealReady?: (sourceId: string) => void;
@@ -278,6 +285,12 @@ export function InvestigationEvidencePane({
   );
   const limitationSummary = coverageGroups
     .map((group) => `${group.label}: ${group.summary}`)
+    .join(" · ");
+  const additionalLimitations = coverageGroups
+    .map((group) => `${group.label}: ${group.summary}`)
+    .filter(
+      (line) => !story?.summary?.trim() || !summarizedLimits.includes(line),
+    )
     .join(" · ");
   // Resolves a story placement to the agent item it names, or says why it
   // cannot: an index Radar does not know, an item the server could not bind,
@@ -657,7 +670,7 @@ export function InvestigationEvidencePane({
                 <CoverageStrip
                   groups={coverageGroups}
                   visibleGroupIds={new Set(partition.collectionByGroup.keys())}
-                  summary={limitationSummary}
+                  summary={additionalLimitations}
                   onViewSource={onViewSource}
                   open={coverageOpen}
                   onOpenChange={setCoverageOpen}

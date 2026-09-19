@@ -34,6 +34,21 @@ func TestParse_ParsesJSONBlock(t *testing.T) {
 	}
 }
 
+func TestParse_CertaintyRequiresSummary(t *testing.T) {
+	for _, summary := range []string{"", "   ", "[[radar:evidence=0]]"} {
+		for _, certainty := range []string{"established", "likely", "suspected"} {
+			fields, _ := json.Marshal(map[string]any{"summary": summary, "certainty": certainty, "revises_assessment": false})
+			d := Parse("```json\n" + string(fields) + "\n```\nA conversational answer.").Verdict
+			if d.Certainty != "" || d.Summary != "" || d.Report != "A conversational answer." {
+				t.Fatalf("summary=%q certainty=%q: %+v", summary, certainty, d)
+			}
+		}
+	}
+	if d := Parse(verdictJSON(`"summary":"All replicas are ready","healthy":true,"certainty":"established"`)).Verdict; d.Certainty != Established {
+		t.Fatalf("valid certainty removed: %+v", d)
+	}
+}
+
 func TestParse_ReadsRootCauseRefsPrivatelyAndStrictly(t *testing.T) {
 	first := testRef('a', 'b')
 	second := testRef('c', 'd')
@@ -178,11 +193,11 @@ func TestParse_StoryFields(t *testing.T) {
 }
 
 func TestParse_EstablishedCannotCoexistWithUnresolved(t *testing.T) {
-	d := Parse(verdictJSON(`"certainty":"established","unresolved":["whether the password was rotated"],"root_cause":"x"`)).Verdict
+	d := Parse(verdictJSON(`"summary":"Connection fails","certainty":"established","unresolved":["whether the password was rotated"],"root_cause":"x"`)).Verdict
 	if d.Certainty != Likely {
 		t.Fatalf("established with open questions must read as likely, got %q", d.Certainty)
 	}
-	d = Parse(verdictJSON(`"certainty":"established","unresolved":[],"root_cause":"x","steps":[{"text":"roll back","kind":"mitigate"}],"recommended_index":1`)).Verdict
+	d = Parse(verdictJSON(`"summary":"Connection fails","certainty":"established","unresolved":[],"root_cause":"x","steps":[{"text":"roll back","kind":"mitigate"}],"recommended_index":1`)).Verdict
 	if d.Certainty != Established || d.RecommendedIndex == nil {
 		t.Fatalf("an unconditional mitigate step stays recommendable: %+v", d)
 	}

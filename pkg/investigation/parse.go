@@ -183,7 +183,7 @@ func Parse(text string) Parsed {
 	d.RootCause = stripStoryMarkers(d.RootCause)
 	d.Summary = clampSummary(stripStoryMarkers(parsed.Summary), MaxSummaryRunes)
 	if certainty := Certainty(strings.ToLower(strings.TrimSpace(parsed.Certainty))); certainty != "" {
-		if _, known := certainties[certainty]; known {
+		if _, known := certainties[certainty]; known && d.Summary != "" {
 			d.Certainty = certainty
 		}
 	}

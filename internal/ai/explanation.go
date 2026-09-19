@@ -2,7 +2,6 @@ package ai
 
 import (
 	"errors"
-	"strings"
 
 	"github.com/skyhook-io/radar/pkg/investigation"
 )
@@ -17,7 +16,7 @@ func (r *Run) assessmentForExplanation(seq int) (*Diagnosis, error) {
 		return nil, ErrInvalidExplanation
 	}
 	ev := r.events[seq-1].Event
-	if ev.Type != "done" || ev.Diag == nil || strings.TrimSpace(ev.Diag.RootCause) == "" {
+	if ev.Type != "done" || ev.Diag == nil || !ev.Diag.Structured() {
 		return nil, ErrInvalidExplanation
 	}
 	for i := seq - 2; i >= 0; i-- {

@@ -788,7 +788,8 @@ export function InvestigationView({
     assessment: Turn,
   ): AssessmentExplanation | undefined => {
     const sequence = assessment.resultSequence;
-    if (!sequence || !assessment.diagnosis?.rootCause) return undefined;
+    if (!sequence || !investigationIsAssessmentTurn(assessment))
+      return undefined;
     const saved = investigationExplanation(turns, sequence);
     if ((readOnly || !explanationEnabled) && saved.status === "idle")
       return undefined;
@@ -2361,12 +2362,14 @@ export function InvestigationView({
                     story={
                       storyShape && currentAssessment?.diagnosis
                         ? {
+                            summary: currentAssessment.diagnosis.summary,
                             report: currentAssessment.diagnosis.report,
                             evidence: currentAssessment.diagnosis.evidence,
                           }
                         : undefined
                     }
                     storyShell={storyShell}
+                    summarizedLimits={storyShape ? assessmentLimits : undefined}
                     collecting={
                       explanationRequest?.status !== "running" &&
                       (requestPending ||

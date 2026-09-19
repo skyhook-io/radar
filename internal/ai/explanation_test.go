@@ -18,6 +18,12 @@ func TestAssessmentForExplanation(t *testing.T) {
 	}{
 		{"initial", StreamEvent{Type: "turn"}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{RootCause: "Missing Secret"}}}, true},
 		{"verification", StreamEvent{Type: "turn", Question: "Recheck", Verify: true}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{RootCause: "Still missing"}}}, true},
+		{"healthy", StreamEvent{Type: "turn"}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{Healthy: true, Report: "All replicas ready"}}}, true},
+		{"inconclusive", StreamEvent{Type: "turn"}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{Inconclusive: true, Report: "Logs unavailable"}}}, true},
+		{"healthy verification", StreamEvent{Type: "turn", Question: "Recheck", Verify: true}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{Healthy: true}}}, true},
+		{"revised healthy", StreamEvent{Type: "turn", Question: "What about now?"}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{Summary: "Recovered", Healthy: true, RevisesAssessment: true}}}, true},
+		{"ordinary healthy answer", StreamEvent{Type: "turn", Question: "What does ready mean?"}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{Healthy: true}}}, false},
+		{"empty", StreamEvent{Type: "turn"}, StreamEvent{Type: "done", Diag: &Diagnosis{}}, false},
 		{"ordinary question", StreamEvent{Type: "turn", Question: "Why?"}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{RootCause: "An answer"}}}, false},
 		{"explanation", StreamEvent{Type: "turn", ExplainAssessment: 2}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{RootCause: "An explanation"}}}, false},
 		{"apply", StreamEvent{Type: "turn", Apply: true}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{RootCause: "Applied"}}}, false},
