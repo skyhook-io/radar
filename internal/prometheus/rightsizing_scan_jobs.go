@@ -217,19 +217,27 @@ func (m *RightsizingScanManager) Resolve(ctx context.Context, request Rightsizin
 	if request.Cancel && job.active {
 		job.cancel()
 	}
-	changed := job.changed
-	shouldWait := request.Wait > 0 && job.active
-	m.mu.Unlock()
-	if shouldWait {
+	if request.Wait > 0 && job.active {
+		evaluated := job.result.Coverage.WorkloadsEvaluated
 		timer := time.NewTimer(request.Wait)
 		defer timer.Stop()
-		select {
-		case <-changed:
-		case <-ctx.Done():
-		case <-timer.C:
+		for job.active && job.result.Coverage.WorkloadsEvaluated == evaluated && m.jobs[job.result.ScanID] == job {
+			changed := job.changed
+			m.mu.Unlock()
+			done := false
+			select {
+			case <-changed:
+			case <-ctx.Done():
+				done = true
+			case <-timer.C:
+				done = true
+			}
+			m.mu.Lock()
+			if done {
+				break
+			}
 		}
 	}
-	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.generation != request.Generation || m.jobs[job.result.ScanID] != job || !job.valid() {
 		return nil, ErrRightsizingScanNotFound

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -42,18 +41,6 @@ func (s *Server) handleRightsizingScan(w http.ResponseWriter, r *http.Request) {
 	request := prometheuspkg.RightsizingScanRequest{
 		Generation: generation, Namespaces: namespaces, Scope: s.resolveRightsizingScanScope(r, namespaces),
 		ID: id, Start: r.Method == http.MethodPost, Refresh: r.Method == http.MethodPost, Cancel: r.Method == http.MethodDelete,
-	}
-	if r.Method == http.MethodPost {
-		wait := 45
-		if value := r.URL.Query().Get("wait_seconds"); value != "" {
-			var err error
-			wait, err = strconv.Atoi(value)
-			if err != nil || wait < 0 || wait > 45 {
-				s.writeError(w, http.StatusBadRequest, "wait_seconds must be an integer between 0 and 45")
-				return
-			}
-		}
-		request.Wait = time.Duration(wait) * time.Second
 	}
 	if request.Cancel {
 		request.Wait = 5 * time.Second

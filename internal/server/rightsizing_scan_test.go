@@ -140,7 +140,7 @@ func TestScanIDUsesOriginalScopeAndRechecksPermissions(t *testing.T) {
 		s.handleRightsizingScan(rec, req)
 		return rec
 	}
-	started := request(http.MethodPost, "/api/prometheus/rightsizing/scan?namespace=alpha&wait_seconds=0", "alice", "")
+	started := request(http.MethodPost, "/api/prometheus/rightsizing/scan?namespace=alpha", "alice", "")
 	if started.Code != http.StatusOK {
 		t.Fatalf("start: %d %s", started.Code, started.Body)
 	}

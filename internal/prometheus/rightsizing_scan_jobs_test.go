@@ -261,3 +261,22 @@ func TestCompletedScanIsNotRelabeledByLateCancellation(t *testing.T) {
 		t.Fatalf("complete result relabeled: %+v", result)
 	}
 }
+
+func TestScanWaitSkipsInventoryOnlyProgress(t *testing.T) {
+	m := scanTestManager(t, func(ctx context.Context, scope RightsizingScanScope, publish func(RightsizingScanResponse)) RightsizingScanResponse {
+		result := newRightsizingScanResponse(time.Now(), scope)
+		result.Coverage.WorkloadsDiscovered = 50
+		publish(result)
+		result.Coverage.Batches = 1
+		publish(result)
+		result.Coverage.WorkloadsEvaluated = 50
+		result.State = RightsizingScanComplete
+		return result
+	})
+	request := scanTestRequest(m)
+	request.Wait = time.Second
+	result, err := m.Resolve(context.Background(), request)
+	if err != nil || result.ScanStatus != "finished" || result.Coverage.WorkloadsEvaluated != 50 {
+		t.Fatalf("wait returned inventory-only progress: %+v %v", result, err)
+	}
+}

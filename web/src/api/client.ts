@@ -3703,7 +3703,7 @@ export function useRightsizingScan(namespaces: string[], context = "") {
     mutationFn: async (started: { scope: string; path: string; queryKey: typeof cache.queryKey }) => {
       await queryClient.cancelQueries({ queryKey: started.queryKey });
       if (currentScope.current !== started.scope) throw new Error('Scan scope changed; run the scan again.');
-      return fetchJSON<RightsizingScanResponse>(`${started.path}&wait_seconds=0`, { method: 'POST' });
+      return fetchJSON<RightsizingScanResponse>(started.path, { method: 'POST' });
     },
     onSuccess: (result, started) => queryClient.setQueryData(started.queryKey, result),
     onError: (_error, started) => {
@@ -3728,7 +3728,7 @@ export function useRightsizingScan(namespaces: string[], context = "") {
     } else if (current && current.coverage.workloadsEvaluated > 0) {
       previous.current = { scope, result: current };
     }
-  }, [current, inaccessible, scope, queryClient]);
+  }, [current, inaccessible, scope, queryClient, cache.queryKey]);
   const showingPrevious = current?.scanStatus === 'running' && current.coverage.workloadsEvaluated === 0 && previous.current?.scope === scope;
   return {
     data: showingPrevious ? previous.current!.result : current,
