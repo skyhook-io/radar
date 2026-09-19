@@ -52,7 +52,7 @@ func TestFromTLSSecret_SkipsNonServingSecrets(t *testing.T) {
 				Type: corev1.SecretTypeTLS,
 				Data: map[string][]byte{"tls.crt": valid},
 			},
-			wantOK: false, // label set below
+			wantOK: false,
 		},
 		{
 			name:   "missing tls.crt skipped",
@@ -74,7 +74,6 @@ func TestFromTLSSecret_SkipsNonServingSecrets(t *testing.T) {
 			wantOK: true,
 		},
 	}
-	// Attach the sealed-secrets label to the dedicated case.
 	cases[1].secret.Labels = map[string]string{"sealedsecrets.bitnami.com/sealed-secrets-key": "active"}
 
 	for _, tc := range cases {
