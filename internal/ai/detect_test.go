@@ -10,6 +10,7 @@ func TestExecutionProfiles(t *testing.T) {
 		{"claude", []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}},
 		{"codex", []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}},
 		{"cursor-agent", []ExecutionProfile{ExecutionProfileFullLocal}},
+		{"opencode", []ExecutionProfile{ExecutionProfileFullLocal}},
 		{"gemini", nil},
 	}
 	for _, c := range cases {
@@ -48,6 +49,7 @@ func TestConsentSurfacesMatchTheExactAgentProfile(t *testing.T) {
 		{"codex", ExecutionProfileSafeguarded, "codex:safeguarded"},
 		{"codex", ExecutionProfileFullLocal, "codex:full-local"},
 		{"cursor-agent", ExecutionProfileFullLocal, "cursor-agent:full-local"},
+		{"opencode", ExecutionProfileFullLocal, "opencode:full-local"},
 	}
 	for _, c := range cases {
 		if got := ConsentSurfaceFor(c.agent, c.profile); got != c.want {

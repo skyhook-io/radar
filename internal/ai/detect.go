@@ -31,10 +31,11 @@ type AgentInfo struct {
 
 // knownAgents are the CLI names we probe for — a FIXED list. We never exec a
 // user-supplied name/path: only these literals, resolved through PATH, are run.
-var knownAgents = []string{"claude", "codex", "gemini", "cursor-agent"}
+var knownAgents = []string{"claude", "codex", "gemini", "cursor-agent", "opencode"}
 
 var agentLabels = map[string]string{
 	"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini CLI", "cursor-agent": "Cursor Agent",
+	"opencode": "OpenCode",
 }
 
 // AgentLabel is the display name for an agent CLI — the ONE table every
@@ -75,7 +76,7 @@ func ProfilesFor(agent string) []ExecutionProfile {
 		return []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}
 	case "codex":
 		return []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}
-	case "cursor-agent":
+	case "cursor-agent", "opencode":
 		return []ExecutionProfile{ExecutionProfileFullLocal}
 	default:
 		return nil

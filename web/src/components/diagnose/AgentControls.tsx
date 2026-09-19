@@ -371,9 +371,17 @@ export function AgentControls({
         <TextField
           label="Model"
           value={model}
-          placeholder="Default"
+          placeholder={
+            selectedAgent === "opencode"
+              ? "Default (e.g. opencode-1.5-pro)"
+              : "Default"
+          }
           onChange={onSetModel}
-          hint="Leave empty for the agent's default, or enter a model identifier it supports."
+          hint={
+            selectedAgent === "opencode"
+              ? "Leave empty for OpenCode's default, or enter a supported model slug."
+              : "Leave empty for the agent's default, or enter a model identifier it supports."
+          }
         />
       )}
       {isCodex && (

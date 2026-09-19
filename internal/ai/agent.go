@@ -63,6 +63,8 @@ func resolveAgent(bin string) Agent {
 		return &cursorAgent{bin: bin}
 	case strings.Contains(base, "codex"):
 		return &codexAgent{bin: bin}
+	case base == "opencode" || strings.HasPrefix(base, "opencode-"):
+		return &opencodeAgent{bin: bin}
 	default:
 		return &claudeAgent{bin: bin}
 	}

@@ -235,7 +235,7 @@ const defaultMaxTurns = 15
 
 // agentCLICandidates are CLIs whose event stream we can parse + drive. Order is
 // the default-selection preference when several are installed.
-var agentCLICandidates = []string{"claude", "codex", "cursor-agent"}
+var agentCLICandidates = []string{"claude", "codex", "cursor-agent", "opencode"}
 
 // Detector / Diagnoser ------------------------------------------------------
 
