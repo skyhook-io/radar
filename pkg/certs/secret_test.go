@@ -111,3 +111,10 @@ func TestFromTLSSecretDoesNotSkipMalformedPEM(t *testing.T) {
 		t.Fatal("malformed PEM leaf promoted intermediate")
 	}
 }
+
+func TestFromTLSSecretDoesNotSkipUnterminatedLeaf(t *testing.T) {
+	data := append([]byte("-----BEGIN CERTIFICATE-----\nmissing end marker\n"), selfSignedPEM(t, "intermediate", nil, time.Now().Add(365*24*time.Hour))...)
+	if _, ok := FromTLSSecret(&corev1.Secret{Type: corev1.SecretTypeTLS, Data: map[string][]byte{"tls.crt": data}}); ok {
+		t.Fatal("unterminated leaf promoted intermediate")
+	}
+}

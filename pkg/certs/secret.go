@@ -34,7 +34,7 @@ func FromTLSSecret(sec *corev1.Secret) (Input, bool) {
 	data = data[start:]
 	endMarker := []byte("-----END CERTIFICATE-----")
 	end := bytes.Index(data, endMarker)
-	if end < 0 {
+	if end < 0 || bytes.Contains(data[len("-----BEGIN CERTIFICATE-----"):end], []byte("-----BEGIN CERTIFICATE-----")) {
 		return Input{}, false
 	}
 	block, _ := pem.Decode(data[:end+len(endMarker)])
