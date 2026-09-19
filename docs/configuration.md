@@ -271,9 +271,31 @@ it does not switch every saved endpoint, tool preference and credential.
 | Kubecost auto-discovery API key / cluster-ID override | Bound to the configured context; an explicit central URL's key can be reused across contexts |
 
 If different clusters use different Prometheus backends or tenants, update the URL
-and headers together in **Settings → Metrics**. Changing only the URL retains
-saved headers; explicitly replace or clear them when moving to another endpoint.
-Headers require an explicit URL and are not sent during auto-discovery.
+and headers together in **Settings → Metrics**. Changing the server (scheme, host
+or port) requires explicitly replacing or clearing saved headers; a URL-only
+change cannot carry credentials to another server. If the configuration file
+contains `prometheusHeadersFromEnv`, update its URL and header references together
+and restart. If `--prometheus-url`, `--prometheus-header` or
+`--prometheus-header-from-env` is set, change the URL and header flags together and
+restart before switching servers or enabling auto-discovery. Headers supplied by
+flags or environment references cannot be replaced or cleared in Settings; change
+them at their source and restart. A URL-only flag still allows saved headers to be
+edited. Same-server path edits apply immediately, but a URL supplied at launch is
+restored on restart. Settings shows the running URL and header names, never header
+values. For editable headers, **Clear saved headers** followed by **Apply** removes
+them explicitly. Apply saves the configuration before checking connectivity, so
+an unreachable backend remains saved until you correct it.
+
+At launch, overriding a saved server with `--prometheus-url` also requires
+explicitly replacing every inherited header source, or updating the saved URL
+and headers together. A header-only configuration file can still pair with a
+deployment's URL flag. Applying that connection in Settings saves its URL, so
+subsequent launches bind the saved headers to that server. Header names are
+case-insensitive; duplicate names, whitespace-padded keys and invalid HTTP header
+characters are rejected, including on startup.
+
+Cross-origin HTTP redirects are refused, including for custom auth
+and tenant headers. Headers require an explicit URL and are not sent during auto-discovery.
 The new workload charts recheck identity, but older name-based metrics are not
 protected by that attribution contract. See [Workload metrics](workload-metrics.md).
 

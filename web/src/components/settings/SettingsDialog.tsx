@@ -30,7 +30,7 @@ import {
   costIntegrationUnavailableMessage,
   costSourceLabel,
 } from '../cost/source'
-import { costSourceApplyLabel, shouldOfferCostReview, shouldShowSettingsFooter } from './settings-state'
+import { costSourceApplyLabel, prometheusHeadersFromRows, shouldOfferCostReview, shouldShowSettingsFooter } from './settings-state'
 import type { SettingsSectionId } from './settings-state'
 export type { SettingsSectionId } from './settings-state'
 
@@ -69,6 +69,9 @@ interface ConfigResponse {
   isDesktop: boolean
   openCostCurrencyManaged?: boolean
   prometheusHeaderKeys?: string[]
+  prometheusServerManaged: boolean
+  prometheusHeadersManaged: boolean
+  prometheusUrlFromFlag: boolean
   kubecostApiKeySet?: boolean
   kubecostEnvManaged?: boolean
   kubecostEnvError?: string
@@ -229,7 +232,7 @@ export function SettingsDialog({
       })
       .then((data: ConfigResponse) => {
         setConfigData(data)
-        setEditedConfig(data.file)
+        setEditedConfig({ ...data.file, prometheusUrl: data.effective.prometheusUrl })
       })
       .catch((err) => {
         console.warn('[settings] Failed to load config:', err)
@@ -361,7 +364,7 @@ export function SettingsDialog({
     // live integration fields, so restoring it drops drafts without touching
     // what's saved.
     if (!configData) return
-    setEditedConfig(configData.file)
+    setEditedConfig({ ...configData.file, prometheusUrl: configData.effective.prometheusUrl })
     setCostCredentialDirty(false)
     setCostDraftReset((current) => current + 1)
     setSaveMessage(null)
@@ -625,7 +628,7 @@ export function SettingsDialog({
               id="prometheus"
               active={section}
               title="Metrics"
-              caption="Applies immediately — no restart."
+              caption="Connect and manage your metrics backend."
               live
               locked={!canEditConfig}
             >
@@ -633,10 +636,17 @@ export function SettingsDialog({
                 local={deploymentMode === 'local'}
                 value={editedConfig.prometheusUrl ?? ''}
                 configuredHeaderKeys={configData?.prometheusHeaderKeys ?? []}
+                serverManaged={configData?.prometheusServerManaged === true}
+                headersManaged={configData?.prometheusHeadersManaged === true}
+                urlFromFlag={configData?.prometheusUrlFromFlag === true}
                 onChange={(v) => updateConfigField('prometheusUrl', v || undefined)}
                 onApplied={(url) =>
                   setConfigData((prev) =>
-                    prev ? { ...prev, file: { ...prev.file, prometheusUrl: url || undefined } } : prev
+                    prev ? {
+                      ...prev,
+                      file: { ...prev.file, prometheusUrl: url || undefined },
+                      effective: { ...prev.effective, prometheusUrl: url || undefined },
+                    } : prev
                   )
                 }
               />
@@ -1915,12 +1925,18 @@ function PrometheusConfigField({
   value,
   onChange,
   configuredHeaderKeys,
+  serverManaged,
+  headersManaged,
+  urlFromFlag,
   onApplied,
 }: {
   local: boolean
   value: string
   onChange: (value: string) => void
   configuredHeaderKeys: string[]
+  serverManaged: boolean
+  headersManaged: boolean
+  urlFromFlag: boolean
   onApplied?: (url: string) => void
 }) {
   const [apply, setApply] = useState<ApplyState>({ status: 'idle' })
@@ -1950,17 +1966,8 @@ function PrometheusConfigField({
     // a replacement when the editor has real content, or {} when the user emptied
     // every row (explicit clear) — blank in-progress rows must NOT wipe stored
     // secrets just because the editor happens to be open for a URL-only change.
-    let editedHeaders: Record<string, string> | undefined
-    if (headerRows !== null) {
-      const entered = Object.fromEntries(
-        headerRows
-          .map((r) => [r.key.trim(), r.value] as const)
-          .filter(([k, v]) => k !== '' && v !== '')
-      )
-      if (Object.keys(entered).length > 0) editedHeaders = entered
-      else if (headerRows.length === 0) editedHeaders = {}
-    }
     try {
+      const editedHeaders = prometheusHeadersFromRows(headerRows)
       const res = await fetch(apiUrl('/integrations/prometheus'), {
         method: 'PUT',
         credentials: getCredentialsMode(),
@@ -2007,11 +2014,12 @@ function PrometheusConfigField({
       <div className="flex items-center gap-2">
         <Input
           value={value}
+          disabled={apply.status === 'applying'}
           onChange={(e) => onChange(e.target.value)}
           placeholder="http://prometheus-server.monitoring:9090"
           className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
         />
-        <Tooltip content="Apply the connection now — no restart. Changing the URL or headers clears any workload scope override and resumes automatic identity matching." wrapperClassName="shrink-0">
+        <Tooltip content="Save and apply this connection, then check reachability. Applying clears any workload scope override and resumes automatic identity matching." wrapperClassName="shrink-0">
           <button
             onClick={handleApply}
             disabled={apply.status === 'applying'}
@@ -2039,15 +2047,26 @@ function PrometheusConfigField({
         </p>
       ) : (
         <p className="mt-1 text-xs text-theme-text-tertiary">
-          Applies immediately — no restart needed.
+          Saves and applies before checking the connection.
         </p>
       )}
       <p className="mt-2 text-xs text-theme-text-tertiary">
         {local
           ? 'Saved URL and headers apply across all local cluster contexts.'
           : 'Changes affect this Radar installation. Use deployment settings for configuration that survives Pod replacement.'}
-        {' URL changes do not clear headers. Replace or clear credentials before switching backends.'}
+        {' Changing servers requires replacing or clearing the saved headers.'}
       </p>
+      {serverManaged && (
+        <p className="mt-2 text-xs text-theme-text-secondary">
+          Server controlled by startup configuration. To set or change the server,
+          {local ? ' update the startup flags or environment references and restart Radar.' : ' update the deployment configuration (such as Helm values) and restart Radar.'}
+        </p>
+      )}
+      {urlFromFlag && (
+        <p className="mt-1 text-xs text-theme-text-secondary">
+          Path edits apply until restart; the URL supplied at launch will then be restored.
+        </p>
+      )}
 
       {/* Auth headers — for token / multi-tenant backends (Bearer, X-Scope-OrgID). */}
       <div className="mt-3">
@@ -2058,12 +2077,13 @@ function PrometheusConfigField({
                 ? <>Auth headers: <span className="text-theme-text-secondary">{storedKeys.join(', ')}</span> <span className="text-theme-text-disabled">(values hidden)</span></>
                 : 'No auth headers'}
             </span>
-            <button
+            {!headersManaged && <button
               onClick={() => { setHeaderRows([{ key: '', value: '' }]); clearStatus() }}
+              disabled={apply.status === 'applying'}
               className="shrink-0 text-xs font-medium text-accent-text hover:underline"
             >
               {storedKeys.length > 0 ? 'Edit headers' : 'Add auth headers'}
-            </button>
+            </button>}
           </div>
         ) : (
           <div className="rounded-md border border-theme-border bg-theme-elevated/40 p-2.5 space-y-2">
@@ -2071,6 +2091,7 @@ function PrometheusConfigField({
               <div key={i} className="flex items-center gap-2">
                 <Input
                   value={row.key}
+                  disabled={apply.status === 'applying'}
                   onChange={(e) => {
                     setHeaderRows((rows) => rows!.map((r, j) => j === i ? { ...r, key: e.target.value } : r))
                     clearStatus()
@@ -2081,6 +2102,7 @@ function PrometheusConfigField({
                 <input
                   type="password"
                   value={row.value}
+                  disabled={apply.status === 'applying'}
                   onChange={(e) => {
                     setHeaderRows((rows) => rows!.map((r, j) => j === i ? { ...r, value: e.target.value } : r))
                     clearStatus()
@@ -2091,6 +2113,7 @@ function PrometheusConfigField({
                 <Tooltip content="Remove header" wrapperClassName="shrink-0">
                   <button
                     onClick={() => setHeaderRows((rows) => rows!.filter((_, j) => j !== i))}
+                    disabled={apply.status === 'applying'}
                     className="p-1 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover rounded"
                   >
                     <X className="w-3.5 h-3.5" />
@@ -2101,12 +2124,14 @@ function PrometheusConfigField({
             <div className="flex items-center justify-between gap-2">
               <button
                 onClick={() => setHeaderRows((rows) => [...rows!, { key: '', value: '' }])}
+                disabled={apply.status === 'applying'}
                 className="flex items-center gap-1 text-xs font-medium text-accent-text hover:underline"
               >
                 <Plus className="w-3 h-3" /> Add header
               </button>
               <button
                 onClick={() => { setHeaderRows(null); clearStatus() }}
+                disabled={apply.status === 'applying'}
                 className="text-xs text-theme-text-tertiary hover:text-theme-text-primary"
               >
                 Cancel
@@ -2121,6 +2146,22 @@ function PrometheusConfigField({
           </div>
         )}
       </div>
+      {headersManaged ? (
+        <p className="mt-2 text-xs text-theme-text-secondary">
+          Headers are controlled by startup configuration. Change them at their source and restart Radar.
+        </p>
+      ) : storedKeys.length > 0 && (
+        <button
+          onClick={() => { setHeaderRows([]); clearStatus() }}
+          disabled={apply.status === 'applying'}
+          className="mt-2 text-xs text-theme-text-secondary hover:underline"
+        >
+          Clear saved headers
+        </button>
+      )}
+      {headerRows?.length === 0 && (
+        <p className="mt-1 text-xs text-warning-text">Headers will be cleared when you click Apply now.</p>
+      )}
     </div>
   )
 }

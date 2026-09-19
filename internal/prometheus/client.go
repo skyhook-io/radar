@@ -253,14 +253,20 @@ func HasHeaders() bool {
 
 // CurrentHeaders returns a copy of the running client's headers.
 func CurrentHeaders() map[string]string {
+	_, headers := CurrentConfig()
+	return headers
+}
+
+// CurrentConfig snapshots the endpoint and its credentials under the same lock.
+func CurrentConfig() (string, map[string]string) {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
 	if globalClient == nil {
-		return nil
+		return "", nil
 	}
 	globalClient.mu.RLock()
 	defer globalClient.mu.RUnlock()
-	return copyHeaders(globalClient.headers)
+	return globalClient.manualURL, copyHeaders(globalClient.headers)
 }
 
 // configureLocked is the single writer for manualURL + headers. manualURL is

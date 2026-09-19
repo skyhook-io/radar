@@ -4,10 +4,40 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestCarettaRejectsCrossOriginRedirects(t *testing.T) {
+	var received atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(target.Close)
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	t.Cleanup(source.Close)
+	c := NewCarettaSource(nil)
+	c.prometheusAddr = source.URL
+	c.headers = map[string]string{"Authorization": "Bearer secret", "X-API-Key": "api-secret", "X-Scope-OrgID": "tenant"}
+	c.mu.Lock()
+	connected := c.tryMetricsEndpointLocked(context.Background(), source.URL)
+	hasSeries := c.hasSeriesLocked(context.Background(), source.URL, "up")
+	c.mu.Unlock()
+	if connected || hasSeries {
+		t.Fatal("cross-origin redirect was accepted as a valid metrics source")
+	}
+	if _, err := c.queryPrometheusRaw(context.Background(), "up"); err == nil || !strings.Contains(err.Error(), "cross-origin redirect refused") {
+		t.Fatalf("query error = %v, want refused redirect", err)
+	}
+	if received.Load() != 0 {
+		t.Fatal("traffic consumer sent a request to the redirect destination")
+	}
+}
 
 // Guards the parallel applyHeaders implementation in caretta.go against
 // silent drift from internal/prometheus/client.go — a future contributor
