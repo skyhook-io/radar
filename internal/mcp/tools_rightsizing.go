@@ -48,7 +48,7 @@ type getRightsizingInput struct {
 	Namespace      string   `json:"namespace,omitempty" jsonschema:"one namespace: required for scope=workload, and for scope=namespace unless namespaces is set; rejected for scope=cluster"`
 	Namespaces     []string `json:"namespaces,omitempty" jsonschema:"for scope=namespace only, instead of namespace: scan several namespaces in one call. The 45s budget is shared, so this saves calls, not scan time"`
 	IncludeAll     bool     `json:"include_all,omitempty" jsonschema:"also return correctly-sized and unevidenced containers (default false, which returns only oversized, under_requested, and missing_request rows and reports the rest as omitted counts). Ignored for scope=workload, which returns every row of the named workload"`
-	Limit          int      `json:"limit,omitempty" jsonschema:"max workloads returned, ranked by classification then replica-weighted impact (default 20, max 100). Rejected for scope=workload"`
+	Limit          int      `json:"limit,omitempty" jsonschema:"max workloads returned, ranked by safety priority then replica-weighted impact (default 20, max 100). Rejected for scope=workload"`
 }
 
 type rightsizingRowDTO struct {

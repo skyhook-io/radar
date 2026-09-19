@@ -38,7 +38,7 @@ func RightsizingPriority(class RightsizingClass, rows []RightsizingRow, scaledTo
 			}
 			for _, reason := range ManualReviewReasons(row) {
 				switch reason {
-				case "current_pod_oom", "oom_in_window", "limit_conflict", "bursty_reduction", "throttled_reduction":
+				case "current_pod_oom", "oom_in_window", "limit_conflict", "throttled_reduction":
 					return 0
 				}
 			}

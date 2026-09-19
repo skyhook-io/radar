@@ -60,6 +60,7 @@ function needsManualReview(row: RightsizingRow): boolean {
   return (
     row.hpaManaged ||
     needsSafetyReview(row) ||
+    (isReduction(row) && row.bursty === true) ||
     row.recommendationReason === 'hpa_evidence_unavailable' ||
     row.recommendationReason === 'oom_evidence_unavailable'
   )
@@ -70,7 +71,7 @@ function needsSafetyReview(row: RightsizingRow): boolean {
     row.currentPodOOM === true ||
     row.windowOomEvidence === true ||
     row.limitConflict === true ||
-    (isReduction(row) && (row.bursty === true || (row.throttleRatio ?? 0) >= 0.1))
+    (isReduction(row) && (row.throttleRatio ?? 0) >= 0.1)
   )
 }
 

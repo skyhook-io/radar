@@ -273,7 +273,7 @@ Rows also carry `pool: {name, source}` and `capacityType` (`spot`, `preemptible`
 
 `scope=namespace` and `scope=cluster` apply the Rightsizing screen's ordering rule, at a coarser grain — the screen ranks each **container** as its own entry while these scopes return **workloads**, so a workload's containers are summed here and the top-N can legitimately differ from the screen's. Both surfaces retain known actionable evidence when another resource lacks data; missing evidence yields `need_data` only when no actionable classification can be established from the available evidence. The rule is:
 
-1. **Reliability priority** — evidenced OOM signals, limit conflicts, and bursty/throttled reductions first; then `increase`, ordinary `reduction`, routine `review` (HPA-only or scaled-to-zero), `need_data`, and `in_range`. Retained risk history does not promote scaled-to-zero workloads. Priority is computed before response limits; classification/filter values remain unchanged.
+1. **Reliability priority** — evidenced OOM signals, limit conflicts, and throttled reductions first; then `increase`, ordinary `reduction`, routine `review` (burstiness-only, HPA-only, or scaled-to-zero), `need_data`, and `in_range`. Retained risk history does not promote scaled-to-zero workloads. Priority is computed before response limits; classification/filter values remain unchanged.
 2. **`requestDelta`** — the replica-weighted absolute request change (`{cpu, memory}`, formatted quantities such as `-2250m`), normalized so a CPU change and a memory change are comparable.
 3. Namespace, kind and name, so repeated scans return a stable order.
 

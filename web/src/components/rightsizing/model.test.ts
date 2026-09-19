@@ -336,9 +336,9 @@ it('ranks known safety risks and increases above savings, while routine reviews 
   ]
   const rows = flattenScanResults({ ...response([]), workloads })
   const names = rows.map((row) => row.name)
-  expect(new Set(names.slice(0, 4))).toEqual(new Set(['oom', 'limit', 'bursty', 'throttled']))
-  expect(names.slice(4, 6)).toEqual(['grow', 'partial-grow'])
-  expect(names[6]).toBe('cut')
-  expect(names.slice(7, 9)).toEqual(['hpa', 'idle'])
+  expect(new Set(names.slice(0, 3))).toEqual(new Set(['oom', 'limit', 'throttled']))
+  expect(names.slice(3, 5)).toEqual(['grow', 'partial-grow'])
+  expect(names[5]).toBe('cut')
+  expect(names.slice(6, 9)).toEqual(['bursty', 'hpa', 'idle'])
   expect(names.slice(9)).toEqual(['failed-risk', 'steady'])
 })

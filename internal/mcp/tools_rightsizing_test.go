@@ -1521,7 +1521,7 @@ func TestScanReliabilityPriority(t *testing.T) {
 	for _, workload := range got {
 		names = append(names, workload.Name)
 	}
-	want := []string{"bursty", "limit", "oom", "throttled", "grow", "partial-grow", "cut", "hpa", "idle", "failed-risk", "steady"}
+	want := []string{"limit", "oom", "throttled", "grow", "partial-grow", "cut", "bursty", "hpa", "idle", "failed-risk", "steady"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("priority order = %v, want %v", names, want)
 	}
