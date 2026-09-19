@@ -3725,7 +3725,7 @@ export function useRightsizingScan(namespaces: string[], context = "") {
     if (inaccessible) {
       previous.current = null;
       queryClient.setQueryData(cache.queryKey, null);
-    } else if (current && (current.scanStatus !== 'running' || current.coverage.workloadsEvaluated > 0)) {
+    } else if (current && current.coverage.workloadsEvaluated > 0) {
       previous.current = { scope, result: current };
     }
   }, [current, inaccessible, scope, queryClient]);

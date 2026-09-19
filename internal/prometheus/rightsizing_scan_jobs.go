@@ -180,9 +180,6 @@ func (m *RightsizingScanManager) Resolve(ctx context.Context, request Rightsizin
 			return nil, ErrRightsizingScanNotFound
 		}
 		if job.key != key {
-			job.cancel()
-			close(job.changed)
-			delete(m.jobs, request.ID)
 			m.mu.Unlock()
 			return nil, ErrRightsizingScanScopeChanged
 		}
@@ -266,7 +263,7 @@ func (m *RightsizingScanManager) run(ctx context.Context, job *rightsizingScanJo
 	}
 	result.RightsizingScanProgress = job.result.RightsizingScanProgress
 	result.ScanStatus, result.PollAfterSeconds = "finished", 0
-	if ctx.Err() != nil {
+	if ctx.Err() != nil && result.State != RightsizingScanComplete {
 		result.State = RightsizingScanPartial
 		if result.Coverage.WorkloadsEvaluated == 0 {
 			result.State = RightsizingScanUnavailable

@@ -48,6 +48,7 @@ export const RIGHTSIZING_EMBEDDED_METRICS_REQUIRED_BODY =
   `${RIGHTSIZING_METRICS_REQUIRED_BODY}\nConfigure metrics for this cluster in the host application or Radar deployment.`
 
 export type RightsizingScanSurfaceState =
+  | 'loading_scan'
   | 'discovering'
   | 'prometheus_required'
   | 'first_run'
@@ -57,6 +58,7 @@ export type RightsizingScanSurfaceState =
   | 'results'
 
 export function getRightsizingScanSurfaceState(input: {
+  scanLoading?: boolean
   statusLoading: boolean
   hasStatus: boolean
   connected: boolean
@@ -67,6 +69,7 @@ export function getRightsizingScanSurfaceState(input: {
 }): RightsizingScanSurfaceState {
   if (input.statusLoading && !input.hasStatus) return 'discovering'
   if (!input.connected) return 'prometheus_required'
+  if (input.scanLoading && !input.hasResult) return 'loading_scan'
   if (input.pending && !input.hasResult) return 'scanning'
   if (input.hasError && !input.hasResult) return 'fatal_error'
   if (!input.hasResult) return 'first_run'
@@ -184,7 +187,8 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
   const hiddenSystem = rows.length - rows.filter((row) => !row.system).length
   const onlySystemRowsAreHidden = !includeSystem && rows.length > 0 && scopeRows.length === 0
   const surfaceState = getRightsizingScanSurfaceState({
-    statusLoading: statusLoading || scan.isLoading,
+    statusLoading,
+    scanLoading: scan.isLoading,
     hasStatus: Boolean(promStatus),
     connected: promStatus?.connected === true,
     pending: scan.isPending,
@@ -280,6 +284,8 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
               </div>
             }
           />
+        ) : surfaceState === 'loading_scan' ? (
+          <CenteredState loading title="Loading scan…" body="Checking for an existing scan in this cluster and namespace scope." />
         ) : surfaceState === 'first_run' ? (
           <FirstRunState namespaces={namespaces} onRun={runScan} />
         ) : surfaceState === 'scanning' ? (
@@ -309,8 +315,7 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
             action={
               <button
                 type="button"
-                onClick={scan.isPending ? scan.stop : runScan}
-                disabled={scan.isStopping}
+                onClick={runScan}
                 className="btn-brand px-3 py-1.5 text-xs font-medium"
               >
                 Try again
@@ -328,7 +333,7 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
               </div>
             )}
             {scan.isPending && (
-              <Notice text={`${scan.progress?.coverage.workloadsDiscovered ? `Scanning — ${scan.progress.coverage.workloadsEvaluated} of ${scan.progress.coverage.workloadsDiscovered} workloads attempted.` : 'Preparing scan…'} Results and rankings update as batches finish. You can leave this page and return.${scan.showingPrevious ? ' Showing previous results until the first batch is ready.' : ''}`} />
+              <Notice loading text={`${scan.progress?.coverage.workloadsDiscovered ? `Scanning — ${scan.progress.coverage.workloadsEvaluated} of ${scan.progress.coverage.workloadsDiscovered} workloads attempted.` : 'Preparing scan…'} Results and rankings update as batches finish. You can leave this page and return.${scan.showingPrevious ? ' Showing previous results until the first batch is ready.' : ''}`} />
             )}
             <ScanSummary
               namespaces={namespaces}
@@ -681,12 +686,12 @@ export function ScanNotices({ result }: { result: ScanResult }) {
   )
 }
 
-function Notice({ text, tone }: { text: string; tone?: 'warning' }) {
+function Notice({ text, tone, loading }: { text: string; tone?: 'warning'; loading?: boolean }) {
   return (
     <div
       className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${tone === 'warning' ? 'status-degraded' : 'border-theme-border bg-theme-surface text-theme-text-secondary'}`}
     >
-      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      {loading ? <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" /> : <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
       {text}
     </div>
   )

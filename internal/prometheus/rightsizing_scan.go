@@ -240,7 +240,9 @@ func runRightsizingScan(ctx context.Context, scope RightsizingScanScope, client 
 	querier, err := client.newScanQuerier(ctx, resp.ScannedAt.Truncate(rightsizingStep))
 	if err != nil {
 		resp.Reason = "prometheus_unavailable"
-		appendScanWarning(&resp, "prometheus_unavailable", err.Error())
+		if ctx.Err() == nil {
+			appendScanWarning(&resp, "prometheus_unavailable", err.Error())
+		}
 		return resp
 	}
 	return computeRightsizingScanProgress(ctx, querier, workloads, resp, publish)
@@ -356,7 +358,9 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 	ksm, err := client.Query(ctx, `count(kube_pod_owner)`)
 	if err != nil {
 		resp.Reason = "owner_metrics_query_failed"
-		appendScanWarning(&resp, "owner_metrics_query_failed", err.Error())
+		if ctx.Err() == nil {
+			appendScanWarning(&resp, "owner_metrics_query_failed", err.Error())
+		}
 		return resp
 	}
 	if firstValue(ksm) == nil || *firstValue(ksm) <= 0 {
@@ -366,6 +370,9 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 	replicaSetOwnersQueryFailed := false
 	if hasScanKind(workloads, "Deployment") {
 		replicaSetOwners, queryErr := client.Query(ctx, `count(kube_replicaset_owner)`)
+		if queryErr != nil && ctx.Err() != nil {
+			return resp
+		}
 		if queryErr != nil || firstValue(replicaSetOwners) == nil || *firstValue(replicaSetOwners) <= 0 {
 			resp.Coverage.UnavailableKinds = appendUniqueSorted(resp.Coverage.UnavailableKinds, "Deployment")
 			workloads = withoutScanKind(workloads, "Deployment")
@@ -399,13 +406,14 @@ func computeRightsizingScanProgress(ctx context.Context, client rightsizingScanQ
 		if len(evidence.errors) == 0 {
 			resp.Coverage.CompletedBatches++
 		} else {
-			for key, queryErr := range evidence.errors {
-				appendScanWarning(&resp, key+"_query_failed", queryErr.Error())
-			}
-			// The loop-top check never sees a deadline that cut the last batch:
-			// its queries fail with the context error and there is no next pass.
+			// An interrupted batch is not backend failure evidence. Keep only
+			// the batches that completed before cancellation or the scan deadline.
 			if err := ctx.Err(); err != nil {
 				appendScanWarning(&resp, ReasonScanDeadlineExceeded, err.Error())
+				break
+			}
+			for key, queryErr := range evidence.errors {
+				appendScanWarning(&resp, key+"_query_failed", queryErr.Error())
 			}
 		}
 		for _, workload := range batch {

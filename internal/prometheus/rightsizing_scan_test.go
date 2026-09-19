@@ -277,6 +277,9 @@ func TestRightsizingScanNamesADeadlineThatCutTheOnlyBatch(t *testing.T) {
 	if resp.Coverage.Batches != 1 || resp.Coverage.CompletedBatches != 0 {
 		t.Fatalf("coverage = %+v, want one incomplete batch", resp.Coverage)
 	}
+	if len(resp.Workloads) != 0 || len(resp.Warnings) != 1 {
+		t.Fatalf("interrupted batch reported as query failures: %+v", resp)
+	}
 	if !hasScanWarning(resp.Warnings, "scan_deadline_exceeded") {
 		t.Fatalf("warnings = %+v, want scan_deadline_exceeded for a batch the deadline cut", resp.Warnings)
 	}

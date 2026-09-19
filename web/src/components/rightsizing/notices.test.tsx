@@ -14,7 +14,7 @@ const scan: RightsizingScanResponse = {
     workloadsEvaluated: 120,
     workloadsWithData: 47,
     batches: 3,
-    attemptedBatches: 1, completedBatches: 3,
+    attemptedBatches: 3, completedBatches: 3,
   },
   workloads: [],
 }

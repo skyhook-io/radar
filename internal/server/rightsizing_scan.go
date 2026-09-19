@@ -3,10 +3,11 @@ package server
 import (
 	"context"
 	"errors"
-	"github.com/go-chi/chi/v5"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 )
@@ -53,6 +54,9 @@ func (s *Server) handleRightsizingScan(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		request.Wait = time.Duration(wait) * time.Second
+	}
+	if request.Cancel {
+		request.Wait = 5 * time.Second
 	}
 	result, err := manager.Resolve(ctx, request)
 	if err != nil {

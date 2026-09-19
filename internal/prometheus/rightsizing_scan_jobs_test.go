@@ -124,6 +124,10 @@ func TestScanIdentityScopeAndGenerationIsolation(t *testing.T) {
 	if _, err := m.Resolve(alice, request); !errors.Is(err, ErrRightsizingScanScopeChanged) {
 		t.Fatalf("revoked permission: %v", err)
 	}
+	request.Scope.NamespacesByKind = map[string][]string{"Deployment": {"app"}}
+	if same, err := m.Resolve(alice, request); err != nil || same.ScanID != first.ScanID || same.ScanStatus != "running" {
+		t.Fatalf("mismatched poll disrupted original scan: %+v %v", same, err)
+	}
 	m.Invalidate()
 	if _, err := m.Resolve(alice, request); !errors.Is(err, ErrRightsizingScanScopeChanged) {
 		t.Fatalf("old generation: %v", err)
@@ -230,5 +234,30 @@ func TestScanScopeKeyPreservesNilAndNormalizesOrder(t *testing.T) {
 	}
 	if scanScopeKey(nil, a) == scanScopeKey([]string{}, a) {
 		t.Fatal("cluster-wide and no-access scopes collided")
+	}
+}
+
+func TestCompletedScanIsNotRelabeledByLateCancellation(t *testing.T) {
+	ready, finish := make(chan struct{}), make(chan struct{})
+	m := scanTestManager(t, func(ctx context.Context, scope RightsizingScanScope, _ func(RightsizingScanResponse)) RightsizingScanResponse {
+		result := newRightsizingScanResponse(time.Now(), scope)
+		result.State = RightsizingScanComplete
+		close(ready)
+		<-finish
+		return result
+	})
+	request := scanTestRequest(m)
+	first, err := m.Resolve(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-ready
+	request.ID, request.Cancel = first.ScanID, true
+	if _, err := m.Resolve(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	close(finish)
+	if result := awaitScan(t, m, request); result.ScanStatus != "finished" || result.State != RightsizingScanComplete {
+		t.Fatalf("complete result relabeled: %+v", result)
 	}
 }
