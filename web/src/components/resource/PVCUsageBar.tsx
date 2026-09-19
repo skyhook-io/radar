@@ -1,26 +1,45 @@
 import { formatMemoryBytes } from '@skyhook-io/k8s-ui/utils/format'
-import { useAutoPromConnect, usePrometheusPVCUsage, usePrometheusStatus } from '../../api/client'
+import { isForbiddenError, useAutoPromConnect, usePrometheusPVCUsage, usePrometheusStatus } from '../../api/client'
 
-/**
- * PVCUsageBar — single-line capacity gauge derived from kubelet_volume_stats_*.
- *
- * Hidden silently when:
- *  - Prometheus isn't connected
- *  - The CSI driver doesn't implement NodeGetVolumeStats
- *  - Prometheus isn't scraping kubelet endpoints (notably GMP default config)
- *
- * Operators get nothing rather than a "no data" message that'd look like Radar
- * is broken — the absence is information enough.
- */
 export function PVCUsageBar({ namespace, name }: { namespace: string; name: string }) {
   // PVC detail can be the first Prometheus-backed surface a user opens; without
   // this, the gauge silently stays hidden until they open a workload metrics tab.
   useAutoPromConnect()
-  const { data: status } = usePrometheusStatus()
+  const { data: status, error: statusError } = usePrometheusStatus()
   const isConnected = status?.connected === true
-  const { data: usage } = usePrometheusPVCUsage(namespace, name, isConnected)
+  const { data: usage, error } = usePrometheusPVCUsage(namespace, name, isConnected)
 
-  if (!usage || !usage.hasData) return null
+  let unavailable: string | undefined
+  if (isForbiddenError(error)) {
+    unavailable = "You don't have access to usage metrics for this PVC."
+  } else if (isForbiddenError(statusError)) {
+    unavailable = 'Metrics access denied.'
+  } else if (statusError) {
+    unavailable = 'Could not check the metrics connection.'
+  } else if (!status) {
+    unavailable = 'Checking metrics availability…'
+  } else if (status.discovering) {
+    unavailable = 'Discovering Prometheus…'
+  } else if (!isConnected) {
+    unavailable = 'Prometheus is not connected. Used space is unknown.'
+  } else if (error || usage?.status === 'query_failed') {
+    unavailable = 'The usage query failed. Used space is unknown.'
+  } else if (!usage) {
+    unavailable = 'Loading usage measurements…'
+  } else if (usage.status === 'no_series') {
+    unavailable = 'No usage measurements reported for this volume.'
+  } else if (usage.status === 'invalid_data') {
+    unavailable = 'Volume usage measurements are invalid. Used space is unknown.'
+  }
+
+  if (unavailable || !usage) {
+    return (
+      <section aria-label="PVC usage" className="rounded-lg border border-theme-border bg-theme-surface/30 p-3">
+        <div className="text-xs font-medium text-theme-text-secondary uppercase tracking-wide mb-1">Usage</div>
+        <p className="text-sm text-theme-text-tertiary">{unavailable}</p>
+      </section>
+    )
+  }
 
   const pct = Math.max(0, Math.min(1, usage.ratio))
   const usedLabel = formatMemoryBytes(usage.used)

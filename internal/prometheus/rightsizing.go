@@ -1002,13 +1002,13 @@ type PVCUsageResponse struct {
 	Used      int64   `json:"used"`     // bytes
 	Capacity  int64   `json:"capacity"` // bytes
 	Ratio     float64 `json:"ratio"`    // 0.0 - 1.0
-	HasData   bool    `json:"hasData"`  // false when no series (CSI not reporting, kubelet not scraped, etc.)
+	HasData   bool    `json:"hasData"`
+	Status    string  `json:"status"` // available, no_series, invalid_data, query_failed
 }
 
 // handlePVCUsage returns current usage for a PVC, computed from
-// kubelet_volume_stats_{used,capacity}_bytes. Returns HasData=false silently
-// when no series — many CSI drivers don't implement NodeGetVolumeStats and
-// some Prom configs (notably GMP default) don't scrape kubelet endpoints.
+// kubelet_volume_stats_{used,capacity}_bytes. Missing measurements do not
+// establish whether the driver reports volume stats or kubelet is scraped.
 func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 	client := GetClient()
 	if client == nil {
@@ -1028,17 +1028,14 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 	pvc := prom.SanitizeLabelValue(name)
 
 	// kubelet's native label is `persistentvolumeclaim`; clusters with custom
-	// relabeling that renamed it will return no series and the gauge hides.
+	// relabeling that renamed it will return no series.
 	usedQuery := fmt.Sprintf(`max(kubelet_volume_stats_used_bytes{namespace='%s',persistentvolumeclaim='%s'})`, ns, pvc)
 	capQuery := fmt.Sprintf(`max(kubelet_volume_stats_capacity_bytes{namespace='%s',persistentvolumeclaim='%s'})`, ns, pvc)
 
-	resp := PVCUsageResponse{Namespace: namespace, Name: name}
+	resp := PVCUsageResponse{Namespace: namespace, Name: name, Status: "query_failed"}
 
 	usedRes, err := client.Query(r.Context(), usedQuery)
 	if err != nil {
-		// Distinguish "Prometheus is unreachable" from "CSI doesn't report" so
-		// operators can find this in the errorlog stream when the gauge mysteriously
-		// disappears. The frontend still hides on hasData=false.
 		errorlog.Record("prometheus", "warning", "pvc used-bytes query failed for %s/%s: %v", namespace, name, err)
 		writeJSON(w, http.StatusOK, resp)
 		return
@@ -1050,9 +1047,18 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if usedRes == nil || capRes == nil || len(usedRes.Series) == 0 || len(capRes.Series) == 0 ||
+		len(usedRes.Series[0].DataPoints) == 0 || len(capRes.Series[0].DataPoints) == 0 {
+		resp.Status = "no_series"
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
 	used := firstValue(usedRes)
 	capacity := firstValue(capRes)
-	if used == nil || capacity == nil || *capacity <= 0 {
+	if used == nil || capacity == nil || math.IsInf(*used, 0) || math.IsInf(*capacity, 0) ||
+		*used < 0 || *capacity < 1 || *used >= math.Exp2(63) || *capacity >= math.Exp2(63) {
+		resp.Status = "invalid_data"
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
@@ -1061,6 +1067,7 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 	resp.Capacity = int64(*capacity)
 	resp.Ratio = *used / *capacity
 	resp.HasData = true
+	resp.Status = "available"
 	writeJSON(w, http.StatusOK, resp)
 }
 
