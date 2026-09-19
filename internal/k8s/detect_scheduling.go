@@ -1248,8 +1248,8 @@ type AdmissionWebhookBackendFailure struct {
 }
 
 var (
-	admissionWebhookDenialPattern      = regexp.MustCompile(`(?i)^(?:(?:error creating:|create pod \S+ in statefulset \S+ failed error:)\s*)?admission webhook "[^"\r\n]+" denied the request`)
-	admissionWebhookCallFailurePattern = regexp.MustCompile(`(?i)^(?:(?:error creating:|create pod \S+ in statefulset \S+ failed error:)\s*)?(?:internal error occurred:\s*)?failed calling webhook "[^"\r\n]+":\s*\S`)
+	admissionWebhookDenialPattern      = regexp.MustCompile(`(?i)^(?:(?:error creating(?: job)?:|create pod \S+ in statefulset \S+ failed error:)\s*)?admission webhook "[^"\r\n]+" denied the request`)
+	admissionWebhookCallFailurePattern = regexp.MustCompile(`(?i)^(?:(?:error creating(?: job)?:|create pod \S+ in statefulset \S+ failed error:)\s*)?(?:internal error occurred:\s*)?failed calling webhook "[^"\r\n]+":\s*\S`)
 	admissionWebhookURLPattern         = regexp.MustCompile(`https?://[^\s"]+`)
 	admissionWebhookNamePattern        = regexp.MustCompile(`(?i)failed calling webhook "([^"]+)"`)
 	admissionNoEndpointsNamePattern    = regexp.MustCompile(`(?i)no endpoints available for service "([a-z0-9]([-a-z0-9]*[a-z0-9])?)"`)

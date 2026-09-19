@@ -358,6 +358,8 @@ func TestClassifyAdmissionFailure(t *testing.T) {
 		{`failed calling webhook "dns.example.com": Post "https://external.example/": dial tcp: lookup external.example: no such host`, "WebhookUnavailable", true},
 		{`Create Pod statefulset-blocked-0 in StatefulSet statefulset-blocked failed error: Internal error occurred: failed calling webhook "refused.radar-autodev.example": failed to call webhook: Post "https://refused-backend.radar-autodev-webhook.svc:443/validate?timeout=1s": dial tcp 10.96.132.122:443: connect: connection refused`, "WebhookUnavailable", true},
 		{`Create Pod statefulset-blocked-0 in StatefulSet statefulset-blocked failed error: admission webhook "policy.example.com" denied the request: nope`, "WebhookDenied", true},
+		{`Error creating job: admission webhook "jobs.example.com" denied the request: nope`, "WebhookDenied", true},
+		{`Error creating job: Internal error occurred: failed calling webhook "jobs.example.com": context deadline exceeded`, "WebhookUnavailable", true},
 		{`some unrelated message`, "", false},
 	}
 	for _, c := range cases {

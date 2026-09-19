@@ -528,7 +528,7 @@ func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *
 	selfDeadlock := false
 	if failClosed {
 		for _, candidate := range flat {
-			if candidate.Category != issuesapi.CategoryAdmissionWebhookBlocking {
+			if candidate.Category != issuesapi.CategoryAdmissionWebhookBlocking || candidate.Reason != "WebhookUnavailable" {
 				continue
 			}
 			failure, ok := k8s.ParseAdmissionWebhookBackendFailure(diagnosticMessage(candidate))

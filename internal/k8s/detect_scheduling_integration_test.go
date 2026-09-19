@@ -811,6 +811,9 @@ func TestDetectAdmissionProblems_WebhookCallFailures(t *testing.T) {
 			last = metav1.NewTime(now.Add(-time.Hour))
 		}
 		objects = append(objects, &corev1.Event{ObjectMeta: metadata(subject.name + "-event"), InvolvedObject: corev1.ObjectReference{APIVersion: "apps/v1", Kind: subject.kind, Namespace: "test", Name: subject.name}, Reason: "FailedCreate", Type: corev1.EventTypeWarning, Message: message, LastTimestamp: last})
+		if subject.kind == "StatefulSet" {
+			objects[len(objects)-1].(*corev1.Event).Message = strings.Replace(message, "Error creating:", "Create Pod sts-0 in StatefulSet sts failed error:", 1)
+		}
 		if subject.kind == "Job" {
 			objects[len(objects)-1].(*corev1.Event).InvolvedObject.APIVersion = "batch/v1"
 		}
@@ -828,7 +831,7 @@ func TestDetectAdmissionProblems_WebhookCallFailures(t *testing.T) {
 		if problem.Name == "recovered" || problem.Name == "stale" {
 			t.Errorf("inactive call failure surfaced: %+v", problem)
 		}
-		if !strings.Contains(problem.Message, message) {
+		if !strings.Contains(problem.Message, `failed calling webhook "external.example.com"`) {
 			t.Errorf("raw error lost: %+v", problem)
 		}
 	}
