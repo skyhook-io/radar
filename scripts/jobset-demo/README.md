@@ -66,7 +66,10 @@ installing or applying anything.
 - the controller-created Jobs and Pods returned by Radar's core resource APIs;
 - matching Kubernetes and Radar resource inventories, including exact UIDs,
   owner references, labels, and lifecycle evidence, with bounded waits for cache
-  synchronization.
+  synchronization;
+- exact basic-tier execution summaries through REST AI detail and MCP
+  `get_resource`, including full GVK, namespace/name, stage, condition/reason, declared and
+  observed counts, and explicit zero global counters versus absent per-Job arrays.
 
 Every namespaced API request explicitly selects `jobset-demo`, independently of
 Radar's saved namespace view filter.
@@ -79,16 +82,25 @@ kubectl config use-context kind-radar-jobset-demo
 ./scripts/visual-test-start.sh
 ```
 
+The execution assertions expect `running` for both the three-member run and
+the active initializer: a withheld dependent role does not make the whole run
+suspended or failed. The terminal scenario expects `failed` with the exact
+controller failure-policy reason. All three retain explicit observed zero Job
+counts and zero global restart totals, including the counted field that the
+controller omits at zero. Per-Job arrays stay absent until materialized; their
+absence does not imply incomplete role coverage.
+
 ## Proof boundary
 
 Passing this lane proves that JobSet `v0.12.0` on kind Kubernetes `v1.36.1`
 can create and identify role-, group-, and index-labelled Jobs and Pods,
 withhold a dependent role, produce one explicit terminal failure, and expose
-those objects through Radar's group-aware APIs.
+those objects through Radar's group-aware APIs with the expected basic-tier
+execution summary wired through both REST and MCP.
 
 It does **not** prove:
 
-- normalized execution context, MCP projections, or UI rendering/drilldown;
+- diagnostic-tier execution context or UI rendering/drilldown;
 - GPU hardware, device plugins, DRA allocation, utilization, or cost;
 - Kueue admission, quota, preemption, or topology-aware scheduling;
 - framework-specific semantics for Ray, Kubeflow Training, MPI, PyTorch, or inference;

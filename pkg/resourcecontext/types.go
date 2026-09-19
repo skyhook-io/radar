@@ -437,7 +437,8 @@ const (
 )
 
 // ExecutionState preserves the controller condition selected as the evidence
-// for Stage. Messages and transition times are diagnostic-tier fields.
+// for Stage. This block includes messages and transition times only at the
+// diagnostic tier; the resource and other context blocks keep their own detail.
 type ExecutionState struct {
 	Condition          string `json:"condition"`
 	Status             string `json:"status"`
@@ -461,8 +462,8 @@ type ExecutionCounts struct {
 }
 
 // ExecutionRestartCounts keeps independent global and per-member counters
-// separate. IndividualRoles fields disclose how many observed roles
-// contributed counters, so a partial aggregate cannot read as a complete total.
+// separate. IndividualRoles fields count statuses with explicit restart arrays,
+// not coverage: controllers can omit zero-valued arrays for untouched roles.
 type ExecutionRestartCounts struct {
 	Global                    *int64 `json:"global,omitempty"`
 	GlobalCountTowardsMax     *int64 `json:"globalCountTowardsMax,omitempty"`

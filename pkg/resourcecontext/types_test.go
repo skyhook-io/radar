@@ -330,7 +330,11 @@ func TestResourceContextRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	wire := string(b)
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(b, &envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	wire := string(envelope["scheduling"])
 	for _, want := range []string{
 		`"observations"`, `"source":"kueue"`, `"domain":"admission"`, `"decision":"unsatisfied"`,
 		`"subjectGeneration":9`,

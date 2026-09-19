@@ -37,7 +37,7 @@ func TestForResourceRequiresExactJobSetGVK(t *testing.T) {
 	}
 }
 
-func TestForResourceAggregatesPartialObservedStatusWithoutInventingCoverage(t *testing.T) {
+func TestForResourceAggregatesObservedRolesAcrossReconcileGap(t *testing.T) {
 	got := ForResource(loadFixture(t, "partial-running.yaml"), resourcecontext.TierBasic)
 	if got == nil {
 		t.Fatal("execution summary is nil")
@@ -61,8 +61,9 @@ func TestForResourceAggregatesPartialObservedStatusWithoutInventingCoverage(t *t
 		t.Fatal("restart summary is nil")
 	}
 	assertInt64Pointer(t, "globalRestarts", got.Restarts.Global, 2)
-	if got.Restarts.GlobalCountTowardsMax != nil || got.Restarts.Individual != nil || got.Restarts.IndividualRoles != nil {
-		t.Fatalf("unreported restart fields became observed zero: %+v", got.Restarts)
+	assertInt64Pointer(t, "global restarts counted", got.Restarts.GlobalCountTowardsMax, 0)
+	if got.Restarts.Individual != nil || got.Restarts.IndividualRoles != nil {
+		t.Fatalf("absent per-Job restart arrays were materialized: %+v", got.Restarts)
 	}
 }
 
@@ -116,7 +117,21 @@ func TestObservedZeroDiffersFromUnreportedStatus(t *testing.T) {
 	assertInt64Pointer(t, "activeJobs", observedSummary.Counts.ActiveJobs, 0)
 }
 
-func TestIndividualRestartAggregateDisclosesRoleCoverage(t *testing.T) {
+func TestRestartCountersNeedObservedStatus(t *testing.T) {
+	obj := newJobSet("jobset.x-k8s.io/v1alpha2", "JobSet")
+	if got := ForResource(obj, resourcecontext.TierBasic); got.Restarts != nil {
+		t.Fatalf("unobserved JobSet has restart counts: %+v", got.Restarts)
+	}
+	obj.Object["status"] = map[string]any{"restarts": int64(0)}
+	got := ForResource(obj, resourcecontext.TierBasic)
+	assertInt64Pointer(t, "global", got.Restarts.Global, 0)
+	assertInt64Pointer(t, "global counted", got.Restarts.GlobalCountTowardsMax, 0)
+	obj.Object["status"].(map[string]any)["restartsCountTowardsMax"] = int64(2)
+	got = ForResource(obj, resourcecontext.TierBasic)
+	assertInt64Pointer(t, "explicit global counted", got.Restarts.GlobalCountTowardsMax, 2)
+}
+
+func TestIndividualRestartAggregateRecordsMaterializedRoleArrays(t *testing.T) {
 	obj := loadFixture(t, "partial-running.yaml")
 	statuses := obj.Object["status"].(map[string]any)["replicatedJobsStatus"].([]any)
 	statuses[0].(map[string]any)["jobRestarts"] = []any{int64(2)}
@@ -132,7 +147,7 @@ func TestIndividualRestartAggregateDisclosesRoleCoverage(t *testing.T) {
 	assertInt64Pointer(t, "individual counted roles", got.Restarts.IndividualCountedRoles, 1)
 	assertInt64Pointer(t, "observed roles", got.Counts.ObservedRoles, 2)
 	if *got.Restarts.IndividualRoles == *got.Counts.ObservedRoles {
-		t.Fatal("fixture should preserve partial per-Job restart coverage")
+		t.Fatal("fixture should preserve which roles carry explicit per-Job restart arrays")
 	}
 }
 
@@ -154,7 +169,7 @@ func TestJobSetStagePrecedence(t *testing.T) {
 		{name: "suspend wins over restart", suspend: true, conditions: []any{condition("RestartingJobSet", "True", "FailurePolicy_retry")}, active: 2, want: resourcecontext.ExecutionSuspended},
 		{name: "restarting wins over live counts", conditions: []any{condition("RestartingJobSet", "True", "FailurePolicy_retry")}, active: 2, want: resourcecontext.ExecutionRestarting},
 		{name: "startup wins over live counts", conditions: []any{condition("StartupPolicyInProgress", "True", "InOrderStartupPolicyInProgress")}, active: 1, want: resourcecontext.ExecutionStarting},
-		{name: "active is running", active: 1, want: resourcecontext.ExecutionRunning},
+		{name: "active without ready is starting", active: 1, want: resourcecontext.ExecutionStarting},
 		{name: "ready is running", ready: 1, want: resourcecontext.ExecutionRunning},
 	} {
 		t.Run(test.name, func(t *testing.T) {

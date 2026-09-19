@@ -1557,11 +1557,26 @@ and MCP `get_resource` also project `resourceContext.execution`: a normalized
 stage, its authoritative controller condition/reason when condition-derived,
 declared role/Job totals, controller-reported per-state Job aggregates, and
 observed-role coverage. Restart counters retain JobSet's global/per-Job and
-counts-toward-limit distinctions; per-Job aggregates state how many role
-statuses contributed so partial status cannot read as a complete total.
+counts-toward-limit distinctions. With observed global restart status, an omitted
+global counted value is zero. Per-Job aggregates are emitted when arrays are
+present; their role counts describe array presence, not completeness (untouched
+roles use implicit zero arrays). Declared versus observed role counts can expose
+a spec/status reconcile gap; the pinned controller normally reports all roles.
 Controller-native roles, policies, templates, and conditions remain on the
 returned resource. Radar does not infer child Job names or skip the Job→Pod
 ownership layer from naming conventions.
+
+`running` requires at least one ready Job; active Jobs with none ready are
+`starting`, because active can include Pending Pods. Neither stage proves every
+member is healthy. Terminal controller evidence wins; otherwise `Suspended=True`
+or a requested `spec.suspend` produces `suspended` (the latter has no condition
+state). A resume request can retain the observed suspended state until the
+controller reconciles. Suspension does not identify its actor or cause: Kueue
+can also suspend a JobSet, and admission evidence belongs to its Workload.
+`restarting` is a global restart condition, not an individual member restart.
+Selected condition messages are bounded inside diagnostic-tier `execution.state`;
+this does not remove conditions from the resource or `statusSummary`. The current
+JobSet integration exposes basic-tier REST/MCP detail, not JobSet `diagnose`.
 
 Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share kind names with other resources — Radar disambiguates by API group in tables, filters, and status badges.
 

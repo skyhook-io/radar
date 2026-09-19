@@ -108,7 +108,8 @@ func jobSetRestarts(u *unstructured.Unstructured) *resourcecontext.ExecutionRest
 	if value, found, _ := unstructured.NestedInt64(u.Object, "status", "restarts"); found {
 		restarts.Global = &value
 	}
-	if value, found, _ := unstructured.NestedInt64(u.Object, "status", "restartsCountTowardsMax"); found {
+	// JobSet omits the counted field when its observed value is zero.
+	if value, found, _ := unstructured.NestedInt64(u.Object, "status", "restartsCountTowardsMax"); found || restarts.Global != nil {
 		restarts.GlobalCountTowardsMax = &value
 	}
 
@@ -218,8 +219,11 @@ func jobSetStage(
 	if condition, ok := trueCondition(conditions, "StartupPolicyInProgress"); ok {
 		return resourcecontext.ExecutionStarting, executionState(condition, tier)
 	}
-	if observed && (*counts.ActiveJobs > 0 || *counts.ReadyJobs > 0) {
+	if observed && *counts.ReadyJobs > 0 {
 		return resourcecontext.ExecutionRunning, nil
+	}
+	if observed && *counts.ActiveJobs > 0 {
+		return resourcecontext.ExecutionStarting, nil
 	}
 	if hasStatus {
 		return resourcecontext.ExecutionPending, nil
