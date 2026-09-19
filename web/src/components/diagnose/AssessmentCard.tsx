@@ -35,7 +35,7 @@ import {
   STEP_KIND_LABEL,
   assessmentCopyText,
 } from "./assessmentCopy";
-import { AIMarkdown, CopyButton } from "./AIMarkdown";
+import { AIMarkdown, CopyButton, tidyFences } from "./AIMarkdown";
 import { prettyTool } from "./toolCallLabel";
 
 export function ResultCard({
@@ -784,6 +784,7 @@ function DiagnosisResult({
   }) => {
     const isRec = recValid && i === recIdx! - 1;
     const step = typedSteps ? steps[i] : undefined;
+    const commands = remediationCommands(r);
     return (
       <div
         key={i}
@@ -842,17 +843,6 @@ function DiagnosisResult({
                     Apply…
                   </button>
                 )}
-                {remediationCommands(r).map((command, c, all) => (
-                  <CopyButton
-                    key={c}
-                    text={command}
-                    label={
-                      all.length > 1
-                        ? `Copy command ${c + 1} of step ${i + 1}`
-                        : `Copy command from step ${i + 1}`
-                    }
-                  />
-                ))}
               </div>
             </div>
             {/* The condition and the reason are read before the command is
@@ -873,7 +863,19 @@ function DiagnosisResult({
                 {diagnosis.recommendedReason}
               </p>
             )}
-            <AIMarkdown className="max-w-[100ch] text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_pre]:my-1.5">
+            <AIMarkdown
+              className="max-w-[100ch] text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_pre]:my-1.5"
+              codeActions={(code) => {
+                const command = code.trim();
+                if (!commands.includes(command)) return null;
+                return (
+                  <CopyButton
+                    text={command}
+                    label={`Copy command from step ${i + 1}`}
+                  />
+                );
+              }}
+            >
               {r}
             </AIMarkdown>
           </div>
@@ -1547,10 +1549,10 @@ export function remediationHeadline(step: string): string {
  */
 export function remediationCommands(step: string): string[] {
   const commands: string[] = [];
-  // One pass in reading order, so button N is the Nth command in the text.
+  const normalized = tidyFences(step);
   const code = /```[a-zA-Z]*\n([\s\S]*?)```|`([^`\n]+)`/g;
   let match: RegExpExecArray | null;
-  while ((match = code.exec(step))) {
+  while ((match = code.exec(normalized))) {
     if (match[1] !== undefined) {
       const body = match[1].trim();
       if (body) commands.push(body);

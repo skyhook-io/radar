@@ -13,9 +13,10 @@ interface MarkdownProps {
    * reference, say) into a control instead of an external link.
    */
   linkRenderer?: (href: string | undefined, children: ReactNode) => ReactNode | null
+  codeActions?: (code: string) => ReactNode
 }
 
-export function Markdown({ children, className, linkRenderer }: MarkdownProps) {
+export function Markdown({ children, className, linkRenderer, codeActions }: MarkdownProps) {
   return (
     <div className={clsx('markdown-content', className)}>
       <ReactMarkdown
@@ -62,6 +63,15 @@ export function Markdown({ children, className, linkRenderer }: MarkdownProps) {
         code: ({ className, children }) => {
           const isInline = !className
           if (isInline) {
+            const actions = codeActions?.(String(children))
+            if (actions) {
+              return (
+                <span className="inline-flex max-w-full items-start gap-1 align-middle">
+                  <code className="inline-code min-w-0">{children}</code>
+                  {actions}
+                </span>
+              )
+            }
             return (
               <code className="inline-code">
                 {children}
@@ -72,11 +82,28 @@ export function Markdown({ children, className, linkRenderer }: MarkdownProps) {
             <code className="block font-mono text-theme-text-secondary">{children}</code>
           )
         },
-        pre: ({ children }) => (
-          <pre className="my-3 p-3 bg-theme-elevated rounded-lg overflow-x-auto text-xs font-mono text-theme-text-secondary">
-            {children}
-          </pre>
-        ),
+        pre: ({ children, node }) => {
+          const code = node?.children[0]
+          const text = code?.type === 'element'
+            ? code.children.filter(child => child.type === 'text').map(child => child.value).join('')
+            : ''
+          const actions = codeActions?.(text)
+          if (actions) {
+            // Render the code directly so an unlabelled fence does not also
+            // receive the inline-code action. Only the code scrolls, not Copy.
+            return (
+              <pre className="my-3 flex items-start gap-2 rounded-lg bg-theme-elevated p-3 text-xs font-mono text-theme-text-secondary">
+                <code className="min-w-0 flex-1 overflow-x-auto">{text}</code>
+                {actions}
+              </pre>
+            )
+          }
+          return (
+            <pre className="my-3 p-3 bg-theme-elevated rounded-lg overflow-x-auto text-xs font-mono text-theme-text-secondary">
+              {children}
+            </pre>
+          )
+        },
         blockquote: ({ children }) => (
           <blockquote className="border-l-2 border-theme-border pl-3 my-2 text-theme-text-tertiary italic">
             {children}

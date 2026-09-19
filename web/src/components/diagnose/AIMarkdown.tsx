@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ComponentProps } from "react";
 import { AlertTriangle, Copy, Check } from "lucide-react";
 import { Markdown } from "../ui/Markdown";
 import { Tooltip } from "../ui/Tooltip";
@@ -59,7 +59,7 @@ export function CopyButton({ text, label }: { text: string; label: string }) {
 // it as a fence — it leaks the literal ``` and renders an empty code box. Coerce
 // fence markers onto their own lines and push trailing content off the opener so
 // the block renders. (Well-formed markdown is unaffected.)
-function tidyFences(md: string): string {
+export function tidyFences(md: string): string {
   if (!md || !md.includes("```")) return md;
   return md
     .replace(/([^\n])```/g, "$1\n\n```") // opener/closer must start a line
@@ -75,12 +75,17 @@ const SOFT_INLINE_CODE =
 export function AIMarkdown({
   className,
   children,
+  codeActions,
 }: {
   className?: string;
   children: string;
+  codeActions?: ComponentProps<typeof Markdown>["codeActions"];
 }) {
   return (
-    <Markdown className={`${SOFT_INLINE_CODE} ${className ?? ""}`}>
+    <Markdown
+      className={`${SOFT_INLINE_CODE} ${className ?? ""}`}
+      codeActions={codeActions}
+    >
       {tidyFences(children)}
     </Markdown>
   );

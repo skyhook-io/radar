@@ -95,10 +95,73 @@ describe("remediation commands", () => {
         compactActions
       />,
     );
-    expect(html).toContain("Copy command 1 of step 1");
-    expect(html).toContain("Copy command 2 of step 1");
+    expect(html.match(/aria-label="Copy command from step 1"/g)).toHaveLength(
+      2,
+    );
     expect(html).not.toContain("Copy remediation step");
+    expect(
+      html.indexOf("kubectl rollout undo deployment/api -n dev</code>"),
+    ).toBeLessThan(html.indexOf("Copy command from step 1"));
+    expect(html.indexOf("Copy command from step 1")).toBeLessThan(
+      html.indexOf("kubectl -n dev get pods</code>"),
+    );
   });
+
+  it.each(["bash", ""])(
+    "places each copy button inside its own %s fenced command box",
+    (language) => {
+      const html = renderToStaticMarkup(
+        <ResultCard
+          diagnosis={
+            {
+              rootCause: "Image pull failure",
+              report: "Assessment",
+              remediation: [
+                `Roll back:\n\`\`\`${language}\nkubectl rollout undo deployment/api -n dev\n\`\`\`\nThen watch:\n\`\`\`${language}\nkubectl rollout status deployment/api -n dev\n\`\`\``,
+              ],
+              recommendedIndex: 1,
+            } as Diagnosis
+          }
+          section="actions"
+          compactActions
+          onApply={noop}
+        />,
+      );
+      const blocks = [...html.matchAll(/<pre\b[^>]*>([\s\S]*?)<\/pre>/g)].map(
+        (match) => match[1],
+      );
+      expect(blocks).toHaveLength(2);
+      expect(blocks[0]).toContain("kubectl rollout undo");
+      expect(blocks[0]).toContain("Copy command from step 1");
+      expect(blocks[1]).toContain("kubectl rollout status");
+      expect(blocks[1]).toContain("Copy command from step 1");
+      expect(html.match(/aria-label="Copy command/g)).toHaveLength(2);
+      expect(html.indexOf("Apply…")).toBeLessThan(html.indexOf("<pre"));
+    },
+  );
+});
+
+it("keeps repeated and normalized commands copyable at their rendered locations", () => {
+  const step =
+    "Run `kubectl get pods -n dev`, then run this: ```bash kubectl get pods -n dev ```";
+  expect(remediationCommands(step)).toEqual([
+    "kubectl get pods -n dev",
+    "kubectl get pods -n dev",
+  ]);
+  const html = renderToStaticMarkup(
+    <ResultCard
+      diagnosis={
+        { rootCause: "Check", report: "", remediation: [step] } as Diagnosis
+      }
+      section="actions"
+      compactActions
+    />,
+  );
+  expect(html.match(/aria-label="Copy command from step 1"/g)).toHaveLength(2);
+  expect(html).toMatch(
+    /<pre\b[^>]*>[\s\S]*kubectl get pods -n dev[\s\S]*Copy command from step 1[\s\S]*<\/pre>/,
+  );
+  expect(html).not.toContain("bash kubectl");
 });
 
 describe("explanation placement", () => {
