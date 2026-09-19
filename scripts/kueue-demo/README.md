@@ -22,15 +22,19 @@ make kueue-demo-status
 make build
 kind get kubeconfig --name radar-kueue-demo > /tmp/radar-kueue-demo.kubeconfig
 ./radar --kubeconfig /tmp/radar-kueue-demo.kubeconfig --port 9331 --no-browser
+
+# In a second terminal, from the repository root:
 RADAR_URL=http://127.0.0.1:9331 ./scripts/kueue-demo.sh verify-radar
 
-# When done
+# When done, stop Radar with Ctrl-C in its terminal, then:
 make kueue-demo-down
+rm /tmp/radar-kueue-demo.kubeconfig
 ```
 
 `up` is idempotent and reuses only a cluster carrying the demo's ownership
 marker. `down` refuses to delete a same-named cluster when that marker is absent
-or mismatched. Set `CLUSTER_NAME` to create an independently named lane.
+or mismatched. Changing the recorded Kueue version requires `reset`, rather
+than upgrading a cluster with existing admitted Workloads. Set `CLUSTER_NAME` to create an independently named lane.
 
 ## Controller-earned scenarios
 
@@ -59,6 +63,7 @@ partially edited scenario.
 `verify-radar` expects an already-running Radar and checks:
 
 - the health endpoint;
+- the fixture namespace explicitly, independent of a saved UI namespace selection;
 - exactly three group-pure `kueue.x-k8s.io/v1beta2` Workloads;
 - admitted, quota-blocked, and held-queue conditions as returned by Radar;
 - both group-pure ClusterQueues;
@@ -97,3 +102,7 @@ The lane uses local Docker/kind only and has no cloud cost. The first run is
 normally 2–4 minutes depending on image/network cache; repeat runs are faster.
 Version bumps are deliberate because Kueue API versions, conditions, admission
 semantics, and Kubernetes compatibility can change together.
+
+The exact condition reasons follow the pinned Kueue release's default feature
+gates. Revalidate those defaults and the expected reasons together when bumping
+versions; newer admission-observability behavior can change the reason vocabulary.

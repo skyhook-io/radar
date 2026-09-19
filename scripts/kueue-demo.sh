@@ -39,14 +39,17 @@ require_cmd() {
 kc() { kubectl --context "${KUBECTL_CTX}" "$@"; }
 
 cluster_exists() {
-  kind get clusters 2>/dev/null | grep -qx "${CLUSTER_NAME}"
+  local clusters
+  clusters="$(kind get clusters)" || fail "Unable to list kind clusters. Check that Docker is running and accessible."
+  grep -Fx "${CLUSTER_NAME}" <<<"${clusters}" >/dev/null
 }
 
 cluster_owned() {
-  local owner cluster
-  owner="$(kc -n kube-system get configmap "${MARKER_NAME}" -o jsonpath='{.data.owner}' 2>/dev/null || true)"
-  cluster="$(kc -n kube-system get configmap "${MARKER_NAME}" -o jsonpath='{.data.clusterName}' 2>/dev/null || true)"
-  [ "${owner}" = "${MARKER_VALUE}" ] && [ "${cluster}" = "${CLUSTER_NAME}" ]
+  local marker
+  marker="$(kc -n kube-system get configmap "${MARKER_NAME}" --ignore-not-found --request-timeout=10s -o json)" || \
+    fail "Unable to verify ownership: context '${KUBECTL_CTX}' must be reachable in the active kubeconfig. Export it with: kind get kubeconfig --name '${CLUSTER_NAME}'"
+  [ -n "${marker}" ] && jq -e --arg owner "${MARKER_VALUE}" --arg cluster "${CLUSTER_NAME}" \
+    '.data.owner == $owner and .data.clusterName == $cluster' <<<"${marker}" >/dev/null
 }
 
 require_owned_cluster() {
@@ -84,9 +87,12 @@ prepare_context_restore() {
 }
 
 assert_cluster_contract() {
-  local recorded_image recorded_version server_version
+  local recorded_image recorded_version recorded_kueue server_version
   recorded_image="$(kc -n kube-system get configmap "${MARKER_NAME}" -o jsonpath='{.data.kindNodeImage}')"
   recorded_version="$(kc -n kube-system get configmap "${MARKER_NAME}" -o jsonpath='{.data.kubernetesVersion}')"
+  recorded_kueue="$(kc -n kube-system get configmap "${MARKER_NAME}" -o jsonpath='{.data.kueueVersion}')"
+  [ "${recorded_kueue}" = "${KUEUE_VERSION}" ] || \
+    fail "Cluster records Kueue '${recorded_kueue:-unknown}', expected '${KUEUE_VERSION}'. Run '$0 reset' to change it."
   server_version="$(kc version -o json | jq -r '.serverVersion.gitVersion')"
   [ "${recorded_image}" = "${KIND_NODE_IMAGE}" ] || \
     fail "Cluster uses recorded kind image '${recorded_image:-unknown}', expected '${KIND_NODE_IMAGE}'. Run '$0 reset' to change it."
@@ -105,7 +111,10 @@ wait_until() {
     fi
     sleep 2
   done
-  fail "Timed out after ${WAIT_SECONDS}s waiting for ${description}"
+  warn "Last controller snapshot for '${description}':" >&2
+  kc -n "${DEMO_NS}" get workloads.kueue.x-k8s.io,jobs,pods --request-timeout=10s -o json | \
+    jq -c '.items[:10][] | {kind, name: .metadata.name, suspend: .spec.suspend, phase: .status.phase, conditions: .status.conditions}' >&2 || true
+  fail "Timed out after ${WAIT_SECONDS}s waiting for ${description}. Inspect the lane with CLUSTER_NAME='${CLUSTER_NAME}' $0 status"
 }
 
 condition_is() {
@@ -243,9 +252,9 @@ verify_quota_blocked() {
   wait_until "Kueue Workload for ${job}" workload_exists_for_job "${job}"
   workload="$(workload_for_job "${job}")"
   assert_workload_owner "${job}" "${workload}"
-  wait_until "${job} to remain without quota" workload_condition_is "${job}" QuotaReserved False Pending
+  wait_until "${job} to be without quota" workload_condition_is "${job}" QuotaReserved False Pending
   wait_until "${job} quota explanation" workload_message_contains "${job}" QuotaReserved 'insufficient quota.*maximum capacity'
-  wait_until "${job} to remain suspended" job_suspended_is "${job}" true
+  wait_until "${job} to be suspended" job_suspended_is "${job}" true
   pods="$(pod_count "${job}")" || fail "Failed to list Pods for ${job}"
   [ "${pods}" = "0" ] || fail "${job} unexpectedly created Pods"
   kc -n "${DEMO_NS}" get workloads.kueue.x-k8s.io "${workload}" -o json | jq -e '.status.admission == null' >/dev/null || \
@@ -260,9 +269,9 @@ verify_held() {
   wait_until "Kueue Workload for ${job}" workload_exists_for_job "${job}"
   workload="$(workload_for_job "${job}")"
   assert_workload_owner "${job}" "${workload}"
-  wait_until "${job} to remain without quota" workload_condition_is "${job}" QuotaReserved False Inadmissible
+  wait_until "${job} to be without quota" workload_condition_is "${job}" QuotaReserved False Inadmissible
   wait_until "${job} held-queue explanation" workload_message_contains "${job}" QuotaReserved 'ClusterQueue admission-held is inactive'
-  wait_until "${job} to remain suspended" job_suspended_is "${job}" true
+  wait_until "${job} to be suspended" job_suspended_is "${job}" true
   pods="$(pod_count "${job}")" || fail "Failed to list Pods for ${job}"
   [ "${pods}" = "0" ] || fail "${job} unexpectedly created Pods"
   [ "$(kc get clusterqueue admission-held -o jsonpath='{.spec.stopPolicy}')" = "Hold" ] || fail "admission-held no longer has stopPolicy=Hold"
@@ -297,7 +306,11 @@ mcp_get_workload() {
     -d "${request}" \
     "${RADAR_URL}/mcp")" || return 1
   event="$(sed -n 's/^data: //p' <<<"${response}" | tail -n 1)"
-  [ -n "${event}" ] || return 1
+  [ -n "${event}" ] || { warn "MCP response contained no SSE data event" >&2; return 1; }
+  if jq -e '.error != null or .result.isError == true' <<<"${event}" >/dev/null; then
+    jq -c '{error, result}' <<<"${event}" >&2
+    return 1
+  fi
   jq -er '.result.content[0].text | fromjson' <<<"${event}"
 }
 
@@ -312,7 +325,7 @@ radar_crd_discovery_ready() {
 }
 
 radar_workloads_ready() {
-  curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/resources/workloads?group=kueue.x-k8s.io" 2>/dev/null | \
+  curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/resources/workloads?group=kueue.x-k8s.io&namespaces=${DEMO_NS}" 2>/dev/null | \
     jq -e 'type == "array" and length == 3 and all(.[]; .apiVersion == "kueue.x-k8s.io/v1beta2")' >/dev/null 2>&1
 }
 
@@ -373,8 +386,10 @@ assert_radar_scheduling() {
           $observation.queues[1].name == $entitlementQueue and
           $observation.queues[1].roles == ["entitlement"]
         end)
-      )' <<<"${rest_response}" >/dev/null || \
+      )' <<<"${rest_response}" >/dev/null || {
+    jq -c '.resourceContext.scheduling' <<<"${rest_response}" >&2
     fail "Radar scheduling projection did not match ${job}'s controller-owned state"
+  }
 
   if ! mcp_response="$(mcp_get_workload "${workload}")"; then
     fail "MCP get_resource failed for ${job}'s Workload '${workload}'"
@@ -383,8 +398,10 @@ assert_radar_scheduling() {
     fail "REST scheduling projection is not valid JSON for ${job}"
   mcp_scheduling="$(jq -ceS '.resourceContext.scheduling' <<<"${mcp_response}")" || \
     fail "MCP scheduling projection is not valid JSON for ${job}"
-  [ "${rest_scheduling}" = "${mcp_scheduling}" ] || \
+  if [ "${rest_scheduling}" != "${mcp_scheduling}" ]; then
+    printf 'REST: %s\nMCP: %s\n' "${rest_scheduling}" "${mcp_scheduling}" >&2
     fail "REST and MCP scheduling projections differ for ${job}"
+  fi
   ok "${job}: REST and MCP agree on ${decision}/${phase} from ${condition_type}=${condition_reason}"
 }
 
@@ -407,7 +424,7 @@ cmd_verify_radar() {
   wait_until "Radar CRD discovery" radar_crd_discovery_ready
 
   wait_until "Radar to cache the three Kueue Workloads" radar_workloads_ready
-  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/workloads?group=kueue.x-k8s.io")" || \
+  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/workloads?group=kueue.x-k8s.io&namespaces=${DEMO_NS}")" || \
     fail "Radar Workload list request failed"
   jq -e 'type == "array" and length == 3 and all(.[]; .apiVersion == "kueue.x-k8s.io/v1beta2")' <<<"${response}" >/dev/null || \
     fail "Radar did not return the three group-pure Kueue Workloads"
@@ -445,7 +462,7 @@ cmd_up() {
   else
     step "Creating dedicated kind cluster '${CLUSTER_NAME}'"
     kind create cluster --name "${CLUSTER_NAME}" --image "${KIND_NODE_IMAGE}" --wait 60s
-    mark_cluster
+    mark_cluster || fail "Cluster '${CLUSTER_NAME}' was created but ownership could not be recorded. Inspect it before manually removing it with: kind delete cluster --name '${CLUSTER_NAME}'"
     assert_cluster_contract
     ok "Cluster created and ownership marker recorded"
   fi
@@ -461,6 +478,7 @@ cmd_up() {
 cmd_down() {
   require_cmd kind "https://kind.sigs.k8s.io/"
   require_cmd kubectl "https://kubernetes.io/docs/tasks/tools/"
+  require_cmd jq "https://jqlang.github.io/jq/download/"
   if ! cluster_exists; then
     ok "Cluster '${CLUSTER_NAME}' does not exist"
     return
