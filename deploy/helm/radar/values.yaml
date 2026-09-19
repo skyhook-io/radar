@@ -483,6 +483,17 @@ cloud:
       viewer: true
       member: true
       owner: true
+    # Read Radar's curated integrations with explicit group/resource grants.
+    # Includes full specs/status (including inline configuration), not just UI
+    # summaries. Credential-bearing exceptions are listed in files/integration-read-baseline.yaml.
+    # Independent of *ClusterRole: custom base roles still receive this add-on.
+    # Cluster kinds additionally require clusterScopedRead.<tier>. A false here
+    # removes only this add-on, not grants from other roles. For customer-managed
+    # RBAC only, set defaultRbac.create=false and supply your own group bindings.
+    integrationRead:
+      viewer: true
+      member: true
+      owner: true
     # Grant the owner tier node cordon/drain. Cluster-scoped WRITE, so OFF by
     # default. Blast radius when enabled: `patch nodes` can't be field-scoped
     # by RBAC (also permits label/taint edits cluster-wide), and

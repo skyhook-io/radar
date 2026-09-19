@@ -1,0 +1,67 @@
+suite: Cloud integration read baseline
+templates:
+  - cloud-rbac-integration-read.yaml
+set:
+  cloud.enabled: true
+  cloud.token: dummy
+  cloud.url: wss://cloud.example
+  cloud.clusterName: test
+tests:
+  - it: binds both scopes to all three default tiers
+    asserts:
+      - hasDocuments:
+          count: 8
+  - it: does not affect OSS
+    set:
+      cloud.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: respects customer-managed RBAC
+    set:
+      cloud.defaultRbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: respects the RBAC creation gate
+    set:
+      rbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: keeps a viewer namespaced binding when cluster reads are off
+    set:
+      cloud.defaultRbac.clusterScopedRead.viewer: false
+    documentSelector:
+      path: metadata.name
+      value: RELEASE-NAME-radar-cloud-viewer-integration-read-namespaced
+    asserts:
+      - equal:
+          path: roleRef.name
+          value: RELEASE-NAME-radar-integration-read-namespaced
+      - contains:
+          path: subjects
+          content:
+            kind: Group
+            name: radar:viewer
+            apiGroup: rbac.authorization.k8s.io
+  - it: drops both viewer bindings when its integration addon is off
+    set:
+      cloud.defaultRbac.integrationRead.viewer: false
+    asserts:
+      - hasDocuments:
+          count: 6
+  - it: emits nothing when all integration addons are off
+    set:
+      cloud.defaultRbac.integrationRead.viewer: false
+      cloud.defaultRbac.integrationRead.member: false
+      cloud.defaultRbac.integrationRead.owner: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: defaults missing reuse-values maps to enabled
+    set:
+      cloud.defaultRbac.integrationRead: null
+    asserts:
+      - hasDocuments:
+          count: 8

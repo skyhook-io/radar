@@ -296,6 +296,15 @@
                 "owner": { "type": "boolean" }
               }
             },
+            "integrationRead": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "viewer": { "type": "boolean" },
+                "member": { "type": "boolean" },
+                "owner": { "type": "boolean" }
+              }
+            },
             "nodeOps": { "type": "boolean" }
           }
         },

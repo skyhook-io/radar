@@ -1,0 +1,768 @@
+# Explicit Cloud caller policy, NOT the connector service account's collection rules.
+# Additions require review. Catalog coverage tests never generate authorization.
+# All grant rows mean get/list/watch on full objects, not redacted projections.
+# Existing grants are preserved; withhold does not revoke rights from other roles.
+entries:
+  - group: ""
+    resources: ["nodes","persistentvolumes"]
+    scope: Cluster
+    collection: ""
+    decision: existing
+    reason: "Covered by the existing cluster-read add-on and its existing collection/tier gates."
+    source: "pkg/topology/cluster_scoped_kinds.go; existing cloud-rbac-cluster-read.yaml"
+  - group: "acme.cert-manager.io"
+    resources: ["challenges","orders"]
+    scope: Namespaced
+    collection: "certManager"
+    decision: grant
+    reason: "Includes ACME challenge spec.key/spec.token proof material; no private-key Secret access."
+    source: "https://cert-manager.io/docs/reference/api-docs/#acme.cert-manager.io/v1.Challenge"
+  - group: "admissionregistration.k8s.io"
+    resources: ["mutatingwebhookconfigurations","validatingwebhookconfigurations"]
+    scope: Cluster
+    collection: ""
+    decision: existing
+    reason: "Covered by the existing cluster-read add-on and its existing collection/tier gates."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "amd.com"
+    resources: ["deviceconfigs"]
+    scope: Namespaced
+    collection: "amdGpu"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "apiextensions.crossplane.io"
+    resources: ["compositeresourcedefinitions","compositionrevisions","compositions","environmentconfigs"]
+    scope: Cluster
+    collection: "crossplane"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "apiextensions.k8s.io"
+    resources: ["customresourcedefinitions"]
+    scope: Cluster
+    collection: ""
+    decision: existing
+    reason: "Covered by the existing cluster-read add-on and its existing collection/tier gates."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "apiregistration.k8s.io"
+    resources: ["apiservices"]
+    scope: Cluster
+    collection: "apiRegistration"
+    decision: existing
+    reason: "Covered by the existing cluster-read add-on and its existing collection/tier gates."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "apps.nvidia.com"
+    resources: ["nimcaches","nimpipelines","nimservices"]
+    scope: Namespaced
+    collection: "nimOperator"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "aquasecurity.github.io"
+    resources: ["clustercompliancereports","clusterinfraassessmentreports","clusterrbacassessmentreports","clustersbomreports"]
+    scope: Cluster
+    collection: "trivy"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "aquasecurity.github.io"
+    resources: ["configauditreports","infraassessmentreports","rbacassessmentreports","sbomreports","vulnerabilityreports"]
+    scope: Namespaced
+    collection: "trivy"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "aquasecurity.github.io"
+    resources: ["exposedsecretreports"]
+    scope: Namespaced
+    collection: "trivy"
+    decision: withhold
+    reason: "report.secrets[].match contains secret-detection excerpts; examples are masked but default access is deferred pending masking guarantees."
+    source: "https://aquasecurity.github.io/trivy-operator/v0.21.1/docs/crds/exposedsecret-report/"
+  - group: "argoproj.io"
+    resources: ["clusteranalysistemplates","clusterworkflowtemplates"]
+    scope: Cluster
+    collection: "argo"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "argoproj.io"
+    resources: ["analysisruns","analysistemplates","applications","applicationsets","appprojects","cronworkflows","experiments","rollouts","workflows","workflowtemplates"]
+    scope: Namespaced
+    collection: "argo"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "autoscaling.k8s.io"
+    resources: ["verticalpodautoscalers"]
+    scope: Namespaced
+    collection: "verticalPodAutoscaler"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "autoscaling.x-k8s.io"
+    resources: ["provisioningrequests"]
+    scope: Namespaced
+    collection: "kueue"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "barmancloud.cnpg.io"
+    resources: ["objectstores"]
+    scope: Namespaced
+    collection: "cloudnativePg"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "batch.volcano.sh"
+    resources: ["jobs"]
+    scope: Namespaced
+    collection: "volcano"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "bitnami.com"
+    resources: ["sealedsecrets"]
+    scope: Namespaced
+    collection: "sealedSecrets"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "bootstrap.cluster.x-k8s.io"
+    resources: ["kubeadmconfigs"]
+    scope: Namespaced
+    collection: "clusterApi"
+    decision: withhold
+    reason: "spec.files[].content and bootstrap credentials can contain sensitive machine configuration."
+    source: "https://cluster-api.sigs.k8s.io/tasks/bootstrap/kubeadm-bootstrap/"
+  - group: "bootstrap.cluster.x-k8s.io"
+    resources: ["kubeadmconfigtemplates"]
+    scope: Namespaced
+    collection: "clusterApi"
+    decision: withhold
+    reason: "spec.template.spec embeds KubeadmConfig, including inline files and bootstrap credentials."
+    source: "https://cluster-api.sigs.k8s.io/tasks/bootstrap/kubeadm-bootstrap/"
+  - group: "cert-manager.io"
+    resources: ["clusterissuers"]
+    scope: Cluster
+    collection: "certManager"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "cert-manager.io"
+    resources: ["certificaterequests","certificates","issuers"]
+    scope: Namespaced
+    collection: "certManager"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "cilium.io"
+    resources: ["ciliumclusterwidenetworkpolicies"]
+    scope: Cluster
+    collection: "cilium"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "pkg/topology/cluster_scoped_kinds.go; existing cloud-rbac-cluster-read.yaml"
+  - group: "cilium.io"
+    resources: ["ciliumnetworkpolicies"]
+    scope: Namespaced
+    collection: "cilium"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "pkg/topology/cluster_scoped_kinds.go; existing cloud-rbac-cluster-read.yaml"
+  - group: "cluster.x-k8s.io"
+    resources: ["clusterclasses","clusters","machinedeployments","machinedrainrules","machinehealthchecks","machinepools","machines","machinesets"]
+    scope: Namespaced
+    collection: "clusterApi"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "controlplane.cluster.x-k8s.io"
+    resources: ["awsmanagedcontrolplanes"]
+    scope: Namespaced
+    collection: "clusterApi"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "packages/k8s-ui/src/components/resources/ResourcesView.tsx (curated columns)"
+  - group: "controlplane.cluster.x-k8s.io"
+    resources: ["kubeadmcontrolplanes"]
+    scope: Namespaced
+    collection: "clusterApi"
+    decision: withhold
+    reason: "spec.kubeadmConfigSpec embeds bootstrap files and credentials."
+    source: "https://cluster-api.sigs.k8s.io/tasks/bootstrap/kubeadm-bootstrap/"
+  - group: "controlplane.cluster.x-k8s.io"
+    resources: ["kubeadmcontrolplanetemplates"]
+    scope: Namespaced
+    collection: "clusterApi"
+    decision: withhold
+    reason: "Renderer-only bootstrap template; default grant withheld pending credential-field review, consistent with KubeadmControlPlane."
+    source: "packages/k8s-ui/src/components/shared/ResourceRendererDispatch.tsx (KNOWN_KINDS)"
+  - group: "crd.projectcalico.org"
+    resources: ["globalnetworkpolicies","stagedglobalnetworkpolicies"]
+    scope: Cluster
+    collection: "calico"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "crd.projectcalico.org"
+    resources: ["hostendpoints","ippools","tiers"]
+    scope: Cluster
+    collection: "calico"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "packages/k8s-ui/src/components/resources/ResourcesView.tsx (curated columns)"
+  - group: "crd.projectcalico.org"
+    resources: ["networkpolicies","stagedkubernetesnetworkpolicies","stagednetworkpolicies"]
+    scope: Namespaced
+    collection: "calico"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "eventing.knative.dev"
+    resources: ["brokers","eventtypes","triggers"]
+    scope: Namespaced
+    collection: "knative"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "external-secrets.io"
+    resources: ["clusterexternalsecrets"]
+    scope: Cluster
+    collection: "externalSecrets"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "external-secrets.io"
+    resources: ["externalsecrets"]
+    scope: Namespaced
+    collection: "externalSecrets"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "external-secrets.io"
+    resources: ["clustersecretstores"]
+    scope: Cluster
+    collection: "externalSecrets"
+    decision: withhold
+    reason: "Provider authentication can contain plaintext credentials, e.g. spec.provider.scaleway.secretKey.value, rather than only Secret references."
+    source: "https://external-secrets.io/v0.18.2/provider/scaleway/"
+  - group: "external-secrets.io"
+    resources: ["secretstores"]
+    scope: Namespaced
+    collection: "externalSecrets"
+    decision: withhold
+    reason: "Provider authentication can contain plaintext credentials, e.g. spec.provider.scaleway.secretKey.value, rather than only Secret references."
+    source: "https://external-secrets.io/v0.18.2/provider/scaleway/"
+  - group: "flow.volcano.sh"
+    resources: ["jobflows","jobtemplates"]
+    scope: Namespaced
+    collection: "volcano"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "flows.knative.dev"
+    resources: ["parallels","sequences"]
+    scope: Namespaced
+    collection: "knative"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "gateway.networking.k8s.io"
+    resources: ["gatewayclasses"]
+    scope: Cluster
+    collection: "gatewayApi"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "gateway.networking.k8s.io"
+    resources: ["gateways","grpcroutes","httproutes","referencegrants","tcproutes","tlsroutes"]
+    scope: Namespaced
+    collection: "gatewayApi"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "helm.crossplane.io"
+    resources: ["providerconfigs"]
+    scope: Cluster
+    collection: "crossplane"
+    decision: withhold
+    reason: "Credential configuration; default grant deferred pending provider-specific schema review."
+    source: "https://github.com/crossplane-contrib/provider-helm"
+  - group: "helm.crossplane.io"
+    resources: ["releases"]
+    scope: Cluster
+    collection: "crossplane"
+    decision: withhold
+    reason: "Default grant deferred pending review of provider spec/status and connection details; not a claim that inline Helm values alone are unsafe."
+    source: "https://github.com/crossplane-contrib/provider-helm"
+  - group: "helm.toolkit.fluxcd.io"
+    resources: ["helmreleases"]
+    scope: Namespaced
+    collection: "flux"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "inference.networking.k8s.io"
+    resources: ["inferencepools"]
+    scope: Namespaced
+    collection: "inferenceGateway"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "inference.networking.x-k8s.io"
+    resources: ["inferenceobjectives","inferencepools"]
+    scope: Namespaced
+    collection: "inferenceGateway"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "infrastructure.cluster.x-k8s.io"
+    resources: ["awsmachines","awsmachinetemplates","awsmanagedclusters","awsmanagedmachinepools","azuremachines","azuremachinetemplates","azuremanagedclusters","azuremanagedcontrolplanes","azuremanagedmachinepools","gcpmachines","gcpmachinetemplates","gcpmanagedclusters","gcpmanagedcontrolplanes","gcpmanagedmachinepools"]
+    scope: Namespaced
+    collection: "clusterApi"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "packages/k8s-ui/src/components/resources/ResourcesView.tsx (curated columns)"
+  - group: "jobset.x-k8s.io"
+    resources: ["jobsets"]
+    scope: Namespaced
+    collection: "jobset"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "kaito.sh"
+    resources: ["ragengines","workspaces"]
+    scope: Namespaced
+    collection: "kaito"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "karpenter.azure.com"
+    resources: ["aksnodeclasses"]
+    scope: Cluster
+    collection: "karpenter"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "karpenter.k8s.aws"
+    resources: ["ec2nodeclasses"]
+    scope: Cluster
+    collection: "karpenter"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "karpenter.k8s.gcp"
+    resources: ["gcenodeclasses"]
+    scope: Cluster
+    collection: "karpenter"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "karpenter.sh"
+    resources: ["nodeclaims","nodepools"]
+    scope: Cluster
+    collection: "karpenter"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "keda.sh"
+    resources: ["clustertriggerauthentications"]
+    scope: Cluster
+    collection: "keda"
+    decision: withhold
+    reason: "spec.hashiCorpVault.credential.token is a credential value, not a Secret reference."
+    source: "https://keda.sh/docs/2.20/concepts/authentication/"
+  - group: "keda.sh"
+    resources: ["scaledjobs","scaledobjects"]
+    scope: Namespaced
+    collection: "keda"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "keda.sh"
+    resources: ["triggerauthentications"]
+    scope: Namespaced
+    collection: "keda"
+    decision: withhold
+    reason: "spec.hashiCorpVault.credential.token is a credential value, not a Secret reference."
+    source: "https://keda.sh/docs/2.20/concepts/authentication/"
+  - group: "kubeflow.org"
+    resources: ["mpijobs","pytorchjobs","tfjobs"]
+    scope: Namespaced
+    collection: "kubeflow"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "kubernetes.crossplane.io"
+    resources: ["objects"]
+    scope: Cluster
+    collection: "crossplane"
+    decision: withhold
+    reason: "spec.forProvider.manifest and status.atProvider.manifest can carry arbitrary objects, including Secrets."
+    source: "https://github.com/crossplane-contrib/provider-kubernetes"
+  - group: "kubernetes.crossplane.io"
+    resources: ["providerconfigs"]
+    scope: Cluster
+    collection: "crossplane"
+    decision: withhold
+    reason: "Credential configuration; default grant deferred pending provider-specific schema review."
+    source: "https://github.com/crossplane-contrib/provider-kubernetes"
+  - group: "kueue.x-k8s.io"
+    resources: ["admissionchecks","clusterqueues","resourceflavors"]
+    scope: Cluster
+    collection: "kueue"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "kueue.x-k8s.io"
+    resources: ["localqueues","workloads"]
+    scope: Namespaced
+    collection: "kueue"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "kustomize.toolkit.fluxcd.io"
+    resources: ["kustomizations"]
+    scope: Namespaced
+    collection: "flux"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "kyverno.io"
+    resources: ["clustercleanuppolicies","clusterpolicies","globalcontextentries"]
+    scope: Cluster
+    collection: "kyverno"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "kyverno.io"
+    resources: ["cleanuppolicies","policies","policyexceptions"]
+    scope: Namespaced
+    collection: "kyverno"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "kyverno.io"
+    resources: ["updaterequests"]
+    scope: Namespaced
+    collection: "kyverno"
+    decision: withhold
+    reason: "spec.context.admissionRequestInfo.admissionRequest can embed a Secret object."
+    source: "https://pkg.go.dev/github.com/kyverno/kyverno/api/kyverno/v2#AdmissionRequestInfoObject"
+  - group: "leaderworkerset.x-k8s.io"
+    resources: ["leaderworkersets"]
+    scope: Namespaced
+    collection: "lws"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "llm-d.ai"
+    resources: ["inferenceobjectives"]
+    scope: Namespaced
+    collection: "inferenceGateway"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "messaging.knative.dev"
+    resources: ["channels","inmemorychannels","subscriptions"]
+    scope: Namespaced
+    collection: "knative"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "monitoring.coreos.com"
+    resources: ["alertmanagers","podmonitors","prometheusrules","servicemonitors"]
+    scope: Namespaced
+    collection: "prometheus"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "networking.internal.knative.dev"
+    resources: ["certificates","ingresses","serverlessservices"]
+    scope: Namespaced
+    collection: "knative"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "networking.istio.io"
+    resources: ["destinationrules","gateways","serviceentries","virtualservices"]
+    scope: Namespaced
+    collection: "istio"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "notification.toolkit.fluxcd.io"
+    resources: ["alerts"]
+    scope: Namespaced
+    collection: "flux"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "nvidia.com"
+    resources: ["clusterpolicies","nvidiadrivers"]
+    scope: Cluster
+    collection: "nvidia"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "openreports.io"
+    resources: ["clusterreports"]
+    scope: Cluster
+    collection: "kyverno"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/policy_reports.go (reportGroups)"
+  - group: "openreports.io"
+    resources: ["reports"]
+    scope: Namespaced
+    collection: "kyverno"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/policy_reports.go (reportGroups)"
+  - group: "pkg.crossplane.io"
+    resources: ["configurations","deploymentruntimeconfigs","functionrevisions","functions","providerrevisions","providers"]
+    scope: Cluster
+    collection: "crossplane"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "policies.kyverno.io"
+    resources: ["deletingpolicies","generatingpolicies","imagevalidatingpolicies","mutatingpolicies","validatingpolicies"]
+    scope: Cluster
+    collection: "kyverno"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "policies.kyverno.io"
+    resources: ["namespaceddeletingpolicies","namespacedgeneratingpolicies","namespacedimagevalidatingpolicies","namespacedmutatingpolicies","namespacedvalidatingpolicies","policyexceptions"]
+    scope: Namespaced
+    collection: "kyverno"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "policy.networking.k8s.io"
+    resources: ["clusternetworkpolicies"]
+    scope: Cluster
+    collection: "networkPolicyApi"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "pkg/topology/cluster_scoped_kinds.go; existing cloud-rbac-cluster-read.yaml"
+  - group: "postgresql.cnpg.io"
+    resources: ["clusterimagecatalogs"]
+    scope: Cluster
+    collection: "cloudnativePg"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "postgresql.cnpg.io"
+    resources: ["clusters"]
+    scope: Namespaced
+    collection: "cloudnativePg"
+    decision: grant
+    reason: "Includes spec.externalClusters[].connectionParameters; inline connection settings (potentially passwords) are intentionally visible, like Helm values."
+    source: "https://cloudnative-pg.io/docs/1.28/logical_replication/"
+  - group: "postgresql.cnpg.io"
+    resources: ["backups","databases","imagecatalogs","poolers","publications","scheduledbackups","subscriptions"]
+    scope: Namespaced
+    collection: "cloudnativePg"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "projectcalico.org"
+    resources: ["globalnetworkpolicies","stagedglobalnetworkpolicies"]
+    scope: Cluster
+    collection: "calico"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "projectcalico.org"
+    resources: ["hostendpoints","ippools","tiers"]
+    scope: Cluster
+    collection: "calico"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "packages/k8s-ui/src/components/resources/ResourcesView.tsx (curated columns)"
+  - group: "projectcalico.org"
+    resources: ["networkpolicies","stagedkubernetesnetworkpolicies","stagednetworkpolicies"]
+    scope: Namespaced
+    collection: "calico"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "projectcontour.io"
+    resources: ["httpproxies"]
+    scope: Namespaced
+    collection: "contour"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "ray.io"
+    resources: ["rayclusters","raycronjobs","rayjobs","rayservices"]
+    scope: Namespaced
+    collection: "kuberay"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "reports.kyverno.io"
+    resources: ["clusterephemeralreports"]
+    scope: Cluster
+    collection: "kyverno"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "reports.kyverno.io"
+    resources: ["ephemeralreports"]
+    scope: Namespaced
+    collection: "kyverno"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "resource.k8s.io"
+    resources: ["deviceclasses","resourceslices"]
+    scope: Cluster
+    collection: "dra"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "resource.k8s.io"
+    resources: ["resourceclaims","resourceclaimtemplates"]
+    scope: Namespaced
+    collection: "dra"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "scheduling.run.ai"
+    resources: ["queues"]
+    scope: Cluster
+    collection: "kaiScheduler"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "scheduling.run.ai"
+    resources: ["podgroups"]
+    scope: Namespaced
+    collection: "kaiScheduler"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "scheduling.volcano.sh"
+    resources: ["queues"]
+    scope: Cluster
+    collection: "volcano"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "scheduling.volcano.sh"
+    resources: ["podgroups"]
+    scope: Namespaced
+    collection: "volcano"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "security.istio.io"
+    resources: ["authorizationpolicies","peerauthentications"]
+    scope: Namespaced
+    collection: "istio"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "packages/k8s-ui/src/components/resources/ResourcesView.tsx (curated columns)"
+  - group: "serving.knative.dev"
+    resources: ["configurations","domainmappings","revisions","routes","services"]
+    scope: Namespaced
+    collection: "knative"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "serving.kserve.io"
+    resources: ["clusterservingruntimes"]
+    scope: Cluster
+    collection: "kserve"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "serving.kserve.io"
+    resources: ["inferencegraphs","inferenceservices","llminferenceservices","servingruntimes","trainedmodels"]
+    scope: Namespaced
+    collection: "kserve"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "source.toolkit.fluxcd.io"
+    resources: ["gitrepositories","helmrepositories","ocirepositories"]
+    scope: Namespaced
+    collection: "flux"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "sources.knative.dev"
+    resources: ["apiserversources","containersources","pingsources","sinkbindings"]
+    scope: Namespaced
+    collection: "knative"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "storage.k8s.io"
+    resources: ["storageclasses"]
+    scope: Cluster
+    collection: ""
+    decision: existing
+    reason: "Covered by the existing cluster-read add-on and its existing collection/tier gates."
+    source: "pkg/topology/cluster_scoped_kinds.go; existing cloud-rbac-cluster-read.yaml"
+  - group: "traefik.containo.us"
+    resources: ["ingressroutes","ingressroutetcps","ingressrouteudps","middlewaretcps","serverstransports","serverstransporttcps","tlsoptions","tlsstores","traefikservices"]
+    scope: Namespaced
+    collection: "traefik"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "traefik.containo.us"
+    resources: ["middlewares"]
+    scope: Namespaced
+    collection: "traefik"
+    decision: grant
+    reason: "Kubernetes BasicAuth references a Secret; spec.plugin and forwardAuth configuration remain visible under the inline-config policy."
+    source: "https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/basicauth/"
+  - group: "traefik.io"
+    resources: ["ingressroutes","ingressroutetcps","ingressrouteudps","middlewaretcps","serverstransports","serverstransporttcps","tlsoptions","tlsstores","traefikservices"]
+    scope: Namespaced
+    collection: "traefik"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "traefik.io"
+    resources: ["middlewares"]
+    scope: Namespaced
+    collection: "traefik"
+    decision: grant
+    reason: "Kubernetes BasicAuth references a Secret; spec.plugin and forwardAuth configuration remain visible under the inline-config policy."
+    source: "https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/basicauth/"
+  - group: "trainer.kubeflow.org"
+    resources: ["trainjobs"]
+    scope: Namespaced
+    collection: "kubeflow"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "scripts/gpu-ecosystem-demo/resources.tsv (pinned upstream CRD schemas)"
+  - group: "velero.io"
+    resources: ["backuprepositories","backups","backupstoragelocations","restores","schedules","volumesnapshotlocations"]
+    scope: Namespaced
+    collection: "velero"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "internal/k8s/dynamic_cache.go (supportedCRDFallbacks)"
+  - group: "wgpolicyk8s.io"
+    resources: ["clusterpolicyreports"]
+    scope: Cluster
+    collection: "kyverno"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "packages/k8s-ui/src/components/resources/ResourcesView.tsx (curated columns)"
+  - group: "wgpolicyk8s.io"
+    resources: ["policyreports"]
+    scope: Namespaced
+    collection: "kyverno"
+    decision: grant
+    reason: "Operational configuration and status; full inline configuration is intentionally readable."
+    source: "packages/k8s-ui/src/components/resources/ResourcesView.tsx (curated columns)"

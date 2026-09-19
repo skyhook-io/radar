@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'fs'
 import { join } from 'path'
+import { parse } from 'yaml'
 import { hasCuratedColumns } from './ResourcesView'
 
 // Parsed from the source rather than exported: this asserts a property of the
@@ -27,6 +28,50 @@ function objectKeys(declName: string): string[] {
 
 const CURATED = objectKeys('const KNOWN_COLUMNS')
 const OWNED = new Set(objectKeys('const CURATED_COLUMN_GROUPS'))
+
+describe('Cloud integration read baseline coverage', () => {
+  const root = join(__dirname, '../../../../..')
+  const policy = parse(readFileSync(join(root, 'deploy/helm/radar/files/integration-read-baseline.yaml'), 'utf8')) as {
+    entries: { group: string; resources: string[]; scope: string; decision: string }[]
+  }
+
+  it('requires an explicit permission decision for every curated API identity', () => {
+    const aliases = new Map<string, Set<string>>()
+    for (const [, resource, body] of objectBody('const GROUP_QUALIFIED_COLUMN_KEYS').matchAll(/^ {2}([a-z0-9_]+):\s*\{([^}]+)\}/gm)) {
+      for (const [, group, key] of body.matchAll(/'([^']+)':\s*'([^']+)'/g)) {
+        const identity = `${group}/${key}`
+        const plurals = aliases.get(identity) ?? new Set<string>()
+        plurals.add(resource)
+        aliases.set(identity, plurals)
+      }
+    }
+    const missing: string[] = []
+    let checked = 0
+    for (const [, key, groups] of objectBody('const CURATED_COLUMN_GROUPS').matchAll(/^ {2}([a-z0-9_]+):\s*\[([^\]]+)\]/gm)) {
+      checked++
+      for (const [, group] of groups.matchAll(/'([^']+)'/g)) {
+        const candidates = aliases.get(`${group}/${key}`) ?? new Set([key])
+        if (!policy.entries.some(e => e.group === group && e.resources.some(r => candidates.has(r)))) {
+          missing.push(`${group}/${key}`)
+        }
+      }
+    }
+    expect(missing).toEqual([])
+    expect(checked).toBe(OWNED.size)
+    expect(policy.entries.length).toBeGreaterThan(0)
+  })
+
+  it('matches the exact plural and scope of pinned GPU ecosystem CRDs', () => {
+    const rows = readFileSync(join(root, 'scripts/gpu-ecosystem-demo/resources.tsv'), 'utf8')
+      .split('\n').filter(line => line && !line.startsWith('#'))
+    for (const row of rows) {
+      const [, group, resource, , scope] = row.split('\t')
+      const entry = policy.entries.find(e => e.group === group && e.resources.includes(resource))
+      expect(entry, `${group}/${resource}`).toBeDefined()
+      expect(entry?.scope, `${group}/${resource}`).toBe(scope)
+    }
+  })
+})
 
 // Curated sets keyed on a kind the API server reserves. A CRD cannot be created
 // in a core group, so these can never be claimed by a foreign resource.
