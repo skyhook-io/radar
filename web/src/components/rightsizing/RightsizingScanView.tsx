@@ -9,6 +9,7 @@ import {
   SearchBox,
   SelectMenu,
   pluralize,
+  useDisclosure,
 } from '@skyhook-io/k8s-ui'
 import { Badge } from '@skyhook-io/k8s-ui/components/ui/Badge'
 import {
@@ -335,7 +336,7 @@ export function RightsizingScanView({ namespaces }: RightsizingScanViewProps) {
               selected={classFilter}
               onSelect={(value) => setFilter('rfClass', value === 'actions' ? undefined : value)}
             />
-            <ScanNotices result={result} rows={rows} />
+            <ScanNotices key={result.scannedAt} result={result} />
             {result.reason === 'only_daemonsets_without_nodes' ? (
               <EmptyState
                 variant="card"
@@ -536,16 +537,14 @@ function ScanSummary({
   )
 }
 
-function ScanNotices({ result, rows }: { result: ScanResult; rows: RightsizingScanRow[] }) {
+export function ScanNotices({ result }: { result: ScanResult }) {
+  const [open, setOpen] = useState(false)
+  const disclosure = useDisclosure(open)
   const notices: string[] = []
-  if (result.state === 'partial')
-    notices.push('Some workloads could not be fully analyzed. Completed recommendations are shown.')
   if ((result.coverage.restrictedKinds?.length ?? 0) > 0)
     notices.push('Some workload kinds or namespaces were excluded by your Kubernetes access.')
   if ((result.coverage.unavailableKinds?.length ?? 0) > 0)
     notices.push('Some workload kinds could not be evaluated with the available ownership data.')
-  // Distinct from the partial notice above: these workloads were analyzed
-  // completely, the cache simply never held the other namespaces.
   if ((result.coverage.partiallyCachedKinds?.length ?? 0) > 0)
     notices.push(
       'Radar is caching only some namespaces, so this scan covered a narrower scope than the whole cluster.',
@@ -554,18 +553,60 @@ function ScanNotices({ result, rows }: { result: ScanResult; rows: RightsizingSc
   // The DaemonSet-only empty state already says this.
   if (daemonSetsWithoutNodes > 0 && result.reason !== 'only_daemonsets_without_nodes')
     notices.push(
-      `${pluralize(daemonSetsWithoutNodes, 'DaemonSet')} run on no node right now and ${daemonSetsWithoutNodes === 1 ? 'is' : 'are'} not listed. Open one from Resources to see recommendations from its retained history.`,
+      `${pluralize(daemonSetsWithoutNodes, 'DaemonSet')} ${daemonSetsWithoutNodes === 1 ? 'runs' : 'run'} on no node right now and ${daemonSetsWithoutNodes === 1 ? 'is' : 'are'} not listed. Open one from Resources to see recommendations from its retained history.`,
     )
-  for (const warning of result.warnings ?? []) notices.push(warningMessage(warning.code))
-  if (rows.length > 0 && rows.every((row) => row.classification === 'need_data'))
-    notices.push('There is not enough recent history to recommend request changes yet.')
-  return notices.length > 0 ? (
-    <div className="flex flex-col gap-2">
-      {notices.map((text) => (
-        <Notice key={text} text={text} />
-      ))}
-    </div>
-  ) : null
+  const warnings = result.warnings ?? []
+  const deadlineExceeded = warnings.some((warning) => warning.code === 'scan_deadline_exceeded')
+  for (const warning of warnings) {
+    if (warning.code !== 'scan_deadline_exceeded') notices.push(warningMessage(warning.code))
+  }
+  const partial = result.state === 'partial'
+  if (!partial && notices.length === 0 && !deadlineExceeded) return null
+  const details = [...new Set(notices)]
+  const singleNote = details.length === 1 && !deadlineExceeded
+  const hasDetails = details.length > 0 && !singleNote
+  const summary = singleNote
+    ? details[0]
+    : deadlineExceeded
+      ? 'The scan reached its time limit. Available recommendations are shown. For a narrower scan, select namespaces in the top bar and run again.'
+      : partial
+        ? 'Some workloads or metrics could not be fully evaluated. Available recommendations are shown.'
+        : 'Some workloads were excluded from this scan.'
+  return (
+    <section
+      aria-label="Scan coverage"
+      className="rounded-lg border border-theme-border bg-theme-surface text-xs text-theme-text-secondary"
+    >
+      <div className="flex items-start gap-2 px-3 py-2">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <p className="font-medium text-theme-text-primary">
+            {partial ? 'Partial results' : 'Scan notes'}
+          </p>
+          <p className="mt-1">{summary}</p>
+        </div>
+        {hasDetails && (
+          <button
+            type="button"
+            {...disclosure.buttonProps}
+            onClick={() => setOpen(!open)}
+            className="inline-flex shrink-0 items-center gap-1 rounded px-1 py-0.5 text-accent-text hover:bg-theme-hover"
+          >
+            Details <CollapseChevron open={open} className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      {hasDetails && (
+        <Collapse open={open} id={disclosure.panelId}>
+          <ul className="list-disc space-y-1 border-t border-theme-border py-2 pl-9 pr-3">
+            {details.map((text) => (
+              <li key={text}>{text}</li>
+            ))}
+          </ul>
+        </Collapse>
+      )}
+    </section>
+  )
 }
 
 function Notice({ text, tone }: { text: string; tone?: 'warning' }) {
@@ -784,7 +825,7 @@ function SignalBadge({ signal }: { signal: ResourceSignal }) {
   )
 }
 
-function FitWhy({ label, row }: { label: string; row?: RightsizingRow }) {
+export function FitWhy({ label, row }: { label: string; row?: RightsizingRow }) {
   if (!row)
     return (
       <div>
@@ -809,8 +850,9 @@ function FitWhy({ label, row }: { label: string; row?: RightsizingRow }) {
         Why this {label.toLowerCase()} guidance
       </div>
       <p className="mt-1 text-xs text-theme-text-secondary">
-        {observation}
-        {history}
+        {row.queryError
+          ? 'Metrics could not be queried, so usable history could not be determined. Retry the scan, or select fewer namespaces in the top bar.'
+          : `${observation}${history}`}
       </p>
       <EvidenceNote row={row} />
     </div>
@@ -870,7 +912,7 @@ function primaryEvidenceNote(row: RightsizingRow) {
         The calculated request would exceed the current limit.
       </p>
     )
-  if (row.fit === 'insufficient_history')
+  if (row.fit === 'insufficient_history' && !row.queryError)
     return (
       <p className="mt-1 text-xs text-theme-text-tertiary">
         Wait for more runtime history before changing this request.
@@ -984,14 +1026,15 @@ function unavailableMessage(reason?: string): string {
 }
 
 function warningMessage(code: string): string {
-  if (code === 'scan_deadline_exceeded')
-    return 'The scan reached its time limit. Results from completed batches are shown.'
   if (code === 'owner_metrics_query_failed') return 'Workload ownership data could not be queried.'
   if (code === 'oom_evidence_unavailable')
     return 'Radar could not verify restart history for some containers, so it withheld their memory reductions.'
   if (code.endsWith('_query_failed'))
-    return `Some ${code.replace('_query_failed', '').replaceAll('_', ' ')} data could not be queried.`
-  return 'Some rightsizing data was unavailable. Completed recommendations are shown.'
+    return `Some ${code
+      .replace('_query_failed', '')
+      .replaceAll('_', ' ')
+      .replace(/\bcpu\b/g, 'CPU')} data could not be queried.`
+  return 'Some rightsizing data was unavailable.'
 }
 
 function formatScanTime(value: string): string {
