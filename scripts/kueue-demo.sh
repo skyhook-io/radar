@@ -47,7 +47,7 @@ cluster_exists() {
 cluster_owned() {
   local marker
   marker="$(kc -n kube-system get configmap "${MARKER_NAME}" --ignore-not-found --request-timeout=10s -o json)" || \
-    fail "Unable to verify ownership: context '${KUBECTL_CTX}' must be reachable in the active kubeconfig. Export it with: kind get kubeconfig --name '${CLUSTER_NAME}'"
+    fail "Unable to verify ownership: context '${KUBECTL_CTX}' is missing or unreachable in the active kubeconfig. If missing, restore it with: kind export kubeconfig --name '${CLUSTER_NAME}'"
   [ -n "${marker}" ] && jq -e --arg owner "${MARKER_VALUE}" --arg cluster "${CLUSTER_NAME}" \
     '.data.owner == $owner and .data.clusterName == $cluster' <<<"${marker}" >/dev/null
 }
