@@ -438,20 +438,41 @@ export function parseLogfmt(content: string): Record<string, string> | null {
 }
 
 /**
- * Handle SSE error events from log streams.
- * Parses server-sent error data and logs it, then calls onClose.
+ * Handle SSE error events from log streams. Logs the failure, calls onClose,
+ * and returns the message to show the user.
+ *
+ * Once the stream is open the handler reports a failure it can explain (the
+ * container never started, say) as an SSE `error` event carrying the reason,
+ * and the browser fires the same listener for a dropped connection with no
+ * body at all. Only the body separates the two, so `prefix` is the transport
+ * wording and is used only when the server said nothing.
+ *
+ * A refusal before the handshake, such as a denied namespace, is an ordinary
+ * non-2xx response. EventSource never exposes those bodies, so the caller's
+ * `prefix` is all there is for them.
  */
-export function handleSSEError(event: Event, prefix: string, onClose: () => void): void {
+export function handleSSEError(event: Event, prefix: string, onClose?: () => void): string {
   const me = event as MessageEvent
-  if (me.data) {
-    try {
-      const data = JSON.parse(me.data)
-      console.error(`${prefix}:`, data.error || data.message || me.data)
-    } catch {
-      console.error(`${prefix}:`, me.data)
-    }
-  } else {
+  if (!me.data) {
     console.error(`${prefix} connection error`)
+    onClose?.()
+    return prefix
   }
-  onClose()
+
+  let reason: string | undefined
+  try {
+    const data = JSON.parse(me.data) as Record<string, unknown> | null
+    for (const key of ['error', 'message']) {
+      const val = data?.[key]
+      if (typeof val === 'string' && val) {
+        reason = val
+        break
+      }
+    }
+  } catch {
+    reason = me.data
+  }
+  console.error(`${prefix}:`, reason || me.data)
+  onClose?.()
+  return reason || prefix
 }
