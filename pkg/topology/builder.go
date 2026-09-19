@@ -12,6 +12,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -372,6 +373,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			Status: healthLevelToStatus(health.Workload(deploy, time.Now()).Level),
 			Data: map[string]any{
 				"namespace":     deploy.Namespace,
+				"apiVersion":    appsv1.SchemeGroupVersion.String(),
 				"readyReplicas": ready,
 				"totalReplicas": total,
 				"strategy":      string(deploy.Spec.Strategy.Type),
@@ -2548,6 +2550,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			Status: healthLevelToStatus(health.Workload(ds, time.Now()).Level),
 			Data: map[string]any{
 				"namespace":     ds.Namespace,
+				"apiVersion":    appsv1.SchemeGroupVersion.String(),
 				"readyReplicas": ready,
 				"totalReplicas": total,
 				"labels":        ds.Labels,
@@ -2599,6 +2602,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			Status: healthLevelToStatus(health.Workload(sts, time.Now()).Level),
 			Data: map[string]any{
 				"namespace":     sts.Namespace,
+				"apiVersion":    appsv1.SchemeGroupVersion.String(),
 				"readyReplicas": ready,
 				"totalReplicas": total,
 				"labels":        sts.Labels,
@@ -2636,6 +2640,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			Status: healthLevelToStatus(health.Workload(cj, time.Now()).Level),
 			Data: map[string]any{
 				"namespace":        cj.Namespace,
+				"apiVersion":       batchv1.SchemeGroupVersion.String(),
 				"schedule":         cj.Spec.Schedule,
 				"suspend":          cj.Spec.Suspend != nil && *cj.Spec.Suspend,
 				"activeJobs":       len(cj.Status.Active),
@@ -2852,6 +2857,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			Status: status,
 			Data: map[string]any{
 				"namespace":      job.Namespace,
+				"apiVersion":     batchv1.SchemeGroupVersion.String(),
 				"completions":    job.Spec.Completions,
 				"parallelism":    job.Spec.Parallelism,
 				"succeeded":      job.Status.Succeeded,
@@ -3023,6 +3029,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			rsData := map[string]any{
 				"namespace":     rs.Namespace,
+				"apiVersion":    appsv1.SchemeGroupVersion.String(),
 				"readyReplicas": ready,
 				"totalReplicas": total,
 				"labels":        rs.Labels,
@@ -3537,10 +3544,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			Name:   ing.Name,
 			Status: StatusHealthy,
 			Data: map[string]any{
-				"namespace": ing.Namespace,
-				"hostname":  host,
-				"tls":       hasTLS,
-				"labels":    ing.Labels,
+				"namespace":  ing.Namespace,
+				"hostname":   host,
+				"tls":        hasTLS,
+				"apiVersion": networkingv1.SchemeGroupVersion.String(),
+				"labels":     ing.Labels,
 			},
 		})
 
@@ -3919,6 +3927,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			Status: hpaNodeHealth(hpa),
 			Data: map[string]any{
 				"namespace":   hpa.Namespace,
+				"apiVersion":  autoscalingv2.SchemeGroupVersion.String(),
 				"minReplicas": hpa.Spec.MinReplicas,
 				"maxReplicas": hpa.Spec.MaxReplicas,
 				"current":     hpa.Status.CurrentReplicas,
@@ -3978,6 +3987,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			Status: status,
 			Data: map[string]any{
 				"namespace":          pdb.Namespace,
+				"apiVersion":         policyv1.SchemeGroupVersion.String(),
 				"disruptionsAllowed": pdb.Status.DisruptionsAllowed,
 				"currentHealthy":     pdb.Status.CurrentHealthy,
 				"desiredHealthy":     pdb.Status.DesiredHealthy,
@@ -4053,6 +4063,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 		nodeData := map[string]any{
 			"namespace":   np.Namespace,
+			"apiVersion":  networkingv1.SchemeGroupVersion.String(),
 			"policyTypes": policyTypes,
 			"labels":      np.Labels,
 		}
@@ -6333,10 +6344,11 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			Name:   ing.Name,
 			Status: StatusHealthy,
 			Data: map[string]any{
-				"namespace": ing.Namespace,
-				"hostname":  host,
-				"tls":       len(ing.Spec.TLS) > 0,
-				"labels":    ing.Labels,
+				"namespace":  ing.Namespace,
+				"hostname":   host,
+				"tls":        len(ing.Spec.TLS) > 0,
+				"apiVersion": networkingv1.SchemeGroupVersion.String(),
+				"labels":     ing.Labels,
 			},
 		})
 
