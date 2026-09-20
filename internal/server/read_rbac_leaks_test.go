@@ -1,7 +1,9 @@
 package server
 
 import (
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -153,6 +155,33 @@ func TestProxyAuth_PodBackedReadsRequireExactAccess(t *testing.T) {
 			defer resp.Body.Close()
 			if resp.StatusCode != tt.wantStatus {
 				t.Fatalf("status = %d, want %d", resp.StatusCode, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestProxyAuth_JobSetMembersRequireParentAndJobsAccess(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		parent, jobs bool
+		wantStatus   int
+	}{{"parent denied", false, true, http.StatusForbidden}, {"member list denied", true, false, http.StatusForbidden}, {"both allowed", true, true, http.StatusInternalServerError}} {
+		t.Run(test.name, func(t *testing.T) {
+			env := newAuthTestServer(t)
+			permissions := &auth.UserPermissions{AllowedNamespaces: []string{"default"}}
+			permissions.SetCanI("get", "jobset.x-k8s.io", "jobsets", "default", test.parent)
+			permissions.SetCanI("list", "batch", "jobs", "default", test.jobs)
+			env.srv.permCache.Set("alice", nil, permissions)
+			resp := env.authGet(t, "/api/workloads/jobsets/default/training/runs", "alice", "")
+			defer resp.Body.Close()
+			if resp.StatusCode != test.wantStatus {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, test.wantStatus)
+			}
+			if test.parent && test.jobs {
+				body, err := io.ReadAll(resp.Body)
+				if err != nil || !strings.Contains(string(body), "failed to get jobset default/training:") {
+					t.Fatalf("did not reach JobSet lookup: %s (%v)", body, err)
+				}
 			}
 		})
 	}

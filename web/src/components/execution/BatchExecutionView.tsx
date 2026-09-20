@@ -40,6 +40,10 @@ export function workloadRunKey(run: Pick<WorkloadRun, 'kind' | 'namespace' | 'na
   return `${run.kind}/${run.namespace}/${run.name}`
 }
 
+export function selectedRunOutsideWindow(runs: WorkloadRun[], key: string, truncated: boolean): boolean {
+  return truncated && Boolean(key) && !runs.some((run) => workloadRunKey(run) === key)
+}
+
 function isTemplateKind(kind: string): boolean {
   return kind === 'WorkflowTemplate' || kind === 'ClusterWorkflowTemplate'
 }
@@ -135,8 +139,10 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
     [kind, resource, referencedDefinitionQuery.data],
   )
 
+  const selectionOutsideWindow = memberCollection && selectedRunOutsideWindow(runs, selectedRunKey, Boolean(runsQuery.data?.truncated))
+
   useEffect(() => {
-    if (!runsQuery.data) return
+    if (!runsQuery.data || selectionOutsideWindow) return
     if (runs.length === 0) {
       if (selectedRunKey) onSelectRun?.('')
       return
@@ -144,9 +150,9 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
     if (!runs.some((run) => workloadRunKey(run) === selectedRunKey)) {
       onSelectRun?.(workloadRunKey(defaultRun ?? runs[0]))
     }
-  }, [runsQuery.data, runs, selectedRunKey, defaultRun, onSelectRun])
+  }, [runsQuery.data, runs, selectedRunKey, defaultRun, onSelectRun, selectionOutsideWindow])
 
-  const selectedRun = runs.find((run) => workloadRunKey(run) === selectedRunKey) ?? defaultRun
+  const selectedRun = selectionOutsideWindow ? undefined : runs.find((run) => workloadRunKey(run) === selectedRunKey) ?? defaultRun
   const shouldResolveLivePods = Boolean(
     selectedRun && (
       memberCollection ||
@@ -279,7 +285,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                     run={run}
                     showNamespace={clusterScoped}
                     memberCollection={memberCollection}
-                    selected={workloadRunKey(selectedRun ?? run) === workloadRunKey(run)}
+                    selected={Boolean(selectedRun && workloadRunKey(selectedRun) === workloadRunKey(run))}
                     onClick={() => onSelectRun?.(workloadRunKey(run))}
                   />
                 ))}
@@ -329,7 +335,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                         {selectedResourceQuery.isFetching && <span>refreshing</span>}
                       </div>
                     </div>
-                    <span className={clsx('badge', phaseBadgeClass(selectedRun.phase))}>{selectedRun.phase}</span>
+                    <span className={clsx('badge', phaseBadgeClass(selectedRun.phase))}>{selectedRun.phase}{selectedRun.deleting ? ' · deleting' : ''}</span>
                   </div>
                   <RunDetailList run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} scheduledParent={scheduled} memberCollection={memberCollection} />
                   <RunContext run={selectedRun} resource={selectedResource} definitionResource={definitionResource} workflowExecution={workflowExecution} currentWorkload={{ kind, namespace, name }} onNavigateToResource={onNavigateToResource} />
@@ -345,9 +351,11 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                 <EmptyState
                   tone="neutral"
                   variant="card"
-                  headline={memberCollection ? 'No selected Job' : 'No selected run'}
+                  headline={selectionOutsideWindow ? 'Selected Job is not among the shown members' : memberCollection ? 'No selected Job' : 'No selected run'}
                   body={
-                    memberCollection
+                    selectionOutsideWindow
+                      ? 'The member list is truncated. This Job may have been removed or fallen outside the shown window. Choose a shown Job to inspect another member.'
+                      : memberCollection
                       ? 'This JobSet has no readable child Jobs to inspect.'
                       : `There are no retained ${runKindPluralForSchedule(kind)} to inspect.`
                   }
@@ -1209,7 +1217,7 @@ function RunRailButton({ run, selected, showNamespace, memberCollection, onClick
             : <>{formatRunTime(run) || 'time unknown'}{formatRunDuration(run) ? ` · ${formatRunDuration(run)}` : ''} · {workCount(run)}</>}
         </span>
       </span>
-      <span className={clsx('badge-sm shrink-0', phaseBadgeClass(run.phase))}>{shortPhase(run.phase)}</span>
+      <span className={clsx('badge-sm shrink-0', phaseBadgeClass(run.phase))}>{shortPhase(run.phase)}{run.deleting ? ' · deleting' : ''}</span>
     </button>
   )
 }
@@ -1396,7 +1404,7 @@ function pluralKind(kind: string): string {
 
 function workCount(run: WorkloadRun): string {
   if (run.podTotal) {
-    if (run.podRunning) return `${run.podRunning} running ${pluralize('pod', run.podRunning)}`
+    if (run.podRunning) return `${run.podRunning} ${run.kind === 'jobs' ? 'active' : 'running'} ${pluralize('pod', run.podRunning)}`
     if (run.podPending && !run.podSucceeded && !run.podFailed) return `${run.podPending} pending ${pluralize('pod', run.podPending)}`
     if (run.podFailed && run.phase !== 'Succeeded') return `${run.podFailed}/${run.podTotal} pods failed`
     return `${run.podSucceeded ?? 0}/${run.podTotal} pods`
@@ -1416,7 +1424,7 @@ function podBreakdown(run: WorkloadRun, workflowExecution?: WorkflowExecutionMod
   const podTotal = counts?.podTotal ?? run.podTotal
   if (!podTotal) return null
   const parts = [
-    (counts?.podRunning ?? run.podRunning) ? `${counts?.podRunning ?? run.podRunning} running` : '',
+    (counts?.podRunning ?? run.podRunning) ? `${counts?.podRunning ?? run.podRunning} ${run.kind === 'jobs' ? 'active' : 'running'}` : '',
     (counts?.podSucceeded ?? run.podSucceeded) ? `${counts?.podSucceeded ?? run.podSucceeded} succeeded` : '',
     (counts?.podFailed ?? run.podFailed) ? `${counts?.podFailed ?? run.podFailed} failed` : '',
     (counts?.podPending ?? run.podPending) ? `${counts?.podPending ?? run.podPending} pending` : '',

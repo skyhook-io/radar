@@ -80,6 +80,7 @@ type WorkloadRun struct {
 	Namespace   string `json:"namespace"`
 	Name        string `json:"name"`
 	Phase       string `json:"phase"`
+	Deleting    bool   `json:"deleting,omitempty"`
 	Active      bool   `json:"active"`
 	StartedAt   string `json:"startedAt,omitempty"`
 	FinishedAt  string `json:"finishedAt,omitempty"`
@@ -1120,8 +1121,7 @@ func jobSetMemberRunInfo(jobSet *unstructured.Unstructured, job *batchv1.Job) Wo
 	run.RestartAttempt = annotations[jobSetRestartAttemptAnnotation]
 	run.JobRestartAttempt = annotations[jobSetJobRestartAttemptAnnotation]
 	if job.DeletionTimestamp != nil {
-		run.Phase = "Terminating"
-		run.Active = false
+		run.Deleting = true
 	}
 	return run
 }
@@ -1147,11 +1147,11 @@ func jobSetLauncher(jobSet *unstructured.Unstructured, job *batchv1.Job) *Worklo
 
 func sortJobSetMembers(runs []WorkloadRun) {
 	sort.SliceStable(runs, func(i, j int) bool {
-		if (runs[i].Phase == "Terminating") != (runs[j].Phase == "Terminating") {
-			return runs[i].Phase != "Terminating"
-		}
 		if rankDiff := jobSetMemberPhaseRank(runs[i].Phase) - jobSetMemberPhaseRank(runs[j].Phase); rankDiff != 0 {
 			return rankDiff < 0
+		}
+		if runs[i].Deleting != runs[j].Deleting {
+			return !runs[i].Deleting
 		}
 		if runs[i].GroupName != runs[j].GroupName {
 			return runs[i].GroupName < runs[j].GroupName
@@ -1181,10 +1181,8 @@ func jobSetMemberPhaseRank(phase string) int {
 		return 2
 	case "Succeeded", "Complete":
 		return 3
-	case "Terminating":
-		return 4
 	default:
-		return 5
+		return 4
 	}
 }
 
@@ -1295,7 +1293,7 @@ func jobRunInfo(job *batchv1.Job) WorkloadRun {
 		Launcher:     launcher,
 		PodSucceeded: int(job.Status.Succeeded),
 		PodFailed:    int(job.Status.Failed),
-		PodRunning:   int(job.Status.Active),
+		PodRunning:   int(job.Status.Active), // Job.Status.Active counts Pending Pods too.
 	}
 	run.PodTotal = run.PodSucceeded + run.PodFailed + run.PodRunning
 	if run.Desired > 0 {

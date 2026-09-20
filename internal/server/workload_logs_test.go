@@ -530,7 +530,7 @@ func TestJobSetMemberRunsPutTerminatingAttemptsAfterReplacements(t *testing.T) {
 
 	result := jobSetMemberRuns(jobSet, []*batchv1.Job{old, replacement})
 
-	if result.Runs[0].Name != "workers-new" || result.Runs[1].Phase != "Terminating" || result.Runs[1].Active {
+	if result.Runs[0].Name != "workers-new" || result.Runs[1].Phase != "Pending" || !result.Runs[1].Deleting || !result.Runs[1].Active {
 		t.Fatalf("unexpected restart ordering: %#v", result.Runs)
 	}
 }
@@ -751,5 +751,34 @@ func TestWorkloadLogEndPayloadIncludesEmptyMetadata(t *testing.T) {
 	}
 	if got["command"] != "kubectl logs job/nightly -n ci" {
 		t.Fatalf("command = %q", got["command"])
+	}
+}
+
+func TestJobSetDeletingMembersRetainTerminalOutcome(t *testing.T) {
+	root := testJobSet("training", "root", "root-uid")
+	deleted := metav1.Now()
+	for _, test := range []struct {
+		condition batchv1.JobConditionType
+		phase     string
+	}{{batchv1.JobFailed, "Failed"}, {batchv1.JobComplete, "Succeeded"}} {
+		job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "member", Namespace: "training", DeletionTimestamp: &deleted}, Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{Type: test.condition, Status: corev1.ConditionTrue}}}}
+		got := jobSetMemberRunInfo(root, job)
+		if got.Phase != test.phase || !got.Deleting || got.Active {
+			t.Fatalf("deletion obscured outcome: %#v", got)
+		}
+	}
+	runs := []WorkloadRun{{Name: "success", Phase: "Succeeded"}, {Name: "old-failure", Phase: "Failed", Deleting: true}, {Name: "current-failure", Phase: "Failed"}}
+	sortJobSetMembers(runs)
+	if runs[0].Name != "current-failure" || runs[1].Name != "old-failure" {
+		t.Fatalf("failed evidence demoted: %#v", runs)
+	}
+}
+
+func TestJobSetDeletingMemberRetainsActivity(t *testing.T) {
+	deleted := metav1.Now()
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "draining", DeletionTimestamp: &deleted}, Status: batchv1.JobStatus{Active: 1}}
+	got := jobSetMemberRunInfo(testJobSet("training", "root", "root-uid"), job)
+	if !got.Deleting || !got.Active || got.Phase != "Running" {
+		t.Fatalf("deletion obscured activity: %#v", got)
 	}
 }

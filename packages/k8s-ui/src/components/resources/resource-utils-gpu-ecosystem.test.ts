@@ -139,7 +139,7 @@ describe('GPU ecosystem API contracts', () => {
 
   it('distinguishes pending JobSets from active work', () => {
     expect(getJobSetStatus({ status: { replicatedJobsStatus: [{ active: 0, ready: 0 }] } }).text).toBe('Pending')
-    expect(getJobSetStatus({ status: { replicatedJobsStatus: [{ active: 1, ready: 0 }] } }).text).toBe('Running')
+    expect(getJobSetStatus({ status: { replicatedJobsStatus: [{ active: 1, ready: 0 }] } }).text).toBe('Active')
     expect(getJobSetStatus({}).text).toBe('Unknown')
   })
 
@@ -194,7 +194,7 @@ describe('GPU ecosystem API contracts', () => {
         ...liveCounts,
         conditions: [{ type: 'RestartingJobSet', status: 'True' }],
       },
-    }).text).toBe('Suspended')
+    }).text).toBe('Restarting')
     expect(getJobSetStatus({
       status: {
         ...liveCounts,
@@ -203,7 +203,7 @@ describe('GPU ecosystem API contracts', () => {
           { type: 'StartupPolicyInProgress', status: 'True' },
         ],
       },
-    }).text).toBe('Restarting')
+    }).text).toBe('Starting')
     expect(getJobSetStatus({
       status: {
         ...liveCounts,
@@ -302,5 +302,24 @@ describe('GPU ecosystem API contracts', () => {
       spec: { pytorchReplicaSpecs: { Worker: { replicas: 4 } } },
       status: { replicaStatuses: { Worker: { active: 1, succeeded: 1, failed: 2 } } },
     })).toBe('Worker 2/4 (2 failed)')
+  })
+})
+
+describe('JobSet status evidence boundaries', () => {
+  it('does not turn pending Pods or child failures into root health or outcomes', () => {
+    for (const counts of [{ active: 1, ready: 0 }, { failed: 1 }, { succeeded: 1 }]) {
+      expect(getJobSetStatus({ status: { replicatedJobsStatus: [counts] } })).toMatchObject({ text: 'Active', level: 'neutral' })
+    }
+  })
+  it('requires observed counts for pending and preserves unknown native states', () => {
+    expect(getJobSetStatus({ status: {} }).text).toBe('Unknown')
+    expect(getJobSetStatus({ status: { replicatedJobsStatus: [{ active: 0 }] } }).text).toBe('Pending')
+    expect(getJobSetStatus({ status: { terminalState: 'Future', conditions: [{ type: 'Completed', status: 'True' }] } }).text).toBe('Unknown')
+  })
+  it('separates suspension intent and in-order resume evidence', () => {
+    expect(getJobSetStatus({ spec: { suspend: true }, status: { replicatedJobsStatus: [{ active: 1 }] } }).text).toBe('Active')
+    const conditions = [{ type: 'Suspended', status: 'True' }, { type: 'StartupPolicyInProgress', status: 'True' }]
+    expect(getJobSetStatus({ spec: { suspend: false }, status: { conditions } }).text).toBe('Starting')
+    expect(getJobSetStatus({ spec: { suspend: true }, status: { conditions } }).text).toBe('Suspended')
   })
 })

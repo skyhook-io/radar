@@ -6796,6 +6796,7 @@ export interface WorkloadRun {
   namespace: string;
   name: string;
   phase: string;
+  deleting?: boolean;
   active: boolean;
   startedAt?: string;
   finishedAt?: string;

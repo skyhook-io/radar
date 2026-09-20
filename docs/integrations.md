@@ -1586,6 +1586,11 @@ Root outcomes require root evidence; child failures alone are not terminal.
 Native spec/status remain available. This does not add JobSet `diagnose`, infer
 admission causes, or replace the JobSet→Job→Pod ownership chain.
 
+JobSet detail also provides controller-owned member Jobs with role, index, group,
+and restart-attempt metadata. Select a Job to inspect its Pods and logs, or follow
+its backlink to the owning JobSet. Member and Pod lists show their limits explicitly;
+missing children do not imply success, and unreadable data is reported as unavailable.
+
 Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share kind names with other resources — Radar disambiguates by API group in tables, filters, and status badges.
 
 ### Model serving operators: KAITO, NVIDIA NIM, AMD

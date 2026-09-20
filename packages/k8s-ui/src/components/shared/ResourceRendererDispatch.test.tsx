@@ -944,7 +944,7 @@ describe('GPU ecosystem kind collisions', () => {
 })
 
 describe('GPU ecosystem status edge cases', () => {
-  it('JobSet with minimal status is Pending, not Running', () => {
+  it('JobSet distinguishes observed inactivity from active child Jobs', () => {
     const fresh = getResourceStatus('jobsets', {
       apiVersion: 'jobset.x-k8s.io/v1alpha2',
       status: { replicatedJobsStatus: [{ name: 'w', active: 0, ready: 0 }] },
@@ -954,7 +954,7 @@ describe('GPU ecosystem status edge cases', () => {
       status: { replicatedJobsStatus: [{ name: 'w', active: 1, ready: 1 }] },
     })
     expect(fresh?.text).toBe('Pending')
-    expect(live?.text).toBe('Running')
+    expect(live?.text).toBe('Active')
   })
 
   it('InferencePool with only an empty-parentRef default entry reads Not referenced', () => {

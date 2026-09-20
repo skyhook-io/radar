@@ -71,6 +71,10 @@ export function getJobSetStatus(resource: any): StatusBadge {
     return { text: 'Completed', color: healthColors.neutral, level: 'neutral' }
   }
 
+  if (resource.status?.terminalState) {
+    return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+  }
+
   if (failedCond?.status === 'True') {
     return { text: failedCond.reason || 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
   }
@@ -79,8 +83,14 @@ export function getJobSetStatus(resource: any): StatusBadge {
     return { text: 'Completed', color: healthColors.neutral, level: 'neutral' }
   }
 
+  const startupCond = conditions.find((c: any) => c.type === 'StartupPolicyInProgress')
+  // In-order resume retains Suspended until every role starts.
+  if (startupCond?.status === 'True' && resource.spec?.suspend !== true) {
+    return { text: 'Starting', color: healthColors.degraded, level: 'degraded' }
+  }
+
   const suspendedCond = conditions.find((c: any) => c.type === 'Suspended')
-  if (suspendedCond?.status === 'True' || resource.spec?.suspend === true) {
+  if (suspendedCond?.status === 'True') {
     return { text: 'Suspended', color: healthColors.neutral, level: 'neutral' }
   }
 
@@ -89,19 +99,18 @@ export function getJobSetStatus(resource: any): StatusBadge {
     return { text: 'Restarting', color: healthColors.degraded, level: 'degraded' }
   }
 
-  const startupCond = conditions.find((c: any) => c.type === 'StartupPolicyInProgress')
   if (startupCond?.status === 'True') {
     return { text: 'Starting', color: healthColors.degraded, level: 'degraded' }
   }
 
-  // A fresh JobSet has zeroed counts before reconciliation; only observed live
-  // child Jobs make it Running.
-  const live = sumReplicatedJobsField(resource, 'active') + sumReplicatedJobsField(resource, 'ready')
-  if (live > 0) {
-    return { text: 'Running', color: healthColors.healthy, level: 'healthy' }
-  }
-  if (resource.status) {
-    return { text: 'Pending', color: healthColors.neutral, level: 'neutral' }
+  const statuses = resource.status?.replicatedJobsStatus
+  if (Array.isArray(statuses)) {
+    // Child activity includes Pending Pods and cleanup, not application health.
+    const activity = ['active', 'ready', 'succeeded', 'failed', 'suspended']
+      .some((field) => sumReplicatedJobsField(resource, field) > 0)
+    return activity
+      ? { text: 'Active', color: healthColors.neutral, level: 'neutral' }
+      : { text: 'Pending', color: healthColors.neutral, level: 'neutral' }
   }
 
   return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }

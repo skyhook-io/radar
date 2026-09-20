@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { WorkflowExecutionActivity } from '@skyhook-io/k8s-ui/utils/workflow-execution'
 import {
   activityPreviewItems,
+  selectedRunOutsideWindow,
   effectiveDefinitionResource,
   emptyRunsCopy,
   isDirectRunKind,
@@ -201,7 +202,7 @@ describe('JobSet member presentation', () => {
       podRunning: 1,
     }
 
-    expect(jobSetMemberIdentity(member)).toBe('workers #2 · trainers #1 · 1 running pod')
+    expect(jobSetMemberIdentity(member)).toBe('workers #2 · trainers #1 · 1 active pod')
     expect(pluralizeMemberJobs(200, 240, true)).toBe('200 of 240 Jobs')
     expect(emptyRunsCopy('JobSet', {})).toEqual({
       headline: 'No child Jobs currently retained',
@@ -246,5 +247,15 @@ describe('JobSet member presentation', () => {
       ['Ready / succeeded / failed', '1 / 0 / 0'],
       ['Controller status coverage', '1 of 2 roles reported'],
     ])
+  })
+})
+
+describe('selection across a truncated member refresh', () => {
+  it('preserves a selected Job that has fallen outside the shown window', () => {
+    const shown = [{ kind: 'jobs', namespace: 'training', name: 'current', phase: 'Running', active: true }]
+    expect(selectedRunOutsideWindow(shown, 'jobs/training/earlier', true)).toBe(true)
+    expect(selectedRunOutsideWindow(shown, 'jobs/training/current', true)).toBe(false)
+    expect(selectedRunOutsideWindow(shown, 'jobs/training/earlier', false)).toBe(false)
+    expect(selectedRunOutsideWindow(shown, '', true)).toBe(false)
   })
 })
