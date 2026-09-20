@@ -5,6 +5,7 @@ import { batchRunNextStep } from './batch-run-actions'
 function run(phase: string, counts: Partial<Pick<WorkloadRun, 'podFailed' | 'podSucceeded' | 'podRunning' | 'podPending'>> = {}): WorkloadRun {
   return {
     kind: 'jobs',
+      group: 'batch',
     namespace: 'jobs',
     name: 'example',
     phase,

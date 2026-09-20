@@ -16,6 +16,7 @@ import {
   workflowDefinitionParameters,
   workflowDefinitionTarget,
   workflowRunArguments,
+  workloadRunKey,
 } from './BatchExecutionView'
 
 function activity(id: string, tone: WorkflowExecutionActivity['tone'] = 'success'): WorkflowExecutionActivity {
@@ -189,14 +190,12 @@ describe('JobSet member presentation', () => {
   it('uses role and native indexes without calling Jobs retained runs', () => {
     const member = {
       kind: 'jobs',
+      group: 'batch',
       namespace: 'training',
       name: 'distributed-workers-2',
       phase: 'Running',
       active: true,
-      replicatedJob: 'workers',
-      jobIndex: '2',
-      groupName: 'trainers',
-      groupIndex: '1',
+      jobset: { replicatedJob: 'workers', jobIndex: '2', groupName: 'trainers', groupIndex: '1' },
       running: 1,
       podTotal: 1,
       podRunning: 1,
@@ -213,15 +212,16 @@ describe('JobSet member presentation', () => {
   it('keeps the selected Job as the core Kubernetes intermediate', () => {
     expect(resourceTargetForRun({
       kind: 'jobs',
+      group: 'batch',
       namespace: 'training',
       name: 'distributed-workers-2',
       phase: 'Running',
       active: true,
     })).toEqual({
       kind: 'jobs',
+      group: 'batch',
       namespace: 'training',
       name: 'distributed-workers-2',
-      group: undefined,
     })
   })
 
@@ -252,10 +252,21 @@ describe('JobSet member presentation', () => {
 
 describe('selection across a truncated member refresh', () => {
   it('preserves a selected Job that has fallen outside the shown window', () => {
-    const shown = [{ kind: 'jobs', namespace: 'training', name: 'current', phase: 'Running', active: true }]
+    const shown = [{ kind: 'jobs', group: 'batch', namespace: 'training', name: 'current', phase: 'Running', active: true }]
     expect(selectedRunOutsideWindow(shown, 'jobs/training/earlier', true)).toBe(true)
     expect(selectedRunOutsideWindow(shown, 'jobs/training/current', true)).toBe(false)
     expect(selectedRunOutsideWindow(shown, 'jobs/training/earlier', false)).toBe(false)
     expect(selectedRunOutsideWindow(shown, '', true)).toBe(false)
+  })
+})
+
+
+describe('run navigation identity', () => {
+  it('uses the reported group and preserves the released selection address', () => {
+    const run = { group: 'batch', kind: 'jobs', namespace: 'training', name: 'worker', phase: 'Running', active: true }
+    expect(workloadRunKey(run)).toBe('jobs/training/worker')
+    expect(resourceTargetForRun(run).group).toBe('batch')
+    expect(resourceTargetForRun({ ...run, group: 'batch.volcano.sh' }).group).toBe('batch.volcano.sh')
+    expect(resourceTargetForRun({ ...run, group: 'argoproj.io', kind: 'workflows' }).group).toBe('argoproj.io')
   })
 })

@@ -2,13 +2,17 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-chi/chi/v5"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -388,8 +392,13 @@ func TestJobSetMemberRunsRequireExactControllerIdentity(t *testing.T) {
 
 	result := jobSetMemberRuns(jobSet, []*batchv1.Job{wrongGroup, staleUID, nonController, labelOnly, member, missingLabels})
 
-	if result.Total != 2 || result.Truncated || len(result.Runs) != 2 {
+	if result.Collection != WorkloadRunCollectionMembers || result.Total != 2 || result.Truncated || len(result.Runs) != 2 {
 		t.Fatalf("unexpected member bounds: %#v", result)
+	}
+	for _, run := range result.Runs {
+		if run.Name == missingLabels.Name && (run.JobSet == nil || run.JobSet.ReplicatedJob != "" || run.JobSet.JobIndex != "") {
+			t.Fatalf("unreported member identity was invented: %#v", run.JobSet)
+		}
 	}
 	var got *WorkloadRun
 	for i := range result.Runs {
@@ -398,16 +407,16 @@ func TestJobSetMemberRunsRequireExactControllerIdentity(t *testing.T) {
 			break
 		}
 	}
-	if got == nil {
+	if got == nil || got.JobSet == nil {
 		t.Fatalf("owned member missing from %#v", result.Runs)
 	}
-	if got.ReplicatedJob != "workers" || got.ReplicatedJobReplicas != "4" || got.JobIndex != "2" || got.GlobalReplicas != "5" || got.GlobalIndex != "3" {
+	if got.JobSet.ReplicatedJob != "workers" || got.JobSet.ReplicatedJobReplicas != "4" || got.JobSet.JobIndex != "2" || got.JobSet.GlobalReplicas != "5" || got.JobSet.GlobalIndex != "3" {
 		t.Fatalf("unexpected role/index metadata: %#v", got)
 	}
-	if got.GroupName != "trainers" || got.GroupReplicas != "4" || got.GroupIndex != "2" {
+	if got.JobSet.GroupName != "trainers" || got.JobSet.GroupReplicas != "4" || got.JobSet.GroupIndex != "2" {
 		t.Fatalf("unexpected group metadata: %#v", got)
 	}
-	if got.RestartAttempt != "1" || got.JobRestartAttempt != "2" {
+	if got.JobSet.RestartAttempt != "1" || got.JobSet.JobRestartAttempt != "2" {
 		t.Fatalf("unexpected restart metadata: %#v", got)
 	}
 	if got.Launcher == nil || got.Launcher.Kind != "JobSet" || got.Launcher.Group != "jobset.x-k8s.io" || got.Launcher.Name != "distributed" {
@@ -780,5 +789,84 @@ func TestJobSetDeletingMemberRetainsActivity(t *testing.T) {
 	got := jobSetMemberRunInfo(testJobSet("training", "root", "root-uid"), job)
 	if !got.Deleting || !got.Active || got.Phase != "Running" {
 		t.Fatalf("deletion obscured activity: %#v", got)
+	}
+}
+
+func TestWorkloadRunsHTTPContract(t *testing.T) {
+	controller := true
+	jobSet := testJobSet("training", "distributed", "jobset-current")
+	emptyJobSet := testJobSet("training", "empty", "jobset-empty")
+	member := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "training", Name: "distributed-workers-0",
+		OwnerReferences: []metav1.OwnerReference{{APIVersion: jobSetAPIVersion, Kind: "JobSet", Name: "distributed", UID: "jobset-current", Controller: &controller}},
+		Labels:          map[string]string{replicatedJobNameLabel: "workers", replicatedJobReplicasLabel: "1", jobSetJobIndexLabel: "0", jobSetGlobalReplicasLabel: "1", jobSetJobGlobalIndexLabel: "0", jobSetGroupNameLabel: "trainers", jobSetGroupReplicasLabel: "1", jobSetJobGroupIndexLabel: "0"},
+		Annotations:     map[string]string{jobSetRestartAttemptAnnotation: "0", jobSetJobRestartAttemptAnnotation: "0"},
+	}}
+	ordinary := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "training", Name: "ordinary"}}
+	cronJob := &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Namespace: "training", Name: "empty"}}
+	useTestResourceCache(t, fake.NewSimpleClientset(member, ordinary, cronJob))
+	jobSetGVR := schema.GroupVersionResource{Group: "jobset.x-k8s.io", Version: "v1alpha2", Resource: "jobsets"}
+	workflowGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "workflows"}
+	workflow := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "argoproj.io/v1alpha1", "kind": "Workflow", "metadata": map[string]any{"name": "workflow", "namespace": "training"}}}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{jobSetGVR: "JobSetList", workflowGVR: "WorkflowList"}, jobSet, emptyJobSet, workflow)
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{
+		{Group: jobSetGVR.Group, Version: jobSetGVR.Version, Name: jobSetGVR.Resource, Kind: "JobSet", Namespaced: true, Verbs: []string{"get", "list", "watch"}},
+		{Group: workflowGVR.Group, Version: workflowGVR.Version, Name: workflowGVR.Resource, Kind: "Workflow", Namespaced: true, Verbs: []string{"get", "list", "watch"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(k8s.ResetTestDynamicState)
+	srv := &Server{}
+	router := chi.NewRouter()
+	router.Get("/api/workloads/{kind}/{namespace}/{name}/runs", srv.handleWorkloadRuns)
+	for _, tc := range []struct {
+		path, collection, group string
+		count                   int
+		member                  bool
+	}{
+		{"jobsets/training/distributed", "members", "batch", 1, true},
+		{"jobsets/training/empty", "members", "", 0, false},
+		{"cronjobs/training/empty", "runs", "", 0, false},
+		{"jobs/training/ordinary", "runs", "batch", 1, false},
+		{"jobs/training/distributed-workers-0", "runs", "batch", 1, false},
+		{"workflows/training/workflow", "runs", "argoproj.io", 1, false},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, httptest.NewRequest("GET", "/api/workloads/"+tc.path+"/runs", nil))
+			if recorder.Code != 200 {
+				t.Fatalf("status %d: %s", recorder.Code, recorder.Body.String())
+			}
+			var got map[string]any
+			if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			runs, ok := got["runs"].([]any)
+			if !ok || len(runs) != tc.count || got["collection"] != tc.collection || got["total"] != float64(tc.count) || got["truncated"] != false {
+				t.Fatalf("unexpected collection: %s", recorder.Body.String())
+			}
+			if tc.count == 0 {
+				return
+			}
+			run := runs[0].(map[string]any)
+			if run["group"] != tc.group {
+				t.Fatalf("group = %v", run["group"])
+			}
+			metadata, exists := run["jobset"]
+			if exists != tc.member {
+				t.Fatalf("unexpected member metadata: %v", run)
+			}
+			if tc.member {
+				want := map[string]any{"replicatedJob": "workers", "replicatedJobReplicas": "1", "jobIndex": "0", "globalReplicas": "1", "globalIndex": "0", "groupName": "trainers", "groupReplicas": "1", "groupIndex": "0", "restartAttempt": "0", "jobRestartAttempt": "0"}
+				if !reflect.DeepEqual(metadata, want) {
+					t.Fatalf("metadata = %v, want %v", metadata, want)
+				}
+				for key := range want {
+					if _, exists := run[key]; exists {
+						t.Fatalf("native field %s leaked into shared run", key)
+					}
+				}
+			}
+		})
 	}
 }

@@ -76,6 +76,7 @@ type workloadLogMetadata struct {
 }
 
 type WorkloadRun struct {
+	Group       string `json:"group"`
 	Kind        string `json:"kind"`
 	Namespace   string `json:"namespace"`
 	Name        string `json:"name"`
@@ -88,24 +89,15 @@ type WorkloadRun struct {
 	Trigger     string `json:"trigger,omitempty"`
 	Message     string `json:"message,omitempty"`
 
-	Succeeded             int32                   `json:"succeeded,omitempty"`
-	Failed                int32                   `json:"failed,omitempty"`
-	Running               int32                   `json:"running,omitempty"`
-	Desired               int32                   `json:"desired,omitempty"`
-	Parallelism           int32                   `json:"parallelism,omitempty"`
-	Progress              string                  `json:"progress,omitempty"`
-	Template              string                  `json:"template,omitempty"`
-	Launcher              *WorkloadRunResourceRef `json:"launcher,omitempty"`
-	ReplicatedJob         string                  `json:"replicatedJob,omitempty"`
-	ReplicatedJobReplicas string                  `json:"replicatedJobReplicas,omitempty"`
-	JobIndex              string                  `json:"jobIndex,omitempty"`
-	GlobalReplicas        string                  `json:"globalReplicas,omitempty"`
-	GlobalIndex           string                  `json:"globalIndex,omitempty"`
-	GroupName             string                  `json:"groupName,omitempty"`
-	GroupReplicas         string                  `json:"groupReplicas,omitempty"`
-	GroupIndex            string                  `json:"groupIndex,omitempty"`
-	RestartAttempt        string                  `json:"restartAttempt,omitempty"`
-	JobRestartAttempt     string                  `json:"jobRestartAttempt,omitempty"`
+	Succeeded   int32                   `json:"succeeded,omitempty"`
+	Failed      int32                   `json:"failed,omitempty"`
+	Running     int32                   `json:"running,omitempty"`
+	Desired     int32                   `json:"desired,omitempty"`
+	Parallelism int32                   `json:"parallelism,omitempty"`
+	Progress    string                  `json:"progress,omitempty"`
+	Template    string                  `json:"template,omitempty"`
+	Launcher    *WorkloadRunResourceRef `json:"launcher,omitempty"`
+	JobSet      *JobSetMember           `json:"jobset,omitempty"`
 
 	PodTotal     int `json:"podTotal,omitempty"`
 	PodSucceeded int `json:"podSucceeded,omitempty"`
@@ -114,10 +106,34 @@ type WorkloadRun struct {
 	PodPending   int `json:"podPending,omitempty"`
 }
 
+// JobSetMember preserves controller-written labels and restart annotations as strings.
+// It describes membership in the returned JobSet collection, not a generic execution attempt.
+type JobSetMember struct {
+	ReplicatedJob         string `json:"replicatedJob,omitempty"`
+	ReplicatedJobReplicas string `json:"replicatedJobReplicas,omitempty"`
+	JobIndex              string `json:"jobIndex,omitempty"`
+	GlobalReplicas        string `json:"globalReplicas,omitempty"`
+	GlobalIndex           string `json:"globalIndex,omitempty"`
+	GroupName             string `json:"groupName,omitempty"`
+	GroupReplicas         string `json:"groupReplicas,omitempty"`
+	GroupIndex            string `json:"groupIndex,omitempty"`
+	RestartAttempt        string `json:"restartAttempt,omitempty"`
+	JobRestartAttempt     string `json:"jobRestartAttempt,omitempty"`
+}
+
+type WorkloadRunCollection string
+
+const (
+	WorkloadRunCollectionRuns    WorkloadRunCollection = "runs"
+	WorkloadRunCollectionMembers WorkloadRunCollection = "members"
+)
+
 type WorkloadRunsResponse struct {
-	Runs      []WorkloadRun `json:"runs"`
-	Total     int           `json:"total"`
-	Truncated bool          `json:"truncated"`
+	// Runs are execution roots; members are children of one execution, not its history.
+	Collection WorkloadRunCollection `json:"collection"`
+	Runs       []WorkloadRun         `json:"runs"`
+	Total      int                   `json:"total"`
+	Truncated  bool                  `json:"truncated"`
 }
 
 type WorkloadRunResourceRef struct {
@@ -292,7 +308,7 @@ func (s *Server) handleWorkloadRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.writeJSON(w, map[string]any{"runs": runs})
+	s.writeJSON(w, WorkloadRunsResponse{Collection: WorkloadRunCollectionRuns, Runs: runs, Total: len(runs)})
 }
 
 func (s *Server) readableRunNamespaces(r *http.Request, group, resource string, namespaces []string) ([]string, bool) {
@@ -930,7 +946,7 @@ func (s *Server) getWorkloadRuns(ctx context.Context, kind, namespace, name stri
 		return nil, &workloadError{http.StatusServiceUnavailable, "resource cache not available"}
 	}
 
-	var runs []WorkloadRun
+	runs := make([]WorkloadRun, 0)
 	switch kind {
 	case "job", "jobs":
 		if cache.Jobs() == nil {
@@ -1086,7 +1102,7 @@ func jobSetMemberRuns(jobSet *unstructured.Unstructured, jobs []*batchv1.Job) Wo
 		runs = append(runs, jobSetMemberRunInfo(jobSet, job))
 	}
 	sortJobSetMembers(runs)
-	result := WorkloadRunsResponse{Runs: runs, Total: len(runs)}
+	result := WorkloadRunsResponse{Collection: WorkloadRunCollectionMembers, Runs: runs, Total: len(runs)}
 	if len(result.Runs) > maxJobSetMemberRuns {
 		result.Runs = result.Runs[:maxJobSetMemberRuns]
 		result.Truncated = true
@@ -1110,16 +1126,18 @@ func jobSetMemberRunInfo(jobSet *unstructured.Unstructured, job *batchv1.Job) Wo
 	labels := job.GetLabels()
 	annotations := job.GetAnnotations()
 	run.Launcher = jobSetLauncher(jobSet, job)
-	run.ReplicatedJob = labels[replicatedJobNameLabel]
-	run.ReplicatedJobReplicas = labels[replicatedJobReplicasLabel]
-	run.JobIndex = labels[jobSetJobIndexLabel]
-	run.GlobalReplicas = labels[jobSetGlobalReplicasLabel]
-	run.GlobalIndex = labels[jobSetJobGlobalIndexLabel]
-	run.GroupName = labels[jobSetGroupNameLabel]
-	run.GroupReplicas = labels[jobSetGroupReplicasLabel]
-	run.GroupIndex = labels[jobSetJobGroupIndexLabel]
-	run.RestartAttempt = annotations[jobSetRestartAttemptAnnotation]
-	run.JobRestartAttempt = annotations[jobSetJobRestartAttemptAnnotation]
+	run.JobSet = &JobSetMember{
+		ReplicatedJob:         labels[replicatedJobNameLabel],
+		ReplicatedJobReplicas: labels[replicatedJobReplicasLabel],
+		JobIndex:              labels[jobSetJobIndexLabel],
+		GlobalReplicas:        labels[jobSetGlobalReplicasLabel],
+		GlobalIndex:           labels[jobSetJobGlobalIndexLabel],
+		GroupName:             labels[jobSetGroupNameLabel],
+		GroupReplicas:         labels[jobSetGroupReplicasLabel],
+		GroupIndex:            labels[jobSetJobGroupIndexLabel],
+		RestartAttempt:        annotations[jobSetRestartAttemptAnnotation],
+		JobRestartAttempt:     annotations[jobSetJobRestartAttemptAnnotation],
+	}
 	if job.DeletionTimestamp != nil {
 		run.Deleting = true
 	}
@@ -1153,19 +1171,19 @@ func sortJobSetMembers(runs []WorkloadRun) {
 		if runs[i].Deleting != runs[j].Deleting {
 			return !runs[i].Deleting
 		}
-		if runs[i].GroupName != runs[j].GroupName {
-			return runs[i].GroupName < runs[j].GroupName
+		if runs[i].JobSet.GroupName != runs[j].JobSet.GroupName {
+			return runs[i].JobSet.GroupName < runs[j].JobSet.GroupName
 		}
-		if runs[i].ReplicatedJob != runs[j].ReplicatedJob {
-			return runs[i].ReplicatedJob < runs[j].ReplicatedJob
+		if runs[i].JobSet.ReplicatedJob != runs[j].JobSet.ReplicatedJob {
+			return runs[i].JobSet.ReplicatedJob < runs[j].JobSet.ReplicatedJob
 		}
-		left, leftErr := strconv.Atoi(runs[i].JobIndex)
-		right, rightErr := strconv.Atoi(runs[j].JobIndex)
+		left, leftErr := strconv.Atoi(runs[i].JobSet.JobIndex)
+		right, rightErr := strconv.Atoi(runs[j].JobSet.JobIndex)
 		if leftErr == nil && rightErr == nil && left != right {
 			return left < right
 		}
-		if runs[i].JobIndex != runs[j].JobIndex {
-			return runs[i].JobIndex < runs[j].JobIndex
+		if runs[i].JobSet.JobIndex != runs[j].JobSet.JobIndex {
+			return runs[i].JobSet.JobIndex < runs[j].JobSet.JobIndex
 		}
 		return runs[i].Name < runs[j].Name
 	})
@@ -1277,6 +1295,7 @@ func jobRunInfo(job *batchv1.Job) WorkloadRun {
 		trigger = "event"
 	}
 	run := WorkloadRun{
+		Group:        "batch",
 		Kind:         "jobs",
 		Namespace:    job.Namespace,
 		Name:         job.Name,
@@ -1380,6 +1399,7 @@ func workflowRunInfo(workflow *unstructured.Unstructured) WorkloadRun {
 		trigger = "schedule"
 	}
 	run := WorkloadRun{
+		Group:       "argoproj.io",
 		Kind:        "workflows",
 		Namespace:   workflow.GetNamespace(),
 		Name:        workflow.GetName(),

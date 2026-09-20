@@ -5,7 +5,7 @@ import { BatchExecutionFullscreen } from './BatchExecutionView'
 vi.mock('../../api/client', () => ({
   useResource: () => ({}),
   useWorkloadPods: () => ({}),
-  useWorkloadRuns: () => ({ data: { runs: [] } }),
+  useWorkloadRuns: () => ({ data: { collection: 'runs', runs: [], total: 0, truncated: false } }),
 }))
 
 describe.each(['Job', 'CronJob', 'ScaledJob'])('%s cleanup retention display', (kind) => {

@@ -6792,6 +6792,7 @@ export interface WorkloadLogsResponse {
 }
 
 export interface WorkloadRun {
+  group: string;
   kind: string;
   namespace: string;
   name: string;
@@ -6810,16 +6811,7 @@ export interface WorkloadRun {
   parallelism?: number;
   progress?: string;
   template?: string;
-  replicatedJob?: string;
-  replicatedJobReplicas?: string;
-  jobIndex?: string;
-  globalReplicas?: string;
-  globalIndex?: string;
-  groupName?: string;
-  groupReplicas?: string;
-  groupIndex?: string;
-  restartAttempt?: string;
-  jobRestartAttempt?: string;
+  jobset?: JobSetMember;
   launcher?: {
     kind: string;
     namespace?: string;
@@ -6833,10 +6825,24 @@ export interface WorkloadRun {
   podPending?: number;
 }
 
+export interface JobSetMember {
+  replicatedJob?: string;
+  replicatedJobReplicas?: string;
+  jobIndex?: string;
+  globalReplicas?: string;
+  globalIndex?: string;
+  groupName?: string;
+  groupReplicas?: string;
+  groupIndex?: string;
+  restartAttempt?: string;
+  jobRestartAttempt?: string;
+}
+
 export interface WorkloadRunsResponse {
+  collection: "runs" | "members";
   runs: WorkloadRun[];
-  total?: number;
-  truncated?: boolean;
+  total: number;
+  truncated: boolean;
 }
 
 // Fetch pods for a workload

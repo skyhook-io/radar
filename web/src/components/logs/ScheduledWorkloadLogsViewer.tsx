@@ -17,8 +17,8 @@ const EMPTY_RUNS: WorkloadRun[] = []
 
 export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRunKey, onSelectRun }: ScheduledWorkloadLogsViewerProps) {
   const clusterScoped = kind === 'ClusterWorkflowTemplate' || kind === 'clusterworkflowtemplates'
-  const memberCollection = kind === 'JobSet' || kind === 'jobsets'
   const runsQuery = useWorkloadRuns(kind, namespace, name, true, { clusterScoped, refetchActive: true })
+  const memberCollection = runsQuery.data?.collection === 'members'
   const runs = runsQuery.data?.runs ?? EMPTY_RUNS
   const defaultRun = useMemo(() => memberCollection ? runs[0] : pickDefaultRun(runs), [memberCollection, runs])
   const [localRunKey, setLocalRunKey] = useState('')
@@ -45,7 +45,7 @@ export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRun
       <div className="flex h-full items-center justify-center text-theme-text-tertiary">
         <div className="flex items-center gap-2">
           <Loader2 className="h-4 w-4 animate-spin" />
-          <span>{memberCollection ? 'Loading member Jobs...' : 'Loading runs...'}</span>
+          <span>{kind === 'JobSet' || kind === 'jobsets' ? 'Loading member Jobs...' : 'Loading runs...'}</span>
         </div>
       </div>
     )
@@ -55,7 +55,7 @@ export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRun
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 text-theme-text-tertiary">
         <Terminal className="h-8 w-8" />
-        <span>{runsQuery.error instanceof Error ? runsQuery.error.message : memberCollection ? 'Failed to load member Jobs' : 'Failed to load runs'}</span>
+        <span>{runsQuery.error instanceof Error ? runsQuery.error.message : kind === 'JobSet' || kind === 'jobsets' ? 'Failed to load member Jobs' : 'Failed to load runs'}</span>
       </div>
     )
   }
@@ -110,7 +110,7 @@ export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRun
       </div>
       <div className="min-h-0 flex-1">
         <WorkloadLogsViewer
-          key={`${selectedRun.kind}/${selectedRun.namespace}/${selectedRun.name}`}
+          key={workloadRunLogsKey(selectedRun)}
           kind={selectedRun.kind}
           namespace={selectedRun.namespace}
           name={selectedRun.name}
@@ -145,12 +145,17 @@ function formatRunTime(run: WorkloadRun): string {
 
 function formatRunOption(run: WorkloadRun, showNamespace: boolean, memberCollection: boolean): string {
   const bits = [showNamespace ? `${run.namespace}/${run.name}` : run.name, `${run.phase}${run.deleting ? ' · deleting' : ''}`]
-  if (memberCollection && run.replicatedJob) {
-    bits.push(`${run.replicatedJob}${run.jobIndex ? ` #${run.jobIndex}` : ''}`)
+  if (memberCollection && run.jobset?.replicatedJob) {
+    bits.push(`${run.jobset?.replicatedJob}${run.jobset?.jobIndex ? ` #${run.jobset?.jobIndex}` : ''}`)
   }
   if (run.progress) bits.push(run.progress)
   else if (run.desired) bits.push(`${run.succeeded ?? 0}/${run.desired}`)
   const work = run.podTotal ? `${run.podSucceeded ?? 0}/${run.podTotal} pods` : ''
   if (work) bits.push(work)
   return bits.join(' · ')
+}
+
+// A JobSet retry can replace a child Job at the same resource address.
+export function workloadRunLogsKey(run: WorkloadRun): string {
+  return JSON.stringify([run.group, workloadRunKey(run), run.jobset?.restartAttempt, run.jobset?.jobRestartAttempt])
 }

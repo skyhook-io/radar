@@ -119,9 +119,9 @@ interface BatchExecutionProps {
 
 export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resource, selectedRunKey = '', canViewLogs = false, onSelectRun, onSwitchToLogs, onSwitchToTimeline, onNavigateToResource }: BatchExecutionProps) {
   const scheduled = SCHEDULED_KINDS.has(kind)
-  const memberCollection = kind === 'JobSet'
   const clusterScoped = kind === 'ClusterWorkflowTemplate'
   const runsQuery = useWorkloadRuns(apiKind, namespace, name, true, { refetchActive: true, clusterScoped })
+  const memberCollection = runsQuery.data?.collection === 'members'
   const runs = runsQuery.data?.runs ?? EMPTY_RUNS
   const defaultRun = useMemo(() => memberCollection ? runs[0] : pickDefaultRun(runs), [memberCollection, runs])
   const [runFilter, setRunFilter] = useState<'all' | 'active' | 'failed'>('all')
@@ -209,11 +209,11 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
         <EmptyState
           tone="neutral"
           variant="card"
-          headline={memberCollection ? 'Member Jobs unavailable' : 'Run history unavailable'}
+          headline={kind === 'JobSet' ? 'Member Jobs unavailable' : 'Run history unavailable'}
           body={
             runsQuery.error instanceof Error
               ? runsQuery.error.message
-              : memberCollection
+              : kind === 'JobSet'
                 ? 'Radar could not load this JobSet’s child Jobs.'
                 : 'Radar could not load retained runs.'
           }
@@ -281,7 +281,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
               <div className="space-y-1">
                 {visibleRuns.map((run) => (
                   <RunRailButton
-                    key={`${run.kind}/${run.namespace}/${run.name}`}
+                    key={workloadRunKey(run)}
                     run={run}
                     showNamespace={clusterScoped}
                     memberCollection={memberCollection}
@@ -770,13 +770,13 @@ function parameterValue(parameter: WorkflowParameter): string {
 function RunDetailList({ run, resource, workflowExecution, scheduledParent, memberCollection }: { run: WorkloadRun; resource: any; workflowExecution: WorkflowExecutionModel | null; scheduledParent: boolean; memberCollection: boolean }) {
   const isWorkflowRun = run.kind === 'workflows' || !!workflowExecution
   const rows: Array<[string, string]> = [
-    ...(run.replicatedJob ? [['Role', run.replicatedJob]] as Array<[string, string]> : []),
-    ...(run.jobIndex ? [['Job index', formatIndexedCount(run.jobIndex, run.replicatedJobReplicas)]] as Array<[string, string]> : []),
-    ...(run.globalIndex ? [['Global index', formatIndexedCount(run.globalIndex, run.globalReplicas)]] as Array<[string, string]> : []),
-    ...(run.groupName ? [['Group', run.groupName]] as Array<[string, string]> : []),
-    ...(run.groupIndex ? [['Group index', formatIndexedCount(run.groupIndex, run.groupReplicas)]] as Array<[string, string]> : []),
-    ...(run.restartAttempt ? [['JobSet restart attempt', `#${run.restartAttempt}`]] as Array<[string, string]> : []),
-    ...(run.jobRestartAttempt ? [['Job restart attempt', `#${run.jobRestartAttempt}`]] as Array<[string, string]> : []),
+    ...(run.jobset?.replicatedJob ? [['Role', run.jobset?.replicatedJob]] as Array<[string, string]> : []),
+    ...(run.jobset?.jobIndex ? [['Job index', formatIndexedCount(run.jobset?.jobIndex, run.jobset?.replicatedJobReplicas)]] as Array<[string, string]> : []),
+    ...(run.jobset?.globalIndex ? [['Global index', formatIndexedCount(run.jobset?.globalIndex, run.jobset?.globalReplicas)]] as Array<[string, string]> : []),
+    ...(run.jobset?.groupName ? [['Group', run.jobset?.groupName]] as Array<[string, string]> : []),
+    ...(run.jobset?.groupIndex ? [['Group index', formatIndexedCount(run.jobset?.groupIndex, run.jobset?.groupReplicas)]] as Array<[string, string]> : []),
+    ...(run.jobset?.restartAttempt ? [['JobSet restart attempt', `#${run.jobset?.restartAttempt}`]] as Array<[string, string]> : []),
+    ...(run.jobset?.jobRestartAttempt ? [['Job restart attempt', `#${run.jobset?.jobRestartAttempt}`]] as Array<[string, string]> : []),
     ['Started', run.startedAt ? formatAge(run.startedAt) : '-'],
     ['Finished', run.finishedAt ? formatAge(run.finishedAt) : run.active ? 'Running' : '-'],
     ['Duration', formatRunDuration(run) || '-'],
@@ -1223,11 +1223,11 @@ function RunRailButton({ run, selected, showNamespace, memberCollection, onClick
 }
 
 export function jobSetMemberIdentity(run: WorkloadRun): string {
-  const identity = run.replicatedJob
-    ? `${run.replicatedJob}${run.jobIndex ? ` #${run.jobIndex}` : ''}`
+  const identity = run.jobset?.replicatedJob
+    ? `${run.jobset?.replicatedJob}${run.jobset?.jobIndex ? ` #${run.jobset?.jobIndex}` : ''}`
     : 'Role unknown'
-  const group = run.groupName
-    ? ` · ${run.groupName}${run.groupIndex ? ` #${run.groupIndex}` : ''}`
+  const group = run.jobset?.groupName
+    ? ` · ${run.jobset?.groupName}${run.jobset?.groupIndex ? ` #${run.jobset?.groupIndex}` : ''}`
     : ''
   return `${identity}${group} · ${workCount(run)}`
 }
@@ -1384,7 +1384,7 @@ export function resourceTargetForRun(run: WorkloadRun) {
     kind: run.kind,
     namespace: run.namespace,
     name: run.name,
-    group: run.kind === 'workflows' ? 'argoproj.io' : undefined,
+    group: run.group,
   }
 }
 
