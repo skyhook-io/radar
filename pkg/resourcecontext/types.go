@@ -30,33 +30,34 @@ import "time"
 // emerges that needs deterministic prose, add it as a separate
 // `explain_resource` tool rather than re-introducing it inline here.
 type ResourceContext struct {
-	Reflection      *ReflectionContext `json:"reflection,omitempty"`
-	Tier            ContextTier        `json:"tier"`
-	Owner           *ContextRef        `json:"owner,omitempty"`
-	ManagedBy       []ContextRef       `json:"managedBy,omitempty"`
-	Exposes         []ContextRef       `json:"exposes,omitempty"`
-	SelectedBy      []ContextRef       `json:"selectedBy,omitempty"`
-	ReferencedBy    *ReferencedBy      `json:"referencedBy,omitempty"`
-	Uses            *UsesBlock         `json:"uses,omitempty"`
-	RunsOn          *ContextRef        `json:"runsOn,omitempty"`
-	ScaledBy        []ScalerRef        `json:"scaledBy,omitempty"`
-	StatusSummary   *StatusSummary     `json:"statusSummary,omitempty"`
-	Scheduling      *SchedulingSummary `json:"scheduling,omitempty"`
-	Execution       *ExecutionSummary  `json:"execution,omitempty"`
-	PodSummary      *PodSummary        `json:"podSummary,omitempty"`
-	WorkloadSummary *WorkloadSummary   `json:"workloadSummary,omitempty"`
-	ServiceSummary  *ServiceSummary    `json:"serviceSummary,omitempty"`
-	IngressSummary  *IngressSummary    `json:"ingressSummary,omitempty"`
-	NodeSummary     *NodeSummary       `json:"nodeSummary,omitempty"`
-	PVCSummary      *PVCSummary        `json:"pvcSummary,omitempty"`
-	JobSummary      *JobSummary        `json:"jobSummary,omitempty"`
-	CronJobSummary  *CronJobSummary    `json:"cronJobSummary,omitempty"`
-	HPASummary      *HPASummary        `json:"hpaSummary,omitempty"`
-	IssueSummary    *IssueSummary      `json:"issueSummary,omitempty"`
-	AuditSummary    *AuditSummary      `json:"auditSummary,omitempty"`
-	PolicySummary   *PolicySummary     `json:"policySummary,omitempty"`
-	AppReferences   *AppReferences     `json:"appReferences,omitempty"`
-	Omitted         []OmittedField     `json:"omitted,omitempty"`
+	Reflection        *ReflectionContext `json:"reflection,omitempty"`
+	Tier              ContextTier        `json:"tier"`
+	Owner             *ContextRef        `json:"owner,omitempty"`
+	ManagedBy         []ContextRef       `json:"managedBy,omitempty"`
+	Exposes           []ContextRef       `json:"exposes,omitempty"`
+	SelectedBy        []ContextRef       `json:"selectedBy,omitempty"`
+	ReferencedBy      *ReferencedBy      `json:"referencedBy,omitempty"`
+	Uses              *UsesBlock         `json:"uses,omitempty"`
+	RunsOn            *ContextRef        `json:"runsOn,omitempty"`
+	ScaledBy          []ScalerRef        `json:"scaledBy,omitempty"`
+	StatusSummary     *StatusSummary     `json:"statusSummary,omitempty"`
+	Scheduling        *SchedulingSummary `json:"scheduling,omitempty"`
+	Execution         *ExecutionSummary  `json:"execution,omitempty"`
+	RayServiceSummary *RayServiceSummary `json:"rayServiceSummary,omitempty"`
+	PodSummary        *PodSummary        `json:"podSummary,omitempty"`
+	WorkloadSummary   *WorkloadSummary   `json:"workloadSummary,omitempty"`
+	ServiceSummary    *ServiceSummary    `json:"serviceSummary,omitempty"`
+	IngressSummary    *IngressSummary    `json:"ingressSummary,omitempty"`
+	NodeSummary       *NodeSummary       `json:"nodeSummary,omitempty"`
+	PVCSummary        *PVCSummary        `json:"pvcSummary,omitempty"`
+	JobSummary        *JobSummary        `json:"jobSummary,omitempty"`
+	CronJobSummary    *CronJobSummary    `json:"cronJobSummary,omitempty"`
+	HPASummary        *HPASummary        `json:"hpaSummary,omitempty"`
+	IssueSummary      *IssueSummary      `json:"issueSummary,omitempty"`
+	AuditSummary      *AuditSummary      `json:"auditSummary,omitempty"`
+	PolicySummary     *PolicySummary     `json:"policySummary,omitempty"`
+	AppReferences     *AppReferences     `json:"appReferences,omitempty"`
+	Omitted           []OmittedField     `json:"omitted,omitempty"`
 }
 
 // ContextTier signals how much enrichment is included. "basic" is the

@@ -1519,18 +1519,26 @@ coverage, or support for other Kueue API versions.
 | RayService | `ray.io/v1` | lifecycle conditions + active/pending RayCluster runtime status |
 | RayCronJob | `ray.io/v1` | suspend |
 
-For an exact `ray.io/v1` RayService, the REST AI resource endpoint and MCP
-`get_resource` project a compact `resourceContext.execution` summary from
-KubeRay's authoritative conditions. Service lifecycle stays separate from the
-controller-reported active and pending RayCluster runtime slots. Each named
-slot can carry its selected native RayCluster condition and, when KubeRay
-reports them, target-capacity and traffic percentages; an observed zero remains
-zero rather than becoming unavailable. The summary does not use deprecated
-`serviceStatus` or RayCluster `state` fallbacks, invent child names, flatten
-RayService ownership, or emit Job/member counts that RayService does not own.
-Full Serve application/deployment status and `numServeEndpoints` remain on the
-returned resource; the endpoint count spans both runtime slots during an
-incremental upgrade and is not attributed to either one.
+For an exact `ray.io/v1` RayService, REST AI detail and MCP `get_resource`
+include `resourceContext.rayServiceSummary` with named active/pending revisions, generation
+evidence, requested suspension, reported percentages, and up to eight name-sorted
+Serve application states per revision (with explicit truncation). Readiness,
+upgrade/rollback, and suspension conditions remain independent in the existing
+`statusSummary`: a healthy active
+service can coexist with a failing pending revision. Requested suspension is
+separate from controller acknowledgement. Embedded RayCluster conditions are deliberately excluded: changes to them alone
+do not trigger RayService status writes. Missing percentages stay absent (normal
+for non-incremental upgrades) and explicit zero stays zero. Traffic percentages
+represent configured route weights, not measured requests.
+
+The projection follows KubeRay v1.7.0 and performs no child reads. It does not use
+deprecated state fallbacks or infer health from cluster names. Ready means proxy
+endpoints exist, not that every application is healthy; inspect the native app
+states and, when truncated, the full resource. Application messages, deployment
+status and the cross-revision endpoint count remain on the resource. Suspension
+tears down owned resources; resume creates new clusters. The [KubeRay controller lane](../scripts/kuberay-demo/README.md)
+checks a real healthy active revision and failed pending revision through REST
+and MCP; incremental Gateway traffic shifting is outside that lane's proof.
 
 ### KServe
 

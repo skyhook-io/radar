@@ -60,12 +60,13 @@ type Options struct {
 	RelIndex *topology.RelationshipsIndex
 
 	// Pre-computed summaries — pass-through into the response.
-	IssueSummary  *IssueSummary
-	AuditSummary  *AuditSummary
-	Scheduling    *SchedulingSummary
-	Execution     *ExecutionSummary
-	PolicyReports PolicyReportLookup // nil = Kyverno not installed / no findings
-	AppReferences *AppReferences
+	IssueSummary      *IssueSummary
+	AuditSummary      *AuditSummary
+	Scheduling        *SchedulingSummary
+	Execution         *ExecutionSummary
+	RayServiceSummary *RayServiceSummary
+	PolicyReports     PolicyReportLookup // nil = Kyverno not installed / no findings
+	AppReferences     *AppReferences
 	// Attached only after the evidence Job and Pod pass the access gate.
 	ContainerCompletionSplit *ContainerCompletionSplit
 
@@ -321,6 +322,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	rc.StatusSummary = buildStatusSummary(obj)
 	rc.Scheduling = filterSchedulingSummary(ctx, opts.Scheduling, opts.AccessChecker, omitted)
 	rc.Execution = opts.Execution
+	rc.RayServiceSummary = opts.RayServiceSummary
 
 	// 4. Pre-computed summaries — pass-through.
 	rc.IssueSummary = opts.IssueSummary

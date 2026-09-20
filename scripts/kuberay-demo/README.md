@@ -89,7 +89,16 @@ context and cluster to match the owned lane, and waits for exact live-versus-cac
 resource identity, owner references, labels and Service selectors. It then checks
 Radar's real group-aware `rayservices.ray.io` and
 `rayclusters.ray.io` browse paths, native controller status, and the generated
-Pod/Service lineage. Browser smoke is optional for this script-only fixture;
+Pod/Service lineage. It also asserts the exact basic-tier `resourceContext.rayServiceSummary`
+envelope through REST AI detail and MCP `get_resource`: root generation evidence,
+active cluster name with the RUNNING application, and the pending name without
+invented application health. It also checks concurrent Ready and UpgradeInProgress
+conditions in the existing `statusSummary`. Embedded RayCluster conditions are
+not projected because their changes alone do not trigger RayService status writes.
+It rejects a finite-run `execution` block for this serving root. Both surfaces
+must match the independently specified scenario, not merely each other.
+
+Browser smoke is optional for this script-only fixture;
 use the repository visual-test workflow when changing a visible KubeRay
 surface.
 

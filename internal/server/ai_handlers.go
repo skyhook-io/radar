@@ -53,6 +53,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/policyreports"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/schedulinginsight"
+	"github.com/skyhook-io/radar/pkg/servinginsight"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -468,13 +469,14 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	auditSum := s.computeAuditSummaryForResource(r, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
-		Reflections:   k8s.ReflectionLookup{Cache: cache},
-		Tier:          resourcecontext.TierBasic,
-		AccessChecker: s.newRequestScopedChecker(r),
-		IssueSummary:  issueSum,
-		AuditSummary:  auditSum,
-		Scheduling:    schedulinginsight.ForResource(obj, resourcecontext.TierBasic),
-		Execution:     executioninsight.ForResource(obj, resourcecontext.TierBasic),
+		Reflections:       k8s.ReflectionLookup{Cache: cache},
+		Tier:              resourcecontext.TierBasic,
+		AccessChecker:     s.newRequestScopedChecker(r),
+		IssueSummary:      issueSum,
+		AuditSummary:      auditSum,
+		Scheduling:        schedulinginsight.ForResource(obj, resourcecontext.TierBasic),
+		Execution:         executioninsight.ForResource(obj, resourcecontext.TierBasic),
+		RayServiceSummary: servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),

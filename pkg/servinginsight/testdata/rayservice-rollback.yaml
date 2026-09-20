@@ -25,6 +25,13 @@ status:
       message: Traffic is returning to the active Ray cluster.
       lastTransitionTime: "2026-08-31T11:10:00Z"
   activeServiceStatus:
+    applicationStatuses:
+      image:
+        status: RUNNING
+        message: Application is running.
+        serveDeploymentStatuses:
+          image:
+            status: HEALTHY
     rayClusterName: image-service-raycluster-old
     targetCapacity: 100
     trafficRoutedPercent: 65
@@ -42,6 +49,13 @@ status:
           message: One active worker Pod could not be created.
           lastTransitionTime: "2026-08-31T11:09:00Z"
   pendingServiceStatus:
+    applicationStatuses:
+      image:
+        status: DEPLOY_FAILED
+        message: traceback
+        serveDeploymentStatuses:
+          image:
+            status: UNHEALTHY
     rayClusterName: image-service-raycluster-new
     targetCapacity: 0
     trafficRoutedPercent: 0
