@@ -14,12 +14,14 @@ var highConfidenceSecretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`gho_[A-Za-z0-9]{36}`),                       // GitHub OAuth tokens
 	regexp.MustCompile(`ghs_[A-Za-z0-9]{36}`),                       // GitHub App installation tokens
 	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{22,}`),              // GitHub fine-grained PATs
-	regexp.MustCompile(`AKIA[A-Z0-9]{16}`),                          // AWS access key IDs
-	regexp.MustCompile(`Bearer\s+[A-Za-z0-9\-._~+/]{20,}`),          // Bearer tokens
+	regexp.MustCompile(`(?:AKIA|ASIA)[A-Z0-9]{16}`),                 // AWS access key IDs
+	regexp.MustCompile(`(?i)bearer\s+[A-Za-z0-9\-._~+/]{20,}=*`),    // Bearer tokens
 	regexp.MustCompile(`(?i)password[=:]\s*\S{8,}`),                 // password= or password: values
 	regexp.MustCompile(`\$(?:apr1|2[aby]|5|6)\$[./A-Za-z0-9$]{8,}`), // htpasswd/crypt hashes (basicAuth users)
 }
 
+var basicAuthHeaderPattern = regexp.MustCompile(`(?i)(\b(?:proxy-)?authorization["'\]]?[ \t]*[:=][ \t]*["'\[]?[ \t]*basic[ \t]+)[A-Za-z0-9+/_-]+={0,2}`)
+var bearerSchemePrefix = regexp.MustCompile(`(?i)^bearer\s+`)
 var credentialURLPattern = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*)://([^:/@\s]*:)[^/\s?#]+@([A-Za-z0-9._~:%\[\]-]*)`)
 var sha256DigestPattern = regexp.MustCompile(`(?i)^sha256:[a-f0-9]{64}$`)
 var sha256DigestPrefixPattern = regexp.MustCompile(`(?i)(?:^|[^a-z0-9])sha256:$`)
@@ -81,11 +83,11 @@ func applyPatterns(text string, patterns []*regexp.Regexp) string {
 		}
 		return parts[1] + "://" + parts[2] + "[REDACTED]@" + parts[3]
 	})
+	result = basicAuthHeaderPattern.ReplaceAllString(result, "${1}[REDACTED]")
 	for _, pattern := range patterns {
 		result = pattern.ReplaceAllStringFunc(result, func(match string) string {
-			// For Bearer tokens, preserve the "Bearer " prefix
-			if strings.HasPrefix(match, "Bearer ") || strings.HasPrefix(match, "bearer ") {
-				return match[:7] + "[REDACTED]"
+			if loc := bearerSchemePrefix.FindStringIndex(match); loc != nil {
+				return match[:loc[1]] + "[REDACTED]"
 			}
 			// For password= patterns, preserve the key
 			lower := strings.ToLower(match)
