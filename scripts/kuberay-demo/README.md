@@ -91,8 +91,10 @@ Radar's real group-aware `rayservices.ray.io` and
 `rayclusters.ray.io` browse paths, native controller status, and the generated
 Pod/Service lineage. It also asserts the exact basic-tier `resourceContext.rayServiceSummary`
 envelope through REST AI detail and MCP `get_resource`: root generation evidence,
-active cluster name with the RUNNING application, and the pending name without
-invented application health. It also checks concurrent Ready and UpgradeInProgress
+exact active/pending cluster names with application maps unreported. Under
+`NewCluster`, KubeRay only reconciles pending applications during the upgrade and
+clears the active application map, even while the active endpoint answers. The
+verifier therefore must not invent RUNNING status for that revision. It also checks concurrent Ready and UpgradeInProgress
 conditions in the existing `statusSummary`. Embedded RayCluster conditions are
 not projected because their changes alone do not trigger RayService status writes.
 It rejects a finite-run `execution` block for this serving root. Both surfaces

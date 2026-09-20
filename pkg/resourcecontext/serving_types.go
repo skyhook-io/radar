@@ -22,6 +22,8 @@ type RayServiceSummary struct {
 // absence is unreported, never proof of health or zero applications. Full app
 // messages and deployment states remain on the resource. These are reported
 // snapshots, not end-to-end availability checks; deletion does not rewrite them.
+// During NewCluster upgrades KubeRay stops refreshing the active application map
+// and clears it; absence can coexist with a working active endpoint.
 // Target capacity scales Serve replica targets; traffic is configured HTTPRoute
 // weight, not measured requests. Nil means unreported (normal for non-incremental
 // upgrades), not zero. An incremental upgrade may also not have reported yet.

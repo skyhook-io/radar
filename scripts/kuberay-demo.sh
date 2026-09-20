@@ -533,8 +533,7 @@ radar_serving_matches() {
   expected="$(jq -ceS '
     def generation: if . == null or . == 0 then {} else {observedGeneration:.} end;
     {subjectGeneration:.metadata.generation, suspendRequested:false,
-     active:{clusterName:.status.activeServiceStatus.rayClusterName,
-             applications:[{name:"radar-demo",status:"RUNNING"}]},
+     active:{clusterName:.status.activeServiceStatus.rayClusterName},
      pending:{clusterName:.status.pendingServiceStatus.rayClusterName}}
      + (.status.observedGeneration | generation)
   ' <<<"${native}")" || return 1
@@ -559,7 +558,7 @@ radar_serving_matches() {
       return 1
     fi
   done
-  ok "REST and MCP agree: Ready while upgrading, active application RUNNING, named pending with application status unreported"
+  ok "REST and MCP agree: Ready while upgrading, exact active/pending names, both application maps unreported"
 }
 
 cmd_verify_radar() {
