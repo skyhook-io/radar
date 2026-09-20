@@ -1,10 +1,14 @@
 import { formatMemoryBytes } from '@skyhook-io/k8s-ui/utils/format'
-import { isForbiddenError, useAutoPromConnect, usePrometheusPVCUsage, usePrometheusStatus } from '../../api/client'
+import { isForbiddenError, useAutoPromConnect, useCloudRole, usePrometheusPVCUsage, usePrometheusStatus } from '../../api/client'
+import { useNavCustomization } from '../../context/NavCustomization'
 
 export function PVCUsageBar({ namespace, name }: { namespace: string; name: string }) {
   // PVC detail can be the first Prometheus-backed surface a user opens; without
   // this, the gauge silently stays hidden until they open a workload metrics tab.
   useAutoPromConnect()
+  const { canAtLeast, isLoading: roleLoading } = useCloudRole()
+  const settingsAvailable = !useNavCustomization().embedded
+  const canConfigure = settingsAvailable && !roleLoading && canAtLeast('owner')
   const { data: status, error: statusError } = usePrometheusStatus()
   const isConnected = status?.connected === true
   const { data: usage, error } = usePrometheusPVCUsage(namespace, name, isConnected)
@@ -34,11 +38,32 @@ export function PVCUsageBar({ namespace, name }: { namespace: string; name: stri
     unavailable = 'Usage measurements are unavailable.'
   }
 
+  const denied = isForbiddenError(error) || isForbiddenError(statusError)
+  const waiting = !error && !statusError && (!status || status.discovering || (isConnected && !usage))
+  const guidance = denied
+    ? 'Ask your operator to review your metrics access.'
+    : !canConfigure && !roleLoading
+      ? !isConnected || statusError
+        ? 'Ask your operator to check the metrics connection for this cluster.'
+        : 'Ask your operator to check metrics availability for this volume.'
+      : undefined
+
   if (unavailable || !usage) {
     return (
       <section aria-label="PVC usage" className="rounded-lg border border-theme-border bg-theme-surface/30 p-3">
         <div className="text-xs font-medium text-theme-text-secondary uppercase tracking-wide mb-1">Usage</div>
         <p className="text-sm text-theme-text-tertiary">{unavailable}</p>
+        {!waiting && (
+          canConfigure && !denied ? (
+            <button
+              type="button"
+              className="mt-2 text-xs text-accent hover:underline"
+              onClick={() => window.dispatchEvent(new CustomEvent('radar:open-settings', { detail: { section: 'prometheus' } }))}
+            >Configure metrics</button>
+          ) : guidance ? (
+            <p className="mt-2 text-xs text-theme-text-tertiary">{guidance}</p>
+          ) : null
+        )}
       </section>
     )
   }
