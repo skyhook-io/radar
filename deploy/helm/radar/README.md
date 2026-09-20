@@ -224,6 +224,22 @@ trend charts remain unavailable for Kubecost.
 
 See `values.yaml` for all configuration options.
 
+### Installation-owned settings (OSS)
+
+Shared OSS Settings is read-only. Configure integrations through the values above,
+audit policy through `audit.ignoredNamespaces` / `audit.disabledChecks`, and OCI
+chart prefixes through `helm.ociSources`. `audit: null` preserves the default system
+namespace exclusions; explicitly empty lists include all namespaces and checks.
+The chart mounts a versioned, non-secret operator settings ConfigMap read-only and
+rolls Radar when it changes. No runtime ConfigMap/Secret writes or extra RBAC are
+required. External Secret rotation requires a restart.
+
+Before upgrading, resupply any old UI-written integration settings as Helm values;
+Pod-local files are not adopted as deployment configuration. Use matching chart
+and image versions. Cloud keeps its existing settings path and does not mount the
+OSS operator file. See [installation settings](../../../docs/in-cluster.md#installation-settings)
+for examples and run-mode behavior.
+
 ### Timeline storage: memory vs sqlite vs postgres
 
 Radar's timeline records every cluster change so you can scrub backwards through "what happened, when." Three backends:

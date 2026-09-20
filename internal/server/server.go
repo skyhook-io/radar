@@ -254,7 +254,7 @@ func New(cfg Config) *Server {
 	// Radar Hub) anyway.
 	// Also requires /mcp to be mounted — the agent reaches the cluster only
 	// through it, so with --no-mcp the feature can't work.
-	if !s.authConfig.Enabled() && s.mcpHandler != nil &&
+	if s.configManagement() != "operator" && !s.authConfig.Enabled() && s.mcpHandler != nil &&
 		s.mcpInvestigationHandler != nil && cfg.InvestigationRefs != nil {
 		if d, err := ai.NewDetected(context.Background(), cfg.InvestigationRefs); err == nil {
 			s.aiDiagnoser = d
@@ -725,6 +725,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 			// Helm routes
 			helmHandlers := helm.NewHandlers(s.resolveHelmNamespaces)
+			helmHandlers.ConfigWriteAllowed = s.requireConfigEditable
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes
@@ -1315,6 +1316,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		WorkloadImages: true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
+	caps.ConfigManagement = s.configManagement()
 	status, _ := s.localTerminalUnavailable(r)
 	caps.LocalTerminal = status == 0
 	if user := auth.UserFromContext(r.Context()); user != nil {
@@ -4688,6 +4690,9 @@ func (s *Server) handleListContexts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	name := chi.URLParam(r, "name")
 	if name == "" {
 		s.writeError(w, http.StatusBadRequest, "context name is required")
@@ -4874,6 +4879,9 @@ func (s *Server) handleCAPIClusterKubeconfig(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	if !s.requireConnected(w) {
 		return
 	}
@@ -5490,6 +5498,10 @@ func deploymentMode() k8s.DeploymentMode {
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	if s.configManagement() == "operator" {
+		s.writeJSON(w, map[string]any{"preferenceStorage": "browser"})
+		return
+	}
 	loaded := settings.Load()
 	// Desktop's own state: on a shared instance this would hand every viewer
 	// the cluster name from whenever this $HOME last ran the Desktop app.
@@ -5504,6 +5516,9 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	var patch settings.Settings
 	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
@@ -5545,9 +5560,10 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 // configResponse bundles the on-disk config file with the effective startup
 // config so the UI can show "currently running" hints for values that differ.
 type configResponse struct {
-	File      config.Config `json:"file"`
-	Effective config.Config `json:"effective"`
-	IsDesktop bool          `json:"isDesktop"`
+	Management string        `json:"management"`
+	File       config.Config `json:"file"`
+	Effective  config.Config `json:"effective"`
+	IsDesktop  bool          `json:"isDesktop"`
 	// OpenCostManaged tells Settings that an explicit startup flag owns the
 	// running value even when the persisted file changes.
 	OpenCostManaged bool `json:"openCostCurrencyManaged,omitempty"`
@@ -5579,6 +5595,10 @@ type configResponse struct {
 // PrometheusHeaders are redacted — they may contain Bearer tokens / tenant IDs and the
 // diagnostics endpoint already masks them as a presence bool.
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	if s.configManagement() == "operator" {
+		s.handleGetOperatorConfig(w, r)
+		return
+	}
 	file := config.Load()
 	normalizedCurrency, err := config.NormalizeOpenCostCurrency(file.OpenCostCurrency)
 	if err != nil {
@@ -5631,6 +5651,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resp := configResponse{
+		Management:               s.configManagement(),
 		File:                     file,
 		IsDesktop:                version.IsDesktop(),
 		OpenCostManaged:          s.currencyManaged,
@@ -5673,6 +5694,9 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 // Live integration fields are preserved from the on-disk file: their dedicated endpoints
 // apply them, and GET redacts their credentials, so a UI round-trip must not replace them.
 func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
 	}
@@ -5763,6 +5787,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 // response carries the live reachability result so the UI can confirm the URL
 // actually works. An empty URL reverts to auto-discovery.
 func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
 	}

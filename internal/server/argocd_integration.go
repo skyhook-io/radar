@@ -40,6 +40,9 @@ func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
 		resp.Anonymous = argocd.AnonymousReadAllowed()
 	} else if argocd.TokenBindingUpgradeRequired() {
 		resp.Reason = "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source."
+		if s.configManagement() == "operator" {
+			resp.Reason = "The saved Argo CD token is not bound to this kubeconfig source. Ask the operator to provision the token through startup configuration."
+		}
 	} else if err := argocd.LastProbeError(); err != nil && resp.Configured {
 		resp.Reason = "Radar couldn't connect to Argo CD: " + argoAPIHealthFailure(err, argocd.TokenSet()) + "."
 	}
@@ -53,6 +56,9 @@ func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
 // URL or token can't land on disk; on probe failure the previous settings are
 // restored on the live client.
 func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
 	}

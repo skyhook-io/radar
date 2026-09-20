@@ -5,7 +5,7 @@ import {
   type ClusterSwitcherItem,
   pluralize,
 } from '@skyhook-io/k8s-ui'
-import { useContexts, useSwitchContext, useClusterInfo, fetchSessionCounts, type SessionCounts } from '../api/client'
+import { useContexts, useSwitchContext, useClusterInfo, useCapabilities, fetchSessionCounts, type SessionCounts } from '../api/client'
 import { useContextSwitch } from '../context/ContextSwitchContext'
 import { useToast } from '../components/ui/Toast'
 import { useDock } from '../components/dock'
@@ -40,6 +40,7 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
 
   const { data: contexts, isLoading: contextsLoading } = useContexts()
   const { data: clusterInfo } = useClusterInfo()
+  const { data: capabilities } = useCapabilities()
   const switchContext = useSwitchContext()
   const { startSwitch, endSwitch } = useContextSwitch()
   const { showError } = useToast()
@@ -206,7 +207,7 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
         items={items}
         onSelect={handleSelect}
         loading={switchContext.isPending}
-        disabled={contextsLoading}
+        disabled={contextsLoading || !capabilities || capabilities.configManagement === 'operator'}
         searchable={items.length > 1}
         showGroupHeaders={hasMultipleAccounts}
         errorSlot={

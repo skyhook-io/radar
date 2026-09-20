@@ -5,6 +5,22 @@
   "type": "object",
   "additionalProperties": true,
   "properties": {
+    "audit": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["ignoredNamespaces", "disabledChecks"],
+      "properties": {
+        "ignoredNamespaces": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "disabledChecks": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "helm": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ociSources": { "type": "array", "items": { "type": "string", "pattern": "^oci://.+" } }
+      }
+    },
     "replicaCount": {
       "type": "integer",
       "minimum": 1,

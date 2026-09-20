@@ -121,6 +121,7 @@ import { ServiceAccountRenderer } from '../resources/renderers/ServiceAccountRen
 import { RoleRenderer } from '../resources/renderers/RoleRenderer'
 import { RoleBindingRenderer } from '../resources/renderers/RoleBindingRenderer'
 import { NamespaceRenderer } from '../resources/renderers/NamespaceRenderer'
+import { CAPIClusterRenderer } from '../resources/renderers/CAPIClusterRenderer'
 import { HPARenderer } from '../resources/renderers/HPARenderer'
 import { PVCRenderer } from '../resources/renderers/PVCRenderer'
 import { RolloutRenderer } from '../resources/renderers/RolloutRenderer'
@@ -156,6 +157,7 @@ const BATCH_EXECUTION_KINDS = new Set([
 
 // Stable reference — web renderer wrappers inject platform hooks internally
 const rendererOverrides: RendererOverrides = {
+  CAPIClusterRenderer,
   PodRenderer,
   KarpenterNodePoolRenderer,
   NodeRenderer,

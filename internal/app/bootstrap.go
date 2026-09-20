@@ -375,6 +375,9 @@ func persistKubecostContextBindings(cfg AppConfig) AppConfig {
 
 // CreateServer creates the HTTP server with the given configuration.
 func CreateServer(cfg AppConfig) *server.Server {
+	if err := loadOperatorSettings(cfg); err != nil {
+		log.Fatalf("Invalid operator settings: %v", err)
+	}
 	restoreLastDesktopContext := remembersLastContext(cfg)
 	costSource := cfg.CostSource
 	kubecostURL := cfg.KubecostURL

@@ -102,11 +102,7 @@ func applyAuditSettings(results *bp.ScanResults, cfg settings.AuditConfig) *bp.S
 
 // getAuditConfig returns the current audit config with defaults applied.
 func getAuditConfig() settings.AuditConfig {
-	s := settings.Load()
-	if s.Audit != nil {
-		return *s.Audit
-	}
-	return settings.DefaultAuditConfig()
+	return settings.EffectiveAudit()
 }
 
 // handleAudit returns full audit scan results.
@@ -223,6 +219,9 @@ func (s *Server) handleGetAuditSettings(w http.ResponseWriter, r *http.Request) 
 // handlePutAuditSettings updates the audit configuration.
 // PUT /api/settings/audit
 func (s *Server) handlePutAuditSettings(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify audit settings") {
 		return
 	}

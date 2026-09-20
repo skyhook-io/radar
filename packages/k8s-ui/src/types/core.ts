@@ -116,6 +116,7 @@ export interface IntegrationCapability {
 
 // Feature capabilities based on RBAC permissions
 export interface Capabilities {
+  configManagement?: 'local' | 'operator' | 'cloud'
   exec: boolean           // Terminal feature (pods/exec)
   localTerminal: boolean  // Local terminal available (not in-cluster, not disabled)
   logs: boolean           // Log viewer (pods/log)

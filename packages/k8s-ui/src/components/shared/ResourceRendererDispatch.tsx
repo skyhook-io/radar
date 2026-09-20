@@ -400,6 +400,10 @@ export interface RendererOverrides {
   // Namespace RBAC summary: host fetches /api/rbac/namespace/{ns} so the
   // namespace page can show bindings configured here without falling
   // through to GenericRenderer.
+  CAPIClusterRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
   NamespaceRenderer?: React.ComponentType<{
     data: any
     onNavigate?: (ref: ResourceRef) => void
@@ -748,6 +752,7 @@ export function ResourceRendererDispatch({
   const RoleComp = rendererOverrides?.RoleRenderer ?? RoleRenderer
   const RoleBindingComp = rendererOverrides?.RoleBindingRenderer ?? RoleBindingRenderer
   const NamespaceComp = rendererOverrides?.NamespaceRenderer ?? NamespaceRenderer
+  const CAPIClusterComp = rendererOverrides?.CAPIClusterRenderer ?? CAPIClusterRenderer
   const HPAComp = rendererOverrides?.HPARenderer ?? HPARenderer
   const PVCComp = rendererOverrides?.PVCRenderer ?? PVCRenderer
   const RolloutComp = rendererOverrides?.RolloutRenderer ?? RolloutRenderer
@@ -892,7 +897,7 @@ export function ResourceRendererDispatch({
         {kind === 'clusterexternalsecrets' && <ClusterExternalSecretRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'secretstores' || kind === 'clustersecretstores') && <SecretStoreRenderer data={data} />}
         {kind === 'clusters' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGClusterComp data={data} onNavigate={onNavigate} />}
-        {kind === 'clusters' && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && <CAPIClusterRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'clusters' && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && <CAPIClusterComp data={data} onNavigate={onNavigate} />}
         {kind === 'scheduledbackups' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGScheduledBackupRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'poolers' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGPoolerRenderer data={data} onNavigate={onNavigate} />}
         {/* Cluster API (CAPI) */}

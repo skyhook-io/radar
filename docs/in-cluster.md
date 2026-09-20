@@ -26,6 +26,94 @@ kubectl port-forward svc/radar 9280:9280 -n radar
 open http://localhost:9280
 ```
 
+## Installation settings
+
+Shared OSS Radar is configured by the installation operator, not by visitors to
+its web UI. Settings shows effective configuration and connection status; it does
+not save installation changes. Use Helm values (or flags/environment for a
+non-Helm deployment), then restart or roll out Radar. Kubernetes actions such as
+scaling workloads still follow their existing permissions.
+
+| Setting | Helm values |
+|---|---|
+| Prometheus-compatible backend | `traffic.prometheusUrl`, `traffic.prometheusHeadersFromEnv` plus Secret-backed `env` entries |
+| Argo CD API | `argocd.url`, `argocd.existingSecret`, `argocd.insecureTls` |
+| Cost data | `cost.source`, `cost.kubecost.url`, `cost.kubecost.clusterId`, `cost.kubecost.existingSecret`, `cost.currency` |
+| Audit policy | `audit.ignoredNamespaces`, `audit.disabledChecks` |
+| Helm OCI chart sources | `helm.ociSources` |
+| Timeline / MCP | `timeline`, `persistence`, `mcp.enabled` |
+
+For example, add this to your existing values file:
+
+```yaml
+audit:
+  ignoredNamespaces: [kube-system, kube-node-lease, kube-public, "*-system"]
+  disabledChecks: []
+helm:
+  ociSources:
+    - oci://ghcr.io/myorg/charts
+```
+
+`audit: null` uses Radar's default system-namespace exclusions. Explicit empty
+lists include every namespace and enable all checks. Check IDs are listed in
+the `checks` object returned by `GET /api/audit`. Namespace exclusions accept
+exact names or one leading/trailing `*`. OCI entries are prefixes, not full chart
+references; private-registry credentials are not managed by these values.
+
+The chart renders audit/OCI settings into a read-only ConfigMap, separate from
+Radar's writable local files. Its checksum triggers a rollout when values
+change. Radar reads it at startup and rejects unknown fields, unsupported schema
+versions, invalid patterns, and unknown check IDs. It never writes ConfigMaps or
+Secrets to save UI edits. Rotating an externally managed integration Secret
+also requires restarting Radar; that Secret's contents are not part of the
+ConfigMap checksum. A timeline PVC does not persist installation settings.
+
+When upgrading from an installation where Settings allowed edits, copy the
+intended configuration into Helm values first. Old Pod-local edits are not
+automatically adopted, and generally did not survive Pod replacement anyway.
+Use a chart and binary from the same release: pinning an older `image.tag` does
+not add this configuration behavior to the older binary. Future document keys
+unsupported by a pinned binary fail startup rather than being silently ignored.
+
+Theme and sidebar pins stay in each browser; they do not change another
+visitor's preferences. Namespace browsing remains available. Authenticated
+users have their existing per-user namespace filters; without authentication,
+visitors still share the anonymous namespace selection. A forced
+`--namespace-scope` cache cannot be changed by shared-OSS visitors. Context
+switching and CAPI “Connect to Cluster” are also installation-owned. Live Traffic
+source selection remains an existing runtime control, not a persisted setting.
+
+This is configuration ownership, **not authentication**. An unauthenticated
+installation still gives visitors its configured Kubernetes access; configure
+[authentication](authentication.md) before sharing it outside a trusted network.
+The same read-only policy applies to authenticated OSS on a laptop, and to a Pod
+using an explicit kubeconfig with a non-loopback listener. A personal loopback
+CLI in a Kubernetes-hosted development workspace remains editable unless an
+operator file is supplied. Helm installations always supply that file, regardless
+of listener or kubeconfig overrides. Local unauthenticated CLI/Desktop settings
+remain editable. Radar Cloud retains its existing role-managed settings and
+personal preferences; the chart rejects non-default `audit` or `helm.ociSources`
+values in Cloud mode rather than silently ignoring them.
+
+For non-Helm shared OSS, use the existing flags/env for integrations. Structured
+audit/OCI settings can be supplied through a read-only JSON file selected by
+`RADAR_OPERATOR_SETTINGS_FILE`:
+
+Without that file, managed OSS uses the built-in audit policy and an empty OCI
+source list, not old values from `settings.json`. If `audit` is supplied, both
+arrays are required; use `[]` deliberately to remove exclusions or disabled checks.
+
+```json
+{
+  "version": 1,
+  "audit": { "ignoredNamespaces": ["kube-system", "*-system"], "disabledChecks": [] },
+  "helmOciSources": ["oci://ghcr.io/myorg/charts"]
+}
+```
+
+This file contains no credentials, is read once at startup, and opts the process
+into operator-owned settings. In Cloud it is ignored with a startup warning.
+
 ## Upgrading
 
 Upgrade Radar through the same source that manages the current installation.

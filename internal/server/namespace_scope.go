@@ -537,7 +537,7 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 		CanClearNamespace:    canClear,
 		CacheScoped:          k8s.ForceNamespaceScope,
 		CacheScopeNamespace:  cacheScopeNs,
-		NamespaceRescope:     k8s.ForceNamespaceScope && !s.authConfig.Enabled(),
+		NamespaceRescope:     k8s.ForceNamespaceScope && !s.authConfig.Enabled() && s.configManagement() != "operator",
 	})
 }
 
@@ -548,6 +548,9 @@ type setActiveNamespaceRequest struct {
 }
 
 func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request) {
+	if k8s.ForceNamespaceScope && !s.requireConfigEditable(w, r) {
+		return
+	}
 	if !s.requireConnected(w) {
 		return
 	}

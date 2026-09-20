@@ -460,7 +460,7 @@ func (c *Client) GetStatus() prom.Status {
 		Available:   connected,
 		Connected:   connected,
 		Discovering: discovering,
-		Address:     c.baseURL,
+		Address:     prom.SafeAddress(c.baseURL),
 		Service:     svc,
 		ContextName: c.contextName,
 	}
@@ -468,7 +468,7 @@ func (c *Client) GetStatus() prom.Status {
 	case c.headersRequireURLLocked():
 		st.Error = prom.ErrHeadersRequireURL.Error()
 	case !connected && !discovering && c.lastOutcomeGen == c.discoveryGen:
-		st.Error = c.lastOutcome
+		st.Error = prom.RedactURLs(c.lastOutcome)
 	}
 	return st
 }

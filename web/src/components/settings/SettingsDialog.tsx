@@ -32,6 +32,7 @@ import {
 } from '../cost/source'
 import { costSourceApplyLabel, prometheusHeadersFromRows, shouldOfferCostReview, shouldShowSettingsFooter } from './settings-state'
 import type { SettingsSectionId } from './settings-state'
+import { OperatorManagedNotice } from './OperatorManagedNotice'
 export type { SettingsSectionId } from './settings-state'
 
 // The loopback URL an MCP client is told to connect to. Shared by the overview
@@ -64,6 +65,7 @@ interface Config {
 }
 
 interface ConfigResponse {
+  management: 'local' | 'operator' | 'cloud'
   file: Config
   effective: Config
   isDesktop: boolean
@@ -140,16 +142,12 @@ export function SettingsDialog({
   const dialogRef = useRef<HTMLDivElement>(null)
   const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs('dialog'))
   const { data: versionInfo } = useVersionCheck()
-  // Radar configuration (kubeconfig, port, integrations…) is host-level and
-  // affects every user of this instance, so it's gated to owners. Personal
-  // sections (My permissions, AI investigations) stay usable by everyone. Non-Cloud
-  // callers (OSS, OIDC, kubectl plugin) have no role and pass — single-user
-  // laptops are never locked out of their own config. Backend enforces this too.
   const { canAtLeast } = useCloudRole()
   const capabilities = useCapabilitiesContext()
-  const canEditConfig = canAtLeast('owner')
 
   const [configData, setConfigData] = useState<ConfigResponse | null>(null)
+  const operatorManaged = configData?.management === 'operator'
+  const canEditConfig = configData != null && !operatorManaged && canAtLeast('owner')
   const [editedConfig, setEditedConfig] = useState<Config>({})
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
@@ -212,6 +210,7 @@ export function SettingsDialog({
   // actually accessible to the current identity.
   useEffect(() => {
     if (!open) return
+    setConfigData(null)
     setSaveMessage(null)
     setLoadError(null)
     setConfirmingClose(false)
@@ -538,7 +537,7 @@ export function SettingsDialog({
                 key={i.id}
                 item={i}
                 active={section === i.id}
-                disabled={i.ownerOnly && !canEditConfig}
+                disabled={i.ownerOnly && !operatorManaged && !canAtLeast('owner')}
                 onSelect={() => setSection(i.id)}
               />
             ))}
@@ -552,7 +551,7 @@ export function SettingsDialog({
                 item={i}
                 horizontal
                 active={section === i.id}
-                disabled={i.ownerOnly && !canEditConfig}
+                disabled={i.ownerOnly && !operatorManaged && !canAtLeast('owner')}
                 onSelect={() => setSection(i.id)}
               />
             ))}
@@ -567,12 +566,16 @@ export function SettingsDialog({
               </div>
             )}
 
+            {!configData && !['overview', 'perms', 'ai'].includes(section) ? (
+              <p className="text-sm text-theme-text-secondary">{loadError ? 'Configuration is unavailable. Close Settings and try again.' : 'Loading configuration…'}</p>
+            ) : <>
+            {operatorManaged && section !== 'perms' && section !== 'ai' && <div className="mb-4"><OperatorManagedNotice /></div>}
             {/* Overview — status at a glance; the landing section */}
             <div className={clsx(section !== 'overview' && 'hidden')} role="tabpanel" inert={section !== 'overview' || undefined}>
               <div className="mb-1">
                 <h3 className="text-base font-semibold text-theme-text-primary">Overview</h3>
                 <p className="mt-0.5 text-xs text-theme-text-tertiary">
-                  What this Radar is connected to right now — select a row to manage it.
+                  What this Radar is connected to right now — select a row for details.
                 </p>
               </div>
               <div className="mt-3">
@@ -599,6 +602,7 @@ export function SettingsDialog({
               id="connection"
               active={section}
               title="Connection"
+              managed={operatorManaged ? <OperatorSettingsSummary section="connection" config={configData} /> : undefined}
               caption="Takes effect on next launch."
               locked={!canEditConfig}
             >
@@ -628,6 +632,7 @@ export function SettingsDialog({
               id="prometheus"
               active={section}
               title="Metrics"
+              managed={operatorManaged ? <OperatorSettingsSummary section="prometheus" config={configData} /> : undefined}
               caption="Connect and manage your metrics backend."
               live
               locked={!canEditConfig}
@@ -656,6 +661,7 @@ export function SettingsDialog({
               id="cost"
               active={section}
               title="Cost"
+              managed={operatorManaged ? <OperatorSettingsSummary section="cost" config={configData} /> : undefined}
               caption="Choose where Radar gets cost data and how amounts are labeled."
               live
               locked={!canEditConfig}
@@ -700,6 +706,7 @@ export function SettingsDialog({
               id="argocd"
               active={section}
               title="Argo CD"
+              managed={operatorManaged ? <OperatorSettingsSummary section="argocd" config={configData} /> : undefined}
               caption="Applies immediately — no restart."
               live
               locked={!canEditConfig}
@@ -749,12 +756,14 @@ export function SettingsDialog({
               <div className="mb-4">
                 <h3 className="text-base font-semibold text-theme-text-primary">AI investigations</h3>
                 <p className="mt-0.5 text-xs text-theme-text-tertiary">
-                  {diag.hosted
+                  {operatorManaged
+                    ? 'AI investigations are available in local Radar and Radar Cloud.'
+                    : diag.hosted
                     ? `Investigate incidents with ${diag.agentLabel} — reading logs, events, and topology to understand what's happening.`
                     : "Investigate incidents with an AI agent that runs on your own machine — reading logs, events, and topology to understand what's happening. No Radar cloud, no API key."}
                 </p>
               </div>
-              {aiAvailable ? (
+              {operatorManaged ? <p className="text-sm text-theme-text-secondary">Local AI investigations are unavailable in a shared installation. Use local Radar with an agent CLI, or Radar Cloud.</p> : aiAvailable ? (
                 <div className="space-y-4">
                   <AISettingsSection
                     available={diag.available}
@@ -796,6 +805,7 @@ export function SettingsDialog({
               id="advanced"
               active={section}
               title="Advanced"
+              managed={operatorManaged ? <OperatorSettingsSummary section="advanced" config={configData} /> : undefined}
               caption="Takes effect on next launch."
               locked={!canEditConfig}
             >
@@ -818,6 +828,7 @@ export function SettingsDialog({
                 />
               </div>
             </SectionPane>
+            </>}
           </div>
         </div>
 
@@ -1019,6 +1030,7 @@ function SectionPane({
   caption,
   live,
   locked,
+  managed,
   children,
 }: {
   id: SettingsSectionId
@@ -1027,6 +1039,7 @@ function SectionPane({
   caption?: string
   live?: boolean
   locked?: boolean
+  managed?: ReactNode
   children: ReactNode
 }) {
   return (
@@ -1035,7 +1048,7 @@ function SectionPane({
         <h3 className="text-base font-semibold text-theme-text-primary">{title}</h3>
         {!locked && caption && <SectionCaption live={live}>{caption}</SectionCaption>}
       </div>
-      {locked ? <LockWall /> : <div className="space-y-4">{children}</div>}
+      {managed ?? (locked ? <LockWall /> : <div className="space-y-4">{children}</div>)}
     </div>
   )
 }
@@ -1051,6 +1064,70 @@ function SectionCaption({ children, live }: { children: ReactNode; live?: boolea
       {live ? <Zap className="w-3 h-3 shrink-0" /> : <RotateCw className="w-3 h-3 shrink-0" />}
       {children}
     </p>
+  )
+}
+
+function OperatorSettingsSummary({ section, config }: { section: SettingsSectionId; config: ConfigResponse }) {
+  const { data: prom, error: promError } = usePrometheusStatus()
+  const { data: argo, error: argoError } = useArgoStatus(section === 'argocd')
+  const { data: cost, error: costError } = useOpenCostSummary()
+  const { data: cluster } = useClusterInfo()
+  const c = config.effective
+  let rows: [string, ReactNode][] = []
+  let detail: string | undefined
+  switch (section) {
+    case 'connection':
+      rows = [['Cluster connection', cluster?.inCluster ? 'Pod service account' : cluster?.context ?? 'Connecting…'], ['Server port', c.port ?? '—']]
+      detail = 'The operator selects the cluster and connection settings at startup.'
+      break
+    case 'prometheus':
+      rows = [
+        ['Status', promError ? 'Status unavailable' : !prom ? 'Checking…' : prom.connected ? 'Connected' : prom.discovering ? 'Discovering…' : 'Not connected'],
+        ['Endpoint', prom?.address || c.prometheusUrl || 'Auto-discovery'],
+        ['Headers', config.prometheusHeaderKeys?.join(', ') || 'None configured'],
+      ]
+      detail = prom?.error
+      break
+    case 'argocd':
+      rows = [
+        ['Status', argoError ? 'Status unavailable' : !argo ? 'Checking…' : argo.connected ? 'Connected' : 'Not connected'],
+        ['Endpoint', argo?.address || c.argoCdUrl || 'Auto-discovery'],
+        ['Token', config.argoCdTokenSet ? 'Configured' : 'None configured'],
+        ['TLS verification', c.argoCdInsecureTls ? 'Disabled' : 'Enabled'],
+      ]
+      detail = config.argoCdEnvError || argo?.reason
+      break
+    case 'cost':
+      rows = [
+        ['Status', costError ? 'Status unavailable' : !cost ? 'Checking…' : cost.available ? 'Available' : 'Unavailable'],
+        ['Source preference', c.costSource || 'Auto'],
+        ['Kubecost endpoint', c.kubecostUrl || 'Auto-discovery'],
+        ['Cluster ID', c.kubecostClusterId || 'Auto-detected when available'],
+        ['API key', config.kubecostApiKeySet ? 'Configured' : 'None configured'],
+        ['Currency override', c.opencostCurrency || 'Automatic'],
+      ]
+      detail = config.kubecostEnvError || (cost?.reason ? costIntegrationUnavailableMessage(cost.reason) ?? undefined : undefined)
+      break
+    case 'advanced':
+      rows = [
+        ['MCP', c.mcp ? 'Enabled' : 'Disabled'],
+        ['Timeline storage', c.timelineStorage || 'Memory'],
+        ['Event history limit', c.historyLimit ?? '—'],
+      ]
+      break
+  }
+  return (
+    <div className="space-y-3">
+      <dl className="divide-y divide-theme-border-subtle rounded-lg border border-theme-border px-3">
+        {rows.map(([label, value]) => (
+          <div key={label} className="grid grid-cols-[140px_minmax(0,1fr)] gap-3 py-3 text-sm">
+            <dt className="text-theme-text-tertiary">{label}</dt>
+            <dd className="min-w-0 break-words text-theme-text-primary">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {detail && <p className="text-sm text-theme-text-secondary break-words">{detail}</p>}
+    </div>
   )
 }
 
