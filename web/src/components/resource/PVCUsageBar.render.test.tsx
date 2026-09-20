@@ -137,6 +137,26 @@ describe('PVC metrics next step', () => {
     expect(render()).not.toContain('Configure metrics')
     expect(render()).toContain('review your metrics access')
   })
+  it.each([true, false])('keeps discovery quiet with a retained usage error (owner=%s)', owner => {
+    canConfigure = owner
+    statusResult = { data: { connected: false, discovering: true } }
+    usageResult = { error: new ApiError('retained query failure', 500) }
+    expect(render()).toContain('Discovering Prometheus')
+    expect(render()).not.toContain('Configure metrics')
+    expect(render()).not.toContain('Ask your operator')
+  })
+  it('keeps status loading quiet with a retained usage error', () => {
+    statusResult = {}
+    usageResult = { error: new ApiError('retained query failure', 500) }
+    expect(render()).toContain('Checking metrics availability')
+    expect(render()).not.toContain('Configure metrics')
+  })
+  it('retains access guidance when denied during discovery', () => {
+    statusResult = { data: { connected: false, discovering: true } }
+    usageResult = { error: new ApiError('forbidden', 403) }
+    expect(render()).toContain('review your metrics access')
+    expect(render()).not.toContain('Configure metrics')
+  })
   it.each(['status', 'discovery', 'usage', 'available'])('does not add an action during %s', state => {
     if (state === 'status') statusResult = {}
     if (state === 'discovery') statusResult = { data: { connected: false, discovering: true } }

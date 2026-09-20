@@ -39,7 +39,7 @@ export function PVCUsageBar({ namespace, name }: { namespace: string; name: stri
   }
 
   const denied = isForbiddenError(error) || isForbiddenError(statusError)
-  const waiting = !error && !statusError && (!status || status.discovering || (isConnected && !usage))
+  const waiting = !denied && !statusError && (!status || status.discovering || (isConnected && !usage && !error))
   const guidance = denied
     ? 'Ask your operator to review your metrics access.'
     : !canConfigure && !roleLoading
