@@ -10,6 +10,7 @@ func TestAuthRedactionAcrossTextSurfaces(t *testing.T) {
 		{"basic", "Authorization: Basic YXVkaXQ6ZHVtbXk=", "Authorization: Basic [REDACTED]"},
 		{"basic-empty-password", "Authorization: Basic dTo=", "Authorization: Basic [REDACTED]"},
 		{"basic-empty-user", "Authorization: Basic OnA=", "Authorization: Basic [REDACTED]"},
+		{"basic-json-header-array", `{"Authorization":["Basic dTpw"]}`, `{"Authorization":["Basic [REDACTED]"]}`},
 		{"basic-json", `{"Authorization":"Basic YXVkaXQ6ZHVtbXk="}`, `{"Authorization":"Basic [REDACTED]"}`},
 		{"basic-proxy", "Proxy-Authorization: basic YXVkaXQ6ZHVtbXk=", "Proxy-Authorization: basic [REDACTED]"},
 		{"basic-go-header", "Authorization:[Basic YXVkaXQ6ZHVtbXk=]", "Authorization:[Basic [REDACTED]]"},

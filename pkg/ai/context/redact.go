@@ -20,7 +20,7 @@ var highConfidenceSecretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\$(?:apr1|2[aby]|5|6)\$[./A-Za-z0-9$]{8,}`), // htpasswd/crypt hashes (basicAuth users)
 }
 
-var basicAuthHeaderPattern = regexp.MustCompile(`(?i)(\b(?:proxy-)?authorization["'\]]?[ \t]*[:=][ \t]*["'\[]?[ \t]*basic[ \t]+)[A-Za-z0-9+/_-]+={0,2}`)
+var basicAuthHeaderPattern = regexp.MustCompile(`(?i)(\b(?:proxy-)?authorization["'\]]?[ \t]*[:=][ \t]*\[?[ \t]*["']?[ \t]*basic[ \t]+)[A-Za-z0-9+/_-]+={0,2}`)
 var bearerSchemePrefix = regexp.MustCompile(`(?i)^bearer\s+`)
 var credentialURLPattern = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*)://([^:/@\s]*:)[^/\s?#]+@([A-Za-z0-9._~:%\[\]-]*)`)
 var sha256DigestPattern = regexp.MustCompile(`(?i)^sha256:[a-f0-9]{64}$`)
