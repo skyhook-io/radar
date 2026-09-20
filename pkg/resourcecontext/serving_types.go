@@ -1,14 +1,19 @@
 package resourcecontext
 
-// RayServiceSummary describes reported serving revisions, not a finite execution.
+// ServingSummary groups controller-specific serving evidence without normalizing
+// readiness, rollout state, or capacity across different serving models.
+type ServingSummary struct {
+	RayService *RayServiceServing `json:"rayService,omitempty"`
+}
+
+// RayServiceServing describes reported serving revisions, not a finite execution.
 // Root Ready/upgrade/rollback/suspension conditions remain in StatusSummary.
-// SubjectGeneration belongs to the RayService; ObservedGeneration is the native
+// Compare ObservedGeneration with resource.metadata.generation; it is a native
 // status attestation, not a guarantee that every nested field is current.
 // SuspendRequested is intent (omitted spec.suspend means false in KubeRay).
 // Suspension tears down owned resources and clears slots; once Suspending=True,
 // teardown completes even if intent flips back. Resume creates new clusters.
-type RayServiceSummary struct {
-	SubjectGeneration  int64 `json:"subjectGeneration,omitempty"`
+type RayServiceServing struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 	SuspendRequested   bool  `json:"suspendRequested"`
 	// UpgradeStrategy is declared intent, not the effective operator default or rollout completion.

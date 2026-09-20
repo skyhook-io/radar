@@ -136,12 +136,12 @@ func TestResourceContextFieldOrdering(t *testing.T) {
 			Source: SchedulingSourceKueue, Domain: SchedulingDomainAdmission,
 			Subject: ContextRef{Kind: "Workload", Name: "trainer"}, Decision: SchedulingDecisionUnsatisfied,
 		}}},
-		Execution:         &ExecutionSummary{Controller: "jobset", Phase: ExecutionActive},
-		RayServiceSummary: &RayServiceSummary{},
-		IssueSummary:      &IssueSummary{Count: 1},
-		AuditSummary:      &AuditSummary{Count: 2},
-		PolicySummary:     &PolicySummary{},
-		Omitted:           []OmittedField{{Field: "selectedBy", Reason: OmittedRBACDenied}},
+		Execution:     &ExecutionSummary{Controller: "jobset", Phase: ExecutionActive},
+		Serving:       &ServingSummary{},
+		IssueSummary:  &IssueSummary{Count: 1},
+		AuditSummary:  &AuditSummary{Count: 2},
+		PolicySummary: &PolicySummary{},
+		Omitted:       []OmittedField{{Field: "selectedBy", Reason: OmittedRBACDenied}},
 	}
 	b, err := json.Marshal(ac)
 	if err != nil {
@@ -158,7 +158,7 @@ func TestResourceContextFieldOrdering(t *testing.T) {
 		`"scaledBy"`,
 		`"scheduling"`,
 		`"execution"`,
-		`"rayServiceSummary"`,
+		`"serving"`,
 		`"issueSummary"`,
 		`"auditSummary"`,
 		`"policySummary"`,

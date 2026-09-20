@@ -1240,14 +1240,14 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 	auditSum := computeMCPAuditSummary(ctx, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
-		Reflections:       k8s.ReflectionLookup{Cache: cache},
-		Tier:              tier,
-		AccessChecker:     newMCPRequestScopedChecker(ctx),
-		IssueSummary:      issueSum,
-		AuditSummary:      auditSum,
-		Scheduling:        schedulinginsight.ForResource(obj, tier),
-		Execution:         executioninsight.ForResource(obj, tier),
-		RayServiceSummary: servinginsight.ForRayService(obj),
+		Reflections:   k8s.ReflectionLookup{Cache: cache},
+		Tier:          tier,
+		AccessChecker: newMCPRequestScopedChecker(ctx),
+		IssueSummary:  issueSum,
+		AuditSummary:  auditSum,
+		Scheduling:    schedulinginsight.ForResource(obj, tier),
+		Execution:     executioninsight.ForResource(obj, tier),
+		Serving:       servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),

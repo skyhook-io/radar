@@ -3,31 +3,36 @@
 package servinginsight
 
 import (
+	"sort"
+
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"sort"
 )
 
 var rayServiceV1 = schema.GroupVersionKind{Group: "ray.io", Version: "v1", Kind: "RayService"}
 
 const maxApplications = 8
 
-// ForRayService follows KubeRay v1.7.0; the served API version alone does not
-// identify the controller release. Ready means proxy endpoints exist, not that
-// all Serve applications or revisions are healthy. Independent root conditions
-// already live in statusSummary; no combined phase or outcome is synthesized.
-func ForRayService(obj runtime.Object) *resourcecontext.RayServiceSummary {
+// ForResource returns serving evidence only for exact, supported resource identities.
+func ForResource(obj runtime.Object) *resourcecontext.ServingSummary {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok || u.GroupVersionKind() != rayServiceV1 {
 		return nil
 	}
+	return &resourcecontext.ServingSummary{RayService: forRayService(u)}
+}
+
+// forRayService follows KubeRay v1.7.0; the served API version alone does not
+// identify the controller release. Ready means proxy endpoints exist, not that
+// all Serve applications or revisions are healthy. Independent root conditions
+// already live in statusSummary; no combined phase or outcome is synthesized.
+func forRayService(u *unstructured.Unstructured) *resourcecontext.RayServiceServing {
 	suspendRequested, _, _ := unstructured.NestedBool(u.Object, "spec", "suspend")
 	observedGeneration, _, _ := unstructured.NestedInt64(u.Object, "status", "observedGeneration")
 	upgradeStrategy, _, _ := unstructured.NestedString(u.Object, "spec", "upgradeStrategy", "type")
-	return &resourcecontext.RayServiceSummary{
-		SubjectGeneration:  u.GetGeneration(),
+	return &resourcecontext.RayServiceServing{
 		ObservedGeneration: observedGeneration,
 		SuspendRequested:   suspendRequested,
 		UpgradeStrategy:    upgradeStrategy,

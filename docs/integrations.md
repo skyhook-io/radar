@@ -1520,8 +1520,8 @@ coverage, or support for other Kueue API versions.
 | RayCronJob | `ray.io/v1` | suspend |
 
 For an exact `ray.io/v1` RayService, REST AI detail and MCP `get_resource`
-include `resourceContext.rayServiceSummary` with named active/pending revisions, generation
-evidence, requested suspension, declared upgrade strategy, reported percentages, and up to eight name-sorted
+include `resourceContext.serving.rayService` with named active/pending revisions, native
+observed generation (compare with `resource.metadata.generation`), requested suspension, declared upgrade strategy, reported percentages, and up to eight name-sorted
 Serve application states per revision (with explicit truncation). Readiness,
 upgrade/rollback, and suspension conditions remain independent in the existing
 `statusSummary`: a healthy active service can coexist with a failing pending revision. Requested suspension is

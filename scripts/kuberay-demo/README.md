@@ -89,8 +89,9 @@ context and cluster to match the owned lane, and waits for exact live-versus-cac
 resource identity, owner references, labels and Service selectors. It then checks
 Radar's real group-aware `rayservices.ray.io` and
 `rayclusters.ray.io` browse paths, native controller status, and the generated
-Pod/Service lineage. It also asserts the exact basic-tier `resourceContext.rayServiceSummary`
-envelope through REST AI detail and MCP `get_resource`: root generation evidence,
+Pod/Service lineage. It also asserts the exact basic-tier `resourceContext.serving.rayService`
+envelope through REST AI detail and MCP `get_resource`: preserved
+`resource.metadata.generation` and native observed generation,
 exact active/pending cluster names with application maps unreported. Under
 `NewCluster`, KubeRay only reconciles pending applications during the upgrade and
 clears the active application map, even while the active endpoint answers. The
@@ -99,6 +100,7 @@ conditions in the existing `statusSummary`. Embedded RayCluster conditions are
 not projected because their changes alone do not trigger RayService status writes.
 It rejects a finite-run `execution` block for this serving root. Both surfaces
 must match the independently specified scenario, not merely each other.
+With `context=none`, both must retain the resource's generation and omit context.
 
 Browser smoke is optional for this script-only fixture;
 use the repository visual-test workflow when changing a visible KubeRay
