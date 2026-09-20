@@ -415,8 +415,9 @@ type KueueConcurrentAdmission struct {
 // ExecutionSummary describes the root's last reported execution, not Pod
 // readiness or object deletion. Exactly one detail block matches Controller;
 // quantities stay there because controllers count different units and populations.
-// SubjectGeneration survives AI minification. PrimaryCondition.ObservedGeneration
-// applies only to that condition, not to counters or the whole snapshot.
+// SubjectGeneration identifies the spec revision of this execution subject.
+// PrimaryCondition.ObservedGeneration applies only to that condition, not to
+// counters or the whole snapshot.
 // SuspendRequested is intent: nil means unavailable, false means not requested.
 type ExecutionSummary struct {
 	Controller        ExecutionController `json:"controller"`
