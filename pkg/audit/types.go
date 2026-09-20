@@ -18,6 +18,7 @@ type CheckInput struct {
 	ConfigReferenceEvidence  *ConfigReferenceEvidence
 	Pods                     []*corev1.Pod
 	Deployments              []*appsv1.Deployment
+	ReplicaSets              []*appsv1.ReplicaSet
 	StatefulSets             []*appsv1.StatefulSet
 	DaemonSets               []*appsv1.DaemonSet
 	Jobs                     []*batchv1.Job

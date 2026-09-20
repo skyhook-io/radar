@@ -119,7 +119,7 @@ func TestCheckCounts_MissingInputs(t *testing.T) {
 	want := map[string]bool{
 		"poddisruptionbudgets": true, "configmaps": true,
 		"serviceaccounts": true, "limitranges": true, "secrets": true,
-		"pods": true, "services": true, "ingresses": true,
+		"pods": true, "replicasets": true, "services": true, "ingresses": true,
 		"horizontalpodautoscalers": true,
 		"statefulsets":             true, "daemonsets": true,
 		"jobs": true, "cronjobs": true,
@@ -139,6 +139,7 @@ func TestCheckCounts_MissingInputs(t *testing.T) {
 	input.ServiceAccounts = []*corev1.ServiceAccount{}
 	input.LimitRanges = []*corev1.LimitRange{}
 	input.Pods = []*corev1.Pod{}
+	input.ReplicaSets = []*appsv1.ReplicaSet{}
 	input.Services = []*corev1.Service{}
 	input.Ingresses = []*networkingv1.Ingress{}
 	input.Secrets = []*corev1.Secret{}

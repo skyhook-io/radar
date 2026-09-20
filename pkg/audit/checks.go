@@ -15,6 +15,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	utilversion "k8s.io/apimachinery/pkg/util/version"
 
 	"github.com/skyhook-io/radar/pkg/configrefs"
@@ -90,12 +92,14 @@ func RunChecks(input *CheckInput) *ScanResults {
 		missingInputs = append(missingInputs, "poddisruptionbudgets")
 	}
 	findings = append(findings, checkMissingTopologySpread(tr, input.Deployments, input.StatefulSets)...)
-	// HA-risk placement needs the pod inventory — nil pods would make every
-	// deployment look risk-free (or falsely clustered), not "no pods".
-	if input.Pods != nil {
-		findings = append(findings, checkPodHARisk(tr, input.Pods, input.Deployments)...)
-	} else {
+	if input.Pods != nil && input.ReplicaSets != nil {
+		findings = append(findings, checkPodHARisk(tr, input.Pods, input.Deployments, input.ReplicaSets)...)
+	}
+	if input.Pods == nil {
 		missingInputs = append(missingInputs, "pods")
+	}
+	if input.ReplicaSets == nil {
+		missingInputs = append(missingInputs, "replicasets")
 	}
 
 	// --- Efficiency checks are included in checkWorkloadPodSpecs ---
@@ -932,46 +936,77 @@ func checkMissingTopologySpread(tr *evalTracker, deployments []*appsv1.Deploymen
 	return findings
 }
 
-func checkPodHARisk(tr *evalTracker, pods []*corev1.Pod, deployments []*appsv1.Deployment) []Finding {
+func checkPodHARisk(tr *evalTracker, pods []*corev1.Pod, deployments []*appsv1.Deployment, replicaSets []*appsv1.ReplicaSet) []Finding {
+	sets := make(map[types.NamespacedName]*appsv1.ReplicaSet, len(replicaSets))
+	for _, rs := range replicaSets {
+		sets[types.NamespacedName{Namespace: rs.Namespace, Name: rs.Name}] = rs
+	}
+	placements := map[types.UID]map[string]int{}
+	incomplete := map[string]bool{}
+	owners := make(map[types.UID]*appsv1.Deployment, len(deployments))
+	for _, d := range deployments {
+		if d.UID != "" {
+			owners[d.UID] = d
+		}
+	}
+	for _, pod := range pods {
+		if pod.Status.Phase != corev1.PodRunning || pod.Spec.NodeName == "" || pod.DeletionTimestamp != nil {
+			continue
+		}
+		ref := metav1.GetControllerOf(pod)
+		if ref == nil || ref.Kind != "ReplicaSet" || schema.FromAPIVersionAndKind(ref.APIVersion, ref.Kind).Group != "apps" {
+			continue
+		}
+		rs := sets[types.NamespacedName{Namespace: pod.Namespace, Name: ref.Name}]
+		if ref.UID == "" || rs == nil || rs.UID != ref.UID {
+			incomplete[pod.Namespace] = true
+			continue
+		}
+		parent := metav1.GetControllerOf(rs)
+		if parent == nil || parent.Kind != "Deployment" || schema.FromAPIVersionAndKind(parent.APIVersion, parent.Kind).Group != "apps" {
+			continue
+		}
+		d := owners[parent.UID]
+		if d == nil || d.Name != parent.Name || d.Namespace != pod.Namespace {
+			continue
+		}
+		if placements[d.UID] == nil {
+			placements[d.UID] = map[string]int{}
+		}
+		placements[d.UID][pod.Spec.NodeName]++
+	}
 	var findings []Finding
 	for _, d := range deployments {
 		replicas := int32(1)
 		if d.Spec.Replicas != nil {
 			replicas = *d.Spec.Replicas
 		}
-		if replicas <= 1 || d.Spec.Selector == nil {
+		if replicas <= 1 || d.UID == "" {
 			continue
 		}
-		sel, err := metav1.LabelSelectorAsSelector(d.Spec.Selector)
-		if err != nil {
+		if incomplete[d.Namespace] {
+			// An unresolved ReplicaSet may own another replica of this Deployment.
+			if !slices.Contains(tr.missingInputs, "replicaset-ownership") {
+				tr.missingInputs = append(tr.missingInputs, "replicaset-ownership")
+			}
+			continue
+		}
+		count := 0
+		for _, n := range placements[d.UID] {
+			count += n
+		}
+		if count < 2 {
 			continue
 		}
 		tr.record("podHARisk", d.Namespace)
-		nodeSet := make(map[string]bool)
-		matchCount := 0
-		for _, pod := range pods {
-			if pod.Namespace != d.Namespace {
-				continue
-			}
-			if !sel.Matches(labels.Set(pod.Labels)) {
-				continue
-			}
-			// Skip pods not running (pending pods don't have a node yet)
-			if pod.Spec.NodeName == "" {
-				continue
-			}
-			nodeSet[pod.Spec.NodeName] = true
-			matchCount++
+		if len(placements[d.UID]) != 1 {
+			continue
 		}
-		if matchCount > 1 && len(nodeSet) == 1 {
-			var nodeName string
-			for n := range nodeSet {
-				nodeName = n
-			}
+		for node := range placements[d.UID] {
 			findings = append(findings, Finding{
 				Kind: "Deployment", Namespace: d.Namespace, Name: d.Name,
 				CheckID: "podHARisk", Category: CategoryReliability, Severity: SeverityWarning,
-				Message: fmt.Sprintf("All %d running pods are on node %s", matchCount, nodeName),
+				Message: fmt.Sprintf("All %d observed running pods are on node %s", count, node),
 			})
 		}
 	}

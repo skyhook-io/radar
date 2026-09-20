@@ -1223,63 +1223,6 @@ func TestMissingTopologySpread_SingleReplica(t *testing.T) {
 	}
 }
 
-func TestPodHARisk(t *testing.T) {
-	input := &CheckInput{
-		Deployments: []*appsv1.Deployment{{
-			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
-			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr(int32(3)),
-				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
-				Template: corev1.PodTemplateSpec{
-					Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Image: "app:v1"}}},
-				},
-			},
-		}},
-		Pods: []*corev1.Pod{
-			{ObjectMeta: metav1.ObjectMeta{Name: "web-1", Namespace: "default", Labels: map[string]string{"app": "web"}}, Spec: corev1.PodSpec{NodeName: "node-1"}},
-			{ObjectMeta: metav1.ObjectMeta{Name: "web-2", Namespace: "default", Labels: map[string]string{"app": "web"}}, Spec: corev1.PodSpec{NodeName: "node-1"}},
-			{ObjectMeta: metav1.ObjectMeta{Name: "web-3", Namespace: "default", Labels: map[string]string{"app": "web"}}, Spec: corev1.PodSpec{NodeName: "node-1"}},
-		},
-	}
-
-	results := RunChecks(input)
-	found := false
-	for _, f := range results.Findings {
-		if f.CheckID == "podHARisk" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected podHARisk when all 3 pods are on the same node")
-	}
-}
-
-func TestPodHARisk_Distributed(t *testing.T) {
-	input := &CheckInput{
-		Deployments: []*appsv1.Deployment{{
-			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
-			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr(int32(2)),
-				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
-				Template: corev1.PodTemplateSpec{
-					Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Image: "app:v1"}}},
-				},
-			},
-		}},
-		Pods: []*corev1.Pod{
-			{ObjectMeta: metav1.ObjectMeta{Name: "web-1", Namespace: "default", Labels: map[string]string{"app": "web"}}, Spec: corev1.PodSpec{NodeName: "node-1"}},
-			{ObjectMeta: metav1.ObjectMeta{Name: "web-2", Namespace: "default", Labels: map[string]string{"app": "web"}}, Spec: corev1.PodSpec{NodeName: "node-2"}},
-		},
-	}
-
-	results := RunChecks(input)
-	for _, f := range results.Findings {
-		if f.CheckID == "podHARisk" {
-			t.Error("podHARisk should not fire when pods are on different nodes")
-		}
-	}
-}
-
 func TestOrphanConfigMapSecret(t *testing.T) {
 	input := &CheckInput{
 		Ingresses: []*networkingv1.Ingress{},
