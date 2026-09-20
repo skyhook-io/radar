@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -120,12 +121,13 @@ func TestPostBindCorrelationIndependentOwners(t *testing.T) {
 			appendPostBindNodeCorrelation(cache, actual, now)
 			hints := 0
 			for i := range actual {
-				if strings.Contains(actual[i].Message, "; same node has ") {
+				if evidence := actual[i].NodeStartupCorroboration; evidence != nil {
 					hints++
-					if !strings.HasSuffix(actual[i].Message, "; same node has 2 visible pods across 2 distinct workload owners with this failure class") {
-						t.Errorf("unexpected counts: %s", actual[i].Message)
+					if evidence.PodCount != 2 || evidence.OwnerCount != 2 || len(evidence.Pods) != 2 {
+						t.Errorf("unexpected evidence: %+v", evidence)
 					}
 				}
+				actual[i].NodeStartupCorroboration = nil
 				actual[i].Message = strings.Split(actual[i].Message, "; same node has ")[0]
 			}
 			if hints != tc.wantHintRows {
@@ -152,7 +154,7 @@ func TestPostBindCorrelationVisibleNamespacesAndDuplicateInputs(t *testing.T) {
 	}
 	cache := GetResourceCache()
 	for _, d := range DetectPostBindProblemsForNamespaces(cache, []string{"visible", "visible"}) {
-		if strings.Contains(d.Message, "same node has") {
+		if d.NodeStartupCorroboration != nil {
 			t.Fatalf("hidden namespace or duplicated row inflated correlation: %+v", d)
 		}
 	}
@@ -161,7 +163,7 @@ func TestPostBindCorrelationVisibleNamespacesAndDuplicateInputs(t *testing.T) {
 		t.Fatalf("underlying row behavior changed: %d", len(rows))
 	}
 	for _, d := range rows {
-		if !strings.Contains(d.Message, "2 visible pods across 2 distinct workload owners") {
+		if d.NodeStartupCorroboration == nil || d.NodeStartupCorroboration.PodCount != 2 || d.NodeStartupCorroboration.OwnerCount != 2 {
 			t.Fatalf("bad scoped unique counts: %+v", d)
 		}
 	}
@@ -189,8 +191,44 @@ func TestPostBindCorrelationMissingIntermediateVisibility(t *testing.T) {
 		t.Fatalf("underlying issues lost: %+v", problems)
 	}
 	for _, d := range problems {
-		if strings.Contains(d.Message, "same node has") {
+		if d.NodeStartupCorroboration != nil {
 			t.Fatalf("missing intermediate visibility invented independence: %+v", d)
+		}
+	}
+}
+
+func TestPostBindCorrelationReferencesAreDeterministicAndInternal(t *testing.T) {
+	defer ResetTestState()
+	old := time.Now().Add(-45 * time.Minute)
+	var objects []runtime.Object
+	for _, name := range []string{"z", "c", "b", "a", "e", "d", "f"} {
+		pod := postBindContainerCreatingPod("visible", name, "node-a", old)
+		pod.OwnerReferences = []metav1.OwnerReference{correlationOwner("apps/v1", "StatefulSet", name, name+"-uid")}
+		objects = append(objects, pod)
+	}
+	if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+		t.Fatal(err)
+	}
+	rows := DetectPostBindProblems(GetResourceCache(), "visible")
+	for _, row := range rows {
+		evidence := row.NodeStartupCorroboration
+		if evidence == nil || evidence.PodCount != 7 || evidence.OwnerCount != 7 {
+			t.Fatalf("missing complete counts: %+v", row)
+		}
+		for i := 1; i < len(evidence.Pods); i++ {
+			if evidence.Pods[i-1].Name >= evidence.Pods[i].Name {
+				t.Fatalf("unsorted refs: %+v", evidence.Pods)
+			}
+		}
+		encoded, err := json.Marshal(row)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), "NodeStartupCorroboration") {
+			t.Fatal("internal evidence unexpectedly serialized")
+		}
+		if !strings.Contains(row.Message, "7 visible pods across 7 distinct workload owners") {
+			t.Fatal("legacy consumers lost evidence")
 		}
 	}
 }

@@ -19,6 +19,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/skyhook-io/radar/pkg/health"
@@ -50,6 +51,13 @@ const configMapSecretTerminatingWarningAfter = 2 * time.Minute
 const terminatingWarningAfter = 10 * time.Minute
 const terminatingCriticalAfter = 30 * time.Minute
 
+type NodeStartupCorroboration struct {
+	Node       string
+	PodCount   int
+	OwnerCount int
+	Pods       []types.NamespacedName
+}
+
 // Detection is a transport-neutral raw operational finding emitted by the
 // detector layer — a failing Deployment, a crashlooping pod, a dangling
 // reference, a degraded Argo app. It carries NO classification, grouping, or
@@ -66,20 +74,21 @@ const terminatingCriticalAfter = 30 * time.Minute
 // successor to the v0 standalone "problems" feature, NOT a parallel surface to
 // issues.
 type Detection struct {
-	Kind              string
-	Namespace         string
-	Name              string
-	Group             string // API group for CRD disambiguation (e.g., "cluster.x-k8s.io")
-	Severity          string // "critical", "high", "medium", "warning", or "info"
-	Reason            string
-	Message           string
-	RawMessage        string
-	Age               string // human-readable
-	AgeSeconds        int64  // for sorting
-	Duration          string // how long the problem has persisted
-	DurationSeconds   int64
-	OnsetAt           time.Time
-	ResourceCreatedAt time.Time
+	NodeStartupCorroboration *NodeStartupCorroboration `json:"-"`
+	Kind                     string
+	Namespace                string
+	Name                     string
+	Group                    string // API group for CRD disambiguation (e.g., "cluster.x-k8s.io")
+	Severity                 string // "critical", "high", "medium", "warning", or "info"
+	Reason                   string
+	Message                  string
+	RawMessage               string
+	Age                      string // human-readable
+	AgeSeconds               int64  // for sorting
+	Duration                 string // how long the problem has persisted
+	DurationSeconds          int64
+	OnsetAt                  time.Time
+	ResourceCreatedAt        time.Time
 	// OnsetUnknown is set when the snapshot proves the issue exists but carries
 	// no defensible evidence for when the failing state began. Resource age may
 	// still be populated independently.

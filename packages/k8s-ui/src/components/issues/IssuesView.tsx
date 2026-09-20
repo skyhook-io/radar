@@ -221,6 +221,7 @@ export function IssueRow({
   // query toggles: inline at the row's right edge on a wide container, and on a
   // line of its own below the resource line once the row is too narrow to hold
   // it beside the title — so the title never has to truncate to make room.
+  const nodeCorroboration = issue.diagnostic_context?.facts?.find(fact => fact.type === 'node_startup_corroboration');
   const metaChips = (wrapperClass: string) => (
     <div className={`items-center gap-3 ${wrapperClass}`}>
       <span className={`badge-sm shrink-0 px-2.5 py-0.5 text-xs font-semibold ${open ? ISSUE_SEVERITY_SOLID_CLASS[severity] : ISSUE_SEVERITY_BADGE_CLASS[severity]}`}>
@@ -235,6 +236,11 @@ export function IssueRow({
             <Clock className="h-3 w-3" aria-hidden />
             {partialOnset ? '≥' : ''}{formatCompactAge(issue.first_seen)}
           </time>
+        </Tooltip>
+      ) : null}
+      {nodeCorroboration ? (
+        <Tooltip content={nodeCorroboration.message} delay={200}>
+          <span className="badge-sm text-[10px] text-theme-text-secondary">Same-node failures</span>
         </Tooltip>
       ) : null}
       {timing ? (

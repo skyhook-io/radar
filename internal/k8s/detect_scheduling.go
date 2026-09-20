@@ -1556,8 +1556,9 @@ func appendPostBindNodeCorrelation(cache *ResourceCache, problems []Detection, n
 	}
 	type groupKey struct{ node, reason string }
 	type group struct {
-		pods   map[types.NamespacedName]bool
-		owners map[types.UID]bool
+		pods     map[types.NamespacedName]bool
+		owners   map[types.UID]bool
+		evidence *NodeStartupCorroboration
 	}
 	groups := map[groupKey]*group{}
 	eligible := map[int]groupKey{}
@@ -1583,10 +1584,25 @@ func appendPostBindNodeCorrelation(cache *ResourceCache, problems []Detection, n
 		g.owners[owner] = true
 		eligible[i] = key
 	}
-	for i, key := range eligible {
-		g := groups[key]
+	for key, g := range groups {
 		if len(g.owners) > 1 {
-			problems[i].Message += fmt.Sprintf("; same node has %d visible pods across %d distinct workload owners with this failure class", len(g.pods), len(g.owners))
+			pods := make([]types.NamespacedName, 0, len(g.pods))
+			for pod := range g.pods {
+				pods = append(pods, pod)
+			}
+			sort.Slice(pods, func(i, j int) bool {
+				if pods[i].Namespace != pods[j].Namespace {
+					return pods[i].Namespace < pods[j].Namespace
+				}
+				return pods[i].Name < pods[j].Name
+			})
+			g.evidence = &NodeStartupCorroboration{Node: key.node, PodCount: len(g.pods), OwnerCount: len(g.owners), Pods: pods}
+		}
+	}
+	for i, key := range eligible {
+		problems[i].NodeStartupCorroboration = groups[key].evidence
+		if evidence := groups[key].evidence; evidence != nil {
+			problems[i].Message += fmt.Sprintf("; same node has %d visible pods across %d distinct workload owners with this failure class", evidence.PodCount, evidence.OwnerCount)
 		}
 	}
 }
