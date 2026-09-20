@@ -184,6 +184,7 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		IssueTimingBasis:     issueTimingBasis,
 	}
 	if evidence := p.NodeStartupCorroboration; evidence != nil && reason == p.Reason {
+		iss.Message = p.MessageBeforeCorroboration
 		refs := make([]Ref, 0, min(len(evidence.Pods), maxDiagnosticRefs))
 		for _, pod := range evidence.Pods[:min(len(evidence.Pods), maxDiagnosticRefs)] {
 			refs = append(refs, Ref{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name})

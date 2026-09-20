@@ -12,12 +12,12 @@ import (
 
 func TestNodeCorroborationContextPreservesRepresentativeAndRollup(t *testing.T) {
 	now := time.Now()
-	detection := k8s.Detection{Kind: "Pod", Namespace: "visible", Name: "one", Reason: "IPExhaustion", Severity: "critical", Message: "specific per-Pod failure", OwnerKind: "Deployment", OwnerName: "workload", NodeStartupCorroboration: &k8s.NodeStartupCorroboration{Node: "node-a", PodCount: 7, OwnerCount: 3}}
+	detection := k8s.Detection{Kind: "Pod", Namespace: "visible", Name: "one", Reason: "IPExhaustion", Severity: "critical", Message: "specific per-Pod failure; same node has 7 visible pods across 3 distinct workload owners with this failure class", MessageBeforeCorroboration: "specific per-Pod failure", OwnerKind: "Deployment", OwnerName: "workload", NodeStartupCorroboration: &k8s.NodeStartupCorroboration{Node: "node-a", PodCount: 7, OwnerCount: 3}}
 	for _, name := range []string{"one", "two", "three", "four", "five", "six", "seven"} {
 		detection.NodeStartupCorroboration.Pods = append(detection.NodeStartupCorroboration.Pods, types.NamespacedName{Namespace: "visible", Name: name})
 	}
 	first := fromProblem(detection, now, SourceScheduling)
-	if first.Message != detection.Message || first.DiagnosticContext == nil {
+	if first.Message != detection.MessageBeforeCorroboration || first.DiagnosticContext == nil {
 		t.Fatalf("lost failure/context: %+v", first)
 	}
 	fact := first.DiagnosticContext.Facts[0]
@@ -45,6 +45,10 @@ func TestNodeCorroborationContextPreservesRepresentativeAndRollup(t *testing.T) 
 		if counts[factNodeStartupCorroboration] != 1 || counts[factOwnerRollup] != 1 {
 			t.Fatalf("lost/duplicated context after pass%d: %+v", iteration, counts)
 		}
+	}
+	detection.Message = "pods is forbidden: User test cannot list pods; same node has 7 visible pods across 3 distinct workload owners with this failure class"
+	if got := fromProblem(detection, now, SourceScheduling); got.Reason != "RBACForbidden" || got.DiagnosticContext != nil || got.Message != detection.Message {
+		t.Fatalf("reclassified message/context changed: %+v", got)
 	}
 	detection.NodeStartupCorroboration = nil
 	if got := fromProblem(detection, now, SourceScheduling); got.DiagnosticContext != nil {

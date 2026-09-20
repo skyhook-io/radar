@@ -1602,6 +1602,7 @@ func appendPostBindNodeCorrelation(cache *ResourceCache, problems []Detection, n
 	for i, key := range eligible {
 		problems[i].NodeStartupCorroboration = groups[key].evidence
 		if evidence := groups[key].evidence; evidence != nil {
+			problems[i].MessageBeforeCorroboration = problems[i].Message
 			problems[i].Message += fmt.Sprintf("; same node has %d visible pods across %d distinct workload owners with this failure class", evidence.PodCount, evidence.OwnerCount)
 		}
 	}

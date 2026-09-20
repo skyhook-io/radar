@@ -128,6 +128,7 @@ func TestPostBindCorrelationIndependentOwners(t *testing.T) {
 					}
 				}
 				actual[i].NodeStartupCorroboration = nil
+				actual[i].MessageBeforeCorroboration = ""
 				actual[i].Message = strings.Split(actual[i].Message, "; same node has ")[0]
 			}
 			if hints != tc.wantHintRows {
@@ -226,6 +227,9 @@ func TestPostBindCorrelationReferencesAreDeterministicAndInternal(t *testing.T) 
 		}
 		if strings.Contains(string(encoded), "NodeStartupCorroboration") {
 			t.Fatal("internal evidence unexpectedly serialized")
+		}
+		if row.MessageBeforeCorroboration == "" || strings.Contains(row.MessageBeforeCorroboration, "same node has") {
+			t.Fatal("original failure message was not captured")
 		}
 		if !strings.Contains(row.Message, "7 visible pods across 7 distinct workload owners") {
 			t.Fatal("legacy consumers lost evidence")

@@ -240,7 +240,7 @@ export function IssueRow({
       ) : null}
       {nodeCorroboration ? (
         <Tooltip content={nodeCorroboration.message} delay={200}>
-          <span className="badge-sm text-[10px] text-theme-text-secondary">Same-node failures</span>
+          <span className="badge-sm inline-flex items-center gap-1 border border-theme-border text-[10px] text-theme-text-secondary"><Workflow className="h-3 w-3 shrink-0" aria-hidden />Same-node evidence</span>
         </Tooltip>
       ) : null}
       {timing ? (

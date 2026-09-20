@@ -74,21 +74,22 @@ type NodeStartupCorroboration struct {
 // successor to the v0 standalone "problems" feature, NOT a parallel surface to
 // issues.
 type Detection struct {
-	NodeStartupCorroboration *NodeStartupCorroboration `json:"-"`
-	Kind                     string
-	Namespace                string
-	Name                     string
-	Group                    string // API group for CRD disambiguation (e.g., "cluster.x-k8s.io")
-	Severity                 string // "critical", "high", "medium", "warning", or "info"
-	Reason                   string
-	Message                  string
-	RawMessage               string
-	Age                      string // human-readable
-	AgeSeconds               int64  // for sorting
-	Duration                 string // how long the problem has persisted
-	DurationSeconds          int64
-	OnsetAt                  time.Time
-	ResourceCreatedAt        time.Time
+	NodeStartupCorroboration   *NodeStartupCorroboration `json:"-"`
+	MessageBeforeCorroboration string                    `json:"-"`
+	Kind                       string
+	Namespace                  string
+	Name                       string
+	Group                      string // API group for CRD disambiguation (e.g., "cluster.x-k8s.io")
+	Severity                   string // "critical", "high", "medium", "warning", or "info"
+	Reason                     string
+	Message                    string
+	RawMessage                 string
+	Age                        string // human-readable
+	AgeSeconds                 int64  // for sorting
+	Duration                   string // how long the problem has persisted
+	DurationSeconds            int64
+	OnsetAt                    time.Time
+	ResourceCreatedAt          time.Time
 	// OnsetUnknown is set when the snapshot proves the issue exists but carries
 	// no defensible evidence for when the failing state began. Resource age may
 	// still be populated independently.
