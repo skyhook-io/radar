@@ -65,6 +65,12 @@ configuration instead. See [installation settings](in-cluster.md#installation-se
 for provisioning, upgrades, personal preferences, and the separate Cloud behavior.
 The local files below are not a substitute for Helm configuration.
 
+Non-Helm shared OSS still reads `config.json` as startup defaults (including
+previously saved integration endpoints); flags override them. It does not adopt
+UI-saved audit policy or OCI sources from `settings.json`: move those into
+`RADAR_OPERATOR_SETTINGS_FILE` before upgrading. Radar logs a warning when it
+ignores those saved settings. Neither local file is rewritten by this transition.
+
 ### Config File (`~/.radar/config.json`)
 
 Persistent defaults for CLI flags. CLI flags always override these values. Managed via the Settings dialog in the UI or `PUT /api/config`.

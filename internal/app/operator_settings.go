@@ -19,6 +19,9 @@ func loadOperatorSettings(cfg AppConfig) error {
 	path := os.Getenv(settings.OperatorFileEnv)
 	if path == "" {
 		if server.ConfigurationManagement(cfg.AuthConfig, cfg.CloudTunnelConfigured, cfg.ListenAddress) == "operator" {
+			if saved := settings.Load(); saved.Audit != nil || len(saved.HelmOCISources) > 0 {
+				log.Printf("[settings] Ignoring UI-saved audit/OCI settings in this managed installation; supply %s to preserve the intended policy. config.json remains a startup-default source", settings.OperatorFileEnv)
+			}
 			settings.SetOperatorConfig(&settings.OperatorConfig{Version: 1})
 		}
 		return nil

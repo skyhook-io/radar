@@ -1,9 +1,12 @@
 package app
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -66,6 +69,10 @@ func TestOperatorDefaultsWithoutFile(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Setenv("KUBERNETES_SERVICE_HOST", tt.pod)
+			var logs bytes.Buffer
+			previousOutput := log.Writer()
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(previousOutput) })
 			if err := loadOperatorSettings(AppConfig{AuthConfig: auth.Config{Mode: tt.authMode}, ListenAddress: tt.listen, CloudTunnelConfigured: tt.cloud}); err != nil {
 				t.Fatal(err)
 			}
@@ -78,6 +85,9 @@ func TestOperatorDefaultsWithoutFile(t *testing.T) {
 			}
 			if got := settings.Load(); !reflect.DeepEqual(got.Audit, legacy.Audit) || !reflect.DeepEqual(got.HelmOCISources, legacy.HelmOCISources) {
 				t.Fatal("startup changed the local settings file")
+			}
+			if warned := strings.Contains(logs.String(), "Ignoring UI-saved audit/OCI"); warned != tt.operator {
+				t.Fatalf("migration warning = %v, want %v", warned, tt.operator)
 			}
 		})
 	}
