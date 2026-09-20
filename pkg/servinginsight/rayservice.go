@@ -14,21 +14,23 @@ var rayServiceV1 = schema.GroupVersionKind{Group: "ray.io", Version: "v1", Kind:
 
 const maxApplications = 8
 
-// ForResource follows KubeRay v1.7.0; the served API version alone does not
+// ForRayService follows KubeRay v1.7.0; the served API version alone does not
 // identify the controller release. Ready means proxy endpoints exist, not that
 // all Serve applications or revisions are healthy. Independent root conditions
 // already live in statusSummary; no combined phase or outcome is synthesized.
-func ForResource(obj runtime.Object) *resourcecontext.RayServiceSummary {
+func ForRayService(obj runtime.Object) *resourcecontext.RayServiceSummary {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok || u.GroupVersionKind() != rayServiceV1 {
 		return nil
 	}
 	suspendRequested, _, _ := unstructured.NestedBool(u.Object, "spec", "suspend")
 	observedGeneration, _, _ := unstructured.NestedInt64(u.Object, "status", "observedGeneration")
+	upgradeStrategy, _, _ := unstructured.NestedString(u.Object, "spec", "upgradeStrategy", "type")
 	return &resourcecontext.RayServiceSummary{
 		SubjectGeneration:  u.GetGeneration(),
 		ObservedGeneration: observedGeneration,
 		SuspendRequested:   suspendRequested,
+		UpgradeStrategy:    upgradeStrategy,
 		Active:             rayServiceRuntime(u, "activeServiceStatus"),
 		Pending:            rayServiceRuntime(u, "pendingServiceStatus"),
 	}

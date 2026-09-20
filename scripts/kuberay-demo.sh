@@ -532,7 +532,7 @@ radar_serving_matches() {
   native="$(rayservice_json)" || return 1
   expected="$(jq -ceS '
     def generation: if . == null or . == 0 then {} else {observedGeneration:.} end;
-    {subjectGeneration:.metadata.generation, suspendRequested:false,
+    {subjectGeneration:.metadata.generation, suspendRequested:false, upgradeStrategy:"NewCluster",
      active:{clusterName:.status.activeServiceStatus.rayClusterName},
      pending:{clusterName:.status.pendingServiceStatus.rayClusterName}}
      + (.status.observedGeneration | generation)

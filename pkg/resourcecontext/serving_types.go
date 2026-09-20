@@ -8,11 +8,13 @@ package resourcecontext
 // Suspension tears down owned resources and clears slots; once Suspending=True,
 // teardown completes even if intent flips back. Resume creates new clusters.
 type RayServiceSummary struct {
-	SubjectGeneration  int64              `json:"subjectGeneration,omitempty"`
-	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
-	SuspendRequested   bool               `json:"suspendRequested"`
-	Active             *RayServiceRuntime `json:"active,omitempty"`
-	Pending            *RayServiceRuntime `json:"pending,omitempty"`
+	SubjectGeneration  int64 `json:"subjectGeneration,omitempty"`
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	SuspendRequested   bool  `json:"suspendRequested"`
+	// UpgradeStrategy is declared intent, not the effective operator default or rollout completion.
+	UpgradeStrategy string             `json:"upgradeStrategy,omitempty"`
+	Active          *RayServiceRuntime `json:"active,omitempty"`
+	Pending         *RayServiceRuntime `json:"pending,omitempty"`
 }
 
 // RayServiceRuntime uses only the root's named status slot. ClusterName is not

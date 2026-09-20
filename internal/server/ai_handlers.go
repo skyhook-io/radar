@@ -476,7 +476,7 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		AuditSummary:      auditSum,
 		Scheduling:        schedulinginsight.ForResource(obj, resourcecontext.TierBasic),
 		Execution:         executioninsight.ForResource(obj, resourcecontext.TierBasic),
-		RayServiceSummary: servinginsight.ForResource(obj),
+		RayServiceSummary: servinginsight.ForRayService(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),

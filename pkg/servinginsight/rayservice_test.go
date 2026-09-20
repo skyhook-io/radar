@@ -43,7 +43,7 @@ func fixture(t *testing.T) *unstructured.Unstructured {
 }
 func wire(t *testing.T, obj *unstructured.Unstructured, tier resourcecontext.ContextTier) string {
 	t.Helper()
-	data, err := json.Marshal(resourcecontext.ResourceContext{Tier: tier, RayServiceSummary: ForResource(obj)})
+	data, err := json.Marshal(resourcecontext.ResourceContext{Tier: tier, RayServiceSummary: ForRayService(obj)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,12 +55,12 @@ func TestExactGVKAndAbsentState(t *testing.T) {
 		obj := newRayService()
 		obj.SetAPIVersion(gvk.version)
 		obj.SetKind(gvk.kind)
-		if got := ForResource(obj); got != nil {
+		if got := ForRayService(obj); got != nil {
 			t.Fatalf("unsupported %v: %+v", gvk, got)
 		}
 	}
 	for _, obj := range []runtime.Object{nil, &corev1.Service{}} {
-		if ForResource(obj) != nil {
+		if ForRayService(obj) != nil {
 			t.Fatal("unsupported object")
 		}
 	}
@@ -97,9 +97,9 @@ func TestBuildKeepsIndependentConditionsAndIntent(t *testing.T) {
 			obj.Object["spec"] = map[string]any{"suspend": tc.suspend}
 			obj.Object["status"] = map[string]any{"observedGeneration": int64(3), "conditions": tc.conditions}
 			before := obj.DeepCopy()
-			projected := ForResource(obj)
+			projected := ForRayService(obj)
 			got := resourcecontext.Build(context.Background(), obj, resourcecontext.Options{Tier: resourcecontext.TierBasic, RayServiceSummary: projected})
-			if got.Execution != nil || got.RayServiceSummary != projected {
+			if got.RayServiceSummary != projected {
 				t.Fatalf("context wiring: %+v", got)
 			}
 			if projected.SubjectGeneration != 4 || projected.ObservedGeneration != 3 || projected.SuspendRequested != tc.suspend {
@@ -120,7 +120,7 @@ func TestBuildKeepsIndependentConditionsAndIntent(t *testing.T) {
 			}
 			now := metav1.Now()
 			obj.SetDeletionTimestamp(&now)
-			if after := ForResource(obj); !reflect.DeepEqual(projected, after) {
+			if after := ForRayService(obj); !reflect.DeepEqual(projected, after) {
 				t.Fatal("deletion reclassified native state")
 			}
 		})
@@ -129,7 +129,7 @@ func TestBuildKeepsIndependentConditionsAndIntent(t *testing.T) {
 
 func TestRuntimeApplicationsAndPercentages(t *testing.T) {
 	obj := fixture(t)
-	got := ForResource(obj)
+	got := ForRayService(obj)
 	if got.Active.ClusterName != "image-service-raycluster-old" || got.Pending.ClusterName != "image-service-raycluster-new" {
 		t.Fatalf("runtime identity: %+v", got)
 	}
@@ -155,19 +155,19 @@ func TestPartialRuntimeDoesNotInventChildState(t *testing.T) {
 		"activeServiceStatus":  map[string]any{"rayClusterName": "active", "rayClusterStatus": map[string]any{"state": "failed", "conditions": []any{condition("HeadPodReady", "True", "HeadPodRunningAndReady")}}},
 		"pendingServiceStatus": map[string]any{"rayClusterName": "pending"},
 	}
-	got := ForResource(obj)
+	got := ForRayService(obj)
 	want := &resourcecontext.RayServiceSummary{SubjectGeneration: 4, Active: &resourcecontext.RayServiceRuntime{ClusterName: "active"}, Pending: &resourcecontext.RayServiceRuntime{ClusterName: "pending"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("invented missing evidence: %+v", got)
 	}
 	delete(obj.Object["status"].(map[string]any)["pendingServiceStatus"].(map[string]any), "rayClusterName")
 	_ = unstructured.SetNestedField(obj.Object, int64(0), "status", "pendingServiceStatus", "targetCapacity")
-	if ForResource(obj).Pending != nil {
+	if ForRayService(obj).Pending != nil {
 		t.Fatal("unnamed runtime emitted")
 	}
 	// A reported app can itself have no status; do not fill it with RUNNING.
 	_ = unstructured.SetNestedMap(obj.Object, map[string]any{"unobserved": map[string]any{}}, "status", "activeServiceStatus", "applicationStatuses")
-	if apps := ForResource(obj).Active.Applications; len(apps) != 1 || apps[0].Status != "" {
+	if apps := ForRayService(obj).Active.Applications; len(apps) != 1 || apps[0].Status != "" {
 		t.Fatalf("invented app state: %+v", apps)
 	}
 }
@@ -181,7 +181,7 @@ func TestDeterministicCardinalityAndOutputBudget(t *testing.T) {
 	for _, slot := range []string{"activeServiceStatus", "pendingServiceStatus"} {
 		_ = unstructured.SetNestedMap(obj.Object, apps, "status", slot, "applicationStatuses")
 	}
-	got := ForResource(obj)
+	got := ForRayService(obj)
 	for _, slot := range []*resourcecontext.RayServiceRuntime{got.Active, got.Pending} {
 		if !slot.ApplicationsTruncated || len(slot.Applications) != 8 || slot.Applications[0].Name != "app-0000" || slot.Applications[7].Name != "app-0007" || slot.Applications[0].Status != "UNRECOGNIZED_NATIVE_STATE" {
 			t.Fatalf("cap or native values: %+v", slot)
@@ -199,7 +199,19 @@ func TestDeterministicCardinalityAndOutputBudget(t *testing.T) {
 		delete(apps, fmt.Sprintf("app-%04d", i))
 	}
 	_ = unstructured.SetNestedMap(obj.Object, apps, "status", "activeServiceStatus", "applicationStatuses")
-	if ForResource(obj).Active.ApplicationsTruncated {
+	if ForRayService(obj).Active.ApplicationsTruncated {
 		t.Fatal("exactly eight apps incorrectly truncated")
+	}
+}
+
+func TestDeclaredUpgradeStrategyDoesNotInferDefaults(t *testing.T) {
+	for _, strategy := range []string{"", "None", "NewCluster", "NewClusterWithIncrementalUpgrade", "FutureStrategy"} {
+		obj := newRayService()
+		if strategy != "" {
+			_ = unstructured.SetNestedField(obj.Object, strategy, "spec", "upgradeStrategy", "type")
+		}
+		if got := ForRayService(obj).UpgradeStrategy; got != strategy {
+			t.Fatalf("declared %q became %q", strategy, got)
+		}
 	}
 }
