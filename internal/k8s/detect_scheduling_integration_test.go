@@ -631,6 +631,8 @@ func TestDetectPostBindProblems_EventlessCNIStartupStall(t *testing.T) {
 	old := time.Now().Add(-45 * time.Minute)
 	stuck := postBindContainerCreatingPod("prod", "valkey", "worker-2", old)
 	sameNode := postBindContainerCreatingPod("kube-system", "calico-token-refresh", "worker-2", old)
+	stuck.OwnerReferences = []metav1.OwnerReference{correlationOwner("apps/v1", "StatefulSet", "valkey", "valkey-uid")}
+	sameNode.OwnerReferences = []metav1.OwnerReference{correlationOwner("apps/v1", "DaemonSet", "calico", "calico-uid")}
 	slowImagePull := postBindContainerCreatingPod("prod", "image-pull", "worker-2", old)
 	slowImagePull.Status.PodIP = "10.1.2.3"
 	fresh := postBindContainerCreatingPod("prod", "fresh", "worker-2", time.Now().Add(-5*time.Minute))
@@ -647,7 +649,7 @@ func TestDetectPostBindProblems_EventlessCNIStartupStall(t *testing.T) {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
 	scoped := DetectPostBindProblems(GetResourceCache(), "prod")
-	if len(scoped) != 1 || strings.Contains(scoped[0].Message, "same node has 2 visible pods") {
+	if len(scoped) != 1 || strings.Contains(scoped[0].Message, "same node has 2 visible pods across 2 distinct workload owners") {
 		t.Fatalf("single-namespace detector should not count kube-system pods, got %+v", scoped)
 	}
 	problems := DetectPostBindProblemsForNamespaces(GetResourceCache(), []string{"prod", "kube-system"})
@@ -668,7 +670,7 @@ func TestDetectPostBindProblems_EventlessCNIStartupStall(t *testing.T) {
 	if got.Reason != "PostBindStartupStall" || got.Severity != "critical" {
 		t.Fatalf("got reason/severity %s/%s, want PostBindStartupStall/critical: %+v", got.Reason, got.Severity, got)
 	}
-	for _, want := range []string{"worker-2", "no matching recent kubelet event", "same node has 2 visible pods"} {
+	for _, want := range []string{"worker-2", "no matching recent kubelet event", "same node has 2 visible pods across 2 distinct workload owners"} {
 		if !strings.Contains(got.Message, want) {
 			t.Errorf("message %q missing %q", got.Message, want)
 		}
@@ -697,7 +699,7 @@ func TestDetectPostBindProblems_ExpiredVolumeEventSuppressesFallback(t *testing.
 		if p.Name == "web" {
 			t.Fatalf("expired storage event must not be relabeled as an eventless CNI/runtime stall: %+v", problems)
 		}
-		if p.Name == "network" && strings.Contains(p.Message, "same node has 2 visible pods") {
+		if p.Name == "network" && strings.Contains(p.Message, "same node has 2 visible pods across 2 distinct workload owners") {
 			t.Fatalf("expired storage event must not inflate same-node CNI/runtime correlation: %+v", problems)
 		}
 	}
