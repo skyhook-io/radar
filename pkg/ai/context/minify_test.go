@@ -154,7 +154,6 @@ func TestMinifyResource_Pod(t *testing.T) {
 		t.Errorf("Expected namespace=default, got %v", meta["namespace"])
 	}
 
-	// Should strip uid and resourceVersion
 	if _, exists := meta["uid"]; exists {
 		t.Error("uid should be stripped")
 	}
