@@ -92,6 +92,7 @@ type Server struct {
 	openCostCurrency        *opencost.CurrencyResolver
 	currencyManaged         bool
 	prometheusConfigMu      sync.Mutex
+	prometheusProfiles      *prometheuspkg.ProfileResolver
 	promURLFlag             bool
 	promHeaderFlags         bool
 	authConfig              auth.Config
@@ -192,6 +193,7 @@ type Config struct {
 	EffectiveConfig         *config.Config              // Running startup config for GET /api/config
 	PrometheusURLFlag       bool
 	PrometheusHeaderFlags   bool
+	PrometheusProfiles      *prometheuspkg.ProfileResolver
 	OpenCostCurrency        string      // ISO 4217 code labeling values returned by OpenCost endpoints
 	OpenCostManaged         bool        // true when an explicit CLI/Helm flag owns the running value
 	AuthConfig              auth.Config // Authentication configuration
@@ -229,6 +231,7 @@ func New(cfg Config) *Server {
 		effectiveConfig:         cfg.EffectiveConfig,
 		promURLFlag:             cfg.PrometheusURLFlag,
 		promHeaderFlags:         cfg.PrometheusHeaderFlags,
+		prometheusProfiles:      cfg.PrometheusProfiles,
 		openCostCurrency:        opencost.NewCurrencyResolver(cfg.OpenCostCurrency),
 		currencyManaged:         cfg.OpenCostManaged,
 		authConfig:              cfg.AuthConfig,
@@ -5564,10 +5567,11 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 // configResponse bundles the on-disk config file with the effective startup
 // config so the UI can show "currently running" hints for values that differ.
 type configResponse struct {
-	Management string        `json:"management"`
-	File       config.Config `json:"file"`
-	Effective  config.Config `json:"effective"`
-	IsDesktop  bool          `json:"isDesktop"`
+	PrometheusProfile *prometheuspkg.ProfileView `json:"prometheusProfile,omitempty"`
+	Management        string                     `json:"management"`
+	File              config.Config              `json:"file"`
+	Effective         config.Config              `json:"effective"`
+	IsDesktop         bool                       `json:"isDesktop"`
 	// OpenCostManaged tells Settings that an explicit startup flag owns the
 	// running value even when the persisted file changes.
 	OpenCostManaged bool `json:"openCostCurrencyManaged,omitempty"`
@@ -5689,6 +5693,18 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		resp.Effective = effective
 	}
 	resp.Effective.PrometheusURL = currentURL
+	if s.prometheusProfiles != nil && s.configManagement() == "local" {
+		view := s.localPrometheusView()
+		resp.PrometheusProfile = &view
+		resp.File.PrometheusURL = view.URL
+		resp.File.PrometheusHeadersFromEnv = nil
+		resp.Effective.PrometheusURL = view.URL
+		resp.Effective.PrometheusHeadersFromEnv = nil
+		resp.PrometheusHeaderKeys = view.HeaderKeys
+		resp.PrometheusServerManaged = view.State == "launch"
+		resp.PrometheusHeadersManaged = view.HeadersManaged || view.State == "launch"
+		resp.PrometheusURLFromFlag = view.State == "launch"
+	}
 	s.writeJSON(w, resp)
 }
 
@@ -5797,6 +5813,10 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
 	}
+	if s.prometheusProfiles != nil && s.configManagement() == "local" {
+		s.handleApplyLocalPrometheus(w, r)
+		return
+	}
 	// No requireConnected: persisting + applying a manual URL needs no cluster
 	// (the probe hits the URL over HTTP), so operators can point at an external
 	// Prometheus even while the cluster is unreachable, like handlePutConfig.
@@ -5816,15 +5836,9 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 
 	// Reject anything startup would log.Fatalf on, so "Apply now" can't persist a
 	// config that bricks the next launch. Empty reverts to auto-discovery.
-	if rawURL != "" {
-		if u, err := url.Parse(rawURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			s.writeError(w, http.StatusBadRequest, "Prometheus URL must be an HTTP(S) base URL without credentials, query parameters or fragments (e.g., http://prometheus-server.monitoring:9090)")
-			return
-		}
-		if _, valid := prom.NormalizeOrigin(rawURL); !valid {
-			s.writeError(w, http.StatusBadRequest, "Prometheus URL has an invalid port; use a numeric port no greater than 65535")
-			return
-		}
+	if err := prom.ValidateBaseURL(rawURL); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	var headers map[string]string

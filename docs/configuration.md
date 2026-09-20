@@ -73,7 +73,9 @@ there would leave a running process with no way to reach it.
 
 ## Persistent Configuration
 
-Local CLI and Desktop Radar store configuration in two files under `~/.radar/`.
+Local CLI and Desktop Radar store machine defaults (`config.json`), personal
+preferences (`settings.json`), and per-cluster Prometheus connections
+(`clusters.json`) under `~/.radar/`.
 Shared OSS installations (in-cluster or authentication-enabled) expose these
 installation settings read-only; configure them through Helm values or startup
 configuration instead. See [installation settings](in-cluster.md#installation-settings)
@@ -88,7 +90,11 @@ ignores those saved settings. Neither local file is rewritten by this transition
 
 ### Config File (`~/.radar/config.json`)
 
-Persistent defaults for CLI flags. CLI flags always override these values. Managed via the Settings dialog in the UI or `PUT /api/config`.
+Persistent defaults for CLI flags. CLI flags override these values. Managed via the Settings dialog in the UI or `PUT /api/config`.
+
+For local CLI/Desktop, the three `prometheus*` fields below are **legacy adoption
+sources**, not active defaults. Use [per-cluster connections](#local-prometheus-profiles)
+instead. Shared OSS and Cloud retain installation-scoped configuration.
 
 ```json
 {
@@ -290,35 +296,82 @@ it does not switch every saved endpoint, tool preference and credential.
 | Setting | Local context-switch behavior |
 |---|---|
 | Namespace selection | Remembered per visible kubeconfig context |
-| Prometheus URL and headers, including tenant/auth headers | Radar-wide; the manual URL and headers remain selected after switching contexts |
+| Prometheus URL and headers, including tenant/auth headers | Per kubeconfig source/context; the selected cluster's profile replaces the previous connection |
 | Prometheus auto-discovery | Runs for the selected cluster when no manual URL or headers are configured |
 | Workload-metrics identity evidence / scope assertion | Evidence is rechecked; a connection change discards the process-local assertion |
 | Argo CD auto-discovery token | Bound to its kubeconfig source identity; this protects reuse but is not a saved profile for every cluster |
 | Kubecost auto-discovery API key / cluster-ID override | Bound to the configured context; an explicit central URL's key can be reused across contexts |
 
-If different clusters use different Prometheus backends or tenants, update the URL
-and headers together in **Settings → Metrics**. Changing the server (scheme, host
-or port) requires explicitly replacing or clearing saved headers; a URL-only
-change cannot carry credentials to another server. If the configuration file
-contains `prometheusHeadersFromEnv`, update its URL and header references together
-and restart. If `--prometheus-url`, `--prometheus-header` or
-`--prometheus-header-from-env` is set, change the URL and header flags together and
-restart before switching servers or enabling auto-discovery. Headers supplied by
-flags or environment references cannot be replaced or cleared in Settings; change
-them at their source and restart. A URL-only flag still allows saved headers to be
-edited. Same-server path edits apply immediately, but a URL supplied at launch is
-restored on restart. Settings shows the running URL and header names, never header
-values. For editable headers, **Clear saved headers** followed by **Apply** removes
-them explicitly. Apply saves the configuration before checking connectivity, so
-an unreachable backend remains saved until you correct it.
+### Local Prometheus profiles
 
-At launch, overriding a saved server with `--prometheus-url` also requires
-explicitly replacing every inherited header source, or updating the saved URL
-and headers together. A header-only configuration file can still pair with a
-deployment's URL flag. Applying that connection in Settings saves its URL, so
-subsequent launches bind the saved headers to that server. Header names are
-case-insensitive; duplicate names, whitespace-padded keys and invalid HTTP header
-characters are rejected, including on startup.
+In **Settings → Metrics**, save the endpoint and auth/tenant headers for the
+selected context. Switching A → B → A restores A's connection, while a context
+without a profile uses auto-discovery. CLI and Desktop share this store. Argo CD
+and cost-source configuration are not yet complete per-cluster profiles.
+
+Settings shows header names, never values. Changing the server (scheme, host or
+port) requires replacing or clearing saved headers. **Clear saved headers** then
+**Apply now** removes them; an empty URL without headers enables auto-discovery.
+Saving precedes the connection check: an unreachable backend remains saved.
+
+Profiles live in `~/.radar/clusters.json`. Let Settings create the entry rather
+than inventing its opaque key or target fingerprint. You can then edit its
+`description` or use `prometheus.headersFromEnv`, for example
+`{"Authorization":"PROMETHEUS_TOKEN","X-Scope-OrgID":"PROMETHEUS_TENANT"}`.
+Those variables must exist in the Radar process's environment; Desktop apps do
+not necessarily inherit your terminal environment. Missing variables suspend the
+connection. Environment-backed headers are read-only in Settings; edit their
+references in the file. See the [JSON schema](schemas/clusters.schema.json).
+
+Files refresh when opening/reloading Settings and when switching or retrying a
+cluster connection, not continuously. Parallel Radar processes use a file lock
+and revision checks; a stale save asks you to reload instead of overwriting
+another process's changes. Invalid or unsupported files are never replaced.
+
+The key includes the kubeconfig source and in-file context, so same-named
+contexts in different files do not share credentials. Moving or renaming the
+source creates a different profile. CAPI connections use their stable management
+source/namespace/name identity, not temporary kubeconfig paths. Changing the
+Kubernetes server, CA trust, TLS settings or user reference pauses the connection
+until explicitly reconfirmed. Rotating bearer tokens does not. Replacing a
+cluster behind the same endpoint, trust and user reference cannot be detected
+by this fingerprint alone.
+
+An explicit `--prometheus-url` is a complete, read-only **Set for this launch**
+override, bound to the initial context and target. It never inherits saved
+headers. Local header flags require that URL flag in the same launch. Switching
+away disables the override; returning to the same target restores it. Restart
+without these flags to edit the saved profile. No new flags are needed.
+Workload scope assertions remain process-local and are cleared on a cluster
+switch attempt, including an unsuccessful one; saved profiles never restore them.
+Repairing a profile that was unusable at startup also resumes automatic matching,
+not the startup assertion. Relaunch with the scope flags to assert it again.
+
+**Upgrading from global settings:** old `config.json` Prometheus values never
+activate automatically in local mode. Settings offers **Save for this cluster**
+to associate them explicitly. You may do this separately for multiple contexts
+using a central backend. **Stop offering legacy settings for all clusters** ends
+further offers. The old file remains a recovery copy; it is never a fallback.
+Older Radar versions still read that old global file, so rolling back does not
+restore the new per-cluster behavior.
+
+The profile file and lock are created with Unix mode `0600`; a newly created
+directory uses `0700`. Existing directory permissions are not changed. Headers
+are plaintext, not encrypted: protect backups and your OS account. When creating
+or replacing the file manually on Unix, set `chmod 600 ~/.radar/clusters.json`;
+Radar does not change existing file permissions merely by reading it. Atomic
+replacement prevents partial writes but does not guarantee the latest save
+survives sudden power loss. On Windows,
+protect access with user-directory ACLs; Unix modes are not an ACL guarantee.
+Locking is intended for local filesystems, not validated for network homes.
+On Windows, an open reader or antivirus scanner may briefly prevent atomic
+replacement. A failed save leaves the previous file and running connection
+unchanged; reload and retry after that reader finishes.
+
+Shared OSS/Cloud configuration remains installation-scoped. A shared deployment's
+header-only configuration may still pair with its URL flag; changing a saved
+server requires replacing every inherited header source. These installations do
+not read local profiles.
 
 Cross-origin HTTP redirects are refused, including for custom auth
 and tenant headers. Headers require an explicit URL and are not sent during auto-discovery.

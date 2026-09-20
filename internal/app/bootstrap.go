@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"maps"
 	"net"
 	"net/url"
 	"os"
@@ -41,55 +42,60 @@ type AppConfig struct {
 	KubeconfigDirs []string
 	// Zero value is the deliberate one: an entrypoint that never sets this
 	// starts on the kubeconfig's current-context. Only cmd/desktop opts in.
-	RestoreLastDesktopContext bool
-	Namespace                 string
-	Namespaces                []string
-	Port                      int
-	ListenAddress             string
-	ShowRemoteAccessHint      bool
-	BasePath                  string
-	NoBrowser                 bool
-	Browser                   string
-	DevMode                   bool
-	HistoryLimit              int
-	DebugEvents               bool
-	FakeInCluster             bool
-	DisableHelmWrite          bool
-	DisableExec               bool
-	DisableLocalTerminal      bool
-	PodShellDefault           string
-	DebugImage                string
-	ReachabilityImage         string
-	ListPageSize              int64
-	NamespaceScope            bool
-	TimelineStorage           string
-	TimelineDBPath            string
-	TimelinePostgresDSN       string
-	TimelineRetention         time.Duration
-	TimelineMaxSizeBytes      int64
-	PrometheusURL             string
-	OpenCostCurrency          string
-	OpenCostFlagSet           bool
-	CostSource                string
-	KubecostURL               string
-	KubecostAPIKey            string
-	KubecostAPIKeyContext     string
-	KubecostClusterID         string
-	KubecostClusterIDContext  string
-	PrometheusHeaders         map[string]string
-	PrometheusHeadersFromEnv  map[string]string
-	PrometheusURLFlag         bool
-	PrometheusHeaderFlags     bool
-	BeylaJobSelector          string
-	WorkloadMetricsScope      prom.WorkloadMetricsScope
-	Version                   string
-	MCPEnabled                bool
-	AIHistory                 bool   // persist AI investigations across restarts
-	AIHistoryDBPath           string // "" = ~/.radar/ai-runs.db
-	AuthConfig                auth.Config
-	HubAPIURL                 string // Hub API origin override ("" = hosted default)
-	HubAppURL                 string // Hub frontend origin override ("" = derived)
-	CloudTunnelConfigured     bool   // --cloud-url was set on this process
+	RestoreLastDesktopContext   bool
+	Namespace                   string
+	Namespaces                  []string
+	Port                        int
+	ListenAddress               string
+	ShowRemoteAccessHint        bool
+	BasePath                    string
+	NoBrowser                   bool
+	Browser                     string
+	DevMode                     bool
+	HistoryLimit                int
+	DebugEvents                 bool
+	FakeInCluster               bool
+	DisableHelmWrite            bool
+	DisableExec                 bool
+	DisableLocalTerminal        bool
+	PodShellDefault             string
+	DebugImage                  string
+	ReachabilityImage           string
+	ListPageSize                int64
+	NamespaceScope              bool
+	TimelineStorage             string
+	TimelineDBPath              string
+	TimelinePostgresDSN         string
+	TimelineRetention           time.Duration
+	TimelineMaxSizeBytes        int64
+	PrometheusURL               string
+	OpenCostCurrency            string
+	OpenCostFlagSet             bool
+	CostSource                  string
+	KubecostURL                 string
+	KubecostAPIKey              string
+	KubecostAPIKeyContext       string
+	KubecostClusterID           string
+	KubecostClusterIDContext    string
+	PrometheusHeaders           map[string]string
+	PrometheusHeadersFromEnv    map[string]string
+	PrometheusURLFlag           bool
+	PrometheusHeaderFlags       bool
+	PrometheusLiteralHeaderFlag bool
+	PrometheusEnvHeaderFlag     bool
+	PrometheusSavedURL          string
+	PrometheusProfiles          *prometheuspkg.ProfileResolver
+	operatorSettingsLoaded      bool
+	BeylaJobSelector            string
+	WorkloadMetricsScope        prom.WorkloadMetricsScope
+	Version                     string
+	MCPEnabled                  bool
+	AIHistory                   bool   // persist AI investigations across restarts
+	AIHistoryDBPath             string // "" = ~/.radar/ai-runs.db
+	AuthConfig                  auth.Config
+	HubAPIURL                   string // Hub API origin override ("" = hosted default)
+	HubAppURL                   string // Hub frontend origin override ("" = derived)
+	CloudTunnelConfigured       bool   // --cloud-url was set on this process
 }
 
 // SetGlobals applies debug/test flags to global state.
@@ -257,7 +263,12 @@ func BuildTimelineStoreConfig(cfg AppConfig) (timeline.StoreConfig, error) {
 // RegisterCallbacks registers Helm, timeline, traffic, and Prometheus reset/reinit
 // functions used for both initial cluster initialization and context switching.
 // Must be called before InitializeCluster.
-func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
+func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) AppConfig {
+	var err error
+	cfg, err = preparePrometheusConfiguration(cfg)
+	if err != nil {
+		log.Fatalf("Invalid startup configuration: %v", err)
+	}
 	k8s.RegisterHelmFuncs(helm.ResetClient, helm.ReinitClient)
 
 	RegisterLastContextMemory(cfg)
@@ -287,9 +298,8 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 	prometheuspkg.Initialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 
 	if cfg.PrometheusURL != "" {
-		u, err := url.Parse(cfg.PrometheusURL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-			log.Fatalf("Invalid --prometheus-url %q: must be a valid HTTP(S) URL (e.g., http://prometheus-server.monitoring:9090)", cfg.PrometheusURL)
+		if err := prom.ValidateBaseURL(cfg.PrometheusURL); err != nil {
+			log.Fatalf("Invalid --prometheus-url: %v", err)
 		}
 		traffic.SetMetricsURL(cfg.PrometheusURL)
 		prometheuspkg.SetManualURL(cfg.PrometheusURL)
@@ -320,15 +330,46 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 			log.Fatalf("Invalid workload metrics scope: %v", err)
 		}
 	}
+	if cfg.PrometheusProfiles != nil {
+		if _, err := resolveLocalPrometheus(cfg.PrometheusProfiles); err != nil {
+			prometheuspkg.Retire()
+			traffic.SetMetricsConfig("", nil)
+		}
+	}
 
 	k8s.RegisterTrafficFuncs(traffic.Reset, func() error {
+		if cfg.PrometheusProfiles != nil {
+			selection, err := resolveLocalPrometheus(cfg.PrometheusProfiles)
+			if err != nil {
+				traffic.SetMetricsConfig("", nil)
+			} else {
+				traffic.SetMetricsConfig(selection.Connection.URL, selection.Connection.Headers)
+			}
+		}
 		return traffic.ReinitializeWithConfig(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 	})
 
 	// Reinitialize carries the current manual URL + headers forward (including any
 	// applied live via /integrations/prometheus). Re-applying the captured startup
 	// cfg here would revert a live change on context switch, so we don't.
-	k8s.RegisterPrometheusFuncs(prometheuspkg.Reset, func() error {
+	resetPrometheus := prometheuspkg.Reset
+	if cfg.PrometheusProfiles != nil {
+		resetPrometheus = func() { prometheuspkg.Retire(); traffic.SetMetricsConfig("", nil) }
+	}
+	k8s.RegisterPrometheusFuncs(resetPrometheus, func() error {
+		if cfg.PrometheusProfiles != nil {
+			selection, err := resolveLocalPrometheus(cfg.PrometheusProfiles)
+			if err != nil {
+				prometheuspkg.Retire()
+				return err
+			}
+			prometheuspkg.Reinitialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
+			url, headers := prometheuspkg.CurrentConfig()
+			if url != strings.TrimRight(selection.Connection.URL, "/") || !maps.Equal(headers, selection.Connection.Headers) {
+				prometheuspkg.Configure(selection.Connection.URL, selection.Connection.Headers)
+			}
+			return nil
+		}
 		prometheuspkg.Reinitialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 		return nil
 	})
@@ -338,6 +379,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 	k8s.OnContextSwitch(func(_ string) { prometheuspkg.Prewarm() })
 	k8s.OnNamespaceRescope(func(_ string) { prometheuspkg.Prewarm() })
 	k8s.RegisterCostResetFunc(internalopencost.Reset)
+	return cfg
 }
 
 func persistKubecostContextBindings(cfg AppConfig) AppConfig {
@@ -376,8 +418,10 @@ func persistKubecostContextBindings(cfg AppConfig) AppConfig {
 
 // CreateServer creates the HTTP server with the given configuration.
 func CreateServer(cfg AppConfig) *server.Server {
-	if err := loadOperatorSettings(cfg); err != nil {
-		log.Fatalf("Invalid operator settings: %v", err)
+	if !cfg.operatorSettingsLoaded {
+		if err := loadOperatorSettings(cfg); err != nil {
+			log.Fatalf("Invalid operator settings: %v", err)
+		}
 	}
 	restoreLastDesktopContext := remembersLastContext(cfg)
 	costSource := cfg.CostSource
@@ -435,6 +479,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		EffectiveConfig:       effectiveCfg,
 		PrometheusURLFlag:     cfg.PrometheusURLFlag,
 		PrometheusHeaderFlags: cfg.PrometheusHeaderFlags,
+		PrometheusProfiles:    cfg.PrometheusProfiles,
 		OpenCostCurrency:      cfg.OpenCostCurrency,
 		OpenCostManaged:       cfg.OpenCostFlagSet,
 		DiagConfig: &server.DiagConfig{

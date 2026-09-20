@@ -371,6 +371,24 @@ func Reset() {
 	}
 }
 
+// Retire removes the local context's client even when the next context fails
+// to connect. Reset alone allows discovery to reuse its previous credentials.
+func Retire() {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	if globalClient != nil {
+		globalClient.mu.Lock()
+		globalClient.retired = true
+		globalClient.cancelWorkloadAttributionsLocked()
+		if globalClient.discoveryCancel != nil {
+			globalClient.discoveryCancel()
+		}
+		globalClient.mu.Unlock()
+		globalClient = nil
+	}
+	portforward.Stop(portforward.OwnerPrometheus)
+}
+
 // Reinitialize recreates the client with new K8s connection info.
 func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName string) {
 	clientMu.Lock()
@@ -483,6 +501,10 @@ func (c *Client) HasManualURL() bool {
 // already connected. Returns the base URL and base path, or an error.
 func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 	c.mu.RLock()
+	if c.retired {
+		c.mu.RUnlock()
+		return "", "", errDiscoverySuperseded
+	}
 	base := c.baseURL
 	bp := c.basePath
 	gen := c.discoveryGen
@@ -507,7 +529,7 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 			// its answer describe a superseded endpoint. Neither return it nor
 			// tear down whatever the new configuration has since connected.
 			c.mu.Lock()
-			current := c.discoveryGen == gen && c.baseURL == base
+			current := !c.retired && c.discoveryGen == gen && c.baseURL == base
 			if ok {
 				c.mu.Unlock()
 				if current {

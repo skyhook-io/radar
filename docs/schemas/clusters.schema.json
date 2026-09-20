@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Radar local cluster profiles",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "profiles"],
+  "properties": {
+    "version": { "const": 1 },
+    "prometheusMigrationComplete": { "type": "boolean" },
+    "prometheusAdopted": { "type": "object", "additionalProperties": { "type": "boolean" } },
+    "profiles": {
+      "type": "object",
+      "propertyNames": { "minLength": 1 },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["context", "target"],
+        "properties": {
+          "context": { "type": "string", "minLength": 1 },
+          "source": { "type": "string" },
+          "description": { "type": "string" },
+          "target": { "type": "string", "minLength": 1 },
+          "prometheus": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "url": { "type": "string", "description": "Empty for auto-discovery without headers; otherwise an HTTP(S) base URL without credentials, query or fragment." },
+              "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+              "headersFromEnv": { "type": "object", "additionalProperties": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" } }
+            }
+          }
+        }
+      }
+    }
+  }
+}

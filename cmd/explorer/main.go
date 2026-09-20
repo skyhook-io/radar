@@ -322,15 +322,6 @@ func main() {
 	if *mcpCatalogStdio && noMCPFlagSet && *noMCP {
 		log.Fatalf("--mcp-catalog-stdio cannot be combined with --no-mcp")
 	}
-	inheritsPrometheusHeaders := !promHeaders.overrides && len(fileCfg.PrometheusHeaders) > 0 ||
-		!promHeadersFromEnv.overrides && len(fileCfg.PrometheusHeadersFromEnv) > 0
-	if err := app.ValidatePrometheusHeaderDestination(fileCfg.PrometheusURL, *prometheusURL, inheritsPrometheusHeaders); err != nil {
-		log.Fatalf("Invalid Prometheus header configuration: %v", err)
-	}
-	resolvedPrometheusHeaders, err := app.ResolvePrometheusHeaders(promHeaders.value(), promHeadersFromEnv.value())
-	if err != nil {
-		log.Fatalf("Invalid Prometheus header configuration: %v", err)
-	}
 	resolvedNamespace, resolvedNamespaces, err := app.ResolveNamespaceSelection(*namespace, *namespaces, namespaceFlagSet, namespacesFlagSet)
 	if err != nil {
 		log.Fatalf("%v", err)
@@ -363,55 +354,58 @@ func main() {
 	}
 
 	cfg := app.AppConfig{
-		Kubeconfig:               resolvedKubeconfig,
-		KubeconfigDirs:           resolvedKubeconfigDirs,
-		Namespace:                resolvedNamespace,
-		Namespaces:               resolvedNamespaces,
-		Port:                     *port,
-		ListenAddress:            normalizedListenAddress,
-		ShowRemoteAccessHint:     true,
-		BasePath:                 normalizedBasePath,
-		NoBrowser:                *noBrowser,
-		Browser:                  *browser,
-		DevMode:                  *devMode,
-		HistoryLimit:             *historyLimit,
-		DebugEvents:              *debugEvents,
-		FakeInCluster:            *fakeInCluster,
-		DisableHelmWrite:         *disableHelmWrite,
-		DisableExec:              *disableExec,
-		DisableLocalTerminal:     *disableLocalTerminal,
-		PodShellDefault:          *podShellDefault,
-		DebugImage:               *debugImage,
-		ReachabilityImage:        *reachabilityImage,
-		ListPageSize:             *listPageSize,
-		NamespaceScope:           *namespaceScope,
-		TimelineStorage:          *timelineStorage,
-		TimelineDBPath:           *timelineDBPath,
-		TimelinePostgresDSN:      os.Getenv("RADAR_TIMELINE_POSTGRES_DSN"),
-		TimelineRetention:        *timelineRetention,
-		TimelineMaxSizeBytes:     timelineMaxSizeBytes,
-		PrometheusURL:            *prometheusURL,
-		OpenCostCurrency:         normalizedOpenCostCurrency,
-		OpenCostFlagSet:          openCostCurrencyFlagSet,
-		CostSource:               fileCfg.CostSource,
-		KubecostURL:              fileCfg.KubecostURL,
-		KubecostAPIKey:           fileCfg.KubecostAPIKey,
-		KubecostAPIKeyContext:    fileCfg.KubecostAPIKeyContext,
-		KubecostClusterID:        fileCfg.KubecostClusterID,
-		KubecostClusterIDContext: fileCfg.KubecostClusterIDContext,
-		PrometheusHeaders:        resolvedPrometheusHeaders,
-		PrometheusHeadersFromEnv: promHeadersFromEnv.value(),
-		PrometheusURLFlag:        prometheusURLFlagSet,
-		PrometheusHeaderFlags:    promHeaders.overrides || promHeadersFromEnv.overrides,
-		BeylaJobSelector:         *beylaJobSelector,
-		WorkloadMetricsScope:     prom.WorkloadMetricsScope{SingleCluster: *workloadSingleCluster, ClusterLabels: workloadClusterLabels},
-		MCPEnabled:               mcpEnabled,
-		AIHistory:                *aiHistory,
-		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,
-		Version:                  version,
-		HubAPIURL:                hubAPIURL,
-		HubAppURL:                hubAppURL,
-		CloudTunnelConfigured:    *cloudURL != "",
+		Kubeconfig:                  resolvedKubeconfig,
+		KubeconfigDirs:              resolvedKubeconfigDirs,
+		Namespace:                   resolvedNamespace,
+		Namespaces:                  resolvedNamespaces,
+		Port:                        *port,
+		ListenAddress:               normalizedListenAddress,
+		ShowRemoteAccessHint:        true,
+		BasePath:                    normalizedBasePath,
+		NoBrowser:                   *noBrowser,
+		Browser:                     *browser,
+		DevMode:                     *devMode,
+		HistoryLimit:                *historyLimit,
+		DebugEvents:                 *debugEvents,
+		FakeInCluster:               *fakeInCluster,
+		DisableHelmWrite:            *disableHelmWrite,
+		DisableExec:                 *disableExec,
+		DisableLocalTerminal:        *disableLocalTerminal,
+		PodShellDefault:             *podShellDefault,
+		DebugImage:                  *debugImage,
+		ReachabilityImage:           *reachabilityImage,
+		ListPageSize:                *listPageSize,
+		NamespaceScope:              *namespaceScope,
+		TimelineStorage:             *timelineStorage,
+		TimelineDBPath:              *timelineDBPath,
+		TimelinePostgresDSN:         os.Getenv("RADAR_TIMELINE_POSTGRES_DSN"),
+		TimelineRetention:           *timelineRetention,
+		TimelineMaxSizeBytes:        timelineMaxSizeBytes,
+		PrometheusURL:               *prometheusURL,
+		OpenCostCurrency:            normalizedOpenCostCurrency,
+		OpenCostFlagSet:             openCostCurrencyFlagSet,
+		CostSource:                  fileCfg.CostSource,
+		KubecostURL:                 fileCfg.KubecostURL,
+		KubecostAPIKey:              fileCfg.KubecostAPIKey,
+		KubecostAPIKeyContext:       fileCfg.KubecostAPIKeyContext,
+		KubecostClusterID:           fileCfg.KubecostClusterID,
+		KubecostClusterIDContext:    fileCfg.KubecostClusterIDContext,
+		PrometheusHeaders:           promHeaders.value(),
+		PrometheusSavedURL:          fileCfg.PrometheusURL,
+		PrometheusLiteralHeaderFlag: promHeaders.overrides,
+		PrometheusEnvHeaderFlag:     promHeadersFromEnv.overrides,
+		PrometheusHeadersFromEnv:    promHeadersFromEnv.value(),
+		PrometheusURLFlag:           prometheusURLFlagSet,
+		PrometheusHeaderFlags:       promHeaders.overrides || promHeadersFromEnv.overrides,
+		BeylaJobSelector:            *beylaJobSelector,
+		WorkloadMetricsScope:        prom.WorkloadMetricsScope{SingleCluster: *workloadSingleCluster, ClusterLabels: workloadClusterLabels},
+		MCPEnabled:                  mcpEnabled,
+		AIHistory:                   *aiHistory,
+		AIHistoryDBPath:             fileCfg.AIHistoryDBPath,
+		Version:                     version,
+		HubAPIURL:                   hubAPIURL,
+		HubAppURL:                   hubAppURL,
+		CloudTunnelConfigured:       *cloudURL != "",
 		AuthConfig: auth.Config{
 			Mode:                      *authMode,
 			Secret:                    *authSecret,
@@ -500,7 +494,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid timeline configuration: %v", err)
 	}
-	app.RegisterCallbacks(cfg, timelineStoreCfg)
+	cfg = app.RegisterCallbacks(cfg, timelineStoreCfg)
 	k8s.LogTiming(" Callbacks registered: %v", time.Since(t))
 
 	// Create server

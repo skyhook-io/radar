@@ -12,6 +12,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
 // InitLoadTestResourceCache creates a resource cache from a fake client using
@@ -378,6 +379,24 @@ func SetTestConfig(c *rest.Config) *rest.Config {
 	k8sConfig = c
 	clientMu.Unlock()
 	return prev
+}
+
+// SetTestProfileSource supplies the source identity used by local configuration
+// handlers. SetTestConfig supplies its matching REST transport separately.
+func SetTestProfileSource(source, name, user string) func() {
+	clientMu.Lock()
+	oldBinding, oldName, oldFile, oldSourceName, oldSourceConfig, oldGeneration := contextBinding, contextName, activeSourceFile, activeSourceName, activeSourceConfig, activeClientGeneration
+	contextBinding = sourceContextBinding(source, name)
+	contextName, activeSourceFile, activeSourceName = name, source, name
+	activeSourceConfig = clientcmdapi.NewConfig()
+	activeSourceConfig.Contexts[name] = &clientcmdapi.Context{AuthInfo: user}
+	activeClientGeneration++
+	clientMu.Unlock()
+	return func() {
+		clientMu.Lock()
+		contextBinding, contextName, activeSourceFile, activeSourceName, activeSourceConfig, activeClientGeneration = oldBinding, oldName, oldFile, oldSourceName, oldSourceConfig, oldGeneration
+		clientMu.Unlock()
+	}
 }
 
 func SetTestPolicyReportIndex(idx *policyreports.Index) *policyreports.Index {
