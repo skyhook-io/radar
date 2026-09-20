@@ -43,14 +43,17 @@ require_cmd() {
 kc() { kubectl --context "${KUBECTL_CTX}" "$@"; }
 
 cluster_exists() {
-  kind get clusters 2>/dev/null | grep -qx "${CLUSTER_NAME}"
+  local clusters
+  clusters="$(kind get clusters)" || fail "Unable to list kind clusters. Check that Docker is running and accessible."
+  grep -Fx "${CLUSTER_NAME}" <<<"${clusters}" >/dev/null
 }
 
 cluster_owned() {
-  local owner cluster
-  owner="$(kc -n kube-system get configmap "${MARKER_NAME}" -o jsonpath='{.data.owner}' 2>/dev/null || true)"
-  cluster="$(kc -n kube-system get configmap "${MARKER_NAME}" -o jsonpath='{.data.clusterName}' 2>/dev/null || true)"
-  [ "${owner}" = "${MARKER_VALUE}" ] && [ "${cluster}" = "${CLUSTER_NAME}" ]
+  local marker
+  marker="$(kc -n kube-system get configmap "${MARKER_NAME}" --ignore-not-found --request-timeout=10s -o json)" || \
+    fail "Unable to verify ownership: context '${KUBECTL_CTX}' is missing or unreachable in the active kubeconfig. If missing, restore it with: kind export kubeconfig --name '${CLUSTER_NAME}'"
+  [ -n "${marker}" ] && jq -e --arg owner "${MARKER_VALUE}" --arg cluster "${CLUSTER_NAME}" \
+    '.data.owner == $owner and .data.clusterName == $cluster' <<<"${marker}" >/dev/null
 }
 
 require_owned_cluster() {
@@ -77,10 +80,10 @@ mark_cluster() {
 restore_previous_context() {
   [ "${RESTORE_CONTEXT}" = "true" ] || return 0
   if [ -z "${PREVIOUS_CONTEXT}" ]; then
-    kubectl config unset current-context >/dev/null 2>&1 || true
-  elif kubectl config get-contexts "${PREVIOUS_CONTEXT}" >/dev/null 2>&1 && \
-    [ "$(kubectl config current-context 2>/dev/null || true)" != "${PREVIOUS_CONTEXT}" ]; then
-    kubectl config use-context "${PREVIOUS_CONTEXT}" >/dev/null 2>&1 || true
+    kubectl config unset current-context >/dev/null 2>&1 || warn "Unable to restore the unset current-context" >&2
+  elif [ "$(kubectl config current-context 2>/dev/null || true)" != "${PREVIOUS_CONTEXT}" ]; then
+    kubectl config set current-context "${PREVIOUS_CONTEXT}" >/dev/null 2>&1 || \
+      warn "Unable to restore current-context '${PREVIOUS_CONTEXT}'" >&2
   fi
 }
 
@@ -124,7 +127,10 @@ wait_until() {
     fi
     sleep 2
   done
-  fail "Timed out after ${WAIT_SECONDS}s waiting for ${description}"
+  warn "Last controller snapshot for '${description}':" >&2
+  kc -n "${DEMO_NS}" get rayservices.ray.io,rayclusters.ray.io,pods --request-timeout=10s -o json | \
+    jq -c '.items[:10][] | {kind, name: .metadata.name, phase: .status.phase, active: .status.activeServiceStatus.rayClusterName, pending: .status.pendingServiceStatus.rayClusterName, conditions: [.status.conditions[]? | {type, status, reason}], containers: [.status.containerStatuses[]? | {name, state}]}' >&2 || true
+  fail "Timed out after ${WAIT_SECONDS}s waiting for ${description}. Inspect with CLUSTER_NAME='${CLUSTER_NAME}' $0 status"
 }
 
 operator_contract_matches() {
@@ -390,13 +396,14 @@ apply_fixtures() {
 }
 
 ensure_revision_pair() {
-  local image baseline_active current_active
+  local image baseline_active baseline_active_uid current_active current_active_uid
   assert_rayservice_spec
   image="$(rayservice_json | jq -r '.spec.rayClusterConfig.headGroupSpec.template.spec.containers[0].image')"
   if [ "${image}" = "${RAY_IMAGE}" ]; then
     step "Waiting for the real Ray Serve application"
     wait_until "RayService Ready with a healthy Serve deployment" healthy_baseline_ready
     baseline_active="$(active_cluster_name)"
+    baseline_active_uid="$(kc -n "${DEMO_NS}" get rayclusters.ray.io "${baseline_active}" -o jsonpath='{.metadata.uid}')"
     verify_serve_response
     ok "Active revision ${baseline_active} is Ready and serves radar-kuberay-ready"
     step "Creating an intentionally non-runnable pending revision"
@@ -405,7 +412,9 @@ ensure_revision_pair() {
     wait_until "distinct active and pending RayService revisions" revision_pair_ready
     wait_until "controller-reported pending startup failure" pending_failure_ready
     current_active="$(active_cluster_name)"
-    [ "${current_active}" = "${baseline_active}" ] || fail "The active RayCluster changed while creating the pending revision"
+    current_active_uid="$(kc -n "${DEMO_NS}" get rayclusters.ray.io "${current_active}" -o jsonpath='{.metadata.uid}')"
+    [ "${current_active}" = "${baseline_active}" ] && [ "${current_active_uid}" = "${baseline_active_uid}" ] || \
+      fail "The active RayCluster identity changed while creating the pending revision"
     ok "NewCluster preserved active ${current_active} and exposed pending $(pending_cluster_name)"
   else
     step "Reusing the active/pending RayService revision pair"
@@ -431,32 +440,41 @@ cmd_verify() {
   ok "Active Serve response, pending failure, conditions, ownership UIDs, labels, and selectors verified"
 }
 
-cmd_verify_radar() {
-  require_cmd kind "https://kind.sigs.k8s.io/"
-  require_cmd kubectl "https://kubernetes.io/docs/tasks/tools/"
-  require_cmd curl "https://curl.se/download.html"
-  require_cmd jq "https://jqlang.github.io/jq/download/"
-  require_owned_cluster
-  assert_cluster_contract
-  step "Verifying Radar API at ${RADAR_URL}"
+radar_health_ready() {
+  curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/health" 2>/dev/null | \
+    jq -e '.status == "healthy"' >/dev/null 2>&1
+}
 
-  local response rayservices rayclusters pods services active pending service_uid
-  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/health")"
-  jq -e '.status == "healthy"' <<<"${response}" >/dev/null || fail "Radar health response is not healthy"
+radar_crd_discovery_ready() {
+  curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/cluster-info" 2>/dev/null | \
+    jq -e '.crdDiscoveryStatus == "ready"' >/dev/null 2>&1
+}
 
-  rayservices="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/rayservices?group=ray.io")"
+radar_inventory_ready() {
+  local kind="$1" group="$2" live cached projection
+  projection='map({metadata: (.metadata | {namespace, name, uid, generation, ownerReferences, labels}), selector: .spec.selector} + (if $dynamic then {apiVersion, kind} else {} end)) | sort_by(.metadata.name)'
+  local dynamic=false
+  [ -z "${group}" ] || dynamic=true
+  live="$(kc -n "${DEMO_NS}" get "${kind}${group:+.${group}}" --request-timeout=10s -o json | jq -cS --argjson dynamic "${dynamic}" ".items | ${projection}")" || return 1
+  cached="$(curl -fsS --connect-timeout 2 --max-time 5 "${RADAR_URL}/api/resources/${kind}?group=${group}&namespace=${DEMO_NS}" | jq -cS --argjson dynamic "${dynamic}" "${projection}")" || return 1
+  [ "${live}" = "${cached}" ]
+}
+
+radar_revisions_ready() {
+  local rayservices rayclusters pods services active pending service_uid
+  rayservices="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/rayservices?group=ray.io&namespace=${DEMO_NS}")" || return 1
   jq -e '
     type == "array" and length == 1 and .[0].apiVersion == "ray.io/v1" and
     .[0].status.numServeEndpoints > 0 and
     any(.[0].status.conditions[]?; .type == "Ready" and .status == "True" and .reason == "NonZeroServeEndpoints") and
     any(.[0].status.conditions[]?; .type == "UpgradeInProgress" and .status == "True" and .reason == "BothActivePendingClustersExist") and
     .[0].status.activeServiceStatus.rayClusterName != .[0].status.pendingServiceStatus.rayClusterName
-  ' <<<"${rayservices}" >/dev/null || fail "Radar did not return the group-pure active/pending RayService status"
+  ' <<<"${rayservices}" >/dev/null || { warn "Radar did not return the group-pure active/pending RayService status" >&2; return 1; }
   active="$(jq -r '.[0].status.activeServiceStatus.rayClusterName' <<<"${rayservices}")"
   pending="$(jq -r '.[0].status.pendingServiceStatus.rayClusterName' <<<"${rayservices}")"
   service_uid="$(jq -r '.[0].metadata.uid' <<<"${rayservices}")"
 
-  rayclusters="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/rayclusters?group=ray.io")"
+  rayclusters="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/rayclusters?group=ray.io&namespace=${DEMO_NS}")" || return 1
   jq -e --arg active "${active}" --arg pending "${pending}" --arg uid "${service_uid}" '
     type == "array" and length == 2 and
     ([.[].metadata.name] | sort) == ([$active, $pending] | sort) and
@@ -467,25 +485,47 @@ cmd_verify_radar() {
       any(.status.conditions[]?;
         .type == "HeadPodReady" and .status == "False" and
         (.reason == "CrashLoopBackOff" or .reason == "RunContainerError")))
-  ' <<<"${rayclusters}" >/dev/null || fail "Radar did not return both owned RayClusters with their native conditions"
+  ' <<<"${rayclusters}" >/dev/null || { warn "Radar did not return both owned RayClusters with their native conditions" >&2; return 1; }
 
-  pods="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/pods?namespace=${DEMO_NS}")"
+  pods="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/pods?namespace=${DEMO_NS}")" || return 1
   jq -e --arg active "${active}" --arg pending "${pending}" '
     type == "array" and
     ([.[] | select(.metadata.labels["ray.io/cluster"] == $active and
       .metadata.labels["ray.io/group"] == "headgroup" and .metadata.labels["ray.io/node-type"] == "head")] | length) == 1 and
     ([.[] | select(.metadata.labels["ray.io/cluster"] == $pending and
       .metadata.labels["ray.io/group"] == "headgroup" and .metadata.labels["ray.io/node-type"] == "head")] | length) == 1
-  ' <<<"${pods}" >/dev/null || fail "Radar did not expose both controller-created head Pods and their role labels"
+  ' <<<"${pods}" >/dev/null || { warn "Radar did not expose both controller-created head Pods and their role labels" >&2; return 1; }
 
-  services="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/services?namespace=${DEMO_NS}")"
+  services="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/resources/services?namespace=${DEMO_NS}")" || return 1
   jq -e --arg active "${active}" --arg pending "${pending}" '
     type == "array" and
     any(.[]; .spec.selector["ray.io/cluster"] == $active and .metadata.labels["ray.io/serve"] == "revision-demo-serve") and
     any(.[]; .spec.selector["ray.io/cluster"] == $active and .metadata.labels["ray.io/node-type"] == "head") and
     any(.[]; .spec.selector["ray.io/cluster"] == $pending and .metadata.labels["ray.io/node-type"] == "head")
-  ' <<<"${services}" >/dev/null || fail "Radar did not expose the active Serve and both head Service selectors"
-  ok "Radar returned group-aware RayService/RayCluster status and the Pod/Service lineage"
+  ' <<<"${services}" >/dev/null || { warn "Radar did not expose the active Serve and both head Service selectors" >&2; return 1; }
+}
+
+cmd_verify_radar() {
+  require_cmd kind "https://kind.sigs.k8s.io/"
+  require_cmd kubectl "https://kubernetes.io/docs/tasks/tools/"
+  require_cmd curl "https://curl.se/download.html"
+  require_cmd jq "https://jqlang.github.io/jq/download/"
+  require_owned_cluster
+  assert_cluster_contract
+  step "Verifying Radar API at ${RADAR_URL}"
+
+  local response
+  wait_until "Radar health endpoint" radar_health_ready
+  response="$(curl -fsS --connect-timeout 5 --max-time 15 "${RADAR_URL}/api/cluster-info")" || fail "Radar cluster-info request failed"
+  jq -e --arg context "${KUBECTL_CTX}" '.context == $context and .cluster == $context' <<<"${response}" >/dev/null || \
+    fail "Radar is not connected to the expected context and cluster '${KUBECTL_CTX}'"
+  wait_until "Radar CRD discovery" radar_crd_discovery_ready
+  wait_until "Radar RayService identities" radar_inventory_ready rayservices ray.io
+  wait_until "Radar RayCluster ownership" radar_inventory_ready rayclusters ray.io
+  wait_until "Radar Pod ownership and role labels" radar_inventory_ready pods ""
+  wait_until "Radar Service ownership and selectors" radar_inventory_ready services ""
+  wait_until "Radar active/pending revision status" radar_revisions_ready
+  ok "Radar returned group-aware RayService/RayCluster status and exact Pod/Service lineage"
 }
 
 cmd_up() {
@@ -501,7 +541,7 @@ cmd_up() {
   else
     step "Creating dedicated kind cluster '${CLUSTER_NAME}'"
     kind create cluster --name "${CLUSTER_NAME}" --image "${KIND_NODE_IMAGE}" --wait 120s
-    mark_cluster
+    mark_cluster || fail "Cluster created but ownership could not be recorded. Inspect it before manual cleanup: kind delete cluster --name ${CLUSTER_NAME}"
     assert_cluster_contract
     ok "Cluster created and ownership marker recorded"
   fi
@@ -572,7 +612,7 @@ Commands:
 
 Environment:
   CLUSTER_NAME   kind cluster name (default: radar-kuberay-demo)
-  WAIT_SECONDS   maximum wait per reconciled state (default: 480)
+  WAIT_SECONDS   maximum wait per state, including image pulls (default: 480)
   RADAR_URL      running Radar base URL for verify-radar (default: http://127.0.0.1:9280)
 
 This validates one head-only CPU RayService on KubeRay ${KUBERAY_VERSION}: a

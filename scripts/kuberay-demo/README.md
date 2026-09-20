@@ -35,6 +35,10 @@ The first run pulls the Ray image at roughly 824 MB compressed on arm64 (the
 architecture-specific size varies), plus the kind node and 29 MB operator
 image. Budget roughly 5-10 minutes on an uncached Docker installation. The two
 head Pods request a combined 2 CPU and 4 GiB while the final fixture is present.
+`WAIT_SECONDS` (default 480) applies to each reconciliation wait, including image
+pull time. Increase it for a slow first pull. A timeout prints the last controller
+and container state plus the command to inspect the lane.
+
 Everything runs in local Docker; the script creates no cloud resources or cloud
 cost.
 
@@ -44,7 +48,7 @@ cost.
 |---|---|
 | RayService baseline | During the initial `up`, before the revision, KubeRay reports `Ready=True`, the `radar-demo` application is `RUNNING`, its deployment is `HEALTHY`, and the Serve endpoint answers |
 | Revision identity | RayService reports distinct `activeServiceStatus.rayClusterName` and `pendingServiceStatus.rayClusterName` values with `UpgradeInProgress=True/BothActivePendingClustersExist` |
-| Active continuity | RayService remains `Ready=True/NonZeroServeEndpoints`; the active RayCluster's authoritative Ready/Provisioned conditions remain true; its Serve endpoint still answers after the pending failure |
+| Active continuity | During the initial `up`, the active RayCluster name and UID survive the spec update. Every `verify` checks that RayService remains `Ready=True/NonZeroServeEndpoints`; the active RayCluster's authoritative Ready/Provisioned conditions remain true; its Serve endpoint still answers after the pending failure |
 | Pending failure | The directly owned pending RayCluster reports `HeadPodReady=False` with `CrashLoopBackOff` or `RunContainerError`, plus `RayClusterProvisioned=False/RayClusterPodsProvisioning` |
 | Ownership | Both RayClusters have controller owner references to the RayService UID; each head Pod and head Service has a controller owner reference to its RayCluster UID; the stable head and Serve Services are owned by the RayService UID |
 | Identity labels | RayClusters carry KubeRay origin labels; Pods carry `ray.io/cluster`, `ray.io/group=headgroup`, `ray.io/node-type=head`, and active/pending Serve-role labels; Services select the correct revision |
@@ -80,7 +84,10 @@ Then run:
 RADAR_URL=http://127.0.0.1:9333 ./scripts/kuberay-demo.sh verify-radar
 ```
 
-That checks Radar's real group-aware `rayservices.ray.io` and
+The verifier first waits for Radar health and CRD discovery, requires its reported
+context and cluster to match the owned lane, and waits for exact live-versus-cached
+resource identity, owner references, labels and Service selectors. It then checks
+Radar's real group-aware `rayservices.ray.io` and
 `rayclusters.ray.io` browse paths, native controller status, and the generated
 Pod/Service lineage. Browser smoke is optional for this script-only fixture;
 use the repository visual-test workflow when changing a visible KubeRay
