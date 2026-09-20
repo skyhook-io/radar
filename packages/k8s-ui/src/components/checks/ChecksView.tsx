@@ -355,7 +355,16 @@ export function ChecksView({ checks, catalog, anyData, evaluated, missingInputs 
         <AlertBanner
           variant="warning"
           title="Some checks could not run"
-          message={<>Findings cover only available inputs. Unavailable inputs: {missingInputs.join(', ')}.</>}
+          message={
+            <>
+              Findings cover only available inputs. Unavailable inputs: {missingInputs.map(input => input === 'replicasets' ? 'ReplicaSets' : input === 'replicaset-ownership' ? 'ReplicaSet ownership' : input).join(', ')}.
+              {(missingInputs.includes('replicasets') || missingInputs.includes('replicaset-ownership')) && (
+                <p className="mt-2">
+                  <em>Running replicas on same node</em> could not be fully evaluated: ReplicaSet inventory or ownership evidence was unavailable, so affected Deployments were skipped, not passed.
+                </p>
+              )}
+            </>
+          }
         />
       )}
 

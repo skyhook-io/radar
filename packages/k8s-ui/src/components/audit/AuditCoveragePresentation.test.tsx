@@ -43,3 +43,34 @@ describe('audit coverage presentation', () => {
     })
   }
 })
+
+
+describe('replica placement coverage explanation', () => {
+  for (const inputs of [['replicasets'], ['replicaset-ownership'], ['replicasets', 'replicaset-ownership', 'secrets']]) {
+    it(`names the unevaluated check for ${inputs.join(', ')}`, () => {
+      const html = renderToString(
+        <FilterLocationProvider value={{ searchParams: new URLSearchParams(), update: () => {} }}>
+          <ChecksView checks={[]} catalog={{}} anyData evaluated={0} missingInputs={inputs} />
+        </FilterLocationProvider>,
+      )
+      expect(html).toContain('Running replicas on same node')
+      expect(html).toContain('could not be fully evaluated')
+      expect(html).toContain('affected Deployments were skipped, not passed')
+      expect(html).toContain('No findings in the available data')
+      expect(html).not.toContain('replicaset-ownership')
+      if (inputs.includes('replicasets')) expect(html).toContain('ReplicaSets')
+      if (inputs.includes('replicaset-ownership')) expect(html).toContain('ReplicaSet ownership')
+    })
+  }
+  it('does not imply missing replica evidence for unrelated unavailable inputs', () => {
+    const html = renderToString(
+      <FilterLocationProvider value={{ searchParams: new URLSearchParams(), update: () => {} }}>
+        <ChecksView checks={[]} catalog={{}} anyData evaluated={4} missingInputs={['secrets']} />
+      </FilterLocationProvider>,
+    )
+    expect(html).toContain('Unavailable inputs:')
+    expect(html).toContain('secrets')
+    expect(html).not.toContain('Running replicas on same node')
+    expect(html).not.toContain('skipped, not passed')
+  })
+})
