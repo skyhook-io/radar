@@ -127,7 +127,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 		Name: "get_resource",
 		Description: "Use AFTER narrowing to one resource. Returns the resource's " +
 			"Kubernetes-shaped spec/status/metadata plus resourceContext when available " +
-			"(relationships, refs, scheduling, execution, issue/audit/policy rollups — issues carry " +
+			"(relationships, refs, controller observations, issue/audit/policy rollups — issues carry " +
 			"diagnostic_context with cross-subject causal links + a confidence tier; " +
 			"audit findings are static posture and remediation priority, not evidence " +
 			"of an active outage; auditSummary.highestSeverity uses the Checks ladder " +
