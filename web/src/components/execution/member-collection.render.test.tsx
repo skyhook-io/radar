@@ -6,7 +6,7 @@ import { ScheduledWorkloadLogsViewer, workloadRunLogsKey } from '../logs/Schedul
 
 const state = vi.hoisted(() => ({
   response: { collection: 'members', runs: [], total: 0, truncated: false } as WorkloadRunsResponse,
-  useResource: vi.fn((..._args: unknown[]) => ({ data: { spec: {} } })),
+  useResource: vi.fn().mockReturnValue({ data: { spec: {} } }),
 }))
 
 vi.mock('../../api/client', () => ({
@@ -15,7 +15,7 @@ vi.mock('../../api/client', () => ({
   useWorkloadRuns: () => ({ data: state.response }),
 }))
 vi.mock('../logs/WorkloadLogsViewer', () => ({
-  WorkloadLogsViewer: ({ name }: { name: string }) => <div>Logs for {name}</div>,
+  WorkloadLogsViewer: ({ kind, namespace, name }: { kind: string; namespace: string; name: string }) => <div data-log-target={`${kind}/${namespace}/${name}`}>Logs for {name}</div>,
 }))
 
 const member: WorkloadRun = {
@@ -47,15 +47,31 @@ describe('member collection consumers', () => {
     const logHTML = logs('jobs/training/distributed-workers-0')
     expect(logHTML).toContain('workers #0')
     expect(logHTML).toContain(`Logs for ${member.name}`)
+    expect(logHTML).toContain(`data-log-target="jobs/training/${member.name}"`)
+    expect(logHTML).not.toContain('data-log-target="jobsets/')
   })
 
   it('does not silently select a different member outside a truncated window', () => {
     state.response = { collection: 'members', runs: [member], total: 201, truncated: true }
     const missing = 'jobs/training/omitted-worker'
-    expect(overview(missing)).toContain('Selected Job is not among the shown members')
+    expect(overview(missing)).toContain('The member list is truncated')
     const html = logs(missing)
     expect(html).toContain('Select a shown member Job')
     expect(html).not.toContain('Logs for')
+  })
+
+  it.each([{ remaining: [] }, { remaining: [{ ...member, name: 'other-worker' }] }])('preserves an explicit member through a recreation gap with $remaining', ({ remaining }) => {
+    const selected = 'jobs/training/distributed-workers-0'
+    state.response = { collection: 'members', runs: remaining, total: remaining.length, truncated: false }
+    expect(overview(selected)).toContain('Selected Job is currently unavailable')
+    const html = logs(selected)
+    expect(html).toContain('Your selection is preserved if it reappears')
+    expect(html).not.toContain('truncated window')
+    expect(html).not.toContain('Logs for')
+    if (remaining.length === 0) expect(html).not.toContain('<select')
+    state.response = { collection: 'members', runs: [member], total: 1, truncated: false }
+    expect(logs(selected)).toContain(`Logs for ${member.name}`)
+    expect(overview(selected)).not.toContain('Selected Job is currently unavailable')
   })
 
   it('uses collection semantics even when there are no members', () => {

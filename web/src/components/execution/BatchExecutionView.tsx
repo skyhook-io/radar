@@ -40,8 +40,8 @@ export function workloadRunKey(run: Pick<WorkloadRun, 'kind' | 'namespace' | 'na
   return `${run.kind}/${run.namespace}/${run.name}`
 }
 
-export function selectedRunOutsideWindow(runs: WorkloadRun[], key: string, truncated: boolean): boolean {
-  return truncated && Boolean(key) && !runs.some((run) => workloadRunKey(run) === key)
+export function selectedRunMissing(runs: WorkloadRun[], key: string): boolean {
+  return Boolean(key) && !runs.some((run) => workloadRunKey(run) === key)
 }
 
 function isTemplateKind(kind: string): boolean {
@@ -139,10 +139,10 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
     [kind, resource, referencedDefinitionQuery.data],
   )
 
-  const selectionOutsideWindow = memberCollection && selectedRunOutsideWindow(runs, selectedRunKey, Boolean(runsQuery.data?.truncated))
+  const selectionMissing = memberCollection && selectedRunMissing(runs, selectedRunKey)
 
   useEffect(() => {
-    if (!runsQuery.data || selectionOutsideWindow) return
+    if (!runsQuery.data || selectionMissing) return
     if (runs.length === 0) {
       if (selectedRunKey) onSelectRun?.('')
       return
@@ -150,9 +150,9 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
     if (!runs.some((run) => workloadRunKey(run) === selectedRunKey)) {
       onSelectRun?.(workloadRunKey(defaultRun ?? runs[0]))
     }
-  }, [runsQuery.data, runs, selectedRunKey, defaultRun, onSelectRun, selectionOutsideWindow])
+  }, [runsQuery.data, runs, selectedRunKey, defaultRun, onSelectRun, selectionMissing])
 
-  const selectedRun = selectionOutsideWindow ? undefined : runs.find((run) => workloadRunKey(run) === selectedRunKey) ?? defaultRun
+  const selectedRun = selectionMissing ? undefined : runs.find((run) => workloadRunKey(run) === selectedRunKey) ?? defaultRun
   const shouldResolveLivePods = Boolean(
     selectedRun && (
       memberCollection ||
@@ -351,10 +351,12 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                 <EmptyState
                   tone="neutral"
                   variant="card"
-                  headline={selectionOutsideWindow ? 'Selected Job is not among the shown members' : memberCollection ? 'No selected Job' : 'No selected run'}
+                  headline={selectionMissing ? 'Selected Job is currently unavailable' : memberCollection ? 'No selected Job' : 'No selected run'}
                   body={
-                    selectionOutsideWindow
-                      ? 'The member list is truncated. This Job may have been removed or fallen outside the shown window. Choose a shown Job to inspect another member.'
+                    selectionMissing
+                      ? runsQuery.data?.truncated
+                        ? 'The member list is truncated. This Job may have been removed or fallen outside the shown window. Choose a shown Job to inspect another member.'
+                        : 'This Job is not currently retained. It may have been removed or be waiting for recreation. Your selection is preserved if it reappears; choose another shown Job to switch.'
                       : memberCollection
                       ? 'This JobSet has no readable child Jobs to inspect.'
                       : `There are no retained ${runKindPluralForSchedule(kind)} to inspect.`
@@ -1279,7 +1281,6 @@ function phaseBadgeClass(phase: string): string {
       return 'status-unhealthy'
     case 'Pending':
     case 'Suspended':
-    case 'Terminating':
       return 'status-degraded'
     default:
       return 'status-unknown'

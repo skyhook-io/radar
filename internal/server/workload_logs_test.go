@@ -776,7 +776,7 @@ func TestJobSetDeletingMembersRetainTerminalOutcome(t *testing.T) {
 			t.Fatalf("deletion obscured outcome: %#v", got)
 		}
 	}
-	runs := []WorkloadRun{{Name: "success", Phase: "Succeeded"}, {Name: "old-failure", Phase: "Failed", Deleting: true}, {Name: "current-failure", Phase: "Failed"}}
+	runs := []WorkloadRun{{Name: "success", Phase: "Succeeded", JobSet: &JobSetMember{}}, {Name: "old-failure", Phase: "Failed", Deleting: true, JobSet: &JobSetMember{}}, {Name: "current-failure", Phase: "Failed", JobSet: &JobSetMember{}}}
 	sortJobSetMembers(runs)
 	if runs[0].Name != "current-failure" || runs[1].Name != "old-failure" {
 		t.Fatalf("failed evidence demoted: %#v", runs)

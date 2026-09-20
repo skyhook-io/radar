@@ -3,7 +3,7 @@ import { Loader2, Terminal } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useWorkloadRuns, type WorkloadRun } from '../../api/client'
 import { WorkloadLogsViewer } from './WorkloadLogsViewer'
-import { pickDefaultRun, selectedRunOutsideWindow, workloadRunKey } from '../execution/BatchExecutionView'
+import { pickDefaultRun, selectedRunMissing, workloadRunKey } from '../execution/BatchExecutionView'
 
 interface ScheduledWorkloadLogsViewerProps {
   kind: string
@@ -25,10 +25,10 @@ export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRun
   const effectiveRunKey = selectedRunKey ?? localRunKey
   const selectRun = onSelectRun ?? setLocalRunKey
 
-  const selectionOutsideWindow = memberCollection && selectedRunOutsideWindow(runs, effectiveRunKey, Boolean(runsQuery.data?.truncated))
+  const selectionMissing = memberCollection && selectedRunMissing(runs, effectiveRunKey)
 
   useEffect(() => {
-    if (!runsQuery.data || selectionOutsideWindow) return
+    if (!runsQuery.data || selectionMissing) return
     if (runs.length === 0) {
       if (effectiveRunKey) selectRun('')
       return
@@ -36,9 +36,9 @@ export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRun
     if (!runs.some(run => workloadRunKey(run) === effectiveRunKey)) {
       selectRun(workloadRunKey(defaultRun ?? runs[0]))
     }
-  }, [runsQuery.data, runs, effectiveRunKey, defaultRun, selectRun, selectionOutsideWindow])
+  }, [runsQuery.data, runs, effectiveRunKey, defaultRun, selectRun, selectionMissing])
 
-  const selectedRun = selectionOutsideWindow ? undefined : runs.find(run => workloadRunKey(run) === effectiveRunKey) ?? defaultRun
+  const selectedRun = selectionMissing ? undefined : runs.find(run => workloadRunKey(run) === effectiveRunKey) ?? defaultRun
 
   if (runsQuery.isLoading) {
     return (
@@ -60,14 +60,16 @@ export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRun
     )
   }
 
-  if (selectionOutsideWindow) {
+  if (selectionMissing) {
     return (
       <div className="space-y-3 p-4">
-        <p className="text-sm text-theme-text-secondary">Selected Job is not among the shown members. It may have been removed or fallen outside the truncated window. Choose a shown Job below.</p>
-        <select aria-label="Select a shown member Job" value={effectiveRunKey} onChange={(event) => selectRun(event.target.value)} className="max-w-full rounded-md border border-theme-border bg-theme-elevated px-2 py-1 text-sm text-theme-text-primary">
+        <p className="text-sm text-theme-text-secondary">{runsQuery.data?.truncated
+          ? 'Selected Job is not among the shown members. It may have been removed or fallen outside the truncated window. Choose a shown Job below.'
+          : 'Selected Job is currently unavailable. It may have been removed or be waiting for recreation. Your selection is preserved if it reappears; choose another shown Job to switch.'}</p>
+        {runs.length > 0 && <select aria-label="Select a shown member Job" value={effectiveRunKey} onChange={(event) => selectRun(event.target.value)} className="max-w-full rounded-md border border-theme-border bg-theme-elevated px-2 py-1 text-sm text-theme-text-primary">
           <option value={effectiveRunKey} disabled>Choose a shown Job</option>
           {runs.map((run) => <option key={workloadRunKey(run)} value={workloadRunKey(run)}>{formatRunOption(run, false, true)}</option>)}
-        </select>
+        </select>}
       </div>
     )
   }
