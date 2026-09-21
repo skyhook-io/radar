@@ -6895,7 +6895,7 @@ export function useWorkloadRuns(
     staleTime: 10000,
     refetchInterval: options?.refetchActive
       ? (query) =>
-          query.state.data?.runs?.some((run) => run.active) ? 5000 : 30000
+          query.state.data?.selected?.active || query.state.data?.runs?.some((run) => run.active) ? 5000 : 30000
       : false,
   });
 }

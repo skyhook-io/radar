@@ -29,12 +29,12 @@ export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRun
   const runs = runsQuery.data?.runs ?? EMPTY_RUNS
   const resolvedRuns = useMemo(() => runsQuery.data?.selected && !runs.some(run => workloadRunKey(run) === workloadRunKey(runsQuery.data!.selected!)) ? [...runs, runsQuery.data.selected] : runs, [runs, runsQuery.data?.selected])
   const defaultRun = useMemo(() => memberCollection ? runs[0] : pickDefaultRun(runs), [memberCollection, runs])
-  const roles: string[] = rootQuery.data?.spec?.replicatedJobs?.map((r: { name: string }) => r.name) ?? [...new Set(runs.map(run => run.jobset?.replicatedJob).filter((r): r is string => Boolean(r)))]
-  const effectiveRole = roles.includes(role) ? role : roles[0] || ''
+  const roles: string[] = [...new Set<string>([...(rootQuery.data?.spec?.replicatedJobs?.map((r: { name: string }) => r.name) ?? []), ...(role ? [role] : [])])]
+  const effectiveRole = role || roles[0] || ''
   const aggregate = memberCollection && scope !== 'selected'
   const scopeControls = memberCollection && <div className="flex flex-wrap items-center gap-2 border-b border-theme-border bg-theme-surface px-3 py-2 text-xs">
     <label htmlFor="jobset-log-scope" className="text-theme-text-secondary">Log scope</label>
-    <select id="jobset-log-scope" value={scope} onChange={event => setScope(event.target.value)} className="rounded border border-theme-border bg-theme-elevated px-2 py-1 text-theme-text-primary"><option value="selected">Selected Job</option><option value="role" disabled={roles.length === 0}>Role</option><option value="all">All current members</option></select>
+    <select id="jobset-log-scope" value={scope} onChange={event => { if (event.target.value === 'role') setRole(effectiveRole); setScope(event.target.value) }} className="rounded border border-theme-border bg-theme-elevated px-2 py-1 text-theme-text-primary"><option value="selected">Selected Job</option><option value="role" disabled={roles.length === 0}>Role</option><option value="all">All current members</option></select>
     {scope === 'role' && <select aria-label="Log role" value={effectiveRole} onChange={event => setRole(event.target.value)} className="rounded border border-theme-border bg-theme-elevated px-2 py-1 text-theme-text-primary">{roles.map(r => <option key={r} value={r}>{r}</option>)}</select>}
     {aggregate && <span className="text-theme-text-secondary">Snapshot · Refresh for new logs · up to 40 container sources, 1,000 lines and 64 KiB per source · retained Pods only</span>}
   </div>

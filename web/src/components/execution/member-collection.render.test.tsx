@@ -38,7 +38,8 @@ beforeEach(() => {
   state.response = { collection: 'members', runs: [member], total: 1, truncated: false }
   state.isLoading = false
   state.error = undefined
-  state.useResource.mockClear()
+  state.useResource.mockReset()
+  state.useResource.mockReturnValue({ data: { spec: {} } })
 })
 
 describe('member collection consumers', () => {
@@ -108,6 +109,13 @@ describe('member collection consumers', () => {
     expect(overview(key)).toContain('Selected Job is outside the current filter or shown window')
     expect(logs(key)).toContain('Logs for off-window')
     expect(logs(key)).not.toContain('Selected Job is currently unavailable')
+  })
+
+  it('waits for declared roles before enabling a role log scope', () => {
+    state.useResource.mockReturnValue({ data: undefined })
+    expect(logs()).toContain('<option value="role" disabled="">Role</option>')
+    state.useResource.mockReturnValue({ data: { spec: { replicatedJobs: [{ name: 'prepare' }, { name: 'workers' }] } } })
+    expect(logs()).toContain('<option value="role">Role</option>')
   })
 
   it('uses collection semantics even when there are no members', () => {
