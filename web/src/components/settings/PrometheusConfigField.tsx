@@ -80,7 +80,7 @@ export function PrometheusConfigField({ profile, onProfileChange, onReload, onAp
         <div className="card-inner-lg space-y-2">
           <Badge tone="note">Set for this launch</Badge>
           <p className="text-sm text-theme-text-primary break-all">{profile.url || 'Auto-discovery'}</p>
-          <p className="text-xs text-theme-text-secondary">{profile.headerKeys.length ? `Headers: ${profile.headerKeys.join(', ')} (values hidden)` : 'No auth headers'}</p>
+          <p className="text-xs text-theme-text-secondary">{profile.headerKeys.length ? `Headers: ${profile.headerKeys.join(', ')} (values hidden)` : 'No headers configured'}</p>
           <p className="text-xs text-theme-text-secondary">This override stays with this cluster. Restart without Prometheus flags to edit its saved connection.</p>
         </div>
       ) : replacing ? (
@@ -116,7 +116,11 @@ export function PrometheusConfigField({ profile, onProfileChange, onReload, onAp
         <PrometheusConnectionForm {...form} configuredHeaderKeys={profile.headerKeys} headersManaged={profile.headersManaged} serverManaged={false} urlFromFlag={false} scopeDescription={`Saved for ${profile.target.context}. Other contexts keep their own connections.`} onApply={apply} />
       </>}
       {error && <p role="alert" className="text-sm text-warning-text">{error}</p>}
-      <Disclosure summary="Storage and cluster identity" className="text-xs text-theme-text-tertiary">
+      <Disclosure
+        summary="Storage and cluster identity"
+        className="border-t border-theme-border pt-4 text-xs text-theme-text-tertiary"
+        summaryClassName="text-sm font-medium text-theme-text-primary"
+      >
         <div className="space-y-2 pt-2">
           <p>Stored in ~/.radar/clusters.json, shared by CLI and Desktop. Credentials are permission-protected plaintext, not encrypted. Separate kubeconfig contexts have separate profiles.</p>
           {profile.target.source && <p className="break-all">Source: {profile.target.source}</p>}

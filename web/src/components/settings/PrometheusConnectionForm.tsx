@@ -93,15 +93,19 @@ export function PrometheusConnectionForm({
 
   return (
     <div>
-      <p className="text-xs text-theme-text-tertiary mb-3">
-        Connect existing Prometheus-compatible data for resource usage, workload HTTP metrics and rightsizing. Available charts depend on collected metrics.
-      </p>
+      <div className="mb-4 space-y-1">
+        <p className="text-sm text-theme-text-secondary">
+          Works with Prometheus, VictoriaMetrics, Thanos and Grafana Mimir.
+        </p>
+        <p className="text-xs text-theme-text-tertiary">
+          Charts cover resource usage, workload HTTP metrics and rightsizing when those metrics are available.
+        </p>
+      </div>
       <label className="block text-sm font-medium text-theme-text-primary mb-1">
         Metrics backend URL
       </label>
       <p className="text-xs text-theme-text-tertiary mb-1">
-        Base URL reachable from Radar, not your browser — Prometheus, VictoriaMetrics, Thanos or
-        Mimir. Include any backend path prefix, but not /api/v1/query. Leave empty for cluster discovery; headers require a URL.
+        Base URL reachable from Radar, not your browser. Include any backend path prefix, but not /api/v1/query. Leave empty for cluster discovery.
       </p>
       <div className="flex items-center gap-2">
         <Input
@@ -144,7 +148,6 @@ export function PrometheusConnectionForm({
       )}
       <p className="mt-2 text-xs text-theme-text-tertiary">
         {scopeDescription ?? (local ? 'Saved for this cluster.' : 'Changes affect this Radar installation. Use deployment settings for configuration that survives Pod replacement.')}
-        {' Changing servers requires replacing or clearing the saved headers.'}
       </p>
       {serverManaged && (
         <p className="mt-2 text-xs text-theme-text-secondary">
@@ -158,14 +161,18 @@ export function PrometheusConnectionForm({
         </p>
       )}
 
-      {/* Auth headers — for token / multi-tenant backends (Bearer, X-Scope-OrgID). */}
-      <div className="mt-3">
+      <section className="mt-5 border-t border-theme-border pt-4">
+        <h4 className="text-sm font-medium text-theme-text-primary mb-2">Authentication headers</h4>
+        <p className="text-xs text-theme-text-tertiary mb-3">
+          Optional authentication or tenant headers, such as Authorization or X-Scope-OrgID. Requires a backend URL.
+          {!headersManaged && storedKeys.length > 0 && ' Changing servers requires replacing or clearing the saved headers.'}
+        </p>
         {headerRows === null ? (
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-xs text-theme-text-tertiary">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="min-w-0 break-words text-xs text-theme-text-tertiary">
               {storedKeys.length > 0
-                ? <>Auth headers: <span className="text-theme-text-secondary">{storedKeys.join(', ')}</span> <span className="text-theme-text-disabled">(values hidden)</span></>
-                : 'No auth headers'}
+                ? <><span className="text-theme-text-secondary">{storedKeys.join(', ')}</span> (values hidden)</>
+                : 'No headers configured'}
             </span>
             {!headersManaged && <button
               onClick={() => { setHeaderRows([{ key: '', value: '' }]); clearStatus() }}
@@ -235,23 +242,23 @@ export function PrometheusConnectionForm({
             </p>
           </div>
         )}
-      </div>
-      {headersManaged ? (
-        <p className="mt-2 text-xs text-theme-text-secondary">
-          Headers are controlled by startup configuration. Change them at their source and restart Radar.
-        </p>
-      ) : storedKeys.length > 0 && (
-        <button
-          onClick={() => { setHeaderRows([]); clearStatus() }}
-          disabled={apply.status === 'applying'}
-          className="mt-2 text-xs text-theme-text-secondary hover:underline"
-        >
-          Clear saved headers
-        </button>
-      )}
-      {headerRows?.length === 0 && (
-        <p className="mt-1 text-xs text-warning-text">Headers will be cleared when you click Apply now.</p>
-      )}
+        {headersManaged ? (
+          <p className="mt-2 text-xs text-theme-text-secondary">
+            Headers are controlled by startup configuration. Change them at their source and restart Radar.
+          </p>
+        ) : storedKeys.length > 0 && (
+          <button
+            onClick={() => { setHeaderRows([]); clearStatus() }}
+            disabled={apply.status === 'applying'}
+            className="mt-2 text-xs text-theme-text-secondary hover:underline"
+          >
+            Clear saved headers
+          </button>
+        )}
+        {headerRows?.length === 0 && (
+          <p className="mt-1 text-xs text-warning-text">Headers will be cleared when you click Apply now.</p>
+        )}
+      </section>
     </div>
   )
 }

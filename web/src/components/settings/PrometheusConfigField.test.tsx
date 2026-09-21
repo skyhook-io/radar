@@ -18,6 +18,26 @@ describe('Per-cluster metrics settings', () => {
     expect(html).toContain('aria-expanded="false"')
     expect(html).not.toContain('Previously saved connection')
   })
+  it('makes compatible backends and authentication distinct from storage details', () => {
+    const html = render({ headerKeys: ['Authorization', 'X-Scope-OrgID'] })
+    expect(html).toContain('Works with Prometheus, VictoriaMetrics, Thanos and Grafana Mimir.')
+    expect(html).toMatch(/<h4[^>]*>Authentication headers<\/h4>/)
+    expect(html).toContain('Authorization, X-Scope-OrgID')
+    expect(html).toContain('Changing servers requires replacing or clearing the saved headers.')
+    expect(html).toMatch(/<\/section>[\s\S]*Storage and cluster identity/)
+  })
+  it('keeps credential replacement guidance out of the empty authentication state', () => {
+    const html = render({})
+    expect(html).toContain('No headers configured')
+    expect(html).not.toContain('Changing servers requires')
+  })
+  it('directs environment-managed header changes to startup configuration', () => {
+    const html = render({ headerKeys: ['Authorization'], headersManaged: true })
+    expect(html).toContain('Headers are controlled by startup configuration.')
+    expect(html).not.toContain('Changing servers requires')
+    expect(html).not.toMatch(/<button[^>]*>Edit headers<\/button>/)
+    expect(html).not.toContain('Clear saved headers')
+  })
   it('offers explicit legacy association without exposing credential values', () => {
     const html = render({ legacy: { url: 'https://legacy', headerKeys: ['Authorization'], revision: 'legacy' } })
     expect(html).toContain('Save for this cluster')
