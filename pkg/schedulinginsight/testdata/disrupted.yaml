@@ -1,0 +1,43 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: Workload
+metadata:
+  name: disrupted
+  namespace: training
+spec:
+  queueName: gpu
+  podSets:
+    - name: workers
+      count: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: trainer
+              image: registry.k8s.io/pause:3.10
+status:
+  conditions:
+    - type: QuotaReserved
+      status: "False"
+      reason: WaitingForQuota
+      message: Waiting to reserve quota again
+      lastTransitionTime: "2026-08-30T10:00:00Z"
+    - type: Admitted
+      status: "False"
+      reason: NoReservation
+      message: The workload has no reservation
+      lastTransitionTime: "2026-08-30T10:00:00Z"
+    - type: PodsReady
+      status: "False"
+      reason: WaitForRecovery
+      message: Waiting for recovery
+      lastTransitionTime: "2026-08-30T09:58:00Z"
+    - type: Evicted
+      status: "True"
+      reason: Preempted
+      message: Evicted for a higher-priority workload
+      lastTransitionTime: "2026-08-30T09:58:00Z"
+    - type: Preempted
+      status: "True"
+      reason: InClusterQueue
+      message: Preempted within gpu-team
+      lastTransitionTime: "2026-08-30T09:58:00Z"

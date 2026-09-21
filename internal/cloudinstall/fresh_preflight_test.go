@@ -337,3 +337,51 @@ func TestFreshInstallPreflight_ValidatesRequiredInputs(t *testing.T) {
 		t.Fatalf("expected nil client validation, got %v", err)
 	}
 }
+
+func TestFreshInstallPreflight_DeniedRoleDoesNotMakeItsBindingAClusterRefusal(t *testing.T) {
+	manifest := `apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: radar-generated}
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: radar-generated}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: radar-generated
+subjects:
+- kind: ServiceAccount
+  name: radar
+  namespace: radar`
+	kc := adoptionKubeClient(t, func(authv1.ResourceAttributes) bool { return true },
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "radar"}})
+	dc := adoptionDynamicClient()
+	dc.PrependReactor("create", "clusterroles", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: "rbac.authorization.k8s.io", Resource: "clusterroles"}, "radar-generated",
+			errors.New(`user "dev" (groups=["system:authenticated"]) is attempting to grant RBAC permissions not currently held: {APIGroups:[""], Resources:["secrets"], Verbs:["get"]}`))
+	})
+	dc.PrependReactor("create", "clusterrolebindings", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewNotFound(
+			schema.GroupResource{Group: "rbac.authorization.k8s.io", Resource: "clusterroles"},
+			"radar-generated")
+	})
+
+	result, err := FreshInstallPreflight(context.Background(), kc, dc, adoptionDiscovery(), FreshInstallPreflightOptions{
+		Namespace: "radar", ReleaseName: "radar", TargetManifest: manifest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Blocking) != 1 || !listContainsSubstring(result.Blocking, "not currently held") {
+		t.Fatalf("only the role's own denial should block; the binding's NotFound depends on it: %+v", result.Blocking)
+	}
+	if got := result.Cause(); got != BlockCausePermissions {
+		t.Fatalf("Cause() = %q, want permissions", got)
+	}
+}

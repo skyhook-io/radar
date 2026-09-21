@@ -150,7 +150,7 @@ export function VPARenderer({ data, onNavigate }: VPARendererProps) {
                   {policy.mode && (
                     <span className={clsx(
                       'px-1.5 py-0.5 rounded text-[10px] font-medium',
-                      policy.mode === 'Off' ? 'bg-theme-hover text-theme-text-tertiary' : 'bg-blue-500/20 text-blue-400'
+                      policy.mode === 'Off' ? 'bg-theme-hover text-theme-text-tertiary' : 'status-blue'
                     )}>
                       {policy.mode}
                     </span>

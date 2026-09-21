@@ -23,6 +23,7 @@ import { toCanvas } from 'html-to-image'
 
 import { AlertTriangle, ChevronsDownUp, ChevronsUpDown, Download, Info, Layers, LayoutGrid, Loader2, Maximize, Minus, Pause, Play, Plus, RotateCw, Shield } from 'lucide-react'
 import { PaneLoader } from '../ui/PaneLoader'
+import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { TopologyOverlayBar } from './TopologyOverlayBar'
 import { Input } from '../ui/Input'
 import { Tooltip } from '../ui/Tooltip'
@@ -34,7 +35,7 @@ import { GroupNode } from './GroupNode'
 import { NEUTRAL_OWNER, type WorkloadFocus } from '../../utils/workload-colors'
 import { ownershipOf } from '../../utils/topology-neighborhood'
 import { buildHierarchicalElkGraph, applyHierarchicalLayout, getGroupKey, isGroupEffectivelyCollapsed, type GroupDisplayLevel } from './layout'
-import type { Topology, TopologyNode, TopologyEdge, ViewMode, GroupingMode } from '../../types'
+import type { Topology, TopologyNode, TopologyEdge, ViewMode, GroupingMode, HealthStatus } from '../../types'
 import { pluralize } from '../../utils/pluralize'
 import { foldHash } from '../../utils/structure-hash'
 import { recordLayoutDuration, recordLayoutSkipped, recordStructureKeyDuration } from '../../perf'
@@ -68,19 +69,30 @@ const EDGE_LEGEND: { label: string; color: string }[] = [
 // Memoized edge style cache to avoid creating new objects on every render
 const edgeStyleCache = new Map<string, React.CSSProperties>()
 
-function getEdgeStyle(type: string, isTrafficView: boolean, isTrafficEdge: boolean, animated: boolean, partial: boolean): React.CSSProperties {
-  const cacheKey = `${type}-${isTrafficView}-${isTrafficEdge}-${animated}-${partial}`
+function getEdgeStyle(type: string, isTrafficView: boolean, isTrafficEdge: boolean, animated: boolean, partial: boolean, isRolloutTrafficEdge: boolean): React.CSSProperties {
+  const cacheKey = `${type}-${isTrafficView}-${isTrafficEdge}-${animated}-${partial}-${isRolloutTrafficEdge}`
   let style = edgeStyleCache.get(cacheKey)
   if (!style) {
     const edgeColor = getEdgeColor(type, isTrafficView)
+    const dashed = (isTrafficView && isTrafficEdge && animated) || (isRolloutTrafficEdge && animated)
     style = {
       stroke: edgeColor,
       strokeWidth: isTrafficView ? 2 : 1.5,
-      strokeDasharray: partial ? '6 3' : isTrafficView && isTrafficEdge && animated ? '5 5' : undefined,
+      strokeDasharray: partial ? '6 3' : dashed ? '5 5' : undefined,
     }
     edgeStyleCache.set(cacheKey, style)
   }
   return style
+}
+
+// A Rollout canary/stable (weighted) or blue-green active/preview Service
+// edge — set server-side via a fixed label vocabulary (pkg/topology
+// builder.go's "Check Rollouts" block). These carry a live traffic split
+// worth animating even outside the separate Network Flow view, since that
+// view doesn't build Rollout nodes/edges at all — this is the only place
+// they render.
+function isRolloutTrafficEdgeLabel(label: TopologyEdge['label']): boolean {
+  return typeof label === 'string' && (label === 'Active' || label === 'Preview' || label.startsWith('Canary') || label.startsWith('Stable'))
 }
 
 // Reachability outcome → edge color/dash, set by the Reachability view via
@@ -125,6 +137,7 @@ function buildEdges(
   nodeCount?: number,
   groupLevels?: Map<string, GroupDisplayLevel>,
   smartDefaultActive = false,
+  nodes?: TopologyNode[],
 ): Edge[] {
   const edges: Edge[] = []
   const seenEdgeIds = new Set<string>() // O(1) duplicate detection
@@ -139,6 +152,21 @@ function buildEdges(
       const groupId = `group-${groupingMode}-${groupKey}`
       for (const nodeId of memberIds) {
         nodeGroupMap.set(nodeId, groupId)
+      }
+    }
+  }
+
+  // nodeId -> trafficRole, so a Rollout->ReplicaSet or ReplicaSet/Rollout->Pod
+  // ownership edge can animate too when it leads to a canary/stable/active/
+  // preview node - the "active DAG" should read as a continuous path from the
+  // Service all the way down to the pods actually serving that role, not stop
+  // at the Rollout.
+  const nodeTrafficRoleById = new Map<string, string>()
+  if (nodes) {
+    for (const n of nodes) {
+      const role = (n.data as Record<string, unknown> | undefined)?.trafficRole
+      if (typeof role === 'string' && role) {
+        nodeTrafficRoleById.set(n.id, role)
       }
     }
   }
@@ -175,8 +203,22 @@ function buildEdges(
     const reach = edge.reachOutcome
     const edgeColor = reach ? (REACH_COLORS[reach] || '#94a3b8') : getEdgeColor(edge.type, isTrafficView)
     const isTrafficEdge = edge.type === 'routes-to' || edge.type === 'exposes'
+    // Exposes: detected via the fixed label vocabulary (Canary/Stable/Active/
+    // Preview) set server-side on Service->Rollout edges. Manages: the SAME
+    // path continued down through Rollout->ReplicaSet and ReplicaSet/Rollout->
+    // Pod ownership edges, detected via the target node's own trafficRole
+    // (also set server-side) rather than a label, since an ownership edge
+    // carries no label today and doesn't need one just for this.
+    const isRolloutTrafficEdge =
+      (edge.type === 'exposes' && isRolloutTrafficEdgeLabel(edge.label)) ||
+      (edge.type === 'manages' && nodeTrafficRoleById.has(edge.target))
     // A reachability edge never animates (a dashed "blocked" must not look like flow).
-    const animated = enableAnimations && isTrafficView && isTrafficEdge && !reach && !edge.partial
+    // Rollout canary/stable/active/preview edges animate regardless of view mode —
+    // they only exist in the resources-view topology, so gating on isTrafficView
+    // (the separate Network Flow view) would mean they never animate at all.
+    const animated = enableAnimations && !reach && !edge.partial && (
+      (isTrafficView && isTrafficEdge) || isRolloutTrafficEdge
+    )
 
     edges.push({
       id: edgeId,
@@ -196,7 +238,7 @@ function buildEdges(
         width: 12,
         height: 12,
       },
-      style: reach ? reachEdgeStyle(reach) : getEdgeStyle(edge.type, isTrafficView, isTrafficEdge, animated, edge.partial === true),
+      style: reach ? reachEdgeStyle(reach) : getEdgeStyle(edge.type, isTrafficView, isTrafficEdge, animated, edge.partial === true, isRolloutTrafficEdge),
     })
   }
 
@@ -243,6 +285,23 @@ interface TopologyGraphProps {
   /** Host overlay content (e.g. a search + controls row), stacked above the
    *  topology's own status banners in the overlay bar. */
   children?: ReactNode
+}
+
+// A pod group's children normally carry the health the server computed. Without
+// it, the phase is honest for every state except Running: a crash-looping pod
+// sits at Phase=Running with its container restarting, so that one case says
+// unknown rather than repeating the bug this fallback exists behind.
+export function phaseOnlyHealth(phase: string | undefined): HealthStatus {
+  switch (phase) {
+    case 'Failed':
+      return 'unhealthy'
+    case 'Pending':
+      return 'degraded'
+    case 'Succeeded':
+      return 'neutral'
+    default:
+      return 'unknown'
+  }
 }
 
 export function TopologyGraph({
@@ -298,6 +357,8 @@ export function TopologyGraph({
   const [fitViewCounter, setFitViewCounter] = useState(0)
   const [isExporting, setIsExporting] = useState(false)
   const [showLegend, setShowLegend] = useState(false)
+  const [warningsOpen, setWarningsOpen] = useState(false)
+  const warningsDisclosure = useDisclosure(warningsOpen)
   const prevStructureRef = useRef<string>('')
   const layoutVersionRef = useRef(0) // Used to invalidate stale layout results
   // Saved node positions for preservation across topology updates.
@@ -408,11 +469,26 @@ export function TopologyGraph({
       phase: string
       restarts: number
       containers: number
+      status?: HealthStatus
+      // Present only when the group spans more than one owner (e.g. a
+      // Rollout's canary + stable ReplicaSets) — the specific edge
+      // source(s) that actually own this pod, from the backend's own
+      // per-pod owner resolution. See pkg/topology/builder.go's
+      // ownerKeyToSourceIDs.
+      ownerIds?: string[]
+      // The group's own trafficRole (podGroupNode.data.trafficRole) is only
+      // set when every pod agrees — this is each pod's OWN role, so a mixed
+      // canary/stable group still badges correctly once expanded.
+      trafficRole?: string
     }>
 
     // Find edges pointing to this pod group
     const edgesToGroup = topoEdges.filter(e => e.target === podGroupId)
     const sourceIds = edgesToGroup.map(e => e.source)
+    // Homogeneous per build — resources-view feeds `manages` ownership
+    // edges, traffic-view feeds `routes-to` Service edges — so any surviving
+    // edge's type applies to the whole group.
+    const edgeType = edgesToGroup[0]?.type ?? 'routes-to'
 
     // Remove the PodGroup node and its edges
     const newNodes = topoNodes.filter(n => n.id !== podGroupId)
@@ -425,24 +501,44 @@ export function TopologyGraph({
         id: podId,
         kind: 'Pod',
         name: pod.name,
-        status: pod.phase === 'Running' ? 'healthy' : pod.phase === 'Pending' ? 'degraded' : 'unhealthy',
+        // The server computes pod health; pkg/health tracks a crash loop across
+        // the kubelet's Waiting->Running oscillation, which the phase alone
+        // hides — a crash-looping pod sits at Phase=Running. Deriving it here
+        // again would rebuild that logic in a second place and get it wrong.
+        status: pod.status ?? phaseOnlyHealth(pod.phase),
         data: {
           ...podGroupNode.data,
           namespace: pod.namespace,
           phase: pod.phase,
           restarts: pod.restarts,
           containers: pod.containers,
+          trafficRole: pod.trafficRole,
           expandedFromGroup: podGroupId, // Track which group this came from
         },
       })
 
-      // Add edges from all sources to this pod
-      for (const sourceId of sourceIds) {
+      // A group with a single owner has every source apply to every pod —
+      // the common case. A mixed-owner group (pod.ownerIds present) instead
+      // connects each pod only to the source(s) that are actually its own
+      // owner, so e.g. a canary pod doesn't end up drawn as owned by the
+      // stable ReplicaSet too.
+      const podSourceIds = pod.ownerIds?.filter(id => sourceIds.includes(id)) ?? sourceIds
+      // A mixed-owner group's shared sources (e.g. a Rollout, reached via
+      // both a canary and a stable edge) can't be told apart by source id
+      // alone once collapsed — both edges point at the same node id, just
+      // with different labels. The pod's own trafficRole is unambiguous, so
+      // an ownership edge derives its label from that directly rather than
+      // trying to match back to one specific original edge.
+      const label = edgeType === 'manages' && pod.trafficRole
+        ? pod.trafficRole[0].toUpperCase() + pod.trafficRole.slice(1)
+        : undefined
+      for (const sourceId of podSourceIds) {
         newEdges.push({
           id: `${sourceId}-to-${podId}`,
           source: sourceId,
           target: podId,
-          type: 'routes-to' as const,
+          type: edgeType,
+          ...(label ? { label } : {}),
         })
       }
     }
@@ -771,7 +867,8 @@ export function TopologyGraph({
           nodeToGroup,
           nodesWithHandlers.length,
           groupLevels,
-          smartDefaultActive
+          smartDefaultActive,
+          workingNodes
         )
         setEdges(builtEdges)
       }
@@ -820,7 +917,13 @@ export function TopologyGraph({
       })
       return changed ? next : prev
     })
-    setEdges(prev => (prev.length === 0 ? prev : buildEdges(workingEdges, collapsedGroups, groupMapRef.current ?? new Map(), groupingMode, isTrafficView, undefined, prev.length, groupLevels, false)))
+    // nodeCount must be a real NODE count (buildEdges gates animations on it
+    // for the large-graph performance safeguard) — workingNodes.length, not
+    // the previous EDGES array's length. A tree-shaped graph commonly has
+    // fewer edges than nodes, so using edge count here could report "under
+    // the threshold" and re-enable animations on a graph that's actually
+    // over it.
+    setEdges(prev => (prev.length === 0 ? prev : buildEdges(workingEdges, collapsedGroups, groupMapRef.current ?? new Map(), groupingMode, isTrafficView, undefined, workingNodes.length, groupLevels, false, workingNodes)))
     // layoutEpoch is a dep so this re-applies AFTER any in-flight ELK layout lands -
     // a stale layout closure can't leave the canvas painted with pre-probe styles.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1042,10 +1145,16 @@ export function TopologyGraph({
                         ? 'Large retained run history is summarized to keep the graph readable.'
                         : 'Some resources failed to load. Data may be incomplete.'}
                   </span>
-                  <details className="mt-1">
-                    <summary className="text-xs text-amber-400/80 hover:text-amber-400">
-                      Show details ({topology.warnings.length})
-                    </summary>
+                  <button
+                    {...warningsDisclosure.buttonProps}
+                    type="button"
+                    onClick={() => setWarningsOpen((v) => !v)}
+                    className="mt-1 flex items-center gap-1 text-xs text-amber-400/80 hover:text-amber-400"
+                  >
+                    <CollapseChevron open={warningsOpen} inheritColor className="h-3 w-3" />
+                    Show details ({topology.warnings.length})
+                  </button>
+                  <Collapse open={warningsOpen} id={warningsDisclosure.panelId}>
                     <ul className="mt-1 text-xs text-theme-text-tertiary space-y-0.5">
                       {rbacWarnings.length > 0 && otherWarnings.length > 0 && (
                         <li className="text-amber-400/60 font-medium mt-1">RBAC restrictions:</li>
@@ -1066,7 +1175,7 @@ export function TopologyGraph({
                         <li key={`other-${i}`} className="font-mono">{w}</li>
                       ))}
                     </ul>
-                  </details>
+                  </Collapse>
                 </div>
               </div>
             </div>

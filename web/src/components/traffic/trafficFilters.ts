@@ -115,3 +115,34 @@ export function volumeUnit(isRateBased: boolean | undefined): VolumeUnit {
 export function effectiveThreshold(value: number, chosenUnit: VolumeUnit, currentUnit: VolumeUnit): number {
   return chosenUnit === currentUnit ? value : 0
 }
+
+/**
+ * Is this endpoint kind drawn outside the cluster's workloads?
+ *
+ * "External" is what every source reports for the world outside; Hubble also
+ * tells nodes (`Host`) and endpoints it could not identify (`Unknown`) apart,
+ * because a policy evaluation treats each differently. The graph does not:
+ * none of them is a workload, so they take the external node's place and
+ * styling, and stay out of namespace counts.
+ */
+export function isExternalKind(kind: string): boolean {
+  const k = kind.toLowerCase()
+  return k === 'external' || k === 'host' || k === 'unknown'
+}
+
+/**
+ * Is a drop a NetworkPolicy question at all?
+ *
+ * Only on positive evidence: Hubble's two policy drop reasons — `POLICY_DENIED`
+ * (no rule allowed it) and `POLICY_DENY` (an explicit deny rule) — or the
+ * plugin naming the policy itself. A drop with no reported reason is not
+ * assumed to be one. The two codes are spelled differently enough that a
+ * substring test on either misses the other.
+ */
+export function isPolicyDropReason(dropReasonDesc: string | undefined, deniedByCount: number): boolean {
+  // deniedByCount includes references withheld for permissions: the plugin
+  // still named a policy.
+  if (deniedByCount > 0) return true
+  const code = (dropReasonDesc ?? '').toUpperCase()
+  return code === 'POLICY_DENIED' || code === 'POLICY_DENY'
+}

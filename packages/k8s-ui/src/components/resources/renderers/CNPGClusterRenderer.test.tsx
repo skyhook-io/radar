@@ -39,9 +39,33 @@ describe('CNPGClusterRenderer — the drawer must not contradict the badge', () 
     expect(html(settled)).toContain('Degraded Cluster')
   })
 
-  it('still raises Cluster Down at zero ready, whatever the phase', () => {
-    // No phase excuses a database with nothing serving.
-    expect(html(cluster('Upgrading cluster', 0))).toContain('Cluster Down')
+  it('still raises Cluster Down for a was-up cluster at zero ready, whatever the phase', () => {
+    // No phase excuses a database that was serving and now has nothing ready.
+    // readyInstances is OMITTED — the shape CNPG actually emits for zero ready —
+    // and currentPrimary is the "was up" signal that tells this apart from a
+    // first bootstrap.
+    const wasUpDown = {
+      apiVersion: 'postgresql.cnpg.io/v1',
+      kind: 'Cluster',
+      metadata: { name: 'pg', namespace: 'db' },
+      spec: { instances: 3 },
+      status: { phase: 'Upgrading cluster', currentPrimary: 'pg-1' },
+    }
+    expect(html(wasUpDown)).toContain('Cluster Down')
+  })
+
+  it('does not raise Cluster Down for a bootstrapping cluster with no primary yet', () => {
+    // Reported (phase) but no primary elected and readyInstances omitted — the
+    // shape a fresh cluster emits. A red banner here is the false alarm the
+    // availability verdict exists to prevent.
+    const bootstrapping = {
+      apiVersion: 'postgresql.cnpg.io/v1',
+      kind: 'Cluster',
+      metadata: { name: 'pg', namespace: 'db' },
+      spec: { instances: 3 },
+      status: { phase: 'Setting up primary' },
+    }
+    expect(html(bootstrapping)).not.toContain('Cluster Down')
   })
 
   it('renders a failed last backup at the same tier as the badge and detector', () => {
@@ -114,5 +138,47 @@ describe('recovery points must be readable as ages, not raw machine timestamps',
     const at = '2026-01-30T09:40:37.000Z'
     const html = renderToString(<CNPGClusterRenderer data={withBackup(at)} />)
     expect(html).toContain('2026-01-30 09:40:37 UTC')
+  })
+})
+
+describe('CNPGClusterRenderer — the replica-cluster role tracks live state, not stanza presence', () => {
+  const withReplica = (replica: any, name = 'pg-eu') => ({
+    apiVersion: 'postgresql.cnpg.io/v1',
+    kind: 'Cluster',
+    metadata: { name, namespace: 'db' },
+    spec: { instances: 3, replica },
+    status: { phase: 'Cluster in healthy state', readyInstances: 3 },
+  })
+
+  it('shows the Replica Cluster section for a genuine replica (replica mode enabled)', () => {
+    const out = renderToString(<CNPGClusterRenderer data={withReplica({ source: 'pg-us', enabled: true })} />)
+    expect(out).toContain('Replica Cluster')
+    expect(out).toContain('Role')
+    expect(out).toContain('pg-us')
+  })
+
+  it('shows Replica for a distributed-topology cluster whose primary is elsewhere', () => {
+    const out = renderToString(
+      <CNPGClusterRenderer data={withReplica({ source: 'pg-us', primary: 'pg-us', self: 'pg-eu' })} />,
+    )
+    expect(out).toContain('Replica Cluster')
+  })
+
+  it('drops the Replica label once a distributed replica is promoted, though the stanza remains', () => {
+    // Promotion sets replica.primary to this cluster; the stanza is not removed.
+    const out = renderToString(
+      <CNPGClusterRenderer data={withReplica({ source: 'pg-us', primary: 'pg-eu', self: 'pg-eu' })} />,
+    )
+    expect(out).not.toContain('Replica Cluster')
+  })
+
+  it('drops the Replica label once a standalone replica is promoted (replica.enabled off)', () => {
+    const out = renderToString(<CNPGClusterRenderer data={withReplica({ source: 'pg-us', enabled: false })} />)
+    expect(out).not.toContain('Replica Cluster')
+  })
+
+  it('a normal standalone cluster shows no Replica Cluster section', () => {
+    const out = renderToString(<CNPGClusterRenderer data={cluster('Cluster in healthy state', 3)} />)
+    expect(out).not.toContain('Replica Cluster')
   })
 })

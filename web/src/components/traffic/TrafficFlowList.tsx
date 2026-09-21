@@ -1,11 +1,13 @@
 import { useState, useMemo } from 'react'
 import { Virtuoso } from 'react-virtuoso'
-import type { TrafficFlow } from '../../types'
+import type { TrafficFlow, TrafficEndpoint } from '../../types'
 import { clsx } from 'clsx'
 import { ChevronDown, ChevronUp, ShieldCheck } from 'lucide-react'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
-import { pluralize } from '@skyhook-io/k8s-ui'
+import { pluralize, StatusDot } from '@skyhook-io/k8s-ui'
+import type { StatusTone } from '@skyhook-io/k8s-ui'
 import { useFlowSearch } from './TrafficFlowListContext'
+import { isPolicyDropReason } from './trafficFilters'
 import { useQuery } from '@tanstack/react-query'
 import { fetchJSON } from '../../api/client'
 import { Tooltip } from '../ui/Tooltip'
@@ -250,14 +252,14 @@ export function TrafficFlowList({ flows }: TrafficFlowListProps) {
                     <div className="grid grid-cols-2 gap-x-6 gap-y-1">
                       <div>
                         <span className="text-theme-text-tertiary">Source: </span>
-                        <span className="text-theme-text-primary">{flow.source.name}</span>
-                        {flow.source.namespace && <span className="text-theme-text-tertiary"> ({flow.source.namespace})</span>}
+                        <span className="text-theme-text-primary">{endpointLabel(flow.source)}</span>
+                        {endpointNote(flow.source) && <span className="text-theme-text-tertiary"> ({endpointNote(flow.source)})</span>}
                         {flow.sourceService && <span className="text-theme-text-tertiary"> via {flow.sourceService}</span>}
                       </div>
                       <div>
                         <span className="text-theme-text-tertiary">Destination: </span>
-                        <span className="text-theme-text-primary">{flow.destination.name}</span>
-                        {flow.destination.namespace && <span className="text-theme-text-tertiary"> ({flow.destination.namespace})</span>}
+                        <span className="text-theme-text-primary">{endpointLabel(flow.destination)}</span>
+                        {endpointNote(flow.destination) && <span className="text-theme-text-tertiary"> ({endpointNote(flow.destination)})</span>}
                         {flow.destService && <span className="text-theme-text-tertiary"> via {flow.destService}</span>}
                       </div>
                       <div>
@@ -334,7 +336,8 @@ export function TrafficFlowList({ flows }: TrafficFlowListProps) {
                     {/* Drop reason + policy correlation */}
                     {flow.dropReasonDesc && (
                       <div className="pt-1 border-t border-theme-border/50">
-                        <span className={SEVERITY_TEXT.error}>Drop reason: {flow.dropReasonDesc}</span>
+                        <span className={SEVERITY_TEXT.error}>Dropped: {describeDropReason(flow.dropReasonDesc)}</span>
+                        <span className="text-theme-text-tertiary font-mono text-[10px]"> · {flow.dropReasonDesc}</span>
                       </div>
                     )}
                     {flow.verdict === 'dropped' && (
@@ -357,88 +360,244 @@ export function TrafficFlowList({ flows }: TrafficFlowListProps) {
   )
 }
 
+type PolicyVerdictWord = 'admitted' | 'denied' | 'undecidable' | 'no-policy'
+
 interface PolicyEvaluation {
   selectingPolicies: { name: string; namespace?: string; kind: string; effect: string; reason: string }[]
-  verdict: string
+  verdict: PolicyVerdictWord
+  reason?: string
+  /** What Kubernetes NetworkPolicies alone said, when the verdict was capped
+   *  because policies of another kind also govern the pod. */
+  coreVerdict?: PolicyVerdictWord
+  evaluated?: { direction?: string; pod?: string; peer?: string; port?: number; protocol?: string }
+}
+
+function isPolicyDrop(flow: TrafficFlow): boolean {
+  return isPolicyDropReason(flow.dropReasonDesc, (flow.policyVerdict?.deniedBy?.length ?? 0) + (flow.policyVerdict?.withheld ?? 0))
+}
+
+const EFFECT_TONE: Record<string, StatusTone> = {
+  admits: 'healthy',
+  does_not_admit: 'neutral',
+  undecidable: 'unknown',
+}
+
+const EFFECT_LABEL: Record<string, string> = {
+  admits: 'allows this traffic',
+  does_not_admit: 'no matching allow rule',
+  undecidable: "can't evaluate",
+}
+
+/** Plain words for the drop reasons an operator meets most; anything else is
+ *  the code itself, humanized. The code stays beside it either way. */
+const DROP_REASON_TEXT: Record<string, string> = {
+  POLICY_DENIED: 'blocked by network policy — no rule allowed it',
+  POLICY_DENY: 'blocked by an explicit deny rule',
+  AUTH_REQUIRED: 'mutual authentication required and not established',
+  NO_CONFIGURATION_AVAILABLE_TO_PERFORM_POLICY_DECISION: 'policy not yet loaded for this endpoint',
+  STALE_OR_UNROUTABLE_IP: 'no route to the destination address',
+  UNSUPPORTED_L3_PROTOCOL: 'unsupported network protocol',
+  INVALID_SOURCE_IP: 'the source address is not valid here',
+  NO_TUNNEL_OR_ENCAPSULATION_ENDPOINT: 'no tunnel endpoint for the destination node',
+}
+
+function describeDropReason(code: string | undefined): string {
+  if (!code) return 'reason not reported'
+  return DROP_REASON_TEXT[code] ?? code.toLowerCase().replace(/_/g, ' ')
+}
+
+/** A pod is named; anything else is best identified by the address the user
+ *  can act on, with the classification as the note. */
+function endpointLabel(ep: TrafficEndpoint): string {
+  if (ep.kind === 'Pod' || ep.kind === 'Service' || !ep.ip) return ep.name
+  return ep.ip
+}
+
+function endpointNote(ep: TrafficEndpoint): string {
+  if (ep.kind === 'Pod' || ep.kind === 'Service') return ep.namespace ?? ''
+  if (ep.kind === 'External') return 'outside the cluster'
+  if (ep.kind === 'Host') return ep.name === 'kube-apiserver' ? 'the API server' : 'a node or the host network'
+  return ep.ip ? 'not identified' : ''
+}
+
+function policyRef(p: { kind: string; namespace?: string; name: string }): string {
+  return p.namespace ? `${p.namespace}/${p.name}` : p.name
 }
 
 function PolicyCorrelation({ flow }: { flow: TrafficFlow }) {
-  const destLabels = flow.destination?.labels
-  const srcLabels = flow.source?.labels
-  const destNs = flow.destination?.namespace || ''
-  const destName = flow.destination?.name || ''
-  const srcNs = flow.source?.namespace || ''
-  const srcName = flow.source?.name || ''
+  const src = flow.source
+  const dst = flow.destination
+  const direction = flow.trafficDirection === 'ingress' || flow.trafficDirection === 'egress' ? flow.trafficDirection : ''
+  const evaluated = direction === 'egress' ? src : dst
+  const evaluatedRef = evaluated ? `${evaluated.namespace}/${evaluated.name}` : ''
+  const intoOutOf = direction === 'egress' ? 'out of' : 'into'
+  const observed = flow.lastSeen ? new Date(flow.lastSeen).toLocaleTimeString() : ''
 
-  const labelsParam = destLabels ? Object.entries(destLabels).map(([k, v]) => `${k}=${v}`).join(',') : ''
-  const srcLabelsParam = srcLabels ? Object.entries(srcLabels).map(([k, v]) => `${k}=${v}`).join(',') : ''
+  // Only a pod has policies applied to it; a drop at a node or an external
+  // endpoint is not a NetworkPolicy question.
+  const canQuery = isPolicyDrop(flow) && (!direction || (evaluated?.kind === 'Pod' && !!evaluated.namespace && !!evaluated.name))
 
-  const direction = flow.trafficDirection || 'ingress'
-  // For egress: the evaluated pod is the source. For ingress: the destination.
-  const evalNs = direction === 'egress' ? srcNs : destNs
-  const evalName = direction === 'egress' ? srcName : destName
-  const evalLabels = direction === 'egress' ? srcLabelsParam : labelsParam
-
-  // Need either labels or pod name to resolve the evaluated pod
-  const canQuery = !!evalNs && (!!evalLabels || !!evalName)
-
-  const { data, isLoading, isError } = useQuery<PolicyEvaluation>({
-    queryKey: ['policy-evaluate', destNs, destName, labelsParam, srcNs, srcName, srcLabelsParam, direction],
+  const { data, isLoading, error, dataUpdatedAt } = useQuery<PolicyEvaluation, Error>({
+    queryKey: ['policy-evaluate', direction, dst?.namespace, dst?.name, dst?.kind, dst?.ip, src?.namespace, src?.name, src?.kind, src?.ip, flow.port, flow.protocol],
     queryFn: () => {
-      const params = new URLSearchParams({ namespace: destNs })
-      if (labelsParam) params.set('labels', labelsParam)
-      if (!labelsParam && destName) params.set('podName', destName)
-      if (srcNs) params.set('sourceNamespace', srcNs)
-      if (srcLabelsParam) params.set('sourceLabels', srcLabelsParam)
-      else if (srcName && srcNs) params.set('sourcePodName', srcName)
-      if (direction === 'egress') params.set('direction', 'egress')
+      const params = new URLSearchParams()
+      if (direction) params.set('direction', direction)
+      if (dst?.namespace) params.set('namespace', dst.namespace)
+      if (dst?.name) params.set('podName', dst.name)
+      if (dst?.kind) params.set('destinationKind', dst.kind)
+      if (dst?.ip) params.set('destinationIP', dst.ip)
+      if (src?.namespace) params.set('sourceNamespace', src.namespace)
+      if (src?.name) params.set('sourcePodName', src.name)
+      if (src?.kind) params.set('sourceKind', src.kind)
+      if (src?.ip) params.set('sourceIP', src.ip)
+      if (flow.port) params.set('port', String(flow.port))
+      if (flow.protocol) params.set('protocol', flow.protocol)
       return fetchJSON(`/network-policies/evaluate?${params}`)
     },
     enabled: canQuery,
     staleTime: 30000,
+    // "As they are now" has to stay true while the row is open.
+    refetchInterval: 30000,
   })
+  const checkedAt = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString() : ''
 
-  if (!canQuery) return null
-  if (isLoading) return (
-    <div className="pt-1 border-t border-theme-border/50 text-theme-text-tertiary text-[10px]">
-      Evaluating policies...
-    </div>
-  )
-  if (isError) return (
-    <div className="pt-1 border-t border-theme-border/50 text-theme-text-tertiary text-[10px]">
-      Unable to evaluate policies
-    </div>
-  )
-  if (!data || !data.selectingPolicies || data.selectingPolicies.length === 0) return (
-    <div className="pt-1 border-t border-theme-border/50">
-      <div className="flex items-center gap-1 text-theme-text-tertiary">
-        <ShieldCheck className="w-3 h-3" />
-        <span className="text-[10px]">No NetworkPolicy selects this destination</span>
+  const hubble = flow.policyVerdict
+  const hubbleDenied = hubble?.deniedBy ?? []
+  const hubbleAllowed = hubble?.allowedBy ?? []
+  const withheld = hubble?.withheld ?? 0
+
+  if (!isPolicyDrop(flow)) {
+    return (
+      <div className="pt-1 border-t border-theme-border/50 text-[10px] text-theme-text-tertiary">
+        {flow.dropReasonDesc
+          ? `Radar checks NetworkPolicies only for drops the plugin reports as policy drops; this one was reported as ${flow.dropReasonDesc}`
+          : "The plugin did not report why this flow was dropped, so Radar can't tell whether a policy was involved"}
       </div>
-    </div>
-  )
+    )
+  }
+
+  // What the plugin recorded when the packet was dropped is the ground
+  // truth; the current-policy check below is a reading of the policies as
+  // they are now, and is presented as a note under it rather than as a
+  // second verdict.
+  //
+  // Only a named deny is the account of a drop. Hubble can also record an
+  // allow on a dropped flow — at another layer (L3 allowed, then dropped at
+  // L7) or at the other end — and that is not why the packet was dropped.
+  const attribution = hubbleDenied.length > 0
+    ? { text: `Blocked by ${hubbleDenied.map((p) => `${p.kind} ${policyRef(p)}`).join(', ')}`, tone: 'unhealthy' as StatusTone }
+    : withheld > 0
+      ? { text: `Blocked by ${withheld === 1 ? 'a policy' : `${withheld} policies`} you don't have permission to read`, tone: 'unhealthy' as StatusTone }
+      : null
+  const alsoAllowed = hubbleAllowed.length > 0
+    ? `The plugin also recorded ${hubbleAllowed.map((p) => `${p.kind} ${policyRef(p)}`).join(', ')} allowing this flow at another layer or at the other end — not the reason for the drop.`
+    : ''
+
+  if (!canQuery && !attribution) {
+    return (
+      <div className="pt-1 border-t border-theme-border/50 text-[10px] text-theme-text-tertiary">
+        {evaluated?.kind && evaluated.kind !== 'Pod'
+          ? `NetworkPolicies apply to pods, and the ${direction === 'egress' ? 'source' : 'destination'} here is ${endpointNote(evaluated) || 'not a pod'}`
+          : 'Not enough is known about this flow to check policies'}
+      </div>
+    )
+  }
+
+  // The current check, scoped to what it can establish: which policies
+  // allow this traffic at the evaluated pod, now. Never "the connection
+  // works" — the flow was dropped, and policies may have changed since.
+  // When another policy kind governs the pod, the Kubernetes reading is
+  // still worth stating — as a reading, not a verdict.
+  const v = data?.verdict
+  const core = data?.coreVerdict
+  const capped = v === 'undecidable' && !!core && core !== 'undecidable'
+  const current = v === 'admitted'
+    ? { text: `A current NetworkPolicy allows this traffic ${intoOutOf} ${evaluatedRef}`, tone: 'healthy' as StatusTone,
+        note: "Policies may have changed since the drop; this doesn't confirm a new connection will succeed." }
+    : v === 'denied'
+      ? { text: `No current NetworkPolicy allows this traffic ${intoOutOf} ${evaluatedRef}`, tone: 'unhealthy' as StatusTone, note: '' }
+      : v === 'no-policy'
+        ? { text: `No NetworkPolicy selects ${evaluatedRef} for ${direction === 'egress' ? 'outgoing' : 'incoming'} traffic`, tone: 'neutral' as StatusTone, note: '' }
+        : capped
+          ? { text: core === 'admitted'
+                ? `Kubernetes NetworkPolicies alone would allow this traffic ${intoOutOf} ${evaluatedRef} — but another policy kind also applies and was not evaluated`
+                : core === 'denied'
+                  ? `No Kubernetes NetworkPolicy allows this traffic ${intoOutOf} ${evaluatedRef} — but another policy kind also applies and could`
+                  : `No Kubernetes NetworkPolicy selects ${evaluatedRef} — but another policy kind applies and was not evaluated`,
+              tone: 'unknown' as StatusTone, note: '' }
+          : v === 'undecidable'
+            ? { text: "Radar can't complete the current NetworkPolicy check", tone: 'unknown' as StatusTone, note: '' }
+            : null
+  const peerNote = data?.evaluated?.peer && data.evaluated.peer.includes('(') ? `Peer: ${data.evaluated.peer}.` : ''
+  const currentNote = [current?.note, data?.reason, peerNote].filter(Boolean).join(' ')
+  const checkedText = checkedAt ? ` · checked ${checkedAt}` : ''
+
+  const rows = data?.selectingPolicies ?? []
+  const explainAdditive = rows.length > 1 && rows.some((r) => r.effect === 'does_not_admit')
 
   return (
     <div className="pt-1 border-t border-theme-border/50 space-y-1">
-      <div className="flex items-center gap-1 text-theme-text-secondary">
-        <ShieldCheck className="w-3 h-3" />
-        <span className="text-[10px] font-medium">
-          {data.selectingPolicies.length} selecting {data.selectingPolicies.length === 1 ? 'policy' : 'policies'}
-        </span>
-      </div>
-      {data.selectingPolicies.map((p, i) => (
-        <div key={i} className="flex items-start gap-1.5 ml-4">
-          <span className={clsx(
-            'shrink-0 mt-0.5 w-1.5 h-1.5 rounded-full',
-            p.effect === 'allow' ? 'bg-green-500' : p.effect === 'unknown' ? 'bg-yellow-500' : 'bg-red-500',
-          )} />
-          <div className="min-w-0">
-            <span className="text-[10px] text-theme-text-primary font-medium">{p.name}</span>
-            <span className="text-[10px] text-theme-text-tertiary ml-1">({p.kind})</span>
-            <div className="text-[10px] text-theme-text-tertiary">{p.reason}</div>
+      {attribution && (
+        <div className="flex items-start gap-1.5">
+          <StatusDot tone={attribution.tone} className="mt-1 shrink-0" />
+          <div className="min-w-0 text-[10px]">
+            <span className="text-theme-text-primary font-medium">{attribution.text}</span>
+            <span className="text-theme-text-tertiary"> · reported by the network plugin when the packet was dropped</span>
+          </div>
+        </div>
+      )}
+      {alsoAllowed && (
+        <div className={clsx('text-[10px] text-theme-text-tertiary', attribution && 'ml-4')}>{alsoAllowed}</div>
+      )}
+      {canQuery && isLoading && (
+        <div className="text-[10px] text-theme-text-tertiary">Checking current NetworkPolicies…</div>
+      )}
+      {canQuery && error && (
+        <div className="text-[10px] text-theme-text-tertiary">Couldn't check current NetworkPolicies: {error.message}</div>
+      )}
+      {current && (attribution ? (
+        <div className="ml-4 text-[10px]">
+          <span className="text-theme-text-secondary">Current check: </span>
+          <span className="text-theme-text-primary">{current.text}</span>
+          <span className="text-theme-text-tertiary">{observed ? ` · flow seen ${observed}` : ''}{checkedText}</span>
+          {currentNote && <div className="text-theme-text-tertiary">{currentNote}</div>}
+        </div>
+      ) : (
+        <div className="flex items-start gap-1.5">
+          <StatusDot tone={current.tone} className="mt-1 shrink-0" />
+          <div className="min-w-0 text-[10px]">
+            <span className="text-theme-text-primary font-medium">{current.text}</span>
+            <span className="text-theme-text-tertiary"> · against policies as they are now{observed ? `, flow seen ${observed}` : ''}{checkedText}</span>
+            {currentNote && <div className="text-theme-text-tertiary">{currentNote}</div>}
           </div>
         </div>
       ))}
+      {rows.length > 0 && (
+        <div className="ml-4 space-y-1">
+          <div className="flex items-center gap-1 text-theme-text-secondary">
+            <ShieldCheck className="w-3 h-3" />
+            <span className="text-[10px] font-medium">
+              {rows.length} {rows.length === 1 ? 'policy applies' : 'policies apply'} to {evaluatedRef}
+            </span>
+          </div>
+          {explainAdditive && (
+            <div className="text-[10px] text-theme-text-tertiary">
+              NetworkPolicies combine their allow rules: a policy with no matching rule doesn't override another policy's allow.
+            </div>
+          )}
+          {rows.map((p, i) => (
+            <div key={i} className="flex items-start gap-1.5">
+              <StatusDot tone={EFFECT_TONE[p.effect] ?? 'unknown'} className="mt-1 shrink-0" />
+              <div className="min-w-0">
+                <span className="text-[10px] text-theme-text-primary font-medium">{p.name}</span>
+                <span className="text-[10px] text-theme-text-tertiary ml-1">({p.kind})</span>
+                <span className="text-[10px] text-theme-text-secondary ml-1">— {EFFECT_LABEL[p.effect] ?? p.effect}</span>
+                <div className="text-[10px] text-theme-text-tertiary">{p.reason}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

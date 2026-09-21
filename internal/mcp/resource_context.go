@@ -181,8 +181,8 @@ func issueRelatedResourceAccess(ctx context.Context) func(issues.Ref) bool {
 	}
 }
 
-func computeMCPAuditSummary(cache *k8s.ResourceCache, group, kind, namespace, name string) *resourcecontext.AuditSummary {
-	summary, _ := auditcontext.SummarizeResource(cache, group, kind, namespace, name)
+func computeMCPAuditSummary(ctx context.Context, cache *k8s.ResourceCache, group, kind, namespace, name string) *resourcecontext.AuditSummary {
+	summary, _ := auditcontext.SummarizeResource(cache, group, kind, namespace, name, auditOptions(ctx))
 	return summary
 }
 

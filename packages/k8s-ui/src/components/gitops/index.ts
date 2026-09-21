@@ -15,6 +15,7 @@ export {
   shortClusterName,
   summarizeGitOpsRows,
   normalizeArgoApplication,
+  normalizeArgoApplicationSet,
   normalizeFluxKustomization,
   normalizeFluxHelmRelease,
   buildFluxSourceUrlMap,
@@ -58,3 +59,5 @@ export type {
   FluxActionHandlers,
   GitOpsHelmValuesData,
 } from './GitOpsDetailLayout'
+export { GitOpsHealthSourceNotice, healthSourceNoticeKind, hasRadarFinding, APP_TREE_HEALTH_NOTICE, APP_TREE_NO_FINDINGS_NOTICE, REMOTE_DESTINATION_NOTICE } from './GitOpsHealthSourceNotice'
+export { radarHealthNote, RADAR_HEALTH_NOTE } from './health-provenance'

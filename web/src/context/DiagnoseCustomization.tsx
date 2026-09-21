@@ -1,24 +1,36 @@
-// Slot-based injection of a resource-level "Diagnose" action, and of the
+// Slot-based injection of a resource-level "Investigate" action, and of the
 // consent card's trust copy.
 //
-// Lets an embedding host (e.g. Radar Hub) inject a "Diagnose with AI" button
+// Lets an embedding host (e.g. Radar Hub) inject an "Investigate with AI" button
 // into every resource detail action bar — without forking WorkloadView or the
 // shared ResourceActionsBar. The host returns whatever node should render in
 // the action bar's right-aligned universal-actions area, given the resource
 // context.
 //
-// Default (no provider): Radar renders no Diagnose button — OSS stays
+// Default (no provider): Radar renders no Investigate button — OSS stays
 // agent-free.
-import { createContext, useContext, useMemo } from 'react';
-import type { ReactNode } from 'react';
+import { createContext, useContext, useMemo } from "react";
+import type { ReactNode } from "react";
+import type { RunSummary } from "../api/diagnose";
 
-/** Render prop for the resource-level Diagnose action. */
+/** Optional host controls beside shared run actions. Return a component element
+ * if hooks are needed: this callback is invoked conditionally. Call onRunUpdated
+ * after a mutation to refresh the shared run summary. */
+export type RenderInvestigationRunActions = (props: {
+  run: RunSummary;
+  onRunUpdated: (run: RunSummary) => void;
+}) => ReactNode;
+
+/** Render prop for the resource-level Investigate action. */
 export type RenderDiagnoseAction = (ctx: {
+  /** Kubernetes Kind when loaded or discovered; otherwise its API resource name. */
   kind: string;
+  /** Kubernetes API group; empty means core. */
+  group?: string;
   namespace: string;
   name: string;
   /** Coarse health of the resource (from its status badge), so the entry point can
-   *  adapt: an urgent "Diagnose" on a problem vs. a quiet "ask AI" when fine/unknown. */
+   *  adapt: an urgent "Investigate" on a problem vs. a quiet "ask AI" when fine/unknown. */
   health?: "problem" | "healthy" | "unknown";
 }) => ReactNode;
 
@@ -50,6 +62,7 @@ export type DiagnoseConsentCopy = {
 // set once at mount, so per-value re-render isolation buys nothing.
 export interface DiagnoseCustomization {
   renderAction: RenderDiagnoseAction | undefined;
+  renderRunActions?: RenderInvestigationRunActions;
   consentCopy: DiagnoseConsentCopy | undefined;
   // undefined = default (CustomEvent → Radar's own Settings dialog);
   // null = hide the settings affordances.
@@ -62,24 +75,27 @@ const DEFAULTS: DiagnoseCustomization = {
   onOpenSettings: undefined,
 };
 
-const DiagnoseCustomizationContext = createContext<DiagnoseCustomization>(DEFAULTS);
+const DiagnoseCustomizationContext =
+  createContext<DiagnoseCustomization>(DEFAULTS);
 
 export function DiagnoseCustomizationProvider({
   value,
   consentCopy,
+  renderRunActions,
   onOpenSettings,
   children,
 }: {
   value: RenderDiagnoseAction | undefined;
   consentCopy?: DiagnoseConsentCopy;
+  renderRunActions?: RenderInvestigationRunActions;
   /** Where "AI settings" affordances lead. Omit for Radar's own Settings
    *  dialog; pass `null` to hide them. */
   onOpenSettings?: (() => void) | null;
   children: ReactNode;
 }) {
   const ctx = useMemo(
-    () => ({ renderAction: value, consentCopy, onOpenSettings }),
-    [value, consentCopy, onOpenSettings],
+    () => ({ renderAction: value, consentCopy, onOpenSettings, renderRunActions }),
+    [value, consentCopy, onOpenSettings, renderRunActions],
   );
   return (
     <DiagnoseCustomizationContext.Provider value={ctx}>

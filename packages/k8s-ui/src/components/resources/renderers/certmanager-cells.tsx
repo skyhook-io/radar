@@ -48,8 +48,8 @@ export function CertificateCell({ resource, column }: { resource: any; column: s
     case 'expires': {
       const expiry = getCertificateExpiry(resource)
       return (
-        <span className={clsx(
-          'text-sm font-medium',
+        <span title={expiry.text} className={clsx(
+          'text-sm font-medium truncate block',
           expiry.level === 'unhealthy' ? 'text-red-400' :
           expiry.level === 'degraded' ? 'text-yellow-400' :
           expiry.level === 'healthy' ? 'text-green-400' :

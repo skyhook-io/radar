@@ -1,0 +1,68 @@
+import { useQuery } from "@tanstack/react-query";
+import type { TimeSeries } from "@skyhook-io/k8s-ui/components/charts";
+import { ApiError, fetchJSON, useClusterInfo, type PrometheusTimeRange } from "./client";
+import { getApiBase } from "./config";
+
+export type WorkloadMetricState =
+  "available" | "partial" | "stale" | "unavailable" | "error" | "detecting";
+export type WorkloadRequestSource = "beyla" | "istio";
+
+export interface WorkloadMetricPanel {
+  state: WorkloadMetricState;
+  reason?: string;
+  unit: string;
+  series: TimeSeries[];
+}
+
+export interface WorkloadMetrics {
+	 history: Partial<Record<"cpu" | "memory" | "throttling" | "requests", { mode: "workload-history" | "current-pods" | "unavailable"; reason?: string }>>;
+	 comparison: Partial<Record<"cpu" | "memory" | "throttling", WorkloadMetricPanel>>;
+  scopeNotice?: string;
+  attribution?: Record<string, string>;
+  state: WorkloadMetricState;
+  reason?: string;
+  source?: WorkloadRequestSource;
+  sources: {
+    id: WorkloadRequestSource;
+    label: string;
+    state: WorkloadMetricState;
+  }[];
+  pods: number;
+  podsTotal: number;
+  end: number;
+  start: number;
+  stepSeconds: number;
+  rateWindowSeconds: number;
+  panels: Partial<
+    Record<
+      "requests" | "errors" | "p50" | "p95" | "throttling" | "cpu" | "memory" | "observedPods",
+      WorkloadMetricPanel
+    >
+  >;
+}
+
+export function useWorkloadMetrics(
+  kind: string,
+  namespace: string,
+  name: string,
+  range: PrometheusTimeRange,
+  source: WorkloadRequestSource | "",
+  enabled: boolean,
+) {
+  const { data: cluster } = useClusterInfo();
+  const identity = ["workload-metrics", getApiBase(), cluster?.context, kind, namespace, name, range];
+  return useQuery<WorkloadMetrics>({
+    queryKey: [...identity, source],
+    placeholderData: (previous, previousQuery) =>
+      identity.every((value, index) => previousQuery?.queryKey[index] === value) ? previous : undefined,
+    queryFn: ({ signal }) =>
+      fetchJSON<WorkloadMetrics>(
+        `/prometheus/workload/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}?${new URLSearchParams({ range, source })}`,
+        signal,
+      ),
+    enabled,
+    staleTime: 30_000,
+    refetchInterval: (query) => query.state.data?.state === "detecting" || Object.values(query.state.data?.comparison ?? {}).some((panel) => panel.state === "detecting") ? 3_000 : 30_000,
+    retry: (failureCount, error) => failureCount < 1 && error instanceof ApiError && error.status === 409,
+  });
+}

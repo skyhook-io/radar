@@ -7,6 +7,7 @@ import { FetchResult } from '../ui/FetchResult'
 import { PaneLoader } from '../ui/PaneLoader'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { clsx } from 'clsx'
+import { Collapse } from '../ui/Collapse'
 import {
   ArrowLeft,
   ArrowRight,
@@ -36,7 +37,7 @@ import {
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
 import type { NavigateToResource } from '../../utils/navigation'
-import { refToSelectedResource, pluralToKind, kindToPlural, kindToPluralWithGroup, apiVersionToGroup } from '../../utils/navigation'
+import { refToSelectedResource, pluralToKind, knownKindForPluralWithGroup, kindToPlural, kindToPluralWithGroup, apiVersionToGroup } from '../../utils/navigation'
 import { neighborhoodFor, seedNodeIds } from '../../utils/topology-neighborhood'
 import { TopologyGraph } from '../topology/TopologyGraph'
 import { gitOpsOwnerFromRelationships, type GitOpsOwnerRef } from '../../utils/gitops-owner'
@@ -728,10 +729,11 @@ export function WorkloadView({
   // prominent "Diagnose" on a problem, a quiet icon when fine. Rendered via the host
   // slot (DiagnoseCustomization); standalone Radar injects it, Hub overrides it.
   const renderDiagnose = actionsBarProps?.renderDiagnose as
-    | ((ctx: { kind: string; namespace: string; name: string; health?: DiagnoseHealthHint }) => ReactNode)
+    | ((ctx: { kind: string; group?: string; namespace: string; name: string; health?: DiagnoseHealthHint }) => ReactNode)
     | undefined
   const diagnoseAction = renderDiagnose?.({
-    kind: apiKind,
+    kind: resource?.kind ?? knownKindForPluralWithGroup(apiKind, group ?? '') ?? apiKind,
+    group,
     namespace,
     name,
     health: diagnoseHealthHint(apiKind, resource),
@@ -880,8 +882,15 @@ export function WorkloadView({
         {/* Success animation overlay */}
         {saveSuccess && <SaveSuccessAnimation />}
 
-        {/* Content — viewTransitionName scopes View Transitions API cross-fade to this element */}
-        <div className="flex-1 overflow-y-auto" style={{ viewTransitionName: 'drawer-content' }}>
+        {/* Content — viewTransitionName scopes View Transitions API cross-fade to this element.
+            `relative` is the backstop for absolutely-positioned descendants (Tailwind's
+            `sr-only` is position:absolute). The drawer frame keeps overflow visible at idle so
+            popovers aren't clipped, and the app's content column clips only horizontally, so one
+            that resolves its containing block above this scroller escapes into the DOCUMENT's
+            scrollable overflow — a second, page-level scrollbar. Anchoring here confines the
+            damage to this scroll body; ui/Collapse.tsx keeps them from escaping in the first
+            place. */}
+        <div className="relative flex-1 overflow-y-auto" style={{ viewTransitionName: 'drawer-content' }}>
           {!resource ? (
             // Fill the drawer body so the loading logo centers in it, not in a
             // 128px box pinned to the top (matches the splash/PaneLoader centering).
@@ -2941,20 +2950,15 @@ function PodListFrame({
         {children}
       </div>
       {hasOverflow && (
-        <div
-          className={clsx(
-            'grid transition-[grid-template-rows,opacity] duration-200',
-            expanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0',
-          )}
-          style={{ transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)' }}
-          aria-hidden={!expanded || undefined}
-        >
-          <div className={clsx('min-h-0 overflow-hidden', expanded && 'max-h-[26rem] overflow-y-auto pr-1')} inert={!expanded || undefined}>
+        <Collapse open={expanded}>
+          {/* Long overflow lists scroll inside a capped box once open; the
+              cap comes off while closed so the collapse measures to zero. */}
+          <div className={clsx(expanded && 'max-h-[26rem] overflow-y-auto pr-1')}>
             <div className="space-y-2">
               {overflow}
             </div>
           </div>
-        </div>
+        </Collapse>
       )}
       {toggle}
     </div>

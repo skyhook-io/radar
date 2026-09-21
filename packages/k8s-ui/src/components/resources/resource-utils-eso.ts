@@ -7,33 +7,63 @@ import { healthColors, formatAge } from './resource-utils'
 // PROVIDER DETECTION
 // ============================================================================
 
+// Keys are the SecretStore `spec.provider` field names. v1 and v1beta1 do not
+// carry the same set, so entries dropped upstream (device42, alibaba) stay for
+// clusters still serving v1beta1.
 const PROVIDER_MAP: Record<string, string> = {
-  aws: 'AWS Secrets Manager',
+  aws: 'AWS',
   azurekv: 'Azure Key Vault',
   gcpsm: 'GCP Secret Manager',
   vault: 'HashiCorp Vault',
+  openBao: 'OpenBao',
   kubernetes: 'Kubernetes',
+  crd: 'Kubernetes Resource',
   oracle: 'Oracle Vault',
   ibm: 'IBM Secrets Manager',
+  alibaba: 'Alibaba Cloud KMS',
+  ovh: 'OVHcloud Secret Manager',
+  volcengine: 'Volcengine',
+  cloudrusm: 'Cloud.ru Secret Manager',
+  nebiusmysterybox: 'Nebius Mysterybox',
+  barbican: 'OpenStack Barbican',
+  yandexlockbox: 'Yandex Lockbox',
+  yandexcertificatemanager: 'Yandex Certificate Manager',
   doppler: 'Doppler',
   onepassword: '1Password',
+  onepasswordSDK: '1Password',
+  bitwardensecretsmanager: 'Bitwarden Secrets Manager',
   senhasegura: 'senhasegura',
+  github: 'GitHub',
   gitlab: 'GitLab',
   webhook: 'Webhook',
   fake: 'Fake',
   keepersecurity: 'Keeper Security',
   scaleway: 'Scaleway',
-  delinea: 'Delinea',
+  conjur: 'CyberArk Conjur',
+  delinea: 'Delinea DevOps Secrets Vault',
+  secretserver: 'Delinea Secret Server',
+  beyondtrust: 'BeyondTrust',
+  beyondtrustworkloadcredentials: 'BeyondTrust Workload Credentials',
   chef: 'Chef',
   pulumi: 'Pulumi ESC',
   fortanix: 'Fortanix',
   passworddepot: 'Password Depot',
+  passbolt: 'Passbolt',
+  previder: 'Previder',
+  onboardbase: 'Onboardbase',
+  dvls: 'Devolutions Server',
   device42: 'Device42',
   akeyless: 'Akeyless',
-  beyondtrust: 'BeyondTrust',
   infisical: 'Infisical',
-  passbolt: 'Passbolt',
-  bitwarden: 'Bitwarden',
+  ngrok: 'ngrok',
+}
+
+// A single `aws` key addresses three unrelated AWS products; `service` is a
+// required enum and is the only thing that says which one holds the secrets.
+const AWS_SERVICE_LABELS: Record<string, string> = {
+  SecretsManager: 'AWS Secrets Manager',
+  ParameterStore: 'AWS Parameter Store',
+  CertificateManager: 'AWS Certificate Manager',
 }
 
 /**
@@ -43,6 +73,8 @@ const PROVIDER_MAP: Record<string, string> = {
 export function getSecretStoreProviderType(resource: any): string {
   const provider = resource.spec?.provider
   if (!provider) return 'Unknown'
+
+  if (provider.aws) return AWS_SERVICE_LABELS[provider.aws.service] ?? 'AWS'
 
   for (const [key, label] of Object.entries(PROVIDER_MAP)) {
     if (provider[key]) return label
@@ -201,6 +233,19 @@ export function getExternalSecretStore(resource: any): { name: string; kind: str
     name: ref?.name || '-',
     kind: ref?.kind || 'SecretStore',
   }
+}
+
+/**
+ * Key for looking this ExternalSecret's store up in a provider map.
+ *
+ * A ClusterSecretStore is cluster-scoped and referenceable from any namespace,
+ * so it keys by name alone; a SecretStore only resolves within the
+ * ExternalSecret's own namespace.
+ */
+export function getExternalSecretStoreKey(resource: any): string {
+  const store = getExternalSecretStore(resource)
+  if (store.kind === 'ClusterSecretStore') return store.name
+  return `${resource?.metadata?.namespace ?? ''}/${store.name}`
 }
 
 export function getExternalSecretRefreshInterval(resource: any): string {

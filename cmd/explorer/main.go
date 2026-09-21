@@ -11,7 +11,6 @@ import (
 	neturl "net/url"
 	"os"
 	"os/signal"
-	"regexp"
 	"sort"
 	"strings"
 	"syscall"
@@ -25,9 +24,11 @@ import (
 	"github.com/skyhook-io/radar/internal/diagnosecli"
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
+	"github.com/skyhook-io/radar/internal/memlimit"
 	"github.com/skyhook-io/radar/internal/reachability"
 	"github.com/skyhook-io/radar/internal/server"
 	versionpkg "github.com/skyhook-io/radar/internal/version"
+	"github.com/skyhook-io/radar/pkg/prom"
 	"golang.org/x/net/http/httpguts"
 	authv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,10 +40,6 @@ import (
 var (
 	version = "dev"
 )
-
-// releaseVersionRe matches a published release version ("1.10.3", "v1.10.3").
-// Anything else - git-describe suffixes, "dev", "-dirty" - is a dev build.
-var releaseVersionRe = regexp.MustCompile(`^v?\d+\.\d+\.\d+$`)
 
 func main() {
 	// Subcommand dispatch (before flag parsing — subcommands own their flags).
@@ -79,10 +76,10 @@ func main() {
 	// published image tag, so its version-matched default ImagePullBackOffs on
 	// every in-cluster test. Fall back to the latest published release instead -
 	// only for dev-shaped versions; a released binary keeps its exact match.
-	// CheckForUpdate is cached and cheap relative to the probe run it precedes.
-	if !releaseVersionRe.MatchString(version) {
+	// The release-only lookup is cached and cheap relative to the probe run it precedes.
+	if !versionpkg.IsReleaseVersion(version) {
 		reachability.LatestReleaseImage = func() string {
-			if u := versionpkg.CheckForUpdate(context.Background()); u != nil && u.LatestVersion != "" {
+			if u := versionpkg.CheckForUpdateRelease(context.Background()); u != nil && u.LatestVersion != "" {
 				return "ghcr.io/skyhook-io/radar:" + u.LatestVersion
 			}
 			return ""
@@ -117,21 +114,37 @@ func main() {
 	fakeInCluster := flag.Bool("fake-in-cluster", false, "Simulate in-cluster mode for testing (shows kubectl copy buttons instead of port-forward)")
 	disableHelmWrite := flag.Bool("disable-helm-write", false, "Simulate restricted Helm permissions (disables install/upgrade/rollback/uninstall)")
 	disableExec := flag.Bool("disable-exec", false, "Simulate restricted exec permissions (disables terminal, debug shell)")
-	disableLocalTerminal := flag.Bool("disable-local-terminal", false, "Disable local terminal feature")
+	disableLocalTerminal := flag.Bool("disable-local-terminal", false, "Disable the host local terminal")
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
 	debugImage := flag.String("debug-image", fileCfg.DebugImage, "Image for ephemeral debug containers and node debug pods (empty = busybox:latest; point at a mirror for air-gapped/private-registry clusters)")
 	reachabilityImage := flag.String("reachability-image", fileCfg.ReachabilityImage, "Image for the in-cluster reachability probe Job (empty = RADAR_IMAGE env, then the version-matched published Radar image; point at a mirror for air-gapped clusters)")
 	listPageSize := flag.Int64("list-page-size", 0, "Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this page size on clusters without WatchList streaming. 0 = off (single LIST). Try 2000 if a very large cluster fails to sync.")
 	namespaceScope := flag.Bool("namespace-scope", false, "Scope namespaced informer caches to a single namespace (multiple namespaces are not supported yet). Requires --namespace or a kubeconfig context namespace. Local mode can rescope by switching namespaces; auth/cloud mode locks to the startup namespace.")
 	// Timeline storage options
-	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory or sqlite")
+	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory, sqlite, or postgres")
 	timelineDBPath := flag.String("timeline-db", fileCfg.TimelineDBPath, "Path to timeline database file (default: ~/.radar/timeline.db)")
-	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite (e.g. 168h, 720h). 0 disables age-based cleanup.")
+	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite or postgres (e.g. 168h, 720h). 0 disables age-based cleanup.")
 	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("1Gi"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
-	// AI history (Diagnose investigations)
-	aiHistory := flag.Bool("ai-history", fileCfg.AIHistoryOr(true), "Persist AI investigations (transcripts + verdicts) to ~/.radar/ai-runs.db so they survive restarts")
+	// AI investigation history
+	aiHistory := flag.Bool("ai-history", fileCfg.AIHistoryOr(true), "Persist AI investigations (transcripts + conclusions) to ~/.radar/ai-runs.db so they survive restarts")
 	// Traffic/metrics options
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
+	workloadSingleCluster := flag.Bool("prometheus-single-cluster", false, "Optional workload-metrics scope override: assert that the backend contains only this Kubernetes cluster. Replaces automatic matching; not saved, and cleared when the cluster, backend or credentials change. Does not scope other metrics features.")
+	workloadClusterLabels := map[string]string{}
+	flag.Func("prometheus-cluster-label", "Optional workload-metrics scope override: exact label=value identifying this cluster, e.g. cluster=production (repeatable, ANDed). Alternative to --prometheus-single-cluster, with the same lifetime and workload-only scope; leave both unset for automatic matching.", func(raw string) error {
+		key, value, ok := strings.Cut(raw, "=")
+		if !ok {
+			return fmt.Errorf("expected label=value")
+		}
+		if _, err := (prom.WorkloadMetricsScope{ClusterLabels: map[string]string{key: value}}).Matchers(); err != nil {
+			return err
+		}
+		if _, exists := workloadClusterLabels[key]; exists {
+			return fmt.Errorf("duplicate cluster label %q", key)
+		}
+		workloadClusterLabels[key] = value
+		return nil
+	})
 	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "Override the ISO 4217 currency label for OpenCost values (empty: auto-detect, then USD)")
 	// --prometheus-header Key=Value, repeatable. Defaults populated from
 	// config file; any --prometheus-header flag replaces the file value rather
@@ -140,7 +153,7 @@ func main() {
 	flag.Var(promHeaders, "prometheus-header", "HTTP header to send with Prometheus requests, e.g. 'Authorization=Bearer <token>' (repeatable). Required for auth-protected backends.")
 	promHeadersFromEnv := newHeaderFromEnvFlag(fileCfg.PrometheusHeadersFromEnv)
 	flag.Var(promHeadersFromEnv, "prometheus-header-from-env", "HTTP header to send with Prometheus requests, sourced from an env var, e.g. 'Authorization=PROMETHEUS_TOKEN' (repeatable).")
-	beylaJobSelector := flag.String("beyla-job-selector", "", `PromQL job-label matcher fragment Beyla traffic queries use to scope Prometheus series, e.g. 'job=~"my-beyla.*"' (empty = built-in default matching *beyla* or *alloy* job names)`)
+	beylaJobSelector := flag.String("beyla-job-selector", "", `PromQL matcher fragment for Beyla Live Traffic, e.g. 'job=~"my-beyla.*"' (empty = *beyla* or *alloy* jobs). Workload charts use this override only with an explicit Prometheus scope flag and accept one job equality or regex matcher; automatic workload matching discovers custom jobs without it.`)
 	// MCP server
 	noMCP := flag.Bool("no-mcp", !fileCfg.MCPEnabledOr(true), "Disable MCP (Model Context Protocol) server for AI tools")
 	mcpCatalogStdio := flag.Bool("mcp-catalog-stdio", false, "Start only the MCP catalog over stdio for registry/inspector introspection; skips Kubernetes initialization")
@@ -188,6 +201,11 @@ func main() {
 	namespaceListTimeout := flag.Duration("namespace-list-timeout", k8s.EnvDurationOr("RADAR_NAMESPACE_LIST_TIMEOUT", 5*time.Second), "Timeout for the cluster-wide namespace LIST used to decide if the user is RBAC-namespace-restricted (default: 5s). Widen to 30s or more on slow control planes — a timeout here is misreported in the UI as 'Limited list — RBAC'. Env: RADAR_NAMESPACE_LIST_TIMEOUT")
 	maxScopeCandidates := flag.Int("max-scope-candidates", k8s.EnvIntOr("RADAR_MAX_SCOPE_CANDIDATES", 20), "Cap on the namespace-fallback probe fanout for users who can list namespaces cluster-wide but not list a specific kind cluster-wide (default: 20). Raise for clusters with more than 20 namespaces to avoid silently marking kinds as denied in dropped namespaces. Env: RADAR_MAX_SCOPE_CANDIDATES")
 	flag.Parse()
+	if *workloadSingleCluster || len(workloadClusterLabels) > 0 {
+		if _, err := (prom.WorkloadMetricsScope{SingleCluster: *workloadSingleCluster, ClusterLabels: workloadClusterLabels}).Matchers(); err != nil {
+			log.Fatalf("Invalid workload metrics scope: %v", err)
+		}
+	}
 
 	// An explicit --reachability-image override applies to BOTH probe paths. It must
 	// win over the in-cluster self-read, so record it as the configured override
@@ -240,6 +258,7 @@ func main() {
 		startupMode = "Radar Cloud"
 	}
 	log.Printf("Radar %s starting (mode=%s, auth=%s)...", version, startupMode, *authMode)
+	memlimit.Apply()
 
 	// Validate flags
 	switch *authMode {
@@ -278,6 +297,7 @@ func main() {
 	namespaceFlagSet := false
 	namespacesFlagSet := false
 	openCostCurrencyFlagSet := false
+	prometheusURLFlagSet := false
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "no-mcp":
@@ -292,6 +312,8 @@ func main() {
 			namespacesFlagSet = true
 		case "opencost-currency":
 			openCostCurrencyFlagSet = true
+		case "prometheus-url":
+			prometheusURLFlagSet = true
 		}
 	})
 	if *mcpCatalogOnly && noMCPFlagSet && *noMCP {
@@ -299,6 +321,11 @@ func main() {
 	}
 	if *mcpCatalogStdio && noMCPFlagSet && *noMCP {
 		log.Fatalf("--mcp-catalog-stdio cannot be combined with --no-mcp")
+	}
+	inheritsPrometheusHeaders := !promHeaders.overrides && len(fileCfg.PrometheusHeaders) > 0 ||
+		!promHeadersFromEnv.overrides && len(fileCfg.PrometheusHeadersFromEnv) > 0
+	if err := app.ValidatePrometheusHeaderDestination(fileCfg.PrometheusURL, *prometheusURL, inheritsPrometheusHeaders); err != nil {
+		log.Fatalf("Invalid Prometheus header configuration: %v", err)
 	}
 	resolvedPrometheusHeaders, err := app.ResolvePrometheusHeaders(promHeaders.value(), promHeadersFromEnv.value())
 	if err != nil {
@@ -360,14 +387,24 @@ func main() {
 		NamespaceScope:           *namespaceScope,
 		TimelineStorage:          *timelineStorage,
 		TimelineDBPath:           *timelineDBPath,
+		TimelinePostgresDSN:      os.Getenv("RADAR_TIMELINE_POSTGRES_DSN"),
 		TimelineRetention:        *timelineRetention,
 		TimelineMaxSizeBytes:     timelineMaxSizeBytes,
 		PrometheusURL:            *prometheusURL,
 		OpenCostCurrency:         normalizedOpenCostCurrency,
 		OpenCostFlagSet:          openCostCurrencyFlagSet,
+		CostSource:               fileCfg.CostSource,
+		KubecostURL:              fileCfg.KubecostURL,
+		KubecostAPIKey:           fileCfg.KubecostAPIKey,
+		KubecostAPIKeyContext:    fileCfg.KubecostAPIKeyContext,
+		KubecostClusterID:        fileCfg.KubecostClusterID,
+		KubecostClusterIDContext: fileCfg.KubecostClusterIDContext,
 		PrometheusHeaders:        resolvedPrometheusHeaders,
 		PrometheusHeadersFromEnv: promHeadersFromEnv.value(),
+		PrometheusURLFlag:        prometheusURLFlagSet,
+		PrometheusHeaderFlags:    promHeaders.overrides || promHeadersFromEnv.overrides,
 		BeylaJobSelector:         *beylaJobSelector,
+		WorkloadMetricsScope:     prom.WorkloadMetricsScope{SingleCluster: *workloadSingleCluster, ClusterLabels: workloadClusterLabels},
 		MCPEnabled:               mcpEnabled,
 		AIHistory:                *aiHistory,
 		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,
@@ -459,7 +496,10 @@ func main() {
 
 	// Build timeline config and register callbacks
 	t = time.Now()
-	timelineStoreCfg := app.BuildTimelineStoreConfig(cfg)
+	timelineStoreCfg, err := app.BuildTimelineStoreConfig(cfg)
+	if err != nil {
+		log.Fatalf("Invalid timeline configuration: %v", err)
+	}
 	app.RegisterCallbacks(cfg, timelineStoreCfg)
 	k8s.LogTiming(" Callbacks registered: %v", time.Since(t))
 
@@ -513,12 +553,14 @@ func main() {
 			cancel()
 			namespace := os.Getenv("MY_POD_NAMESPACE")
 			deploymentName := os.Getenv("MY_DEPLOYMENT_NAME")
+			helmRelease := os.Getenv("RADAR_HELM_RELEASE")
 			runErr := cloud.Run(rootCtx, cloud.Config{
 				URL:                *cloudURL,
 				Token:              *cloudToken,
 				ClusterID:          *cloudClusterName,
 				ClusterName:        *cloudClusterName,
 				Namespace:          namespace,
+				Release:            helmRelease,
 				APIServerURL:       apiServerURL,
 				InsecureSkipVerify: *cloudInsecureSkipVerify,
 				// Ask the apiserver whether this ServiceAccount may actually

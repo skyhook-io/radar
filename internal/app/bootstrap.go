@@ -18,8 +18,10 @@ import (
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/investigationrefs"
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
+	internalopencost "github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/server"
 	"github.com/skyhook-io/radar/internal/settings"
@@ -27,6 +29,7 @@ import (
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
 	versionpkg "github.com/skyhook-io/radar/internal/version"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 var clusterConnectionProbe = k8s.TestClusterConnection
@@ -60,14 +63,24 @@ type AppConfig struct {
 	NamespaceScope            bool
 	TimelineStorage           string
 	TimelineDBPath            string
+	TimelinePostgresDSN       string
 	TimelineRetention         time.Duration
 	TimelineMaxSizeBytes      int64
 	PrometheusURL             string
 	OpenCostCurrency          string
 	OpenCostFlagSet           bool
+	CostSource                string
+	KubecostURL               string
+	KubecostAPIKey            string
+	KubecostAPIKeyContext     string
+	KubecostClusterID         string
+	KubecostClusterIDContext  string
 	PrometheusHeaders         map[string]string
 	PrometheusHeadersFromEnv  map[string]string
+	PrometheusURLFlag         bool
+	PrometheusHeaderFlags     bool
 	BeylaJobSelector          string
+	WorkloadMetricsScope      prom.WorkloadMetricsScope
 	Version                   string
 	MCPEnabled                bool
 	AIHistory                 bool   // persist AI investigations across restarts
@@ -207,12 +220,16 @@ func seedNamespaceScopePick(ctxName, ns string) {
 }
 
 // BuildTimelineStoreConfig creates the timeline store configuration from app config.
-func BuildTimelineStoreConfig(cfg AppConfig) timeline.StoreConfig {
+func BuildTimelineStoreConfig(cfg AppConfig) (timeline.StoreConfig, error) {
 	storeCfg := timeline.StoreConfig{
 		Type:    timeline.StoreTypeMemory,
 		MaxSize: cfg.HistoryLimit,
 	}
-	if cfg.TimelineStorage == "sqlite" {
+
+	switch cfg.TimelineStorage {
+	case "", "memory":
+		return storeCfg, nil
+	case "sqlite":
 		storeCfg.Type = timeline.StoreTypeSQLite
 		dbPath := cfg.TimelineDBPath
 		if dbPath == "" {
@@ -222,8 +239,18 @@ func BuildTimelineStoreConfig(cfg AppConfig) timeline.StoreConfig {
 		storeCfg.Path = dbPath
 		storeCfg.RetentionAge = cfg.TimelineRetention
 		storeCfg.MaxStorageBytes = cfg.TimelineMaxSizeBytes
+		return storeCfg, nil
+	case "postgres":
+		if cfg.TimelinePostgresDSN == "" {
+			return timeline.StoreConfig{}, fmt.Errorf("PostgreSQL timeline storage requires a DSN")
+		}
+		storeCfg.Type = timeline.StoreTypePostgres
+		storeCfg.DSN = cfg.TimelinePostgresDSN
+		storeCfg.RetentionAge = cfg.TimelineRetention
+		return storeCfg, nil
+	default:
+		return timeline.StoreConfig{}, fmt.Errorf("unknown timeline storage %q", cfg.TimelineStorage)
 	}
-	return storeCfg
 }
 
 // RegisterCallbacks registers Helm, timeline, traffic, and Prometheus reset/reinit
@@ -240,11 +267,23 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 		timeline.ResetStore()
 		timeline.ResetMetricsForContextSwitch()
 	}, func() error {
-		return timeline.ReinitStore(timelineStoreCfg)
+		if err := timeline.ReinitStore(timelineStoreCfg); err != nil {
+			// PostgreSQL deliberately does not degrade to memory: an operator who
+			// pointed Radar at an external database must not silently get an
+			// in-memory timeline that vanishes on restart. Every other backend
+			// keeps the historical behaviour — warn and continue degraded rather
+			// than fail the whole subsystem bring-up, which would also take down
+			// cluster browsing.
+			if timelineStoreCfg.Type == timeline.StoreTypePostgres {
+				return err
+			}
+			log.Printf("Warning: timeline init failed, continuing degraded: %v", err)
+		}
+		return nil
 	})
 
 	// Initialize Prometheus metrics client (must come before SetManualURL)
-	prometheuspkg.Initialize(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
+	prometheuspkg.Initialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 
 	if cfg.PrometheusURL != "" {
 		u, err := url.Parse(cfg.PrometheusURL)
@@ -257,27 +296,104 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 	if len(cfg.PrometheusHeaders) > 0 {
 		traffic.SetMetricsHeaders(cfg.PrometheusHeaders)
 		prometheuspkg.SetHeaders(cfg.PrometheusHeaders)
+		if prom.HeadersRequireURL(cfg.PrometheusURL, cfg.PrometheusHeaders) {
+			log.Printf("[prometheus] Warning: %v", prom.ErrHeadersRequireURL)
+		}
+	}
+	cfg = persistKubecostContextBindings(cfg)
+	if err := internalopencost.ConfigureStartup(internalopencost.ManagerConfig{
+		Source:           internalopencost.Source(cfg.CostSource),
+		URL:              cfg.KubecostURL,
+		APIKey:           cfg.KubecostAPIKey,
+		APIKeyContext:    cfg.KubecostAPIKeyContext,
+		ClusterID:        cfg.KubecostClusterID,
+		ClusterIDContext: cfg.KubecostClusterIDContext,
+	}); err != nil {
+		log.Printf("[opencost] Invalid cost source configuration: %v", err)
 	}
 	if cfg.BeylaJobSelector != "" {
 		traffic.SetBeylaJobSelector(cfg.BeylaJobSelector)
 	}
+	if cfg.WorkloadMetricsScope.SingleCluster || len(cfg.WorkloadMetricsScope.ClusterLabels) > 0 {
+		if err := prometheuspkg.SetWorkloadMetricsScope(cfg.WorkloadMetricsScope, cfg.BeylaJobSelector); err != nil {
+			log.Fatalf("Invalid workload metrics scope: %v", err)
+		}
+	}
 
 	k8s.RegisterTrafficFuncs(traffic.Reset, func() error {
-		return traffic.ReinitializeWithConfig(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
+		return traffic.ReinitializeWithConfig(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 	})
 
 	// Reinitialize carries the current manual URL + headers forward (including any
 	// applied live via /integrations/prometheus). Re-applying the captured startup
 	// cfg here would revert a live change on context switch, so we don't.
 	k8s.RegisterPrometheusFuncs(prometheuspkg.Reset, func() error {
-		prometheuspkg.Reinitialize(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
+		prometheuspkg.Reinitialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 		return nil
 	})
+	// Reinitialize only builds the new client; discovery for the new cluster has
+	// to be started explicitly, and the callback fires once subsystem init is
+	// done so the run sees a populated cache.
+	k8s.OnContextSwitch(func(_ string) { prometheuspkg.Prewarm() })
+	k8s.OnNamespaceRescope(func(_ string) { prometheuspkg.Prewarm() })
+	k8s.RegisterCostResetFunc(internalopencost.Reset)
+}
+
+func persistKubecostContextBindings(cfg AppConfig) AppConfig {
+	contextName := strings.TrimSpace(k8s.GetContextName())
+	if contextName == "" {
+		return cfg
+	}
+	stored := config.Load()
+	bindAPIKey := strings.TrimSpace(cfg.KubecostURL) == "" && cfg.KubecostAPIKey != "" && strings.TrimSpace(cfg.KubecostAPIKeyContext) == "" &&
+		strings.TrimSpace(stored.KubecostURL) == "" && stored.KubecostAPIKey == cfg.KubecostAPIKey && strings.TrimSpace(stored.KubecostAPIKeyContext) == ""
+	bindClusterID := strings.TrimSpace(cfg.KubecostClusterID) != "" && strings.TrimSpace(cfg.KubecostClusterIDContext) == "" &&
+		stored.KubecostClusterID == cfg.KubecostClusterID && strings.TrimSpace(stored.KubecostClusterIDContext) == ""
+	if !bindAPIKey && !bindClusterID {
+		return cfg
+	}
+	updated, err := config.Update(func(c *config.Config) {
+		if bindAPIKey && strings.TrimSpace(c.KubecostURL) == "" && c.KubecostAPIKey == cfg.KubecostAPIKey && strings.TrimSpace(c.KubecostAPIKeyContext) == "" {
+			c.KubecostAPIKeyContext = contextName
+		}
+		if bindClusterID && c.KubecostClusterID == cfg.KubecostClusterID && strings.TrimSpace(c.KubecostClusterIDContext) == "" {
+			c.KubecostClusterIDContext = contextName
+		}
+	})
+	if err != nil {
+		log.Printf("[opencost] Failed to persist Kubecost context binding: %v", err)
+		return cfg
+	}
+	if updated.KubecostAPIKey == cfg.KubecostAPIKey && strings.TrimSpace(updated.KubecostURL) == strings.TrimSpace(cfg.KubecostURL) {
+		cfg.KubecostAPIKeyContext = updated.KubecostAPIKeyContext
+	}
+	if updated.KubecostClusterID == cfg.KubecostClusterID {
+		cfg.KubecostClusterIDContext = updated.KubecostClusterIDContext
+	}
+	return cfg
 }
 
 // CreateServer creates the HTTP server with the given configuration.
 func CreateServer(cfg AppConfig) *server.Server {
+	if err := loadOperatorSettings(cfg); err != nil {
+		log.Fatalf("Invalid operator settings: %v", err)
+	}
 	restoreLastDesktopContext := remembersLastContext(cfg)
+	costSource := cfg.CostSource
+	kubecostURL := cfg.KubecostURL
+	kubecostAPIKey := cfg.KubecostAPIKey
+	kubecostAPIKeyContext := cfg.KubecostAPIKeyContext
+	kubecostClusterID := cfg.KubecostClusterID
+	kubecostClusterIDContext := cfg.KubecostClusterIDContext
+	if internalopencost.IsEnvManaged() {
+		costConfig := internalopencost.ConfigSnapshot()
+		costSource = string(costConfig.Source)
+		kubecostURL = costConfig.URL
+		kubecostAPIKey = costConfig.APIKey
+		kubecostAPIKeyContext = costConfig.APIKeyContext
+		kubecostClusterID = costConfig.ClusterID
+		kubecostClusterIDContext = costConfig.ClusterIDContext
+	}
 	effectiveCfg := &config.Config{
 		Kubeconfig:                cfg.Kubeconfig,
 		KubeconfigDirs:            cfg.KubeconfigDirs,
@@ -292,6 +408,12 @@ func CreateServer(cfg AppConfig) *server.Server {
 		HistoryLimit:              cfg.HistoryLimit,
 		PrometheusURL:             cfg.PrometheusURL,
 		OpenCostCurrency:          cfg.OpenCostCurrency,
+		CostSource:                costSource,
+		KubecostURL:               kubecostURL,
+		KubecostAPIKey:            kubecostAPIKey,
+		KubecostAPIKeyContext:     kubecostAPIKeyContext,
+		KubecostClusterID:         kubecostClusterID,
+		KubecostClusterIDContext:  kubecostClusterIDContext,
 		PrometheusHeaders:         cfg.PrometheusHeaders,
 		PrometheusHeadersFromEnv:  cfg.PrometheusHeadersFromEnv,
 		DebugImage:                cfg.DebugImage,
@@ -301,17 +423,19 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 
 	serverCfg := server.Config{
-		Port:             cfg.Port,
-		ListenAddress:    cfg.ListenAddress,
-		BasePath:         cfg.BasePath,
-		StartupLog:       true,
-		RemoteAccessHint: cfg.ShowRemoteAccessHint,
-		DevMode:          cfg.DevMode,
-		StaticFS:         static.FS,
-		StaticRoot:       "dist",
-		EffectiveConfig:  effectiveCfg,
-		OpenCostCurrency: cfg.OpenCostCurrency,
-		OpenCostManaged:  cfg.OpenCostFlagSet,
+		Port:                  cfg.Port,
+		ListenAddress:         cfg.ListenAddress,
+		BasePath:              cfg.BasePath,
+		StartupLog:            true,
+		RemoteAccessHint:      cfg.ShowRemoteAccessHint,
+		DevMode:               cfg.DevMode,
+		StaticFS:              static.FS,
+		StaticRoot:            "dist",
+		EffectiveConfig:       effectiveCfg,
+		PrometheusURLFlag:     cfg.PrometheusURLFlag,
+		PrometheusHeaderFlags: cfg.PrometheusHeaderFlags,
+		OpenCostCurrency:      cfg.OpenCostCurrency,
+		OpenCostManaged:       cfg.OpenCostFlagSet,
 		DiagConfig: &server.DiagConfig{
 			Port:                 cfg.Port,
 			DevMode:              cfg.DevMode,
@@ -346,8 +470,14 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 
 	if cfg.MCPEnabled {
+		// The same in-memory registry must back both ends of Radar's private
+		// evidence protocol: DiagnoseStream owns active turn scopes, while the MCP
+		// handler records exactly what Radar returned inside those scopes.
+		evidenceRefs := investigationrefs.NewRegistry()
+		serverCfg.InvestigationRefs = evidenceRefs
 		serverCfg.MCPHandler = mcppkg.NewHandler()
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
+		serverCfg.MCPInvestigationHandler = mcppkg.NewInvestigationHandler(evidenceRefs)
 	}
 
 	return server.New(serverCfg)
@@ -470,21 +600,7 @@ func InitializeCluster() {
 		ClusterName: k8s.GetClusterName(),
 	})
 
-	// Auto-discover Prometheus in the background so charts are ready immediately
-	go func() {
-		pt := time.Now()
-		promCtx, promCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer promCancel()
-		client := prometheuspkg.GetClient()
-		if client == nil {
-			return
-		}
-		if _, _, err := client.EnsureConnected(promCtx); err != nil {
-			log.Printf("[prometheus] Auto-discovery failed (%v): %v", time.Since(pt), err)
-		} else {
-			log.Printf("[prometheus] Auto-discovery succeeded (%v)", time.Since(pt))
-		}
-	}()
+	prometheuspkg.Prewarm()
 }
 
 // mcpPortFileDisabled suppresses port-file writes AND removals — an ephemeral

@@ -1,7 +1,10 @@
-import { useRef, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { AlertTriangle, ArrowUpRight, Check, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
+import { AlertTriangle, ArrowUpRight, Check, Copy, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
+import { type AdminNoteContext, type BlockedExit, composeAdminNote, composeFailureNote, needsAdminHandoff, trimRefusal } from './cloudConnectHandoff'
+import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
+import { Tooltip } from './ui/Tooltip'
 import {
   ApiError,
   cancelCloudInstall,
@@ -19,20 +22,23 @@ import { showApiError } from './ui/Toast'
 export function CloudConnectFlow({
   status,
   blocked,
-  signupUrl,
+  exit,
+  where,
   onStatus,
   onExit,
 }: {
   status: CloudInstallStatus
   blocked: CloudInstallBlocked | null
-  signupUrl: string
+  exit: BlockedExit
+  // Which cluster this is, for the note a blocked person hands to an admin.
+  where?: AdminNoteContext
   // Push a mutation's status response into the shared query state.
   onStatus: (st: CloudInstallStatus) => void
   // Leave the flow view (back to the pitch, or close after dismiss).
   onExit: () => void
 }) {
   if (blocked) {
-    return <BlockedView blocked={blocked} signupUrl={signupUrl} onExit={onExit} />
+    return <BlockedView blocked={blocked} exit={exit} where={where} onExit={onExit} />
   }
 
   switch (status.state) {
@@ -58,7 +64,7 @@ export function CloudConnectFlow({
     case 'connected':
       return <ConnectedCard status={status} onStatus={onStatus} onExit={onExit} />
     case 'failed':
-      return <FailedCard status={status} onStatus={onStatus} onExit={onExit} />
+      return <FailedCard status={status} where={where} onStatus={onStatus} onExit={onExit} />
     default:
       return null
   }
@@ -66,13 +72,21 @@ export function CloudConnectFlow({
 
 function BlockedView({
   blocked,
-  signupUrl,
+  exit,
+  where,
   onExit,
 }: {
   blocked: CloudInstallBlocked
-  signupUrl: string
+  exit: BlockedExit
+  where?: AdminNoteContext
   onExit: () => void
 }) {
+  const copy = blockedCopy(blocked, exit)
+  // The person who can act is usually not the one reading this card. What
+  // they need is an ask with the link and the evidence — not the card's
+  // second-person explanation — so the note is composed on its own; the
+  // CopyForAdmin action previews exactly what will be copied.
+  const note = composeAdminNote(blocked, exit, where)
   const icon =
     blocked.reason === 'gitops' ? (
       <GitBranch className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
@@ -81,53 +95,337 @@ function BlockedView({
     ) : (
       <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />
     )
-  const title =
-    blocked.reason === 'gitops'
-      ? 'This install is managed by GitOps'
-      : blocked.reason === 'preflight'
-        ? 'Your Kubernetes identity can’t install this'
-        : 'This cluster can’t be connected from here'
   return (
     <div className="px-8 pt-6 pb-5">
       <div className="card-inner-lg flex gap-2.5">
         {icon}
-        <div className="min-w-0">
-          <div className="text-[13px] font-semibold text-theme-text-primary">{title}</div>
-          <p className="mt-1 text-[12px] leading-relaxed text-theme-text-secondary">{blocked.message}</p>
-          {blocked.blocking && blocked.blocking.length > 0 && (
-            <ul className="mt-2 space-y-1 text-[11.5px] text-theme-text-tertiary">
-              {blocked.blocking.map((line) => (
-                <li key={line} className="flex items-start gap-1.5">
-                  <span className="mt-[6px] w-1 h-1 rounded-full bg-amber-500 shrink-0" />
-                  {line}
-                </li>
-              ))}
-            </ul>
-          )}
+        <div className="min-w-0 space-y-3">
+          <div className="text-[13px] font-semibold text-theme-text-primary">{copy.title}</div>
+          <BlockedSection label="What Radar tried">{copy.tried}</BlockedSection>
+          <BlockedSection label="Why it stopped">
+            {copy.why}
+            {blocked.blocking && blocked.blocking.length > 0 && <BlockingLines lines={blocked.blocking} />}
+          </BlockedSection>
+          <BlockedSection label="What to do">{copy.next}</BlockedSection>
         </div>
       </div>
-      <div className="mt-4 flex items-center gap-4">
-        {/* Only a preflight denial has a legitimate browser alternative —
-            someone with more Kubernetes permission can run the wizard. GitOps
-            and unsupported refusals named a specific reason and target that a
-            generic signup link cannot carry, so offering it would contradict
-            the message directly above. */}
-        {blocked.reason === 'preflight' && (
-          <a
-            href={signupUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[12.5px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline underline-offset-2"
-          >
-            Connect through the browser wizard instead →
-          </a>
-        )}
-        <button onClick={onExit} className="text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">
+      <div className="relative mt-4 flex items-center gap-4">
+        <a
+          href={exit.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="px-5 py-2 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[13.5px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all"
+        >
+          {exit.label}
+        </a>
+        <CopyForAdmin note={note} />
+        <button
+          onClick={onExit}
+          className="ml-auto text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
+        >
           Back
         </button>
       </div>
     </div>
   )
+}
+
+// The person who can act is usually not the one reading a stop card. This
+// hands them the composed note: a preview panel on hover or focus (card-wide,
+// on the elevated surface, sized to the note — a block of text laid over the
+// card, not a hint), and when the clipboard is refused the panel pins open
+// with the note selected so copying is one keystroke.
+function CopyForAdmin({ note }: { note: string }) {
+  const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
+  const [previewing, setPreviewing] = useState(false)
+  const [pinned, setPinned] = useState(false)
+  const noteRef = useRef<HTMLPreElement | null>(null)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  // The panel is anchored above the action row inside the dialog's scroll
+  // area. A hover panel taller than the room visible above the row is only
+  // partly on screen, and scrolling to see the rest moves it out from under
+  // the pointer and closes it. So the ceiling is measured — the row's
+  // distance from the visible top of the scroller — rather than guessed. A
+  // normal note fits and shows whole; only a longer one scrolls inside.
+  const [maxHeight, setMaxHeight] = useState<number>()
+  const shown = previewing || pinned
+  useEffect(() => {
+    if (!shown) return
+    const wrapper = panelRef.current
+    // The positioned ancestor the panel is anchored to — the action row.
+    const row = wrapper?.offsetParent as HTMLElement | null | undefined
+    const scroller = row?.closest<HTMLElement>('.overflow-y-auto')
+    if (!wrapper || !row || !scroller) return
+    const visibleRoom = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+    const gap = wrapper.getBoundingClientRect().bottom - (wrapper.firstElementChild?.getBoundingClientRect().bottom ?? 0)
+    setMaxHeight(Math.max(96, Math.floor(visibleRoom - gap - 8)))
+  }, [shown])
+  // Leaving closes on a short delay that entering the panel cancels, so the
+  // pointer can cross the row's own space on its way up into the panel.
+  const closeTimer = useRef<number | undefined>(undefined)
+  const enter = () => {
+    window.clearTimeout(closeTimer.current)
+    setPreviewing(true)
+  }
+  const leave = () => {
+    window.clearTimeout(closeTimer.current)
+    closeTimer.current = window.setTimeout(() => setPreviewing(false), 200)
+  }
+  useEffect(() => () => window.clearTimeout(closeTimer.current), [])
+  const copy = () => {
+    // copyText also serves Radar on a plain-HTTP non-loopback address, where
+    // the async Clipboard API is missing and the legacy command still works.
+    void copyText(note).then((ok) => {
+      setCopied(ok ? 'done' : 'failed')
+      if (ok) setTimeout(() => setCopied('idle'), 2000)
+      else setPinned(true)
+    })
+  }
+  // The panel may not be mounted when the clipboard refuses (the pointer has
+  // left the button), so the selection waits for the pinned render.
+  useEffect(() => {
+    if (!pinned) return
+    const pre = noteRef.current
+    const selection = window.getSelection()
+    if (!pre || !selection) return
+    selection.removeAllRanges()
+    const range = document.createRange()
+    range.selectNodeContents(pre)
+    selection.addRange(range)
+  }, [pinned])
+  return (
+    // Hover is tracked on this wrapper, which contains the panel, and the
+    // gap between button and panel is padding rather than margin, so moving
+    // the pointer up into the panel (to scroll a long note) never counts as
+    // leaving.
+    <span className="contents" onMouseEnter={enter} onMouseLeave={leave}>
+      {shown && (
+        <div ref={panelRef} className="absolute inset-x-0 bottom-full z-20 pb-3">
+        <div
+          id="admin-note-preview"
+          role="tooltip"
+          style={maxHeight ? { maxHeight } : undefined}
+          className="flex flex-col rounded-xl border border-theme-border bg-theme-elevated p-4 shadow-theme-lg"
+        >
+          <div className="mb-1.5 flex items-center justify-between text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+            <span>{pinned ? 'Select and copy' : 'What gets copied'}</span>
+            {pinned && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPinned(false)
+                  setCopied('idle')
+                }}
+                aria-label="Close"
+                className="rounded p-0.5 text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+          <pre
+            ref={noteRef}
+            className="min-h-0 select-text overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-theme-text-primary"
+          >
+            {note}
+          </pre>
+        </div>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={copy}
+        onFocus={() => setPreviewing(true)}
+        onBlur={() => setPreviewing(false)}
+        aria-describedby={shown ? 'admin-note-preview' : undefined}
+        className="inline-flex items-center gap-1.5 text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+      >
+        {copied === 'done' ? (
+          <>
+            <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Copied
+          </>
+        ) : copied === 'failed' ? (
+          'Couldn’t copy — the note is selected above, press ⌘C / Ctrl+C'
+        ) : (
+          <>
+            <Copy className="w-3.5 h-3.5" /> Copy for a cluster admin
+          </>
+        )}
+      </button>
+    </span>
+  )
+}
+
+function BlockedSection({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <div className="text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">{label}</div>
+      <div className="mt-0.5 text-[12px] leading-relaxed text-theme-text-secondary">{children}</div>
+    </div>
+  )
+}
+
+// Each line is a Go error chain; the card shows what was attempted and why
+// it was refused, with the whole chain a hover away.
+function BlockingLines({ lines }: { lines: string[] }) {
+  return (
+    <ul className="mt-1.5 space-y-1 text-[11.5px] text-theme-text-tertiary">
+      {lines.map((line) => {
+        const shown = trimRefusal(line)
+        return (
+          <li key={line} className="flex items-start gap-1.5">
+            <span className="mt-[6px] w-1 h-1 rounded-full bg-amber-500 shrink-0" />
+            <Tooltip
+              content={line}
+              position="bottom"
+              className="max-w-md whitespace-normal"
+              // Off when the trim only added the period, so the hover never repeats the line.
+              disabled={shown === line.trim().replace(/\.?$/, '.')}
+            >
+              <span>{shown}</span>
+            </Tooltip>
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
+// The blocked card stands in for the plan card the person never saw, so it
+// carries what Radar did first, then why it stopped, then the way forward.
+// Three short labeled parts, not one paragraph. Every card ends the same way
+// — an admin with cluster access, in Radar Cloud — and the exit says whether
+// that is a deep-linked install command or Radar Cloud itself.
+function blockedCopy(blocked: CloudInstallBlocked, exit: BlockedExit): { title: string; tried: ReactNode; why: ReactNode; next: ReactNode } {
+  const a = blocked.attempted
+  const release = a && (
+    <>
+      release <code className="font-mono text-[11px] text-theme-text-primary">{a.release}</code> in namespace{' '}
+      <code className="font-mono text-[11px] text-theme-text-primary">{a.namespace}</code>
+    </>
+  )
+  const operation = a?.mode === 'adopt' ? 'a Helm upgrade of your existing' : 'a fresh Helm install of'
+  // What Radar did is told by the stage it reached, not by the plan it had:
+  // a target can be known from discovery before any chart was rendered or
+  // dry-run, and the card must not claim work that did not happen.
+  const tried =
+    !a ? (
+      <>Radar was looking for an existing Radar install in this cluster, as your kubeconfig identity. Nothing was changed.</>
+    ) : a.mode === 'gitops' ? (
+      <>Radar found {release} and traced how it is managed before planning anything. Nothing was changed.</>
+    ) : a.stage === 'inspect' ? (
+      a.mode === 'adopt' ? (
+        <>
+          Radar found {release} and was reading its Helm state, as your kubeconfig identity, before planning anything.
+          Nothing was changed.
+        </>
+      ) : (
+        <>
+          Radar found no Radar running anywhere in this cluster and was checking Helm’s release records in namespace{' '}
+          <code className="font-mono text-[11px] text-theme-text-primary">{a.namespace}</code>, as your kubeconfig
+          identity, before planning anything. Nothing was changed.
+        </>
+      )
+    ) : a.stage === 'prepare' ? (
+      <>
+        Radar planned {operation} {release} with the Cloud connection enabled and was preparing the chart, as your
+        kubeconfig identity. Nothing was changed.
+      </>
+    ) : (
+      <>
+        Radar prepared {operation} {release} with the Cloud connection enabled, and dry-ran it against the cluster as
+        your kubeconfig identity. Nothing was changed.
+      </>
+    )
+
+  // Where the exit is an install command, Radar Cloud confirms the cluster name (prefilled from the context)
+  // first, then shows the instructions — say so, rather than promising a
+  // command on the next screen.
+  const installNext = (
+    <>
+      Have an admin with cluster access get the install command from Radar Cloud: it confirms the cluster name, then
+      shows the Helm, Argo CD or Flux instructions to review before running.
+    </>
+  )
+  const genericNext = (
+    <>
+      Have an admin with cluster access resolve the issue above, then connect — or recover — this cluster from Radar
+      Cloud.
+    </>
+  )
+  const unknownNext = (
+    <>
+      Have an admin with cluster access connect it from Radar Cloud.{' '}
+      {a?.partialScan ? (
+        <>
+          Radar could only check namespace{' '}
+          <code className="font-mono text-[11px] text-theme-text-primary">{a.namespace}</code> for an existing install,
+          so they should check the rest of the cluster first.
+        </>
+      ) : (
+        <>Radar couldn’t tell whether it is already installed here, so they should check first.</>
+      )}
+    </>
+  )
+
+  if (blocked.reason === 'gitops') {
+    return {
+      title: 'This install is managed by GitOps',
+      tried,
+      why: blocked.message,
+      next: exit.install ? (
+        <>
+          Have an admin with repo access get the values patch from Radar Cloud: it confirms the cluster name, then shows
+          the patch for your controller and the one command that creates the token Secret.
+        </>
+      ) : (
+        genericNext
+      ),
+    }
+  }
+  if (blocked.reason === 'unsupported') {
+    return { title: 'Radar can’t connect this cluster from here', tried, why: blocked.message, next: genericNext }
+  }
+  // Fresh offered on "nothing running" alone: say what was not confirmed.
+  const unconfirmedNext = (
+    <>
+      An admin with cluster access should confirm nothing is installed — Radar couldn’t read Helm’s release records —
+      then get the install command from Radar Cloud: it confirms the cluster name, then shows the Helm, Argo CD or Flux
+      instructions to review before running.
+    </>
+  )
+  const next = exit.install ? (a?.releaseUnread ? unconfirmedNext : installNext) : unknownNext
+  switch (blocked.cause) {
+    case 'permissions':
+      return {
+        title: 'Your Kubernetes identity can’t do this install',
+        tried,
+        why: 'Your credentials lack permissions this needs (below). Anyone with them can complete this exact install.',
+        next,
+      }
+    case 'verification':
+      return {
+        title: 'This version of Radar can’t install this chart version from here',
+        tried,
+        why: 'The chart renders something this Radar build can’t check before applying, so it won’t install it unseen. A limitation of this Radar, not of your cluster or your access.',
+        next,
+      }
+    default:
+      return {
+        title: 'The cluster blocked part of this install',
+        tried,
+        why: 'The cluster refused: something already there conflicts with the install, or a policy rejects it. More permission wouldn’t change that.',
+        next: exit.install ? (
+          <>
+            Once the refusals above are resolved, have an admin with cluster access get the install command from Radar
+            Cloud: it confirms the cluster name, then shows the Helm, Argo CD or Flux instructions to review before
+            running.
+          </>
+        ) : (
+          next
+        ),
+      }
+  }
 }
 
 function PlanCard({
@@ -348,7 +646,7 @@ function ConsentRow({
   checked: boolean
   onChange: (v: boolean) => void
   tone: 'emerald' | 'amber'
-  children: React.ReactNode
+  children: ReactNode
 }) {
   return (
     <label className="mt-3 flex items-start gap-2 cursor-pointer">
@@ -507,16 +805,22 @@ function ConnectedCard({
 
 function FailedCard({
   status,
+  where,
   onStatus,
   onExit,
 }: {
   status: CloudInstallStatus
+  where?: AdminNoteContext
   onStatus: (st: CloudInstallStatus) => void
   onExit: () => void
 }) {
   const dismiss = useDismiss(status, onStatus, onExit)
   const failure = status.failure
   if (!failure) return null
+  // After the Hub approved, the guidance is written for an operator — inspect
+  // commands, keep this Hub cluster, don't rerun. Hand it over the same way a
+  // blocked card does, as a request to finish the connection.
+  const handoff = needsAdminHandoff(failure)
   return (
     <div className="px-8 pt-6 pb-5">
       <div className="flex items-start gap-2.5 mb-3">
@@ -529,13 +833,20 @@ function FailedCard({
           showSummary={failure.guidance.summary !== failure.message}
         />
       )}
-      <div className="mt-4 flex items-center gap-4">
+      <div className="relative mt-4 flex items-center gap-4">
         <button
           onClick={dismiss}
           className="px-4 py-1.5 rounded-[10px] bg-theme-elevated hover:bg-theme-hover border border-theme-border text-[12.5px] font-semibold text-theme-text-primary transition-colors"
         >
           {failure.retrySafe ? 'Start over' : 'Close'}
         </button>
+        {handoff && (
+          <CopyForAdmin
+            // The flow's own record of the cluster: a context switch after
+            // the install started must not relabel the note for another.
+            note={composeFailureNote(failure, { context: status.plan?.contextName ?? where?.context, cluster: where?.cluster })}
+          />
+        )}
       </div>
     </div>
   )

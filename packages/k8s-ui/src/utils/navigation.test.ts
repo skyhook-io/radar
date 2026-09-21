@@ -1,6 +1,6 @@
 import { describe, test, expect, afterEach } from 'vitest'
 import { englishPlural } from './pluralize'
-import { kindToPlural, kindToPluralWithGroup, pluralToKind, refToSelectedResource, initNavigationMap, resetNavigationMap, laneId, laneResourceKey, groupQualifiesLaneId, parseLaneId } from './navigation'
+import { kindToPlural, kindToPluralWithGroup, pluralToKind, knownKindForPluralWithGroup, refToSelectedResource, initNavigationMap, resetNavigationMap, laneId, laneResourceKey, groupQualifiesLaneId, parseLaneId } from './navigation'
 
 afterEach(() => {
   resetNavigationMap()
@@ -223,6 +223,25 @@ describe('initNavigationMap', () => {
       { group: 'metrics.k8s.io', version: 'v1beta1', kind: 'PodMetrics', name: 'pods', namespaced: true, isCrd: false, verbs: ['get'] },
     ])
     expect(pluralToKind('pods')).toBe('Pod')
+    expect(knownKindForPluralWithGroup('pods', '')).toBe('Pod')
+    expect(knownKindForPluralWithGroup('pods', 'metrics.k8s.io')).toBe('PodMetrics')
+    expect(kindToPluralWithGroup('PodMetrics', 'metrics.k8s.io')).toBe('pods')
+  })
+
+  test('resolves discovered plural collisions by API group', () => {
+    initNavigationMap([
+      { group: 'a.example.io', version: 'v1', kind: 'Widget', name: 'widgets', namespaced: true, isCrd: true, verbs: ['get'] },
+      { group: 'b.example.io', version: 'v1', kind: 'OtherWidget', name: 'widgets', namespaced: true, isCrd: true, verbs: ['get'] },
+    ])
+    expect(knownKindForPluralWithGroup('widgets', 'a.example.io')).toBe('Widget')
+    expect(knownKindForPluralWithGroup('widgets', 'b.example.io')).toBe('OtherWidget')
+    expect(knownKindForPluralWithGroup('OtherWidget', 'b.example.io')).toBe('OtherWidget')
+  })
+
+  test('does not invent a Kind for an undiscovered irregular CRD', () => {
+    expect(knownKindForPluralWithGroup('databases', 'postgresql.cnpg.io')).toBeUndefined()
+    expect(kindToPluralWithGroup('Database', 'postgresql.cnpg.io')).toBe('databases')
+    expect(kindToPluralWithGroup('databases', 'postgresql.cnpg.io')).toBe('databases')
   })
 
   test('keeps the virtual PodGroup alias distinct from scheduling PodGroup', () => {
@@ -324,5 +343,15 @@ describe('lane identity helpers', () => {
       kind: 'Cluster', group: 'postgresql.cnpg.io', namespace: 'prod', name: 'main-db',
     })
     expect(parseLaneId('bogus')).toBeNull()
+  })
+})
+
+describe('pluralToKind on absent input', () => {
+  // A saved investigation can carry an empty kind. This runs over every row of
+  // the run list, so throwing here took the whole investigations panel down and
+  // made every other run unopenable — one bad row, no panel.
+  test('returns the empty string instead of throwing', () => {
+    expect(() => pluralToKind('')).not.toThrow()
+    expect(pluralToKind('')).toBe('')
   })
 })

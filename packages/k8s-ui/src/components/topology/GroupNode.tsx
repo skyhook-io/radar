@@ -159,6 +159,10 @@ export const GroupNode = memo(function GroupNode({
     </div>
   )
 
+  // Chip and cardGrid roots must NOT counter-scale with zoom (group-header-scaled):
+  // the transform shrinks the visuals but the React Flow wrapper — the hitbox,
+  // drag target, and edge-attachment box — keeps the full ELK-computed size, so
+  // past zoom 0.7 the interactive area extends well outside the drawn box.
   // ── Level 1: Chip (compact collapsed card) ──
   if (displayLevel === 'chip') {
     // Size tier: 0-9 → 0, 10-99 → 1, 100-999 → 2, 1000+ → 3
@@ -178,7 +182,7 @@ export const GroupNode = memo(function GroupNode({
       <>
         {handles}
         <div
-          className="rounded-xl group-header-scaled overflow-hidden"
+          className="rounded-xl overflow-hidden"
           style={{ ...getBorderStyle(), ...getHeaderBgStyle(), padding: chipPadding, width: width || '100%', height: height || '100%' }}
         >
           {/* Header row: icon + name + count + status + controls */}
@@ -220,7 +224,7 @@ export const GroupNode = memo(function GroupNode({
       <>
         {handles}
         <div
-          className="rounded-xl overflow-hidden group-header-scaled"
+          className="rounded-xl overflow-hidden"
           style={{ ...getBorderStyle(), width: width || '100%', height: height || '100%' }}
         >
           {/* Header bar with level controls */}

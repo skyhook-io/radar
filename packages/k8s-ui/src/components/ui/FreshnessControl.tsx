@@ -6,7 +6,10 @@ import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { formatUpdatedAgo, msToNextBucket } from '../../utils/format'
 
 export type FreshnessMode = 'auto' | 'snapshot'
-export type FreshnessConnection = 'connected' | 'disconnected' | 'connecting'
+// 'syncing' is the progressive first-load shell: the app has a live link to
+// the cluster and serves kinds as their initial sync completes — nothing was
+// ever connected before, so 'Reconnecting…' would be untrue there.
+export type FreshnessConnection = 'connected' | 'disconnected' | 'connecting' | 'syncing'
 
 interface FreshnessControlProps {
   // 'auto'     — the view keeps itself current (polls or streams). Reads
@@ -85,7 +88,10 @@ export function FreshnessControl({
   let label: string | null
   let tooltip: string | null
   let live = false
-  if (degraded) {
+  if (connectionState === 'syncing') {
+    label = 'Loading cluster data…'
+    tooltip = 'Initial sync in progress — rows shown are live for the kinds that have finished loading.'
+  } else if (degraded) {
     label = 'Reconnecting…'
     tooltip = 'Not connected to the cluster — data may be stale until the connection is restored.'
   } else if (mode === 'auto' && paused) {

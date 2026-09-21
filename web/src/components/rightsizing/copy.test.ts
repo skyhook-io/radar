@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   getRightsizingScanSurfaceState,
+  RIGHTSIZING_EMBEDDED_METRICS_REQUIRED_BODY,
+  RIGHTSIZING_METRICS_REQUIRED_BODY,
+  RIGHTSIZING_METRICS_REQUIRED_TITLE,
   RIGHTSIZING_SCAN_DESCRIPTION,
   RIGHTSIZING_SCAN_METHODOLOGY,
 } from './RightsizingScanView'
@@ -15,6 +18,22 @@ describe('rightsizing scan copy', () => {
     expect(copy).toContain('Memory reductions require verifiable restart history')
     expect(copy.toLowerCase()).not.toContain('efficiency')
     expect(copy.toLowerCase()).not.toContain('savings')
+  })
+
+  it('describes the metrics contract without assuming one provider or cost source', () => {
+    const copy = `${RIGHTSIZING_METRICS_REQUIRED_TITLE} ${RIGHTSIZING_METRICS_REQUIRED_BODY}`
+    expect(copy).toContain('Metrics history')
+    expect(copy).toContain('PromQL-compatible metrics backend')
+    expect(copy).toContain('7 days')
+    expect(copy).toContain('Prometheus, VictoriaMetrics, Thanos, or Mimir')
+    expect(RIGHTSIZING_METRICS_REQUIRED_BODY).toContain('\nCost Overview')
+    expect(copy).not.toContain('OpenCost')
+    expect(copy).not.toContain('Kubecost')
+  })
+
+  it('routes embedded configuration through the host instead of standalone Settings', () => {
+    expect(RIGHTSIZING_EMBEDDED_METRICS_REQUIRED_BODY).toContain('host application')
+    expect(RIGHTSIZING_EMBEDDED_METRICS_REQUIRED_BODY).not.toContain('Settings')
   })
 
   it('retains a prior snapshot after a failed rerun but treats a first-run failure as fatal', () => {
@@ -39,6 +58,13 @@ describe('rightsizing scan copy', () => {
         hasError: true,
       }),
     ).toBe('fatal_error')
+  })
+
+  it('waits for the retained scan lookup before offering a first run', () => {
+    expect(getRightsizingScanSurfaceState({
+      statusLoading: false, hasStatus: true, connected: true, scanLoading: true,
+      pending: false, hasResult: false, hasError: false,
+    })).toBe('loading_scan')
   })
 
   it('does not auto-scan a connected first visit', () => {

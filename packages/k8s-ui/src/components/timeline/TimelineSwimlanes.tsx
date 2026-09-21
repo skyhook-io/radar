@@ -43,6 +43,7 @@ import { isChangeEvent, isHistoricalEvent, isOperation, displayKind } from '../.
 import { DiffViewer } from './DiffViewer'
 import { getHealthBadgeColor, getEventTypeColor } from '../../utils/badge-colors'
 import { MiddleEllipsis } from '../ui/MiddleEllipsis'
+import { CollapseChevron } from '../ui/Collapse'
 import { Tooltip } from '../ui/Tooltip'
 import { ResourceRefBadge } from '../ui/drawer-components'
 import { buildResourceHierarchy, extractPinnedLanes, removePinnedLanes, isProblematicEvent, laneTrackEvents, isChildVisibleInWindow, collidingLaneKeys, laneCollisionKey, type ResourceLane as BaseResourceLane, type TimelineGrouping, type PinnedLaneRef } from '../../utils/resource-hierarchy'
@@ -1644,10 +1645,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                     aria-label={isExpanded ? 'Collapse' : 'Expand'}
                     className="p-1 -m-0.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
                   >
-                    <ChevronRight className={clsx(
-                      'w-4 h-4 transition-transform',
-                      isExpanded && 'rotate-90'
-                    )} />
+                    <CollapseChevron open={isExpanded} inheritColor className="w-4 h-4" />
                   </button>
                 ) : compact ? null : (
                   <div className="w-4" />
@@ -2285,7 +2283,7 @@ function ChildLaneLabel({ kind, group, showGroupChip, kindTitle, name, labelWidt
           style={{ left: selfRailPx }}
           aria-label={expanded ? 'Collapse' : 'Expand'}
         >
-          <ChevronRight className={clsx('w-4 h-4 transition-transform', expanded && 'rotate-90')} />
+          <CollapseChevron open={!!expanded} inheritColor className="w-4 h-4" />
         </button>
       )}
       {/* Single-line child row: kind chip · name (middle-ellipsis). Colored chips

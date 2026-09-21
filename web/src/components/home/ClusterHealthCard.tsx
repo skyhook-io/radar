@@ -13,6 +13,7 @@ import { MCPSetupDialog } from './MCPSetupDialog'
 import { assetUrl, pluralize, parseContextName } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 import { routePath } from '../../api/config'
+import { parseMajorMinor } from '../../utils/version'
 import gkeIcon from '../../assets/platform-icons/google_kubernetes_engine.png'
 import eksIcon from '../../assets/platform-icons/aws_eks.png'
 import aksIcon from '../../assets/platform-icons/azure-aks.svg'
@@ -40,6 +41,7 @@ interface ClusterHealthCardProps {
   // Freshness/refresh control for the dashboard poll — rendered under the
   // cluster metadata so the overview carries a freshness signal without a band.
   freshness?: ReactNode
+  radarVersion?: ReactNode
 }
 
 function getMetricsInstallHint(platform: string): string {
@@ -136,6 +138,7 @@ export function ClusterHealthCard({
   onWarningEventsClick,
   onIssuesClick,
   freshness,
+  radarVersion,
 }: ClusterHealthCardProps) {
   void _topCRDs // Reserved for future CRD display
 
@@ -260,6 +263,7 @@ export function ClusterHealthCard({
                   onNavigate={onNavigateToUpgradeImpact}
                 />
               )}
+              {radarVersion}
               <span><span className="font-mono">{counts.namespaces}</span> namespaces</span>
               {/* Show raw kubeconfig context as muted metadata only when
                   it differs from the headline AND we're in local mode
@@ -524,12 +528,6 @@ export function ClusterHealthCard({
       </div>
     </div>
   )
-}
-
-function parseMajorMinor(version: string): { major: number; minor: number } | null {
-  const m = /^v?(\d+)\.(\d+)/.exec(version.trim())
-  if (!m) return null
-  return { major: Number(m[1]), minor: Number(m[2]) }
 }
 
 // How many minors the running version trails the newest one the upgrade-impact

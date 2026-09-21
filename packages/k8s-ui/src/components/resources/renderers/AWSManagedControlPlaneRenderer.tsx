@@ -145,9 +145,9 @@ export function AWSManagedControlPlaneRenderer({ data }: Props) {
                   <td className="py-1 text-theme-text-secondary font-mono text-[10px]">{a.statusVersion !== '-' ? a.statusVersion : a.specVersion}</td>
                   <td className="py-1">
                     <span className={`badge badge-sm ${a.status === 'ACTIVE'
-                      ? 'status-healthy'
+                      ? 'status-green'
                       : a.status === 'DEGRADED'
-                      ? 'status-unhealthy'
+                      ? 'status-red'
                       : 'status-neutral'
                     }`}>{a.status}</span>
                   </td>

@@ -9,6 +9,7 @@ import { useChartDetail, useNamespaces, useArtifactHubChart, installChartWithPro
 import { useCanHelmAct } from '../../api/client'
 import type { ChartSource, ChartDetail, ArtifactHubChartDetail } from '../../types'
 import { YamlEditor } from '../ui/YamlEditor'
+import { Collapse, CollapseChevron, useDisclosure } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import { Tooltip } from '../ui/Tooltip'
 import { Markdown } from '../ui/Markdown'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '../../utils/badge-colors'
@@ -656,6 +657,7 @@ interface ValuesStepProps {
 
 function ValuesStep({ valuesYaml, setValuesYaml, yamlError, setYamlError, chartDetail, source }: ValuesStepProps) {
   const [showEditor, setShowEditor] = useState(false)
+  const editorDisclosure = useDisclosure(showEditor)
 
   const isLocal = source === 'local'
   const localDetail = chartDetail as ChartDetail | undefined
@@ -700,11 +702,12 @@ function ValuesStep({ valuesYaml, setValuesYaml, yamlError, setYamlError, chartD
       {/* Collapsible editor section */}
       <div className="border border-theme-border rounded-lg overflow-hidden">
         <button
+          {...editorDisclosure.buttonProps}
           onClick={() => setShowEditor(!showEditor)}
           className="w-full flex items-center justify-between px-4 py-3 bg-theme-elevated/50 hover:bg-theme-elevated transition-colors"
         >
           <div className="flex items-center gap-2">
-            <ChevronRight className={clsx('w-4 h-4 text-theme-text-tertiary transition-transform', showEditor && 'rotate-90')} />
+            <CollapseChevron open={showEditor} className="w-4 h-4" />
             <span className="text-sm font-medium text-theme-text-primary">
               {hasValues ? (showEditor ? 'Hide' : 'Show') : 'Add'} configuration values
             </span>
@@ -715,7 +718,9 @@ function ValuesStep({ valuesYaml, setValuesYaml, yamlError, setYamlError, chartD
           </div>
         </button>
 
-        {showEditor && (
+        {/* unmountOnExit: the Monaco editor is heavy and its instance should
+            not outlive a closed section; values live in `valuesYaml` above. */}
+        <Collapse open={showEditor} unmountOnExit id={editorDisclosure.panelId}>
           <div className="p-4 border-t border-theme-border">
             {/* Action buttons */}
             <div className="flex items-center gap-3 mb-4">
@@ -777,7 +782,7 @@ function ValuesStep({ valuesYaml, setValuesYaml, yamlError, setYamlError, chartD
               </div>
             )}
           </div>
-        )}
+        </Collapse>
       </div>
     </div>
   )

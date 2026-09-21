@@ -31,6 +31,17 @@ type Config struct {
 	HistoryLimit              int      `json:"historyLimit,omitempty"`
 	PrometheusURL             string   `json:"prometheusUrl,omitempty"`
 	OpenCostCurrency          string   `json:"opencostCurrency,omitempty"`
+	CostSource                string   `json:"costSource,omitempty"`
+	KubecostURL               string   `json:"kubecostUrl,omitempty"`
+	KubecostAPIKey            string   `json:"kubecostApiKey,omitempty"`
+	// KubecostAPIKeyContext binds a credential used with local auto-discovery to
+	// the kubeconfig context where it was configured. Explicit-URL credentials
+	// remain portable because their origin is stable across context switches.
+	KubecostAPIKeyContext string `json:"kubecostApiKeyContext,omitempty"`
+	KubecostClusterID     string `json:"kubecostClusterId,omitempty"`
+	// KubecostClusterIDContext prevents a cluster-specific central-Aggregator
+	// filter from silently following a local kubeconfig switch.
+	KubecostClusterIDContext string `json:"kubecostClusterIdContext,omitempty"`
 	// PrometheusHeaders are sent with every request to the Prometheus API.
 	// Required for auth-protected backends (Bearer tokens, X-Scope-OrgID, etc.).
 	// Stored in plain text in ~/.radar/config.json — protect the file accordingly.
@@ -62,12 +73,12 @@ type Config struct {
 	// auto-discovery token. Authorization relies on this field rather than the
 	// mutable display context.
 	ArgoCDTokenBinding string `json:"argoCdTokenBinding,omitempty"`
-	// AIHistory persists AI investigations (transcripts + verdicts) to a local
+	// AIHistory persists AI investigations (transcripts + conclusions) to a local
 	// SQLite file so they survive restarts. nil = default (true), false = off.
 	AIHistory *bool `json:"aiHistory,omitempty"`
 	// AIHistoryDBPath overrides the history DB location (default ~/.radar/ai-runs.db).
 	AIHistoryDBPath string `json:"aiHistoryDbPath,omitempty"`
-	// AIConsent records the acknowledged AI-diagnosis disclosure version per
+	// AIConsent records the acknowledged AI-investigation disclosure version per
 	// agent execution profile. Machine-scoped on purpose: consent gates a
 	// machine-scoped action (spawn this machine's agent CLI, persist transcripts
 	// to this machine's disk), so one acknowledgment covers the web panel and
@@ -75,7 +86,7 @@ type Config struct {
 	AIConsent map[string]string `json:"aiConsent,omitempty"`
 }
 
-// AI-diagnosis consent disclosure versions, per surface. THE single source of
+// AI-investigation consent disclosure versions, per surface. THE single source of
 // truth for the server endpoint and the CLI's standalone path alike — bump when
 // the consent copy's claims change materially, and prior acknowledgments stop
 // counting everywhere at once.
@@ -84,7 +95,7 @@ var aiConsentVersions = map[string]string{
 	"claude:full-local":       "v1",
 	"codex:safeguarded":       "v1",
 	"codex:full-local":        "v1",
-	"cursor-agent:full-local": "v1",
+	"cursor-agent:full-local": "v2",
 }
 
 // AIConsentVersion returns the current disclosure version for a surface

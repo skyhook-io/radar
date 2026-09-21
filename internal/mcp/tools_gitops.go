@@ -116,12 +116,15 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 		return nil, nil, err
 	}
 
-	resp := map[string]string{
+	resp := map[string]any{
 		"status":  "ok",
 		"message": result.Message,
 	}
 	if result.RequestedAt != "" {
 		resp["requestedAt"] = result.RequestedAt
+	}
+	if result.NoChange {
+		resp["noChange"] = true
 	}
 	return toJSONResult(resp)
 }

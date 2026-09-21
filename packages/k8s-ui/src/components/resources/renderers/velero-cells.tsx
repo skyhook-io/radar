@@ -30,6 +30,7 @@ import {
   getVSLConfig,
   getBackupRepositoryStatus,
   getBackupRepositoryType,
+  getBackupRepositoryVolumeNamespace,
 } from '../resource-utils-velero'
 
 // The detail-page Phase value. The badge carries the same label the table
@@ -235,6 +236,8 @@ export function BackupRepositoryCell({ resource, column }: { resource: any; colu
         </span>
       )
     }
+    case 'volumeNamespace':
+      return <span className="text-sm text-theme-text-secondary">{getBackupRepositoryVolumeNamespace(resource)}</span>
     case 'repositoryType': {
       const type = getBackupRepositoryType(resource)
       // restic is on its way out (no new backups since v1.17, restore dropped in

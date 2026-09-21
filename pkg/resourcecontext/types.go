@@ -30,30 +30,34 @@ import "time"
 // emerges that needs deterministic prose, add it as a separate
 // `explain_resource` tool rather than re-introducing it inline here.
 type ResourceContext struct {
-	Tier            ContextTier      `json:"tier"`
-	Owner           *ContextRef      `json:"owner,omitempty"`
-	ManagedBy       []ContextRef     `json:"managedBy,omitempty"`
-	Exposes         []ContextRef     `json:"exposes,omitempty"`
-	SelectedBy      []ContextRef     `json:"selectedBy,omitempty"`
-	ReferencedBy    *ReferencedBy    `json:"referencedBy,omitempty"`
-	Uses            *UsesBlock       `json:"uses,omitempty"`
-	RunsOn          *ContextRef      `json:"runsOn,omitempty"`
-	ScaledBy        []ContextRef     `json:"scaledBy,omitempty"`
-	StatusSummary   *StatusSummary   `json:"statusSummary,omitempty"`
-	PodSummary      *PodSummary      `json:"podSummary,omitempty"`
-	WorkloadSummary *WorkloadSummary `json:"workloadSummary,omitempty"`
-	ServiceSummary  *ServiceSummary  `json:"serviceSummary,omitempty"`
-	IngressSummary  *IngressSummary  `json:"ingressSummary,omitempty"`
-	NodeSummary     *NodeSummary     `json:"nodeSummary,omitempty"`
-	PVCSummary      *PVCSummary      `json:"pvcSummary,omitempty"`
-	JobSummary      *JobSummary      `json:"jobSummary,omitempty"`
-	CronJobSummary  *CronJobSummary  `json:"cronJobSummary,omitempty"`
-	HPASummary      *HPASummary      `json:"hpaSummary,omitempty"`
-	IssueSummary    *IssueSummary    `json:"issueSummary,omitempty"`
-	AuditSummary    *AuditSummary    `json:"auditSummary,omitempty"`
-	PolicySummary   *PolicySummary   `json:"policySummary,omitempty"`
-	AppReferences   *AppReferences   `json:"appReferences,omitempty"`
-	Omitted         []OmittedField   `json:"omitted,omitempty"`
+	Reflection      *ReflectionContext `json:"reflection,omitempty"`
+	Tier            ContextTier        `json:"tier"`
+	Owner           *ContextRef        `json:"owner,omitempty"`
+	ManagedBy       []ContextRef       `json:"managedBy,omitempty"`
+	Exposes         []ContextRef       `json:"exposes,omitempty"`
+	SelectedBy      []ContextRef       `json:"selectedBy,omitempty"`
+	ReferencedBy    *ReferencedBy      `json:"referencedBy,omitempty"`
+	Uses            *UsesBlock         `json:"uses,omitempty"`
+	RunsOn          *ContextRef        `json:"runsOn,omitempty"`
+	ScaledBy        []ScalerRef        `json:"scaledBy,omitempty"`
+	StatusSummary   *StatusSummary     `json:"statusSummary,omitempty"`
+	Scheduling      *SchedulingSummary `json:"scheduling,omitempty"`
+	Execution       *ExecutionSummary  `json:"execution,omitempty"`
+	Serving         *ServingSummary    `json:"serving,omitempty"`
+	PodSummary      *PodSummary        `json:"podSummary,omitempty"`
+	WorkloadSummary *WorkloadSummary   `json:"workloadSummary,omitempty"`
+	ServiceSummary  *ServiceSummary    `json:"serviceSummary,omitempty"`
+	IngressSummary  *IngressSummary    `json:"ingressSummary,omitempty"`
+	NodeSummary     *NodeSummary       `json:"nodeSummary,omitempty"`
+	PVCSummary      *PVCSummary        `json:"pvcSummary,omitempty"`
+	JobSummary      *JobSummary        `json:"jobSummary,omitempty"`
+	CronJobSummary  *CronJobSummary    `json:"cronJobSummary,omitempty"`
+	HPASummary      *HPASummary        `json:"hpaSummary,omitempty"`
+	IssueSummary    *IssueSummary      `json:"issueSummary,omitempty"`
+	AuditSummary    *AuditSummary      `json:"auditSummary,omitempty"`
+	PolicySummary   *PolicySummary     `json:"policySummary,omitempty"`
+	AppReferences   *AppReferences     `json:"appReferences,omitempty"`
+	Omitted         []OmittedField     `json:"omitted,omitempty"`
 }
 
 // ContextTier signals how much enrichment is included. "basic" is the
@@ -76,6 +80,18 @@ type ContextRef struct {
 	Group     string `json:"group,omitempty"`
 	Namespace string `json:"namespace,omitempty"`
 	Name      string `json:"name"`
+}
+
+// ScalerRef is one scaledBy entry: the scaler's identity plus, when the
+// scaler is an HPA the caller may read, the same diagnosis the HPA's own
+// context carries under hpaSummary. Scalers Radar does not diagnose (KEDA
+// ScaledObject/ScaledJob) carry the identity alone.
+type ScalerRef struct {
+	ContextRef
+	// ManagedBy names the KEDA ScaledObject that owns this HPA, when the HPA
+	// is one KEDA created rather than one a person wrote.
+	ManagedBy  *ContextRef `json:"managedBy,omitempty"`
+	HPASummary *HPASummary `json:"hpaSummary,omitempty"`
 }
 
 // ManagedByRef is the compact form of a "managed-by" pointer used in
@@ -191,14 +207,288 @@ type ReferenceUse struct {
 type StatusSummary struct {
 	Phase      string             `json:"phase,omitempty"`
 	Conditions []ConditionSummary `json:"conditions,omitempty"`
+	// ConditionsTruncated reports a cap on the source array, before invalid entries are skipped.
+	ConditionsTruncated bool `json:"conditionsTruncated,omitempty"`
 }
 
+// ConditionSummary preserves one Kubernetes condition as bounded factual
+// evidence, including the generation for which a controller computed it.
 type ConditionSummary struct {
 	Type               string `json:"type"`
 	Status             string `json:"status"`
 	Reason             string `json:"reason,omitempty"`
 	Message            string `json:"message,omitempty"`
+	ObservedGeneration int64  `json:"observedGeneration,omitempty"`
 	LastTransitionTime string `json:"lastTransitionTime,omitempty"`
+}
+
+// SchedulingSummary composes the independent scheduling decisions that can
+// apply to one resource. Each observation retains the source's native detail
+// instead of forcing admission, group placement, and Pod placement into one
+// lifecycle.
+type SchedulingSummary struct {
+	Observations []SchedulingObservation `json:"observations,omitempty"`
+}
+
+// SchedulingObservation is one controller's decision for one scheduling
+// domain and subject. Decision describes the domain, not the subject's whole
+// lifecycle; provider-specific outcome and phase must be read together with
+// it. Disruptions contains only affirmative conditions in the current object
+// snapshot; historical transitions belong in Timeline. Adapters emit
+// observations in a stable source-defined order.
+type SchedulingObservation struct {
+	Source            SchedulingSource   `json:"source"`
+	Domain            SchedulingDomain   `json:"domain"`
+	Subject           ContextRef         `json:"subject"`
+	SubjectGeneration int64              `json:"subjectGeneration,omitempty"`
+	Decision          SchedulingDecision `json:"decision"`
+	PrimaryCondition  *ConditionSummary  `json:"primaryCondition,omitempty"`
+	Queues            []SchedulingQueue  `json:"queues,omitempty"`
+	Gates             []SchedulingGate   `json:"gates,omitempty"`
+	Disruptions       []ConditionSummary `json:"disruptions,omitempty"`
+	Kueue             *KueueScheduling   `json:"kueue,omitempty"`
+}
+
+// SchedulingSource identifies the controller or native API that produced an
+// observation.
+type SchedulingSource string
+
+const (
+	// SchedulingSourceKueue identifies Kueue Workload admission evidence.
+	SchedulingSourceKueue SchedulingSource = "kueue"
+)
+
+// SchedulingDomain identifies the independent scheduling question answered by
+// an observation.
+type SchedulingDomain string
+
+const (
+	// SchedulingDomainAdmission answers whether a workload may consume quota
+	// and start.
+	SchedulingDomainAdmission SchedulingDomain = "admission"
+	// SchedulingDomainGroupPlacement answers whether a multi-Pod group has been
+	// placed as a unit.
+	SchedulingDomainGroupPlacement SchedulingDomain = "group_placement"
+	// SchedulingDomainPodPlacement answers whether an individual Pod can bind
+	// to a node.
+	SchedulingDomainPodPlacement SchedulingDomain = "pod_placement"
+)
+
+// SchedulingDecision is the normalized answer for one scheduling domain.
+// Held means the subject's own state explicitly pauses progress. Unsatisfied
+// means the controller evaluated the request but its requirements are not met,
+// including when a referenced queue is inactive.
+type SchedulingDecision string
+
+const (
+	// SchedulingDecisionSatisfied means the domain's requirements are met.
+	SchedulingDecisionSatisfied SchedulingDecision = "satisfied"
+	// SchedulingDecisionUnsatisfied means evaluated requirements are not met.
+	SchedulingDecisionUnsatisfied SchedulingDecision = "unsatisfied"
+	// SchedulingDecisionHeld means progress is explicitly paused.
+	SchedulingDecisionHeld SchedulingDecision = "held"
+	// SchedulingDecisionUnknown means the available evidence cannot answer.
+	SchedulingDecisionUnknown SchedulingDecision = "unknown"
+)
+
+// SchedulingQueue describes a provider-owned queue in the scheduling path.
+// Name remains available when RBAC prevents Radar from exposing a navigable
+// Ref. Adapters order queues from submission toward entitlement and Roles in
+// the constant order below; one queue may play both roles.
+type SchedulingQueue struct {
+	Name  string                `json:"name"`
+	Roles []SchedulingQueueRole `json:"roles"`
+	Ref   *ContextRef           `json:"ref,omitempty"`
+}
+
+// SchedulingQueueRole describes how a queue participates in admission.
+type SchedulingQueueRole string
+
+const (
+	// SchedulingQueueSubmission is the queue to which the subject was
+	// submitted.
+	SchedulingQueueSubmission SchedulingQueueRole = "submission"
+	// SchedulingQueueEntitlement is the queue or cohort that evaluates quota
+	// entitlement.
+	SchedulingQueueEntitlement SchedulingQueueRole = "entitlement"
+)
+
+// SchedulingGate is one named prerequisite for a scheduling decision. Name is
+// provider-owned evidence; Ref is optional navigation and independently RBAC-
+// gated. Decision describes this gate only. Adapters emit gates in a stable,
+// actionable-first order.
+type SchedulingGate struct {
+	Kind                SchedulingGateKind `json:"kind"`
+	Name                string             `json:"name"`
+	Ref                 *ContextRef        `json:"ref,omitempty"`
+	NativeState         string             `json:"nativeState,omitempty"`
+	Decision            SchedulingDecision `json:"decision"`
+	Message             string             `json:"message,omitempty"`
+	LastTransitionTime  string             `json:"lastTransitionTime,omitempty"`
+	RequeueAfterSeconds *int64             `json:"requeueAfterSeconds,omitempty"`
+	RetryCount          *int64             `json:"retryCount,omitempty"`
+}
+
+// SchedulingGateKind identifies the native gate family without forcing all
+// controllers to expose the same state vocabulary.
+type SchedulingGateKind string
+
+const (
+	// SchedulingGateAdmissionCheck is a controller-managed admission check.
+	SchedulingGateAdmissionCheck SchedulingGateKind = "admission_check"
+	// SchedulingGatePreemption governs whether a workload may trigger
+	// preemption; a closed gate does not by itself mean admission is blocked.
+	SchedulingGatePreemption SchedulingGateKind = "preemption_gate"
+	// SchedulingGatePodScheduling is a Pod spec scheduling gate.
+	SchedulingGatePodScheduling SchedulingGateKind = "pod_scheduling_gate"
+)
+
+// KueueScheduling preserves Kueue-specific evidence alongside the normalized
+// observation. Outcome describes terminal completion and must be interpreted
+// with Phase and the observation Decision.
+type KueueScheduling struct {
+	Phase                      KueuePhase                `json:"phase"`
+	Outcome                    KueueOutcome              `json:"outcome,omitempty"`
+	Active                     *bool                     `json:"active,omitempty"`
+	PodsReady                  *ConditionSummary         `json:"podsReady,omitempty"`
+	WaitingForReplacementPods  *ConditionSummary         `json:"waitingForReplacementPods,omitempty"`
+	PodSetAssignments          []KueuePodSetAssignment   `json:"podSetAssignments,omitempty"`
+	PodSetAssignmentsTruncated bool                      `json:"podSetAssignmentsTruncated,omitempty"`
+	RequeueState               *KueueRequeueState        `json:"requeueState,omitempty"`
+	ConcurrentAdmission        *KueueConcurrentAdmission `json:"concurrentAdmission,omitempty"`
+}
+
+// KueuePhase is Radar's compact projection of the Kueue admission lifecycle.
+type KueuePhase string
+
+const (
+	// KueuePhasePending means quota has not been reserved.
+	KueuePhasePending KueuePhase = "pending"
+	// KueuePhaseQuotaReserved means quota is reserved but admission is not
+	// complete.
+	KueuePhaseQuotaReserved KueuePhase = "quota_reserved"
+	// KueuePhaseAdmitted means Kueue admitted the workload.
+	KueuePhaseAdmitted KueuePhase = "admitted"
+	// KueuePhaseFinished means Kueue reports a terminal condition.
+	KueuePhaseFinished KueuePhase = "finished"
+)
+
+// KueueOutcome is the terminal result reported by Kueue.
+type KueueOutcome string
+
+const (
+	// KueueOutcomeSucceeded is a successful terminal result.
+	KueueOutcomeSucceeded KueueOutcome = "succeeded"
+	// KueueOutcomeFailed is a failed terminal result.
+	KueueOutcomeFailed KueueOutcome = "failed"
+)
+
+// KueuePodSetAssignment is the admitted count and resource assignment for one
+// Kueue PodSet. Adapters emit assignments in stable name order and report
+// truncation explicitly.
+type KueuePodSetAssignment struct {
+	Name               string                    `json:"name"`
+	Count              *int64                    `json:"count,omitempty"`
+	Resources          []KueueResourceAssignment `json:"resources,omitempty"`
+	ResourcesTruncated bool                      `json:"resourcesTruncated,omitempty"`
+}
+
+// KueueResourceAssignment is one resource quantity and optional flavor. Flavor
+// remains visible as native evidence when FlavorRef navigation is RBAC-denied.
+type KueueResourceAssignment struct {
+	Name      string      `json:"name"`
+	Flavor    string      `json:"flavor,omitempty"`
+	FlavorRef *ContextRef `json:"flavorRef,omitempty"`
+	Usage     string      `json:"usage,omitempty"`
+}
+
+// KueueRequeueState is Kueue's retry count and next eligible admission time.
+type KueueRequeueState struct {
+	Count     *int64 `json:"count,omitempty"`
+	RequeueAt string `json:"requeueAt,omitempty"`
+}
+
+// KueueConcurrentAdmission identifies the controller parent of a Kueue
+// Workload variant. ParentName remains visible when ParentRef is RBAC-denied.
+type KueueConcurrentAdmission struct {
+	ParentName string      `json:"parentName"`
+	ParentRef  *ContextRef `json:"parentRef,omitempty"`
+}
+
+// ExecutionSummary describes the root's last reported execution, not Pod
+// readiness or object deletion. Exactly one detail block matches Controller;
+// quantities stay there because controllers count different units and populations.
+// SubjectGeneration identifies the spec revision of this execution subject.
+// PrimaryCondition.ObservedGeneration applies only to that condition, not to
+// counters or the whole snapshot.
+// SuspendRequested is intent: nil means unavailable, false means not requested.
+type ExecutionSummary struct {
+	Controller        ExecutionController `json:"controller"`
+	SubjectGeneration int64               `json:"subjectGeneration,omitempty"`
+	Phase             ExecutionPhase      `json:"phase"`
+	Outcome           ExecutionOutcome    `json:"outcome,omitempty"`
+	PrimaryCondition  *ConditionSummary   `json:"primaryCondition,omitempty"`
+	NativeState       string              `json:"nativeState,omitempty"`
+	SuspendRequested  *bool               `json:"suspendRequested,omitempty"`
+	JobSet            *JobSetExecution    `json:"jobset,omitempty"`
+}
+
+type ExecutionController string
+
+const ExecutionControllerJobSet ExecutionController = "jobset"
+
+// Pending requires observed inactivity; absent evidence is Unknown. Active
+// includes startup, retries and cleanup, not proof that user code is running.
+// Suspended requires controller evidence, not just requested intent. Finished
+// requires a root outcome; all other phases omit it. Child failures are not root outcomes.
+type ExecutionPhase string
+
+const (
+	ExecutionPending   ExecutionPhase = "pending"
+	ExecutionActive    ExecutionPhase = "active"
+	ExecutionSuspended ExecutionPhase = "suspended"
+	ExecutionFinished  ExecutionPhase = "finished"
+	ExecutionUnknown   ExecutionPhase = "unknown"
+)
+
+// ExecutionOutcome is extensible. Consumers must retain unfamiliar values as
+// unclassified outcomes rather than coerce them to success or failure.
+type ExecutionOutcome string
+
+const (
+	ExecutionSucceeded ExecutionOutcome = "succeeded"
+	ExecutionFailed    ExecutionOutcome = "failed"
+)
+
+// JobSetExecution keeps declarations separate from reported child-Job counts.
+// ObservedRoles counts reported entries, not identity completeness or freshness.
+// Nil observed groups mean unavailable; present zero values mean observed zero.
+type JobSetExecution struct {
+	DeclaredRoles int64                `json:"declaredRoles"`
+	DeclaredJobs  int64                `json:"declaredJobs"`
+	ObservedRoles *int64               `json:"observedRoles,omitempty"`
+	Jobs          *ChildJobCounts      `json:"jobs,omitempty"`
+	Restarts      *JobSetRestartCounts `json:"restarts,omitempty"`
+}
+
+// ChildJobCounts uses the child-Job semantics shared by JobSet and TrainJob.
+// Ready can include completed Pods, active can include Pending Pods, and the
+// counters overlap. A nil block distinguishes unreported status from zero.
+type ChildJobCounts struct {
+	Ready     int64 `json:"ready"`
+	Active    int64 `json:"active"`
+	Succeeded int64 `json:"succeeded"`
+	Failed    int64 `json:"failed"`
+	Suspended int64 `json:"suspended"`
+}
+
+// JobSetRestartCounts separates global and individual Job recreation and the
+// counts charged to the restart limit. These are not in-place/container retries.
+type JobSetRestartCounts struct {
+	Global                    *int64 `json:"global,omitempty"`
+	GlobalCountTowardsMax     *int64 `json:"globalCountTowardsMax,omitempty"`
+	Individual                *int64 `json:"individual,omitempty"`
+	IndividualCountTowardsMax *int64 `json:"individualCountTowardsMax,omitempty"`
 }
 
 type PodSummary struct {
@@ -380,9 +670,11 @@ type HPAReplicaBounds struct {
 }
 
 type HPAReasonSummary struct {
-	ID      string `json:"id"`
-	Message string `json:"message"`
-	Detail  string `json:"detail,omitempty"`
+	ID              string `json:"id"`
+	Message         string `json:"message"`
+	Detail          string `json:"detail,omitempty"`
+	ConditionType   string `json:"conditionType,omitempty"`
+	ConditionReason string `json:"conditionReason,omitempty"`
 }
 
 type HPAMetricSummary struct {
@@ -407,9 +699,12 @@ type IssueSummary struct {
 // resource. HighestSeverity uses the canonical Checks severity ladder; it is
 // remediation priority, not proof of an active outage.
 type AuditSummary struct {
-	Count           int    `json:"count"`
-	HighestSeverity string `json:"highestSeverity,omitempty"`
-	TopFinding      string `json:"topFinding,omitempty"`
+	// MissingInputs describes unavailable inputs in the underlying audit scan,
+	// not additional findings or proof that this resource failed a check.
+	MissingInputs   []string `json:"missingInputs,omitempty"`
+	Count           int      `json:"count"`
+	HighestSeverity string   `json:"highestSeverity,omitempty"`
+	TopFinding      string   `json:"topFinding,omitempty"`
 }
 
 // PolicySummary aggregates external policy-engine signals. Only Kyverno
@@ -455,3 +750,16 @@ const (
 	OmittedCacheCold      OmittedReason = "cache_cold"
 	OmittedNotInstalled   OmittedReason = "not_installed"
 )
+
+// ReflectionContext contains declared metadata and authorized cached observations,
+// never a synchronization verdict. VisibleMirrors is not a complete inventory.
+type ReflectionContext struct {
+	DeclaredSource        string       `json:"declaredSource,omitempty"`
+	Source                *ContextRef  `json:"source,omitempty"`
+	SourceResourceVersion string       `json:"sourceResourceVersion,omitempty"`
+	RecordedSourceVersion string       `json:"recordedSourceVersion,omitempty"`
+	RecordedAt            string       `json:"recordedAt,omitempty"`
+	Automatic             *bool        `json:"automatic,omitempty"`
+	VisibleMirrors        []ContextRef `json:"visibleMirrors,omitempty"`
+	Truncated             bool         `json:"truncated,omitempty"`
+}

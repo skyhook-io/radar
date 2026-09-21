@@ -1,4 +1,4 @@
-import { ServerOff, RefreshCw, Loader2, Copy, Check, TerminalSquare, ChevronRight } from 'lucide-react'
+import { ServerOff, RefreshCw, Loader2, Copy, Check, TerminalSquare } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type { ConnectionState } from '../context/ConnectionContext'
 import { ContextSwitcher } from './ContextSwitcher'
@@ -6,8 +6,10 @@ import { parseContextName } from '../utils/context-name'
 import { useOpenLocalTerminal, ClusterName } from '@skyhook-io/k8s-ui'
 import { useAuthMe, useContexts } from '../api/client'
 import { Tooltip } from './ui/Tooltip'
-import { allShellSafe } from '../utils/shell-safe'
+import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
+import { allShellSafe, awsProfileFlag } from '../utils/shell-safe'
 import { apiUrl } from '../api/config'
+import { useCapabilitiesContext } from '../contexts/CapabilitiesContext'
 
 interface ConnectionErrorViewProps {
   connection: ConnectionState
@@ -32,7 +34,7 @@ interface AuthHints {
   hideAuthButton?: boolean
 }
 
-function getAuthHints(context: string): AuthHints {
+function getAuthHints(context: string, awsProfile?: string): AuthHints {
   const parsed = parseContextName(context)
 
   switch (parsed.provider) {
@@ -53,18 +55,19 @@ function getAuthHints(context: string): AuthHints {
       return result
     }
     case 'EKS': {
+      const profileFlag = awsProfileFlag(awsProfile)
       const result: AuthHints = {
         title: 'EKS Authentication Failed',
         hints: [
           'Radar could not get AWS credentials for this context.',
           'For AWS SSO contexts, the SSO session may need login.',
         ],
-        authCommand: { label: 'If this context uses AWS SSO, refresh credentials:', command: 'aws sso login' },
+        authCommand: { label: 'If this context uses AWS SSO, refresh credentials:', command: `aws sso login${profileFlag}` },
       }
       if (parsed.region && allShellSafe(parsed.clusterName, parsed.region)) {
         result.fallbackCommand = {
           label: 'If that doesn\'t work, refresh cluster credentials:',
-          command: `aws eks update-kubeconfig --name ${parsed.clusterName} --region ${parsed.region}`,
+          command: `aws eks update-kubeconfig --name ${parsed.clusterName} --region ${parsed.region}${profileFlag}`,
         }
       }
       return result
@@ -87,26 +90,34 @@ function getAuthHints(context: string): AuthHints {
   }
 }
 
-export function getAuthRejectedHints(context: string): AuthHints {
+export function getAuthRejectedHints(context: string, awsProfile?: string): AuthHints {
   const parsed = parseContextName(context)
 
   switch (parsed.provider) {
     case 'EKS': {
+      const profileFlag = awsProfileFlag(awsProfile)
       const result: AuthHints = {
         title: 'EKS Could Not Authenticate This Request',
         hints: [
           'EKS returned HTTP 401, so Kubernetes could not authenticate this request.',
           'The AWS credential may be missing, stale, or revoked, or its IAM principal may not be mapped through an EKS access entry or the cluster\'s legacy aws-auth configuration.',
           'If the credential is current, ask a cluster admin to verify the mapping for the IAM principal used by this context.',
-          'The diagnostic uses the terminal\'s current AWS profile. If the kubeconfig exec block pins AWS_PROFILE or --role-arn, use that profile or role instead.',
+          profileFlag
+            ? 'The commands below use the AWS profile pinned by this context\'s kubeconfig exec block. If it also pins --role-arn, inspect that role instead.'
+            : 'The diagnostic uses the terminal\'s current AWS profile. If the kubeconfig exec block pins AWS_PROFILE or --role-arn, use that profile or role instead.',
           'API and API_AND_CONFIG_MAP modes use access entries; CONFIG_MAP mode uses the aws-auth ConfigMap.',
         ],
-        fallbackCommand: { label: 'If this context uses the current AWS SSO profile, re-login and retry:', command: 'aws sso login' },
+        fallbackCommand: {
+          label: profileFlag ? 'If this profile uses AWS SSO, re-login and retry:' : 'If this context uses the current AWS SSO profile, re-login and retry:',
+          command: `aws sso login${profileFlag}`,
+        },
       }
       if (parsed.region && allShellSafe(parsed.clusterName, parsed.region)) {
         result.authCommand = {
-          label: 'Inspect the caller and authentication mode for the current terminal AWS profile:',
-          command: `aws sts get-caller-identity && aws eks describe-cluster --name ${parsed.clusterName} --region ${parsed.region} --query cluster.accessConfig.authenticationMode --output text`,
+          label: profileFlag
+            ? 'Inspect the caller and authentication mode for the pinned AWS profile:'
+            : 'Inspect the caller and authentication mode for the current terminal AWS profile:',
+          command: `aws sts get-caller-identity${profileFlag} && aws eks describe-cluster --name ${parsed.clusterName} --region ${parsed.region}${profileFlag} --query cluster.accessConfig.authenticationMode --output text`,
         }
         // A diagnostic, not a re-auth — the "Authenticate in terminal" button
         // would misrepresent what running it does.
@@ -166,7 +177,7 @@ function getAuthPluginStuckHints(): AuthHints {
   }
 }
 
-function getTimeoutHints(context: string): AuthHints | null {
+function getTimeoutHints(context: string, awsProfile?: string): AuthHints | null {
   const parsed = parseContextName(context)
   const baseHints = [
     'The Kubernetes API did not respond before the deadline.',
@@ -191,15 +202,16 @@ function getTimeoutHints(context: string): AuthHints | null {
       return result
     }
     case 'EKS': {
+      const profileFlag = awsProfileFlag(awsProfile)
       const result: AuthHints = {
         title: 'Connection Timed Out',
         hints: [...baseHints, 'If the endpoint is reachable, AWS credentials or SSO may need refresh.'],
-        authCommand: { label: 'If this context uses AWS SSO and network access looks healthy, refresh credentials:', command: 'aws sso login' },
+        authCommand: { label: 'If this context uses AWS SSO and network access looks healthy, refresh credentials:', command: `aws sso login${profileFlag}` },
       }
       if (parsed.region && allShellSafe(parsed.clusterName, parsed.region)) {
         result.fallbackCommand = {
           label: 'If that does not work, refresh cluster credentials:',
-          command: `aws eks update-kubeconfig --name ${parsed.clusterName} --region ${parsed.region}`,
+          command: `aws eks update-kubeconfig --name ${parsed.clusterName} --region ${parsed.region}${profileFlag}`,
         }
       }
       return result
@@ -321,17 +333,17 @@ export function CopyableCommand({ command, onRunInTerminal }: { command: string;
   )
 }
 
-export function selectConnectionHints(errorType: string | undefined, context: string, originalContext?: string): AuthHints | null {
+export function selectConnectionHints(errorType: string | undefined, context: string, originalContext?: string, awsProfile?: string): AuthHints | null {
   const parsedContext = originalContext || context
   switch (errorType) {
     case 'auth':
-      return getAuthHints(parsedContext)
+      return getAuthHints(parsedContext, awsProfile)
     case 'auth-rejected':
-      return getAuthRejectedHints(parsedContext)
+      return getAuthRejectedHints(parsedContext, awsProfile)
     case 'auth-plugin-stuck':
       return getAuthPluginStuckHints()
     case 'timeout':
-      return getTimeoutHints(parsedContext)
+      return getTimeoutHints(parsedContext, awsProfile)
     default:
       return null
   }
@@ -343,12 +355,15 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
   const isAuthRejected = connection.errorType === 'auth-rejected'
   const isAuthPluginStuck = connection.errorType === 'auth-plugin-stuck'
   const isAuthError = isAuth || isAuthRejected || isAuthPluginStuck
-  const { data: contexts } = useContexts()
-  const originalContext = contexts?.find((context) => context.name === connection.context)?.originalName
-  const commandInfo = selectConnectionHints(connection.errorType, connection.context || '', originalContext)
+  const { data: contexts, isLoading: contextsLoading } = useContexts()
+  const matchedContext = contexts?.find((context) => context.name === connection.context)
+  const originalContext = matchedContext?.originalName
+  const awsProfile = contextsLoading ? undefined : matchedContext?.awsProfile
+  const commandInfo = selectConnectionHints(connection.errorType, connection.context || '', originalContext, awsProfile)
   const errorInfo = commandInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
   const { data: authMe } = useAuthMe()
+  const { localTerminal } = useCapabilitiesContext()
   const rawErrorDefaultOpen = !connection.errorType || connection.errorType === 'unknown'
   const [showRawError, setShowRawError] = useState(rawErrorDefaultOpen)
 
@@ -356,11 +371,8 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
     setShowRawError(rawErrorDefaultOpen)
   }, [connection.error, rawErrorDefaultOpen])
 
-  // Auto-retry after successful auth. The terminal shell runs on the server
-  // host, so the auth command itself fixes the server's credentials in every
-  // mode — but the chained retry curl carries no session cookie, so it 401s
-  // once /api/connection is auth-gated. Only chain it when auth is *known*
-  // disabled (authMe still loading → don't chain a doomed call).
+  // The local terminal is only available in unauthenticated local mode, but
+  // authMe may still be loading when the capability response arrives.
   const retryCmd = `curl -s -X POST http://${window.location.host}${apiUrl('/connection/retry')} > /dev/null`
 
   const handleAuthInTerminal = () => {
@@ -421,8 +433,8 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
             {commandInfo?.authCommand && (
               <div className="mt-3">
                 <p className="text-xs text-theme-text-tertiary">{commandInfo.authCommand.label}</p>
-                <CopyableCommand command={commandInfo.authCommand.command} onRunInTerminal={commandInfo.authCommand.runnable === false ? undefined : handleRunInTerminal} />
-                {isAuthError && !commandInfo?.hideAuthButton && commandInfo.authCommand.runnable !== false && (
+                <CopyableCommand command={commandInfo.authCommand.command} onRunInTerminal={!localTerminal || commandInfo.authCommand.runnable === false ? undefined : handleRunInTerminal} />
+                {localTerminal && isAuthError && !commandInfo?.hideAuthButton && commandInfo.authCommand.runnable !== false && (
                   <button
                     onClick={handleAuthInTerminal}
                     className="mt-3 w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium btn-brand rounded-md"
@@ -436,7 +448,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
             {commandInfo?.fallbackCommand && (
               <div className="mt-4 pt-3 border-t border-theme-border/50">
                 <p className="text-xs text-theme-text-tertiary">{commandInfo.fallbackCommand.label}</p>
-                <CopyableCommand command={commandInfo.fallbackCommand.command} onRunInTerminal={commandInfo.fallbackCommand.runnable === false ? undefined : handleRunInTerminal} />
+                <CopyableCommand command={commandInfo.fallbackCommand.command} onRunInTerminal={!localTerminal || commandInfo.fallbackCommand.runnable === false ? undefined : handleRunInTerminal} />
               </div>
             )}
             {connection.error && (
@@ -448,18 +460,16 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
                   onClick={() => setShowRawError((open) => !open)}
                   className="flex items-center gap-1 text-xs font-medium text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
                 >
-                  <ChevronRight className={`h-3.5 w-3.5 transition-transform duration-200 ${showRawError ? 'rotate-90' : ''}`} />
+                  <CollapseChevron open={showRawError} className="h-3.5 w-3.5" />
                   Raw error
                 </button>
-                <div className={`issue-details-motion ${showRawError ? 'issue-details-motion-open' : ''}`}>
-                  <div className="overflow-hidden">
-                    <div id="connection-raw-error" className="mt-2 bg-theme-elevated border border-theme-border rounded-md p-3 overflow-auto max-h-32">
-                      <code className="text-xs text-theme-text-tertiary font-mono whitespace-pre-wrap break-words">
-                        {connection.error}
-                      </code>
-                    </div>
+                <Collapse open={showRawError} id="connection-raw-error">
+                  <div className="mt-2 bg-theme-elevated border border-theme-border rounded-md p-3 overflow-auto max-h-32">
+                    <code className="text-xs text-theme-text-tertiary font-mono whitespace-pre-wrap break-words">
+                      {connection.error}
+                    </code>
                   </div>
-                </div>
+                </Collapse>
               </div>
             )}
           </div>

@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Bug, X, ChevronDown, ChevronUp } from 'lucide-react'
+import { Bug, X } from 'lucide-react'
+import { Collapse, CollapseChevron, useDisclosure } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 import { useRuntimeStats } from '../api/client'
 import { Tooltip } from './ui/Tooltip'
 
@@ -14,6 +15,7 @@ function formatUptime(seconds: number): string {
 export function DebugOverlay() {
   const [visible, setVisible] = useState(true)
   const [expanded, setExpanded] = useState(false)
+  const disclosure = useDisclosure(expanded)
   const { data } = useRuntimeStats(visible)
 
   if (!visible) {
@@ -40,9 +42,11 @@ export function DebugOverlay() {
         <div className="flex-1" />
         <button
           onClick={() => setExpanded(!expanded)}
+          {...disclosure.buttonProps}
+          aria-label={expanded ? 'Collapse debug stats' : 'Expand debug stats'}
           className="p-0.5 text-theme-text-tertiary hover:text-theme-text-secondary"
         >
-          {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronUp className="w-3 h-3" />}
+          <CollapseChevron open={expanded} className="w-3 h-3" />
         </button>
         <button
           onClick={() => setVisible(false)}
@@ -60,8 +64,8 @@ export function DebugOverlay() {
               <span className="text-theme-text-tertiary">Heap</span>
               <span className="text-theme-text-primary">{runtime.heapMB.toFixed(1)} MB</span>
             </div>
-            {expanded && (
-              <>
+            <Collapse open={expanded} id={disclosure.panelId}>
+              <div className="space-y-0.5">
                 <div className="flex justify-between gap-4">
                   <span className="text-theme-text-tertiary">Objects</span>
                   <span className="text-theme-text-primary">{runtime.heapObjectsK.toFixed(1)}K</span>
@@ -84,8 +88,8 @@ export function DebugOverlay() {
                   <span className="text-theme-text-tertiary">Resources</span>
                   <span className="text-theme-text-primary">{data?.resourceCount ?? '-'}</span>
                 </div>
-              </>
-            )}
+              </div>
+            </Collapse>
           </>
         ) : (
           <span className="text-theme-text-tertiary">Loading…</span>

@@ -1,11 +1,15 @@
 .PHONY: build install clean dev frontend backend test test-e2e test-chart lint help restart restart-fe kill watch-backend watch-frontend loadtest
 .PHONY: calico-demo calico-demo-down calico-demo-status
+.PHONY: kueue-demo kueue-demo-down kueue-demo-status kueue-demo-verify
 .PHONY: cilium-demo cilium-demo-down cilium-demo-status
 .PHONY: gpu-ecosystem-demo gpu-ecosystem-demo-down gpu-ecosystem-demo-status
+.PHONY: kubecost-demo kubecost-demo-down kubecost-demo-status
+.PHONY: jobset-demo jobset-demo-down jobset-demo-reset jobset-demo-status jobset-demo-verify
+.PHONY: kuberay-demo kuberay-demo-down kuberay-demo-reset kuberay-demo-status kuberay-demo-verify
 .PHONY: release release-binaries-dry docker docker-test docker-multiarch docker-push
 .PHONY: desktop desktop-binary desktop-dev desktop-package-darwin desktop-package-windows desktop-package-linux
 
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+VERSION ?= $(shell git describe --tags --match 'v*' --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -X main.version=$(VERSION)
 DOCKER_REPO ?= ghcr.io/skyhook-io/radar
 RADAR_FLAGS ?=
@@ -288,6 +292,13 @@ beyla-demo-down:
 beyla-demo-status:
 	./scripts/beyla-demo.sh status
 
+.PHONY: workload-metrics-demo workload-metrics-demo-check
+workload-metrics-demo:
+	bash scripts/workload-metrics-demo.sh up
+
+workload-metrics-demo-check:
+	bash scripts/workload-metrics-demo.sh check
+
 # Bootstrap a kind cluster with Cilium + Hubble Relay and traffic workloads,
 # for exercising every Hubble connection lane: direct in-cluster dial
 # (plaintext and TLS/SAN-discovery via `tls`), and the port-forward fallback
@@ -313,6 +324,68 @@ gpu-ecosystem-demo-down:
 
 gpu-ecosystem-demo-status:
 	./scripts/gpu-ecosystem-demo.sh status
+
+# Kubecost 3 on kind with ephemeral storage, deterministic prices, accelerated
+# FinOps Agent exports, and Deployment/StatefulSet/DaemonSet fixtures. Exercises
+# the real allocation/asset API plus Radar's local port-forward and in-cluster
+# Service-DNS lanes. See scripts/kubecost-demo/README.md.
+kubecost-demo:
+	./scripts/kubecost-demo.sh up
+
+kubecost-demo-down:
+	./scripts/kubecost-demo.sh down
+
+kubecost-demo-status:
+	./scripts/kubecost-demo.sh status
+
+# Focused live Kueue controller lane. Complements the controller-free GPU
+# breadth fixtures with admitted, quota-blocked, and held-queue reconciliation.
+# See scripts/kueue-demo/README.md for the proof boundary.
+kueue-demo:
+	./scripts/kueue-demo.sh up
+
+kueue-demo-down:
+	./scripts/kueue-demo.sh down
+
+kueue-demo-status:
+	./scripts/kueue-demo.sh status
+
+kueue-demo-verify:
+	./scripts/kueue-demo.sh verify
+
+# Focused live JobSet controller lane. Complements the controller-free GPU
+# breadth fixtures with role/index lineage, dependency gating, and a terminal
+# failure. See scripts/jobset-demo/README.md for the proof boundary.
+jobset-demo:
+	./scripts/jobset-demo.sh up
+
+jobset-demo-down:
+	./scripts/jobset-demo.sh down
+
+jobset-demo-reset:
+	./scripts/jobset-demo.sh reset
+
+jobset-demo-status:
+	./scripts/jobset-demo.sh status
+
+jobset-demo-verify:
+	./scripts/jobset-demo.sh verify
+# Real KubeRay reconciliation for one head-only RayService: a healthy active
+# Serve revision plus an intentionally non-runnable pending NewCluster revision.
+kuberay-demo:
+	./scripts/kuberay-demo.sh up
+
+kuberay-demo-down:
+	./scripts/kuberay-demo.sh down
+
+kuberay-demo-reset:
+	./scripts/kuberay-demo.sh reset
+
+kuberay-demo-status:
+	./scripts/kuberay-demo.sh status
+
+kuberay-demo-verify:
+	./scripts/kuberay-demo.sh verify
 
 # Bootstrap a kind cluster running real Calico with its aggregated API server,
 # plus the policy shapes the Calico surfaces render (both API groups serving the
@@ -455,6 +528,10 @@ help:
 	@echo "  make beyla-demo       - Grafana Beyla eBPF traffic fixtures"
 	@echo "  make cilium-demo      - Cilium + Hubble Relay, all Radar connection lanes"
 	@echo "  make gpu-ecosystem-demo - 37 GPU, batch, and AI/ML resource fixtures"
+	@echo "  make kubecost-demo    - Kubecost 3 current-cost API and Radar connection lanes"
+	@echo "  make kueue-demo      - Live Kueue admission and pre-Pod blocker fixtures"
+	@echo "  make jobset-demo      - Live JobSet role, dependency, and failure fixtures"
+	@echo "  make kuberay-demo     - Real RayService active/pending revision lifecycle"
 	@echo "  make calico-demo      - Real Calico, both API groups, staged policies"
 	@echo ""
 	@echo "Desktop:"

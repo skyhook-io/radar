@@ -2,6 +2,7 @@ import { clsx } from 'clsx'
 import { HelpCircle } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
 import { formatCostPerHour, formatProjectedMonthlyRate } from './format'
+import { costRateLabels } from './source'
 
 interface CurrentAllocationUseProps {
   currency: string
@@ -14,10 +15,11 @@ interface CurrentAllocationUseProps {
   cpuUsageAvailable: boolean
   memoryUsageAvailable: boolean
   scopeNote?: string
+  window?: string
 }
 
 export const ALLOCATION_USE_TOOLTIP =
-  'OpenCost allocation uses the greater of requested or observed CPU and memory. The percentages compare observed use with that allocated amount; they are not request headroom or a right-sizing recommendation.'
+  'Cost allocation uses the greater of requested or observed CPU and memory. The percentages compare observed use with that allocated amount; they are not request headroom or a right-sizing recommendation.'
 
 export function formatAllocatedUse(
   allocationCost: number,
@@ -43,23 +45,25 @@ export function CurrentAllocationUse({
   cpuUsageAvailable,
   memoryUsageAvailable,
   scopeNote,
+  window,
 }: CurrentAllocationUseProps) {
   const splitTotal = cpuCost + memoryCost
   const cpuPct = splitTotal > 0 ? (cpuCost / splitTotal) * 100 : 0
   const memoryPct = splitTotal > 0 ? (memoryCost / splitTotal) * 100 : 0
+  const labels = costRateLabels(window)
 
   return (
     <section className="rounded-lg border border-theme-border bg-theme-surface/50 p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-1.5">
-            <div className="text-sm font-semibold text-theme-text-primary">Current allocation and use</div>
+            <div className="text-sm font-semibold text-theme-text-primary">{labels.allocationTitle}</div>
             <Tooltip content={ALLOCATION_USE_TOOLTIP} className="max-w-[320px] whitespace-normal text-left" delay={150}>
               <HelpCircle className="h-3.5 w-3.5 cursor-help text-theme-text-tertiary transition-colors hover:text-theme-text-secondary" />
             </Tooltip>
           </div>
           <div className="text-xs text-theme-text-tertiary">
-            Allocation and CPU use: 1h average · Memory use: current
+            {labels.allocationPeriod}
             {scopeNote ? ` · ${scopeNote}` : ''}
           </div>
         </div>
@@ -69,7 +73,7 @@ export function CurrentAllocationUse({
           </div>
           {dataAvailable && (
             <div className="text-[10px] text-theme-text-tertiary tabular-nums">
-              {formatCostPerHour(hourlyCost, currency)} current rate
+              {formatCostPerHour(hourlyCost, currency)} · {labels.rate}
             </div>
           )}
         </div>

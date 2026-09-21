@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import { Tooltip } from '../../ui/Tooltip'
 import {
   getCNPGClusterStatus,
+  getCNPGClusterAvailability,
   classifyCNPGClusterPhase,
   getCNPGClusterInstances,
   getCNPGClusterPrimary,
@@ -66,8 +67,18 @@ export function CNPGClusterCell({ resource, column }: { resource: any; column: s
           </Tooltip>
         )
       }
+      // Colour tracks the badge: a was-up total outage (readyInstances omitted,
+      // so readyKnown is false) reads red like its "Not Ready" badge rather than
+      // muted grey, and a partial shortfall stays yellow. Without the
+      // availability check the most severe count was the least emphasised.
+      const down = getCNPGClusterAvailability(resource) === 'down'
       return (
-        <span className={clsx('text-sm', readyKnown && ready < desired ? 'text-yellow-400' : 'text-theme-text-secondary')}>
+        <span
+          className={clsx(
+            'text-sm',
+            down ? 'text-red-400' : readyKnown && ready < desired ? 'text-yellow-400' : 'text-theme-text-secondary',
+          )}
+        >
           {instances}
         </span>
       )
@@ -276,7 +287,7 @@ export function CNPGPoolerCell({ resource, column }: { resource: any; column: st
       return (
         <span className={clsx(
           'badge-sm',
-          type === 'rw' ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'
+          type === 'rw' ? 'status-blue' : 'status-purple'
         )}>
           {type}
         </span>

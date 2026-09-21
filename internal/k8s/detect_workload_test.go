@@ -43,7 +43,7 @@ func TestDetectHPAProblems(t *testing.T) {
 			},
 			wantCount:   1,
 			wantProblem: "maxed",
-			wantReason:  "10/10 replicas (wants 10): TooManyReplicas: the desired replica count is more than the maximum replica count",
+			wantReason:  "10/10 replicas (wants 10): TooManyReplicas: HPA is capped at maxReplicas=10",
 			wantNoDiag:  true,
 		},
 		{

@@ -8,6 +8,20 @@
 # enabled (single PVC + SQLite cannot be safely shared across pods).
 replicaCount: 1
 
+# Shared OSS configuration is read-only in the UI. These values are loaded at
+# startup; changing them rolls the Pod. Cloud keeps its existing settings path.
+# null retains Radar's default ignored system namespaces. To include all
+# namespaces, set audit: {ignoredNamespaces: [], disabledChecks: []}.
+audit: null
+# audit:
+#   ignoredNamespaces: [kube-system, kube-node-lease, kube-public, "*-system"]
+#   disabledChecks: [] # Check IDs from GET /api/audit -> checks
+
+helm:
+  # Prefixes, not full chart references. Registry credentials are not stored here.
+  ociSources: []
+  # - oci://ghcr.io/myorg/charts
+
 image:
   repository: ghcr.io/skyhook-io/radar
   pullPolicy: IfNotPresent
@@ -66,7 +80,16 @@ rbac:
   # Automatically enables secrets read access (needed for Helm release storage).
   helm: false
 
-  # Allow reading secrets (shows secrets in resource list)
+  # Allow reading secrets (shows secrets in the resource list, and backs the
+  # Helm releases view in no-auth installs since Helm stores releases in Secrets).
+  # Auto-enabled when rbac.helm is on, when auth is on (auth.mode != none), or in
+  # cloud mode. Under auth/cloud every Secret read is re-checked against the
+  # requesting user's own RBAC, so the ServiceAccount grant only lets the shared
+  # cache hold Secrets; it does not expose them to users who can't read them
+  # themselves. Like viewRBAC and viewWebhooks, this flag therefore only changes
+  # no-auth installs. The grant is cluster-wide get/list/watch on all Secrets, and
+  # setting this to false does not remove it in those modes: read the rendered
+  # ClusterRole.
   secrets: false
 
   # Allow reading RBAC objects (Roles, RoleBindings, ClusterRoles, ClusterRoleBindings)
@@ -260,11 +283,11 @@ httpRoute:
 
 resources:
   limits:
-    cpu: 500m
-    memory: 512Mi
+    cpu: 2
+    memory: 1Gi
   requests:
-    cpu: 100m
-    memory: 128Mi
+    cpu: 200m
+    memory: 256Mi
 
 # Timeline storage configuration
 #
@@ -279,27 +302,45 @@ resources:
 #     that happened while you weren't looking, or run Radar in-cluster as a
 #     long-lived deployment. Adds operational concerns: the PVC fills if
 #     retention is unbounded; restart on a multi-GB DB is slower.
+#   postgres — events persist in an externally managed PostgreSQL database.
+#     Pick this when you want history to survive pod restarts and rolling
+#     updates without attaching a PVC, or when your platform already runs a
+#     managed database. The DSN must be provided via an existing Kubernetes
+#     Secret; Helm never touches the credential.
+#     This does NOT make Radar multi-replica: informer caches, SSE streams,
+#     and exec/port-forward sessions are still per-pod, so replicaCount must
+#     stay 1. Only the timeline is shared.
 #
 # Timeline volume depends on cluster size and controller churn. Keep `maxSize`
 # below the PVC `size` so Radar can prune before the volume fills; tune
 # `retention`, `maxSize`, and PVC `size` together.
 timeline:
-  # Storage backend: "memory" or "sqlite"
+  # Storage backend: "memory", "sqlite", or "postgres"
   storage: memory
   # Path to SQLite database (only used when storage is "sqlite")
   # Note: Requires a PVC when using sqlite
   dbPath: /data/timeline.db
   # Maximum number of events to retain (memory store only — currently
-  # ignored by sqlite; use `retention` instead).
+  # ignored by sqlite and postgres; use `retention` instead).
   historyLimit: 10000
-  # SQLite retention: how long to keep events. Go duration (e.g. 168h, 720h).
+  # Retention: how long to keep events. Go duration (e.g. 168h, 720h).
   # "0" disables cleanup (events table grows unbounded — not recommended for
   # in-cluster deployments). Cleanup runs hourly + once at startup.
+  # Applies to sqlite and postgres.
   retention: 168h
   # SQLite max storage size. When the DB + WAL exceed this value, Radar prunes
   # oldest events until storage is back under the low-water mark. Set "0" to
-  # disable size-based pruning.
+  # disable size-based pruning. Not used for postgres or memory.
   maxSize: 800Mi
+  # PostgreSQL configuration (only used when storage is "postgres")
+  postgres:
+    # Name of an existing, same-namespace Secret containing the PostgreSQL DSN.
+    # Required when storage is "postgres". The chart creates no PostgreSQL
+    # resources, so the Secret may come from any operator or secret manager.
+    existingSecret: ""
+    # Key within existingSecret that holds the DSN value. Set this to match the
+    # producer's key, for example "uri" for an operator-managed Secret.
+    secretKey: dsn
 
 # Authentication and RBAC configuration
 auth:
@@ -456,6 +497,17 @@ cloud:
       viewer: true
       member: true
       owner: true
+    # Read Radar's curated integrations with explicit group/resource grants.
+    # Includes full specs/status (including inline configuration), not just UI
+    # summaries. Credential-bearing exceptions are listed in files/integration-read-baseline.yaml.
+    # Independent of *ClusterRole: custom base roles still receive this add-on.
+    # Cluster kinds additionally require clusterScopedRead.<tier>. A false here
+    # removes only this add-on, not grants from other roles. For customer-managed
+    # RBAC only, set defaultRbac.create=false and supply your own group bindings.
+    integrationRead:
+      viewer: true
+      member: true
+      owner: true
     # Grant the owner tier node cordon/drain. Cluster-scoped WRITE, so OFF by
     # default. Blast radius when enabled: `patch nodes` can't be field-scoped
     # by RBAC (also permits label/taint edits cluster-wide), and
@@ -473,9 +525,27 @@ mcp:
 
 # OpenCost/Kubecost display configuration
 cost:
+  # Cost data source: "auto", "prometheus", or "kubecost". Empty uses Auto;
+  # source controls stay editable only when the Kubecost URL, cluster ID, and
+  # existing Secret are also empty.
+  source: ""
   # Optional ISO 4217 override for OpenCost/Kubecost values. Empty detects the
   # running cost tool's configured currency when available, then uses USD.
   currency: ""
+  kubecost:
+    # Kubecost 3 Aggregator base URL. Empty auto-discovers tcp-api:9004 in the
+    # connected cluster and, without an API key, can fall back to the same
+    # Service's tcp-api-rbac:9008 when 9004 requires SAML/OIDC. Federated
+    # agent-only clusters need the central URL. Root and /model URLs are accepted.
+    url: ""
+    # Cluster ID used to filter central/federated Aggregator results. Empty
+    # detects a literal CLUSTER_ID from an active FinOps Agent or Aggregator.
+    clusterId: ""
+    # Optional Secret containing a Kubecost service-account API key. Radar sends
+    # it only to the configured origin as X-API-KEY. When a key is configured,
+    # Radar will not bypass a failed authentication attempt through port 9008.
+    existingSecret: ""
+    existingSecretKey: "api-key"
 
 # Traffic source configuration
 traffic:
@@ -486,8 +556,19 @@ traffic:
   #   http://vmsingle.victoria-metrics:8428
   #   http://vmselect.victoria-metrics:8481/select/0/prometheus
   prometheusUrl: ""
+  # Optional workload-metrics scope override, not a feature enable switch.
+  # Leave both unset for automatic matching; set at most one mode.
+  # Does not scope rightsizing, node/HPA/PVC or legacy network/storage queries.
+  prometheusSingleCluster: false
+  prometheusClusterLabels: {}
+  # Beyla Live Traffic matcher fragment. Workload charts use it only with an
+  # explicit scope override and accept one job equality or regex matcher.
+  # Automatic workload matching discovers custom jobs without this override.
+  beylaJobSelector: ""
   # HTTP headers sent with every Prometheus request. Required for
   # auth-protected backends (Bearer tokens, X-Scope-OrgID multi-tenancy, etc.).
+  # Setting headers requires prometheusUrl: Radar never sends credentials to
+  # auto-discovered endpoints, and the chart schema rejects the combination.
   # Values are rendered into the pod spec; use prometheusHeadersFromEnv for
   # secrets.
   # Example:
@@ -512,9 +593,8 @@ traffic:
 # Provisions the Argo CD API connection declaratively so it survives pod
 # restarts and needs no interactive Settings paste — the right shape for
 # in-cluster / Cloud deployments. Powers the full Git-rendered desired-vs-live
-# diff on GitOps Application pages. Leave token/existingSecret empty to configure
-# it interactively in Settings instead (note: that pick is stored under
-# /home/nonroot and is lost on restart unless persistence is enabled).
+# diff on GitOps Application pages. Configure shared OSS through these values;
+# Settings shows connection status but cannot edit installation configuration.
 #
 # Setting a token here makes the integration environment-managed: read-only in
 # the Settings UI, never written to disk. Mint a token with

@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -2852,6 +2853,24 @@ func TestAPIServiceHPA_MissingRequestNotAttributed(t *testing.T) {
 	}
 }
 
+func TestAPIServiceHPA_MissingRequestNotAttributedWhenRadarLeadsTheReason(t *testing.T) {
+	// The same case as above in the shape the workload detector now produces:
+	// Radar's reading of the condition leads the message and the controller's
+	// own sentence no longer appears in it. The guard has to recognise this
+	// spelling too, or a workload whose pods lack resource requests gets blamed
+	// on a metrics API outage.
+	apisvc := Issue{Kind: "APIService", Group: "apiregistration.k8s.io", Name: "v1beta1.metrics.k8s.io", Category: issuesapi.CategoryAPIServiceUnavailable, Severity: SeverityCritical, Reason: "FailedDiscoveryCheck"}
+	noReq := Issue{ID: "hpa-r2", Kind: "HorizontalPodAutoscaler", Namespace: "prod", Name: "web", Category: issuesapi.CategoryHPALimitedOrFailed, Severity: SeverityWarning,
+		Reason:  "FailedGetResourceMetric: HPA controller cannot read scaling metrics",
+		Message: "HPA controller cannot read scaling metrics",
+		Cause:   "Target pods do not declare cpu resource requests, so the HPA cannot compute utilization."}
+	p := &fakeProvider{}
+	out := enrichDiagnosticContext([]Issue{apisvc}, []Issue{apisvc, noReq}, nil, p)
+	if out[0].DiagnosticContext != nil {
+		t.Fatalf("a missing-request HPA failure must not be attributed to the metrics API, got %+v", out[0].DiagnosticContext)
+	}
+}
+
 func TestAPIServiceHPA_ContainerResourceMetric(t *testing.T) {
 	// ContainerResource HPA metrics fail with FailedGetContainerResourceMetric and
 	// are also served by metrics.k8s.io — they must link under the resource family.
@@ -3072,6 +3091,39 @@ func TestSymptomNamesSecret(t *testing.T) {
 	for _, c := range cases {
 		if got := symptomNamesSecret(mk(c.msg, c.ns), "foo"); got != c.want {
 			t.Errorf("symptomNamesSecret(%q) = %v, want %v", c.msg, got, c.want)
+		}
+	}
+}
+
+func TestAdmissionWebhookCallFailureDoesNotBlameService(t *testing.T) {
+	for _, detail := range []string{"dial tcp: connection refused", "context deadline exceeded", "tls: failed to verify certificate: x509: certificate signed by unknown authority", `denied: no endpoints available for service "policy-webhook"`} {
+		for _, readable := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/readable=%v", detail, readable), func(t *testing.T) {
+				message := `failed calling webhook "validate.example.com": Post "https://policy-webhook.hooks.svc:443/validate": ` + detail
+				reason := "WebhookUnavailable"
+				if strings.HasPrefix(detail, "denied:") {
+					message = `admission webhook "policy.example.com" denied the request: ` + message
+					reason = "WebhookDenied"
+				}
+				p := &fakeProvider{
+					problems:    []k8s.Detection{{Kind: "Service", Namespace: "hooks", Name: "policy-webhook", Severity: "warning", Reason: k8s.SelectorMatchesNoPodsReason, Fingerprint: k8s.NoReadyEndpointsFingerprint}},
+					scheduling:  []k8s.Detection{{Kind: "Deployment", Group: "apps", Namespace: "apps", Name: "catalog", Severity: "critical", Reason: reason, Message: message}},
+					webhookRefs: map[string][]AdmissionWebhookRef{"hooks/policy-webhook": {{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"}, WebhookName: "validate.example.com", FailurePolicy: "Fail"}}},
+				}
+				out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return readable }})
+				found := false
+				for _, issue := range out {
+					if issue.Kind == "Deployment" {
+						found = true
+						if issue.Category != issuesapi.CategoryAdmissionWebhookBlocking || issue.IncidentParent != nil || !strings.Contains(issue.Message, detail) {
+							t.Fatalf("call failure lost evidence or acquired backend blame: %+v", issue)
+						}
+					}
+				}
+				if !found {
+					t.Fatalf("call-failure issue missing: %+v", out)
+				}
+			})
 		}
 	}
 }

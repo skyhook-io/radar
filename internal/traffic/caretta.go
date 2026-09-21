@@ -122,9 +122,9 @@ func (c *CarettaSource) applyHeaders(req *http.Request) {
 func NewCarettaSource(client kubernetes.Interface) *CarettaSource {
 	return &CarettaSource{
 		k8sClient: client,
-		httpClient: &http.Client{
+		httpClient: prom.SameOriginRedirectClient(&http.Client{
 			Timeout: 10 * time.Second,
-		},
+		}),
 		inCluster: k8s.IsInCluster(),
 	}
 }
@@ -369,6 +369,12 @@ func (c *CarettaSource) discoverPrometheus(ctx context.Context) string {
 		// Clear stale address
 		c.prometheusAddr = ""
 		c.metricsBasePath = ""
+	}
+
+	if prom.HeadersRequireURL(c.metricsURL, c.headers) {
+		log.Printf("[caretta] Discovery skipped: %v", prom.ErrHeadersRequireURL)
+		c.backendWarning = prom.ErrHeadersRequireURL.Error()
+		return ""
 	}
 
 	// Layer 1: Manual URL override — if set, use it exclusively (don't fall through)
@@ -957,6 +963,16 @@ func (c *CarettaSource) Connect(ctx context.Context, contextName string) (*portf
 		c.prometheusAddr = ""
 		c.metricsBasePath = ""
 		c.currentContext = contextName
+	}
+
+	if prom.HeadersRequireURL(c.metricsURL, c.headers) {
+		log.Printf("[caretta] Discovery skipped: %v", prom.ErrHeadersRequireURL)
+		c.backendWarning = prom.ErrHeadersRequireURL.Error()
+		return &portforward.ConnectionInfo{
+			Connected:   false,
+			ContextName: contextName,
+			Error:       prom.ErrHeadersRequireURL.Error(),
+		}, nil
 	}
 
 	// Layer 1: Manual URL override — if set, use it exclusively (don't fall through)

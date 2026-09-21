@@ -29,7 +29,8 @@ import (
 // in internal/* pre-compute IssueSummary / AuditSummary / PolicyReports and
 // pass them in, so we don't reach into internal/issues or internal/audit.
 type Options struct {
-	Tier ContextTier
+	Reflections ReflectionLookup
+	Tier        ContextTier
 
 	// AccessChecker gates every emitted ContextRef. nil = no gating (treat
 	// as fully authorized — local-kubeconfig / tests).
@@ -61,6 +62,9 @@ type Options struct {
 	// Pre-computed summaries — pass-through into the response.
 	IssueSummary  *IssueSummary
 	AuditSummary  *AuditSummary
+	Scheduling    *SchedulingSummary
+	Execution     *ExecutionSummary
+	Serving       *ServingSummary
 	PolicyReports PolicyReportLookup // nil = Kyverno not installed / no findings
 	AppReferences *AppReferences
 	// Attached only after the evidence Job and Pod pass the access gate.
@@ -234,9 +238,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 			toContextRefs(selected),
 			"selectedBy", omitted)
 
-		rc.ScaledBy = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(rel.Scalers),
-			"scaledBy", omitted)
+		rc.ScaledBy = buildScaledBy(ctx, rel.Scalers, opts.Provider, opts.AccessChecker, omitted)
 	}
 
 	// 3. Pod-specific: RunsOn (Node) + Uses (ConfigMap/Secret/PVC/SA).
@@ -298,6 +300,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	if svc, ok := obj.(*corev1.Service); ok {
 		rc.ServiceSummary = buildServiceSummary(ctx, svc, opts.ServiceBackends, opts.AccessChecker, omitted)
 	}
+	rc.Reflection = buildReflection(ctx, obj, opts.Reflections, opts.AccessChecker, omitted)
 	rc.ReferencedBy = buildReferencedBy(ctx, obj, opts.Provider, opts.AccessChecker, omitted)
 	if uses := buildUsesFromWorkload(ctx, obj, opts.AccessChecker, omitted); uses != nil {
 		rc.Uses = uses
@@ -317,6 +320,9 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	}
 	rc.HPASummary = buildHPASummary(obj)
 	rc.StatusSummary = buildStatusSummary(obj)
+	rc.Scheduling = filterSchedulingSummary(ctx, opts.Scheduling, opts.AccessChecker, omitted)
+	rc.Execution = opts.Execution
+	rc.Serving = opts.Serving
 
 	// 4. Pre-computed summaries — pass-through.
 	rc.IssueSummary = opts.IssueSummary
@@ -1200,6 +1206,90 @@ func buildCronJobSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 	return out
 }
 
+// buildScaledBy gates the scaler refs first and only then looks up the HPA
+// object, so a scaler the caller cannot read never reaches the diagnosis and
+// nothing about it (state, bounds, metric names) can leak through the summary.
+func buildScaledBy(ctx context.Context, scalers []topology.ResourceRef, provider topology.ResourceProvider, ac RefAccessChecker, omitted *omittedTracker) []ScalerRef {
+	refs := filterRefs(ctx, ac, toContextRefs(scalers), "scaledBy", omitted)
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]ScalerRef, 0, len(refs))
+	var hpas map[string]*autoscalingv2.HorizontalPodAutoscaler
+	hpasLoaded := false
+	for _, ref := range refs {
+		entry := ScalerRef{ContextRef: ref}
+		if isHPARef(ref) && provider != nil {
+			if !hpasLoaded {
+				hpas = indexHPAs(provider)
+				hpasLoaded = true
+			}
+			if hpa := hpas[hpaKey(ref.Namespace, ref.Name)]; hpa != nil {
+				entry.HPASummary = buildHPASummary(hpa)
+				entry.ManagedBy = kedaScaledObjectRef(ctx, hpa, ac, omitted)
+			}
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// Topology refs carry the autoscaling group only when discovery resolved it;
+// without a dynamic provider the group is empty, as it is for core kinds.
+func isHPARef(ref ContextRef) bool {
+	return ref.Kind == "HorizontalPodAutoscaler" && (ref.Group == "" || ref.Group == "autoscaling")
+}
+
+// KEDA owns the HPAs it creates and also labels them with the ScaledObject
+// name; either is enough to attribute the HPA. The pointer is gated like any
+// other ref so a ScaledObject the caller cannot read is not named.
+func kedaScaledObjectRef(ctx context.Context, hpa *autoscalingv2.HorizontalPodAutoscaler, ac RefAccessChecker, omitted *omittedTracker) *ContextRef {
+	name := ""
+	for _, owner := range hpa.OwnerReferences {
+		if owner.Kind == "ScaledObject" && groupFromAPIVersion(owner.APIVersion) == "keda.sh" {
+			name = owner.Name
+			break
+		}
+	}
+	if name == "" {
+		name = hpa.Labels["scaledobject.keda.sh/name"]
+	}
+	if name == "" {
+		return nil
+	}
+	ref := &ContextRef{Kind: "ScaledObject", Group: "keda.sh", Namespace: hpa.Namespace, Name: name}
+	if !checkRef(ctx, ac, ref) {
+		omitted.add("scaledBy.managedBy", OmittedRBACDenied)
+		return nil
+	}
+	return ref
+}
+
+// indexHPAs keys the provider's HPAs so each scaler ref is one map lookup.
+// A workload can name several scalers and the cluster can hold thousands of
+// HPAs, so scanning the list per ref makes a context build quadratic in the
+// worst case. The list itself is the provider's only read API.
+func indexHPAs(provider topology.ResourceProvider) map[string]*autoscalingv2.HorizontalPodAutoscaler {
+	list, _ := provider.HorizontalPodAutoscalers()
+	byKey := make(map[string]*autoscalingv2.HorizontalPodAutoscaler, len(list))
+	for _, hpa := range list {
+		if hpa == nil {
+			continue
+		}
+		// Two HPAs cannot share a namespace and name, so a repeat key is a
+		// provider artefact; the first entry is the one to keep.
+		key := hpaKey(hpa.Namespace, hpa.Name)
+		if _, seen := byKey[key]; !seen {
+			byKey[key] = hpa
+		}
+	}
+	return byKey
+}
+
+func hpaKey(namespace, name string) string {
+	return namespace + "\x00" + name
+}
+
 func buildHPASummary(obj runtime.Object) *HPASummary {
 	hpa, ok := obj.(*autoscalingv2.HorizontalPodAutoscaler)
 	if !ok || hpa == nil {
@@ -1238,9 +1328,11 @@ func buildHPASummary(obj runtime.Object) *HPASummary {
 	}
 	for _, reason := range diagnosis.Reasons {
 		out.Reasons = append(out.Reasons, HPAReasonSummary{
-			ID:      string(reason.ID),
-			Message: reason.Message,
-			Detail:  reason.Detail,
+			ID:              string(reason.ID),
+			Message:         reason.Message,
+			Detail:          reason.Detail,
+			ConditionType:   reason.ConditionType,
+			ConditionReason: reason.ConditionReason,
 		})
 	}
 	return out
@@ -1304,6 +1396,7 @@ func buildStatusSummary(obj runtime.Object) *StatusSummary {
 	}
 	if conditions, ok, _ := unstructured.NestedSlice(status, "conditions"); ok {
 		if len(conditions) > maxSummaryItems {
+			out.ConditionsTruncated = true
 			conditions = conditions[:maxSummaryItems]
 		}
 		for _, item := range conditions {
@@ -1318,13 +1411,16 @@ func buildStatusSummary(obj runtime.Object) *StatusSummary {
 				Message:            truncateRunes(stringField(cond, "message"), 300),
 				LastTransitionTime: stringField(cond, "lastTransitionTime"),
 			}
+			if observedGeneration, ok, _ := unstructured.NestedInt64(cond, "observedGeneration"); ok {
+				summary.ObservedGeneration = observedGeneration
+			}
 			if summary.Type == "" && summary.Status == "" {
 				continue
 			}
 			out.Conditions = append(out.Conditions, summary)
 		}
 	}
-	if out.Phase == "" && len(out.Conditions) == 0 {
+	if out.Phase == "" && len(out.Conditions) == 0 && !out.ConditionsTruncated {
 		return nil
 	}
 	return out
@@ -1473,6 +1569,137 @@ func filterRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, fie
 		return nil
 	}
 	return out
+}
+
+func filterSchedulingSummary(ctx context.Context, summary *SchedulingSummary, ac RefAccessChecker, omitted *omittedTracker) *SchedulingSummary {
+	if summary == nil || len(summary.Observations) == 0 {
+		return nil
+	}
+	out := &SchedulingSummary{Observations: make([]SchedulingObservation, 0, len(summary.Observations))}
+	for i := range summary.Observations {
+		observation := summary.Observations[i]
+		if !checkRef(ctx, ac, &observation.Subject) {
+			omitted.add("scheduling.observations.subject", OmittedRBACDenied)
+			continue
+		}
+		filtered := observation
+		if observation.PrimaryCondition != nil {
+			condition := *observation.PrimaryCondition
+			filtered.PrimaryCondition = &condition
+		}
+		filtered.Disruptions = append([]ConditionSummary(nil), observation.Disruptions...)
+
+		filtered.Queues = nil
+		for _, queue := range observation.Queues {
+			filteredQueue := queue
+			filteredQueue.Roles = append([]SchedulingQueueRole(nil), queue.Roles...)
+			filteredQueue.Ref = nil
+			if queue.Ref != nil {
+				ref := *queue.Ref
+				if checkRef(ctx, ac, &ref) {
+					filteredQueue.Ref = &ref
+				} else {
+					omitted.add("scheduling.observations.queues.ref", OmittedRBACDenied)
+				}
+			}
+			filtered.Queues = append(filtered.Queues, filteredQueue)
+		}
+
+		filtered.Gates = nil
+		for _, gate := range observation.Gates {
+			filteredGate := gate
+			filteredGate.Ref = nil
+			if gate.Ref != nil {
+				ref := *gate.Ref
+				if checkRef(ctx, ac, &ref) {
+					filteredGate.Ref = &ref
+				} else {
+					omitted.add("scheduling.observations.gates.ref", OmittedRBACDenied)
+				}
+			}
+			if gate.RequeueAfterSeconds != nil {
+				requeueAfter := *gate.RequeueAfterSeconds
+				filteredGate.RequeueAfterSeconds = &requeueAfter
+			}
+			if gate.RetryCount != nil {
+				retryCount := *gate.RetryCount
+				filteredGate.RetryCount = &retryCount
+			}
+			filtered.Gates = append(filtered.Gates, filteredGate)
+		}
+
+		filtered.Kueue = filterKueueScheduling(ctx, observation.Kueue, ac, omitted)
+		out.Observations = append(out.Observations, filtered)
+	}
+	if len(out.Observations) == 0 {
+		return nil
+	}
+	return out
+}
+
+func filterKueueScheduling(ctx context.Context, scheduling *KueueScheduling, ac RefAccessChecker, omitted *omittedTracker) *KueueScheduling {
+	if scheduling == nil {
+		return nil
+	}
+	out := *scheduling
+	if scheduling.Active != nil {
+		active := *scheduling.Active
+		out.Active = &active
+	}
+	if scheduling.PodsReady != nil {
+		condition := *scheduling.PodsReady
+		out.PodsReady = &condition
+	}
+	if scheduling.WaitingForReplacementPods != nil {
+		condition := *scheduling.WaitingForReplacementPods
+		out.WaitingForReplacementPods = &condition
+	}
+	if scheduling.RequeueState != nil {
+		requeue := *scheduling.RequeueState
+		if scheduling.RequeueState.Count != nil {
+			count := *scheduling.RequeueState.Count
+			requeue.Count = &count
+		}
+		out.RequeueState = &requeue
+	}
+	if scheduling.ConcurrentAdmission != nil {
+		concurrent := *scheduling.ConcurrentAdmission
+		concurrent.ParentRef = nil
+		if scheduling.ConcurrentAdmission.ParentRef != nil {
+			parent := *scheduling.ConcurrentAdmission.ParentRef
+			if checkRef(ctx, ac, &parent) {
+				concurrent.ParentRef = &parent
+			} else {
+				omitted.add("scheduling.observations.kueue.concurrentAdmission.parentRef", OmittedRBACDenied)
+			}
+		}
+		out.ConcurrentAdmission = &concurrent
+	}
+
+	out.PodSetAssignments = nil
+	for _, assignment := range scheduling.PodSetAssignments {
+		filteredAssignment := assignment
+		if assignment.Count != nil {
+			count := *assignment.Count
+			filteredAssignment.Count = &count
+		}
+		filteredAssignment.Resources = nil
+		for _, resource := range assignment.Resources {
+			filteredResource := resource
+			filteredResource.FlavorRef = nil
+			if resource.FlavorRef != nil {
+				flavor := *resource.FlavorRef
+				if checkRef(ctx, ac, &flavor) {
+					filteredResource.FlavorRef = &flavor
+				} else {
+					omitted.add("scheduling.observations.kueue.podSetAssignments.resources.flavorRef", OmittedRBACDenied)
+				}
+			}
+			filteredAssignment.Resources = append(filteredAssignment.Resources, filteredResource)
+		}
+		out.PodSetAssignments = append(out.PodSetAssignments, filteredAssignment)
+	}
+	return &out
 }
 
 func filterAppReferences(ctx context.Context, refs *AppReferences, ac RefAccessChecker, omitted *omittedTracker) *AppReferences {

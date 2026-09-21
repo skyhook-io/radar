@@ -31,6 +31,9 @@ type Owner = string
 const (
 	OwnerPrometheus Owner = "prometheus"
 	OwnerTraffic    Owner = "traffic"
+	OwnerCost       Owner = "cost"
+	// EstablishTimeout lets compound discovery flows budget for each managed tunnel attempt.
+	EstablishTimeout = 10 * time.Second
 )
 
 // metricsForward is one owner's active port-forward state.
@@ -71,6 +74,11 @@ func (f *metricsForward) info() *ConnectionInfo {
 		ServiceName: f.serviceName,
 		ContextName: f.contextName,
 	}
+}
+
+func (f *metricsForward) matches(namespace, serviceName string, targetPort int, contextName string) bool {
+	return f != nil && f.active && f.namespace == namespace && f.serviceName == serviceName &&
+		f.targetPort == targetPort && f.contextName == contextName
 }
 
 // ConnectionInfo contains info about the metrics connection
@@ -121,7 +129,7 @@ func Start(owner Owner, ctx context.Context, namespace, serviceName string, targ
 	// Fast path + client capture under reg.mu, held only briefly.
 	reg.mu.Lock()
 	f := forwardFor(owner)
-	if f.active && f.namespace == namespace && f.serviceName == serviceName && f.contextName == contextName {
+	if f.matches(namespace, serviceName, targetPort, contextName) {
 		info := f.info()
 		reg.mu.Unlock()
 		return info, nil
@@ -144,7 +152,7 @@ func Start(owner Owner, ctx context.Context, namespace, serviceName string, targ
 	// Re-check under reg.mu: a concurrent establish for this owner may have just
 	// connected to the same target while we waited on establishMu.
 	reg.mu.Lock()
-	if f.active && f.namespace == namespace && f.serviceName == serviceName && f.contextName == contextName {
+	if f.matches(namespace, serviceName, targetPort, contextName) {
 		info := f.info()
 		reg.mu.Unlock()
 		return info, nil
@@ -225,7 +233,7 @@ func Start(owner Owner, ctx context.Context, namespace, serviceName string, targ
 		teardown()
 		return nil, fmt.Errorf("port-forward failed: %w", err)
 
-	case <-time.After(10 * time.Second):
+	case <-time.After(EstablishTimeout):
 		teardown()
 		return nil, fmt.Errorf("port-forward timed out")
 
@@ -242,6 +250,20 @@ func Stop(owner Owner) {
 	if f := reg.forwards[owner]; f != nil {
 		stopForwardLocked(f)
 	}
+}
+
+// StopIfAddress stops the owner's forward only when it is still the connection
+// identified by address. This keeps cleanup for a stale caller from tearing down
+// a replacement that claimed the same owner in the meantime.
+func StopIfAddress(owner Owner, address string) bool {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	f := reg.forwards[owner]
+	if f == nil || !f.active || f.info().Address != address {
+		return false
+	}
+	stopForwardLocked(f)
+	return true
 }
 
 // stopForwardLocked stops one owner's forward (caller must hold reg.mu).

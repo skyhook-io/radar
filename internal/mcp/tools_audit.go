@@ -21,11 +21,12 @@ type auditInput struct {
 }
 
 type auditToolResult struct {
-	Summary    auditSummary   `json:"summary"`
-	Findings   []auditFinding `json:"findings"`
-	TotalCount int            `json:"totalCount"`
-	Truncated  bool           `json:"truncated,omitempty"`
-	NarrowHint string         `json:"narrowHint,omitempty"`
+	MissingInputs []string       `json:"missingInputs,omitempty"`
+	Summary       auditSummary   `json:"summary"`
+	Findings      []auditFinding `json:"findings"`
+	TotalCount    int            `json:"totalCount"`
+	Truncated     bool           `json:"truncated,omitempty"`
+	NarrowHint    string         `json:"narrowHint,omitempty"`
 }
 
 type auditSummary struct {
@@ -67,14 +68,14 @@ func handleGetAudit(ctx context.Context, req *mcp.CallToolRequest, input auditIn
 	}
 
 	// For namespace-restricted users, narrow the audit scope to their allowed
-	// set (cluster-scoped findings are filtered out below). For cluster-admins
+	// set (cluster-scoped subjects use their exact grants in the runner). For cluster-admins
 	// (allowed == nil) we pass through to RunFromCache's default behavior.
 	namespaces := requested
 	if allowed != nil && len(requested) == 0 {
 		namespaces = allowed
 	}
 
-	results := audit.RunFromCache(cache, namespaces, nil)
+	results := audit.RunFromCache(cache, namespaces, auditOptions(ctx))
 	if results == nil {
 		return toJSONResult(auditToolResult{})
 	}
@@ -95,18 +96,7 @@ func handleGetAudit(ctx context.Context, req *mcp.CallToolRequest, input auditIn
 		limit = 100
 	}
 
-	// For namespace-restricted users, drop findings outside their allowed
-	// set (covers cluster-scoped findings and findings on objects the
-	// listNamespaced helper let through with empty namespace).
-	var nsAllow map[string]bool
-	if allowed != nil {
-		nsAllow = make(map[string]bool, len(allowed))
-		for _, ns := range allowed {
-			nsAllow[ns] = true
-		}
-	}
-
-	catCounts, filtered := collectAuditToolFindings(results.Findings, registry, nsAllow, input.Category, severity)
+	catCounts, filtered := collectAuditToolFindings(results.Findings, registry, input.Category, severity)
 	summary := summarizeAuditToolFindings(filtered, catCounts)
 
 	totalCount := len(filtered)
@@ -122,18 +112,18 @@ func handleGetAudit(ctx context.Context, req *mcp.CallToolRequest, input auditIn
 	}
 
 	return toJSONResult(auditToolResult{
-		Summary:    summary,
-		Findings:   filtered,
-		TotalCount: totalCount,
-		Truncated:  truncated,
-		NarrowHint: narrowHint,
+		MissingInputs: results.MissingInputs,
+		Summary:       summary,
+		Findings:      filtered,
+		TotalCount:    totalCount,
+		Truncated:     truncated,
+		NarrowHint:    narrowHint,
 	})
 }
 
 func collectAuditToolFindings(
 	findings []bp.Finding,
 	registry map[string]bp.CheckMeta,
-	nsAllow map[string]bool,
 	category string,
 	severity checks.Severity,
 ) (map[string]int, []auditFinding) {
@@ -142,9 +132,6 @@ func collectAuditToolFindings(
 	categories := map[string]int{}
 	var filtered []auditFinding
 	for _, f := range findings {
-		if nsAllow != nil && !nsAllow[f.Namespace] {
-			continue
-		}
 		effectiveSeverity := checks.MapSeverity(f.Severity)
 		if severity != "" && effectiveSeverity != severity {
 			continue
@@ -200,9 +187,5 @@ func parseAuditSeverity(value string) (checks.Severity, error) {
 }
 
 func loadAuditConfig() settings.AuditConfig {
-	s := settings.Load()
-	if s.Audit != nil {
-		return *s.Audit
-	}
-	return settings.DefaultAuditConfig()
+	return settings.EffectiveAudit()
 }

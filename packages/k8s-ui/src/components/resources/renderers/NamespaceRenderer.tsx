@@ -4,6 +4,7 @@ import { Section, PropertyList, Property, ResourceLink } from '../../ui/drawer-c
 import type { RBACNamespaceResponse, RBACBindingWithSubjects, RBACSubject, ResourceRef } from '../../../types'
 import { rbacKindBadgeClass } from '../../../utils/rbac-badges'
 import { RBACErrorSection } from './RBACErrorSection'
+import { NamespaceLimitRangesSection } from './LimitRangeRenderer'
 import { SEVERITY_TEXT, SEVERITY_DOT } from '../../../utils/badge-colors'
 import { parseCPUToNanocores, parseMemoryToBytes, parseQuantityToNumber } from '../../../utils/format'
 
@@ -30,10 +31,21 @@ interface NamespaceRendererProps {
    * fetch 500/503s isn't mistaken for quota-free. (403 stays hidden upstream.)
    */
   quotaError?: Error | null
+  /**
+   * LimitRange objects for this namespace (from /api/resources/limitranges
+   * ?namespace=). Undefined when the host hasn't wired the fetch (section
+   * omitted) or while the read is in flight — an empty array is a real answer
+   * ("nothing constrains this namespace") and must not be confused with it.
+   */
+  limitRangeData?: any[]
+  limitRangeLoading?: boolean
+  /** Passed through including 403: a denial reads as "you can't check", which
+   *  is a different statement from "there are none". */
+  limitRangeError?: unknown
   onNavigate?: (ref: ResourceRef) => void
 }
 
-export function NamespaceRenderer({ data, rbacData, rbacLoading, rbacError, quotaData, quotaError, onNavigate }: NamespaceRendererProps) {
+export function NamespaceRenderer({ data, rbacData, rbacLoading, rbacError, quotaData, quotaError, limitRangeData, limitRangeLoading, limitRangeError, onNavigate }: NamespaceRendererProps) {
   const metadata = data.metadata || {}
   const status = data.status || {}
   const phase = status.phase
@@ -67,6 +79,17 @@ export function NamespaceRenderer({ data, rbacData, rbacLoading, rbacError, quot
       {/* ResourceQuota usage — only when host wired the fetch. */}
       {(quotaError || (quotaData != null && quotaData.length > 0)) && (
         <NamespaceQuotaSection quotas={quotaData ?? []} error={quotaError ?? null} />
+      )}
+
+      {/* LimitRange rules — only when host wired the fetch. */}
+      {(limitRangeData !== undefined || limitRangeLoading || limitRangeError != null) && (
+        <NamespaceLimitRangesSection
+          limitRanges={limitRangeData}
+          loading={limitRangeLoading}
+          error={limitRangeError}
+          namespace={metadata.name ?? ''}
+          onNavigate={onNavigate}
+        />
       )}
 
       {/* RBAC summary — only when host wired the fetch. */}

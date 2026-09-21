@@ -994,9 +994,14 @@ func convertHubbleFlow(pbFlow *flowpb.Flow) Flow {
 	if dir := pbFlow.GetTrafficDirection(); dir != flowpb.TrafficDirection_TRAFFIC_DIRECTION_UNKNOWN {
 		flow.TrafficDirection = strings.ToLower(dir.String())
 	}
+	flow.PolicyVerdict = convertPolicyVerdict(pbFlow)
 	if flow.Verdict == "dropped" {
 		if reason := pbFlow.GetDropReasonDesc(); reason != flowpb.DropReason_DROP_REASON_UNKNOWN {
 			flow.DropReasonDesc = reason.String()
+		} else if code := pbFlow.GetDropReason(); code != 0 {
+			// Older relays fill only the numeric code; its enum name is the
+			// same vocabulary.
+			flow.DropReasonDesc = flowpb.DropReason(code).String()
 		}
 	}
 	if svc := pbFlow.GetSourceService(); svc != nil && svc.GetName() != "" {
@@ -1016,11 +1021,16 @@ func convertHubbleFlow(pbFlow *flowpb.Flow) Flow {
 	return flow
 }
 
-// convertEndpoint converts a Hubble Endpoint to our internal Endpoint type
+// convertEndpoint converts a Hubble Endpoint to our internal Endpoint type.
+//
+// The kind is decided on positive evidence only, because a policy
+// evaluation draws different conclusions from each: a selector can never
+// admit an External endpoint, nothing is decidable about a Host one, and an
+// Unknown one must not be mistaken for either.
 func convertEndpoint(ep *flowpb.Endpoint, ip string) Endpoint {
 	if ep == nil {
 		return Endpoint{
-			Kind: "External",
+			Kind: EndpointKindUnknown,
 			IP:   ip,
 			Name: ip,
 		}
@@ -1031,27 +1041,11 @@ func convertEndpoint(ep *flowpb.Endpoint, ip string) Endpoint {
 		IP:        ip,
 	}
 
-	// Determine the name and kind
 	if podName := ep.GetPodName(); podName != "" {
 		endpoint.Name = podName
-		endpoint.Kind = "Pod"
-	} else if ep.GetIdentity() != 0 {
-		// Use identity for reserved labels (like host, world, etc.)
-		labels := ep.GetLabels()
-		for _, label := range labels {
-			if strings.HasPrefix(label, "reserved:") {
-				endpoint.Kind = "External"
-				endpoint.Name = strings.TrimPrefix(label, "reserved:")
-				break
-			}
-		}
-		if endpoint.Name == "" {
-			endpoint.Kind = "External"
-			endpoint.Name = ip
-		}
+		endpoint.Kind = EndpointKindPod
 	} else {
-		endpoint.Kind = "External"
-		endpoint.Name = ip
+		endpoint.Kind, endpoint.Name = classifyNonPodIdentity(ep.GetLabels(), ip)
 	}
 
 	// Extract workload name from labels
@@ -1179,4 +1173,54 @@ hubble observe --server localhost:4245
 # Or port-forward Hubble UI (if installed):
 kubectl -n %s port-forward svc/hubble-ui 12000:80
 # Then open http://localhost:12000`, namespace, namespace)
+}
+
+// classifyNonPodIdentity reads Cilium's reserved identity labels for an
+// endpoint that is not a pod. Host, remote-node and the API server are the
+// cluster's own nodes; world and CIDR identities are outside the cluster;
+// anything else (init, health, ingress, unknown) carries no identity a policy
+// evaluation could use. Node evidence wins over the whole label set: with
+// CIDR matching for nodes enabled, a node's identity carries both a cidr:
+// label and its reserved one, and it is still a node.
+func classifyNonPodIdentity(labels []string, ip string) (kind, name string) {
+	external, reserved := false, ""
+	for _, label := range labels {
+		switch {
+		case label == "reserved:host" || label == "reserved:remote-node" || label == "reserved:kube-apiserver":
+			return EndpointKindHost, strings.TrimPrefix(label, "reserved:")
+		case label == "reserved:world" || label == "reserved:world-ipv4" || label == "reserved:world-ipv6" || strings.HasPrefix(label, "cidr:"):
+			external = true
+		case strings.HasPrefix(label, "reserved:") && reserved == "":
+			reserved = strings.TrimPrefix(label, "reserved:")
+		}
+	}
+	switch {
+	case external:
+		return EndpointKindExternal, "world"
+	case reserved != "":
+		return EndpointKindUnknown, reserved
+	}
+	return EndpointKindUnknown, ip
+}
+
+// convertPolicyVerdict carries over the policies Hubble reports as having
+// decided the flow. Nil when it reports none, so a consumer can tell "the
+// plugin said nothing" from "the plugin said no policy was involved".
+func convertPolicyVerdict(pbFlow *flowpb.Flow) *PolicyVerdict {
+	toRefs := func(ps []*flowpb.Policy) []PolicyRef {
+		out := make([]PolicyRef, 0, len(ps))
+		for _, p := range ps {
+			if p == nil || p.GetName() == "" {
+				continue
+			}
+			out = append(out, PolicyRef{Kind: p.GetKind(), Namespace: p.GetNamespace(), Name: p.GetName()})
+		}
+		return out
+	}
+	allowed := append(toRefs(pbFlow.GetIngressAllowedBy()), toRefs(pbFlow.GetEgressAllowedBy())...)
+	denied := append(toRefs(pbFlow.GetIngressDeniedBy()), toRefs(pbFlow.GetEgressDeniedBy())...)
+	if len(allowed) == 0 && len(denied) == 0 {
+		return nil
+	}
+	return &PolicyVerdict{AllowedBy: allowed, DeniedBy: denied}
 }

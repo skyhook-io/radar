@@ -2,13 +2,17 @@ package prom
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 )
+
+var ErrResponseTooLarge = errors.New("upstream response exceeds configured limit")
 
 // Transport is the pluggable HTTP transport used by Client to issue requests
 // to a Prometheus HTTP API. Implementations decide how the request physically
@@ -39,10 +43,11 @@ type Transport interface {
 // Accept header, so callers may override Accept by setting it here. Typical
 // uses are Authorization: Bearer ... and tenant headers like X-Scope-OrgID.
 type HTTPTransport struct {
-	BaseURL    string
-	BasePath   string
-	HTTPClient *http.Client
-	Headers    map[string]string
+	BaseURL          string
+	BasePath         string
+	HTTPClient       *http.Client
+	Headers          map[string]string
+	MaxResponseBytes int64
 }
 
 // NewHTTPTransport constructs an HTTPTransport with a default 10-second
@@ -64,7 +69,10 @@ func NewHTTPTransport(baseURL, basePath string, httpClient *http.Client) *HTTPTr
 // transport errors this way, for example).
 func (t *HTTPTransport) Do(ctx context.Context, method, path string, params url.Values) ([]byte, error) {
 	full := t.BaseURL + t.BasePath + path
-	if len(params) > 0 {
+	var requestBody io.Reader
+	if method == http.MethodPost {
+		requestBody = strings.NewReader(params.Encode())
+	} else if len(params) > 0 {
 		if strings.Contains(full, "?") {
 			full = full + "&" + params.Encode()
 		} else {
@@ -72,7 +80,7 @@ func (t *HTTPTransport) Do(ctx context.Context, method, path string, params url.
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, full, nil)
+	req, err := http.NewRequestWithContext(ctx, method, full, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("prom.HTTPTransport: build request: %w", err)
 	}
@@ -80,16 +88,29 @@ func (t *HTTPTransport) Do(ctx context.Context, method, path string, params url.
 	for k, v := range t.Headers {
 		req.Header.Set(k, v)
 	}
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
 
-	resp, err := t.HTTPClient.Do(req)
+	resp, err := SameOriginRedirectClient(t.HTTPClient).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("prom.HTTPTransport: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10 MiB cap
+	maxResponseBytes := t.MaxResponseBytes
+	if maxResponseBytes <= 0 {
+		maxResponseBytes = 10 << 20
+	}
+	// From here on the endpoint has answered: a failure reading the body is
+	// wrapped so callers reasoning about reachability can tell it from a
+	// connection that never produced a response.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("prom.HTTPTransport: read body: %w", err)
+		return nil, fmt.Errorf("prom.HTTPTransport: read body: %w", &ResponseError{StatusCode: resp.StatusCode, Err: err})
+	}
+	if int64(len(body)) > maxResponseBytes {
+		return nil, fmt.Errorf("prom.HTTPTransport: %w (%d bytes)", &ResponseError{StatusCode: resp.StatusCode, Err: ErrResponseTooLarge}, maxResponseBytes)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -103,13 +124,35 @@ func (t *HTTPTransport) Address() string {
 	return t.BaseURL + t.BasePath
 }
 
-// HTTPError is returned when Prometheus responds with a non-2xx status.
+// HTTPError is returned when an HTTP-backed metrics or cost source responds with a non-2xx status.
 type HTTPError struct {
 	StatusCode int
 	URL        string
 	Body       []byte
 }
 
+// ResponseError is a failure after the endpoint answered — the body could not
+// be read, or was over the limit. It carries the status that arrived so the
+// failure is never mistaken for an unreachable endpoint.
+type ResponseError struct {
+	StatusCode int
+	Err        error
+}
+
+func (e *ResponseError) Error() string { return e.Err.Error() }
+func (e *ResponseError) Unwrap() error { return e.Err }
+
 func (e *HTTPError) Error() string {
-	return fmt.Sprintf("prometheus returned %d for %s: %s", e.StatusCode, e.URL, string(e.Body))
+	body := strings.ToValidUTF8(string(e.Body), "�")
+	body = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+			return ' '
+		}
+		return r
+	}, body)
+	const maxDiagnosticRunes = 512
+	if runes := []rune(body); len(runes) > maxDiagnosticRunes {
+		body = string(runes[:maxDiagnosticRunes]) + "…"
+	}
+	return fmt.Sprintf("upstream returned %d for %s: %s", e.StatusCode, e.URL, body)
 }

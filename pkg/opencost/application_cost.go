@@ -10,6 +10,15 @@ func BuildApplicationCostResponse(inputs []ApplicationWorkloadCostInput, unavail
 			Unsupported: append([]ApplicationWorkloadRef(nil), unsupported...),
 		},
 	}
+	for _, costs := range namespaceCosts {
+		if costs == nil || !costs.Available {
+			continue
+		}
+		out.DataThrough = LatestKubecostTimestamp(out.DataThrough, costs.DataThrough)
+		if costs.Window == "1d" || out.Window == "" {
+			out.Window = costs.Window
+		}
+	}
 
 	for _, status := range unavailable {
 		out.Workloads = append(out.Workloads, ApplicationWorkloadCost{
@@ -159,10 +168,10 @@ func addApplicationCostTotal(total *ApplicationCostTotals, wl WorkloadCost) {
 
 func finalizeApplicationCostTotals(total *ApplicationCostTotals) {
 	if total.CPUUsageAvailable {
-		total.CPUAllocationUse = efficiencyPct(total.CPUUsageCost, total.CPUCost)
+		total.CPUAllocationUse = EfficiencyPercent(total.CPUUsageCost, total.CPUCost)
 	}
 	if total.MemoryUsageAvailable {
-		total.MemoryAllocationUse = efficiencyPct(total.MemoryUsageCost, total.MemoryCost)
+		total.MemoryAllocationUse = EfficiencyPercent(total.MemoryUsageCost, total.MemoryCost)
 	}
 	total.HourlyCost = roundTo(total.HourlyCost, 4)
 	total.CPUCost = roundTo(total.CPUCost, 4)

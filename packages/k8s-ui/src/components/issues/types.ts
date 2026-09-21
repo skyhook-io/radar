@@ -121,6 +121,8 @@ export interface IssueRecentChangeField {
 export interface IssueRecentChange {
   source?: string;
   kind: string;
+  /** Kubernetes API version for an exact, collision-safe resource identity. */
+  apiVersion?: string;
   namespace?: string;
   name: string;
   changeType: string;

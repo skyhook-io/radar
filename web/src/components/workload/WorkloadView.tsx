@@ -70,6 +70,8 @@ import {
   useCordonNode,
   useUncordonNode,
   useDrainNode,
+  useDrainPlan,
+  DrainPlanUnsupportedError,
   useCascadeDeletePreview,
   useResourceEvents,
   useResource,
@@ -81,7 +83,7 @@ import {
 import { PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
 import { RestartEventLane } from '../resource/RestartChart'
-import { RightsizingPanel, RightsizingStrip } from '../resource/RightsizingStrip'
+import { RightsizingPanel } from '../resource/RightsizingStrip'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { useResourceAudit, useResourceIssues, useResources, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
@@ -119,6 +121,7 @@ import { ServiceAccountRenderer } from '../resources/renderers/ServiceAccountRen
 import { RoleRenderer } from '../resources/renderers/RoleRenderer'
 import { RoleBindingRenderer } from '../resources/renderers/RoleBindingRenderer'
 import { NamespaceRenderer } from '../resources/renderers/NamespaceRenderer'
+import { CAPIClusterRenderer } from '../resources/renderers/CAPIClusterRenderer'
 import { HPARenderer } from '../resources/renderers/HPARenderer'
 import { PVCRenderer } from '../resources/renderers/PVCRenderer'
 import { RolloutRenderer } from '../resources/renderers/RolloutRenderer'
@@ -154,6 +157,7 @@ const BATCH_EXECUTION_KINDS = new Set([
 
 // Stable reference — web renderer wrappers inject platform hooks internally
 const rendererOverrides: RendererOverrides = {
+  CAPIClusterRenderer,
   PodRenderer,
   KarpenterNodePoolRenderer,
   NodeRenderer,
@@ -381,6 +385,7 @@ function useActionsBarProps(
   const cordonMutation = useCordonNode()
   const uncordonMutation = useUncordonNode()
   const drainMutation = useDrainNode()
+  const drainPlanMutation = useDrainPlan()
 
   const { renderAction: renderDiagnose } = useDiagnoseCustomization()
 
@@ -485,6 +490,13 @@ function useActionsBarProps(
     onDrainNode: (params: Parameters<typeof drainMutation.mutate>[0]) =>
       drainMutation.mutate(params),
     isDrainingNode: drainMutation.isPending,
+    onPlanDrain: (params: Parameters<typeof drainPlanMutation.mutate>[0]) =>
+      drainPlanMutation.mutate(params),
+    onPlanDrainReset: () => drainPlanMutation.reset(),
+    drainPlan: drainPlanMutation.data ?? null,
+    isPlanningDrain: drainPlanMutation.isPending,
+    drainPlanError: drainPlanMutation.error?.message ?? null,
+    drainPlanUnsupported: drainPlanMutation.error instanceof DrainPlanUnsupportedError,
   }
 }
 
@@ -732,9 +744,15 @@ export function WorkloadView({
     [helmOwner, helmSourceResource],
   )
 
-  // Fetch topology for hierarchy building (only when expanded)
+  // Fetch topology for hierarchy building (only when expanded). Polled like
+  // useTrace's "drawer feeling live" pattern — without this, a resource
+  // whose status/labels/edges change without its node/edge identity changing
+  // (a canary weight step, a Pod's traffic role flipping to stable, an
+  // AnalysisRun finishing) never refreshes until something else forces a
+  // remount; a genuinely stuck-looking Topology tab, not just a stale one.
   const { data: topology } = useTopology([namespace], 'resources', {
     enabled: expanded,
+    refetchInterval: expanded ? 5000 : false,
   })
 
   // Always fetched so Recent Events populates on drawer open; allEvents below is
@@ -1795,7 +1813,7 @@ function DiagnoseFromWorkloadHint({
 }) {
   if (services.length === 0) return null
   return (
-    <Section title="Diagnose network path">
+    <Section title="Trace network path">
       <div className="flex items-start gap-2 text-xs text-theme-text-secondary">
         <Stethoscope className="w-4 h-4 mt-0.5 shrink-0 text-theme-text-tertiary" aria-hidden />
         <div className="flex-1 min-w-0">
@@ -2411,16 +2429,9 @@ function MetricsTabContent({
   resource: any
   expanded: boolean
 }) {
-  const showRightsizing = expanded && ['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind)
-
   if (expanded) {
     return (
       <div className="flex flex-col h-full">
-        {showRightsizing && (
-          <div className="px-4 pt-4">
-            <RightsizingStrip kind={kind} namespace={namespace} name={name} />
-          </div>
-        )}
         <div className="flex-1 min-h-0">
           <PrometheusChartsGrid kind={kind} namespace={namespace} name={name} resource={resource} />
         </div>
@@ -2446,9 +2457,17 @@ function DrawerMetricsContent({
 }) {
   const [chartRange, setChartRange] = useState<import('../../api/client').PrometheusTimeRange>('1h')
   const showRestartLane = isPrometheusSupported(kind) && kind !== 'Node'
+  const navigate = useNavigate()
 
   return (
     <div className="flex flex-col h-full">
+      {['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind) && (
+        <div className="px-4 pt-3">
+          <button className="text-xs text-accent hover:underline" onClick={() => navigate(`${buildWorkloadPath({ kind, namespace, name })}?tab=metrics&metricsRange=${chartRange}`)}>
+            Open request and resource dashboard →
+          </button>
+        </div>
+      )}
       <div className="flex-1 min-h-0">
         <PrometheusCharts
           kind={kind}

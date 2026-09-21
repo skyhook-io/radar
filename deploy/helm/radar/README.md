@@ -126,6 +126,41 @@ applies to GitOps users: manage the Secret with SealedSecrets / SOPS /
 External Secrets and reference it via `cloud.existingSecret`; Helm never
 touches its contents.
 
+### Radar Cloud default integration reads
+
+Radar Cloud's default viewer/member/owner bindings receive explicit `get/list/watch`
+grants for Radar's curated integrations, in addition to their existing roles.
+These are full-object Kubernetes permissions: inline configuration in specs and
+status is visible, not just Radar's summaries. The baseline adds no writes,
+Secret grants, RBAC-object grants, or wildcard resources/groups.
+
+```yaml
+cloud:
+  defaultRbac:
+    integrationRead:
+      viewer: true
+      member: true
+      owner: true
+    clusterScopedRead:
+      viewer: false  # retains namespaced integration reads, not cluster kinds
+```
+
+Each integration follows its `rbac.crdGroups` collection flag; `all=true` enables
+only the reviewed finite baseline, not arbitrary caller access. Custom base
+roles (`viewerClusterRole`, etc.) do **not** disable these separate bindings.
+`integrationRead.<tier>=false` removes only the new add-on; existing cluster-read,
+base roles, vendor aggregation and customer bindings can still grant access.
+For entirely customer-managed user RBAC, set `cloud.defaultRbac.create=false`
+and supply your own bindings. Kubernetes permissions are additive, not denies.
+
+The [permission table](files/integration-read-baseline.yaml) records exact tuples
+and intentional exceptions. See [the policy and upgrade guide](../../../docs/cloud-rbac-baseline.md)
+for sensitive-resource exclusions, enterprise group bindings and rollout details.
+An **installed chart upgrade** is needed to apply these grants; updating only the
+Radar binary (including Radar Cloud self-upgrade) does not update RBAC. Missing new keys
+on an older `--reuse-values` installation default to enabled; set explicit false
+before upgrading if the added visibility is unwanted.
+
 ### Connecting to Argo CD (GitOps deep diff)
 
 Radar's GitOps pages show a Git-rendered desired-vs-live diff when connected to
@@ -149,6 +184,32 @@ Prefer `argocd.existingSecret` over the inline `argocd.token` so the token never
 lands in the Helm release state. Rotation requires a pod restart. See
 [docs/gitops.md](../../../docs/gitops.md#provisioning-the-token-per-deployment-shape).
 
+### Connecting to Kubecost 3
+
+Auto mode uses working OpenCost-compatible Prometheus metrics first, then a
+Kubecost 3 Aggregator in the connected cluster. Radar tries the Aggregator's
+named `tcp-api` port 9004 first. Without an API key, an authentication rejection
+can fall back to the same Service's `tcp-api-rbac` port 9008 for SAML/OIDC-enabled
+Kubecost. Configuring a key disables that bypass. A federated agent-only cluster
+has no local Aggregator, so configure its central endpoint and cluster ID:
+
+```bash
+kubectl create secret generic radar-kubecost -n radar \
+  --from-literal=api-key="$KUBECOST_API_KEY" \
+  --dry-run=client -o yaml | kubectl apply -f -
+helm upgrade --install radar skyhook/radar -n radar \
+  --set cost.source=kubecost \
+  --set cost.kubecost.url=https://kubecost.example.com/model \
+  --set cost.kubecost.clusterId=production-a \
+  --set cost.kubecost.existingSecret=radar-kubecost
+```
+
+The API key is optional; omit the Secret for an endpoint that intentionally
+allows unauthenticated allocation reads. These values are environment-managed
+and read-only in Settings. Radar reads current allocation and node costs plus
+the retained cluster allocation trend from Kubecost. Workload and application
+trend charts remain unavailable for Kubecost.
+
 ## Configuration
 
 | Parameter | Description | Default |
@@ -168,32 +229,92 @@ lands in the Helm release state. Rotation requires a pod restart. See
 | `httpRoute.hostnames` | HTTPRoute hostnames | `[]` |
 | `httpRoute.defaultTimeout` | Optional request timeout for generated default rule; empty uses Gateway deployment default | `""` |
 | `httpRoute.rules` | HTTPRoute rules, passed through unchanged | `[]` |
-| `timeline.storage` | Timeline storage (memory/sqlite) | `memory` |
-| `timeline.retention` | SQLite retention (Go duration; `0` disables) | `168h` |
-| `timeline.maxSize` | SQLite max DB + WAL size before oldest events are pruned (`0` disables) | `800Mi` |
+| `timeline.storage` | Timeline storage (memory/sqlite/postgres) | `memory` |
+| `timeline.retention` | Retention (Go duration; `0` disables). Applies to sqlite and postgres. | `168h` |
+| `timeline.maxSize` | SQLite max DB + WAL size before oldest events are pruned (`0` disables). Not used for postgres. | `800Mi` |
+| `timeline.postgres.existingSecret` | Name of a Secret holding the PostgreSQL DSN (required when `storage=postgres`) | `""` |
+| `timeline.postgres.secretKey` | Key within the Secret holding the DSN | `dsn` |
 | `persistence.enabled` | Enable PVC for SQLite | `false` |
+| `cost.source` | Cost source: `auto`, `prometheus`, or `kubecost`; controls stay editable only when this and the Kubecost URL, cluster ID, and Secret are empty | `""` |
 | `cost.currency` | Optional ISO 4217 override for OpenCost/Kubecost values; empty auto-detects, then uses USD | `""` |
+| `cost.kubecost.url` | Kubecost 3 Aggregator URL; blank discovers local `tcp-api:9004` and may fall back to `tcp-api-rbac:9008` without a key; agent-only clusters need their central URL | `""` |
+| `cost.kubecost.clusterId` | Cluster ID filter; blank detects literal `CLUSTER_ID` from the local FinOps Agent/Aggregator | `""` |
+| `cost.kubecost.existingSecret` | Secret holding an optional Kubecost service-account API key; setting it disables automatic port-9008 auth bypass | `""` |
+| `cost.kubecost.existingSecretKey` | Key within `cost.kubecost.existingSecret`; sent as `X-API-KEY` | `api-key` |
 | `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) | `""` |
-| `traffic.prometheusHeaders` | HTTP headers sent with every Prometheus request (auth-protected backends) | `{}` |
-| `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers | `{}` |
+| `traffic.prometheusHeaders` | HTTP headers sent with every Prometheus request (auth-protected backends). Requires `traffic.prometheusUrl` — credentials are never sent to auto-discovered endpoints | `{}` |
+| `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers. Requires `traffic.prometheusUrl` | `{}` |
+| `traffic.prometheusSingleCluster` | Optional workload-metrics override: assert that the backend contains only this cluster. Replaces automatic matching; does not scope rightsizing or other metrics features | `false` |
+| `traffic.prometheusClusterLabels` | Optional exact label/value constraints for workload metrics in a shared store, ANDed. Alternative to `prometheusSingleCluster`; leave both unset for automatic matching | `{}` |
+| `traffic.beylaJobSelector` | Beyla Live Traffic matcher fragment. Workload charts use it only with an explicit scope override and accept one `job` equality or regex matcher; custom workload jobs are normally discovered automatically | `""` |
 | `argocd.existingSecret` | Name of a Secret holding the Argo CD API token (recommended — keeps it out of the release) | `""` |
 | `argocd.existingSecretKey` | Key within `argocd.existingSecret` holding the token | `token` |
 | `argocd.token` | Inline Argo CD API token (dev only — lands in the release state) | `""` |
 | `argocd.url` | Explicit `argocd-server` URL; blank auto-discovers in-cluster | `""` |
 | `argocd.insecureTls` | Skip TLS verification for a self-signed `argocd-server` | `false` |
-| `resources.limits.memory` | Memory limit | `512Mi` |
-| `resources.requests.memory` | Memory request | `128Mi` |
+| `resources.requests.cpu` | CPU request | `200m` |
+| `resources.requests.memory` | Memory request | `256Mi` |
+| `resources.limits.cpu` | CPU limit | `2` |
+| `resources.limits.memory` | Memory limit. Radar sets `GOMEMLIMIT` to 85% of the container's cgroup limit at startup, so the GC collects harder as it approaches the limit; set `GOMEMLIMIT` under `env` to override | `1Gi` |
 
 See `values.yaml` for all configuration options.
 
-### Timeline storage: memory vs sqlite
+### Installation-owned settings (OSS)
 
-Radar's timeline records every cluster change so you can scrub backwards through "what happened, when." Two backends:
+Shared OSS Settings is read-only. Configure integrations through the values above,
+audit policy through `audit.ignoredNamespaces` / `audit.disabledChecks`, and OCI
+chart prefixes through `helm.ociSources`. `audit: null` preserves the default system
+namespace exclusions; explicitly empty lists include all namespaces and checks.
+The chart mounts a versioned, non-secret operator settings ConfigMap read-only and
+rolls Radar when it changes. No runtime ConfigMap/Secret writes or extra RBAC are
+required. External Secret rotation requires a restart.
+
+Before upgrading, resupply any old UI-written integration settings as Helm values;
+Pod-local files are not adopted as deployment configuration. Use matching chart
+and image versions. Cloud keeps its existing settings path and does not mount the
+OSS operator file. See [installation settings](../../../docs/in-cluster.md#installation-settings)
+for examples and run-mode behavior.
+
+### Timeline storage: memory vs sqlite vs postgres
+
+Radar's timeline records every cluster change so you can scrub backwards through "what happened, when." Three backends:
 
 - **`memory`** (default): events live in-process. Lost on pod restart. Lower memory footprint per retention window than SQLite (no indexes, no WAL). Pick this if you only need recent activity (last few hours), don't care about losing history when a pod cycles, or want the simplest setup.
-- **`sqlite`**: events persist to a PVC across restarts. Pick this if you want a multi-day audit trail, need to inspect changes that happened while you weren't looking, or run Radar in-cluster long-term. Adds operational concerns: the PVC will fill if retention is unbounded; restarting on a multi-GB DB is slower (more rows to load).
+- **`sqlite`**: events persist to a PVC across restarts. Pick this if you want a multi-day audit trail, need to inspect changes that happened while you weren't looking, or run Radar in-cluster long-term. Adds operational concerns: the PVC will fill if retention is unbounded; restarting on a multi-GB DB is slower (more rows to load). Requires `persistence.enabled=true`.
+- **`postgres`**: events persist in an externally managed PostgreSQL database. Pick this when you want history to survive pod restarts and rolling updates without attaching a PVC. It does not make Radar multi-replica — informer caches, SSE streams, and exec/port-forward sessions remain per-pod, so `replicaCount` must stay 1. Use a dedicated database per Radar deployment. The DSN must be provided via an existing Kubernetes Secret; Helm never touches the credential.
 
-**Sizing**: timeline volume depends on cluster size and controller churn. Tune `timeline.retention`, `timeline.maxSize`, and `persistence.size` together. Set `timeline.retention=0` to disable age cleanup; keep `timeline.maxSize` enabled for in-cluster deployments so Radar prunes oldest events before the PVC fills.
+**Provider-agnostic PostgreSQL setup**:
+
+The chart does not install, configure, or upgrade PostgreSQL. It creates no
+PostgreSQL workload, Service, PVC, CRD, or credential Secret. Use any managed
+database, PostgreSQL operator, or secret manager. The only requirement is a
+Secret in Radar's namespace containing a PostgreSQL DSN under the key selected
+by `timeline.postgres.secretKey`.
+
+```bash
+kubectl create secret generic radar-postgres -n radar \
+  --from-literal=dsn='postgres://radar:password@postgres.example:5432/radar?sslmode=require' \
+  --dry-run=client -o yaml | kubectl apply -f -
+helm upgrade --install radar skyhook/radar -n radar \
+  --set timeline.storage=postgres \
+  --set timeline.postgres.existingSecret=radar-postgres \
+  --set timeline.retention=720h
+```
+
+For an operator or secret manager that supplies a different key, reference that
+key instead:
+
+```yaml
+timeline:
+  storage: postgres
+  postgres:
+    existingSecret: app-db-credentials
+    secretKey: uri
+```
+
+The Secret is managed independently of Helm, so credential rotation does not require a Helm upgrade. Restart the Radar Deployment after updating the Secret because Kubernetes does not refresh environment variables in running containers. The same applies to GitOps users: manage the Secret with SealedSecrets / SOPS / External Secrets and reference it via `timeline.postgres.existingSecret`.
+
+**Sizing**: timeline volume depends on cluster size and controller churn. For sqlite, tune `timeline.retention`, `timeline.maxSize`, and `persistence.size` together. Set `timeline.retention=0` to disable age cleanup; keep `timeline.maxSize` enabled for in-cluster SQLite deployments so Radar prunes oldest events before the PVC fills. `maxSize` is ignored for postgres and memory.
 
 `/api/diagnostics` surfaces `timeline.retentionAge`, `timeline.maxStorageBytes`, `timeline.lastCleanupAt`, `timeline.lastCleanupDeletedRows`, `timeline.lastCleanupError`, and `timeline.storageBytes` so you can confirm cleanup is keeping up without tailing logs.
 
@@ -222,7 +343,7 @@ Disabled by default for security:
 
 | Feature | Value | Description |
 |---------|-------|-------------|
-| Secrets | `rbac.secrets: true` | View secrets in resource list |
+| Secrets | `rbac.secrets: true` | View secrets in resource list. Also granted by `rbac.helm` (Helm stores releases in Secrets), by auth (`auth.mode` other than `none`), and in cloud mode, where every Secret read is re-checked against the requesting user's own RBAC. The grant is cluster-wide `get/list/watch` on all Secrets; `rbac.secrets: false` does not remove it in those modes. |
 | Terminal | `rbac.podExec: true` | Shell access to pods |
 | Port Forward | `rbac.portForward: true` | Port forwarding to pods. Also the fallback for traffic sources (Hubble/Caretta) — Radar dials the relay/metrics Service directly first, so in-cluster installs only need this when a NetworkPolicy or routing blocks Radar's namespace from reaching the service |
 | Logs | `rbac.podLogs: true` | View pod logs (**enabled by default**) |

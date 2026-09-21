@@ -3,6 +3,7 @@ import { describe, test, expect } from 'vitest'
 import {
   formatGitOpsDestination,
   formatGitOpsSourceUrl,
+  getGitOpsResourceStatus,
   getGitOpsTool,
   parseArgoRollbackID,
 } from './detail-helpers'
@@ -93,5 +94,58 @@ describe('getGitOpsTool', () => {
   // Unknown kinds default to flux (matches the OSS fall-through).
   test('unknown kind defaults to flux', () => {
     expect(getGitOpsTool('somecustomresource', 'unknown.io')).toBe('flux')
+  })
+})
+
+describe('getGitOpsResourceStatus - ApplicationSet', () => {
+  // An ApplicationSet reports through ErrorOccurred / ParametersGenerated /
+  // ResourcesUpToDate and never sets Ready. Routed to the Flux reader - which
+  // looks for Ready - every one of these cases collapses to Unknown, and a
+  // generator that is failing outright reads exactly like a healthy one.
+  const appSet = (conditions: Array<Record<string, string>>) => ({
+    status: { conditions },
+  })
+
+  test('a failed generator is Degraded, not Unknown', () => {
+    const status = getGitOpsResourceStatus('applicationsets', appSet([
+      { type: 'ErrorOccurred', status: 'True', message: 'error generating params from git' },
+      { type: 'ResourcesUpToDate', status: 'False', reason: 'ErrorOccurred' },
+    ]))
+    expect(status?.health).toBe('Degraded')
+    expect(status?.message).toBe('error generating params from git')
+  })
+
+  test('a generator that produced its Applications is Healthy', () => {
+    const status = getGitOpsResourceStatus('applicationsets', appSet([
+      { type: 'ResourcesUpToDate', status: 'True', reason: 'ApplicationSetUpToDate' },
+      { type: 'ParametersGenerated', status: 'True', reason: 'ParametersGenerated' },
+    ]))
+    expect(status?.health).toBe('Healthy')
+  })
+
+  test('no conditions yet is Unknown', () => {
+    expect(getGitOpsResourceStatus('applicationsets', appSet([]))?.health).toBe('Unknown')
+  })
+
+  // Sync answers "is the declared state applied". An ApplicationSet applies
+  // nothing - it generates Applications, each of which carries its own sync.
+  // Unknown is the honest answer in every case, including the healthy one.
+  test('sync stays Unknown regardless of health', () => {
+    expect(getGitOpsResourceStatus('applicationsets', appSet([
+      { type: 'ResourcesUpToDate', status: 'True' },
+    ]))?.sync).toBe('Unknown')
+    expect(getGitOpsResourceStatus('applicationsets', appSet([
+      { type: 'ErrorOccurred', status: 'True', message: 'boom' },
+    ]))?.sync).toBe('Unknown')
+  })
+
+  // ErrorOccurred=False is the steady state of a working generator; only
+  // status 'True' means a fault.
+  test('ErrorOccurred=False does not count as a fault', () => {
+    const status = getGitOpsResourceStatus('applicationsets', appSet([
+      { type: 'ErrorOccurred', status: 'False' },
+      { type: 'ResourcesUpToDate', status: 'True' },
+    ]))
+    expect(status?.health).toBe('Healthy')
   })
 })

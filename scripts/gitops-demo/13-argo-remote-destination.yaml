@@ -1,0 +1,20 @@
+# An Application whose destination is a cluster this Argo doesn't know.
+# Argo parks it on an InvalidSpecError condition (cluster not found) and
+# never syncs — which is fine: the point is the Application object itself.
+# Radar can't read a remote destination's resources, so the detail page
+# must derive nothing for it and say so (and, standalone, point at Radar
+# Cloud). Closest thing to hub-spoke a single kind cluster can show.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: guestbook-remote
+  namespace: argocd
+spec:
+  project: radar-demo
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps
+    targetRevision: HEAD
+    path: guestbook
+  destination:
+    server: https://spoke-1.example.com:6443
+    namespace: demo-remote

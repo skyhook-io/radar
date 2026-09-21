@@ -1,3 +1,4 @@
+import { hasReflectorDetails } from '../resources/renderers/ReflectorSection'
 import { clsx } from 'clsx'
 import { SEVERITY_BADGE, HEALTH_BADGE_COLORS } from '../../utils/badge-colors'
 import { isArgoRolloutResource } from '../../utils/workload-rollout'
@@ -120,6 +121,8 @@ import {
   PVCRenderer,
   RolloutRenderer,
   AnalysisRunRenderer,
+  AnalysisTemplateRenderer,
+  ExperimentRenderer,
   CertificateRenderer,
   WorkflowRenderer,
   PersistentVolumeRenderer,
@@ -231,6 +234,7 @@ import {
   PriorityClassRenderer,
   RuntimeClassRenderer,
   LeaseRenderer,
+  LimitRangeRenderer,
   TraefikIngressRouteRenderer,
   TraefikMiddlewareRenderer,
   TraefikServiceRenderer,
@@ -396,6 +400,10 @@ export interface RendererOverrides {
   // Namespace RBAC summary: host fetches /api/rbac/namespace/{ns} so the
   // namespace page can show bindings configured here without falling
   // through to GenericRenderer.
+  CAPIClusterRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
   NamespaceRenderer?: React.ComponentType<{
     data: any
     onNavigate?: (ref: ResourceRef) => void
@@ -426,7 +434,7 @@ const KNOWN_KINDS = new Set([
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
   'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'cronworkflows',
   'hpas', 'horizontalpodautoscalers', 'nodes', 'persistentvolumeclaims',
-  'rollouts', 'analysisruns', 'certificates', 'workflows', 'persistentvolumes',
+  'rollouts', 'analysisruns', 'analysistemplates', 'clusteranalysistemplates', 'experiments', 'certificates', 'workflows', 'persistentvolumes',
   'storageclasses', 'certificaterequests', 'clusterissuers', 'issuers',
   'orders', 'challenges',
   'gateways', 'gatewayclasses', 'httproutes', 'grpcroutes', 'tcproutes', 'tlsroutes', 'sealedsecrets', 'workflowtemplates', 'clusterworkflowtemplates',
@@ -473,7 +481,7 @@ const KNOWN_KINDS = new Set([
   'virtualservices', 'destinationrules', 'serviceentries',
   'peerauthentications', 'authorizationpolicies',
   'mutatingwebhookconfigurations', 'validatingwebhookconfigurations',
-  'ingressclasses', 'priorityclasses', 'runtimeclasses', 'leases',
+  'ingressclasses', 'priorityclasses', 'runtimeclasses', 'leases', 'limitranges',
   'knativeservices', 'knativeconfigurations', 'knativerevisions', 'knativeroutes',
   'brokers', 'triggers', 'eventtypes', 'pingsources', 'apiserversources', 'containersources', 'sinkbindings',
   'channels', 'inmemorychannels', 'subscriptions', 'sequences', 'parallels',
@@ -502,6 +510,20 @@ const KNOWN_KINDS = new Set([
   'compositeresourcedefinitions', 'compositions', 'compositionrevisions',
   'functions', 'configurations',
 ])
+
+// Cluster topology owns resources across the core, bootstrap, control-plane,
+// and infrastructure contracts. Keep this explicit: a suffix/substring match
+// would also accept unrelated groups such as extension.cluster.x-k8s.io.
+const CAPI_TOPOLOGY_GROUPS = [
+  'cluster.x-k8s.io',
+  'bootstrap.cluster.x-k8s.io',
+  'controlplane.cluster.x-k8s.io',
+  'infrastructure.cluster.x-k8s.io',
+] as const
+
+function isCAPITopologyGroup(apiVersion?: string): boolean {
+  return CAPI_TOPOLOGY_GROUPS.some(group => isApiGroup(apiVersion, group))
+}
 
 // ============================================================================
 // RESOURCE CONTENT - Delegates to specific renderers
@@ -658,11 +680,14 @@ export function ResourceRendererDispatch({
   // them, and `subscriptions` is Knative's as well. Adding a kind to KNOWN_KINDS
   // with a positively-gated render line and forgetting this list is what makes a
   // foreign CRD render a BLANK drawer rather than the generic one.
+  // CAPI's `machines` and `machinesets` need the same protection because another
+  // API group can publish either plural without inheriting CAPI presentation.
   const isGroupGatedKind =
     kind === 'clusters' || kind === 'backups' || kind === 'scheduledbackups' || kind === 'poolers'
     || kind === 'objectstores' || kind === 'databases' || kind === 'publications'
     || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs'
-    || kind === 'policies' || kind === 'rollouts'
+    || kind === 'policies' || kind === 'rollouts' || kind === 'experiments'
+    || kind === 'machines' || kind === 'machinesets'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
     (kind === 'clusters' && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'cluster.x-k8s.io')))
@@ -675,6 +700,13 @@ export function ResourceRendererDispatch({
       && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'messaging.knative.dev')))
     || (kind === 'policies' && isApiGroup(data?.apiVersion, 'kyverno.io'))
     || (kind === 'rollouts' && isArgoRolloutResource(data))
+    // Katib (kubeflow.org) ships its own, unrelated Experiment CRD sharing
+    // this plural — without this gate it got the Argo Rollouts Experiment
+    // renderer's mostly-empty status view instead of its actual resource
+    // details, the same collision shape as every other check in this block.
+    || (kind === 'experiments' && isApiGroup(data?.apiVersion, 'argoproj.io'))
+    || ((kind === 'machines' || kind === 'machinesets')
+      && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io'))
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
   const calicoApiVersionMatched = isCalicoApiVersion(data?.apiVersion)
@@ -720,14 +752,19 @@ export function ResourceRendererDispatch({
   const RoleComp = rendererOverrides?.RoleRenderer ?? RoleRenderer
   const RoleBindingComp = rendererOverrides?.RoleBindingRenderer ?? RoleBindingRenderer
   const NamespaceComp = rendererOverrides?.NamespaceRenderer ?? NamespaceRenderer
+  const CAPIClusterComp = rendererOverrides?.CAPIClusterRenderer ?? CAPIClusterRenderer
   const HPAComp = rendererOverrides?.HPARenderer ?? HPARenderer
   const PVCComp = rendererOverrides?.PVCRenderer ?? PVCRenderer
   const RolloutComp = rendererOverrides?.RolloutRenderer ?? RolloutRenderer
+  const showsReflection = (kind === 'configmaps' || kind === 'secrets') && hasReflectorDetails(data, relationships?.reflection)
+  const reflectionRefs = showsReflection ? [relationships?.reflection?.source, ...(relationships?.reflection?.mirrors ?? [])].filter((ref): ref is ResourceRef => !!ref) : []
+  const withoutReflection = (refs: ResourceRef[] | undefined) => refs?.filter(ref => !reflectionRefs.some(mirror => mirror.kind === ref.kind && mirror.namespace === ref.namespace && mirror.name === ref.name && (mirror.group ?? '') === (ref.group ?? '')))
+  const sidebarRelationships = showsReflection && relationships ? { ...relationships, configRefs: withoutReflection(relationships.configRefs), consumers: withoutReflection(relationships.consumers) } : relationships
   const scaleBlockedBy = replicaScalers(relationships?.scalers)
 
   const sidebarContent = showCommonSections && (
     <>
-      <RelatedResourcesSection relationships={relationships} onNavigate={onNavigate} />
+      <RelatedResourcesSection relationships={sidebarRelationships} onNavigate={onNavigate} />
       {kind !== 'events' && <EventsSection events={events || []} updates={updates || []} isLoading={eventsLoading ?? false} eventsError={eventsError ?? null} updatesError={updatesError ?? null} hint={eventsHint} />}
       <LabelsSection data={data} />
       <AnnotationsSection data={data} />
@@ -755,8 +792,8 @@ export function ResourceRendererDispatch({
         {kind === 'services' && !data?.apiVersion?.includes('serving.knative.dev') && <ServiceComp data={data} onCopy={onCopy} copied={copied} onNavigate={onNavigate} />}
         {kind === 'endpointslices' && <EndpointSliceRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'ingresses' && !data?.apiVersion?.includes('networking.internal.knative.dev') && <IngressRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'configmaps' && <ConfigMapRenderer data={data} />}
-        {kind === 'secrets' && <SecretRenderer data={data} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
+        {kind === 'configmaps' && <ConfigMapRenderer data={data} relationships={relationships} onNavigate={onNavigate} />}
+        {kind === 'secrets' && <SecretRenderer data={data} relationships={relationships} onNavigate={onNavigate} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
         {kind === 'jobs' && !nonCoreJobFallthrough && <JobRenderer data={data} />}
         {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'cronworkflows' && <CronWorkflowRenderer data={data} onNavigate={onNavigate} />}
@@ -765,6 +802,8 @@ export function ResourceRendererDispatch({
         {kind === 'persistentvolumeclaims' && <PVCComp data={data} onNavigate={onNavigate} />}
         {kind === 'rollouts' && isArgoRolloutResource(data) && <RolloutComp data={data} onNavigate={onNavigate} />}
         {kind === 'analysisruns' && <AnalysisRunRenderer data={data} onNavigate={onNavigate} />}
+        {(kind === 'analysistemplates' || kind === 'clusteranalysistemplates') && <AnalysisTemplateRenderer data={data} />}
+        {kind === 'experiments' && isApiGroup(data?.apiVersion, 'argoproj.io') && <ExperimentRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'certificates' && !data?.apiVersion?.includes('networking.internal.knative.dev') && <CertificateRenderer data={data} />}
         {kind === 'workflows' && <WorkflowRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'persistentvolumes' && <PersistentVolumeRenderer data={data} onNavigate={onNavigate} />}
@@ -858,19 +897,19 @@ export function ResourceRendererDispatch({
         {kind === 'clusterexternalsecrets' && <ClusterExternalSecretRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'secretstores' || kind === 'clustersecretstores') && <SecretStoreRenderer data={data} />}
         {kind === 'clusters' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGClusterComp data={data} onNavigate={onNavigate} />}
-        {kind === 'clusters' && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && <CAPIClusterRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'clusters' && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && <CAPIClusterComp data={data} onNavigate={onNavigate} />}
         {kind === 'scheduledbackups' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGScheduledBackupRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'poolers' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGPoolerRenderer data={data} onNavigate={onNavigate} />}
         {/* Cluster API (CAPI) */}
-        {'topology.cluster.x-k8s.io/owned' in (data?.metadata?.labels ?? {}) && data?.apiVersion?.includes('cluster.x-k8s.io') && (
+        {'topology.cluster.x-k8s.io/owned' in (data?.metadata?.labels ?? {}) && isCAPITopologyGroup(data?.apiVersion) && (
           <AlertBanner
             variant="warning"
             title="Topology-controlled — this resource is managed by ClusterClass. Manual changes will be reconciled back."
           />
         )}
-        {kind === 'machines' && data?.apiVersion?.includes('cluster.x-k8s.io') && <CAPIMachineRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'machines' && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && <CAPIMachineRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'machinedeployments' && <CAPIMachineDeploymentRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'machinesets' && data?.apiVersion?.includes('cluster.x-k8s.io') && <CAPIMachineSetRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'machinesets' && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && <CAPIMachineSetRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'machinepools' && <CAPIMachinePoolRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'kubeadmcontrolplanes' && <CAPIKubeadmControlPlaneRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'clusterclasses' && <CAPIClusterClassRenderer data={data} />}
@@ -902,6 +941,7 @@ export function ResourceRendererDispatch({
         {kind === 'priorityclasses' && <PriorityClassRenderer data={data} />}
         {kind === 'runtimeclasses' && <RuntimeClassRenderer data={data} />}
         {kind === 'leases' && <LeaseRenderer data={data} />}
+        {kind === 'limitranges' && <LimitRangeRenderer data={data} />}
         {/* Knative Serving */}
         {(kind === 'services' && data?.apiVersion?.includes('serving.knative.dev')) && <KnativeServiceRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'knativeservices' && <KnativeServiceRenderer data={data} onNavigate={onNavigate} />}
@@ -1085,6 +1125,10 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'nodes') return getNodeStatus(data)
   if (k === 'persistentvolumeclaims') return getPVCStatus(data)
   if (k === 'analysisruns') return getAnalysisRunStatus(data)
+  // Same collision guard as the render branch above — Katib's unrelated
+  // Experiment CRD (kubeflow.org) shares this plural and doesn't report the
+  // AnalysisPhase vocabulary getAnalysisRunStatus expects.
+  if (k === 'experiments' && isApiGroup(data?.apiVersion, 'argoproj.io')) return getAnalysisRunStatus(data)
   if (k === 'workflows') return getWorkflowStatus(data)
   if (k === 'cronworkflows') return getCronWorkflowStatus(data)
   if (k === 'certificates') {
@@ -1187,9 +1231,9 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
     // Third-party `clusters` CRDs (KubeBlocks, Redis/Valkey) fall through to the
     // generic handling below instead of getting a fabricated PostgreSQL status.
   }
-  if (k === 'machines' && data.apiVersion?.includes('cluster.x-k8s.io')) return getMachineStatus(data)
+  if (k === 'machines' && isApiGroup(data.apiVersion, 'cluster.x-k8s.io')) return getMachineStatus(data)
   if (k === 'machinedeployments') return getMachineDeploymentStatus(data)
-  if (k === 'machinesets') return getMachineSetStatus(data)
+  if (k === 'machinesets' && isApiGroup(data.apiVersion, 'cluster.x-k8s.io')) return getMachineSetStatus(data)
   if (k === 'machinepools') return getMachinePoolStatus(data)
   if (k === 'kubeadmcontrolplanes') return getKCPStatus(data)
   if (k === 'clusterclasses') return getClusterClassStatus(data)

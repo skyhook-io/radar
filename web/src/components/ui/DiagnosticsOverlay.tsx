@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { X, Copy, Check, ExternalLink } from 'lucide-react'
 import { clsx } from 'clsx'
-import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
+import { TRANSITION_BACKDROP, TRANSITION_PANEL, overlayTransitionStyle } from '../../utils/animation'
 import { openExternal } from '../../utils/navigation'
 import { useDiagnostics } from '../../api/client'
 import type { DiagnosticsSnapshot, DiagEnvVar, DiagMetricsSourceHealth, DiagDropRecord, DiagErrorEntry, DiagCacheSyncStatus, DiagInformerSyncStatus, DiagSyncPhase, DiagSampleWindow } from '../../api/client'
@@ -17,8 +17,10 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
   const [copied, setCopied] = useState<'json' | 'formatted' | null>(null)
   const [reportOpened, setReportOpened] = useState(false)
 
-  // Close on Escape (capture phase)
+  // Close on Escape (capture phase) — only while logically open: the overlay
+  // stays mounted through its exit.
   useEffect(() => {
+    if (!isOpen) return
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
@@ -28,7 +30,7 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
     }
     document.addEventListener('keydown', handler, true)
     return () => document.removeEventListener('keydown', handler, true)
-  }, [onClose])
+  }, [isOpen, onClose])
 
   const copyToClipboard = useCallback(async (type: 'json' | 'formatted') => {
     if (!data) return
@@ -64,23 +66,27 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
   }, [data])
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[8vh]">
+    <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[8vh]" inert={!isOpen || undefined}>
       {/* Backdrop */}
       <div
         className={clsx(
           'absolute inset-0 bg-theme-base/60 backdrop-blur-sm',
           TRANSITION_BACKDROP,
-          isOpen ? 'opacity-100' : 'opacity-0'
+          isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
         )}
-        onClick={onClose}
+        style={overlayTransitionStyle(isOpen, 'dialog')}
+        onClick={isOpen ? onClose : undefined}
       />
 
       {/* Panel */}
-      <div className={clsx(
-        'relative w-full max-w-2xl mx-4 dialog overflow-hidden flex flex-col max-h-[84vh]',
-        TRANSITION_PANEL,
-        isOpen ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-[0.97] translate-y-3'
-      )}>
+      <div
+        className={clsx(
+          'relative w-full max-w-2xl mx-4 dialog overflow-hidden flex flex-col max-h-[84vh]',
+          TRANSITION_PANEL,
+          isOpen ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-[0.97] translate-y-3'
+        )}
+        style={overlayTransitionStyle(isOpen, 'dialog')}
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-theme-border shrink-0">
           <div className="flex items-center gap-3">

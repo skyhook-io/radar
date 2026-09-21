@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -61,6 +62,8 @@ var pfManager = &PortForwardManager{
 	sessions: make(map[string]*PortForwardSession),
 }
 
+var errPortForwardStoppedWhileStarting = errors.New("port forward stopped while starting")
+
 // GetPortForwardCount returns the number of active port forward sessions
 func GetPortForwardCount() int {
 	pfManager.mu.RLock()
@@ -70,17 +73,49 @@ func GetPortForwardCount() int {
 
 // StopAllPortForwards stops all active port forward sessions
 func StopAllPortForwards() {
-	pfManager.mu.Lock()
-	defer pfManager.mu.Unlock()
+	pfManager.stopAll()
+}
 
-	for id, session := range pfManager.sessions {
+func (m *PortForwardManager) stopAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for id, session := range m.sessions {
 		log.Printf("Stopping port forward %s (%s/%s)", id, session.Namespace, session.PodName)
-		if session.cancel != nil {
-			session.cancel()
-		}
-		session.Status = "stopped"
-		delete(pfManager.sessions, id)
+		stopPortForwardSessionLocked(session)
+		delete(m.sessions, id)
 	}
+}
+
+func stopPortForwardSessionLocked(session *PortForwardSession) {
+	if session.cancel != nil {
+		session.cancel()
+	}
+	if session.stopCh != nil {
+		select {
+		case <-session.stopCh:
+		default:
+			close(session.stopCh)
+		}
+	}
+	session.Status = "stopped"
+}
+
+func (m *PortForwardManager) finishStart(sessionID string) (*PortForwardSession, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	session, ok := m.sessions[sessionID]
+	if !ok || session.Status == "stopped" {
+		return nil, errPortForwardStoppedWhileStarting
+	}
+	if session.Status == "error" {
+		return nil, errors.New(session.Error)
+	}
+
+	session.Status = "running"
+	response := *session
+	return &response, nil
 }
 
 // handleListPortForwards returns all active port forward sessions
@@ -243,18 +278,17 @@ func (s *Server) handleStartPortForward(w http.ResponseWriter, r *http.Request) 
 	// Wait briefly for port forward to start
 	time.Sleep(100 * time.Millisecond)
 
-	pfManager.mu.Lock()
-	session = pfManager.sessions[sessionID]
-	if session.Status == "error" {
-		errMsg := session.Error
-		pfManager.mu.Unlock()
-		s.writeError(w, http.StatusInternalServerError, errMsg)
+	response, err := pfManager.finishStart(sessionID)
+	if errors.Is(err, errPortForwardStoppedWhileStarting) {
+		s.writeError(w, http.StatusConflict, "Port forward was stopped while starting")
 		return
 	}
-	session.Status = "running"
-	pfManager.mu.Unlock()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
-	s.writeJSON(w, session)
+	s.writeJSON(w, response)
 }
 
 // handleStopPortForward stops an active port forward session
@@ -269,10 +303,7 @@ func (s *Server) handleStopPortForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Signal stop
-	session.cancel()
-	close(session.stopCh)
-	session.Status = "stopped"
+	stopPortForwardSessionLocked(session)
 	delete(pfManager.sessions, sessionID)
 	pfManager.mu.Unlock()
 
@@ -367,12 +398,12 @@ func findPodForService(ctx context.Context, client kubernetes.Interface, namespa
 	}
 
 	// Find the matching service port entry
-	var targetPort intstr.IntOrString
+	var servicePortSpec corev1.ServicePort
 	var scheme string
 	found := false
 	for _, port := range svc.Spec.Ports {
 		if int(port.Port) == servicePort {
-			targetPort = port.TargetPort
+			servicePortSpec = port
 			appProto := ""
 			if port.AppProtocol != nil {
 				appProto = *port.AppProtocol
@@ -408,23 +439,18 @@ func findPodForService(ctx context.Context, client kubernetes.Interface, namespa
 		return "", 0, "", fmt.Errorf("no running pod found")
 	}
 
-	// Named targetPort: resolve against running pods by looking up container port names
-	if targetPort.Type == intstr.String && targetPort.StrVal != "" {
+	if servicePortSpec.TargetPort.Type == intstr.String && servicePortSpec.TargetPort.StrVal != "" {
 		for _, pod := range pods.Items {
 			if pod.Status.Phase == corev1.PodRunning {
-				if resolved, ok := resolveNamedPort(&pod, targetPort.StrVal); ok {
+				if resolved, ok := k8score.ResolveServiceTargetPort(servicePortSpec, pod.Spec.Containers); ok {
 					return pod.Name, resolved, scheme, nil
 				}
 			}
 		}
-		return "", 0, "", fmt.Errorf("no running pod found with named port %q", targetPort.StrVal)
+		return "", 0, "", fmt.Errorf("no running pod found with named port %q", servicePortSpec.TargetPort.StrVal)
 	}
 
-	// Numeric targetPort: use the value, or default to the service port if unset
-	containerPort := servicePort
-	if targetPort.IntVal > 0 {
-		containerPort = int(targetPort.IntVal)
-	}
+	containerPort, _ := k8score.ResolveServiceTargetPort(servicePortSpec, nil)
 
 	// Return the first running pod — the service spec is authoritative for the port,
 	// and containers can listen on ports without declaring them in the pod spec.
@@ -435,18 +461,6 @@ func findPodForService(ctx context.Context, client kubernetes.Interface, namespa
 	}
 
 	return "", 0, "", fmt.Errorf("no running pod found")
-}
-
-// resolveNamedPort looks up a named port in a pod's containers and returns the container port number.
-func resolveNamedPort(pod *corev1.Pod, portName string) (int, bool) {
-	for _, container := range pod.Spec.Containers {
-		for _, p := range container.Ports {
-			if p.Name == portName {
-				return int(p.ContainerPort), true
-			}
-		}
-	}
-	return 0, false
 }
 
 // validatePodPort checks if the pod actually exposes the requested port and

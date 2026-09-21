@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { Info, CheckCircle, XCircle, AlertCircle, ChevronRight, ChevronDown, FileCode, AlertTriangle, Layers } from 'lucide-react'
+import { Info, CheckCircle, XCircle, AlertCircle, FileCode, AlertTriangle, Layers } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
+import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { getGenericResourceStatus } from '../generic-status'
 import type { HealthLevel } from '../resource-utils'
 
@@ -244,19 +245,23 @@ interface NestedObjectViewerProps {
 
 function NestedObjectViewer({ name, value, depth = 0 }: NestedObjectViewerProps) {
   const [expanded, setExpanded] = useState(depth < 1)
+  const { panelId, buttonProps } = useDisclosure(expanded)
 
   if (Array.isArray(value)) {
     return (
       <div className="text-sm">
         <button
+          {...buttonProps}
           onClick={() => setExpanded(!expanded)}
           className="flex items-center gap-1 text-theme-text-secondary hover:text-theme-text-primary transition-colors"
         >
-          {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          <CollapseChevron open={expanded} className="w-3.5 h-3.5" />
           <span className="font-medium">{name}</span>
           <span className="text-xs text-theme-text-tertiary">({value.length} items)</span>
         </button>
-        {expanded && (
+        {/* Recursive and unbounded: closed branches unmount so a deep object
+            costs only the rows the user has actually opened. */}
+        <Collapse open={expanded} unmountOnExit id={panelId}>
           <div className="ml-5 mt-1 space-y-1">
             {value.map((item, i) => {
               if (typeof item === 'object' && item !== null) {
@@ -269,7 +274,7 @@ function NestedObjectViewer({ name, value, depth = 0 }: NestedObjectViewerProps)
               )
             })}
           </div>
-        )}
+        </Collapse>
       </div>
     )
   }
@@ -282,14 +287,15 @@ function NestedObjectViewer({ name, value, depth = 0 }: NestedObjectViewerProps)
     return (
       <div className="text-sm">
         <button
+          {...buttonProps}
           onClick={() => setExpanded(!expanded)}
           className="flex items-center gap-1 text-theme-text-secondary hover:text-theme-text-primary transition-colors"
         >
-          {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          <CollapseChevron open={expanded} className="w-3.5 h-3.5" />
           <span className="font-medium">{name}</span>
           <span className="text-xs text-theme-text-tertiary">({entries.length} fields)</span>
         </button>
-        {expanded && (
+        <Collapse open={expanded} unmountOnExit id={panelId}>
           <div className="ml-5 mt-1 space-y-1">
             {simpleEntries.map(([k, v]) => (
               <div key={k} className="flex items-start gap-2 text-xs">
@@ -301,7 +307,7 @@ function NestedObjectViewer({ name, value, depth = 0 }: NestedObjectViewerProps)
               <NestedObjectViewer key={k} name={formatFieldName(k)} value={v} depth={depth + 1} />
             ))}
           </div>
-        )}
+        </Collapse>
       </div>
     )
   }
@@ -364,7 +370,7 @@ function GenericConditionsSection({ conditions }: { conditions: any[] }) {
                   <span className="text-theme-text-primary font-medium">{cond.type}</span>
                   <span className={clsx(
                     'badge-sm',
-                    isTrue ? 'bg-theme-elevated text-theme-text-secondary' : 'bg-red-500/20 text-red-400'
+                    isTrue ? 'bg-theme-elevated text-theme-text-secondary' : 'status-red'
                   )}>
                     {cond.status}
                   </span>

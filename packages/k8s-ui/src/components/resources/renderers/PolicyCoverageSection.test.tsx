@@ -4,7 +4,7 @@ import { PolicyCoverageSection } from './PolicyCoverageSection'
 import type { PolicyCoverageResponse, PolicyCoverageRule, PolicyCoverageSubject } from '../../../types/policy'
 
 const vpol = (spec: any = {}) => ({ apiVersion: 'policies.kyverno.io/v1', kind: 'ValidatingPolicy', spec })
-const mpol = () => ({ apiVersion: 'policies.kyverno.io/v1', kind: 'MutatingPolicy', spec: {} })
+const mpol = (spec: any = {}) => ({ apiVersion: 'policies.kyverno.io/v1', kind: 'MutatingPolicy', spec })
 const legacy = (spec: any) => ({ apiVersion: 'kyverno.io/v1', kind: 'ClusterPolicy', spec })
 
 const counts = (c: Partial<PolicyCoverageResponse['counts']> = {}) =>
@@ -80,6 +80,97 @@ describe('what the section says a policy did', () => {
     )
     expect(html).toContain('triggered generation')
     expect(html).not.toContain('Generated')
+  })
+
+  // A legacy Enforce policy with `spec.admission: false` is left out of the
+  // admission webhook, so it rejects nothing — the consequence sentence must not
+  // promise a rejection it cannot make.
+  it('does not promise rejection when admission evaluation is disabled', () => {
+    const html = render(
+      coverage({ examined: 2, subjects: 2, subjectsFailing: 2, counts: counts({ fail: 2 }),
+        rules: [rule({ counts: counts({ fail: 2 }), subjects: [subject('a', 'fail')], total: 2 })] }),
+      legacy({ validationFailureAction: 'Enforce', admission: false,
+        rules: [{ name: 'r', validate: { pattern: {} } }] }),
+    )
+    expect(html).toContain('Nothing is rejected today')
+    expect(html).not.toContain('will be rejected')
+  })
+
+  // The policy already declares Enforce, so the remediation is to re-enable
+  // admission — not to "switch this policy to block", which would point at the
+  // wrong knob.
+  it('names admission, not the action, as the reason nothing is rejected', () => {
+    const html = render(
+      coverage({ examined: 2, subjects: 2, subjectsFailing: 2, counts: counts({ fail: 2 }),
+        rules: [rule({ counts: counts({ fail: 2 }), subjects: [subject('a', 'fail')], total: 2 })] }),
+      legacy({ validationFailureAction: 'Enforce', admission: false,
+        rules: [{ name: 'r', validate: { pattern: {} } }] }),
+    )
+    expect(html).toContain('admission is disabled for this policy')
+    expect(html).toContain('Enabling admission would reject the next update')
+    expect(html).not.toContain('Switching this policy to block')
+  })
+
+  // The modern CEL family reaches the same non-blocking state via
+  // `spec.evaluation.admission.enabled: false`, and the shared sentence must be
+  // honest there too.
+  it('names admission for a modern Deny policy with admission disabled', () => {
+    const html = render(
+      coverage({ examined: 2, subjects: 2, subjectsFailing: 2, counts: counts({ fail: 2 }),
+        rules: [rule({ counts: counts({ fail: 2 }), subjects: [subject('a', 'fail')], total: 2 })] }),
+      vpol({ validationActions: ['Deny'], evaluation: { admission: { enabled: false } } }),
+    )
+    expect(html).toContain('admission is disabled for this policy')
+    expect(html).not.toContain('Switching this policy to block')
+  })
+
+  // A JSON-mode policy is evaluated against payloads outside the cluster and
+  // never joins admission. Both phrasings would be false: it rejects nothing
+  // today, and neither switching the action nor enabling admission changes
+  // that. The sentence is withheld rather than guessed at.
+  it('states no admission consequence for a JSON-mode policy', () => {
+    const failing = coverage({ examined: 2, subjects: 2, subjectsFailing: 2, counts: counts({ fail: 2 }),
+      rules: [rule({ counts: counts({ fail: 2 }), subjects: [subject('a', 'fail')], total: 2 })] })
+
+    const admissionOff = render(failing, vpol({
+      validationActions: ['Deny'],
+      evaluation: { mode: 'JSON', admission: { enabled: false } },
+    }))
+    expect(admissionOff).not.toContain('admission is disabled for this policy')
+    expect(admissionOff).not.toContain('Switching this policy to block')
+
+    // Same for JSON mode with admission left at its default.
+    const admissionDefault = render(failing, vpol({
+      validationActions: ['Deny'],
+      evaluation: { mode: 'JSON' },
+    }))
+    expect(admissionDefault).not.toContain('Switching this policy to block')
+    expect(admissionDefault).not.toContain('will be rejected')
+  })
+
+  // `getKyvernoValidationActions` applies Kyverno's absent-means-Deny default,
+  // which is right for the validating families and wrong for every other kind.
+  // A mutating policy with admission off must not be described as a policy that
+  // would reject once admission is re-enabled.
+  it('does not read a Deny default off a mutating policy with admission disabled', () => {
+    const html = render(
+      coverage({ examined: 2, subjects: 2, subjectsFailing: 2, counts: counts({ fail: 2 }),
+        rules: [rule({ counts: counts({ fail: 2 }), subjects: [subject('a', 'fail')], total: 2 })] }),
+      mpol({ evaluation: { admission: { enabled: false } } }),
+    )
+    expect(html).not.toContain('admission is disabled for this policy')
+  })
+
+  // An Audit policy genuinely never blocks, so its remediation IS to switch the
+  // action — the admission-off wording must not leak onto it.
+  it('still offers to switch the action for an audit policy', () => {
+    const html = render(
+      coverage({ examined: 2, subjects: 2, subjectsFailing: 2, counts: counts({ fail: 2 }),
+        rules: [rule({ counts: counts({ fail: 2 }), subjects: [subject('a', 'fail')], total: 2 })] }),
+      vpol({ validationActions: ['Audit'] }),
+    )
+    expect(html).toContain('Switching this policy to block')
+    expect(html).not.toContain('admission is disabled')
   })
 
   it('withholds the consequence when the policy’s rules disagree on blocking', () => {

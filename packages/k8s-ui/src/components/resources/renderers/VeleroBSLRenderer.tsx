@@ -1,5 +1,5 @@
 import { HardDrive, Clock, Archive } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, RelationshipGroup } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, RelationshipGroup, AlertBanner } from '../../ui/drawer-components'
 import { TimeValue } from '../../ui/ScheduleValue'
 import {
   getBSLStatus,
@@ -11,6 +11,7 @@ import {
   getBSLAccessMode,
   getBSLLastValidation,
   getBSLLastSynced,
+  getBSLMessage,
 } from '../resource-utils-velero'
 import { VeleroPhaseValue } from './velero-cells'
 
@@ -66,6 +67,7 @@ export function VeleroBSLRenderer({ data, storedBackups, storedTotal, restorable
   const status = data.status || {}
   const conditions = status.conditions || []
   const bslStatus = getBSLStatus(data)
+  const message = getBSLMessage(data)
   const config = data.spec?.config || {}
   // Two things falsify "restorable", and the phase sees neither. A backup that
   // did complete is still not something to go back to once its TTL has passed —
@@ -90,6 +92,19 @@ export function VeleroBSLRenderer({ data, storedBackups, storedTotal, restorable
 
   return (
     <>
+      {/* The reason, not just the state. An unavailable location means Velero's
+          last validation of the bucket failed, and status.message is the only
+          place that reason exists — the object carries no conditions. */}
+      {bslStatus.level === 'unhealthy' && (
+        <AlertBanner
+          variant="error"
+          title="Storage Location Unavailable"
+          message={message
+            ? message
+            : 'Velero reported this location as unavailable and gave no reason. New backups cannot be written here, and backups already stored here cannot be restored from, while it stays that way.'}
+        />
+      )}
+
       {/* Status section */}
       <Section title="Status" icon={Clock} defaultExpanded>
         <PropertyList>

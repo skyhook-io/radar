@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -43,29 +44,51 @@ func apiResourceToKind(resource string) string {
 var auditCache struct {
 	mu        sync.RWMutex
 	results   *bp.ScanResults
-	nsKey     string // comma-joined namespace filter used for this result
+	key       auditResultKey
 	expiresAt time.Time
+}
+
+type auditResultKey struct {
+	cache   *k8s.ResourceCache
+	dynamic *k8s.DynamicResourceCache
+	options string
+}
+
+func auditKey(cache *k8s.ResourceCache, namespaces []string, opts *audit.RunOptions) auditResultKey {
+	selected := slices.Clone(namespaces)
+	slices.Sort(selected)
+	encoded, _ := json.Marshal(struct {
+		Namespaces []string
+		Options    *audit.RunOptions
+	}{selected, opts})
+	return auditResultKey{cache, k8s.GetDynamicResourceCache(), string(encoded)}
+}
+
+func invalidateAuditCache() {
+	auditCache.mu.Lock()
+	auditCache.results = nil
+	auditCache.mu.Unlock()
 }
 
 const auditCacheTTL = 5 * time.Second
 
 // getCachedResults returns cached scan results if fresh, or runs a new scan.
-func getCachedResults(cache *k8s.ResourceCache, namespaces []string) *bp.ScanResults {
-	nsKey := strings.Join(namespaces, ",")
+func getCachedResults(cache *k8s.ResourceCache, namespaces []string, opts *audit.RunOptions) *bp.ScanResults {
+	key := auditKey(cache, namespaces, opts)
 
 	auditCache.mu.RLock()
-	if auditCache.results != nil && auditCache.nsKey == nsKey && time.Now().Before(auditCache.expiresAt) {
+	if auditCache.results != nil && auditCache.key == key && time.Now().Before(auditCache.expiresAt) {
 		r := auditCache.results
 		auditCache.mu.RUnlock()
 		return r
 	}
 	auditCache.mu.RUnlock()
 
-	results := audit.RunFromCache(cache, namespaces, nil)
+	results := audit.RunFromCache(cache, namespaces, opts)
 
 	auditCache.mu.Lock()
 	auditCache.results = results
-	auditCache.nsKey = nsKey
+	auditCache.key = key
 	auditCache.expiresAt = time.Now().Add(auditCacheTTL)
 	auditCache.mu.Unlock()
 
@@ -79,11 +102,7 @@ func applyAuditSettings(results *bp.ScanResults, cfg settings.AuditConfig) *bp.S
 
 // getAuditConfig returns the current audit config with defaults applied.
 func getAuditConfig() settings.AuditConfig {
-	s := settings.Load()
-	if s.Audit != nil {
-		return *s.Audit
-	}
-	return settings.DefaultAuditConfig()
+	return settings.EffectiveAudit()
 }
 
 // handleAudit returns full audit scan results.
@@ -102,7 +121,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, &bp.ScanResults{Summary: bp.ScanSummary{Categories: map[string]bp.CategorySummary{}}})
 		return
 	}
-	results := getCachedResults(cache, namespaces)
+	results := getCachedResults(cache, namespaces, s.auditOptions(r))
 	// `?raw=true` returns the unfiltered scan, skipping the local
 	// ~/.radar/settings.json audit filters. Radar Cloud's Hub requests raw so
 	// it can own the effective Checks config (org policy) centrally rather than
@@ -159,7 +178,7 @@ func (s *Server) handleAuditResource(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, []bp.Finding{})
 		return
 	}
-	results := getCachedResults(cache, namespaces)
+	results := getCachedResults(cache, namespaces, s.auditOptions(r))
 	// Honor ?raw=true here too (mirrors handleAudit), so the per-resource
 	// drill-down and the list endpoint can't drift on the raw contract: Radar
 	// Cloud's Hub owns effective Checks config, standalone keeps local settings.
@@ -200,6 +219,9 @@ func (s *Server) handleGetAuditSettings(w http.ResponseWriter, r *http.Request) 
 // handlePutAuditSettings updates the audit configuration.
 // PUT /api/settings/audit
 func (s *Server) handlePutAuditSettings(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify audit settings") {
 		return
 	}

@@ -11,6 +11,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -167,6 +168,37 @@ func TestDetectAdmissionProblems_FailedCreateDeploymentBlockedRollout(t *testing
 		if p.Name == "rollout-complete" {
 			t.Fatalf("completed rollout with lingering event must not surface admission issue: %+v", p)
 		}
+	}
+}
+
+func TestAdmissionTargetIdentityIncludesAPIGroup(t *testing.T) {
+	defer ResetTestState()
+	createdAt := metav1.NewTime(time.Now().UTC().Add(-time.Hour))
+	replicas := int32(1)
+	deployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "checkout", Namespace: "prod", CreationTimestamp: createdAt},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Status:     appsv1.DeploymentStatus{Replicas: 1, UpdatedReplicas: 1},
+	}
+	if err := InitTestResourceCache(fake.NewClientset(deployment)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	appsRef := corev1.ObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Namespace: "prod", Name: "checkout"}
+	customRef := corev1.ObjectReference{APIVersion: "delivery.example.io/v1", Kind: "Deployment", Namespace: "prod", Name: "checkout"}
+
+	if admissionProblemKey(admissionObjectGroup(appsRef), appsRef.Kind, appsRef.Namespace, appsRef.Name) ==
+		admissionProblemKey(admissionObjectGroup(customRef), customRef.Kind, customRef.Namespace, customRef.Name) {
+		t.Fatal("same-named resources in different API groups must not share admission identity")
+	}
+	if admissionTargetStillBlocked(GetResourceCache(), appsRef) {
+		t.Fatal("healthy apps Deployment should retire its lingering FailedCreate event")
+	}
+	if !admissionTargetStillBlocked(GetResourceCache(), customRef) {
+		t.Fatal("custom Deployment must not be cross-checked against the same-named apps Deployment")
+	}
+	if got := admissionTargetCreatedAt(GetResourceCache(), customRef); !got.IsZero() {
+		t.Fatalf("custom Deployment inherited apps Deployment creation time: %v", got)
 	}
 }
 
@@ -599,6 +631,8 @@ func TestDetectPostBindProblems_EventlessCNIStartupStall(t *testing.T) {
 	old := time.Now().Add(-45 * time.Minute)
 	stuck := postBindContainerCreatingPod("prod", "valkey", "worker-2", old)
 	sameNode := postBindContainerCreatingPod("kube-system", "calico-token-refresh", "worker-2", old)
+	stuck.OwnerReferences = []metav1.OwnerReference{correlationOwner("apps/v1", "StatefulSet", "valkey", "valkey-uid")}
+	sameNode.OwnerReferences = []metav1.OwnerReference{correlationOwner("apps/v1", "DaemonSet", "calico", "calico-uid")}
 	slowImagePull := postBindContainerCreatingPod("prod", "image-pull", "worker-2", old)
 	slowImagePull.Status.PodIP = "10.1.2.3"
 	fresh := postBindContainerCreatingPod("prod", "fresh", "worker-2", time.Now().Add(-5*time.Minute))
@@ -615,7 +649,7 @@ func TestDetectPostBindProblems_EventlessCNIStartupStall(t *testing.T) {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
 	scoped := DetectPostBindProblems(GetResourceCache(), "prod")
-	if len(scoped) != 1 || strings.Contains(scoped[0].Message, "same node has 2 visible pods") {
+	if len(scoped) != 1 || scoped[0].NodeStartupCorroboration != nil {
 		t.Fatalf("single-namespace detector should not count kube-system pods, got %+v", scoped)
 	}
 	problems := DetectPostBindProblemsForNamespaces(GetResourceCache(), []string{"prod", "kube-system"})
@@ -636,7 +670,10 @@ func TestDetectPostBindProblems_EventlessCNIStartupStall(t *testing.T) {
 	if got.Reason != "PostBindStartupStall" || got.Severity != "critical" {
 		t.Fatalf("got reason/severity %s/%s, want PostBindStartupStall/critical: %+v", got.Reason, got.Severity, got)
 	}
-	for _, want := range []string{"worker-2", "no matching recent kubelet event", "same node has 2 visible pods"} {
+	if got.NodeStartupCorroboration == nil || got.NodeStartupCorroboration.OwnerCount != 2 {
+		t.Fatalf("missing independent-owner evidence: %+v", got)
+	}
+	for _, want := range []string{"worker-2", "no matching recent kubelet event"} {
 		if !strings.Contains(got.Message, want) {
 			t.Errorf("message %q missing %q", got.Message, want)
 		}
@@ -665,7 +702,7 @@ func TestDetectPostBindProblems_ExpiredVolumeEventSuppressesFallback(t *testing.
 		if p.Name == "web" {
 			t.Fatalf("expired storage event must not be relabeled as an eventless CNI/runtime stall: %+v", problems)
 		}
-		if p.Name == "network" && strings.Contains(p.Message, "same node has 2 visible pods") {
+		if p.Name == "network" && p.NodeStartupCorroboration != nil {
 			t.Fatalf("expired storage event must not inflate same-node CNI/runtime correlation: %+v", problems)
 		}
 	}
@@ -755,6 +792,52 @@ func TestDetectAdmissionProblems_JobAndDaemonSetCrossCheck(t *testing.T) {
 		}
 		if p.Name == "ds-ok" {
 			t.Errorf("fully-scheduled DaemonSet must be skipped: %+v", p)
+		}
+	}
+}
+
+func TestDetectAdmissionProblems_WebhookCallFailures(t *testing.T) {
+	defer ResetTestState()
+	now := metav1.Now()
+	message := `Error creating: Internal error occurred: failed calling webhook "external.example.com": failed to call webhook: Post "https://external.example.com/validate": context deadline exceeded`
+	metadata := func(name string) metav1.ObjectMeta { return metav1.ObjectMeta{Name: name, Namespace: "test"} }
+	objects := []runtime.Object{
+		&appsv1.ReplicaSet{ObjectMeta: metadata("rs"), Spec: appsv1.ReplicaSetSpec{Replicas: ptr32(1)}},
+		&appsv1.StatefulSet{ObjectMeta: metadata("sts"), Spec: appsv1.StatefulSetSpec{Replicas: ptr32(1)}},
+		&appsv1.DaemonSet{ObjectMeta: metadata("ds"), Status: appsv1.DaemonSetStatus{DesiredNumberScheduled: 1}},
+		&batchv1.Job{ObjectMeta: metadata("job")},
+		&appsv1.Deployment{ObjectMeta: metadata("deployment"), Spec: appsv1.DeploymentSpec{Replicas: ptr32(1)}, Status: appsv1.DeploymentStatus{Conditions: []appsv1.DeploymentCondition{{Type: appsv1.DeploymentReplicaFailure, Status: corev1.ConditionTrue, Reason: "FailedCreate", Message: message, LastTransitionTime: now}}}},
+		&appsv1.ReplicaSet{ObjectMeta: metadata("recovered"), Spec: appsv1.ReplicaSetSpec{Replicas: ptr32(1)}, Status: appsv1.ReplicaSetStatus{Replicas: 1}},
+		&appsv1.ReplicaSet{ObjectMeta: metadata("stale"), Spec: appsv1.ReplicaSetSpec{Replicas: ptr32(1)}},
+	}
+	for _, subject := range []struct{ kind, name string }{{"ReplicaSet", "rs"}, {"StatefulSet", "sts"}, {"DaemonSet", "ds"}, {"Job", "job"}, {"ReplicaSet", "recovered"}, {"ReplicaSet", "stale"}} {
+		last := now
+		if subject.name == "stale" {
+			last = metav1.NewTime(now.Add(-time.Hour))
+		}
+		objects = append(objects, &corev1.Event{ObjectMeta: metadata(subject.name + "-event"), InvolvedObject: corev1.ObjectReference{APIVersion: "apps/v1", Kind: subject.kind, Namespace: "test", Name: subject.name}, Reason: "FailedCreate", Type: corev1.EventTypeWarning, Message: message, LastTimestamp: last})
+		if subject.kind == "StatefulSet" {
+			objects[len(objects)-1].(*corev1.Event).Message = strings.Replace(message, "Error creating:", "Create Pod sts-0 in StatefulSet sts failed error:", 1)
+		}
+		if subject.kind == "Job" {
+			objects[len(objects)-1].(*corev1.Event).InvolvedObject.APIVersion = "batch/v1"
+		}
+	}
+	if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+		t.Fatal(err)
+	}
+	problems := DetectAdmissionProblems(GetResourceCache(), "test")
+	for _, subject := range []struct{ kind, name string }{{"ReplicaSet", "rs"}, {"StatefulSet", "sts"}, {"DaemonSet", "ds"}, {"Job", "job"}, {"Deployment", "deployment"}} {
+		if !findProblem(problems, subject.kind, "test", subject.name, "WebhookUnavailable") {
+			t.Errorf("missing %s call-failure issue: %+v", subject.kind, problems)
+		}
+	}
+	for _, problem := range problems {
+		if problem.Name == "recovered" || problem.Name == "stale" {
+			t.Errorf("inactive call failure surfaced: %+v", problem)
+		}
+		if !strings.Contains(problem.Message, `failed calling webhook "external.example.com"`) {
+			t.Errorf("raw error lost: %+v", problem)
 		}
 	}
 }

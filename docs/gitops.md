@@ -20,7 +20,7 @@ The hard part of GitOps tooling isn't sync — it's diagnosis. Radar surfaces dr
 
 Open the **GitOps** tab in the sidebar. Argo + Flux rows mix in the same table or tile view with resolved source URLs (`github.com/owner/repo`) for both ecosystems — not the CRD-internal source name.
 
-- **Filters**: Sync, Health, Project, Namespace, Labels, Automation (auto-sync / manual / suspended), Lifecycle (active / terminating)
+- **Filters**: Sync, Health, Project, Namespace, Labels, Automation (auto-sync / manual / suspended), Lifecycle (active / terminating), Kind (Applications / ApplicationSets — Argo only, shown once a cluster has ApplicationSets)
 - **Modes**: Applications / Sources / Projects / Alerts
 - **Default sort**: smart-tiered by urgency — Failed > Terminating > Degraded > Missing > OutOfSync > Suspended > Progressing > Synced
 
@@ -62,12 +62,24 @@ The Issues band at the top of the detail page surfaces six classes of problems:
 - **Stuck-drift loop** — when sync succeeded but the app is *still* OutOfSync with auto-sync on and a recent reconcile, something is mutating resources after each apply. The Issue calls out likely culprits (mutating webhook, sibling controller, schema migration)
 - **Manual drift without auto-sync** — drift exists but auto-sync is disabled. The Issue tells you "nothing will reconcile until you click Sync" so you stop waiting
 - **Argo Application conditions** — `ComparisonError` (verify repo creds), `OrphanedResourceWarning`, `InvalidSpecError`, etc. extracted into typed-severity Issues
-- **Per-resource health** — Degraded / Missing children get a critical Issue each, deduped against any operation failure that already named the same resource (no triplicate rendering)
+- **Per-resource health** — Degraded / Missing children get a critical Issue each, deduped against any operation failure that already named the same resource (no triplicate rendering). See [Per-resource health](#per-resource-health) for where that health comes from
 - **Pending deletion** (lifecycle) — see [Lifecycle awareness](#lifecycle-awareness) below
 
 **Structured remediation** — when the diagnosis pipeline recognizes a fixable failure (e.g. Argo operation error "namespace X not found"), the Issue carries a primary-blue action button that performs the fix in one click. Duplicate per-resource Missing issues + SyncError condition rows are then suppressed so the user sees one clear "create the namespace and retry" path instead of three.
 
 While an operation is running, the page polls every 2s; otherwise on-demand.
+
+### Per-resource health
+
+The health chip on each managed resource (tree node, Resources table, per-resource Issues) comes from one of two places, and Radar tells you which:
+
+- **Argo CD's own verdict.** Argo evaluates every managed resource it has a health check for (built-in checks for core kinds and many CRDs, plus your `resource.customizations`) and rolls the results up into the Application's health. Up to Argo CD 2.x this per-resource result was also written into the Application object (`status.resources[].health`), and that is what Radar reads.
+- **Argo CD's verdict, read from its API server.** Argo CD 3.0 changed the default: the controller no longer persists per-resource health into the Application (`status.resourceHealthSource: appTree`, controlled by `controller.resource.health.persist` in `argocd-cmd-params-cm`). The app-level health still rolls up, but every managed resource in the object is left without one. When Radar sees that and can reach argocd-server, it asks the server for the same per-resource verdicts (the Application's `resource-tree`, which the server keeps in its own cache) and shows those. This works with the Argo CD integration connected (Settings → Argo CD), and, without any setup, on installs that allow anonymous read (`users.anonymous.enabled`); the credential-free read accepts argocd-server's default self-signed certificate, since it sends nothing that needs protecting. Once an anonymous read has succeeded, the connection counts as the integration: Settings shows it as connected with no token needed, and the Git-rendered diff works over it too. A reachable server that refuses the read (the default) stays "not connected" — reachability alone is not an integration. The answer is accepted only when it is about the same Application (matching UID) and the Application deploys to the connected cluster. With the integration configured and no usable answer (token rejected, server unreachable, a different install answering), the notice says so and why instead of quietly showing Radar's read.
+- **Radar's own read.** When Argo's verdicts are not in the object and cannot be fetched, Radar reads the live resources itself through its issues engine (crash loops, image pulls, failed `Ready` conditions and so on) and reports what it finds. Those rows carry a **Found by Radar** marker, and a notice above the Issues band says that the problems listed are Radar's findings. Radar only reports problems this way; it never marks a resource Healthy on Argo's behalf, and a resource it has nothing on is shown without a health value.
+
+Two things follow from that. A resource Argo has no health check for (so Argo ignores it) can still show a Radar finding if it is unhealthy: that is Radar's read, not a change in Argo's verdict, and the marker says so. And an Application that deploys to another cluster gets neither: Radar can only read the cluster it is connected to, so it derives nothing and says why.
+
+To see Argo's per-resource verdicts instead of Radar's read, connect Radar to your Argo CD server in Settings (the notice links there), or set `controller.resource.health.persist: "true"` in `argocd-cmd-params-cm` and restart the application controller. Radar switches to Argo's values automatically either way.
 
 ## Lifecycle awareness
 

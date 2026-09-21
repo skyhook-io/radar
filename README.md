@@ -51,7 +51,7 @@ curl -fsSL https://get.radarhq.io | sh && kubectl radar
 - **Airgapped-friendly** — runs as a single binary against the Kubernetes API and works in locked-down environments with outbound egress blocked
 - **Real-time** — watches your cluster via informers, pushes updates to the browser via SSE
 - **Works everywhere** — GKE, EKS, AKS, minikube, kind, k3s, or any conformant cluster
-- **AI-ready** — built-in [MCP server](docs/mcp.md) lets AI agents inspect, diagnose, and operate your cluster through Radar
+- **AI-ready** — built-in [MCP server](docs/mcp.md) lets AI agents inspect, investigate, and operate your cluster through Radar
 - **In-cluster option** — deploy with Helm for shared team access with RBAC-scoped permissions
 
 > "Have Radar deployed at work. As far as Kubernetes dashboards go, this is one of the best." — u/TheRealNetroxen
@@ -179,22 +179,25 @@ The table below covers common startup flags. See the [full CLI reference](https:
 | `--base-path` | | Serve Radar under a URL prefix such as `/radar`. Use when an ingress forwards a subpath without stripping it — everything, including `/api/health`, moves under the prefix. Not supported with `--cloud-url`. |
 | `--no-browser` | `false` | Don't auto-open browser |
 | `--browser` | | Browser to use when opening the UI, e.g. `firefox`, `google-chrome`, or `Google Chrome` on macOS |
-| `--timeline-storage` | `memory` | Timeline storage backend: `memory` or `sqlite` |
+| `--timeline-storage` | `memory` | Timeline storage backend: `memory`, `sqlite`, or `postgres` |
 | `--timeline-db` | `~/.radar/timeline.db` | Path to SQLite database (when using sqlite storage) |
 | `--timeline-max-size` | `1Gi` | Maximum SQLite DB + WAL size before pruning oldest events (e.g. `800Mi`, `8Gi`; `0` disables) |
-| `--history-limit` | `10000` | Maximum events to retain in timeline |
+| `--history-limit` | `10000` | Maximum events to retain in timeline (memory only) |
 | `--disable-exec` | `false` | Disable terminal and debug shell |
 | `--disable-helm-write` | `false` | Disable Helm write operations |
-| `--disable-local-terminal` | `false` | Disable local terminal feature |
+| `--disable-local-terminal` | `false` | Disable the host local terminal |
 | `--debug-image` | `busybox:latest` | Image for ephemeral debug containers and node debug pods. If built-in restricted PodSecurity rejects the default pod debug container, Radar retries with a restricted-compatible Linux security context using the target/pod non-root UID, or UID `65532` by default; point at a compatible mirror for air-gapped / private-registry clusters. |
 | `--list-page-size` | `0` (off) | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this size. Helps very large clusters that fail to sync; only used when WatchList streaming is unavailable. Try `2000`. |
 | `--context-switch-timeout` | `30s` | Maximum time a kubeconfig context switch may take. Widen on high-latency control planes — see [Tuning for slow clusters](#tuning-for-slow-or-high-latency-clusters). Env: `RADAR_CONTEXT_SWITCH_TIMEOUT`. |
 | `--first-paint-backstop` | `5m` | Hard upper bound on the initial critical-cache sync wait before Radar falls through to a partial-data render. Env: `RADAR_FIRST_PAINT_BACKSTOP`. |
 | `--namespace-list-timeout` | `5s` | Timeout for the cluster-wide namespace LIST used to decide if the user is RBAC-namespace-restricted. A timeout on a slow control plane is misreported in the UI as "Limited list — RBAC". Env: `RADAR_NAMESPACE_LIST_TIMEOUT`. |
 | `--max-scope-candidates` | `20` | Cap on the namespace-fallback probe fanout (used by accounts that can list namespaces cluster-wide but not list a specific kind cluster-wide). Raise above `20` for clusters with more than 20 namespaces. Env: `RADAR_MAX_SCOPE_CANDIDATES`. |
-| `--prometheus-url` | (auto-discover) | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) |
+| `--prometheus-url` | (auto-discover) | Manual PromQL-compatible query URL, including Prometheus, VictoriaMetrics, Thanos, or Mimir (skips auto-discovery) |
+| `--prometheus-single-cluster` | `false` | Optional workload-metrics scope override: assert that the backend contains only this cluster. Replaces automatic identity matching; does not scope rightsizing or other metrics features. [Scope and lifetime](docs/workload-metrics.md#optional-operator-override). |
+| `--prometheus-cluster-label` | (automatic matching) | Optional workload-metrics override for a shared backend, e.g. `cluster=production` (repeatable, ANDed). Alternative to `--prometheus-single-cluster`; leave both unset for automatic matching. Not persisted. |
 | `--prometheus-header` | | HTTP header sent with every Prometheus request, format `Key=Value` (repeatable). Required for auth-protected backends. |
 | `--prometheus-header-from-env` | | HTTP header sent with every Prometheus request, sourced from an environment variable, format `Key=ENV_VAR` (repeatable). |
+| `--beyla-job-selector` | (empty) | Beyla Live Traffic matcher fragment (empty matches Beyla/Alloy jobs there). Workload charts use it only with an explicit scope override and accept one `job` equality or regex matcher. Automatic workload matching discovers custom jobs without it. [Details](docs/workload-metrics.md#request-sources). |
 | `--opencost-currency` | (auto-detect, then USD) | Override the ISO 4217 currency label for OpenCost values. Radar labels values but does not convert them. |
 | `--auth-mode` | `none` | Authentication mode: `none`, `proxy`, or `oidc` ([details](docs/authentication.md)) |
 | `--no-mcp` | `false` | Disable MCP server for AI tool integration |
@@ -382,6 +385,20 @@ Visualize live network traffic between services using Hubble, Caretta, Istio, or
 - Filter by namespace, protocol, or status code
 - Setup wizard to install a traffic source if none is detected
 
+### Workload Metrics
+
+Open a Deployment, StatefulSet or DaemonSet's **Metrics** tab to investigate
+request rate, HTTP errors, latency, CPU, memory and throttling. Radar reads an
+existing Prometheus-compatible backend; resource charts do not require HTTP
+instrumentation, and request charts use supported Beyla or Istio observations.
+
+- Workload history includes previous replicas when metrics and ownership are retained
+- Compare current Pods to find resource outliers
+- Automatic discovery and identity checks, with missing or partial data labeled explicitly
+
+See [Workload metrics](docs/workload-metrics.md) for screenshots, prerequisites,
+supported configurations and local multi-cluster setup limitations.
+
 ### Capacity (Karpenter)
 
 Read-only diagnosis for Karpenter-managed fleets — why is my pod pending, which NodePool could take it, why aren't my nodes joining, what is disruption doing to my fleet? Appears automatically when Karpenter NodePools are detected (RBAC-gated).
@@ -397,15 +414,19 @@ See [docs/capacity.md](docs/capacity.md) for the full reference.
 
 ### Cost Insights
 
-Track Kubernetes spending with OpenCost integration. Radar reads the configured currency from a
-running OpenCost or Kubecost workload when available and otherwise uses USD. Override the label in
-Settings → Cost, config, CLI, or Helm. Radar does not convert values between currencies.
+Track Kubernetes spending from OpenCost metrics in a PromQL-compatible backend or a Kubecost 3 Aggregator.
+Auto mode keeps working Prometheus cost metrics, then discovers a local Kubecost Aggregator; a
+federated agent-only cluster can use its central Aggregator URL in Settings, config, or Helm. Radar
+reads the configured currency from a running OpenCost or Kubecost workload when available and
+otherwise uses USD. Source changes are tested and applied separately from the display-currency
+preference, which can be saved even when a source is unavailable. Radar labels values but does not
+convert them.
 
-- Cluster hourly and projected monthly cost, top namespaces by spend
-- Cost trend charts with 6h/24h/7d range selector
+- Allocated workload cost with namespace scope called out separately from cluster-wide node capacity cost
+- Cost trend charts with 6h/24h/7d range selector when Prometheus history is available
 - Namespace and workload-level cost breakdowns with efficiency scoring
 - Node costs with instance type and region pricing
-- Appears automatically when OpenCost metrics are detected in Prometheus
+- Appears automatically when compatible Prometheus metrics or Kubecost current allocation data is detected
 
 ### Cluster Audit
 
@@ -461,7 +482,7 @@ Read-only visibility ships first; the considered follow-ups (RBAC audit checks, 
 
 ### AI Integration (MCP)
 
-Radar includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI agents — Claude, Cursor, Copilot, and others — inspect, diagnose, and operate your cluster through Radar.
+Radar includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI agents — Claude, Cursor, Copilot, and others — inspect, investigate, and operate your cluster through Radar.
 
 Instead of raw `kubectl` output (verbose YAML that burns through LLM context windows), your AI gets pre-processed, token-optimized data: topology graphs, health assessments, deduplicated events, and filtered logs. Diagnosis is read-only by default; optional in-cluster route probing uses short-lived, self-deleting probe pods. Write operations such as restart, scale, apply, and rollback are identified for client confirmation and enforced through Kubernetes RBAC.
 
@@ -501,6 +522,7 @@ Upgrade impact also gets list-only access to CSIStorageCapacities, FlowSchemas, 
 | **GitOps (ArgoCD)** | Application, ApplicationSet, AppProject |
 | **Argo Rollouts** | Rollout |
 | **Argo Workflows** | Workflow, WorkflowTemplate |
+| **[Reflector](docs/integrations.md#configmap-and-secret-reflection-reflector)** | ConfigMap/Secret reflection details, source and mirror relationships, recorded copy evidence |
 | **cert-manager** | Certificate, CertificateRequest, Order, Challenge, Issuer, ClusterIssuer |
 | **Gateway API** | Gateway, GatewayClass, HTTPRoute, GRPCRoute, TCPRoute, TLSRoute |
 | **Istio** | VirtualService, DestinationRule, Gateway, ServiceEntry, PeerAuthentication, AuthorizationPolicy |
@@ -531,7 +553,7 @@ Upgrade impact also gets list-only access to CSIStorageCapacities, FlowSchemas, 
 | **Batch** | LeaderWorkerSet, JobSet, Volcano (Job/Queue/PodGroup/JobFlow/JobTemplate), Kubeflow (PyTorchJob/TFJob/MPIJob/TrainJob) — basic |
 | **KAI Scheduler** | Queue, PodGroup — basic |
 | **Model serving** | KAITO (Workspace, RAGEngine), NVIDIA NIM (NIMService/NIMCache/NIMPipeline), AMD GPU Operator (DeviceConfig) — basic |
-| **Cost (OpenCost)** | Namespace/workload/node cost breakdown via Prometheus (no CRDs) |
+| **Cost (OpenCost / Kubecost)** | Namespace/workload/node cost via compatible Prometheus metrics or the Kubecost 3 Aggregator (no CRDs) |
 | **CRDs** | Any Custom Resource Definition in your cluster (auto-discovered) |
 
 ---

@@ -60,3 +60,14 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{- define "radar.operatorSettings" -}}
+{{- $settings := dict "version" 1 -}}
+{{- if .Values.audit -}}
+{{- $_ := set $settings "audit" .Values.audit -}}
+{{- end -}}
+{{- if .Values.helm.ociSources -}}
+{{- $_ := set $settings "helmOciSources" .Values.helm.ociSources -}}
+{{- end -}}
+{{- $settings | toPrettyJson -}}
+{{- end -}}

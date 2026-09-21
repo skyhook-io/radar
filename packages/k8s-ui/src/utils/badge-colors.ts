@@ -74,7 +74,7 @@ export const NODEPOOL_MODE_BADGE: Record<string, string> = {
 
 // Translucent gray badge for "inactive / unknown / pending / unset / disabled" states.
 // The de-facto fallback in renderers when no severity or category applies.
-export const BADGE_INACTIVE = 'bg-gray-500/20 text-gray-400'
+export const BADGE_INACTIVE = 'status-unknown'
 
 // Best practices category colors
 export const BP_CATEGORY_BADGE: Record<string, string> = {

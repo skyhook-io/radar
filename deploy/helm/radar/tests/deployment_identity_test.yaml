@@ -19,6 +19,11 @@ tests:
           content:
             name: MY_DEPLOYMENT_NAME
             value: RELEASE-NAME-radar
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_HELM_RELEASE
+            value: RELEASE-NAME
   # Self-upgrade permission is decided by the apiserver against the Role that
   # rbac.selfUpgrade creates. A marker env would go stale on exactly the path
   # that matters: Hub's self-upgrade patches only the image, leaving the old

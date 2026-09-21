@@ -174,6 +174,12 @@ describe('IPPool derivations', () => {
       getCalicoIPPoolAllowedUses({ spec: { allowedUses: ['Tunnel'] } }),
     ).toBe('Tunnel')
   })
+
+  it('treats an empty allowedUses list as the default, not as no uses', () => {
+    // Calico: "If not specified or empty, defaults to ["Tunnel", "Workload"]".
+    // A dash here would read as a pool that allocates for nothing.
+    expect(getCalicoIPPoolAllowedUses({ spec: { allowedUses: [] } })).toBe('Workload, Tunnel')
+  })
 })
 
 describe('derived policy types', () => {

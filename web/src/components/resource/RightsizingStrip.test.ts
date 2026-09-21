@@ -107,3 +107,41 @@ describe('rightsizing presentation', () => {
     expect(RIGHTSIZING_DOCS_URL).toContain('/features/rightsizing')
   })
 })
+
+describe('live pod inventory', () => {
+  it('qualifies a memory row when the pod list could not be read', () => {
+    const explanation = getRightsizingExplanation(
+      row({ resource: 'memory', liveInventoryUnavailable: true }),
+    )
+    expect(explanation).toContain('could not read')
+    expect(explanation).toContain('out-of-memory restarts')
+  })
+
+  it('adds the caveat to a suppression reason instead of replacing it', () => {
+    const explanation = getRightsizingExplanation(
+      row({ resource: 'memory', recommendationReason: 'oom_evidence', liveInventoryUnavailable: true }),
+    )
+    expect(explanation).toContain('OOM evidence exists')
+    expect(explanation).toContain('could not read')
+  })
+
+  it('keeps the caveat on a staged reduction, where an unchecked pod matters most', () => {
+    const explanation = getRightsizingExplanation(
+      row({
+        resource: 'memory',
+        liveInventoryUnavailable: true,
+        reductionLimited: true,
+        calculatedRequest: '256Mi',
+        recommendedRequest: '384Mi',
+      }),
+    )
+    expect(explanation).toContain('conservative next step')
+    expect(explanation).toContain('could not read')
+  })
+
+  it('says nothing when the pods were read', () => {
+    expect(getRightsizingExplanation(row({ resource: 'memory' })) ?? '').not.toContain(
+      'could not read',
+    )
+  })
+})

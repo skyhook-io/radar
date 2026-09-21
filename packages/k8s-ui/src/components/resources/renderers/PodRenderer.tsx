@@ -14,6 +14,7 @@ import {
 import { resolvedEnvFromKey } from '../../../utils/env-from'
 import { detectBlastRadius, rulePermissivenessScore } from '../../../utils/rbac-blast-radius'
 import { RBACErrorSection, isRBACUnavailable } from './RBACErrorSection'
+import { NamespaceLimitRangeLink } from './LimitRangeRenderer'
 import type {
   PodEnvironmentResponse,
   PodEnvironmentRevealResponse,
@@ -114,6 +115,9 @@ interface PodRendererProps {
   policyData?: PolicyResourceResponse | null
   policyLoading?: boolean
   policyError?: Error | null
+  /** Names of the LimitRanges in this Pod's namespace. Absent while the lookup
+   *  is pending or unreadable, which leaves the contextual link unrendered. */
+  namespaceLimitRangeNames?: string[] | null
 }
 
 // ── Env vars section — extracted to use hooks (useState for reveal) ──────────
@@ -296,6 +300,7 @@ export function PodRenderer({
   policyData,
   policyLoading,
   policyError,
+  namespaceLimitRangeNames,
 }: PodRendererProps) {
   const containerStatuses = data.status?.containerStatuses || []
   const containers = data.spec?.containers || []
@@ -763,6 +768,12 @@ export function PodRenderer({
             )
           })}
         </div>
+        <NamespaceLimitRangeLink
+          namespace={namespace || ''}
+          names={namespaceLimitRangeNames}
+          scope="pod"
+          onNavigate={onNavigate}
+        />
       </Section>
 
       {/* Environment Variables */}

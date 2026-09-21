@@ -82,7 +82,11 @@ func formatStartupLogSummary(summary startupLogSummary, color bool) []string {
 		return code + value + startupANSIReset
 	}
 	row := func(label, value string) string {
-		return fmt.Sprintf("%-13s%s", label+":", value)
+		key := label + ":"
+		if len(key) >= 13 {
+			return key + " " + value
+		}
+		return fmt.Sprintf("%-13s%s", key, value)
 	}
 
 	lines := []string{paint(startupANSIBold, "── Radar startup ─────────────────────────────────────────")}
@@ -135,7 +139,7 @@ func formatStartupLogSummary(summary startupLogSummary, color bool) []string {
 		lines = append(lines, row("MCP", "disabled"))
 	}
 	if summary.aiAgent != "" {
-		lines = append(lines, row("AI diagnose", "enabled via "+summary.aiAgent))
+		lines = append(lines, row("AI investigations", "enabled via "+summary.aiAgent))
 	}
 
 	if loopback && summary.showRemoteAccessHint {

@@ -124,6 +124,8 @@ function BestPracticesView({ namespaces, onNavigateToResource }: AuditViewProps)
         checks={data.groupedChecks ?? []}
         catalog={data.checks ?? {}}
         anyData
+        evaluated={data.summary.passing + data.summary.warning + data.summary.danger}
+        missingInputs={data.missingInputs}
         onResourceClick={onResourceClick}
         onHideCheck={canEdit ? hideCheck : undefined}
         onHideCategory={canEdit ? hideCategory : undefined}

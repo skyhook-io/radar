@@ -1,7 +1,8 @@
 import { useState, useMemo } from 'react'
-import { Bell, Search, ChevronRight } from 'lucide-react'
+import { Bell, Search } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection } from '../../ui/drawer-components'
+import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { Input } from '../../ui/Input'
 import { BADGE_SEVERITY_COLORS } from '../../ui/Badge'
 import {
@@ -116,6 +117,7 @@ function RuleGroupSection({ group, searchTerm }: { group: PrometheusRuleGroup; s
 
   // Auto-expand when searching so matched rules are visible
   const expanded = searchTerm ? filteredRules.length > 0 : manualExpanded
+  const { panelId, buttonProps } = useDisclosure(expanded)
 
   // If searching and no matches, hide the group entirely
   if (searchTerm && filteredRules.length === 0) return null
@@ -123,11 +125,12 @@ function RuleGroupSection({ group, searchTerm }: { group: PrometheusRuleGroup; s
   return (
     <div className="card-inner">
       <button
+        {...buttonProps}
         onClick={() => setManualExpanded(!manualExpanded)}
         className="flex items-center justify-between w-full text-left"
       >
         <div className="flex items-center gap-2">
-          <ChevronRight className={clsx('w-3.5 h-3.5 text-theme-text-tertiary transition-transform duration-200', expanded && 'rotate-90')} />
+          <CollapseChevron open={expanded} className="w-3.5 h-3.5" />
           <span className="text-sm text-theme-text-primary font-medium">{group.name}</span>
         </div>
         <div className="flex items-center gap-2">
@@ -147,20 +150,15 @@ function RuleGroupSection({ group, searchTerm }: { group: PrometheusRuleGroup; s
           {group.recordCount > 0 && <span>{group.recordCount} recording</span>}
         </div>
       )}
-      <div
-        className="grid transition-[grid-template-rows] duration-200 ease-out"
-        style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
-      >
-        <div className="overflow-hidden">
-          <div className="mt-2 space-y-2">
-            {filteredRules.map((rule, i) => (
-              rule.type === 'alert'
-                ? <AlertRuleCard key={`alert-${rule.alert}-${i}`} rule={rule} />
-                : <RecordingRuleCard key={`rec-${rule.record}-${i}`} rule={rule} />
-            ))}
-          </div>
+      <Collapse open={expanded} id={panelId}>
+        <div className="mt-2 space-y-2">
+          {filteredRules.map((rule, i) => (
+            rule.type === 'alert'
+              ? <AlertRuleCard key={`alert-${rule.alert}-${i}`} rule={rule} />
+              : <RecordingRuleCard key={`rec-${rule.record}-${i}`} rule={rule} />
+          ))}
         </div>
-      </div>
+      </Collapse>
     </div>
   )
 }

@@ -55,8 +55,9 @@ import type {
   PodEnvironmentRevealResponse,
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
-import { getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
+import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
 import { apiVersionToGroup, pluralToKind } from '../utils/navigation'
+import type { DeploymentMode } from '../types'
 
 // Auto-refresh cadences (ms) — named constants for each polled hook's
 // refetchInterval below, so the poll rate reads clearly at each call site.
@@ -224,6 +225,64 @@ export function shouldRetryCapacityQuery(
   )
     return false;
   return failureCount < 3;
+}
+
+// isKindSyncPending matches the 503 the resource read handlers return while a
+// kind's informer is still completing its initial sync — the caller should
+// keep polling, not surface an error.
+export function isKindSyncPending(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 503 &&
+    error.data?.error_code === "kind_sync_pending"
+  );
+}
+
+// isClusterConnecting matches the 503 the server returns while the whole
+// connection is still being established (no cache handle for this surface
+// yet) — like kind_sync_pending, a keep-polling signal, not an error.
+export function isClusterConnecting(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 503 &&
+    error.data?.error_code === "cluster_connecting"
+  );
+}
+
+// isStillLoadingError groups the two retryable "the cluster is warming up"
+// signals every resource surface should sit out in a loading state.
+export function isStillLoadingError(error: unknown): boolean {
+  return isKindSyncPending(error) || isClusterConnecting(error);
+}
+
+// isKindSyncFailed matches the terminal variant: the kind never synced within
+// the deadline for this connection. Retrying won't help — show the error.
+export function isKindSyncFailed(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 503 &&
+    error.data?.error_code === "kind_sync_failed"
+  );
+}
+
+// SyncKindState / SyncStatusSnapshot mirror k8score's SyncSnapshot — attached
+// to the connection-status payload while the initial informer sync is running.
+export interface SyncKindState {
+  kind: string;
+  key: string;
+  synced: boolean;
+  deferred: boolean;
+  // Terminal: the kind's sync deadline fired without completing.
+  failed?: boolean;
+}
+
+export interface SyncStatusSnapshot {
+  phase: string;
+  criticalTotal: number;
+  criticalSynced: number;
+  deferredTotal: number;
+  deferredSynced: number;
+  kinds: SyncKindState[];
 }
 
 const METRICS_API_GROUP_TOKENS = ["metrics", "k8s", "io"] as const;
@@ -434,6 +493,7 @@ export type DashboardAudit = AuditCardData;
 export type { AuditFinding, ResourceGroup, CheckMeta, Check };
 
 export interface AuditResponse {
+  missingInputs?: string[];
   summary: DashboardAudit;
   findings: AuditFinding[];
   groups: ResourceGroup[];
@@ -699,7 +759,7 @@ export function useResourceIssues(
   });
 }
 
-import type { Trace as NetworkTrace, InClusterCapability } from '@skyhook-io/k8s-ui'
+import type { Trace as NetworkTrace, InClusterCapability, DrainPlan, DrainPlanPod } from '@skyhook-io/k8s-ui'
 
 // useTrace polls the static path-shaped diagnosis for one network entry
 // kind. 5s refetch + 15s staleTime keeps the drawer feeling live without
@@ -881,24 +941,36 @@ export interface OpenCostNamespaceCost {
 
 export type CostUnavailableReason =
   | "no_prometheus"
+  | "no_cost_source"
   | "no_metrics"
   | "query_error"
   | "access_denied"
-  | "not_found";
+  | "not_found"
+  | "source_unavailable"
+  | "authentication_error"
+  | "configuration_mismatch"
+  | "deployment_configuration_error"
+  | "history_unsupported"
+  | "insufficient_history";
+
+export type CostDataSource = "prometheus" | "kubecost";
 
 export interface OpenCostSummary {
   available: boolean;
   reason?: CostUnavailableReason;
+  source?: CostDataSource;
+  dataThrough?: string;
   currency?: string;
   window?: string;
   totalHourlyCost?: number;
   totalStorageCost?: number;
   totalIdleCost?: number;
   clusterEfficiency?: number;
+  namespaceScope?: string[];
   namespaces?: OpenCostNamespaceCost[];
 }
 
-const noPrometheusFirstSeenAt = new Map<string, number>();
+const costDiscoveryFirstSeenAt = new Map<string, number>();
 
 function costRefetchInterval(
   defaultInterval: number | false = COST_REFRESH_INTERVAL_MS,
@@ -914,15 +986,18 @@ function costRefetchInterval(
   }) => {
     const data = query.state.data;
     const queryID = `${contextName ?? "unknown"}:${query.queryHash ?? JSON.stringify(query.queryKey ?? "opencost")}`;
-    if (data?.available === false && data.reason === "no_prometheus") {
+    if (
+      data?.available === false &&
+      (data.reason === "no_prometheus" || data.reason === "no_cost_source")
+    ) {
       const now = Date.now();
-      const firstSeenAt = noPrometheusFirstSeenAt.get(queryID) ?? now;
-      noPrometheusFirstSeenAt.set(queryID, firstSeenAt);
+      const firstSeenAt = costDiscoveryFirstSeenAt.get(queryID) ?? now;
+      costDiscoveryFirstSeenAt.set(queryID, firstSeenAt);
       return now - firstSeenAt < COST_DISCOVERY_GRACE_MS
         ? COST_DISCOVERY_RETRY_INTERVAL_MS
         : defaultInterval;
     }
-    noPrometheusFirstSeenAt.delete(queryID);
+    costDiscoveryFirstSeenAt.delete(queryID);
     return defaultInterval;
   };
 }
@@ -962,6 +1037,9 @@ export interface OpenCostWorkloadCost {
 export interface OpenCostWorkloadResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  source?: CostDataSource;
+  window?: string;
+  dataThrough?: string;
   currency?: string;
   namespace: string;
   workloads: OpenCostWorkloadCost[];
@@ -990,6 +1068,9 @@ export function useOpenCostWorkloads(
 export interface OpenCostWorkloadDetailResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  source?: CostDataSource;
+  window?: string;
+  dataThrough?: string;
   currency?: string;
   namespace: string;
   kind: string;
@@ -1035,8 +1116,12 @@ export interface OpenCostTrendSeries {
 export interface OpenCostTrendResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  source?: CostDataSource;
   currency?: string;
   range: string;
+  windowStart?: number;
+  windowEnd?: number;
+  dataThrough?: string;
   series?: OpenCostTrendSeries[];
 }
 
@@ -1057,6 +1142,7 @@ export function useOpenCostTrend(range_: CostTimeRange = "24h") {
 export interface OpenCostWorkloadTrendResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  source?: CostDataSource;
   currency?: string;
   namespace: string;
   kind: string;
@@ -1130,6 +1216,9 @@ export interface OpenCostApplicationWorkloadCost extends OpenCostApplicationWork
 export interface OpenCostApplicationCostResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  source?: CostDataSource;
+  window?: string;
+  dataThrough?: string;
   currency?: string;
   partial?: boolean;
   totals: OpenCostApplicationCostTotals;
@@ -1145,6 +1234,7 @@ export interface OpenCostApplicationCostTrendSeries extends OpenCostApplicationW
 export interface OpenCostApplicationCostTrendResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  source?: CostDataSource;
   currency?: string;
   range: string;
   partial?: boolean;
@@ -1237,6 +1327,8 @@ export interface OpenCostNodeCost {
 export interface OpenCostNodeResponse {
   available: boolean;
   reason?: CostUnavailableReason;
+  source?: CostDataSource;
+  dataThrough?: string;
   currency?: string;
   nodes?: OpenCostNodeCost[];
 }
@@ -1516,13 +1608,68 @@ export interface VersionInfo {
   error?: string;
 }
 
+const UPDATE_CHECK_STORAGE_KEY_PREFIX = 'radar-update-check';
+
+export function utcDay(now: Date): string {
+  return now.toISOString().slice(0, 10)
+}
+
+export function markDailyUpdateCheckAttempt(
+  storage: Pick<Storage, 'getItem' | 'setItem'>,
+  apiBase: string,
+  now: Date,
+): boolean {
+  const storageKey = `${UPDATE_CHECK_STORAGE_KEY_PREFIX}:${apiBase}`
+  const day = utcDay(now)
+  try {
+    if (storage.getItem(storageKey) === day) return false
+
+    storage.setItem(storageKey, day)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function markUpdateCheckAttempt(): boolean {
+  try {
+    return markDailyUpdateCheckAttempt(localStorage, getApiBase(), new Date())
+  } catch {
+    return false
+  }
+}
+
+export async function triggerDailyUpdateCheck(
+  deploymentMode: DeploymentMode | undefined,
+): Promise<void> {
+  if (deploymentMode !== 'in-cluster' || !markUpdateCheckAttempt()) return
+  await fetch(apiUrl('/version-check/browser'), {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    credentials: getCredentialsMode(),
+    keepalive: true,
+  })
+}
+
 export function useVersionCheck() {
-  return useQuery<VersionInfo>({
-    queryKey: ["version-check"],
-    queryFn: () => fetchJSON("/version-check"),
+  const capabilities = useCapabilities()
+  const apiBase = getApiBase()
+  const deploymentMode = capabilities.data
+    ? (capabilities.data.deployment?.mode ?? 'local')
+    : undefined
+
+  const query = useQuery<VersionInfo>({
+    queryKey: ["version-check", apiBase],
+    queryFn: () => fetchJSON('/version-check'),
     staleTime: 60 * 60 * 1000, // 1 hour
     retry: false, // Don't retry on failure
   });
+
+  useEffect(() => {
+    if (query.isSuccess) void triggerDailyUpdateCheck(deploymentMode).catch(() => {})
+  }, [apiBase, deploymentMode, query.isSuccess])
+
+  return query;
 }
 
 // ============================================================================
@@ -1746,8 +1893,34 @@ export interface CloudInstallFailure {
   retrySafe: boolean
 }
 
+// What Radar did before it stopped: the operation it planned, how far it got,
+// and what it could establish about the cluster. Evidence for the card, and
+// the input to the exit it offers — the two are decided separately.
+export interface CloudInstallAttempted {
+  mode: 'fresh' | 'adopt' | 'gitops'
+  namespace: string
+  release: string
+  stage: 'inspect' | 'prepare' | 'preflight'
+  // Discovery saw only the default namespace; a fresh plan is not proof that
+  // no Radar exists elsewhere.
+  partialScan?: boolean
+  // A complete scan found no Radar running, but Helm's release records could
+  // not be read, so a leftover release cannot be ruled out.
+  releaseUnread?: boolean
+  // GitOps only: the Hub install-page tab of the verified owning controller.
+  method?: 'argocd' | 'flux' | ''
+}
+
 export interface CloudInstallBlocked {
   reason: 'gitops' | 'preflight' | 'unsupported'
+  // The Kubernetes user the attempt acted as; absent when the API server
+  // would not say.
+  identity?: string
+  // Preflight only: what would unblock it, and the Helm operation that was
+  // dry-run — the plan card never renders when preflight blocks, so the
+  // blocked card states what Radar tried itself.
+  cause?: 'permissions' | 'cluster' | 'verification'
+  attempted?: CloudInstallAttempted
   message: string
   blocking?: string[]
 }
@@ -1802,13 +1975,23 @@ export interface CloudConnectInfo {
   freeTier?: string
 }
 
-// Deliberately a bare cross-origin GET: no credentials, no identifiers, no
-// params. The Hub learns only what any HTTP request reveals.
-export function useCloudConnectInfo(apiUrl: string | undefined, enabled: boolean) {
+// Deliberately a bare cross-origin GET: no credentials, no identifiers. The
+// Hub learns what any HTTP request reveals plus `about`, below: the lane the
+// footer renders and this deployment's mode, both closed enums, so nothing
+// about the cluster or the person rides along. Part of the query key so a
+// lane change (a driver install that just became tunneled, say) refetches
+// instead of reusing the other lane's copy.
+export function useCloudConnectInfo(
+  apiUrl: string | undefined,
+  enabled: boolean,
+  about: { lane: "driver" | "wizard"; mode?: DeploymentMode },
+) {
+  const params = new URLSearchParams({ lane: about.lane });
+  if (about.mode) params.set("mode", about.mode);
   return useQuery<CloudConnectInfo>({
-    queryKey: ["cloud-connect-info", apiUrl],
+    queryKey: ["cloud-connect-info", apiUrl, about.lane, about.mode],
     queryFn: async () => {
-      const res = await fetch(`${apiUrl}/api/connect/info`, {
+      const res = await fetch(`${apiUrl}/api/connect/info?${params}`, {
         credentials: "omit",
         signal: AbortSignal.timeout(4000),
       });
@@ -1847,6 +2030,12 @@ export interface CloudConnectSelf {
   deploymentName?: string
   chart?: string
   controller?: string
+  controllerRef?: {
+    group?: string
+    kind: string
+    namespace?: string
+    name: string
+  }
   wizardUrl?: string
 }
 
@@ -1856,6 +2045,36 @@ export function useCloudConnectSelf(enabled: boolean) {
     queryFn: () => fetchJSON('/cloud/connect/self'),
     enabled,
     staleTime: 60000,
+  })
+}
+
+// What the driver-lane dialog learns about the cluster when it opens: the
+// chart's Deployments already carrying Cloud connection settings, so a
+// cluster that is already connected is pointed at rather than re-offered.
+export interface CloudInstallConnectedRadar {
+  namespace: string
+  deployment: string
+  release?: string
+  // The Hub the Deployment names, when it is not the one this Radar uses.
+  hubHost?: string
+  // The cluster's page in Radar Cloud, when its Hub is ours and its id is known.
+  clusterUrl?: string
+}
+
+export interface CloudInstallDiscovered {
+  connected: CloudInstallConnectedRadar[]
+  partialScan: boolean
+}
+
+// Keyed by context: a switch must not describe the previous cluster.
+export function useCloudInstallDiscover(enabled: boolean, contextName: string | undefined) {
+  return useQuery<CloudInstallDiscovered>({
+    queryKey: ['cloud-install-discover', contextName],
+    queryFn: () => fetchJSON('/cloud/install/discover'),
+    enabled,
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
   })
 }
 
@@ -2258,6 +2477,15 @@ export function useResource<T>(
     queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
     enabled: (options?.enabled ?? true) && Boolean(kind && name), // namespace can be empty for cluster-scoped resources
     refetchInterval: options?.refetchInterval,
+    // Kind still completing its initial sync: stay in loading and poll until
+    // it becomes readable instead of erroring out (deep links during startup).
+    retry: (failureCount, error) => {
+      if (isStillLoadingError(error)) return true;
+      if (isKindSyncFailed(error)) return false;
+      return failureCount < 1; // matches the QueryClient default (retry: 1)
+    },
+    retryDelay: (failureCount, error) =>
+      isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   });
 
   // Extract resource and relationships from the response
@@ -2281,6 +2509,15 @@ export function useResourceWithRelationships<T>(
     queryKey: ["resource", kind, namespace, name, group],
     queryFn: () => fetchResourceWithRelationships<T>(kind, namespace, name, group),
     enabled: Boolean(kind && name),
+    // Deep-linked detail views can mount while the kind's informer is still
+    // completing its initial sync: keep polling instead of erroring out.
+    retry: (failureCount, error) => {
+      if (isStillLoadingError(error)) return true;
+      if (isKindSyncFailed(error)) return false;
+      return failureCount < 1; // matches the QueryClient default (retry: 1)
+    },
+    retryDelay: (failureCount, error) =>
+      isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   });
 }
 
@@ -2303,6 +2540,16 @@ export function useResources<T>(
     enabled: (options?.enabled ?? true) && Boolean(kind),
     staleTime: 30000, // 30 seconds - matches refetchInterval in ResourcesView
     refetchInterval: options?.refetchInterval,
+    // Kind still completing its initial sync (progressive shell, or a
+    // deferred kind shortly after connect): keep polling instead of
+    // surfacing an error.
+    retry: (failureCount, error) => {
+      if (isStillLoadingError(error)) return true;
+      if (isKindSyncFailed(error)) return false;
+      return failureCount < 1; // matches the QueryClient default (retry: 1)
+    },
+    retryDelay: (failureCount, error) =>
+      isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   });
 }
 
@@ -2973,6 +3220,8 @@ export function useTopNodeMetrics(options?: { enabled?: boolean }) {
 export interface PrometheusStatus {
   available: boolean;
   connected: boolean;
+  /** A discovery run is in flight for the current configuration. Never true alongside connected. */
+  discovering?: boolean;
   address?: string;
   service?: {
     namespace: string;
@@ -3011,6 +3260,10 @@ export interface PrometheusResourceMetrics {
   result: PrometheusQueryResult;
   query?: string; // PromQL query (included when result is empty, for diagnostics)
   hint?: string; // Contextual hint when results are empty (e.g. cri-docker label issues)
+  // Workload kinds only: the pods the chart covers, established by
+  // controller ownership. podsTotal is the full set when the cap cut the list.
+  pods?: number;
+  podsTotal?: number;
 }
 
 export type PrometheusMetricCategory =
@@ -3019,9 +3272,9 @@ export type PrometheusTimeRange =
   "10m" | "30m" | "1h" | "3h" | "6h" | "12h" | "24h" | "48h" | "7d" | "14d";
 
 // PVC usage at a moment in time, derived from kubelet_volume_stats_*.
-// HasData=false silently indicates the CSI driver doesn't report or Prom
-// isn't scraping kubelet endpoints — UI should hide the gauge in that case.
 export interface PrometheusPVCUsage {
+  // Hub packages the frontend independently from per-cluster agent upgrades.
+  status?: "available" | "no_series" | "invalid_data" | "query_failed";
   namespace: string;
   name: string;
   used: number;
@@ -3075,6 +3328,8 @@ export interface RightsizingRow {
   currentPodOOM?: boolean;
   windowOomEvidence?: boolean;
   oomEvidenceAvailable: boolean;
+  /** The cluster cache would not list the workload's pods, so currentPodOOM is unknown rather than false. */
+  liveInventoryUnavailable?: boolean;
   limitConflict?: boolean;
   queryError?: string;
 }
@@ -3109,11 +3364,19 @@ export interface RightsizingScanCoverage {
   workloadsWithData: number;
   batches: number;
   completedBatches: number;
+  attemptedBatches: number;
   restrictedKinds?: string[];
   unavailableKinds?: string[];
+  partiallyCachedKinds?: string[];
+  daemonSetsWithoutNodes?: number;
 }
 
 export interface RightsizingScanResponse {
+  scanId: string;
+  scanStatus: 'running' | 'finished' | 'cancelled' | 'timed_out';
+  deadlineAt: string;
+  expiresAt?: string;
+  pollAfterSeconds?: number;
   state: RightsizingScanState;
   scannedAt: string;
   window: string;
@@ -3124,13 +3387,32 @@ export interface RightsizingScanResponse {
   reason?: string;
 }
 
+// Poll quickly while a discovery run is in flight so the flip to connected
+// (or to a failure message) lands promptly; otherwise the slow cadence. A
+// status that is neither connected nor carrying an outcome was read before
+// the server's run started (boot, context switch) — every run ends in one or
+// the other, so that state is transient and gets the fast cadence too.
+export const PROM_STATUS_POLL_DISCOVERING_MS = 2000;
+export const PROM_STATUS_POLL_IDLE_MS = 60000;
+
+export function prometheusStatusRefetchInterval(
+  status: PrometheusStatus | undefined,
+): number {
+  if (!status) return PROM_STATUS_POLL_IDLE_MS;
+  const settled = status.connected || !!status.error;
+  return status.discovering || !settled
+    ? PROM_STATUS_POLL_DISCOVERING_MS
+    : PROM_STATUS_POLL_IDLE_MS;
+}
+
 // Check Prometheus availability
 export function usePrometheusStatus() {
   return useQuery<PrometheusStatus>({
     queryKey: ["prometheus-status"],
     queryFn: () => fetchJSON("/prometheus/status"),
     staleTime: 30000,
-    refetchInterval: 60000,
+    refetchInterval: (query) =>
+      prometheusStatusRefetchInterval(query.state.data),
   });
 }
 
@@ -3139,6 +3421,9 @@ export interface ArgoStatus {
   // client is live. The two differ right after a restart (configured, reconnecting).
   configured: boolean;
   connected: boolean;
+  // Connected without a token: the install serves reads to everyone, so
+  // there is nothing to add in Settings.
+  anonymous?: boolean;
   address?: string;
   reason?: string;
 }
@@ -3245,6 +3530,12 @@ export function useAutoPromConnect(): void {
     // initial UI render isn't competing with the cluster network call.
     const delay = cached === "1" ? 0 : PROM_FIRSTLAUNCH_PROBE_DELAY_MS;
     const timeout = window.setTimeout(() => {
+      // The server only reports discovering once the run has started; mark it
+      // here first so the view shows progress instead of the manual CTA for the
+      // whole duration of this request.
+      queryClient.setQueryData<PrometheusStatus>(["prometheus-status"], (prev) =>
+        prev ? { ...prev, discovering: true } : prev,
+      );
       // Direct apiFetch (not via the usePrometheusConnect mutation) so the
       // meta-driven toast handler stays silent — the user didn't click anything.
       apiFetch(`${getApiBase()}/prometheus/connect?optional=true`, {
@@ -3259,6 +3550,14 @@ export function useAutoPromConnect(): void {
           queryClient.invalidateQueries({ queryKey: ["prometheus-status"] });
         })
         .catch(() => {
+          // Undo the optimistic flag, then ask the server: if it's reachable
+          // the authoritative status (possibly a still-running discovery)
+          // replaces this within one fetch; if it isn't, the CTA is right.
+          queryClient.setQueryData<PrometheusStatus>(
+            ["prometheus-status"],
+            (prev) => (prev?.discovering ? { ...prev, discovering: false } : prev),
+          );
+          queryClient.invalidateQueries({ queryKey: ["prometheus-status"] });
           try {
             window.localStorage.removeItem(promAutoConnectKey(context));
           } catch {
@@ -3336,7 +3635,6 @@ export function usePrometheusClusterMetrics(
   });
 }
 
-// Fetch PVC usage. hasData=false when no series — UI should hide the gauge.
 export function usePrometheusPVCUsage(
   namespace: string,
   name: string,
@@ -3347,7 +3645,10 @@ export function usePrometheusPVCUsage(
     queryFn: () => fetchJSON(`/prometheus/pvc/${namespace}/${name}`),
     enabled: enabled && Boolean(namespace && name),
     staleTime: 60000,
-    refetchInterval: 120000,
+    refetchInterval: (query) =>
+      isForbiddenError(query.state.error) ? false : 120000,
+    retry: (failureCount, error) =>
+      !isForbiddenError(error) && failureCount < 1,
   });
 }
 
@@ -3370,73 +3671,115 @@ export function usePrometheusRightsizing(
 
 const RIGHTSIZING_SCAN_CACHE_TIME = 5 * 60 * 1000;
 
-export function getRightsizingScanCacheConfig(
-  namespaces: string[],
-  context = "",
-): {
-  namespaceKey: string;
-  queryKey: readonly ["prometheus-rightsizing-scan", string, string];
-  queryFn: typeof skipToken;
-  gcTime: number;
-} {
-  const namespaceKey = [...namespaces].sort().join(",");
+export function getRightsizingScanCacheConfig(namespaces: string[], context = "", identity = "") {
+  const namespaceKey = [...new Set(namespaces)].sort().join(",");
   return {
     namespaceKey,
-    queryKey: ["prometheus-rightsizing-scan", context, namespaceKey] as const,
-    queryFn: skipToken,
+    queryKey: ["prometheus-rightsizing-scan", getApiBase(), identity, context, namespaceKey] as const,
     gcTime: RIGHTSIZING_SCAN_CACHE_TIME,
   };
 }
 
-// A fleet rightsizing scan is intentionally manual. It can query seven days of
-// Prometheus history for many containers, so navigation alone must never run it.
+// Navigation retrieves a retained scan; only an explicit POST starts work.
 export function useRightsizingScan(namespaces: string[], context = "") {
   const queryClient = useQueryClient();
-  const { namespaceKey, ...snapshotOptions } = getRightsizingScanCacheConfig(
-    namespaces,
-    context,
-  );
-  const scanScope = { namespaceKey, queryKey: snapshotOptions.queryKey };
-  const snapshot = useQuery<RightsizingScanResponse>(snapshotOptions);
-  const mutation = useMutation({
-    mutationFn: async (startedScope: typeof scanScope) => {
-      const params = new URLSearchParams();
-      if (startedScope.namespaceKey)
-        params.set("namespaces", startedScope.namespaceKey);
-      const query = params.toString();
-      return fetchJSON<RightsizingScanResponse>(
-        `/prometheus/rightsizing/scan${query ? `?${query}` : ""}`,
-        {
-          method: "POST",
-        },
-      );
-    },
-    onSuccess: (result, startedScope) =>
-      queryClient.setQueryData(startedScope.queryKey, result),
+  const { data: auth } = useAuthMe();
+  const identity = JSON.stringify([auth?.username, [...(auth?.groups ?? [])].sort()]);
+  const { namespaceKey, ...cache } = getRightsizingScanCacheConfig(namespaces, context, identity);
+  const scope = JSON.stringify(cache.queryKey);
+  const currentScope = useRef(scope);
+  currentScope.current = scope;
+  const previous = useRef<{ scope: string; result: RightsizingScanResponse } | null>(null);
+  const params = new URLSearchParams();
+  if (namespaceKey) params.set('namespaces', namespaceKey);
+  const path = `/prometheus/rightsizing/scan?${params}`;
+  const snapshot = useQuery<RightsizingScanResponse | null>({
+    ...cache,
+    enabled: Boolean(context && auth),
+    queryFn: ({ signal }) => fetchJSON(path, { signal }),
+    refetchOnMount: 'always',
+    retry: (count, error) => !(error instanceof ApiError && [403, 404, 409].includes(error.status)) && count < 1,
+    refetchInterval: (query) => !query.state.error && query.state.data?.scanStatus === 'running' ? 5000 : false,
   });
+  const mutation = useMutation({
+    mutationFn: async (started: { scope: string; path: string; queryKey: typeof cache.queryKey; previousScanId?: string }) => {
+      await queryClient.cancelQueries({ queryKey: started.queryKey });
+      if (currentScope.current !== started.scope) throw new Error('Scan scope changed; run the scan again.');
+      return fetchJSON<RightsizingScanResponse>(started.path, { method: 'POST' });
+    },
+    onSuccess: (result, started) => queryClient.setQueryData(started.queryKey, result),
+    onError: (_error, started) => {
+      // A lost POST response may still have started a scan. Read before retrying.
+      void queryClient.invalidateQueries({ queryKey: started.queryKey });
+    },
+  });
+  const stop = useMutation({
+    mutationFn: async (started: { id: string; scope: string; queryKey: typeof cache.queryKey }) => {
+      await queryClient.cancelQueries({ queryKey: started.queryKey });
+      if (currentScope.current !== started.scope) throw new Error('Scan scope changed.');
+      return fetchJSON<RightsizingScanResponse>(`/prometheus/rightsizing/scan/${encodeURIComponent(started.id)}`, { method: 'DELETE' });
+    },
+    onSuccess: (result, started) => queryClient.setQueryData(started.queryKey, result),
+  });
+  const inaccessible = snapshot.error instanceof ApiError && [403, 404, 409].includes(snapshot.error.status);
+  const current = inaccessible ? null : snapshot.data;
+  useEffect(() => {
+    if (inaccessible) {
+      previous.current = null;
+      queryClient.setQueryData(cache.queryKey, null);
+    } else if (current && current.coverage.workloadsEvaluated > 0) {
+      previous.current = { scope, result: current };
+    }
+  }, [current, inaccessible, scope, queryClient, cache.queryKey]);
+  const showingPrevious = current?.scanStatus === 'running' && current.coverage.workloadsEvaluated === 0 && previous.current?.scope === scope;
+  const startRecovered = current && current.scanId !== mutation.variables?.previousScanId;
+  const stopRecovered = current && (current.scanId !== stop.variables?.id || current.scanStatus !== 'running');
   return {
-    ...mutation,
-    data: snapshot.data,
-    mutate: () => mutation.mutate(scanScope),
-    mutateAsync: () => mutation.mutateAsync(scanScope),
+    data: showingPrevious ? previous.current!.result : current,
+    progress: current,
+    showingPrevious,
+    isStarting: mutation.isPending,
+    isPending: mutation.isPending || current?.scanStatus === 'running',
+    isLoading: snapshot.isLoading,
+    statusError: snapshot.error,
+    error: snapshot.error || (stop.variables?.scope === scope && !stopRecovered ? stop.error : null) || (mutation.variables?.scope === scope && !startRecovered ? mutation.error : null),
+    reset: () => { mutation.reset(); stop.reset(); },
+    mutateAsync: () => mutation.mutateAsync({ scope, path, queryKey: cache.queryKey, previousScanId: current?.scanId }),
+    retryStatus: () => snapshot.refetch(),
+    stop: () => { if (!mutation.isPending && current?.scanStatus === 'running') stop.mutate({ id: current.scanId, scope, queryKey: cache.queryKey }); },
+    isStopping: stop.isPending,
   };
 }
 
-// Raw PromQL query (range). Used by HPA charts for status_current_replicas etc.
-export function usePromQLRange(
-  query: string,
+// An HPA's replica history: the count it currently observes and the count it
+// has decided on. Curated server-side so reading the HPA is the only grant
+// the chart needs; raw PromQL requires cluster-wide access.
+export interface PrometheusHPAMetrics {
+  namespace: string;
+  name: string;
+  range: string;
+  current: PrometheusQueryResult;
+  desired: PrometheusQueryResult;
+}
+
+export function usePrometheusHPAMetrics(
+  namespace: string,
+  name: string,
   range: PrometheusTimeRange = "1h",
   enabled = true,
 ) {
-  return useQuery<PrometheusQueryResult>({
-    queryKey: ["promql-range", query, range],
+  return useQuery<PrometheusHPAMetrics>({
+    queryKey: ["prometheus-hpa-metrics", namespace, name, range],
     queryFn: () =>
-      fetchJSON(
-        `/prometheus/query?query=${encodeURIComponent(query)}&range=${range}`,
-      ),
-    enabled: enabled && Boolean(query),
+      fetchJSON(`/prometheus/hpa/${namespace}/${name}?range=${range}`),
+    enabled: enabled && Boolean(namespace && name),
     staleTime: 30000,
-    refetchInterval: 60000,
+    // A denial is a standing RBAC fact, not a blip: show the access state at
+    // once and stop polling for it.
+    refetchInterval: (query) =>
+      isForbiddenError(query.state.error) ? false : 60000,
+    retry: (failureCount, error) =>
+      !isForbiddenError(error) && failureCount < 1,
   });
 }
 
@@ -4622,6 +4965,31 @@ export function useRolloutCapabilities(
   });
 }
 
+export interface AnalysisRunSummary {
+  name: string;
+  phase: string;
+  message?: string;
+  trigger?: string;
+  stepIndex?: number;
+  createdAt: string;
+  metricsTotal: number;
+  metricsPassing: number;
+  metricsNotPassing: number;
+}
+
+export function useRolloutAnalysisRuns(
+  namespace: string,
+  name: string,
+  enabled = true,
+) {
+  return useQuery<{ items: AnalysisRunSummary[] }>({
+    queryKey: ["rollout-analysisruns", namespace, name],
+    queryFn: () => fetchJSON(`/rollouts/${namespace}/${name}/analysisruns`),
+    enabled: Boolean(namespace && name && enabled),
+    staleTime: 10000,
+  });
+}
+
 // Fallbacks only. The server reports what it actually did — including when it found
 // nothing to do — so its message is preferred over anything asserted here.
 const ROLLOUT_ACTION_MESSAGES: Record<
@@ -4786,6 +5154,75 @@ export interface DrainNodeOptions {
   force?: boolean;
 }
 
+export interface DrainPlanRequestOptions {
+  deleteEmptyDirData: boolean;
+  force: boolean;
+}
+
+/** Path of the read-only plan endpoint; distinct from the drain so a preview can never drain. */
+export function drainPlanPath(name: string): string {
+  return `/nodes/${encodeURIComponent(name)}/drain-plan`;
+}
+
+/** Body for the plan request: both options are always explicit, the server echoes them back. */
+export function drainPlanBody(options: DrainPlanRequestOptions): string {
+  return JSON.stringify({
+    deleteEmptyDirData: options.deleteEmptyDirData,
+    force: options.force,
+  });
+}
+
+/**
+ * The connected radar predates the drain-plan endpoint. Distinguished from a
+ * node-not-found 404 by the body: handlers answer with a JSON error envelope,
+ * while an unknown route gets the router's plain-text 404. Hosts serving a newer
+ * frontend against an older radar (Radar Hub) use this to fall back to the
+ * plan-less drain dialog instead of leaving Drain permanently disabled.
+ */
+export class DrainPlanUnsupportedError extends Error {
+  constructor() {
+    super("This radar does not support drain plans");
+    this.name = "DrainPlanUnsupportedError";
+  }
+}
+
+export function drainPlanFetchError(
+  status: number,
+  body: { error?: string } | null,
+): Error {
+  if (status === 404 && body === null) {
+    return new DrainPlanUnsupportedError();
+  }
+  return new Error(body?.error || `HTTP ${status}`);
+}
+
+// Read-only drain plan: what a drain with these options would do to each pod on the node.
+// Modelled as a mutation because it is a POST with a body and is fetched on demand
+// while the drain dialog is open; it performs no cluster mutation.
+export function useDrainPlan() {
+  return useMutation<
+    DrainPlan,
+    Error,
+    { name: string; options: DrainPlanRequestOptions }
+  >({
+    mutationFn: async ({ name, options }) => {
+      const response = await apiFetch(apiUrl(drainPlanPath(name)), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: drainPlanBody(options),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw drainPlanFetchError(response.status, body);
+      }
+      return response.json();
+    },
+    // Deliberately no meta toast keys: the plan is fetched only from the drain dialog, which
+    // renders a failure inline and keeps Drain disabled while it shows; a global toast would
+    // report the same failure twice.
+  });
+}
+
 export function useDrainNode() {
   const queryClient = useQueryClient();
 
@@ -4815,7 +5252,11 @@ export function useDrainNode() {
       // No static successMessage — handled in onSuccess to distinguish partial failures
     },
     onSuccess: (
-      data: { evictedPods?: string[]; errors?: string[] },
+      data: {
+        evictedPods?: string[];
+        skippedPods?: DrainPlanPod[];
+        errors?: string[];
+      },
       variables,
     ) => {
       queryClient.invalidateQueries({ queryKey: ["resources", "nodes"] });
@@ -4824,18 +5265,65 @@ export function useDrainNode() {
       });
       queryClient.invalidateQueries({ queryKey: ["topology"] });
 
-      const evicted = data?.evictedPods?.length ?? 0;
-      const errors = data?.errors?.length ?? 0;
-      if (errors > 0) {
-        showApiError(
-          `Drain completed with ${errors} error(s)`,
-          `${evicted} pods evicted. Errors: ${data.errors!.join("; ")}`,
-        );
+      const { title, detail, failed } = describeDrainResult(data);
+      if (failed) {
+        showApiError(title, detail);
       } else {
-        showApiSuccess(`Node drained: ${evicted} pods evicted`);
+        showApiSuccess(title, detail);
       }
     },
   });
+}
+
+const DRAIN_RESULT_MAX_LISTED = 5;
+
+function listWithOverflow(items: string[]): string {
+  const shown = items.slice(0, DRAIN_RESULT_MAX_LISTED);
+  const rest = items.length - shown.length;
+  return rest > 0 ? `${shown.join("; ")}; +${rest} more` : shown.join("; ");
+}
+
+/**
+ * Turns the drain response into a legible summary: evicted, skipped (with reasons),
+ * failed. Lists are capped so the toast stays readable on nodes with many pods.
+ */
+export function describeDrainResult(data: {
+  evictedPods?: string[];
+  skippedPods?: DrainPlanPod[];
+  errors?: string[];
+}): { title: string; detail: string; failed: boolean } {
+  const evicted = data?.evictedPods?.length ?? 0;
+  const skipped = data?.skippedPods ?? [];
+  const errors = data?.errors ?? [];
+  const parts: string[] = [];
+  if (skipped.length > 0) {
+    parts.push(
+      `Skipped ${skipped.length}: ${listWithOverflow(
+        skipped.map((p) => `${p.namespace}/${p.name} (${p.reason})`),
+      )}`,
+    );
+  }
+  if (errors.length > 0) {
+    parts.push(`Failed ${errors.length}: ${listWithOverflow(errors)}`);
+  }
+  parts.push(
+    evicted > 0
+      ? "Evictions were accepted; those pods may still be terminating. The node remains cordoned."
+      : "The node remains cordoned.",
+  );
+  const detail = parts.join("\n");
+  if (errors.length > 0) {
+    return {
+      title: `Drain finished with ${errors.length} failed eviction(s): ${evicted} evicted, ${skipped.length} skipped`,
+      detail,
+      failed: true,
+    };
+  }
+  return {
+    title: `Node drained: ${evicted} evicted, ${skipped.length} skipped`,
+    detail,
+    failed: false,
+  };
 }
 
 // ============================================================================

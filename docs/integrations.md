@@ -2,6 +2,58 @@
 
 Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar provides dedicated detail views, topology edges, smart table columns, and AI-optimized summaries for seamless integration.
 
+## ConfigMap and Secret reflection (Reflector)
+
+[EmberStack Reflector](https://github.com/emberstack/kubernetes-reflector) copies
+core Secrets and ConfigMaps between namespaces using annotations. It needs no CRDs.
+
+**Resource details:** ordinary Secrets and ConfigMaps are unchanged. Mirrors show compact source navigation and edit guidance before their data, after Secret identity and certificate-expiry alerts. Detailed settings follow the data in a collapsible **Reflector** section
+showing source/mirror role, automatic versus manual mirrors, reflection permission,
+and configured namespace name patterns and label selectors. Visible sources and
+mirrors are linked directly. Source section titles show the visible mirror count; expanding shows five mirrors initially, with a control to show all. Automatic creation requires reflection permission;
+name patterns and selectors are alternatives within each rule on controller versions
+that support selectors. Radar displays these rules without predicting a destination
+set or evaluating the controller's regular expressions.
+
+**Recorded copy evidence:** mirrors show `reflected-version` and `reflected-at` when
+present. When the source is visible, Radar compares its observed resource version
+with the mirror's recorded version. These cached observations can lag reconciliation.
+This is metadata evidence, not a content or
+health check: metadata-only changes advance source versions, and editing a mirror
+can leave its recorded version unchanged. Mirror details and Secret edit confirmation
+explain that local changes may persist until a source update overwrites them.
+
+**Configuration checks:** local warnings identify malformed or self-referencing
+source declarations, invalid boolean settings, automatic creation without reflection
+permission, sources with visible mirrors but disabled reflection, and mirror chains that do not propagate updates as ordinary sources.
+These appear in resource details, not as cluster-wide health findings.
+
+**Topology:** when both objects are visible, the mirror's `reflects` annotation
+creates a **Reflects to** configuration edge from source to mirror, including mirrors
+with a different name. It represents a declaration, not Kubernetes ownership or
+successful synchronization. Namespace filters apply. Secret nodes are hidden by
+default and require Secret list access when included. The REST resource-detail relationship response also
+identifies reflection sources and mirrors explicitly.
+
+**Unused resource checks:** observed consumption of a mirror also counts as use of
+its visible same-kind source, including declared chains. Automatic mirrors with
+visible sources are exempt when unused, but their existence alone does not prove
+source use. Without adequate consumer inventory, a source is unknown rather than
+unused; see [audit evidence under partial access](configuration.md#audit-evidence-under-partial-access).
+
+**Agent context (MCP and REST):** `get_resource` and the REST AI resource context expose an optional `resourceContext.reflection` block. It separates `declaredSource` from an authorized observed `source`, includes recorded copy metadata and the authorized source resource version, and lists up to 20 `visibleMirrors` with `truncated` when more authorized mirrors were observed. This lookup spans namespaces in the available cache independently of the resource-context graph. Unreadable endpoints and their versions are withheld; omitted-field reasons describe unavailable cache evidence or denied access. These observations do not prove complete distribution or synchronization health.
+
+**Partial visibility:** unavailable sources are not called missing, and visible mirror
+counts are not expected totals. Radar does not diagnose absent mirrors, name conflicts,
+controller availability, or synchronization lag. Controller configuration and version
+can further restrict eligible namespaces. Inspect controller logs when a declared
+relationship is not being reconciled.
+
+| Resource | Group | Topology | Detail View |
+|----------|-------|----------|-------------|
+| ConfigMap | Core | Source → mirror configuration edge | Reflection settings, visible mirrors, source navigation, copy-version evidence, local configuration warnings |
+| Secret | Core | Source → mirror configuration edge when included and authorized | Same metadata-only reflection details; values remain behind existing reveal controls |
+
 ---
 
 ## Karpenter
@@ -436,6 +488,11 @@ The legacy `traefik.containo.us` API group (pre-v2.11) is warm-listed alongside 
 
 [Prometheus Operator](https://prometheus-operator.dev/) simplifies Prometheus setup on Kubernetes, providing CRDs for defining monitoring targets, alerting rules, and scrape configurations declaratively.
 
+Looking for CPU, memory, throttling or HTTP request charts? See
+[Workload metrics](workload-metrics.md). Those charts read a Prometheus-compatible
+backend and do not require Prometheus Operator. This integration page describes
+inspection of the Operator's Kubernetes resources and scrape configuration.
+
 ### What Radar Shows
 
 **ServiceMonitor Detail View:**
@@ -565,9 +622,9 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 |-----|-------|----------|-------------|------------|
 | Rollout | `argoproj.io/v1alpha1` | Yes | Yes | Yes |
 | AnalysisRun | `argoproj.io/v1alpha1` | Yes | Yes | Yes |
-| AnalysisTemplate | `argoproj.io/v1alpha1` | — | Generic | — |
-| ClusterAnalysisTemplate | `argoproj.io/v1alpha1` | — | Generic | — |
-| Experiment | `argoproj.io/v1alpha1` | — | Generic | — |
+| AnalysisTemplate | `argoproj.io/v1alpha1` | — | Yes | — |
+| ClusterAnalysisTemplate | `argoproj.io/v1alpha1` | — | Yes | — |
+| Experiment | `argoproj.io/v1alpha1` | — | Yes | — |
 
 ### What Radar Shows
 
@@ -575,9 +632,17 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 
 **Rollout visibility:** Radar keeps serving readiness separate from transient rollout activity. Resource tables, drawers, full workload views, and Applications show the active step, progress, pause, or failure without marking capacity served by the stable revision as unavailable.
 
+**Canary/blueGreen progression:** The Rollout detail page renders a connected step timeline — every canary step in declaration order, with the current step highlighted and, for an analysis step, its live AnalysisRun status shown inline alongside a clickable link to the AnalysisTemplate/ClusterAnalysisTemplate it references. A blueGreen Rollout gets an equivalent derived phase list (preview scaled up → pre/post-promotion analysis → awaiting promotion → active cutover), since blueGreen has no `steps[]` array of its own to render directly.
+
+**ReplicaSet progression:** A ReplicaSets section lists every revision the Rollout owns (newest first), each with its Current/Stable/Rolling-out role badge, image, replica count, and — expandable per revision — its live pods with ready/phase status. Read-only; rollback stays on the existing revision-history dialog. Built entirely from the same `useWorkloadRevisions`/`useWorkloadPods` endpoints already used elsewhere for workload rollback, joined client-side by each pod's own pod-template-hash label — no new backend endpoint needed for this part.
+
+**AnalysisRun history:** Beyond the four "currently active" analysis slots (step / background / pre-promotion / post-promotion), an AnalysisRun History section lists the Rollout's full AnalysisRun history — phase, trigger, and metrics passing/total — via a dedicated `GET /api/rollouts/{ns}/{name}/analysisruns` endpoint gated on listing AnalysisRuns directly (a separate RBAC grant from the Rollout's own `patch` capability).
+
+**AnalysisTemplate / ClusterAnalysisTemplate / Experiment:** Full detail renderers — metric definitions (provider, interval, count, success/failure conditions) for the templates; templates, duration, and per-template replica/analysis status for Experiment. Reached both directly and via the step-timeline/Analysis-section links above.
+
 **Why it's stuck:** `InconclusiveAnalysisRun` names nothing on its own, so Radar resolves the AnalysisRun the controller recorded and surfaces the deciding metric — its success/failure condition, latest measured value, and message. The same verdict reaches AI agents through the Rollout's `issue` field.
 
-**Topology:** Rollout → active AnalysisRun (`uses`), labelled by trigger (step / background / pre-promotion / post-promotion). Only the runs the Rollout's status points at are graphed — historical runs would grow the graph without bound.
+**Topology:** Rollout → active AnalysisRun (`uses`), labelled by trigger (step / background / pre-promotion / post-promotion). Only the runs the Rollout's status points at are graphed — historical runs would grow the graph without bound. (The full AnalysisRun history above is a detail-page list, not a topology change — the graph's "only active runs" bound is unchanged.)
 
 **Timeline:** Step index, traffic weights, pause conditions, abort/promote-full, and stable-ReplicaSet moves are all recorded as distinct events; a Rollout sits in `Progressing` for the whole canary, so phase alone would show nothing.
 
@@ -794,7 +859,7 @@ They roll up under three categories, split by what you'd go and look at: `backup
 - Phase, backup method, duration, start/stop timestamps
 - Cluster reference with clickable link
 - Destination path and server name
-- Recovery target
+- Backup target
 - Failure detection (AlertBanner with error message)
 
 **ScheduledBackup Detail View:**
@@ -993,8 +1058,8 @@ Deferred to a future "full Crossplane" pass:
 ### What Radar Shows
 
 **Policy / ClusterPolicy Detail View:**
-- Failure action badge (Enforce in red, Audit in yellow)
-- Configuration: background scanning, webhook timeout, failure policy, schema validation
+- Enforcement badge: what the policy does at admission, not just what `validationFailureAction` reads. Enforce in red, Audit in yellow, and **Background only** (or **Inactive**, when background scanning is off too) in orange for a policy that declares Enforce but is kept out of the admission webhook by `spec.admission: false`
+- Configuration: admission and background scanning, webhook timeout, failure policy, schema validation
 - Rule type summary (validate/mutate/generate/verifyImages counts)
 - Individual rules with type badges and match/exclude indicators
 - Auto-generated rules list
@@ -1006,7 +1071,7 @@ Deferred to a future "full Crossplane" pass:
 - Expandable details: message, category, source, affected resources
 - Problem detection (AlertBanner for failures or errors)
 
-**Resource Browser:** Smart columns show status (colored by worst outcome), failure action, rule counts, and pass/fail/warn/error/skip breakdowns.
+**Resource Browser:** Smart columns show status (colored by worst outcome), enforcement at admission, rule counts, and pass/fail/warn/error/skip breakdowns.
 
 ### The per-policy resource view
 
@@ -1151,15 +1216,52 @@ PolicyReport findings are policy posture, not live operational failure, so they 
 | Certificate | `networking.internal.knative.dev/v1alpha1` | — | Yes | — |
 | ServerlessService | `networking.internal.knative.dev/v1alpha1` | — | Yes | — |
 
-## OpenCost
+## OpenCost and Kubecost
 
 [OpenCost](https://www.opencost.io/) is a CNCF tool for Kubernetes cost monitoring, exposing cloud provider pricing and workload resource allocation as Prometheus metrics.
 
-Radar discovers if OpenCost metrics are available in the already-discovered Prometheus. If OpenCost is installed and scraping into Prometheus, cost data appears automatically. The integration is passive and read-only.
+Radar supports two read-only cost paths. Auto mode keeps OpenCost-compatible metrics from the
+already-discovered Prometheus when representative cost data is usable; when those metrics are
+absent, it tries the current allocation and asset APIs of a Kubecost 3 Aggregator. Source selection
+can also be pinned to `prometheus` or `kubecost` in Settings → Cost, `config.json`, or Helm. When
+Auto positively finds neither source, Radar reports that state and retries discovery; it does not
+label an absent Prometheus source as active. Settings tests Auto and Kubecost before saving, while an
+explicit Prometheus selection remains a saveable preference for installations being configured in
+stages.
 
-OpenCost's Prometheus metrics contain numeric values but no currency metadata. When Radar auto-discovers Prometheus in the connected cluster, it looks for `currencyCode` in the pricing ConfigMap referenced by an active OpenCost or Kubecost workload, or a literal `DISPLAY_CURRENCY` on an active Kubecost Deployment or StatefulSet. `DISPLAY_CURRENCY` takes precedence over ConfigMap evidence; conflicting or indirect values are treated as ambiguous. If the evidence is unavailable or ambiguous, Radar uses USD. Radar skips cluster inference for a manually configured Prometheus URL because it may serve another cluster. Override the label in Settings → Cost or `opencostCurrency` (CLI: `--opencost-currency`; Helm: `cost.currency`). CLI and Helm overrides remain authoritative while Radar runs and after restart. Radar labels the values but does not convert them.
+For Kubecost, Radar auto-discovers only an active Aggregator StatefulSet and its matching Service.
+It tries the official named `tcp-api` port 9004 first. When that port rejects unauthenticated access
+and no API key is configured, Radar falls back only to the same Service's exact `tcp-api-rbac` port
+9008, which Kubecost exposes for internal clients when SAML or OIDC is enabled. An explicitly
+configured key is never bypassed this way: a rejected key remains an authentication error.
+In-cluster Radar connects through Service DNS; local Radar uses a scoped port-forward to the selected
+port. An explicit URL is required for federated agent-only clusters, which have a FinOps Agent but no
+local Aggregator. A Service exposing only port 9008 is not auto-discovered; configure that endpoint
+explicitly. Radar accepts either a root API URL or one ending in `/model`, can send an optional
+service-account key as `X-API-KEY`, and requires an exact cluster ID
+to filter a central Aggregator. It detects one literal `CLUSTER_ID` from an active FinOps Agent or
+Aggregator; indirect, missing, or conflicting values require an override. Radar binds a cluster-ID
+override saved in Settings to the active kubeconfig context. It also binds a saved API key when the
+URL is blank and Radar auto-discovers a local Aggregator. Both fail closed after a context switch
+until the cluster-specific value is cleared or updated; an explicit central Aggregator URL and its
+key may still be shared.
 
-Kubecost Enterprise 3.x agent-only federated clusters do not have the Aggregator workload or its Prometheus cost metrics in the connected cluster. Those clusters need an explicit currency override, and their cost data is outside this Prometheus-backed integration.
+OpenCost-compatible Prometheus data powers current cost and historical charts. Kubecost REST powers
+the current namespace summary, workload/application compute allocation, node costs, and the cluster
+namespace trend from the allocation history retained by its Aggregator. Workload and application
+history remain unavailable for Kubecost. Radar never mixes current data from one source with history
+from another.
+
+Cost values contain no reliable per-response currency metadata. When the selected source is tied to
+the connected cluster, Radar looks for `currencyCode` in the pricing ConfigMap referenced by an
+active OpenCost/Kubecost workload, or literal `DISPLAY_CURRENCY` on an active Kubecost Deployment or
+StatefulSet. `DISPLAY_CURRENCY` takes precedence; conflicting or indirect values are treated as
+ambiguous. A manually configured Prometheus URL skips cluster inference because it may serve another
+cluster, while a selected Kubecost source still uses its connected-cluster workload evidence. If
+evidence is unavailable, Radar uses USD. Override the label in Settings → Cost or
+`opencostCurrency` (CLI: `--opencost-currency`; Helm: `cost.currency`). Radar labels values but does
+not convert them. The Settings currency preference saves independently of the live source action,
+so changing its label never requires the source probe to succeed.
 
 ### What Radar Shows
 
@@ -1170,16 +1272,23 @@ Kubecost Enterprise 3.x agent-only federated clusters do not have the Aggregator
 **Cost Insights View (`/cost`):**
 - Header: cluster hourly/monthly cost, efficiency %, idle cost projection
 - Resource cost split bar: CPU / Memory / Storage percentage breakdown
-- Cost trend chart with 6h/24h/7d range selector and per-namespace hover tooltips
+- Cost trend chart with 6h/24h/7d range selector and per-namespace hover tooltips for OpenCost or retained Kubecost allocation history
 - Namespace breakdown table (sortable by cost, efficiency, CPU/memory split) — click any row to expand per-workload costs on demand
 - Node costs table: instance type, region, and hourly/monthly pricing per machine
 - Efficiency color coding: green (50%+), amber (25–50%), red (below 25%)
 
 ### Prerequisites
 
-1. OpenCost (or Kubecost) deployed in your cluster, with its metrics being scraped by Prometheus
+One of:
 
-OpenCost cost data is not CRD-based — no custom resources are required. Cost views appear automatically when metrics are detected; they are hidden when no OpenCost metrics are found in Prometheus.
+1. OpenCost-compatible cost metrics scraped into Prometheus; or
+2. A Kubecost 3 Aggregator in the connected cluster; or
+3. An explicit central Kubecost Aggregator URL and cluster ID for a federated agent-only cluster.
+
+Cost data is not CRD-based — no custom resources are required. Cost views appear when either path
+returns usable current allocation data. Configure declarative Kubecost access with
+`cost.source`, `cost.kubecost.url`, `cost.kubecost.clusterId`, and an optional Secret in the Helm
+chart.
 
 ---
 
@@ -1227,7 +1336,42 @@ The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-op
 
 ## Network Policies
 
-[Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) control pod-to-pod and pod-to-external traffic at the network level. Radar supports standard Kubernetes NetworkPolicy, Cilium policies, and [Calico policies](https://docs.tigera.io/calico/latest/network-policy/), providing visibility into what traffic is allowed, denied, and which workloads are unprotected.
+[Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) control pod-to-pod and pod-to-external traffic at the network level. Radar supports standard Kubernetes NetworkPolicy, Cilium policies, and [Calico policies](https://docs.tigera.io/calico/latest/network-policy/), showing which policies exist and which workloads they select, which workloads no policy selects, and - when Hubble reports a policy drop - what the plugin recorded and what Radar can determine from the current Kubernetes NetworkPolicies. Applicable Cilium policies are listed, but their rules are not evaluated.
+
+### Why was this flow dropped?
+
+With Hubble as the traffic source, expand a dropped flow in the Traffic view to see the reason the network plugin reported. For policy drops, Radar also shows the deny policy the plugin named, if any, and checks the current Kubernetes NetworkPolicies against that connection. The panel answers in that order: what the plugin recorded, what current policies say, and what Radar could not check.
+
+Radar reads policies as they are now and says so. The plugin's deny attribution and Radar's current-policy check are separate things, and the panel keeps them apart. When missing information — the pod is gone, the flow record has no direction, you cannot read the peer's namespace — keeps Radar from completing the check, the panel explains why instead of guessing. Applicable Cilium policies are listed, but their rules are not evaluated.
+
+The common case is a default-deny policy with nothing that allows the client. Cilium reports the drop as a policy drop but names no policy, because no rule matched. Radar's own check names the policy that isolates the pod and explains what it does.
+
+<p align="center">
+  <img src="screenshots/integrations/netpol-drop-default-deny.png" alt="Dropped flow with a default-deny NetworkPolicy named by Radar's check" width="900">
+  <br><em>Hubble reports POLICY_DENIED without naming a policy. The current check lists deny-echo-ingress and explains that it has no allow rules</em>
+</p>
+
+When the plugin does name the policy — an explicit Cilium deny rule — that is the headline, shown if you have permission to read that policy. The current Kubernetes NetworkPolicy check appears under it as a note; it may find an allow, no matching allow, or an incomplete result.
+
+<p align="center">
+  <img src="screenshots/integrations/netpol-drop-cilium-attributed.png" alt="Dropped flow attributed by Hubble to a CiliumNetworkPolicy" width="900">
+  <br><em>Hubble names a Cilium deny policy as the reason for the drop. The current Kubernetes NetworkPolicy check appears below it</em>
+</p>
+
+Cilium policies can allow or deny traffic on their own terms, alongside Kubernetes ones, and Radar does not evaluate their rules. So when a Cilium policy governs the pod in the flow's direction, Radar states the Kubernetes-only result as a result, lists the Cilium policy as *can't evaluate*, and does not call the connection allowed or denied.
+
+<p align="center">
+  <img src="screenshots/integrations/netpol-drop-cilium-capped.png" alt="Dropped flow where a Cilium policy caps the Kubernetes-only verdict" width="900">
+  <br><em>A Cilium policy also applies. Radar shows the Kubernetes-only result and cannot determine the combined result</em>
+</p>
+
+Each policy row says what it does to this connection in plain words: *allows this traffic*, *no matching allow rule*, or *can't evaluate*. NetworkPolicies combine their allow rules, so a policy with no matching rule does not override another policy's allow; the panel shows this reminder when several policies apply and at least one has no matching allow rule.
+
+Radar runs the current-policy check only when the plugin reports a policy drop. For other drops (an unroutable address, a malformed packet) the panel shows the reported reason and says that Radar checks NetworkPolicies only for policy drops. If the plugin reported no reason, the panel says Radar cannot tell whether a policy was involved. A policy drop over a protocol other than TCP, UDP or SCTP cannot be checked against port rules, and the panel says so.
+
+The panel shows when the flow was seen and when the policies were checked, and refreshes every 30 seconds while the row is open. Policies may have changed since the drop: a current allow does not confirm that a new connection will succeed. What the panel does not do yet: propose the rule that would allow the traffic, or tell you whether a policy changed after the drop.
+
+The panel shows only what you could read yourself: listing policies and reading the pod in that namespace are required, a peer pod or Namespace you cannot read is left unresolved, and a policy name reported by the plugin is withheld when you cannot list policies of that kind. In the Helm chart, the Cloud cluster-read role grants Cilium policy reads under `rbac.crdGroups.cilium` so Radar can identify the Cilium policies that apply; it still does not evaluate their rules.
 
 ### What Radar Shows
 
@@ -1238,6 +1382,13 @@ The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-op
   <br><em>Calico policy topology — enforced relationships use solid edges; staged previews use dashed edges</em>
 </p>
 
+**Dashboard Coverage Card:** The home dashboard includes a Network Policy Coverage card showing total policy count, the percentage of workloads covered by at least one enforced policy, and a count of uncovered workloads. When staged Calico policies exist, it separately shows projected coverage if those policies were applied. That projection can be **lower** than today's coverage — a staged deletion removes the protection of the policy it names — and the bar marks the part that would be lost.
+
+<p align="center">
+  <img src="screenshots/integrations/calico-dashboard-coverage.png" alt="Network Policy Coverage Card with staged Calico coverage" width="354">
+  <br><em>Dashboard coverage separates enforced protection from the projected result of applying staged policies</em>
+</p>
+
 **Policy Flow Diagram:** Each NetworkPolicy detail drawer includes a visual flow diagram showing ingress and egress rules as a directional graph — sources on the left, targets on the right, with ports and protocols labeled. Quickly understand what a policy allows without reading YAML.
 
 <p align="center">
@@ -1245,12 +1396,11 @@ The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-op
   <br><em>Policy Flow Diagram — visual representation of ingress and egress rules</em>
 </p>
 
-**Dashboard Coverage Card:** The home dashboard includes a Network Policy Coverage card showing total policy count, the percentage of workloads covered by at least one enforced policy, and a count of uncovered workloads. When staged Calico policies exist, it separately shows projected coverage if those policies were applied. That projection can be **lower** than today's coverage — a staged deletion removes the protection of the policy it names — and the bar marks the part that would be lost.
-
-<p align="center">
-  <img src="screenshots/integrations/calico-dashboard-coverage.png" alt="Network Policy Coverage Card with staged Calico coverage" width="354">
-  <br><em>Dashboard coverage separates enforced protection from the projected result of applying staged policies</em>
-</p>
+**Standard NetworkPolicy Detail View:**
+- Pod selector and namespace selector rules, shown the way Kubernetes applies them: a peer with both selectors is one condition (pods matching X in namespaces matching Y), not two
+- Ingress and egress rules with CIDR blocks, ports, port ranges, and protocols
+- Policy types as the API server applies them: a policy with no `policyTypes` isolates ingress, and egress only when it has egress rules
+- Related resources showing protected workloads
 
 **Cilium Policy Detail View:**
 - Endpoint selector targeting
@@ -1287,19 +1437,6 @@ part of resource navigation and authorization — it is what keeps Calico
 `NetworkPolicy` distinct from Kubernetes `networking.k8s.io` NetworkPolicy — and
 a policy is shown to anyone authorized to list it under **either** group, since
 either grant is enough to read it.
-
-**Standard NetworkPolicy Detail View:**
-- Pod selector and namespace selector rules
-- Ingress and egress rules with CIDR blocks, ports, and protocols
-- Policy type indicators (Ingress, Egress, or both)
-- Related resources showing protected workloads
-
-**Traffic View Integration:** When Hubble is available, dropped flows are correlated with the network policies that caused them, showing which policy denied specific traffic in real time.
-
-<p align="center">
-  <img src="screenshots/integrations/netpol-traffic-correlation.png" alt="Traffic Drop Correlation" width="800">
-  <br><em>Traffic View — dropped flow with POLICY_DENIED reason and selecting policy correlation</em>
-</p>
 
 ### Supported Resources
 
@@ -1340,14 +1477,72 @@ This is resource reconnaissance, not GPU accounting or end-to-end workload diagn
 | AdmissionCheck | `kueue.x-k8s.io` | `Active` condition |
 | ProvisioningRequest | `autoscaling.x-k8s.io` (v1, v1beta1) | Provisioned / Failed / CapacityRevoked / BookingExpired conditions |
 
+For an exact `kueue.x-k8s.io/v1beta2` Workload, the REST AI resource endpoint
+and MCP `get_resource` also project a bounded admission summary into
+`resourceContext.scheduling.observations`. The first adapter emits one Kueue
+`admission` observation: a controller-neutral `satisfied`, `unsatisfied`,
+`held`, or `unknown` decision; the most useful native condition; LocalQueue and
+ClusterQueue facts with submission/entitlement roles; AdmissionCheck and
+preemption-gate evidence; and affirmative disruption conditions from the
+current snapshot. Resource names remain useful facts when RBAC withholds an
+optional navigation reference.
+
+`held` requires evidence of an explicit pause: `spec.active=false`, an `OnHold`
+condition, or `AdmissionGated` together with the current non-empty
+`kueue.x-k8s.io/admission-gated-by` annotation. The overloaded
+preemption-gated `AdmissionGated` reason remains `unsatisfied`, as does
+`Suspended` by itself: Kueue uses that reason for an inactive ClusterQueue,
+which may reflect broken dependencies rather than an intentional stop policy.
+
+Typed Kueue detail retains the controller's `pending` / `quota_reserved` /
+`admitted` / `finished` phase, PodsReady and replacement-Pod evidence,
+per-PodSet resource-to-ResourceFlavor assignments and usage, requeue state,
+and an exact concurrent-admission Parent reference for a Variant. Each
+observation carries the Workload's `subjectGeneration`, and projected
+conditions retain `observedGeneration`, so consumers can detect stale
+controller evidence. The compact projection keeps the first eight PodSets in
+name order and up to seven resource assignments per PodSet, prioritizing
+extended resources before core resources; explicit truncation flags point
+consumers back to the returned raw Workload for the complete status. Normal
+unsatisfied admission is scheduling context rather than an operational Issue.
+Radar does not infer feature-gate state, queue position, fairness math, Pod
+placement, or physical capacity. This is a bounded projection of the returned
+Workload's current status, not condition history, queue-wide observation
+coverage, or support for other Kueue API versions.
+
 ### KubeRay
 
 | Resource | Group | Status source |
 |----------|-------|---------------|
 | RayCluster | `ray.io/v1` | state + provisioning conditions |
 | RayJob | `ray.io/v1` | jobStatus + jobDeploymentStatus |
-| RayService | `ray.io/v1` | serviceStatus + upgrade/rollback conditions |
+| RayService | `ray.io/v1` | lifecycle conditions (`serviceStatus` fallback) |
 | RayCronJob | `ray.io/v1` | suspend |
+
+For an exact `ray.io/v1` RayService, REST AI detail and MCP `get_resource`
+include `resourceContext.serving.rayService` with named active/pending revisions, native
+observed generation (compare with `resource.metadata.generation`), requested suspension, declared upgrade strategy, reported percentages, and up to eight name-sorted
+Serve application states per revision (with explicit truncation). Readiness,
+upgrade/rollback, and suspension conditions remain independent in the existing
+`statusSummary`: a healthy active service can coexist with a failing pending revision. Requested suspension is
+separate from controller acknowledgement. Embedded RayCluster conditions are
+deliberately excluded: changes to them alone
+do not trigger RayService status writes. Missing percentages stay absent (normal
+for non-incremental upgrades) and explicit zero stays zero. Traffic percentages
+represent configured route weights, not measured requests.
+
+The projection follows KubeRay v1.7.0 and performs no child reads. It does not use
+deprecated state fallbacks or infer health from cluster names. Ready means proxy
+endpoints exist, not that every application is healthy; inspect the native app
+states and, when truncated, the full resource. During `NewCluster` upgrades,
+KubeRay clears the active application map while reconciling the pending revision;
+absence is not proof of an outage. Application messages, deployment
+status and the cross-revision endpoint count remain on the resource. Suspension
+tears down owned resources; resume creates new clusters.
+
+The [KubeRay controller lane](../scripts/kuberay-demo/README.md)
+checks a real healthy active revision and failed pending revision through REST
+and MCP; incremental Gateway traffic shifting is outside that lane's proof.
 
 ### KServe
 
@@ -1381,6 +1576,15 @@ This is resource reconnaissance, not GPU accounting or end-to-end workload diagn
 | PyTorchJob / TFJob | `kubeflow.org/v1` | JobCondition pattern |
 | MPIJob | `kubeflow.org` (v1, v2beta1) | JobCondition pattern |
 | TrainJob | `trainer.kubeflow.org/v1alpha1` | Complete / Failed / Suspended conditions + active child jobs |
+
+For `jobset.x-k8s.io/v1alpha2` JobSets, REST AI detail and MCP `get_resource`
+include `resourceContext.execution`: root lifecycle and outcome, controller evidence,
+requested suspension, and JobSet-specific role, child-Job, and recreation counts.
+Missing observations remain distinct from zero. Activity does not guarantee running
+Pods, and a suspension request does not prove observed suspension or its cause.
+Root outcomes require root evidence; child failures alone are not terminal.
+Native spec/status remain available. This does not add JobSet `diagnose`, infer
+admission causes, or replace the JobSet→Job→Pod ownership chain.
 
 Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share kind names with other resources — Radar disambiguates by API group in tables, filters, and status badges.
 

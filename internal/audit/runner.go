@@ -2,6 +2,7 @@ package audit
 
 import (
 	"log"
+	"slices"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -16,6 +17,7 @@ import (
 
 // RunOptions provides optional data sources for checks that need them.
 type RunOptions struct {
+	Scope          *ReadScope
 	ClusterVersion string   // e.g. "1.30"
 	ServedAPIs     []string // e.g. ["apps/v1", "batch/v1beta1"]
 }
@@ -27,7 +29,26 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 		return &bp.ScanResults{Summary: bp.ScanSummary{Categories: map[string]bp.CategorySummary{}}}
 	}
 
+	var scope *ReadScope
+	if opts != nil {
+		scope = opts.Scope
+	}
+	namespaces = scope.subjectNamespaces(namespaces)
+	if scope != nil && scope.Namespaces != nil && len(namespaces) == 0 {
+		return &bp.ScanResults{Summary: bp.ScanSummary{Categories: map[string]bp.CategorySummary{}}}
+	}
 	input := CollectTypedInput(cache, namespaces)
+	if !scope.hasSecretSubjects(namespaces) {
+		input.Secrets = nil
+	} else if scope != nil {
+		visible := input.Secrets[:0:0]
+		for _, sec := range input.Secrets {
+			if scope.allows(schema.GroupVersionResource{Resource: "secrets"}, sec.Namespace) {
+				visible = append(visible, sec)
+			}
+		}
+		input.Secrets = visible
+	}
 	input.GitOpsToolsPresent, input.ArgoAppNames = gitOpsRoots()
 
 	if opts != nil {
@@ -40,13 +61,10 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	// is best-effort: if Crossplane isn't installed, discovery is unavailable,
 	// or the dynamic cache hasn't synced, we leave the fields nil and the
 	// crossplaneStuck check no-ops.
-	mrs, xrs := listCrossplaneDynamic(namespaces)
+	mrs, xrs := listCrossplaneDynamic(namespaces, scope)
 	input.ManagedResources = mrs
 	input.CompositeResources = xrs
-	input.ConfigObjectRefs = listDynamicConfigObjectRefs(namespaces, dynamicConfigRefOptions{
-		ServiceAccounts: input.ServiceAccounts,
-		Deployments:     ListNamespaced(cache.Deployments(), nil),
-	})
+	input.ConfigReferenceEvidence = collectConfigEvidence(cache, input, namespaces, scope)
 
 	// Traefik routers + their reference targets for the dangling-reference checks.
 	// Routes are scoped to the audited namespaces (they're the subjects we report
@@ -69,7 +87,32 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 	// posture check. Nil inventory (CNPG absent / RBAC denied) → check no-ops.
 	input.CNPGClusters, input.CNPGScheduledBackups, input.CNPGScheduledBackupsAuthoritative = listCNPGDynamic(namespaces)
 
-	return bp.RunChecks(input)
+	results := bp.RunChecks(input)
+	if !hasCompleteSecretInput(cache, namespaces, scope) && !slices.Contains(results.MissingInputs, "secrets") {
+		results.MissingInputs = append(results.MissingInputs, "secrets")
+	}
+	return results
+}
+
+func hasCompleteSecretInput(cache *k8s.ResourceCache, namespaces []string, scope *ReadScope) bool {
+	if scope == nil || scope.SecretNamespaces == nil {
+		return true
+	}
+	secretNamespaces := namespaces
+	complete := len(secretNamespaces) > 0
+	if len(secretNamespaces) == 0 && cache.IsKindReady(k8score.Namespaces) && cache.IsKindClusterWide(k8score.Namespaces) {
+		all, err := cache.Namespaces().List(labels.Everything())
+		if err == nil {
+			complete = true
+			for _, ns := range all {
+				secretNamespaces = append(secretNamespaces, ns.Name)
+			}
+		}
+	}
+	for _, ns := range secretNamespaces {
+		complete = complete && scope.allows(schema.GroupVersionResource{Resource: "secrets"}, ns)
+	}
+	return complete
 }
 
 func CollectTypedInput(cache *k8s.ResourceCache, namespaces []string) *bp.CheckInput {
@@ -90,6 +133,7 @@ func collectWorkloadInput(cache *k8s.ResourceCache, namespaces []string) *bp.Che
 	return &bp.CheckInput{
 		Pods:         ListNamespaced(cache.Pods(), namespaces),
 		Deployments:  ListNamespaced(cache.Deployments(), namespaces),
+		ReplicaSets:  ListNamespaced(cache.ReplicaSets(), namespaces),
 		StatefulSets: ListNamespaced(cache.StatefulSets(), namespaces),
 		DaemonSets:   ListNamespaced(cache.DaemonSets(), namespaces),
 		Jobs:         ListNamespaced(cache.Jobs(), namespaces),
@@ -112,7 +156,7 @@ func collectWorkloadInput(cache *k8s.ResourceCache, namespaces []string) *bp.Che
 // already observing — MRs/XRs in groups nobody has navigated to yet won't
 // surface until they're watched for some other reason. Acceptable trade-
 // off for an audit pass.
-func listCrossplaneDynamic(namespaces []string) (mrs, xrs []*unstructured.Unstructured) {
+func listCrossplaneDynamic(namespaces []string, scope *ReadScope) (mrs, xrs []*unstructured.Unstructured) {
 	cache := k8s.GetDynamicResourceCache()
 	if cache == nil {
 		return nil, nil
@@ -140,7 +184,7 @@ func listCrossplaneDynamic(namespaces []string) (mrs, xrs []*unstructured.Unstru
 			continue
 		}
 		for _, u := range items {
-			if u == nil {
+			if u == nil || !scope.allows(gvr, u.GetNamespace()) {
 				continue
 			}
 			if len(namespaces) > 0 {

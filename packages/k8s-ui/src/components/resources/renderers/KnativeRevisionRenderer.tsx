@@ -44,7 +44,7 @@ export function KnativeRevisionRenderer({ data }: KnativeRevisionRendererProps) 
           {routingState && <Property label="Routing" value={
             <span className={clsx(
               'badge',
-              routingState === 'active' ? 'bg-green-500/20 text-green-400' : 'bg-theme-hover text-theme-text-secondary'
+              routingState === 'active' ? 'status-green' : 'bg-theme-hover text-theme-text-secondary'
             )}>
               {routingState}
             </span>

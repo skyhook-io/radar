@@ -7,13 +7,13 @@ import {
   CheckCircle,
   Clock,
   RefreshCw,
-  ChevronRight,
   Plus,
   Trash2,
   Shield,
   X,
 } from 'lucide-react'
 import { clsx } from 'clsx'
+import { Collapse, CollapseChevron } from '../ui/Collapse'
 import { DiffViewer, DiffBadge } from './DiffViewer'
 import { TimelineToolbar } from './TimelineToolbar'
 import {
@@ -696,17 +696,20 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, sele
               aria-label={expanded ? 'Collapse changes' : 'Expand changes'}
               className="shrink-0 rounded p-0.5 text-theme-text-disabled hover:bg-theme-elevated hover:text-theme-text-secondary"
             >
-              <ChevronRight className={clsx('w-4 h-4 transition-transform', expanded && 'rotate-90')} />
+              <CollapseChevron open={expanded} inheritColor className="w-4 h-4" />
             </button>
           )}
         </div>
 
-        {/* Expanded details - only for items with diffs */}
-        {expanded && hasExpandableContent && item.diff && (
-          <div className="mt-3 pt-3 border-t-subtle">
-            <div className="text-xs text-theme-text-tertiary mb-2">Changes:</div>
-            <DiffViewer diff={item.diff} />
-          </div>
+        {/* Expanded details - only for items with diffs. A list holds many
+            cards, each diff is real work to render: mount on first open. */}
+        {hasExpandableContent && item.diff && (
+          <Collapse open={expanded} mountLazily>
+            <div className="mt-3 pt-3 border-t-subtle">
+              <div className="text-xs text-theme-text-tertiary mb-2">Changes:</div>
+              <DiffViewer diff={item.diff} />
+            </div>
+          </Collapse>
         )}
       </div>
     </div>
@@ -826,12 +829,12 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
             aria-label={expanded ? 'Collapse occurrences' : 'Expand occurrences'}
             className="shrink-0 rounded p-0.5 text-theme-text-disabled hover:bg-theme-elevated hover:text-theme-text-secondary"
           >
-            <ChevronRight className={clsx('w-4 h-4 transition-transform', expanded && 'rotate-90')} />
+            <CollapseChevron open={expanded} inheritColor className="w-4 h-4" />
           </button>
         </div>
 
         {/* Expanded details */}
-        {expanded && (
+        <Collapse open={expanded}>
           <div className="mt-3 pt-3 border-t-subtle space-y-3">
             {/* First occurrence */}
             <div className="flex items-start gap-2">
@@ -865,7 +868,7 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
               </div>
             </div>
           </div>
-        )}
+        </Collapse>
       </div>
     </div>
   )

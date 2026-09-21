@@ -1,5 +1,5 @@
 import { ArchiveRestore, Filter } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink, LabelSelectorDisplay } from '../../ui/drawer-components'
 import {
   getRestoreStatus,
   getRestoreBackupName,
@@ -7,6 +7,10 @@ import {
   getRestoreExcludedNamespaces,
   getRestoreIncludedResources,
   getRestoreExcludedResources,
+  getRestoreNamespaceMapping,
+  getRestoreLabelSelector,
+  getRestoreOrLabelSelectors,
+  hasLabelSelectorTerms,
   getRestoreDuration,
   getRestoreErrors,
   getRestoreWarnings,
@@ -41,6 +45,19 @@ export function VeleroRestoreRenderer({ data, messages, onNavigate }: VeleroRest
   const excludedNamespaces = getRestoreExcludedNamespaces(data)
   const includedResources = getRestoreIncludedResources(data)
   const excludedResources = getRestoreExcludedResources(data)
+  const namespaceMapping = getRestoreNamespaceMapping(data)
+  const rawLabelSelector = getRestoreLabelSelector(data)
+  const labelSelector = hasLabelSelectorTerms(rawLabelSelector) ? rawLabelSelector : null
+  const orLabelSelectors = getRestoreOrLabelSelectors(data).filter(hasLabelSelectorTerms)
+  const namespaceMappingEntries = Object.entries(namespaceMapping)
+  const hasScope =
+    includedNamespaces.length > 0 ||
+    excludedNamespaces.length > 0 ||
+    includedResources.length > 0 ||
+    excludedResources.length > 0 ||
+    namespaceMappingEntries.length > 0 ||
+    Boolean(labelSelector) ||
+    orLabelSelectors.length > 0
 
   const phase = status.phase || ''
   const validationErrors = getRestoreValidationErrors(data)
@@ -148,7 +165,7 @@ export function VeleroRestoreRenderer({ data, messages, onNavigate }: VeleroRest
       )}
 
       {/* Scope section */}
-      {(includedNamespaces.length > 0 || excludedNamespaces.length > 0 || includedResources.length > 0 || excludedResources.length > 0) && (
+      {hasScope && (
         <Section title="Scope" icon={Filter} defaultExpanded>
           <PropertyList>
             {includedNamespaces.length > 0 && (
@@ -172,6 +189,19 @@ export function VeleroRestoreRenderer({ data, messages, onNavigate }: VeleroRest
                 </div>
               } />
             )}
+            {namespaceMappingEntries.length > 0 && (
+              <Property label="Namespace Mapping" value={
+                <div className="flex flex-col gap-1">
+                  {namespaceMappingEntries.map(([source, target]) => (
+                    <div key={source} className="flex items-center gap-1.5">
+                      <span className="badge-sm bg-theme-hover text-theme-text-secondary">{source}</span>
+                      <span className="text-theme-text-tertiary" aria-hidden="true">&rarr;</span>
+                      <span className="badge-sm bg-theme-hover text-theme-text-secondary">{String(target)}</span>
+                    </div>
+                  ))}
+                </div>
+              } />
+            )}
             {includedResources.length > 0 && (
               <Property label="Included Resources" value={
                 <div className="flex flex-wrap gap-1">
@@ -186,6 +216,18 @@ export function VeleroRestoreRenderer({ data, messages, onNavigate }: VeleroRest
                 <div className="flex flex-wrap gap-1">
                   {excludedResources.map((r: string) => (
                     <span key={r} className="badge-sm bg-red-500/10 text-red-400">{r}</span>
+                  ))}
+                </div>
+              } />
+            )}
+            {labelSelector && (
+              <Property label="Label Selector" value={<LabelSelectorDisplay selector={labelSelector} />} />
+            )}
+            {orLabelSelectors.length > 0 && (
+              <Property label="Label Selectors (match any)" value={
+                <div className="flex flex-col gap-1">
+                  {orLabelSelectors.map((sel: any, i: number) => (
+                    <LabelSelectorDisplay key={i} selector={sel} />
                   ))}
                 </div>
               } />

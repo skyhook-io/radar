@@ -9,10 +9,13 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/skyhook-io/radar/internal/investigationrefs"
 	"github.com/skyhook-io/radar/internal/version"
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 func newServer(includeWrites bool) *mcpsdk.Server {
+	paramRegistry := newToolParamRegistry()
 	server := mcpsdk.NewServer(
 		&mcpsdk.Implementation{
 			Name:    "radar",
@@ -25,9 +28,9 @@ func newServer(includeWrites bool) *mcpsdk.Server {
 	// report the accepted argument names when validation still fails. Every tool
 	// schema is additionalProperties:false, so without this one wrong argument
 	// name is an unrecoverable dead end for an agent. See toolparams.go.
-	server.AddReceivingMiddleware(paramRepairMiddleware)
+	server.AddReceivingMiddleware(paramRepairMiddlewareFor(paramRegistry))
 
-	registerTools(server, includeWrites)
+	registerTools(server, includeWrites, paramRegistry)
 	registerResources(server)
 
 	return server
@@ -41,10 +44,97 @@ func RunStdio(ctx context.Context) error {
 // NewHandler creates the full MCP HTTP handler (read + write tools) to mount on chi.
 func NewHandler() http.Handler { return handlerForServer(newServer(true)) }
 
-// NewReadOnlyHandler creates an MCP handler exposing only read tools. Radar points
-// read-only AI investigations here so a mutating tool can't even be discovered —
-// server-side enforcement that doesn't depend on the agent CLI restricting itself.
+// NewReadOnlyHandler creates the public MCP handler exposing only read tools.
 func NewReadOnlyHandler() http.Handler { return handlerForServer(newServer(false)) }
+
+// NewInvestigationHandler creates the private read-only MCP transport used by
+// Radar's built-in investigation runner. It deliberately has a separate mount
+// from the public /mcp-readonly surface: the evidence marker is an internal
+// correlation protocol between Radar and its agent adapters, not part of the
+// normal tool result contract.
+func NewInvestigationHandler(refs *investigationrefs.Registry) http.Handler {
+	return investigationHandlerForServer(newServer(false), refs)
+}
+
+func investigationHandlerForServer(server *mcpsdk.Server, refs *investigationrefs.Registry) http.Handler {
+	server.AddReceivingMiddleware(investigationEvidenceReferenceMiddleware(refs))
+	handler := handlerForServer(server)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scope := r.URL.Query().Get("scope")
+		if !investigation.ValidScope(scope) {
+			http.Error(w, "invalid investigation evidence scope", http.StatusBadRequest)
+			return
+		}
+		if !refs.Active(scope) {
+			http.Error(w, "inactive investigation evidence scope", http.StatusForbidden)
+			return
+		}
+		ctx := context.WithValue(r.Context(), investigationEvidenceScopeKey{}, scope)
+		handler.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+type investigationEvidenceScopeKey struct{}
+
+func investigationEvidenceReferenceMiddleware(refs *investigationrefs.Registry) mcpsdk.Middleware {
+	return func(next mcpsdk.MethodHandler) mcpsdk.MethodHandler {
+		return func(ctx context.Context, method string, req mcpsdk.Request) (mcpsdk.Result, error) {
+			result, err := next(ctx, method, req)
+			if err != nil {
+				return result, err
+			}
+			if method == "initialize" || method == "tools/list" {
+				if scope, _ := ctx.Value(investigationEvidenceScopeKey{}).(string); scope != "" {
+					refs.MarkConnected(scope)
+				}
+			}
+			if method != "tools/call" {
+				return result, err
+			}
+			toolResult, ok := result.(*mcpsdk.CallToolResult)
+			if !ok {
+				return result, err
+			}
+			scope, _ := ctx.Value(investigationEvidenceScopeKey{}).(string)
+			if !investigation.ValidScope(scope) {
+				return result, err
+			}
+			payload := investigationEvidenceProducerText(toolResult)
+			if strings.TrimSpace(payload) == "" {
+				return result, err
+			}
+			ref, issued := refs.Issue(scope, payload)
+			if !issued {
+				return result, err
+			}
+			annotateInvestigationEvidenceReference(toolResult, ref)
+			return result, err
+		}
+	}
+}
+
+func investigationEvidenceProducerText(result *mcpsdk.CallToolResult) string {
+	var payload strings.Builder
+	for _, content := range result.Content {
+		if text, ok := content.(*mcpsdk.TextContent); ok {
+			payload.WriteString(text.Text)
+		}
+	}
+	return payload.String()
+}
+
+// annotateInvestigationEvidenceReference prepends a uniform, machine-readable
+// content block without changing the producer payload. All supported agent CLIs
+// expose ordered text content to the model; their stream adapters remove this
+// marker and retain the reference separately before persisting the tool result.
+// Tool-level error results are marked too: they are not citable as causal proof,
+// but their exact Radar provenance lets Findings report an honest failed check.
+func annotateInvestigationEvidenceReference(result *mcpsdk.CallToolResult, ref string) {
+	marker := &mcpsdk.TextContent{
+		Text: investigation.RefMarker(ref),
+	}
+	result.Content = append([]mcpsdk.Content{marker}, result.Content...)
+}
 
 func handlerForServer(server *mcpsdk.Server) http.Handler {
 	streamOpts := &mcpsdk.StreamableHTTPOptions{Stateless: true}

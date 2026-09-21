@@ -109,9 +109,10 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'diagnose',
-    desc: 'One-call root-cause bundle. Workloads get spec + resourceContext + current AND previous logs across pods + warning events + startup blockers; GitOps reconcilers, including Flux HelmRelease, get status summary + parsed related issues; network entry kinds (Service / Ingress / HTTPRoute / GRPCRoute / Gateway) get a path-shaped trace naming the first broken hop, with an optional one-shot reachability test.',
+    desc: 'Bounded, point-in-time evidence bundle for one narrowed target — not an agent run and not an authoritative root-cause verdict. For workloads, including Argo Rollout, Radar attempts selected, capped current and previous logs where available, alongside resource context, a capped warning-event sample, and startup blockers; GitOps reconcilers, including Flux HelmRelease, get status summary + parsed related issues; network entry kinds (Service / Ingress / HTTPRoute / GRPCRoute / Gateway) get a coverage-honest path trace that identifies a broken hop only when the evidence establishes one, with an optional one-shot reachability test.',
     params: [
-      { arg: 'kind', required: true, desc: 'pod, deployment, statefulset, daemonset, application, kustomization, Flux HelmRelease, service, ingress, httproute, grpcroute, or gateway' },
+      { arg: 'kind', required: true, desc: 'pod, deployment, statefulset, daemonset, Argo Rollout, application, kustomization, Flux HelmRelease, service, ingress, httproute, grpcroute, or gateway' },
+      { arg: 'group', desc: 'API group for CRDs or kind collisions (for example argoproj.io for Rollout); built-ins are inferred' },
       { arg: 'namespace', required: true, desc: 'resource namespace' },
       { arg: 'name', required: true, desc: 'resource name' },
       { arg: 'probe', desc: 'network kinds only: add active DNS/TCP/TLS/HTTP probes against the declared path (0-3s wall time)' },
@@ -253,6 +254,33 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'group', desc: 'substring filter on rule group name' },
       { arg: 'state', desc: 'alerting rules only: firing, pending, or inactive' },
       { arg: 'limit', desc: 'max rules returned (default 50, max 200)' },
+    ],
+  },
+  {
+    name: 'get_cost',
+    desc: 'Cluster spend from OpenCost or Kubecost — cluster and per-namespace totals, per-workload and per-node breakdowns, and spend over time. Hourly rates plus the same monthly projection the Costs page shows.',
+    params: [
+      { arg: 'view', desc: 'summary (default), workloads, nodes (cluster-wide), or trend' },
+      { arg: 'namespace', desc: 'required for view=workloads; filters summary and trend' },
+      { arg: 'kind', desc: 'view=workloads: target one workload instead of the top spenders; needs name' },
+      { arg: 'name', desc: 'workloads: exact workload name (needs kind); nodes: exact node name' },
+      { arg: 'range', desc: 'trend only: 6h, 24h (default), or 7d' },
+      { arg: 'include_points', desc: 'trend only: include raw points (default false); summaries are always returned' },
+      { arg: 'limit', desc: 'max rows (default 20, max 100)' },
+    ],
+  },
+  {
+    name: 'get_rightsizing',
+    desc: 'CPU/memory request recommendations, with current limits as context, from 7 days of observed usage, with a fit verdict and confidence tier per container. Scans can take 45 seconds; inspect confidence and missing evidence. Request reductions do not directly imply bill savings.',
+    params: [
+      { arg: 'scope', required: true, desc: 'workload (needs kind/name/namespace), namespace, or cluster' },
+      { arg: 'kind', desc: 'scope=workload: Deployment, StatefulSet, or DaemonSet' },
+      { arg: 'name', desc: 'scope=workload: the workload name' },
+      { arg: 'namespace', desc: 'required for scope=workload; for scope=namespace unless namespaces is set' },
+      { arg: 'namespaces', desc: 'scope=namespace: scan several namespaces in one call' },
+      { arg: 'include_all', desc: 'include balanced and unevidenced rows (default false); workload scope always returns all rows' },
+      { arg: 'classification', desc: 'scan only: reduction, increase, review, need_data, or in_range; returns all rows of matching workloads' },
+      { arg: 'limit', desc: 'max workloads returned by a namespace or cluster scan (default 20, max 100)' },
     ],
   },
   {

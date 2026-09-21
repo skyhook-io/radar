@@ -102,6 +102,9 @@ export const getExposedSecretReportSummary = getVulnerabilityReportSummary
 export const getExposedSecretReportContainer = getVulnerabilityReportContainer
 export const getExposedSecretReportImage = getVulnerabilityReportImage
 
+// SBOM reports carry the same report.artifact/registry shape as the scan reports.
+export const getSbomReportImage = getVulnerabilityReportImage
+
 export const getExposedSecretReportStatus = getVulnerabilityReportStatus
 
 // ============================================================================

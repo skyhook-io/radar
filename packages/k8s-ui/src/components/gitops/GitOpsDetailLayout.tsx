@@ -1,9 +1,11 @@
 import { useEffect, type ComponentType, type ReactNode } from 'react'
-import { ArrowDownUp, ChevronDown, ChevronRight, Clock3, GitBranch, GitCommit, Loader2, Pause, Play, RefreshCw, Settings, Trash2, XCircle, Zap } from 'lucide-react'
+import { ArrowDownUp, Clock3, GitBranch, GitCommit, Loader2, Pause, Play, RefreshCw, Settings, Trash2, XCircle, Zap } from 'lucide-react'
+import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { PaneLoader } from '../ui/PaneLoader'
 
 import { HealthStatusBadge, SyncStatusBadge } from './GitOpsStatusBadge'
 import { GitOpsIssuesBand, GitOpsStatusStrip } from './insights'
+import { GitOpsHealthSourceNotice } from './GitOpsHealthSourceNotice'
 import { Tooltip } from '../ui/Tooltip'
 import type { GitOpsHealthStatus, GitOpsInsight, GitOpsIssue, GitOpsRemediation, SyncStatus } from '../../types'
 
@@ -138,6 +140,14 @@ export interface GitOpsDetailLayoutProps {
   // on the OSS-specific CodeViewer component.
   helmValuesContent?: ReactNode
 
+  // GitOpsHealthSourceNotice inputs: where its "Why?" link goes, and what
+  // (if anything) to say after the remote-destination sentence. Both are
+  // host decisions; the notice itself keys off `insight.summary`.
+  healthDocsUrl?: string
+  remoteDestinationHint?: ReactNode
+  // Opens the host's Argo CD settings, when it has such a place.
+  onOpenSettings?: () => void
+
   // Action buttons — Argo + Flux. Exactly one applies for any given CR.
   isArgoApp: boolean
   isFlux: boolean
@@ -222,6 +232,9 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
     helmValuesOpen,
     onToggleHelmValues,
     helmValuesContent,
+    healthDocsUrl,
+    remoteDestinationHint,
+    onOpenSettings,
     isArgoApp,
     isFlux,
     isFluxWorkload,
@@ -245,6 +258,10 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
     documentTitleSuffix,
     children,
   } = props
+  // One predicate for header, caret and panel: without content there is
+  // nothing to open, so the header must not announce expanded.
+  const helmValuesShown = !!helmValuesOpen && !!helmValuesContent
+  const helmValuesDisclosure = useDisclosure(helmValuesShown)
 
   // Document title side effect — opt-in so hub-web can take ownership of
   // its own title format.
@@ -458,6 +475,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
       {!fullscreen && (
         <>
           <GitOpsStatusStrip insight={insight ?? undefined} loading={insightLoading} renderRevisionMeta={renderRevisionMeta} />
+          <GitOpsHealthSourceNotice summary={insight?.summary} changes={insight?.changes} docsUrl={healthDocsUrl} remoteDestinationHint={remoteDestinationHint} onOpenSettings={onOpenSettings} />
           <GitOpsIssuesBand
             issues={insight?.issues}
             terminating={terminating}
@@ -468,16 +486,12 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
           {helmValues && onToggleHelmValues && (
             <div className="shrink-0 border-b border-theme-border bg-theme-base">
               <button
+                {...helmValuesDisclosure.buttonProps}
                 type="button"
                 onClick={onToggleHelmValues}
                 className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs text-theme-text-secondary hover:bg-theme-hover"
-                aria-expanded={helmValuesOpen}
               >
-                {helmValuesOpen ? (
-                  <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-                ) : (
-                  <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-                )}
+                <CollapseChevron open={helmValuesShown} className="h-3.5 w-3.5" />
                 <Settings className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
                 <span className="font-medium text-theme-text-primary">Helm values</span>
                 <span className="tabular-nums text-theme-text-tertiary">
@@ -487,11 +501,13 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   <span className="text-[10px] uppercase tracking-wider text-theme-text-tertiary">parameters</span>
                 )}
               </button>
-              {helmValuesOpen && helmValuesContent && (
+              {/* The values viewer is a full code pane; keep it out of the tree
+                  while closed rather than paying for it on every detail open. */}
+              <Collapse open={helmValuesShown} unmountOnExit id={helmValuesDisclosure.panelId}>
                 <div className="border-t border-theme-border bg-theme-surface px-4 py-3">
                   {helmValuesContent}
                 </div>
-              )}
+              </Collapse>
             </div>
           )}
         </>

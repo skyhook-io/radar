@@ -13,7 +13,7 @@ import { useDock } from '../dock'
 import { AlertBanner, EmptyState, PaneLoader, FreshnessControl } from '@skyhook-io/k8s-ui'
 import { useConnection } from '../../context/ConnectionContext'
 import { Tooltip } from '../ui/Tooltip'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, type VolumeUnit, isExternalKind } from './trafficFilters'
 
 // Addon types for filtering
 export type AddonMode = 'show' | 'group' | 'hide'
@@ -271,8 +271,12 @@ function isSystemEndpoint(name: string, namespace: string | undefined, kind: str
     return true
   }
 
-  // Cilium reserved identities (show up as External kind with reserved names)
-  if (kind === 'External' && CILIUM_RESERVED_IDENTITIES.has(name)) {
+  // Cilium reserved identities: nodes and the host network arrive as Host;
+  // health, init and unmanaged endpoints carry no usable identity.
+  if (kind === 'Host') {
+    return true
+  }
+  if ((kind === 'External' || kind === 'Unknown') && CILIUM_RESERVED_IDENTITIES.has(name)) {
     return true
   }
 
@@ -330,10 +334,7 @@ function isSystemEndpoint(name: string, namespace: string | undefined, kind: str
   return false
 }
 
-// Helper to check if endpoint is external (case-insensitive)
-function isExternal(kind: string): boolean {
-  return kind.toLowerCase() === 'external'
-}
+const isExternal = isExternalKind
 
 interface TrafficViewProps {
   namespaces: string[]
@@ -988,14 +989,14 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
 
     flows.forEach(flow => {
       // Count source nodes
-      if (flow.source.namespace && flow.source.kind.toLowerCase() !== 'external') {
+      if (flow.source.namespace && !isExternalKind(flow.source.kind)) {
         if (!nsCounts.has(flow.source.namespace)) {
           nsCounts.set(flow.source.namespace, new Set())
         }
         nsCounts.get(flow.source.namespace)!.add(flow.source.name)
       }
       // Count destination nodes
-      if (flow.destination.namespace && flow.destination.kind.toLowerCase() !== 'external') {
+      if (flow.destination.namespace && !isExternalKind(flow.destination.kind)) {
         if (!nsCounts.has(flow.destination.namespace)) {
           nsCounts.set(flow.destination.namespace, new Set())
         }

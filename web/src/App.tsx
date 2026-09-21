@@ -7,7 +7,7 @@ import { useNavigate, useLocation, useSearchParams, useNavigationType, Navigatio
 import { HomeView } from './components/home/HomeView'
 import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
-import { useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
+import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
 import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, assetUrl } from '@skyhook-io/k8s-ui'
 import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
@@ -30,18 +30,20 @@ import { ApplicationsView } from './components/applications/ApplicationsView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { PortForwardProvider, PortForwardIndicator, PortForwardPanel } from './components/portforward/PortForwardManager'
 import { DockProvider, BottomDock, useDock, useDockReservedHeight, useOpenLocalTerminal } from './components/dock'
-import { DURATION_DOCK } from '@skyhook-io/k8s-ui/utils/animation'
+import { DURATION_DOCK, overlayExitMs } from '@skyhook-io/k8s-ui/utils/animation'
 import { ContextSwitcher } from './components/ContextSwitcher'
 import { NamespaceSwitcher, type NamespaceSwitcherHandle } from './components/NamespaceSwitcher'
 import { CloudFunnelButton } from './components/CloudFunnelButton'
 import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
+import { navigateFromPrimaryRail } from './components/nav/navigation'
 import { useNavRailPinned } from './hooks/useNavRailPinned'
 import { useMediaQuery } from './hooks/useMediaQuery'
 import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
 import { ConnectionProvider, useConnection } from './context/ConnectionContext'
 import { ConnectionErrorView } from './components/ConnectionErrorView'
+import { SyncProgressPanel } from './components/SyncProgressPanel'
 import { CapabilitiesProvider, useCapabilitiesContext } from './contexts/CapabilitiesContext'
 import { UserMenu } from './components/UserMenu'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
@@ -52,6 +54,7 @@ import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
 import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit } from './api/client'
 import { buildAuditSeverityMap } from './utils/auditBadges'
+import { isInNamespaceScope, scopeNodesToNamespaces } from './utils/topology-namespace'
 import { routePath, apiUrl, getAuthHeaders, getCredentialsMode, stripBasename } from './api/config'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts, useSuppressBaseShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
@@ -119,7 +122,7 @@ const FLEET_MODE_KINDS = new Set<NodeKind>([
 
 // Convert API resource name back to topology node ID prefix
 // Extended MainView type that includes traffic and cost
-type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications'
+type ExtendedMainView = MainView | 'traffic' | 'cost' | 'capacity' | 'workload' | 'checks' | 'gitops' | 'compare' | 'helmCompare' | 'issues' | 'applications' | 'investigations'
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
@@ -139,6 +142,7 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'applications') return 'applications'
   if (path === 'compare') return 'compare'
   if (path === 'issues') return 'issues'
+  if (path === 'investigations') return 'investigations'
   return 'home'
 }
 
@@ -322,7 +326,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // The AI panel is an absolute slot in the body frame (the column under the header):
   // it reserves a right gutter on the CONTENT only, so the navbar + nav rail stay
   // static. contentGutter is the docked panel width (0 when closed/overlay/maximized).
-  const { open: diagnoseOpen, contentGutter } = useDiagnoseLayout()
+  const {
+    open: diagnoseOpen,
+    dismissForNavigation: dismissDiagnoseForNavigation,
+    contentGutter,
+    maximized: diagnoseMaximized,
+  } = useDiagnoseLayout()
   // Hand off to a host-owned URL. The host's `onHostNavigate` (Radar Cloud's
   // cross-tree swap) navigates same-document so the chrome morphs instead of
   // cold-booting; without it we fall back to a hard `window.location` nav.
@@ -467,11 +476,18 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
     const path = view === 'home' ? '/' : `/${view}`
 
-    // Start fresh — keep only cross-view params (namespaces), discard all view-specific ones
+    // Start fresh — keep only cross-view params, discard view-specific ones.
+    // React Router owns navigation state. In embedded MemoryRouter mode the
+    // browser URL intentionally does not change, so window.location is stale.
     const newParams = new URLSearchParams()
-    const globalNamespaces = searchParams.get('namespaces')
+    const currentParams = new URLSearchParams(location.search)
+    const globalNamespaces = currentParams.get('namespaces')
     if (globalNamespaces) {
       newParams.set('namespaces', globalNamespaces)
+    }
+    const diagnoseRun = currentParams.get('ai-run')
+    if (diagnoseRun) {
+      newParams.set('ai-run', diagnoseRun)
     }
 
     // Add any new params
@@ -482,7 +498,18 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     }
 
     navigate({ pathname: path, search: newParams.toString() })
-  }, [navigate, searchParams, takeover, goHost])
+  }, [location.search, navigate, takeover, goHost])
+
+  // The standalone rail expresses intent to leave the full-width investigation
+  // workspace. Close it before routing so the destination is immediately visible;
+  // docked investigations stay open across views as a persistent side panel.
+  const handlePrimaryNavigate = useCallback((view: ExtendedMainView) => {
+    navigateFromPrimaryRail(
+      diagnoseOpen && diagnoseMaximized,
+      dismissDiagnoseForNavigation,
+      () => setMainView(view),
+    )
+  }, [diagnoseOpen, diagnoseMaximized, dismissDiagnoseForNavigation, setMainView])
 
   // Cloud (embedded) takes over the "fleet-shaped" per-cluster views with its
   // own fleet pages scoped to this cluster. In-app navigation hands off in
@@ -651,9 +678,11 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Animation hooks for smooth mount/unmount transitions
   const resourceDrawer = useAnimatedUnmount(!!routeSelectedResource, 300)
   const helmDrawer = useAnimatedUnmount(!!(mainView === 'helm' && selectedHelmRelease), 300)
-  const helpOverlay = useAnimatedUnmount(showHelp, 300)
-  const commandPaletteAnim = useAnimatedUnmount(showCommandPalette, 300)
-  const diagnosticsOverlay = useAnimatedUnmount(showDiagnostics, 300)
+  // Dialog-kind overlays wait their exit duration (shorter than the entrance);
+  // drawers keep the symmetric slide.
+  const helpOverlay = useAnimatedUnmount(showHelp, overlayExitMs('dialog'))
+  const commandPaletteAnim = useAnimatedUnmount(showCommandPalette, overlayExitMs('dialog'))
+  const diagnosticsOverlay = useAnimatedUnmount(showDiagnostics, overlayExitMs('dialog'))
 
   // Hold last valid values so drawers can animate out before data disappears
   const lastResourceRef = useRef(routeSelectedResource)
@@ -704,7 +733,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // duplicated verbatim at each render site. Encodes the opened resource in the
   // URL (?resource=ns/name) — the same deep-link shape the resources view
   // round-trips — so refresh/share keeps the drawer open instead of dropping it.
-  const navigateToResourceList = useCallback((resource: SelectedResource) => {
+  const navigateToResourceList = useCallback((resource: SelectedResource, investigationRunID?: string | null) => {
     const pluralKind = kindToPluralWithGroup(resource.kind, resource.group ?? '')
     setSelectedResource({ ...resource, kind: pluralKind })
     const newParams = new URLSearchParams(searchParams)
@@ -722,10 +751,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     } else {
       newParams.delete('apiGroup')
     }
+    if (investigationRunID === null) newParams.delete('ai-run')
+    else if (investigationRunID) newParams.set('ai-run', investigationRunID)
     navigate({ pathname: `/resources/${pluralKind}`, search: newParams.toString() })
   }, [searchParams, navigate])
 
-  const navigateToHelmRelease = useCallback((namespace: string, name: string, storageNamespace?: string) => {
+  const navigateToHelmRelease = useCallback((namespace: string, name: string, storageNamespace?: string, investigationRunID?: string | null) => {
     const newParams = new URLSearchParams()
     const globalNamespaces = searchParams.get('namespaces')
     if (globalNamespaces) {
@@ -735,6 +766,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     if (storageNamespace) {
       newParams.set('releaseStorage', storageNamespace)
     }
+    if (investigationRunID) newParams.set('ai-run', investigationRunID)
     setSelectedHelmRelease({ namespace, name, storageNamespace })
     if (mainView === 'helm') {
       setSearchParams(newParams, { replace: true })
@@ -746,9 +778,9 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // From the Issues queue: special controller/manager subjects route to their
   // rich detail pages, not the generic resource drawer that's a dead-end for
   // them. Member resources (Pods, Services, …) fall through to resources.
-  const navigateFromIssue = useCallback((resource: SelectedResource) => {
+  const navigateFromIssue = useCallback((resource: SelectedResource, investigationRunID?: string | null) => {
     if (resource.kind === 'HelmRelease' && resource.group === 'helm.sh' && resource.namespace) {
-      navigateToHelmRelease(resource.namespace, resource.name)
+      navigateToHelmRelease(resource.namespace, resource.name, undefined, investigationRunID)
       return
     }
     const gitOpsPath = gitOpsRouteForResource({
@@ -757,10 +789,12 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       metadata: { namespace: resource.namespace ?? '', name: resource.name },
     })
     if (gitOpsPath) {
-      navigate(gitOpsPath)
+      const destination = new URL(gitOpsPath, window.location.origin)
+      if (investigationRunID) destination.searchParams.set('ai-run', investigationRunID)
+      navigate(`${destination.pathname}${destination.search}${destination.hash}`)
       return
     }
-    navigateToResourceList(resource)
+    navigateToResourceList(resource, investigationRunID)
   }, [navigate, navigateToHelmRelease, navigateToResourceList])
 
   // Collapse the over-list fullscreen back to the drawer = drop ?full=1 (and the
@@ -816,7 +850,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     gitops: 'g o', checks: 'g u', cost: 'g c', capacity: 'g p',
     // Non-rail views (reachable via deep links / actions, not the rail) get no
     // dedicated mnemonic — listed for exhaustiveness so the type stays total.
-    workload: '', compare: '', helmCompare: '',
+    workload: '', compare: '', helmCompare: '', investigations: '',
   }
   const views = Object.keys(VIEW_SHORTCUT_KEYS).filter(
     (v): v is ExtendedMainView => VIEW_SHORTCUT_KEYS[v as ExtendedMainView] !== '',
@@ -959,6 +993,15 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // a drawer only ever sits over a real content surface.
   const contentReady = !isSwitching && !authMePending &&
     !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected'
+
+  // Progressive shell during the initial informer sync: once the server
+  // publishes per-kind sync progress, render the app instead of the splash.
+  // Resource views serve kinds as they become ready; everything else shows
+  // the sync progress panel until 'connected'.
+  const shellDuringSync = !isSwitching && !authMePending &&
+    !(authMe?.authEnabled && !authMe?.username) &&
+    connection.state === 'connecting' && !!connection.syncStatus?.kinds?.length
+  const viewsSyncGated = shellDuringSync && mainView !== 'resources'
 
   const { clusterLoadState, showHomeClusterLoadFallback, clusterLoadInitial } = useClusterLoadState({
     namespaces,
@@ -1133,9 +1176,26 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       setSelectedResource(null)
       setSelectedHelmRelease(null)
 
-      // Reset URL to current view with no resource-specific params.
-      // Old cluster's selected pod/resource/kind don't exist on the new cluster.
-      navigate({ pathname: location.pathname, search: '' }, { replace: true })
+      // Reset resource-specific params while retaining the durable investigation
+      // focus. Diagnose resolves runs by id and owns whether the focused run is
+      // still readable after the context switch.
+      if (isInvestigationWorkspacePath(location.pathname)) {
+        navigate(
+          {
+            pathname: location.pathname,
+            search: investigationWorkspaceSearch(location.search),
+          },
+          { replace: true, state: location.state },
+        )
+      } else {
+        const nextParams = new URLSearchParams()
+        const diagnoseRun = new URLSearchParams(location.search).get('ai-run')
+        if (diagnoseRun) nextParams.set('ai-run', diagnoseRun)
+        navigate(
+          { pathname: location.pathname, search: nextParams.toString() },
+          { replace: true, state: location.state },
+        )
+      }
 
       // Auto-unpause so the new cluster's topology loads immediately
       setTopologyPaused(false)
@@ -1196,16 +1256,22 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const clusterConnectionState = connection.state
   const clusterConnected = clusterConnectionState === 'connected'
   const liveUpdatesDisconnected = clusterConnected && !eventStreamConnected && !eventStreamConnecting
+  // During the progressive shell, the header label carries the global sync
+  // progress — the one place that explains why some views are open and
+  // others still loading.
+  const syncProgressLabel = connection.syncStatus
+    ? `Loading cluster data — ${connection.syncStatus.criticalSynced + connection.syncStatus.deferredSynced} of ${connection.syncStatus.criticalTotal + connection.syncStatus.deferredTotal} ready`
+    : 'Connecting'
   const headerConnectionLabel =
     clusterConnectionState === 'disconnected' ? 'Disconnected' :
-    clusterConnectionState === 'connecting' ? 'Connecting' :
+    clusterConnectionState === 'connecting' ? syncProgressLabel :
     liveUpdatesDisconnected ? 'Live updates disconnected' :
     clusterLoadState.loading ? `Connected — ${clusterLoadState.message}` :
     crdDiscoveryStatus === 'discovering' ? 'Connected — discovering Custom Resources...' :
     'Connected'
   const headerConnectionDisplayLabel =
     clusterConnectionState === 'disconnected' ? 'Disconnected' :
-    clusterConnectionState === 'connecting' ? 'Connecting' :
+    clusterConnectionState === 'connecting' ? syncProgressLabel :
     liveUpdatesDisconnected ? 'Live updates disconnected' :
     showClusterWarmupLabel ? clusterLoadState.message :
     crdDiscoveryStatus === 'discovering' ? 'Discovering Custom Resources…' :
@@ -1555,8 +1621,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     // Filter by namespace (client-side) and by visible kinds
     const nsSet = namespaces.length > 0 ? new Set(namespaces) : null
     const filteredNodes = displayedTopology.nodes.filter(node =>
-      effectiveKinds.has(node.kind) &&
-      (!nsSet || nsSet.has(node.data.namespace as string) || !(node.data.namespace as string))
+      effectiveKinds.has(node.kind) && isInNamespaceScope(node, nsSet)
     )
     const filteredNodeIds = new Set(filteredNodes.map(n => n.id))
 
@@ -1580,6 +1645,16 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       edges: filteredEdges,
     }
   }, [displayedTopology, visibleKinds, namespaces, topologyMode])
+
+  // Namespace-scoped but NOT kind-filtered: the sidebar derives its kind list
+  // and visible/hidden footer counts from this prop, so handing it the
+  // kind-filtered graph nodes would drop every hidden kind from the list and
+  // "hidden" would always read zero. Reads displayedTopology so the counts
+  // freeze with the graph while paused.
+  const filterSidebarNodes = useMemo(() => {
+    if (!displayedTopology) return []
+    return scopeNodesToNamespaces(displayedTopology.nodes, namespaces)
+  }, [displayedTopology, namespaces])
 
   // Cluster Audit findings, joined onto topology nodes by the audit key the
   // backend stamps on each node (data.auditKey). Only badge-worthy findings
@@ -1656,7 +1731,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {showNavRail && (
         <PrimaryNavRail
           activeView={navActiveView}
-          onNavigate={setMainView}
+          onNavigate={handlePrimaryNavigate}
           pinned={navRailEffectivePinned}
           onTogglePinned={toggleNavRailPinned}
           showPinToggle={!railForcedSlim}
@@ -1912,7 +1987,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {/* Connecting view — shown during initial connection or retry.
           Icon is pane-anchored so its screen position matches the
           host hub splash across cross-document transitions. */}
-      {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connecting' && (
+      {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connecting' && !shellDuringSync && (
         <PaneLoader
           label="Connecting to cluster"
           className="flex-1 min-h-0 bg-theme-base"
@@ -1973,18 +2048,28 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {/* inert while a fullscreen detail overlay covers the views — keeps the
           retained background list out of the focus order + a11y tree (the visual
           cover already blocks pointer events). */}
-      {contentReady && <div className="flex-1 flex overflow-hidden" inert={expandedView}>
+      {(contentReady || shellDuringSync) && <div className="flex-1 flex overflow-hidden" inert={expandedView}>
         {/* Search included, not just the path: selection inside a view rides in
             the query (?resource=, ?release=), so a path-only key would still
             strand a crash on the view that produced it. */}
         <ErrorBoundary resetKey={location.pathname + location.search}>
+        {/* Initial sync in progress: views that need the full cluster dataset
+            show per-kind progress instead; resource views work as kinds sync. */}
+        {viewsSyncGated && connection.syncStatus && (
+          <SyncProgressPanel
+            syncStatus={connection.syncStatus}
+            onNavigateToKind={(key) => navigate({ pathname: `/resources/${key}` })}
+          />
+        )}
         {/* Home dashboard */}
-        {mainView === 'home' && (
+        {!viewsSyncGated && mainView === 'home' && (
           <HomeView
             namespaces={namespaces}
             topology={topology}
             fallbackClusterLoadState={showHomeClusterLoadFallback ? clusterLoadState : undefined}
             onNavigateToView={setMainView}
+            onNavigateToHelmRelease={navCustomization.embedded ? undefined : navigateToHelmRelease}
+            onNavigateToManagerPath={navCustomization.embedded || takeover.gitops ? undefined : (path) => navigate(path)}
             // Upgrade impact lives under /checks, which a Cloud host takes
             // over wholesale — its fleet pages have no upgrade sub-route, so
             // the version line stays plain text there.
@@ -2036,7 +2121,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         )}
 
         {/* Topology view */}
-        {mainView === 'topology' && (
+        {!viewsSyncGated && mainView === 'topology' && (
           <>
             {topology?.requiresNamespaceFilter && namespaces.length === 0 ? (
               /* Large cluster: prompt user to select a namespace */
@@ -2071,14 +2156,14 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               <>
                 {/* Filter sidebar */}
                 <TopologyFilterSidebar
-                  nodes={topology?.nodes || []}
+                  nodes={filterSidebarNodes}
                   visibleKinds={visibleKinds}
                   onToggleKind={handleToggleKind}
                   onShowAll={handleShowAllKinds}
                   onHideAll={handleHideAllKinds}
                   collapsed={filterSidebarCollapsed}
                   onToggleCollapse={() => setFilterSidebarCollapsed(prev => !prev)}
-                  hiddenKinds={topology?.hiddenKinds}
+                  hiddenKinds={displayedTopology?.hiddenKinds}
                   onEnableHiddenKind={(kind) => {
                     setVisibleKinds(prev => new Set(prev).add(kind as NodeKind))
                     console.log(`[topology] User requested to show hidden kind: ${kind}`)
@@ -2164,7 +2249,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         )}
 
         {/* Timeline view */}
-        {mainView === 'timeline' && (
+        {!viewsSyncGated && mainView === 'timeline' && (
           <TimelineView
             namespaces={namespaces}
             onResourceClick={(resource) => {
@@ -2182,7 +2267,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           />
         )}
 
-        {mainView === 'helm' && (
+        {!viewsSyncGated && mainView === 'helm' && (
           <HelmView
             namespaces={namespaces}
             selectedRelease={selectedHelmRelease}
@@ -2190,13 +2275,13 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           />
         )}
 
-        {mainView === 'helmCompare' && (
+        {!viewsSyncGated && mainView === 'helmCompare' && (
           <HelmCompareRoute />
         )}
 
         {/* GitOps view (inline only when the host hasn't taken it over — see
             the takeover splash below). */}
-        {mainView === 'gitops' && !isViewTakenOver('gitops') && (
+        {!viewsSyncGated && mainView === 'gitops' && !isViewTakenOver('gitops') && (
           <GitOpsView
             namespaces={namespaces}
             onOpenResource={(resource) => {
@@ -2206,12 +2291,14 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
               navigateToResource(resource)
             }}
             onClearNamespaces={clearAllNamespaces}
-            onOpenSettings={() => openSettings()}
+            // Every GitOps "open Settings" ask is about the Argo CD connection
+            // (diff CTA, per-resource health notice), so land on that section.
+            onOpenSettings={() => openSettings('argocd')}
           />
         )}
 
         {/* Applications view — deployable software grouped by app/release evidence */}
-        {mainView === 'applications' && (
+        {!viewsSyncGated && mainView === 'applications' && (
           <ApplicationsView
             namespaces={namespaces}
             onOpenResource={(resource) => {
@@ -2232,16 +2319,16 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         )}
 
         {/* Traffic view */}
-        {mainView === 'traffic' && (
+        {!viewsSyncGated && mainView === 'traffic' && (
           <TrafficView namespaces={namespaces} />
         )}
 
         {/* Cost detail view */}
-        {mainView === 'cost' && (
+        {!viewsSyncGated && mainView === 'cost' && (
           <CostView namespaces={namespaces} onBack={() => setMainView('home')} onOpenResource={navigateToResource} />
         )}
 
-        {mainView === 'capacity' && (
+        {!viewsSyncGated && mainView === 'capacity' && (
           <CapacityView onOpenResource={navigateToResource} />
         )}
 
@@ -2259,7 +2346,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
         {/* Checks detail view. Cloud can take over fleet best practices while
             the target-specific upgrade route continues to render locally. */}
-        {mainView === 'checks' && (!isViewTakenOver('checks') || upgradeReadinessRoute) && (
+        {!viewsSyncGated && mainView === 'checks' && (!isViewTakenOver('checks') || upgradeReadinessRoute) && (
           <AuditView
             namespaces={namespaces}
             onNavigateToResource={navigateToResourceList}
@@ -2271,7 +2358,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             Hub fleet uses; a GitOps reconciler subject routes to its detail page,
             other resources open the standard resource view. Inline only when the
             host hasn't taken it over. */}
-        {mainView === 'issues' && !isViewTakenOver('issues') && (
+        {!viewsSyncGated && mainView === 'issues' && !isViewTakenOver('issues') && (
           <IssuesPane
             namespaces={namespaces}
             onNavigateToResource={navigateFromIssue}
@@ -2281,7 +2368,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         {/* Workload full view — the standalone fullscreen route for non-list
             surfaces and deep links. Expand-from-drawer is the ?full=1 overlay on
             /resources instead, so it never routes here. */}
-        {mainView === 'workload' && (
+        {!viewsSyncGated && mainView === 'workload' && (
           <WorkloadViewRoute
             onNavigateToResource={(resource) => {
               navigate(relatedResourcePath(resource))
@@ -2290,7 +2377,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         )}
 
         {/* Compare two resources of the same kind side-by-side */}
-        {mainView === 'compare' && <CompareViewRoute />}
+        {!viewsSyncGated && mainView === 'compare' && <CompareViewRoute />}
 
         </ErrorBoundary>
       </div>}
@@ -2299,7 +2386,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {/* Resource detail drawer — stays mounted, expands to full-screen WorkloadView.
           Gated on contentReady so it never renders over the connecting/switching
           splash (which would push the centered logo off-center). */}
-      {contentReady && resourceDrawer.shouldRender && drawerResource && (
+      {(contentReady || shellDuringSync) && resourceDrawer.shouldRender && drawerResource && (
         <ResourceDetailDrawer
           resource={drawerResource}
           initialTab={drawerInitialTab}
@@ -2372,7 +2459,51 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           below the header and right of the nav rail, sharing the frame with the
           drawers above. Docked = right slot (pushes content via contentGutter);
           maximized = fills the frame. */}
-      {diagnoseOpen && <DiagnoseSurface topInset={chromeless ? 0 : APP_HEADER_HEIGHT} />}
+      {diagnoseOpen && (
+        <DiagnoseSurface
+          topInset={chromeless ? 0 : APP_HEADER_HEIGHT}
+          onBrowseIssues={() => setMainView('issues')}
+          onOpenResource={(ref, investigationRunID) => {
+            const resource: SelectedResource = {
+              kind: ref.kind,
+              namespace: ref.namespace ?? '',
+              name: ref.name,
+              group: ref.group,
+            }
+            const path = relatedResourcePath(resource)
+            if (path.startsWith('/workload/')) {
+              const destination = new URL(path, window.location.origin)
+              if (investigationRunID) destination.searchParams.set('ai-run', investigationRunID)
+              navigate(`${destination.pathname}${destination.search}${destination.hash}`)
+              return
+            }
+            navigateFromIssue(resource, investigationRunID)
+          }}
+          onOpenTimeline={({ namespace, name }) => {
+            // Scope state and URL move together, as the Timeline's own
+            // namespace prompt does: the URL-write effect would otherwise
+            // restore the previous scope over the destination's `namespaces`
+            // while the URL-read effect applies it, and the two would alternate.
+            const params = new URLSearchParams({ q: name })
+            if (namespace) {
+              params.set('namespaces', namespace)
+              setNamespaces([namespace])
+              setActiveNamespace.mutate({ namespaces: [namespace] })
+            } else {
+              // A cluster-scoped subject changes nothing about scope, so the
+              // destination keeps the current one. That means a namespace
+              // filter can hide the very change that was clicked, because the
+              // Timeline drops events whose namespace is outside it. Widening
+              // instead has to move scope, URL and the server pick together —
+              // three coupled effects with their own ordering rules — so it is
+              // a change to make against that machinery, not here.
+              const globalNamespaces = searchParams.get('namespaces')
+              if (globalNamespaces) params.set('namespaces', globalNamespaces)
+            }
+            navigate({ pathname: '/timeline', search: params.toString() })
+          }}
+        />
+      )}
 
       {/* Port Forward floating panel (indicator lives in header) */}
       <PortForwardPanel />
@@ -2443,6 +2574,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
         open={showSettings}
         initialSection={settingsSection}
         onClose={() => setShowSettings(false)}
+        onNavigateToResource={navigateToResourceList}
       />
 
       {/* Debug overlay — dev mode, standalone only. Embedded hosts (Radar Hub)

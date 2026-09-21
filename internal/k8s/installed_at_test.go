@@ -41,8 +41,7 @@ func TestInstalledAtZeroWhenUnknown(t *testing.T) {
 		{"no downward-API name", kc, "radar", ""},
 		{"deployment absent", kc, "radar", "radar"},
 		{"nil client", nil, "radar", "radar"},
-		// GetClient returns a concrete *Clientset; a nil one in an interface is
-		// non-nil at the interface level and panics on first use.
+		// A typed nil in an interface is non-nil and panics on first use without the guard.
 		{"typed-nil client", (*kubernetes.Clientset)(nil), "radar", "radar"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

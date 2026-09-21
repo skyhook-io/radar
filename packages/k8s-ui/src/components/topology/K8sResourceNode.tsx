@@ -16,6 +16,7 @@ import { ownershipOf } from '../../utils/topology-neighborhood'
 import { midTruncate } from '../../utils/format'
 import { getTopologyIcon } from '../../utils/resource-icons'
 import { Tooltip } from '../ui/Tooltip'
+import { Badge } from '../ui/Badge'
 import { AuditBadgeTooltip, type AuditBadgeMessage } from '../audit/AuditBadgeTooltip'
 import { SEVERITY_TEXT_CLASS } from '../checks/severity'
 import argoCdLogo from '../../assets/gitops/argocd.png'
@@ -129,10 +130,10 @@ function getIssueTooltip(issue: string | undefined): React.ReactNode {
       action: "Check the webhook policy that denied the request.",
     },
     WebhookUnavailable: {
-      title: "Admission Webhook Unavailable",
+      title: "Admission Webhook Call Failed",
       description:
-        "Pod creation could not reach a required admission webhook backend.",
-      action: "Restore the webhook Service and its ready endpoints.",
+        "Pod creation was blocked because an admission webhook call failed.",
+      action: "Check the reported error, webhook connectivity, TLS, and backend health.",
     },
     Evicted: {
       title: "Pod Evicted",
@@ -164,6 +165,36 @@ function getIssueTooltip(issue: string | undefined): React.ReactNode {
       <div className="text-blue-400 text-[10px] mt-1.5 border-t border-theme-border pt-1.5">
         💡 {details.action}
       </div>
+    </div>
+  );
+}
+
+// Full port list for the Service subtitle's hover affordance — the subtitle
+// itself only ever shows the first port + a count, so this is the only place
+// a multi-port Service's other ports are visible without opening the detail
+// page. Formatting (hide targetPort when it matches port) mirrors
+// ServicePortCards in ServiceRenderer.tsx so a Service's ports read the same
+// whether glanced at in the graph or opened in the full resource view. Exported
+// because the GitOps resource tree's Service node summarises ports the same way
+// and needs the same hover to reach the ones the summary drops.
+export function servicePortsTooltip(ports: ServicePortEntry[]): React.ReactNode | null {
+  if (ports.length < 2) return null;
+  return (
+    <div className="max-w-xs space-y-0.5">
+      {ports.map((p, i) => {
+        const target =
+          p.targetPort != null && p.targetPort !== String(p.port)
+            ? ` → ${p.targetPort}`
+            : "";
+        const proto = p.appProtocol || p.protocol;
+        return (
+          <div key={i} className="text-[11px]">
+            {p.name && <span className="text-theme-text-tertiary">{p.name} </span>}
+            <span className="font-medium">{p.port}{target}</span>
+            {proto && <span className="text-theme-text-tertiary"> ({proto})</span>}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -322,6 +353,16 @@ const SUMMARY_POD_KINDS = new Set<NodeKind>([
   "Service",
 ]);
 
+// Shape of one entry in a Service node's nodeData.ports (pkg/topology/builder.go's
+// serviceTopologyPorts). name/appProtocol are omitted server-side when unset.
+export interface ServicePortEntry {
+  name?: string;
+  port: number;
+  targetPort?: string;
+  protocol?: string;
+  appProtocol?: string;
+}
+
 export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string {
   if (nodeData.deploymentMembership === 'source-only') {
     return `Declared by ${nodeData.deploymentSourceLabel ?? 'deployment source'}`
@@ -369,8 +410,10 @@ export function baseSubtitle(kind: NodeKind, nodeData: Record<string, unknown>):
       return (nodeData.phase as string) || "Unknown";
     case "Service": {
       const svcType = (nodeData.type as string) || "ClusterIP";
-      const port = nodeData.port;
-      return port ? `${svcType} :${port}` : svcType;
+      const ports = (nodeData.ports as ServicePortEntry[] | undefined) || [];
+      if (ports.length === 0) return svcType;
+      const more = ports.length > 1 ? ` +${ports.length - 1} more` : "";
+      return `${svcType} :${ports[0].port}${more}`;
     }
     case "CalicoNetworkPolicy":
     case "CalicoGlobalNetworkPolicy":
@@ -513,6 +556,9 @@ export const K8sResourceNode = memo(function K8sResourceNode({
   const { ownerColorIndex } = ownershipOf(nodeData)
   const hue = ownerColorIndex !== null ? workloadHue(ownerColorIndex) : undefined
   const subtitle = getSubtitle(kind, nodeData)
+  const portsTooltip = kind === 'Service'
+    ? servicePortsTooltip((nodeData.ports as ServicePortEntry[] | undefined) || [])
+    : null
   const isInternet = kind === 'Internet'
   const isPodGroup = kind === 'PodGroup'
   const isSmallNode = kind === 'ConfigMap' || kind === 'Secret' || kind === 'ServiceAccount' || kind === 'SealedSecret' || kind === 'ServiceMonitor' || kind === 'PodMonitor' || kind === 'HorizontalPodAutoscaler'
@@ -523,6 +569,11 @@ export const K8sResourceNode = memo(function K8sResourceNode({
   const policyStatus = nodeData.policyStatus as string | undefined
   const deploymentMembership = nodeData.deploymentMembership as 'runtime-only' | 'source-only' | undefined
   const deploymentSourceLabel = nodeData.deploymentSourceLabel as string | undefined
+  // Argo Rollouts canary/stable (or blue-green active/preview) traffic role,
+  // set server-side on Pod/ReplicaSet/Service nodes owned by or matched to a
+  // Rollout. canary/preview are the "being tested" side, stable/active the
+  // "serving" side — tone only tells the two apart, it carries no other meaning.
+  const trafficRole = nodeData.trafficRole as 'canary' | 'stable' | 'active' | 'preview' | undefined
 
   const Icon = getTopologyIcon(kind);
 
@@ -612,6 +663,15 @@ export const K8sResourceNode = memo(function K8sResourceNode({
                     {!isSmallNode && (deploymentMembership === 'runtime-only' ? 'Runtime only' : `${deploymentSourceLabel ?? 'Source'} only`)}
                   </span>
                 </Tooltip>
+              )}
+              {trafficRole && (
+                <Badge
+                  tone={trafficRole === 'canary' || trafficRole === 'preview' ? 'accent1' : 'accent2'}
+                  size="sm"
+                  className="!text-[9px] !px-1 !py-0.5 normal-case tracking-normal"
+                >
+                  {trafficRole[0].toUpperCase() + trafficRole.slice(1)}
+                </Badge>
               )}
               {onToggleReplicaSets && (
                 <Tooltip content={nodeData.replicaSetsCollapsed ? 'Show ReplicaSet' : 'Hide stable ReplicaSet'} position="right">
@@ -730,9 +790,17 @@ export const K8sResourceNode = memo(function K8sResourceNode({
 
           {/* Subtitle */}
           {subtitle && (
-            <div className="text-xs text-theme-text-secondary truncate mt-0.5">
-              {subtitle}
-            </div>
+            portsTooltip ? (
+              <Tooltip content={portsTooltip} position="bottom" wrapperClassName="max-w-full mt-0.5">
+                <div className="text-xs text-theme-text-secondary truncate cursor-help">
+                  {subtitle}
+                </div>
+              </Tooltip>
+            ) : (
+              <div className="text-xs text-theme-text-secondary truncate mt-0.5">
+                {subtitle}
+              </div>
+            )
           )}
         </div>
       </div>

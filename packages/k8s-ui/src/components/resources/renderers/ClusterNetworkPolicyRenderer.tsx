@@ -76,10 +76,10 @@ function AdminRuleCard({ rule, direction }: { rule: any; direction: 'from' | 'to
   const ports: any[] = rule.ports || []
 
   const actionColor = action === 'Deny'
-    ? 'bg-red-500/20 text-red-400 border-red-500/30'
+    ? 'status-red'
     : action === 'Pass'
-      ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'
-      : 'bg-green-500/20 text-green-400 border-green-500/30'
+      ? 'status-amber'
+      : 'status-green'
 
   return (
     <div className="card-inner-lg">

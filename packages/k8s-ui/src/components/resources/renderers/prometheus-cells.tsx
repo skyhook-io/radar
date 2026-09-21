@@ -19,7 +19,7 @@ export function ServiceMonitorCell({ resource, column }: { resource: any; column
     case 'status': {
       const status = getServiceMonitorStatus(resource)
       return (
-        <span className={clsx('badge', status.color)}>
+        <span className={clsx('badge truncate max-w-full', status.color)} title={status.text}>
           {status.text}
         </span>
       )
@@ -40,7 +40,7 @@ export function PrometheusRuleCell({ resource, column }: { resource: any; column
     case 'status': {
       const status = getPrometheusRuleStatus(resource)
       return (
-        <span className={clsx('badge', status.color)}>
+        <span className={clsx('badge truncate max-w-full', status.color)} title={status.text}>
           {status.text}
         </span>
       )
@@ -59,7 +59,7 @@ export function PodMonitorCell({ resource, column }: { resource: any; column: st
     case 'status': {
       const status = getPodMonitorStatus(resource)
       return (
-        <span className={clsx('badge', status.color)}>
+        <span className={clsx('badge truncate max-w-full', status.color)} title={status.text}>
           {status.text}
         </span>
       )

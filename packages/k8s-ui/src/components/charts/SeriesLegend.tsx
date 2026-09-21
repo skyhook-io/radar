@@ -1,10 +1,15 @@
-import { seriesColor } from './colors'
+import { seriesColor, seriesDisplayLabels } from './colors'
 import type { TimeSeries } from './types'
 
 // Caps visible entries to match AreaChart's SERIES_COLORS length; extras
 // collapse to "+N more".
-export function SeriesLegend({ series, color }: { series: TimeSeries[]; color: string }) {
-  const labels = series.map((s, i) => s.labels.pod || s.labels.instance || `series-${i}`)
+export function SeriesLegend({ series, color, seriesLabels }: {
+  series: TimeSeries[]
+  color: string
+  /** Display name per series, parallel to `series`; defaults to label-derived names. */
+  seriesLabels?: string[]
+}) {
+  const labels = seriesLabels ?? seriesDisplayLabels(series)
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1 px-1">
       {series.slice(0, 10).map((_, i) => {

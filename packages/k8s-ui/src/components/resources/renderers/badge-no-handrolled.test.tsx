@@ -20,18 +20,12 @@ const CHIP_RE =
 // Renderer files that still contain hand-rolled chips, pending migration.
 // Ratchet: this list only shrinks. Do not add to it.
 const BASELINE = new Set<string>([
-  'AlertRenderer.tsx', 'ArgoApplicationRenderer.tsx', 'CertificateRenderer.tsx',
-  'CertificateRequestRenderer.tsx', 'ChallengeRenderer.tsx', 'CiliumNetworkPolicyRenderer.tsx',
-  'ClusterExternalSecretRenderer.tsx', 'ClusterIssuerRenderer.tsx', 'ClusterNetworkPolicyRenderer.tsx',
-  'cnpg-cells.tsx', 'CNPGClusterRenderer.tsx', 'GatewayRenderer.tsx',
-  'GenericRenderer.tsx', 'IngressClassRenderer.tsx', 'IstioPeerAuthenticationRenderer.tsx',
-  'IstioServiceEntryRenderer.tsx', 'KarpenterNodeClaimRenderer.tsx', 'knative-cells.tsx',
-  'KnativeEventingRenderer.tsx', 'KnativeRevisionRenderer.tsx', 'kyverno-cells.tsx',
-  'KyvernoPolicyReportRenderer.tsx', 'NetworkPolicyRenderer.tsx', 'NodeRenderer.tsx',
-  'OrderRenderer.tsx', 'PodRenderer.tsx', 'RoleRenderer.tsx', 'RolloutRenderer.tsx',
-  'SealedSecretRenderer.tsx', 'SecretRenderer.tsx', 'SecretStoreRenderer.tsx',
-  'VeleroBackupRenderer.tsx', 'VeleroRestoreRenderer.tsx', 'VeleroScheduleRenderer.tsx',
-  'VPARenderer.tsx', 'VulnerabilityReportRenderer.tsx', 'WebhookConfigRenderer.tsx',
+  'ClusterExternalSecretRenderer.tsx',
+  'PodRenderer.tsx',
+  'SecretRenderer.tsx',
+  'VeleroBackupRenderer.tsx',
+  'VeleroRestoreRenderer.tsx',
+  'VeleroScheduleRenderer.tsx',
 ])
 
 const dir = fileURLToPath(new URL('.', import.meta.url))

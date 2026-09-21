@@ -8,6 +8,7 @@ import {
   formatProjectedMonthlyCost,
   formatProjectedMonthlyRate,
 } from '../cost/format'
+import { costFreshnessLabel } from '../cost/source'
 
 export function CostCard({ onNavigate }: { onNavigate?: () => void }) {
   const { data } = useOpenCostSummary()
@@ -87,13 +88,13 @@ function CostCardContent({ data, onNavigate }: { data: OpenCostSummary; onNaviga
 
         <div className="px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-between">
           <span className="text-[10px] text-theme-text-tertiary">
-            {currency} &middot; projected monthly from {data.window ?? '1h'} window
+            {currency} &middot; projected from {costFreshnessLabel(data.source, data.window, data.dataThrough)}
             {currency !== DEFAULT_COST_CURRENCY && (
               <> &middot; no conversion</>
             )}
           </span>
           <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-accent-text">
-            OpenCost
+            {data.source === 'kubecost' ? 'Kubecost' : 'OpenCost'}
           </span>
         </div>
       </div>

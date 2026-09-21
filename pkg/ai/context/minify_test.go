@@ -2,6 +2,7 @@ package context
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -12,6 +13,75 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 )
+
+func TestMinifyGeneration(t *testing.T) {
+	for _, level := range []VerbosityLevel{LevelDetail, LevelCompact} {
+		for _, generation := range []int64{0, 7} {
+			pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "test", Generation: generation}}
+			dynamic := &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": "example.io/v1", "kind": "Example",
+				"metadata": map[string]any{"name": "test"},
+			}}
+			if generation != 0 {
+				dynamic.SetGeneration(generation)
+			}
+			for _, obj := range []runtime.Object{pod, dynamic} {
+				before := obj.DeepCopyObject()
+				var result any
+				if u, ok := obj.(*unstructured.Unstructured); ok {
+					result = MinifyUnstructured(u, level)
+				} else {
+					var err error
+					result, err = Minify(obj, level)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				data, err := json.Marshal(result)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var wire struct{ Metadata map[string]any }
+				if err := json.Unmarshal(data, &wire); err != nil {
+					t.Fatal(err)
+				}
+				got, exists := wire.Metadata["generation"]
+				if (generation == 0 && exists) || (generation != 0 && got != float64(generation)) {
+					t.Errorf("%T level %d: generation = %v (present %v), source %d", obj, level, got, exists, generation)
+				}
+				if !reflect.DeepEqual(obj, before) {
+					t.Errorf("%T level %d: minification mutated source", obj, level)
+				}
+			}
+		}
+	}
+}
+
+func TestMinifyGenerationDoesNotExpandFlatRepresentations(t *testing.T) {
+	for _, obj := range []runtime.Object{
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod"}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "secret"}, Data: map[string][]byte{"password": []byte("private")}},
+	} {
+		for _, level := range []VerbosityLevel{LevelSummary, LevelDetail, LevelCompact} {
+			if _, secret := obj.(*corev1.Secret); !secret && level != LevelSummary {
+				continue
+			}
+			without, err := Minify(obj, level)
+			if err != nil {
+				t.Fatal(err)
+			}
+			withGeneration := obj.DeepCopyObject()
+			withGeneration.(metav1.Object).SetGeneration(7)
+			with, err := Minify(withGeneration, level)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(without, with) {
+				t.Errorf("%T level %d: generation changed flat representation", obj, level)
+			}
+		}
+	}
+}
 
 func TestMinifyResource_Pod(t *testing.T) {
 	pod := &corev1.Pod{
@@ -84,15 +154,14 @@ func TestMinifyResource_Pod(t *testing.T) {
 		t.Errorf("Expected namespace=default, got %v", meta["namespace"])
 	}
 
-	// Should strip uid, resourceVersion, generation
 	if _, exists := meta["uid"]; exists {
 		t.Error("uid should be stripped")
 	}
 	if _, exists := meta["resourceVersion"]; exists {
 		t.Error("resourceVersion should be stripped")
 	}
-	if _, exists := meta["generation"]; exists {
-		t.Error("generation should be stripped")
+	if meta["generation"] != float64(3) {
+		t.Errorf("generation = %v, want 3", meta["generation"])
 	}
 
 	// Should keep ingress annotation, strip random ones
@@ -599,9 +668,11 @@ func TestMinify_SecretNeverLeaksAtAnyLevel(t *testing.T) {
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{
 			"password": []byte("s3cr3t-value"),
+			"shared":   []byte("data-wins"),
 		},
 		StringData: map[string]string{
 			"api-key": "another-secret",
+			"shared":  "duplicate-key",
 		},
 	}
 
@@ -614,6 +685,9 @@ func TestMinify_SecretNeverLeaksAtAnyLevel(t *testing.T) {
 		output := string(data)
 		if contains(output, "s3cr3t-value") || contains(output, "another-secret") {
 			t.Errorf("Level %d: secret data leaked: %s", level, output)
+		}
+		if !contains(output, `"keys":["api-key","password","shared"]`) {
+			t.Errorf("Level %d: secret keys are not a stable sorted union: %s", level, output)
 		}
 	}
 }

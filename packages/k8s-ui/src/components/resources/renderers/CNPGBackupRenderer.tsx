@@ -127,11 +127,12 @@ export function CNPGBackupRenderer({ data, onNavigate }: CNPGBackupRendererProps
         </Section>
       )}
 
-      {/* Target - for PITR backups */}
+      {/* spec.target is the policy for which instance runs the backup
+          (primary / prefer-standby); it is not a restore destination. */}
       {target !== '-' && (
         <Section title="Target" defaultExpanded>
           <PropertyList>
-            <Property label="Recovery Target" value={target} />
+            <Property label="Backup Target" value={target} />
           </PropertyList>
         </Section>
       )}

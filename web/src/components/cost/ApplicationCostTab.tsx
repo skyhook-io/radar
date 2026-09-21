@@ -25,6 +25,14 @@ import {
 import { isOpenCostWorkloadKind } from './kinds'
 import { CurrentAllocationUse } from './CurrentAllocationUse'
 import { costUnavailableReasonFromError } from './errors'
+import {
+  costFreshnessLabel,
+  costIntegrationUnavailableMessage,
+  costRateLabels,
+  costSourceLabel,
+  isCostDiscoveryPending,
+} from './source'
+import { useNavCustomization } from '../../context/NavCustomization'
 
 type ApplicationCostState =
   | 'loading'
@@ -53,8 +61,9 @@ export function ApplicationCostTab({
   workloads,
   onSelectWorkloadCost,
 }: ApplicationCostTabProps) {
+  const settingsAvailable = !useNavCustomization().embedded
   const [range, setRange] = useState<CostTimeRange>('24h')
-  const [noPrometheusSince, setNoPrometheusSince] = useState<number | null>(null)
+  const [discoverySince, setDiscoverySince] = useState<number | null>(null)
   const supportedWorkloads = useMemo(() => applicationCostWorkloads(workloads), [workloads])
   const unsupportedCount = workloads.length - supportedWorkloads.length
   const queriesEnabled = supportedWorkloads.length > 0
@@ -77,10 +86,10 @@ export function ApplicationCostTab({
   })
 
   useEffect(() => {
-    if (state === 'no_prometheus') {
-      setNoPrometheusSince((prev) => prev ?? Date.now())
+    if (isCostDiscoveryPending(state)) {
+      setDiscoverySince((prev) => prev ?? Date.now())
     } else {
-      setNoPrometheusSince(null)
+      setDiscoverySince(null)
     }
   }, [state])
 
@@ -96,6 +105,7 @@ export function ApplicationCostTab({
       <ApplicationCostUnavailable
         state="no_metrics"
         message="No steady-state workloads in this app are currently cost-attributed."
+        settingsAvailable={settingsAvailable}
       />
     )
   }
@@ -115,22 +125,28 @@ export function ApplicationCostTab({
     state === 'query_error' ||
     state === 'access_denied' ||
     state === 'not_found' ||
+    state === 'no_cost_source' ||
+    state === 'source_unavailable' ||
+    state === 'authentication_error' ||
+    state === 'configuration_mismatch' ||
+    state === 'deployment_configuration_error' ||
+    state === 'history_unsupported' ||
     state === 'load_error'
   ) {
-    const discoveryAgeMs = noPrometheusSince == null ? 0 : Date.now() - noPrometheusSince
-    if (state === 'no_prometheus' && discoveryAgeMs < COST_DISCOVERY_GRACE_MS) {
+    const discoveryAgeMs = discoverySince == null ? 0 : Date.now() - discoverySince
+    if (isCostDiscoveryPending(state) && discoveryAgeMs < COST_DISCOVERY_GRACE_MS) {
       return (
         <ApplicationCostDiscovering
           isFetching={currentQuery.isFetching || trendQuery.isFetching}
           onRetry={() => {
-            setNoPrometheusSince(Date.now())
+            setDiscoverySince(Date.now())
             currentQuery.refetch()
             trendQuery.refetch()
           }}
         />
       )
     }
-    return <ApplicationCostUnavailable state={state} />
+    return <ApplicationCostUnavailable state={state} settingsAvailable={settingsAvailable} />
   }
 
   const current = currentQuery.data
@@ -151,12 +167,16 @@ export function ApplicationCostTab({
   const maxCost = Math.max(...rows.map((row) => row.current?.hourlyCost ?? 0), 0)
   const currentCurrency = current?.currency ?? trend?.currency ?? DEFAULT_COST_CURRENCY
   const trendCurrency = trend?.currency ?? current?.currency ?? DEFAULT_COST_CURRENCY
+  const source = current?.source ?? trend?.source
+  const historyUnsupported = trend?.reason === 'history_unsupported'
+  const currentWindow = current?.window
+  const rateLabels = costRateLabels(currentWindow)
 
   return (
     <div className="mx-auto w-full max-w-[1600px] space-y-4">
       {(current?.partial ||
         trend?.partial ||
-        state === 'partial_missing_history' ||
+        (state === 'partial_missing_history' && !historyUnsupported) ||
         state === 'partial_missing_current' ||
         unsupportedCount > 0) && (
         <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-sm text-theme-text-secondary">
@@ -185,61 +205,76 @@ export function ApplicationCostTab({
                 <div className="text-sm font-semibold text-theme-text-primary">
                   Application compute cost
                 </div>
-                <CostInfoTooltip content="Values are based on OpenCost CPU and memory allocation over time, grouped by the workloads in this application. OpenCost allocation uses the greater of requested or observed resources." />
+                <CostInfoTooltip content="Values are based on CPU and memory allocation grouped by the workloads in this application. The cost provider attributes the greater of requested or observed resources." />
               </div>
               <div className="text-xs text-theme-text-tertiary">
-                OpenCost CPU and memory allocation rate ({trendCurrency}/hr) for Deployment,
-                StatefulSet, and DaemonSet workloads
+                CPU and memory allocation rate ({trendCurrency}/hr) for Deployment, StatefulSet,
+                and DaemonSet workloads
               </div>
             </div>
           </div>
-          <CostTimeRangeSelector value={range} onChange={setRange} />
+          {!historyUnsupported && <CostTimeRangeSelector value={range} onChange={setRange} />}
         </div>
 
-        <div className="grid gap-4 p-4 lg:grid-cols-[240px_minmax(0,1fr)]">
-          <div className="space-y-4">
+        {historyUnsupported ? (
+          <div className="grid gap-4 p-4 sm:grid-cols-2">
             <CostMetricBlock
-              label={`Spend over ${range}`}
-              value={formatHistoricalSpend(
-                points.length,
-                trend?.windowTotalCost ?? 0,
-                trendLoading || state === 'partial_missing_history',
-                trendCurrency,
-              )}
-              subvalue={
-                state === 'partial_missing_history'
-                  ? 'Historical data incomplete'
-                  : `${included} of ${total} workloads included`
-              }
+              label={rateLabels.hourly}
+              value={totals ? formatCostPerHour(hourly, currentCurrency) : '—'}
+              subvalue={`${included} of ${total} workloads included`}
             />
             <CostMetricBlock
               label="Projected monthly"
               value={totals ? formatProjectedMonthlyCost(hourly, currentCurrency) : '—'}
-              subvalue={
-                totals
-                  ? `${formatCostPerHour(hourly, currentCurrency)} current rate`
-                  : 'Current allocation unavailable'
-              }
+              subvalue={`${rateLabels.rate} × 730 hours`}
             />
           </div>
-          <div className="min-w-0">
-            {trendLoading ? (
-              <div className="flex h-[240px] items-center justify-center rounded-md border border-dashed border-theme-border bg-theme-base/60 text-sm text-theme-text-tertiary">
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Loading historical cost…
-              </div>
-            ) : hasTrend && chartSeries.length > 0 ? (
-              <div className="min-w-0">
-                <StackedAreaChart series={chartSeries} currency={trendCurrency} />
-                <ChartLegend series={chartSeries} />
-              </div>
-            ) : (
-              <div className="flex h-[240px] items-center justify-center rounded-md border border-dashed border-theme-border bg-theme-base/60 text-sm text-theme-text-tertiary">
-                No historical workload owner cost points for this range.
-              </div>
-            )}
+        ) : (
+          <div className="grid gap-4 p-4 lg:grid-cols-[240px_minmax(0,1fr)]">
+            <div className="space-y-4">
+              <CostMetricBlock
+                label={`Spend over ${range}`}
+                value={formatHistoricalSpend(
+                  points.length,
+                  trend?.windowTotalCost ?? 0,
+                  trendLoading || state === 'partial_missing_history',
+                  trendCurrency,
+                )}
+                subvalue={
+                  state === 'partial_missing_history'
+                    ? 'Historical data incomplete'
+                    : `${included} of ${total} workloads included`
+                }
+              />
+              <CostMetricBlock
+                label="Projected monthly"
+                value={totals ? formatProjectedMonthlyCost(hourly, currentCurrency) : '—'}
+                subvalue={
+                  totals
+                    ? `${formatCostPerHour(hourly, currentCurrency)} · ${rateLabels.rate}`
+                    : 'Current allocation unavailable'
+                }
+              />
+            </div>
+            <div className="min-w-0">
+              {trendLoading ? (
+                <div className="flex h-[240px] items-center justify-center rounded-md border border-dashed border-theme-border bg-theme-base/60 text-sm text-theme-text-tertiary">
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Loading historical cost…
+                </div>
+              ) : hasTrend && chartSeries.length > 0 ? (
+                <div className="min-w-0">
+                  <StackedAreaChart series={chartSeries} currency={trendCurrency} />
+                  <ChartLegend series={chartSeries} />
+                </div>
+              ) : (
+                <div className="flex h-[240px] items-center justify-center rounded-md border border-dashed border-theme-border bg-theme-base/60 text-sm text-theme-text-tertiary">
+                  No historical workload owner cost points for this range.
+                </div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </section>
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -257,7 +292,7 @@ export function ApplicationCostTab({
           value={totals ? formatProjectedDailyRate(hourly, currentCurrency) : '—'}
           subvalue={
             totals
-              ? `${formatCostPerHour(hourly, currentCurrency)} current hourly rate`
+              ? `${formatCostPerHour(hourly, currentCurrency)} · ${rateLabels.rate}`
               : 'Current allocation unavailable'
           }
         />
@@ -274,6 +309,7 @@ export function ApplicationCostTab({
         cpuUsageAvailable={totals?.cpuUsageAvailable ?? false}
         memoryUsageAvailable={totals?.memoryUsageAvailable ?? false}
         scopeNote="Included workloads only"
+        window={source === 'kubecost' ? currentWindow : undefined}
       />
 
       <section className="rounded-lg border border-theme-border bg-theme-surface/50">
@@ -283,7 +319,7 @@ export function ApplicationCostTab({
               Workload contributors
             </div>
             <div className="text-xs text-theme-text-tertiary">
-              Projected monthly from current allocation, sorted by spend
+              Projected monthly from the {rateLabels.rate}, sorted by spend
             </div>
           </div>
           <div className="text-xs text-theme-text-tertiary">{rows.length} tracked</div>
@@ -315,13 +351,15 @@ export function ApplicationCostTab({
       </section>
 
       <div className="text-xs text-theme-text-tertiary">
-        Powered by OpenCost via Prometheus.{' '}
+        {costSourceLabel(source)} &middot; {costFreshnessLabel(source, source === 'kubecost' ? currentWindow : '1h', current?.dataThrough)}.{' '}
         {currentCurrency !== DEFAULT_COST_CURRENCY && (
           <>Labeled {currentCurrency}; no conversion. </>
         )}
-        Historical spend uses the selected range; projected monthly values multiply current hourly
-        allocation. Batch/job cost is separate; storage/PVC and network costs remain at namespace
-        and cluster level.
+        {historyUnsupported
+          ? 'Historical application charts are not available for Kubecost yet. '
+          : 'Historical spend uses the selected range. '}
+        Projected monthly values multiply the {rateLabels.rate}. Batch/job cost is separate;
+        storage/PVC and network costs remain at namespace and cluster level.
       </div>
     </div>
   )
@@ -348,14 +386,19 @@ export function getApplicationCostState(
   if (trendHasData) return 'partial_missing_current'
   const reason =
     current?.reason ??
-    trend?.reason ??
     costUnavailableReasonFromError(status.currentError) ??
+    trend?.reason ??
     costUnavailableReasonFromError(status.trendError)
   if (
     reason === 'no_prometheus' ||
+    reason === 'no_cost_source' ||
     reason === 'query_error' ||
     reason === 'access_denied' ||
-    reason === 'not_found'
+    reason === 'not_found' ||
+    reason === 'source_unavailable' ||
+    reason === 'authentication_error' ||
+    reason === 'configuration_mismatch' ||
+    reason === 'deployment_configuration_error'
   )
     return reason
   if (queryError) return 'load_error'
@@ -462,10 +505,13 @@ function applicationCostKey(ref: { kind: string; namespace: string; name: string
 }
 
 function reasonLabel(reason?: CostUnavailableReason) {
-  if (reason === 'no_prometheus') return 'Prometheus not found'
+  if (reason === 'no_prometheus') return 'Metrics backend not found'
+  if (reason === 'no_cost_source') return 'Cost source not found'
   if (reason === 'query_error') return 'Cost query failed'
   if (reason === 'access_denied') return 'No access to this workload'
   if (reason === 'not_found') return 'Workload not found'
+  if (reason === 'configuration_mismatch') return 'Kubecost settings are not valid for this cluster'
+  if (reason === 'deployment_configuration_error') return 'Radar cost deployment is misconfigured'
   return 'No workload cost metrics'
 }
 
@@ -482,11 +528,11 @@ function ApplicationCostDiscovering({
         <Loader2 className="h-8 w-8 animate-spin text-theme-text-tertiary/60" />
         <div>
           <p className="text-sm font-medium text-theme-text-primary">
-            Looking for Prometheus cost data…
+            Looking for cost data…
           </p>
           <p className="mt-1 text-xs text-theme-text-tertiary">
-            First discovery can take a few seconds while Radar checks cluster services and opens a
-            local port-forward.
+            Radar is checking OpenCost metrics in a PromQL-compatible backend and a local Kubecost
+            3 Aggregator. First discovery can take a few seconds.
           </p>
         </div>
         <button
@@ -504,23 +550,28 @@ function ApplicationCostDiscovering({
 function ApplicationCostUnavailable({
   state,
   message,
+  settingsAvailable,
 }: {
   state: CostUnavailableReason | 'load_error'
   message?: string
+  settingsAvailable: boolean
 }) {
   const text =
     message ??
+    costIntegrationUnavailableMessage(state, settingsAvailable) ??
     (state === 'no_prometheus'
-      ? 'Prometheus not found. OpenCost application cost requires Prometheus or VictoriaMetrics.'
+      ? 'No compatible metrics backend was found. OpenCost application cost requires OpenCost metrics in a PromQL-compatible backend.'
       : state === 'query_error'
-        ? 'Cost data is temporarily unavailable. Prometheus was found, but application cost queries failed.'
+        ? 'Cost data is temporarily unavailable. A metrics backend was found, but application cost queries failed.'
+        : state === 'history_unsupported'
+          ? 'Historical application cost is not available for Kubecost yet.'
         : state === 'access_denied'
           ? 'Cost data is unavailable because these workloads are not accessible with your current permissions.'
           : state === 'not_found'
             ? 'Cost data is unavailable because the referenced workloads no longer exist.'
             : state === 'load_error'
               ? 'Could not load application cost data. Check access to these workloads and try again.'
-              : 'OpenCost workload metrics were not found for this application.')
+              : 'No workload cost data was returned for this application by the active cost source.')
   return (
     <div className="flex h-full min-h-[320px] items-center justify-center">
       <div className="flex max-w-md flex-col items-center gap-3 text-center text-theme-text-secondary">

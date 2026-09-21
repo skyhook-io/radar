@@ -1,19 +1,25 @@
 import { useState, useEffect } from 'react'
+import { clsx } from 'clsx'
 import { Download, X, Copy, Check, RotateCw, ArrowDownToLine, Loader2 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 import {
   useVersionCheck,
+  useCapabilities,
   useStartDesktopUpdate,
   useDesktopUpdateStatus,
   useApplyDesktopUpdate,
 } from '../../api/client'
 import type { DesktopUpdateState } from '../../api/client'
 import { WithTooltip } from './Tooltip'
+import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
+import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 
 const DISMISSED_KEY = 'radar-update-dismissed'
 
 export function UpdateNotification() {
   const queryClient = useQueryClient()
+  const { data: capabilities } = useCapabilities()
+  const deploymentMode = capabilities ? (capabilities.deployment?.mode ?? 'local') : undefined
   const { data: versionInfo } = useVersionCheck()
   const [dismissed, setDismissed] = useState(false)
   const [copied, setCopied] = useState(false)
@@ -98,8 +104,13 @@ export function UpdateNotification() {
     })
   }
 
-  // Don't show if no update available, dismissed, or error
-  if (!versionInfo?.updateAvailable || dismissed) {
+  // Shared in-cluster viewers get a persistent Home notice instead of a
+  // floating action prompt they may not be able to act on.
+  const show = !!versionInfo?.updateAvailable && !dismissed && deploymentMode !== undefined && deploymentMode !== 'in-cluster' && deploymentMode !== 'cloud'
+  // Presence outlives `show` by the menu exit so a dismiss fades the chip out
+  // instead of snapping it away; the enter runs the same transition in reverse.
+  const { shouldRender, isOpen } = useAnimatedUnmount(show, overlayExitMs('menu'))
+  if (!shouldRender || !versionInfo) {
     return null
   }
 
@@ -107,7 +118,16 @@ export function UpdateNotification() {
   const effectiveState: DesktopUpdateState = updateStatus?.state ?? 'idle'
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 max-w-sm bg-theme-surface border border-accent/50 rounded-lg shadow-xl p-4 animate-in slide-in-from-right">
+    <div
+      inert={!show || undefined}
+      className={clsx(
+        'fixed bottom-4 right-4 z-50 max-w-sm bg-theme-surface border border-accent/50 rounded-lg shadow-xl p-4 origin-bottom-right',
+        TRANSITION_MENU,
+        isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-1 scale-[0.97]',
+        !show && 'pointer-events-none',
+      )}
+      style={overlayTransitionStyle(isOpen, 'menu')}
+    >
       <div className="flex items-start gap-3">
         <div className="flex items-center justify-center w-8 h-8 bg-accent-muted rounded-full shrink-0">
           <UpdateIcon state={effectiveState} />

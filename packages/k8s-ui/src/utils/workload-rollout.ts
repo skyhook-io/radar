@@ -1,5 +1,59 @@
 import type { WorkloadPodInfo } from '../types/core'
 
+/** Every CanaryStep variant Argo defines; raw JSON is unreadable in a step list. */
+export function canaryStepLabel(step: any): string {
+  if (!step || typeof step !== 'object') return 'Unknown step'
+
+  if (step.setWeight !== undefined) return `Set weight: ${step.setWeight}%`
+
+  if (step.pause !== undefined) {
+    return step.pause?.duration ? `Pause: ${step.pause.duration}` : 'Pause: until promoted'
+  }
+
+  if (step.analysis) {
+    const templates = (step.analysis.templates || [])
+      .map((t: any) => t.templateName || t.clusterTemplateName)
+      .filter(Boolean)
+    return templates.length > 0 ? `Analysis: ${templates.join(', ')}` : 'Analysis'
+  }
+
+  if (step.experiment) {
+    const templates = (step.experiment.templates || []).map((t: any) => t.name).filter(Boolean)
+    const duration = step.experiment.duration ? ` for ${step.experiment.duration}` : ''
+    return templates.length > 0
+      ? `Experiment: ${templates.join(', ')}${duration}`
+      : `Experiment${duration}`
+  }
+
+  if (step.setCanaryScale) {
+    const { weight, replicas, matchTrafficWeight } = step.setCanaryScale
+    if (matchTrafficWeight) return 'Set canary scale: match traffic weight'
+    if (replicas !== undefined) return `Set canary scale: ${replicas} replicas`
+    if (weight !== undefined) return `Set canary scale: ${weight}%`
+    return 'Set canary scale'
+  }
+
+  if (step.setHeaderRoute) {
+    const { name, match } = step.setHeaderRoute
+    // An empty match list is how a header route is torn down again.
+    if (!match || match.length === 0) return `Remove header route${name ? `: ${name}` : ''}`
+    const headers = match.map((m: any) => m.headerName).filter(Boolean)
+    return `Header route${name ? ` ${name}` : ''}${headers.length ? `: ${headers.join(', ')}` : ''}`
+  }
+
+  if (step.setMirrorRoute) {
+    const { name, match, percentage } = step.setMirrorRoute
+    if (!match || match.length === 0) return `Remove mirror route${name ? `: ${name}` : ''}`
+    const pct = percentage !== undefined ? ` (${percentage}%)` : ''
+    return `Mirror route${name ? ` ${name}` : ''}${pct}`
+  }
+
+  if (step.plugin) return `Plugin: ${step.plugin.name || 'unnamed'}`
+
+  const key = Object.keys(step)[0]
+  return key ? `Unrecognized step: ${key}` : 'Unknown step'
+}
+
 export type WorkloadRolloutPhase =
   | 'idle'
   | 'applying'
@@ -225,10 +279,22 @@ export function getArgoRolloutStepNumber(resource: any): number | null {
   return Math.min(Math.max(currentIndex + 1, 1), steps.length)
 }
 
+// Mirrors pkg/health/workload_rollout.go's argoStepDetail exactly (same
+// output string, same step-type coverage via canaryStepLabel) - the two are
+// checked against the same golden fixture
+// (pkg/health/testdata/workload_rollout_vectors.json), so a change to one
+// without the other silently breaks cross-language parity rather than
+// failing loudly.
 function argoDetail(resource: any, updated: number, desired: number, available: number): string {
+  const steps = resource?.spec?.strategy?.canary?.steps || []
   const stepNumber = getArgoRolloutStepNumber(resource)
-  const step = stepNumber === null ? '' : `Step ${stepNumber} · `
-  return `${step}${updated}/${desired} updated · ${available} available`
+  const step = stepNumber === null ? '' : `Step ${stepNumber}`
+  const currentStep = stepNumber === null ? undefined : steps[stepNumber - 1]
+  const label = currentStep ? ` (${canaryStepLabel(currentStep)})` : ''
+  const weight = resource?.status?.canary?.weights?.canary?.weight
+  const weightSuffix = typeof weight === 'number' ? ` · ${weight}% canary traffic` : ''
+  const prefix = stepNumber === null ? '' : `${step}${label} · `
+  return `${prefix}${updated}/${desired} updated · ${available} available${weightSuffix}`
 }
 
 function replicaDetail(updated: number, desired: number, available: number): string {

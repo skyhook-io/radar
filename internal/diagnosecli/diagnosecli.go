@@ -1,5 +1,5 @@
 // Package diagnosecli implements `radar diagnose` — a terminal client for the
-// AI-diagnosis engine of a RUNNING radar instance. It is deliberately a thin
+// AI investigation engine of a RUNNING radar instance. It is deliberately a thin
 // client over the same REST+SSE contract the web panel uses: the run it starts
 // is the same durable server-side job, so it can be watched or continued from
 // the UI (and vice versa).
@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // kindAliases maps kubectl-style short/plural names to the canonical Kind.
@@ -61,6 +63,7 @@ func normalizeKind(k string) string {
 
 type options struct {
 	namespace  string
+	group      string
 	agent      string
 	profile    string
 	server     string
@@ -76,10 +79,11 @@ func newFlagSet() (*flag.FlagSet, *options) {
 	o := &options{}
 	fs.StringVar(&o.namespace, "n", "", "Namespace of the resource")
 	fs.StringVar(&o.namespace, "namespace", "", "Namespace of the resource")
+	fs.StringVar(&o.group, "group", "", "Kubernetes API group (inferred for built-in kinds; set for CRDs or kind collisions)")
 	fs.StringVar(&o.agent, "agent", "", "Agent backend to use (claude|codex|cursor-agent; default = server's pick)")
 	fs.StringVar(&o.profile, "profile", "", "Execution profile (safeguarded = Radar safeguards; full-local = your agent setup; default = safest available)")
 	fs.StringVar(&o.server, "server", "", "Radar server URL (default: discover the running instance via ~/.radar/mcp-port)")
-	fs.BoolVar(&o.jsonOut, "json", false, "Print the final verdict as JSON on stdout (progress goes to stderr)")
+	fs.BoolVar(&o.jsonOut, "json", false, "Print the final conclusion as JSON on stdout (progress goes to stderr)")
 	fs.BoolVar(&o.open, "open", false, "Also open the investigation in the Radar UI")
 	fs.BoolVar(&o.yes, "yes", false, "Skip the first-run consent prompt")
 	fs.BoolVar(&o.standalone, "standalone", false, "Run against a temporary in-process Radar instead of a running instance (slower: connects to the cluster first)")
@@ -100,7 +104,8 @@ in the Radar UI, or continue it in your own agent afterwards.
 
 Examples:
   radar diagnose pod/checkout-6f4d -n prod
-  radar diagnose deploy/api --json > verdict.json
+  radar diagnose deploy/api --json > conclusion.json
+  radar diagnose rollout/checkout -n prod --group argoproj.io
   radar diagnose node/ip-10-0-3-36 --open
 
 Flags:
@@ -138,6 +143,7 @@ Flags:
 		}
 	}
 	kind = normalizeKind(kind)
+	o.group = targetGroup(kind, o.group)
 
 	out := newRenderer(o.jsonOut)
 
@@ -200,14 +206,14 @@ Flags:
 		// always an older Radar (or a stale ~/.radar/mcp-port pointing at one
 		// when several instances ran). Say that, not just "404".
 		if strings.Contains(err.Error(), "404") {
-			fmt.Fprintf(os.Stderr, "the Radar at %s doesn't support AI diagnosis — it's likely an older version (or a stale ~/.radar/mcp-port from another instance). Upgrade/restart it, pass --server for the right instance, or use --standalone.\n", base)
+			fmt.Fprintf(os.Stderr, "the Radar at %s doesn't support AI investigations — it's likely an older version (or a stale ~/.radar/mcp-port from another instance). Upgrade/restart it, pass --server for the right instance, or use --standalone.\n", base)
 		} else {
 			fmt.Fprintf(os.Stderr, "found Radar at %s but couldn't query it: %v\n", base, err)
 		}
 		return 1
 	}
 	if !agents.Enabled {
-		fmt.Fprintln(os.Stderr, "AI diagnosis is disabled on this Radar instance — install Claude Code, Codex, or Cursor and restart radar.")
+		fmt.Fprintln(os.Stderr, "AI investigations are disabled on this Radar instance — install Claude Code, Codex, or Cursor and restart radar.")
 		return 1
 	}
 
@@ -232,7 +238,7 @@ Flags:
 		}
 	}
 
-	run, err := startRun(base, kind, o.namespace, name, o.agent, profile)
+	run, err := startRun(base, kind, o.group, o.namespace, name, o.agent, profile)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
@@ -247,14 +253,25 @@ Flags:
 		return 1
 	}
 	if o.jsonOut {
+		radarURL := base + "/?ai-run=" + url.QueryEscape(run.ID)
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(map[string]any{
-			"run": run.ID, "kind": run.Kind, "namespace": run.Namespace, "name": run.Name,
-			"agent": run.Agent, "diagnosis": diag,
+			"run": run.ID, "kind": run.Kind, "group": run.Group, "namespace": run.Namespace, "name": run.Name,
+			"agent": run.Agent, "radar_url": radarURL, "diagnosis": diag,
 		})
 	}
 	return 0
+}
+
+// targetGroup normalizes an explicit API group and fills the canonical group
+// for built-in kinds. Unknown kinds intentionally stay group-less unless the
+// caller supplies --group; the server's discovery owns CRD resolution.
+func targetGroup(kind, explicit string) string {
+	if group := strings.ToLower(strings.TrimSpace(explicit)); group != "" {
+		return group
+	}
+	return resourceid.GroupForBuiltinKind(kind)
 }
 
 // --- server discovery -------------------------------------------------------
@@ -336,7 +353,9 @@ func consentLabel(effective string) string {
 }
 
 func standaloneEffectiveAgent(ctx context.Context, requested string) string {
-	diagnoser, err := ai.NewDetected(ctx)
+	// This path only detects/labels installed agents; it never starts an
+	// investigation turn, so it does not need Radar's private evidence registry.
+	diagnoser, err := ai.NewDetected(ctx, nil)
 	if err != nil {
 		return ""
 	}
@@ -357,12 +376,7 @@ func executionProfile(agent, requested string) (ai.ExecutionProfile, error) {
 	return profile, nil
 }
 
-// promptConsent mirrors the UI's one-time consent card. Interactive terminals
-// get a real y/N gate; non-interactive callers (CI) get the disclosure on
-// stderr and proceed — an explicit `radar diagnose` invocation in a script is
-// already an informed act, and a blocking prompt there would just break CI.
-// record persists the acknowledgment to the shared machine-scoped store.
-func promptConsent(agent string, profile ai.ExecutionProfile, surface string, record func(surface string) error) bool {
+func consentNotice(agent string, profile ai.ExecutionProfile) string {
 	agentLabel := consentLabel(agent)
 	notice := fmt.Sprintf(`This runs your own %s on your machine — no Radar cloud, no API key.
 Radar sends the resource's spec, recent events, and pod logs to it (and on to
@@ -374,16 +388,18 @@ history until cleared.
 tools and MCP servers. Radar cannot constrain that external tooling; it may
 access local files or the network and may be able to change your cluster.
 `, agentLabel)
-		if agent == "claude" {
+		if agent == "cursor-agent" {
+			notice += `Radar passes Cursor --force so headless tool calls can run. This
+auto-approves Cursor's built-in tools and every MCP server it loads, including
+your global servers. Cursor's sandbox does not reliably confine those tools to
+Radar's temporary workspace.
+`
+		} else if agent == "claude" {
 			notice += `Claude uses the permissions from your setup; Radar does not override them.
 `
 		} else {
 			notice += `Radar still enables the agent CLI's own sandbox, but that sandbox does not
 constrain external MCP servers.
-`
-		}
-		if agent == "cursor-agent" {
-			notice += `Cursor always loads your global MCP servers; Radar cannot exclude them.
 `
 		}
 	} else {
@@ -401,7 +417,16 @@ write or reach the network.
 `
 		}
 	}
-	fmt.Fprint(os.Stderr, notice)
+	return notice
+}
+
+// promptConsent mirrors the UI's one-time consent card. Interactive terminals
+// get a real y/N gate; non-interactive callers (CI) get the disclosure on
+// stderr and proceed — an explicit `radar diagnose` invocation in a script is
+// already an informed act, and a blocking prompt there would just break CI.
+// record persists the acknowledgment to the shared machine-scoped store.
+func promptConsent(agent string, profile ai.ExecutionProfile, surface string, record func(surface string) error) bool {
+	fmt.Fprint(os.Stderr, consentNotice(agent, profile))
 	// A real ioctl-backed check — os.ModeCharDevice would misread /dev/null
 	// (and daemon-inherited stdin) as an interactive terminal.
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
@@ -431,6 +456,7 @@ func recordOrReport(record func(string) error, surface string) bool {
 type runSummary struct {
 	ID        string `json:"id"`
 	Kind      string `json:"kind"`
+	Group     string `json:"group"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
 	Agent     string `json:"agent"`
@@ -451,9 +477,9 @@ type runSummary struct {
 	} `json:"health"`
 }
 
-func startRun(base, kind, namespace, name, agent string, profile ai.ExecutionProfile) (runSummary, error) {
+func startRun(base, kind, group, namespace, name, agent string, profile ai.ExecutionProfile) (runSummary, error) {
 	body, _ := json.Marshal(map[string]any{
-		"kind": kind, "namespace": namespace, "name": name, "agent": agent, "profile": profile,
+		"kind": kind, "group": group, "namespace": namespace, "name": name, "agent": agent, "profile": profile,
 	})
 	resp, err := http.Post(base+"/api/diagnose/runs", "application/json", strings.NewReader(string(body)))
 	if err != nil {
@@ -486,7 +512,7 @@ type stepInfo struct {
 	Summary string `json:"summary"`
 }
 
-// diagnosis mirrors the verdict fields the terminal renders.
+// diagnosis mirrors the conclusion fields the terminal renders.
 type diagnosis struct {
 	Healthy           bool     `json:"healthy"`
 	Inconclusive      bool     `json:"inconclusive"`
@@ -500,7 +526,7 @@ type diagnosis struct {
 }
 
 // streamRun consumes the run's SSE stream until the FIRST turn terminates.
-// Returns the raw diagnosis JSON (for --json) and whether the turn succeeded.
+// Returns the raw conclusion JSON (for --json) and whether the turn succeeded.
 func streamRun(base, id string, out *renderer) (json.RawMessage, bool) {
 	resp, err := http.Get(base + "/api/diagnose/runs/" + id + "/stream")
 	if err != nil {
@@ -553,7 +579,7 @@ func streamRun(base, id string, out *renderer) (json.RawMessage, bool) {
 		case "done":
 			var d diagnosis
 			_ = json.Unmarshal(ev.Diag, &d)
-			out.verdict(d)
+			out.conclusion(d)
 			return ev.Diag, true
 		case "error":
 			out.errorLine(ev.Error)

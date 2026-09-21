@@ -1,0 +1,93 @@
+# Two tiny CRDs for the per-resource-health scenario (see the README's
+# "Per-resource health on Argo CD 3" section). Both deliberately have NO
+# status subresource, so the `.status.conditions` written in the fixture
+# manifests is applied verbatim by Argo's kubectl apply — there is no
+# controller behind these kinds, and that is the point: a resource can sit
+# at Ready=False forever without anything reconciling it.
+#
+#   Widget  → has an Argo health check (argocd-cm customization below).
+#             Argo evaluates it Degraded and rolls the app up to Degraded.
+#   Gadget  → NO Argo health check. Argo ignores it for app health. Radar's
+#             issues engine still sees Ready=False, so this is the row that
+#             must be labelled as Radar's own finding, never as Argo's.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: widgets.radar.demo
+spec:
+  group: radar.demo
+  scope: Namespaced
+  names:
+    plural: widgets
+    singular: widget
+    kind: Widget
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: gadgets.radar.demo
+spec:
+  group: radar.demo
+  scope: Namespaced
+  names:
+    plural: gadgets
+    singular: gadget
+    kind: Gadget
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+---
+# The Argo CD health check for Widget: the same shape as Argo's built-in
+# checks for external-secrets.io kinds (Ready=False → Degraded). Merged into
+# argocd-cm by the demo script (a ConfigMap can't be partially owned by two
+# appliers, and install.yaml owns argocd-cm).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: radar-demo-argo-health-customizations
+  namespace: argocd
+data:
+  resource.customizations.health.radar.demo_Widget: |
+    hs = {}
+    if obj.status ~= nil and obj.status.conditions ~= nil then
+      for i, condition in ipairs(obj.status.conditions) do
+        if condition.type == "Ready" and condition.status == "False" then
+          hs.status = "Degraded"
+          hs.message = condition.message
+          return hs
+        end
+        if condition.type == "Ready" and condition.status == "True" then
+          hs.status = "Healthy"
+          hs.message = condition.message
+          return hs
+        end
+      end
+    end
+    hs.status = "Progressing"
+    hs.message = "Waiting for Widget"
+    return hs

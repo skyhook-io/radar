@@ -108,6 +108,47 @@ tests:
             verbs: ["get", "list", "watch"]
           any: true
 
+  - it: grants Cilium policy reads the Traffic policy panel gates on
+    set:
+      cloud:
+        enabled: true
+        token: dummy
+        url: "wss://cloud.example"
+        clusterName: test-cluster
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["cilium.io"]
+            resources: ["ciliumnetworkpolicies", "ciliumclusterwidenetworkpolicies"]
+            verbs: ["get", "list", "watch"]
+          any: true
+
+  - it: follows the Cilium collection gate
+    set:
+      cloud:
+        enabled: true
+        token: dummy
+        url: "wss://cloud.example"
+        clusterName: test-cluster
+      rbac:
+        crdGroups:
+          cilium: false
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["cilium.io"]
+            resources: ["ciliumnetworkpolicies", "ciliumclusterwidenetworkpolicies"]
+            verbs: ["get", "list", "watch"]
+          any: true
+
   - it: follows the Prometheus collection gate
     set:
       cloud:

@@ -9,6 +9,15 @@ describe('baseSubtitle', () => {
     expect(baseSubtitle('ServiceMonitor', { endpointCount: 1 })).toBe('1 scrape endpoint')
   })
 
+  it('describes a Service by its first port, capping additional ports to a count', () => {
+    expect(baseSubtitle('Service', { type: 'ClusterIP', ports: [] })).toBe('ClusterIP')
+    expect(baseSubtitle('Service', { type: 'ClusterIP', ports: [{ port: 80 }] })).toBe('ClusterIP :80')
+    expect(baseSubtitle('Service', {
+      type: 'ClusterIP',
+      ports: [{ port: 80 }, { port: 443 }, { port: 9153 }],
+    })).toBe('ClusterIP :80 +2 more')
+  })
+
   it('describes a Calico staged deletion as a removal, not as selecting everything', () => {
     // A staged deletion carries no selector, because the Calico API forbids one.
     // Falling through to the empty-selector default would label the broadest

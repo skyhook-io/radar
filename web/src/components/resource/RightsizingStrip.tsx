@@ -328,16 +328,28 @@ export function getRightsizingExplanation(row: RightsizingRow): string | undefin
     recommended_request_exceeds_limit:
       'The evidence-based request would exceed the current limit; review the limit first.',
   }
+  // A denied pod read leaves currentPodOOM unknown rather than false, so it
+  // qualifies whatever else is said instead of replacing it — including a
+  // staged reduction, which is exactly where an unchecked pod matters most.
+  const inventoryNote =
+    row.liveInventoryUnavailable && row.resource === 'memory'
+      ? "Radar could not read this workload's pods, so it could not check them for out-of-memory restarts."
+      : undefined
+  const qualified = (base: string) => (inventoryNote ? `${base} ${inventoryNote}` : base)
   if (row.reductionLimited && row.calculatedRequest && row.recommendedRequest) {
     const burstNote = row.bursty && row.peak ? ` CPU P99 reached ${row.peak.formatted}.` : ''
-    return `Demand-based target: ${row.calculatedRequest}. Radar suggests ${row.recommendedRequest} as a conservative next step; observe another full window before reducing further.${burstNote}`
+    return qualified(
+      `Demand-based target: ${row.calculatedRequest}. Radar suggests ${row.recommendedRequest} as a conservative next step; observe another full window before reducing further.${burstNote}`,
+    )
   }
   const message = row.queryError
     ? `Partial result: ${row.queryError}.`
     : messages[row.recommendationReason ?? '']
   const throttleUnavailable = row.resource === 'cpu' && !row.throttleAvailable
-  if (!message && !throttleUnavailable) return undefined
-  return message ?? 'CPU throttling metrics are unavailable; no throttling conclusion was drawn.'
+  if (!message && !throttleUnavailable) return inventoryNote
+  return qualified(
+    message ?? 'CPU throttling metrics are unavailable; no throttling conclusion was drawn.',
+  )
 }
 
 function confidenceLabel(row: RightsizingRow) {

@@ -12,14 +12,14 @@ import {
 // Provider-specific color for visual distinction
 function getProviderColor(providerKey: string): string {
   switch (providerKey) {
-    case 'aws': return 'bg-orange-500/15 text-orange-400 border-orange-500/30'
-    case 'azurekv': return 'bg-blue-500/15 text-blue-400 border-blue-500/30'
-    case 'gcpsm': return 'bg-blue-500/15 text-blue-400 border-blue-500/30'
-    case 'vault': return 'bg-purple-500/15 text-purple-400 border-purple-500/30'
-    case 'kubernetes': return 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30'
-    case 'doppler': return 'bg-green-500/15 text-green-400 border-green-500/30'
-    case 'onepassword': return 'bg-blue-500/15 text-blue-400 border-blue-500/30'
-    case 'akeyless': return 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30'
+    case 'aws': return 'status-orange'
+    case 'azurekv': return 'status-blue'
+    case 'gcpsm': return 'status-blue'
+    case 'vault': return 'status-purple'
+    case 'kubernetes': return 'status-cyan'
+    case 'doppler': return 'status-green'
+    case 'onepassword': return 'status-blue'
+    case 'akeyless': return 'status-purple'
     default: return 'bg-theme-elevated text-theme-text-secondary border-theme-border'
   }
 }

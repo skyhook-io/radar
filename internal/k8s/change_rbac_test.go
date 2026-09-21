@@ -89,3 +89,30 @@ func TestChangeReadAllowed(t *testing.T) {
 		t.Fatal("authorize must not be called for an unresolved kind")
 	}
 }
+
+// Discovery is nil here, so any kind that resolves does so from the static
+// catalogues. Builtin kinds must, or the callers' unknown-kind passthrough
+// would grant their refs (and, for HPAs, the attached diagnosis) while
+// discovery is cold; and the group must come back resolved, because topology
+// refs carry an empty group for builtins in that same window.
+func TestLookupResourceGVRResolvesBuiltinsWithoutDiscovery(t *testing.T) {
+	cases := []struct {
+		kind, group, wantGroup, want string
+	}{
+		{"HorizontalPodAutoscaler", "autoscaling", "autoscaling", "horizontalpodautoscalers"},
+		{"HorizontalPodAutoscaler", "", "autoscaling", "horizontalpodautoscalers"},
+		{"Secret", "", "", "secrets"},
+		{"Deployment", "apps", "apps", "deployments"},
+		{"Node", "", "", "nodes"},
+		{"", "", "", ""},
+		// A same-kind CRD in another group must not borrow the builtin's SAR.
+		{"HorizontalPodAutoscaler", "vendor.example.com", "", ""},
+		{"ScaledObject", "keda.sh", "", ""},
+	}
+	for _, tc := range cases {
+		gotGroup, got := LookupResourceGVR(tc.kind, tc.group)
+		if got != tc.want || gotGroup != tc.wantGroup {
+			t.Errorf("LookupResourceGVR(%q, %q) = (%q, %q), want (%q, %q)", tc.kind, tc.group, gotGroup, got, tc.wantGroup, tc.want)
+		}
+	}
+}

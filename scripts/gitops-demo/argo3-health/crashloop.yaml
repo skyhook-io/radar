@@ -1,0 +1,27 @@
+# A Deployment whose only container exits immediately. Argo's Deployment
+# health goes Degraded once progressDeadlineSeconds passes; Radar's issues
+# engine classifies the pods' CrashLoopBackOff and collapses it onto the
+# Deployment, which is what the per-resource row shows on Argo CD 3.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crashloop
+spec:
+  replicas: 1
+  progressDeadlineSeconds: 30
+  selector:
+    matchLabels:
+      app: crashloop
+  template:
+    metadata:
+      labels:
+        app: crashloop
+    spec:
+      containers:
+        - name: main
+          image: busybox:1.36
+          command: ["sh", "-c", "echo boot; exit 1"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi

@@ -18,6 +18,7 @@ interface ConfirmDialogProps {
   isLoading?: boolean
   isClosable?: boolean // Allow closing even when isLoading (e.g., for long-running ops the user can dismiss)
   confirmDisabled?: boolean // Block the confirm action while custom content is invalid (e.g., bad YAML)
+  showWarning?: boolean
   className?: string
   children?: ReactNode // Optional custom content (e.g., checkboxes)
 }
@@ -35,6 +36,7 @@ export function ConfirmDialog({
   isLoading = false,
   isClosable = false,
   confirmDisabled = false,
+  showWarning = true,
   className,
   children,
 }: ConfirmDialogProps) {
@@ -84,7 +86,7 @@ export function ConfirmDialog({
       )}
 
       {/* Warning message — hidden once the action is in progress */}
-      {!isLoading && !children && (
+      {showWarning && !isLoading && !children && (
         <div className="p-4">
           <div
             className={clsx(

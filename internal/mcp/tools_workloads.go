@@ -251,14 +251,14 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 		return nil, nil, errNotConnected()
 	}
 
-	// Get the workload's label selector
-	selector, err := k8s.GetWorkloadSelector(cache, kind, input.Namespace, input.Name)
+	// The workload's own pods, by controller ownership: a label selector also
+	// matches a bare debug pod or, during a Rollout workloadRef migration,
+	// the referenced Deployment's pods, and their logs would then read as
+	// this workload's.
+	pods, err := k8s.WorkloadPods(cache, kind, input.Namespace, input.Name)
 	if err != nil {
 		return nil, nil, workloadSelectorMCPError(ctx, err, kind, input.Namespace, input.Name)
 	}
-
-	// Get pods matching the workload
-	pods := cache.GetPodsForWorkload(input.Namespace, selector)
 	if len(pods) == 0 {
 		empty := describeMCPWorkloadLogEmpty(ctx, kind, input.Namespace, input.Name)
 		response := map[string]any{
@@ -351,6 +351,9 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 }
 
 func workloadSelectorMCPError(ctx context.Context, err error, kind, namespace, name string) error {
+	if errors.Is(err, k8s.ErrWorkloadCacheWarming) {
+		return fmt.Errorf("%s %s/%s is not readable yet: %w. Retry in a moment", kind, namespace, name, err)
+	}
 	if errors.Is(err, k8s.ErrWorkloadAccessDenied) || apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
 		return fmt.Errorf("forbidden: cannot access %s %s/%s: %w", kind, namespace, name, err)
 	}
@@ -467,12 +470,8 @@ func schedulingBlockerWarnings(kind, namespace, name string) []string {
 	if cache == nil {
 		return nil
 	}
-	selector, err := k8s.GetWorkloadSelector(cache, kind, namespace, name)
-	if err != nil {
-		return nil
-	}
-	pods := cache.GetPodsForWorkload(namespace, selector)
-	if len(pods) == 0 {
+	pods, err := k8s.WorkloadPods(cache, kind, namespace, name)
+	if err != nil || len(pods) == 0 {
 		return nil
 	}
 
@@ -594,6 +593,34 @@ type podLogEntry struct {
 	RawLines  int                    `json:"-"`
 	Logs      aicontext.FilteredLogs `json:"logs,omitempty"`
 	Error     string                 `json:"error,omitempty"`
+	// expectedPreviousAbsence is captured from this pod/container's status,
+	// never from an apiserver error string. It stays private on each row; the
+	// semantic diagnose response promotes only matching pod/container references.
+	expectedPreviousAbsence bool
+	// previousLogNotFound distinguishes the specific kubelet absence response
+	// from denied, unavailable, or interrupted reads. Never serialized.
+	previousLogNotFound bool
+}
+
+// expectedPreviousLogAbsence reports when captured Kubernetes status proves
+// this container had no prior instance. A missing status is unknown, while a
+// zero restart count with no last termination covers both an apiserver
+// "not found" response and an empty successful previous-log stream.
+func expectedPreviousLogAbsence(pod *corev1.Pod, container string) bool {
+	if pod == nil {
+		return false
+	}
+	for _, statuses := range [][]corev1.ContainerStatus{
+		pod.Status.ContainerStatuses,
+		pod.Status.InitContainerStatuses,
+	} {
+		matching := filterContainerStatuses(statuses, container)
+		if len(matching) == 0 {
+			continue
+		}
+		return matching[0].RestartCount == 0 && matching[0].LastTerminationState.Terminated == nil
+	}
+	return false
 }
 
 // fetchPodLogs fans out kubectl-logs requests across the given pods x containers.
@@ -615,8 +642,9 @@ func fetchPodLogs(ctx context.Context, pods []*corev1.Pod, namespace, containerF
 	for _, pod := range pods {
 		containers := k8s.GetContainersForPod(pod, containerFilter, true)
 		for _, c := range containers {
+			expectedAbsence := previous && expectedPreviousLogAbsence(pod, c)
 			wg.Add(1)
-			go func(podName, containerName string) {
+			go func(podName, containerName string, expectedPreviousAbsence bool) {
 				defer wg.Done()
 
 				opts := &corev1.PodLogOptions{
@@ -628,14 +656,17 @@ func fetchPodLogs(ctx context.Context, pods []*corev1.Pod, namespace, containerF
 				}
 
 				entry := podLogEntry{
-					Pod:       podName,
-					Container: containerName,
+					Pod:                     podName,
+					Container:               containerName,
+					expectedPreviousAbsence: expectedPreviousAbsence,
 				}
 
 				stream, err := client.CoreV1().Pods(namespace).GetLogs(podName, opts).Stream(ctx)
 				if err != nil {
 					log.Printf("[mcp] Failed to get logs for %s/%s: %v", podName, containerName, err)
 					entry.Error = fmt.Sprintf("failed to get logs: %v", err)
+					entry.previousLogNotFound = previous && apierrors.IsBadRequest(err) &&
+						strings.Contains(err.Error(), fmt.Sprintf("previous terminated container %q in pod %q not found", containerName, podName))
 					mu.Lock()
 					allLogs = append(allLogs, entry)
 					mu.Unlock()
@@ -670,7 +701,7 @@ func fetchPodLogs(ctx context.Context, pods []*corev1.Pod, namespace, containerF
 				mu.Lock()
 				allLogs = append(allLogs, entry)
 				mu.Unlock()
-			}(pod.Name, c)
+			}(pod.Name, c, expectedAbsence)
 		}
 	}
 
