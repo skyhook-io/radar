@@ -40,10 +40,10 @@ func (c Connection) Validate() error {
 	if err := ValidateBaseURL(c.URL); err != nil {
 		return err
 	}
-	if c.URL == "" && len(c.Headers)+len(c.HeadersFromEnv) > 0 {
+	if c.URL == "" && (len(c.Headers) > 0 || len(c.HeadersFromEnv) > 0) {
 		return ErrHeadersRequireURL
 	}
-	all := make(map[string]string, len(c.Headers)+len(c.HeadersFromEnv))
+	all := make(map[string]string)
 	for k, v := range c.Headers {
 		all[k] = v
 	}

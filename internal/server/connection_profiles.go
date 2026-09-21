@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -206,6 +207,7 @@ func (s *Server) connectionError(w http.ResponseWriter, err error) {
 	var pathError *os.PathError
 	if errors.As(err, &pathError) {
 		status = http.StatusInternalServerError
+		log.Printf("[connections] Failed to access local settings: %v", prom.RedactURLs(err.Error()))
 	}
 	s.writeError(w, status, prom.RedactURLs(err.Error()))
 }

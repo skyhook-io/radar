@@ -61,7 +61,7 @@ export function PrometheusConnectionForm({
   const [appliedKeys, setAppliedKeys] = useState<string[] | null>(null)
   const [operations, setOperations] = useState<HeaderOperation[]>([])
   const storedKeys = appliedKeys ?? configuredHeaderKeys
-  useEffect(() => { onDirtyChange?.(headerRows !== null || operations.length > 0) }, [headerRows, operations, onDirtyChange])
+  useEffect(() => { onDirtyChange?.(headerRows !== null || operations.some(operation => operation.action !== 'keep')) }, [headerRows, operations, onDirtyChange])
 
   const clearStatus = () => {
     if (apply.status !== 'applying') setApply({ status: 'idle' })

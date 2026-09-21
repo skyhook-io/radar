@@ -23,11 +23,6 @@ import (
 // throttled background reconnect when disconnected, so opening Overview after a
 // restart helps the integration come back.
 func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
-	if err := connections.Refresh(config.IntegrationArgoCD); err != nil {
-		s.writeError(w, http.StatusServiceUnavailable, err.Error())
-		return
-	}
-	_, connected := argocd.Get()
 	resp := struct {
 		Configured bool `json:"configured"`
 		Connected  bool `json:"connected"`
@@ -38,9 +33,19 @@ func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
 		Reason    string `json:"reason,omitempty"`
 	}{
 		Configured: argocd.IsConfigured(),
-		Connected:  connected,
 	}
-	if connected {
+	if err := connections.Refresh(config.IntegrationArgoCD); err != nil {
+		resp.Reason = prom.RedactURLs(err.Error())
+		if s.localConnections != nil {
+			view := s.readLocalConnectionViews()[config.IntegrationArgoCD]
+			resp.Configured = view.URL != "" || view.SecretSet || view.State == "launch"
+		}
+		s.writeJSON(w, resp)
+		return
+	}
+	_, resp.Connected = argocd.Get()
+	resp.Configured = argocd.IsConfigured()
+	if resp.Connected {
 		resp.Address = argocd.Address()
 		resp.Anonymous = argocd.AnonymousReadAllowed()
 	} else if argocd.TokenBindingUpgradeRequired() {

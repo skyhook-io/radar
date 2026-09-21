@@ -18,6 +18,7 @@ import (
 	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
+	"k8s.io/client-go/rest"
 )
 
 func TestIntegrationOperationsRefreshExternalChangesWithoutSettings(t *testing.T) {
@@ -112,6 +113,52 @@ func TestIntegrationOperationsRefreshExternalChangesWithoutSettings(t *testing.T
 	}
 	if _, err := opencost.Selected(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLocalArgoTargetChangeStaysEditableAndReportsStatus(t *testing.T) {
+	s := setupLocalProfileTest(t)
+	t.Cleanup(func() { argocd.SetConfig("", "", false, true) })
+	target, _ := k8s.CurrentProfileTarget()
+	url := "https://argo.example"
+	pending, err := s.localConnections.Prepare(target, connections.Update{Target: target, Revision: s.localConnections.Resolve(target, config.IntegrationArgoCD, false).View.Revision, Kind: config.IntegrationArgoCD, Action: "save", URL: &url, Secret: &connections.SecretEdit{Action: "set", Value: "saved-test-token"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.localConnections.Commit(context.Background(), pending); err != nil {
+		t.Fatal(err)
+	}
+	old := k8s.SetTestConfig(&rest.Config{Host: "https://changed-cluster"})
+	defer k8s.SetTestConfig(old)
+	status := httptest.NewRecorder()
+	s.handleArgoCDStatus(status, httptest.NewRequest(http.MethodGet, "/api/integrations/argocd/status", nil))
+	var state struct {
+		Configured bool   `json:"configured"`
+		Connected  bool   `json:"connected"`
+		Reason     string `json:"reason"`
+	}
+	if err := json.Unmarshal(status.Body.Bytes(), &state); err != nil || status.Code != http.StatusOK || !state.Configured || state.Connected || state.Reason == "" {
+		t.Fatalf("expected actionable disconnected state: %d %s", status.Code, status.Body.String())
+	}
+	response := httptest.NewRecorder()
+	s.handleGetConfig(response, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	var cfg struct {
+		ArgoCDEnvManaged    bool                                           `json:"argoCdEnvManaged"`
+		IntegrationProfiles map[config.Integration]connections.ProfileView `json:"integrationProfiles"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	view := cfg.IntegrationProfiles[config.IntegrationArgoCD]
+	if cfg.ArgoCDEnvManaged || view.State != "target_changed" || strings.Contains(response.Body.String(), "saved-test-token") {
+		t.Fatal("target failure hid local recovery or exposed credentials")
+	}
+	request := connections.Update{Target: view.Target, Revision: view.Revision, Kind: config.IntegrationArgoCD, Action: "reconfirm", Kinds: []config.Integration{config.IntegrationArgoCD}}
+	body, _ := json.Marshal(request)
+	result := httptest.NewRecorder()
+	s.handleUpdateLocalConnection(result, httptest.NewRequest(http.MethodPut, "/api/integrations/connections", strings.NewReader(string(body))))
+	if result.Code != http.StatusOK || s.localConnections.Resolve(view.Target, config.IntegrationArgoCD, false).Err != nil {
+		t.Fatalf("recovery blocked: %d %s", result.Code, result.Body.String())
 	}
 }
 

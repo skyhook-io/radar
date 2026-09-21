@@ -156,9 +156,11 @@ export function LocalConnectionSettings({
   const [rename, setRename] = useState('')
   const [pending, setPending] = useState<Update | null>(null)
   const [keepUnused, setKeepUnused] = useState(false)
+  const [confirmBack, setConfirmBack] = useState(false)
   const [accepted, setAccepted] = useState<IntegrationKind[]>([])
   const request = useRef<AbortController | null>(null)
   const heading = useRef<HTMLHeadingElement>(null)
+  const region = useRef<HTMLFieldSetElement>(null)
   const trigger = useRef<HTMLElement | null>(null)
   const mounted = useRef(true)
   const shared = (profile.connection?.uses.length ?? 0) > 1
@@ -196,6 +198,7 @@ export function LocalConnectionSettings({
     setTask(next)
     setError('')
     setMessage('')
+    setConfirmBack(false)
   }
   useEffect(() => {
     if (task !== 'main') heading.current?.focus()
@@ -216,8 +219,9 @@ export function LocalConnectionSettings({
       setSnapshot(profiles)
       resetDraft(profiles[kind])
     }
-  }, [profiles, kind, dirty, task])
-  const back = () => {
+  }, [profiles, snapshot, kind, dirty, task])
+  const leaveTask = () => {
+    setConfirmBack(false)
     setTask('main')
     setPending(null)
     setSelected(null)
@@ -225,7 +229,15 @@ export function LocalConnectionSettings({
     resetDraft(profile)
     requestAnimationFrame(() => {
       if (trigger.current?.isConnected) trigger.current.focus()
+      else region.current?.focus()
     })
+  }
+  const back = () => {
+    if (dirty && ['shared', 'fork', 'replace', 'rename'].includes(task)) {
+      setConfirmBack(true)
+      return
+    }
+    leaveTask()
   }
   const fetchConnections = async (
     update?: Update
@@ -281,6 +293,7 @@ export function LocalConnectionSettings({
   const save = async (update: Update) => {
     const data = await fetchConnections(update)
     receive(data)
+    setConfirmBack(false)
     setTask('main')
     setPending(null)
     setSelected(null)
@@ -392,13 +405,21 @@ export function LocalConnectionSettings({
   }
   return (
     <fieldset
+      ref={region}
+      tabIndex={-1}
+      aria-label={`${names[kind]} connection settings`}
       disabled={busy}
-      className="min-w-0 space-y-4"
+      className="min-w-0 space-y-4 outline-none"
       onKeyDown={(event) => {
         if (event.key === 'Escape' && task !== 'main') {
           event.preventDefault()
           event.stopPropagation()
-          if (!busy) back()
+          if (!busy) {
+            if (confirmBack) {
+              setConfirmBack(false)
+              heading.current?.focus()
+            } else back()
+          }
         }
       }}
     >
@@ -419,6 +440,31 @@ export function LocalConnectionSettings({
           >
             {title}
           </h4>
+        </div>
+      )}
+      {confirmBack && (
+        <div role="alert" className="card-inner-lg space-y-3">
+          <p className="text-sm">Discard your unapplied connection changes?</p>
+          <div className="flex gap-3 text-xs">
+            <button
+              type="button"
+              autoFocus
+              className="btn-brand px-3 py-2"
+              onClick={() => {
+                setConfirmBack(false)
+                heading.current?.focus()
+              }}
+            >
+              Keep editing
+            </button>
+            <button
+              type="button"
+              className="text-theme-text-secondary hover:underline"
+              onClick={leaveTask}
+            >
+              Discard draft
+            </button>
+          </div>
         </div>
       )}
       <div className="flex justify-between items-start gap-3 text-xs">

@@ -224,8 +224,12 @@ export function SettingsDialog({
   const settingsScope = `${settingsApiBase}:${settingsCluster?.context}`
   const targetChangedWithDraft = open && metricsDraft.current.open && metricsDraft.current.dirty && (isSwitching || metricsDraft.current.scope !== settingsScope)
   useEffect(() => {
-    if (!open) setDraftFrozen(false)
-    else if (targetChangedWithDraft) {
+    if (!open) {
+      setDraftFrozen(false)
+      metricsDraft.current = { open: false, scope: settingsScope, dirty: false }
+      return
+    }
+    if (targetChangedWithDraft) {
       setDraftFrozen(true)
       return
     }
