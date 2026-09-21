@@ -22,27 +22,33 @@ const (
 )
 
 // ingressServedByALB reports whether the AWS Load Balancer Controller serves
-// the Ingress. The class comes from the named IngressClass, else the legacy
-// class annotation, else the cluster default. A named class that doesn't
-// resolve is not retried via the annotation, since controllers honour the
-// field over it. With no class, any alb.* annotation counts as evidence.
-// known is false when nothing identifies the controller.
+// the Ingress. A named class that doesn't resolve is not retried via the
+// legacy annotation, since controllers honour the field over it. The legacy
+// value the controller claims is configurable, so a value other than alb
+// still counts when alb.* annotations are present.
 func ingressServedByALB(cache *ResourceCache, ing *networkingv1.Ingress) (alb, known bool) {
 	if name := ing.Spec.IngressClassName; name != nil && strings.TrimSpace(*name) != "" {
 		if controller, ok := ingressClassController(cache, strings.TrimSpace(*name)); ok {
 			return controller == albIngressController, true
 		}
 	} else if class := ingressstatus.LegacyClass(ing); class != "" {
-		return class == albLegacyIngressClass, true
+		return class == albLegacyIngressClass || hasALBAnnotation(ing), true
 	} else if controller, ok := defaultIngressClassController(cache); ok {
 		return controller == albIngressController, true
 	}
-	for key := range ing.Annotations {
-		if strings.HasPrefix(key, albAnnotationPrefix) {
-			return true, true
-		}
+	if hasALBAnnotation(ing) {
+		return true, true
 	}
 	return false, false
+}
+
+func hasALBAnnotation(ing *networkingv1.Ingress) bool {
+	for key := range ing.Annotations {
+		if strings.HasPrefix(key, albAnnotationPrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func ingressClassController(cache *ResourceCache, name string) (controller string, ok bool) {
@@ -86,8 +92,7 @@ func ALBActionAnnotation(backendServiceName string) string {
 	return albActionAnnotationPrefix + backendServiceName
 }
 
-// albActionTarget is one in-cluster backend of a forward action. Target groups
-// addressed by ARN or name have no Service and produce no target.
+// albActionTarget is one Service-backed target of a forward action.
 type albActionTarget struct {
 	ServiceName string
 	ServicePort string
@@ -170,11 +175,9 @@ func albPortSet(port *intstr.IntOrString) bool {
 // parseALBAction reads the action annotation for a use-annotation backend.
 //
 // found is false when no annotation exists for the backend. malformed covers
-// anything the controller would reject. targets list only the backends Radar
-// can check.
-// Redirect and fixed-response actions resolve nothing in-cluster, and neither
-// do target groups given by ARN or name, so those yield no targets with found
-// true.
+// anything the controller would reject. targets is empty for redirect,
+// fixed-response and external target groups, which have nothing in-cluster
+// to check.
 func parseALBAction(annotations map[string]string, backendServiceName string) (targets []albActionTarget, found, malformed bool) {
 	raw, ok := annotations[ALBActionAnnotation(backendServiceName)]
 	if !ok {

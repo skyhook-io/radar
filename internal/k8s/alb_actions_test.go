@@ -332,9 +332,7 @@ func TestDetectIngressALBActionBackends(t *testing.T) {
 	}
 }
 
-// Only the AWS Load Balancer Controller reserves the use-annotation port name.
-// Under another controller it is an ordinary named port, and when no controller
-// can be identified the backend must be left alone.
+// Under any controller but ALB, use-annotation is an ordinary port name.
 func TestDetectIngressSentinelPortByController(t *testing.T) {
 	defer ResetTestState()
 
@@ -368,12 +366,14 @@ func TestDetectIngressSentinelPortByController(t *testing.T) {
 		sentinelIngress("legacy-alb", map[string]string{"kubernetes.io/ingress.class": "alb"}, "orphan"),
 		// No class set, legacy annotation names something else.
 		sentinelIngress("legacy-nginx", map[string]string{"kubernetes.io/ingress.class": "nginx"}, "named"),
+		// Legacy annotation names a custom value, alb.* annotations identify it.
+		sentinelIngress("legacy-custom-alb", map[string]string{"kubernetes.io/ingress.class": "my-alb", "alb.ingress.kubernetes.io/scheme": "internet-facing"}, "orphan"),
 		// Named class does not exist, alb.* annotation is the only evidence.
 		withClass(sentinelIngress("alb-annotation", map[string]string{"alb.ingress.kubernetes.io/scheme": "internet-facing"}, "orphan"), &missingClass),
 		// Named class does not exist and nothing else identifies the controller.
 		withClass(sentinelIngress("unknown", nil, "orphan"), &missingClass),
-		// Named class does not exist. The legacy annotation is not consulted
-		// once the field is set, so this is unknown too.
+		// Named class does not exist. The legacy annotation is ignored once the
+		// field is set.
 		withClass(sentinelIngress("missing-class-legacy-alb", map[string]string{"kubernetes.io/ingress.class": "alb"}, "orphan"), &missingClass),
 		// A resolved nginx class wins over stale alb.* annotations.
 		withClass(sentinelIngress("nginx-stale-alb", map[string]string{"alb.ingress.kubernetes.io/scheme": "internet-facing"}, "named"), &nginx),
@@ -399,10 +399,11 @@ func TestDetectIngressSentinelPortByController(t *testing.T) {
 		}
 	}
 	for name, want := range map[string]string{
-		"nginx-no-port":  "Missing backend Service port",
-		"default-class":  "Missing ALB action annotation",
-		"legacy-alb":     "Missing ALB action annotation",
-		"alb-annotation": "Missing ALB action annotation",
+		"nginx-no-port":     "Missing backend Service port",
+		"default-class":     "Missing ALB action annotation",
+		"legacy-alb":        "Missing ALB action annotation",
+		"alb-annotation":    "Missing ALB action annotation",
+		"legacy-custom-alb": "Missing ALB action annotation",
 	} {
 		got := reasonsFor(name)
 		if len(got) != 1 || got[0] != want {

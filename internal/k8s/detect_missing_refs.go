@@ -669,8 +669,8 @@ func detectIngressMissingBackend(cache *ResourceCache, namespace string, now tim
 		}
 
 		// Only the AWS Load Balancer Controller treats use-annotation as a
-		// sentinel. Under any other controller it is an ordinary port name, and
-		// when the controller can't be identified the backend is left alone.
+		// sentinel. Under any other controller it is an ordinary port name. An
+		// unidentified controller is left alone.
 		var albServed, albKnown, albResolved bool
 		checkBackend := func(b networkingv1.IngressServiceBackend, sourcePath string) {
 			if b.Port.Name == albActionSentinel {
