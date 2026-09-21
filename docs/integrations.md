@@ -1,6 +1,6 @@
-# CRD Integrations
+# Ecosystem Integrations
 
-Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar provides dedicated detail views, topology edges, smart table columns, and AI-optimized summaries for seamless integration.
+Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar adds dedicated capabilities described below, including detail views, topology edges, smart table columns, and AI-optimized summaries. Coverage varies by integration. Explicit local runtime evidence for RabbitMQ, NATS and Vault uses Pod endpoints rather than CRDs.
 
 ## ConfigMap and Secret reflection (Reflector)
 
@@ -1598,6 +1598,22 @@ Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share ki
 | DeviceConfig (AMD GPU Operator) | `amd.com/v1alpha1` | Ready condition + component DaemonSet rollout counts |
 
 ---
+
+## Local runtime evidence: RabbitMQ, NATS and Vault
+
+Radar's local MCP tool `collect_runtime_evidence` collects a bounded snapshot from one named Pod after explicit operator consent. These adapters do not require CRDs and do not add automatic Issues detection, application-specific resource renderers, or cluster-wide health conclusions.
+
+| Integration | Endpoint | Evidence |
+|---|---|---|
+| RabbitMQ | Port 15692, `/metrics` | Source-reported disk and memory alarms for the selected node; both samples must be present and unambiguous. |
+| NATS | Port 8222, `/jsz` | Account-scoped JetStream consumer pending, acknowledgement-pending and redelivery counts, with at most 20 consumer rows and explicit coverage. Pending messages alone do not prove a stuck consumer. |
+| Vault | Port 8200, `/v1/sys/health` | Source HTTP code and initialized/sealed/standby state. A standby is not necessarily faulty; HTTP 200 alone is not a health verdict. |
+
+Collection uses existing Kubernetes Pod-read and port-forward permissions, a recognized official image, and a declared default plaintext port. It introduces no application credentials, Secret reads, exec fallback, or settings. RabbitMQ needs its metrics endpoint enabled; NATS needs monitoring enabled independently of messaging authentication; Vault health is token-free but TLS/proxy requirements may prevent collection.
+
+Only the full local MCP surface exposes this action. Authenticated, remote, hosted and in-cluster callers and built-in investigations do not receive it. Custom ports, TLS and application authentication are outside this slice. Denied, missing, malformed or oversized evidence returns unavailable rather than healthy or empty. Results describe the selected endpoint at collection time, not the whole cluster.
+
+See [explicit local runtime evidence](mcp.md#explicit-local-runtime-evidence) for invocation, consent, response limits and interpretation.
 
 ## Any Other CRD
 
