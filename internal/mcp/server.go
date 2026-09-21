@@ -36,13 +36,28 @@ func newServer(includeWrites bool) *mcpsdk.Server {
 	return server
 }
 
-// RunStdio runs the MCP server over stdio (full tool set).
+// RunStdio runs the MCP server over stdio with tools allowed in the current mode.
 func RunStdio(ctx context.Context) error {
-	return newServer(true).Run(context.WithValue(ctx, runtimeLocalCallerKey{}, true), &mcpsdk.StdioTransport{})
+	ctx = context.WithValue(ctx, runtimeLocalCallerKey{}, true)
+	var server *mcpsdk.Server
+	if runtimeEvidenceAllowed(ctx) {
+		server = newServer(true)
+	} else {
+		server = newApplyServer()
+	}
+	return server.Run(ctx, &mcpsdk.StdioTransport{})
 }
 
 // NewHandler creates the full MCP HTTP handler (read + write tools) to mount on chi.
-func NewHandler() http.Handler { return handlerForServer(newServer(true)) }
+func NewHandler() http.Handler {
+	localServer, remoteServer := newServer(true), newApplyServer()
+	return handlerForServerSelector(func(r *http.Request) *mcpsdk.Server {
+		if runtimeEvidenceAllowed(r.Context()) {
+			return localServer
+		}
+		return remoteServer
+	})
+}
 
 func newApplyServer() *mcpsdk.Server {
 	server := newServer(true)
@@ -146,6 +161,10 @@ func annotateInvestigationEvidenceReference(result *mcpsdk.CallToolResult, ref s
 }
 
 func handlerForServer(server *mcpsdk.Server) http.Handler {
+	return handlerForServerSelector(func(*http.Request) *mcpsdk.Server { return server })
+}
+
+func handlerForServerSelector(selectServer func(*http.Request) *mcpsdk.Server) http.Handler {
 	streamOpts := &mcpsdk.StreamableHTTPOptions{Stateless: true}
 	// The MCP SDK auto-enables DNS-rebinding protection (Host header must be
 	// loopback) when the server binds to a loopback address. That blocks
@@ -157,7 +176,7 @@ func handlerForServer(server *mcpsdk.Server) http.Handler {
 	}
 
 	handler := runtimeLocalCaller(mcpsdk.NewStreamableHTTPHandler(
-		func(r *http.Request) *mcpsdk.Server { return server },
+		selectServer,
 		streamOpts,
 	))
 
