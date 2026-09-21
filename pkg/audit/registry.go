@@ -256,7 +256,7 @@ var CheckRegistry = map[string]CheckMeta{
 		ID:          "podHARisk",
 		Title:       "Running replicas on same node",
 		Category:    CategoryReliability,
-		Description: "All observed Running Pods (at least two) owned by this Deployment are on one node. Pending, terminal and terminating Pods are excluded. Both old and new ReplicaSets count during a rollout. This checks placement, not readiness or serving health; unavailable ownership evidence is not evaluated.",
+		Description: "All observed Running Pods (at least two) owned by this Deployment are on one node. Pending, terminal and terminating Pods are excluded. Both old and new ReplicaSets count during a rollout. This checks placement, not readiness or serving health. Incomplete ownership leaves placement unevaluated unless verified replicas already span multiple nodes.",
 		Remediation: "Add pod anti-affinity or topology spread constraints to distribute replicas across nodes.",
 		References:  []Reference{refAffinity, refTopologySpread},
 	},

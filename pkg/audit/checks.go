@@ -984,6 +984,11 @@ func checkPodHARisk(tr *evalTracker, pods []*corev1.Pod, deployments []*appsv1.D
 		if replicas <= 1 || d.UID == "" {
 			continue
 		}
+		if len(placements[d.UID]) >= 2 {
+			// Additional unknown Pods cannot undo verified placement across nodes.
+			tr.record("podHARisk", d.Namespace)
+			continue
+		}
 		if incomplete[d.Namespace] {
 			// An unresolved ReplicaSet may own another replica of this Deployment.
 			if !slices.Contains(tr.missingInputs, "replicaset-ownership") {
@@ -999,9 +1004,6 @@ func checkPodHARisk(tr *evalTracker, pods []*corev1.Pod, deployments []*appsv1.D
 			continue
 		}
 		tr.record("podHARisk", d.Namespace)
-		if len(placements[d.UID]) != 1 {
-			continue
-		}
 		for node := range placements[d.UID] {
 			findings = append(findings, Finding{
 				Kind: "Deployment", Namespace: d.Namespace, Name: d.Name,

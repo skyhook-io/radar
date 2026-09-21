@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { AlertCircle, AlertOctagon, AlertTriangle, ChevronDown, ExternalLink, EyeOff, Info, Layers, MoreHorizontal, Search, ShieldCheck, Wrench, X } from 'lucide-react'
-import { AlertBanner, CardBody, CardSection, ClusterName, EmptyState, FilterPill, DistributionBar, DistributionLegendChip, Input, NEUTRAL_CHIP_CLASS, renderProse } from '../ui'
+import { AlertBanner, Disclosure, CardBody, CardSection, ClusterName, EmptyState, FilterPill, DistributionBar, DistributionLegendChip, Input, NEUTRAL_CHIP_CLASS, renderProse } from '../ui'
 import { Collapse, CollapseChevron, useDisclosure, disclosurePanelId } from '../ui/Collapse'
 import { useFilterState, defineFilterSchema } from '../../filter-state'
 import type { CheckMeta, CheckReference } from '../audit'
@@ -17,8 +17,18 @@ import {
 } from './severity'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
+import { CORE_RESOURCES } from '../../utils/api-resources'
 
 const CATEGORIES: readonly string[] = ['Security', 'Reliability', 'Efficiency']
+
+const AUDIT_INPUT_LABELS = new Map<string, string>([
+  ...CORE_RESOURCES.map(({ name, kind }) => [name, kind] as const),
+  ['limitranges', 'LimitRange'],
+  ['poddisruptionbudgets', 'PodDisruptionBudget'],
+  ['replicaset-ownership', 'ReplicaSet ownership'],
+  ['configmap-references', 'ConfigMap references'],
+  ['secret-references', 'Secret references'],
+])
 
 // Leading severity glyph, one per tier of the 4-tier ladder: critical = octagon,
 // high = triangle, medium = circle, low = info.
@@ -357,7 +367,10 @@ export function ChecksView({ checks, catalog, anyData, evaluated, missingInputs 
           title="Some checks could not run"
           message={
             <>
-              Findings cover only available inputs. Unavailable inputs: {missingInputs.map(input => input === 'replicasets' ? 'ReplicaSets' : input === 'replicaset-ownership' ? 'ReplicaSet ownership' : input).join(', ')}.
+              Findings cover only available inputs.
+              <Disclosure summary={`Unavailable inputs (${missingInputs.length})`} className="mt-2">
+                {missingInputs.map(input => AUDIT_INPUT_LABELS.get(input) ?? input).join(', ')}.
+              </Disclosure>
               {(missingInputs.includes('replicasets') || missingInputs.includes('replicaset-ownership')) && (
                 <p className="mt-2">
                   <em>Running replicas on same node</em> could not be fully evaluated: ReplicaSet inventory or ownership evidence was unavailable, so affected Deployments were skipped, not passed.

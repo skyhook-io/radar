@@ -131,3 +131,90 @@ func TestPodHARiskUnknownOwnershipIsNamespaceScopedAndPreservesOtherChecks(t *te
 		t.Fatal("independent topology policy finding lost")
 	}
 }
+
+func TestPodHARiskUnknownOwnershipKeepsProvableSpread(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		nodes   []string
+		want    CheckCount
+		missing bool
+	}{
+		{"verified spread", []string{"node-a", "node-b"}, CheckCount{Evaluated: 1, Passed: 1}, false},
+		{"verified colocation", []string{"node-a", "node-a"}, CheckCount{}, true},
+		{"one verified placement", []string{"node-a"}, CheckCount{}, true},
+		{"no verified placements", nil, CheckCount{}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			i := resilienceInput(tc.nodes...)
+			unknown := resilienceInput("node-c").Pods[0]
+			unknown.Name = "unknown"
+			unknown.UID = "unknown-pod"
+			unknown.OwnerReferences[0].UID = "unresolved-rs"
+			i.Pods = append(i.Pods, unknown)
+			r := RunChecks(i)
+			if got := r.CheckCounts["podHARisk"]; got != tc.want {
+				t.Fatalf("counts=%+v, want %+v", got, tc.want)
+			}
+			if got := slices.Contains(r.MissingInputs, "replicaset-ownership"); got != tc.missing {
+				t.Fatalf("ownership missing=%v, want %v", got, tc.missing)
+			}
+			for _, f := range r.Findings {
+				if f.CheckID == "podHARisk" {
+					t.Fatalf("unknown ownership created colocation warning: %+v", f)
+				}
+			}
+		})
+	}
+}
+
+func TestPodHARiskProvableSpreadDoesNotHideSkippedOrIndependentWorkloads(t *testing.T) {
+	for _, sameNamespace := range []bool{true, false} {
+		t.Run(map[bool]string{true: "same namespace skipped", false: "other namespace warning preserved"}[sameNamespace], func(t *testing.T) {
+			i := resilienceInput("node-a", "node-b")
+			unknown := i.Pods[0].DeepCopy()
+			unknown.Name, unknown.UID = "unknown", "unknown-pod"
+			unknown.OwnerReferences[0].UID = "unresolved-rs"
+			i.Pods = append(i.Pods, unknown)
+			other := resilienceInput("node-a", "node-a")
+			d, rs := other.Deployments[0], other.ReplicaSets[0]
+			d.Name, d.UID = "other", "other-deployment"
+			rs.Name, rs.UID = "other-rs", "other-rs"
+			rs.OwnerReferences[0].Name, rs.OwnerReferences[0].UID = d.Name, d.UID
+			if !sameNamespace {
+				d.Namespace, rs.Namespace = "other", "other"
+			}
+			for _, pod := range other.Pods {
+				pod.Name = "other-" + pod.Name
+				pod.UID = types.UID("other-" + string(pod.UID))
+				pod.Namespace = d.Namespace
+				pod.OwnerReferences[0].Name, pod.OwnerReferences[0].UID = rs.Name, rs.UID
+			}
+			i.Deployments = append(i.Deployments, d)
+			i.ReplicaSets = append(i.ReplicaSets, rs)
+			i.Pods = append(i.Pods, other.Pods...)
+			r := RunChecks(i)
+			want := CheckCount{Evaluated: 2, Passed: 1}
+			if sameNamespace {
+				want.Evaluated = 1
+			}
+			if got := r.CheckCounts["podHARisk"]; got != want {
+				t.Fatalf("counts=%+v, want %+v", got, want)
+			}
+			if got := slices.Contains(r.MissingInputs, "replicaset-ownership"); got != sameNamespace {
+				t.Fatalf("missing ownership=%v, want %v", got, sameNamespace)
+			}
+			var findings []Finding
+			for _, f := range r.Findings {
+				if f.CheckID == "podHARisk" {
+					findings = append(findings, f)
+				}
+			}
+			if sameNamespace && len(findings) != 0 {
+				t.Fatalf("skipped workload emitted finding: %+v", findings)
+			}
+			if !sameNamespace && (len(findings) != 1 || findings[0].Name != d.Name || findings[0].Namespace != d.Namespace) {
+				t.Fatalf("independent colocation warning lost: %+v", findings)
+			}
+		})
+	}
+}
