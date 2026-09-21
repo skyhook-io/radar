@@ -43,9 +43,13 @@ type AvailabilityState struct {
 // EnsureConnected already does: a discovery that outlives ctx keeps running
 // detached under its own timeout so the next caller benefits from it.
 func Availability(ctx context.Context) AvailabilityState {
-	c := GetClient()
-	if c == nil {
-		return AvailabilityState{State: AvailabilityAbsent}
+	c, err := ClientForOperation()
+	if err != nil {
+		state := AvailabilityConfiguredFailed
+		if errors.Is(err, ErrPrometheusUnavailable) {
+			return AvailabilityState{State: AvailabilityAbsent}
+		}
+		return AvailabilityState{State: state, Err: err}
 	}
 	return c.Availability(ctx)
 }

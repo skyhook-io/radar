@@ -967,9 +967,9 @@ func changePercent(points int, start, end float64) *float64 {
 // PromForMCP, not Prom: the shared Prom() client carries a 10s socket backstop
 // sized for REST callers, which a 7d trend query on a large cluster outruns.
 func promCostClient(ctx context.Context) (*prom.Client, string) {
-	client := prometheuspkg.GetClient()
-	if client == nil {
-		return nil, pkgopencost.ReasonNoPrometheus
+	client, connectionErr := prometheuspkg.ClientForOperation()
+	if connectionErr != nil {
+		return nil, opencost.ConnectionFailureReason(connectionErr)
 	}
 	if _, _, err := client.EnsureConnected(ctx); err != nil {
 		log.Printf("[mcp] Prometheus EnsureConnected failed for cost query: %v", err)

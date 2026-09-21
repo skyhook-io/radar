@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useId } from 'react'
 import { Check, Loader2, Plug, Plus, X } from 'lucide-react'
 import { Input } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 import { prometheusHeadersFromRows } from './settings-state'
+import { ConnectionHeadersEditor, type HeaderOperation } from './ConnectionHeadersEditor'
 
 export interface PrometheusApplyResult { connected: boolean; address?: string; error?: string }
 
@@ -27,6 +28,9 @@ export function PrometheusConnectionForm({
   onApply,
   scopeDescription,
   onDirtyChange,
+  onApplyOperations,
+  environmentHeaderKeys = [],
+  applyLabel = 'Apply now',
 }: {
   local: boolean
   value: string
@@ -39,8 +43,12 @@ export function PrometheusConnectionForm({
   onApply: (url: string, headers?: Record<string, string>) => Promise<PrometheusApplyResult>
   scopeDescription?: string
   onDirtyChange?: (dirty: boolean) => void
+  onApplyOperations?: (url: string, operations: HeaderOperation[]) => Promise<PrometheusApplyResult>
+  environmentHeaderKeys?: string[]
+  applyLabel?: string
 }) {
   const mounted = useRef(true)
+  const urlId = useId()
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const [apply, setApply] = useState<ApplyState>({ status: 'idle' })
   // null = not editing headers (preserve what's stored). A non-null array means
@@ -51,8 +59,9 @@ export function PrometheusConnectionForm({
   // optimistically (config isn't refetched). Derived from the prop — not a
   // mount-time snapshot — so it stays correct as config loads asynchronously.
   const [appliedKeys, setAppliedKeys] = useState<string[] | null>(null)
+  const [operations, setOperations] = useState<HeaderOperation[]>([])
   const storedKeys = appliedKeys ?? configuredHeaderKeys
-  useEffect(() => { onDirtyChange?.(headerRows !== null) }, [headerRows, onDirtyChange])
+  useEffect(() => { onDirtyChange?.(headerRows !== null || operations.length > 0) }, [headerRows, operations, onDirtyChange])
 
   const clearStatus = () => {
     if (apply.status !== 'applying') setApply({ status: 'idle' })
@@ -72,7 +81,7 @@ export function PrometheusConnectionForm({
     // secrets just because the editor happens to be open for a URL-only change.
     try {
       const editedHeaders = prometheusHeadersFromRows(headerRows)
-      const data = await onApply(value.trim(), editedHeaders)
+      const data = onApplyOperations ? await onApplyOperations(value.trim(), operations) : await onApply(value.trim(), editedHeaders)
       if (!mounted.current) return
       onApplied?.(value.trim())
       if (editedHeaders !== undefined) {
@@ -81,6 +90,7 @@ export function PrometheusConnectionForm({
       if (headerRows !== null) {
         setHeaderRows(null)
       }
+      setOperations([])
       if (data.connected) {
         setApply({ status: 'connected', address: data.address || value.trim() })
       } else {
@@ -101,7 +111,7 @@ export function PrometheusConnectionForm({
           Available charts depend on the metrics collected.
         </p>
       </div>
-      <label className="block text-sm font-medium text-theme-text-primary mb-1">
+      <label htmlFor={urlId} className="block text-sm font-medium text-theme-text-primary mb-1">
         Metrics backend URL
       </label>
       <p className="text-xs text-theme-text-tertiary mb-1">
@@ -109,6 +119,7 @@ export function PrometheusConnectionForm({
       </p>
       <div className="flex items-center gap-2">
         <Input
+          id={urlId}
           value={value}
           disabled={apply.status === 'applying'}
           onChange={(e) => onChange(e.target.value)}
@@ -124,21 +135,21 @@ export function PrometheusConnectionForm({
             {apply.status === 'applying'
               ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
               : <Plug className="w-3.5 h-3.5" />}
-            Apply now
+            {applyLabel}
           </button>
         </Tooltip>
       </div>
       {apply.status === 'connected' ? (
-        <p className="mt-1 flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
+        <p role="status" className="mt-1 flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
           <Check className="w-3 h-3 shrink-0" />
           Connected to {apply.address} — applied, no restart needed
         </p>
       ) : apply.status === 'unreachable' ? (
-        <p className="mt-1 text-xs text-amber-600 dark:text-amber-400/80">
+        <p role="status" className="mt-1 text-xs text-amber-600 dark:text-amber-400/80">
           Saved, but not reachable: {apply.error}
         </p>
       ) : apply.status === 'failed' ? (
-        <p className="mt-1 text-xs text-red-600 dark:text-red-400/80">
+        <p role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400/80">
           Couldn't apply: {apply.error}
         </p>
       ) : (
@@ -149,6 +160,9 @@ export function PrometheusConnectionForm({
       <p className="mt-2 text-xs text-theme-text-tertiary">
         {scopeDescription ?? (local ? 'Saved for this cluster.' : 'Changes affect this Radar installation. Use deployment settings for configuration that survives Pod replacement.')}
       </p>
+      {value.startsWith('http://') && (configuredHeaderKeys.length > 0 || operations.some(operation => operation.action === 'set')) && (
+        <p className="mt-2 text-xs text-warning-text">Headers will travel over unencrypted HTTP. Prefer HTTPS outside a trusted private network.</p>
+      )}
       {serverManaged && (
         <p className="mt-2 text-xs text-theme-text-secondary">
           Server controlled by startup configuration. To set or change the server,
@@ -161,7 +175,7 @@ export function PrometheusConnectionForm({
         </p>
       )}
 
-      <section className="mt-5 border-t border-theme-border pt-4">
+      {onApplyOperations ? <ConnectionHeadersEditor keys={configuredHeaderKeys} environmentKeys={environmentHeaderKeys} value={operations} onChange={setOperations} /> : <section className="mt-5 border-t border-theme-border pt-4">
         <h4 className="text-sm font-medium text-theme-text-primary mb-2">Authentication headers</h4>
         <p className="text-xs text-theme-text-tertiary mb-3">
           Optional authentication or tenant headers, such as Authorization or X-Scope-OrgID. Requires a backend URL.
@@ -258,7 +272,7 @@ export function PrometheusConnectionForm({
         {headerRows?.length === 0 && (
           <p className="mt-1 text-xs text-warning-text">Headers will be cleared when you click Apply now.</p>
         )}
-      </section>
+      </section>}
     </div>
   )
 }

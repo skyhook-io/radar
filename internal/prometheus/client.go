@@ -16,6 +16,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
@@ -323,6 +325,17 @@ func GetClient() *Client {
 	return globalClient
 }
 
+func ClientForOperation() (*Client, error) {
+	if err := connections.Refresh(config.IntegrationMetrics); err != nil {
+		return nil, err
+	}
+	client := GetClient()
+	if client == nil {
+		return nil, ErrPrometheusUnavailable
+	}
+	return client, nil
+}
+
 // Prewarm starts discovery in the background so charts are ready by the time
 // a user opens one, at boot and after every context switch. It never blocks
 // the caller and waits a little past the run's own hang backstop so its log
@@ -378,6 +391,9 @@ func Retire() {
 	defer clientMu.Unlock()
 	if globalClient != nil {
 		globalClient.mu.Lock()
+		if globalClient.workloadScope != nil {
+			log.Print("[prometheus] Workload metrics scope cleared: connection retired; restart with a fresh scope assertion")
+		}
 		globalClient.retired = true
 		globalClient.cancelWorkloadAttributionsLocked()
 		if globalClient.discoveryCancel != nil {
@@ -500,6 +516,11 @@ func (c *Client) HasManualURL() bool {
 // EnsureConnected attempts to discover and connect to Prometheus if not
 // already connected. Returns the base URL and base path, or an error.
 func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
+	if c == GetClient() {
+		if err := connections.Refresh(config.IntegrationMetrics); err != nil {
+			return "", "", err
+		}
+	}
 	c.mu.RLock()
 	if c.retired {
 		c.mu.RUnlock()

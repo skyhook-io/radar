@@ -16,15 +16,22 @@ type Connection struct {
 }
 
 func ValidateBaseURL(raw string) error {
+	if err := ValidateHTTPBaseURL(raw); err != nil {
+		return fmt.Errorf("Prometheus URL %w", err)
+	}
+	return nil
+}
+
+func ValidateHTTPBaseURL(raw string) error {
 	if raw == "" {
 		return nil
 	}
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
-		return errors.New("Prometheus URL must be an HTTP(S) base URL without credentials, query parameters or fragments")
+		return errors.New("must be an HTTP(S) base URL without credentials, query parameters or fragments")
 	}
 	if _, valid := NormalizeOrigin(raw); !valid {
-		return errors.New("Prometheus URL has an invalid port")
+		return errors.New("has an invalid port")
 	}
 	return nil
 }

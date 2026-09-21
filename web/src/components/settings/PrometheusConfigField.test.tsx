@@ -1,66 +1,64 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { PrometheusConfigField, type PrometheusProfileView } from './PrometheusConfigField'
+import { LocalConnectionSettings, type IntegrationProfile, type IntegrationProfiles } from './LocalConnectionSettings'
 
-const view: PrometheusProfileView = {
-  target: { binding: 'opaque', context: 'development', source: '/configs/team', fingerprint: 'target', clientGeneration: 1, operationGeneration: 1 },
-  revision: 'revision', state: 'auto', url: '', headerKeys: [], headersManaged: false,
+const profile: IntegrationProfile = {
+  target: { binding: 'opaque', context: 'development', source: '/configs/team', inFileName: 'dev', fingerprint: 'target', clientGeneration: 1, operationGeneration: 1, identity: { server: 'https://kubernetes', user: 'developer', trust: 'trust', insecureTls: false } },
+  revision: 'revision', state: 'auto', mode: 'auto', url: '', headerKeys: [], envHeaderKeys: [], headersManaged: false, secretSet: false, insecureTls: false, clusterId: '',
 }
-const render = (changes: Partial<PrometheusProfileView>) => renderToStaticMarkup(
-  <PrometheusConfigField profile={{ ...view, ...changes }} local value="" configuredHeaderKeys={[]} serverManaged={false} headersManaged={false} urlFromFlag={false} onChange={vi.fn()} onProfileChange={vi.fn()} onReload={vi.fn()} />,
-)
+const render = (changes: Partial<IntegrationProfile>) => {
+  const profiles: IntegrationProfiles = { metrics: { ...profile, ...changes }, argocd: profile, cost: profile }
+  return renderToStaticMarkup(<LocalConnectionSettings kind="metrics" profiles={profiles} onChange={vi.fn()} onDirtyChange={vi.fn()} />)
+}
 
-describe('Per-cluster metrics settings', () => {
-  it('keeps the normal connection form scoped and identity details collapsed', () => {
+describe('Local saved connections', () => {
+  it('keeps first setup a form, with no mandatory name or assignment step', () => {
     const html = render({})
-    expect(html).toContain('Saved for development')
     expect(html).toContain('Apply now')
+    expect(html).toContain('No headers configured')
+    expect(html).toContain('Storage and cluster identity')
     expect(html).toContain('aria-expanded="false"')
+    expect(html).not.toContain('Connection name')
     expect(html).not.toContain('Previously saved connection')
   })
-  it('makes compatible backends and authentication distinct from storage details', () => {
+  it('names common compatible backends without claiming an exhaustive list', () => {
     const html = render({ headerKeys: ['Authorization', 'X-Scope-OrgID'] })
-    expect(html).toContain('Connect a Prometheus-compatible backend, such as Prometheus, VictoriaMetrics, Thanos or Grafana Mimir.')
-    expect(html).toContain('Available charts depend on the metrics collected.')
-    expect(html).toMatch(/<h4[^>]*>Authentication headers<\/h4>/)
+    expect(html).toContain('such as Prometheus, VictoriaMetrics, Thanos or Grafana Mimir')
+    expect(html).toContain('Authentication headers')
     expect(html).toContain('Authorization, X-Scope-OrgID')
-    expect(html).toContain('Changing servers requires replacing or clearing the saved headers.')
-    expect(html).toMatch(/<\/section>[\s\S]*Storage and cluster identity/)
+    expect(html).toContain('Edit headers')
   })
-  it('keeps credential replacement guidance out of the empty authentication state', () => {
-    const html = render({})
-    expect(html).toContain('No headers configured')
-    expect(html).not.toContain('Changing servers requires')
+  it('offers explicit adoption and never activates legacy credentials by default', () => {
+    const html = render({ legacy: { url: 'https://legacy', headerKeys: ['Authorization'], secretSet: true, revision: 'legacy' } })
+    expect(html).toContain('Use for this cluster')
+    expect(html).toContain('Stop offering these older settings')
   })
-  it('directs environment-managed header changes to startup configuration', () => {
-    const html = render({ headerKeys: ['Authorization'], headersManaged: true })
-    expect(html).toContain('Headers are controlled by startup configuration.')
-    expect(html).not.toContain('Changing servers requires')
-    expect(html).not.toMatch(/<button[^>]*>Edit headers<\/button>/)
-    expect(html).not.toContain('Clear saved headers')
-  })
-  it('offers explicit legacy association without exposing credential values', () => {
-    const html = render({ legacy: { url: 'https://legacy', headerKeys: ['Authorization'], revision: 'legacy' } })
-    expect(html).toContain('Save for this cluster')
-    expect(html).toContain('Stop offering legacy settings for all clusters')
-    expect(html).toContain('Authorization (values hidden)')
-  })
-  it('makes launch overrides read-only and says how to edit saved settings', () => {
+  it('keeps launch overrides read-only with a way to change their source', () => {
     const html = render({ state: 'launch', url: 'https://temporary', headerKeys: ['Authorization'] })
     expect(html).toContain('Set for this launch')
-    expect(html).toContain('Restart without Prometheus flags')
+    expect(html).toContain('Restart without its startup flags or environment configuration')
+    expect(html).not.toContain('Apply now')
+    expect(html).not.toContain('Use saved connection…')
+  })
+  it('requires review for changed cluster identity', () => {
+    const html = render({ state: 'target_changed', url: 'https://saved', error: 'Review the changed cluster connection' })
+    expect(html).toContain('Review changes')
     expect(html).not.toContain('Apply now')
   })
-  it('requires explicit reconfirmation for a changed target', () => {
-    const html = render({ state: 'target_changed', url: 'https://saved' })
-    expect(html).toContain('Use this connection for development')
-    expect(html).toContain('saved metrics connection is paused')
-    expect(html).not.toContain('Apply now')
-  })
-  it('does not offer to overwrite malformed files', () => {
+  it('does not offer to overwrite a malformed file', () => {
     const html = render({ state: 'error', error: 'Repair clusters.json' })
     expect(html).toContain('Repair clusters.json')
     expect(html).toContain('Reload settings')
+    expect(html).not.toContain('Apply now')
+  })
+  it('requires choosing edit scope before exposing a shared editor', () => {
+    const html = render({ state: 'saved', url: 'https://metrics', connection: {
+      id: 'shared', type: 'metrics', name: 'Metrics · metrics', customName: '', url: 'https://metrics', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
+      uses: ['development', 'staging'].map(context => ({ binding: context, integration: 'metrics', context, source: '/configs/team', inFileName: context, availability: 'available' })),
+    } })
+    expect(html).toContain('Edit shared connection')
+    expect(html).toContain('Customize for this cluster')
+    expect(html).toContain('Used by 2 contexts')
     expect(html).not.toContain('Apply now')
   })
 })

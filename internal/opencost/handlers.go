@@ -59,8 +59,8 @@ func handleSummaryScoped(w http.ResponseWriter, r *http.Request, resolveCurrency
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	client := prometheuspkg.GetClient()
-	if client == nil {
+	client, connectionErr := prometheuspkg.ClientForOperation()
+	if connectionErr != nil {
 		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: currency, Source: "prometheus"})
 		return
 	}
@@ -113,8 +113,8 @@ func handleWorkloadsScoped(w http.ResponseWriter, r *http.Request, resolveCurren
 		return
 	}
 
-	client := prometheuspkg.GetClient()
-	if client == nil {
+	client, connectionErr := prometheuspkg.ClientForOperation()
+	if connectionErr != nil {
 		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: pkgopencost.ReasonNoPrometheus, Currency: currency, Source: "prometheus"})
 		return
 	}
@@ -210,8 +210,8 @@ func handleTrendScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	client := prometheuspkg.GetClient()
-	if client == nil {
+	client, connectionErr := prometheuspkg.ClientForOperation()
+	if connectionErr != nil {
 		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: currency, Source: "prometheus", Range: r.URL.Query().Get("range")})
 		return
 	}
@@ -251,8 +251,8 @@ func handleNodesScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	client := prometheuspkg.GetClient()
-	if client == nil {
+	client, connectionErr := prometheuspkg.ClientForOperation()
+	if connectionErr != nil {
 		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: currency, Source: "prometheus"})
 		return
 	}

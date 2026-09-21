@@ -16,8 +16,11 @@ import (
 
 	"k8s.io/apimachinery/pkg/util/validation"
 
+	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/investigationrefs"
@@ -84,7 +87,8 @@ type AppConfig struct {
 	PrometheusLiteralHeaderFlag bool
 	PrometheusEnvHeaderFlag     bool
 	PrometheusSavedURL          string
-	PrometheusProfiles          *prometheuspkg.ProfileResolver
+	LocalConnections            *connections.Resolver
+	LocalRuntime                *connectionruntime.Runtime
 	operatorSettingsLoaded      bool
 	BeylaJobSelector            string
 	WorkloadMetricsScope        prom.WorkloadMetricsScope
@@ -311,16 +315,18 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 			log.Printf("[prometheus] Warning: %v", prom.ErrHeadersRequireURL)
 		}
 	}
-	cfg = persistKubecostContextBindings(cfg)
-	if err := internalopencost.ConfigureStartup(internalopencost.ManagerConfig{
-		Source:           internalopencost.Source(cfg.CostSource),
-		URL:              cfg.KubecostURL,
-		APIKey:           cfg.KubecostAPIKey,
-		APIKeyContext:    cfg.KubecostAPIKeyContext,
-		ClusterID:        cfg.KubecostClusterID,
-		ClusterIDContext: cfg.KubecostClusterIDContext,
-	}); err != nil {
-		log.Printf("[opencost] Invalid cost source configuration: %v", err)
+	if cfg.LocalConnections == nil {
+		cfg = persistKubecostContextBindings(cfg)
+		if err := internalopencost.ConfigureStartup(internalopencost.ManagerConfig{
+			Source:           internalopencost.Source(cfg.CostSource),
+			URL:              cfg.KubecostURL,
+			APIKey:           cfg.KubecostAPIKey,
+			APIKeyContext:    cfg.KubecostAPIKeyContext,
+			ClusterID:        cfg.KubecostClusterID,
+			ClusterIDContext: cfg.KubecostClusterIDContext,
+		}); err != nil {
+			log.Printf("[opencost] Invalid cost source configuration: %v", err)
+		}
 	}
 	if cfg.BeylaJobSelector != "" {
 		traffic.SetBeylaJobSelector(cfg.BeylaJobSelector)
@@ -330,20 +336,20 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 			log.Fatalf("Invalid workload metrics scope: %v", err)
 		}
 	}
-	if cfg.PrometheusProfiles != nil {
-		if _, err := resolveLocalPrometheus(cfg.PrometheusProfiles); err != nil {
+	if cfg.LocalConnections != nil {
+		if _, err := resolveLocalPrometheus(cfg.LocalConnections); err != nil {
 			prometheuspkg.Retire()
 			traffic.SetMetricsConfig("", nil)
 		}
 	}
 
 	k8s.RegisterTrafficFuncs(traffic.Reset, func() error {
-		if cfg.PrometheusProfiles != nil {
-			selection, err := resolveLocalPrometheus(cfg.PrometheusProfiles)
+		if cfg.LocalConnections != nil {
+			selection, err := resolveLocalPrometheus(cfg.LocalConnections)
 			if err != nil {
 				traffic.SetMetricsConfig("", nil)
 			} else {
-				traffic.SetMetricsConfig(selection.Connection.URL, selection.Connection.Headers)
+				traffic.SetMetricsConfig(selection.Connection.Prometheus.URL, selection.Connection.Prometheus.Headers)
 			}
 		}
 		return traffic.ReinitializeWithConfig(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
@@ -353,32 +359,55 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 	// applied live via /integrations/prometheus). Re-applying the captured startup
 	// cfg here would revert a live change on context switch, so we don't.
 	resetPrometheus := prometheuspkg.Reset
-	if cfg.PrometheusProfiles != nil {
+	if cfg.LocalConnections != nil {
 		resetPrometheus = func() { prometheuspkg.Retire(); traffic.SetMetricsConfig("", nil) }
 	}
 	k8s.RegisterPrometheusFuncs(resetPrometheus, func() error {
-		if cfg.PrometheusProfiles != nil {
-			selection, err := resolveLocalPrometheus(cfg.PrometheusProfiles)
+		if cfg.LocalConnections != nil {
+			selection, err := resolveLocalPrometheus(cfg.LocalConnections)
 			if err != nil {
 				prometheuspkg.Retire()
 				return err
 			}
 			prometheuspkg.Reinitialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 			url, headers := prometheuspkg.CurrentConfig()
-			if url != strings.TrimRight(selection.Connection.URL, "/") || !maps.Equal(headers, selection.Connection.Headers) {
-				prometheuspkg.Configure(selection.Connection.URL, selection.Connection.Headers)
+			if url != strings.TrimRight(selection.Connection.Prometheus.URL, "/") || !maps.Equal(headers, selection.Connection.Prometheus.Headers) {
+				prometheuspkg.Configure(selection.Connection.Prometheus.URL, selection.Connection.Prometheus.Headers)
 			}
 			return nil
 		}
 		prometheuspkg.Reinitialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 		return nil
 	})
-	// Reinitialize only builds the new client; discovery for the new cluster has
-	// to be started explicitly, and the callback fires once subsystem init is
-	// done so the run sees a populated cache.
-	k8s.OnContextSwitch(func(_ string) { prometheuspkg.Prewarm() })
-	k8s.OnNamespaceRescope(func(_ string) { prometheuspkg.Prewarm() })
 	k8s.RegisterCostResetFunc(internalopencost.Reset)
+	if cfg.LocalConnections != nil {
+		cfg.LocalRuntime = connectionruntime.New(cfg.LocalConnections, k8s.RestartTrafficSubsystem)
+		argocd.SetConfig("", "", false, true)
+		internalopencost.DisableLocal("Connect to Kubernetes to load this context's cost connection")
+		connections.RegisterRefresh(cfg.LocalRuntime.Refresh)
+		if target, err := k8s.CurrentProfileTarget(); err == nil {
+			cfg.LocalRuntime.Apply(target, false)
+		}
+		runtime := cfg.LocalRuntime
+		k8s.OnContextSwitch(func(_ string) {
+			if target, err := k8s.CurrentProfileTarget(); err == nil {
+				runtime.ActivateSwitch(target)
+			}
+		})
+		k8s.OnNamespaceRescope(func(_ string) {
+			if target, err := k8s.CurrentProfileTarget(); err == nil {
+				runtime.ActivateSwitch(target)
+			}
+		})
+	}
+	// Context-switch callbacks run before Connected is published. Discovery
+	// must wait until the new integration clients are activated and readable.
+	k8s.OnConnectionChange(func(status k8s.ConnectionStatus) {
+		if status.State == k8s.StateConnected {
+			prometheuspkg.Prewarm()
+		}
+	})
+	k8s.OnNamespaceRescope(func(_ string) { prometheuspkg.Prewarm() })
 	return cfg
 }
 
@@ -479,7 +508,8 @@ func CreateServer(cfg AppConfig) *server.Server {
 		EffectiveConfig:       effectiveCfg,
 		PrometheusURLFlag:     cfg.PrometheusURLFlag,
 		PrometheusHeaderFlags: cfg.PrometheusHeaderFlags,
-		PrometheusProfiles:    cfg.PrometheusProfiles,
+		LocalConnections:      cfg.LocalConnections,
+		LocalRuntime:          cfg.LocalRuntime,
 		OpenCostCurrency:      cfg.OpenCostCurrency,
 		OpenCostManaged:       cfg.OpenCostFlagSet,
 		DiagConfig: &server.DiagConfig{

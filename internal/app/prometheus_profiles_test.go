@@ -40,8 +40,8 @@ func TestPrepareLocalPrometheusConfiguration(t *testing.T) {
 			if (err != nil) != tc.denied {
 				t.Fatalf("prepare: %v", err)
 			}
-			if err == nil && (got.PrometheusURL != tc.wantURL || len(got.PrometheusHeaders) != 0 || got.PrometheusProfiles == nil) {
-				t.Fatalf("unexpected selected config: url=%q headers=%d profiles=%v", got.PrometheusURL, len(got.PrometheusHeaders), got.PrometheusProfiles != nil)
+			if err == nil && (got.PrometheusURL != tc.wantURL || len(got.PrometheusHeaders) != 0 || got.LocalConnections == nil) {
+				t.Fatalf("unexpected selected config: url=%q headers=%d profiles=%v", got.PrometheusURL, len(got.PrometheusHeaders), got.LocalConnections != nil)
 			}
 		})
 	}
@@ -74,13 +74,15 @@ func TestUnusableProfileDoesNotPreventStartupWithScope(t *testing.T) {
 			}
 			_, rev, _ := store.Read()
 			_, err = store.Update(context.Background(), rev, func(file *config.ClusterProfiles) error {
-				profile := config.ClusterProfile{Context: "dev", Target: target.Fingerprint, Prometheus: prom.Connection{URL: "https://prom"}}
+				assignment := config.IntegrationAssignment{Mode: "connection", Target: target.Fingerprint, ConnectionID: "metrics"}
+				connection := prom.Connection{URL: "https://prom"}
 				if scenario == "target" {
-					profile.Target = "old-target"
+					assignment.Target = "old-target"
 				} else {
-					profile.Prometheus.HeadersFromEnv = map[string]string{"Authorization": "UNSET_PROFILE_STARTUP_TOKEN"}
+					connection.HeadersFromEnv = map[string]string{"Authorization": "UNSET_PROFILE_STARTUP_TOKEN"}
 				}
-				file.Profiles[target.Binding] = profile
+				file.Connections["metrics"] = config.SavedConnection{Type: config.IntegrationMetrics, Prometheus: &connection}
+				file.Profiles[target.Binding] = config.ClusterProfile{Context: "dev", Integrations: map[config.Integration]config.IntegrationAssignment{config.IntegrationMetrics: assignment}}
 				return nil
 			})
 			if err != nil {
@@ -116,7 +118,7 @@ func TestPrepareSharedPrometheusKeepsExistingConfiguration(t *testing.T) {
 		cfg.PrometheusSavedURL = cfg.PrometheusURL
 		cfg.PrometheusHeadersFromEnv = map[string]string{"Authorization": "RADAR_PROFILE_TEST_TOKEN"}
 		got, err := preparePrometheusConfiguration(cfg)
-		if err != nil || got.PrometheusProfiles != nil || got.PrometheusHeaders["Authorization"] != "shared-secret" {
+		if err != nil || got.LocalConnections != nil || got.PrometheusHeaders["Authorization"] != "shared-secret" {
 			t.Fatalf("shared configuration changed: %v", err)
 		}
 	}

@@ -38,6 +38,10 @@ func (s *Server) handleApplyCostSource(w http.ResponseWriter, r *http.Request) {
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
 	}
+	if s.localConnections != nil && s.configManagement() == "local" {
+		s.writeError(w, http.StatusConflict, "Use the cluster-scoped saved connections endpoint to change this local integration")
+		return
+	}
 	if internalopencost.IsEnvManaged() {
 		s.writeError(w, http.StatusConflict, "Cost source is configured from the environment — edit the deployment to change it.")
 		return

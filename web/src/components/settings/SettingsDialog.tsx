@@ -31,7 +31,8 @@ import {
   costSourceLabel,
 } from '../cost/source'
 import { costSourceApplyLabel, shouldOfferCostReview, shouldShowSettingsFooter } from './settings-state'
-import { PrometheusConfigField, type PrometheusProfileView } from './PrometheusConfigField'
+import { PrometheusConfigField } from './PrometheusConfigField'
+import { LocalConnectionSettings, type IntegrationProfiles, type IntegrationKind } from './LocalConnectionSettings'
 import { useContextSwitch } from '../../context/ContextSwitchContext'
 import type { SettingsSectionId } from './settings-state'
 import { OperatorManagedNotice } from './OperatorManagedNotice'
@@ -63,7 +64,7 @@ interface Config {
 }
 
 interface ConfigResponse {
-  prometheusProfile?: PrometheusProfileView
+	 integrationProfiles?: IntegrationProfiles
   management: 'local' | 'operator' | 'cloud'
   file: Config
   effective: Config
@@ -146,8 +147,15 @@ export function SettingsDialog({
   const { data: settingsCluster } = useClusterInfo()
   const { isSwitching } = useContextSwitch()
   const settingsApiBase = getApiBase()
-  const [reloadConfig, setReloadConfig] = useState(0)
   const [prometheusCredentialDirty, setPrometheusCredentialDirty] = useState(false)
+  const [localDirty, setLocalDirty] = useState<Record<IntegrationKind, boolean>>({ metrics: false, argocd: false, cost: false })
+  const metricsDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, metrics: dirty })), [])
+  const argoDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, argocd: dirty })), [])
+  const costDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, cost: dirty })), [])
+  const connectionsChanged = useCallback((profiles: IntegrationProfiles) => {
+    setConfigData(value => value ? { ...value, integrationProfiles: profiles } : value)
+    void queryClient.invalidateQueries({ predicate: query => typeof query.queryKey[0] === 'string' && /^(prometheus|opencost|gitops|argo)/.test(query.queryKey[0]) })
+  }, [queryClient])
 
   const [configData, setConfigData] = useState<ConfigResponse | null>(null)
   const operatorManaged = configData?.management === 'operator'
@@ -204,28 +212,36 @@ export function SettingsDialog({
     (editedConfig.costSource ?? 'auto') !== (configData?.file.costSource ?? 'auto') ||
     (editedConfig.kubecostUrl ?? '').trim() !== (configData?.file.kubecostUrl ?? '').trim() ||
     (editedConfig.kubecostClusterId ?? '').trim() !== (configData?.file.kubecostClusterId ?? '').trim()
-  const costIntegrationDirty = costSourceDirty || costCredentialDirty
+  const costIntegrationDirty = costSourceDirty || costCredentialDirty || localDirty.cost
   // Merged-pane dirty for the flat nav (Connection = cluster+server, Advanced = mcp+timeline).
   const connectionDirty = clusterDirty || serverDirty
   const advancedDirty = mcpDirty || timelineDirty
   const configDirty = configData != null && (connectionDirty || advancedDirty)
-  const prometheusDirty = prometheusCredentialDirty || (editedConfig.prometheusUrl ?? '') !== (configData?.effective.prometheusUrl ?? '')
-  const metricsDraft = useRef({ open, scope: `${settingsApiBase}:${settingsCluster?.context}`, dirty: false, reload: reloadConfig })
-  const [metricsDraftNotice, setMetricsDraftNotice] = useState(false)
+  const prometheusDirty = prometheusCredentialDirty || localDirty.metrics || (editedConfig.prometheusUrl ?? '') !== (configData?.effective.prometheusUrl ?? '')
+  const metricsDraft = useRef({ open, scope: `${settingsApiBase}:${settingsCluster?.context}`, dirty: false })
+  const [draftFrozen, setDraftFrozen] = useState(false)
+  const [reloadVersion, setReloadVersion] = useState(0)
+  const settingsScope = `${settingsApiBase}:${settingsCluster?.context}`
+  const targetChangedWithDraft = open && metricsDraft.current.open && metricsDraft.current.dirty && (isSwitching || metricsDraft.current.scope !== settingsScope)
   useEffect(() => {
-    const scope = `${settingsApiBase}:${settingsCluster?.context}`
-    if (!open) setMetricsDraftNotice(false)
-    else if (metricsDraft.current.open && metricsDraft.current.dirty && (isSwitching || metricsDraft.current.scope !== scope || metricsDraft.current.reload !== reloadConfig)) setMetricsDraftNotice(true)
-    metricsDraft.current = { open, scope, dirty: configData != null && (prometheusDirty || configDirty || costIntegrationDirty || aiDirty), reload: reloadConfig }
-  }, [open, settingsApiBase, settingsCluster?.context, isSwitching, configData, prometheusDirty, configDirty, costIntegrationDirty, aiDirty, reloadConfig])
+    if (!open) setDraftFrozen(false)
+    else if (targetChangedWithDraft) {
+      setDraftFrozen(true)
+      return
+    }
+    if (open && draftFrozen) return
+    metricsDraft.current = { open, scope: settingsScope, dirty: configData != null && (prometheusDirty || configDirty || costIntegrationDirty || localDirty.argocd || aiDirty) }
+  }, [open, settingsScope, targetChangedWithDraft, draftFrozen, configData, prometheusDirty, configDirty, costIntegrationDirty, localDirty.argocd, aiDirty])
 
   // Load config on open + snapshot AI prefs + pick a default section that's
   // actually accessible to the current identity.
   useEffect(() => {
     if (!open) return
+    if (targetChangedWithDraft || draftFrozen) return
     const controller = new AbortController()
     setConfigData(null)
     setPrometheusCredentialDirty(false)
+    setLocalDirty({ metrics: false, argocd: false, cost: false })
     setSaveMessage(null)
     setLoadError(null)
     setConfirmingClose(false)
@@ -258,7 +274,7 @@ export function SettingsDialog({
     return () => controller.abort()
     // Snapshot-on-open only; we don't want late diag updates to wipe staged edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, isSwitching, settingsCluster?.context, settingsApiBase, reloadConfig])
+  }, [open, isSwitching, settingsCluster?.context, settingsApiBase, draftFrozen, reloadVersion])
 
   useEffect(() => {
     if (open) setSection(initialSection)
@@ -279,7 +295,7 @@ export function SettingsDialog({
   }, [])
 
   const saveConfig = useCallback(async (): Promise<boolean> => {
-    if (!configData || configSavingRef.current || costCurrencySavingRef.current) return false
+    if (!configData || draftFrozen || targetChangedWithDraft || configSavingRef.current || costCurrencySavingRef.current) return false
     configSavingRef.current = true
     setSaving(true)
     setSaveMessage(null)
@@ -323,7 +339,7 @@ export function SettingsDialog({
       configSavingRef.current = false
       setSaving(false)
     }
-  }, [editedConfig, configData])
+  }, [editedConfig, configData, draftFrozen, targetChangedWithDraft])
 
   const saveCostCurrency = useCallback(async (value: string): Promise<void> => {
     if (!configData) throw new Error('Radar configuration is not available')
@@ -416,7 +432,7 @@ export function SettingsDialog({
   const requestCloseRef = useRef<(afterClose?: () => void) => void>(() => {})
   requestCloseRef.current = (afterClose) => {
     pendingCloseActionRef.current = afterClose ?? null
-    if (canEditConfig && (configDirty || costIntegrationDirty || prometheusDirty)) setConfirmingClose(true)
+    if (canEditConfig && (configDirty || costIntegrationDirty || prometheusDirty || localDirty.argocd)) setConfirmingClose(true)
     else finishClose()
   }
 
@@ -470,7 +486,7 @@ export function SettingsDialog({
     { id: 'connection', label: 'Connection', icon: Boxes, ownerOnly: true, dirty: connectionDirty },
     { id: 'prometheus', label: 'Metrics', icon: Activity, ownerOnly: true, dirty: prometheusDirty },
     { id: 'cost', label: 'Cost', icon: Coins, ownerOnly: true, dirty: costIntegrationDirty },
-    { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, dirty: false },
+    { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, dirty: localDirty.argocd },
     { id: 'ai', label: 'AI investigations', icon: Sparkles, ownerOnly: false, dirty: aiDirty },
     { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, ownerOnly: true, dirty: advancedDirty },
   ]
@@ -585,10 +601,17 @@ export function SettingsDialog({
               </div>
             )}
 
-            {metricsDraftNotice && <p role="status" className="mb-3 text-xs text-theme-text-secondary">Settings reloaded. Unapplied edits were discarded.</p>}
+            {draftFrozen && <div role="status" className="mb-4 space-y-2 rounded-md border border-theme-border p-3 text-sm text-theme-text-secondary">
+              <p>The cluster changed while you had unsaved edits. Your previous draft is still shown below, but cannot be applied to this cluster.</p>
+              <button type="button" disabled={isSwitching} className="text-xs text-accent-text hover:underline disabled:opacity-50" onClick={() => {
+                metricsDraft.current = { open, scope: settingsScope, dirty: false }
+                setDraftFrozen(false)
+                setReloadVersion((version) => version + 1)
+              }}>Discard draft and load current cluster</button>
+            </div>}
             {!configData && !['overview', 'perms', 'ai'].includes(section) ? (
               <p className="text-sm text-theme-text-secondary">{loadError ? 'Configuration is unavailable. Close Settings and try again.' : 'Loading configuration…'}</p>
-            ) : <>
+            ) : <div inert={draftFrozen || undefined} className={draftFrozen ? 'opacity-60' : undefined}>
             {operatorManaged && section !== 'perms' && section !== 'ai' && <div className="mb-4"><OperatorManagedNotice /></div>}
             {/* Overview — status at a glance; the landing section */}
             <div className={clsx(section !== 'overview' && 'hidden')} role="tabpanel" inert={section !== 'overview' || undefined}>
@@ -657,11 +680,8 @@ export function SettingsDialog({
               live
               locked={!canEditConfig}
             >
-              <PrometheusConfigField
-                key={`${settingsApiBase}:${JSON.stringify(configData?.prometheusProfile?.target)}`}
-                profile={configData?.prometheusProfile}
-                onProfileChange={(profile) => setConfigData((prev) => prev ? { ...prev, prometheusProfile: profile } : prev)}
-                onReload={() => setReloadConfig((value) => value + 1)}
+              {configData?.integrationProfiles ? <LocalConnectionSettings key={JSON.stringify(configData.integrationProfiles.metrics.target)} kind="metrics" profiles={configData.integrationProfiles} onChange={connectionsChanged} onDirtyChange={metricsDirtyChange} /> : <PrometheusConfigField
+                key={settingsApiBase}
                 onDirtyChange={setPrometheusCredentialDirty}
                 local={deploymentMode === 'local'}
                 value={editedConfig.prometheusUrl ?? ''}
@@ -680,7 +700,7 @@ export function SettingsDialog({
                     } : prev
                   )
                 }}
-              />
+              />}
             </SectionPane>
 
             <SectionPane
@@ -693,6 +713,7 @@ export function SettingsDialog({
               locked={!canEditConfig}
             >
               <CostSection
+                integration={configData?.integrationProfiles ? <LocalConnectionSettings key={JSON.stringify(configData.integrationProfiles.cost.target)} kind="cost" profiles={configData.integrationProfiles} onChange={connectionsChanged} onDirtyChange={costDirtyChange} /> : undefined}
                 currency={editedConfig.opencostCurrency ?? ''}
                 source={editedConfig.costSource ?? 'auto'}
                 url={editedConfig.kubecostUrl ?? ''}
@@ -737,7 +758,7 @@ export function SettingsDialog({
               live
               locked={!canEditConfig}
             >
-              <ArgoCDConfigField
+              {configData?.integrationProfiles ? <LocalConnectionSettings key={JSON.stringify(configData.integrationProfiles.argocd.target)} kind="argocd" profiles={configData.integrationProfiles} cliSession={configData.argoCdCliSession} onChange={connectionsChanged} onDirtyChange={argoDirtyChange} /> : <ArgoCDConfigField
                 url={editedConfig.argoCdUrl ?? ''}
                 insecureTls={editedConfig.argoCdInsecureTls ?? false}
                 tokenSet={configData?.argoCdTokenSet ?? false}
@@ -772,7 +793,7 @@ export function SettingsDialog({
                     predicate: (query) => typeof query.queryKey[0] === 'string' && query.queryKey[0].startsWith('gitops-'),
                   })
                 }}
-              />
+              />}
             </SectionPane>
 
             {/* AI investigations — self-saving, usable by everyone. Same heading block
@@ -854,7 +875,7 @@ export function SettingsDialog({
                 />
               </div>
             </SectionPane>
-            </>}
+            </div>}
           </div>
         </div>
 
@@ -913,7 +934,7 @@ export function SettingsDialog({
                   {configDirty && (
                     <button
                       onClick={costIntegrationDirty || prometheusDirty ? saveConfig : handleSaveAndClose}
-                      disabled={saving || costCurrencySaving}
+                      disabled={saving || costCurrencySaving || draftFrozen || targetChangedWithDraft}
                       className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
                     >
                       {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
@@ -958,7 +979,7 @@ export function SettingsDialog({
                   {configDirty && (
                     <button
                       onClick={saveConfig}
-                      disabled={saving || costCurrencySaving}
+                      disabled={saving || costCurrencySaving || draftFrozen || targetChangedWithDraft}
                       className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
                     >
                       {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
@@ -1506,6 +1527,7 @@ function TimelineSection({
 }
 
 function CostSection({
+  integration,
   currency,
   source,
   url,
@@ -1527,6 +1549,7 @@ function CostSection({
   onCredentialDirtyChange,
   onApplied,
 }: {
+  integration?: ReactNode
   currency: string
   source: 'auto' | 'prometheus' | 'kubecost'
   url: string
@@ -1664,7 +1687,7 @@ function CostSection({
 
   return (
     <div className="space-y-5">
-      {sourceEnvManaged && (
+      {integration ?? <>{sourceEnvManaged && (
         <div id="cost-source-managed" className={clsx(
           'rounded-md border p-3',
           sourceEnvError
@@ -1866,6 +1889,7 @@ function CostSection({
       </div>}
       </div>
 
+      </>}
       <div className="rounded-lg border border-theme-border bg-theme-base/40 p-4">
         <label htmlFor="cost-currency" className="block text-sm font-semibold text-theme-text-primary">
           Display currency

@@ -16,7 +16,7 @@ import (
 )
 
 func TestProfileStoreRejectsInvalidFiles(t *testing.T) {
-	for _, data := range []string{`null`, `{}`, `{"version":2,"profiles":{}}`, `{"version":1}`, `{"version":1,"profiles":null}`, `{"version":1,"profiles":{},"typo":"secret"}`, `{"version":1,"profiles":{}} {}`, `{"version":1,"profiles":{"a":{"context":"a","target":"a","prometheus":{"url":"https://user:secret@prom"}}}}`} {
+	for _, data := range []string{`null`, `{}`, `{"version":2,"profiles":{},"connections":{}}`, `{"version":1}`, `{"version":1,"profiles":null}`, `{"version":1,"profiles":{},"connections":{},"typo":"secret"}`, `{"version":1,"profiles":{},"connections":{}} {}`, `{"version":1,"profiles":{"a":{"context":"a","target":"a","prometheus":{"url":"https://user:secret@prom"}}}}`} {
 		t.Run(data, func(t *testing.T) {
 			s := &ProfileStore{Path: filepath.Join(t.TempDir(), "clusters.json")}
 			if err := os.WriteFile(s.Path, []byte(data), 0600); err != nil {
@@ -53,7 +53,8 @@ func TestProfileStoreAtomicCAS(t *testing.T) {
 			defer wg.Done()
 			independent := &ProfileStore{Path: s.Path}
 			_, err := independent.Update(context.Background(), revision, func(p *ClusterProfiles) error {
-				p.Profiles[binding] = ClusterProfile{Context: binding, Target: binding, Prometheus: prom.Connection{URL: "https://prom/" + binding}}
+				p.Connections[binding] = SavedConnection{Type: IntegrationMetrics, Prometheus: &prom.Connection{URL: "https://prom/" + binding}}
+				p.Profiles[binding] = ClusterProfile{Context: binding, Integrations: map[Integration]IntegrationAssignment{IntegrationMetrics: {Mode: "connection", Target: binding, ConnectionID: binding}}}
 				return nil
 			})
 			results <- err
@@ -122,7 +123,7 @@ func TestProfileStoreAcrossProcesses(t *testing.T) {
 	if path := os.Getenv("RADAR_PROFILE_CHILD_PATH"); path != "" {
 		s := &ProfileStore{Path: path}
 		_, err := s.Update(context.Background(), os.Getenv("RADAR_PROFILE_CHILD_REVISION"), func(p *ClusterProfiles) error {
-			p.PrometheusMigrationComplete = true
+			p.Imported[IntegrationMetrics] = true
 			return nil
 		})
 		if errors.Is(err, ErrProfileConflict) {

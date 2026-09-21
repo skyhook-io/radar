@@ -69,8 +69,8 @@ func (s *Server) handleOpenCostApplication(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	client := prometheuspkg.GetClient()
-	if client == nil {
+	client, connectionErr := prometheuspkg.ClientForOperation()
+	if connectionErr != nil {
 		resp := pkgopencost.UnavailableApplicationCostResponse(inputs, unavailable, unsupported, pkgopencost.ReasonNoPrometheus)
 		resp.Currency = s.resolvedOpenCostCurrency()
 		resp.Source = "prometheus"
@@ -131,8 +131,8 @@ func (s *Server) handleOpenCostApplicationTrend(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	client := prometheuspkg.GetClient()
-	if client == nil {
+	client, connectionErr := prometheuspkg.ClientForOperation()
+	if connectionErr != nil {
 		resp := pkgopencost.ComputeApplicationCostTrendFromProm(r.Context(), nil, pkgopencost.ApplicationTrendOptions{
 			Range:       req.Range,
 			Workloads:   refs,

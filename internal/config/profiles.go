@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/gofrs/flock"
-	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 var ErrProfileConflict = errors.New("cluster settings changed; reload Settings and try again")
@@ -22,18 +21,25 @@ var ErrProfileBusy = errors.New("cluster settings are busy; try again")
 var ErrProfileInvalid = errors.New("invalid cluster settings")
 
 type ClusterProfile struct {
-	Context     string          `json:"context"`
-	Source      string          `json:"source,omitempty"`
-	Description string          `json:"description,omitempty"`
-	Target      string          `json:"target"`
-	Prometheus  prom.Connection `json:"prometheus"`
+	Context      string                                `json:"context"`
+	Source       string                                `json:"source,omitempty"`
+	InFileName   string                                `json:"inFileName,omitempty"`
+	CAPI         *CAPIProfileReference                 `json:"capi,omitempty"`
+	Integrations map[Integration]IntegrationAssignment `json:"integrations"`
+}
+
+type CAPIProfileReference struct {
+	ManagementBinding string `json:"managementBinding"`
+	Namespace         string `json:"namespace"`
+	Name              string `json:"name"`
 }
 
 type ClusterProfiles struct {
-	Version                     int                       `json:"version"`
-	Profiles                    map[string]ClusterProfile `json:"profiles"`
-	PrometheusAdopted           map[string]bool           `json:"prometheusAdopted,omitempty"`
-	PrometheusMigrationComplete bool                      `json:"prometheusMigrationComplete,omitempty"`
+	Version     int                             `json:"version"`
+	Profiles    map[string]ClusterProfile       `json:"profiles"`
+	Connections map[string]SavedConnection      `json:"connections"`
+	Imported    map[Integration]bool            `json:"imported,omitempty"`
+	Dismissed   map[string]map[Integration]bool `json:"dismissed,omitempty"`
 }
 
 type ProfileStore struct{ Path string }
@@ -51,53 +57,44 @@ func profileRevision(data []byte) string {
 }
 
 func (s *ProfileStore) Read() (ClusterProfiles, string, error) {
-	result := ClusterProfiles{Version: 1, Profiles: map[string]ClusterProfile{}, PrometheusAdopted: map[string]bool{}}
+	file, revision, _, err := s.ReadSince("")
+	return file, revision, err
+}
+
+func (s *ProfileStore) ReadSince(previous string) (ClusterProfiles, string, bool, error) {
+	result := ClusterProfiles{Version: 1, Profiles: map[string]ClusterProfile{}, Connections: map[string]SavedConnection{}, Imported: map[Integration]bool{}, Dismissed: map[string]map[Integration]bool{}}
 	if s.Path == "" {
-		return result, "", errors.New("cluster settings directory is unavailable")
+		return result, "", false, errors.New("cluster settings directory is unavailable")
 	}
 	f, err := os.Open(s.Path)
 	if os.IsNotExist(err) {
-		return result, profileRevision(nil), nil
+		return result, profileRevision(nil), previous != profileRevision(nil), nil
 	}
 	if err != nil {
-		return result, "", fmt.Errorf("cannot read cluster settings: %w", err)
+		return result, "", false, fmt.Errorf("cannot read cluster settings: %w", err)
 	}
 	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, 4*1024*1024+1))
 	if err != nil {
-		return result, "", err
+		return result, "", false, err
 	}
 	if len(data) > 4*1024*1024 {
-		return result, "", errors.New("cluster settings exceed 4 MiB")
+		return result, "", false, errors.New("cluster settings exceed 4 MiB")
+	}
+	revision := profileRevision(data)
+	if previous == revision {
+		return result, revision, false, nil
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	result = ClusterProfiles{}
 	if dec.Decode(&result) != nil || dec.Decode(new(any)) != io.EOF {
-		return result, "", errors.New("invalid clusters.json; repair the file before saving settings")
+		return result, "", false, errors.New("invalid clusters.json; repair the file before saving settings")
 	}
-	if err := result.validate(); err != nil {
-		return result, "", err
+	if err := result.ValidateStructure(); err != nil {
+		return result, "", false, err
 	}
-	return result, profileRevision(data), nil
-}
-
-func (p ClusterProfiles) validate() error {
-	if p.Version != 1 {
-		return errors.New("unsupported clusters.json version (expected 1)")
-	}
-	if p.Profiles == nil {
-		return errors.New("clusters.json requires a profiles object")
-	}
-	for binding, profile := range p.Profiles {
-		if binding == "" || profile.Target == "" || profile.Context == "" {
-			return errors.New("cluster profile requires binding, target and context")
-		}
-		if err := profile.Prometheus.Validate(); err != nil {
-			return fmt.Errorf("invalid cluster profile: %w", err)
-		}
-	}
-	return nil
+	return result, revision, true, nil
 }
 
 func (s *ProfileStore) Update(ctx context.Context, revision string, mutate func(*ClusterProfiles) error) (string, error) {
@@ -129,10 +126,21 @@ func (s *ProfileStore) Update(ctx context.Context, revision string, mutate func(
 	if revision != actual {
 		return "", ErrProfileConflict
 	}
+	beforeData, err := json.Marshal(current)
+	if err != nil {
+		return "", err
+	}
+	var before ClusterProfiles
+	if err := json.Unmarshal(beforeData, &before); err != nil {
+		return "", err
+	}
 	if err := mutate(&current); err != nil {
 		return "", err
 	}
-	if err := current.validate(); err != nil {
+	if err := current.ValidateStructure(); err != nil {
+		return "", fmt.Errorf("%w: %v", ErrProfileInvalid, err)
+	}
+	if err := current.ValidateChanges(before); err != nil {
 		return "", fmt.Errorf("%w: %v", ErrProfileInvalid, err)
 	}
 	data, err := json.MarshalIndent(current, "", "  ")

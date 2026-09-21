@@ -71,9 +71,9 @@ func handleWorkloadMetrics(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "Unsupported request source; use beyla or istio, or omit source for automatic selection.")
 		return
 	}
-	client := GetClient()
-	if client == nil {
-		writeError(w, http.StatusServiceUnavailable, "Prometheus client not initialized")
+	client, connectionErr := ClientForOperation()
+	if connectionErr != nil {
+		writeError(w, http.StatusServiceUnavailable, connectionErr.Error())
 		return
 	}
 	generation := client.DiscoveryGeneration()

@@ -1,0 +1,356 @@
+import { useEffect, useId, useState } from 'react'
+import { Input, Disclosure } from '@skyhook-io/k8s-ui'
+
+export interface SecretEdit {
+  action: 'keep' | 'set' | 'clear'
+  value?: string
+}
+export interface ArgoConnectionDraft {
+  url: string
+  insecureTls: boolean
+  secret?: SecretEdit
+  useCliToken?: boolean
+}
+export interface CostConnectionDraft {
+  url: string
+  mode: 'auto' | 'prometheus' | 'kubecost'
+  clusterId: string
+  secret?: SecretEdit
+}
+
+function CredentialField({
+  label,
+  saved,
+  value,
+  onChange
+}: {
+  label: string
+  saved: boolean
+  value: SecretEdit
+  onChange: (value: SecretEdit) => void
+}) {
+  const id = useId()
+  return (
+    <section className="space-y-2 border-t border-theme-border pt-4">
+      <label
+        htmlFor={id}
+        className="block text-sm font-medium text-theme-text-primary"
+      >
+        {label}
+      </label>
+      <div className="flex items-center gap-2">
+        <Input
+          id={id}
+          type="password"
+          autoComplete="new-password"
+          spellCheck={false}
+          value={value.value ?? ''}
+          onChange={(e) => onChange({ action: 'set', value: e.target.value })}
+          placeholder={
+            value.action === 'clear'
+              ? 'Will be removed'
+              : saved
+                ? 'Saved — leave unchanged to keep'
+                : 'Optional'
+          }
+          className="block w-full min-w-0 px-3 py-2 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500 flex-1"
+        />
+        {saved && (
+          <button
+            type="button"
+            className="text-xs text-accent-text hover:underline"
+            onClick={() =>
+              onChange(
+                value.action === 'keep'
+                  ? { action: 'clear' }
+                  : { action: 'keep' }
+              )
+            }
+          >
+            {value.action === 'keep' ? 'Remove' : 'Keep saved'}
+          </button>
+        )}
+      </div>
+      <p className="text-xs text-theme-text-tertiary">
+        {value.action === 'clear'
+          ? 'The saved credential will be removed when you apply.'
+          : 'Saved values are never sent back to your browser.'}
+      </p>
+    </section>
+  )
+}
+
+export function ArgoCDConnectionForm({
+  value,
+  secretSet,
+  cliSession,
+  onChange,
+  onApply,
+  applyLabel = 'Test & apply',
+  onDirtyChange
+}: {
+  value: ArgoConnectionDraft
+  secretSet: boolean
+  cliSession?: { server: string; user: string; insecure?: boolean }
+  onChange: (value: ArgoConnectionDraft) => void
+  onApply: (value: ArgoConnectionDraft) => Promise<void>
+  applyLabel?: string
+  onDirtyChange?: (dirty: boolean) => void
+}) {
+  const id = useId()
+  const [secret, setSecret] = useState<SecretEdit>({ action: 'keep' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(
+    () => onDirtyChange?.(secret.action !== 'keep'),
+    [secret, onDirtyChange]
+  )
+  const apply = async (useCliToken = false) => {
+    setBusy(true)
+    setError('')
+    try {
+      await onApply({
+        ...value,
+        ...(useCliToken ? { useCliToken: true } : { secret })
+      })
+      setSecret({ action: 'keep' })
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <fieldset disabled={busy} className="min-w-0 space-y-4">
+      <p className="text-sm text-theme-text-secondary">
+        Connect Argo CD for Git-rendered desired-versus-live diffs and its
+        resource health verdicts. Auto-discovery works without setup where
+        anonymous reads are allowed.
+      </p>
+      <div className="space-y-1">
+        <label
+          htmlFor={id}
+          className="block text-sm font-medium text-theme-text-primary"
+        >
+          Argo CD server URL
+        </label>
+        <Input
+          className="block w-full min-w-0 px-3 py-2 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
+          id={id}
+          value={value.url}
+          onChange={(e) => onChange({ ...value, url: e.target.value })}
+          placeholder="Auto-discover, or https://argocd.example.com"
+        />
+        <p className="text-xs text-theme-text-tertiary">
+          Reachable from Radar. Leave empty to discover the server in this
+          cluster.
+        </p>
+      </div>
+      <CredentialField
+        label="API token"
+        saved={secretSet}
+        value={secret}
+        onChange={setSecret}
+      />
+      {cliSession && (
+        <div className="text-xs text-theme-text-secondary space-y-1">
+          <p>
+            CLI session available: {cliSession.user} at {cliSession.server}
+          </p>
+          <button
+            type="button"
+            disabled={!value.url.trim()}
+            onClick={() => void apply(true)}
+            className="text-accent-text hover:underline disabled:opacity-50"
+          >
+            Connect using CLI token
+          </button>
+        </div>
+      )}
+      <label className="flex items-center gap-2 text-xs text-theme-text-secondary">
+        <input
+          type="checkbox"
+          checked={value.insecureTls}
+          onChange={(e) =>
+            onChange({ ...value, insecureTls: e.target.checked })
+          }
+        />
+        Skip TLS verification (self-signed server)
+      </label>
+      {value.insecureTls && (
+        <p className="text-xs text-warning-text">
+          Server identity will not be verified. Use only for a trusted server.
+        </p>
+      )}
+      {value.url.startsWith('http://') &&
+        (secretSet || secret.action === 'set') && (
+          <p className="text-xs text-warning-text">
+            Credentials will travel over unencrypted HTTP. Prefer HTTPS outside
+            a trusted private network.
+          </p>
+        )}
+      <button
+        type="button"
+        onClick={() => void apply()}
+        className="btn-brand px-3 py-2 text-xs"
+      >
+        {busy ? 'Checking connection…' : applyLabel}
+      </button>
+      {error && (
+        <p role="alert" className="text-sm text-warning-text">
+          {error}
+        </p>
+      )}
+    </fieldset>
+  )
+}
+
+export function CostConnectionForm({
+  value,
+  secretSet,
+  onChange,
+  onApply,
+  applyLabel = 'Test & apply',
+  onDirtyChange,
+  shared = false
+}: {
+  value: CostConnectionDraft
+  secretSet: boolean
+  onChange: (value: CostConnectionDraft) => void
+  onApply: (value: CostConnectionDraft) => Promise<void>
+  applyLabel?: string
+  onDirtyChange?: (dirty: boolean) => void
+  shared?: boolean
+}) {
+  const id = useId()
+  const [secret, setSecret] = useState<SecretEdit>({ action: 'keep' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(
+    () => onDirtyChange?.(secret.action !== 'keep'),
+    [secret, onDirtyChange]
+  )
+  const apply = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await onApply({ ...value, secret })
+      setSecret({ action: 'keep' })
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <fieldset disabled={busy} className="min-w-0 space-y-4">
+      <p className="text-sm text-theme-text-secondary">
+        Use OpenCost metrics from this cluster's metrics connection, or connect
+        to a Kubecost Aggregator.
+      </p>
+      {!shared && (
+        <label className="block text-sm font-medium text-theme-text-primary space-y-1">
+          Cost source
+          <select
+            aria-label="Cost source"
+            value={value.mode}
+            onChange={(e) =>
+              onChange({
+                ...value,
+                mode: e.target.value as CostConnectionDraft['mode']
+              })
+            }
+            className="block w-full rounded-md border border-theme-border bg-theme-elevated px-3 py-2 text-sm"
+          >
+            <option value="auto">Auto-detect</option>
+            <option value="prometheus">OpenCost via metrics connection</option>
+            <option value="kubecost">Kubecost</option>
+          </select>
+        </label>
+      )}
+      {value.mode !== 'prometheus' && (
+        <>
+          <div className="space-y-1">
+            <label
+              htmlFor={id}
+              className="block text-sm font-medium text-theme-text-primary"
+            >
+              Kubecost Aggregator URL
+            </label>
+            <Input
+              className="block w-full min-w-0 px-3 py-2 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
+              id={id}
+              value={value.url}
+              onChange={(e) => onChange({ ...value, url: e.target.value })}
+              placeholder="Auto-discover, or https://kubecost.example.com"
+            />
+            <p className="text-xs text-theme-text-tertiary">
+              Leave empty for discovery in this cluster. Use the central
+              Aggregator URL for a federated setup.
+            </p>
+          </div>
+          <CredentialField
+            label="API key"
+            saved={secretSet}
+            value={secret}
+            onChange={setSecret}
+          />
+          {value.url.startsWith('http://') &&
+            (secretSet || secret.action === 'set') && (
+              <p className="text-xs text-warning-text">
+                The API key will travel over unencrypted HTTP. Prefer HTTPS
+                outside a trusted private network.
+              </p>
+            )}
+          {!shared && (
+            <Disclosure
+              summary="Cluster mapping"
+              defaultOpen={!!value.clusterId}
+            >
+              <div className="space-y-2 pt-2">
+                <label
+                  htmlFor={`${id}-cluster`}
+                  className="text-sm font-medium text-theme-text-primary"
+                >
+                  Kubecost cluster ID
+                </label>
+                <Input
+                  className="block w-full min-w-0 px-3 py-2 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
+                  id={`${id}-cluster`}
+                  value={value.clusterId}
+                  onChange={(e) =>
+                    onChange({ ...value, clusterId: e.target.value })
+                  }
+                  placeholder="Auto-detect CLUSTER_ID"
+                />
+                <p className="text-xs text-theme-text-tertiary">
+                  The FinOps Agent's CLUSTER_ID, not the kubeconfig context
+                  name. Applies only to this context, even when the backend is
+                  shared.
+                </p>
+              </div>
+            </Disclosure>
+          )}
+        </>
+      )}
+      <button
+        type="button"
+        onClick={() => void apply()}
+        className="btn-brand px-3 py-2 text-xs"
+      >
+        {busy
+          ? 'Applying…'
+          : value.mode === 'prometheus'
+            ? 'Apply source'
+            : value.mode === 'auto' && !value.url.trim()
+              ? 'Apply discovery settings'
+              : applyLabel}
+      </button>
+      {error && (
+        <p role="alert" className="text-sm text-warning-text">
+          {error}
+        </p>
+      )}
+    </fieldset>
+  )
+}

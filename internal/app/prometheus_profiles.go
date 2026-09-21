@@ -4,10 +4,13 @@ import (
 	"errors"
 	"log"
 
+	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/prometheus"
+	"github.com/skyhook-io/radar/internal/opencost"
 	"github.com/skyhook-io/radar/internal/server"
+	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -52,28 +55,51 @@ func preparePrometheusConfiguration(cfg AppConfig) (AppConfig, error) {
 		c.HeadersFromEnv = nil
 		launch = &c
 	}
-	cfg.PrometheusProfiles = prometheus.NewProfileResolver(config.NewProfileStore(), target, launch)
+	launches := map[config.Integration]connections.Bundle{}
+	if launch != nil {
+		launches[config.IntegrationMetrics] = connections.Bundle{Connection: config.SavedConnection{Type: config.IntegrationMetrics, Prometheus: launch}, Assignment: config.IntegrationAssignment{Mode: "connection"}}
+	}
+	argo, argoManaged, err := argocd.EnvironmentConfiguration()
+	if argoManaged {
+		if targetErr != nil {
+			return cfg, errors.New("local Argo CD environment configuration requires a selected kubeconfig context")
+		}
+		mode := "auto"
+		if argo.URL != "" {
+			mode = "connection"
+		}
+		launches[config.IntegrationArgoCD] = connections.Bundle{Connection: config.SavedConnection{Type: config.IntegrationArgoCD, ArgoCD: &argo}, Assignment: config.IntegrationAssignment{Mode: mode}, Err: err}
+	}
+	cost, costManaged, err := opencost.EnvironmentConfiguration()
+	if costManaged {
+		if targetErr != nil {
+			return cfg, errors.New("local cost environment configuration requires a selected kubeconfig context")
+		}
+		launches[config.IntegrationCost] = connections.Bundle{Connection: config.SavedConnection{Type: config.IntegrationCost, Kubecost: &pkgopencost.Connection{URL: cost.URL, APIKey: cost.APIKey}}, Assignment: config.IntegrationAssignment{Mode: string(cost.Source), ClusterID: cost.ClusterID}, Err: err}
+	}
+	cfg.LocalConnections = connections.NewResolver(config.NewProfileStore(), target, launches)
+	cfg.CostSource, cfg.KubecostURL, cfg.KubecostAPIKey, cfg.KubecostAPIKeyContext, cfg.KubecostClusterID, cfg.KubecostClusterIDContext = "auto", "", "", "", "", ""
 	cfg.PrometheusURL = ""
 	cfg.PrometheusHeaders = nil
 	cfg.PrometheusHeadersFromEnv = nil
 	if targetErr == nil {
-		selection, err := resolveLocalPrometheus(cfg.PrometheusProfiles)
+		selection, err := resolveLocalPrometheus(cfg.LocalConnections)
 		if err != nil {
 			log.Printf("[prometheus] Cluster settings unavailable: %v", err)
 		} else {
-			cfg.PrometheusURL = selection.Connection.URL
-			cfg.PrometheusHeaders = selection.Connection.Headers
+			cfg.PrometheusURL = selection.Connection.Prometheus.URL
+			cfg.PrometheusHeaders = selection.Connection.Prometheus.Headers
 		}
 	}
 	return cfg, nil
 }
 
-func resolveLocalPrometheus(resolver *prometheus.ProfileResolver) (prometheus.ProfileSelection, error) {
+func resolveLocalPrometheus(resolver *connections.Resolver) (connections.Selection, error) {
 	target, err := k8s.CurrentProfileTarget()
 	if err != nil {
-		return prometheus.ProfileSelection{}, err
+		return connections.Selection{}, err
 	}
-	selection := resolver.Resolve(target, false)
+	selection := resolver.Resolve(target, config.IntegrationMetrics, false)
 	if selection.View.State == "target_changed" {
 		return selection, errors.New("Kubernetes target changed; confirm the metrics connection in Settings")
 	}

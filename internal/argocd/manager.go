@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -22,6 +21,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/argoapi"
 )
@@ -282,6 +282,18 @@ func SeedFromEnvVars() (bool, error) {
 	return true, nil
 }
 
+func EnvironmentConfiguration() (argoapi.Connection, bool, error) {
+	url, token, insecure, ok, err := resolveEnvArgo(os.Getenv, os.ReadFile)
+	attempted := ok || envArgoAttempted(os.Getenv)
+	if err != nil {
+		return argoapi.Connection{}, attempted, errors.New(sanitizeEnvErr(err))
+	}
+	if attempted && !ok {
+		return argoapi.Connection{}, true, errors.New("Argo CD environment configuration requires a token")
+	}
+	return argoapi.Connection{URL: url, Token: token, InsecureTLS: insecure}, attempted, nil
+}
+
 // envArgoAttempted reports whether the operator clearly tried to provision Argo CD
 // from the environment — a token, token-file, or URL is set. It gates the
 // fail-closed suppression of the on-disk fallback so a truly empty environment
@@ -354,35 +366,7 @@ func resolveEnvArgo(getenv func(string) string, readFile func(string) ([]byte, e
 	return rawURL, token, insecure, true, nil
 }
 
-// validateEnvArgoURL strictly validates an argocd-server URL: http(s) scheme, a
-// host, and no embedded userinfo / query / fragment. The env URL flows into
-// /api/config, the status address, and logs, so credentials in userinfo or a
-// query (e.g. ?token=…) must be rejected. This is stricter than the Settings PUT
-// (which checks only the scheme); see the divergence note in argocd_integration.go.
-func validateEnvArgoURL(raw string) error {
-	u, err := url.Parse(strings.TrimRight(raw, "/"))
-	if err != nil {
-		// Don't wrap the parse error: url.Parse echoes the raw input, which could
-		// carry embedded credentials (e.g. a malformed userinfo) into the logs.
-		return errors.New("could not be parsed as a URL")
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return fmt.Errorf("must be an http(s) URL (got %q)", u.Scheme)
-	}
-	if u.Host == "" {
-		return errors.New("must include a host")
-	}
-	if u.User != nil {
-		return errors.New("must not embed userinfo credentials")
-	}
-	// A query or fragment can carry credentials (e.g. ?token=…) that would then
-	// surface in /api/config and logs — an argocd-server URL has neither. A path
-	// is allowed (ingress prefixes like /argocd are legitimate).
-	if u.RawQuery != "" || u.Fragment != "" {
-		return errors.New("must not include a query or fragment")
-	}
-	return nil
-}
+func validateEnvArgoURL(raw string) error { return argoapi.ValidateServerURL(raw) }
 
 // SeedFromEnv provisions the default manager from an already-resolved
 // environment token (see SeedFromEnvVars).
@@ -783,6 +767,11 @@ func (m *Manager) Address() string {
 // session/userinfo. Errors wrap ErrUnreachable or ErrTokenInvalid so callers
 // can map them to distinct messages.
 func (m *Manager) Probe(ctx context.Context) error {
+	if m == defaultManager {
+		if err := connections.Refresh(config.IntegrationArgoCD); err != nil {
+			return err
+		}
+	}
 	err := m.probe(ctx)
 	// The caller's own deadline or navigation says nothing about the
 	// server; recording it would have Settings report a timeout the
@@ -983,6 +972,11 @@ func (m *Manager) liveClient() *argoapi.Client {
 // per-resource filters bypass the cache — mixing filtered results into the
 // app-level key would poison it for unfiltered callers.
 func (m *Manager) ManagedResourcesCached(ctx context.Context, q argoapi.ManagedResourcesQuery) ([]argoapi.ResourceDiff, error) {
+	if m == defaultManager {
+		if err := connections.Refresh(config.IntegrationArgoCD); err != nil {
+			return nil, err
+		}
+	}
 	filtered := q.Group != "" || q.Kind != "" || q.Namespace != "" || q.Name != ""
 	key := q.AppNamespace + "\x00" + q.AppName
 
@@ -1048,6 +1042,11 @@ func (m *Manager) ManagedResourcesCached(ctx context.Context, q argoapi.ManagedR
 // so an install that says no is asked again at most every
 // probeRetryInterval.
 func (m *Manager) ApplicationHealthCached(ctx context.Context, q argoapi.ApplicationQuery) (*argoapi.ApplicationHealth, error) {
+	if m == defaultManager {
+		if err := connections.Refresh(config.IntegrationArgoCD); err != nil {
+			return nil, err
+		}
+	}
 	key := q.AppNamespace + "\x00" + q.AppName
 	m.mu.Lock()
 	if e, ok := m.appHealthCache[key]; ok && time.Now().Before(e.expires) {
@@ -1154,6 +1153,11 @@ func (m *Manager) fetchApplicationHealth(ctx context.Context, q argoapi.Applicat
 // context switch (dropConnectionLocked), so it never serves another cluster's
 // data.
 func (m *Manager) RevisionMetadataCached(ctx context.Context, q argoapi.RevisionMetadataQuery) (*argoapi.RevisionMetadata, error) {
+	if m == defaultManager {
+		if err := connections.Refresh(config.IntegrationArgoCD); err != nil {
+			return nil, err
+		}
+	}
 	key := q.AppNamespace + "\x00" + q.AppName + "\x00" + q.SourceIndex + "\x00" + q.Revision
 
 	m.mu.Lock()
@@ -1214,6 +1218,11 @@ func (m *Manager) RevisionMetadataCached(ctx context.Context, q argoapi.Revision
 // the data appears at most one poll late. Stale is always same-cluster (the
 // cache is cleared on reconnect/context switch).
 func (m *Manager) RepositoriesCached() []argoapi.Repository {
+	if m == defaultManager {
+		if err := connections.Refresh(config.IntegrationArgoCD); err != nil {
+			return nil
+		}
+	}
 	m.mu.Lock()
 	repos := m.repoCache
 	fresh := repos != nil && time.Now().Before(m.repoCacheExpires)

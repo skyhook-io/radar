@@ -46,6 +46,8 @@ import (
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/images"
 	"github.com/skyhook-io/radar/internal/investigationrefs"
@@ -92,7 +94,8 @@ type Server struct {
 	openCostCurrency        *opencost.CurrencyResolver
 	currencyManaged         bool
 	prometheusConfigMu      sync.Mutex
-	prometheusProfiles      *prometheuspkg.ProfileResolver
+	localConnections        *connections.Resolver
+	localRuntime            *connectionruntime.Runtime
 	promURLFlag             bool
 	promHeaderFlags         bool
 	authConfig              auth.Config
@@ -193,7 +196,8 @@ type Config struct {
 	EffectiveConfig         *config.Config              // Running startup config for GET /api/config
 	PrometheusURLFlag       bool
 	PrometheusHeaderFlags   bool
-	PrometheusProfiles      *prometheuspkg.ProfileResolver
+	LocalConnections        *connections.Resolver
+	LocalRuntime            *connectionruntime.Runtime
 	OpenCostCurrency        string      // ISO 4217 code labeling values returned by OpenCost endpoints
 	OpenCostManaged         bool        // true when an explicit CLI/Helm flag owns the running value
 	AuthConfig              auth.Config // Authentication configuration
@@ -231,7 +235,8 @@ func New(cfg Config) *Server {
 		effectiveConfig:         cfg.EffectiveConfig,
 		promURLFlag:             cfg.PrometheusURLFlag,
 		promHeaderFlags:         cfg.PrometheusHeaderFlags,
-		prometheusProfiles:      cfg.PrometheusProfiles,
+		localConnections:        cfg.LocalConnections,
+		localRuntime:            cfg.LocalRuntime,
 		openCostCurrency:        opencost.NewCurrencyResolver(cfg.OpenCostCurrency),
 		currencyManaged:         cfg.OpenCostManaged,
 		authConfig:              cfg.AuthConfig,
@@ -848,6 +853,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Put("/integrations/cost", s.handleApplyCostSource)
 			r.Put("/integrations/argocd", s.handleApplyArgoCDConfig)
 			r.Get("/integrations/argocd/status", s.handleArgoCDStatus)
+			r.Get("/integrations/connections", s.handleLocalConnections)
+			r.Put("/integrations/connections", s.handleUpdateLocalConnection)
 
 			// Desktop routes
 			r.Post("/desktop/open-url", s.handleDesktopOpenURL)
@@ -4967,6 +4974,7 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	k8s.RegisterCAPIProfileReference(safetyBinding, managementBinding, ns, name)
 	if err := k8s.PerformContextSwitch(qualifiedName); err != nil {
 		discarded := k8s.DiscardFailedMergedContext(mergedPath, created)
 		if discarded {
@@ -5567,11 +5575,11 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 // configResponse bundles the on-disk config file with the effective startup
 // config so the UI can show "currently running" hints for values that differ.
 type configResponse struct {
-	PrometheusProfile *prometheuspkg.ProfileView `json:"prometheusProfile,omitempty"`
-	Management        string                     `json:"management"`
-	File              config.Config              `json:"file"`
-	Effective         config.Config              `json:"effective"`
-	IsDesktop         bool                       `json:"isDesktop"`
+	IntegrationProfiles map[config.Integration]connections.ProfileView `json:"integrationProfiles,omitempty"`
+	Management          string                                         `json:"management"`
+	File                config.Config                                  `json:"file"`
+	Effective           config.Config                                  `json:"effective"`
+	IsDesktop           bool                                           `json:"isDesktop"`
 	// OpenCostManaged tells Settings that an explicit startup flag owns the
 	// running value even when the persisted file changes.
 	OpenCostManaged bool `json:"openCostCurrencyManaged,omitempty"`
@@ -5693,9 +5701,10 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		resp.Effective = effective
 	}
 	resp.Effective.PrometheusURL = currentURL
-	if s.prometheusProfiles != nil && s.configManagement() == "local" {
-		view := s.localPrometheusView()
-		resp.PrometheusProfile = &view
+	if s.localConnections != nil && s.configManagement() == "local" {
+		views := s.readLocalConnectionViews()
+		resp.IntegrationProfiles = views
+		view := views[config.IntegrationMetrics]
 		resp.File.PrometheusURL = view.URL
 		resp.File.PrometheusHeadersFromEnv = nil
 		resp.Effective.PrometheusURL = view.URL
@@ -5704,6 +5713,15 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		resp.PrometheusServerManaged = view.State == "launch"
 		resp.PrometheusHeadersManaged = view.HeadersManaged || view.State == "launch"
 		resp.PrometheusURLFromFlag = view.State == "launch"
+		argo := views[config.IntegrationArgoCD]
+		resp.File.ArgoCDURL, resp.Effective.ArgoCDURL = argo.URL, argo.URL
+		resp.File.ArgoCDInsecureTLS, resp.Effective.ArgoCDInsecureTLS = argo.InsecureTLS, argo.InsecureTLS
+		resp.ArgoCDTokenSet, resp.ArgoCDEnvManaged, resp.ArgoCDEnvError = argo.SecretSet, argo.State == "launch", argo.Error
+		cost := views[config.IntegrationCost]
+		resp.File.CostSource, resp.Effective.CostSource = cost.Mode, cost.Mode
+		resp.File.KubecostURL, resp.Effective.KubecostURL = cost.URL, cost.URL
+		resp.File.KubecostClusterID, resp.Effective.KubecostClusterID = cost.ClusterID, cost.ClusterID
+		resp.KubecostAPIKeySet, resp.KubecostEnvManaged, resp.KubecostEnvError = cost.SecretSet, cost.State == "launch", cost.Error
 	}
 	s.writeJSON(w, resp)
 }
@@ -5813,8 +5831,8 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
 	}
-	if s.prometheusProfiles != nil && s.configManagement() == "local" {
-		s.handleApplyLocalPrometheus(w, r)
+	if s.localConnections != nil && s.configManagement() == "local" {
+		s.writeError(w, http.StatusConflict, "Use the cluster-scoped saved connections endpoint to change this local integration")
 		return
 	}
 	// No requireConnected: persisting + applying a manual URL needs no cluster

@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connectionruntime"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -30,14 +32,33 @@ func setupLocalProfileTest(t *testing.T) *Server {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.prometheusProfiles = prometheuspkg.NewProfileResolver(config.NewProfileStore(), target, nil)
+	s.localConnections = connections.NewResolver(config.NewProfileStore(), target, nil)
+	s.localRuntime = connectionruntime.New(s.localConnections, nil)
+	connections.RegisterRefresh(s.localRuntime.Refresh)
+	t.Cleanup(func() { connections.RegisterRefresh(nil) })
 	t.Cleanup(prometheuspkg.Retire)
 	return s
 }
 
-func updateProfile(t *testing.T, s *Server, view prometheuspkg.ProfileView, action, url string, headers *map[string]string) *httptest.ResponseRecorder {
+func updateProfile(t *testing.T, s *Server, view connections.ProfileView, action, url string, headers *map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
-	body := localPrometheusUpdate{Target: view.Target, Revision: view.Revision, Action: action, PrometheusURL: url, Headers: headers}
+	if action == "apply" {
+		action = "save"
+	}
+	if action == "finish_migration" {
+		action = "dismiss_legacy"
+	}
+	body := connections.Update{Target: view.Target, Revision: view.Revision, Kind: config.IntegrationMetrics, Action: action, URL: &url, ConfirmRemoval: true}
+	if headers != nil {
+		for _, key := range view.HeaderKeys {
+			if _, exists := (*headers)[key]; !exists {
+				body.Headers = append(body.Headers, prom.HeaderOperation{Key: key, Action: "clear"})
+			}
+		}
+		for key, value := range *headers {
+			body.Headers = append(body.Headers, prom.HeaderOperation{Key: key, Action: "set", Value: value})
+		}
+	}
 	if view.Legacy != nil {
 		body.LegacyRevision = view.Legacy.Revision
 	}
@@ -45,7 +66,14 @@ func updateProfile(t *testing.T, s *Server, view prometheuspkg.ProfileView, acti
 	if err != nil {
 		t.Fatal(err)
 	}
-	return applyPrometheus(s, string(data))
+	response := httptest.NewRecorder()
+	s.handleUpdateLocalConnection(response, httptest.NewRequest(http.MethodPut, "/api/integrations/connections", strings.NewReader(string(data))))
+	return response
+}
+
+func (s *Server) localPrometheusView() connections.ProfileView {
+	target, _ := k8s.CurrentProfileTarget()
+	return s.localRuntime.Apply(target, true)[config.IntegrationMetrics].View
 }
 
 func TestLocalProfileSaveConflictAndCredentialProtection(t *testing.T) {
@@ -107,8 +135,8 @@ func TestLocalProfileLegacyAdoptionAndCompletion(t *testing.T) {
 	restore := k8s.SetTestProfileSource("/fixture/team", "second", "developer")
 	defer restore()
 	view = s.localPrometheusView()
-	if view.Legacy == nil || len(prometheuspkg.CurrentHeaders()) != 0 {
-		t.Fatal("second context lost offer or inherited credentials")
+	if view.Legacy != nil || len(prometheuspkg.CurrentHeaders()) != 0 {
+		t.Fatal("second context repeated import offer or inherited credentials")
 	}
 	if res := updateProfile(t, s, view, "finish_migration", "unfinished-url", nil); res.Code != 200 {
 		t.Fatalf("finish: %d %s", res.Code, res.Body.String())
@@ -124,7 +152,7 @@ func TestLocalProfileLegacyAdoptionAndCompletion(t *testing.T) {
 func TestLocalProfileChangedTargetCanReplaceWithoutAdoption(t *testing.T) {
 	s := setupLocalProfileTest(t)
 	view := s.localPrometheusView()
-	if res := updateProfile(t, s, view, "apply", "", nil); res.Code != 200 {
+	if res := updateProfile(t, s, view, "apply", "http://127.0.0.1:1", nil); res.Code != 200 {
 		t.Fatalf("initial save: %d", res.Code)
 	}
 	old := k8s.SetTestConfig(&rest.Config{Host: "https://different-cluster"})
@@ -159,16 +187,17 @@ func TestLocalProfileEnvironmentOriginGuidance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, rev, _ := s.prometheusProfiles.Store.Read()
-	_, err = s.prometheusProfiles.Store.Update(context.Background(), rev, func(file *config.ClusterProfiles) error {
-		file.Profiles[target.Binding] = config.ClusterProfile{Context: target.Context, Target: target.Fingerprint, Prometheus: prom.Connection{URL: "https://original.example", HeadersFromEnv: map[string]string{"Authorization": "PROFILE_TEST_TOKEN"}}}
+	_, rev, _ := s.localConnections.Store.Read()
+	_, err = s.localConnections.Store.Update(context.Background(), rev, func(file *config.ClusterProfiles) error {
+		file.Connections["env"] = config.SavedConnection{Type: config.IntegrationMetrics, Prometheus: &prom.Connection{URL: "https://original.example", HeadersFromEnv: map[string]string{"Authorization": "PROFILE_TEST_TOKEN"}}}
+		file.Profiles[target.Binding] = config.ClusterProfile{Context: target.Context, Integrations: map[config.Integration]config.IntegrationAssignment{config.IntegrationMetrics: {Mode: "connection", Target: target.Fingerprint, ConnectionID: "env"}}}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	res := updateProfile(t, s, s.localPrometheusView(), "apply", "https://different.example", nil)
-	if res.Code != 400 || !strings.Contains(res.Body.String(), "headersFromEnv together in clusters.json") || strings.Contains(res.Body.String(), "synthetic-secret") {
+	if res.Code != 400 || !strings.Contains(res.Body.String(), "environment references in clusters.json") || strings.Contains(res.Body.String(), "synthetic-secret") {
 		t.Fatalf("guidance: %d %s", res.Code, res.Body.String())
 	}
 }
