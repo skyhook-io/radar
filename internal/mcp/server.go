@@ -62,7 +62,7 @@ func RunStdio(ctx context.Context) error {
 
 // RunStdioMode uses the same read-only catalog and enforcement as HTTP.
 func RunStdioMode(ctx context.Context, readOnly bool) error {
-	return newServer(!readOnly, !readOnly, serverInstructions(!readOnly)).Run(ctx, &mcpsdk.StdioTransport{})
+	return newServer(!readOnly, !readOnly, serverInstructions(!readOnly)).Run(context.WithValue(ctx, runtimeLocalCallerKey{}, true), &mcpsdk.StdioTransport{})
 }
 
 // NewHandler creates the full MCP HTTP handler (read + write tools) to mount on chi.
@@ -77,7 +77,7 @@ func NewReadOnlyHandler() http.Handler {
 // preview. Removing it here enforces the boundary for every agent client.
 func newApplyServer() *mcpsdk.Server {
 	server := newServer(true, false, investigation.GeneralGuidance(true))
-	server.RemoveTools("delete_resource")
+	server.RemoveTools("delete_resource", "collect_runtime_evidence")
 	return server
 }
 
@@ -198,10 +198,10 @@ func handlerForServer(server *mcpsdk.Server) http.Handler {
 		log.Printf("[mcp] WARNING: DNS-rebinding Host check DISABLED via env (bench mode)")
 	}
 
-	handler := mcpsdk.NewStreamableHTTPHandler(
+	handler := runtimeLocalCaller(mcpsdk.NewStreamableHTTPHandler(
 		func(r *http.Request) *mcpsdk.Server { return server },
 		streamOpts,
-	)
+	))
 
 	// go-sdk v1.6 removed the implicit cross-origin protection default;
 	// wrap the handler so a malicious page can't drive the local MCP server.
