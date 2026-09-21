@@ -62,11 +62,25 @@ func RunStdio(ctx context.Context) error {
 
 // RunStdioMode uses the same read-only catalog and enforcement as HTTP.
 func RunStdioMode(ctx context.Context, readOnly bool) error {
-	return newServer(!readOnly, !readOnly, serverInstructions(!readOnly)).Run(context.WithValue(ctx, runtimeLocalCallerKey{}, true), &mcpsdk.StdioTransport{})
+	ctx = context.WithValue(ctx, runtimeLocalCallerKey{}, true)
+	server := newServer(!readOnly, !readOnly, serverInstructions(!readOnly))
+	if !runtimeEvidenceAllowed(ctx) {
+		server.RemoveTools("collect_runtime_evidence")
+	}
+	return server.Run(ctx, &mcpsdk.StdioTransport{})
 }
 
 // NewHandler creates the full MCP HTTP handler (read + write tools) to mount on chi.
-func NewHandler() http.Handler { return handlerForServer(newFullServer()) }
+func NewHandler() http.Handler {
+	localServer, remoteServer := newFullServer(), newFullServer()
+	remoteServer.RemoveTools("collect_runtime_evidence")
+	return handlerForServerSelector(func(r *http.Request) *mcpsdk.Server {
+		if runtimeEvidenceAllowed(r.Context()) {
+			return localServer
+		}
+		return remoteServer
+	})
+}
 
 // NewReadOnlyHandler creates the public MCP handler exposing only read tools.
 func NewReadOnlyHandler() http.Handler {
@@ -183,6 +197,10 @@ func annotateInvestigationEvidenceReference(result *mcpsdk.CallToolResult, ref s
 const maxRequestBodyBytes = mcpsdk.DefaultMaxLineLength
 
 func handlerForServer(server *mcpsdk.Server) http.Handler {
+	return handlerForServerSelector(func(*http.Request) *mcpsdk.Server { return server })
+}
+
+func handlerForServerSelector(selectServer func(*http.Request) *mcpsdk.Server) http.Handler {
 	streamOpts := &mcpsdk.StreamableHTTPOptions{
 		Stateless:           true,
 		MaxRequestBodyBytes: maxRequestBodyBytes,
@@ -199,7 +217,7 @@ func handlerForServer(server *mcpsdk.Server) http.Handler {
 	}
 
 	handler := runtimeLocalCaller(mcpsdk.NewStreamableHTTPHandler(
-		func(r *http.Request) *mcpsdk.Server { return server },
+		selectServer,
 		streamOpts,
 	))
 
