@@ -233,7 +233,7 @@ export function SettingsDialog({
       setDraftFrozen(true)
       return
     }
-    if (open && draftFrozen) return
+    if (draftFrozen) return
     metricsDraft.current = { open, scope: settingsScope, dirty: configData != null && (prometheusDirty || configDirty || costIntegrationDirty || localDirty.argocd || aiDirty) }
   }, [open, settingsScope, targetChangedWithDraft, draftFrozen, configData, prometheusDirty, configDirty, costIntegrationDirty, localDirty.argocd, aiDirty])
 
