@@ -20,7 +20,7 @@ describe('Kueue admission investigation', () => {
     expect(render(empty)).toBe('')
     expect(render(empty, { hinted: true })).toContain('No controller-owned Kueue Workload observed')
     expect(render(undefined, { loading: true })).toContain('Looking for controller-owned Workloads')
-    expect(render(empty, { error: 'Forbidden', onRetry: () => {} })).toContain('Admission evidence unavailable: Forbidden')
+    expect(render(empty, { error: 'Forbidden', onRetry: () => {} })).toContain('Admission evidence unavailable')
     expect(render(empty, { error: 'Cache not ready' })).not.toContain('No controller-owned')
     expect(render(empty, { error: 'Workload list denied', forbidden: true, onRetry: () => {} })).not.toContain('Retry admission lookup')
     expect(render({ ...empty, installed: false }, { hinted: true })).toContain('not served by this cluster')
@@ -50,7 +50,7 @@ describe('Kueue admission investigation', () => {
   it('keeps disruptions, inactive state, check retries and requeues distinct', () => {
     const html = render(response({ decision: 'held', kueue: { phase: 'pending', active: false, requeueState: { count: 0, requeueAt: '2026-09-22T00:00:00Z' } }, disruptions: [{ type: 'Evicted', status: 'True', reason: 'Preempted' }], gates: [{ kind: 'preemption_gate', name: 'gate', decision: 'unsatisfied', retryCount: 0, requeueAfterSeconds: 0 }] }))
     expect(html).toContain('Workload inactive')
-    expect(html).toContain('Evicted=True')
+    expect(html).toContain('Preempted')
     expect(html).toContain('alone does not establish an admission blocker')
     expect(html).toContain('Retries: 0')
     expect(html).toContain('Requeues: 0')

@@ -1,7 +1,7 @@
 import { Badge } from '../ui/Badge'
-import { ResourceLink } from '../ui/drawer-components'
+import { AlertBanner, ConditionsSection, ResourceLink } from '../ui/drawer-components'
 import { kindToPluralWithGroup } from '../../utils/navigation'
-import type { KueueAdmissionResponse, SchedulingCondition, SchedulingObservation, SchedulingRef } from '../../types/scheduling'
+import type { KueueAdmissionResponse, SchedulingObservation, SchedulingRef } from '../../types/scheduling'
 
 interface KueueAdmissionSectionProps {
   data?: KueueAdmissionResponse
@@ -26,7 +26,7 @@ export function KueueAdmissionSection({ data, loading, error, forbidden, hinted,
       <h3 className="text-sm font-semibold text-theme-text-primary">Kueue admission</h3>
       <p className="mt-1 text-xs text-theme-text-secondary">Admission and execution are separate observations. An admitted Workload does not prove that Jobs or Pods are running.</p>
       {loading ? <p className="mt-3 text-sm text-theme-text-secondary">Looking for controller-owned Workloads…</p>
-        : error ? <div className="mt-3 text-sm text-theme-text-secondary"><p>{forbidden ? 'Admission lookup requires permission: ' : 'Admission evidence unavailable: '}{error}</p>{!forbidden && onRetry && <button type="button" className="mt-2 text-accent-text hover:underline" onClick={onRetry}>Retry admission lookup</button>}</div>
+        : error ? <AlertBanner variant={forbidden ? 'info' : 'warning'} title={forbidden ? 'Admission lookup requires permission' : 'Admission evidence unavailable'} message={error}>{!forbidden && onRetry && <button type="button" className="mt-2 text-accent-text hover:underline" onClick={onRetry}>Retry admission lookup</button>}</AlertBanner>
           : data && !data.installed ? <p className="mt-3 text-sm text-theme-text-secondary">Kueue Workloads are not served by this cluster.</p>
             : data && data.workloads.length === 0 ? <p className="mt-3 text-sm text-theme-text-secondary">No controller-owned Kueue Workload observed in this namespace.{externalExecution ? ' This JobSet uses an external controller; local absence does not establish remote admission or execution state.' : ' Queue metadata alone does not establish an admission decision.'}</p>
               : data && <div className="mt-3 space-y-3">
@@ -55,7 +55,19 @@ function AdmissionObservation({ observation, link }: { observation: SchedulingOb
       {kueue?.active === false && <span>Workload inactive</span>}
     </div>
     {stale && <p className="text-sm text-theme-text-secondary">The primary condition describes generation {condition!.observedGeneration}; this Workload is now generation {observation.subjectGeneration}. Treat that condition as stale evidence.</p>}
-    {condition ? <AdmissionCondition condition={condition} /> : <p className="text-theme-text-secondary">No primary admission condition reported.</p>}
+    {!condition && <p className="text-theme-text-secondary">No primary admission condition reported.</p>}
+    <ConditionsSection
+      conditions={[condition, ...(observation.disruptions ?? []), kueue?.podsReady, kueue?.waitingForReplacementPods].filter((entry) => entry != null)}
+      defaultExpanded={true}
+      getConditionTone={(entry) => {
+        if (entry.status !== 'True' && entry.status !== 'False') return 'unknown'
+        if (entry.observedGeneration && observation.subjectGeneration && entry.observedGeneration < observation.subjectGeneration) return 'unknown'
+        if (entry.type === 'Finished') return entry.status === 'False' ? 'unknown' : kueue?.outcome === 'failed' ? 'fail' : 'ok'
+        if (entry.type === condition?.type) return observation.decision === 'satisfied' ? 'ok' : observation.decision === 'unknown' ? 'unknown' : 'warning'
+        if (entry.type === 'WaitingForReplacementPods' || observation.disruptions?.some((item) => item.type === entry.type)) return entry.status === 'True' ? 'warning' : 'ok'
+        return entry.status === 'True' ? 'ok' : 'warning'
+      }}
+    />
     {!!observation.queues?.length && <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">{observation.queues.map((queue, index) => <span key={index}>{queue.roles.join(' + ')} queue: {link(queue.name, queue.ref)}</span>)}</div>}
     {observation.gates?.map((gate, index) => <div key={index} className="border-l-2 border-theme-border pl-3 text-xs text-theme-text-secondary">
       <p>{gate.kind === 'preemption_gate' ? 'Preemption gate' : 'Admission check'}: {link(gate.name, gate.ref)} · {gate.nativeState || gate.decision}</p>
@@ -64,14 +76,7 @@ function AdmissionObservation({ observation, link }: { observation: SchedulingOb
       {gate.retryCount != null && <p>Retries: {gate.retryCount}</p>}
       {gate.requeueAfterSeconds != null && <p>Requeue delay: {gate.requeueAfterSeconds}s</p>}
     </div>)}
-    {observation.disruptions?.map((disruption, index) => <AdmissionCondition key={index} condition={disruption} />)}
-    {kueue?.podsReady && <AdmissionCondition condition={kueue.podsReady} />}
-    {kueue?.waitingForReplacementPods && <AdmissionCondition condition={kueue.waitingForReplacementPods} />}
     {kueue?.requeueState && <p className="text-xs text-theme-text-secondary">Requeues: {kueue.requeueState.count ?? 'Not reported'}{kueue.requeueState.requeueAt && ` · Eligible again: ${kueue.requeueState.requeueAt}`}</p>}
     {kueue?.concurrentAdmission && <p className="text-xs">Parent Workload: {link(kueue.concurrentAdmission.parentName, kueue.concurrentAdmission.parentRef)}</p>}
   </div>
-}
-
-function AdmissionCondition({ condition }: { condition: SchedulingCondition }) {
-  return <div className="text-xs text-theme-text-secondary"><p>{condition.type}={condition.status}{condition.reason && ` · ${condition.reason}`}</p>{condition.message && <p className="mt-1 whitespace-pre-wrap break-words">{condition.message}</p>}</div>
 }
