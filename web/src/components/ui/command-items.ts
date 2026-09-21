@@ -146,9 +146,6 @@ const VIEW_ENTRIES: {
   { view: "cost", label: "Cost", icon: Coins, shortcut: "g c" },
 ];
 
-// The static command-palette items (Views, Resource Kinds, Contexts,
-// Namespaces, Actions) — shared by the centered modal (embedded) and the
-// standalone omnibar so the two never drift.
 export function useCommandItems(cb: CommandItemCallbacks): CommandItem[] {
   const { data: namespacesData } = useNamespaces();
   const { data: contexts } = useContexts();

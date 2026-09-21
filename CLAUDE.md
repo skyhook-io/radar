@@ -35,7 +35,7 @@ Not everything is in this file. The following files contain critical details tha
 | Writing or modifying **frontend UI / styling** | [DESIGN.md](DESIGN.md) — theme tokens, do's/don'ts, component patterns |
 | Touching anything library consumers import | `web/package.json` + `web/src/index.ts` — `web/` IS the `@skyhook-io/radar-app` npm package. Public surface: `RadarApp`, runtime-config setters (`setApiBase` etc.), `NavCustomization`. Breaking it breaks all downstream consumers. |
 | Adding or changing **api/fetch call sites** | `web/src/api/config.ts` — all fetches go through `getApiBase()`, `apiUrl()`, `getWsUrl()`, `getAuthHeaders()`, `getCredentialsMode()`. New fetch sites must use these helpers so library consumers (Radar Hub) can override per-cluster. |
-| Embedding Radar inside another app | `web/src/RadarApp.tsx` + `web/src/context/NavCustomization.tsx` — `apiBase`, `basename`, `router`, `navSlots` props. Changes to this API surface are breaking. |
+| Embedding Radar inside another app | `web/src/RadarApp.tsx` + `web/src/context/NavCustomization.tsx` — `apiBase`, `basename`, `router`, `navSlots` props. Check Radar Hub call sites when changing this interface. |
 
 ## Library distribution
 
@@ -46,11 +46,11 @@ Publish with tag `radar-app-v<semver>` — see `.github/workflows/publish-radar-
 Consumers get:
 - `<RadarApp apiBase basename router navSlots queryClient />` — the whole app as one component
 - Runtime config setters for cross-cutting behavior (`setApiBase`, `setBasename`, `setAuthHeadersProvider`, `setCredentialsMode`) for non-React code paths
-- `NavCustomization` type for nav slot injection
+- `NavCustomization` type for embedded layout and Hub navigation hooks
 
 Known consumers: Radar Hub (`skyhook-dev/radar-hub-web`).
 
-**Backwards-compat rule:** adding props is fine; removing or renaming `apiBase` / `basename` / `navSlots` fields is breaking. Bump major version.
+**Consumer scope:** Radar OSS and Radar Hub are the supported consumers. Coordinate interface changes with Hub; do not preserve unused modes or add migration machinery for hypothetical consumers. `navSlots.embedded` hides all Radar chrome; Hub owns its sidebar and top bar.
 
 ## Architecture
 

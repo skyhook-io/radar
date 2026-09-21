@@ -49,8 +49,7 @@ type NavRailView =
 //                content under the cursor).
 //
 // In embedded mode (Radar Hub) this rail is not rendered at all — the host
-// owns primary view navigation via its own fleet LeftRail. That keeps the
-// @skyhook-io/radar-app surface non-breaking and avoids stacked chrome.
+// owns primary view navigation via its own fleet LeftRail.
 
 interface NavItemDef {
   view: NavRailView;

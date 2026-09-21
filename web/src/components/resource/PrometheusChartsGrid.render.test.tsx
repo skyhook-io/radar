@@ -30,7 +30,7 @@ vi.mock('@skyhook-io/k8s-ui/components/charts', async (importActual) => ({
 const { PrometheusChartsGrid } = await import('./PrometheusChartsGrid')
 const resource = { spec: { template: { spec: { containers: [{ resources: { requests: { cpu: '100m' }, limits: { cpu: '200m' } } }] } } } }
 const render = (url = '/workloads/Deployment/demo/web?tab=metrics', embedded = false) => renderToString(
-  <MemoryRouter initialEntries={[url]}><NavCustomizationProvider value={embedded ? { embedded: true, rightExtras: null } : {}}>
+  <MemoryRouter initialEntries={[url]}><NavCustomizationProvider value={embedded ? { embedded: true } : {}}>
     <PrometheusChartsGrid kind="Deployment" namespace="demo" name="web" resource={resource} />
   </NavCustomizationProvider></MemoryRouter>,
 )
