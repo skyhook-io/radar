@@ -53,6 +53,11 @@ func TestParseALBAction(t *testing.T) {
 			wantFound:   true,
 		},
 		{
+			name:        "redirect ignores a leftover forwardConfig",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"redirect","redirectConfig":{"statusCode":"HTTP_301"},"forwardConfig":{"targetGroups":[{"serviceName":"gone","servicePort":80}]}}`},
+			wantFound:   true,
+		},
+		{
 			name:        "arn-only target group carries no Service",
 			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"Type":"forward","ForwardConfig":{"TargetGroups":[{"TargetGroupARN":"arn:aws:x", "Weight":100}]}}`},
 			wantFound:   true,
@@ -337,6 +342,7 @@ func TestDetectIngressSentinelPortByController(t *testing.T) {
 	defer ResetTestState()
 
 	nginx := "nginx"
+	alb := "alb"
 	missingClass := "gone"
 	withClass := func(ing *networkingv1.Ingress, class *string) *networkingv1.Ingress {
 		ing.Spec.IngressClassName = class
@@ -349,6 +355,7 @@ func TestDetectIngressSentinelPortByController(t *testing.T) {
 
 	objects := []runtime.Object{
 		&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "nginx"}, Spec: networkingv1.IngressClassSpec{Controller: "k8s.io/ingress-nginx"}},
+		&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "alb"}, Spec: networkingv1.IngressClassSpec{Controller: albIngressController}},
 		&networkingv1.IngressClass{
 			ObjectMeta: metav1.ObjectMeta{Name: "alb-default", Annotations: map[string]string{"ingressclass.kubernetes.io/is-default-class": "true"}},
 			Spec:       networkingv1.IngressClassSpec{Controller: albIngressController},
@@ -372,9 +379,11 @@ func TestDetectIngressSentinelPortByController(t *testing.T) {
 		withClass(sentinelIngress("alb-annotation", map[string]string{"alb.ingress.kubernetes.io/scheme": "internet-facing"}, "orphan"), &missingClass),
 		// Named class does not exist and nothing else identifies the controller.
 		withClass(sentinelIngress("unknown", nil, "orphan"), &missingClass),
-		// Named class does not exist. The legacy annotation is ignored once the
-		// field is set.
+		// Named class does not exist, legacy annotation still decides.
 		withClass(sentinelIngress("missing-class-legacy-alb", map[string]string{"kubernetes.io/ingress.class": "alb"}, "orphan"), &missingClass),
+		// Both set. The controller reads the annotation first.
+		withClass(sentinelIngress("field-alb-annotation-nginx", map[string]string{"kubernetes.io/ingress.class": "nginx"}, "named"), &alb),
+		withClass(sentinelIngress("field-nginx-annotation-alb", map[string]string{"kubernetes.io/ingress.class": "alb"}, "orphan"), &nginx),
 		// A resolved nginx class wins over stale alb.* annotations.
 		withClass(sentinelIngress("nginx-stale-alb", map[string]string{"alb.ingress.kubernetes.io/scheme": "internet-facing"}, "named"), &nginx),
 	}
@@ -393,17 +402,19 @@ func TestDetectIngressSentinelPortByController(t *testing.T) {
 		return out
 	}
 
-	for _, name := range []string{"nginx-named-port", "legacy-nginx", "unknown", "missing-class-legacy-alb", "nginx-stale-alb"} {
+	for _, name := range []string{"nginx-named-port", "legacy-nginx", "unknown", "nginx-stale-alb", "field-alb-annotation-nginx"} {
 		if got := reasonsFor(name); len(got) != 0 {
 			t.Errorf("%s: want no backend problems, got %v", name, got)
 		}
 	}
 	for name, want := range map[string]string{
-		"nginx-no-port":     "Missing backend Service port",
-		"default-class":     "Missing ALB action annotation",
-		"legacy-alb":        "Missing ALB action annotation",
-		"alb-annotation":    "Missing ALB action annotation",
-		"legacy-custom-alb": "Missing ALB action annotation",
+		"nginx-no-port":              "Missing backend Service port",
+		"default-class":              "Missing ALB action annotation",
+		"legacy-alb":                 "Missing ALB action annotation",
+		"alb-annotation":             "Missing ALB action annotation",
+		"legacy-custom-alb":          "Missing ALB action annotation",
+		"missing-class-legacy-alb":   "Missing ALB action annotation",
+		"field-nginx-annotation-alb": "Missing ALB action annotation",
 	} {
 		got := reasonsFor(name)
 		if len(got) != 1 || got[0] != want {

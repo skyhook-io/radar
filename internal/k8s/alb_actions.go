@@ -22,17 +22,18 @@ const (
 )
 
 // ingressServedByALB reports whether the AWS Load Balancer Controller serves
-// the Ingress. A named class that doesn't resolve is not retried via the
-// legacy annotation, since controllers honour the field over it. The legacy
-// value the controller claims is configurable, so a value other than alb
-// still counts when alb.* annotations are present.
+// the Ingress. The controller checks the legacy class annotation before
+// spec.ingressClassName, so when the annotation is set the field is not
+// read. The legacy value the controller claims is configurable, so a value
+// other than alb still counts when alb.* annotations are present.
 func ingressServedByALB(cache *ResourceCache, ing *networkingv1.Ingress) (alb, known bool) {
+	if class := ingressstatus.LegacyClass(ing); class != "" {
+		return class == albLegacyIngressClass || hasALBAnnotation(ing), true
+	}
 	if name := ing.Spec.IngressClassName; name != nil && strings.TrimSpace(*name) != "" {
 		if controller, ok := ingressClassController(cache, strings.TrimSpace(*name)); ok {
 			return controller == albIngressController, true
 		}
-	} else if class := ingressstatus.LegacyClass(ing); class != "" {
-		return class == albLegacyIngressClass || hasALBAnnotation(ing), true
 	} else if controller, ok := defaultIngressClassController(cache); ok {
 		return controller == albIngressController, true
 	}
@@ -191,7 +192,10 @@ func parseALBAction(annotations map[string]string, backendServiceName string) (t
 	if err := json.Unmarshal([]byte(raw), &action); err != nil || !action.valid() {
 		return nil, true, true
 	}
-	if action.ForwardConfig == nil {
+
+	// Redirect and fixed-response actions may carry a leftover forwardConfig
+	// that the controller ignores.
+	if action.Type != "forward" || action.ForwardConfig == nil {
 		return nil, true, false
 	}
 
