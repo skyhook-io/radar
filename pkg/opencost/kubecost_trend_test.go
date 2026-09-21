@@ -182,7 +182,7 @@ func TestComputeKubecostTrendRanksAtLatestGlobalBucketAndAggregatesOther(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Series) != 2 || response.Series[0].Namespace != "a" || response.Series[1].Namespace != "other" {
+	if len(response.Series) != 2 || response.Series[0].Namespace != "a" || response.Series[1].Namespace != "other" || !response.Series[1].Remainder || response.Series[0].Remainder {
 		t.Fatalf("unexpected ranked series: %#v", response.Series)
 	}
 	other := response.Series[1].DataPoints

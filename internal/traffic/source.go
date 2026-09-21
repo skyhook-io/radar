@@ -13,6 +13,16 @@ type DetectionResult = pkgtraffic.DetectionResult
 type FlowOptions = pkgtraffic.FlowOptions
 type Flow = pkgtraffic.Flow
 type Endpoint = pkgtraffic.Endpoint
+type PolicyVerdict = pkgtraffic.PolicyVerdict
+type PolicyRef = pkgtraffic.PolicyRef
+
+const (
+	EndpointKindPod      = pkgtraffic.EndpointKindPod
+	EndpointKindExternal = pkgtraffic.EndpointKindExternal
+	EndpointKindHost     = pkgtraffic.EndpointKindHost
+	EndpointKindUnknown  = pkgtraffic.EndpointKindUnknown
+)
+
 type FlowsResponse = pkgtraffic.FlowsResponse
 type AggregatedFlow = pkgtraffic.AggregatedFlow
 type HTTPPathStat = pkgtraffic.HTTPPathStat

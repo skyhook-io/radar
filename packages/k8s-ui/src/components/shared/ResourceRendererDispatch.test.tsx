@@ -180,6 +180,27 @@ function renderCollidingKind(kind: string, apiVersion: string): string {
   )
 }
 
+describe('LimitRange dispatch', () => {
+  const limitRange = {
+    apiVersion: 'v1',
+    kind: 'LimitRange',
+    metadata: { name: 'team-limits', namespace: 'dev' },
+    spec: { limits: [{ type: 'Container', defaultRequest: { cpu: '100m' }, default: { cpu: '500m' } }] },
+  }
+
+  it('renders the declared rules instead of the generic fallback', () => {
+    const html = renderKind('limitranges', limitRange, 'dev')
+    expect(html).toContain('Defaults &amp; Constraints')
+    expect(html).toContain('100m')
+  })
+
+  // A LimitRange has no status. Reporting one would be an invention, and the
+  // drawer header would disagree with the object.
+  it('reports no health for a kind that has none', () => {
+    expect(getResourceStatus('limitranges', limitRange)).toBeNull()
+  })
+})
+
 describe('getResourceStatus — workload rollout activity', () => {
   const steadyDegraded = {
     metadata: { generation: 4 },
@@ -275,6 +296,30 @@ describe('getResourceStatus — colliding plurals', () => {
       apiVersion: 'cluster.x-k8s.io/v1beta1',
       status: { phase: 'Provisioned' },
     })).not.toBeNull()
+  })
+
+  it('reads an Argo Rollouts Experiment with the AnalysisPhase vocabulary', () => {
+    expect(getResourceStatus('experiments', {
+      apiVersion: 'argoproj.io/v1alpha1',
+      status: { phase: 'Successful' },
+    })).toMatchObject({ text: 'Successful', level: 'healthy' })
+
+    expect(getResourceStatus('experiments', {
+      apiVersion: 'argoproj.io/v1alpha1',
+      status: { phase: 'Running' },
+    })).toMatchObject({ level: 'degraded' })
+  })
+
+  // Katib ships its own Experiment at kubeflow.org sharing this plural, and it
+  // does not report AnalysisPhase. Falling through to the generic reader is
+  // fine; being scored with Argo's vocabulary is not, because that attaches a
+  // HealthLevel derived from a phase Katib never reports.
+  it('does not score a Katib Experiment with the Argo vocabulary', () => {
+    const katib = getResourceStatus('experiments', {
+      apiVersion: 'kubeflow.org/v1beta1',
+      status: { conditions: [{ type: 'Running', status: 'True' }] },
+    })
+    expect(katib?.level).toBeUndefined()
   })
 
   it('fabricates no engine status for a third-party backups CRD', () => {
@@ -648,6 +693,81 @@ describe('colliding plurals — near-match API groups', () => {
     const html = renderCollidingKind(kind, apiVersion)
     expect(html.trim()).not.toBe('')
     expect(html).not.toContain('Cluster Overview')
+  })
+})
+
+describe('CAPI Machine kind collisions', () => {
+  const foreignApiVersion = 'extension.cluster.x-k8s.io/v1'
+
+  it.each([
+    ['machines', 'Machine', 'Role'],
+    ['machinesets', 'MachineSet', 'Delete Policy'],
+  ])('routes a foreign %s CRD through the generic renderer only', (plural, kind, capiMarker) => {
+    const html = renderKind(plural, {
+      apiVersion: foreignApiVersion,
+      kind,
+      metadata: {
+        name: 'foreign',
+        namespace: 'default',
+        labels: { 'topology.cluster.x-k8s.io/owned': '' },
+      },
+      spec: { collisionProbe: COLLISION_PROBE },
+      status: { phase: 'provisioned' },
+    }, 'default')
+
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain(capiMarker)
+    expect(html).not.toContain('Topology-controlled')
+    expect(getResourceStatus(plural, {
+      apiVersion: foreignApiVersion,
+      status: { phase: 'provisioned' },
+    })?.text).toBe('provisioned')
+  })
+
+  it.each([
+    ['machines', 'Machine', 'Role'],
+    ['machinesets', 'MachineSet', 'Delete Policy'],
+  ])('keeps exact-group CAPI %s resources on the dedicated path', (plural, kind, capiMarker) => {
+    const html = renderKind(plural, {
+      apiVersion: 'cluster.x-k8s.io/v1beta1',
+      kind,
+      metadata: {
+        name: 'capi',
+        namespace: 'default',
+        labels: { 'topology.cluster.x-k8s.io/owned': '' },
+      },
+      spec: { collisionProbe: COLLISION_PROBE },
+      status: { phase: 'provisioned' },
+    }, 'default')
+
+    expect(html).toContain(capiMarker)
+    expect(html).toContain('Topology-controlled')
+    expect(html).not.toContain(COLLISION_PROBE)
+    expect(getResourceStatus(plural, {
+      apiVersion: 'cluster.x-k8s.io/v1beta1',
+      status: { phase: 'provisioned' },
+    })?.text).toBe('Provisioned')
+  })
+
+  it.each([
+    ['kubeadmcontrolplanes', 'KubeadmControlPlane', 'controlplane.cluster.x-k8s.io/v1beta1'],
+    ['awsmanagedcontrolplanes', 'AWSManagedControlPlane', 'controlplane.cluster.x-k8s.io/v1beta2'],
+    ['awsmanagedmachinepools', 'AWSManagedMachinePool', 'infrastructure.cluster.x-k8s.io/v1beta2'],
+    ['awsmachines', 'AWSMachine', 'infrastructure.cluster.x-k8s.io/v1beta2'],
+  ])('keeps the topology-owned warning for %s', (plural, kind, apiVersion) => {
+    const html = renderKind(plural, {
+      apiVersion,
+      kind,
+      metadata: {
+        name: 'topology-owned',
+        namespace: 'default',
+        labels: { 'topology.cluster.x-k8s.io/owned': '' },
+      },
+      spec: {},
+      status: {},
+    }, 'default')
+
+    expect(html).toContain('Topology-controlled')
   })
 })
 

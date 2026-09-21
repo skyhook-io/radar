@@ -85,10 +85,17 @@ export function mergeGitOpsTrees(
   // resource-viewer routing.
   const nodes: GitOpsTreeNode[] = controller.nodes.map((n) => {
     const dest = destByKey.get(refKey(n.ref))
+    // Health provenance travels with the health it describes: when the
+    // destination's live health wins, so do its source/reason/message.
+    const healthFrom = dest?.health ? dest : n
     const merged = dest
       ? {
           ...n,
           health: dest.health ?? n.health,
+          healthSource: healthFrom.healthSource,
+          healthReason: healthFrom.healthReason,
+          healthMessage: healthFrom.healthMessage,
+          healthSeverity: healthFrom.healthSeverity,
           info: dest.info ?? n.info,
           topologyStatus: dest.topologyStatus ?? n.topologyStatus,
         }

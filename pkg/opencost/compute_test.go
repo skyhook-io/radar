@@ -99,6 +99,7 @@ func TestComputeCostSummary_HappyPath(t *testing.T) {
 		{contains: "container_memory_working_set_bytes", body: vectorBody(map[string]float64{"checkout": 1.2, "payments": 0.25})},
 		{contains: "pv_hourly_cost", body: vectorBody(map[string]float64{"checkout": 0.05})},
 		{contains: "node_total_hourly_cost", body: scalarBody(8.0)}, // exceeds sum of namespaces, so it wins
+		{contains: "node_gpu_count", body: scalarBody(0)},
 	})
 
 	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{Currency: "GBP"})
@@ -122,6 +123,27 @@ func TestComputeCostSummary_HappyPath(t *testing.T) {
 	// totalIdle = 6.5 - 2.85 = 3.65
 	if got.TotalIdleCost < 3.5 || got.TotalIdleCost > 3.8 {
 		t.Errorf("TotalIdleCost=%v, want ~3.65", got.TotalIdleCost)
+	}
+	// Node cost won, so hourlyCost is node capacity: it already holds the
+	// 8 - 6.5 of compute nobody allocated, and the rows' storage is not in it.
+	if got.HourlyCostBasis != HourlyCostBasisNodeCapacity {
+		t.Errorf("HourlyCostBasis=%q, want node_capacity", got.HourlyCostBasis)
+	}
+	if got.TotalUnallocatedCost == nil || *got.TotalUnallocatedCost != 1.5 {
+		t.Errorf("TotalUnallocatedCost=%v, want 1.5", got.TotalUnallocatedCost)
+	}
+	if got.TotalNodeCost == nil || *got.TotalNodeCost != 8 {
+		t.Fatalf("node capacity cost must be independently retained: %+v", got.TotalNodeCost)
+	}
+	if got.TotalAllocatedCost != 6.55 {
+		t.Errorf("allocated=%v, want 6.55", got.TotalAllocatedCost)
+	}
+	var rowIdle float64
+	for _, row := range got.Namespaces {
+		rowIdle += row.IdleCost
+	}
+	if got.TotalUnusedRequestCost != roundTo(rowIdle, 4) {
+		t.Errorf("unused request cost=%v, want the rows' sum %v", got.TotalUnusedRequestCost, roundTo(rowIdle, 4))
 	}
 	if len(got.Namespaces) != 2 {
 		t.Fatalf("expected 2 namespaces, got %d", len(got.Namespaces))
@@ -320,5 +342,241 @@ func TestEfficiencyPercent(t *testing.T) {
 				t.Fatalf("EfficiencyPercent(%v, %v) = %v, want %v", test.usage, test.alloc, got, test.want)
 			}
 		})
+	}
+}
+
+func TestPartialUsageFailureIsFlaggedNotUnderstated(t *testing.T) {
+	// Partial usage evidence must not yield a plausible efficiency measurement:
+	// an efficiency derived from one of the two usage queries is indistinguishable
+	// from a real one, so the row has to report that usage was not collected.
+	client := scriptedProm(t, []scriptedCase{
+		{contains: "container_cpu_allocation", body: vectorBody(map[string]float64{"checkout": 2.0})},
+		{contains: "container_memory_allocation_bytes", body: vectorBody(map[string]float64{"checkout": 3.0})},
+		{contains: "container_cpu_usage_seconds_total", body: `{"status":"error","errorType":"bad_data","error":"boom"}`},
+		{contains: "container_memory_working_set_bytes", body: vectorBody(map[string]float64{"checkout": 2.4})},
+	})
+
+	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{Currency: "USD"})
+	if !got.Available {
+		t.Fatalf("summary unavailable: %+v", got)
+	}
+	if len(got.Namespaces) != 1 {
+		t.Fatalf("namespaces = %+v, want one row", got.Namespaces)
+	}
+
+	row := got.Namespaces[0]
+	if !row.UsageUnavailable {
+		t.Error("a failed usage query must mark the row, or a reader treats 0 as measured")
+	}
+	if row.Efficiency != 0 {
+		t.Errorf("Efficiency=%v, want 0 — memory usage alone understates it", row.Efficiency)
+	}
+	if row.IdleCost != 0 {
+		t.Errorf("IdleCost=%v, want 0 — idle is unknown, not the full allocation", row.IdleCost)
+	}
+	if got.ClusterEfficiency != 0 {
+		t.Errorf("ClusterEfficiency=%v, want 0 — no row contributed usable evidence", got.ClusterEfficiency)
+	}
+
+	// The costs themselves are unaffected: only the usage-derived fields are.
+	if row.HourlyCost != 5.0 {
+		t.Errorf("HourlyCost=%v, want 5.0 — allocation is independent of the usage query", row.HourlyCost)
+	}
+}
+
+func TestTotalUsageFailureLeavesUsageFieldsAtZeroAndFlagsThem(t *testing.T) {
+	// With both usage queries failing, efficiency and idle stay zero and the row
+	// marks usage unavailable. Zero here means "not measured", and only the flag
+	// separates that from a genuine 0% — no data is not 100% idle.
+	client := scriptedProm(t, []scriptedCase{
+		{contains: "container_cpu_allocation", body: vectorBody(map[string]float64{"checkout": 2.0})},
+		{contains: "container_memory_allocation_bytes", body: vectorBody(map[string]float64{"checkout": 3.0})},
+		{contains: "container_cpu_usage_seconds_total", body: `{"status":"error","errorType":"bad_data","error":"boom"}`},
+		{contains: "container_memory_working_set_bytes", body: `{"status":"error","errorType":"bad_data","error":"boom"}`},
+	})
+
+	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{Currency: "USD"})
+	row := got.Namespaces[0]
+	if row.Efficiency != 0 || row.IdleCost != 0 || got.ClusterEfficiency != 0 || got.TotalIdleCost != 0 {
+		t.Errorf("totals changed for a full usage failure: row=%+v clusterEff=%v idle=%v", row, got.ClusterEfficiency, got.TotalIdleCost)
+	}
+	if !row.UsageUnavailable {
+		t.Error("the row must still be flagged")
+	}
+	if row.HourlyCost != 5.0 {
+		t.Errorf("HourlyCost=%v, want 5.0", row.HourlyCost)
+	}
+}
+
+// A namespace the usage queries never reported is not a namespace that used
+// nothing. Both arrive as zero from the usage maps, and reporting the first as
+// 0% efficiency ranks the one namespace nobody measured as the worst waste in
+// the cluster.
+func TestUnmeasuredNamespaceIsFlagged_MeasuredZeroIsNot(t *testing.T) {
+	client := scriptedProm(t, []scriptedCase{
+		{contains: "container_cpu_allocation", body: vectorBody(map[string]float64{"measured": 2.0, "unmeasured": 2.0})},
+		{contains: "container_memory_allocation_bytes", body: vectorBody(map[string]float64{"measured": 1.0, "unmeasured": 1.0})},
+		// Both usage queries answer successfully, and both carry a real zero for
+		// "measured" while omitting "unmeasured" entirely.
+		{contains: "rate(container_cpu_usage_seconds_total", body: vectorBody(map[string]float64{"measured": 0})},
+		{contains: "container_memory_working_set_bytes", body: vectorBody(map[string]float64{"measured": 0})},
+	})
+
+	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{})
+	if !got.Available {
+		t.Fatalf("summary unavailable: %+v", got)
+	}
+	rows := map[string]NamespaceCost{}
+	for _, ns := range got.Namespaces {
+		rows[ns.Name] = ns
+	}
+
+	measured, ok := rows["measured"]
+	if !ok {
+		t.Fatalf("measured namespace missing: %+v", got.Namespaces)
+	}
+	if measured.UsageUnavailable {
+		t.Error("a namespace whose usage series reported 0 was flagged unavailable; a real measurement of zero must survive")
+	}
+	if measured.Efficiency != 0 {
+		t.Errorf("measured.Efficiency=%v, want 0 — it genuinely used nothing", measured.Efficiency)
+	}
+
+	unmeasured, ok := rows["unmeasured"]
+	if !ok {
+		t.Fatalf("unmeasured namespace missing: %+v", got.Namespaces)
+	}
+	if !unmeasured.UsageUnavailable {
+		t.Error("a namespace absent from both usage results was not flagged UsageUnavailable, so it reports 0% efficiency as if measured")
+	}
+	if unmeasured.IdleCost != 0 {
+		t.Errorf("unmeasured.IdleCost=%v, want 0 — idle cannot be derived from usage that was never collected", unmeasured.IdleCost)
+	}
+
+	// Cluster efficiency must be built only from rows that were measured:
+	// alloc 2+1=3, usage 0 => 0%. Folding the unmeasured namespace's allocation
+	// in would double the denominator and halve the reported efficiency.
+	if got.ClusterEfficiency != 0 {
+		t.Errorf("ClusterEfficiency=%v, want 0 from the measured namespace alone", got.ClusterEfficiency)
+	}
+}
+
+// One usage query answering and the other not is still incomplete evidence:
+// efficiency built from half the inputs understates use on every row.
+func TestNamespaceMissingFromOneUsageResultIsFlagged(t *testing.T) {
+	client := scriptedProm(t, []scriptedCase{
+		{contains: "container_cpu_allocation", body: vectorBody(map[string]float64{"half": 2.0})},
+		{contains: "container_memory_allocation_bytes", body: vectorBody(map[string]float64{"half": 1.0})},
+		{contains: "rate(container_cpu_usage_seconds_total", body: vectorBody(map[string]float64{"half": 1.0})},
+		{contains: "container_memory_working_set_bytes", body: vectorBody(map[string]float64{})},
+	})
+
+	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{})
+	if len(got.Namespaces) != 1 {
+		t.Fatalf("namespaces=%+v", got.Namespaces)
+	}
+	if !got.Namespaces[0].UsageUnavailable {
+		t.Error("namespace present in the CPU usage result but absent from memory was not flagged; partial evidence is still incomplete")
+	}
+}
+
+// Without node cost the source never measured unallocated capacity, and a zero
+// there would claim the nodes are fully packed.
+func TestComputeCostSummaryWithoutNodeCostLeavesUnallocatedUnknown(t *testing.T) {
+	client := scriptedProm(t, []scriptedCase{
+		{contains: "container_cpu_allocation", body: vectorBody(map[string]float64{"checkout": 2.0})},
+		{contains: "container_memory_allocation_bytes", body: vectorBody(map[string]float64{"checkout": 1.0})},
+	})
+	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{})
+	if !got.Available {
+		t.Fatalf("summary unavailable: %+v", got)
+	}
+	if got.TotalUnallocatedCost != nil {
+		t.Errorf("TotalUnallocatedCost=%v, want nil when node cost is absent", *got.TotalUnallocatedCost)
+	}
+	if got.HourlyCostBasis != HourlyCostBasisAllocated || got.TotalHourlyCost != got.TotalAllocatedCost {
+		t.Errorf("basis=%q hourly=%v allocated=%v, want allocated and equal totals", got.HourlyCostBasis, got.TotalHourlyCost, got.TotalAllocatedCost)
+	}
+}
+
+func TestComputeCostSummaryClampsUnallocatedAtZero(t *testing.T) {
+	client := scriptedProm(t, []scriptedCase{
+		{contains: "container_cpu_allocation", body: vectorBody(map[string]float64{"checkout": 2.0})},
+		{contains: "container_memory_allocation_bytes", body: vectorBody(map[string]float64{"checkout": 1.0})},
+		{contains: "node_total_hourly_cost", body: scalarBody(2.9)},
+		{contains: "node_gpu_count", body: scalarBody(0)},
+	})
+	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{})
+	if got.TotalUnallocatedCost == nil || *got.TotalUnallocatedCost != 0 {
+		t.Errorf("TotalUnallocatedCost=%v, want 0 when price rounding puts allocation above node cost", got.TotalUnallocatedCost)
+	}
+}
+
+// node_total_hourly_cost includes GPU spend the CPU and memory allocation does
+// not, so on GPU nodes the difference would report allocated GPUs as idle.
+func TestComputeCostSummaryLeavesUnallocatedUnknownOnGPUNodes(t *testing.T) {
+	client := scriptedProm(t, []scriptedCase{
+		{contains: "container_cpu_allocation", body: vectorBody(map[string]float64{"training": 2.0})},
+		{contains: "container_memory_allocation_bytes", body: vectorBody(map[string]float64{"training": 1.0})},
+		{contains: "node_total_hourly_cost", body: scalarBody(9.0)},
+		{contains: "node_gpu_count", body: scalarBody(6.0)},
+	})
+	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{})
+	if got.TotalUnallocatedCost != nil {
+		t.Errorf("TotalUnallocatedCost=%v, want nil when nodes carry GPU spend", *got.TotalUnallocatedCost)
+	}
+	if got.HourlyCostBasis != HourlyCostBasisNodeCapacity {
+		t.Errorf("HourlyCostBasis=%q, want node_capacity", got.HourlyCostBasis)
+	}
+}
+
+// OpenCost can be configured not to emit its GPU metrics while node cost still
+// includes GPU spend, so an absent GPU result cannot be read as no GPUs.
+func TestComputeCostSummaryTreatsMissingGPUMetricsAsUnknown(t *testing.T) {
+	client := scriptedProm(t, []scriptedCase{
+		{contains: "container_cpu_allocation", body: vectorBody(map[string]float64{"a": 2.0})},
+		{contains: "container_memory_allocation_bytes", body: vectorBody(map[string]float64{"a": 1.0})},
+		{contains: "node_total_hourly_cost", body: scalarBody(9.0)},
+	})
+	if got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{}); got.TotalUnallocatedCost != nil {
+		t.Errorf("TotalUnallocatedCost=%v, want nil without GPU metrics", *got.TotalUnallocatedCost)
+	}
+}
+
+func TestComputeCostSummaryWithholdsUnallocatedWhenAnAllocationFamilyIsMissing(t *testing.T) {
+	client := scriptedProm(t, []scriptedCase{
+		{contains: "container_cpu_allocation", body: vectorBody(map[string]float64{"a": 2.0})},
+		{contains: "node_total_hourly_cost", body: scalarBody(9.0)},
+		{contains: "node_gpu_count", body: scalarBody(0)},
+	})
+	if got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{}); got.TotalUnallocatedCost != nil {
+		t.Errorf("TotalUnallocatedCost=%v, want nil when memory allocation is absent", *got.TotalUnallocatedCost)
+	}
+}
+
+// One namespace using more than it was allocated must not cancel another's
+// unused allocation in the total, as it does in the aggregate idle figure.
+func TestUnusedRequestCostDoesNotNetOveruseAgainstWaste(t *testing.T) {
+	client := scriptedProm(t, []scriptedCase{
+		{contains: "container_cpu_allocation", body: vectorBody(map[string]float64{"idle": 4.0, "busy": 1.0})},
+		{contains: "container_memory_allocation_bytes", body: vectorBody(map[string]float64{"idle": 0.0, "busy": 0.0})},
+		{contains: "container_cpu_usage_seconds_total", body: vectorBody(map[string]float64{"idle": 1.0, "busy": 4.0})},
+		{contains: "container_memory_working_set_bytes", body: vectorBody(map[string]float64{"idle": 0.0, "busy": 0.0})},
+	})
+	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{})
+	if got.TotalUnusedRequestCost != 3 {
+		t.Errorf("TotalUnusedRequestCost=%v, want 3 from the idle namespace alone", got.TotalUnusedRequestCost)
+	}
+}
+
+func TestSummaryRetainsNodeCostBelowAllocatedCost(t *testing.T) {
+	client := scriptedProm(t, []scriptedCase{
+		{contains: "container_cpu_allocation", body: vectorBody(map[string]float64{"app": 2})},
+		{contains: "container_memory_allocation_bytes", body: vectorBody(map[string]float64{"app": 1})},
+		{contains: "node_total_hourly_cost", body: scalarBody(1.5)},
+	})
+	got := ComputeCostSummaryFromProm(context.Background(), client, SummaryOptions{})
+	if !got.Available || got.TotalAllocatedCost != 3 || got.TotalNodeCost == nil || *got.TotalNodeCost != 1.5 {
+		t.Fatalf("independent allocation/capacity totals lost: %+v", got)
 	}
 }

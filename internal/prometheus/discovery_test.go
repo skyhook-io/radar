@@ -325,14 +325,14 @@ func TestEnsureConnected_RetiredClientAborts(t *testing.T) {
 func TestMarkConnected_DropsStaleGeneration(t *testing.T) {
 	c := &Client{discoveryGen: 5}
 
-	if c.markConnected("http://stale", "", 4) { // started under an older generation
+	if c.markConnected("http://stale", "", "stale", 4) { // started under an older generation
 		t.Fatal("markConnected committed a stale-generation result")
 	}
 	if c.baseURL != "" {
 		t.Fatalf("stale-generation result was published: baseURL=%q", c.baseURL)
 	}
 
-	if !c.markConnected("http://fresh", "/bp", 5) { // current generation
+	if !c.markConnected("http://fresh", "/bp", "fresh", 5) { // current generation
 		t.Fatal("markConnected rejected a current-generation result")
 	}
 	if c.baseURL != "http://fresh" || c.basePath != "/bp" {
@@ -341,7 +341,7 @@ func TestMarkConnected_DropsStaleGeneration(t *testing.T) {
 
 	// A client retired by Reinitialize must not commit, even at the current gen.
 	retiredC := &Client{discoveryGen: 5, retired: true}
-	if retiredC.markConnected("http://x", "", 5) {
+	if retiredC.markConnected("http://x", "", "x", 5) {
 		t.Fatal("retired client committed a result")
 	}
 	if retiredC.baseURL != "" {
@@ -434,5 +434,36 @@ func TestEnsureConnected_CanceledCallerReturnsPromptly(t *testing.T) {
 	c.mu.Unlock()
 	if dcancel != nil {
 		dcancel()
+	}
+}
+
+// A probe still hanging when the pass ends is what a packet-dropping policy
+// looks like; it must come back as a transport failure so attribution can
+// look at it, while a candidate the pass never reached stays unexplained.
+func TestProbeCandidatesWithReasons_DeadlineMarksLaunchedProbesAsTransportFailures(t *testing.T) {
+	c := &Client{httpClient: &http.Client{Timeout: 30 * time.Second}}
+	blackhole := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer blackhole.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	cands := make([]prom.Candidate, maxConcurrentProbes+1)
+	for i := range cands {
+		cands[i] = prom.Candidate{ClusterAddr: blackhole.URL}
+	}
+	idx, reasons := c.probeCandidatesWithReasons(ctx, cands)
+	if idx != -1 {
+		t.Fatalf("idx = %d, want -1", idx)
+	}
+	for i := 0; i < maxConcurrentProbes; i++ {
+		if reasons[i] != prom.ProbeReasonTransportError {
+			t.Fatalf("reasons[%d] = %q, want transport_error for a probe that was launched and hung", i, reasons[i])
+		}
+	}
+	if reasons[maxConcurrentProbes] != "" {
+		t.Fatalf("reasons[%d] = %q, want empty for a probe the pass never launched", maxConcurrentProbes, reasons[maxConcurrentProbes])
 	}
 }

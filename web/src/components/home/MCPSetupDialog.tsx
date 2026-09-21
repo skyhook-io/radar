@@ -1,8 +1,9 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
-import { X, Copy, Check, Radio, Terminal, MessageSquare, Code2, ChevronRight, Pin } from 'lucide-react'
+import { X, Copy, Check, Radio, Terminal, MessageSquare, Code2, Pin } from 'lucide-react'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { MCP_TOOL_CATALOG } from './mcpToolCatalog'
 import { Tooltip } from '../ui/Tooltip'
+import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
 
 interface MCPSetupDialogProps {
   open: boolean
@@ -204,14 +205,14 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
               <a href="https://modelcontextprotocol.io" target="_blank" rel="noopener noreferrer" className="text-purple-400 hover:text-purple-300 underline underline-offset-2">
                 Model Context Protocol
               </a>{' '}
-              (MCP) server that lets AI agents inspect, diagnose, and operate your cluster through Radar.
+              (MCP) server that lets AI agents inspect, investigate, and operate your cluster through Radar.
               Unlike raw kubectl access, Radar gives your AI pre-processed, enriched data —
               topology graphs, health assessments, deduplicated events, filtered logs — so it
               can understand your cluster state quickly without burning through context on
               verbose YAML output.
             </p>
             <p className="text-sm text-theme-text-secondary leading-relaxed">
-              Most read tools do not change cluster state. Live route diagnosis can create up
+              Most read tools do not change cluster state. An in-cluster route probe can create up
               to five self-deleting probe pods when explicitly requested. Write tools (restart,
               scale, sync, apply, node drain) are annotated as destructive so your AI client
               can flag them and prompt before running.
@@ -285,17 +286,22 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
               { icon: Terminal, name: 'OpenAI Codex', path: '~/.codex/config.toml', config: codexConfig },
               { icon: Terminal, name: 'Gemini CLI', path: '~/.gemini/settings.json', config: geminiConfig },
             ].map((agent) => (
-              <details key={agent.name} className="group rounded-md border border-theme-border/50 bg-theme-base/30">
-                <summary className="flex items-center gap-2 px-3 py-2 select-none list-none hover:bg-theme-hover/50 rounded-md transition-colors [&::-webkit-details-marker]:hidden">
-                  <ChevronRight className="w-3.5 h-3.5 text-theme-text-tertiary transition-transform group-open:rotate-90" />
-                  <agent.icon className="w-4 h-4 text-theme-text-tertiary" />
-                  <span className="text-sm font-medium text-theme-text-primary">{agent.name}</span>
-                  {agent.path && <span className="text-[10px] text-theme-text-tertiary ml-auto">{agent.path}</span>}
-                </summary>
+              <Disclosure
+                key={agent.name}
+                className="rounded-md border border-theme-border/50 bg-theme-base/30"
+                summaryClassName="gap-2 px-3 py-2 select-none hover:bg-theme-hover/50 rounded-md transition-colors"
+                summary={
+                  <>
+                    <agent.icon className="w-4 h-4 text-theme-text-tertiary" />
+                    <span className="text-sm font-medium text-theme-text-primary">{agent.name}</span>
+                    {agent.path && <span className="text-[10px] text-theme-text-tertiary ml-auto">{agent.path}</span>}
+                  </>
+                }
+              >
                 <div className="px-3 pb-3 pt-1">
                   <CodeBlock>{agent.config}</CodeBlock>
                 </div>
-              </details>
+              </Disclosure>
             ))}
           </div>
 

@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react'
 import { X, Plus, Trash2, Lock } from 'lucide-react'
 import { clsx } from 'clsx'
-import { useAuditSettings, useUpdateAuditSettings, useAudit, useCloudRole } from '../../api/client'
+import { useAuditSettings, useUpdateAuditSettings, useAudit, useCloudRole, useCapabilities } from '../../api/client'
+import { OperatorManagedNotice } from '../settings/OperatorManagedNotice'
 import type { CheckMeta } from '@skyhook-io/k8s-ui'
 import { validateRFC1123Label, type ValidationResult } from '@skyhook-io/k8s-ui/utils/validators'
 import { Tooltip } from '../ui/Tooltip'
@@ -20,7 +21,9 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
   // server-side too). Non-owners get a read-only view. Non-Cloud callers
   // have no role and pass.
   const { canAtLeast } = useCloudRole()
-  const canEdit = canAtLeast('owner')
+  const { data: capabilities } = useCapabilities()
+  const operatorManaged = capabilities?.configManagement === 'operator'
+  const canEdit = capabilities != null && !operatorManaged && canAtLeast('owner')
   const [ignoredNs, setIgnoredNs] = useState<string[]>([])
   const [disabledChecks, setDisabledChecks] = useState<string[]>([])
   const [newNs, setNewNs] = useState('')
@@ -82,7 +85,8 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
         </div>
 
         <div className="px-5 py-4 overflow-y-auto flex-1">
-          {!canEdit && (
+          {operatorManaged && <div className="mb-4"><OperatorManagedNotice helmValue="audit" /></div>}
+          {capabilities && !operatorManaged && !canEdit && (
             <div className="mb-4 rounded-lg border border-theme-border bg-theme-elevated/50 p-3 flex items-start gap-2.5">
               <Lock className="w-3.5 h-3.5 mt-0.5 shrink-0 text-theme-text-tertiary" />
               <p className="text-xs text-theme-text-tertiary">
@@ -104,13 +108,13 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
               {ignoredNs.map(ns => (
                 <div key={ns} className="flex items-center justify-between px-3 py-1.5 bg-theme-elevated rounded-lg">
                   <span className="text-sm text-theme-text-primary">{ns}</span>
-                  <button
+                  {!operatorManaged && <button
                     onClick={() => setIgnoredNs(ignoredNs.filter(n => n !== ns))}
                     disabled={!canEdit}
                     className="p-1 rounded hover:bg-theme-hover text-theme-text-tertiary hover:text-red-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-theme-text-tertiary"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  </button>}
                 </div>
               ))}
               {ignoredNs.length === 0 && (
@@ -118,7 +122,7 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
               )}
             </div>
 
-            <div className="flex gap-2">
+            {!operatorManaged && <div className="flex gap-2">
               <Input
                 value={newNs}
                 onChange={e => setNewNs(e.target.value)}
@@ -141,7 +145,7 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
               >
                 <Plus className="w-4 h-4" />
               </button>
-            </div>
+            </div>}
             {(newNsError || newNsDuplicate) && (
               <p id="new-ns-help" className="mt-1.5 text-xs text-red-400">
                 {newNsDuplicate
@@ -157,7 +161,7 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
               Enabled Checks
             </label>
             <p className="text-xs text-theme-text-tertiary mt-1 mb-3">
-              Uncheck to disable specific checks globally across all views.
+              {operatorManaged ? 'Checks enabled by the installation’s audit policy.' : 'Uncheck to disable specific checks globally across all views.'}
             </p>
 
             <div className="flex flex-col gap-0.5">
@@ -191,9 +195,9 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
             onClick={onClose}
             className="px-4 py-1.5 text-sm text-theme-text-secondary hover:text-theme-text-primary bg-theme-elevated hover:bg-theme-hover border border-theme-border rounded-lg transition-colors"
           >
-            Cancel
+            {operatorManaged ? 'Close' : 'Cancel'}
           </button>
-          <Tooltip
+          {!operatorManaged && <Tooltip
             content={
               !canEdit
                 ? 'Audit settings can only be changed by owners'
@@ -216,7 +220,7 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
           >
             {updateSettings.isPending ? 'Saving...' : 'Save'}
           </button>
-          </Tooltip>
+          </Tooltip>}
         </div>
       </div>
     </div>

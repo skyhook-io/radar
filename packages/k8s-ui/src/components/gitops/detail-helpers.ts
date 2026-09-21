@@ -1,4 +1,4 @@
-import { argoStatusToGitOpsStatus, fluxConditionsToGitOpsStatus, type FluxCondition, type GitOpsStatus } from '../../types/gitops'
+import { argoApplicationSetConditionsToGitOpsStatus, argoStatusToGitOpsStatus, fluxConditionsToGitOpsStatus, type FluxCondition, type GitOpsStatus } from '../../types/gitops'
 import { formatCompactAge } from '../../utils/format'
 
 // =============================================================================
@@ -91,13 +91,23 @@ export function describeGitOpsTerminating(summary?: {
   }
 }
 
-// getGitOpsResourceStatus dispatches sync/health extraction by tool. Argo
-// reads from .status (rich operationState + sync state); Flux reads from
+// getGitOpsResourceStatus dispatches sync/health extraction by kind. Argo
+// Applications read from .status (rich operationState + sync state); Argo
+// ApplicationSets read their own generator conditions; Flux kinds read
 // .status.conditions + .spec.suspend. Returns null if the resource has
 // no recognizable status (e.g. just-created, status not yet populated).
 export function getGitOpsResourceStatus(kind: string, resource: any): GitOpsStatus | null {
   if (kind === 'applications') {
     return argoStatusToGitOpsStatus(resource?.status ?? {})
+  }
+  // ApplicationSets carry Argo's generator conditions, not Flux's. Without
+  // this they fall through to the Flux reader below, which looks for Ready /
+  // Reconciling / Stalled, finds none, and reports a failing generator as
+  // Unknown.
+  if (kind === 'applicationsets') {
+    return argoApplicationSetConditionsToGitOpsStatus(
+      (resource?.status?.conditions ?? []) as FluxCondition[]
+    )
   }
   const conditions = (resource?.status?.conditions ?? []) as FluxCondition[]
   return fluxConditionsToGitOpsStatus(conditions, resource?.spec?.suspend === true, {

@@ -7,6 +7,7 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
@@ -202,4 +203,60 @@ func equalSlice(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func TestClampToNamespacePinLeavesAuthorizationToTheCaller(t *testing.T) {
+	// MCP must allow exactly what the REST route allows. handleRightsizing gates
+	// on an exact "get" SAR and nothing else, while the RBAC namespace list is
+	// derived from "list" sentinels — so a tool that authorizes with an exact SAR
+	// applies the pin WITHOUT that filter, or a caller holding get-but-not-list is
+	// denied here and served there.
+	original, originalTarget := k8s.ForceNamespaceScope, k8s.GetNamespaceScopeTarget()
+	t.Cleanup(func() {
+		k8s.ForceNamespaceScope = original
+		k8s.SetNamespaceScopeOverride(originalTarget)
+	})
+
+	k8s.ForceNamespaceScope = false
+	if got, ok := clampToNamespacePin([]string{"anything"}); !ok || len(got) != 1 || got[0] != "anything" {
+		t.Errorf("without a pin the request passes through untouched, got %v ok=%v", got, ok)
+	}
+
+	k8s.ForceNamespaceScope = true
+	k8s.SetNamespaceScopeOverride("pinned")
+	if _, ok := clampToNamespacePin([]string{"other"}); ok {
+		t.Error("a namespace outside the pin must be refused")
+	}
+	if got, ok := clampToNamespacePin([]string{"pinned"}); !ok || got[0] != "pinned" {
+		t.Errorf("the pinned namespace is allowed, got %v ok=%v", got, ok)
+	}
+}
+
+func TestScopedNamespacesForUserHonorsNamespacePin(t *testing.T) {
+	// Prometheus and Kubecost answer cluster-wide regardless of informer
+	// scoping, so a --namespace-pinned Radar must clamp here or cost tools
+	// report spend for namespaces the operator pinned away.
+	original, originalTarget := k8s.ForceNamespaceScope, k8s.GetNamespaceScopeTarget()
+	t.Cleanup(func() {
+		k8s.ForceNamespaceScope = original
+		k8s.SetNamespaceScopeOverride(originalTarget)
+	})
+
+	k8s.ForceNamespaceScope = true
+	k8s.SetNamespaceScopeOverride("pinned")
+
+	if got := scopedNamespacesForUser(context.Background(), nil); len(got) != 1 || got[0] != "pinned" {
+		t.Errorf("an unscoped request must be clamped to the pin, got %v", got)
+	}
+	if got := scopedNamespacesForUser(context.Background(), []string{"pinned"}); len(got) != 1 || got[0] != "pinned" {
+		t.Errorf("requesting the pinned namespace should be allowed, got %v", got)
+	}
+	if got := scopedNamespacesForUser(context.Background(), []string{"other"}); got == nil || len(got) != 0 {
+		t.Errorf("requesting a namespace outside the pin must deny, got %v", got)
+	}
+
+	k8s.ForceNamespaceScope = false
+	if got := scopedNamespacesForUser(context.Background(), nil); got != nil {
+		t.Errorf("without a pin the RBAC filter decides, got %v", got)
+	}
 }

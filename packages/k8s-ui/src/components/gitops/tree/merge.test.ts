@@ -41,6 +41,40 @@ function destNode(
 }
 
 describe('mergeGitOpsTrees', () => {
+  // Health provenance follows the health value: when the destination's live
+  // health replaces the controller's, its source/reason/message come along;
+  // a destination node with no health leaves the controller's provenance.
+  test('health provenance travels with whichever health wins', () => {
+    const controller: GitOpsResourceTree = {
+      root: ctrlNode('app1', 'Application', 'app1', 'argocd', { role: 'root' }),
+      nodes: [
+        ctrlNode('app1', 'Application', 'app1', 'argocd', { role: 'root' }),
+        ctrlNode('dep1', 'Deployment', 'web', 'prod', { health: 'Healthy', healthSource: 'controller' }),
+        ctrlNode('css1', 'ClusterSecretStore', 'platform', '', { health: 'Degraded', healthSource: 'radar', healthReason: 'Ready: Bad', healthMessage: 'no route' }),
+      ],
+      edges: [],
+    }
+    const destination: GitOpsResourceTree = {
+      root: destNode('dest-root', 'Application', 'app1', 'argocd', { role: 'root' }),
+      nodes: [
+        destNode('dest-root', 'Application', 'app1', 'argocd', { role: 'root' }),
+        destNode('dest-dep1', 'Deployment', 'web', 'prod', { health: 'Degraded', healthSource: 'radar', healthReason: 'CrashLoopBackOff', healthMessage: 'back-off' }),
+        destNode('dest-css1', 'ClusterSecretStore', 'platform', ''),
+      ],
+      edges: [],
+    }
+    const merged = mergeGitOpsTrees(controller, destination)
+    const dep = merged.nodes.find((n) => n.ref.kind === 'Deployment')!
+    expect(dep.health).toBe('Degraded')
+    expect(dep.healthSource).toBe('radar')
+    expect(dep.healthReason).toBe('CrashLoopBackOff')
+    expect(dep.healthMessage).toBe('back-off')
+    const css = merged.nodes.find((n) => n.ref.kind === 'ClusterSecretStore')!
+    expect(css.health).toBe('Degraded')
+    expect(css.healthSource).toBe('radar')
+    expect(css.healthReason).toBe('Ready: Bad')
+  })
+
   // The classic in-cluster case — caller didn't fetch a destination tree
   // (single-cluster app) so destination is null. Returning the controller
   // tree unchanged is what preserves Argo's status + summary tile counts

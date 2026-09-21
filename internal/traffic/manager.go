@@ -62,13 +62,26 @@ func SetMetricsURL(url string) {
 func SetMetricsHeaders(h map[string]string) {
 	metricsConfigMu.Lock()
 	defer metricsConfigMu.Unlock()
+	configuredMetricsHeaders = copyMetricsHeaders(h)
+}
+
+// SetMetricsConfig applies URL and headers together. A source built between
+// two separate writes would pair the new URL with the old credentials (or the
+// reverse), so a live change must publish both in one step.
+func SetMetricsConfig(url string, h map[string]string) {
+	metricsConfigMu.Lock()
+	defer metricsConfigMu.Unlock()
+	configuredMetricsURL = url
+	configuredMetricsHeaders = copyMetricsHeaders(h)
+}
+
+func copyMetricsHeaders(h map[string]string) map[string]string {
 	if len(h) == 0 {
-		configuredMetricsHeaders = nil
-		return
+		return nil
 	}
 	out := make(map[string]string, len(h))
 	maps.Copy(out, h)
-	configuredMetricsHeaders = out
+	return out
 }
 
 // SetBeylaJobSelector overrides the `job` label matcher fragment (e.g.

@@ -74,7 +74,7 @@ func FreshInstallPreflight(
 	target, err := parseAdoptionManifest(opts.TargetManifest, opts.Namespace, mapper)
 	if err != nil {
 		if meta.IsNoMatchError(err) {
-			result.Blocking = append(result.Blocking, fmt.Sprintf("map target Helm manifest to this cluster: %v", err))
+			result.blockRefused(fmt.Sprintf("map target Helm manifest to this cluster: %v", err))
 			return result, nil
 		}
 		return result, fmt.Errorf("fresh-install preflight: parse target Helm manifest: %w", err)
@@ -143,13 +143,16 @@ func preflightFreshChartCreates(
 			continue
 		}
 
-		// A successful dry-run Role create already proves that the caller may
-		// grant every rendered rule. Its dry-run object is not persisted, though,
-		// so Kubernetes cannot resolve a following generated RoleBinding the way
-		// it can during Helm's real kind-ordered create. Suppress only the precise
-		// NotFound for that successfully checked prepared role.
-		if roleKey, ok := preparedBindingRole(desired, target); ok && created[roleKey] && missingPreparedRole(mutationErr, roleKey) {
-			if !notedEphemeralRoles[roleKey] {
+		// A dry-run Role create is not persisted, so Kubernetes cannot resolve
+		// a following generated RoleBinding the way it can during Helm's real
+		// kind-ordered create, and answers NotFound for the role. That NotFound
+		// says nothing on its own: if the role's dry run succeeded it proved the
+		// caller may grant every rendered rule (note it, keep going); if the role
+		// was refused, that refusal is already recorded and is the real cause.
+		// Recording the binding's NotFound as a blocker of its own would let a
+		// dependent error outrank a plain permission denial.
+		if roleKey, ok := preparedBindingRole(desired, target); ok && missingPreparedRole(mutationErr, roleKey) {
+			if created[roleKey] && !notedEphemeralRoles[roleKey] {
 				result.Advisory = append(result.Advisory, fmt.Sprintf(
 					"create %s: Kubernetes could not complete bind admission because referenced %s %q exists only for the duration of its successful dry-run; Helm creates that proven role before its bindings during the real install",
 					desired.description(), roleKey.kind, roleKey.name))

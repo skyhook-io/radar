@@ -54,7 +54,7 @@ func handleSummaryScoped(w http.ResponseWriter, r *http.Request, resolveCurrency
 			return
 		}
 		if allowedNamespaces != nil {
-			filterCostSummary(resp, allowedNamespaces)
+			FilterCostSummary(resp, allowedNamespaces)
 		}
 		writeJSON(w, http.StatusOK, resp)
 		return
@@ -70,10 +70,10 @@ func handleSummaryScoped(w http.ResponseWriter, r *http.Request, resolveCurrency
 		return
 	}
 	resp := pkgopencost.ComputeCostSummaryFromProm(
-		r.Context(), client.Prom(), pkgopencost.SummaryOptions{Currency: currency})
+		r.Context(), client.Prom(), pkgopencost.SummaryOptions{Currency: currency, SkipNodeCost: allowedNamespaces != nil})
 	resp.Source = "prometheus"
 	if allowedNamespaces != nil {
-		filterCostSummary(resp, allowedNamespaces)
+		FilterCostSummary(resp, allowedNamespaces)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -268,7 +268,7 @@ func handleNodesScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func filterCostSummary(resp *pkgopencost.CostSummary, allowed []string) {
+func FilterCostSummary(resp *pkgopencost.CostSummary, allowed []string) {
 	allow := make(map[string]struct{}, len(allowed))
 	for _, namespace := range allowed {
 		allow[namespace] = struct{}{}
@@ -287,6 +287,12 @@ func filterCostSummary(resp *pkgopencost.CostSummary, allowed []string) {
 	resp.TotalStorageCost = 0
 	resp.TotalNetworkCost = 0
 	resp.TotalIdleCost = 0
+	// Unrequested node capacity cannot be attributed to a namespace, so a
+	// scoped summary has no unallocated figure, and its total is the rows'.
+	resp.TotalUnallocatedCost = nil
+	resp.TotalNodeCost = nil
+	resp.TotalUnusedRequestCost = 0
+	resp.HourlyCostBasis = pkgopencost.HourlyCostBasisAllocated
 	var allocated, usage float64
 	for _, row := range resp.Namespaces {
 		if _, ok := allow[row.Name]; !ok {
@@ -297,12 +303,14 @@ func filterCostSummary(resp *pkgopencost.CostSummary, allowed []string) {
 		resp.TotalStorageCost += row.StorageCost
 		resp.TotalNetworkCost += row.NetworkCost
 		resp.TotalIdleCost += row.IdleCost
+		resp.TotalUnusedRequestCost += row.IdleCost
 		if !row.UsageUnavailable {
 			allocated += row.CPUCost + row.MemoryCost
 			usage += row.CPUUsageCost + row.MemoryUsageCost
 		}
 	}
 	resp.Namespaces = filtered
+	resp.TotalAllocatedCost = resp.TotalHourlyCost
 	if sourceAvailable && len(filtered) == 0 {
 		resp.Available = false
 		resp.Reason = pkgopencost.ReasonNoMetrics

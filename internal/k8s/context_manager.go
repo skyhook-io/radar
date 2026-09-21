@@ -268,6 +268,32 @@ func RegisterTrafficFuncs(reset TrafficResetFunc, reinit TrafficReinitFunc) {
 	trafficReinitFunc = reinit
 }
 
+// RestartTrafficSubsystem tears down and rebuilds the traffic manager for the
+// current cluster, the way a context switch does, serialized with any switch
+// or rescope in flight so the two can't interleave on the manager singleton.
+// A live configuration change that the traffic sources copied at construction
+// (the metrics URL and headers) reaches them only this way. No-op while
+// disconnected: the next connect builds the manager from current config.
+func RestartTrafficSubsystem() error {
+	contextSwitchMu.RLock()
+	resetFn, reinitFn := trafficResetFunc, trafficReinitFunc
+	contextSwitchMu.RUnlock()
+	if resetFn == nil || reinitFn == nil {
+		return nil
+	}
+	activeContextOperations.Add(1)
+	contextOpMu.Lock()
+	defer func() {
+		activeContextOperations.Add(-1)
+		contextOpMu.Unlock()
+	}()
+	if GetClient() == nil {
+		return nil
+	}
+	resetFn()
+	return reinitFn()
+}
+
 // RegisterPrometheusFuncs registers the Prometheus client reset/reinit functions.
 func RegisterPrometheusFuncs(reset PrometheusResetFunc, reinit PrometheusReinitFunc) {
 	contextSwitchMu.Lock()

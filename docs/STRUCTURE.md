@@ -81,7 +81,7 @@ radar/
 │   │   └── tree/              # GitOps resource tree builder for ArgoCD/FluxCD detail graphs
 │   ├── k8score/               # Shared K8s caching layer (informers, listers, transforms)
 │   ├── portforward/           # Port forwarding logic
-│   ├── timeline/              # Timeline event storage (memory/SQLite)
+│   ├── timeline/              # Timeline event storage (memory/SQLite/PostgreSQL)
 │   └── topology/
 │       ├── builder.go         # Topology graph construction
 │       ├── certificates.go    # Certificate relationship detection
@@ -114,7 +114,6 @@ radar/
 │   │   │   ├── logs/          # Logs viewer component
 │   │   │   ├── portforward/   # Port forward manager
 │   │   │   ├── resource/      # Single resource detail page
-│   │   │   ├── resource-drawer/ # Resource drawer overlay
 │   │   │   ├── resources/     # Resource list panels (thin wrappers over @skyhook-io/k8s-ui)
 │   │   │   ├── audit/         # Cluster audit detail view
 │   │   │   ├── cost/          # Cost tracking and visualization
@@ -139,7 +138,7 @@ radar/
 
 ## Tech stack snapshot
 
-**Backend:** Go 1.26+, client-go, chi, gorilla/websocket, helm.sh/helm/v3, cilium/cilium (Hubble), google/go-containerregistry, modernc.org/sqlite, modelcontextprotocol/go-sdk, wailsapp/wails/v2 (desktop), `go:embed` for frontend.
+**Backend:** Go 1.26+, client-go, chi, gorilla/websocket, helm.sh/helm/v3, cilium/cilium (Hubble), google/go-containerregistry, modernc.org/sqlite, `github.com/jackc/pgx/v5` (PostgreSQL timeline storage), modelcontextprotocol/go-sdk, wailsapp/wails/v2 (desktop), `go:embed` for frontend.
 
 **Frontend:** React 19 + TypeScript, Vite, @xyflow/react + elkjs (graph), @xterm/* (terminal), @monaco-editor/react (YAML), shiki (syntax), @tanstack/react-query v5, react-router-dom, Tailwind CSS v4 + shadcn/ui (`@tailwindcss/vite` plugin), Lucide React (icons), `yaml`.
 

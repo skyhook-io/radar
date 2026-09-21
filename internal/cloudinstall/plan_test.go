@@ -140,3 +140,14 @@ func TestClassifyInstallPlanCarriesClusterWideUncertainty(t *testing.T) {
 		t.Fatalf("plan = %#v, err = %v", plan, err)
 	}
 }
+
+func TestClassifyInstallPlanReleaseInspectErrorCarriesTheDiscoveredTarget(t *testing.T) {
+	var e *ReleaseInspectError
+	err := error(&ReleaseInspectError{Namespace: "monitoring", Release: "radar-prod", Existing: true, Err: errors.New("secrets is forbidden")})
+	if !errors.As(err, &e) || !e.Existing || e.Release != "radar-prod" {
+		t.Fatalf("typed error lost its target: %+v", e)
+	}
+	if got := err.Error(); got != `inspect Helm release "radar-prod" in namespace "monitoring": secrets is forbidden` {
+		t.Fatalf("message = %q", got)
+	}
+}

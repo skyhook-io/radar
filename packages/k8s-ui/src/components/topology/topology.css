@@ -65,7 +65,10 @@
   box-shadow: none !important;
 }
 
-/* Group header scaling using CSS variable set by ViewportController */
+/* Group header scaling using CSS variable set by ViewportController.
+   Only safe on children INSIDE a group container (the expanded-group header row):
+   on a node's root content it desyncs the visible box from the React Flow
+   wrapper, whose full-size hitbox and edge anchors don't follow the transform. */
 .group-header-scaled {
   transform: scale(var(--group-header-scale, 1));
   transform-origin: top left;

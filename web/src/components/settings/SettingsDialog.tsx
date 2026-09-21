@@ -9,7 +9,7 @@ import {
 import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
-import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
+import { TRANSITION_BACKDROP, TRANSITION_PANEL, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import { apiUrl, getAuthHeaders, getCredentialsMode, routePath } from '../../api/config'
 import {
   useCloudRole, useVersionCheck, useClusterInfo, usePrometheusStatus, useArgoStatus, useCapabilities,
@@ -30,8 +30,9 @@ import {
   costIntegrationUnavailableMessage,
   costSourceLabel,
 } from '../cost/source'
-import { costSourceApplyLabel, shouldOfferCostReview, shouldShowSettingsFooter } from './settings-state'
+import { costSourceApplyLabel, prometheusHeadersFromRows, shouldOfferCostReview, shouldShowSettingsFooter } from './settings-state'
 import type { SettingsSectionId } from './settings-state'
+import { OperatorManagedNotice } from './OperatorManagedNotice'
 export type { SettingsSectionId } from './settings-state'
 
 // The loopback URL an MCP client is told to connect to. Shared by the overview
@@ -64,11 +65,15 @@ interface Config {
 }
 
 interface ConfigResponse {
+  management: 'local' | 'operator' | 'cloud'
   file: Config
   effective: Config
   isDesktop: boolean
   openCostCurrencyManaged?: boolean
   prometheusHeaderKeys?: string[]
+  prometheusServerManaged: boolean
+  prometheusHeadersManaged: boolean
+  prometheusUrlFromFlag: boolean
   kubecostApiKeySet?: boolean
   kubecostEnvManaged?: boolean
   kubecostEnvError?: string
@@ -107,7 +112,7 @@ interface SettingsDialogProps {
 //     the owner-gated footer and applied after restart.
 //   • Live integrations (Prometheus, cost source, Argo CD) — their own Apply/Connect endpoints
 //     re-point the running server; effect immediately, NOT part of footer dirty.
-//   • Self-saving preferences (cost currency, AI diagnose) — applied immediately.
+//   • Self-saving preferences (cost currency, AI investigations) — applied immediately.
 // Integration fields (prometheusUrl, argoCdUrl, argoCdInsecureTls) apply through
 // their own controls and are excluded here. Every field is normalized so
 // unset≡default doesn't read as a change.
@@ -135,18 +140,14 @@ export function SettingsDialog({
 }: SettingsDialogProps) {
   const queryClient = useQueryClient()
   const dialogRef = useRef<HTMLDivElement>(null)
-  const { shouldRender, isOpen } = useAnimatedUnmount(open, 200)
+  const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs('dialog'))
   const { data: versionInfo } = useVersionCheck()
-  // Radar configuration (kubeconfig, port, integrations…) is host-level and
-  // affects every user of this instance, so it's gated to owners. Personal
-  // sections (My permissions, AI diagnose) stay usable by everyone. Non-Cloud
-  // callers (OSS, OIDC, kubectl plugin) have no role and pass — single-user
-  // laptops are never locked out of their own config. Backend enforces this too.
   const { canAtLeast } = useCloudRole()
   const capabilities = useCapabilitiesContext()
-  const canEditConfig = canAtLeast('owner')
 
   const [configData, setConfigData] = useState<ConfigResponse | null>(null)
+  const operatorManaged = configData?.management === 'operator'
+  const canEditConfig = configData != null && !operatorManaged && canAtLeast('owner')
   const [editedConfig, setEditedConfig] = useState<Config>({})
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
@@ -163,9 +164,7 @@ export function SettingsDialog({
     open && section === 'argocd'
   )
 
-  // AI Diagnosis prefs are client-side (localStorage) and now SELF-SAVING: the
-  // section has its own Save that commits the draft to DiagnoseContext, so it's
-  // independent of the owner-gated footer. The draft is snapshotted on open.
+  // Local AI preferences save independently of the owner-gated server settings.
   const diag = useDiagnose()
   const aiAvailable = diag.available && diag.agents.length > 0
   const [aiDraft, setAiDraft] = useState<AIDraft>({
@@ -211,6 +210,7 @@ export function SettingsDialog({
   // actually accessible to the current identity.
   useEffect(() => {
     if (!open) return
+    setConfigData(null)
     setSaveMessage(null)
     setLoadError(null)
     setConfirmingClose(false)
@@ -231,7 +231,7 @@ export function SettingsDialog({
       })
       .then((data: ConfigResponse) => {
         setConfigData(data)
-        setEditedConfig(data.file)
+        setEditedConfig({ ...data.file, prometheusUrl: data.effective.prometheusUrl })
       })
       .catch((err) => {
         console.warn('[settings] Failed to load config:', err)
@@ -363,7 +363,7 @@ export function SettingsDialog({
     // live integration fields, so restoring it drops drafts without touching
     // what's saved.
     if (!configData) return
-    setEditedConfig(configData.file)
+    setEditedConfig({ ...configData.file, prometheusUrl: configData.effective.prometheusUrl })
     setCostCredentialDirty(false)
     setCostDraftReset((current) => current + 1)
     setSaveMessage(null)
@@ -443,7 +443,7 @@ export function SettingsDialog({
   // Flat, un-grouped nav ordered as a narrative — at-a-glance, then you, then how
   // Radar connects, then data integrations, then AI, then advanced. The
   // per-section captions carry the restart-vs-live semantics, so group labels
-  // would only add visual weight. AI diagnose is always shown (the section
+  // would only add visual weight. AI investigations is always shown (the section
   // explains how to enable it when no agent CLI is installed).
   const navItems: NavItemDef[] = [
     { id: 'overview', label: 'Overview', icon: LayoutDashboard, ownerOnly: false, dirty: false },
@@ -452,7 +452,7 @@ export function SettingsDialog({
     { id: 'prometheus', label: 'Metrics', icon: Activity, ownerOnly: true, dirty: false },
     { id: 'cost', label: 'Cost', icon: Coins, ownerOnly: true, dirty: costIntegrationDirty },
     { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, dirty: false },
-    { id: 'ai', label: 'AI diagnose', icon: Sparkles, ownerOnly: false, dirty: aiDirty },
+    { id: 'ai', label: 'AI investigations', icon: Sparkles, ownerOnly: false, dirty: aiDirty },
     { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, ownerOnly: true, dirty: advancedDirty },
   ]
 
@@ -475,6 +475,7 @@ export function SettingsDialog({
           TRANSITION_BACKDROP,
           isOpen ? 'opacity-100' : 'opacity-0'
         )}
+        style={overlayTransitionStyle(isOpen, 'dialog')}
         onClick={() => requestCloseRef.current()}
       />
 
@@ -501,6 +502,7 @@ export function SettingsDialog({
           TRANSITION_PANEL,
           isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
         )}
+        style={overlayTransitionStyle(isOpen, 'dialog')}
       >
         {/* Header — spans both panes */}
         <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
@@ -535,7 +537,7 @@ export function SettingsDialog({
                 key={i.id}
                 item={i}
                 active={section === i.id}
-                disabled={i.ownerOnly && !canEditConfig}
+                disabled={i.ownerOnly && !operatorManaged && !canAtLeast('owner')}
                 onSelect={() => setSection(i.id)}
               />
             ))}
@@ -549,7 +551,7 @@ export function SettingsDialog({
                 item={i}
                 horizontal
                 active={section === i.id}
-                disabled={i.ownerOnly && !canEditConfig}
+                disabled={i.ownerOnly && !operatorManaged && !canAtLeast('owner')}
                 onSelect={() => setSection(i.id)}
               />
             ))}
@@ -564,12 +566,16 @@ export function SettingsDialog({
               </div>
             )}
 
+            {!configData && !['overview', 'perms', 'ai'].includes(section) ? (
+              <p className="text-sm text-theme-text-secondary">{loadError ? 'Configuration is unavailable. Close Settings and try again.' : 'Loading configuration…'}</p>
+            ) : <>
+            {operatorManaged && section !== 'perms' && section !== 'ai' && <div className="mb-4"><OperatorManagedNotice /></div>}
             {/* Overview — status at a glance; the landing section */}
             <div className={clsx(section !== 'overview' && 'hidden')} role="tabpanel" inert={section !== 'overview' || undefined}>
               <div className="mb-1">
                 <h3 className="text-base font-semibold text-theme-text-primary">Overview</h3>
                 <p className="mt-0.5 text-xs text-theme-text-tertiary">
-                  What this Radar is connected to right now — select a row to manage it.
+                  What this Radar is connected to right now — select a row for details.
                 </p>
               </div>
               <div className="mt-3">
@@ -596,6 +602,7 @@ export function SettingsDialog({
               id="connection"
               active={section}
               title="Connection"
+              managed={operatorManaged ? <OperatorSettingsSummary section="connection" config={configData} /> : undefined}
               caption="Takes effect on next launch."
               locked={!canEditConfig}
             >
@@ -625,17 +632,26 @@ export function SettingsDialog({
               id="prometheus"
               active={section}
               title="Metrics"
-              caption="Applies immediately — no restart."
+              managed={operatorManaged ? <OperatorSettingsSummary section="prometheus" config={configData} /> : undefined}
+              caption="Connect and manage your metrics backend."
               live
               locked={!canEditConfig}
             >
               <PrometheusConfigField
+                local={deploymentMode === 'local'}
                 value={editedConfig.prometheusUrl ?? ''}
                 configuredHeaderKeys={configData?.prometheusHeaderKeys ?? []}
+                serverManaged={configData?.prometheusServerManaged === true}
+                headersManaged={configData?.prometheusHeadersManaged === true}
+                urlFromFlag={configData?.prometheusUrlFromFlag === true}
                 onChange={(v) => updateConfigField('prometheusUrl', v || undefined)}
                 onApplied={(url) =>
                   setConfigData((prev) =>
-                    prev ? { ...prev, file: { ...prev.file, prometheusUrl: url || undefined } } : prev
+                    prev ? {
+                      ...prev,
+                      file: { ...prev.file, prometheusUrl: url || undefined },
+                      effective: { ...prev.effective, prometheusUrl: url || undefined },
+                    } : prev
                   )
                 }
               />
@@ -645,6 +661,7 @@ export function SettingsDialog({
               id="cost"
               active={section}
               title="Cost"
+              managed={operatorManaged ? <OperatorSettingsSummary section="cost" config={configData} /> : undefined}
               caption="Choose where Radar gets cost data and how amounts are labeled."
               live
               locked={!canEditConfig}
@@ -689,6 +706,7 @@ export function SettingsDialog({
               id="argocd"
               active={section}
               title="Argo CD"
+              managed={operatorManaged ? <OperatorSettingsSummary section="argocd" config={configData} /> : undefined}
               caption="Applies immediately — no restart."
               live
               locked={!canEditConfig}
@@ -700,6 +718,9 @@ export function SettingsDialog({
                 envManaged={configData?.argoCdEnvManaged ?? false}
                 envError={configData?.argoCdEnvError}
                 cliSession={configData?.argoCdCliSession}
+                anonymous={argoSectionStatus?.connected && argoSectionStatus.anonymous}
+                connectedAddress={argoSectionStatus?.connected && !argoSectionStatus.anonymous ? argoSectionStatus.address : undefined}
+                active={section === 'argocd'}
                 statusReason={
                   argoSectionStatus?.configured && !argoSectionStatus.connected
                     ? argoSectionStatus.reason
@@ -718,23 +739,31 @@ export function SettingsDialog({
                       : prev
                   )
                   void refetchArgoSectionStatus()
+                  // The GitOps detail page the user came from doesn't poll
+                  // when idle; without this the notice that sent them here
+                  // would still be up when they get back.
+                  void queryClient.invalidateQueries({
+                    predicate: (query) => typeof query.queryKey[0] === 'string' && query.queryKey[0].startsWith('gitops-'),
+                  })
                 }}
               />
             </SectionPane>
 
-            {/* AI diagnose — self-saving, usable by everyone. Same heading block
+            {/* AI investigations — self-saving, usable by everyone. Same heading block
                 as every other tab; the body is the agent controls (when a CLI is
                 installed) or an enable explainer (when not). */}
             <div className={clsx(section !== 'ai' && 'hidden')} role="tabpanel" inert={section !== 'ai' || undefined}>
               <div className="mb-4">
-                <h3 className="text-base font-semibold text-theme-text-primary">AI diagnose</h3>
+                <h3 className="text-base font-semibold text-theme-text-primary">AI investigations</h3>
                 <p className="mt-0.5 text-xs text-theme-text-tertiary">
-                  {diag.hosted
-                    ? `Investigate incidents with ${diag.agentLabel} — reading logs, events, and topology to explain what's wrong.`
-                    : "Investigate incidents with an AI agent that runs on your own machine — reading logs, events, and topology to explain what's wrong. No Radar cloud, no API key."}
+                  {operatorManaged
+                    ? 'AI investigations are available in local Radar and Radar Cloud.'
+                    : diag.hosted
+                    ? `Investigate incidents with ${diag.agentLabel} — reading logs, events, and topology to understand what's happening.`
+                    : "Investigate incidents with an AI agent that runs on your own machine — reading logs, events, and topology to understand what's happening. No Radar cloud, no API key."}
                 </p>
               </div>
-              {aiAvailable ? (
+              {operatorManaged ? <p className="text-sm text-theme-text-secondary">Local AI investigations are unavailable in a shared installation. Use local Radar with an agent CLI, or Radar Cloud.</p> : aiAvailable ? (
                 <div className="space-y-4">
                   <AISettingsSection
                     available={diag.available}
@@ -776,6 +805,7 @@ export function SettingsDialog({
               id="advanced"
               active={section}
               title="Advanced"
+              managed={operatorManaged ? <OperatorSettingsSummary section="advanced" config={configData} /> : undefined}
               caption="Takes effect on next launch."
               locked={!canEditConfig}
             >
@@ -798,6 +828,7 @@ export function SettingsDialog({
                 />
               </div>
             </SectionPane>
+            </>}
           </div>
         </div>
 
@@ -999,6 +1030,7 @@ function SectionPane({
   caption,
   live,
   locked,
+  managed,
   children,
 }: {
   id: SettingsSectionId
@@ -1007,6 +1039,7 @@ function SectionPane({
   caption?: string
   live?: boolean
   locked?: boolean
+  managed?: ReactNode
   children: ReactNode
 }) {
   return (
@@ -1015,7 +1048,7 @@ function SectionPane({
         <h3 className="text-base font-semibold text-theme-text-primary">{title}</h3>
         {!locked && caption && <SectionCaption live={live}>{caption}</SectionCaption>}
       </div>
-      {locked ? <LockWall /> : <div className="space-y-4">{children}</div>}
+      {managed ?? (locked ? <LockWall /> : <div className="space-y-4">{children}</div>)}
     </div>
   )
 }
@@ -1031,6 +1064,70 @@ function SectionCaption({ children, live }: { children: ReactNode; live?: boolea
       {live ? <Zap className="w-3 h-3 shrink-0" /> : <RotateCw className="w-3 h-3 shrink-0" />}
       {children}
     </p>
+  )
+}
+
+function OperatorSettingsSummary({ section, config }: { section: SettingsSectionId; config: ConfigResponse }) {
+  const { data: prom, error: promError } = usePrometheusStatus()
+  const { data: argo, error: argoError } = useArgoStatus(section === 'argocd')
+  const { data: cost, error: costError } = useOpenCostSummary()
+  const { data: cluster } = useClusterInfo()
+  const c = config.effective
+  let rows: [string, ReactNode][] = []
+  let detail: string | undefined
+  switch (section) {
+    case 'connection':
+      rows = [['Cluster connection', cluster?.inCluster ? 'Pod service account' : cluster?.context ?? 'Connecting…'], ['Server port', c.port ?? '—']]
+      detail = 'The operator selects the cluster and connection settings at startup.'
+      break
+    case 'prometheus':
+      rows = [
+        ['Status', promError ? 'Status unavailable' : !prom ? 'Checking…' : prom.connected ? 'Connected' : prom.discovering ? 'Discovering…' : 'Not connected'],
+        ['Endpoint', prom?.address || c.prometheusUrl || 'Auto-discovery'],
+        ['Headers', config.prometheusHeaderKeys?.join(', ') || 'None configured'],
+      ]
+      detail = prom?.error
+      break
+    case 'argocd':
+      rows = [
+        ['Status', argoError ? 'Status unavailable' : !argo ? 'Checking…' : argo.connected ? 'Connected' : 'Not connected'],
+        ['Endpoint', argo?.address || c.argoCdUrl || 'Auto-discovery'],
+        ['Token', config.argoCdTokenSet ? 'Configured' : 'None configured'],
+        ['TLS verification', c.argoCdInsecureTls ? 'Disabled' : 'Enabled'],
+      ]
+      detail = config.argoCdEnvError || argo?.reason
+      break
+    case 'cost':
+      rows = [
+        ['Status', costError ? 'Status unavailable' : !cost ? 'Checking…' : cost.available ? 'Available' : 'Unavailable'],
+        ['Source preference', c.costSource || 'Auto'],
+        ['Kubecost endpoint', c.kubecostUrl || 'Auto-discovery'],
+        ['Cluster ID', c.kubecostClusterId || 'Auto-detected when available'],
+        ['API key', config.kubecostApiKeySet ? 'Configured' : 'None configured'],
+        ['Currency override', c.opencostCurrency || 'Automatic'],
+      ]
+      detail = config.kubecostEnvError || (cost?.reason ? costIntegrationUnavailableMessage(cost.reason) ?? undefined : undefined)
+      break
+    case 'advanced':
+      rows = [
+        ['MCP', c.mcp ? 'Enabled' : 'Disabled'],
+        ['Timeline storage', c.timelineStorage || 'Memory'],
+        ['Event history limit', c.historyLimit ?? '—'],
+      ]
+      break
+  }
+  return (
+    <div className="space-y-3">
+      <dl className="divide-y divide-theme-border-subtle rounded-lg border border-theme-border px-3">
+        {rows.map(([label, value]) => (
+          <div key={label} className="grid grid-cols-[140px_minmax(0,1fr)] gap-3 py-3 text-sm">
+            <dt className="text-theme-text-tertiary">{label}</dt>
+            <dd className="min-w-0 break-words text-theme-text-primary">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      {detail && <p className="text-sm text-theme-text-secondary break-words">{detail}</p>}
+    </div>
   )
 }
 
@@ -1107,9 +1204,9 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
     },
     {
       id: 'prometheus', icon: Activity, label: 'Metrics',
-      tone: prom?.connected ? 'ok' : prom?.available ? 'warn' : 'off',
-      value: prom?.connected ? 'Connected' : prom?.available ? 'Not reachable' : 'Not configured',
-      detail: prom?.connected ? prom.address : undefined,
+      tone: prom?.connected ? 'ok' : prom?.discovering ? 'unknown' : prom?.error ? 'warn' : 'off',
+      value: prom?.connected ? 'Connected' : prom?.discovering ? 'Discovering…' : prom?.error ? 'Not connected' : 'Not configured',
+      detail: prom?.connected ? prom.address : prom?.discovering ? undefined : prom?.error,
     },
     {
       id: costConfigurationAction(cost?.reason).section, icon: Coins, label: 'Cost',
@@ -1129,7 +1226,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
       // Configured-but-not-connected is often a permanently rejected/expired
       // token, not a transient reconnect — "Not reachable" matches Prometheus and
       // doesn't imply it will recover on its own.
-      value: argo?.connected ? 'Connected' : argo?.configured ? 'Not reachable' : 'Not connected',
+      value: argo?.connected ? (argo.anonymous ? 'Connected · no token needed' : 'Connected') : argo?.configured ? 'Not reachable' : 'Not connected',
       detail: argo?.connected ? argo.address : argo?.reason,
     },
     {
@@ -1140,7 +1237,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
       copyable: mcpOn,
     },
     {
-      id: 'ai', icon: Sparkles, label: 'AI diagnose',
+      id: 'ai', icon: Sparkles, label: 'AI investigations',
       tone: aiAvailable ? 'ok' : 'off',
       value: aiAvailable ? 'Ready' : 'No agent CLI',
       detail: aiAvailable ? agentLabel : undefined,
@@ -1220,7 +1317,7 @@ function OverviewStatus({ tone }: { tone: OverviewTone }) {
   return <span className={clsx('w-2 h-2 rounded-full shrink-0', cls)} />
 }
 
-// AIUnavailableNotice is the body of the AI diagnose tab when no supported agent
+// AIUnavailableNotice is the body of the AI investigations tab when no supported agent
 // CLI is installed — the heading/description are provided by the tab itself, so
 // this is just the enable explainer (keeping the feature discoverable to whoever
 // would set it up).
@@ -1901,14 +1998,22 @@ type CurrencySaveState =
 type HeaderRow = { key: string; value: string }
 
 function PrometheusConfigField({
+  local,
   value,
   onChange,
   configuredHeaderKeys,
+  serverManaged,
+  headersManaged,
+  urlFromFlag,
   onApplied,
 }: {
+  local: boolean
   value: string
   onChange: (value: string) => void
   configuredHeaderKeys: string[]
+  serverManaged: boolean
+  headersManaged: boolean
+  urlFromFlag: boolean
   onApplied?: (url: string) => void
 }) {
   const [apply, setApply] = useState<ApplyState>({ status: 'idle' })
@@ -1938,17 +2043,8 @@ function PrometheusConfigField({
     // a replacement when the editor has real content, or {} when the user emptied
     // every row (explicit clear) — blank in-progress rows must NOT wipe stored
     // secrets just because the editor happens to be open for a URL-only change.
-    let editedHeaders: Record<string, string> | undefined
-    if (headerRows !== null) {
-      const entered = Object.fromEntries(
-        headerRows
-          .map((r) => [r.key.trim(), r.value] as const)
-          .filter(([k, v]) => k !== '' && v !== '')
-      )
-      if (Object.keys(entered).length > 0) editedHeaders = entered
-      else if (headerRows.length === 0) editedHeaders = {}
-    }
     try {
+      const editedHeaders = prometheusHeadersFromRows(headerRows)
       const res = await fetch(apiUrl('/integrations/prometheus'), {
         method: 'PUT',
         credentials: getCredentialsMode(),
@@ -1983,23 +2079,24 @@ function PrometheusConfigField({
   return (
     <div>
       <p className="text-xs text-theme-text-tertiary mb-3">
-        Powers the CPU / memory graphs, usage history, and rightsizing hints on workload and node pages.
+        Connect existing Prometheus-compatible data for resource usage, workload HTTP metrics and rightsizing. Available charts depend on collected metrics.
       </p>
       <label className="block text-sm font-medium text-theme-text-primary mb-1">
-        Server URL
+        Metrics backend URL
       </label>
       <p className="text-xs text-theme-text-tertiary mb-1">
-        Manual PromQL-compatible query URL — works with Prometheus, VictoriaMetrics, Thanos, and
-        Mimir. Set this to skip auto-discovery.
+        Base URL reachable from Radar, not your browser — Prometheus, VictoriaMetrics, Thanos or
+        Mimir. Include any backend path prefix, but not /api/v1/query. Leave empty for cluster discovery; headers require a URL.
       </p>
       <div className="flex items-center gap-2">
         <Input
           value={value}
+          disabled={apply.status === 'applying'}
           onChange={(e) => onChange(e.target.value)}
           placeholder="http://prometheus-server.monitoring:9090"
           className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
         />
-        <Tooltip content="Apply this URL to the running server now — no restart" wrapperClassName="shrink-0">
+        <Tooltip content="Save and apply this connection, then check reachability. Applying clears any workload scope override and resumes automatic identity matching." wrapperClassName="shrink-0">
           <button
             onClick={handleApply}
             disabled={apply.status === 'applying'}
@@ -2027,7 +2124,24 @@ function PrometheusConfigField({
         </p>
       ) : (
         <p className="mt-1 text-xs text-theme-text-tertiary">
-          Applies immediately — no restart needed.
+          Saves and applies before checking the connection.
+        </p>
+      )}
+      <p className="mt-2 text-xs text-theme-text-tertiary">
+        {local
+          ? 'Saved URL and headers apply across all local cluster contexts.'
+          : 'Changes affect this Radar installation. Use deployment settings for configuration that survives Pod replacement.'}
+        {' Changing servers requires replacing or clearing the saved headers.'}
+      </p>
+      {serverManaged && (
+        <p className="mt-2 text-xs text-theme-text-secondary">
+          Server controlled by startup configuration. To set or change the server,
+          {local ? ' update the startup flags or environment references and restart Radar.' : ' update the deployment configuration (such as Helm values) and restart Radar.'}
+        </p>
+      )}
+      {urlFromFlag && (
+        <p className="mt-1 text-xs text-theme-text-secondary">
+          Path edits apply until restart; the URL supplied at launch will then be restored.
         </p>
       )}
 
@@ -2040,12 +2154,13 @@ function PrometheusConfigField({
                 ? <>Auth headers: <span className="text-theme-text-secondary">{storedKeys.join(', ')}</span> <span className="text-theme-text-disabled">(values hidden)</span></>
                 : 'No auth headers'}
             </span>
-            <button
+            {!headersManaged && <button
               onClick={() => { setHeaderRows([{ key: '', value: '' }]); clearStatus() }}
+              disabled={apply.status === 'applying'}
               className="shrink-0 text-xs font-medium text-accent-text hover:underline"
             >
               {storedKeys.length > 0 ? 'Edit headers' : 'Add auth headers'}
-            </button>
+            </button>}
           </div>
         ) : (
           <div className="rounded-md border border-theme-border bg-theme-elevated/40 p-2.5 space-y-2">
@@ -2053,6 +2168,7 @@ function PrometheusConfigField({
               <div key={i} className="flex items-center gap-2">
                 <Input
                   value={row.key}
+                  disabled={apply.status === 'applying'}
                   onChange={(e) => {
                     setHeaderRows((rows) => rows!.map((r, j) => j === i ? { ...r, key: e.target.value } : r))
                     clearStatus()
@@ -2063,6 +2179,7 @@ function PrometheusConfigField({
                 <input
                   type="password"
                   value={row.value}
+                  disabled={apply.status === 'applying'}
                   onChange={(e) => {
                     setHeaderRows((rows) => rows!.map((r, j) => j === i ? { ...r, value: e.target.value } : r))
                     clearStatus()
@@ -2073,6 +2190,7 @@ function PrometheusConfigField({
                 <Tooltip content="Remove header" wrapperClassName="shrink-0">
                   <button
                     onClick={() => setHeaderRows((rows) => rows!.filter((_, j) => j !== i))}
+                    disabled={apply.status === 'applying'}
                     className="p-1 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover rounded"
                   >
                     <X className="w-3.5 h-3.5" />
@@ -2083,12 +2201,14 @@ function PrometheusConfigField({
             <div className="flex items-center justify-between gap-2">
               <button
                 onClick={() => setHeaderRows((rows) => [...rows!, { key: '', value: '' }])}
+                disabled={apply.status === 'applying'}
                 className="flex items-center gap-1 text-xs font-medium text-accent-text hover:underline"
               >
                 <Plus className="w-3 h-3" /> Add header
               </button>
               <button
                 onClick={() => { setHeaderRows(null); clearStatus() }}
+                disabled={apply.status === 'applying'}
                 className="text-xs text-theme-text-tertiary hover:text-theme-text-primary"
               >
                 Cancel
@@ -2097,11 +2217,28 @@ function PrometheusConfigField({
             <p className="text-xs text-theme-text-tertiary">
               Saved when you click Apply now. Entered headers replace all stored
               ones — values are hidden, so re-enter any you want to keep. Leave
-              blank to keep existing headers unchanged.
+              all rows blank to keep existing headers unchanged. To clear all saved
+              headers, remove every row and click Apply now.
             </p>
           </div>
         )}
       </div>
+      {headersManaged ? (
+        <p className="mt-2 text-xs text-theme-text-secondary">
+          Headers are controlled by startup configuration. Change them at their source and restart Radar.
+        </p>
+      ) : storedKeys.length > 0 && (
+        <button
+          onClick={() => { setHeaderRows([]); clearStatus() }}
+          disabled={apply.status === 'applying'}
+          className="mt-2 text-xs text-theme-text-secondary hover:underline"
+        >
+          Clear saved headers
+        </button>
+      )}
+      {headerRows?.length === 0 && (
+        <p className="mt-1 text-xs text-warning-text">Headers will be cleared when you click Apply now.</p>
+      )}
     </div>
   )
 }
@@ -2130,6 +2267,9 @@ function ArgoCDConfigField({
   envError,
   cliSession,
   statusReason,
+  anonymous,
+  connectedAddress,
+  active,
   onChangeUrl,
   onChangeInsecureTls,
   onApplied,
@@ -2141,12 +2281,15 @@ function ArgoCDConfigField({
   envError?: string
   cliSession?: { server: string; user: string; insecure?: boolean }
   statusReason?: string
+  anonymous?: boolean
+  connectedAddress?: string
+  active?: boolean
   onChangeUrl: (value: string) => void
   onChangeInsecureTls: (value: boolean) => void
   onApplied?: (v: { url: string; insecureTls: boolean; tokenSet: boolean }) => void
 }) {
   if (envManaged) {
-    return <ArgoCDEnvManagedField url={url} insecureTls={insecureTls} envError={envError} />
+    return <ArgoCDEnvManagedField url={url} insecureTls={insecureTls} envError={envError} connectedAddress={connectedAddress} statusReason={statusReason} />
   }
   return (
     <ArgoCDEditableField
@@ -2155,6 +2298,9 @@ function ArgoCDConfigField({
       tokenSet={tokenSet}
       cliSession={cliSession}
       statusReason={statusReason}
+      anonymous={anonymous}
+      connectedAddress={connectedAddress}
+      active={active}
       onChangeUrl={onChangeUrl}
       onChangeInsecureTls={onChangeInsecureTls}
       onApplied={onApplied}
@@ -2170,10 +2316,17 @@ function ArgoCDEnvManagedField({
   url,
   insecureTls,
   envError,
+  connectedAddress,
+  statusReason,
 }: {
   url: string
   insecureTls: boolean
   envError?: string
+  // Live connection, from the status endpoint: the address when the
+  // token-backed session is up, else why it isn't. The card is read-only,
+  // so this is the one thing on it that can change after deploy.
+  connectedAddress?: string
+  statusReason?: string
 }) {
   if (envError) {
     return (
@@ -2226,6 +2379,21 @@ function ArgoCDEnvManagedField({
             <dt className="w-24 shrink-0 text-theme-text-tertiary">Token</dt>
             <dd className="text-theme-text-secondary">provided via environment</dd>
           </div>
+          <div className="flex gap-2">
+            <dt className="w-24 shrink-0 text-theme-text-tertiary">Status</dt>
+            <dd className="min-w-0 truncate text-theme-text-secondary">
+              {connectedAddress ? (
+                <span className="inline-flex items-center gap-1">
+                  <Check className="w-3 h-3 shrink-0 text-green-600 dark:text-green-400/80" />
+                  Connected at {connectedAddress}
+                </span>
+              ) : statusReason ? (
+                <span className="text-warning-text">Not reachable — {statusReason}</span>
+              ) : (
+                'Not connected'
+              )}
+            </dd>
+          </div>
           {insecureTls && (
             <div className="flex gap-2">
               <dt className="w-24 shrink-0 text-theme-text-tertiary">TLS</dt>
@@ -2248,6 +2416,9 @@ function ArgoCDEditableField({
   tokenSet,
   cliSession,
   statusReason,
+  anonymous,
+  connectedAddress,
+  active,
   onChangeUrl,
   onChangeInsecureTls,
   onApplied,
@@ -2257,6 +2428,9 @@ function ArgoCDEditableField({
   tokenSet: boolean
   cliSession?: { server: string; user: string; insecure?: boolean }
   statusReason?: string
+  anonymous?: boolean
+  connectedAddress?: string
+  active?: boolean
   onChangeUrl: (value: string) => void
   onChangeInsecureTls: (value: boolean) => void
   onApplied?: (v: { url: string; insecureTls: boolean; tokenSet: boolean }) => void
@@ -2350,20 +2524,43 @@ function ArgoCDEditableField({
 
   const showConfiguredPlaceholder = effectiveTokenSet && !tokenTouched && !tokenCleared
   const connecting = state.status === 'connecting'
+  // Opening this section with nothing set up (typically from the GitOps
+  // page's "connect Radar to your Argo CD server") starts the user at the
+  // token — unless a CLI session offers a one-click connect, or reads
+  // already work anonymously.
+  const tokenInputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (active && !effectiveTokenSet && !cliSession && !anonymous) tokenInputRef.current?.focus()
+  }, [active, effectiveTokenSet, cliSession, anonymous])
 
   return (
     <div>
       <p className="text-xs text-theme-text-tertiary mb-3">
         Connect your Argo CD server for the full Git-rendered desired-vs-live diff on GitOps
-        Application pages — what Git declares vs what's actually running. Without it, Radar falls
-        back to a lighter annotation-based drift that can miss fields.
+        Application pages — what Git declares vs what's actually running — and, on Argo CD 3, for
+        Argo's own health verdict on each resource. Without it, Radar falls back to a lighter
+        annotation-based drift that can miss fields, and to its own read of each resource.
       </p>
+
+      {state.status !== 'connected' && (anonymous || connectedAddress) && (
+        <p className="mb-3 flex items-center gap-1.5 text-xs text-theme-text-secondary">
+          <Check className="w-3.5 h-3.5 shrink-0 text-green-600 dark:text-green-400/80" />
+          {anonymous ? (
+            <>
+              Your Argo CD server lets Radar read without a token, so it's already connected. Add a token only
+              if anonymous access gets restricted, or a URL to point Radar at a specific server.
+            </>
+          ) : (
+            <>Connected to Argo CD at {connectedAddress}.</>
+          )}
+        </p>
+      )}
 
       {statusReason && state.status !== 'connected' && (
         <div className="mb-3 rounded-md border border-theme-border bg-theme-elevated p-3">
           <p className="flex items-center gap-1.5 text-sm font-medium text-warning-text">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-            Argo CD token needs attention
+            Argo CD connection needs attention
           </p>
           <p className="mt-1 text-xs text-theme-text-secondary">{statusReason}</p>
         </div>
@@ -2421,6 +2618,7 @@ function ArgoCDEditableField({
       </p>
       <div className="flex items-center gap-2">
         <input
+          ref={tokenInputRef}
           type="password"
           value={showConfiguredPlaceholder ? '' : token}
           onChange={(e) => { setToken(e.target.value); setTokenTouched(true); setTokenCleared(false); clearStatus() }}

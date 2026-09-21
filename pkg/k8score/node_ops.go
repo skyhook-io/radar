@@ -26,8 +26,9 @@ type DrainOptions struct {
 
 // DrainResult reports what happened during a drain operation.
 type DrainResult struct {
-	EvictedPods []string `json:"evictedPods"`
-	Errors      []string `json:"errors,omitempty"`
+	EvictedPods []string           `json:"evictedPods"`
+	SkippedPods []PodDrainDecision `json:"skippedPods,omitempty"` // pods left alone and why
+	Errors      []string           `json:"errors,omitempty"`
 }
 
 // CordonNode marks a node as unschedulable.
@@ -71,21 +72,26 @@ func DrainNode(ctx context.Context, client kubernetes.Interface, nodeName string
 		return nil, fmt.Errorf("list pods on node: %w", err)
 	}
 
-	// Filter pods to evict
+	// Decide per pod with the same classifier the drain plan uses. PDBs are not
+	// pre-checked here: the Eviction API is authoritative and evictPod retries on 429.
+	result := &DrainResult{}
 	var toEvict []corev1.Pod
-	var skipped []string
 	for _, pod := range podList.Items {
-		if shouldSkipPod(pod, opts, &skipped) {
+		decision := ClassifyPodForDrain(pod, opts, nil)
+		if decision.Outcome == DrainOutcomeSkip {
+			result.SkippedPods = append(result.SkippedPods, decision)
 			continue
 		}
 		toEvict = append(toEvict, pod)
 	}
 
-	if len(skipped) > 0 {
-		log.Printf("[node-ops] Drain %s: skipping %d pods: %v", nodeName, len(skipped), skipped)
+	if len(result.SkippedPods) > 0 {
+		names := make([]string, 0, len(result.SkippedPods))
+		for _, d := range result.SkippedPods {
+			names = append(names, d.Namespace+"/"+d.Name)
+		}
+		log.Printf("[node-ops] Drain %s: skipping %d pods: %v", nodeName, len(names), names)
 	}
-
-	result := &DrainResult{}
 
 	if len(toEvict) == 0 {
 		return result, nil
@@ -105,10 +111,8 @@ func DrainNode(ctx context.Context, client kubernetes.Interface, nodeName string
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
 
-			err := evictPod(drainCtx, client, pod, opts.GracePeriodSeconds)
+			err := evictPod(drainCtx, client, pod, opts.GracePeriodSeconds, sem)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -123,53 +127,6 @@ func DrainNode(ctx context.Context, client kubernetes.Interface, nodeName string
 	return result, nil
 }
 
-// shouldSkipPod returns true if the pod should not be evicted during drain.
-func shouldSkipPod(pod corev1.Pod, opts DrainOptions, skipped *[]string) bool {
-	// Skip completed/failed pods
-	if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-		return true
-	}
-
-	// Skip mirror pods (static pods managed by kubelet)
-	if _, isMirror := pod.Annotations[corev1.MirrorPodAnnotationKey]; isMirror {
-		*skipped = append(*skipped, pod.Namespace+"/"+pod.Name+" (mirror)")
-		return true
-	}
-
-	// Skip DaemonSet pods
-	if opts.IgnoreDaemonSets && isDaemonSetPod(pod) {
-		*skipped = append(*skipped, pod.Namespace+"/"+pod.Name+" (daemonset)")
-		return true
-	}
-
-	// Skip unmanaged pods unless Force
-	if !opts.Force && !hasManagedOwner(pod) {
-		*skipped = append(*skipped, pod.Namespace+"/"+pod.Name+" (unmanaged)")
-		return true
-	}
-
-	// Skip pods with emptyDir unless DeleteEmptyDirData
-	if !opts.DeleteEmptyDirData && hasLocalStorage(pod) {
-		*skipped = append(*skipped, pod.Namespace+"/"+pod.Name+" (local-storage)")
-		return true
-	}
-
-	return false
-}
-
-func isDaemonSetPod(pod corev1.Pod) bool {
-	for _, ref := range pod.OwnerReferences {
-		if ref.Kind == "DaemonSet" {
-			return true
-		}
-	}
-	return false
-}
-
-func hasManagedOwner(pod corev1.Pod) bool {
-	return len(pod.OwnerReferences) > 0
-}
-
 func hasLocalStorage(pod corev1.Pod) bool {
 	for _, vol := range pod.Spec.Volumes {
 		if vol.EmptyDir != nil {
@@ -180,7 +137,11 @@ func hasLocalStorage(pod corev1.Pod) bool {
 }
 
 // evictPod evicts a single pod, retrying on PDB conflicts until the context deadline.
-func evictPod(ctx context.Context, client kubernetes.Interface, pod corev1.Pod, gracePeriod *int64) error {
+// The concurrency slot is held only around each Eviction call, never across the
+// backoff sleep: a handful of PDB-blocked pods sleeping in their retry loops would
+// otherwise occupy every slot until the shared deadline, and pods with no budget at
+// all would time out without a single eviction attempt.
+func evictPod(ctx context.Context, client kubernetes.Interface, pod corev1.Pod, gracePeriod *int64, sem chan struct{}) error {
 	eviction := &policyv1.Eviction{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pod.Name,
@@ -195,9 +156,30 @@ func evictPod(ctx context.Context, client kubernetes.Interface, pod corev1.Pod, 
 
 	backoff := 500 * time.Millisecond
 	maxBackoff := 5 * time.Second
+	attempted := false
+
+	deadlineErr := func() error {
+		if attempted {
+			return fmt.Errorf("timed out waiting for PDB to allow eviction: %w", ctx.Err())
+		}
+		return fmt.Errorf("drain deadline passed before this pod could be attempted: %w", ctx.Err())
+	}
 
 	for {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return deadlineErr()
+		}
+		// The select above can pick the slot even when cancellation is also ready.
+		if ctx.Err() != nil {
+			<-sem
+			return deadlineErr()
+		}
 		err := client.PolicyV1().Evictions(pod.Namespace).Evict(ctx, eviction)
+		<-sem
+		attempted = true
+
 		if err == nil {
 			return nil
 		}

@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { KeyRound, ChevronDown, ChevronRight } from 'lucide-react'
+import { KeyRound } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
+import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { formatAge } from '../resource-utils'
 import { SEVERITY_BADGE_COLORS, TrivyAlertBanner, formatTrivyImage } from './trivy-shared'
 import { pluralize } from '../../../utils/pluralize'
@@ -16,6 +17,7 @@ const INITIAL_SHOW_COUNT = 50
 export function ExposedSecretReportRenderer({ data }: ExposedSecretReportRendererProps) {
   const [showAll, setShowAll] = useState(false)
   const [expanded, setExpanded] = useState(true)
+  const { panelId, buttonProps } = useDisclosure(expanded)
 
   const report = data.report || {}
   const summary = report.summary || {}
@@ -70,13 +72,17 @@ export function ExposedSecretReportRenderer({ data }: ExposedSecretReportRendere
       {secrets.length > 0 && (
         <Section title="Exposed Secrets">
           <button
+            {...buttonProps}
             onClick={() => setExpanded(!expanded)}
             className="flex items-center gap-1 text-xs text-theme-text-secondary hover:text-theme-text-primary mb-2"
           >
-            {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+            <CollapseChevron open={expanded} className="w-3.5 h-3.5" />
             {pluralize(secrets.length, 'secret')}
           </button>
-          {expanded && (
+          {/* The table can run to hundreds of rows; unmount it while closed
+              so a collapsed report stays cheap. Filters live above, so
+              nothing is lost. */}
+          <Collapse open={expanded} unmountOnExit id={panelId}>
             <div className="overflow-x-auto -mx-1">
               <table className="w-full text-xs">
                 <thead>
@@ -113,7 +119,7 @@ export function ExposedSecretReportRenderer({ data }: ExposedSecretReportRendere
                 </button>
               )}
             </div>
-          )}
+          </Collapse>
         </Section>
       )}
     </>

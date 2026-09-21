@@ -7,31 +7,59 @@ import { healthColors } from './resource-utils'
 // SHARED HELPERS
 // ============================================================================
 
-function getConditionStatus(resource: any): StatusBadge {
-  const conditions = resource.status?.conditions || []
+// ServiceMonitor, PodMonitor and PrometheusRule are configuration resources.
+// They have no `status.conditions`: the operator reports per selecting workload
+// under `status.bindings[].conditions`, the only condition type is `Accepted`,
+// and it writes any of it only when the StatusForConfigurationResources feature
+// gate is on. Absence is therefore the ordinary case and is not evidence the
+// configuration works — and `Accepted` means the config was accepted, not that
+// any target is being scraped.
+function getConfigResourceStatus(resource: any): StatusBadge {
+  const generation = resource?.metadata?.generation
+  let reporting = 0
+  let accepted = 0
+  let rejected = 0
+  let rejection = ''
 
-  const reconciledCond = conditions.find((c: any) => c.type === 'Reconciled')
-  if (reconciledCond?.status === 'True') {
-    return { text: 'Reconciled', color: healthColors.healthy, level: 'healthy' }
-  }
-  if (reconciledCond?.status === 'False') {
-    return { text: reconciledCond.reason || 'Not Reconciled', color: healthColors.unhealthy, level: 'unhealthy' }
-  }
-
-  const availableCond = conditions.find((c: any) => c.type === 'Available')
-  if (availableCond?.status === 'True') {
-    return { text: 'Available', color: healthColors.healthy, level: 'healthy' }
-  }
-  if (availableCond?.status === 'False') {
-    return { text: availableCond.reason || 'Unavailable', color: healthColors.unhealthy, level: 'unhealthy' }
-  }
-
-  // Fallback: if resource exists but has no conditions, it's likely active
-  if (resource.spec) {
-    return { text: 'Active', color: healthColors.healthy, level: 'healthy' }
+  for (const binding of resource?.status?.bindings || []) {
+    for (const cond of binding?.conditions || []) {
+      if (cond?.type !== 'Accepted') continue
+      // A condition observed against an older spec does not describe the object
+      // as it stands now.
+      if (generation !== undefined && cond.observedGeneration !== undefined
+        && cond.observedGeneration !== generation) continue
+      reporting++
+      if (cond.status === 'True') accepted++
+      else if (cond.status === 'False') {
+        rejected++
+        if (!rejection) rejection = cond.reason || ''
+      }
+    }
   }
 
-  return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+  if (reporting === 0) {
+    return { text: 'Not assessed', color: healthColors.unknown, level: 'unknown' }
+  }
+  if (rejected === reporting) {
+    return { text: rejection || 'Not Accepted', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+  if (rejected > 0) {
+    return {
+      text: `Accepted by ${accepted}/${reporting}`,
+      color: healthColors.degraded,
+      level: 'degraded',
+    }
+  }
+  // No rejection, but a workload reported Accepted=Unknown: it has not decided,
+  // so the resource is not accepted everywhere that selects it.
+  if (accepted < reporting) {
+    return {
+      text: `Accepted by ${accepted}/${reporting}`,
+      color: healthColors.unknown,
+      level: 'unknown',
+    }
+  }
+  return { text: 'Accepted', color: healthColors.healthy, level: 'healthy' }
 }
 
 function formatMatchLabels(selector: any): string {
@@ -45,7 +73,7 @@ function formatMatchLabels(selector: any): string {
 // ============================================================================
 
 export function getServiceMonitorStatus(resource: any): StatusBadge {
-  return getConditionStatus(resource)
+  return getConfigResourceStatus(resource)
 }
 
 export function getServiceMonitorEndpointCount(resource: any): number {
@@ -87,7 +115,7 @@ export function getServiceMonitorNamespaceSelector(resource: any): string {
 // ============================================================================
 
 export function getPrometheusRuleStatus(resource: any): StatusBadge {
-  return getConditionStatus(resource)
+  return getConfigResourceStatus(resource)
 }
 
 export function getPrometheusRuleGroupCount(resource: any): number {
@@ -169,7 +197,7 @@ export function getPrometheusRuleGroups(resource: any): PrometheusRuleGroup[] {
 // ============================================================================
 
 export function getPodMonitorStatus(resource: any): StatusBadge {
-  return getConditionStatus(resource)
+  return getConfigResourceStatus(resource)
 }
 
 export function getPodMonitorEndpointCount(resource: any): number {

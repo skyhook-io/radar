@@ -49,7 +49,12 @@ func isFeaturedKubernetesAPI(group, kind string) bool {
 }
 
 func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	// Served during the progressive shell too: the sidebar badges and the
+	// large-list guard need counts as kinds become ready, not after full
+	// connect. Kinds whose informer has not synced report as unavailable —
+	// a zero from an empty store would read as "the cluster has none" and
+	// would unlatch the large-list guard on exactly the clusters it protects.
+	if !s.requireConnectedOrSyncing(w) {
 		return
 	}
 
@@ -59,9 +64,12 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cache := k8s.GetResourceCache()
+	cache, syncing := k8s.SnapshotCaches()
 	if cache == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
+		cache = syncing
+	}
+	if cache == nil {
+		s.writeNotConnected(w)
 		return
 	}
 
@@ -133,6 +141,25 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, kl := range k8score.AllKindListers() {
+		// An unsynced informer has a partial (or empty) store — its count is
+		// not a fact yet. Unavailable keeps the sidebar badge at "–" and the
+		// large-list guard latched. A terminally-failed kind carries a reason
+		// so the client can hand it to the list endpoint, whose 503
+		// kind_sync_failed renders honestly (the guard would otherwise trap
+		// it on "count unavailable" forever).
+		switch cache.KindReadinessForKindName(kl.Kind()) {
+		case k8score.KindPending:
+			// Reasoned, so the client can render loading instead of a count
+			//-verification failure — deferred kinds sync after connect, so
+			// this state is not confined to the connecting phase.
+			markUnavailable(kl.CountKey())
+			reasons[kl.CountKey()] = "kind_sync_pending"
+			continue
+		case k8score.KindFailed:
+			markUnavailable(kl.CountKey())
+			reasons[kl.CountKey()] = "kind_sync_failed"
+			continue
+		}
 		l := kl.Lister()(cache.ResourceCache)
 		if l == nil {
 			// No informer: Radar's SA can't read this kind (not installed, SA

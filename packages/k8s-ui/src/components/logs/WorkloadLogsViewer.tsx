@@ -6,7 +6,7 @@ import { useLogBuffer } from './useLogBuffer'
 import { useLogStream } from './useLogStream'
 import { ContainerSelect, LogRangeSelect } from './LogToolbarSelects'
 import { LogCore } from './LogCore'
-import type { DownloadFormat } from './LogCore'
+import type { LogExportPayload } from '../../utils/log-export'
 import type { LogPalette } from './log-palette'
 import type { WorkloadPodInfo } from '../../types'
 import { useToast } from '../ui/Toast'
@@ -260,27 +260,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     [entries, selectedPods],
   )
 
-  const downloadLogs = useCallback((format: DownloadFormat) => {
-    let content: string
-    let mime: string
-    const filename = `${name}-logs.${format}`
-    switch (format) {
-      case 'json':
-        content = JSON.stringify(filteredEntries.map(l => ({
-          timestamp: l.timestamp, pod: l.pod, container: l.container, content: l.content,
-        })), null, 2)
-        mime = 'application/json'
-        break
-      case 'csv':
-        content = 'timestamp,pod,container,content\n' + filteredEntries.map(l =>
-          `${l.timestamp},${l.pod || ''},${l.container},"${l.content.replace(/"/g, '""')}"`)
-          .join('\n')
-        mime = 'text/csv'
-        break
-      default:
-        content = filteredEntries.map(l => `${l.timestamp} [${l.pod}/${l.container}] ${l.content}`).join('\n')
-        mime = 'text/plain'
-    }
+  const downloadLogs = useCallback(({ content, mime, extension }: LogExportPayload) => {
+    const filename = `${name}-logs.${extension}`
     try {
       triggerDownload(content, mime, filename, overrideDownload)
       if (!overrideDownload) {
@@ -289,7 +270,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     } catch (err) {
       showError('Failed to download logs', err instanceof Error ? err.message : 'Unknown download error')
     }
-  }, [filteredEntries, name, overrideDownload, showError, showSuccess])
+  }, [name, overrideDownload, showError, showSuccess])
 
   const renderToolbarExtra = ({ isDark, palette }: { isDark: boolean; palette: LogPalette }) => (
     <>
@@ -375,6 +356,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   return (
     <LogCore
       entries={filteredEntries}
+      allEntries={entries}
       isLoading={isLoading || isConnecting}
       isStreaming={isStreaming}
       onStartStream={createStream ? handleStartStreaming : undefined}

@@ -12,13 +12,16 @@ import (
 
 	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
 	"github.com/skyhook-io/radar/pkg/karpenter"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/scheduling"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // Scheduling failure decomposition.
@@ -870,7 +873,7 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Detection
 		if !admissionTargetStillBlocked(cache, obj) {
 			continue
 		}
-		key := obj.Kind + "/" + obj.Namespace + "/" + obj.Name
+		key := admissionProblemKey(admissionObjectGroup(obj), obj.Kind, obj.Namespace, obj.Name)
 		if cur, exists := latest[key]; exists {
 			if eventLastTime(e).After(eventLastTime(cur.ev)) {
 				latest[key] = admCandidate{ev: e, reason: reason}
@@ -890,9 +893,13 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Detection
 		// usually the ReplicaSet. Stamp its owning Deployment so the admission row
 		// rolls up to the same subject as the workload_degraded/rollout_stalled
 		// rollup it explains; otherwise the rollup-over-cause fold misses the match.
-		ownerGroup, ownerKind, ownerName := workloadControllerOwner(cache, obj.Kind, obj.Namespace, obj.Name)
+		var ownerGroup, ownerKind, ownerName string
+		if admissionObjectGroup(obj) == resourceid.GroupForBuiltinKind(obj.Kind) {
+			ownerGroup, ownerKind, ownerName = workloadControllerOwner(cache, obj.Kind, obj.Namespace, obj.Name)
+		}
 		detection := Detection{
 			Kind:              obj.Kind,
+			Group:             admissionObjectGroup(obj),
 			Namespace:         obj.Namespace,
 			Name:              obj.Name,
 			Severity:          "critical",
@@ -913,7 +920,7 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Detection
 	}
 	seen := make(map[string]bool, len(problems))
 	for _, p := range problems {
-		seen[admissionProblemKey(p.Kind, p.Namespace, p.Name)] = true
+		seen[admissionProblemKey(p.Group, p.Kind, p.Namespace, p.Name)] = true
 	}
 	problems = append(problems, detectAdmissionConditionProblems(cache, namespace, seen)...)
 	return problems
@@ -940,32 +947,33 @@ func admissionTargetCreatedAt(cache *ResourceCache, obj corev1.ObjectReference) 
 	if cache == nil {
 		return time.Time{}
 	}
-	switch obj.Kind {
-	case "ReplicaSet":
+	group := admissionObjectGroup(obj)
+	switch {
+	case obj.Kind == "ReplicaSet" && group == "apps":
 		if l := cache.ReplicaSets(); l != nil {
 			if target, err := l.ReplicaSets(obj.Namespace).Get(obj.Name); err == nil {
 				return target.CreationTimestamp.Time
 			}
 		}
-	case "Deployment":
+	case obj.Kind == "Deployment" && group == "apps":
 		if l := cache.Deployments(); l != nil {
 			if target, err := l.Deployments(obj.Namespace).Get(obj.Name); err == nil {
 				return target.CreationTimestamp.Time
 			}
 		}
-	case "StatefulSet":
+	case obj.Kind == "StatefulSet" && group == "apps":
 		if l := cache.StatefulSets(); l != nil {
 			if target, err := l.StatefulSets(obj.Namespace).Get(obj.Name); err == nil {
 				return target.CreationTimestamp.Time
 			}
 		}
-	case "DaemonSet":
+	case obj.Kind == "DaemonSet" && group == "apps":
 		if l := cache.DaemonSets(); l != nil {
 			if target, err := l.DaemonSets(obj.Namespace).Get(obj.Name); err == nil {
 				return target.CreationTimestamp.Time
 			}
 		}
-	case "Job":
+	case obj.Kind == "Job" && group == "batch":
 		if l := cache.Jobs(); l != nil {
 			if target, err := l.Jobs(obj.Namespace).Get(obj.Name); err == nil {
 				return target.CreationTimestamp.Time
@@ -986,8 +994,9 @@ func admissionTargetStillBlocked(cache *ResourceCache, obj corev1.ObjectReferenc
 	// and is no longer admission-blocked. Deployments also need the updated
 	// replica count checked so rolling updates blocked on new-pod creation do
 	// not get masked by old replicas.
-	switch obj.Kind {
-	case "ReplicaSet":
+	group := admissionObjectGroup(obj)
+	switch {
+	case obj.Kind == "ReplicaSet" && group == "apps":
 		if l := cache.ReplicaSets(); l != nil {
 			rs, err := l.ReplicaSets(obj.Namespace).Get(obj.Name)
 			if err == nil {
@@ -997,7 +1006,7 @@ func admissionTargetStillBlocked(cache *ResourceCache, obj corev1.ObjectReferenc
 				return false
 			}
 		}
-	case "Deployment":
+	case obj.Kind == "Deployment" && group == "apps":
 		if l := cache.Deployments(); l != nil {
 			d, err := l.Deployments(obj.Namespace).Get(obj.Name)
 			if err == nil {
@@ -1007,7 +1016,7 @@ func admissionTargetStillBlocked(cache *ResourceCache, obj corev1.ObjectReferenc
 				return false
 			}
 		}
-	case "StatefulSet":
+	case obj.Kind == "StatefulSet" && group == "apps":
 		if l := cache.StatefulSets(); l != nil {
 			ss, err := l.StatefulSets(obj.Namespace).Get(obj.Name)
 			if err == nil {
@@ -1017,7 +1026,7 @@ func admissionTargetStillBlocked(cache *ResourceCache, obj corev1.ObjectReferenc
 				return false
 			}
 		}
-	case "DaemonSet":
+	case obj.Kind == "DaemonSet" && group == "apps":
 		if l := cache.DaemonSets(); l != nil {
 			ds, err := l.DaemonSets(obj.Namespace).Get(obj.Name)
 			if err == nil {
@@ -1027,7 +1036,7 @@ func admissionTargetStillBlocked(cache *ResourceCache, obj corev1.ObjectReferenc
 				return false
 			}
 		}
-	case "Job":
+	case obj.Kind == "Job" && group == "batch":
 		if l := cache.Jobs(); l != nil {
 			j, err := l.Jobs(obj.Namespace).Get(obj.Name)
 			if err == nil {
@@ -1068,7 +1077,7 @@ func detectAdmissionConditionProblems(cache *ResourceCache, namespace string, se
 			items, _ = l.List(labels.Everything())
 		}
 		for _, rs := range items {
-			key := admissionProblemKey("ReplicaSet", rs.Namespace, rs.Name)
+			key := admissionProblemKey("apps", "ReplicaSet", rs.Namespace, rs.Name)
 			if seen[key] || hasSeenDeploymentForReplicaSet(seen, rs) || rs.Status.Replicas >= schedDesiredReplicas(rs.Spec.Replicas) {
 				continue
 			}
@@ -1107,7 +1116,7 @@ func detectAdmissionConditionProblems(cache *ResourceCache, namespace string, se
 					continue
 				}
 				if p, ok := admissionConditionProblem("Deployment", d.Namespace, d.Name, c.Message, d.CreationTimestamp.Time, c.LastTransitionTime.Time, now); ok {
-					key := admissionProblemKey(p.Kind, p.Namespace, p.Name)
+					key := admissionProblemKey(p.Group, p.Kind, p.Namespace, p.Name)
 					if !seen[key] {
 						out = append(out, p)
 						seen[key] = true
@@ -1133,6 +1142,7 @@ func admissionConditionProblem(kind, namespace, name, message string, createdAt,
 	ageDur := now.Sub(createdAt)
 	detection := Detection{
 		Kind:              kind,
+		Group:             resourceid.GroupForBuiltinKind(kind),
 		Namespace:         namespace,
 		Name:              name,
 		Severity:          "critical",
@@ -1146,8 +1156,15 @@ func admissionConditionProblem(kind, namespace, name, message string, createdAt,
 	return detection, true
 }
 
-func admissionProblemKey(kind, namespace, name string) string {
-	return kind + "/" + namespace + "/" + name
+func admissionObjectGroup(obj corev1.ObjectReference) string {
+	if strings.TrimSpace(obj.APIVersion) == "" {
+		return resourceid.GroupForBuiltinKind(obj.Kind)
+	}
+	return GroupFromAPIVersion(obj.APIVersion)
+}
+
+func admissionProblemKey(group, kind, namespace, name string) string {
+	return resourceid.ResourceKey(group, kind, namespace, name)
 }
 
 func hasSeenReplicaSetForDeployment(cache *ResourceCache, seen map[string]bool, namespace, deployment string) bool {
@@ -1160,7 +1177,7 @@ func hasSeenReplicaSetForDeployment(cache *ResourceCache, seen map[string]bool, 
 	}
 	items, _ := l.ReplicaSets(namespace).List(labels.Everything())
 	for _, rs := range items {
-		if seen[admissionProblemKey("ReplicaSet", rs.Namespace, rs.Name)] && replicaSetOwnedByDeployment(rs, deployment) {
+		if seen[admissionProblemKey("apps", "ReplicaSet", rs.Namespace, rs.Name)] && replicaSetOwnedByDeployment(rs, deployment) {
 			return true
 		}
 	}
@@ -1172,7 +1189,7 @@ func hasSeenDeploymentForReplicaSet(seen map[string]bool, rs *appsv1.ReplicaSet)
 	if !ok {
 		return false
 	}
-	return seen[admissionProblemKey("Deployment", rs.Namespace, deployment)]
+	return seen[admissionProblemKey("apps", "Deployment", rs.Namespace, deployment)]
 }
 
 func replicaSetOwnedByDeployment(rs *appsv1.ReplicaSet, deployment string) bool {
@@ -1196,16 +1213,16 @@ func replicaSetDeploymentOwnerName(rs *appsv1.ReplicaSet) (string, bool) {
 // (e.g. transient "object is being deleted") so we don't over-report.
 func classifyAdmissionFailure(msg string) (string, bool) {
 	lower := strings.ToLower(msg)
-	if _, ok := ParseAdmissionWebhookBackendFailure(msg); ok {
+	if admissionWebhookCallFailurePattern.MatchString(strings.TrimSpace(msg)) {
 		return "WebhookUnavailable", true
 	}
 	switch {
+	case admissionWebhookDenialPattern.MatchString(strings.TrimSpace(msg)):
+		return "WebhookDenied", true
 	case strings.Contains(lower, "exceeded quota"), strings.Contains(lower, "failed quota"):
 		return "QuotaExceeded", true
 	case strings.Contains(lower, "violates podsecurity"), strings.Contains(lower, "violates pod security"):
 		return "PodSecurityViolation", true
-	case strings.Contains(lower, "admission webhook") && strings.Contains(lower, "denied"):
-		return "WebhookDenied", true
 	case strings.Contains(lower, "forbidden") && (strings.Contains(lower, "limitrange") ||
 		strings.Contains(lower, "maximum") || strings.Contains(lower, "minimum")):
 		return "LimitRangeViolation", true
@@ -1233,10 +1250,12 @@ type AdmissionWebhookBackendFailure struct {
 }
 
 var (
-	admissionWebhookURLPattern      = regexp.MustCompile(`https?://[^\s"]+`)
-	admissionWebhookNamePattern     = regexp.MustCompile(`(?i)failed calling webhook "([^"]+)"`)
-	admissionNoEndpointsNamePattern = regexp.MustCompile(`(?i)no endpoints available for service "([a-z0-9]([-a-z0-9]*[a-z0-9])?)"`)
-	admissionServiceNotFoundPattern = regexp.MustCompile(`(?i)services? "([a-z0-9]([-a-z0-9]*[a-z0-9])?)" not found`)
+	admissionWebhookDenialPattern      = regexp.MustCompile(`(?i)^(?:(?:error creating(?: job)?:|create pod \S+ in statefulset \S+ failed error:)\s*)?admission webhook "[^"\r\n]+" denied the request`)
+	admissionWebhookCallFailurePattern = regexp.MustCompile(`(?i)^(?:(?:error creating(?: job)?:|create pod \S+ in statefulset \S+ failed error:)\s*)?(?:internal error occurred:\s*)?failed calling webhook "[^"\r\n]+":\s*\S`)
+	admissionWebhookURLPattern         = regexp.MustCompile(`https?://[^\s"]+`)
+	admissionWebhookNamePattern        = regexp.MustCompile(`(?i)failed calling webhook "([^"]+)"`)
+	admissionNoEndpointsNamePattern    = regexp.MustCompile(`(?i)no endpoints available for service "([a-z0-9]([-a-z0-9]*[a-z0-9])?)"`)
+	admissionServiceNotFoundPattern    = regexp.MustCompile(`(?i)services? "([a-z0-9]([-a-z0-9]*[a-z0-9])?)" not found`)
 )
 
 func ParseAdmissionWebhookBackendFailure(message string) (AdmissionWebhookBackendFailure, bool) {
@@ -1308,7 +1327,9 @@ var postBindSeverity = map[string]string{
 // or volume failures. namespace="" scans all namespaces.
 func DetectPostBindProblems(cache *ResourceCache, namespace string) []Detection {
 	now := time.Now()
-	return detectPostBindProblems(cache, namespace, postBindStartupStallCounts(cache, []string{namespace}, now), now)
+	problems := detectPostBindProblems(cache, namespace, now)
+	appendPostBindNodeCorrelation(cache, problems, now)
+	return problems
 }
 
 func DetectPostBindProblemsForNamespaces(cache *ResourceCache, namespaces []string) []Detection {
@@ -1316,15 +1337,15 @@ func DetectPostBindProblemsForNamespaces(cache *ResourceCache, namespaces []stri
 		return DetectPostBindProblems(cache, "")
 	}
 	now := time.Now()
-	nodeStallCounts := postBindStartupStallCounts(cache, namespaces, now)
 	var out []Detection
 	for _, ns := range namespaces {
-		out = append(out, detectPostBindProblems(cache, ns, nodeStallCounts, now)...)
+		out = append(out, detectPostBindProblems(cache, ns, now)...)
 	}
+	appendPostBindNodeCorrelation(cache, out, now)
 	return out
 }
 
-func detectPostBindProblems(cache *ResourceCache, namespace string, nodeStallCounts map[string]int, now time.Time) []Detection {
+func detectPostBindProblems(cache *ResourceCache, namespace string, now time.Time) []Detection {
 	if cache == nil {
 		return nil
 	}
@@ -1395,7 +1416,7 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, nodeStallCou
 			Name:              pod.Name,
 			Severity:          severity,
 			Reason:            c.reason,
-			Message:           postBindEventMessage(pod, c.reason, c.ev.Message, nodeStallCounts),
+			Message:           postBindEventMessage(pod, c.ev.Message),
 			Age:               FormatAge(ageDur),
 			AgeSeconds:        int64(ageDur.Seconds()),
 			ResourceCreatedAt: pod.CreationTimestamp.Time,
@@ -1431,7 +1452,7 @@ func detectPostBindProblems(cache *ResourceCache, namespace string, nodeStallCou
 			Name:              pod.Name,
 			Severity:          postBindProblemSeverity("PostBindStartupStall", ageDur),
 			Reason:            "PostBindStartupStall",
-			Message:           postBindFallbackMessage(pod, ageDur, nodeStallCounts),
+			Message:           postBindFallbackMessage(pod, ageDur),
 			Age:               FormatAge(ageDur),
 			AgeSeconds:        int64(ageDur.Seconds()),
 			ResourceCreatedAt: pod.CreationTimestamp.Time,
@@ -1508,83 +1529,7 @@ func podHasStatusIP(pod *corev1.Pod) bool {
 	return false
 }
 
-func postBindStartupStallCounts(cache *ResourceCache, namespaces []string, now time.Time) map[string]int {
-	counts := map[string]int{}
-	if len(namespaces) == 0 {
-		namespaces = []string{""}
-	}
-	suppressed := expiredVolumePostBindPodKeys(cache, namespaces, now)
-	seen := map[string]bool{}
-	for _, namespace := range namespaces {
-		for _, pods := range listPodsByNamespace(cache, namespace) {
-			for _, pod := range pods {
-				key := pod.Namespace + "/" + pod.Name
-				if seen[key] {
-					continue
-				}
-				seen[key] = true
-				if suppressed[key] {
-					continue
-				}
-				if !isPostBindStartupStallPod(pod, now) {
-					continue
-				}
-				counts[pod.Spec.NodeName]++
-			}
-		}
-	}
-	return counts
-}
-
-func expiredVolumePostBindPodKeys(cache *ResourceCache, namespaces []string, now time.Time) map[string]bool {
-	out := map[string]bool{}
-	if cache == nil {
-		return out
-	}
-	eventLister := cache.Events()
-	if eventLister == nil {
-		return out
-	}
-	if len(namespaces) == 0 {
-		namespaces = []string{""}
-	}
-	latestTime := map[string]time.Time{}
-	latestReason := map[string]string{}
-	for _, namespace := range namespaces {
-		var events []*corev1.Event
-		if namespace != "" {
-			events, _ = eventLister.Events(namespace).List(labels.Everything())
-		} else {
-			events, _ = eventLister.List(labels.Everything())
-		}
-		for _, e := range events {
-			if e.InvolvedObject.Kind != "Pod" {
-				continue
-			}
-			reason, ok := classifyPostBindFailure(e.Reason, e.Message)
-			if !ok {
-				continue
-			}
-			t := eventLastTime(e)
-			if t.IsZero() || now.Sub(t) <= postBindFailureWindow {
-				continue
-			}
-			key := e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name
-			if cur, exists := latestTime[key]; !exists || t.After(cur) {
-				latestTime[key] = t
-				latestReason[key] = reason
-			}
-		}
-	}
-	for key, reason := range latestReason {
-		if isVolumePostBindReason(reason) {
-			out[key] = true
-		}
-	}
-	return out
-}
-
-func postBindEventMessage(pod *corev1.Pod, reason, eventMessage string, nodeStallCounts map[string]int) string {
+func postBindEventMessage(pod *corev1.Pod, eventMessage string) string {
 	msg := "stuck creating"
 	if pod.Spec.NodeName != "" {
 		msg += " on node " + pod.Spec.NodeName
@@ -1592,27 +1537,111 @@ func postBindEventMessage(pod *corev1.Pod, reason, eventMessage string, nodeStal
 	if eventMessage = strings.TrimSpace(eventMessage); eventMessage != "" {
 		msg += ": " + eventMessage
 	}
-	return appendPostBindNodeCorrelation(msg, pod, reason, nodeStallCounts)
+	return msg
 }
 
-func postBindFallbackMessage(pod *corev1.Pod, age time.Duration, nodeStallCounts map[string]int) string {
+func postBindFallbackMessage(pod *corev1.Pod, age time.Duration) string {
 	parts := []string{fmt.Sprintf("container is ContainerCreating with no Pod IP after %s", FormatAge(age))}
 	if cond := podCondition(pod, podReadyToStartContainers); cond != nil && cond.Status == corev1.ConditionFalse {
 		parts = append(parts, "PodReadyToStartContainers=False")
 	}
 	msg := fmt.Sprintf("stuck before container start on node %s: %s; no matching recent kubelet event found; check kubelet, container runtime, and CNI on that node",
 		pod.Spec.NodeName, strings.Join(parts, "; "))
-	return appendPostBindNodeCorrelation(msg, pod, "PostBindStartupStall", nodeStallCounts)
+	return msg
 }
 
-func appendPostBindNodeCorrelation(msg string, pod *corev1.Pod, reason string, nodeStallCounts map[string]int) string {
-	if !isNetworkPostBindReason(reason) || pod.Spec.NodeName == "" {
-		return msg
+func appendPostBindNodeCorrelation(cache *ResourceCache, problems []Detection, now time.Time) {
+	if cache == nil || cache.Pods() == nil {
+		return
 	}
-	if count := nodeStallCounts[pod.Spec.NodeName]; count > 1 {
-		return fmt.Sprintf("%s; same node has %d visible pods stuck before container start", msg, count)
+	type groupKey struct{ node, reason string }
+	type group struct {
+		pods     map[types.NamespacedName]bool
+		owners   map[types.UID]bool
+		evidence *NodeStartupCorroboration
 	}
-	return msg
+	groups := map[groupKey]*group{}
+	eligible := map[int]groupKey{}
+	for i, problem := range problems {
+		if !isNetworkPostBindReason(problem.Reason) {
+			continue
+		}
+		pod, err := cache.Pods().Pods(problem.Namespace).Get(problem.Name)
+		if err != nil || pod.DeletionTimestamp != nil || !isPostBindStartupStallPod(pod, now) || !pod.CreationTimestamp.Time.Equal(problem.ResourceCreatedAt) {
+			continue
+		}
+		owner := postBindWorkloadOwnerUID(cache, pod)
+		if owner == "" {
+			continue
+		}
+		key := groupKey{node: pod.Spec.NodeName, reason: problem.Reason}
+		g := groups[key]
+		if g == nil {
+			g = &group{pods: map[types.NamespacedName]bool{}, owners: map[types.UID]bool{}}
+			groups[key] = g
+		}
+		g.pods[types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}] = true
+		g.owners[owner] = true
+		eligible[i] = key
+	}
+	for key, g := range groups {
+		if len(g.owners) > 1 {
+			pods := make([]types.NamespacedName, 0, len(g.pods))
+			for pod := range g.pods {
+				pods = append(pods, pod)
+			}
+			sort.Slice(pods, func(i, j int) bool {
+				if pods[i].Namespace != pods[j].Namespace {
+					return pods[i].Namespace < pods[j].Namespace
+				}
+				return pods[i].Name < pods[j].Name
+			})
+			g.evidence = &NodeStartupCorroboration{Node: key.node, PodCount: len(g.pods), OwnerCount: len(g.owners), Pods: pods}
+		}
+	}
+	for i, key := range eligible {
+		problems[i].NodeStartupCorroboration = groups[key].evidence
+		if evidence := groups[key].evidence; evidence != nil {
+			problems[i].MessageBeforeCorroboration = problems[i].Message
+			problems[i].Message += fmt.Sprintf("; same node has %d visible pods across %d distinct workload owners with this failure class", evidence.PodCount, evidence.OwnerCount)
+		}
+	}
+}
+
+func postBindWorkloadOwnerUID(cache *ResourceCache, pod *corev1.Pod) types.UID {
+	ref := controllerOwnerRef(pod.OwnerReferences)
+	if ref == nil || ref.Name == "" || ref.UID == "" {
+		return ""
+	}
+	group := schema.FromAPIVersionAndKind(ref.APIVersion, ref.Kind).Group
+	if (group == "apps" && ref.Kind == "ReplicaSet") || (group == "batch" && ref.Kind == "Job") {
+		// Display-owner inference may strip a ReplicaSet hash; corroboration
+		// requires the actual intermediate object and matching identity.
+		obj, err := FetchResource(cache, ref.Kind, pod.Namespace, ref.Name)
+		if err != nil {
+			return ""
+		}
+		metadata, err := meta.Accessor(obj)
+		if err != nil || metadata.GetUID() != ref.UID {
+			return ""
+		}
+		parent := controllerOwnerRef(metadata.GetOwnerReferences())
+		if parent == nil {
+			return ref.UID
+		}
+		if parent.UID == ref.UID {
+			return ""
+		}
+		ref = parent
+		group = schema.FromAPIVersionAndKind(ref.APIVersion, ref.Kind).Group
+	}
+	if ref.Name == "" || ref.UID == "" {
+		return ""
+	}
+	if (group == "apps" && (ref.Kind == "Deployment" || ref.Kind == "StatefulSet" || ref.Kind == "DaemonSet")) || (group == "batch" && ref.Kind == "CronJob") {
+		return ref.UID
+	}
+	return ""
 }
 
 func isNetworkPostBindReason(reason string) bool {

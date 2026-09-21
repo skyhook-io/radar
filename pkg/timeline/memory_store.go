@@ -3,6 +3,7 @@ package timeline
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -310,24 +311,24 @@ func (m *MemoryStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNa
 }
 
 // MarkResourceSeen records that a resource has been seen
-func (m *MemoryStore) MarkResourceSeen(clusterContext, kind, namespace, name string) {
+func (m *MemoryStore) MarkResourceSeen(clusterContext, group, kind, namespace, name string) {
 	m.seenMu.Lock()
 	defer m.seenMu.Unlock()
-	m.seenResources[SeenResourceKey(clusterContext, kind, namespace, name)] = true
+	m.seenResources[SeenResourceKey(clusterContext, group, kind, namespace, name)] = true
 }
 
 // IsResourceSeen checks if a resource has been seen before
-func (m *MemoryStore) IsResourceSeen(clusterContext, kind, namespace, name string) bool {
+func (m *MemoryStore) IsResourceSeen(clusterContext, group, kind, namespace, name string) bool {
 	m.seenMu.RLock()
 	defer m.seenMu.RUnlock()
-	return m.seenResources[SeenResourceKey(clusterContext, kind, namespace, name)]
+	return m.seenResources[SeenResourceKey(clusterContext, group, kind, namespace, name)]
 }
 
 // ClearResourceSeen removes a resource from the seen set
-func (m *MemoryStore) ClearResourceSeen(clusterContext, kind, namespace, name string) {
+func (m *MemoryStore) ClearResourceSeen(clusterContext, group, kind, namespace, name string) {
 	m.seenMu.Lock()
 	defer m.seenMu.Unlock()
-	delete(m.seenResources, SeenResourceKey(clusterContext, kind, namespace, name))
+	delete(m.seenResources, SeenResourceKey(clusterContext, group, kind, namespace, name))
 }
 
 // Stats returns storage statistics
@@ -421,6 +422,16 @@ func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf
 	if len(opts.Kinds) > 0 {
 		found := slices.Contains(opts.Kinds, event.Kind)
 		if !found {
+			return false
+		}
+	}
+
+	if len(opts.APIGroups) > 0 && event.APIVersion != "" {
+		group := ""
+		if idx := strings.IndexByte(event.APIVersion, '/'); idx > 0 {
+			group = event.APIVersion[:idx]
+		}
+		if !slices.Contains(opts.APIGroups, group) {
 			return false
 		}
 	}

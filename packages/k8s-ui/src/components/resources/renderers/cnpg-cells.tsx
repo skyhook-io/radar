@@ -287,7 +287,7 @@ export function CNPGPoolerCell({ resource, column }: { resource: any; column: st
       return (
         <span className={clsx(
           'badge-sm',
-          type === 'rw' ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'
+          type === 'rw' ? 'status-blue' : 'status-purple'
         )}>
           {type}
         </span>

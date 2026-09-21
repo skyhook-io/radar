@@ -177,6 +177,7 @@ func ComputeWorkloadsFromProm(ctx context.Context, client *prom.Client, namespac
 	return &WorkloadCostResponse{
 		Available: true,
 		Namespace: namespace,
+		Window:    DefaultCurrentWindow,
 		Workloads: workloads,
 	}
 }

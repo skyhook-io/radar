@@ -99,7 +99,7 @@ export function RoleRenderer({ data, rbacRoleData, rbacRoleLoading, rbacRoleErro
                     {rule.resources.map((resource: string) => (
                       <span
                         key={resource}
-                        className="badge bg-purple-500/20 text-purple-400"
+                        className="badge status-purple"
                       >
                         {resource}
                       </span>
@@ -133,7 +133,7 @@ export function RoleRenderer({ data, rbacRoleData, rbacRoleLoading, rbacRoleErro
                     {rule.resourceNames.map((name: string) => (
                       <span
                         key={name}
-                        className="badge bg-cyan-500/20 text-cyan-400"
+                        className="badge status-cyan"
                       >
                         {name}
                       </span>
@@ -150,7 +150,7 @@ export function RoleRenderer({ data, rbacRoleData, rbacRoleLoading, rbacRoleErro
                     {rule.nonResourceURLs.map((url: string) => (
                       <span
                         key={url}
-                        className="badge bg-orange-500/20 text-orange-400"
+                        className="badge status-orange"
                       >
                         {url}
                       </span>

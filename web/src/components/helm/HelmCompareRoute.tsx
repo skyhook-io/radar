@@ -32,6 +32,8 @@ import { getHelmStatusColor, getKindBadgeColor, SEVERITY_BADGE } from '../../uti
 import { formatDate } from './helm-utils'
 import { RoleGatedPanel } from './RoleGatedPanel'
 import { Tooltip } from '../ui/Tooltip'
+import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
+import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 
 type DiffTone = 'success' | 'warning' | 'error' | 'info' | 'neutral'
 
@@ -342,6 +344,9 @@ function RevisionSelect({
   onChange: (revision: number) => void
 }) {
   const [open, setOpen] = useState(false)
+  // Presence outlives `open` by the menu exit so the list fades out in place;
+  // the outside-click / Escape listeners below still key off logical `open`.
+  const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs('menu'))
   const [activeIndex, setActiveIndex] = useState(0)
   const rootRef = useRef<HTMLDivElement>(null)
   const listboxId = useId()
@@ -371,12 +376,14 @@ function RevisionSelect({
     if (open) setActiveIndex(selectedIndex)
   }, [open, selectedIndex])
 
+  // The listbox mounts a commit after `open` (presence hook); without
+  // `shouldRender` here a reopen at an unchanged activeIndex never scrolls.
   useEffect(() => {
-    if (!open) return
+    if (!open || !shouldRender) return
     const revision = revisions[activeIndex]
     if (!revision) return
     document.getElementById(`${listboxId}-${revision.revision}`)?.scrollIntoView({ block: 'nearest' })
-  }, [activeIndex, listboxId, open, revisions])
+  }, [activeIndex, listboxId, open, shouldRender, revisions])
 
   const selectRevision = (revision: number) => {
     setOpen(false)
@@ -438,11 +445,18 @@ function RevisionSelect({
         <span className="min-w-0 truncate">{selected ? formatRevisionOption(selected) : 'No revisions'}</span>
         <ChevronDown className={clsx('h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform', open && 'rotate-180')} />
       </button>
-      {open && (
+      {shouldRender && (
         <div
           id={listboxId}
           role="listbox"
-          className="absolute right-0 top-full z-50 mt-1 max-h-80 w-[min(36rem,calc(100vw-2rem))] overflow-y-auto rounded-lg border border-theme-border bg-theme-surface p-1 shadow-theme-lg"
+          inert={!open || undefined}
+          className={clsx(
+            'absolute right-0 top-full z-50 mt-1 max-h-80 w-[min(36rem,calc(100vw-2rem))] origin-top-right overflow-y-auto rounded-lg border border-theme-border bg-theme-surface p-1 shadow-theme-lg',
+            TRANSITION_MENU,
+            isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]',
+            !open && 'pointer-events-none',
+          )}
+          style={overlayTransitionStyle(isOpen, 'menu')}
         >
           {revisions.map((revision, index) => {
             const selectedRevision = revision.revision === value

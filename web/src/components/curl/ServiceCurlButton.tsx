@@ -1,12 +1,13 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useMutation } from '@tanstack/react-query'
-import { Activity, Loader2, X, ChevronDown, Maximize2, Copy, Check } from 'lucide-react'
+import { Activity, Loader2, X, Maximize2, Copy, Check } from 'lucide-react'
 import { clsx } from 'clsx'
 import { apiFetch } from '../../api/client'
 import { apiUrl } from '../../api/config'
 import { Tooltip } from '../ui/Tooltip'
 import { Input } from '@skyhook-io/k8s-ui'
+import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 
 // A port is "curl-able" only if it plausibly speaks HTTP — probing a raw TCP
 // port (Postgres, Redis) with a GET returns noise, so we don't offer it there
@@ -135,7 +136,7 @@ export function CurlButton({ active, onClick }: { active: boolean; onClick: () =
       >
         Curl
         {/* Disclosure caret: signals this expands an inline panel rather than firing a request. */}
-        <ChevronDown className={clsx('w-3 h-3 transition-transform', active && 'rotate-180')} />
+        <CollapseChevron open={active} className="w-3 h-3" />
       </button>
     </Tooltip>
   )
@@ -163,7 +164,7 @@ function VerdictLine({
         onClick={onToggleHeaders}
         className="ml-auto flex items-center gap-1 text-theme-text-secondary hover:text-theme-text-primary"
       >
-        Headers <ChevronDown className={clsx('w-3 h-3 transition-transform', showHeaders && 'rotate-180')} />
+        Headers <CollapseChevron open={showHeaders} className="w-3 h-3" />
       </button>
     </div>
   )
@@ -224,13 +225,11 @@ function CurlResponseDialog({
           <VerdictLine result={result} showHeaders={showHeaders} onToggleHeaders={() => setShowHeaders((v) => !v)} />
         </div>
 
-        <div className="grid transition-[grid-template-rows] duration-200 ease-out mx-4" style={{ gridTemplateRows: showHeaders ? '1fr' : '0fr' }}>
-          <div className="overflow-hidden">
-            <pre className="text-xs bg-theme-base mt-4 rounded p-3 overflow-auto max-h-48 text-theme-text-secondary font-mono whitespace-pre">
-              {Object.entries(result.headers).map(([k, v]) => `${k}: ${v}`).join('\n') || '(no headers)'}
-            </pre>
-          </div>
-        </div>
+        <Collapse open={showHeaders} className="mx-4">
+          <pre className="text-xs bg-theme-base mt-4 rounded p-3 overflow-auto max-h-48 text-theme-text-secondary font-mono whitespace-pre">
+            {Object.entries(result.headers).map(([k, v]) => `${k}: ${v}`).join('\n') || '(no headers)'}
+          </pre>
+        </Collapse>
 
         {result.error ? (
           <div className="m-4 text-sm text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-3 py-2">
@@ -317,8 +316,7 @@ export function CurlPanel({
   }, [peek?.text, open])
 
   return (
-    <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: mounted && open ? '1fr' : '0fr' }}>
-      <div className="overflow-hidden">
+    <Collapse open={mounted && open}>
       <div className="mt-3 pt-3 border-t border-theme-border space-y-2" onClick={(e) => e.stopPropagation()}>
       <div className="flex items-center justify-between">
         <span className="flex items-center gap-1.5 text-xs font-medium text-theme-text-secondary">
@@ -370,9 +368,8 @@ export function CurlPanel({
         </div>
       )}
 
-      {/* Reveal the response with the same grid transition as the panel itself. */}
-      <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: result ? '1fr' : '0fr' }}>
-        <div className="overflow-hidden">
+      {/* Reveal the response with the same disclosure motion as the panel itself. */}
+      <Collapse open={!!result}>
       {result && (
         <div className="space-y-2 pt-0.5">
           <VerdictLine result={result} showHeaders={showHeaders} onToggleHeaders={() => setShowHeaders((v) => !v)} />
@@ -383,13 +380,11 @@ export function CurlPanel({
             </div>
           )}
 
-          <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: showHeaders ? '1fr' : '0fr' }}>
-            <div className="overflow-hidden">
-              <pre className="text-xs bg-theme-base rounded p-2 overflow-auto max-h-32 text-theme-text-secondary font-mono whitespace-pre">
-                {Object.entries(result.headers).map(([k, v]) => `${k}: ${v}`).join('\n') || '(no headers)'}
-              </pre>
-            </div>
-          </div>
+          <Collapse open={showHeaders}>
+            <pre className="text-xs bg-theme-base rounded p-2 overflow-auto max-h-32 text-theme-text-secondary font-mono whitespace-pre">
+              {Object.entries(result.headers).map(([k, v]) => `${k}: ${v}`).join('\n') || '(no headers)'}
+            </pre>
+          </Collapse>
 
           {peek && (
             <>
@@ -425,8 +420,7 @@ export function CurlPanel({
           )}
         </div>
       )}
-        </div>
-      </div>
+      </Collapse>
 
       {sheetOpen && result && (
         <CurlResponseDialog
@@ -439,7 +433,6 @@ export function CurlPanel({
         />
       )}
       </div>
-      </div>
-    </div>
+    </Collapse>
   )
 }

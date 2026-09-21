@@ -1,0 +1,1275 @@
+import { describe, expect, it } from "vitest";
+import { DiagnoseError } from "../../api/diagnose";
+import {
+  canOfferInvestigationApply,
+  initialInvestigationPane,
+  investigationEvidenceAnnouncement,
+  investigationEvidenceShouldMarkUnread,
+  investigationApplyCompletionEffects,
+  investigationApplyAttemptVerified,
+  investigationAssessmentNeedsCurrentStateVerification,
+  investigationApplyRejectionIsDefinitive,
+  investigationApplyTerminalNeedsClusterRefresh,
+  investigationTurnWithTerminalEvent,
+  investigationClosedEventIsLive,
+  investigationClosedRunIsUnavailable,
+  investigationEvidenceInputsEqual,
+  investigationEvidenceCoverageGaps,
+  investigationEvidenceCoverageLimited,
+  investigationEvidenceConflictsWithHealthy,
+  investigationHealthConflictExplainedBy,
+  investigationEndedBeforeConclusion,
+  investigationHistoryUnavailablePresentation,
+  investigationInteractionsBlocked,
+  investigationIsReadOnly,
+  investigationPaneCenteredScrollTop,
+  investigationAssessmentTurnIndexes,
+  investigationHealthSignals,
+  investigationSettledAnswerTurnIndexes,
+  investigationIsAssessmentTurn,
+} from "./investigationState";
+
+describe("investigation terminal presentation", () => {
+  it("centers source navigation inside its pane and clamps at both ends", () => {
+    expect(
+      investigationPaneCenteredScrollTop({
+        scrollTop: 400,
+        viewportHeight: 600,
+        contentHeight: 2_000,
+        targetTop: 500,
+        targetHeight: 100,
+      }),
+    ).toBe(650);
+    expect(
+      investigationPaneCenteredScrollTop({
+        scrollTop: 0,
+        viewportHeight: 600,
+        contentHeight: 2_000,
+        targetTop: 20,
+        targetHeight: 40,
+      }),
+    ).toBe(0);
+    expect(
+      investigationPaneCenteredScrollTop({
+        scrollTop: 1_300,
+        viewportHeight: 600,
+        contentHeight: 2_000,
+        targetTop: 580,
+        targetHeight: 80,
+      }),
+    ).toBe(1_400);
+  });
+
+  it("opens successful and stale runs on Evidence", () => {
+    expect(initialInvestigationPane("done")).toBe("evidence");
+    expect(initialInvestigationPane("stale")).toBe("evidence");
+  });
+
+  it("opens running and ended-early runs on Activity", () => {
+    expect(initialInvestigationPane("running")).toBe("activity");
+    expect(initialInvestigationPane("error")).toBe("activity");
+    expect(initialInvestigationPane("stopped")).toBe("activity");
+  });
+
+  it("marks new evidence unread only when Findings is actually hidden", () => {
+    expect(
+      investigationEvidenceShouldMarkUnread({
+        hasNewLiveSource: true,
+        selectedPane: "activity",
+        evidencePaneVisible: false,
+      }),
+    ).toBe(true);
+    expect(
+      investigationEvidenceShouldMarkUnread({
+        hasNewLiveSource: true,
+        selectedPane: "activity",
+        evidencePaneVisible: true,
+      }),
+    ).toBe(false);
+    expect(
+      investigationEvidenceShouldMarkUnread({
+        hasNewLiveSource: true,
+        selectedPane: "evidence",
+        evidencePaneVisible: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("announces hidden and scrolled-away evidence without duplicating updates", () => {
+    expect(
+      investigationEvidenceAnnouncement({
+        unreadEvidence: true,
+        evidenceUpdateAvailable: true,
+      }),
+    ).toBe("New evidence available");
+    expect(
+      investigationEvidenceAnnouncement({
+        unreadEvidence: false,
+        evidenceUpdateAvailable: true,
+      }),
+    ).toBe("New evidence available in Findings.");
+    expect(
+      investigationEvidenceAnnouncement({
+        unreadEvidence: false,
+        evidenceUpdateAvailable: false,
+      }),
+    ).toBe("");
+  });
+
+  it("makes stale and unavailable runs read-only", () => {
+    expect(investigationIsReadOnly("stale", false)).toBe(true);
+    expect(investigationIsReadOnly("done", true)).toBe(true);
+    expect(investigationIsReadOnly("done", false)).toBe(false);
+  });
+
+  it("distinguishes retrying from permanent history failures", () => {
+    expect(
+      investigationHistoryUnavailablePresentation({
+        error: "history store is busy.",
+        retryable: true,
+      }),
+    ).toMatchObject({
+      loading: true,
+      title: expect.stringContaining("temporarily"),
+    });
+    expect(
+      investigationHistoryUnavailablePresentation({
+        error: "history cannot be decoded",
+        retryable: false,
+      }),
+    ).toEqual({
+      loading: false,
+      title: "Saved history is unavailable",
+      detail: "history cannot be decoded",
+    });
+  });
+
+  it("does not call a completed apply failure an incomplete investigation", () => {
+    expect(
+      investigationEndedBeforeConclusion("error", {
+        status: "error",
+        apply: true,
+      }),
+    ).toBe(false);
+    expect(
+      investigationEndedBeforeConclusion("error", {
+        status: "error",
+        apply: false,
+      }),
+    ).toBe(true);
+  });
+
+  it.each(["error", "stopped"] as const)(
+    "does not discard the assessment after an explanation is %s",
+    (status) => {
+      expect(
+        investigationEndedBeforeConclusion(status, {
+          status: "error",
+          explainAssessment: 2,
+        }),
+      ).toBe(false);
+    },
+  );
+});
+
+describe("investigation evidence projection stability", () => {
+  it("does not call a resource read partial when Diagnose cannot bundle the kind", () => {
+    const projection = {
+      limitations: [],
+      coverage: { attempted: 1, projected: 1, limited: 0, checked: 0 },
+      sources: [
+        { id: "resource", tool: "get_resource", confirmedSuccess: true },
+      ],
+      groups: [
+        {
+          latest: { relevance: "target" as const, source: { id: "resource" } },
+        },
+      ],
+    };
+    expect(
+      investigationEvidenceCoverageGaps(projection, "HorizontalPodAutoscaler"),
+    ).toEqual({ noEvidence: false, noTargetDiagnosis: false });
+    expect(
+      investigationEvidenceCoverageLimited(
+        projection,
+        "HorizontalPodAutoscaler",
+      ),
+    ).toBe(false);
+    expect(investigationEvidenceCoverageGaps(projection, "Deployment")).toEqual(
+      {
+        noEvidence: false,
+        noTargetDiagnosis: true,
+      },
+    );
+    expect(investigationEvidenceCoverageLimited(projection, "Deployment")).toBe(
+      true,
+    );
+  });
+  it("treats zero projected producer evidence as limited coverage", () => {
+    expect(
+      investigationEvidenceCoverageLimited({
+        limitations: [],
+        coverage: { attempted: 0, projected: 0, limited: 0, checked: 0 },
+        sources: [],
+        groups: [],
+      }),
+    ).toBe(true);
+    expect(
+      investigationEvidenceCoverageLimited({
+        limitations: [],
+        coverage: { attempted: 1, projected: 1, limited: 0, checked: 0 },
+        sources: [
+          {
+            id: "resource",
+            tool: "get_resource",
+            confirmedSuccess: true,
+          },
+        ],
+        groups: [
+          {
+            latest: {
+              relevance: "target",
+              source: { id: "resource" },
+            },
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      investigationEvidenceCoverageLimited({
+        limitations: [],
+        coverage: { attempted: 1, projected: 1, limited: 0, checked: 0 },
+        sources: [
+          {
+            id: "diagnose",
+            tool: "diagnose",
+            confirmedSuccess: true,
+          },
+        ],
+        groups: [
+          {
+            latest: {
+              relevance: "target",
+              source: { id: "diagnose" },
+            },
+          },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      investigationEvidenceCoverageLimited({
+        limitations: [],
+        coverage: { attempted: 1, projected: 1, limited: 0, checked: 0 },
+        sources: [
+          {
+            id: "diagnose",
+            tool: "diagnose",
+            confirmedSuccess: true,
+          },
+        ],
+        groups: [
+          {
+            latest: {
+              relevance: "broader",
+              source: { id: "diagnose" },
+            },
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("qualifies a healthy conclusion when active adverse Radar evidence disagrees", () => {
+    const group = (
+      kind: string,
+      tier: "key" | "supporting" | "context",
+      relevance: "target" | "producer-related" | "broader" = "target",
+      historical = false,
+    ) => ({
+      kind,
+      historical,
+      latest: { tier, relevance, tone: "warning" },
+    });
+
+    expect(
+      investigationEvidenceConflictsWithHealthy({
+        groups: [group("issue", "supporting")],
+      }),
+    ).toBe(true);
+    expect(
+      investigationEvidenceConflictsWithHealthy({
+        groups: [group("logs", "supporting")],
+      }),
+    ).toBe(true);
+    expect(
+      investigationEvidenceConflictsWithHealthy({
+        groups: [group("events", "supporting")],
+      }),
+    ).toBe(true);
+    expect(
+      investigationEvidenceConflictsWithHealthy({
+        groups: [group("resource", "context")],
+      }),
+    ).toBe(false);
+    expect(
+      investigationEvidenceConflictsWithHealthy({
+        groups: [group("issue", "supporting", "broader")],
+      }),
+    ).toBe(false);
+    expect(
+      investigationEvidenceConflictsWithHealthy({
+        groups: [group("issue", "supporting", "target", true)],
+      }),
+    ).toBe(false);
+    expect(
+      investigationEvidenceConflictsWithHealthy({
+        groups: [group("changes", "supporting")],
+      }),
+    ).toBe(false);
+  });
+  it("names the explained cards only when the agent addressed every conflict", () => {
+    const group = (id: string, title: string, tone = "warning") => ({
+      id,
+      identity: `issue:${id}`,
+      kind: "issue",
+      historical: false,
+      latest: {
+        tier: "supporting" as const,
+        relevance: "target" as const,
+        tone,
+        title,
+      },
+    });
+    const projection = {
+      groups: [group("g1", "CrashLoopBackOff"), group("g2", "OOMKilled")],
+    };
+    const note = (
+      groupId: string,
+      role: string,
+      placement: "card" | "revision" | "source" = "card",
+      claim = "the agent's reading of this card",
+    ) => ({ role, placement, claim, groupId });
+
+    expect(investigationHealthConflictExplainedBy(projection, undefined)).toBe(
+      null,
+    );
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "benign"),
+      ]),
+    ).toBe(null);
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "benign"),
+        note("g2", "cause"),
+      ]),
+    ).toBe(null);
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "benign"),
+        note("g2", "benign", "source"),
+      ]),
+    ).toBe(null);
+    // A note pinned to a superseded read addressed the card as it was then,
+    // not the card the banner is qualifying now.
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "benign"),
+        note("g2", "benign", "revision"),
+      ]),
+    ).toBe(null);
+    // An empty claim renders nothing, so the banner would be pointing at a
+    // note the reader cannot find.
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "benign"),
+        note("g2", "benign", "card", "   "),
+      ]),
+    ).toBe(null);
+    // "Excludes some hypothesis" and "is peripheral here" are both true of a
+    // problem that is still live, so neither reconciles a healthy verdict.
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "benign"),
+        note("g2", "rules_out"),
+      ]),
+    ).toBe(null);
+    // A note on a superseded revision of the card is not an explanation of
+    // the card as it now stands.
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "benign"),
+        note("g2", "demoted"),
+      ]),
+    ).toBe(null);
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "benign"),
+        note("g2", "benign"),
+      ]),
+    ).toEqual(["CrashLoopBackOff", "OOMKilled"]);
+    // The agent contradicting itself on the same card is not an explanation.
+    expect(
+      investigationHealthConflictExplainedBy(projection, [
+        note("g1", "benign"),
+        note("g2", "benign"),
+        note("g2", "cause"),
+      ]),
+    ).toBe(null);
+    expect(
+      investigationHealthConflictExplainedBy({ groups: [] }, [
+        note("g1", "benign"),
+      ]),
+    ).toBe(null);
+
+    // One log stream read through two calls lands in two groups sharing an
+    // identity, so the partition must not decide whether the agent addressed
+    // it: a note on either twin counts for the conflict recorded on the other.
+    const stream = (id: string) => ({
+      id,
+      identity: "logs:previous:api-abc:api",
+      kind: "logs",
+      historical: false,
+      latest: {
+        tier: "supporting" as const,
+        relevance: "target" as const,
+        tone: "warning",
+        title: "Previous logs · api-abc / api",
+      },
+    });
+    expect(
+      investigationHealthConflictExplainedBy(
+        { groups: [stream("scope-a"), stream("scope-b")] },
+        [note("scope-b", "benign")],
+      ),
+    ).toEqual([
+      "Previous logs · api-abc / api",
+      "Previous logs · api-abc / api",
+    ]);
+  });
+
+  it("ignores reasoning-only transcript updates while retaining completed tool identity", () => {
+    const completedTool = {
+      kind: "tool" as const,
+      id: "events-1",
+      tool: "get_events",
+      status: "done",
+      result: '{"events":[]}',
+      isError: false,
+    };
+    const previous = [
+      {
+        status: "running" as const,
+        timeline: [
+          completedTool,
+          { kind: "thinking" as const, text: "Checking pods" },
+        ],
+      },
+    ];
+    const next = [
+      {
+        status: "running" as const,
+        timeline: [
+          completedTool,
+          { kind: "thinking" as const, text: "Checking pods and owners" },
+        ],
+      },
+    ];
+
+    expect(investigationEvidenceInputsEqual(previous, next)).toBe(true);
+  });
+
+  it("invalidates when a completed tool record or verification status changes", () => {
+    const completedTool = {
+      kind: "tool" as const,
+      id: "events-1",
+      tool: "get_events",
+      status: "done",
+      result: '{"events":[]}',
+      isError: false,
+    };
+    const previous = [
+      { verify: true, status: "running" as const, timeline: [completedTool] },
+    ];
+
+    expect(
+      investigationEvidenceInputsEqual(previous, [
+        {
+          ...previous[0],
+          timeline: [{ ...completedTool, result: '{"events":[{}]}' }],
+        },
+      ]),
+    ).toBe(false);
+    expect(
+      investigationEvidenceInputsEqual(previous, [
+        { ...previous[0], status: "done" as const },
+      ]),
+    ).toBe(false);
+  });
+
+  it("checks every turn after an evidence-free prefix", () => {
+    const firstTurn = {
+      status: "done" as const,
+      timeline: [],
+    };
+    const completedTool = {
+      kind: "tool" as const,
+      id: "pods-1",
+      tool: "get_pods",
+      status: "done",
+      result: '{"pods":[]}',
+      isError: false,
+    };
+    const previous = [
+      firstTurn,
+      { status: "running" as const, timeline: [completedTool] },
+    ];
+
+    expect(
+      investigationEvidenceInputsEqual(previous, [
+        firstTurn,
+        { status: "done" as const, timeline: [completedTool] },
+      ]),
+    ).toBe(false);
+  });
+});
+
+describe("investigation action gating", () => {
+  it("retains apply mutation truth across replayed and live terminal events", () => {
+    const applyTurn = {
+      apply: true,
+      timeline: [],
+      diagnosis: null,
+      error: null,
+      status: "running" as const,
+    };
+
+    expect(
+      investigationTurnWithTerminalEvent(
+        applyTurn,
+        {
+          type: "done",
+          diagnosis: {
+            rootCause: "",
+            report: "Deployment updated.",
+            remediation: [],
+          },
+          applyOutcome: "confirmed",
+        },
+        false,
+      ),
+    ).toMatchObject({
+      status: "done",
+      applyOutcome: "confirmed",
+      animateResult: false,
+    });
+    expect(
+      investigationTurnWithTerminalEvent(
+        applyTurn,
+        {
+          type: "error",
+          error: "The mutation result could not be established.",
+          applyOutcome: "unknown",
+        },
+        true,
+      ),
+    ).toMatchObject({
+      status: "error",
+      error: "The mutation result could not be established.",
+      applyOutcome: "unknown",
+      animateResult: true,
+    });
+  });
+
+  it("blocks actions until replay is complete and while a request or verification handoff is pending", () => {
+    const ready = {
+      streamReady: true,
+      busy: false,
+      requestPending: false,
+      readOnly: false,
+      verificationPending: false,
+    };
+    expect(investigationInteractionsBlocked(ready)).toBe(false);
+    expect(
+      investigationInteractionsBlocked({ ...ready, streamReady: false }),
+    ).toBe(true);
+    expect(
+      investigationInteractionsBlocked({ ...ready, requestPending: true }),
+    ).toBe(true);
+    expect(
+      investigationInteractionsBlocked({
+        ...ready,
+        verificationPending: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not re-offer an assessment after any apply attempt", () => {
+    const base = {
+      currentAssessmentIdx: 0,
+      lastRemediationIdx: 0,
+      lastApplyAttemptIdx: -1,
+      localApplyAttemptAssessmentIdx: -1,
+      interactionsBlocked: false,
+      canApply: true,
+      hasNewerEvidence: false,
+    };
+    expect(canOfferInvestigationApply(base)).toBe(true);
+    expect(
+      canOfferInvestigationApply({ ...base, hasNewerEvidence: true }),
+    ).toBe(false);
+    expect(canOfferInvestigationApply({ ...base, canApply: false })).toBe(false);
+    expect(
+      canOfferInvestigationApply({ ...base, interactionsBlocked: true }),
+    ).toBe(false);
+    expect(
+      canOfferInvestigationApply({
+        ...base,
+        localApplyAttemptAssessmentIdx: 0,
+      }),
+    ).toBe(false);
+    expect(
+      canOfferInvestigationApply({
+        ...base,
+        lastApplyAttemptIdx: 0,
+      }),
+    ).toBe(false);
+    expect(
+      canOfferInvestigationApply({
+        ...base,
+        currentAssessmentIdx: 2,
+        lastRemediationIdx: 2,
+        lastApplyAttemptIdx: 1,
+        localApplyAttemptAssessmentIdx: 0,
+      }),
+    ).toBe(true);
+  });
+
+  it("clears a pessimistic local attempt only after a later verification assessment", () => {
+    const attempt = {
+      localApplyAttemptAssessmentIdx: 3,
+      currentAssessmentIdx: 4,
+      currentAssessmentIsVerification: false,
+    };
+    expect(investigationApplyAttemptVerified(attempt)).toBe(false);
+    expect(
+      investigationApplyAttemptVerified({
+        ...attempt,
+        currentAssessmentIsVerification: true,
+      }),
+    ).toBe(true);
+    expect(
+      investigationApplyAttemptVerified({
+        ...attempt,
+        currentAssessmentIdx: 3,
+        currentAssessmentIsVerification: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("marks an assessment pre-change until structured verification replaces a possible write", () => {
+    const base = {
+      currentAssessmentIdx: 2,
+      lastApplyAttemptIdx: -1,
+      lastApplyOutcome: undefined,
+      localApplyAttemptAssessmentIdx: -1,
+    };
+    expect(investigationAssessmentNeedsCurrentStateVerification(base)).toBe(
+      false,
+    );
+    expect(
+      investigationAssessmentNeedsCurrentStateVerification({
+        ...base,
+        localApplyAttemptAssessmentIdx: 2,
+      }),
+    ).toBe(true);
+    expect(
+      investigationAssessmentNeedsCurrentStateVerification({
+        ...base,
+        lastApplyAttemptIdx: 3,
+        lastApplyOutcome: "confirmed",
+      }),
+    ).toBe(true);
+    expect(
+      investigationAssessmentNeedsCurrentStateVerification({
+        ...base,
+        lastApplyAttemptIdx: 3,
+        lastApplyOutcome: "unknown",
+      }),
+    ).toBe(true);
+    expect(
+      investigationAssessmentNeedsCurrentStateVerification({
+        ...base,
+        lastApplyAttemptIdx: 3,
+        lastApplyOutcome: "failed",
+        localApplyAttemptAssessmentIdx: 2,
+      }),
+    ).toBe(false);
+    expect(
+      investigationAssessmentNeedsCurrentStateVerification({
+        ...base,
+        currentAssessmentIdx: 4,
+        lastApplyAttemptIdx: 3,
+        lastApplyOutcome: "confirmed",
+      }),
+    ).toBe(false);
+  });
+
+  it("restores Apply only when the server definitively rejects the request", () => {
+    expect(
+      investigationApplyRejectionIsDefinitive(
+        new DiagnoseError(409, "Run is no longer writable"),
+      ),
+    ).toBe(true);
+    expect(
+      investigationApplyRejectionIsDefinitive(
+        new DiagnoseError(500, "Apply outcome is unknown"),
+      ),
+    ).toBe(false);
+    expect(
+      investigationApplyRejectionIsDefinitive(new TypeError("fetch failed")),
+    ).toBe(false);
+  });
+
+  it("does not refresh live state or await verification for replayed apply completion", () => {
+    expect(
+      investigationApplyCompletionEffects({
+        live: false,
+        applyStartedLive: false,
+        stale: false,
+      }),
+    ).toEqual({ refreshClusterState: false, verificationPending: false });
+    expect(
+      investigationApplyCompletionEffects({
+        live: true,
+        applyStartedLive: false,
+        stale: false,
+      }),
+    ).toEqual({ refreshClusterState: true, verificationPending: true });
+    expect(
+      investigationApplyCompletionEffects({
+        live: true,
+        applyStartedLive: false,
+        stale: true,
+      }),
+    ).toEqual({ refreshClusterState: true, verificationPending: false });
+  });
+
+  it("refreshes and preserves verification handoff when a live apply completes during replay", () => {
+    expect(
+      investigationApplyCompletionEffects({
+        live: false,
+        applyStartedLive: true,
+        stale: false,
+      }),
+    ).toEqual({ refreshClusterState: true, verificationPending: true });
+  });
+
+  it("does not refresh current-cluster queries for a historical apply error replay", () => {
+    expect(
+      investigationApplyTerminalNeedsClusterRefresh({
+        localApplyRequestPending: false,
+        streamedApplyPending: true,
+        streamedApplyStartedLive: false,
+        terminalEventIsLive: false,
+      }),
+    ).toBe(false);
+    expect(
+      investigationApplyTerminalNeedsClusterRefresh({
+        localApplyRequestPending: false,
+        streamedApplyPending: true,
+        streamedApplyStartedLive: false,
+        terminalEventIsLive: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("distinguishes context-switch closure from eviction", () => {
+    expect(
+      investigationClosedRunIsUnavailable({
+        reason: "run_closed",
+        subscribedRunStatus: "running",
+      }),
+    ).toBe(false);
+    expect(
+      investigationClosedRunIsUnavailable({
+        reason: "run_closed",
+        subscribedRunStatus: "stale",
+      }),
+    ).toBe(false);
+    for (const subscribedRunStatus of ["done", "error", "stopped"] as const) {
+      expect(
+        investigationClosedRunIsUnavailable({
+          reason: "run_closed",
+          subscribedRunStatus,
+        }),
+      ).toBe(true);
+    }
+    expect(
+      investigationClosedRunIsUnavailable({
+        reason: "unavailable",
+        subscribedRunStatus: "running",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not refresh for replayed close but preserves live and local ambiguity", () => {
+    const replayedCloseIsLive = investigationClosedEventIsLive({
+      reason: "run_closed",
+      subscribedRunStatus: "stale",
+      // Retained stale streams send replay_complete before their closed sentinel.
+      replayComplete: true,
+    });
+    const replayedClose = {
+      localApplyRequestPending: false,
+      streamedApplyPending: true,
+      streamedApplyStartedLive: false,
+      terminalEventIsLive: replayedCloseIsLive,
+    };
+    expect(replayedCloseIsLive).toBe(false);
+    expect(investigationApplyTerminalNeedsClusterRefresh(replayedClose)).toBe(
+      false,
+    );
+    expect(
+      investigationClosedEventIsLive({
+        reason: "run_closed",
+        subscribedRunStatus: "running",
+        replayComplete: true,
+      }),
+    ).toBe(true);
+    expect(
+      investigationApplyTerminalNeedsClusterRefresh({
+        ...replayedClose,
+        streamedApplyStartedLive: true,
+      }),
+    ).toBe(true);
+    expect(
+      investigationApplyTerminalNeedsClusterRefresh({
+        ...replayedClose,
+        streamedApplyPending: false,
+        localApplyRequestPending: true,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("investigationAssessmentTurnIndexes", () => {
+  const assessment = {
+    status: "done" as const,
+    diagnosis: { healthy: true, rootCause: "", report: "", remediation: [] },
+  };
+  it("keeps the assessment across answers that only restate a root cause", () => {
+    // Agents restate the cause on most answers; without an explicit revision
+    // signal every question would rewrite Findings.
+    const restating = {
+      status: "done" as const,
+      question: "get the secret",
+      diagnosis: {
+        rootCause: "Secret x does not exist",
+        report: "",
+        remediation: [],
+      },
+    };
+    expect(investigationAssessmentTurnIndexes([assessment, restating])).toEqual(
+      [0],
+    );
+    expect(investigationIsAssessmentTurn(restating)).toBe(false);
+  });
+  it("accepts a question turn only when it revises with a complete verdict", () => {
+    const revised = {
+      status: "done" as const,
+      question: "could it be OOM?",
+      diagnosis: {
+        rootCause: "The container is OOM-killed.",
+        summary: "The app runs out of memory.",
+        revisesAssessment: true,
+        report: "",
+        remediation: [],
+      },
+    };
+    expect(investigationAssessmentTurnIndexes([assessment, revised])).toEqual([
+      0, 1,
+    ]);
+    const flagOnly = {
+      ...revised,
+      diagnosis: { ...revised.diagnosis, summary: undefined },
+    };
+    expect(investigationIsAssessmentTurn(flagOnly)).toBe(false);
+    const noVerdict = {
+      ...revised,
+      diagnosis: {
+        rootCause: "",
+        summary: "Words.",
+        revisesAssessment: true,
+        report: "",
+        remediation: ["x"],
+      },
+    };
+    expect(investigationIsAssessmentTurn(noVerdict)).toBe(false);
+  });
+  it("always takes verifications and never apply, explanation or running turns", () => {
+    const verify = { ...assessment, question: "re-check", verify: true };
+    expect(
+      investigationAssessmentTurnIndexes([
+        assessment,
+        { ...assessment, apply: true },
+        { ...assessment, explainAssessment: 2 },
+        { ...assessment, status: "running" as const },
+        verify,
+      ]),
+    ).toEqual([0, 4]);
+  });
+});
+
+describe("adverse evidence and the healthy-conflict banner", () => {
+  const group = (kind: string, tone: string) => ({
+    id: `${kind}-1`,
+    kind,
+    historical: false,
+    latest: { tier: "supporting" as const, relevance: "target" as const, tone },
+  });
+
+  it("counts every kind Radar can capture a live problem in", () => {
+    // The round that added alerts and Helm cards forgot this rule, so a
+    // firing alert naming the workload sat under a green banner.
+    for (const kind of [
+      "issue",
+      "startup",
+      "crash",
+      "resource",
+      "logs",
+      "events",
+      "dns",
+      "network",
+      "alerts",
+      "helm",
+    ]) {
+      expect(
+        investigationEvidenceConflictsWithHealthy({
+          groups: [group(kind, "error")],
+        }),
+        kind,
+      ).toBe(true);
+    }
+    // A change, a receipt, a chart or a permission grant describe the world,
+    // not a problem in it.
+    for (const kind of [
+      "changes",
+      "receipt",
+      "metrics",
+      "permissions",
+      "relationships",
+      "topology",
+      "inventory",
+    ]) {
+      expect(
+        investigationEvidenceConflictsWithHealthy({
+          groups: [group(kind, "error")],
+        }),
+        kind,
+      ).toBe(false);
+    }
+  });
+
+  // `observe` splits one log stream read by two calls into two groups, so the
+  // explained check deliberately matches a note across groups sharing a kind
+  // and identity. That crossing must not reach forward in time: a later turn
+  // reading the same stream can report a different failure, and the
+  // assessment never saw it.
+  it("refuses a note as explaining a reading captured after the assessment", () => {
+    const logGroup = (id: string, turnIndex: number) => ({
+      id,
+      // Same stream, different calls: what the twin lookup exists for.
+      identity: "logs:current:api-7f6-a:api",
+      kind: "logs",
+      historical: false,
+      latest: {
+        tier: "supporting" as const,
+        relevance: "target" as const,
+        tone: "warning",
+        title: "Error logs",
+        source: { turnIndex },
+      },
+    });
+    const note = (groupId: string, turnIndex: number) => ({
+      role: "benign",
+      placement: "card" as const,
+      claim: "the warmup error clears once the cache fills",
+      groupId,
+      source: { turnIndex },
+    });
+
+    // Two calls in the assessment's own turn read the same stream. The note
+    // sits on one group and explains its twin as well.
+    expect(
+      investigationHealthConflictExplainedBy(
+        { groups: [logGroup("g-a", 0), logGroup("g-b", 0)] },
+        [note("g-a", 0)],
+      ),
+    ).toEqual(["Error logs", "Error logs"]);
+
+    // A later turn reads the same stream and reports a different failure.
+    // The turn-0 note was about something else and must not soften it.
+    expect(
+      investigationHealthConflictExplainedBy(
+        { groups: [logGroup("g-a", 0), logGroup("g-c", 1)] },
+        [note("g-a", 0)],
+      ),
+    ).toBe(null);
+  });
+
+  it("counts the intermediate alert tone, which carries every high severity", () => {
+    for (const tone of ["warning", "alert", "error"]) {
+      expect(
+        investigationEvidenceConflictsWithHealthy({
+          groups: [group("issue", tone)],
+        }),
+        tone,
+      ).toBe(true);
+    }
+    for (const tone of ["neutral", "info", "success"]) {
+      expect(
+        investigationEvidenceConflictsWithHealthy({
+          groups: [group("issue", tone)],
+        }),
+        tone,
+      ).toBe(false);
+    }
+  });
+});
+
+describe("investigationSettledAnswerTurnIndexes", () => {
+  const assessment = {
+    status: "done" as const,
+    diagnosis: { rootCause: "x", report: "s", remediation: [], summary: "S." },
+  };
+  const answer = (revises?: boolean) => ({
+    status: "done" as const,
+    question: "q",
+    diagnosis: {
+      rootCause: "",
+      report: "a",
+      remediation: [],
+      revisesAssessment: revises,
+    },
+  });
+  it("settles non-revising answers under the story contract only", () => {
+    expect(
+      investigationSettledAnswerTurnIndexes(
+        [
+          assessment,
+          answer(false),
+          answer(true),
+          { ...answer(), verify: true },
+        ],
+        0,
+      ),
+    ).toEqual(new Set([1]));
+    const legacy = {
+      ...assessment,
+      diagnosis: { ...assessment.diagnosis, summary: undefined },
+    };
+    expect(
+      investigationSettledAnswerTurnIndexes([legacy, answer(false)], 0),
+    ).toEqual(new Set());
+  });
+});
+
+describe("investigationHealthSignals", () => {
+  const adverse = (id: string, title: string) => ({
+    id,
+    identity: id,
+    historical: false,
+    kind: "issue",
+    latest: {
+      relevance: "target" as const,
+      tier: "key" as const,
+      tone: "warning",
+      title,
+      source: { turnIndex: 0, id: `src-${id}` },
+    },
+  });
+  it("classifies each adverse card by the agent's position on it", () => {
+    const projection = {
+      groups: [
+        adverse("a", "Readiness probe failing"),
+        adverse("b", "Restarts"),
+        adverse("c", "OOM"),
+        adverse("d", "Evicted"),
+      ],
+    };
+    const items = [
+      {
+        role: "benign",
+        placement: "card" as const,
+        claim: "Timeouts never removed it from endpoints.",
+        groupId: "a",
+        source: { turnIndex: 0 },
+      },
+      {
+        role: "demoted",
+        placement: "card" as const,
+        claim: "Old restarts.",
+        groupId: "b",
+        source: { turnIndex: 0 },
+      },
+      {
+        role: "symptom",
+        placement: "card" as const,
+        claim: "",
+        groupId: "c",
+        source: { turnIndex: 0 },
+      },
+    ];
+    expect(
+      investigationHealthSignals(projection, items).map((s) => [
+        s.title,
+        s.status,
+      ]),
+    ).toEqual([
+      ["Readiness probe failing", "explained"],
+      ["Restarts", "related"],
+      ["OOM", "contradiction"],
+      ["Evicted", "unaddressed"],
+    ]);
+  });
+});
+
+describe("investigationHealthSignals twins across scopes", () => {
+  const warning = {
+    reason: "Unhealthy",
+    message:
+      "Readiness probe failed: check failed http://localhost:9898/readyz",
+    type: "Warning",
+  };
+  const eventsGroup = (
+    id: string,
+    identity: string,
+    patch: {
+      relevance?: "target" | "producer-related" | "broader";
+      events?: (typeof warning)[];
+      turnIndex?: number;
+    } = {},
+  ) => ({
+    id,
+    identity,
+    historical: false,
+    kind: "events",
+    latest: {
+      relevance: patch.relevance ?? ("target" as const),
+      tier: "key" as const,
+      tone: "warning",
+      title: "Kubernetes events",
+      summary: `${warning.reason}: ${warning.message} · ${identity}`,
+      data: { type: "events", events: patch.events ?? [warning] },
+      source: { turnIndex: patch.turnIndex ?? 0, id },
+    },
+  });
+  const benignOnPod = [
+    {
+      role: "benign",
+      placement: "card" as const,
+      claim:
+        "Probe timeouts during a node stall; the pod has been Ready since.",
+      groupId: "events-pod",
+      source: { turnIndex: 0 },
+    },
+  ];
+
+  it("lets a benign note on the Pod's copy of a warning explain the Deployment's copy", () => {
+    const groups = [
+      eventsGroup("events-deploy", "deployment demo/podinfo"),
+      eventsGroup("events-pod", "pod demo/podinfo-676569b68b-6278c"),
+    ];
+    expect(
+      investigationHealthSignals({ groups }, benignOnPod).map((signal) => [
+        signal.groupId,
+        signal.status,
+      ]),
+    ).toEqual([
+      ["events-deploy", "explained"],
+      ["events-pod", "explained"],
+    ]);
+    expect(
+      investigationHealthConflictExplainedBy({ groups }, benignOnPod),
+    ).toEqual(["Kubernetes events", "Kubernetes events"]);
+  });
+
+  it("does not let an earlier turn's note on the Pod explain the Deployment's copy captured later", () => {
+    const groups = [
+      eventsGroup("events-deploy", "deployment demo/podinfo", { turnIndex: 1 }),
+      eventsGroup("events-pod", "pod demo/podinfo-676569b68b-6278c"),
+    ];
+    expect(
+      investigationHealthSignals({ groups }, benignOnPod).map((signal) => [
+        signal.groupId,
+        signal.status,
+      ]),
+    ).toEqual([
+      ["events-deploy", "unaddressed"],
+      ["events-pod", "explained"],
+    ]);
+  });
+
+  it("never twins a cluster-scoped card with a namespaced one", () => {
+    const groups = [
+      eventsGroup("events-node", "node worker-1"),
+      eventsGroup("events-pod", "pod demo/podinfo-676569b68b-6278c"),
+    ];
+    expect(
+      investigationHealthSignals({ groups }, benignOnPod).map((signal) => [
+        signal.groupId,
+        signal.status,
+      ]),
+    ).toEqual([
+      ["events-node", "unaddressed"],
+      ["events-pod", "explained"],
+    ]);
+  });
+
+  it("does not let a card with one warning explain a card that carries that warning and another", () => {
+    const extra = {
+      reason: "BackOff",
+      message: "Back-off restarting failed container",
+      type: "Warning",
+    };
+    const groups = [
+      eventsGroup("events-deploy", "deployment demo/podinfo", {
+        events: [warning, extra],
+      }),
+      eventsGroup("events-pod", "pod demo/podinfo-676569b68b-6278c"),
+    ];
+    expect(
+      investigationHealthSignals({ groups }, benignOnPod).map((signal) => [
+        signal.groupId,
+        signal.status,
+      ]),
+    ).toEqual([
+      ["events-deploy", "unaddressed"],
+      ["events-pod", "explained"],
+    ]);
+  });
+
+  it("keeps a different warning, another namespace, or a broader card as its own signal", () => {
+    const groups = [
+      eventsGroup("events-deploy", "deployment demo/podinfo", {
+        events: [{ ...warning, message: "Liveness probe failed: timeout" }],
+      }),
+      eventsGroup("events-elsewhere", "deployment other/podinfo"),
+      eventsGroup("events-broader", "deployment demo/frontend", {
+        relevance: "broader",
+      }),
+      eventsGroup("events-pod", "pod demo/podinfo-676569b68b-6278c"),
+    ];
+    expect(
+      investigationHealthSignals({ groups }, benignOnPod).map((signal) => [
+        signal.groupId,
+        signal.status,
+      ]),
+    ).toEqual([
+      ["events-deploy", "unaddressed"],
+      ["events-elsewhere", "unaddressed"],
+      ["events-pod", "explained"],
+    ]);
+  });
+});

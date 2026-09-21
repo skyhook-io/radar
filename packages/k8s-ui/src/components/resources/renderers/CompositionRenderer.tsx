@@ -1,6 +1,8 @@
+import { useState } from 'react'
 import { clsx } from 'clsx'
 import { Layers, GitBranch, FileText, Boxes, ScrollText } from 'lucide-react'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { CodeViewer } from '../../ui/CodeViewer'
 import { kindToPlural } from '../../../utils/navigation'
 
@@ -122,16 +124,7 @@ function CompositionBody({ data, onNavigate, revision }: CompositionRendererProp
                       />
                     )}
                   </PropertyList>
-                  {step.input && (
-                    <details className="mt-2">
-                      <summary className="text-xs text-theme-text-tertiary cursor-pointer hover:text-theme-text-secondary">
-                        Show input
-                      </summary>
-                      <div className="mt-1">
-                        <CodeViewer code={JSON.stringify(step.input, null, 2)} language="json" maxHeight="200px" />
-                      </div>
-                    </details>
-                  )}
+                  {step.input && <StepInputDisclosure input={step.input} />}
                 </div>
               )
             })}
@@ -214,5 +207,32 @@ export function CompositionRevisionRenderer({ data, onNavigate }: CompositionRev
       )}
       <CompositionBody data={data} onNavigate={onNavigate} revision={revision} />
     </>
+  )
+}
+
+// Per-step input viewer. A native <details> looked nothing like the rest of
+// the drawer's disclosures and skipped the shared open/close motion. The
+// viewer renders on first open: one highlighted JSON pane per pipeline step
+// is real work to do for steps nobody expands.
+function StepInputDisclosure({ input }: { input: unknown }) {
+  const [open, setOpen] = useState(false)
+  const { panelId, buttonProps } = useDisclosure(open)
+  return (
+    <div className="mt-2">
+      <button
+        {...buttonProps}
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1 text-xs text-theme-text-tertiary hover:text-theme-text-secondary"
+      >
+        <CollapseChevron open={open} className="h-3 w-3" />
+        Show input
+      </button>
+      <Collapse open={open} mountLazily id={panelId}>
+        <div className="mt-1">
+          <CodeViewer code={JSON.stringify(input, null, 2)} language="json" maxHeight="200px" />
+        </div>
+      </Collapse>
+    </div>
   )
 }

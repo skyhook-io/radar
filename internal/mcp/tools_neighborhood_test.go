@@ -442,6 +442,42 @@ func setupSecretRefCacheMCP(t *testing.T) {
 	})
 }
 
+func TestNeighborhoodMCP_BuiltInAPIGroup(t *testing.T) {
+	setupSecretRefCacheMCP(t)
+	ctx := withTestUserPerms(t, "reader", nil, []string{"default"})
+	for _, kind := range []string{"deployment", "Deployment", "deployments"} {
+		for _, group := range []string{"", "apps", "wrong.example"} {
+			t.Run(kind+"/"+group, func(t *testing.T) {
+				call, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{
+					Kind: kind, Group: group, Namespace: "default", Name: "nginx", Hops: 2,
+				})
+				if group == "wrong.example" {
+					if err == nil || !strings.Contains(err.Error(), "not found") {
+						t.Fatalf("wrong group: expected not found, got %v", err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				var result neighborhoodResult
+				if err := json.Unmarshal([]byte(call.Content[0].(*mcp.TextContent).Text), &result); err != nil {
+					t.Fatal(err)
+				}
+				if result.Root.Kind != "Deployment" || len(result.Subgraph.Nodes) == 0 || result.Subgraph.Nodes[0].Data["apiVersion"] != "apps/v1" {
+					t.Fatalf("wrong root: %+v", result)
+				}
+			})
+		}
+	}
+	denied := withTestUserPerms(t, "denied", nil, []string{"other"})
+	if _, _, err := handleGetNeighborhood(denied, nil, getNeighborhoodInput{
+		Kind: "deployment", Group: "apps", Namespace: "default", Name: "nginx",
+	}); err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("denied namespace should remain forbidden, got %v", err)
+	}
+}
+
 // TestNeighborhoodMCP_SecretRootIncluded pins the IncludeSecrets fix on the
 // MCP side. DefaultBuildOptions sets IncludeSecrets=false, so the Secret
 // node isn't in the topology and the root lookup returns "resource not

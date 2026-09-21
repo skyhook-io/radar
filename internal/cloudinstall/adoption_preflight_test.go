@@ -681,3 +681,61 @@ func listContainsSubstring(values []string, want string) bool {
 	}
 	return false
 }
+
+func TestAdoptionPreflight_DeniedRoleDoesNotMakeItsBindingAClusterRefusal(t *testing.T) {
+	current := `apiVersion: v1
+kind: ConfigMap
+metadata: {name: radar-config}`
+	target := current + `
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: radar-generated}
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: radar-generated}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: radar-generated
+subjects:
+- kind: ServiceAccount
+  name: radar
+  namespace: radar`
+	liveConfig := adoptionObject("v1", "ConfigMap", "radar", "radar-config", nil)
+	liveConfig.SetLabels(map[string]string{"app.kubernetes.io/managed-by": "Helm"})
+	liveConfig.SetAnnotations(map[string]string{
+		"meta.helm.sh/release-name": "radar", "meta.helm.sh/release-namespace": "radar",
+	})
+	dc := adoptionDynamicClient(liveConfig)
+	dc.PrependReactor("create", "clusterroles", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: "rbac.authorization.k8s.io", Resource: "clusterroles"}, "radar-generated",
+			errors.New(`user "dev" (groups=["system:authenticated"]) is attempting to grant RBAC permissions not currently held: {APIGroups:[""], Resources:["secrets"], Verbs:["get"]}`))
+	})
+	dc.PrependReactor("create", "clusterrolebindings", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewNotFound(
+			schema.GroupResource{Group: "rbac.authorization.k8s.io", Resource: "clusterroles"},
+			"radar-generated")
+	})
+	kc := adoptionKubeClient(t, func(authv1.ResourceAttributes) bool { return true }, currentHelmSecret("radar", "radar", 2))
+
+	result, err := AdoptionPreflight(context.Background(), kc, dc, adoptionDiscovery(), AdoptionPreflightOptions{
+		Namespace: "radar", ReleaseName: "radar", CurrentRevision: 2,
+		CurrentManifest: current, TargetManifest: target,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Blocking) != 1 || !listContainsSubstring(result.Blocking, "not currently held") {
+		t.Fatalf("only the role's own denial should block: %+v", result.Blocking)
+	}
+	if got := result.Cause(); got != BlockCausePermissions {
+		t.Fatalf("Cause() = %q, want permissions", got)
+	}
+}

@@ -16,7 +16,7 @@ import (
 // callers that need finding detail. kind must be the Pascal singular form
 // stored in Finding.Kind; a mismatch returns the same empty result as a
 // resource with no findings.
-func SummarizeResource(cache *k8s.ResourceCache, group, kind, namespace, name string) (*resourcecontext.AuditSummary, []bpaudit.Finding) {
+func SummarizeResource(cache *k8s.ResourceCache, group, kind, namespace, name string, opts *audit.RunOptions) (*resourcecontext.AuditSummary, []bpaudit.Finding) {
 	if cache == nil || kind == "" {
 		return nil, nil
 	}
@@ -26,11 +26,18 @@ func SummarizeResource(cache *k8s.ResourceCache, group, kind, namespace, name st
 	if namespace != "" {
 		namespaces = []string{namespace}
 	}
-	results := audit.RunFromCache(cache, namespaces, nil)
+	results := audit.RunFromCache(cache, namespaces, opts)
 	if results == nil {
 		return nil, nil
 	}
-	return summarizeFindings(results.Findings, group, kind, namespace, name)
+	summary, findings := summarizeFindings(results.Findings, group, kind, namespace, name)
+	if len(results.MissingInputs) > 0 {
+		if summary == nil {
+			summary = &resourcecontext.AuditSummary{}
+		}
+		summary.MissingInputs = results.MissingInputs
+	}
+	return summary, findings
 }
 
 func summarizeFindings(findings []bpaudit.Finding, group, kind, namespace, name string) (*resourcecontext.AuditSummary, []bpaudit.Finding) {

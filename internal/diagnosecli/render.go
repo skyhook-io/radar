@@ -27,7 +27,7 @@ const (
 	clearLine = "\r\x1b[K"
 )
 
-// renderer writes the live transcript + verdict to the terminal. In --json mode
+// renderer writes the live transcript + conclusion to the terminal. In --json mode
 // everything human goes to stderr so stdout stays a clean JSON document.
 // A single mutex serializes event writes with the spinner goroutine: the model
 // goes quiet for long stretches (its own thinking + slow tools), and without a
@@ -131,7 +131,7 @@ func (r *renderer) activityVerbLocked() string {
 		case strings.Contains(t, "list") || strings.Contains(t, "search"):
 			return "scanning related resources…"
 		case strings.Contains(t, "diagnose"):
-			return "running diagnostics…"
+			return "collecting evidence…"
 		case strings.Contains(t, "resource") || strings.Contains(t, "describe"):
 			return "inspecting the resource…"
 		}
@@ -154,7 +154,11 @@ func (r *renderer) toolStarted(tool string) {
 
 func (r *renderer) header(run runSummary, base string) {
 	r.watchURL = fmt.Sprintf("%s/?ai-run=%s", base, run.ID)
-	target := run.Kind + " "
+	target := run.Kind
+	if run.Group != "" {
+		target += "." + run.Group
+	}
+	target += " "
 	if run.Namespace != "" {
 		target += run.Namespace + "/"
 	}
@@ -288,7 +292,7 @@ func (r *renderer) errorLine(msg string) {
 	fmt.Fprintf(r.w, "\n%s %s\n", r.c(cRed, "✗"), msg)
 }
 
-func (r *renderer) verdict(d diagnosis) {
+func (r *renderer) conclusion(d diagnosis) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.clearSpinnerLocked()
@@ -334,11 +338,11 @@ func (r *renderer) verdict(d diagnosis) {
 			}
 		}
 	default:
-		// No structured verdict — show whatever the agent said.
+		// No structured conclusion — show whatever the agent said.
 		if d.Report != "" {
 			fmt.Fprintln(r.w, r.md(d.Report))
 		} else {
-			fmt.Fprintln(r.w, "The investigation finished without a clear result.")
+			fmt.Fprintln(r.w, "The investigation finished without a clear conclusion.")
 		}
 	}
 	footer := "AI-generated — review before applying. Continue in the Radar UI or your own agent."
@@ -363,7 +367,7 @@ var (
 	mdInline = regexp.MustCompile("`([^`]+)`")
 )
 
-// md renders the verdict's GitHub-flavored markdown for a terminal: bold and
+// md renders the conclusion's GitHub-flavored markdown for a terminal: bold and
 // inline code get ANSI treatment, everything else passes through.
 func (r *renderer) md(s string) string {
 	if !r.color {

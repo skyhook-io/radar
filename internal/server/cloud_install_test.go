@@ -3,10 +3,14 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +23,7 @@ import (
 	"github.com/skyhook-io/radar/internal/cloudinstall"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/subject"
 )
 
 const testToken = "rhc_SUPERSECRET_TEST_TOKEN"
@@ -356,7 +361,7 @@ func TestCloudInstallApprovalTerminalOutcomes(t *testing.T) {
 		{"rejected", cloud.ErrConnectRejected, cloudFailRejected, true},
 		{"pickup expired", cloud.ErrConnectPickupExpired, cloudFailPickupExpired, false},
 		{"recovery timeout is ambiguous", cloud.ErrConnectRecoveryTimeout, cloudFailApprovalUnknown, false},
-		{"transport", errors.New("hub returned 502"), cloudFailConnect, false},
+		{"transport", errors.New("hub returned 502"), cloudFailApprovalPoll, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -580,14 +585,31 @@ func TestCloudInstallEndpointGating(t *testing.T) {
 		}
 	})
 
-	t.Run("cross-origin mutation is refused", func(t *testing.T) {
-		srv := newSrv("127.0.0.1")
-		req := httptest.NewRequest(http.MethodPost, "/api/cloud/install/prepare", strings.NewReader("{}"))
-		req.Header.Set("Origin", "https://evil.example")
-		w := httptest.NewRecorder()
-		srv.handleCloudInstallPrepare(w, req)
-		if w.Code != http.StatusForbidden {
-			t.Fatalf("status = %d", w.Code)
+	t.Run("cross-origin mutations are refused", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			path    string
+			handler func(*Server, http.ResponseWriter, *http.Request)
+		}{
+			{"prepare", "/api/cloud/install/prepare", (*Server).handleCloudInstallPrepare},
+			{"start", "/api/cloud/install/start", (*Server).handleCloudInstallStart},
+			{"cancel", "/api/cloud/install/cancel", (*Server).handleCloudInstallCancel},
+			{"dismiss", "/api/cloud/install/dismiss", (*Server).handleCloudInstallDismiss},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				srv := newSrv("127.0.0.1")
+				req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader("{}"))
+				req.Header.Set("Origin", "https://evil.example")
+				w := httptest.NewRecorder()
+				tt.handler(srv, w, req)
+				if w.Code != http.StatusForbidden {
+					t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+				}
+				if body := w.Body.String(); !strings.Contains(body, "cross-origin requests are not allowed") {
+					t.Fatalf("body = %q, want the cross-origin rejection", body)
+				}
+			})
 		}
 	})
 
@@ -799,19 +821,26 @@ func TestCloudInstallLoopbackNeedsNoSharedAcknowledgement(t *testing.T) {
 func TestSameOriginOKAcceptsTheServingAuthority(t *testing.T) {
 	cases := []struct {
 		name, host, origin string
+		devMode            bool
+		fetchSite          string
 		want               bool
 	}{
-		{"no origin (non-browser)", "10.0.0.5:9280", "", true},
-		{"same non-loopback authority", "10.0.0.5:9280", "http://10.0.0.5:9280", true},
-		{"hostname case is ignored", "Radar.Example.com:9280", "http://radar.example.com:9280", true},
-		{"same loopback authority", "127.0.0.1:9280", "http://127.0.0.1:9280", true},
-		{"vite dev proxy, loopback to loopback", "localhost:9280", "http://localhost:9273", true},
-		{"bracketed IPv6 loopback without request port", "[::1]", "http://[::1]:9273", true},
-		{"foreign origin", "10.0.0.5:9280", "https://evil.example", false},
-		{"lookalike hostname", "10.0.0.5:9280", "http://localhost.evil.com", false},
-		{"different port on the same non-loopback host", "10.0.0.5:9280", "http://10.0.0.5:9999", false},
-		{"loopback origin against a non-loopback host", "10.0.0.5:9280", "http://127.0.0.1:9280", false},
-		{"unparseable origin", "10.0.0.5:9280", "://nope", false},
+		{name: "no origin (non-browser)", host: "10.0.0.5:9280", want: true},
+		{name: "same non-loopback authority", host: "10.0.0.5:9280", origin: "http://10.0.0.5:9280", want: true},
+		{name: "hostname case is ignored", host: "Radar.Example.com:9280", origin: "http://radar.example.com:9280", want: true},
+		{name: "same loopback authority", host: "127.0.0.1:9280", origin: "http://127.0.0.1:9280", want: true},
+		{name: "vite dev proxy, loopback to loopback", host: "localhost:9280", origin: "http://localhost:9273", devMode: true, want: true},
+		{name: "vite port outside dev mode", host: "localhost:9280", origin: "http://localhost:9273", want: false},
+		{name: "unrelated port in dev mode", host: "localhost:9280", origin: "http://localhost:9274", devMode: true, want: false},
+		{name: "bracketed IPv6 Vite proxy", host: "[::1]", origin: "http://[::1]:9273", devMode: true, want: true},
+		{name: "foreign origin", host: "10.0.0.5:9280", origin: "http://evil.example", want: false},
+		{name: "lookalike hostname", host: "10.0.0.5:9280", origin: "http://localhost.evil.com", want: false},
+		{name: "different port on the same non-loopback host", host: "10.0.0.5:9280", origin: "http://10.0.0.5:9999", want: false},
+		{name: "loopback origin against a non-loopback host", host: "10.0.0.5:9280", origin: "http://127.0.0.1:9280", want: false},
+		{name: "cross-site metadata without origin", host: "10.0.0.5:9280", fetchSite: "cross-site", want: false},
+		{name: "same-origin metadata survives rewritten host", host: "internal:9280", origin: "https://radar.example.com", fetchSite: "same-origin", want: true},
+		{name: "unparseable origin", host: "10.0.0.5:9280", origin: "://nope", want: false},
+		{name: "opaque (null) origin", host: "10.0.0.5:9280", origin: "null", want: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -820,8 +849,44 @@ func TestSameOriginOKAcceptsTheServingAuthority(t *testing.T) {
 			if tc.origin != "" {
 				r.Header.Set("Origin", tc.origin)
 			}
-			if got := sameOriginOK(r); got != tc.want {
+			if tc.fetchSite != "" {
+				r.Header.Set("Sec-Fetch-Site", tc.fetchSite)
+			}
+			s := &Server{devMode: tc.devMode}
+			if got := s.sameOriginOK(r); got != tc.want {
 				t.Fatalf("sameOriginOK(host=%q, origin=%q) = %v, want %v", tc.host, tc.origin, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSameOriginOKRejectsSchemeDowngrade(t *testing.T) {
+	cases := []struct {
+		name           string
+		tls            bool
+		forwardedProto string
+		origin         string
+		want           bool
+	}{
+		{"https request, http origin (downgrade)", true, "", "http://10.0.0.5:9280", false},
+		{"https request, https origin", true, "", "https://10.0.0.5:9280", true},
+		{"forwarded https, http origin (downgrade)", false, "https", "http://10.0.0.5:9280", false},
+		{"forwarded https, https origin", false, "https", "https://10.0.0.5:9280", true},
+		{"plain http request, http origin", false, "", "http://10.0.0.5:9280", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodPost, "/api/cloud/install/prepare", nil)
+			r.Host = "10.0.0.5:9280"
+			if tc.tls {
+				r.TLS = &tls.ConnectionState{}
+			}
+			if tc.forwardedProto != "" {
+				r.Header.Set("X-Forwarded-Proto", tc.forwardedProto)
+			}
+			r.Header.Set("Origin", tc.origin)
+			if got := (&Server{}).sameOriginOK(r); got != tc.want {
+				t.Fatalf("sameOriginOK(tls=%v xfp=%q origin=%q) = %v, want %v", tc.tls, tc.forwardedProto, tc.origin, got, tc.want)
 			}
 		})
 	}
@@ -875,5 +940,176 @@ func TestCloudInstallProvisionErrorNeverLeaksTokenIntoStatus(t *testing.T) {
 	}
 	if got := logs.String(); strings.Contains(got, testToken) || strings.Contains(got, encoded) {
 		t.Fatalf("server log leaks the token: %s", got)
+	}
+}
+
+func TestConnectRequestFailureHeadlines(t *testing.T) {
+	dial := errors.New("dial tcp 127.0.0.1:9: connect: connection refused")
+	cases := []struct {
+		name        string
+		err         error
+		wantMessage string
+	}{
+		{"unreachable", &cloud.HubUnreachableError{HubBase: "http://127.0.0.1:9", Err: dial}, "Radar couldn't reach Radar Hub, so no connection was requested."},
+		{"other", errors.New("hub response missing required fields"), "Radar couldn't start the connection request."},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := connectRequestFailure(tc.err)
+			if f.Kind != cloudFailConnectRequest || !f.RetrySafe {
+				t.Fatalf("kind/retrySafe = %q/%v", f.Kind, f.RetrySafe)
+			}
+			if f.Message != tc.wantMessage {
+				t.Fatalf("message = %q, want %q", f.Message, tc.wantMessage)
+			}
+			// The raw error is detail, never the headline.
+			if strings.Contains(f.Message, tc.err.Error()) {
+				t.Fatalf("headline carries the raw error: %q", f.Message)
+			}
+			if f.Guidance == nil || len(f.Guidance.Inspect) != 1 || f.Guidance.Inspect[0] != tc.err.Error() {
+				t.Fatalf("guidance.inspect = %+v, want the raw error", f.Guidance)
+			}
+		})
+	}
+}
+
+func TestInspectBlockedKeepsTheAdoptionTarget(t *testing.T) {
+	plan := cloudinstall.InstallPlan{Mode: cloudinstall.InstallModeAdopt, Namespace: "monitoring", Release: "radar-prod"}
+	denied := apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "radar-cloud-token",
+		errors.New(`User "dev" cannot get resource "secrets" in API group "" in the namespace "monitoring"`))
+	blocked, err := inspectBlocked(fmt.Errorf("inspect token Secret: %w", denied), attemptedFor(plan, attemptStagePrepare))
+	if err != nil || blocked == nil {
+		t.Fatalf("blocked=%+v err=%v", blocked, err)
+	}
+	if blocked.Cause != string(cloudinstall.BlockCausePermissions) {
+		t.Fatalf("cause = %q, want permissions", blocked.Cause)
+	}
+	// The link the card builds must still adopt the release inspection found,
+	// not open a fresh install over it.
+	if blocked.Attempted == nil || blocked.Attempted.Mode != "adopt" || blocked.Attempted.Release != "radar-prod" || blocked.Attempted.Namespace != "monitoring" || blocked.Attempted.Stage != attemptStagePrepare {
+		t.Fatalf("attempted = %+v, want the adoption target", blocked.Attempted)
+	}
+	// A refusal that is not about permissions keeps the target too.
+	refused, err := inspectBlocked(errors.New("Helm release \"radar-prod\" in namespace \"monitoring\" cannot be adopted: already connected"), attemptedFor(plan, attemptStagePrepare))
+	if err != nil || refused.Reason != "unsupported" || refused.Attempted == nil || refused.Attempted.Mode != "adopt" {
+		t.Fatalf("refused=%+v err=%v", refused, err)
+	}
+}
+
+func TestInspectBlockedOffersFreshOnlyWhenNothingRunsAndTheScanWasComplete(t *testing.T) {
+	err := errors.New(`secrets is forbidden: User "dev" cannot list resource "secrets" in API group "" in the namespace "radar"`)
+	// Mirrors runPrepare's switch over ReleaseInspectError.
+	pick := func(e *cloudinstall.ReleaseInspectError) *cloudInstallAttempted {
+		switch {
+		case e.Existing:
+			return &cloudInstallAttempted{Mode: "adopt", Namespace: e.Namespace, Release: e.Release, Stage: attemptStageInspect}
+		case !e.Found && !e.ScanIncomplete:
+			return &cloudInstallAttempted{Mode: "fresh", Namespace: e.Namespace, Release: e.Release, Stage: attemptStageInspect, ReleaseUnread: true}
+		}
+		return nil
+	}
+	// A Radar Deployment without matching native-Helm ownership is neither
+	// adoptable nor absent: no target is offered at all.
+	if unmanaged := pick(&cloudinstall.ReleaseInspectError{Namespace: "radar", Release: "radar", Found: true, Existing: false, Err: err}); unmanaged != nil {
+		t.Fatalf("an unmanaged Deployment must not become an install target: %+v", unmanaged)
+	}
+	complete := pick(&cloudinstall.ReleaseInspectError{Namespace: "radar", Release: "radar", Err: err})
+	if complete == nil || complete.Mode != "fresh" || !complete.ReleaseUnread {
+		t.Fatalf("a complete scan finding nothing offers fresh, flagged unconfirmed: %+v", complete)
+	}
+	if partial := pick(&cloudinstall.ReleaseInspectError{Namespace: "radar", Release: "radar", ScanIncomplete: true, Err: err}); partial != nil {
+		t.Fatalf("a partial scan establishes nothing: %+v", partial)
+	}
+	blocked, berr := inspectBlocked(err, complete)
+	if berr != nil || blocked.Cause != string(cloudinstall.BlockCausePermissions) || blocked.Attempted != complete {
+		t.Fatalf("blocked=%+v err=%v", blocked, berr)
+	}
+}
+
+func TestAttemptedForFlagsAFreshPlanFromAPartialScan(t *testing.T) {
+	partial := cloudinstall.InstallPlan{Mode: cloudinstall.InstallModeFresh, Namespace: "radar", Release: "radar", ClusterWideScanError: errors.New("deployments is forbidden")}
+	got := attemptedFor(partial, attemptStagePreflight)
+	// The stage reached is still told — the refusals below describe a dry run
+	// that did run — but the target is not one the card may link to.
+	if got == nil || got.Stage != attemptStagePreflight || !got.PartialScan {
+		t.Fatalf("attempted = %+v, want the preflight stage flagged as a partial scan", got)
+	}
+	adopt := partial
+	adopt.Mode = cloudinstall.InstallModeAdopt
+	if got := attemptedFor(adopt, attemptStagePreflight); got == nil || got.PartialScan {
+		t.Fatalf("an adopt target is established regardless of scan scope: %+v", got)
+	}
+	complete := cloudinstall.InstallPlan{Mode: cloudinstall.InstallModeFresh, Namespace: "radar", Release: "radar"}
+	if got := attemptedFor(complete, attemptStagePreflight); got == nil || got.PartialScan {
+		t.Fatalf("a complete scan establishes fresh: %+v", got)
+	}
+}
+
+func TestGitOpsBlockedCarriesTheVerifiedOwnersMethod(t *testing.T) {
+	stale := cloudinstall.ControllerCandidate{Ref: subject.Ref{Group: "argoproj.io", Kind: "Application", Name: "old"}, Verification: cloudinstall.ControllerStale}
+	verified := cloudinstall.ControllerCandidate{Ref: subject.Ref{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Name: "radar"}, Verification: cloudinstall.ControllerVerified}
+	// Candidate order is not confidence order: the stale Argo CD candidate
+	// comes first, and the method must still come from the verified Flux owner.
+	owner := verifiedController([]cloudinstall.ControllerCandidate{stale, verified})
+	if owner == nil || wizardMethodFor(owner.Ref) != "flux" {
+		t.Fatalf("verified owner not selected: %+v", owner)
+	}
+	if verifiedController([]cloudinstall.ControllerCandidate{stale}) != nil {
+		t.Fatal("a stale-only candidate list must not pick a method")
+	}
+}
+
+func TestDiscoverConnectedNamesAlreadyCloudDeployments(t *testing.T) {
+	m := newCloudInstallManager(CloudConnectConfig{HubAPIURL: "https://api.test.example", HubAppURL: "https://app.test.example"})
+	m.backend.captureClients = func() (cloudInstallClients, string, error) { return cloudInstallClients{}, "kind-dev", nil }
+	m.backend.discover = func(context.Context, cloudInstallClients) (cloudinstall.DiscoveryResult, error) {
+		return cloudinstall.DiscoveryResult{
+			Namespace: []cloudinstall.RadarTarget{
+				{Namespace: "legacy", DeploymentName: "radar", ReleaseName: "radar", Runtime: cloudinstall.DeploymentRuntime{
+					AlreadyCloud: true, CloudTokenConfigured: true,
+				}},
+			},
+			ClusterWide: []cloudinstall.RadarTarget{
+				// An explicit default port is still our Hub.
+				{Namespace: "radar", DeploymentName: "radar", ReleaseName: "radar", Runtime: cloudinstall.DeploymentRuntime{
+					AlreadyCloud: true, CloudURLConfigured: true, CloudURL: "wss://api.test.example:443/agent",
+					ClusterNameConfigured: true, ClusterName: "abc123",
+				}},
+				{Namespace: "tools", DeploymentName: "radar", ReleaseName: "radar", Runtime: cloudinstall.DeploymentRuntime{}},
+				{Namespace: "ops", DeploymentName: "radar", Runtime: cloudinstall.DeploymentRuntime{
+					AlreadyCloud: true, CloudURLConfigured: true, CloudURL: "wss://hub.corp.example/agent",
+					ClusterNameConfigured: true, ClusterName: "def456",
+				}},
+				{Namespace: "staging", DeploymentName: "radar", ReleaseName: "radar", Runtime: cloudinstall.DeploymentRuntime{
+					AlreadyCloud: true, CloudURLConfigured: true, CloudURL: "wss://api.test.example/agent",
+					ClusterNameConfigured: true, ClusterNameUnresolved: true,
+				}},
+			},
+			ClusterWideError: errors.New("forbidden"),
+		}, nil
+	}
+
+	got, err := m.discoverConnected(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.PartialScan {
+		t.Fatal("a refused cluster-wide list must be reported as a partial scan")
+	}
+	if len(got.Connected) != 4 {
+		t.Fatalf("connected = %+v, want the four Deployments carrying Cloud settings", got.Connected)
+	}
+	// Linkable first, then nameable, then settings-only — regardless of discovery order.
+	if got.Connected[0].ClusterURL != "https://app.test.example/c/abc123" || got.Connected[0].HubHost != "" {
+		t.Errorf("configured Hub + literal cluster id should deep-link and lead: %+v", got.Connected[0])
+	}
+	if got.Connected[1].ClusterURL != "https://app.test.example/clusters" {
+		t.Errorf("a cluster id read from a Secret ref falls back to the clusters list: %+v", got.Connected[1])
+	}
+	if got.Connected[2].ClusterURL != "" || got.Connected[2].HubHost != "hub.corp.example" {
+		t.Errorf("another Hub is named by host, never linked through ours: %+v", got.Connected[2])
+	}
+	if got.Connected[3].Namespace != "legacy" || got.Connected[3].ClusterURL != "" || got.Connected[3].HubHost != "" {
+		t.Errorf("settings without a resolvable URL say nothing about where, and sort last: %+v", got.Connected[3])
 	}
 }

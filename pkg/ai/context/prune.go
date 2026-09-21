@@ -10,7 +10,6 @@ import (
 var stripMetadataKeys = map[string]bool{
 	"resourceVersion":            true,
 	"uid":                        true,
-	"generation":                 true,
 	"selfLink":                   true,
 	"generateName":               true,
 	"managedFields":              true,
@@ -21,6 +20,7 @@ var stripMetadataKeys = map[string]bool{
 // Annotations to keep at Compact level (everything else is stripped).
 // At Detail level, ALL annotations are kept.
 var keepAnnotationPrefixes = []string{
+	"reflector.v1.k8s.emberstack.com/",
 	"kubernetes.io/ingress.class",
 	"argo",
 	"flux",

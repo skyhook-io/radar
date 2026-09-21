@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { clsx } from 'clsx'
-import { Shield, ChevronDown, Copy, Check } from 'lucide-react'
+import { Shield, Copy, Check } from 'lucide-react'
+import { Collapse, CollapseChevron, useDisclosure } from './Collapse'
 
 // RestrictedState is the shared "you can't see this because of Kubernetes RBAC"
 // surface — distinct from EmptyState (which covers healthy / filtered / no-data).
@@ -61,6 +62,7 @@ function buildRbacRequest(group: string, resource: string): string {
 
 export function RestrictedState({ kindLabel, group = '', resource, reason, compact, className }: Props) {
   const [expanded, setExpanded] = useState(false)
+  const accessDisclosure = useDisclosure(expanded)
   const [copied, setCopied] = useState(false)
   const isUnavailable = reason === 'unavailable'
 
@@ -112,14 +114,15 @@ export function RestrictedState({ kindLabel, group = '', resource, reason, compa
 
           <div className="mt-3 w-full max-w-md">
             <button
+              {...accessDisclosure.buttonProps}
               onClick={() => setExpanded((v) => !v)}
               className="flex items-center gap-1.5 mx-auto text-sm text-theme-text-secondary hover:text-theme-text-primary transition-colors"
             >
-              <ChevronDown className={clsx('w-4 h-4 transition-transform', expanded && 'rotate-180')} />
+              <CollapseChevron open={expanded} className="w-4 h-4" />
               How to get access
             </button>
 
-            {expanded && (
+            <Collapse open={expanded} id={accessDisclosure.panelId}>
               <div className="mt-2 text-left">
                 <p className="text-xs text-theme-text-tertiary mb-2">
                   Apply this, or send it to whoever administers your cluster, to grant your identity
@@ -143,7 +146,7 @@ export function RestrictedState({ kindLabel, group = '', resource, reason, compa
                   </pre>
                 </div>
               </div>
-            )}
+            </Collapse>
           </div>
         </>
       )}

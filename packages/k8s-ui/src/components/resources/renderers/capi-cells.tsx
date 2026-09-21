@@ -12,6 +12,7 @@ import {
   getClusterClassStatus,
   getMachineHealthCheckStatus, getMachineHealthCheckHealthy, getMachineHealthCheckClusterName,
   getClusterProvider,
+  getMachineDeploymentUpToDate,
 } from '../resource-utils-capi'
 
 function StatusBadge({ resource, getStatus }: { resource: any; getStatus: (r: any) => { text: string; color: string } }) {
@@ -78,6 +79,8 @@ export function CAPIMachineDeploymentCell({ resource, column }: { resource: any;
       return <TextCell value={getMachineClusterName(resource)} />
     case 'ready':
       return <TextCell value={getMachineDeploymentReplicas(resource)} />
+    case 'upToDate':
+      return <TextCell value={getMachineDeploymentUpToDate(resource)} />
     case 'version':
       return <TextCell value={getMachineDeploymentVersion(resource)} />
     default:

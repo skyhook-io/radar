@@ -6,11 +6,13 @@ import type { PolicyResourceResponse } from '../../../types/policy'
 import { Section, PropertyList, Property, ConditionsSection, PodTemplateSection, AlertBanner, ResourceLink, ResourceRefBadge, useOperationalIssuesShown } from '../../ui/drawer-components'
 import { DialogPortal } from '../../ui/DialogPortal'
 import { Tooltip } from '../../ui/Tooltip'
-import { Badge, type BadgeSeverity } from '../../ui/Badge'
+import { Badge } from '../../ui/Badge'
 import type { RBACSubjectResponse, RBACPolicyRule, ResourceRef, HPADiagnosis, WorkloadPodInfo } from '../../../types'
 import { detectBlastRadius, rulePermissivenessScore } from '../../../utils/rbac-blast-radius'
 import { RBACErrorSection, isRBACUnavailable } from './RBACErrorSection'
-import { hpaStateLabel, hpaStateLevel } from '../resource-utils-hpa'
+import { NamespaceLimitRangeLink } from './LimitRangeRenderer'
+import { hpaStateLabel } from '../resource-utils-hpa'
+import { hpaBadgeSeverity } from '../HPADiagnosisSummary'
 import {
   rbacVerbBadgeClass,
   rbacResourceBadgeClass,
@@ -54,6 +56,9 @@ interface WorkloadRendererProps {
   policyData?: PolicyResourceResponse | null
   policyLoading?: boolean
   policyError?: Error | null
+  /** Names of the LimitRanges in this workload's namespace. Absent while the
+   *  lookup is pending or unreadable, which leaves the link unrendered. */
+  namespaceLimitRangeNames?: string[] | null
 }
 
 // Extract real problems from workload status (excludes normal rollout progress)
@@ -125,7 +130,7 @@ function compactHPASummary(diagnosis: HPADiagnosis): string {
   return diagnosis.summary
 }
 
-export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, isScalePending, scaleBlockedBy, scalerDiagnostics, workloadPods, onRequestRefresh, rbacData, rbacLoading, rbacError, policyData, policyLoading, policyError }: WorkloadRendererProps) {
+export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, isScalePending, scaleBlockedBy, scalerDiagnostics, workloadPods, onRequestRefresh, rbacData, rbacLoading, rbacError, policyData, policyLoading, policyError, namespaceLimitRangeNames }: WorkloadRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const metadata = data.metadata || {}
@@ -374,6 +379,12 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
 
       <Section title="Pod Template" defaultExpanded={false}>
         <PodTemplateSection template={spec.template} />
+        <NamespaceLimitRangeLink
+          namespace={metadata.namespace || ''}
+          names={namespaceLimitRangeNames}
+          scope="workload"
+          onNavigate={onNavigate}
+        />
       </Section>
 
       <ConditionsSection conditions={status.conditions} />
@@ -407,27 +418,10 @@ function ScalerDiagnosisRow({ entry }: { entry: ScalerDiagnosis }) {
   if (!entry.diagnosis) return null
   return (
     <div className="rounded border border-theme-border bg-theme-surface px-2 py-1.5 text-xs leading-6 text-theme-text-secondary whitespace-normal break-normal">
-      <Badge severity={badgeSeverityForHPA(entry.diagnosis)} size="sm" className="mr-1.5 align-middle">{hpaStateLabel(entry.diagnosis.state)}</Badge>
+      <Badge severity={hpaBadgeSeverity(entry.diagnosis.state)} size="sm" className="mr-1.5 align-middle">{hpaStateLabel(entry.diagnosis.state)}</Badge>
       <span className="align-middle whitespace-normal break-normal">{compactHPASummary(entry.diagnosis)}</span>
     </div>
   )
-}
-
-function badgeSeverityForHPA(diagnosis: HPADiagnosis): BadgeSeverity {
-  switch (hpaStateLevel(diagnosis.state)) {
-    case 'healthy':
-      return 'success'
-    case 'unhealthy':
-      return 'error'
-    case 'degraded':
-      return 'warning'
-    case 'alert':
-      return 'alert'
-    case 'neutral':
-      return 'info'
-    default:
-      return 'neutral'
-  }
 }
 
 // ============================================================================

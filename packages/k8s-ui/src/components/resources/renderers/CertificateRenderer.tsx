@@ -120,13 +120,13 @@ export function CertificateRenderer({ data }: CertificateRendererProps) {
                 <span className={clsx(
                   'badge',
                   isReady
-                    ? 'bg-green-500/20 text-green-400'
-                    : 'bg-red-500/20 text-red-400'
+                    ? 'status-green'
+                    : 'status-red'
                 )}>
                   {isReady ? 'Ready' : 'Not Ready'}
                 </span>
                 {spec.isCA && (
-                  <span className="badge bg-purple-500/20 text-purple-400">
+                  <span className="badge status-purple">
                     CA Certificate
                   </span>
                 )}

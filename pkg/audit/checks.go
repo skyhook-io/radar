@@ -3,6 +3,7 @@ package audit
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -14,8 +15,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	utilversion "k8s.io/apimachinery/pkg/util/version"
 
+	"github.com/skyhook-io/radar/pkg/configrefs"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rolloutdiag"
 	"github.com/skyhook-io/radar/pkg/timeutil"
@@ -68,6 +72,7 @@ func RunChecks(input *CheckInput) *ScanResults {
 	}
 
 	// --- Reliability checks ---
+	findings = append(findings, checkTLSCertificateExpiry(tr, input.Secrets, time.Now())...)
 	// singleReplica's eligibility filter (HPA-managed deployments are out of
 	// scope) needs the HPA inventory to be authoritative — nil means
 	// unlisted, and an HPA-managed 1-replica deployment would otherwise be a
@@ -87,23 +92,19 @@ func RunChecks(input *CheckInput) *ScanResults {
 		missingInputs = append(missingInputs, "poddisruptionbudgets")
 	}
 	findings = append(findings, checkMissingTopologySpread(tr, input.Deployments, input.StatefulSets)...)
-	// HA-risk placement needs the pod inventory — nil pods would make every
-	// deployment look risk-free (or falsely clustered), not "no pods".
-	if input.Pods != nil {
-		findings = append(findings, checkPodHARisk(tr, input.Pods, input.Deployments)...)
-	} else {
+	if input.Pods != nil && input.ReplicaSets != nil {
+		findings = append(findings, checkPodHARisk(tr, input.Pods, input.Deployments, input.ReplicaSets)...)
+	}
+	if input.Pods == nil {
 		missingInputs = append(missingInputs, "pods")
+	}
+	if input.ReplicaSets == nil {
+		missingInputs = append(missingInputs, "replicasets")
 	}
 
 	// --- Efficiency checks are included in checkWorkloadPodSpecs ---
-	// nil ConfigMaps = RBAC denied, not "none exist" — the ConfigMap-subject
-	// checks must neither run nor count anything as evaluated.
-	// Orphan detection audits ConfigMaps AND Secrets — a nil side means that
-	// KIND is unlisted, not that the whole check is off. References come from
-	// the whole workload inventory (configReferencePodSpecs — pods AND
-	// deployments/statefulsets/daemonsets/jobs) plus Ingress TLS refs; missing
-	// reference inventory surfaces via missingInputs above, so the check runs
-	// on whatever is visible.
+	// Unknown consumer evidence must not turn an unreferenced visible subject
+	// into an orphan finding or a passing evaluation.
 	if input.ConfigMaps != nil || input.Secrets != nil {
 		findings = append(findings, checkOrphanConfigMapsSecrets(tr, input)...)
 	}
@@ -175,7 +176,8 @@ func RunChecks(input *CheckInput) *ScanResults {
 // each of its subjects exactly once and records exactly once per subject
 // that passed the check's own eligibility filters.
 type evalTracker struct {
-	counts map[string]map[string]int // checkID → namespace → subjects evaluated
+	missingInputs []string
+	counts        map[string]map[string]int // checkID → namespace → subjects evaluated
 }
 
 func newEvalTracker() *evalTracker {
@@ -934,46 +936,79 @@ func checkMissingTopologySpread(tr *evalTracker, deployments []*appsv1.Deploymen
 	return findings
 }
 
-func checkPodHARisk(tr *evalTracker, pods []*corev1.Pod, deployments []*appsv1.Deployment) []Finding {
+func checkPodHARisk(tr *evalTracker, pods []*corev1.Pod, deployments []*appsv1.Deployment, replicaSets []*appsv1.ReplicaSet) []Finding {
+	sets := make(map[types.NamespacedName]*appsv1.ReplicaSet, len(replicaSets))
+	for _, rs := range replicaSets {
+		sets[types.NamespacedName{Namespace: rs.Namespace, Name: rs.Name}] = rs
+	}
+	placements := map[types.UID]map[string]int{}
+	incomplete := map[string]bool{}
+	owners := make(map[types.UID]*appsv1.Deployment, len(deployments))
+	for _, d := range deployments {
+		if d.UID != "" {
+			owners[d.UID] = d
+		}
+	}
+	for _, pod := range pods {
+		if pod.Status.Phase != corev1.PodRunning || pod.Spec.NodeName == "" || pod.DeletionTimestamp != nil {
+			continue
+		}
+		ref := metav1.GetControllerOf(pod)
+		if ref == nil || ref.Kind != "ReplicaSet" || schema.FromAPIVersionAndKind(ref.APIVersion, ref.Kind).Group != "apps" {
+			continue
+		}
+		rs := sets[types.NamespacedName{Namespace: pod.Namespace, Name: ref.Name}]
+		if ref.UID == "" || rs == nil || rs.UID != ref.UID {
+			incomplete[pod.Namespace] = true
+			continue
+		}
+		parent := metav1.GetControllerOf(rs)
+		if parent == nil || parent.Kind != "Deployment" || schema.FromAPIVersionAndKind(parent.APIVersion, parent.Kind).Group != "apps" {
+			continue
+		}
+		d := owners[parent.UID]
+		if d == nil || d.Name != parent.Name || d.Namespace != pod.Namespace {
+			continue
+		}
+		if placements[d.UID] == nil {
+			placements[d.UID] = map[string]int{}
+		}
+		placements[d.UID][pod.Spec.NodeName]++
+	}
 	var findings []Finding
 	for _, d := range deployments {
 		replicas := int32(1)
 		if d.Spec.Replicas != nil {
 			replicas = *d.Spec.Replicas
 		}
-		if replicas <= 1 || d.Spec.Selector == nil {
+		if replicas <= 1 || d.UID == "" {
 			continue
 		}
-		sel, err := metav1.LabelSelectorAsSelector(d.Spec.Selector)
-		if err != nil {
+		if len(placements[d.UID]) >= 2 {
+			// Additional unknown Pods cannot undo verified placement across nodes.
+			tr.record("podHARisk", d.Namespace)
+			continue
+		}
+		if incomplete[d.Namespace] {
+			// An unresolved ReplicaSet may own another replica of this Deployment.
+			if !slices.Contains(tr.missingInputs, "replicaset-ownership") {
+				tr.missingInputs = append(tr.missingInputs, "replicaset-ownership")
+			}
+			continue
+		}
+		count := 0
+		for _, n := range placements[d.UID] {
+			count += n
+		}
+		if count < 2 {
 			continue
 		}
 		tr.record("podHARisk", d.Namespace)
-		nodeSet := make(map[string]bool)
-		matchCount := 0
-		for _, pod := range pods {
-			if pod.Namespace != d.Namespace {
-				continue
-			}
-			if !sel.Matches(labels.Set(pod.Labels)) {
-				continue
-			}
-			// Skip pods not running (pending pods don't have a node yet)
-			if pod.Spec.NodeName == "" {
-				continue
-			}
-			nodeSet[pod.Spec.NodeName] = true
-			matchCount++
-		}
-		if matchCount > 1 && len(nodeSet) == 1 {
-			var nodeName string
-			for n := range nodeSet {
-				nodeName = n
-			}
+		for node := range placements[d.UID] {
 			findings = append(findings, Finding{
 				Kind: "Deployment", Namespace: d.Namespace, Name: d.Name,
 				CheckID: "podHARisk", Category: CategoryReliability, Severity: SeverityWarning,
-				Message: fmt.Sprintf("All %d running pods are on node %s", matchCount, nodeName),
+				Message: fmt.Sprintf("All %d observed running pods are on node %s", count, node),
 			})
 		}
 	}
@@ -989,30 +1024,47 @@ func checkOrphanConfigMapsSecrets(tr *evalTracker, input *CheckInput) []Finding 
 		return nil
 	}
 
-	// Build set of referenced ConfigMap and Secret names (namespace/name)
-	referencedCMs := make(map[string]bool)
-	referencedSecrets := make(map[string]bool)
-	saByKey := indexServiceAccounts(input.ServiceAccounts)
-
-	for _, refSpec := range input.configReferencePodSpecs() {
-		collectPodSpecRefs(refSpec.namespace, refSpec.spec, saByKey, referencedCMs, referencedSecrets)
+	refs := CollectConfigObjectRefs(input)
+	var objects []configrefs.Object
+	for _, cm := range input.ConfigMaps {
+		objects = append(objects, configrefs.Metadata("ConfigMap", cm))
 	}
-	for _, ref := range input.ConfigObjectRefs {
-		switch ref.Kind {
-		case "ConfigMap":
-			addRef(referencedCMs, ref.Namespace, ref.Name)
-		case "Secret":
-			addRef(referencedSecrets, ref.Namespace, ref.Name)
+	for _, sec := range input.Secrets {
+		objects = append(objects, configrefs.Metadata("Secret", sec))
+	}
+	if input.ConfigReferenceEvidence != nil {
+		refs = append(refs, input.ConfigReferenceEvidence.Refs...)
+		objects = append(objects, input.ConfigReferenceEvidence.Objects...)
+	}
+	used := map[configrefs.Ref]bool{}
+	for _, ref := range refs {
+		used[configrefs.Ref{Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}] = true
+	}
+	reflections := configrefs.BuildReflections(objects)
+	reflections.PropagateUse(used)
+	eligible := func(kind, ns, name string) bool {
+		ref := configrefs.Ref{Kind: kind, Namespace: ns, Name: name}
+		if used[ref] {
+			tr.record("orphanConfigMapSecret", ns)
+			return false
 		}
-	}
-
-	// Ingress TLS secrets
-	for _, ing := range input.Ingresses {
-		for _, tls := range ing.Spec.TLS {
-			if tls.SecretName != "" {
-				referencedSecrets[ing.Namespace+"/"+tls.SecretName] = true
+		if reflections.Automatic[ref] {
+			return false
+		}
+		evidence := input.ConfigReferenceEvidence
+		complete := evidence != nil && slices.Contains(evidence.CompleteNamespaces[kind], ns)
+		if complete && (reflections.Sources[ref] || reflections.Unresolved[ref]) {
+			complete = evidence.ReflectionsComplete[kind]
+		}
+		if !complete {
+			missing := strings.ToLower(kind) + "-references"
+			if !slices.Contains(tr.missingInputs, missing) {
+				tr.missingInputs = append(tr.missingInputs, missing)
 			}
+			return false
 		}
+		tr.record("orphanConfigMapSecret", ns)
+		return true
 	}
 
 	var findings []Finding
@@ -1029,9 +1081,7 @@ func checkOrphanConfigMapsSecrets(tr *evalTracker, input *CheckInput) []Finding 
 		if hasControllerOwnerReference(cm.OwnerReferences) {
 			continue
 		}
-		// In scope — count as evaluated before the referenced (pass) check.
-		tr.record("orphanConfigMapSecret", cm.Namespace)
-		if referencedCMs[cm.Namespace+"/"+cm.Name] {
+		if !eligible("ConfigMap", cm.Namespace, cm.Name) {
 			continue
 		}
 		findings = append(findings, Finding{
@@ -1050,8 +1100,8 @@ func checkOrphanConfigMapsSecrets(tr *evalTracker, input *CheckInput) []Finding 
 		if sec.Type == "helm.sh/release.v1" {
 			continue
 		}
-		// Skip TLS secrets used by cert-manager (they may be referenced by Ingress annotations, not spec)
-		if sec.Labels != nil && sec.Labels["cert-manager.io/certificate-name"] != "" {
+		// Preserve the exemption when Certificate references are unavailable.
+		if isCertManagerCertificateSecret(sec) {
 			continue
 		}
 		if isKnownPlatformSecret(sec) {
@@ -1060,8 +1110,7 @@ func checkOrphanConfigMapsSecrets(tr *evalTracker, input *CheckInput) []Finding 
 		if hasControllerOwnerReference(sec.OwnerReferences) {
 			continue
 		}
-		tr.record("orphanConfigMapSecret", sec.Namespace)
-		if referencedSecrets[sec.Namespace+"/"+sec.Name] {
+		if !eligible("Secret", sec.Namespace, sec.Name) {
 			continue
 		}
 		findings = append(findings, Finding{
@@ -1162,6 +1211,16 @@ func isKnownPlatformConfigMap(cm *corev1.ConfigMap) bool {
 	}
 
 	return false
+}
+
+const certManagerCertificateNameKey = "cert-manager.io/certificate-name"
+
+func isCertManagerCertificateSecret(sec *corev1.Secret) bool {
+	if sec == nil {
+		return false
+	}
+	return strings.TrimSpace(labelsValue(sec.Annotations, certManagerCertificateNameKey)) != "" ||
+		strings.TrimSpace(labelsValue(sec.Labels, certManagerCertificateNameKey)) != ""
 }
 
 func isKnownPlatformSecret(sec *corev1.Secret) bool {
@@ -1625,7 +1684,7 @@ func buildResults(findings []Finding, tr *evalTracker, missingInputs []string) *
 		Checks:               checks,
 		CheckCounts:          checkCounts,
 		EvaluatedByNamespace: tr.counts,
-		MissingInputs:        missingInputs,
+		MissingInputs:        append(missingInputs, tr.missingInputs...),
 	}
 }
 
@@ -1931,4 +1990,41 @@ func findFalseCrossplaneCondition(u *unstructured.Unstructured) (crossplaneFalse
 		}
 	}
 	return crossplaneFalseCondition{}, false
+}
+
+func CollectConfigObjectRefs(input *CheckInput) []ConfigObjectRef {
+	referencedCMs := make(map[string]bool)
+	referencedSecrets := make(map[string]bool)
+	saByKey := indexServiceAccounts(input.ServiceAccounts)
+
+	for _, refSpec := range input.configReferencePodSpecs() {
+		collectPodSpecRefs(refSpec.namespace, refSpec.spec, saByKey, referencedCMs, referencedSecrets)
+	}
+	for _, ref := range input.ConfigObjectRefs {
+		switch ref.Kind {
+		case "ConfigMap":
+			addRef(referencedCMs, ref.Namespace, ref.Name)
+		case "Secret":
+			addRef(referencedSecrets, ref.Namespace, ref.Name)
+		}
+	}
+
+	for _, ing := range input.Ingresses {
+		for _, tls := range ing.Spec.TLS {
+			if tls.SecretName != "" {
+				referencedSecrets[ing.Namespace+"/"+tls.SecretName] = true
+			}
+		}
+	}
+
+	refs := make([]ConfigObjectRef, 0, len(referencedCMs)+len(referencedSecrets))
+	for kind, names := range map[string]map[string]bool{"ConfigMap": referencedCMs, "Secret": referencedSecrets} {
+		for key := range names {
+			ns, name, ok := strings.Cut(key, "/")
+			if ok {
+				refs = append(refs, ConfigObjectRef{Kind: kind, Namespace: ns, Name: name})
+			}
+		}
+	}
+	return refs
 }

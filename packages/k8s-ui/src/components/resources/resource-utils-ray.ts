@@ -203,6 +203,12 @@ export function getRayCronJobSchedule(resource: any): string {
   return resource.spec?.schedule || '-'
 }
 
+// An unset timeZone does not mean UTC: KubeRay reads the schedule in the
+// operator pod's own local zone, which this object cannot report.
+export function getRayCronJobTimeZone(resource: any): string {
+  return resource.spec?.timeZone || 'Operator local'
+}
+
 export function getRayCronJobSuspend(resource: any): boolean {
   return resource.spec?.suspend === true
 }

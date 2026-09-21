@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 // writeCursorShim writes a fake cursor-agent that mimics a Cursor release where
@@ -82,22 +84,28 @@ func TestCursorForceGrantEndToEnd(t *testing.T) {
 // items drive running/done steps (bare toolName, result nested at
 // result.success.content[].text.text), and the result event carries the final report.
 func TestCursorParseStream_FormatPin(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
 	stream := strings.Join([]string{
 		`{"type":"system","subtype":"init","session_id":"sess-abc","model":"GPT-5.5"}`,
 		`{"type":"user","message":{"content":[{"type":"text","text":"investigate"}]}}`,
 		`{"type":"thinking","subtype":"delta","text":"checking "}`,
 		`{"type":"thinking","subtype":"delta","text":"pods"}`,
 		`{"type":"tool_call","subtype":"started","tool_call":{"toolCallId":"call_1","mcpToolCall":{"args":{"toolName":"get_resource","args":{"namespace":"dev"}}}}}`,
-		`{"type":"tool_call","subtype":"completed","tool_call":{"toolCallId":"call_1","mcpToolCall":{"args":{"toolName":"get_resource","args":{"namespace":"dev"}},"result":{"success":{"isError":false,"content":[{"text":{"text":"crashloop detail"}}]}}}}}`,
+		`{"type":"tool_call","subtype":"completed","tool_call":{"toolCallId":"call_1","mcpToolCall":{"args":{"toolName":"get_resource","args":{"namespace":"dev"}},"result":{"success":{"isError":false,"content":[{"text":{"text":"[[radar:evidence-ref=` + ref + `]]\n"}},{"text":{"text":"crashloop detail"}}]}}}}}`,
 		`{"type":"assistant","message":{"content":[{"type":"text","text":"bad tag."}]}}`,
 		"{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"bad tag.\\n\\n```json\\n{\\\"root_cause\\\":\\\"bad tag\\\"}\\n```\"}",
 	}, "\n")
 
 	var running, done bool
-	var thinking, doneResult, runningSummary string
+	var doneIsError *bool
+	var thinking, doneResult, doneEvidenceRef, runningSummary, readyModel string
 	agent := &cursorAgent{bin: "cursor-agent"}
 	diag := agent.parseStream(strings.NewReader(stream), func(ev StreamEvent) {
 		switch ev.Type {
+		case "phase":
+			if ev.Phase == "ready" {
+				readyModel = ev.Model
+			}
 		case "thinking":
 			thinking += ev.Token
 		case "step":
@@ -114,6 +122,8 @@ func TestCursorParseStream_FormatPin(t *testing.T) {
 			case "done":
 				done = true
 				doneResult = ev.Step.Result
+				doneEvidenceRef = ev.Step.EvidenceRef
+				doneIsError = ev.Step.IsError
 			}
 		}
 	})
@@ -130,16 +140,146 @@ func TestCursorParseStream_FormatPin(t *testing.T) {
 	if !strings.Contains(doneResult, "crashloop detail") {
 		t.Errorf("expected nested tool result on done step, got %q", doneResult)
 	}
+	if doneEvidenceRef != ref || strings.Contains(doneResult, "radar:evidence-ref") {
+		t.Errorf("marker extraction result=%q ref=%q", doneResult, doneEvidenceRef)
+	}
+	if doneIsError == nil || *doneIsError {
+		t.Errorf("Cursor success envelope should be confirmed success, got %v", doneIsError)
+	}
 	if diag.RootCause != "bad tag" {
 		t.Errorf("root cause not parsed from result event: %q", diag.RootCause)
 	}
 	if diag.SessionID != "sess-abc" {
 		t.Errorf("session id (system/init) not captured: %q", diag.SessionID)
 	}
+	if readyModel != "GPT-5.5" {
+		t.Errorf("ready phase model (system/init) = %q, want GPT-5.5", readyModel)
+	}
+}
+
+func TestCursorParseStreamPreservesUncappedProducerResultForValidation(t *testing.T) {
+	ref := testEvidenceRef('a', 'b')
+	payload := strings.Repeat("x", maxToolPayload+500)
+	marked, err := json.Marshal(
+		investigation.RefMarker(ref) + payload,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := `{"type":"tool_call","subtype":"completed","tool_call":{"toolCallId":"large","mcpToolCall":{"args":{"toolName":"get_resource"},"result":{"success":{"isError":false,"content":[{"text":{"text":` + string(marked) + `}}]}}}}}`
+
+	var step *StepInfo
+	agent := &cursorAgent{bin: "cursor-agent"}
+	agent.parseStream(strings.NewReader(stream), func(event StreamEvent) {
+		if event.Step != nil {
+			step = event.Step
+		}
+	})
+	if step == nil || !step.Truncated || step.EvidenceRef != ref {
+		t.Fatalf("oversized Cursor result step = %+v", step)
+	}
+	if step.producerResult == nil || *step.producerResult != payload {
+		t.Fatal("Cursor adapter did not retain the exact uncapped producer result for validation")
+	}
+	wantResult, _ := capPayload(payload)
+	if step.Result != wantResult {
+		t.Fatal("Cursor adapter retained an unexpected capped result")
+	}
+}
+
+func TestCursorToolResultErrorState(t *testing.T) {
+	tests := []struct {
+		name       string
+		resultJSON string
+		wantError  bool
+		wantText   []string
+	}{
+		{
+			name:       "success",
+			resultJSON: `{"success":{"isError":false,"content":[{"text":{"text":"resource detail"}}]}}`,
+			wantText:   []string{"resource detail"},
+		},
+		{
+			name:       "successful envelope carrying MCP error",
+			resultJSON: `{"success":{"isError":true,"content":[{"text":{"text":"MCP returned an error"}}]}}`,
+			wantError:  true,
+			wantText:   []string{"MCP returned an error"},
+		},
+		{
+			name:       "error",
+			resultJSON: `{"error":{"error":"transport failed"}}`,
+			wantError:  true,
+			wantText:   []string{"transport failed"},
+		},
+		{
+			name:       "rejected",
+			resultJSON: `{"rejected":{"reason":"operator rejected it","isReadonly":true}}`,
+			wantError:  true,
+			wantText:   []string{"operator rejected it", "read-only tool"},
+		},
+		{
+			name:       "permission denied",
+			resultJSON: `{"permissionDenied":{"error":"policy denied access","isReadonly":true}}`,
+			wantError:  true,
+			wantText:   []string{"policy denied access", "read-only tool"},
+		},
+		{
+			name:       "tool not found",
+			resultJSON: `{"toolNotFound":{"name":"get_missing","availableTools":["get_resource","get_events"]}}`,
+			wantError:  true,
+			wantText:   []string{"get_missing", "get_resource", "get_events"},
+		},
+		{
+			name:       "server not found",
+			resultJSON: `{"serverNotFound":{"name":"missing-server","availableServers":["radar","grafana"]}}`,
+			wantError:  true,
+			wantText:   []string{"missing-server", "radar", "grafana"},
+		},
+		{
+			name:       "approved",
+			resultJSON: `{"approved":{}}`,
+			wantText:   []string{"approved"},
+		},
+	}
+
+	agent := &cursorAgent{bin: "cursor-agent"}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			line := `{"type":"tool_call","subtype":"completed","tool_call":{"toolCallId":"result","mcpToolCall":{"args":{"toolName":"get_resource"},"result":` + tt.resultJSON + `}}}`
+			var got *StepInfo
+			agent.parseStream(strings.NewReader(line), func(ev StreamEvent) {
+				if ev.Step != nil {
+					got = ev.Step
+				}
+			})
+			if got == nil {
+				t.Fatal("completed MCP call did not emit a step")
+			}
+			if got.IsError == nil || *got.IsError != tt.wantError {
+				t.Fatalf("IsError = %v, want confirmed %v", got.IsError, tt.wantError)
+			}
+			for _, want := range tt.wantText {
+				if !strings.Contains(got.Result, want) {
+					t.Errorf("result = %q, want producer payload %q", got.Result, want)
+				}
+			}
+		})
+	}
+
+	unknown := `{"type":"tool_call","subtype":"completed","tool_call":{"toolCallId":"unknown","mcpToolCall":{"args":{"toolName":"get_resource"}}}}`
+	var unknownState *bool
+	agent.parseStream(strings.NewReader(unknown), func(ev StreamEvent) {
+		if ev.Step != nil {
+			unknownState = ev.Step.IsError
+		}
+	})
+	if unknownState != nil {
+		t.Errorf("missing result envelope = %v, want unknown", unknownState)
+	}
 }
 
 // TestCursorParseStream_ErrorResultNotVerdict ensures a failed turn (is_error:true)
-// does not get its error string promoted to the diagnosis verdict — the run should
+// does not get its error string promoted to the investigation conclusion — the run should
 // surface failure (via exit code), not render an error message as a root cause.
 func TestCursorParseStream_ErrorResultNotVerdict(t *testing.T) {
 	stream := strings.Join([]string{
@@ -149,7 +289,7 @@ func TestCursorParseStream_ErrorResultNotVerdict(t *testing.T) {
 	agent := &cursorAgent{bin: "cursor-agent"}
 	diag := agent.parseStream(strings.NewReader(stream), func(ev StreamEvent) {})
 	if diag.RootCause != "" {
-		t.Errorf("error-result must not become a verdict; got rootCause=%q", diag.RootCause)
+		t.Errorf("error-result must not become a conclusion; got rootCause=%q", diag.RootCause)
 	}
 	if diag.SessionID != "sess-err" {
 		t.Errorf("session id should still be captured on a failed turn: %q", diag.SessionID)

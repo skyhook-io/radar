@@ -13,6 +13,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 // setupDialogCatalogPath is the human-facing tool catalog rendered by the MCP
@@ -176,9 +177,13 @@ func TestTrimmedToolsPreserveLoadBearingSteers(t *testing.T) {
 		}
 	}
 	for _, boundary := range []string{
+		"bounded, point-in-time evidence bundle",
+		"does not run an agent",
+		"not an authoritative root-cause verdict",
+		"not that every source was read atomically",
 		"not a root-cause verdict",
 		"capped sample",
-		"exhaustive set",
+		"broader, dedicated event read",
 		"low-confidence",
 	} {
 		if !strings.Contains(descriptions["diagnose"], boundary) {
@@ -240,7 +245,7 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// These caps guard against description accretion, not against new tools or
 	// load-bearing routing and uncertainty contracts. Raise them deliberately.
 	const (
-		maxCatalogBytes         = 53500
+		maxCatalogBytes         = 58500
 		maxToolDescriptionBytes = 3000
 	)
 
@@ -514,6 +519,21 @@ func TestDiagnoseContractMatchesServerMode(t *testing.T) {
 	if _, ok := strictProperties["in_cluster"]; ok {
 		t.Fatal("read-only MCP diagnose must not expose in_cluster")
 	}
+	for mode, props := range map[string]map[string]json.RawMessage{
+		"full":      fullProperties,
+		"read-only": strictProperties,
+	} {
+		groupSchema, ok := props["group"]
+		if !ok {
+			t.Errorf("%s MCP diagnose schema does not expose the target API group", mode)
+			continue
+		}
+		for _, want := range []string{"target API group", "argoproj.io", "built-ins are inferred"} {
+			if !strings.Contains(string(groupSchema), want) {
+				t.Errorf("%s MCP diagnose group schema lost %q: %s", mode, want, groupSchema)
+			}
+		}
+	}
 	if len(fullProperties) != len(strictProperties)+1 {
 		t.Fatalf("read-only diagnose schema drifted from the full schema: full=%v strict=%v", fullProperties, strictProperties)
 	}
@@ -624,4 +644,43 @@ func listRegisteredToolsWithRegistry(t *testing.T, includeWrites bool) ([]*mcpsd
 		t.Fatal("no MCP tools registered")
 	}
 	return result.Tools, registry
+}
+
+// TestDiagnoserAllowlistCoversAllReadTools fails when a read tool is registered
+// for MCP but never added to the agent's allowlist. Every registered read tool
+// must appear there: one that does not reaches every external client but not
+// Radar's own Diagnose agent, which is silent rather than an error.
+func TestDiagnoserAllowlistCoversAllReadTools(t *testing.T) {
+	writes := map[string]bool{}
+	for _, w := range writeToolNames {
+		writes[w] = true
+	}
+
+	allowed := map[string]bool{}
+	for _, name := range investigation.ReadOnlyTools {
+		allowed[name] = true
+	}
+
+	var missing, stale []string
+	registered := map[string]bool{}
+	for _, tool := range listRegisteredTools(t) {
+		registered[tool.Name] = true
+		if writes[tool.Name] || allowed[tool.Name] {
+			continue
+		}
+		missing = append(missing, tool.Name)
+	}
+	for name := range allowed {
+		if !registered[name] {
+			stale = append(stale, name)
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(stale)
+	if len(missing) > 0 {
+		t.Errorf("read tools registered for MCP but not callable by Radar's own agent: %v — add them to investigation.ReadOnlyTools", missing)
+	}
+	if len(stale) > 0 {
+		t.Errorf("investigation.ReadOnlyTools names tools that are not registered: %v", stale)
+	}
 }

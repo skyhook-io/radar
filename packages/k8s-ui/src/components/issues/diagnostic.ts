@@ -24,6 +24,8 @@ export function diagnosticFactLabel(type: string): string {
   switch (type) {
     case 'explicit_reference':
       return 'Missing reference';
+    case 'node_startup_corroboration':
+      return 'Same-node failures';
     case 'owner_rollup':
       return 'Grouped from pods';
     case 'selected_backend_issue':

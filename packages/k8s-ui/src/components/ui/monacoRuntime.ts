@@ -2,7 +2,21 @@
 
 import { loader } from '@monaco-editor/react'
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api'
+// Tokenizers only — the set the YAML editor and the pod file viewer hand to
+// Monaco. JSON deliberately absent: its language lives in vs/language/json and
+// spawns a validation worker this runtime does not ship; viewers highlight
+// JSON with the YAML tokenizer, which covers it.
 import 'monaco-editor/esm/vs/basic-languages/yaml/yaml.contribution'
+import 'monaco-editor/esm/vs/basic-languages/xml/xml.contribution'
+import 'monaco-editor/esm/vs/basic-languages/html/html.contribution'
+import 'monaco-editor/esm/vs/basic-languages/css/css.contribution'
+import 'monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution'
+import 'monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution'
+import 'monaco-editor/esm/vs/basic-languages/python/python.contribution'
+import 'monaco-editor/esm/vs/basic-languages/shell/shell.contribution'
+import 'monaco-editor/esm/vs/basic-languages/markdown/markdown.contribution'
+import 'monaco-editor/esm/vs/basic-languages/ini/ini.contribution'
+import 'monaco-editor/esm/vs/basic-languages/dockerfile/dockerfile.contribution'
 import 'monaco-editor/esm/vs/editor/contrib/find/browser/findController.js'
 import 'monaco-editor/esm/vs/editor/contrib/folding/browser/folding.js'
 import 'monaco-editor/esm/vs/editor/contrib/format/browser/formatActions.js'

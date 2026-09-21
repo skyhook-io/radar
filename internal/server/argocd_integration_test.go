@@ -10,6 +10,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/pkg/argoapi"
 )
 
 // fakeArgoCDServer accepts "good-token" (and no token) and rejects the rest.
@@ -517,5 +518,75 @@ func TestPutConfigPreservesIntegrationFields(t *testing.T) {
 	}
 	if saved.Port != 9999 {
 		t.Errorf("Port = %d, want the startup field applied", saved.Port)
+	}
+}
+
+// A server that serves reads without a token shows as connected — and says
+// so — only after a read has actually succeeded; a 401 on the same shape
+// stays "not connected" so Settings never invites the user to rely on it.
+func TestArgoCDStatus_AnonymousReadIsConnectedOnlyOnceItWorks(t *testing.T) {
+	s := setupArgoCDTest(t)
+	var allow bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"Version":"v3.5.2"}`)) })
+	mux.HandleFunc("/api/v1/applications/billing", func(w http.ResponseWriter, r *http.Request) {
+		if !allow {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"metadata":{"uid":"u1"},"status":{"resources":[]}}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	argocd.SetConfig(srv.URL, "", false, false)
+
+	var out struct {
+		Connected bool `json:"connected"`
+		Anonymous bool `json:"anonymous"`
+	}
+	getStatus := func() {
+		rec := httptest.NewRecorder()
+		s.handleArgoCDStatus(rec, httptest.NewRequest(http.MethodGet, "/api/integrations/argocd/status", nil))
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+	}
+	q := argoapi.ApplicationQuery{AppName: "billing", AppNamespace: "argocd"}
+	if _, err := argocd.ApplicationHealthCached(context.Background(), q); err == nil {
+		t.Fatal("refused read must fail")
+	}
+	getStatus()
+	if out.Connected || out.Anonymous {
+		t.Fatalf("refused anonymous read: status = %+v, want not connected", out)
+	}
+	allow = true
+	argocd.Reset()
+	if _, err := argocd.ApplicationHealthCached(context.Background(), q); err != nil {
+		t.Fatalf("allowed read: %v", err)
+	}
+	getStatus()
+	if !out.Connected || !out.Anonymous {
+		t.Fatalf("allowed anonymous read: status = %+v, want connected+anonymous", out)
+	}
+}
+
+// Settings sends people to "check Argo CD" when a configured connection
+// doesn't deliver; the status must say what went wrong, in plain words.
+func TestArgoCDStatus_ReportsWhyAConfiguredServerIsNotReachable(t *testing.T) {
+	s := setupArgoCDTest(t)
+	argocd.SetConfig("http://127.0.0.1:1", "tok", false, true)
+	_ = argocd.Probe(context.Background())
+	rec := httptest.NewRecorder()
+	s.handleArgoCDStatus(rec, httptest.NewRequest(http.MethodGet, "/api/integrations/argocd/status", nil))
+	var out struct {
+		Configured bool   `json:"configured"`
+		Connected  bool   `json:"connected"`
+		Reason     string `json:"reason"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.Configured || out.Connected || !strings.Contains(out.Reason, "the server couldn't be reached") {
+		t.Fatalf("status = %+v, want a plain reason for the failed connection", out)
 	}
 }

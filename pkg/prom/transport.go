@@ -69,7 +69,10 @@ func NewHTTPTransport(baseURL, basePath string, httpClient *http.Client) *HTTPTr
 // transport errors this way, for example).
 func (t *HTTPTransport) Do(ctx context.Context, method, path string, params url.Values) ([]byte, error) {
 	full := t.BaseURL + t.BasePath + path
-	if len(params) > 0 {
+	var requestBody io.Reader
+	if method == http.MethodPost {
+		requestBody = strings.NewReader(params.Encode())
+	} else if len(params) > 0 {
 		if strings.Contains(full, "?") {
 			full = full + "&" + params.Encode()
 		} else {
@@ -77,7 +80,7 @@ func (t *HTTPTransport) Do(ctx context.Context, method, path string, params url.
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, full, nil)
+	req, err := http.NewRequestWithContext(ctx, method, full, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("prom.HTTPTransport: build request: %w", err)
 	}
@@ -85,8 +88,11 @@ func (t *HTTPTransport) Do(ctx context.Context, method, path string, params url.
 	for k, v := range t.Headers {
 		req.Header.Set(k, v)
 	}
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
 
-	resp, err := t.HTTPClient.Do(req)
+	resp, err := SameOriginRedirectClient(t.HTTPClient).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("prom.HTTPTransport: %w", err)
 	}
@@ -96,12 +102,15 @@ func (t *HTTPTransport) Do(ctx context.Context, method, path string, params url.
 	if maxResponseBytes <= 0 {
 		maxResponseBytes = 10 << 20
 	}
+	// From here on the endpoint has answered: a failure reading the body is
+	// wrapped so callers reasoning about reachability can tell it from a
+	// connection that never produced a response.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("prom.HTTPTransport: read body: %w", err)
+		return nil, fmt.Errorf("prom.HTTPTransport: read body: %w", &ResponseError{StatusCode: resp.StatusCode, Err: err})
 	}
 	if int64(len(body)) > maxResponseBytes {
-		return nil, fmt.Errorf("prom.HTTPTransport: %w (%d bytes)", ErrResponseTooLarge, maxResponseBytes)
+		return nil, fmt.Errorf("prom.HTTPTransport: %w (%d bytes)", &ResponseError{StatusCode: resp.StatusCode, Err: ErrResponseTooLarge}, maxResponseBytes)
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -121,6 +130,17 @@ type HTTPError struct {
 	URL        string
 	Body       []byte
 }
+
+// ResponseError is a failure after the endpoint answered — the body could not
+// be read, or was over the limit. It carries the status that arrived so the
+// failure is never mistaken for an unreachable endpoint.
+type ResponseError struct {
+	StatusCode int
+	Err        error
+}
+
+func (e *ResponseError) Error() string { return e.Err.Error() }
+func (e *ResponseError) Unwrap() error { return e.Err }
 
 func (e *HTTPError) Error() string {
 	body := strings.ToValidUTF8(string(e.Body), "�")

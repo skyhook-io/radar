@@ -20,6 +20,13 @@ type AgentInfo struct {
 	Supported       bool                        `json:"supported"`
 	Profiles        []ExecutionProfile          `json:"profiles,omitempty"`
 	ConsentSurfaces map[ExecutionProfile]string `json:"consentSurfaces,omitempty"`
+	// Apply and Verification declare what the backend driving this agent
+	// performs beyond a read-only investigation: a user-confirmed remediation
+	// turn, and the automatic re-check after one. The frontend reads the
+	// declaration for policy and the verdict for shape; a backend that omits
+	// them is read-only.
+	Apply        bool `json:"apply,omitempty"`
+	Verification bool `json:"verification,omitempty"`
 }
 
 // knownAgents are the CLI names we probe for — a FIXED list. We never exec a

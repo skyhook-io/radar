@@ -1,8 +1,6 @@
-import { useState, useMemo, useEffect, useRef, useCallback, forwardRef } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback, useId, forwardRef } from 'react'
 import {
   Search,
-  ChevronDown,
-  ChevronRight,
   Eye,
   EyeOff,
   Pin,
@@ -10,6 +8,7 @@ import {
   X,
 } from 'lucide-react'
 import { clsx } from 'clsx'
+import { Collapse, CollapseChevron, useDisclosure, disclosurePanelId } from '../ui/Collapse'
 import type { APIResource } from '../../types'
 import { categorizeResources, CORE_RESOURCES } from '../../utils/api-resources'
 import { getResourceIcon } from '../../utils/resource-icons'
@@ -213,6 +212,10 @@ export function ResourcesSidebar({
   useEffect(() => { persistedExpandedCategories = expandedCategories }, [expandedCategories])
   const [showEmptyKinds, setShowEmptyKinds] = useState(false)
   const [favoritesExpanded, setFavoritesExpanded] = useState(() => pinned.length > 0)
+  const favoritesDisclosure = useDisclosure(favoritesExpanded)
+  // Category sections are mapped inline, so they can't each call useDisclosure;
+  // one generated prefix plus the category name keeps aria-controls unique.
+  const categoryPanelBase = useId()
 
   // Ref to selected sidebar item for scrolling into view on deeplink
   const selectedSidebarRef = useRef<HTMLButtonElement>(null)
@@ -499,14 +502,11 @@ export function ResourcesSidebar({
         {/* Favorites (pinned kinds) section — always visible */}
         <div className="mb-2">
           <button
+            {...favoritesDisclosure.buttonProps}
             onClick={() => setFavoritesExpanded((v) => !v)}
             className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-theme-text-tertiary hover:text-theme-text-secondary uppercase tracking-wide"
           >
-            {favoritesExpanded ? (
-              <ChevronDown className="w-3 h-3" />
-            ) : (
-              <ChevronRight className="w-3 h-3" />
-            )}
+            <CollapseChevron open={favoritesExpanded} className="w-3 h-3" />
             <span className="flex-1 text-left">Favorites</span>
             {!favoritesExpanded && pinned.length > 0 && (
               <span className={clsx('text-xs py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case text-center font-mono', pinned.length < 1000 ? 'w-8' : 'w-9')}>
@@ -514,41 +514,36 @@ export function ResourcesSidebar({
               </span>
             )}
           </button>
-          <div className={clsx(
-            'grid transition-[grid-template-rows] duration-200',
-            favoritesExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
-          )} style={{ transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)' }}>
-            <div className="overflow-hidden">
-              <div className="space-y-0.5">
-                {pinned.length === 0 ? (
-                  <div className="px-3 py-2 text-xs text-theme-text-disabled">
-                    No pinned resources. Click <Pin className="w-3 h-3 inline" /> on any resource type to pin it here.
-                  </div>
-                ) : (
-                  pinned.map((p) => {
-                    const isResourceSelected =
-                      (effectiveSelectedKind.name === p.name && effectiveSelectedKind.group === p.group) ||
-                      (effectiveSelectedKind.kind.toLowerCase() === p.kind.toLowerCase() && effectiveSelectedKind.group === p.group)
-                    const highlighted = isKindHighlighted(p.name, p.group)
-                    return (
-                      <ResourceTypeButton
-                        key={`${p.name}-${p.group}`}
-                        ref={highlighted ? highlightedRef : (isResourceSelected ? selectedSidebarRef : null)}
-                        resource={{ name: p.name, kind: p.kind, group: p.group, version: '', namespaced: true, isCrd: false, verbs: [] }}
-                        count={counts[p.group ? `${p.group}/${p.kind}` : p.kind] ?? null}
-                        isSelected={isResourceSelected}
-                        isHighlighted={highlighted}
-                        isForbidden={forbiddenKinds.has(p.group ? `${p.group}/${p.kind}` : p.kind)}
-                        isPinned={true}
-                        onTogglePin={() => togglePin(p)}
-                        onClick={() => selectKind({ name: p.name, kind: p.kind, group: p.group })}
-                      />
-                    )
-                  })
-                )}
-              </div>
+          <Collapse open={favoritesExpanded} id={favoritesDisclosure.panelId}>
+            <div className="space-y-0.5">
+              {pinned.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-theme-text-disabled">
+                  No pinned resources. Click <Pin className="w-3 h-3 inline" /> on any resource type to pin it here.
+                </div>
+              ) : (
+                pinned.map((p) => {
+                  const isResourceSelected =
+                    (effectiveSelectedKind.name === p.name && effectiveSelectedKind.group === p.group) ||
+                    (effectiveSelectedKind.kind.toLowerCase() === p.kind.toLowerCase() && effectiveSelectedKind.group === p.group)
+                  const highlighted = isKindHighlighted(p.name, p.group)
+                  return (
+                    <ResourceTypeButton
+                      key={`${p.name}-${p.group}`}
+                      ref={highlighted ? highlightedRef : (isResourceSelected ? selectedSidebarRef : null)}
+                      resource={{ name: p.name, kind: p.kind, group: p.group, version: '', namespaced: true, isCrd: false, verbs: [] }}
+                      count={counts[p.group ? `${p.group}/${p.kind}` : p.kind] ?? null}
+                      isSelected={isResourceSelected}
+                      isHighlighted={highlighted}
+                      isForbidden={forbiddenKinds.has(p.group ? `${p.group}/${p.kind}` : p.kind)}
+                      isPinned={true}
+                      onTogglePin={() => togglePin(p)}
+                      onClick={() => selectKind({ name: p.name, kind: p.kind, group: p.group })}
+                    />
+                  )
+                })
+              )}
             </div>
-          </div>
+          </Collapse>
         </div>
         {filteredCategories ? (
           // Dynamic categories from API
@@ -558,14 +553,12 @@ export function ResourcesSidebar({
             return (
               <div key={category.name} className="mb-2">
                 <button
+                  aria-expanded={isExpanded}
+                  aria-controls={disclosurePanelId(categoryPanelBase, category.name)}
                   onClick={() => toggleCategory(category.name)}
                   className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-semibold text-theme-text-tertiary hover:text-theme-text-secondary uppercase tracking-wide"
                 >
-                  {isExpanded ? (
-                    <ChevronDown className="w-3 h-3" />
-                  ) : (
-                    <ChevronRight className="w-3 h-3" />
-                  )}
+                  <CollapseChevron open={isExpanded} className="w-3 h-3" />
                   <span className="flex-1 text-left truncate" title={rawGroupTitle}>{category.name}</span>
                   {!isExpanded && (
                     <span className={clsx('text-xs py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case text-center font-mono', category.total < 1000 ? 'w-8' : 'w-9')}>
@@ -573,38 +566,33 @@ export function ResourcesSidebar({
                     </span>
                   )}
                 </button>
-                <div className={clsx(
-                  'grid transition-[grid-template-rows] duration-200',
-                  isExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
-                )} style={{ transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)' }}>
-                  <div className="overflow-hidden">
-                    <div className="space-y-0.5">
-                      {category.visibleResources.map((resource) => {
-                        const resourceIsPinned = isPinned(resource.name, resource.group)
-                        const isResourceSelected =
-                          (effectiveSelectedKind.name === resource.name && effectiveSelectedKind.group === resource.group) ||
-                          (effectiveSelectedKind.kind.toLowerCase() === resource.kind.toLowerCase() && effectiveSelectedKind.group === resource.group)
-                        // If the resource is pinned, let the Favorites section own the highlight
-                        const showSelected = isResourceSelected && !resourceIsPinned
-                        const highlighted = isKindHighlighted(resource.name, resource.group)
-                        return (
-                        <ResourceTypeButton
-                          key={resource.name}
-                          ref={highlighted ? highlightedRef : (isResourceSelected ? selectedSidebarRef : null)}
-                          resource={resource}
-                          count={counts[resource.group ? `${resource.group}/${resource.kind}` : resource.kind] ?? null}
-                          isSelected={showSelected}
-                          isHighlighted={highlighted}
-                          isForbidden={forbiddenKinds.has(resource.group ? `${resource.group}/${resource.kind}` : resource.kind)}
-                          isPinned={resourceIsPinned}
-                          onTogglePin={() => togglePin({ name: resource.name, kind: resource.kind, group: resource.group })}
-                          onClick={() => selectKind({ name: resource.name, kind: resource.kind, group: resource.group })}
-                        />
-                        )
-                      })}
-                    </div>
+                <Collapse open={isExpanded} id={disclosurePanelId(categoryPanelBase, category.name)}>
+                  <div className="space-y-0.5">
+                    {category.visibleResources.map((resource) => {
+                      const resourceIsPinned = isPinned(resource.name, resource.group)
+                      const isResourceSelected =
+                        (effectiveSelectedKind.name === resource.name && effectiveSelectedKind.group === resource.group) ||
+                        (effectiveSelectedKind.kind.toLowerCase() === resource.kind.toLowerCase() && effectiveSelectedKind.group === resource.group)
+                      // If the resource is pinned, let the Favorites section own the highlight
+                      const showSelected = isResourceSelected && !resourceIsPinned
+                      const highlighted = isKindHighlighted(resource.name, resource.group)
+                      return (
+                      <ResourceTypeButton
+                        key={resource.name}
+                        ref={highlighted ? highlightedRef : (isResourceSelected ? selectedSidebarRef : null)}
+                        resource={resource}
+                        count={counts[resource.group ? `${resource.group}/${resource.kind}` : resource.kind] ?? null}
+                        isSelected={showSelected}
+                        isHighlighted={highlighted}
+                        isForbidden={forbiddenKinds.has(resource.group ? `${resource.group}/${resource.kind}` : resource.kind)}
+                        isPinned={resourceIsPinned}
+                        onTogglePin={() => togglePin({ name: resource.name, kind: resource.kind, group: resource.group })}
+                        onClick={() => selectKind({ name: resource.name, kind: resource.kind, group: resource.group })}
+                      />
+                      )
+                    })}
                   </div>
-                </div>
+                </Collapse>
               </div>
             )
           })

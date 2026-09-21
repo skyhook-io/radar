@@ -113,7 +113,8 @@ func CategoriesForKind(kind string) []MetricCategory {
 }
 
 // BuildQuery builds a PromQL query for the given resource and metric category.
-// For workloads (Deployment, StatefulSet, Job, CronJob, etc.) it uses pod regex matching.
+// Workload kinds return "" here: their pods are resolved by ownership and
+// built with BuildScopedQuery.
 // For Pods it uses exact name matching.
 // For Nodes it matches the node_exporter "instance" label.
 func BuildQuery(kind, namespace, name string, category MetricCategory) string {
@@ -131,8 +132,10 @@ func buildQueryInner(kind, namespace, name string, category MetricCategory, filt
 	switch strings.ToLower(kind) {
 	case "pod":
 		return buildPodQuery(namespace, name, category, filterContainer)
-	case "deployment", "statefulset", "daemonset", "replicaset", "job", "cronjob":
-		return buildWorkloadQuery(namespace, name, category, filterContainer)
+	case "deployment", "statefulset", "daemonset", "replicaset", "job", "cronjob", "rollout", "workflow":
+		// A workload's pods are not a function of its name. Resolve membership
+		// first and build with BuildScopedQuery.
+		return ""
 	case "node":
 		return buildNodeQuery(name, category)
 	default:
@@ -215,9 +218,12 @@ func buildPodQuery(namespace, podName string, category MetricCategory, filterCon
 
 	switch category {
 	case CategoryRestarts:
-		// changes() over a 1h window gives the count of restarts during that window;
-		// using a long window keeps the chart legible (most pods never restart).
-		// Sums across containers so a multi-container pod surfaces one line per pod.
+		// changes() counts samples that differ from the one before, so several
+		// restarts between two scrapes read as one. buildPodSetQueryInner
+		// counts the same category with increase() instead; the two disagree
+		// and only that one is exact. The long window keeps the chart legible,
+		// since most pods never restart, and the sum across containers gives a
+		// multi-container pod one line.
 		return fmt.Sprintf(
 			`sum by (pod,namespace) (changes(kube_pod_container_status_restarts_total{namespace='%s',pod='%s'}[1h]))`,
 			ns, pod)
@@ -246,45 +252,6 @@ func buildPodQuery(namespace, podName string, category MetricCategory, filterCon
 	}
 }
 
-func buildWorkloadQuery(namespace, workloadName string, category MetricCategory, filterContainer bool) string {
-	ns := SanitizeLabelValue(namespace)
-	// Sanitize then escape regex metacharacters so e.g. "my.app" matches literally
-	podPattern := fmt.Sprintf("%s-.*", EscapeRegexMeta(SanitizeLabelValue(workloadName)))
-	cf := ""
-	if filterContainer {
-		cf = "container!='',"
-	}
-
-	switch category {
-	case CategoryRestarts:
-		return fmt.Sprintf(
-			`sum by (pod,namespace) (changes(kube_pod_container_status_restarts_total{namespace='%s',pod=~'%s'}[1h]))`,
-			ns, podPattern)
-	case CategoryCPU:
-		return fmt.Sprintf(
-			`sum(rate(container_cpu_usage_seconds_total{%snamespace='%s',pod=~'%s'}[5m])) by (pod,namespace)`,
-			cf, ns, podPattern)
-	case CategoryMemory:
-		return fmt.Sprintf(
-			`sum by (pod,namespace) (max by (pod,namespace,container) (container_memory_working_set_bytes{%snamespace='%s',pod=~'%s'}))`,
-			cf, ns, podPattern)
-	case CategoryNetworkRX:
-		return fmt.Sprintf(
-			`sum(rate(container_network_receive_bytes_total{namespace='%s',pod=~'%s'}[5m])) by (pod,namespace)`,
-			ns, podPattern)
-	case CategoryNetworkTX:
-		return fmt.Sprintf(
-			`sum(rate(container_network_transmit_bytes_total{namespace='%s',pod=~'%s'}[5m])) by (pod,namespace)`,
-			ns, podPattern)
-	case CategoryFilesystem:
-		return fmt.Sprintf(
-			`sum(rate(container_fs_writes_bytes_total{namespace='%s',pod=~'%s'}[5m]) + rate(container_fs_reads_bytes_total{namespace='%s',pod=~'%s'}[5m])) by (pod,namespace)`,
-			ns, podPattern, ns, podPattern)
-	default:
-		return ""
-	}
-}
-
 func buildNodeQuery(nodeName string, category MetricCategory) string {
 	// Node exporter metrics use the "instance" label which is typically set to the node
 	// name or IP. The value often includes a port suffix, so we match with an optional port.
@@ -307,6 +274,46 @@ func buildNodeQuery(nodeName string, category MetricCategory) string {
 		return fmt.Sprintf(
 			`sum(node_filesystem_size_bytes{%s,fstype=~'ext4|xfs|btrfs'} - node_filesystem_avail_bytes{%s,fstype=~'ext4|xfs|btrfs'})`,
 			nodeFilter, nodeFilter)
+	default:
+		return ""
+	}
+}
+
+// BuildHPAReplicasQueries returns the kube-state-metrics series behind an
+// HPA's replica history: the replica count it currently observes and the
+// count it has decided on.
+func BuildHPAReplicasQueries(namespace, name string) (current, desired string) {
+	ns := SanitizeLabelValue(namespace)
+	n := SanitizeLabelValue(name)
+	current = fmt.Sprintf(`kube_horizontalpodautoscaler_status_current_replicas{namespace="%s",horizontalpodautoscaler="%s"}`, ns, n)
+	desired = fmt.Sprintf(`kube_horizontalpodautoscaler_status_desired_replicas{namespace="%s",horizontalpodautoscaler="%s"}`, ns, n)
+	return current, desired
+}
+
+// BuildPodSetQuery aggregates one category over an explicit pod set: the
+// pods a caller has already resolved through the workload's selector, so a
+// Deployment named api never picks up api-worker pods the way the
+// "<name>-.*" workload pattern does. Pods match as pod=~'^(a|b|c)$' inside
+// namespace; the result is a single sum series. Empty when pods is empty or
+// the category has no expression.
+func BuildPodSetQuery(namespace string, pods []string, category MetricCategory) string {
+	return buildPodSetQueryInner(namespace, pods, category, true)
+}
+
+// BuildPodSetQueryNoContainerFilter is BuildPodSetQuery without the
+// container!=” filter, for clusters whose cAdvisor metrics lack the label.
+func BuildPodSetQueryNoContainerFilter(namespace string, pods []string, category MetricCategory) string {
+	return buildPodSetQueryInner(namespace, pods, category, false)
+}
+
+func buildPodSetQueryInner(namespace string, pods []string, category MetricCategory, filterContainer bool) string {
+	if len(pods) == 0 {
+		return ""
+	}
+	// The vitals keep to the three categories the diagnose bundle promises.
+	switch category {
+	case CategoryCPU, CategoryMemory, CategoryRestarts:
+		return BuildScopedQuery(SelectPods(namespace, pods), category, AggregateTotal, filterContainer)
 	default:
 		return ""
 	}

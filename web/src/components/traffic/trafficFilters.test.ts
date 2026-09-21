@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit } from './trafficFilters'
+import { matchesStatusRanges, bucketsFromCounts, bucketsFromStatus, isRateBasedSource, keepAvailable, effectiveThreshold, volumeUnit, isExternalKind, isPolicyDropReason } from './trafficFilters'
 
 describe('matchesStatusRanges', () => {
   it('does not filter when nothing is selected', () => {
@@ -99,5 +99,32 @@ describe('volumeUnit', () => {
     expect(volumeUnit(true)).toBe('rate')
     expect(volumeUnit(false)).toBe('connections')
     expect(volumeUnit(undefined)).toBe('connections')
+  })
+})
+
+describe('isExternalKind', () => {
+  it('places the world, nodes and unidentified endpoints outside the workloads', () => {
+    expect(isExternalKind('External')).toBe(true)
+    expect(isExternalKind('Host')).toBe(true)
+    expect(isExternalKind('Unknown')).toBe(true)
+  })
+  it('keeps pods and services inside', () => {
+    expect(isExternalKind('Pod')).toBe(false)
+    expect(isExternalKind('Service')).toBe(false)
+  })
+})
+
+describe('isPolicyDropReason', () => {
+  it('recognises both of Hubble\'s policy drop codes', () => {
+    expect(isPolicyDropReason('POLICY_DENIED', 0)).toBe(true)
+    expect(isPolicyDropReason('POLICY_DENY', 0)).toBe(true)
+  })
+  it('takes the plugin naming a policy as evidence even without a code', () => {
+    expect(isPolicyDropReason(undefined, 1)).toBe(true)
+  })
+  it('does not assume policy for other or missing reasons', () => {
+    expect(isPolicyDropReason('STALE_OR_UNROUTABLE_IP', 0)).toBe(false)
+    expect(isPolicyDropReason(undefined, 0)).toBe(false)
+    expect(isPolicyDropReason('', 0)).toBe(false)
   })
 })

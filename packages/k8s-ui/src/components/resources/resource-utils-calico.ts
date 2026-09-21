@@ -256,6 +256,10 @@ export function getCalicoIPPoolEncapsulation(pool: any): string {
 
 export function getCalicoIPPoolAllowedUses(pool: any): string {
   const uses = pool?.spec?.allowedUses
-  if (!Array.isArray(uses)) return 'Workload, Tunnel'
-  return uses.length > 0 ? uses.map(String).join(', ') : '-'
+  // Calico documents an empty list as equivalent to an absent one: "If not
+  // specified or empty, defaults to ["Tunnel", "Workload"] for
+  // back-compatibility." Rendering a dash there would read as a pool that
+  // allocates for nothing.
+  if (!Array.isArray(uses) || uses.length === 0) return 'Workload, Tunnel'
+  return uses.map(String).join(', ')
 }

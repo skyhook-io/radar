@@ -183,6 +183,18 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		IssueTiming:          issueTiming,
 		IssueTimingBasis:     issueTimingBasis,
 	}
+	if evidence := p.NodeStartupCorroboration; evidence != nil && reason == p.Reason {
+		iss.Message = p.MessageBeforeCorroboration
+		refs := make([]Ref, 0, min(len(evidence.Pods), maxDiagnosticRefs))
+		for _, pod := range evidence.Pods[:min(len(evidence.Pods), maxDiagnosticRefs)] {
+			refs = append(refs, Ref{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name})
+		}
+		message := fmt.Sprintf("On node %s, %d visible Pods across %d workload owners have %s, including Pod %s/%s. Matching symptoms do not establish a node cause.", evidence.Node, evidence.PodCount, evidence.OwnerCount, p.Reason, p.Namespace, p.Name)
+		if len(refs) < evidence.PodCount {
+			message += fmt.Sprintf(" Showing %d of %d Pod links.", len(refs), evidence.PodCount)
+		}
+		iss.DiagnosticContext = &issuesapi.DiagnosticContext{Role: issuesapi.DiagnosticRoleContext, Facts: []issuesapi.DiagnosticFact{{Type: factNodeStartupCorroboration, Message: message, Refs: refs}}}
+	}
 	if p.OwnerKind != "" {
 		// Prefer the owner group resolved at detection (carries the real group
 		// for CRD controllers like Argo Rollout); fall back to the builtin

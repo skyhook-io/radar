@@ -30,6 +30,15 @@ Two kinds are gated more tightly, per-resource-kind, because the shared cache ca
 
 **If namespace-level isn't tight enough for you**, scope the boundary at the cache instead of at read time: run a Radar instance per trust boundary and give each one a **namespace-scoped ServiceAccount** (a `Role`/`RoleBinding`, no `ClusterRole`) limited to that boundary's namespaces. Radar detects the restricted permissions at startup and only watches and caches what its ServiceAccount can list — so the instance simply never holds another team's data, and there's nothing to over-expose. Point each team at their own instance (an ingress or auth proxy can route them). See [In-Cluster Deployment → namespace-scoped RBAC](in-cluster.md) for the `rbac.create: false` + custom `Role` setup.
 
+### Prometheus metrics
+
+Charts of a specific resource are gated like the resource itself: you see them only if you can read what they chart. The surfaces that can't be tied to one resource — raw PromQL, metric discovery, alert rules and the cluster-wide aggregate — are gated on listing Pods in **every** namespace, because a PromQL expression can't be namespace-filtered by inspecting it. Kubernetes' built-in `view` ClusterRole meets that bar, so binding `view` also grants read access to everything the Prometheus backend holds, `kube-system` and node-level series included.
+
+Two consequences worth knowing before you deploy:
+
+- A Role scoped with `resourceNames` doesn't pass the check, which needs the whole kind. It fails closed, so the user sees less rather than more.
+- Radar queries Prometheus with its own credentials; only the *authorization* is per user. If several tenants share one Prometheus, that backend needs its own isolation — Radar's gate isn't what separates them.
+
 ## Auth Modes
 
 | Mode | Flag | When to Use |

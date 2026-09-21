@@ -423,7 +423,8 @@ const defaultTotalBudget = 3 * time.Second
 // input before reaching here; the guard exists only to avoid panics on
 // frontend/MCP misuse. Callers that want a static-only trace pass Options{}.
 func BuildTraceWithOptions(ctx context.Context, deps Deps, kind, namespace, name string, opts Options) (*Trace, error) {
-	subject := ResourceRef{Kind: kind, Namespace: namespace, Name: name}
+	canonicalKind := normalizeKind(kind)
+	subject := ResourceRef{Group: entryKindGroup(canonicalKind), Kind: canonicalKind, Namespace: namespace, Name: name}
 
 	if !cacheReady(deps) {
 		return &Trace{
@@ -1384,4 +1385,15 @@ func normalizeKind(k string) string {
 		return "Gateway"
 	}
 	return k
+}
+
+func entryKindGroup(kind string) string {
+	switch normalizeKind(kind) {
+	case "Ingress":
+		return "networking.k8s.io"
+	case "HTTPRoute", "GRPCRoute", "Gateway":
+		return "gateway.networking.k8s.io"
+	default:
+		return ""
+	}
 }

@@ -3,6 +3,7 @@ package opencost
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -196,4 +197,31 @@ func namesOf(series []CostTrendSeries) []string {
 		out[i] = s.Namespace
 	}
 	return out
+}
+
+// "other" is a legal namespace name. A cluster that has one is not capped, and
+// namespaceCount must equal the series count so no consumer reads it as capped.
+func TestComputeCostTrendFromProm_NamespaceNamedOtherIsNotACap(t *testing.T) {
+	client := rangeProm(t, matrixBody([]namespaceSeries{
+		{"other", []dpoint{{1700000000, 3}}},
+		{"prod", []dpoint{{1700000000, 2}}},
+	}))
+	got := ComputeCostTrendFromProm(context.Background(), client, TrendPromOptions{Range: "24h"})
+	if got.NamespaceCount != 2 || len(got.Series) != 2 {
+		t.Errorf("namespaceCount=%d series=%d, want both 2 — equal counts are what say "+
+			"nothing was capped", got.NamespaceCount, len(got.Series))
+	}
+}
+
+// A capped answer reports every namespace it found, so the gap between that
+// count and the series is what discloses the cap.
+func TestComputeCostTrendFromProm_CapReportsEveryNamespaceItFound(t *testing.T) {
+	series := make([]namespaceSeries, 0, 10)
+	for i := range 10 {
+		series = append(series, namespaceSeries{fmt.Sprintf("ns-%02d", i), []dpoint{{1700000000, float64(i + 1)}}})
+	}
+	got := ComputeCostTrendFromProm(context.Background(), rangeProm(t, matrixBody(series)), TrendPromOptions{Range: "24h"})
+	if got.NamespaceCount != 10 || len(got.Series) != 9 {
+		t.Errorf("namespaceCount=%d series=%d, want 10 and 8 named + other", got.NamespaceCount, len(got.Series))
+	}
 }

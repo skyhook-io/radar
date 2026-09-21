@@ -51,6 +51,13 @@ type Config struct {
 	// error if the field is absent when an upgrade is requested.
 	Namespace string
 
+	// Release is the Helm release name Radar was installed under, from
+	// RADAR_HELM_RELEASE (set by the chart from .Release.Name). Sent to the
+	// hub so the dashboard's token-rotation command targets this release
+	// instead of assuming `radar`. Empty for non-Helm installs; the hub keeps
+	// its last stored value then.
+	Release string
+
 	// APIServerURL is the externally-reachable URL of this cluster's
 	// kube-apiserver, sent to the hub so it can correlate this cluster
 	// with references from other surfaces (most notably Argo CD's
@@ -111,7 +118,6 @@ func Run(ctx context.Context, cfg Config) error {
 
 	backoff := 1 * time.Second
 	const maxBackoff = 30 * time.Second
-	const warnAfterFailures = 5
 
 	failures := 0
 
@@ -127,7 +133,7 @@ func Run(ctx context.Context, cfg Config) error {
 			failures++
 			log.Printf("[cloud] dial failed: %v (retry in %s)", err, backoff)
 			if failures == warnAfterFailures {
-				log.Printf("[cloud] WARN: %d consecutive failures — verify --cloud-url, --cloud-token, and --cluster-name", failures)
+				log.Printf("[cloud] WARN: %s", escalationWarning(failures, err))
 			}
 			if !sleep(ctx, backoff) {
 				return ctx.Err()
@@ -168,6 +174,11 @@ func Run(ctx context.Context, cfg Config) error {
 }
 
 const selfUpgradeRecheckInterval = 3 * time.Minute
+
+// warnAfterFailures is how many consecutive dial failures escalate to a WARN.
+// A var so a test can reach the escalation without sitting through the
+// backoff that separates five real attempts.
+var warnAfterFailures = 5
 
 // advertisementSession is the slice of *yamux.Session the capability watcher
 // needs; an interface so tests can observe the close decision without a
@@ -227,4 +238,19 @@ func nextBackoff(cur, max time.Duration) time.Duration {
 		n = max
 	}
 	return n
+}
+
+// escalationWarning is what Radar says once a run of dial failures stops
+// looking transient.
+//
+// A handshake that was answered carries its own instruction, and the flag list
+// contradicts it: on a Cloud-side outage it tells the operator to go re-check a
+// token that was never rejected. The list is for the case with no answer at
+// all, where a wrong URL and an unreachable one look identical from here.
+func escalationWarning(failures int, err error) string {
+	var answered *handshakeStatusError
+	if errors.As(err, &answered) {
+		return fmt.Sprintf("%d consecutive failures, still retrying: %v", failures, err)
+	}
+	return fmt.Sprintf("%d consecutive failures: %v. Verify --cloud-url, --cloud-token and --cluster-name", failures, err)
 }

@@ -15,6 +15,9 @@ type DrainOptions = k8score.DrainOptions
 // DrainResult is an alias for the reusable DrainResult type.
 type DrainResult = k8score.DrainResult
 
+// DrainPlan is an alias for the reusable DrainPlan type.
+type DrainPlan = k8score.DrainPlan
+
 // CordonNode marks a node as unschedulable.
 func CordonNode(ctx context.Context, nodeName string) error {
 	client := GetClient()
@@ -65,4 +68,13 @@ func DrainNodeWithClient(ctx context.Context, nodeName string, opts DrainOptions
 		return nil, fmt.Errorf("not connected to cluster")
 	}
 	return k8score.DrainNode(ctx, client, nodeName, opts)
+}
+
+// PlanNodeDrainWithClient computes a read-only drain plan with a caller-supplied client
+// (so the plan is evaluated under the caller's RBAC identity). It never mutates the cluster.
+func PlanNodeDrainWithClient(ctx context.Context, nodeName string, opts DrainOptions, client kubernetes.Interface) (*DrainPlan, error) {
+	if client == nil {
+		return nil, fmt.Errorf("not connected to cluster")
+	}
+	return k8score.PlanNodeDrain(ctx, client, nodeName, opts)
 }

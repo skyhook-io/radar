@@ -6,6 +6,7 @@ export {
   WORKLOAD_METRIC_CATEGORIES,
   NODE_METRIC_CATEGORIES,
   METRIC_TIME_RANGES,
+  describePodCoverage,
 } from './PrometheusChartsView'
 export type {
   PrometheusChartsViewProps,
@@ -14,13 +15,14 @@ export type {
   MetricCategoryDef,
   PrometheusResourceMetricsResult,
 } from './PrometheusChartsView'
-export { SERIES_COLORS, seriesColor, seriesFill, computeShortLabels } from './colors'
+export { SERIES_COLORS, seriesColor, seriesFill, computeShortLabels, seriesDisplayLabels } from './colors'
 export { formatMetricValue, formatTimestamp } from './format'
 export { computeSaturation } from './saturation'
 export type {
   TimeSeriesPoint,
   TimeSeries,
   ReferenceLine,
+  ChartAnnotation,
   // Deprecated Prom-prefixed aliases — see types.ts.
   PrometheusDataPoint,
   PrometheusSeries,

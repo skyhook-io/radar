@@ -1,0 +1,10 @@
+preset: application
+env:
+  OTEL_EBPF_METRICS_FEATURES: application
+config:
+  data:
+    network:
+      enable: false
+    discovery:
+      instrument:
+        - k8s_namespace: demo

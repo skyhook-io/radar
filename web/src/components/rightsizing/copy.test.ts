@@ -60,6 +60,13 @@ describe('rightsizing scan copy', () => {
     ).toBe('fatal_error')
   })
 
+  it('waits for the retained scan lookup before offering a first run', () => {
+    expect(getRightsizingScanSurfaceState({
+      statusLoading: false, hasStatus: true, connected: true, scanLoading: true,
+      pending: false, hasResult: false, hasError: false,
+    })).toBe('loading_scan')
+  })
+
   it('does not auto-scan a connected first visit', () => {
     expect(
       getRightsizingScanSurfaceState({

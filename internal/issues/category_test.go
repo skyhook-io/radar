@@ -123,6 +123,8 @@ func TestClassify(t *testing.T) {
 		{"missing pvc", classifyInput{Source: SourceMissingRef, Kind: "Pod", Reason: "Missing PVC"}, issuesapi.CategoryMissingConfigRef},
 		{"missing sa", classifyInput{Source: SourceMissingRef, Kind: "Pod", Reason: "Missing ServiceAccount"}, issuesapi.CategoryMissingConfigRef},
 		{"ingress backend missing", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing backend Service"}, issuesapi.CategoryIngressBackendMissing},
+		{"ingress alb action missing", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing ALB action annotation"}, issuesapi.CategoryIngressBackendMissing},
+		{"ingress alb action invalid", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Invalid ALB action annotation"}, issuesapi.CategoryIngressBackendMissing},
 		{"ingress class missing", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing IngressClass"}, issuesapi.CategoryIngressClassMissing},
 		{"gateway backend missing", classifyInput{Source: SourceMissingRef, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: "Missing Gateway backend Service"}, issuesapi.CategoryGatewayRouteInvalid},
 		{"gateway reference grant missing", classifyInput{Source: SourceMissingRef, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: "Missing Gateway ReferenceGrant"}, issuesapi.CategoryGatewayRouteInvalid},

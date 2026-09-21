@@ -54,7 +54,18 @@ func TestResolvePrometheusHeadersFailures(t *testing.T) {
 			name:           "duplicate source",
 			headers:        map[string]string{"Authorization": "literal"},
 			headersFromEnv: map[string]string{"Authorization": "PROM_TOKEN"},
-			wantErr:        "configured both",
+			wantErr:        "multiple sources",
+		},
+		{
+			name:           "case-insensitive duplicate source",
+			headers:        map[string]string{"authorization": "literal"},
+			headersFromEnv: map[string]string{"Authorization": "PROM_TOKEN"},
+			wantErr:        "multiple sources",
+		},
+		{
+			name:    "case-insensitive duplicate literals",
+			headers: map[string]string{"Authorization": "one", "authorization": "two"},
+			wantErr: "duplicate prometheus header",
 		},
 		{
 			name:           "invalid resolved value",
@@ -76,6 +87,27 @@ func TestResolvePrometheusHeadersFailures(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("got error %q, want substring %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidatePrometheusHeaderDestination(t *testing.T) {
+	for _, tc := range []struct {
+		name, saved, launch string
+		inherited, denied   bool
+	}{
+		{"same server", "https://prom.example/a", "https://PROM.example:443/b", true, false},
+		{"different server", "https://prom.example", "http://localhost:9090", true, true},
+		{"different scheme", "https://prom.example", "http://prom.example", true, true},
+		{"all headers explicitly replaced", "https://prom.example", "http://localhost:9090", false, false},
+		{"header-only deployment config", "", "http://prometheus:9090", true, false},
+		{"clear URL with inherited headers", "https://prom.example", "", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidatePrometheusHeaderDestination(tc.saved, tc.launch, tc.inherited)
+			if (err != nil) != tc.denied {
+				t.Fatalf("got %v; denied=%v", err, tc.denied)
 			}
 		})
 	}

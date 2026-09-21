@@ -265,10 +265,23 @@ export function neighborhoodFor(topology: Topology, seeds: NeighborhoodSeed[]): 
     }
   }
 
+  const keptNodes = topology.nodes.filter((n) => keep.has(n.id))
+  // A shortcut edge (Rollout->Pod, CronJob->Pod, ...) exists to bridge the gap
+  // left when its intermediate kind is filtered out. The main view drops it
+  // once that kind reappears in the user's visible-kinds toggle; this
+  // neighborhood has no such toggle, so the equivalent check is whether a
+  // node of that kind is actually present in the resulting subgraph.
+  const presentKinds = new Set(keptNodes.map((n) => n.kind))
+  const keptEdges = topology.edges.filter((e) => {
+    if (!keep.has(e.source) || !keep.has(e.target)) return false
+    if (e.skipIfKindVisible && presentKinds.has(e.skipIfKindVisible as NodeKind)) return false
+    return true
+  })
+
   return {
     ...topology,
-    nodes: topology.nodes.filter((n) => keep.has(n.id)),
-    edges: topology.edges.filter((e) => keep.has(e.source) && keep.has(e.target)),
+    nodes: keptNodes,
+    edges: keptEdges,
     warnings: [
       ...(topology.warnings ?? []),
       ...Array.from(cappedSources).map((sourceId) => {

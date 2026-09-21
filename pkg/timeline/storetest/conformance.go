@@ -15,6 +15,7 @@ package storetest
 import (
 	"context"
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -398,4 +399,330 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 			}
 		}
 	})
+
+	// --- Filter and scoping properties -------------------------------------
+	//
+	// Each store applies these with a different mechanism: the memory store
+	// filters in Go, the SQL stores translate to WHERE clauses in two different
+	// dialects. Without these properties a backend can ignore a filter field
+	// entirely and still satisfy every arrival-order property above, so the
+	// omission surfaces as wrong rows rather than as a failing test.
+
+	// A resource of the same kind/namespace/name can exist in two clusters. The
+	// store must not let one cluster's history leak into the other's view - the
+	// reason clusterContext is carried on the row at all, and the reason it
+	// matters most for a store that outlives a context switch.
+	t.Run("cluster context scopes reads, and unscoped reads see everything", func(t *testing.T) {
+		store := newStore(t)
+		a := informer("shared-name", 0)
+		a.ID, a.ClusterContext = "ctx-a", "cluster-a"
+		b := informer("shared-name", time.Second)
+		b.ID, b.ClusterContext = "ctx-b", "cluster-b"
+		mustAppend(t, store, a)
+		mustAppend(t, store, b)
+
+		scoped, err := store.Query(ctx, timeline.QueryOptions{
+			Limit: 100, ClusterContext: "cluster-a",
+			IncludeManaged: true, IncludeK8sEvents: true,
+		})
+		if err != nil {
+			t.Fatalf("Query(clusterContext): %v", err)
+		}
+		if len(scoped) != 1 || scoped[0].ID != "ctx-a" {
+			t.Fatalf("cluster scope leaked: %v", idsOfEvents(scoped))
+		}
+		if scoped[0].ClusterContext != "cluster-a" {
+			t.Fatalf("clusterContext not round-tripped: %q", scoped[0].ClusterContext)
+		}
+		if all := queryAll(t, store, 0, 100); len(all) != 2 {
+			t.Fatalf("unscoped read returned %d rows, want both: %v", len(all), idsOfEvents(all))
+		}
+	})
+
+	// Namespace, kind, name, source and event-type narrowing. One event is the
+	// intended match and the others differ in exactly one field, so a store that
+	// drops a filter returns extra rows rather than passing by luck.
+	t.Run("field filters narrow the result set", func(t *testing.T) {
+		store := newStore(t)
+		want := informer("match", 0)
+		want.Namespace, want.Kind, want.Name = "prod", "Deployment", "api"
+
+		otherNS := want
+		otherNS.ID, otherNS.Namespace = "other-ns", "staging"
+		otherKind := want
+		otherKind.ID, otherKind.Kind = "other-kind", "StatefulSet"
+		otherName := want
+		otherName.ID, otherName.Name = "other-name", "worker"
+		otherSource := want
+		otherSource.ID, otherSource.Source = "other-source", timeline.SourceK8sEvent
+		otherType := want
+		otherType.ID, otherType.EventType = "other-type", timeline.EventTypeDelete
+
+		for _, e := range []timeline.TimelineEvent{want, otherNS, otherKind, otherName, otherSource, otherType} {
+			mustAppend(t, store, e)
+		}
+
+		check := func(name string, opts timeline.QueryOptions, wantIDs ...string) {
+			t.Helper()
+			opts.Limit, opts.IncludeManaged, opts.IncludeK8sEvents = 100, true, true
+			got, err := store.Query(ctx, opts)
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			gotIDs := idsOfEvents(got)
+			sort.Strings(gotIDs)
+			expect := append([]string(nil), wantIDs...)
+			sort.Strings(expect)
+			if fmt.Sprint(gotIDs) != fmt.Sprint(expect) {
+				t.Errorf("%s: got %v, want %v", name, gotIDs, expect)
+			}
+		}
+
+		check("Namespaces", timeline.QueryOptions{Namespaces: []string{"prod"}},
+			"match", "other-kind", "other-name", "other-source", "other-type")
+		check("Kinds", timeline.QueryOptions{Kinds: []string{"Deployment"}},
+			"match", "other-ns", "other-name", "other-source", "other-type")
+		check("Names", timeline.QueryOptions{Names: []string{"api"}},
+			"match", "other-ns", "other-kind", "other-source", "other-type")
+		check("Sources", timeline.QueryOptions{Sources: []timeline.EventSource{timeline.SourceK8sEvent}},
+			"other-source")
+		check("EventTypes", timeline.QueryOptions{EventTypes: []timeline.EventType{timeline.EventTypeDelete}},
+			"other-type")
+		check("ExcludeDeleted", timeline.QueryOptions{ExcludeDeleted: true},
+			"match", "other-ns", "other-kind", "other-name", "other-source")
+	})
+
+	// APIGroups narrows on the group parsed from APIVersion before the limit
+	// applies, so same-kind rows from another group cannot crowd out the
+	// requested resource's history. Rows with no recorded APIVersion are
+	// unknown rather than mismatches and stay visible under every group filter.
+	t.Run("api group filter runs before the limit and keeps unknown versions", func(t *testing.T) {
+		store := newStore(t)
+		web := func(id string, offset time.Duration, apiVersion string) timeline.TimelineEvent {
+			e := informer(id, offset)
+			e.Name, e.APIVersion = "web", apiVersion
+			return e
+		}
+		mustAppend(t, store, web("matching", 0, "apps/v1"))
+		mustAppend(t, store, web("unknown", time.Minute, ""))
+		mustAppend(t, store, web("wrong-core", 2*time.Minute, "v1"))
+		for i := 0; i < 5; i++ {
+			mustAppend(t, store, web(fmt.Sprintf("wrong-%d", i), 3*time.Minute+time.Duration(i)*time.Second, "other.example/v1"))
+		}
+
+		query := func(name string, groups []string, limit int) []string {
+			t.Helper()
+			got, err := store.Query(ctx, timeline.QueryOptions{
+				Kinds: []string{"Deployment"}, Names: []string{"web"}, APIGroups: groups,
+				Limit: limit, IncludeManaged: true,
+			})
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			return idsOfEvents(got)
+		}
+
+		if got := query("apps", []string{"apps"}, 2); fmt.Sprint(got) != "[unknown matching]" {
+			t.Errorf("apps group with limit 2: got %v, want [unknown matching]", got)
+		}
+		if got := query("core", []string{""}, 10); fmt.Sprint(got) != "[wrong-core unknown]" {
+			t.Errorf("core group: got %v, want [wrong-core unknown]", got)
+		}
+	})
+
+	// Time-range narrowing is separate from arrival-order narrowing: Since/Until
+	// bound the event's own timestamp, which for a k8s Event is when the cluster
+	// says it happened, not when Radar saw it.
+	t.Run("since and until bound the event time", func(t *testing.T) {
+		store := newStore(t)
+		for i := 0; i < 5; i++ {
+			mustAppend(t, store, informer(fmt.Sprintf("t-%d", i), time.Duration(i)*time.Minute))
+		}
+		got, err := store.Query(ctx, timeline.QueryOptions{
+			Limit: 100, Since: base.Add(time.Minute), Until: base.Add(3 * time.Minute),
+			IncludeManaged: true, IncludeK8sEvents: true,
+		})
+		if err != nil {
+			t.Fatalf("Query(since,until): %v", err)
+		}
+		ids := idsOfEvents(got)
+		sort.Strings(ids)
+		if fmt.Sprint(ids) != fmt.Sprint([]string{"t-1", "t-2", "t-3"}) {
+			t.Fatalf("since/until window = %v, want [t-1 t-2 t-3]", ids)
+		}
+	})
+
+	// GetChangesForOwner backs the "what changed under this workload" drill-down.
+	// It scopes on owner kind+name and namespace together; a store that drops the
+	// namespace predicate shows another namespace's identically-named owner.
+	t.Run("changes for owner scope to owner and namespace", func(t *testing.T) {
+		store := newStore(t)
+		owned := informer("owned", 0)
+		owned.Owner = &timeline.OwnerInfo{Kind: "Deployment", Name: "api"}
+		elsewhere := informer("elsewhere", time.Second)
+		elsewhere.Namespace = "staging"
+		elsewhere.Owner = &timeline.OwnerInfo{Kind: "Deployment", Name: "api"}
+		otherOwner := informer("other-owner", 2*time.Second)
+		otherOwner.Owner = &timeline.OwnerInfo{Kind: "Deployment", Name: "web"}
+		for _, e := range []timeline.TimelineEvent{owned, elsewhere, otherOwner} {
+			mustAppend(t, store, e)
+		}
+
+		got, err := store.GetChangesForOwner(ctx, "Deployment", "default", "api", "", time.Time{}, 100)
+		if err != nil {
+			t.Fatalf("GetChangesForOwner: %v", err)
+		}
+		if len(got) != 1 || got[0].ID != "owned" {
+			t.Fatalf("owner scope = %v, want [owned]", idsOfEvents(got))
+		}
+		if got[0].Owner == nil || got[0].Owner.Kind != "Deployment" || got[0].Owner.Name != "api" {
+			t.Fatalf("owner not round-tripped: %+v", got[0].Owner)
+		}
+	})
+
+	// Whatever a store is handed, it must hand back. Each backend encodes these
+	// differently - Go structs in memory, TEXT and a fixed-width time layout in
+	// SQLite, jsonb and bigint nanoseconds in PostgreSQL - and only a
+	// round-trip through the store surface catches an encoding that quietly
+	// loses precision or drops a nested field.
+	t.Run("event payload round-trips through the store", func(t *testing.T) {
+		store := newStore(t)
+		// Deliberately sub-microsecond, and not taken from the wall clock: on
+		// darwin time.Now() is already microsecond-resolution, so a fixture
+		// built from it cannot detect a backend that truncates to microseconds.
+		// These fixed offsets make the property fail on every platform, not
+		// only the ones with a nanosecond clock.
+		born := base.Add(-30*time.Minute + 456789321*time.Nanosecond).Truncate(time.Nanosecond)
+		want := informer("payload", 0)
+		want.Timestamp = base.Add(819945123 * time.Nanosecond)
+		want.APIVersion, want.UID, want.CorrelationID = "apps/v1", "uid-9", "corr-9"
+		want.Reason, want.Message = "Scaled", "scaled up"
+		want.HealthState = timeline.HealthHealthy
+		want.ClusterContext = "cluster-x"
+		want.CreatedAt = &born
+		want.Owner = &timeline.OwnerInfo{Kind: "ReplicaSet", Name: "api-rs"}
+		want.Labels = map[string]string{"app": "api", "tier": "back"}
+		want.Diff = &timeline.DiffInfo{
+			Summary: "replicas 1 -> 3",
+			Fields:  []timeline.FieldChange{{Path: "spec.replicas", OldValue: "1", NewValue: "3"}},
+		}
+		mustAppend(t, store, want)
+
+		verify := func(where string, got *timeline.TimelineEvent) {
+			t.Helper()
+			if !got.Timestamp.Equal(want.Timestamp) {
+				t.Errorf("%s: timestamp = %v (%d ns), want %v (%d ns)", where,
+					got.Timestamp, got.Timestamp.UnixNano(), want.Timestamp, want.Timestamp.UnixNano())
+			}
+			if got.CreatedAt == nil || !got.CreatedAt.Equal(born) {
+				t.Errorf("%s: createdAt = %v, want %v", where, got.CreatedAt, born)
+			}
+			if got.APIVersion != want.APIVersion || got.UID != want.UID ||
+				got.CorrelationID != want.CorrelationID || got.Reason != want.Reason ||
+				got.Message != want.Message || got.HealthState != want.HealthState ||
+				got.ClusterContext != want.ClusterContext {
+				t.Errorf("%s: scalar field lost: %+v", where, got)
+			}
+			if got.Owner == nil || got.Owner.Kind != "ReplicaSet" || got.Owner.Name != "api-rs" {
+				t.Errorf("%s: owner = %+v", where, got.Owner)
+			}
+			if len(got.Labels) != 2 || got.Labels["app"] != "api" || got.Labels["tier"] != "back" {
+				t.Errorf("%s: labels = %v", where, got.Labels)
+			}
+			if got.Diff == nil || got.Diff.Summary != want.Diff.Summary || len(got.Diff.Fields) != 1 {
+				t.Errorf("%s: diff = %+v", where, got.Diff)
+			} else if f := got.Diff.Fields[0]; f.Path != "spec.replicas" ||
+				fmt.Sprint(f.OldValue) != "1" || fmt.Sprint(f.NewValue) != "3" {
+				t.Errorf("%s: diff field = %+v", where, f)
+			}
+		}
+
+		one, err := store.GetEvent(ctx, "payload")
+		if err != nil || one == nil {
+			t.Fatalf("GetEvent: %v %+v", err, one)
+		}
+		verify("GetEvent", one)
+
+		page := queryAll(t, store, 0, 10)
+		if len(page) != 1 {
+			t.Fatalf("Query returned %d rows, want 1", len(page))
+		}
+		verify("Query", &page[0])
+	})
+
+	// Stats backs the retention-gap headers and the Capacity Activity coverage
+	// notes. A store that leaves a field at its zero value reports "no gap" and
+	// "nothing evicted", which reads as clean history rather than missing data.
+	t.Run("stats report counts, seq bounds and event times", func(t *testing.T) {
+		store := newStore(t)
+		for i := 0; i < 3; i++ {
+			mustAppend(t, store, informer(fmt.Sprintf("s-%d", i), time.Duration(i)*time.Minute))
+		}
+		stats := store.Stats()
+		if stats.TotalEvents != 3 {
+			t.Errorf("TotalEvents = %d, want 3", stats.TotalEvents)
+		}
+		if stats.OldestSeq <= 0 || stats.NewestSeq <= stats.OldestSeq {
+			t.Errorf("seq bounds = %d..%d, want an increasing pair", stats.OldestSeq, stats.NewestSeq)
+		}
+		if !stats.OldestEvent.Equal(base) {
+			t.Errorf("OldestEvent = %v, want %v", stats.OldestEvent, base)
+		}
+		if !stats.NewestEvent.Equal(base.Add(2 * time.Minute)) {
+			t.Errorf("NewestEvent = %v, want %v", stats.NewestEvent, base.Add(2*time.Minute))
+		}
+	})
+
+	// The seen-set decides whether a resource's first sighting is reported as a
+	// change. It is keyed by cluster as well as identity, so the same workload in
+	// two clusters is two distinct sightings.
+	t.Run("seen resources are tracked per cluster and can be cleared", func(t *testing.T) {
+		store := newStore(t)
+		if store.IsResourceSeen("cluster-a", "", "Deployment", "default", "api") {
+			t.Fatal("resource reported seen before it was marked")
+		}
+		store.MarkResourceSeen("cluster-a", "", "Deployment", "default", "api")
+		if !store.IsResourceSeen("cluster-a", "", "Deployment", "default", "api") {
+			t.Fatal("resource not reported seen after MarkResourceSeen")
+		}
+		if store.IsResourceSeen("cluster-b", "", "Deployment", "default", "api") {
+			t.Fatal("seen state leaked across cluster contexts")
+		}
+		store.ClearResourceSeen("cluster-a", "", "Deployment", "default", "api")
+		if store.IsResourceSeen("cluster-a", "", "Deployment", "default", "api") {
+			t.Fatal("resource still reported seen after ClearResourceSeen")
+		}
+	})
+
+	// Same Kind/namespace/name can legitimately name two different resources
+	// in different API groups (a core Service vs. a Knative Service, say) —
+	// their seen state and clears must stay independent.
+	t.Run("seen resources are isolated by API group and cleared independently", func(t *testing.T) {
+		store := newStore(t)
+		store.MarkResourceSeen("cluster-a", "", "Service", "shop", "api")
+		store.MarkResourceSeen("cluster-a", "serving.knative.dev", "Service", "shop", "api")
+
+		if !store.IsResourceSeen("cluster-a", "", "Service", "shop", "api") {
+			t.Fatal("core Service should be seen")
+		}
+		if !store.IsResourceSeen("cluster-a", "serving.knative.dev", "Service", "shop", "api") {
+			t.Fatal("Knative Service should be seen independently of the core Service")
+		}
+
+		store.ClearResourceSeen("cluster-a", "", "Service", "shop", "api")
+		if store.IsResourceSeen("cluster-a", "", "Service", "shop", "api") {
+			t.Fatal("core Service should be cleared")
+		}
+		if !store.IsResourceSeen("cluster-a", "serving.knative.dev", "Service", "shop", "api") {
+			t.Fatal("clearing the core Service must not clear the Knative Service in another group")
+		}
+	})
+}
+
+func idsOfEvents(events []timeline.TimelineEvent) []string {
+	ids := make([]string, len(events))
+	for i, e := range events {
+		ids[i] = e.ID
+	}
+	return ids
 }

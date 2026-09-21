@@ -7,6 +7,7 @@ import { useCapabilitiesContext, useNamespacedCapabilities, useIsLocalDeployment
 import { getVisibleLiveMetrics, isLiveMetricsUnavailable, shouldFetchLiveMetrics, usePodEnvironment, usePodMetrics, usePodMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus, useRevealPodEnvironment } from '../../../api/client'
 import { useRBACSubject } from '../../../api/rbac'
 import { usePolicyResource } from '../../../api/policy'
+import { podLimitRangeNames, useNamespaceLimitRanges } from '../../../api/quotas'
 import { podAwaitsScheduling } from '../../capacity/podDemandGate'
 import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
 import { ImageFilesystemModal } from '../ImageFilesystemModal'
@@ -79,6 +80,8 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
     'pods', namespace ?? '', podName, !!namespace && !!podName,
   )
 
+  const { data: limitRanges, isSuccess: limitRangesReady } = useNamespaceLimitRanges(namespace ?? '', !!namespace)
+
   return (
     <BasePodRenderer
       data={data}
@@ -110,6 +113,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
       policyData={policyData ?? null}
       policyLoading={policyLoading}
       policyError={policyError as Error | null}
+      namespaceLimitRangeNames={limitRangesReady ? podLimitRangeNames(limitRanges) : undefined}
       canExec={canExec}
       canViewLogs={canViewLogs}
       canPortForward={showPortForward}

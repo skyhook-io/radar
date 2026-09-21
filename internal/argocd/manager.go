@@ -6,6 +6,8 @@ package argocd
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log"
@@ -60,6 +62,16 @@ const (
 	probeTimeout       = 15 * time.Second
 	probeRetryInterval = 30 * time.Second
 
+	// probeEndpointTimeout bounds a single reachability probe. On macOS,
+	// resolving any *.local hostname (a common convention for local cluster
+	// Gateway/Ingress hostnames) routes through mDNSResponder, which tries
+	// multicast DNS first and only falls back to /etc/hosts after its own
+	// hardcoded 5s timeout — so a tight probe budget can time out on DNS
+	// resolution alone before the TCP connect even starts, misreporting a
+	// live, reachable server as unreachable. 8s leaves headroom above that
+	// worst case for the actual connect + HTTP round trip.
+	probeEndpointTimeout = 8 * time.Second
+
 	// repoErrorBackoff throttles repo-list refetches after a failure (commonly a
 	// token without `repositories, get`), so insights' 2s poll doesn't hammer
 	// argocd-server. Longer than probeRetryInterval since repo-scope denials are
@@ -69,6 +81,26 @@ const (
 
 type cacheEntry struct {
 	items   []argoapi.ResourceDiff
+	expires time.Time
+}
+
+// applicationHealthTTL bounds how often the per-resource health of one app is
+// re-read from argocd-server. Failures are cached for the same window: the
+// GitOps detail page polls every 2s while a sync runs, and an install that
+// refuses anonymous reads must not be asked again on every tick.
+const applicationHealthTTL = 15 * time.Second
+
+type anonymousReadState uint8
+
+const (
+	anonymousReadUnknown anonymousReadState = iota
+	anonymousReadAllowed
+	anonymousReadRefused
+)
+
+type appHealthEntry struct {
+	health  *argoapi.ApplicationHealth
+	err     error
 	expires time.Time
 }
 
@@ -110,12 +142,30 @@ type Manager struct {
 
 	probing   bool
 	nextProbe time.Time
+	// lastProbeErr is why the last probe failed, for Settings to show; a
+	// connection drop keeps it (that is when the user wants to know).
+	lastProbeErr error
 
 	baseURL string
 	client  *argoapi.Client
 	forward *activeForward
+	// clientAnonymous marks a client built without a token. It counts as a
+	// connection only once a read has actually succeeded through it: a
+	// reachable argocd-server that answers 401 is not an integration, and
+	// must not light the diff or show as connected in Settings.
+	clientAnonymous bool
+	anonymousRead   anonymousReadState
 
 	cache map[string]cacheEntry
+	// appHealthCache memoizes ApplicationHealthCached per app, hits and
+	// misses alike.
+	appHealthCache map[string]appHealthEntry
+	// readRetryAfter throttles the health read while there is no client —
+	// discovery for the unconfigured (anonymous) case, the connect for a
+	// configured server that failed — so a detail-page poll doesn't rerun a
+	// Service list or a probe timeout. readRetryErr is the failure it repeats.
+	readRetryAfter time.Time
+	readRetryErr   error
 
 	// revMetaCache holds Git commit metadata keyed by
 	// (appNamespace, app, sourceIndex, revision). Cleared alongside `cache` on
@@ -367,6 +417,16 @@ func ValidateServerURL(raw string) error { return validateEnvArgoURL(raw) }
 // IsConfigured reports whether the default manager has connection settings.
 func IsConfigured() bool { return defaultManager.IsConfigured() }
 
+// AnonymousReadAllowed reports whether the default manager reads argocd-server
+// without a token and the install answers.
+func AnonymousReadAllowed() bool { return defaultManager.AnonymousReadAllowed() }
+
+// TokenSet reports whether the default manager has a token configured.
+func TokenSet() bool { return defaultManager.TokenSet() }
+
+// LastProbeError is the default manager's most recent probe failure, if any.
+func LastProbeError() error { return defaultManager.LastProbeError() }
+
 // TokenContext returns the readable context recorded with the current token.
 func TokenContext() string { return defaultManager.TokenContext() }
 
@@ -396,6 +456,12 @@ func ManagedResourcesCached(ctx context.Context, q argoapi.ManagedResourcesQuery
 
 func RevisionMetadataCached(ctx context.Context, q argoapi.RevisionMetadataQuery) (*argoapi.RevisionMetadata, error) {
 	return defaultManager.RevisionMetadataCached(ctx, q)
+}
+
+// ApplicationHealthCached fetches an Application's per-resource health via the
+// default manager (see Manager.ApplicationHealthCached).
+func ApplicationHealthCached(ctx context.Context, q argoapi.ApplicationQuery) (*argoapi.ApplicationHealth, error) {
+	return defaultManager.ApplicationHealthCached(ctx, q)
 }
 
 func RepositoriesCached() []argoapi.Repository {
@@ -618,6 +684,7 @@ func (m *Manager) dropConnectionLocked() *activeForward {
 	m.baseURL = ""
 	m.client = nil
 	m.cache = nil
+	m.appHealthCache = nil
 	m.revMetaCache = nil
 	m.repoCache = nil
 	// Clear the retry throttles too, so a reconnect or context switch (which is
@@ -625,13 +692,19 @@ func (m *Manager) dropConnectionLocked() *activeForward {
 	// staying suppressed for up to a retry interval on the PREVIOUS failure.
 	m.nextProbe = time.Time{}
 	m.repoRetryAfter = time.Time{}
+	m.readRetryAfter = time.Time{}
+	m.readRetryErr = nil
+	m.clientAnonymous = false
+	m.anonymousRead = anonymousReadUnknown
 	fwd := m.forward
 	m.forward = nil
 	return fwd
 }
 
 // Get returns the connected client without any network I/O. Returns
-// (nil, false) when unconfigured or not yet (successfully) probed.
+// (nil, false) when unconfigured or not yet (successfully) probed, and for
+// a tokenless client until argocd-server has answered a read through it —
+// reachability alone is not an integration the rest of the product can use.
 func (m *Manager) Get() (*argoapi.Client, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -643,7 +716,27 @@ func (m *Manager) Get() (*argoapi.Client, bool) {
 		m.maybeProbeInBackgroundLocked()
 		return nil, false
 	}
+	if m.clientAnonymous && m.anonymousRead != anonymousReadAllowed {
+		return nil, false
+	}
 	return m.client, true
+}
+
+// AnonymousReadAllowed reports that the live connection carries no token and
+// argocd-server has answered a read through it anyway — the install serves
+// reads to everyone, so there is nothing for the user to configure.
+func (m *Manager) AnonymousReadAllowed() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.client != nil && m.clientAnonymous && m.anonymousRead == anonymousReadAllowed
+}
+
+// TokenSet reports whether a token is configured, without exposing it.
+func (m *Manager) TokenSet() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ensureSeededLocked()
+	return m.token != ""
 }
 
 // maybeProbeInBackgroundLocked starts a background Probe when the manager has
@@ -690,6 +783,28 @@ func (m *Manager) Address() string {
 // session/userinfo. Errors wrap ErrUnreachable or ErrTokenInvalid so callers
 // can map them to distinct messages.
 func (m *Manager) Probe(ctx context.Context) error {
+	err := m.probe(ctx)
+	// The caller's own deadline or navigation says nothing about the
+	// server; recording it would have Settings report a timeout the
+	// background probe never saw.
+	if errors.Is(err, errStaleProbe) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	m.mu.Lock()
+	m.lastProbeErr = err
+	m.mu.Unlock()
+	return err
+}
+
+// LastProbeError is the failure of the most recent completed probe, or nil
+// after a success — what Settings shows next to "Not reachable".
+func (m *Manager) LastProbeError() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastProbeErr
+}
+
+func (m *Manager) probe(ctx context.Context) error {
 	// Serialize probes. Background reconnection and the synchronous probe from
 	// ManagedResourcesCached would otherwise run discovery + port-forward setup
 	// concurrently and race on m.forward / m.baseURL / m.client — the generation
@@ -766,8 +881,10 @@ func (m *Manager) Probe(ctx context.Context) error {
 		m.baseURL = url
 		m.cache = nil
 		m.revMetaCache = nil
+		m.anonymousRead = anonymousReadUnknown
 	}
 	m.client = newClient(url, snap.token, snap.insecureTLS)
+	m.clientAnonymous = snap.token == ""
 	return nil
 }
 
@@ -840,17 +957,25 @@ var ErrTokenBindingUpgrade = fmt.Errorf("argocd: re-confirm this token for this 
 // synchronously and re-fetches, surfacing "connection was reset" if a config
 // change raced the probe.
 func (m *Manager) connectedClient(ctx context.Context) (*argoapi.Client, error) {
-	if client, ok := m.Get(); ok {
+	if client := m.liveClient(); client != nil {
 		return client, nil
 	}
 	if err := m.Probe(ctx); err != nil {
 		return nil, err
 	}
-	client, ok := m.Get()
-	if !ok {
+	client := m.liveClient()
+	if client == nil {
 		return nil, fmt.Errorf("%w: connection was reset", ErrUnreachable)
 	}
 	return client, nil
+}
+
+// liveClient is whatever client the manager holds, tokenless or not — the
+// view for reads that may run anonymously. Get is the public, stricter one.
+func (m *Manager) liveClient() *argoapi.Client {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.client
 }
 
 // ManagedResourcesCached returns the app's managed-resource diffs, serving
@@ -905,6 +1030,122 @@ func (m *Manager) ManagedResourcesCached(ctx context.Context, q argoapi.ManagedR
 		m.mu.Unlock()
 	}
 	return items, nil
+}
+
+// ApplicationHealthCached returns Argo's own per-resource health for an
+// Application, as argocd-server reports it. The plain GET establishes
+// identity (UID) and mode; in appTree mode the health itself comes from
+// resource-tree, which every 3.x scopes by the Application's own namespace
+// (3.0's GET-side inference keyed the tree cache by bare name, so an app
+// outside Argo's namespace could get a same-named app's verdicts). The GET's
+// inline health is used only when the tree call fails. Served from a 15s
+// cache per app, misses included.
+//
+// Unlike the diff calls, this also runs for an UNCONFIGURED manager: with no
+// URL and no token it discovers argocd-server and asks without credentials,
+// which succeeds only where the install allows anonymous read
+// (users.anonymous.enabled). A refusal is cached and discovery is throttled,
+// so an install that says no is asked again at most every
+// probeRetryInterval.
+func (m *Manager) ApplicationHealthCached(ctx context.Context, q argoapi.ApplicationQuery) (*argoapi.ApplicationHealth, error) {
+	key := q.AppNamespace + "\x00" + q.AppName
+	m.mu.Lock()
+	if e, ok := m.appHealthCache[key]; ok && time.Now().Before(e.expires) {
+		m.mu.Unlock()
+		return e.health, e.err
+	}
+	m.ensureSeededLocked()
+	if m.client == nil && time.Now().Before(m.readRetryAfter) {
+		err := fmt.Errorf("%w (retry throttled)", m.readRetryErr)
+		m.mu.Unlock()
+		return nil, err
+	}
+	m.mu.Unlock()
+
+	health, gen, err := m.fetchApplicationHealth(ctx, q)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// A SetConfig/Reset during the fetch bumps the generation: the answer
+	// (or the failure) is for a superseded connection and must neither be
+	// served nor cached under the new one — a changed token against the same
+	// Application keeps its UID, so the overlay could not tell.
+	if m.generation != gen {
+		return nil, fmt.Errorf("%w: connection changed during fetch", ErrUnreachable)
+	}
+	// The caller's own deadline or navigation is not the server's answer:
+	// neither cached nor counted as a discovery failure, or every other
+	// viewer would skip Argo's verdicts for the rest of the window.
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return nil, err
+	}
+	if err != nil && m.client == nil {
+		m.readRetryAfter = time.Now().Add(probeRetryInterval)
+		m.readRetryErr = err
+	}
+	// The read is the only thing that proves whether the install serves
+	// anonymous reads; a 401/403 settles it the other way. Other failures
+	// leave the question open.
+	if m.client != nil && m.clientAnonymous {
+		switch {
+		case err == nil:
+			m.anonymousRead = anonymousReadAllowed
+		case errors.Is(err, argoapi.ErrUnauthorized):
+			m.anonymousRead = anonymousReadRefused
+		}
+	}
+	if m.appHealthCache == nil {
+		m.appHealthCache = make(map[string]appHealthEntry)
+	}
+	now := time.Now()
+	for k, e := range m.appHealthCache {
+		if now.After(e.expires) {
+			delete(m.appHealthCache, k)
+		}
+	}
+	m.appHealthCache[key] = appHealthEntry{health: health, err: err, expires: now.Add(applicationHealthTTL)}
+	return health, err
+}
+
+// fetchApplicationHealth returns the health and the manager generation the
+// client belonged to, so the caller can refuse to cache a superseded answer.
+func (m *Manager) fetchApplicationHealth(ctx context.Context, q argoapi.ApplicationQuery) (*argoapi.ApplicationHealth, uint64, error) {
+	// The generation is taken before anything can fail: a reset that races
+	// the probe bumps it, and the caller then discards this attempt's error
+	// instead of negative-caching it under the new connection.
+	m.mu.Lock()
+	gen := m.generation
+	m.mu.Unlock()
+	if _, err := m.connectedClient(ctx); err != nil {
+		return nil, gen, err
+	}
+	m.mu.Lock()
+	client := m.client
+	if m.generation != gen {
+		client = nil
+	}
+	m.mu.Unlock()
+	if client == nil {
+		return nil, gen, fmt.Errorf("%w: connection was reset", ErrUnreachable)
+	}
+	app, err := client.Application(ctx, q)
+	if err != nil {
+		return nil, gen, err
+	}
+	if app.ResourceHealthSource == "appTree" {
+		// The tree is the only acceptable source here — a tree with no
+		// health at all is Argo saying "no check for any of these", and a
+		// tree error is no answer, never a reason to fall back to the GET's
+		// possibly mis-scoped inference.
+		tree, terr := client.ResourceTree(ctx, q)
+		if terr != nil {
+			return nil, gen, terr
+		}
+		tree.UID = app.UID
+		tree.ResourceHealthSource = app.ResourceHealthSource
+		return tree, gen, nil
+	}
+	return app, gen, nil
 }
 
 // RevisionMetadataCached returns Git commit metadata for a revision, cached per
@@ -1076,6 +1317,12 @@ func (m *Manager) verifyAuth(ctx context.Context, url string, snap probeSnapshot
 		if errors.Is(err, argoapi.ErrUnauthorized) {
 			return fmt.Errorf("%w: %v", ErrTokenInvalid, err)
 		}
+		// The tokenless probe skips TLS verification, so a certificate
+		// problem first surfaces here, where the token would be sent; say
+		// what to do about it rather than leaving a bare x509 error.
+		if isTLSError(err) {
+			return fmt.Errorf("%w: %v (argocd-server serves a certificate Radar can't verify; set argoCdInsecureTls to trust it)", ErrUnreachable, err)
+		}
 		return fmt.Errorf("%w: %v", ErrUnreachable, err)
 	}
 	if !info.LoggedIn {
@@ -1084,10 +1331,21 @@ func (m *Manager) verifyAuth(ctx context.Context, url string, snap probeSnapshot
 	return nil
 }
 
+func isTLSError(err error) bool {
+	var certErr x509.UnknownAuthorityError
+	var hostErr x509.HostnameError
+	var certInvalid x509.CertificateInvalidError
+	if errors.As(err, &certErr) || errors.As(err, &hostErr) || errors.As(err, &certInvalid) {
+		return true
+	}
+	var tlsErr *tls.CertificateVerificationError
+	return errors.As(err, &tlsErr)
+}
+
 // probeEndpoint checks that an Argo CD API server answers at url. A 401/403
 // still proves reachability — auth is verifyAuth's concern.
 func (m *Manager) probeEndpoint(ctx context.Context, url string, snap probeSnapshot) error {
-	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, probeEndpointTimeout)
 	defer cancel()
 	// Reachability only — send NO token. /api/version answers 200 (public) or 401
 	// either way, so the bearer token is never needed to prove an endpoint is up.
@@ -1102,11 +1360,17 @@ func (m *Manager) probeEndpoint(ctx context.Context, url string, snap probeSnaps
 	return err
 }
 
+// newClient builds a client for url. A client that carries no token has
+// nothing on the wire to protect, so it skips TLS verification regardless of
+// the setting: the default in-cluster argocd-server serves a self-signed
+// certificate, and without this the reachability probe and the anonymous
+// read would fail there for every install. The setting still governs every
+// client that sends the token.
 func newClient(url, token string, insecureTLS bool) *argoapi.Client {
 	return argoapi.New(argoapi.Options{
 		BaseURL:               url,
 		Token:                 token,
-		InsecureSkipTLSVerify: insecureTLS,
+		InsecureSkipTLSVerify: insecureTLS || token == "",
 	})
 }
 

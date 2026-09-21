@@ -91,3 +91,50 @@ type RevisionMetadataQuery struct {
 	Project      string
 	SourceIndex  string // stringified source index; omitted when empty
 }
+
+// ApplicationQuery identifies an Application for the health calls. AppName
+// is required; AppNamespace is sent as `appNamespace` when non-empty.
+type ApplicationQuery struct {
+	AppName      string
+	AppNamespace string
+	Project      string
+}
+
+// ResourceHealth is one managed resource's health as the Argo CD API server
+// reports it. Health is Argo's vocabulary (Healthy / Progressing / Degraded /
+// Suspended / Missing / Unknown) or "" when Argo has no check for the kind.
+type ResourceHealth struct {
+	Group     string
+	Kind      string
+	Namespace string
+	Name      string
+	Health    string
+	Message   string
+}
+
+// ApplicationHealth is the per-resource health of one Application, read from
+// argocd-server rather than the Application object. UID identifies which
+// Application the server answered for, so a caller can refuse an answer
+// about a same-named app from a different Argo install.
+type ApplicationHealth struct {
+	UID string
+	// ResourceHealthSource mirrors status.resourceHealthSource: "" when the
+	// controller persists per-resource health inline, "appTree" when not.
+	ResourceHealthSource string
+	Resources            []ResourceHealth
+}
+
+// HasHealth reports whether at least one resource carries a health value —
+// the difference between "the server answered" and "the server answered
+// with Argo's verdicts".
+func (a *ApplicationHealth) HasHealth() bool {
+	if a == nil {
+		return false
+	}
+	for _, r := range a.Resources {
+		if r.Health != "" {
+			return true
+		}
+	}
+	return false
+}

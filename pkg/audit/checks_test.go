@@ -1223,63 +1223,6 @@ func TestMissingTopologySpread_SingleReplica(t *testing.T) {
 	}
 }
 
-func TestPodHARisk(t *testing.T) {
-	input := &CheckInput{
-		Deployments: []*appsv1.Deployment{{
-			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
-			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr(int32(3)),
-				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
-				Template: corev1.PodTemplateSpec{
-					Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Image: "app:v1"}}},
-				},
-			},
-		}},
-		Pods: []*corev1.Pod{
-			{ObjectMeta: metav1.ObjectMeta{Name: "web-1", Namespace: "default", Labels: map[string]string{"app": "web"}}, Spec: corev1.PodSpec{NodeName: "node-1"}},
-			{ObjectMeta: metav1.ObjectMeta{Name: "web-2", Namespace: "default", Labels: map[string]string{"app": "web"}}, Spec: corev1.PodSpec{NodeName: "node-1"}},
-			{ObjectMeta: metav1.ObjectMeta{Name: "web-3", Namespace: "default", Labels: map[string]string{"app": "web"}}, Spec: corev1.PodSpec{NodeName: "node-1"}},
-		},
-	}
-
-	results := RunChecks(input)
-	found := false
-	for _, f := range results.Findings {
-		if f.CheckID == "podHARisk" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected podHARisk when all 3 pods are on the same node")
-	}
-}
-
-func TestPodHARisk_Distributed(t *testing.T) {
-	input := &CheckInput{
-		Deployments: []*appsv1.Deployment{{
-			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
-			Spec: appsv1.DeploymentSpec{
-				Replicas: ptr(int32(2)),
-				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "web"}},
-				Template: corev1.PodTemplateSpec{
-					Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Image: "app:v1"}}},
-				},
-			},
-		}},
-		Pods: []*corev1.Pod{
-			{ObjectMeta: metav1.ObjectMeta{Name: "web-1", Namespace: "default", Labels: map[string]string{"app": "web"}}, Spec: corev1.PodSpec{NodeName: "node-1"}},
-			{ObjectMeta: metav1.ObjectMeta{Name: "web-2", Namespace: "default", Labels: map[string]string{"app": "web"}}, Spec: corev1.PodSpec{NodeName: "node-2"}},
-		},
-	}
-
-	results := RunChecks(input)
-	for _, f := range results.Findings {
-		if f.CheckID == "podHARisk" {
-			t.Error("podHARisk should not fire when pods are on different nodes")
-		}
-	}
-}
-
 func TestOrphanConfigMapSecret(t *testing.T) {
 	input := &CheckInput{
 		Ingresses: []*networkingv1.Ingress{},
@@ -1310,7 +1253,7 @@ func TestOrphanConfigMapSecret(t *testing.T) {
 		},
 	}
 
-	results := RunChecks(input)
+	results := RunChecks(completeOrphanEvidence(input))
 	orphans := map[string]bool{}
 	messages := map[string]string{}
 	for _, f := range results.Findings {
@@ -1522,7 +1465,7 @@ func TestOrphanConfigMapSecretSkipsKnownPlatformArtifacts(t *testing.T) {
 		},
 	}
 
-	orphans := findingResourceKeys(RunChecks(input).Findings, "orphanConfigMapSecret")
+	orphans := findingResourceKeys(RunChecks(completeOrphanEvidence(input)).Findings, "orphanConfigMapSecret")
 	for _, key := range []string{
 		"ConfigMap/kube-system/aws-auth",
 		"ConfigMap/kube-system/amazon-vpc-cni",
@@ -1649,7 +1592,7 @@ func TestOrphanConfigMapSecretKnownPlatformArtifactNegativeCases(t *testing.T) {
 		},
 	}
 
-	orphans := findingResourceKeys(RunChecks(input).Findings, "orphanConfigMapSecret")
+	orphans := findingResourceKeys(RunChecks(completeOrphanEvidence(input)).Findings, "orphanConfigMapSecret")
 	for _, key := range []string{
 		"ConfigMap/custom-argocd/argocd-rbac-cm",
 		"ConfigMap/kyverno/kyverno-metrics",
@@ -1764,7 +1707,7 @@ func TestOrphanConfigMapSecretPrecision(t *testing.T) {
 		},
 	}
 
-	orphans := findingNames(RunChecks(input).Findings, "orphanConfigMapSecret")
+	orphans := findingNames(RunChecks(completeOrphanEvidence(input)).Findings, "orphanConfigMapSecret")
 	if !orphans["actual-orphan-config"] || !orphans["actual-orphan-secret"] {
 		t.Fatalf("expected only explicit orphans, got %+v", orphans)
 	}
@@ -1833,7 +1776,7 @@ func TestOrphanConfigMapSecretTerminalJobsDoNotSuppressFindings(t *testing.T) {
 		},
 	}
 
-	orphans := findingNames(RunChecks(input).Findings, "orphanConfigMapSecret")
+	orphans := findingNames(RunChecks(completeOrphanEvidence(input)).Findings, "orphanConfigMapSecret")
 	if !orphans["finished-job-config"] || !orphans["finished-job-secret"] {
 		t.Fatalf("terminal Job references should not suppress orphan findings, got %+v", orphans)
 	}
@@ -1878,7 +1821,7 @@ func TestOrphanConfigMapSecretServiceAccountImagePullSecrets(t *testing.T) {
 		},
 	}
 
-	orphans := findingNames(RunChecks(input).Findings, "orphanConfigMapSecret")
+	orphans := findingNames(RunChecks(completeOrphanEvidence(input)).Findings, "orphanConfigMapSecret")
 	for _, name := range []string{"default-pull-secret", "builder-pull-secret", "direct-pull-secret"} {
 		if orphans[name] {
 			t.Errorf("%s should be counted as used", name)
@@ -1920,7 +1863,7 @@ func TestOrphanConfigMapSecretEphemeralContainerRefs(t *testing.T) {
 		},
 	}
 
-	orphans := findingNames(RunChecks(input).Findings, "orphanConfigMapSecret")
+	orphans := findingNames(RunChecks(completeOrphanEvidence(input)).Findings, "orphanConfigMapSecret")
 	if orphans["debug-config"] || orphans["debug-secret"] {
 		t.Fatalf("ephemeral container refs should be counted as used, got %+v", orphans)
 	}
@@ -1944,12 +1887,66 @@ func TestOrphanConfigMapSecretAdditionalRefs(t *testing.T) {
 		},
 	}
 
-	orphans := findingNames(RunChecks(input).Findings, "orphanConfigMapSecret")
+	orphans := findingNames(RunChecks(completeOrphanEvidence(input)).Findings, "orphanConfigMapSecret")
 	if orphans["crd-config"] || orphans["crd-secret"] {
 		t.Fatalf("additional refs should suppress orphan findings, got %+v", orphans)
 	}
 	if !orphans["actual-orphan-config"] || !orphans["actual-orphan-secret"] {
 		t.Fatalf("unreferenced resources should still be flagged, got %+v", orphans)
+	}
+}
+
+func TestOrphanConfigMapSecretCertManagerCertificateMetadata(t *testing.T) {
+	input := &CheckInput{
+		Secrets: []*corev1.Secret{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "api-tls-from-annotation",
+					Namespace: "app",
+					Annotations: map[string]string{
+						"cert-manager.io/certificate-name": "api-tls",
+						"cert-manager.io/issuer-name":      "letsencrypt",
+					},
+					Labels: map[string]string{
+						"controller.cert-manager.io/fao": "true",
+					},
+				},
+				Type: corev1.SecretTypeTLS,
+			},
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "api-tls-from-label",
+					Namespace: "app",
+					Labels: map[string]string{
+						"cert-manager.io/certificate-name": "api-tls-label",
+					},
+				},
+				Type: corev1.SecretTypeTLS,
+			},
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "unrelated-tls",
+					Namespace: "app",
+					Annotations: map[string]string{
+						"cert-manager.io/issuer-name": "letsencrypt",
+					},
+				},
+				Type: corev1.SecretTypeTLS,
+			},
+		},
+	}
+
+	orphans := findingResourceKeys(RunChecks(completeOrphanEvidence(input)).Findings, "orphanConfigMapSecret")
+	for _, key := range []string{
+		"Secret/app/api-tls-from-annotation",
+		"Secret/app/api-tls-from-label",
+	} {
+		if orphans[key] {
+			t.Errorf("%s should not be flagged as orphan", key)
+		}
+	}
+	if !orphans["Secret/app/unrelated-tls"] {
+		t.Errorf("Secret/app/unrelated-tls should still be flagged as orphan")
 	}
 }
 

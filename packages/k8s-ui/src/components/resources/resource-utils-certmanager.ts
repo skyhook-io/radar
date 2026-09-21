@@ -126,7 +126,7 @@ export function getOrderState(order: any): StatusBadge {
     case 'valid':
       return { text: 'Valid', color: healthColors.healthy, level: 'healthy' }
     case 'ready':
-      return { text: 'Ready', color: 'bg-blue-500/20 text-blue-400', level: 'healthy' }
+      return { text: 'Ready', color: 'status-blue', level: 'healthy' }
     case 'pending':
       return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
     case 'invalid':
@@ -162,7 +162,7 @@ export function getChallengeState(challenge: any): StatusBadge {
     case 'valid':
       return { text: 'Valid', color: healthColors.healthy, level: 'healthy' }
     case 'ready':
-      return { text: 'Ready', color: 'bg-blue-500/20 text-blue-400', level: 'healthy' }
+      return { text: 'Ready', color: 'status-blue', level: 'healthy' }
     case 'pending':
       return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
     case 'processing':

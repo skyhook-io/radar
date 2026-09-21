@@ -4,7 +4,8 @@ import { ReachActions, JustTestedNote, CopyableCommand, completedRequestMode, ty
 import { AlertBanner } from '../ui/drawer-components'
 import { PaneLoader } from '../ui/PaneLoader'
 import { ReachabilityGraph, MarkGlyph } from './ReachabilityGraph'
-import { Activity, ChevronRight } from 'lucide-react'
+import { Activity } from 'lucide-react'
+import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 import { Tooltip } from '../ui/Tooltip'
 import { buildGraph, noteHeadline } from './reachGraphModel'
 import { buildOrigins, defaultOrigin, probeCheckStats, type Origin, type OriginId } from './reachOrigins'
@@ -778,10 +779,10 @@ function untestableSummary(out: Origin[]): string {
 // ---------------------------------------------------------------- inspector
 
 /**
- * The panel's one disclosure, matching drawer-components' Section: a rotating
- * ChevronRight and a grid-template-rows transition. Hand-rolled "›"/"⌄" toggles
- * neither looked like the rest of Radar nor animated, so a section appearing was
- * an abrupt jump with no affordance saying it could be opened at all.
+ * The panel's one disclosure, on the shared Collapse primitive like
+ * drawer-components' Section. Hand-rolled "›"/"⌄" toggles neither looked like
+ * the rest of Radar nor animated, so a section appearing was an abrupt jump
+ * with no affordance saying it could be opened at all.
  */
 function Disclosure({
   open,
@@ -796,21 +797,22 @@ function Disclosure({
   count?: number
   children: React.ReactNode
 }) {
+  const { panelId, buttonProps } = useDisclosure(open)
   return (
     <div>
       <button
+        {...buttonProps}
         type="button"
         onClick={onToggle}
-        aria-expanded={open}
         className="flex w-full items-center gap-1.5 text-[9.5px] font-bold tracking-[0.07em] text-theme-text-tertiary transition-colors hover:text-theme-text-secondary"
       >
-        <ChevronRight className={`h-3 w-3 flex-none transition-transform duration-200 ${open ? 'rotate-90' : ''}`} />
+        <CollapseChevron open={open} className="h-3 w-3 flex-none" />
         <span>{label}</span>
         {count !== undefined && <span className="flex-1 text-right font-normal tracking-normal">{count}</span>}
       </button>
-      <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: open ? '1fr' : '0fr' }}>
-        <div className="overflow-hidden">{children}</div>
-      </div>
+      <Collapse open={open} id={panelId}>
+        {children}
+      </Collapse>
     </div>
   )
 }
@@ -981,6 +983,7 @@ function HopSection({
 }) {
   const [openOverride, setOpenOverride] = useState<boolean | null>(null)
   const open = openOverride ?? hop.expanded
+  const { panelId, buttonProps } = useDisclosure(open)
   const ref = useRef<HTMLDivElement>(null)
   // A click on the graph scrolls its hop into view instead of replacing the
   // panel - the gesture still means "I care about this one", it just no longer
@@ -1012,15 +1015,15 @@ function HopSection({
       className={`mt-2 rounded-md px-2 py-1 transition-colors duration-200 ${selected ? 'selection selection-ring' : ''}`}
     >
       <button
+        {...buttonProps}
         type="button"
         onClick={() => {
           setOpenOverride(!open)
           onSelect(hop.id)
         }}
-        aria-expanded={open}
         className="flex w-full items-center gap-1.5 text-left"
       >
-        <ChevronRight className={`h-3 w-3 flex-none text-theme-text-tertiary transition-transform duration-200 ${open ? 'rotate-90' : ''}`} />
+        <CollapseChevron open={open} className="h-3 w-3 flex-none" />
         <span className="text-[9px] font-bold tracking-[0.04em] text-theme-text-tertiary">{hop.kind}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] font-semibold text-theme-text-primary">{hop.name}</span>
         <span className={`badge-sm whitespace-nowrap ${SEV_BADGE[hop.chipTone]}`}>{hop.chipText || HOP_STATE_NOTE[hop.state]}</span>
@@ -1032,8 +1035,7 @@ function HopSection({
             .join(' — ')}
         </div>
       )}
-      <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: open ? '1fr' : '0fr' }}>
-        <div className="overflow-hidden">
+      <Collapse open={open} id={panelId}>
         <div className="pb-1 pl-[18px]">
           {hop.openRef?.name && (
             <button type="button" onClick={() => onOpen(hop.openRef!)} className="text-[11px] text-accent-text hover:underline">
@@ -1084,8 +1086,7 @@ function HopSection({
             <Caveats items={hop.notProve} />
           </div>
         </div>
-        </div>
-      </div>
+      </Collapse>
     </div>
   )
 }

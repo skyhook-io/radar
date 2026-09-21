@@ -69,7 +69,7 @@ func (s *Server) handleCloudConnectSelf(w http.ResponseWriter, r *http.Request) 
 // ownership "unknown" with a generic wizard link — a wrong-but-confident
 // answer here would send an operator to a command that damages their install.
 func (s *Server) inspectSelfInstall(ctx context.Context, r *http.Request, namespace, deploymentName string) cloudConnectSelf {
-	generic := cloudConnectSelf{Ownership: "unknown", WizardURL: s.cloudConnectCfg.HubAppURL + "/install?" + cloudFunnelUTM("wizard-generic").Encode()}
+	generic := cloudConnectSelf{Ownership: "unknown", WizardURL: s.cloudConnectCfg.HubAppURL + "/install?" + cloudFunnelUTM("wizard-install-link-unknown-install").Encode()}
 	if namespace == "" || deploymentName == "" {
 		return generic
 	}
@@ -194,7 +194,7 @@ func wizardMethodFor(ref subject.Ref) string {
 // it renders the existing-install artifact for the right namespace, release,
 // and tool instead of guessing any of the three.
 func (s *Server) wizardInstallURL(namespace, release, method string) string {
-	q := cloudFunnelUTM("wizard-deeplink")
+	q := cloudFunnelUTM("wizard-install-link-known-install")
 	q.Set("existing", "1")
 	q.Set("ns", namespace)
 	q.Set("release", release)
@@ -202,10 +202,9 @@ func (s *Server) wizardInstallURL(namespace, release, method string) string {
 	return s.cloudConnectCfg.HubAppURL + "/install?" + q.Encode()
 }
 
-// cloudFunnelUTM marks a funnel-opened Hub URL with which lane produced it,
-// so Hub-side analytics can measure the funnel per lane without Radar itself
-// transmitting anything — the Hub only ever sees it when the user actually
-// navigates there. Matches the frontend's SIGNUP_QUERY vocabulary.
+// cloudFunnelUTM tags a Hub URL opened from the Cloud dialog with the link
+// that produced it. It travels only in the link the user opens. Matches the
+// frontend's SIGNUP_QUERY vocabulary (cloudConnectHandoff.ts).
 func cloudFunnelUTM(content string) url.Values {
 	return url.Values{
 		"utm_source":   {"radar-oss"},

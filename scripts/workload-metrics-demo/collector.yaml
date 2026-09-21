@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: workload-ksm
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: workload-demo-ksm
+rules:
+  - apiGroups: ['']
+    resources: [pods, namespaces]
+    verbs: [list, watch]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets, statefulsets, daemonsets]
+    verbs: [list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: workload-demo-ksm
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: workload-demo-ksm}
+subjects:
+  - {kind: ServiceAccount, name: workload-ksm, namespace: monitoring}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: workload-demo-cadvisor
+rules:
+  - apiGroups: ['']
+    resources: [nodes/metrics]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: workload-demo-cadvisor
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: workload-demo-cadvisor}
+subjects:
+  - {kind: ServiceAccount, name: prometheus, namespace: monitoring}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: workload-ksm}}
+  template:
+    metadata: {labels: {app: workload-ksm}}
+    spec:
+      serviceAccountName: workload-ksm
+      containers:
+        - name: kube-state-metrics
+          image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.19.1
+          args: ['--resources=pods,namespaces,deployments,replicasets,statefulsets,daemonsets']
+          ports: [{name: metrics, containerPort: 8080}]
+          resources:
+            requests: {cpu: 25m, memory: 64Mi}
+            limits: {memory: 256Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+spec:
+  selector: {app: workload-ksm}
+  ports: [{name: metrics, port: 8080}]

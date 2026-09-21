@@ -51,7 +51,7 @@ func (c *requestScopedChecker) CanRead(_ context.Context, group, kind, namespace
 		return v
 	}
 
-	resource := lookupResourceName(kind, group)
+	gvrGroup, resource := k8s.LookupResourceGVR(kind, group)
 	if resource == "" {
 		c.cache[key] = true
 		return true
@@ -61,7 +61,7 @@ func (c *requestScopedChecker) CanRead(_ context.Context, group, kind, namespace
 	if namespace == "" {
 		allowed = canReadClusterScopedKind(c.ctx, kind, group, "get")
 	} else {
-		allowed = canReadInNamespace(c.ctx, group, resource, namespace, "get")
+		allowed = canReadInNamespace(c.ctx, gvrGroup, resource, namespace, "get")
 	}
 	c.cache[key] = allowed
 	return allowed
@@ -69,26 +69,3 @@ func (c *requestScopedChecker) CanRead(_ context.Context, group, kind, namespace
 
 // Compile-time assertion that requestScopedChecker satisfies the contract.
 var _ resourcecontext.RefAccessChecker = (*requestScopedChecker)(nil)
-
-// lookupResourceName resolves a (kind, group) pair to the canonical plural
-// resource name used by SubjectAccessReview. Tries the static cluster-only
-// catalogue first (covers Nodes / ClusterRoles / etc.), then discovery for
-// everything else including CRDs. Returns "" when neither path knows the
-// kind. Mirrors internal/server/rc_rbac.go's helper of the same name.
-func lookupResourceName(kind, group string) string {
-	if kind == "" {
-		return ""
-	}
-	if clusterScoped, _, resource := k8s.ClassifyKindScope(kind, group); clusterScoped {
-		return resource
-	}
-	if g, r, ok := k8s.ClusterOnlyKindGVR(kind); ok && (group == "" || group == g) {
-		return r
-	}
-	if disc := k8s.GetResourceDiscovery(); disc != nil {
-		if ar, ok := disc.GetResourceWithGroup(kind, group); ok {
-			return ar.Name
-		}
-	}
-	return ""
-}

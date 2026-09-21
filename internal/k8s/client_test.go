@@ -978,3 +978,97 @@ func containsSubstring(haystack, needle string) bool {
 	}
 	return false
 }
+
+func TestExtractAWSProfile(t *testing.T) {
+	tests := []struct {
+		name string
+		ai   *clientcmdapi.AuthInfo
+		want string
+	}{
+		{
+			name: "nil AuthInfo",
+			ai:   nil,
+			want: "",
+		},
+		{
+			name: "no exec block",
+			ai:   &clientcmdapi.AuthInfo{},
+			want: "",
+		},
+		{
+			name: "non-AWS exec command",
+			ai: &clientcmdapi.AuthInfo{Exec: &clientcmdapi.ExecConfig{
+				Command: "gke-gcloud-auth-plugin",
+				Env:     []clientcmdapi.ExecEnvVar{{Name: "AWS_PROFILE", Value: "should-be-ignored"}},
+			}},
+			want: "",
+		},
+		{
+			name: "AWS_PROFILE env var",
+			ai: &clientcmdapi.AuthInfo{Exec: &clientcmdapi.ExecConfig{
+				Command: "aws",
+				Args:    []string{"--region", "ap-southeast-1", "eks", "get-token", "--cluster-name", "my-cluster", "--output", "json"},
+				Env:     []clientcmdapi.ExecEnvVar{{Name: "AWS_PROFILE", Value: "myorg/my-account/my-role"}},
+			}},
+			want: "myorg/my-account/my-role",
+		},
+		{
+			name: "--profile flag (space-separated)",
+			ai: &clientcmdapi.AuthInfo{Exec: &clientcmdapi.ExecConfig{
+				Command: "aws",
+				Args:    []string{"--profile", "my-profile", "eks", "get-token", "--cluster-name", "my-cluster"},
+			}},
+			want: "my-profile",
+		},
+		{
+			name: "--profile= (equals-separated)",
+			ai: &clientcmdapi.AuthInfo{Exec: &clientcmdapi.ExecConfig{
+				Command: "aws",
+				Args:    []string{"--profile=my-profile", "eks", "get-token"},
+			}},
+			want: "my-profile",
+		},
+		{
+			name: "--profile arg with no following value",
+			ai: &clientcmdapi.AuthInfo{Exec: &clientcmdapi.ExecConfig{
+				Command: "aws",
+				Args:    []string{"--profile"},
+			}},
+			want: "",
+		},
+		{
+			name: "--profile flag takes precedence over AWS_PROFILE env var",
+			ai: &clientcmdapi.AuthInfo{Exec: &clientcmdapi.ExecConfig{
+				Command: "aws",
+				Args:    []string{"--profile", "from-flag"},
+				Env:     []clientcmdapi.ExecEnvVar{{Name: "AWS_PROFILE", Value: "from-env"}},
+			}},
+			want: "from-flag",
+		},
+		{
+			name: "aws-iam-authenticator command",
+			ai: &clientcmdapi.AuthInfo{Exec: &clientcmdapi.ExecConfig{
+				Command: "aws-iam-authenticator",
+				Env:     []clientcmdapi.ExecEnvVar{{Name: "AWS_PROFILE", Value: "myorg/my-account/my-role"}},
+			}},
+			want: "myorg/my-account/my-role",
+		},
+		{
+			name: "full path to aws binary",
+			ai: &clientcmdapi.AuthInfo{Exec: &clientcmdapi.ExecConfig{
+				Command: "/usr/local/bin/aws",
+				Env:     []clientcmdapi.ExecEnvVar{{Name: "AWS_PROFILE", Value: "my-profile"}},
+			}},
+			want: "my-profile",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractAWSProfile(tt.ai)
+			if got != tt.want {
+				t.Errorf("extractAWSProfile() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

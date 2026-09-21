@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
-import { AlertTriangle, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
+import { AlertTriangle, Loader2 } from 'lucide-react'
+import { Collapse, CollapseChevron, useDisclosure } from './Collapse'
 import { ConfirmDialog } from './ConfirmDialog'
 import { pluralize } from '../../utils/pluralize'
 
@@ -97,6 +98,7 @@ const MAX_NAMES_PER_KIND = 8
 
 function CascadeDependentsList({ dependents }: { dependents: CascadeDependent[] }) {
   const [expanded, setExpanded] = useState(false)
+  const { panelId, buttonProps } = useDisclosure(expanded)
 
   const grouped = useMemo(() => {
     const map = new Map<string, string[]>()
@@ -111,17 +113,18 @@ function CascadeDependentsList({ dependents }: { dependents: CascadeDependent[] 
   return (
     <div className="rounded border border-amber-500/30 bg-amber-500/5">
       <button
+        {...buttonProps}
         type="button"
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-2 w-full px-3 py-2 text-left text-xs font-medium text-amber-400 hover:bg-amber-500/10 transition-colors"
       >
-        {expanded ? <ChevronDown className="w-3.5 h-3.5 shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 shrink-0" />}
+        <CollapseChevron open={expanded} inheritColor className="w-3.5 h-3.5" />
         <span>
           Will also delete {pluralize(dependents.length, 'dependent resource')}
         </span>
       </button>
 
-      {expanded && (
+      <Collapse open={expanded} id={panelId}>
         <div className="px-3 pb-2.5 space-y-1.5">
           {grouped.map(([kind, names]) => (
             <div key={kind} className="text-xs">
@@ -136,7 +139,7 @@ function CascadeDependentsList({ dependents }: { dependents: CascadeDependent[] 
             </div>
           ))}
         </div>
-      )}
+      </Collapse>
     </div>
   )
 }
