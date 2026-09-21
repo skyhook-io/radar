@@ -312,7 +312,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                 tone="filtered"
                 variant="card"
                 headline={memberCollection ? 'No Jobs match these filters' : 'No runs match these filters'}
-                body={memberCollection ? 'Change the status filter or Job-name search.' : 'Change the status filter or run-name search.'}
+                body={memberCollection ? `Change the status filter, Job-name search${roleFilter ? ', or role filter' : ''}.` : 'Change the status filter or run-name search.'}
               />
             ) : (
               <div className="space-y-1">

@@ -97,16 +97,16 @@ export function JobSetRenderer({ data, mode = 'detail', shownMemberCounts, onSel
         {mode === 'overview' ? (
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-theme-text-secondary">
             <span className={`badge ${displayedStatus.color}`}>{displayedStatus.text}</span>
-            <span>Suspend requested: {spec.suspend == null ? 'Not reported' : spec.suspend ? 'Yes' : 'No'}</span>
+            <span>Suspend requested: {spec.suspend ? 'Yes' : 'No'}</span>
             <span>Global restarts: {status.restarts ?? 'Not reported'}</span>
-            <span>Role observations: {observedRoles} / {replicatedJobs.length}</span>
+            {observedRoles < replicatedJobs.length && <span>Roles reporting status: {observedRoles} of {replicatedJobs.length}</span>}
           </div>
         ) : (
         <PropertyList>
           <Property label="State" value={<span className={`badge ${displayedStatus.color}`}>{displayedStatus.text}</span>} />
           <Property label="Terminal state" value={status.terminalState} />
           <Property label="Global restarts" value={status.restarts} />
-          <Property label="Suspend requested" value={spec.suspend === undefined ? undefined : spec.suspend ? 'Yes' : 'No'} />
+          <Property label="Suspend requested" value={spec.suspend ? 'Yes' : 'No'} />
           <Property label="Managed by" value={spec.managedBy} />
           <Property
             label="Delete after finish"
@@ -190,7 +190,7 @@ export function JobSetRenderer({ data, mode = 'detail', shownMemberCounts, onSel
                     <Property label="Individual restarts" value={jobRestarts} />
                   </PropertyList>
 
-                  {counts.length > 0 ? (
+                  {mode === 'detail' && (counts.length > 0 ? (
                     <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-theme-border-subtle pt-2 text-xs text-theme-text-secondary">
                       {counts.map((count) => (
                         <span key={count.label}>
@@ -203,9 +203,9 @@ export function JobSetRenderer({ data, mode = 'detail', shownMemberCounts, onSel
                     <div className="border-t border-theme-border-subtle pt-2 text-xs text-theme-text-tertiary">
                       Controller status has not been reported for this role.
                     </div>
-                  )}
+                  ))}
 
-                  {dependencies.length > 0 && (
+                  {mode === 'detail' && dependencies.length > 0 && (
                     <div className="flex flex-wrap items-center gap-1.5 text-xs">
                       <span className="text-theme-text-tertiary">Starts after</span>
                       {dependencies.map((dependency, dependencyIndex) => (
@@ -248,7 +248,7 @@ export function JobSetRenderer({ data, mode = 'detail', shownMemberCounts, onSel
             <Property label="Global restarts counted toward limit" value={globalCountedRestarts ?? 'Not reported'} />
             <Property label="Individual restarts counted toward limit" value={individualCountedRestarts == null ? 'Not reported' : `${individualCountedRestarts} (${observedRoles} of ${replicatedJobs.length} roles reported)`} />
             <Property label="Restart strategy" value={failurePolicy?.restartStrategy} />
-            {failurePolicy && <Property label="No matching rule" value="RestartJobSet" />}
+            {failureRules.length > 0 && <Property label="Default action" value="RestartJobSet" />}
             <Property label="Startup order" value={spec.startupPolicy?.startupPolicyOrder} />
           </PropertyList>
 
@@ -316,13 +316,7 @@ export function JobSetRenderer({ data, mode = 'detail', shownMemberCounts, onSel
         </Section>
       )}
 
-      {mode === 'detail' && <ConditionsSection conditions={conditions} getConditionTone={getJobSetConditionTone} />}
-      {mode === 'overview' && conditions.length > 0 && (
-        <details className="text-sm">
-          <summary className="cursor-pointer py-2 text-accent-text">Controller conditions ({conditions.length})</summary>
-          <ConditionsSection conditions={conditions} getConditionTone={getJobSetConditionTone} />
-        </details>
-      )}
+      {showSummary && <ConditionsSection conditions={conditions} getConditionTone={getJobSetConditionTone} defaultExpanded={mode === 'overview' ? false : undefined} />}
     </>
   )
 }
