@@ -205,7 +205,7 @@ describe('JobSet member presentation', () => {
     expect(pluralizeMemberJobs(200, 240, true)).toBe('200 of 240 Jobs')
     expect(emptyRunsCopy('JobSet', {})).toEqual({
       headline: 'No child Jobs currently retained',
-      body: 'No readable Jobs owned by this JobSet are currently available. They may be waiting on dependencies or may already have been cleaned up.',
+      body: 'No readable Jobs owned by this JobSet are currently available. Use the JobSet status, role dependencies, and admission evidence to investigate.',
     })
   })
 

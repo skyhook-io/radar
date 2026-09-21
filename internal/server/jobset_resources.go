@@ -41,7 +41,7 @@ type jobSetPod struct {
 func jobSetOwnedPods(root *unstructured.Unstructured, jobs []*batchv1.Job, pods []*corev1.Pod) []jobSetPod {
 	owned := make(map[types.UID]*batchv1.Job)
 	for _, job := range jobs {
-		if jobSetControlsJob(root, job) && job.UID != "" {
+		if jobSetControls(root, job) && job.UID != "" {
 			owned[job.UID] = job
 		}
 	}
