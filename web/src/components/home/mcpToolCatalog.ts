@@ -25,17 +25,7 @@ export interface MCPToolInfo {
 }
 
 export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
-  {
-    name: 'collect_runtime_evidence',
-    write: true,
-    desc: 'Explicit local-only collection of selected Pod evidence: RabbitMQ alarms, NATS consumer counts, or Vault seal/init status. Requires existing port-forward permission. Missing evidence never means healthy; no hosted or automatic investigation access.',
-    params: [
-      { arg: 'adapter', required: true, desc: 'rabbitmq, nats, or vault' },
-      { arg: 'namespace', required: true, desc: 'Pod namespace' },
-      { arg: 'pod', required: true, desc: 'one explicitly selected Pod' },
-      { arg: 'confirm_network_access', required: true, desc: 'true after operator authorization to collect endpoint evidence' },
-    ],
-  },
+
   {
     name: 'get_dashboard',
     desc: 'Cluster or namespace health overview: resource counts, failing pods, unhealthy workloads, recent warning events, and Helm status. Start here before drilling into specific resources.',
@@ -306,6 +296,16 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'grep', desc: 'regex matches to return instead of diagnostic auto-filtering' },
       { arg: 'since', desc: 'only logs newer than this duration' },
       { arg: 'previous', desc: 'logs from the previous terminated container' },
+    ],
+  },
+  {
+    name: 'collect_runtime_evidence',
+    desc: 'Explicit local-only collection of selected Pod evidence: RabbitMQ alarms, NATS consumer counts, or Vault seal/init status. Requires existing port-forward permission. Missing evidence never means healthy; no hosted or automatic investigation access.',
+    params: [
+      { arg: 'adapter', required: true, desc: 'rabbitmq, nats, or vault' },
+      { arg: 'namespace', required: true, desc: 'Pod namespace' },
+      { arg: 'pod', required: true, desc: 'one explicitly selected Pod' },
+      { arg: 'confirm_network_access', required: true, desc: 'true after operator authorization to collect endpoint evidence' },
     ],
   },
   {
