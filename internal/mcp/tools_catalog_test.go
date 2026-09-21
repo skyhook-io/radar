@@ -13,6 +13,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 // setupDialogCatalogPath is the human-facing tool catalog rendered by the MCP
@@ -244,7 +245,7 @@ func TestToolCatalogContextBudget(t *testing.T) {
 	// These caps guard against description accretion, not against new tools or
 	// load-bearing routing and uncertainty contracts. Raise them deliberately.
 	const (
-		maxCatalogBytes         = 53500
+		maxCatalogBytes         = 58500
 		maxToolDescriptionBytes = 3000
 	)
 
@@ -643,4 +644,43 @@ func listRegisteredToolsWithRegistry(t *testing.T, includeWrites bool) ([]*mcpsd
 		t.Fatal("no MCP tools registered")
 	}
 	return result.Tools, registry
+}
+
+// TestDiagnoserAllowlistCoversAllReadTools fails when a read tool is registered
+// for MCP but never added to the agent's allowlist. Every registered read tool
+// must appear there: one that does not reaches every external client but not
+// Radar's own Diagnose agent, which is silent rather than an error.
+func TestDiagnoserAllowlistCoversAllReadTools(t *testing.T) {
+	writes := map[string]bool{}
+	for _, w := range writeToolNames {
+		writes[w] = true
+	}
+
+	allowed := map[string]bool{}
+	for _, name := range investigation.ReadOnlyTools {
+		allowed[name] = true
+	}
+
+	var missing, stale []string
+	registered := map[string]bool{}
+	for _, tool := range listRegisteredTools(t) {
+		registered[tool.Name] = true
+		if writes[tool.Name] || allowed[tool.Name] {
+			continue
+		}
+		missing = append(missing, tool.Name)
+	}
+	for name := range allowed {
+		if !registered[name] {
+			stale = append(stale, name)
+		}
+	}
+	sort.Strings(missing)
+	sort.Strings(stale)
+	if len(missing) > 0 {
+		t.Errorf("read tools registered for MCP but not callable by Radar's own agent: %v — add them to investigation.ReadOnlyTools", missing)
+	}
+	if len(stale) > 0 {
+		t.Errorf("investigation.ReadOnlyTools names tools that are not registered: %v", stale)
+	}
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/skyhook-io/radar/internal/diagnosecli"
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
+	"github.com/skyhook-io/radar/internal/memlimit"
 	"github.com/skyhook-io/radar/internal/reachability"
 	"github.com/skyhook-io/radar/internal/server"
 	versionpkg "github.com/skyhook-io/radar/internal/version"
@@ -257,6 +258,7 @@ func main() {
 		startupMode = "Radar Cloud"
 	}
 	log.Printf("Radar %s starting (mode=%s, auth=%s)...", version, startupMode, *authMode)
+	memlimit.Apply()
 
 	// Validate flags
 	switch *authMode {
@@ -295,6 +297,7 @@ func main() {
 	namespaceFlagSet := false
 	namespacesFlagSet := false
 	openCostCurrencyFlagSet := false
+	prometheusURLFlagSet := false
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "no-mcp":
@@ -309,6 +312,8 @@ func main() {
 			namespacesFlagSet = true
 		case "opencost-currency":
 			openCostCurrencyFlagSet = true
+		case "prometheus-url":
+			prometheusURLFlagSet = true
 		}
 	})
 	if *mcpCatalogOnly && noMCPFlagSet && *noMCP {
@@ -316,6 +321,11 @@ func main() {
 	}
 	if *mcpCatalogStdio && noMCPFlagSet && *noMCP {
 		log.Fatalf("--mcp-catalog-stdio cannot be combined with --no-mcp")
+	}
+	inheritsPrometheusHeaders := !promHeaders.overrides && len(fileCfg.PrometheusHeaders) > 0 ||
+		!promHeadersFromEnv.overrides && len(fileCfg.PrometheusHeadersFromEnv) > 0
+	if err := app.ValidatePrometheusHeaderDestination(fileCfg.PrometheusURL, *prometheusURL, inheritsPrometheusHeaders); err != nil {
+		log.Fatalf("Invalid Prometheus header configuration: %v", err)
 	}
 	resolvedPrometheusHeaders, err := app.ResolvePrometheusHeaders(promHeaders.value(), promHeadersFromEnv.value())
 	if err != nil {
@@ -391,6 +401,8 @@ func main() {
 		KubecostClusterIDContext: fileCfg.KubecostClusterIDContext,
 		PrometheusHeaders:        resolvedPrometheusHeaders,
 		PrometheusHeadersFromEnv: promHeadersFromEnv.value(),
+		PrometheusURLFlag:        prometheusURLFlagSet,
+		PrometheusHeaderFlags:    promHeaders.overrides || promHeadersFromEnv.overrides,
 		BeylaJobSelector:         *beylaJobSelector,
 		WorkloadMetricsScope:     prom.WorkloadMetricsScope{SingleCluster: *workloadSingleCluster, ClusterLabels: workloadClusterLabels},
 		MCPEnabled:               mcpEnabled,

@@ -70,3 +70,20 @@ describe('sameResource', () => {
     expect(sameResource(subject, { kind: 'configmaps', namespace: 'demo', name: 'data' })).toBe(false)
   })
 })
+
+it('makes typed node corroboration discoverable without replacing the failure or adding causal labels', () => {
+  const correlated: Issue = {
+    ...issue, kind: 'Pod', name: 'worker', reason: 'IPExhaustion', cause: undefined,
+    message: 'specific kubelet failure',
+    diagnostic_context: { role: 'context', facts: [{ type: 'node_startup_corroboration', message: 'Three visible Pods across two workloads on node-a; including Pod demo/worker.', refs: [{ kind: 'Pod', namespace: 'demo', name: 'peer' }] }] },
+  }
+  const collapsed = renderToString(<ResourceIssuesSection issues={[correlated]} />)
+  expect(collapsed).toContain('Same-node evidence')
+  expect(collapsed).toContain('specific kubelet failure')
+  const expanded = renderToString(<IssueRow issue={correlated} open onToggle={() => {}} resourceHref={ref => `/resources/${ref.kind}/${ref.namespace}/${ref.name}`} />)
+  expect(expanded).toContain('Three visible Pods across two workloads')
+  expect(expanded).toContain('/resources/Pod/demo/peer')
+  expect(expanded).not.toContain('confidence')
+  expect(expanded).not.toContain('Caused by')
+  expect(renderToString(<IssueRow issue={{ ...correlated, diagnostic_context: undefined }} open onToggle={() => {}} />)).not.toContain('Same-node evidence')
+})

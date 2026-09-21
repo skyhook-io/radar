@@ -156,9 +156,7 @@ func foldGroup(members []Issue) Issue {
 		ResourceCreatedAt:    rep.ResourceCreatedAt,
 		LastSeen:             rep.LastSeen,
 		// Per-issue context carries from the representative, like Reason/Message.
-		// In the cluster-wide path grouping runs before enrichment, so these are
-		// nil here and enrichment attaches to the grouped row afterward. On the
-		// per-resource RelatedIssues path Compose enriches the flat rows first,
+		// The per-resource RelatedIssues path enriches the flat rows first,
 		// so without this the regroup would drop the representative's causal
 		// links / change context.
 		DiagnosticContext: rep.DiagnosticContext,

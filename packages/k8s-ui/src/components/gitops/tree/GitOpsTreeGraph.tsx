@@ -25,6 +25,7 @@ import { displayKind } from '../../../types'
 import { healthToSeverity, SEVERITY_DOT } from '../../../utils/badge-colors'
 import { formatCompactAge } from '../../../utils/format'
 import { radarHealthNote } from '../health-provenance'
+import { servicePortsTooltip, type ServicePortEntry } from '../../topology/K8sResourceNode'
 import { getTopologyIcon } from '../../../utils/resource-icons'
 import { Tooltip } from '../../ui/Tooltip'
 import { hasGitOpsTreeFilters, matchesGitOpsTreeFilters, type GitOpsTreeFilters } from './tree-helpers'
@@ -592,6 +593,15 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
   // (ReplicaSets, Pods) are always Radar's read; marking each would be
   // noise.
   const radarNote = node.role === 'declared' ? radarHealthNote(node) : ''
+  // A Service's subtitle names its first port and counts the rest, so without a
+  // hover the ones behind "+1 more" can't be reached from the graph at all. Same
+  // affordance the topology graph's Service node carries, same renderer. Stood
+  // down when the card already explains an unhealthy verdict: that reason is
+  // what the hover should say, and only one tooltip is ever visible anyway.
+  const portsTooltip = kind === 'Service' && !cause
+    ? servicePortsTooltip((node.data?.ports as ServicePortEntry[] | undefined) ?? [])
+    : null
+  const subtitle = getSubtitle(node)
 
   const card = (
       <div
@@ -654,7 +664,13 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
               own page". The subtitle text alone wasn't enough — users were
               treating the count as an immutable fact rather than a button. */}
           <div className="mt-0.5 flex items-center gap-1 text-xs text-theme-text-secondary">
-            <span className="truncate">{getSubtitle(node)}</span>
+            {portsTooltip ? (
+              <Tooltip content={portsTooltip} position="bottom" wrapperClassName="min-w-0">
+                <span className="cursor-help truncate">{subtitle}</span>
+              </Tooltip>
+            ) : (
+              <span className="truncate">{subtitle}</span>
+            )}
             {(node.role === 'group' || gitopsTool) && <ChevronRight className="ml-auto h-3 w-3 shrink-0 text-theme-text-tertiary" />}
           </div>
           {chips.length > 0 && (
@@ -755,7 +771,21 @@ function buildChips(node: GitOpsTreeNode): Array<{ label?: string; value: string
   return chips
 }
 
-function getSubtitle(node: GitOpsTreeNode): string {
+// The subtitle is the node's one line of prose, and sync, health and the
+// backend's info line all want it. It can't be won on precedence: the backend
+// derives a health for every node it can build an info line for, so a rule that
+// only reaches info when health is absent never reaches it at all, and a
+// Service's ports, a Pod's phase and an Ingress's host stay invisible.
+//
+// So all three share the line, and "Healthy" is the part that yields when the
+// space is contested. It is the one health value the node already states without
+// words — healthToTopology maps it onto the green status dot and the green left
+// stripe, one value to one colour. Progressing and Suspended are both yellow and
+// Degraded and Missing are both red, so for those the word is the only thing
+// that tells them apart and it keeps its place. "Healthy" gives up the line only
+// when there is a concrete info line to spend it on, so a node with nothing to
+// say instead still reads as Healthy.
+export function getSubtitle(node: GitOpsTreeNode): string {
   if (node.role === 'group') {
     // Action-oriented copy invites the click; "collapsed" alone reads as
     // a state description, not an affordance.
@@ -764,10 +794,10 @@ function getSubtitle(node: GitOpsTreeNode): string {
   if (isNodeTerminating(node)) {
     return 'Pending deletion'
   }
-  if (node.sync || node.health) {
-    return [node.sync, node.health].filter(Boolean).join(' • ')
-  }
-  if (node.info?.[0]?.value) return node.info[0].value
+  const info = node.info?.[0]?.value
+  const health = node.health === 'Healthy' && info ? undefined : node.health
+  const parts = [node.sync, health, info].filter(Boolean)
+  if (parts.length > 0) return parts.join(' • ')
   return node.ref.namespace || ''
 }
 

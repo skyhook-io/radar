@@ -3,7 +3,7 @@ import Editor from '@monaco-editor/react'
 import { AlertTriangle, Download, FileText, RotateCw } from 'lucide-react'
 import { PaneLoader, ensureMonacoRuntime } from '@skyhook-io/k8s-ui'
 import { formatBytes } from '../../utils/format'
-import { Disclosure } from '../ui/Disclosure'
+import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 
 // A curated inline viewer for text files inside a pod container, rendered in

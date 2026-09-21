@@ -1,6 +1,10 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
+	"github.com/go-chi/chi/v5"
+	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -112,5 +116,52 @@ func TestHasExplicitNamespaceFilter(t *testing.T) {
 		if got := hasExplicitNamespaceFilter(req); got != tt.want {
 			t.Errorf("hasExplicitNamespaceFilter(%q) = %v, want %v", tt.url, got, tt.want)
 		}
+	}
+}
+
+func TestScanIDUsesOriginalScopeAndRechecksPermissions(t *testing.T) {
+	s := newTestServer(t)
+	manager := prometheuspkg.RightsizingScans()
+	manager.Invalidate()
+	t.Cleanup(manager.Invalidate)
+	s.permCache = pkgauth.NewPermissionCache()
+	perms := &pkgauth.UserPermissions{AllowedNamespaces: []string{"alpha"}}
+	for _, resource := range []string{"deployments", "statefulsets", "daemonsets"} {
+		perms.SetCanI("list", "apps", resource, "alpha", true)
+	}
+	s.permCache.Set("alice", nil, perms)
+	request := func(method, path, user, id string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, nil)
+		ctx := pkgauth.ContextWithUser(req.Context(), &pkgauth.User{Username: user})
+		route := chi.NewRouteContext()
+		route.URLParams.Add("scanId", id)
+		req = req.WithContext(context.WithValue(ctx, chi.RouteCtxKey, route))
+		rec := httptest.NewRecorder()
+		s.handleRightsizingScan(rec, req)
+		return rec
+	}
+	started := request(http.MethodPost, "/api/prometheus/rightsizing/scan?namespace=alpha", "alice", "")
+	if started.Code != http.StatusOK {
+		t.Fatalf("start: %d %s", started.Code, started.Body)
+	}
+	var scan prometheuspkg.RightsizingScanResponse
+	if err := json.Unmarshal(started.Body.Bytes(), &scan); err != nil {
+		t.Fatal(err)
+	}
+	if scan.ScanID == "" {
+		t.Fatal("missing scan ID")
+	}
+	wrongFilter := request(http.MethodGet, "/api/prometheus/rightsizing/scan/"+scan.ScanID+"?namespace=beta", "alice", scan.ScanID)
+	if wrongFilter.Code != http.StatusOK {
+		t.Fatalf("ID lookup applied a new view filter: %d %s", wrongFilter.Code, wrongFilter.Body)
+	}
+	other := request(http.MethodGet, "/api/prometheus/rightsizing/scan/"+scan.ScanID, "bob", scan.ScanID)
+	if other.Code != http.StatusNotFound {
+		t.Fatalf("other user could inspect scan: %d", other.Code)
+	}
+	perms.SetCanI("list", "apps", "deployments", "alpha", false)
+	revoked := request(http.MethodGet, "/api/prometheus/rightsizing/scan/"+scan.ScanID, "alice", scan.ScanID)
+	if revoked.Code != http.StatusConflict {
+		t.Fatalf("revoked scope still readable: %d %s", revoked.Code, revoked.Body)
 	}
 }

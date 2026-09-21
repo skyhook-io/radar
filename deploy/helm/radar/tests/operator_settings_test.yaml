@@ -1,0 +1,92 @@
+suite: Operator-owned OSS settings
+templates:
+  - operator-settings.yaml
+  - deployment.yaml
+tests:
+  - it: rejects unsupported Cloud audit policy instead of silently ignoring it
+    template: operator-settings.yaml
+    set:
+      cloud.enabled: true
+      audit:
+        ignoredNamespaces: []
+        disabledChecks: []
+    asserts:
+      - failedTemplate:
+          errorMessage: audit and helm.ociSources are supported only in OSS installations; configure Cloud through Radar Cloud instead
+  - it: rejects unsupported Cloud OCI sources instead of silently ignoring them
+    template: operator-settings.yaml
+    set:
+      cloud.enabled: true
+      helm.ociSources:
+        - oci://ghcr.io/example/charts
+    asserts:
+      - failedTemplate:
+          errorMessage: audit and helm.ociSources are supported only in OSS installations; configure Cloud through Radar Cloud instead
+  - it: renders a minimal versioned document by default
+    template: operator-settings.yaml
+    asserts:
+      - equal:
+          path: data["settings.json"]
+          value: |
+            {
+              "version": 1
+            }
+  - it: mounts the settings read-only and advertises their startup path
+    template: deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_OPERATOR_SETTINGS_FILE
+            value: /etc/radar/operator/settings.json
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: operator-settings
+            mountPath: /etc/radar/operator
+            readOnly: true
+      - isNotEmpty:
+          path: spec.template.metadata.annotations["checksum/operator-settings"]
+  - it: supports explicitly empty audit exclusions and registered OCI prefixes
+    template: operator-settings.yaml
+    set:
+      audit:
+        ignoredNamespaces: []
+        disabledChecks: []
+      helm.ociSources:
+        - oci://ghcr.io/example/charts
+    asserts:
+      - matchRegex:
+          path: data["settings.json"]
+          pattern: '"ignoredNamespaces": \[\]'
+      - matchRegex:
+          path: data["settings.json"]
+          pattern: 'oci://ghcr.io/example/charts'
+  - it: does not provision an operator overlay for Cloud
+    template: operator-settings.yaml
+    set:
+      cloud.enabled: true
+      cloud.token: test-token
+      cloud.url: wss://hub.example.com
+      cloud.clusterName: example
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: leaves Cloud deployment settings unchanged
+    template: deployment.yaml
+    set:
+      cloud.enabled: true
+      cloud.token: test-token
+      cloud.url: wss://hub.example.com
+      cloud.clusterName: example
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_OPERATOR_SETTINGS_FILE
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: operator-settings
+          any: true

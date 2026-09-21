@@ -10,7 +10,6 @@ import (
 var stripMetadataKeys = map[string]bool{
 	"resourceVersion":            true,
 	"uid":                        true,
-	"generation":                 true,
 	"selfLink":                   true,
 	"generateName":               true,
 	"managedFields":              true,

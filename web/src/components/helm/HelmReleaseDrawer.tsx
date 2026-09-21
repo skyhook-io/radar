@@ -26,7 +26,7 @@ import { ValuesViewer } from './ValuesViewer'
 import { OwnedResources } from './OwnedResources'
 import { TrackChartSourceDialog } from './TrackChartSourceDialog'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
-import { Disclosure } from '../ui/Disclosure'
+import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
 
 interface HelmReleaseDrawerProps {
   release: SelectedHelmRelease

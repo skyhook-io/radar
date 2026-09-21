@@ -4,10 +4,11 @@
 package investigationrefs
 
 import (
-	"crypto/rand"
 	"errors"
 	"strings"
 	"sync"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 const maxIssuedRefsPerScope = 256
@@ -110,7 +111,7 @@ func (r *Registry) Issue(scope, payload string) (string, bool) {
 		return "", false
 	}
 	for {
-		ref := "ev_" + scope + "_" + strings.ToLower(rand.Text())
+		ref := investigation.NewRef(scope)
 		if _, collision := state.records[ref]; collision {
 			continue
 		}

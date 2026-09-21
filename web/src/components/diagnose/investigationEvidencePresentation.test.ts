@@ -428,6 +428,8 @@ describe("coverage presentation", () => {
       limitation("Container logs", "Connection timed out", "error"),
     ]);
     expect(groups[0].hasError).toBe(true);
+    expect(groups[0].bookkeepingOnly).toBe(false);
+    expect(groups[1].bookkeepingOnly).toBe(true);
     expect(groups[0].summary).toContain("Forbidden");
     expect(groups[0].summary).toContain("Connection timed out");
     expect(groups[0].limitations).toHaveLength(3);

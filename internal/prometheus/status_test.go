@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -51,6 +52,22 @@ func TestGetStatus_IdleBeforeAnyDiscovery(t *testing.T) {
 	st := c.GetStatus()
 	if st.Connected || st.Discovering || st.Error != "" {
 		t.Fatalf("fresh client status = %+v, want idle with no error", st)
+	}
+}
+
+func TestGetStatusDoesNotExposeURLCredentials(t *testing.T) {
+	const address = "https://operator:private-password@metrics.example/prom?token=private-token#private-fragment"
+	c := &Client{baseURL: address}
+	if got := c.GetStatus().Address; got != "https://metrics.example/prom" {
+		t.Fatalf("unsafe display address: %s", got)
+	}
+	if c.baseURL != address {
+		t.Fatal("display redaction changed the connection URL")
+	}
+	c.baseURL = ""
+	c.lastOutcome = "GET " + address + ": unavailable"
+	if got := c.GetStatus().Error; strings.Contains(got, "private-") || !strings.Contains(got, "unavailable") {
+		t.Fatalf("unsafe or unhelpful status error: %s", got)
 	}
 }
 

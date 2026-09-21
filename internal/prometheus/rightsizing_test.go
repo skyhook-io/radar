@@ -456,3 +456,118 @@ func slicesEqual(a, b []string) bool {
 	}
 	return true
 }
+
+func TestEvidenceQueryWarningsNameTheFailedSupportingQueries(t *testing.T) {
+	warnings := evidenceQueryWarnings(map[string]queryOutcome{
+		"cpu_stat":            {},
+		"restart_activity":    {err: errors.New("context deadline exceeded")},
+		"termination_history": {err: errors.New("context deadline exceeded")},
+	})
+
+	codes := make([]string, 0, len(warnings))
+	for _, warning := range warnings {
+		codes = append(codes, warning.Code)
+	}
+	want := "restart_activity_query_failed,termination_history_query_failed"
+	if got := strings.Join(codes, ","); got != want {
+		t.Fatalf("a withheld memory recommendation must name the queries that failed behind it, got %q want %q", got, want)
+	}
+	// The codes are the ones a scan reports, so a caller comparing the two
+	// scopes of the same workload reads one vocabulary.
+	for _, warning := range warnings {
+		if warning.Message == "" {
+			t.Errorf("warning %q carries no message", warning.Code)
+		}
+	}
+}
+
+func TestEvidenceQueryWarningsStaySilentWhenEveryQueryAnswered(t *testing.T) {
+	if warnings := evidenceQueryWarnings(map[string]queryOutcome{
+		"cpu_stat":            {},
+		"restart_activity":    {values: map[string]float64{"app": 0}},
+		"termination_history": {terminations: map[string]terminationEvidence{}},
+	}); len(warnings) != 0 {
+		t.Fatalf("queries that answered are not a warning: %v", warnings)
+	}
+}
+
+func TestEvidenceQueryWarningsCoverEveryQueryItRuns(t *testing.T) {
+	// A query with no code is a failure that reaches no one: the row swallows
+	// it and the envelope never mentions it.
+	results := map[string]queryOutcome{}
+	for key := range buildRightsizingQueries("dev", metricSelection{}) {
+		results[key] = queryOutcome{err: errors.New("context deadline exceeded")}
+	}
+	if got, want := len(evidenceQueryWarnings(results)), len(results); got != want {
+		t.Errorf("every query this builds must map to a warning code, got %d for %d queries", got, want)
+	}
+}
+
+func TestCPUPeakFailureIsNotSilent(t *testing.T) {
+	// Losing cpu_peak leaves Bursty false, which drops the manual-review flag
+	// and loosens the clamp — so it must degrade the answer, unlike throttle.
+	warnings := evidenceQueryWarnings(map[string]queryOutcome{
+		"cpu_peak": {err: errors.New("context deadline exceeded")},
+	})
+	if len(warnings) != 1 || warnings[0].Code != "cpu_peak_query_failed" {
+		t.Fatalf("a failed cpu_peak must be named, got %v", warnings)
+	}
+}
+
+func TestManualReviewReasonsNameEveryTrigger(t *testing.T) {
+	reduction := func(row RightsizingRow) RightsizingRow {
+		current, recommended := 0.5, 0.3
+		row.CurrentRequestValue, row.RecommendedRequestValue = &current, &recommended
+		return row
+	}
+	throttled := 0.307
+	under := 0.05
+
+	for _, tc := range []struct {
+		name string
+		row  RightsizingRow
+		want string
+	}{
+		{"heavily throttled cut", reduction(RightsizingRow{ThrottleRatio: &throttled}), "throttled_reduction"},
+		{"bursty cut", reduction(RightsizingRow{Bursty: true}), "bursty_reduction"},
+		{"autoscaler owns it", RightsizingRow{HPAManaged: true}, "hpa_managed"},
+		{"oom in window", RightsizingRow{WindowOOMEvidence: true}, "oom_in_window"},
+		{"limit conflict", RightsizingRow{LimitConflict: true}, "limit_conflict"},
+		{"withheld recommendation", RightsizingRow{RecommendationReason: ReasonOOMEvidenceUnavailable}, "recommendation_withheld"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reasons := ManualReviewReasons(tc.row)
+			if strings.Join(reasons, ",") != tc.want {
+				t.Errorf("got %v want %q", reasons, tc.want)
+			}
+			if !NeedsManualReview(tc.row) {
+				t.Error("the verdict must agree with its own reasons")
+			}
+		})
+	}
+
+	// Light throttling on a cut, and heavy throttling on a row that is not a
+	// cut, are both fine: the concern is a smaller request meeting a workload
+	// that already wants more.
+	if reasons := ManualReviewReasons(reduction(RightsizingRow{ThrottleRatio: &under})); len(reasons) != 0 {
+		t.Errorf("throttling below the threshold is not a review trigger: %v", reasons)
+	}
+	if reasons := ManualReviewReasons(RightsizingRow{ThrottleRatio: &throttled}); len(reasons) != 0 {
+		t.Errorf("throttling without a reduction is not a review trigger: %v", reasons)
+	}
+}
+
+func TestLostThrottleReadingClearsTheReviewReason(t *testing.T) {
+	// The reason a failed throttle query degrades the answer: the same row
+	// reads as a clean cut once the ratio is gone, and nothing on it says so.
+	current, recommended := 0.5, 0.3
+	throttled := 0.307
+	row := RightsizingRow{CurrentRequestValue: &current, RecommendedRequestValue: &recommended, ThrottleRatio: &throttled}
+	if !NeedsManualReview(row) {
+		t.Fatal("a throttled cut needs review")
+	}
+	row.ThrottleRatio = nil
+	if NeedsManualReview(row) {
+		t.Error("without the ratio the row reads as a clean cut, which is why a failed throttle query has to reach the caller")
+	}
+}

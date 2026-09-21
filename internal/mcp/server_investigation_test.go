@@ -12,6 +12,8 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/skyhook-io/radar/internal/investigationrefs"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 func TestAnnotateInvestigationEvidenceReferencePreservesProducerPayload(t *testing.T) {
@@ -30,7 +32,7 @@ func TestAnnotateInvestigationEvidenceReferencePreservesProducerPayload(t *testi
 				t.Fatalf("content blocks = %d, want marker + payload", len(result.Content))
 			}
 			marker, ok := result.Content[0].(*mcpsdk.TextContent)
-			if !ok || marker.Text != investigationEvidenceMarkerPrefix+ref+investigationEvidenceMarkerSuffix {
+			if !ok || marker.Text != investigation.RefMarker(ref) {
 				t.Fatalf("marker = %#v", result.Content[0])
 			}
 			original, ok := result.Content[1].(*mcpsdk.TextContent)
@@ -63,14 +65,14 @@ func TestInvestigationEvidenceReferenceMiddlewareScopesSuccessfulToolResults(t *
 	}
 	got := result.(*mcpsdk.CallToolResult)
 	marker := got.Content[0].(*mcpsdk.TextContent).Text
-	prefix := investigationEvidenceMarkerPrefix + "ev_" + scope + "_"
-	if !strings.HasPrefix(marker, prefix) || !strings.HasSuffix(marker, investigationEvidenceMarkerSuffix) {
+	prefix := "[[radar:evidence-ref=ev_" + scope + "_"
+	if !strings.HasPrefix(marker, prefix) || !strings.HasSuffix(marker, "]]\n") {
 		t.Fatalf("marker = %q, want scoped prefix %q", marker, prefix)
 	}
 	if got.Content[1].(*mcpsdk.TextContent).Text != `[]` {
 		t.Fatal("middleware changed the producer result")
 	}
-	ref := strings.TrimSuffix(strings.TrimPrefix(marker, investigationEvidenceMarkerPrefix), investigationEvidenceMarkerSuffix)
+	_, ref := investigation.SplitRefMarker(marker)
 	if payload := lease.Close()[ref]; payload != `[]` {
 		t.Fatalf("issued payload = %q, want exact producer text", payload)
 	}
@@ -100,7 +102,7 @@ func TestInvestigationEvidenceReferenceMiddlewareMarksToolErrorsForProvenance(t 
 		t.Fatalf("content blocks = %d, want marker + error payload", len(toolError.Content))
 	}
 	marker := toolError.Content[0].(*mcpsdk.TextContent).Text
-	ref := strings.TrimSuffix(strings.TrimPrefix(marker, investigationEvidenceMarkerPrefix), investigationEvidenceMarkerSuffix)
+	_, ref := investigation.SplitRefMarker(marker)
 	if payload := lease.Close()[ref]; payload != "permission denied" {
 		t.Fatalf("issued error payload = %q, want exact producer text", payload)
 	}
@@ -259,11 +261,11 @@ func TestInvestigationHandlerAnnotatesRealToolCallWithoutChangingPublicContract(
 	if !ok {
 		t.Fatalf("private marker type = %T, want TextContent", privateResult.Content[0])
 	}
-	wantPrefix := investigationEvidenceMarkerPrefix + "ev_" + scope + "_"
-	if !strings.HasPrefix(marker.Text, wantPrefix) || !strings.HasSuffix(marker.Text, investigationEvidenceMarkerSuffix) {
+	wantPrefix := "[[radar:evidence-ref=ev_" + scope + "_"
+	if !strings.HasPrefix(marker.Text, wantPrefix) || !strings.HasSuffix(marker.Text, "]]\n") {
 		t.Fatalf("private marker = %q, want scoped prefix %q", marker.Text, wantPrefix)
 	}
-	ref := strings.TrimSuffix(strings.TrimPrefix(marker.Text, investigationEvidenceMarkerPrefix), investigationEvidenceMarkerSuffix)
+	_, ref := investigation.SplitRefMarker(marker.Text)
 	privateText, ok := privateResult.Content[1].(*mcpsdk.TextContent)
 	if !ok || privateText.Text != payload {
 		t.Fatalf("private producer payload = %#v, want unchanged %q", privateResult.Content[1], payload)

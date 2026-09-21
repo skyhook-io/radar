@@ -1,16 +1,31 @@
-import { apiVersionToGroup, knownKindForPluralWithGroup } from "../../../utils/navigation";
+import {
+  apiVersionToGroup,
+  knownKindForPluralWithGroup,
+} from "../../../utils/navigation";
 import { adaptChanges } from "./adapters/changes";
 import { adaptDiagnose } from "./adapters/diagnose";
 import { adaptEvents } from "./adapters/events";
 import { adaptHelmRelease } from "./adapters/helm";
+import {
+  adaptListHelmReleases,
+  adaptListPackages,
+  adaptSearch,
+} from "./adapters/listings";
+import { adaptTopResources } from "./adapters/rankings";
+import { adaptClusterAudit, adaptUpgradeReadiness } from "./adapters/posture";
 import { adaptIssues } from "./adapters/issues";
 import { adaptPodLogs, adaptWorkloadLogs } from "./adapters/logs";
 import { adaptSubjectPermissions } from "./adapters/permissions";
 import {
   adaptPrometheusRules,
+  adaptDiscoverMetrics,
   adaptQueryPrometheus,
 } from "./adapters/prometheus";
-import { adaptGetResource, adaptListResources } from "./adapters/resource";
+import {
+  adaptGetResource,
+  adaptListResources,
+  adaptListNamespaces,
+} from "./adapters/resource";
 import { adaptNeighborhood, adaptTopology } from "./adapters/topology";
 import {
   investigationEvidenceRefRe,
@@ -58,6 +73,14 @@ const ADAPTERS: Record<
   issues: adaptIssues,
   get_resource: adaptGetResource,
   list_resources: adaptListResources,
+  list_namespaces: adaptListNamespaces,
+  list_helm_releases: adaptListHelmReleases,
+  list_packages: adaptListPackages,
+  search: adaptSearch,
+  top_resources: adaptTopResources,
+  get_cluster_audit: adaptClusterAudit,
+  get_cluster_upgrade_readiness: adaptUpgradeReadiness,
+  discover_metrics: adaptDiscoverMetrics,
   get_events: adaptEvents,
   get_pod_logs: adaptPodLogs,
   get_changes: adaptChanges,
@@ -408,6 +431,7 @@ export function projectInvestigationEvidence(
     sources: builder.sources,
     evidenceRefSources,
     citableSources,
+    targetPods: [...builder.establishedTargetPods],
     coverage: {
       attempted: builder.sources.length,
       projected: builder.projectedSources.size,

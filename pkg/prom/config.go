@@ -2,7 +2,11 @@ package prom
 
 import (
 	"errors"
+	"fmt"
+	"net/http"
 	"strings"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 // ErrHeadersRequireURL is returned instead of running discovery when
@@ -18,4 +22,22 @@ var ErrHeadersRequireURL = errors.New("Prometheus headers are configured but no 
 // discovery applies this one rule.
 func HeadersRequireURL(manualURL string, headers map[string]string) bool {
 	return strings.TrimSpace(manualURL) == "" && len(headers) > 0
+}
+
+func ValidateHeaders(headers map[string]string) error {
+	seen := make(map[string]bool, len(headers))
+	for key, value := range headers {
+		if !httpguts.ValidHeaderFieldName(key) {
+			return fmt.Errorf("invalid prometheus header name %q (must be RFC 7230 tokens)", key)
+		}
+		if !httpguts.ValidHeaderFieldValue(value) {
+			return fmt.Errorf("invalid value for prometheus header %q (control characters not allowed)", key)
+		}
+		canonical := http.CanonicalHeaderKey(key)
+		if seen[canonical] {
+			return fmt.Errorf("duplicate prometheus header %q (header names are case-insensitive)", canonical)
+		}
+		seen[canonical] = true
+	}
+	return nil
 }

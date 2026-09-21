@@ -3,9 +3,10 @@ package ai
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 func TestAssessmentForExplanation(t *testing.T) {
@@ -15,13 +16,19 @@ func TestAssessmentForExplanation(t *testing.T) {
 		result StreamEvent
 		valid  bool
 	}{
-		{"initial", StreamEvent{Type: "turn"}, StreamEvent{Type: "done", Diag: &Diagnosis{RootCause: "Missing Secret"}}, true},
-		{"verification", StreamEvent{Type: "turn", Question: "Recheck", Verify: true}, StreamEvent{Type: "done", Diag: &Diagnosis{RootCause: "Still missing"}}, true},
-		{"ordinary question", StreamEvent{Type: "turn", Question: "Why?"}, StreamEvent{Type: "done", Diag: &Diagnosis{RootCause: "An answer"}}, false},
-		{"explanation", StreamEvent{Type: "turn", ExplainAssessment: 2}, StreamEvent{Type: "done", Diag: &Diagnosis{RootCause: "An explanation"}}, false},
-		{"apply", StreamEvent{Type: "turn", Apply: true}, StreamEvent{Type: "done", Diag: &Diagnosis{RootCause: "Applied"}}, false},
+		{"initial", StreamEvent{Type: "turn"}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{RootCause: "Missing Secret"}}}, true},
+		{"verification", StreamEvent{Type: "turn", Question: "Recheck", Verify: true}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{RootCause: "Still missing"}}}, true},
+		{"healthy", StreamEvent{Type: "turn"}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{Healthy: true, Report: "All replicas ready"}}}, true},
+		{"inconclusive", StreamEvent{Type: "turn"}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{Inconclusive: true, Report: "Logs unavailable"}}}, true},
+		{"healthy verification", StreamEvent{Type: "turn", Question: "Recheck", Verify: true}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{Healthy: true}}}, true},
+		{"revised healthy", StreamEvent{Type: "turn", Question: "What about now?"}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{Summary: "Recovered", Healthy: true, RevisesAssessment: true}}}, true},
+		{"ordinary healthy answer", StreamEvent{Type: "turn", Question: "What does ready mean?"}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{Healthy: true}}}, false},
+		{"empty", StreamEvent{Type: "turn"}, StreamEvent{Type: "done", Diag: &Diagnosis{}}, false},
+		{"ordinary question", StreamEvent{Type: "turn", Question: "Why?"}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{RootCause: "An answer"}}}, false},
+		{"explanation", StreamEvent{Type: "turn", ExplainAssessment: 2}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{RootCause: "An explanation"}}}, false},
+		{"apply", StreamEvent{Type: "turn", Apply: true}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{RootCause: "Applied"}}}, false},
 		{"error", StreamEvent{Type: "turn"}, StreamEvent{Type: "error"}, false},
-		{"no assessment", StreamEvent{Type: "turn"}, StreamEvent{Type: "done", Diag: &Diagnosis{Report: "No conclusion"}}, false},
+		{"no assessment", StreamEvent{Type: "turn"}, StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{Report: "No conclusion"}}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &Run{subs: map[int]chan RunEvent{}}
@@ -41,10 +48,11 @@ func TestAssessmentForExplanation(t *testing.T) {
 }
 
 func TestExplanationCompletionDoesNotPromoteModelVerdict(t *testing.T) {
-	for _, diag := range []Diagnosis{
+	for _, verdict := range []investigation.Verdict{
 		{RootCause: "Simplified cause", Remediation: []string{"An unrequested fix"}},
 		{Healthy: true},
 	} {
+		diag := Diagnosis{Verdict: verdict}
 		r := &Run{status: "running", inFlight: true, preview: "Original cause", subs: map[int]chan RunEvent{}}
 		r.append(StreamEvent{Type: "turn", ExplainAssessment: 2})
 		diag.Report = "A plain-language explanation."
@@ -72,7 +80,7 @@ func TestExplanationReusesTurnAndPersistsOrigin(t *testing.T) {
 		case <-ctx.Done():
 			return Diagnosis{}, ctx.Err()
 		}
-		return Diagnosis{Report: "Your app cannot start because its required configuration is missing.", SessionID: "session"}, nil
+		return Diagnosis{Verdict: investigation.Verdict{Report: "Your app cannot start because its required configuration is missing."}, SessionID: "session"}, nil
 	}
 	r := &Run{ID: "explain", Context: "ctx", Agent: "claude", Profile: ExecutionProfileSafeguarded,
 		status: "done", sessionID: "session", hydrated: true, store: store, subs: map[int]chan RunEvent{}, CreatedAt: nowUTC(), updatedAt: nowUTC()}
@@ -80,7 +88,7 @@ func TestExplanationReusesTurnAndPersistsOrigin(t *testing.T) {
 	m.order = []string{r.ID}
 	store.SaveRun(r.Summary())
 	r.append(StreamEvent{Type: "turn"})
-	r.append(StreamEvent{Type: "done", Diag: &Diagnosis{RootCause: "Missing Secret", Report: "The saved analysis.", Remediation: []string{"Restore the configuration."}}})
+	r.append(StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{RootCause: "Missing Secret", Report: "The saved analysis.", Remediation: []string{"Restore the configuration."}}}})
 	if err := m.AddExplanation(r.ID, 2); err != nil {
 		t.Fatal(err)
 	}
@@ -126,21 +134,5 @@ func TestExplanationReusesTurnAndPersistsOrigin(t *testing.T) {
 	defer unsubscribe()
 	if len(backlog) != 4 || backlog[2].Event.ExplainAssessment != 2 || backlog[3].Event.Diag.Report == "" {
 		t.Fatalf("completed explanation lost on restart: %+v", backlog)
-	}
-}
-
-func TestExplanationUsesSavedAssessmentAndBoundedInstruction(t *testing.T) {
-	prompt := explanationPrompt(Diagnosis{RootCause: "Missing Secret", Report: "Not established whether it was deleted.", Remediation: []string{"Restore configuration."}})
-	for _, want := range []string{"Missing Secret", "Not established whether it was deleted.", "Restore configuration.", "Do not recheck the cluster or call tools", "Do not apply anything", "120-180", "Preserve uncertainty"} {
-		if !strings.Contains(prompt, want) {
-			t.Fatalf("missing %q", want)
-		}
-	}
-	if strings.Contains(prompt, "root_cause_evidence_refs") {
-		t.Fatal("explanation must not request fresh evidence refs")
-	}
-	parsed := diagnosisFromText("The saved configuration is missing. Restore the intended configuration, then verify the app starts.")
-	if parsed.Report == "" || parsed.RootCause != "" || len(parsed.Remediation) != 0 {
-		t.Fatalf("plain explanation did not stay conversational: %+v", parsed)
 	}
 }

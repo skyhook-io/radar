@@ -16,91 +16,12 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/investigationrefs"
-)
 
-func TestDiagnosisFromText_ParsesJSONBlock(t *testing.T) {
-	text := "The pod crashloops.\n\n```json\n" +
-		`{"root_cause": "bad image tag", "remediation": ["roll back"], "confidence": 0.9}` +
-		"\n```"
-	d := diagnosisFromText(text)
-	if d.RootCause != "bad image tag" {
-		t.Errorf("root cause = %q", d.RootCause)
-	}
-	if len(d.Remediation) != 1 || d.Remediation[0] != "roll back" {
-		t.Errorf("remediation = %v", d.Remediation)
-	}
-	if d.Confidence == nil || *d.Confidence != 0.9 {
-		t.Errorf("confidence = %v", d.Confidence)
-	}
-	if strings.Contains(d.Report, "```json") {
-		t.Errorf("report still has the json block: %q", d.Report)
-	}
-}
+	"github.com/skyhook-io/radar/pkg/investigation"
+)
 
 func testEvidenceRef(scope, nonce byte) string {
 	return "ev_" + strings.Repeat(string(scope), 26) + "_" + strings.Repeat(string(nonce), 26)
-}
-
-func TestDiagnosisFromText_ParsesEvidenceRequestPrivatelyAndStrictly(t *testing.T) {
-	first := testEvidenceRef('a', 'b')
-	second := testEvidenceRef('c', 'd')
-	valid := "```json\n" +
-		`{"root_cause":"bad tag","root_cause_evidence_refs":["` + first + `","` + second + `"]}` +
-		"\n```"
-	diagnosis := diagnosisFromText(valid)
-	if diagnosis.RootCauseEvidence != nil {
-		t.Fatal("untrusted model refs must not enter the public diagnosis before run binding")
-	}
-	if !diagnosis.evidenceRequest.present || diagnosis.evidenceRequest.invalid {
-		t.Fatalf("valid request state = %+v", diagnosis.evidenceRequest)
-	}
-	if len(diagnosis.evidenceRequest.refs) != 2 || diagnosis.evidenceRequest.refs[0] != first || diagnosis.evidenceRequest.refs[1] != second {
-		t.Fatalf("evidence refs = %v", diagnosis.evidenceRequest.refs)
-	}
-
-	invalidFields := []string{
-		`null`,
-		`{"ref":"` + first + `"}`,
-		`["not-a-ref"]`,
-		`["` + first + `","` + first + `"]`,
-		`["` + first + `","` + second + `","` + testEvidenceRef('e', 'f') + `","` + testEvidenceRef('g', 'h') + `"]`,
-	}
-	for _, field := range invalidFields {
-		text := "```json\n" + `{"root_cause":"still preserved","root_cause_evidence_refs":` + field + `}` + "\n```"
-		got := diagnosisFromText(text)
-		if got.RootCause != "still preserved" {
-			t.Fatalf("malformed evidence discarded root cause for %s", field)
-		}
-		if !got.evidenceRequest.present || !got.evidenceRequest.invalid || len(got.evidenceRequest.refs) != 0 {
-			t.Errorf("field %s request = %+v, want invalid with no refs", field, got.evidenceRequest)
-		}
-	}
-
-	missing := diagnosisFromText("```json\n{\"root_cause\":\"old response\"}\n```")
-	if missing.evidenceRequest.present || missing.evidenceRequest.invalid {
-		t.Fatalf("omitted field = %+v, want missing", missing.evidenceRequest)
-	}
-	empty := diagnosisFromText("```json\n{\"root_cause\":\"uncited\",\"root_cause_evidence_refs\":[]}\n```")
-	if !empty.evidenceRequest.present || empty.evidenceRequest.invalid || len(empty.evidenceRequest.refs) != 0 {
-		t.Fatalf("empty field = %+v", empty.evidenceRequest)
-	}
-}
-
-func TestSplitInvestigationEvidenceMarker(t *testing.T) {
-	ref := testEvidenceRef('a', 'b')
-	marker := investigationEvidenceMarkerPrefix + ref + investigationEvidenceMarkerSuffix
-	clean, gotRef := splitInvestigationEvidenceMarker(marker + `[{"kind":"Pod"}]`)
-	if gotRef != ref || clean != `[{"kind":"Pod"}]` {
-		t.Fatalf("clean=%q ref=%q", clean, gotRef)
-	}
-	lookalike := `{"message":"[[radar:evidence-ref=` + ref + `]]"}`
-	if clean, gotRef := splitInvestigationEvidenceMarker(lookalike); clean != lookalike || gotRef != "" {
-		t.Fatalf("payload marker was trusted: clean=%q ref=%q", clean, gotRef)
-	}
-	malformed := investigationEvidenceMarkerPrefix + "ev_fake" + investigationEvidenceMarkerSuffix + "payload"
-	if clean, gotRef := splitInvestigationEvidenceMarker(malformed); clean != malformed || gotRef != "" {
-		t.Fatalf("malformed leading marker was trusted: clean=%q ref=%q", clean, gotRef)
-	}
 }
 
 func TestInvestigationEvidenceValidatorUsesAndClearsFullProducerResult(t *testing.T) {
@@ -219,7 +140,7 @@ func (agent *captureTurnAgent) command(ctx context.Context, spec turnSpec) (*exe
 		return nil, func() {}, agent.commandErr
 	}
 	content, _ := json.Marshal(
-		investigationEvidenceMarkerPrefix + issuedRef + investigationEvidenceMarkerSuffix + agent.payload,
+		investigation.RefMarker(issuedRef) + agent.payload,
 	)
 	stream := strings.Join([]string{
 		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"radar-read","name":"mcp__radar__get_resource","input":{"kind":"Pod","namespace":"shop","name":"api"}}]}}`,
@@ -268,7 +189,7 @@ func (*adapterAuthoredEvidenceAgent) command(ctx context.Context, _ turnSpec) (*
 }
 func (agent *adapterAuthoredEvidenceAgent) parseStream(_ io.Reader, onEvent func(StreamEvent)) Diagnosis {
 	onEvent(agent.event)
-	return Diagnosis{RootCause: "apply completed"}
+	return Diagnosis{Verdict: investigation.Verdict{RootCause: "apply completed"}}
 }
 
 func TestDiagnoseStreamClearsAdapterProvenanceOnApplyTurn(t *testing.T) {
@@ -340,207 +261,6 @@ func TestDiagnoseStreamUsesPerTurnScopedInvestigationMount(t *testing.T) {
 	}
 }
 
-func TestDiagnosisFromText_RecommendedIndex(t *testing.T) {
-	valid := "x\n\n```json\n" +
-		`{"root_cause":"r","remediation":["a","b"],"recommended_index":2}` + "\n```"
-	if d := diagnosisFromText(valid); d.RecommendedIndex == nil || *d.RecommendedIndex != 2 {
-		t.Errorf("recommended_index = %v, want 2", d.RecommendedIndex)
-	}
-	// Out of range (and the 0 = "no safe fix" sentinel) must be dropped, so the UI
-	// never points Apply at a non-existent step.
-	for _, bad := range []string{"0", "3", "-1"} {
-		text := "x\n\n```json\n" +
-			`{"root_cause":"r","remediation":["a","b"],"recommended_index":` + bad + "}\n```"
-		if d := diagnosisFromText(text); d.RecommendedIndex != nil {
-			t.Errorf("recommended_index %s should be dropped, got %v", bad, *d.RecommendedIndex)
-		}
-	}
-}
-
-func TestDiagnosisFromText_ParsesHealthyAllClear(t *testing.T) {
-	text := "The deployment is healthy.\n\n```json\n" +
-		`{"healthy":true,"root_cause":"","remediation":[],"recommended_index":0,"confidence":0.8}` +
-		"\n```"
-	d := diagnosisFromText(text)
-	if !d.Healthy {
-		t.Fatal("healthy = false, want true")
-	}
-	if d.RootCause != "" {
-		t.Errorf("root cause = %q, want empty", d.RootCause)
-	}
-	if len(d.Remediation) != 0 {
-		t.Errorf("remediation = %v, want empty", d.Remediation)
-	}
-	if d.RecommendedIndex != nil {
-		t.Errorf("recommended_index should be dropped for all-clear, got %v", *d.RecommendedIndex)
-	}
-}
-
-// Conclusion precedence must never produce a self-contradictory object: a concrete
-// finding clears both flags; inconclusive clears healthy ("absence of evidence is
-// not health"); at most one of {finding, inconclusive, healthy} survives.
-func TestDiagnosisFromText_ConclusionPrecedence(t *testing.T) {
-	block := func(j string) string { return "prose\n\n```json\n" + j + "\n```" }
-
-	// healthy + a real root cause → the finding wins; healthy cleared.
-	d := diagnosisFromText(block(`{"healthy":true,"root_cause":"bad image","remediation":["fix it"],"recommended_index":1}`))
-	if d.Healthy {
-		t.Error("healthy must be cleared when a root cause is present")
-	}
-	if d.Inconclusive {
-		t.Error("inconclusive must be cleared when a root cause is present")
-	}
-	if d.RootCause != "bad image" {
-		t.Errorf("root cause = %q, want %q", d.RootCause, "bad image")
-	}
-
-	// healthy + inconclusive → inconclusive wins (never a false all-clear).
-	d = diagnosisFromText(block(`{"healthy":true,"inconclusive":true,"root_cause":"","remediation":[]}`))
-	if d.Healthy {
-		t.Error("healthy must be cleared when inconclusive is set")
-	}
-	if !d.Inconclusive {
-		t.Error("inconclusive should hold")
-	}
-
-	// inconclusive + recommended_reason carried only with a valid index (none here).
-	d = diagnosisFromText(block(`{"inconclusive":true,"root_cause":"","remediation":[],"recommended_index":0,"recommended_reason":"x"}`))
-	if d.RecommendedReason != "" {
-		t.Errorf("recommended_reason must be empty without a valid index, got %q", d.RecommendedReason)
-	}
-}
-
-func TestApplyPrompt_BindsConfirmedFix(t *testing.T) {
-	fix := "Set `spec.replicas` to `3` on Deployment `x`"
-	req := Request{Kind: "Deployment", Namespace: "prod", Name: "x", Fix: fix}
-	p := applyPrompt(req)
-	if !strings.Contains(p, fix) {
-		t.Errorf("apply prompt should embed the confirmed fix; got %q", p)
-	}
-	if !strings.Contains(p, "Deployment prod/x") {
-		t.Errorf("apply prompt should name the target resource; got %q", p)
-	}
-	if p := applyPrompt(Request{Kind: "Deployment", Name: "x"}); strings.Contains(p, "EXACTLY this fix") {
-		t.Errorf("empty fix should use the fallback prompt; got %q", p)
-	}
-}
-
-func TestApplyPrompt_BindsImmutableAPIGroup(t *testing.T) {
-	grouped := applyPrompt(Request{Kind: "Rollout", Group: "argoproj.io", Namespace: "prod", Name: "checkout"})
-	for _, want := range []string{
-		`immutable target API group is "argoproj.io"`,
-		`Pass group="argoproj.io" to patch_resource`,
-		`manifest apiVersion must belong to "argoproj.io"`,
-		"Never mutate a same-named resource from another API group",
-	} {
-		if !strings.Contains(grouped, want) {
-			t.Errorf("group-qualified apply prompt missing %q:\n%s", want, grouped)
-		}
-	}
-
-	core := applyPrompt(Request{Kind: "Pod", Namespace: "prod", Name: "checkout"})
-	for _, want := range []string{"Kubernetes core API group", "omit group", "apiVersion must be v1"} {
-		if !strings.Contains(core, want) {
-			t.Errorf("core-group apply prompt missing %q:\n%s", want, core)
-		}
-	}
-}
-
-func TestTaskPrompt_HealthAwareOpening(t *testing.T) {
-	healthy := taskPrompt(Request{
-		Kind: "Deployment", Namespace: "prod", Name: "api",
-		Health: &ResourceHealthSignal{Health: "healthy"},
-	})
-	for _, want := range []string{
-		"Radar currently reports Deployment prod/api as healthy",
-		"do not manufacture a problem",
-		`"healthy": boolean`,
-		`"root_cause_evidence_refs": [string]`,
-		"[[radar:evidence-ref=ev_...]]",
-	} {
-		if !strings.Contains(healthy, want) {
-			t.Errorf("healthy prompt missing %q:\n%s", want, healthy)
-		}
-	}
-	if strings.Contains(healthy, "Investigate the unhealthy") {
-		t.Errorf("healthy prompt still uses unhealthy framing:\n%s", healthy)
-	}
-
-	broken := taskPrompt(Request{
-		Kind: "Deployment", Namespace: "prod", Name: "api",
-		Health: &ResourceHealthSignal{
-			IssueCount: 2, HighestSeverity: "critical", TopReason: "CrashLoopBackOff",
-		},
-	})
-	for _, want := range []string{
-		"Radar currently flags 2 active issues on Deployment prod/api",
-		"highest severity critical: CrashLoopBackOff",
-		"Find the specific root cause",
-	} {
-		if !strings.Contains(broken, want) {
-			t.Errorf("broken prompt missing %q:\n%s", want, broken)
-		}
-	}
-
-	auditOnly := taskPrompt(Request{
-		Kind: "Pod", Namespace: "prod", Name: "api-7",
-		Health: &ResourceHealthSignal{
-			Health: "healthy", AuditCount: 1, AuditSeverity: "high", TopFinding: "runAsRoot",
-		},
-	})
-	for _, want := range []string{
-		"static posture finding",
-		"highest severity high",
-		"not evidence of an active outage",
-		"Verify quickly",
-	} {
-		if !strings.Contains(auditOnly, want) {
-			t.Errorf("audit-only prompt missing %q:\n%s", want, auditOnly)
-		}
-	}
-
-	coexisting := taskPrompt(Request{
-		Kind: "Deployment", Namespace: "prod", Name: "api",
-		Health: &ResourceHealthSignal{
-			IssueCount: 1, HighestSeverity: "critical", TopReason: "CrashLoopBackOff",
-			AuditCount: 1, AuditSeverity: "high", TopFinding: "runAsRoot",
-		},
-	})
-	for _, want := range []string{
-		"highest severity critical: CrashLoopBackOff",
-		"static posture finding; highest severity high: runAsRoot",
-		"not evidence of an active outage",
-		"Find the specific root cause",
-	} {
-		if !strings.Contains(coexisting, want) {
-			t.Errorf("coexisting issue/audit prompt missing %q:\n%s", want, coexisting)
-		}
-	}
-	if strings.Contains(coexisting, "Verify quickly") {
-		t.Errorf("coexisting issue/audit prompt used audit-only healthy framing:\n%s", coexisting)
-	}
-
-	if !strings.Contains(broken, "Start with Radar's `diagnose` tool for this workload") {
-		t.Errorf("workload prompt should prefer semantic diagnose first:\n%s", broken)
-	}
-	nonWorkload := taskPrompt(Request{Kind: "ConfigMap", Namespace: "prod", Name: "api"})
-	if strings.Contains(nonWorkload, "`diagnose` tool") {
-		t.Errorf("unsupported resource prompt must not direct the agent to semantic diagnose:\n%s", nonWorkload)
-	}
-}
-
-func TestDiagnosisFromText_FreeTextIsReportNotRootCause(t *testing.T) {
-	// A reply with no fenced JSON carries the prose in Report and leaves RootCause
-	// empty — so the UI renders it neutrally, not under the "ROOT CAUSE" anchor.
-	d := diagnosisFromText("The deployment looks healthy; nothing is wrong.")
-	if d.Report == "" {
-		t.Fatalf("expected free text in Report, got %q", d.Report)
-	}
-	if d.RootCause != "" {
-		t.Errorf("free text must not become a RootCause, got %q", d.RootCause)
-	}
-}
-
 // TestParseStream_FormatPin locks the claude stream-json schema we depend on,
 // including the cost/turns fields on the terminal result event.
 func TestParseStream_FormatPin(t *testing.T) {
@@ -601,7 +321,7 @@ func TestParseStreamPreservesUncappedProducerResultForValidation(t *testing.T) {
 	ref := testEvidenceRef('a', 'b')
 	payload := strings.Repeat("x", maxToolPayload+500)
 	marked, err := json.Marshal(
-		investigationEvidenceMarkerPrefix + ref + investigationEvidenceMarkerSuffix + payload,
+		investigation.RefMarker(ref) + payload,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -686,18 +406,6 @@ func TestClaudeToolResultErrorState(t *testing.T) {
 
 // TestReadTools_ExcludeWrites is the fail-closed guard: the read allowlist must
 // never contain a Radar write tool.
-func TestReadTools_ExcludeWrites(t *testing.T) {
-	writes := map[string]bool{
-		"apply_resource": true, "patch_resource": true, "manage_workload": true,
-		"manage_rollout": true, "manage_cronjob": true, "manage_node": true, "manage_gitops": true,
-	}
-	for _, rt := range radarReadTools {
-		if writes[rt] {
-			t.Errorf("write tool %q must not be in the read allowlist", rt)
-		}
-	}
-}
-
 // TestDetectAgents_OnlyKnownNames ensures detection never reports a binary
 // outside the fixed known list (we only ever exec literal known names).
 func TestDetectAgents_OnlyKnownNames(t *testing.T) {
@@ -1106,12 +814,5 @@ func TestDiagnoseStreamReportsHandshakeOnShortTurn(t *testing.T) {
 		if strings.Join(phases, ",") != "investigating,connected" {
 			t.Fatalf("run %d phases = %v, want investigating then exactly one connected", i, phases)
 		}
-	}
-}
-
-func TestHealthFrameDisclosesMissingAuditInputsWithoutFindings(t *testing.T) {
-	frame := healthFrame("Pod app/api", &ResourceHealthSignal{AuditMissingInputs: []string{"secrets"}})
-	if !strings.Contains(frame, "could not read these inputs: secrets") || !strings.Contains(frame, "Zero audit findings do not establish") {
-		t.Fatal(frame)
 	}
 }

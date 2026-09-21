@@ -14,6 +14,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/ai"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 func TestDiagnoseReplayCompleteFrameIsUnsequenced(t *testing.T) {
@@ -277,10 +279,12 @@ func TestHandleDiagnoseRunStreamReplaysPersistedEvidenceProvenance(t *testing.T)
 			RadarEvidence: true, IsError: &success,
 		}}},
 		{Seq: 2, Event: ai.StreamEvent{Type: "done", Diag: &ai.Diagnosis{
-			RootCause: "The workload uses a stale database credential.",
-			RootCauseEvidence: &ai.RootCauseEvidence{
-				Status: ai.EvidenceLinked,
-				Refs:   []string{ref},
+			Verdict: investigation.Verdict{
+				RootCause: "The workload uses a stale database credential.",
+				RootCauseEvidence: &investigation.RootCauseEvidence{
+					Status: investigation.Linked,
+					Refs:   []string{ref},
+				},
 			},
 		}}},
 		{Seq: 3, Event: ai.StreamEvent{Type: "closed"}},
@@ -338,7 +342,7 @@ func TestHandleDiagnoseRunStreamReplaysPersistedEvidenceProvenance(t *testing.T)
 	if replayedStep == nil || replayedStep.EvidenceRef != ref || !replayedStep.RadarEvidence {
 		t.Fatalf("replayed step lost evidence provenance: %+v; body=%q", replayedStep, body)
 	}
-	wantEvidence := &ai.RootCauseEvidence{Status: ai.EvidenceLinked, Refs: []string{ref}}
+	wantEvidence := &investigation.RootCauseEvidence{Status: investigation.Linked, Refs: []string{ref}}
 	if replayedDiagnosis == nil || !reflect.DeepEqual(replayedDiagnosis.RootCauseEvidence, wantEvidence) {
 		t.Fatalf("replayed diagnosis lost rootCauseEvidence: %+v; body=%q", replayedDiagnosis, body)
 	}

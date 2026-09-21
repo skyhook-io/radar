@@ -77,6 +77,8 @@ type AppConfig struct {
 	KubecostClusterIDContext  string
 	PrometheusHeaders         map[string]string
 	PrometheusHeadersFromEnv  map[string]string
+	PrometheusURLFlag         bool
+	PrometheusHeaderFlags     bool
 	BeylaJobSelector          string
 	WorkloadMetricsScope      prom.WorkloadMetricsScope
 	Version                   string
@@ -373,6 +375,9 @@ func persistKubecostContextBindings(cfg AppConfig) AppConfig {
 
 // CreateServer creates the HTTP server with the given configuration.
 func CreateServer(cfg AppConfig) *server.Server {
+	if err := loadOperatorSettings(cfg); err != nil {
+		log.Fatalf("Invalid operator settings: %v", err)
+	}
 	restoreLastDesktopContext := remembersLastContext(cfg)
 	costSource := cfg.CostSource
 	kubecostURL := cfg.KubecostURL
@@ -418,17 +423,19 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 
 	serverCfg := server.Config{
-		Port:             cfg.Port,
-		ListenAddress:    cfg.ListenAddress,
-		BasePath:         cfg.BasePath,
-		StartupLog:       true,
-		RemoteAccessHint: cfg.ShowRemoteAccessHint,
-		DevMode:          cfg.DevMode,
-		StaticFS:         static.FS,
-		StaticRoot:       "dist",
-		EffectiveConfig:  effectiveCfg,
-		OpenCostCurrency: cfg.OpenCostCurrency,
-		OpenCostManaged:  cfg.OpenCostFlagSet,
+		Port:                  cfg.Port,
+		ListenAddress:         cfg.ListenAddress,
+		BasePath:              cfg.BasePath,
+		StartupLog:            true,
+		RemoteAccessHint:      cfg.ShowRemoteAccessHint,
+		DevMode:               cfg.DevMode,
+		StaticFS:              static.FS,
+		StaticRoot:            "dist",
+		EffectiveConfig:       effectiveCfg,
+		PrometheusURLFlag:     cfg.PrometheusURLFlag,
+		PrometheusHeaderFlags: cfg.PrometheusHeaderFlags,
+		OpenCostCurrency:      cfg.OpenCostCurrency,
+		OpenCostManaged:       cfg.OpenCostFlagSet,
 		DiagConfig: &server.DiagConfig{
 			Port:                 cfg.Port,
 			DevMode:              cfg.DevMode,

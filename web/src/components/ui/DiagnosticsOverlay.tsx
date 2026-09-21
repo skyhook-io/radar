@@ -17,8 +17,10 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
   const [copied, setCopied] = useState<'json' | 'formatted' | null>(null)
   const [reportOpened, setReportOpened] = useState(false)
 
-  // Close on Escape (capture phase)
+  // Close on Escape (capture phase) — only while logically open: the overlay
+  // stays mounted through its exit.
   useEffect(() => {
+    if (!isOpen) return
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
@@ -28,7 +30,7 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
     }
     document.addEventListener('keydown', handler, true)
     return () => document.removeEventListener('keydown', handler, true)
-  }, [onClose])
+  }, [isOpen, onClose])
 
   const copyToClipboard = useCallback(async (type: 'json' | 'formatted') => {
     if (!data) return
@@ -64,16 +66,16 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
   }, [data])
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[8vh]">
+    <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[8vh]" inert={!isOpen || undefined}>
       {/* Backdrop */}
       <div
         className={clsx(
           'absolute inset-0 bg-theme-base/60 backdrop-blur-sm',
           TRANSITION_BACKDROP,
-          isOpen ? 'opacity-100' : 'opacity-0'
+          isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
         )}
         style={overlayTransitionStyle(isOpen, 'dialog')}
-        onClick={onClose}
+        onClick={isOpen ? onClose : undefined}
       />
 
       {/* Panel */}

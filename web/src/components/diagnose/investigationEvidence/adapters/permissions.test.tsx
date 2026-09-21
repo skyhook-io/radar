@@ -4,6 +4,8 @@ import {
   projectInvestigationEvidence,
 } from "../index";
 import { deployment, groupsOf, project, tool } from "../evidenceFixtures";
+import { renderToStaticMarkup } from "react-dom/server";
+import { PermissionsBody } from "../bodies/platform";
 
 const deploymentWithServiceAccount = {
   ...deployment,
@@ -524,5 +526,53 @@ describe("subject permissions adapter", () => {
       projection.limitations.map((limitation) => limitation.source),
     ).toEqual(["Permissions", "Access check"]);
     expect(projection.limitations[0].sources).toHaveLength(3);
+  });
+});
+
+describe("subject permissions card detail", () => {
+  it("keeps the effective rules and renders them", () => {
+    const projection = project([
+      tool("diagnose", "diagnose", {
+        resource: deploymentWithServiceAccount,
+        resourceContext: { tier: "basic" },
+      }),
+      tool(
+        "perm",
+        "get_subject_permissions",
+        {
+          subject: {
+            kind: "ServiceAccount",
+            namespace: "shop",
+            name: "api-sa",
+          },
+          bindings: [],
+          flatRules: [
+            {
+              verbs: ["get", "list"],
+              apiGroups: [""],
+              resources: ["pods", "pods/log"],
+            },
+            {
+              verbs: ["get"],
+              apiGroups: [""],
+              resources: ["secrets"],
+              resourceNames: ["db-creds"],
+            },
+          ],
+          truncated: false,
+        },
+        { summary: permissionsArgs },
+      ),
+    ]);
+    const [group] = groupsOf(projection.groups, "permissions");
+    const data = group.latest.data;
+    if (data.type !== "permissions")
+      throw new Error("expected a permissions card");
+    expect(data.rules?.length).toBe(2);
+    const html = renderToStaticMarkup(<PermissionsBody data={data} />);
+    expect(html).toContain("Effective rules");
+    expect(html).toContain("get, list");
+    expect(html).toContain("pods, pods/log");
+    expect(html).toContain("[db-creds]");
   });
 });

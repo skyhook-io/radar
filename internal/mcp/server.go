@@ -5,13 +5,13 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"regexp"
 	"strings"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/skyhook-io/radar/internal/investigationrefs"
 	"github.com/skyhook-io/radar/internal/version"
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 func newServer(includeWrites bool) *mcpsdk.Server {
@@ -61,7 +61,7 @@ func investigationHandlerForServer(server *mcpsdk.Server, refs *investigationref
 	handler := handlerForServer(server)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		scope := r.URL.Query().Get("scope")
-		if !investigationEvidenceScopeRe.MatchString(scope) {
+		if !investigation.ValidScope(scope) {
 			http.Error(w, "invalid investigation evidence scope", http.StatusBadRequest)
 			return
 		}
@@ -73,13 +73,6 @@ func investigationHandlerForServer(server *mcpsdk.Server, refs *investigationref
 		handler.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
-
-const (
-	investigationEvidenceMarkerPrefix = "[[radar:evidence-ref="
-	investigationEvidenceMarkerSuffix = "]]\n"
-)
-
-var investigationEvidenceScopeRe = regexp.MustCompile(`^[a-z2-7]{26,128}$`)
 
 type investigationEvidenceScopeKey struct{}
 
@@ -103,7 +96,7 @@ func investigationEvidenceReferenceMiddleware(refs *investigationrefs.Registry) 
 				return result, err
 			}
 			scope, _ := ctx.Value(investigationEvidenceScopeKey{}).(string)
-			if !investigationEvidenceScopeRe.MatchString(scope) {
+			if !investigation.ValidScope(scope) {
 				return result, err
 			}
 			payload := investigationEvidenceProducerText(toolResult)
@@ -138,7 +131,7 @@ func investigationEvidenceProducerText(result *mcpsdk.CallToolResult) string {
 // but their exact Radar provenance lets Findings report an honest failed check.
 func annotateInvestigationEvidenceReference(result *mcpsdk.CallToolResult, ref string) {
 	marker := &mcpsdk.TextContent{
-		Text: investigationEvidenceMarkerPrefix + ref + investigationEvidenceMarkerSuffix,
+		Text: investigation.RefMarker(ref),
 	}
 	result.Content = append([]mcpsdk.Content{marker}, result.Content...)
 }

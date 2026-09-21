@@ -6,13 +6,13 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/argocd"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 // handleArgoCDStatus reports the live Argo CD integration state for the Settings
@@ -40,6 +40,9 @@ func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
 		resp.Anonymous = argocd.AnonymousReadAllowed()
 	} else if argocd.TokenBindingUpgradeRequired() {
 		resp.Reason = "Re-enter the Argo CD token in Settings to bind it to this kubeconfig source."
+		if s.configManagement() == "operator" {
+			resp.Reason = "The saved Argo CD token is not bound to this kubeconfig source. Ask the operator to provision the token through startup configuration."
+		}
 	} else if err := argocd.LastProbeError(); err != nil && resp.Configured {
 		resp.Reason = "Radar couldn't connect to Argo CD: " + argoAPIHealthFailure(err, argocd.TokenSet()) + "."
 	}
@@ -53,6 +56,9 @@ func (s *Server) handleArgoCDStatus(w http.ResponseWriter, r *http.Request) {
 // URL or token can't land on disk; on probe failure the previous settings are
 // restored on the live client.
 func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
 	}
@@ -125,7 +131,7 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 	// the new URL points at (Radar probes it with Bearer <token>). So when the
 	// origin changes and the caller reuses the stored token instead of supplying
 	// a fresh one, refuse — the token must be re-entered for the new server.
-	if token != "" && !suppliesNewToken && !sameArgoOrigin(rawURL, prev.ArgoCDURL) {
+	if token != "" && !suppliesNewToken && !sameIntegrationOrigin(rawURL, prev.ArgoCDURL) {
 		s.writeError(w, http.StatusBadRequest,
 			"Changing the Argo CD URL requires re-entering the API token — a token is bound to the server it was issued by.")
 		return
@@ -197,13 +203,13 @@ func (s *Server) handleApplyArgoCDConfig(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// sameArgoOrigin reports whether two Argo CD URLs address the same server.
+// sameIntegrationOrigin reports whether two integration URLs address the same server.
 // Empty means auto-discovery (the in-cluster argocd-server); two empties are
 // the same origin, and empty vs explicit is a change. Comparison is on
 // scheme + host + effective port (default ports normalized, so
 // https://host and https://host:443 are the same origin), case-insensitive —
 // a token is bound to an origin, not a path.
-func sameArgoOrigin(a, b string) bool {
+func sameIntegrationOrigin(a, b string) bool {
 	a = strings.TrimSpace(a)
 	b = strings.TrimSpace(b)
 	if a == "" || b == "" {
@@ -221,20 +227,5 @@ func sameArgoOrigin(a, b string) bool {
 // default port filled in when omitted, so default-port and explicit-port forms
 // of the same server compare equal.
 func normalizeOrigin(raw string) (string, bool) {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return "", false
-	}
-	scheme := strings.ToLower(u.Scheme)
-	host := strings.ToLower(u.Hostname())
-	port := u.Port()
-	if port == "" {
-		switch scheme {
-		case "https":
-			port = "443"
-		case "http":
-			port = "80"
-		}
-	}
-	return scheme + "://" + host + ":" + port, true
+	return prom.NormalizeOrigin(raw)
 }

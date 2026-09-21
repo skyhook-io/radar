@@ -18,7 +18,7 @@ import {
 } from "../../api/workloadMetrics";
 import { latestWorkloadValue, workloadPodValues } from "./workloadMetricValues";
 import { WorkloadMetricsHelpDialog } from './WorkloadMetricsHelpDialog';
-import { Disclosure } from '../ui/Disclosure';
+import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure';
 
 interface Props {
   kind: string;

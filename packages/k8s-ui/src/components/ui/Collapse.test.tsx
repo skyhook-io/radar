@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { readFileSync } from 'fs'
-import { join } from 'path'
 import { Collapse, CollapseChevron, disclosurePanelId } from './Collapse'
 import {
-  CSS_EASE,
   DURATION_DISCLOSURE,
   TRANSITION_CHEVRON,
   TRANSITION_DISCLOSURE,
@@ -60,15 +57,5 @@ describe('CollapseChevron', () => {
     const html = renderToString(<CollapseChevron open />)
     expect(html).toContain('rotate-90')
     expect(html).toContain(`duration-${DURATION_DISCLOSURE}`)
-  })
-})
-
-describe('motion tokens stay in step with the stylesheet', () => {
-  it('.issue-details-motion mirrors DURATION_DISCLOSURE and CSS_EASE', () => {
-    const css = readFileSync(join(__dirname, '../../theme/components.css'), 'utf8')
-    const m = css.match(/\.issue-details-motion \{[^}]*transition: grid-template-rows (\d+)ms ([^;]+);/)
-    expect(m, 'legacy class present').not.toBeNull()
-    expect(Number(m![1])).toBe(DURATION_DISCLOSURE)
-    expect(m![2].replace(/\s+/g, '')).toBe(CSS_EASE.replace(/\s+/g, ''))
   })
 })

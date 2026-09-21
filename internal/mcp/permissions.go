@@ -15,6 +15,7 @@ import (
 	"github.com/skyhook-io/radar/internal/timeline"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
+	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 )
 
 // mcpChangeAuthorizer returns the per-kind authorizer for the ctx user, for the
@@ -159,6 +160,69 @@ func filterNamespacesForUser(ctx context.Context, requested []string) []string {
 		return requested
 	}
 	return pkgauth.FilterNamespacesForUser(requested, user, perms)
+}
+
+// scopedNamespacesForUser applies the --namespace pin before the RBAC filter,
+// mirroring Server.openCostRouteScope and parseNamespacesForUser. Prometheus
+// and Kubecost answer cluster-wide no matter which namespace the informer
+// caches are pinned to, so a tool reading them must clamp the scope itself or a
+// namespace-scoped Radar reports spend for namespaces it was told to ignore.
+func scopedNamespacesForUser(ctx context.Context, requested []string) []string {
+	clamped, ok := clampToNamespacePin(requested)
+	if !ok {
+		return []string{}
+	}
+	return filterNamespacesForUser(ctx, clamped)
+}
+
+// namespaceWithinPin reports whether a single namespace survives the --namespace
+// pin, for tools that authorize it with their own exact SubjectAccessReview.
+func namespaceWithinPin(namespace string) bool {
+	_, ok := clampToNamespacePin([]string{namespace})
+	return ok
+}
+
+// deniedScopeReason names why a namespace request resolved to nothing. The pin
+// and an RBAC denial are indistinguishable in the resulting namespace list, so
+// the cause has to be re-derived from configuration: "you cannot read this"
+// and "radar was started with --namespace-scope" need different answers.
+func deniedScopeReason(requested []string) string {
+	if _, ok := clampToNamespacePin(requested); !ok {
+		return ReasonOutsideNamespaceScope
+	}
+	return pkgopencost.ReasonAccessDenied
+}
+
+// ReasonOutsideNamespaceScope marks a request the --namespace pin excluded,
+// rather than one this identity lacks permission for.
+const ReasonOutsideNamespaceScope = "outside_namespace_scope"
+
+// NamespacePinned reports whether informer caches are pinned to one namespace,
+// and which. Callers use it to attribute a narrowed scope: a pin and an RBAC
+// limit produce the same namespace list, and telling a cluster-admin their
+// access is restricted when the operator pinned the process is a wrong answer.
+func NamespacePinned() (string, bool) {
+	if !k8s.ForceNamespaceScope {
+		return "", false
+	}
+	target := k8s.GetNamespaceScopeTarget()
+	return target, target != ""
+}
+
+// clampToNamespacePin applies only the --namespace pin, reporting false when the
+// request falls outside it.
+func clampToNamespacePin(requested []string) ([]string, bool) {
+	if !k8s.ForceNamespaceScope {
+		return requested, true
+	}
+	target := k8s.GetNamespaceScopeTarget()
+	if target == "" {
+		return nil, false
+	}
+	if requested != nil && !slices.Contains(requested, target) {
+		return nil, false
+	}
+	return []string{target}, true
 }
 
 // checkNamespaceAccess reports whether the user can read in this single

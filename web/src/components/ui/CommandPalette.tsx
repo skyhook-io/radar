@@ -23,13 +23,17 @@ export function CommandPalette({ onClose, isOpen = true, ...callbacks }: Command
   // with the standalone omnibar via useCommandItems so the two never drift.
   const items = useCommandItems(callbacks)
 
-  // Focus input on mount
+  // Focus the input once logically open. Not on mount: the presence hook
+  // mounts the palette two frames before `isOpen` flips, and the root is
+  // `inert` until then, so a mount-time focus would be refused.
   useEffect(() => {
-    inputRef.current?.focus()
-  }, [])
+    if (isOpen) inputRef.current?.focus()
+  }, [isOpen])
 
-  // Close on Escape (capture phase to beat the shortcut system)
+  // Close on Escape (capture phase to beat the shortcut system) — only while
+  // logically open: the palette stays mounted through its exit.
   useEffect(() => {
+    if (!isOpen) return
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
@@ -39,7 +43,7 @@ export function CommandPalette({ onClose, isOpen = true, ...callbacks }: Command
     }
     document.addEventListener('keydown', handler, true)
     return () => document.removeEventListener('keydown', handler, true)
-  }, [onClose])
+  }, [isOpen, onClose])
 
   // Filter and rank results
   const filteredItems = useMemo(() => {
@@ -122,16 +126,16 @@ export function CommandPalette({ onClose, isOpen = true, ...callbacks }: Command
   let flatIndex = 0
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[15vh]">
+    <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[15vh]" inert={!isOpen || undefined}>
       {/* Backdrop */}
       <div
         className={clsx(
           'absolute inset-0 bg-theme-base/60 backdrop-blur-sm',
           TRANSITION_BACKDROP,
-          isOpen ? 'opacity-100' : 'opacity-0'
+          isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
         )}
         style={overlayTransitionStyle(isOpen, 'dialog')}
-        onClick={onClose}
+        onClick={isOpen ? onClose : undefined}
       />
 
       {/* Panel */}

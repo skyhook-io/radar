@@ -544,7 +544,7 @@ func detectPrometheusCostState(ctx context.Context) prometheusCostState {
 		}
 		return prometheusCostUnknown
 	}
-	resp := pkgopencost.ComputeCostSummaryFromProm(ctx, client.Prom(), pkgopencost.SummaryOptions{Currency: pkgopencost.DefaultCurrency})
+	resp := pkgopencost.ComputeCostSummaryFromProm(ctx, client.Prom(), pkgopencost.SummaryOptions{Currency: pkgopencost.DefaultCurrency, SkipNodeCost: true})
 	if resp.Available {
 		return prometheusCostAvailable
 	}

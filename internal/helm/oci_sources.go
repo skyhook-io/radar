@@ -82,10 +82,21 @@ func rejectLinkLocalHost(ref string) error {
 
 // ListOCISources returns the registered OCI prefixes (normalized).
 func ListOCISources() []string {
-	s := settings.Load()
-	out := make([]string, 0, len(s.HelmOCISources))
-	out = append(out, s.HelmOCISources...)
-	return out
+	return settings.EffectiveOCISources()
+}
+
+func ValidateOCISources(sources []string) ([]string, error) {
+	result := make([]string, 0, len(sources))
+	for _, source := range sources {
+		prefix, err := normalizeOCIPrefix(source)
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(result, prefix) {
+			result = append(result, prefix)
+		}
+	}
+	return result, nil
 }
 
 // AddOCISource registers a prefix. Idempotent: re-adding an existing prefix is a

@@ -510,9 +510,7 @@ describe("strict evidence adapters", () => {
     expect(groupsOf(result.groups, "events")[0].latest.relevance).toBe(
       "target",
     );
-    expect(groupsOf(result.groups, "issue")[0].latest.relevance).toBe(
-      "target",
-    );
+    expect(groupsOf(result.groups, "issue")[0].latest.relevance).toBe("target");
   });
 
   it("keeps colliding non-core plurals on their own API group", () => {
@@ -1776,7 +1774,7 @@ describe("strict evidence adapters", () => {
 
   it("keeps unknown tools in Activity and limits invalid known contracts", () => {
     const result = project([
-      tool("other", "discover_metrics", { data: "ignored" }),
+      tool("other", "get_dashboard", { data: "ignored" }),
       tool("bad-events", "get_events", { events: [{ nope: true }] }),
     ]);
     expect(result.sources.map((source) => source.stepId)).toEqual([
@@ -2699,5 +2697,40 @@ describe("live-run follow-ups", () => {
     expect(changes[0].latest.title).toBe("Recent changes · last 48h");
     expect(changes[0].latest.summary).toBe("2 changes · Deployment shop/api");
     expect(changes[1].latest.title).toBe("Recent changes · last 24h");
+  });
+});
+
+describe("namespace listings", () => {
+  it("renders a list_namespaces result as an inventory card of Namespaces", () => {
+    const projection = projectInvestigationEvidence(
+      [
+        {
+          timeline: [
+            tool(
+              "namespaces",
+              "list_namespaces",
+              [
+                {
+                  name: "capi-system",
+                  status: "Terminating",
+                  labels: { a: "b" },
+                },
+                { name: "shop", status: "Active" },
+              ],
+              { summary: "{}" },
+            ),
+          ],
+        },
+      ],
+      { kind: "Deployment", group: "apps", namespace: "shop", name: "api" },
+    );
+    const card = projection.groups.find((group) => group.kind === "inventory");
+    expect(card?.latest.title).toBe("Namespaces");
+    expect(card?.latest.summary).toBe("2 returned");
+    expect(
+      card?.latest.data.type === "inventory"
+        ? card.latest.data.resources.map((r) => r.name)
+        : [],
+    ).toEqual(["capi-system", "shop"]);
   });
 });

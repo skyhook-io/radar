@@ -1,7 +1,7 @@
 import { useLayoutEffect, useId, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { ExternalLink, X } from 'lucide-react'
-import { Disclosure } from '../ui/Disclosure'
+import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
 import type { WorkloadMetrics } from '../../api/workloadMetrics'
 import type { PrometheusTimeRange } from '../../api/client'
 

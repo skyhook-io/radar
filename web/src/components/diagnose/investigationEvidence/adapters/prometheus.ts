@@ -6,6 +6,7 @@ import {
   ProjectionBuilder,
   evidenceTierForRelevance,
   invalidPayload,
+  scopeFromArgs,
 } from "../observations";
 import {
   nonEmptyString,
@@ -766,4 +767,52 @@ export function adaptQueryPrometheus(
       data,
     },
   );
+}
+
+// A metric catalogue is bookkeeping for the query that follows; when the
+// agent cites it, the receipt says what was searched and how much came back.
+export function adaptDiscoverMetrics(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+  payload: unknown,
+): void {
+  const value = record(payload);
+  if (!value || typeof value.count !== "number") {
+    invalidPayload(builder, source);
+    return;
+  }
+  if (!source.confirmedSuccess) return;
+  const match = nonEmptyString(value.match) ? value.match : undefined;
+  const label = nonEmptyString(value.label) ? value.label : undefined;
+  const scope = match ?? scopeFromArgs(source);
+  builder.observe(
+    `metrics:discover:${scope}:${label ?? "names"}`,
+    "receipt",
+    source,
+    {
+      tier: evidenceTierForRelevance("checked", "broader"),
+      relevance: "broader",
+      tone: "neutral",
+      title: label
+        ? `Values of ${label}`
+        : match
+          ? `Metric names matching ${match}`
+          : "Metric names",
+      summary: `${value.count} ${label ? "values" : "metrics"} · last hour${value.truncated === true ? " · truncated" : ""}`,
+      data: {
+        type: "receipt",
+        checked: "metrics",
+        scope,
+        message: nonEmptyString(value.note) ? value.note : undefined,
+      },
+    },
+  );
+  if (value.truncated === true) {
+    builder.limit(
+      source,
+      "Metric discovery",
+      "The catalogue was truncated; a narrower selector would show the rest.",
+      "unknown",
+    );
+  }
 }

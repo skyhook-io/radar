@@ -20,10 +20,12 @@ import {
 import { clsx } from 'clsx'
 import type {
   PodEnvironmentResponse,
+  PodEnvironmentEvidence,
   PodEnvironmentRevealResponse,
   PodEnvironmentRow,
   PodEnvironmentSource,
 } from '../../../types'
+import { formatLogTimestamp } from '../../../utils/log-format'
 import { Badge, type BadgeSeverity } from '../../ui/Badge'
 import { Section, type CopyHandler } from '../../ui/drawer-components'
 import { Tooltip } from '../../ui/Tooltip'
@@ -501,7 +503,7 @@ function CompactStatusCell({ row }: { row: PodEnvironmentRow }) {
       : row.evidence.kind === 'removed'
         ? 'Removed after start'
         : 'Changed after start'
-    return <CompactStatusBadge label={label} explanation={row.evidence.message} severity="warning" icon={<History className="h-3.5 w-3.5" aria-hidden />} />
+    return <CompactStatusBadge label={label} explanation={changeEvidenceExplanation(row.evidence)} severity="warning" icon={<History className="h-3.5 w-3.5" aria-hidden />} />
   }
   if (row.state === 'denied') return <CompactStatusBadge label="Access needed" explanation={row.message} severity="info" icon={<LockKeyhole className="h-3.5 w-3.5" aria-hidden />} />
   if (row.runtimeDependent) return <CompactStatusBadge label="At startup" explanation={row.message} severity="neutral" icon={<Minus className="h-3.5 w-3.5" aria-hidden />} />
@@ -545,7 +547,7 @@ function StatusCell({ row }: { row: PodEnvironmentRow }) {
       : row.evidence.kind === 'removed'
         ? 'Removed after start'
         : 'Changed after start'
-    return <StatusBadge explanation={row.evidence.message}><Badge severity="warning" size="sm">{label}</Badge></StatusBadge>
+    return <StatusBadge explanation={changeEvidenceExplanation(row.evidence)}><Badge severity="warning" size="sm">{label}</Badge></StatusBadge>
   }
   if (row.state === 'denied') return <StatusBadge explanation={row.message}><Badge severity="info" size="sm">Access needed</Badge></StatusBadge>
   if (row.runtimeDependent) return <StatusBadge explanation={row.message}><Badge severity="neutral" size="sm">At startup</Badge></StatusBadge>
@@ -556,8 +558,13 @@ function StatusCell({ row }: { row: PodEnvironmentRow }) {
 
 function missingStatus(row: PodEnvironmentRow) {
   const label = row.missingImpact === 'restartBlocked' ? 'Restart blocked' : 'Prevents start'
-  const explanation = [row.message, row.evidence?.message].filter(Boolean).join(' ')
+  const explanation = [row.message, changeEvidenceExplanation(row.evidence)].filter(Boolean).join(' ')
   return { label, explanation }
+}
+
+function changeEvidenceExplanation(evidence?: PodEnvironmentEvidence) {
+  if (!evidence) return undefined
+  return [evidence.message, `Change observed at ${formatLogTimestamp(evidence.changedAt, 'iso-utc')}.`].filter(Boolean).join(' ')
 }
 
 function hasEnvironmentStatus(row: PodEnvironmentRow) {

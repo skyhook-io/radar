@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Loader2, Wifi, WifiOff } from "lucide-react";
-import { Disclosure } from "../ui/Disclosure";
+import { Disclosure } from "@skyhook-io/k8s-ui/components/ui/Disclosure";
 import {
   AreaChart,
   SeriesLegend,

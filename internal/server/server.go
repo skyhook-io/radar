@@ -62,6 +62,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/perfstats"
+	"github.com/skyhook-io/radar/pkg/prom"
 	"github.com/skyhook-io/radar/pkg/rbac"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 )
@@ -88,6 +89,9 @@ type Server struct {
 	effectiveConfig         *config.Config // running config for GET /api/config
 	openCostCurrency        *opencost.CurrencyResolver
 	currencyManaged         bool
+	prometheusConfigMu      sync.Mutex
+	promURLFlag             bool
+	promHeaderFlags         bool
 	authConfig              auth.Config
 	permCache               *auth.PermissionCache
 	oidcHandler             *auth.OIDCHandler
@@ -184,10 +188,12 @@ type Config struct {
 	InvestigationRefs       *investigationrefs.Registry // shared private evidence issuance ledger
 	DiagConfig              *DiagConfig                 // Sanitized config for diagnostics endpoint
 	EffectiveConfig         *config.Config              // Running startup config for GET /api/config
-	OpenCostCurrency        string                      // ISO 4217 code labeling values returned by OpenCost endpoints
-	OpenCostManaged         bool                        // true when an explicit CLI/Helm flag owns the running value
-	AuthConfig              auth.Config                 // Authentication configuration
-	AIHistoryDB             string                      // AI run-history SQLite path ("" = memory-only runs)
+	PrometheusURLFlag       bool
+	PrometheusHeaderFlags   bool
+	OpenCostCurrency        string      // ISO 4217 code labeling values returned by OpenCost endpoints
+	OpenCostManaged         bool        // true when an explicit CLI/Helm flag owns the running value
+	AuthConfig              auth.Config // Authentication configuration
+	AIHistoryDB             string      // AI run-history SQLite path ("" = memory-only runs)
 	CloudConnect            CloudConnectConfig
 }
 
@@ -219,6 +225,8 @@ func New(cfg Config) *Server {
 		mcpInvestigationHandler: cfg.MCPInvestigationHandler,
 		diagConfig:              cfg.DiagConfig,
 		effectiveConfig:         cfg.EffectiveConfig,
+		promURLFlag:             cfg.PrometheusURLFlag,
+		promHeaderFlags:         cfg.PrometheusHeaderFlags,
 		openCostCurrency:        opencost.NewCurrencyResolver(cfg.OpenCostCurrency),
 		currencyManaged:         cfg.OpenCostManaged,
 		authConfig:              cfg.AuthConfig,
@@ -231,6 +239,7 @@ func New(cfg Config) *Server {
 		yamlSchemaPathCache:     make(map[string]yamlSchemaPathCacheEntry),
 		yamlSchemaBundleCache:   make(map[string]yamlSchemaBundleCacheEntry),
 	}
+	opencost.PublishCurrencyResolver(s.openCostCurrency)
 	s.cloudInstall = newCloudInstallManager(cfg.CloudConnect)
 	s.cloudInstall.sharedListener = s.sharedListener
 
@@ -245,7 +254,7 @@ func New(cfg Config) *Server {
 	// Radar Hub) anyway.
 	// Also requires /mcp to be mounted — the agent reaches the cluster only
 	// through it, so with --no-mcp the feature can't work.
-	if !s.authConfig.Enabled() && s.mcpHandler != nil &&
+	if s.configManagement() != "operator" && !s.authConfig.Enabled() && s.mcpHandler != nil &&
 		s.mcpInvestigationHandler != nil && cfg.InvestigationRefs != nil {
 		if d, err := ai.NewDetected(context.Background(), cfg.InvestigationRefs); err == nil {
 			s.aiDiagnoser = d
@@ -554,6 +563,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// the gate (local + no auth + no tunnel). prepare/start are
 			// registered above, outside the 60s timeout.
 			r.Get("/cloud/install/status", s.handleCloudInstallStatus)
+			r.Get("/cloud/install/discover", s.handleCloudInstallDiscover)
 			r.Post("/cloud/install/cancel", s.handleCloudInstallCancel)
 			r.Post("/cloud/install/dismiss", s.handleCloudInstallDismiss)
 			r.Get("/cloud/connect/self", s.handleCloudConnectSelf)
@@ -715,6 +725,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 
 			// Helm routes
 			helmHandlers := helm.NewHandlers(s.resolveHelmNamespaces)
+			helmHandlers.ConfigWriteAllowed = s.requireConfigEditable
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes
@@ -726,6 +737,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// through this gate before querying — see prometheusAuthGate.
 			prometheuspkg.SetAuthGate(s.prometheusAuthGate)
 			r.Post("/prometheus/rightsizing/scan", s.handleRightsizingScan)
+			r.Get("/prometheus/rightsizing/scan", s.handleRightsizingScan)
+			r.Get("/prometheus/rightsizing/scan/{scanId}", s.handleRightsizingScan)
+			r.Delete("/prometheus/rightsizing/scan/{scanId}", s.handleRightsizingScan)
 			prometheuspkg.RegisterRoutes(r)
 
 			// OpenCost routes
@@ -1195,6 +1209,7 @@ func (s *Server) Handler() http.Handler {
 
 // Stop gracefully stops the server and releases the listening port.
 func (s *Server) Stop() {
+	prometheuspkg.RightsizingScans().Invalidate()
 	StopAllLocalTermSessions()
 	if s.aiRuns != nil {
 		s.aiRuns.Shutdown() // cancel investigations so agent children don't outlive us
@@ -1301,6 +1316,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		WorkloadImages: true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
+	caps.ConfigManagement = s.configManagement()
 	status, _ := s.localTerminalUnavailable(r)
 	caps.LocalTerminal = status == 0
 	if user := auth.UserFromContext(r.Context()); user != nil {
@@ -4674,6 +4690,9 @@ func (s *Server) handleListContexts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	name := chi.URLParam(r, "name")
 	if name == "" {
 		s.writeError(w, http.StatusBadRequest, "context name is required")
@@ -4860,6 +4879,9 @@ func (s *Server) handleCAPIClusterKubeconfig(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	if !s.requireConnected(w) {
 		return
 	}
@@ -5476,6 +5498,10 @@ func deploymentMode() k8s.DeploymentMode {
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	if s.configManagement() == "operator" {
+		s.writeJSON(w, map[string]any{"preferenceStorage": "browser"})
+		return
+	}
 	loaded := settings.Load()
 	// Desktop's own state: on a shared instance this would hand every viewer
 	// the cluster name from whenever this $HOME last ran the Desktop app.
@@ -5490,6 +5516,9 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	var patch settings.Settings
 	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
@@ -5531,15 +5560,19 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 // configResponse bundles the on-disk config file with the effective startup
 // config so the UI can show "currently running" hints for values that differ.
 type configResponse struct {
-	File      config.Config `json:"file"`
-	Effective config.Config `json:"effective"`
-	IsDesktop bool          `json:"isDesktop"`
+	Management string        `json:"management"`
+	File       config.Config `json:"file"`
+	Effective  config.Config `json:"effective"`
+	IsDesktop  bool          `json:"isDesktop"`
 	// OpenCostManaged tells Settings that an explicit startup flag owns the
 	// running value even when the persisted file changes.
 	OpenCostManaged bool `json:"openCostCurrencyManaged,omitempty"`
 	// PrometheusHeaderKeys lists the configured Prometheus header names so the UI
 	// can show what's set without ever receiving the (secret) values.
-	PrometheusHeaderKeys []string `json:"prometheusHeaderKeys,omitempty"`
+	PrometheusHeaderKeys     []string `json:"prometheusHeaderKeys,omitempty"`
+	PrometheusServerManaged  bool     `json:"prometheusServerManaged"`
+	PrometheusHeadersManaged bool     `json:"prometheusHeadersManaged"`
+	PrometheusURLFromFlag    bool     `json:"prometheusUrlFromFlag"`
 	// ArgoCDTokenSet tells the UI a token is configured without exposing it.
 	ArgoCDTokenSet     bool   `json:"argoCdTokenSet,omitempty"`
 	KubecostAPIKeySet  bool   `json:"kubecostApiKeySet,omitempty"`
@@ -5562,14 +5595,19 @@ type configResponse struct {
 // PrometheusHeaders are redacted — they may contain Bearer tokens / tenant IDs and the
 // diagnostics endpoint already masks them as a presence bool.
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	if s.configManagement() == "operator" {
+		s.handleGetOperatorConfig(w, r)
+		return
+	}
 	file := config.Load()
 	normalizedCurrency, err := config.NormalizeOpenCostCurrency(file.OpenCostCurrency)
 	if err != nil {
 		normalizedCurrency = ""
 	}
 	file.OpenCostCurrency = normalizedCurrency
-	headerKeys := make([]string, 0, len(file.PrometheusHeaders))
-	for k := range file.PrometheusHeaders {
+	currentURL, currentHeaders := prometheuspkg.CurrentConfig()
+	headerKeys := make([]string, 0, len(currentHeaders))
+	for k := range currentHeaders {
 		headerKeys = append(headerKeys, k)
 	}
 	sort.Strings(headerKeys)
@@ -5613,16 +5651,20 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resp := configResponse{
-		File:                 file,
-		IsDesktop:            version.IsDesktop(),
-		OpenCostManaged:      s.currencyManaged,
-		PrometheusHeaderKeys: headerKeys,
-		ArgoCDTokenSet:       tokenSet,
-		KubecostAPIKeySet:    kubecostAPIKeySet,
-		KubecostEnvManaged:   kubecostEnvManaged,
-		KubecostEnvError:     kubecostEnvError,
-		ArgoCDEnvManaged:     envManaged,
-		ArgoCDEnvError:       envError,
+		Management:               s.configManagement(),
+		File:                     file,
+		IsDesktop:                version.IsDesktop(),
+		OpenCostManaged:          s.currencyManaged,
+		PrometheusHeaderKeys:     headerKeys,
+		PrometheusServerManaged:  s.promURLFlag || s.promHeaderFlags || len(file.PrometheusHeadersFromEnv) > 0,
+		PrometheusHeadersManaged: s.promHeaderFlags || len(file.PrometheusHeadersFromEnv) > 0,
+		PrometheusURLFromFlag:    s.promURLFlag,
+		ArgoCDTokenSet:           tokenSet,
+		KubecostAPIKeySet:        kubecostAPIKeySet,
+		KubecostEnvManaged:       kubecostEnvManaged,
+		KubecostEnvError:         kubecostEnvError,
+		ArgoCDEnvManaged:         envManaged,
+		ArgoCDEnvError:           envError,
 	}
 	// Best-effort: surface a detected Argo CD CLI login so the UI can offer it.
 	// A malformed CLI config just means "no session offered", never a failure.
@@ -5642,6 +5684,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		effective.ArgoCDToken = ""
 		resp.Effective = effective
 	}
+	resp.Effective.PrometheusURL = currentURL
 	s.writeJSON(w, resp)
 }
 
@@ -5651,6 +5694,9 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 // Live integration fields are preserved from the on-disk file: their dedicated endpoints
 // apply them, and GET redacts their credentials, so a UI round-trip must not replace them.
 func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
 	}
@@ -5741,6 +5787,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 // response carries the live reachability result so the UI can confirm the URL
 // actually works. An empty URL reverts to auto-discovery.
 func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
 	}
@@ -5764,19 +5813,58 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 	// Reject anything startup would log.Fatalf on, so "Apply now" can't persist a
 	// config that bricks the next launch. Empty reverts to auto-discovery.
 	if rawURL != "" {
-		if u, err := url.Parse(rawURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-			s.writeError(w, http.StatusBadRequest, "Prometheus URL must be a valid HTTP(S) URL (e.g., http://prometheus-server.monitoring:9090)")
+		if u, err := url.Parse(rawURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			s.writeError(w, http.StatusBadRequest, "Prometheus URL must be an HTTP(S) base URL without credentials, query parameters or fragments (e.g., http://prometheus-server.monitoring:9090)")
+			return
+		}
+		if _, valid := prom.NormalizeOrigin(rawURL); !valid {
+			s.writeError(w, http.StatusBadRequest, "Prometheus URL has an invalid port; use a numeric port no greater than 65535")
 			return
 		}
 	}
 
 	var headers map[string]string
 	if body.Headers != nil {
-		headers = make(map[string]string, len(*body.Headers))
-		for k, v := range *body.Headers {
-			if k = strings.TrimSpace(k); k != "" {
-				headers[k] = v
-			}
+		headers = *body.Headers
+		if err := prom.ValidateHeaders(headers); err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
+	// Serialize the credential check, persistence and live application. Otherwise
+	// a URL-only edit can reuse credentials replaced by another request mid-save.
+	s.prometheusConfigMu.Lock()
+	defer s.prometheusConfigMu.Unlock()
+	currentURL, currentHeaders := prometheuspkg.CurrentConfig()
+	previous := config.Load()
+	if body.Headers != nil && (s.promHeaderFlags || len(previous.PrometheusHeadersFromEnv) > 0) {
+		s.writeError(w, http.StatusConflict, "Prometheus headers are configured outside Settings. Update their startup flags, environment references or Helm values, then restart Radar; no changes were saved.")
+		return
+	}
+
+	// On restart, URL or header flags can split a saved endpoint/credential pair.
+	// Bind edits to the immutable startup URL, not the mutable running client.
+	if (s.promURLFlag || s.promHeaderFlags) && (s.effectiveConfig == nil || !sameIntegrationOrigin(rawURL, s.effectiveConfig.PrometheusURL)) {
+		s.writeError(w, http.StatusConflict, "Prometheus is configured by startup flags. Update the URL and header flags together, then restart Radar to set or change the server, or enable auto-discovery.")
+		return
+	}
+
+	if rawURL != "" {
+		savedHeaderURL := previous.PrometheusURL
+		if savedHeaderURL == "" && (s.promURLFlag || s.promHeaderFlags) && s.effectiveConfig != nil {
+			savedHeaderURL = s.effectiveConfig.PrometheusURL
+		}
+		if len(previous.PrometheusHeadersFromEnv) > 0 &&
+			(!sameIntegrationOrigin(rawURL, currentURL) || previous.PrometheusURL != "" && !sameIntegrationOrigin(rawURL, previous.PrometheusURL)) {
+			s.writeError(w, http.StatusConflict, "Prometheus headers are loaded from environment references in the configuration file. Update the URL and header references together in that file, then restart Radar.")
+			return
+		}
+		if body.Headers == nil &&
+			(len(currentHeaders) > 0 && !sameIntegrationOrigin(rawURL, currentURL) ||
+				len(previous.PrometheusHeaders) > 0 && !sameIntegrationOrigin(rawURL, savedHeaderURL)) {
+			s.writeError(w, http.StatusBadRequest, "Changing the Prometheus server requires replacing or clearing its headers. Existing credentials cannot be sent to a different server.")
+			return
 		}
 	}
 
@@ -5788,8 +5876,8 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 	// that the next start resolves again regardless of what's submitted here.
 	if rawURL == "" {
 		effective := body.Headers != nil && len(headers) > 0 ||
-			body.Headers == nil && prometheuspkg.HasHeaders() ||
-			len(config.Load().PrometheusHeadersFromEnv) > 0
+			body.Headers == nil && (len(currentHeaders) > 0 || len(previous.PrometheusHeaders) > 0) ||
+			len(previous.PrometheusHeadersFromEnv) > 0
 		if effective {
 			s.writeError(w, http.StatusBadRequest, "Prometheus headers require a Prometheus URL: keep a URL, or clear the headers (including any prometheusHeadersFromEnv in the Helm values) before switching back to auto-discovery")
 			return
@@ -5814,7 +5902,7 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 	// endpoint with the new credentials.
 	effectiveHeaders := headers
 	if body.Headers == nil {
-		effectiveHeaders = prometheuspkg.CurrentHeaders()
+		effectiveHeaders = currentHeaders
 	}
 	prometheuspkg.Configure(rawURL, effectiveHeaders)
 	// A live traffic source copies URL and headers at construction and reads

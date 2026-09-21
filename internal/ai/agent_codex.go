@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 // codexAgent drives the Codex CLI (`codex exec`). Codex has no per-MCP-tool
@@ -185,7 +187,7 @@ func (a *codexAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnos
 			}
 			switch e.Item.Type {
 			case "mcp_tool_call":
-				resultText, evidenceRef := splitInvestigationEvidenceMarker(
+				resultText, evidenceRef := investigation.SplitRefMarker(
 					codexResultText(e.Item),
 				)
 				res, trunc := capPayload(resultText)

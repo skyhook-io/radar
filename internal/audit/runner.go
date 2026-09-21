@@ -133,6 +133,7 @@ func collectWorkloadInput(cache *k8s.ResourceCache, namespaces []string) *bp.Che
 	return &bp.CheckInput{
 		Pods:         ListNamespaced(cache.Pods(), namespaces),
 		Deployments:  ListNamespaced(cache.Deployments(), namespaces),
+		ReplicaSets:  ListNamespaced(cache.ReplicaSets(), namespaces),
 		StatefulSets: ListNamespaced(cache.StatefulSets(), namespaces),
 		DaemonSets:   ListNamespaced(cache.DaemonSets(), namespaces),
 		Jobs:         ListNamespaced(cache.Jobs(), namespaces),

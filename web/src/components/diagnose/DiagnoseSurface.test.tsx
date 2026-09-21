@@ -48,9 +48,9 @@ describe("canRerunInvestigation", () => {
 
   it("stays hidden while a turn is in flight", () => {
     // A start would be handed back the live run, so the button does nothing.
-    expect(
-      canRerunInvestigation("investigation", run("running"), false),
-    ).toBe(false);
+    expect(canRerunInvestigation("investigation", run("running"), false)).toBe(
+      false,
+    );
   });
 
   it("stays hidden on a stale run", () => {
@@ -62,9 +62,9 @@ describe("canRerunInvestigation", () => {
   });
 
   it("blocks fresh starts while a human turn stops, but allows a separate human run from an automatic one", () => {
-    expect(
-      canRerunInvestigation("investigation", run("stopping"), false),
-    ).toBe(false);
+    expect(canRerunInvestigation("investigation", run("stopping"), false)).toBe(
+      false,
+    );
     expect(
       canRerunInvestigation(
         "investigation",
@@ -89,9 +89,9 @@ describe("canRerunInvestigation", () => {
     expect(canRerunInvestigation("investigation", run("error"), false)).toBe(
       true,
     );
-    expect(
-      canRerunInvestigation("investigation", run("stopped"), false),
-    ).toBe(true);
+    expect(canRerunInvestigation("investigation", run("stopped"), false)).toBe(
+      true,
+    );
   });
 });
 

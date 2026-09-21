@@ -27,6 +27,33 @@ describe("resource cards scaled by an HPA", () => {
       },
     });
 
+  it("states a workload's readiness from the resource when the read carried no context", () => {
+    const result = project([
+      tool(
+        "res",
+        "get_resource",
+        {
+          resource: {
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: { namespace: "shop", name: "api" },
+            spec: { replicas: 1 },
+            status: { replicas: 1, readyReplicas: 0 },
+          },
+        },
+        {
+          summary: JSON.stringify({
+            kind: "deployment",
+            namespace: "shop",
+            name: "api",
+          }),
+        },
+      ),
+    ]);
+    const card = groupsOf(result.groups, "resource")[0].latest;
+    expect(card.summary).toBe("0/1 replicas ready");
+  });
+
   it("lifts a healthy workload whose autoscaler cannot act", () => {
     const result = project([scaled("metrics_unavailable")]);
     const card = groupsOf(result.groups, "resource")[0].latest;

@@ -257,6 +257,33 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
     ],
   },
   {
+    name: 'get_cost',
+    desc: 'Cluster spend from OpenCost or Kubecost — cluster and per-namespace totals, per-workload and per-node breakdowns, and spend over time. Hourly rates plus the same monthly projection the Costs page shows.',
+    params: [
+      { arg: 'view', desc: 'summary (default), workloads, nodes (cluster-wide), or trend' },
+      { arg: 'namespace', desc: 'required for view=workloads; filters summary and trend' },
+      { arg: 'kind', desc: 'view=workloads: target one workload instead of the top spenders; needs name' },
+      { arg: 'name', desc: 'workloads: exact workload name (needs kind); nodes: exact node name' },
+      { arg: 'range', desc: 'trend only: 6h, 24h (default), or 7d' },
+      { arg: 'include_points', desc: 'trend only: include raw points (default false); summaries are always returned' },
+      { arg: 'limit', desc: 'max rows (default 20, max 100)' },
+    ],
+  },
+  {
+    name: 'get_rightsizing',
+    desc: 'CPU/memory request recommendations, with current limits as context, from 7 days of observed usage, with a fit verdict and confidence tier per container. Scans can take 45 seconds; inspect confidence and missing evidence. Request reductions do not directly imply bill savings.',
+    params: [
+      { arg: 'scope', required: true, desc: 'workload (needs kind/name/namespace), namespace, or cluster' },
+      { arg: 'kind', desc: 'scope=workload: Deployment, StatefulSet, or DaemonSet' },
+      { arg: 'name', desc: 'scope=workload: the workload name' },
+      { arg: 'namespace', desc: 'required for scope=workload; for scope=namespace unless namespaces is set' },
+      { arg: 'namespaces', desc: 'scope=namespace: scan several namespaces in one call' },
+      { arg: 'include_all', desc: 'include balanced and unevidenced rows (default false); workload scope always returns all rows' },
+      { arg: 'classification', desc: 'scan only: reduction, increase, review, need_data, or in_range; returns all rows of matching workloads' },
+      { arg: 'limit', desc: 'max workloads returned by a namespace or cluster scan (default 20, max 100)' },
+    ],
+  },
+  {
     name: 'get_workload_logs',
     desc: 'Aggregated logs across all pods of a workload. Without grep, filters for diagnostic relevance; grep returns only matching timestamp-prefixed lines instead.',
     params: [

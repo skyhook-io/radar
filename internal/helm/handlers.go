@@ -68,6 +68,7 @@ func decodeOptionalApplyValuesRequest(body io.Reader) (map[string]any, error) {
 
 // Handlers provides HTTP handlers for Helm endpoints
 type Handlers struct {
+	ConfigWriteAllowed func(http.ResponseWriter, *http.Request) bool
 	// resolveNamespaces maps a request to the namespaces a Helm list should
 	// query. It returns (nil, true) for cluster-wide access, (namespaces, true)
 	// to list those namespaces and merge, and (_, false) when the identity has
@@ -981,6 +982,9 @@ func (h *Handlers) handleListOCISources(w http.ResponseWriter, r *http.Request) 
 // requireHelmWrite (same as repo refresh): it mutates pod-local config and
 // underpins later upgrades, but is not a cluster mutation.
 func (h *Handlers) handleAddOCISource(w http.ResponseWriter, r *http.Request) {
+	if h.ConfigWriteAllowed != nil && !h.ConfigWriteAllowed(w, r) {
+		return
+	}
 	if !requireHelmWrite(w, r) {
 		return
 	}
@@ -999,6 +1003,9 @@ func (h *Handlers) handleAddOCISource(w http.ResponseWriter, r *http.Request) {
 
 // handleRemoveOCISource unregisters an OCI chart-source prefix.
 func (h *Handlers) handleRemoveOCISource(w http.ResponseWriter, r *http.Request) {
+	if h.ConfigWriteAllowed != nil && !h.ConfigWriteAllowed(w, r) {
+		return
+	}
 	if !requireHelmWrite(w, r) {
 		return
 	}

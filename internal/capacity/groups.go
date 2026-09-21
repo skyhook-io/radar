@@ -274,6 +274,40 @@ func BuildGroupsModel(snapshot Snapshot, status *autoscalerstatus.Status, detect
 	return result
 }
 
+// NodePool returns the pool a node belongs to and the label family that named
+// it, under the same precedence and ambiguity rule the Capacity views use, so
+// the two surfaces never disagree about a node.
+func NodePool(node *corev1.Node) (name, source string, ok bool) {
+	_, name, source, ok = groupIdentityForNode(node)
+	return name, source, ok
+}
+
+// NodeCapacityType reports how a node is purchased, or "" when unknown. A
+// missing spot label only means on-demand on platforms that label every spot
+// node; elsewhere its absence says nothing.
+func NodeCapacityType(node *corev1.Node) string {
+	labels := node.Labels
+	if value := labels[karpenter.CapacityTypeLabelKey]; value != "" {
+		return value
+	}
+	switch labels["eks.amazonaws.com/capacityType"] {
+	case "SPOT":
+		return "spot"
+	case "ON_DEMAND":
+		return "on-demand"
+	}
+	switch {
+	case labels["cloud.google.com/gke-spot"] == "true",
+		strings.EqualFold(labels["kubernetes.azure.com/scalesetpriority"], "spot"):
+		return "spot"
+	case labels["cloud.google.com/gke-preemptible"] == "true":
+		return "preemptible"
+	case labels[labelGKENodePool] != "", labels[labelAKSAgentPool] != "":
+		return "on-demand"
+	}
+	return ""
+}
+
 func groupIdentityForNode(node *corev1.Node) (id, name, domain string, ok bool) {
 	if v := node.Labels[karpenter.NodePoolLabelKey]; v != "" {
 		return "karpenter-nodepool/" + v, v, "karpenter", true

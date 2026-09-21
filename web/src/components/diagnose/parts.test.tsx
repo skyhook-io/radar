@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { TW_EASE_UI } from "../../utils/animation";
 import { describe, expect, it, vi } from "vitest";
 import {
   AgentControls,
@@ -29,6 +30,82 @@ import { investigationEvidenceSourceId } from "./investigationEvidence";
 import { ThemeProvider } from "../../context/ThemeContext";
 
 const noop = vi.fn();
+
+describe("explanations without a root cause", () => {
+  it("keeps inconclusive explanation, sources and action in one control row", () => {
+    const html = renderToStaticMarkup(
+      <ResultCard
+        diagnosis={
+          {
+            inconclusive: true,
+            summary: "Not enough evidence",
+            report: "Logs unavailable",
+            rootCause: "",
+            remediation: [],
+          } as Diagnosis
+        }
+        explanation={{ status: "idle", onGenerate: noop }}
+        assessmentSources={<span>Saved sources</span>}
+        assessmentAction={<button>Next steps</button>}
+      />,
+    );
+    expect(html.match(/data-assessment-actions/g)).toHaveLength(1);
+    const row = html.slice(
+      html.indexOf("data-assessment-actions"),
+      html.indexOf("data-assessment-actions") + 6000,
+    );
+    expect(row).toContain("Assessment details");
+    expect(row).toContain("Explain simply");
+    expect(row).toContain("Next steps");
+  });
+  it.each(["healthy", "inconclusive"] as const)(
+    "offers Explain for a %s assessment",
+    (state) => {
+      const diagnosis = {
+        [state]: true,
+        summary: "Saved assessment",
+        report: "Saved analysis",
+        rootCause: "",
+        remediation: [],
+      } as Diagnosis;
+      const html = renderToStaticMarkup(
+        <ResultCard
+          diagnosis={diagnosis}
+          explanation={{ status: "idle", onGenerate: noop }}
+          section="conclusion"
+        />,
+      );
+      expect(html.match(/Explain simply/g)).toHaveLength(1);
+      expect(html).not.toContain('disabled=""');
+      const running = renderToStaticMarkup(
+        <ResultCard
+          diagnosis={diagnosis}
+          explanation={{ status: "running" }}
+          section="conclusion"
+        />,
+      );
+      expect(running).toContain("Explaining this assessment");
+      expect(
+        renderToStaticMarkup(
+          <ResultCard
+            diagnosis={diagnosis}
+            explanation={{ status: "idle", onGenerate: noop }}
+            section="actions"
+          />,
+        ),
+      ).not.toContain("Explain simply");
+      expect(
+        renderToStaticMarkup(
+          <ResultCard
+            diagnosis={diagnosis}
+            explanation={{ status: "idle", onGenerate: noop }}
+            followup
+          />,
+        ),
+      ).not.toContain("Explain simply");
+    },
+  );
+});
 
 it("keeps earlier remediation copyable without suggesting it is executable", () => {
   const html = renderToStaticMarkup(
@@ -94,10 +171,73 @@ describe("remediation commands", () => {
         compactActions
       />,
     );
-    expect(html).toContain("Copy command 1 of step 1");
-    expect(html).toContain("Copy command 2 of step 1");
+    expect(html.match(/aria-label="Copy command from step 1"/g)).toHaveLength(
+      2,
+    );
     expect(html).not.toContain("Copy remediation step");
+    expect(
+      html.indexOf("kubectl rollout undo deployment/api -n dev</code>"),
+    ).toBeLessThan(html.indexOf("Copy command from step 1"));
+    expect(html.indexOf("Copy command from step 1")).toBeLessThan(
+      html.indexOf("kubectl -n dev get pods</code>"),
+    );
   });
+
+  it.each(["bash", ""])(
+    "places each copy button inside its own %s fenced command box",
+    (language) => {
+      const html = renderToStaticMarkup(
+        <ResultCard
+          diagnosis={
+            {
+              rootCause: "Image pull failure",
+              report: "Assessment",
+              remediation: [
+                `Roll back:\n\`\`\`${language}\nkubectl rollout undo deployment/api -n dev\n\`\`\`\nThen watch:\n\`\`\`${language}\nkubectl rollout status deployment/api -n dev\n\`\`\``,
+              ],
+              recommendedIndex: 1,
+            } as Diagnosis
+          }
+          section="actions"
+          compactActions
+          onApply={noop}
+        />,
+      );
+      const blocks = [...html.matchAll(/<pre\b[^>]*>([\s\S]*?)<\/pre>/g)].map(
+        (match) => match[1],
+      );
+      expect(blocks).toHaveLength(2);
+      expect(blocks[0]).toContain("kubectl rollout undo");
+      expect(blocks[0]).toContain("Copy command from step 1");
+      expect(blocks[1]).toContain("kubectl rollout status");
+      expect(blocks[1]).toContain("Copy command from step 1");
+      expect(html.match(/aria-label="Copy command/g)).toHaveLength(2);
+      expect(html.indexOf("Apply…")).toBeLessThan(html.indexOf("<pre"));
+    },
+  );
+});
+
+it("keeps repeated and normalized commands copyable at their rendered locations", () => {
+  const step =
+    "Run `kubectl get pods -n dev`, then run this: ```bash kubectl get pods -n dev ```";
+  expect(remediationCommands(step)).toEqual([
+    "kubectl get pods -n dev",
+    "kubectl get pods -n dev",
+  ]);
+  const html = renderToStaticMarkup(
+    <ResultCard
+      diagnosis={
+        { rootCause: "Check", report: "", remediation: [step] } as Diagnosis
+      }
+      section="actions"
+      compactActions
+    />,
+  );
+  expect(html.match(/aria-label="Copy command from step 1"/g)).toHaveLength(2);
+  expect(html).toMatch(
+    /<pre\b[^>]*>[\s\S]*kubectl get pods -n dev[\s\S]*Copy command from step 1[\s\S]*<\/pre>/,
+  );
+  expect(html).not.toContain("bash kubectl");
 });
 
 describe("explanation placement", () => {
@@ -349,8 +489,9 @@ describe("Timeline reasoning density", () => {
     );
 
     expect(html).toContain("height:47px");
+    // The clamp animates on the shared disclosure clock, not a local timing.
     expect(html).toContain(
-      "transition-[height] duration-200 ease-out motion-reduce:transition-none",
+      `transition-[height] duration-300 ${TW_EASE_UI} motion-reduce:transition-none`,
     );
     expect(html).not.toContain("animate-transcript-enter");
     expect(html).not.toContain("Show reasoning");
@@ -708,9 +849,10 @@ describe("tool row duration and failure reason", () => {
     expect(args?.[1]).toContain("flex-1");
     expect(args?.[1]).toContain("truncate");
     const reason = html.match(
-      /<span class="investigation-tool-reason ([^"]*)">([^<]*)</,
+      /<span class="investigation-tool-reason ([^"]*)"[^>]*>([^<]*)</,
     );
-    expect(reason?.[1]).toContain("shrink-0");
+    expect(reason?.[1]).toContain("min-w-0");
+    expect(reason?.[1]).toContain("truncate");
     expect(reason?.[2]).toBe(
       "resource not found: secret &quot;dev/does-not-exist&quot; not found",
     );
@@ -1152,7 +1294,7 @@ describe("ResultCard conclusion states", () => {
     expect(html).not.toContain("animation-delay");
   });
 
-  it("keeps only the recommended action in the first Findings scan", () => {
+  it("opens only the recommended action in the first Findings scan", () => {
     const html = renderToStaticMarkup(
       <ResultCard
         diagnosis={diagnosis({
@@ -1170,9 +1312,11 @@ describe("ResultCard conclusion states", () => {
     );
 
     expect(html).toContain("Push the missing image.");
-    expect(html).not.toContain("Inspect the registry.");
-    expect(html).not.toContain("Restart the rollout.");
-    expect(html).toContain("Show 2 more steps");
+    // The other steps fold to one readable row each rather than vanishing.
+    expect(html.match(/data-step-folded=/g)).toHaveLength(2);
+    expect(html).toContain("Inspect the registry.");
+    expect(html).toContain("Restart the rollout.");
+    expect(html).toContain("Expand all steps");
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain("grid-template-rows:0fr");
     expect(html).toContain("motion-reduce:transition-none");
@@ -1565,5 +1709,17 @@ describe("assessment provenance disclosure", () => {
     );
     expect(shown).not.toContain("WITHHELD_CLAIM");
     expect(shown).toContain("1 agent note on an evidence card");
+  });
+
+  it("discloses entries a count cap left out even when nothing else was lost", () => {
+    const only = renderToStaticMarkup(
+      <AssessmentSources omittedEntries={2} onViewSource={noop} />,
+    );
+    expect(only).toContain(
+      "2 next steps, open items or ruled-out hypotheses went past the page",
+    );
+    expect(
+      renderToStaticMarkup(<AssessmentSources onViewSource={noop} />),
+    ).toBe("");
   });
 });

@@ -189,7 +189,7 @@ export function resolveInvestigationRootCauseEvidence(
 
   const byRef = new Map<string, InvestigationEvidenceSource[]>();
   for (const source of projection.evidenceRefSources) {
-    if (source.turnIndex !== assessmentTurnIndex) continue;
+    if (source.turnIndex > assessmentTurnIndex) continue;
     if (!source.evidenceRef) continue;
     const matches = byRef.get(source.evidenceRef) ?? [];
     matches.push(source);
@@ -197,14 +197,14 @@ export function resolveInvestigationRootCauseEvidence(
   }
   const citableSourceIds = new Set(
     projection.citableSources
-      .filter((source) => source.turnIndex === assessmentTurnIndex)
+      .filter((source) => source.turnIndex <= assessmentTurnIndex)
       .map((source) => source.id),
   );
   const links: InvestigationRootCauseEvidenceLink[] = [];
   for (const ref of refs) {
     const matches = byRef.get(ref);
-    // Match the server's fail-closed binding: every current-turn occurrence
-    // counts before success/completeness eligibility is considered.
+    // Match the server's fail-closed binding: every occurrence up to this
+    // turn counts before success/completeness eligibility is considered.
     if (matches?.length !== 1 || !citableSourceIds.has(matches[0].id)) {
       return { status: "invalid", links: [] };
     }

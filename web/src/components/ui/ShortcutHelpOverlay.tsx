@@ -182,8 +182,11 @@ export function ShortcutHelpOverlay({ onClose, currentView, isOpen = true }: Sho
   const shortcuts = useActiveShortcuts()
   const overlayRef = useRef<HTMLDivElement>(null)
 
-  // Close on Escape
+  // Close on Escape — only while logically open: the overlay stays mounted
+  // through its exit and must not keep swallowing Escape (or blocking
+  // clicks) while it fades.
   useEffect(() => {
+    if (!isOpen) return
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
@@ -194,7 +197,7 @@ export function ShortcutHelpOverlay({ onClose, currentView, isOpen = true }: Sho
     // Use capture to intercept before the shortcut system
     document.addEventListener('keydown', handler, true)
     return () => document.removeEventListener('keydown', handler, true)
-  }, [onClose])
+  }, [isOpen, onClose])
 
   // Group shortcuts by category, merging duplicates with same description
   // (e.g., "Zoom in" registered for both + and = shows as one row)
@@ -224,16 +227,16 @@ export function ShortcutHelpOverlay({ onClose, currentView, isOpen = true }: Sho
   const isEmpty = globalCategories.length === 0 && !hasViewSection && !hasContextSection
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4" inert={!isOpen || undefined}>
       {/* Backdrop */}
       <div
         className={clsx(
           'absolute inset-0 bg-theme-base/70 backdrop-blur-sm',
           TRANSITION_BACKDROP,
-          isOpen ? 'opacity-100' : 'opacity-0'
+          isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
         )}
         style={overlayTransitionStyle(isOpen, 'dialog')}
-        onClick={onClose}
+        onClick={isOpen ? onClose : undefined}
       />
 
       {/* Panel */}

@@ -652,13 +652,22 @@ func connectProm(ctx context.Context) (*prom.Client, error) {
 // promNotConnectedError turns a discovery/connection failure into an
 // actionable message including current status.
 func promNotConnectedError(client *prometheus.Client, err error) error {
-	status := client.GetStatus()
+	return errors.New(notConnectedMessage(client.GetStatus().Address, err))
+}
+
+// notConnectedMessage is the message body, split out from the client lookup so
+// the redaction it performs is testable without a live Prometheus client.
+func notConnectedMessage(address string, err error) string {
 	detail := ""
-	if status.Address != "" {
-		detail = fmt.Sprintf(" (last address: %s)", status.Address)
+	if address != "" {
+		// The address names which backend was tried, so the host stays; the
+		// credential a --prometheus-url can carry does not. The wrapped error
+		// quotes request URLs of its own, which get the stronger treatment.
+		detail = fmt.Sprintf(" (last address: %s)", prom.SafeAddress(address))
 	}
-	return fmt.Errorf("prometheus is not connected%s: %v — radar auto-discovers Prometheus in the cluster; "+
-		"set --prometheus-url (with --prometheus-header for auth) or check Settings → Prometheus in the radar UI", detail, err)
+	return fmt.Sprintf("prometheus is not connected%s: %s — radar auto-discovers Prometheus in the cluster; "+
+		"set --prometheus-url (with --prometheus-header for auth) or check Settings → Prometheus in the radar UI",
+		detail, prom.RedactURLs(err.Error()))
 }
 
 // resolveQueryTimeout clamps the model-requested timeout to [default, max].

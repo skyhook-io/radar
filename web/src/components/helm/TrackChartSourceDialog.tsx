@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { X, Plus, Trash2, Link2, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
-import { useHelmOCISources, useAddOCISource, useRemoveOCISource, useClusterInfo } from '../../api/client'
+import { useHelmOCISources, useAddOCISource, useRemoveOCISource, useClusterInfo, useCapabilities } from '../../api/client'
+import { OperatorManagedNotice } from '../settings/OperatorManagedNotice'
 import { Input } from '@skyhook-io/k8s-ui'
 import type { UpgradeInfo } from '../../types'
 
@@ -15,12 +16,14 @@ interface TrackChartSourceDialogProps {
   sourceError?: string
 }
 
-function getSourceIssueCopy(sourceIssue: UpgradeInfo['sourceIssue'], sourceError?: string) {
+function getSourceIssueCopy(sourceIssue: UpgradeInfo['sourceIssue'], sourceError?: string, operatorManaged = false) {
   switch (sourceIssue) {
     case 'repo_index_error':
       return {
         title: 'A Helm repo index failed',
-        body: 'Fix, refresh, or remove the broken Helm repo index. If this release came from OCI, add its registry prefix and Radar will check OCI before reporting that repo error.',
+        body: operatorManaged
+          ? 'Ask the operator to fix the Helm repo index, or add the chart’s OCI registry prefix to helm.ociSources if it came from OCI.'
+          : 'Fix, refresh, or remove the broken Helm repo index. If this release came from OCI, add its registry prefix and Radar will check OCI before reporting that repo error.',
       }
     case 'ambiguous_repository':
       return {
@@ -30,7 +33,9 @@ function getSourceIssueCopy(sourceIssue: UpgradeInfo['sourceIssue'], sourceError
     case 'untracked':
       return {
         title: 'Source not tracked',
-        body: 'Helm does not record the install source. Add the OCI prefix that contains this chart.',
+        body: operatorManaged
+          ? 'Helm does not record the install source. Ask the operator to add the OCI prefix that contains this chart to helm.ociSources.'
+          : 'Helm does not record the install source. Add the OCI prefix that contains this chart.',
       }
     default:
       return sourceError
@@ -50,6 +55,9 @@ export function TrackChartSourceDialog({ open, onClose, chartName, sourceIssue, 
   const { data: clusterInfo } = useClusterInfo()
   const addSource = useAddOCISource()
   const removeSource = useRemoveOCISource()
+  const { data: capabilities } = useCapabilities()
+  const operatorManaged = capabilities?.configManagement === 'operator'
+  const canEdit = capabilities != null && !operatorManaged
 
   // In-cluster Radar has no `helm registry login` store (the pod's HELM_CONFIG_HOME
   // points at an empty /tmp), so private registries can't authenticate — only
@@ -62,7 +70,7 @@ export function TrackChartSourceDialog({ open, onClose, chartName, sourceIssue, 
   const normalizedChartName = chartName?.trim().replace(/^\/+|\/+$/g, '') ?? ''
   const probedRef = normalizedInput && normalizedChartName ? `${normalizedInput}/${normalizedChartName}` : ''
   const looksLikeFullChartRef = Boolean(normalizedInput && normalizedChartName && normalizedInput.endsWith(`/${normalizedChartName}`))
-  const sourceIssueCopy = getSourceIssueCopy(sourceIssue, sourceError)
+  const sourceIssueCopy = getSourceIssueCopy(sourceIssue, sourceError, operatorManaged)
 
   const handleAdd = () => {
     if (!trimmed || invalid) return
@@ -78,8 +86,8 @@ export function TrackChartSourceDialog({ open, onClose, chartName, sourceIssue, 
         <div className="flex-1 min-w-0">
           <h3 className="text-lg font-semibold text-theme-text-primary">Track chart source</h3>
           <p className="text-sm text-theme-text-secondary mt-1">
-            Helm doesn&apos;t record where a chart was installed from. Register your OCI
-            registry prefix and Radar will check it for newer versions of your charts.
+            Helm doesn&apos;t record where a chart was installed from. Radar checks registered OCI
+            prefixes for newer versions of your charts.
           </p>
         </div>
         <button
@@ -91,6 +99,7 @@ export function TrackChartSourceDialog({ open, onClose, chartName, sourceIssue, 
       </div>
 
       <div className="p-4 space-y-4">
+        {operatorManaged && <OperatorManagedNotice helmValue="helm.ociSources" />}
         {sourceIssueCopy && (
           <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 text-sm">
             <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-theme-text-secondary" />
@@ -101,7 +110,7 @@ export function TrackChartSourceDialog({ open, onClose, chartName, sourceIssue, 
           </div>
         )}
 
-        <div>
+        {canEdit && <div>
           <label className="block text-sm font-medium text-theme-text-secondary mb-2">
             OCI registry prefix
           </label>
@@ -135,7 +144,7 @@ export function TrackChartSourceDialog({ open, onClose, chartName, sourceIssue, 
                 ? `Radar will probe "${probedRef || `<prefix>/${normalizedChartName}`}".`
                 : 'Radar probes <prefix>/<chartName> for each untracked release.'}
           </p>
-        </div>
+        </div>}
 
         {sources && sources.length > 0 && (
           <div>
@@ -149,14 +158,14 @@ export function TrackChartSourceDialog({ open, onClose, chartName, sourceIssue, 
                   className="flex items-center justify-between gap-2 px-3 py-2 bg-theme-elevated rounded-lg"
                 >
                   <span className="text-sm text-theme-text-primary font-mono truncate">{src}</span>
-                  <button
+                  {canEdit && <button
                     onClick={() => removeSource.mutate(src)}
                     disabled={removeSource.isPending}
                     className="p-1 text-theme-text-secondary hover:text-red-400 hover:bg-red-500/10 rounded disabled:opacity-50"
                     aria-label={`Remove ${src}`}
                   >
                     <Trash2 className="w-4 h-4" />
-                  </button>
+                  </button>}
                 </li>
               ))}
             </ul>

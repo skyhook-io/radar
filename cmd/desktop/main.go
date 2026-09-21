@@ -108,6 +108,7 @@ func main() {
 	namespaceFlagSet := false
 	namespacesFlagSet := false
 	openCostCurrencyFlagSet := false
+	prometheusURLFlagSet := false
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "kubeconfig":
@@ -120,6 +121,8 @@ func main() {
 			namespacesFlagSet = true
 		case "opencost-currency":
 			openCostCurrencyFlagSet = true
+		case "prometheus-url":
+			prometheusURLFlagSet = true
 		}
 	})
 	timelineMaxSizeBytes, err := config.ParseByteSize(*timelineMaxSize)
@@ -130,6 +133,10 @@ func main() {
 	normalizedOpenCostCurrency, err := config.NormalizeOpenCostCurrency(*openCostCurrency)
 	if err != nil {
 		log.Printf("ERROR: invalid --opencost-currency %q: %v", *openCostCurrency, err)
+		os.Exit(1)
+	}
+	if err := app.ValidatePrometheusHeaderDestination(fileCfg.PrometheusURL, *prometheusURL, len(fileCfg.PrometheusHeaders)+len(fileCfg.PrometheusHeadersFromEnv) > 0); err != nil {
+		log.Printf("ERROR: invalid Prometheus header configuration: %v", err)
 		os.Exit(1)
 	}
 	resolvedPrometheusHeaders, err := app.ResolvePrometheusHeaders(fileCfg.PrometheusHeaders, fileCfg.PrometheusHeadersFromEnv)
@@ -180,6 +187,7 @@ func main() {
 		TimelineRetention:         *timelineRetention,
 		TimelineMaxSizeBytes:      timelineMaxSizeBytes,
 		PrometheusURL:             *prometheusURL,
+		PrometheusURLFlag:         prometheusURLFlagSet,
 		OpenCostCurrency:          normalizedOpenCostCurrency,
 		CostSource:                fileCfg.CostSource,
 		KubecostURL:               fileCfg.KubecostURL,

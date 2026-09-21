@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 // cursorAgent drives the Cursor CLI (`cursor-agent -p`). Cursor has no hermetic
@@ -348,7 +350,7 @@ func cursorToolCallEvent(e cursorEvent, onEvent func(StreamEvent)) {
 			Summary: cursorArgsText(m.Args.Args),
 		}})
 	case "completed":
-		resultText, evidenceRef := splitInvestigationEvidenceMarker(
+		resultText, evidenceRef := investigation.SplitRefMarker(
 			cursorMCPResultText(m),
 		)
 		res, trunc := capPayload(resultText)

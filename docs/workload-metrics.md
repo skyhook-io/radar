@@ -106,8 +106,12 @@ Kubernetes context keeps the manually selected backend and headers.
 With no manual URL or headers, Radar rediscovers a backend in the selected cluster.
 With a manual backend, select the appropriate URL and headers in Metrics settings
 when changing clusters. When changing endpoints, explicitly replace or clear
-saved headers; editing only the URL retains them. Headers require an explicit URL
-and are never sent to auto-discovered candidates.
+saved headers; a URL-only change to a different server is rejected while headers
+are configured. Same-server URL edits retain headers. Headers require an explicit
+URL and are never sent to auto-discovered candidates or across HTTP redirects to
+another origin. When the URL or headers come from startup flags, or headers use
+configuration-file environment references, update that startup configuration and
+restart before switching servers; clearing headers in Settings does not remove those sources.
 
 The new workload charts invalidate identity evidence on connection changes and
 recheck it. Optional scope assertions are discarded on context, endpoint or

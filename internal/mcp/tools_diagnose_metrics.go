@@ -254,6 +254,9 @@ func diagnoseMetricsForScope(budgetCtx context.Context, avail prometheus.Availab
 }
 
 func boundDiagnoseMetricsError(msg string) string {
+	// Prometheus errors quote the failing request URL, which names the backend
+	// and can carry its credentials; this string ships in the tool result.
+	msg = prom.RedactURLs(msg)
 	if len(msg) <= diagnoseMetricsMaxErrorBytes {
 		return msg
 	}

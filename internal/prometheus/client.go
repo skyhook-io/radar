@@ -253,14 +253,20 @@ func HasHeaders() bool {
 
 // CurrentHeaders returns a copy of the running client's headers.
 func CurrentHeaders() map[string]string {
+	_, headers := CurrentConfig()
+	return headers
+}
+
+// CurrentConfig snapshots the endpoint and its credentials under the same lock.
+func CurrentConfig() (string, map[string]string) {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
 	if globalClient == nil {
-		return nil
+		return "", nil
 	}
 	globalClient.mu.RLock()
 	defer globalClient.mu.RUnlock()
-	return copyHeaders(globalClient.headers)
+	return globalClient.manualURL, copyHeaders(globalClient.headers)
 }
 
 // configureLocked is the single writer for manualURL + headers. manualURL is
@@ -454,7 +460,7 @@ func (c *Client) GetStatus() prom.Status {
 		Available:   connected,
 		Connected:   connected,
 		Discovering: discovering,
-		Address:     c.baseURL,
+		Address:     prom.SafeAddress(c.baseURL),
 		Service:     svc,
 		ContextName: c.contextName,
 	}
@@ -462,7 +468,7 @@ func (c *Client) GetStatus() prom.Status {
 	case c.headersRequireURLLocked():
 		st.Error = prom.ErrHeadersRequireURL.Error()
 	case !connected && !discovering && c.lastOutcomeGen == c.discoveryGen:
-		st.Error = c.lastOutcome
+		st.Error = prom.RedactURLs(c.lastOutcome)
 	}
 	return st
 }

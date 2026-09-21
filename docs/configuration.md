@@ -58,7 +58,18 @@ there would leave a running process with no way to reach it.
 
 ## Persistent Configuration
 
-Radar stores configuration in two files under `~/.radar/`:
+Local CLI and Desktop Radar store configuration in two files under `~/.radar/`.
+Shared OSS installations (in-cluster or authentication-enabled) expose these
+installation settings read-only; configure them through Helm values or startup
+configuration instead. See [installation settings](in-cluster.md#installation-settings)
+for provisioning, upgrades, personal preferences, and the separate Cloud behavior.
+The local files below are not a substitute for Helm configuration.
+
+Non-Helm shared OSS still reads `config.json` as startup defaults (including
+previously saved integration endpoints); flags override them. It does not adopt
+UI-saved audit policy or OCI sources from `settings.json`: move those into
+`RADAR_OPERATOR_SETTINGS_FILE` before upgrading. Radar logs a warning when it
+ignores those saved settings. Neither local file is rewritten by this transition.
 
 ### Config File (`~/.radar/config.json`)
 
@@ -110,7 +121,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `costSource` | `auto` (default), `prometheus`, or `kubecost`. Auto keeps working OpenCost metrics from a PromQL-compatible backend, then tries a Kubecost 3 Aggregator; if neither is present, selection remains unavailable and retries instead of reporting an absent source as active. Settings validates Auto and Kubecost before saving. An explicit `prometheus` value is a persisted preference and can be saved before its metrics are installed. |
 | `kubecostUrl` | Optional Kubecost 3 Aggregator base URL. Empty discovers an active local Aggregator Service and tries its named `tcp-api` port (9004). When that port requires SAML/OIDC and no API key is configured, Radar can fall back to the same Service's exact `tcp-api-rbac` port (9008). Federated agent-only clusters need the central URL; root API URLs and URLs ending in `/model` are accepted. |
 | `kubecostClusterId` | Cluster ID used to filter a central Aggregator. Empty detects one distinct literal `CLUSTER_ID` from an active FinOps Agent or Aggregator; indirect or conflicting values require an override. An override saved in Settings is bound to the active kubeconfig context so switching clusters cannot silently reuse the wrong cluster's costs. A value added directly to the config file is bound and persisted on its first startup with an available kubeconfig context. |
-| `kubecostApiKey` | Optional Kubecost service-account key sent as `X-API-KEY`. Stored in the unencrypted `0600` config file and redacted from `GET /api/config`; changing the URL origin clears a stored key unless it is supplied again. With a blank URL, a key saved in Settings is bound to the active kubeconfig context because Radar will auto-discover that cluster's local Aggregator; a key added directly to the config file is bound and persisted on its first startup with an available kubeconfig context. An explicit key is never bypassed through an auto-discovered unauthenticated port: authentication failure remains visible. A key paired with an explicit central Aggregator URL can be reused across contexts. In the Helm deployment, the UI-written config lives on the pod's temporary `emptyDir` and does not survive pod replacement; use a Kubernetes Secret with `cost.kubecost.existingSecret` instead. |
+| `kubecostApiKey` | Optional Kubecost service-account key sent as `X-API-KEY`. Stored in the unencrypted `0600` config file and redacted from `GET /api/config`; changing the URL origin clears a stored key unless it is supplied again. With a blank URL, a key saved in Settings is bound to the active kubeconfig context because Radar will auto-discover that cluster's local Aggregator; a key added directly to the config file is bound and persisted on its first startup with an available kubeconfig context. An explicit key is never bypassed through an auto-discovered unauthenticated port: authentication failure remains visible. A key paired with an explicit central Aggregator URL can be reused across contexts. In the Helm deployment, Settings is read-only; provision a Kubernetes Secret with `cost.kubecost.existingSecret`. |
 | `prometheusHeaders` | HTTP headers sent with every Prometheus request. Required for auth-protected backends — e.g. `{"X-Scope-OrgID": "my-org"}`. Equivalent CLI: `--prometheus-header Key=Value` (repeatable). Stored in plain text in `config.json` — protect the file accordingly. **Requires `prometheusUrl`**: headers carry credentials, and auto-discovery probes every Service that looks like Prometheus, so with headers configured and no URL Radar refuses to discover (the Metrics status names the rule) rather than send them to endpoints you never named. Settings rejects saving that combination. |
 | `argoCdUrl` | Manual argocd-server URL for the Argo CD API integration — skips auto-discovery. |
 | `argoCdToken` | Argo CD API token (get-only account recommended). Stored in plain text — the file is written `0600`; the token is redacted from `GET /api/config`. |
@@ -247,7 +258,7 @@ Radar keeps its window open so the source can be repaired in Settings.
 
 Radar supports switching between Kubernetes contexts at runtime through the UI. Click the context selector in the header to switch between available contexts.
 
-When running in-cluster (using the pod's service account), context switching is disabled.
+In shared OSS installations (in-cluster or authentication-enabled), context switching is disabled. The operator selects the connection at startup. This includes Helm installations and Pods using an explicit kubeconfig on a non-loopback listener; a personal loopback CLI in a development Pod remains local.
 
 Switching contexts in the UI never rewrites your kubeconfig — `kubectl` keeps pointing wherever it pointed before.
 
@@ -271,9 +282,31 @@ it does not switch every saved endpoint, tool preference and credential.
 | Kubecost auto-discovery API key / cluster-ID override | Bound to the configured context; an explicit central URL's key can be reused across contexts |
 
 If different clusters use different Prometheus backends or tenants, update the URL
-and headers together in **Settings → Metrics**. Changing only the URL retains
-saved headers; explicitly replace or clear them when moving to another endpoint.
-Headers require an explicit URL and are not sent during auto-discovery.
+and headers together in **Settings → Metrics**. Changing the server (scheme, host
+or port) requires explicitly replacing or clearing saved headers; a URL-only
+change cannot carry credentials to another server. If the configuration file
+contains `prometheusHeadersFromEnv`, update its URL and header references together
+and restart. If `--prometheus-url`, `--prometheus-header` or
+`--prometheus-header-from-env` is set, change the URL and header flags together and
+restart before switching servers or enabling auto-discovery. Headers supplied by
+flags or environment references cannot be replaced or cleared in Settings; change
+them at their source and restart. A URL-only flag still allows saved headers to be
+edited. Same-server path edits apply immediately, but a URL supplied at launch is
+restored on restart. Settings shows the running URL and header names, never header
+values. For editable headers, **Clear saved headers** followed by **Apply** removes
+them explicitly. Apply saves the configuration before checking connectivity, so
+an unreachable backend remains saved until you correct it.
+
+At launch, overriding a saved server with `--prometheus-url` also requires
+explicitly replacing every inherited header source, or updating the saved URL
+and headers together. A header-only configuration file can still pair with a
+deployment's URL flag. Applying that connection in Settings saves its URL, so
+subsequent launches bind the saved headers to that server. Header names are
+case-insensitive; duplicate names, whitespace-padded keys and invalid HTTP header
+characters are rejected, including on startup.
+
+Cross-origin HTTP redirects are refused, including for custom auth
+and tenant headers. Headers require an explicit URL and are not sent during auto-discovery.
 The new workload charts recheck identity, but older name-based metrics are not
 protected by that attribution contract. See [Workload metrics](workload-metrics.md).
 

@@ -4,14 +4,16 @@ import { describe, expect, it, vi } from "vitest";
 import {
   INVESTIGATION_DISCLOSURE_SETTLE_MS,
   InvestigationEvidencePane,
-  VISIBLE_LOG_EVIDENCE_LINES,
-  partitionInvestigationEvidence,
   investigationDisclosureSettleDelay,
   investigationDisclosureScrollTop,
+} from "./InvestigationEvidencePane";
+import { VISIBLE_LOG_EVIDENCE_LINES } from "./investigationEvidence/bodies/streams";
+import {
+  partitionInvestigationEvidence,
   investigationEvidenceFullRowFlags,
   investigationEvidenceRevealCollection,
   investigationEvidenceShouldRevealHistory,
-} from "./InvestigationEvidencePane";
+} from "./investigationEvidencePartition";
 import {
   investigationEvidenceSourceDomId,
   investigationEvidenceStepIdsByTurn,
@@ -32,6 +34,53 @@ import { groupEvidenceCoverage } from "./investigationEvidencePresentation";
 import { metricsChangeMarkers } from "./investigationMetrics";
 
 const onViewSource = vi.fn();
+
+describe("coverage already summarized by the assessment", () => {
+  it("removes only the repeated collapsed preview, retaining source details and new gaps", () => {
+    const projection = project(
+      tool(
+        "logs-denied",
+        "get_pod_logs",
+        { error: "pods/log is forbidden" },
+        { isError: true },
+      ),
+      tool("issues-cut", "issues", {}, { truncated: true }),
+    );
+    const groups = groupEvidenceCoverage(projection.limitations);
+    const line = `${groups[0].label}: ${groups[0].summary}`;
+    const renderStory = (summarizedLimits: string[], summary = "Assessment") =>
+      renderToStaticMarkup(
+        <InvestigationEvidencePane
+          projection={projection}
+          story={{ summary, report: "Analysis [[radar:evidence=0]]" }}
+          summarizedLimits={summarizedLimits}
+          collecting={false}
+          animateGroupIds={new Set()}
+          onViewSource={onViewSource}
+          onViewActivity={() => {}}
+        />,
+      );
+    const preview = (html: string) =>
+      html.match(
+        /<button[^>]*aria-controls="investigation-evidence-coverage"[\s\S]*?<\/button>/,
+      )?.[0] ?? "";
+    const firstSummary = renderToStaticMarkup(<>{groups[0].summary}</>);
+    expect(preview(renderStory([]))).toContain(firstSummary);
+    const html = renderStory([line]);
+    expect(preview(html)).not.toContain(firstSummary);
+    expect(preview(html)).toContain(groups[1].summary);
+    expect(html).toContain('aria-label="View result for Container logs"');
+    expect(html).toContain("Evidence coverage update:");
+    const allSummarized = renderStory(
+      groups.map((g) => `${g.label}: ${g.summary}`),
+    );
+    expect(preview(allSummarized)).not.toContain("line-clamp-2");
+    expect(preview(allSummarized)).toContain("Evidence coverage is incomplete");
+    for (const summary of ["", "   "]) {
+      expect(preview(renderStory([line], summary))).toContain(firstSummary);
+    }
+  });
+});
 const target = {
   kind: "Deployment",
   group: "apps",
@@ -529,7 +578,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(html).not.toContain("Secret values are never shown");
     expect(html).not.toContain("aria-expanded=");
     expect(html).toContain(
-      'aria-label="View source for Secret dev/skyhook-agent"',
+      'aria-label="View result for Secret dev/skyhook-agent"',
     );
     expect(html).not.toContain("Relationship to target not established");
   });
@@ -870,7 +919,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
           onViewSource={onViewSource}
         />,
       ),
-    ).toContain("View Get Resource source used for this assessment");
+    ).toContain("View Get Resource result used for this assessment");
     expect(html).toContain("Evidence coverage is incomplete");
     expect(html).toContain("couldn&#x27;t summarize this investigation step");
     expect(html.match(new RegExp(anchor, "g"))).toHaveLength(1);
@@ -1142,7 +1191,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(html).not.toContain("strongest");
     expect(html).not.toContain("main proof");
     expect(html).toContain("CrashLoopBackOff");
-    expect(html).toContain('aria-label="View source for CrashLoopBackOff"');
+    expect(html).toContain('aria-label="View result for CrashLoopBackOff"');
     expect(html).toContain(
       `id="${investigationEvidenceSourceDomId(source.id)}"`,
     );
@@ -1266,7 +1315,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     );
     projection.groups[0].latest.tone = "neutral";
     const html = render(projection);
-    expect(html).toContain("More evidence about this workload");
+    expect(html).toContain("More evidence about this resource");
     expect(html).not.toContain("with warnings or errors");
     expect(
       investigationEvidenceRevealCollection(
@@ -1748,7 +1797,7 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(receipt).toBeDefined();
 
     const html = render(projection);
-    expect(html).toContain("More evidence about this workload");
+    expect(html).toContain("More evidence about this resource");
     expect(html).toContain("No warning events");
     expect(html).not.toContain("What Radar did not find");
     expect(html).not.toContain(`${receipt!.id}-body`);
@@ -2002,7 +2051,7 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(html).toContain(
       "Only part of this investigation result was saved, so Radar could not summarize it here.",
     );
-    expect(html).toContain('aria-label="View source for Issue scan"');
+    expect(html).toContain('aria-label="View result for Issue scan"');
     expect(source.primaryGroupId).toBeUndefined();
     expect(html).toContain(
       `id="${investigationEvidenceSourceDomId(source.id)}"`,
@@ -2108,6 +2157,7 @@ describe("InvestigationEvidencePane honest result states", () => {
       sources: [],
       evidenceRefSources: [],
       citableSources: [],
+      targetPods: [],
       coverage: { attempted: 0, projected: 0, limited: 0, checked: 0 },
     };
     const collecting = render(empty, true);
@@ -2260,7 +2310,7 @@ describe("Track A evidence bodies and deep links", () => {
     ]);
     const html = render(projection, false, undefined, undefined, () => {});
     expect(html).toContain("MongoServerError: Authentication failed.");
-    expect(html).toContain("Unfiltered log tail");
+    expect(html).toContain("Log tail · filter matched nothing");
     expect(html).toContain(
       "Open current Pod shop/api-68c7b766dc-fmphn in Radar",
     );
@@ -2706,32 +2756,6 @@ describe("cited broader cards and coverage rows", () => {
     ]);
     expect(cited.hiddenBroader).toBe(1);
 
-    // A later turn's citations widen the selection; they never take one away.
-    // Replacing the assessment's resolution with a follow-up's used to push
-    // the assessment's own cited evidence back into the withheld count.
-    // A later turn's citation widens the selection; it never takes one away,
-    // and it carries the source that cited it so a broader card can actually
-    // be promoted rather than selected-but-withheld.
-    const withheld = projection.groups.find(
-      (group) => !cited.collectionByGroup.has(group.id),
-    );
-    expect(withheld).toBeDefined();
-    const widened = partitionInvestigationEvidence(
-      projection.groups,
-      resolution,
-      undefined,
-      [
-        {
-          groupId: withheld!.id,
-          source: withheld!.latest.source,
-        },
-      ],
-    );
-    for (const group of cited.main) {
-      expect(widened.main).toContain(group);
-    }
-    expect(widened.main).toContain(withheld);
-    expect(widened.hiddenBroader).toBe(cited.hiddenBroader - 1);
     const html = render(projection, false, undefined, resolution);
     expect(html).toContain("6/12 pods Unschedulable");
     expect(html).toContain(

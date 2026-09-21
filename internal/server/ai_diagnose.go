@@ -186,6 +186,12 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	} else {
 		agents = ai.DetectAgents(r.Context(), withVersions)
 	}
+	// Every local agent runs through the run manager, which performs the
+	// confirmed apply turn and the verification that follows it.
+	for i := range agents {
+		agents[i].Apply = true
+		agents[i].Verification = true
+	}
 	// eligible: this run mode supports local BYO-agent investigations (no proxy/OIDC
 	// auth, /mcp mounted) — the SAME gate the boot-time engine init uses. It's true
 	// even when no agent is installed, so the UI can distinguish "install an agent

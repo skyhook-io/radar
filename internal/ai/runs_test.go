@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 // TestRunWorkDirUnderPrivateRoot pins that per-run scratch dirs live UNDER the
@@ -375,7 +377,10 @@ func TestApplyRunsImmediateAutomaticVerificationAsOneJob(t *testing.T) {
 	}
 	emitControlledWriteResult(apply, "write-1", boolPointer(false))
 	apply.respond <- controlledDiagnoseResponse{diag: Diagnosis{
-		Report: "scaled Deployment prod/api", SessionID: "write-session",
+		Verdict: investigation.Verdict{
+			Report: "scaled Deployment prod/api",
+		},
+		SessionID: "write-session",
 	}}
 
 	// The next call is emitted directly by the same execution loop: there is no
@@ -403,7 +408,7 @@ func TestApplyRunsImmediateAutomaticVerificationAsOneJob(t *testing.T) {
 		t.Fatalf("concurrent AddTurn = %v, want ErrTurnInFlight", err)
 	}
 
-	verify.respond <- controlledDiagnoseResponse{diag: Diagnosis{Healthy: true, SessionID: "read-session-2"}}
+	verify.respond <- controlledDiagnoseResponse{diag: Diagnosis{Verdict: investigation.Verdict{Healthy: true}, SessionID: "read-session-2"}}
 	waitForEvent(t, live, "done", 2)
 	waitForRunNotInFlight(t, r)
 
@@ -442,7 +447,7 @@ func TestApplyVerificationHandoffPersistsRunningUntilFinalVerdict(t *testing.T) 
 	}
 	apply := receiveDiagnoseCall(t, calls)
 	emitControlledWriteResult(apply, "write-1", boolPointer(false))
-	apply.respond <- controlledDiagnoseResponse{diag: Diagnosis{Report: "changed"}}
+	apply.respond <- controlledDiagnoseResponse{diag: Diagnosis{Verdict: investigation.Verdict{Report: "changed"}}}
 	verify := receiveDiagnoseCall(t, calls) // verification remains blocked here
 
 	sqlite.barrier()
@@ -463,7 +468,7 @@ func TestApplyVerificationHandoffPersistsRunningUntilFinalVerdict(t *testing.T) 
 		t.Fatalf("persisted handoff events = %+v", events)
 	}
 
-	verify.respond <- controlledDiagnoseResponse{diag: Diagnosis{Healthy: true, SessionID: "read-session-2"}}
+	verify.respond <- controlledDiagnoseResponse{diag: Diagnosis{Verdict: investigation.Verdict{Healthy: true}, SessionID: "read-session-2"}}
 	waitForRunNotInFlight(t, r)
 	sqlite.barrier()
 	runs, err = store.LoadRuns()
@@ -489,7 +494,7 @@ func TestRestartDuringAutomaticVerificationRemainsAnHonestInterruption(t *testin
 	}
 	store.AppendEvents(summary.ID, []RunEvent{
 		{Seq: 1, Event: StreamEvent{Type: "turn", Apply: true}},
-		{Seq: 2, Event: StreamEvent{Type: "done", Diag: &Diagnosis{Report: "changed"}}},
+		{Seq: 2, Event: StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{Report: "changed"}}}},
 		{Seq: 3, Event: StreamEvent{Type: "turn", Verify: true, Question: automaticVerificationPrompt}},
 	}, &summary)
 	store.(*sqliteRunStore).barrier()
@@ -595,8 +600,10 @@ func TestErroredWriteToolRemainsUnknownAndVerifiesOnZeroExit(t *testing.T) {
 	apply := receiveDiagnoseCall(t, calls)
 	emitControlledWriteResult(apply, "failed-write", boolPointer(true))
 	apply.respond <- controlledDiagnoseResponse{diag: Diagnosis{
-		Inconclusive: true,
-		Report:       "RBAC denied the patch",
+		Verdict: investigation.Verdict{
+			Inconclusive: true,
+			Report:       "RBAC denied the patch",
+		},
 	}}
 
 	terminal := waitForEvent(t, live, "error", 1)
@@ -604,7 +611,7 @@ func TestErroredWriteToolRemainsUnknownAndVerifiesOnZeroExit(t *testing.T) {
 	if !verify.request.Verify || verify.request.Question != automaticUncertainVerificationPrompt {
 		t.Fatalf("errored-write verification request = %+v", verify.request)
 	}
-	verify.respond <- controlledDiagnoseResponse{diag: Diagnosis{Healthy: true, SessionID: "read-session-2"}}
+	verify.respond <- controlledDiagnoseResponse{diag: Diagnosis{Verdict: investigation.Verdict{Healthy: true}, SessionID: "read-session-2"}}
 	waitForEvent(t, live, "done", 1)
 	waitForRunNotInFlight(t, r)
 	if terminal.Event.ApplyOutcome != ApplyMutationUnknown {
@@ -630,8 +637,10 @@ func TestZeroExitWithoutWriteCannotBecomeApplied(t *testing.T) {
 	}
 	apply := receiveDiagnoseCall(t, calls)
 	apply.respond <- controlledDiagnoseResponse{diag: Diagnosis{
-		Inconclusive: true,
-		Report:       "I could not find a write tool",
+		Verdict: investigation.Verdict{
+			Inconclusive: true,
+			Report:       "I could not find a write tool",
+		},
 	}}
 
 	terminal := waitForEvent(t, live, "error", 1)
@@ -670,7 +679,7 @@ func TestAmbiguousApplyFailureRunsReadOnlyVerification(t *testing.T) {
 	if verify.request.SessionID != "read-session" {
 		t.Fatalf("uncertain verification resumed %q, want canonical read-only session", verify.request.SessionID)
 	}
-	verify.respond <- controlledDiagnoseResponse{diag: Diagnosis{Healthy: true, SessionID: "read-session-2"}}
+	verify.respond <- controlledDiagnoseResponse{diag: Diagnosis{Verdict: investigation.Verdict{Healthy: true}, SessionID: "read-session-2"}}
 	waitForEvent(t, live, "done", 1)
 	waitForRunNotInFlight(t, r)
 
@@ -711,7 +720,7 @@ func TestConfirmedWriteStillVerifiesWhenAgentExitFails(t *testing.T) {
 	if !verify.request.Verify || verify.request.Question != automaticVerificationPrompt {
 		t.Fatalf("confirmed-write verification request = %+v", verify.request)
 	}
-	verify.respond <- controlledDiagnoseResponse{diag: Diagnosis{Healthy: true, SessionID: "read-session-2"}}
+	verify.respond <- controlledDiagnoseResponse{diag: Diagnosis{Verdict: investigation.Verdict{Healthy: true}, SessionID: "read-session-2"}}
 	waitForEvent(t, live, "done", 1)
 	waitForRunNotInFlight(t, r)
 
@@ -741,7 +750,7 @@ func TestApplyDoesNotVerifyAgainstDifferentClusterContext(t *testing.T) {
 	apply := receiveDiagnoseCall(t, calls)
 	emitControlledWriteResult(apply, "confirmed", boolPointer(false))
 	m.ctxLabel = func() string { return "different-cluster" }
-	apply.respond <- controlledDiagnoseResponse{diag: Diagnosis{Report: "changed"}}
+	apply.respond <- controlledDiagnoseResponse{diag: Diagnosis{Verdict: investigation.Verdict{Report: "changed"}}}
 
 	terminal := waitForEvent(t, live, "error", 1)
 	waitForRunNotInFlight(t, r)
@@ -1052,7 +1061,7 @@ func TestManualVerificationDoesNotRecursivelyVerify(t *testing.T) {
 	if !verify.request.Verify || verify.request.Apply {
 		t.Fatalf("manual verification request = %+v", verify.request)
 	}
-	verify.respond <- controlledDiagnoseResponse{diag: Diagnosis{Healthy: true, SessionID: "read-session-2"}}
+	verify.respond <- controlledDiagnoseResponse{diag: Diagnosis{Verdict: investigation.Verdict{Healthy: true}, SessionID: "read-session-2"}}
 	waitForEvent(t, live, "done", 1)
 	waitForRunNotInFlight(t, r)
 	select {
@@ -1109,7 +1118,7 @@ func TestStopCancelsAutomaticVerificationWithoutExtraTerminal(t *testing.T) {
 	}
 	apply := receiveDiagnoseCall(t, calls)
 	emitControlledWriteResult(apply, "write-1", boolPointer(false))
-	apply.respond <- controlledDiagnoseResponse{diag: Diagnosis{Report: "changed"}}
+	apply.respond <- controlledDiagnoseResponse{diag: Diagnosis{Verdict: investigation.Verdict{Report: "changed"}}}
 	verify := receiveDiagnoseCall(t, calls)
 	if err := m.Stop(r.ID); err != nil {
 		t.Fatal(err)
@@ -1141,7 +1150,7 @@ func TestContextSwitchCancelsAutomaticVerificationAndCloses(t *testing.T) {
 	}
 	apply := receiveDiagnoseCall(t, calls)
 	emitControlledWriteResult(apply, "write-1", boolPointer(false))
-	apply.respond <- controlledDiagnoseResponse{diag: Diagnosis{Report: "changed"}}
+	apply.respond <- controlledDiagnoseResponse{diag: Diagnosis{Verdict: investigation.Verdict{Report: "changed"}}}
 	verify := receiveDiagnoseCall(t, calls)
 	m.OnContextSwitch()
 	<-verify.returned
@@ -1192,7 +1201,7 @@ func TestTurnCompletionOrdersTerminalBeforeNextTurn(t *testing.T) {
 	releaseTerminal := make(chan struct{})
 	finished := make(chan struct{})
 	go func() {
-		r.finishTurnWithBarrier(Diagnosis{RootCause: "old conclusion"}, nil, false, time.Minute, func() {
+		r.finishTurnWithBarrier(Diagnosis{Verdict: investigation.Verdict{RootCause: "old conclusion"}}, nil, false, time.Minute, func() {
 			close(terminalReady)
 			<-releaseTerminal
 		})
@@ -1549,7 +1558,7 @@ func TestPersistenceRestartRoundtrip(t *testing.T) {
 	r.sessionID = "sess-42"
 	r.preview = "bad image"
 	r.mu.Unlock()
-	r.append(StreamEvent{Type: "done", Diag: &Diagnosis{RootCause: "bad image"}})
+	r.append(StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{RootCause: "bad image"}}})
 	st.(*sqliteRunStore).barrier()
 
 	// "Restart": fresh manager, same store.
@@ -1751,7 +1760,7 @@ func TestPersistenceInterruptedFollowup(t *testing.T) {
 		CreatedAt: nowUTC(), updatedAt: nowUTC(), subs: map[int]chan RunEvent{}}
 	st.SaveRun(r.Summary())
 	r.append(StreamEvent{Type: "turn"})
-	r.append(StreamEvent{Type: "done", Diag: &Diagnosis{Healthy: true}})
+	r.append(StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{Healthy: true}}})
 	m1.mu.Lock()
 	m1.runs[r.ID] = r
 	m1.order = append(m1.order, r.ID)

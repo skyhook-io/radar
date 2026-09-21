@@ -142,28 +142,6 @@
     padding: 0.75rem;
   }
 
-  /* ── ISSUE ROW DETAILS ── */
-
-  /* Legacy: prefer <Collapse unmountOnExit> (ui/Collapse.tsx). Kept for any
-     straggler; timing mirrors DURATION_DISCLOSURE / CSS_EASE in
-     utils/animation.ts — the source-hygiene test keeps them equal. */
-  .issue-details-motion {
-    display: grid;
-    grid-template-rows: 0fr;
-    overflow: hidden;
-    transition: grid-template-rows 300ms cubic-bezier(0.32, 0.72, 0, 1);
-  }
-
-  .issue-details-motion-open {
-    grid-template-rows: 1fr;
-  }
-
-  @starting-style {
-    .issue-details-motion-open {
-      grid-template-rows: 0fr;
-    }
-  }
-
   /* ── SUBTLE BORDERS ── */
 
   .table-divide-subtle > * + * {

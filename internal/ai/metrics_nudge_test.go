@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 func TestTurnPrompt_MetricsNudgeOnlyOnReadOnlyTurnsWhenConnected(t *testing.T) {
@@ -20,7 +22,7 @@ func TestTurnPrompt_MetricsNudgeOnlyOnReadOnlyTurnsWhenConnected(t *testing.T) {
 		!strings.HasSuffix(strings.TrimSpace(p), "which also matches sibling workloads.") {
 		t.Fatalf("initial turn lacks the metrics nudge after the task prompt:\n%s", p)
 	}
-	if p := turnPrompt(initial); strings.Index(p, diagnosisJSONInstruction) > strings.Index(p, "Prometheus is connected") {
+	if p := turnPrompt(initial); strings.Index(p, "PLACING A CARD") > strings.Index(p, "Prometheus is connected") {
 		t.Fatalf("nudge must follow prompt selection, not precede the JSON contract:\n%s", p)
 	}
 
@@ -43,7 +45,7 @@ func TestTurnPrompt_MetricsNudgeOnlyOnReadOnlyTurnsWhenConnected(t *testing.T) {
 
 	explanation := base
 	explanation.Metrics = connected
-	explanation.Explanation = &Diagnosis{RootCause: "Missing Secret", Report: "The saved analysis."}
+	explanation.Explanation = &Diagnosis{Verdict: investigation.Verdict{RootCause: "Missing Secret", Report: "The saved analysis."}}
 	if p := turnPrompt(explanation); strings.Contains(p, "Prometheus") {
 		t.Fatalf("an explanation turn must not be sent to gather metrics:\n%s", p)
 	}
@@ -54,33 +56,6 @@ func TestTurnPrompt_MetricsNudgeOnlyOnReadOnlyTurnsWhenConnected(t *testing.T) {
 	apply.Fix = "set replicas to 2"
 	if p := turnPrompt(apply); strings.Contains(p, "Prometheus") {
 		t.Fatalf("an apply turn must not be sent to gather metrics:\n%s", p)
-	}
-
-	// The prompt is model-visible and leaves the machine, so every place a
-	// configured URL can carry a credential has to be gone: userinfo, the
-	// query string an auth proxy commonly uses, and the fragment.
-	for _, tc := range []struct {
-		name, address, secret, want string
-	}{
-		{"userinfo", "https://admin:s3cret@prom.example.com:9090", "s3cret", "https://prom.example.com:9090"},
-		{"query", "https://prom.example.com/api?token=s3cret", "s3cret", "https://prom.example.com/api"},
-		{"fragment", "https://prom.example.com/api#s3cret", "s3cret", "https://prom.example.com/api"},
-		{"all three", "https://admin:p@prom.example.com/api?token=s3cret#f", "s3cret", "https://prom.example.com/api"},
-	} {
-		withCredentials := base
-		withCredentials.Metrics = MetricsAvailability{Connected: true, Address: tc.address}
-		p := turnPrompt(withCredentials)
-		if strings.Contains(p, tc.secret) {
-			t.Fatalf("%s: the secret reached the prompt:\n%s", tc.name, p)
-		}
-		if !strings.Contains(p, tc.want) {
-			t.Fatalf("%s: prompt lost the address %q:\n%s", tc.name, tc.want, p)
-		}
-	}
-	withUser := base
-	withUser.Metrics = MetricsAvailability{Connected: true, Address: "https://admin:s3cret@prom.example.com:9090"}
-	if p := turnPrompt(withUser); strings.Contains(p, "admin") {
-		t.Fatalf("the username reached the prompt:\n%s", p)
 	}
 }
 
@@ -98,13 +73,13 @@ func TestRunManagerProbesMetricsOnlyForReadOnlyTurns(t *testing.T) {
 		return MetricsAvailability{Connected: true, Address: "http://prom:9090"}
 	}
 	r.append(StreamEvent{Type: "turn"})
-	r.append(StreamEvent{Type: "done", Diag: &Diagnosis{RootCause: "Missing Secret", Report: "The saved analysis."}})
+	r.append(StreamEvent{Type: "done", Diag: &Diagnosis{Verdict: investigation.Verdict{RootCause: "Missing Secret", Report: "The saved analysis."}}})
 
 	next := func(t *testing.T) controlledDiagnoseCall {
 		t.Helper()
 		select {
 		case call := <-calls:
-			call.respond <- controlledDiagnoseResponse{diag: Diagnosis{Report: "ok", SessionID: "read-session"}}
+			call.respond <- controlledDiagnoseResponse{diag: Diagnosis{Verdict: investigation.Verdict{Report: "ok"}, SessionID: "read-session"}}
 			<-call.returned
 			return call
 		case <-time.After(2 * time.Second):
@@ -181,7 +156,7 @@ func TestRunManagerWithoutMetricsProbeSaysNothing(t *testing.T) {
 		if call.request.Metrics != (MetricsAvailability{}) {
 			t.Fatalf("request carried metrics without a probe: %+v", call.request.Metrics)
 		}
-		call.respond <- controlledDiagnoseResponse{diag: Diagnosis{Report: "ok", SessionID: "read-session"}}
+		call.respond <- controlledDiagnoseResponse{diag: Diagnosis{Verdict: investigation.Verdict{Report: "ok"}, SessionID: "read-session"}}
 		<-call.returned
 	case <-time.After(2 * time.Second):
 		t.Fatal("agent not invoked")

@@ -31,6 +31,7 @@ Not everything is in this file. The following files contain critical details tha
 | Working on **resource renderers** | `packages/k8s-ui/src/components/resources/renderers/` — all existing renderers live here |
 | Understanding **cluster connection behavior** | [docs/configuration.md](docs/configuration.md) — kubeconfig precedence, multi-context, in-cluster |
 | Working on **MCP tools or AI context** | [docs/mcp.md](docs/mcp.md) + `internal/mcp/tools.go` — tool definitions and design rationale |
+| Working on the **investigation verdict, story or Findings pane** | [docs/mcp.md](docs/mcp.md#the-story-contract) — the verdict JSON, `[[radar:evidence=N]]` placement grammar, run-scoped citation, and the assessment-turn rule. The contract lives in `pkg/investigation` (shared with Radar Hub): prompt suite `prompt.go` (`SystemPrompt`, `TaskPrompt`, `verdictContract`, `storyGuidance`), verdict types and caps `verdict.go`, parser `parse.go`, binder `bind.go`; OSS orchestration and ref eligibility stay in `internal/ai/runs.go`; frontend tokenizer `web/src/components/diagnose/investigationStory.ts`, story `AnalysisStory.tsx`, turn rule `investigationState.ts` (`investigationIsAssessmentTurn`) |
 | Writing or modifying **frontend UI / styling** | [DESIGN.md](DESIGN.md) — theme tokens, do's/don'ts, component patterns |
 | Touching anything library consumers import | `web/package.json` + `web/src/index.ts` — `web/` IS the `@skyhook-io/radar-app` npm package. Public surface: `RadarApp`, runtime-config setters (`setApiBase` etc.), `NavCustomization`. Breaking it breaks all downstream consumers. |
 | Adding or changing **api/fetch call sites** | `web/src/api/config.ts` — all fetches go through `getApiBase()`, `apiUrl()`, `getWsUrl()`, `getAuthHeaders()`, `getCredentialsMode()`. New fetch sites must use these helpers so library consumers (Radar Hub) can override per-cluster. |
@@ -125,7 +126,7 @@ Use `/visual-test` command for the full workflow (cluster check, Playwright MCP,
 
 ### Demo clusters (scripted test fixtures)
 
-Ten scripted `kind` clusters under `scripts/*-demo.sh` reproduce the states each integration needs — states that are hard or impossible to conjure by hand (frozen controllers holding all phases at once, configurations that fail in ways that look like success, connection lanes toggled on demand).
+Scripted `kind` clusters under `scripts/*-demo.sh` reproduce the states each integration needs — states that are hard or impossible to conjure by hand (frozen controllers holding all phases at once, configurations that fail in ways that look like success, connection lanes toggled on demand).
 
 **Before using one, read its `scripts/<name>-demo/README.md` — this is not optional.** Each README is the only complete account of what the scenarios cover, which modes are NOT interchangeable, and why the cluster is shaped the way it is; the shape encodes hard-won constraints that look like bugs if you don't know them. Don't improvise against the fixtures or "fix" what looks broken before reading it.
 
@@ -144,6 +145,9 @@ After `make <name>-demo`, run `kubectl config use-context kind-radar-<name>-demo
 | Crossplane | `make crossplane-demo` | Crossplane renderers and spec-shape dispatch |
 | Rollouts | `make rollouts-demo` | Argo Rollouts progression. `-roll` advances a rollout |
 | GPU ecosystem | `make gpu-ecosystem-demo` | All 37 curated GPU, batch, distributed-training, and inference resource identities. `install-radar` verifies default chart RBAC and group-aware discovery |
+| Kueue admission | `make kueue-demo` | Real Kueue reconciliation: admitted/running, quota-blocked with no Pod, and held-queue with no Pod |
+| JobSet | `make jobset-demo` | Real JobSet reconciliation: role/index Job-to-Pod lineage, dependency gating, and explicit terminal failure |
+| KubeRay | `make kuberay-demo` | Real RayService reconciliation: healthy active Serve revision plus an intentionally failed pending NewCluster revision |
 
 `scripts/rbac-demo.sh` is the odd one out: it seeds RBAC scenarios into the *current* context (no cluster of its own).
 
@@ -238,7 +242,7 @@ Pod **Permissions** is the differentiator — frames the SA's grant as blast rad
 
 ### MCP Server
 
-Stateless HTTP at `/mcp` (JSON-RPC). Read tools use `readOnlyHint`, write tools use `destructiveHint: true`. Respects cluster RBAC (impersonates via `DynamicClientFromContext` for write/exec/logs). Enabled by default; `--no-mcp` to disable. Tool catalogue + design rationale lives in `internal/mcp/tools.go` + [docs/mcp.md](docs/mcp.md) — don't restate it here. **When adding/removing a tool in `registerTools`, also update the user-facing setup dialog catalog `web/src/components/home/mcpToolCatalog.ts`** — `TestSetupDialogCoversAllTools` fails CI if the two diverge. A **write** tool additionally needs adding to both write-tool lists in `internal/mcp/tools_catalog_test.go` (`writeTools` in `TestRegisteredToolAnnotations` and `writeToolNames`) — the second is what keeps it out of the read-only mount. New tools also consume the `maxCatalogBytes` description budget; raise it deliberately rather than gutting routing guidance.
+Stateless HTTP at `/mcp` (JSON-RPC). Read tools use `readOnlyHint`, write tools use `destructiveHint: true`. Respects cluster RBAC (impersonates via `DynamicClientFromContext` for write/exec/logs). Enabled by default; `--no-mcp` to disable. Tool catalogue + design rationale lives in `internal/mcp/tools.go` + [docs/mcp.md](docs/mcp.md) — don't restate it here. **When adding/removing a tool in `registerTools`, also update the user-facing setup dialog catalog `web/src/components/home/mcpToolCatalog.ts`** — `TestSetupDialogCoversAllTools` fails CI if the two diverge. A **read** tool additionally needs adding to `radarReadTools` in `internal/ai/diagnoser.go` — the allowlist Radar's own Diagnose agent calls through; a tool missing there reaches every external client but not the product's own agent (`TestDiagnoserAllowlistCoversAllReadTools` fails CI). A **write** tool instead needs adding to both write-tool lists in `internal/mcp/tools_catalog_test.go` (`writeTools` in `TestRegisteredToolAnnotations` and `writeToolNames`) — the second is what keeps it out of the read-only mount, and `radarWriteTools` gates it to confirmed apply turns. New tools also consume the `maxCatalogBytes` description budget; raise it deliberately rather than gutting routing guidance.
 
 ### Error Handling (Backend)
 

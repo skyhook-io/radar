@@ -1,0 +1,14 @@
+{{- if and .Values.cloud.enabled (or .Values.audit .Values.helm.ociSources) }}
+{{- fail "audit and helm.ociSources are supported only in OSS installations; configure Cloud through Radar Cloud instead" }}
+{{- end }}
+{{- if not .Values.cloud.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "radar.fullname" . }}-operator-settings
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+data:
+  settings.json: |
+    {{- include "radar.operatorSettings" . | nindent 4 }}
+{{- end }}

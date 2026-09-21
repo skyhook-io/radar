@@ -293,7 +293,8 @@ export function RecentList({
                       ? `${parsed.account} · ${parsed.region}`
                       : r.context;
                 const readableKind = pluralToKind(r.kind);
-                const kind = groupsByKind.get(readableKind)!.size > 1
+                const kind =
+                  groupsByKind.get(readableKind)!.size > 1
                     ? `${readableKind} · ${r.group || "core"}`
                     : readableKind;
                 const initialIssue = r.health?.topReason?.trim();

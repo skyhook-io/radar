@@ -5,13 +5,15 @@ import {
   invalidPayload,
   resourceMatchesTarget,
 } from "../observations";
-import { nonEmptyString, record } from "../parse";
+import { nonEmptyString, record, stringArray } from "../parse";
 import {
   type InvestigationEvidenceRelevance,
   type InvestigationEvidenceSource,
   type InvestigationHelmOperation,
   type InvestigationHelmOwnedResource,
   type InvestigationHelmRelease,
+  InvestigationHelmRevision,
+  InvestigationHelmHook,
 } from "../types";
 
 function helmOwnedResource(
@@ -39,6 +41,67 @@ function helmOwnedResource(
   }
   return candidate as unknown as InvestigationHelmOwnedResource;
 }
+// Revisions are stored oldest first; the card reads newest first and keeps
+// the ten that matter for a rollback decision.
+function helmHistory(value: unknown): InvestigationHelmRevision[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const revisions = value.flatMap((entry) => {
+    const item = record(entry);
+    if (
+      !item ||
+      typeof item.revision !== "number" ||
+      !nonEmptyString(item.status) ||
+      typeof item.chart !== "string" ||
+      typeof item.updated !== "string"
+    )
+      return [];
+    return [
+      {
+        revision: item.revision,
+        status: item.status,
+        chart: item.chart,
+        ...(nonEmptyString(item.appVersion)
+          ? { appVersion: item.appVersion }
+          : {}),
+        ...(nonEmptyString(item.description)
+          ? { description: item.description }
+          : {}),
+        updated: item.updated,
+      },
+    ];
+  });
+  if (revisions.length === 0) return undefined;
+  return revisions.sort((a, b) => b.revision - a.revision).slice(0, 10);
+}
+
+function helmHooks(value: unknown): InvestigationHelmHook[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const hooks = value.flatMap((entry) => {
+    const item = record(entry);
+    if (!item || !nonEmptyString(item.name) || !nonEmptyString(item.kind))
+      return [];
+    return [
+      {
+        name: item.name,
+        kind: item.kind,
+        ...(nonEmptyString(item.namespace)
+          ? { namespace: item.namespace }
+          : {}),
+        events: stringArray(item.events) ?? [],
+        weight: typeof item.weight === "number" ? item.weight : 0,
+        ...(nonEmptyString(item.status) ? { status: item.status } : {}),
+        ...(nonEmptyString(item.startedAt)
+          ? { startedAt: item.startedAt }
+          : {}),
+        ...(nonEmptyString(item.completedAt)
+          ? { completedAt: item.completedAt }
+          : {}),
+      },
+    ];
+  });
+  return hooks.length > 0 ? hooks : undefined;
+}
+
 function helmOperation(value: unknown): InvestigationHelmOperation | undefined {
   const candidate = record(value);
   if (
@@ -109,6 +172,9 @@ export function adaptHelmRelease(
     invalidPayload(builder, source, "Helm resources");
     return;
   }
+  const history = helmHistory(value.history);
+  const hooks = helmHooks(value.hooks);
+  const values = record(value.values) ?? undefined;
   const lastOperation =
     value.lastOperation === undefined
       ? undefined
@@ -137,6 +203,9 @@ export function adaptHelmRelease(
       string | undefined,
     lastOperation,
     resources,
+    ...(history ? { history } : {}),
+    ...(hooks ? { hooks } : {}),
+    ...(values ? { values } : {}),
   };
   // The release manages the target when the target is among the resources
   // Helm rendered for it; a release is never the investigated object itself.

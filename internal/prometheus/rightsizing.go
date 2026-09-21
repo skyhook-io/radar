@@ -30,7 +30,40 @@ var (
 	errCacheNotReady   = errors.New("resource cache not initialized")
 	errKindRBACDenied  = errors.New("kind not listable by service account")
 	errWorkloadMissing = errors.New("workload not found")
+
+	ErrPrometheusUnavailable      = errors.New("prometheus is not connected")
+	ErrRightsizingKindUnsupported = errors.New("rightsizing supports only Deployment, StatefulSet, and DaemonSet")
 )
+
+// Recommendation reasons set only when absent evidence actually suppressed a
+// recommendation. A row carrying one is a withheld verdict, not a clean bill of
+// health, so every consumer that reports coverage must treat it as a gap.
+const (
+	ReasonHPAEvidenceUnavailable = "hpa_evidence_unavailable"
+	ReasonOOMEvidenceUnavailable = "oom_evidence_unavailable"
+)
+
+// Reasons a single-workload rightsizing answer carries. They are prose because
+// the REST response renders them to the user directly, and named here so the
+// MCP tool can attach remediation to them instead of matching the literals.
+const (
+	ReasonWorkloadNoContainers     = "Workload has no runtime containers (init-only or empty spec)."
+	ReasonRightsizingQueriesFailed = "Prometheus rightsizing queries failed."
+	ReasonNoOwnerSamples           = "No current or retained workload ownership samples are available."
+	ReasonNoUsageSamples           = "No workload usage samples are available in the last 7d."
+	ReasonPodInventoryUnreadable   = "Radar could not read this workload's pods, and no retained ownership history was available, so there was nothing to measure."
+)
+
+// IsWithheldRecommendationReason keeps the withheld set with the code that
+// assigns it: a reason added here without updating every consumer's own copy
+// would be reported as a clean result by whichever one was missed.
+func IsWithheldRecommendationReason(reason string) bool {
+	switch reason {
+	case ReasonHPAEvidenceUnavailable, ReasonOOMEvidenceUnavailable:
+		return true
+	}
+	return false
+}
 
 type RightsizingFit string
 
@@ -110,10 +143,18 @@ type RightsizingResponse struct {
 	Window          string           `json:"window"`
 	Source          string           `json:"source"`
 	OwnerCoverage   OwnerCoverage    `json:"ownerCoverage"`
+	Replicas        int              `json:"replicas"`
 	ScaledToZero    bool             `json:"scaledToZero"`
 	SampleAvailable bool             `json:"sampleAvailable"`
+	ManagedBy       *WorkloadManager `json:"managedBy,omitempty"`
 	Rows            []RightsizingRow `json:"rows"`
 	Reason          string           `json:"reason,omitempty"`
+	// Warnings name the supporting queries that failed. A withheld memory
+	// recommendation reads identically whether the OOM-evidence queries
+	// answered "no history" or never answered at all, so without these a
+	// caller cannot tell an absence of evidence from an absent query — and
+	// a scan of the same workload, whose queries did answer, contradicts it.
+	Warnings []RightsizingScanWarning `json:"warnings,omitempty"`
 }
 
 const (
@@ -131,8 +172,7 @@ const (
 // Only Deployment / StatefulSet / DaemonSet supported — per-pod rightsizing
 // is wrong granularity (recs are per-container-template).
 func handleRightsizing(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
-	if client == nil {
+	if GetClient() == nil {
 		writeError(w, http.StatusServiceUnavailable, "Prometheus client not initialized")
 		return
 	}
@@ -141,7 +181,7 @@ func handleRightsizing(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	if !isRightsizingKind(kind) {
+	if !IsRightsizingKind(kind) {
 		writeError(w, http.StatusBadRequest, "rightsizing only supported for Deployment, StatefulSet, DaemonSet")
 		return
 	}
@@ -149,13 +189,12 @@ func handleRightsizing(w http.ResponseWriter, r *http.Request) {
 	// Per-user RBAC: the cache is populated under Radar's SA, so without this
 	// gate any authenticated user could fetch any namespace's container spec
 	// + P95 by guessing names. Use "get" — matches normal resource-detail reads.
-	resourcePlural := strings.ToLower(kind) + "s"
-	if !canRead(r, "apps", resourcePlural, namespace, "get") {
+	if !canRead(r, "apps", ScanKindResource(kind), namespace, "get") {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 
-	workload, err := loadRightsizingWorkload(r.Context(), kind, namespace, name)
+	resp, err := RightsizingForWorkload(r.Context(), kind, namespace, name)
 	if err != nil {
 		switch {
 		case errors.Is(err, errCacheNotReady):
@@ -173,29 +212,55 @@ func handleRightsizing(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if len(workload.containers) == 0 {
-		writeJSON(w, http.StatusOK, RightsizingResponse{
-			Kind: kind, Namespace: namespace, Name: name,
-			Window: "7d", Source: "radar", SampleAvailable: false,
-			Rows:   []RightsizingRow{},
-			Reason: "Workload has no runtime containers (init-only or empty spec).",
-		})
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-	resp := computeRightsizing(ctx, client, kind, namespace, name, workload)
 
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func isRightsizingKind(kind string) bool {
-	switch strings.ToLower(kind) {
-	case "deployment", "statefulset", "daemonset":
-		return true
+// RightsizingForWorkload is the shared entry point behind the REST handler and
+// the get_rightsizing MCP tool. It performs no per-user RBAC check: callers own
+// that gate, because the cache is populated under Radar's ServiceAccount.
+func RightsizingForWorkload(ctx context.Context, kind, namespace, name string) (RightsizingResponse, error) {
+	client := GetClient()
+	if client == nil {
+		return RightsizingResponse{}, ErrPrometheusUnavailable
 	}
-	return false
+	if !IsRightsizingKind(kind) {
+		return RightsizingResponse{}, ErrRightsizingKindUnsupported
+	}
+
+	workload, err := loadRightsizingWorkload(ctx, kind, namespace, name)
+	if err != nil {
+		return RightsizingResponse{}, err
+	}
+	if len(workload.containers) == 0 {
+		return RightsizingResponse{
+			Kind: kind, Namespace: namespace, Name: name,
+			Window: "7d", Source: "radar", SampleAvailable: false,
+			Rows:   []RightsizingRow{},
+			Reason: ReasonWorkloadNoContainers,
+		}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return computeRightsizing(ctx, client, kind, namespace, name, workload), nil
+}
+
+// specReplicas defaults a nil replica count to 1, matching the apiserver: a
+// Deployment written without spec.replicas runs one pod, and treating it as
+// zero would zero out every impact figure computed from it.
+func specReplicas(replicas *int32) int {
+	if replicas == nil {
+		return 1
+	}
+	return int(*replicas)
+}
+
+// IsRightsizingKind reports whether recommendations exist for a kind. Callers
+// check it before authorizing, so an unsupported kind gets that answer instead
+// of a denial from a SubjectAccessReview against a resource that cannot exist.
+func IsRightsizingKind(kind string) bool {
+	return ScanKindResource(kind) != ""
 }
 
 type containerSpec struct {
@@ -212,10 +277,12 @@ type rightsizingWorkload struct {
 	currentPodOOM map[string]bool
 	hpaManaged    map[string]bool
 	hpaAvailable  bool
+	replicas      int
 	scaledToZero  bool
 	// The live pod list could not be read, so podNames and currentPodOOM are
 	// empty because nothing answered — not because the workload has no pods.
 	liveInventoryUnavailable bool
+	managedBy                *WorkloadManager
 }
 
 // warmingRetryBudget bounds how long a rightsizing read waits for an informer
@@ -250,7 +317,9 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 	}
 
 	var podTemplate *corev1.PodSpec
+	var managedBy *WorkloadManager
 	scaledToZero := false
+	replicas := 0
 	switch strings.ToLower(kind) {
 	case "deployment":
 		if cache.Deployments() == nil {
@@ -261,7 +330,9 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 			return rightsizingWorkload{}, fmt.Errorf("%w: deployment %s/%s", errWorkloadMissing, namespace, name)
 		}
 		podTemplate = &d.Spec.Template.Spec
-		scaledToZero = d.Spec.Replicas != nil && *d.Spec.Replicas == 0
+		managedBy = detectWorkloadManager(d)
+		replicas = specReplicas(d.Spec.Replicas)
+		scaledToZero = replicas == 0
 	case "statefulset":
 		if cache.StatefulSets() == nil {
 			return rightsizingWorkload{}, fmt.Errorf("%w: statefulsets", errKindRBACDenied)
@@ -271,7 +342,9 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 			return rightsizingWorkload{}, fmt.Errorf("%w: statefulset %s/%s", errWorkloadMissing, namespace, name)
 		}
 		podTemplate = &ss.Spec.Template.Spec
-		scaledToZero = ss.Spec.Replicas != nil && *ss.Spec.Replicas == 0
+		managedBy = detectWorkloadManager(ss)
+		replicas = specReplicas(ss.Spec.Replicas)
+		scaledToZero = replicas == 0
 	case "daemonset":
 		if cache.DaemonSets() == nil {
 			return rightsizingWorkload{}, fmt.Errorf("%w: daemonsets", errKindRBACDenied)
@@ -281,6 +354,11 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 			return rightsizingWorkload{}, fmt.Errorf("%w: daemonset %s/%s", errWorkloadMissing, namespace, name)
 		}
 		podTemplate = &ds.Spec.Template.Spec
+		managedBy = detectWorkloadManager(ds)
+		replicas = int(ds.Status.DesiredNumberScheduled)
+		// Scans skip a zero the controller has observed, but a caller naming
+		// one gets its retained history, which is exactly the scaled-to-zero
+		// case: a node pool scaled away.
 		scaledToZero = ds.Status.DesiredNumberScheduled == 0
 	}
 
@@ -294,7 +372,9 @@ func loadRightsizingWorkload(ctx context.Context, kind, namespace, name string) 
 		currentPodOOM: map[string]bool{},
 		hpaManaged:    hpaManaged,
 		hpaAvailable:  hpaAvailable,
+		replicas:      replicas,
 		scaledToZero:  scaledToZero,
+		managedBy:     managedBy,
 	}
 	pods, err := workloadPodsOnceWarm(ctx, cache, kind, namespace, name)
 	if ctx.Err() != nil {
@@ -434,7 +514,7 @@ func computeRightsizing(ctx context.Context, client rightsizingQuerier, kind, na
 	expected := int(rightsizingWindow / rightsizingStep)
 	resp := RightsizingResponse{
 		Kind: kind, Namespace: namespace, Name: name, Window: "7d", Source: "radar",
-		OwnerCoverage: coverage, ScaledToZero: workload.scaledToZero,
+		OwnerCoverage: coverage, Replicas: workload.replicas, ScaledToZero: workload.scaledToZero, ManagedBy: workload.managedBy,
 		Rows: make([]RightsizingRow, 0, len(workload.containers)*2),
 	}
 	for _, container := range workload.containers {
@@ -443,6 +523,7 @@ func computeRightsizing(ctx context.Context, client rightsizingQuerier, kind, na
 			resp.Rows = append(resp.Rows, row)
 		}
 	}
+	resp.Warnings = evidenceQueryWarnings(results)
 	for _, row := range resp.Rows {
 		if row.Observed != nil {
 			resp.SampleAvailable = true
@@ -451,20 +532,56 @@ func computeRightsizing(ctx context.Context, client rightsizingQuerier, kind, na
 	}
 	if !resp.SampleAvailable {
 		if results["cpu_stat"].err != nil || results["cpu_coverage"].err != nil || results["memory_stat"].err != nil || results["memory_coverage"].err != nil {
-			resp.Reason = "Prometheus rightsizing queries failed."
+			resp.Reason = ReasonRightsizingQueriesFailed
 		} else if workload.liveInventoryUnavailable && coverage == OwnerCoverageCurrentPods {
 			// Without retained ownership the selection falls back to the current
 			// pods, and those could not be listed — so the query matched nothing
 			// by construction. "No samples" would send the reader after missing
 			// metrics instead of the unreadable inventory.
-			resp.Reason = "Radar could not read this workload's pods, and no retained ownership history was available, so there was nothing to measure."
+			resp.Reason = ReasonPodInventoryUnreadable
 		} else if len(workload.podNames) == 0 && coverage == OwnerCoverageCurrentPods {
-			resp.Reason = "No current or retained workload ownership samples are available."
+			resp.Reason = ReasonNoOwnerSamples
 		} else {
-			resp.Reason = "No workload usage samples are available in the last 7d."
+			resp.Reason = ReasonNoUsageSamples
 		}
 	}
 	return resp
+}
+
+// evidenceQueryWarnings names the failed queries behind a workload-scope
+// answer, using the same codes a scan reports so a caller comparing the two
+// scopes reads one vocabulary. The usage queries are included because a row's
+// queryError points at these codes.
+func evidenceQueryWarnings(results map[string]queryOutcome) []RightsizingScanWarning {
+	codes := []struct{ query, code string }{
+		{"cpu_stat", "cpu_query_failed"},
+		{"memory_stat", "memory_query_failed"},
+		// cpu_peak decides Bursty, which gates manual review and tightens the
+		// clamp. Its failure is swallowed at the row — an absent peak reads the
+		// same as a container that never had one — so only a warning shows it.
+		{"cpu_peak", "cpu_peak_query_failed"},
+		{"cpu_coverage", "cpu_coverage_query_failed"},
+		{"memory_coverage", "memory_coverage_query_failed"},
+		// A lost throttle reading silently loosens the clamp and clears the
+		// throttled_reduction review reason, so a throttled workload reads as a
+		// clean cut. That is a changed answer, not a missing footnote.
+		{"throttle", "throttle_query_failed"},
+		{"restart_activity", "restart_activity_query_failed"},
+		{"termination_history", "termination_history_query_failed"},
+	}
+	var warnings []RightsizingScanWarning
+	for _, entry := range codes {
+		outcome, ok := results[entry.query]
+		if !ok || outcome.err == nil {
+			continue
+		}
+		warnings = append(warnings, RightsizingScanWarning{
+			Code:    entry.code,
+			Message: boundWarningMessage(outcome.err.Error()),
+		})
+	}
+	sort.Slice(warnings, func(i, j int) bool { return warnings[i].Code < warnings[j].Code })
+	return warnings
 }
 
 type metricSelection struct {
@@ -607,7 +724,7 @@ func buildRightsizingRow(container containerSpec, resourceName string, expected 
 	stat := results[resourceName+"_stat"]
 	coverage := results[resourceName+"_coverage"]
 	if stat.err != nil {
-		row.QueryError = "usage query failed"
+		row.QueryError = RowUsageQueryFailed
 		return row
 	}
 	if coverage.err != nil {
@@ -701,7 +818,7 @@ func classifyRightsizingFit(row *RightsizingRow, observed float64, req, lim *res
 		row.RecommendationReason = "request_within_fit_range"
 		return
 	}
-	recommended, reductionLimited := recommendRequest(observed, req, resourceName, row.Bursty || (row.ThrottleRatio != nil && *row.ThrottleRatio >= 0.1))
+	recommended, reductionLimited := recommendRequest(observed, req, resourceName, row.Bursty || (row.ThrottleRatio != nil && *row.ThrottleRatio >= throttleReviewRatio))
 	recommendedValue := quantityToFloat(resource.MustParse(recommended), resourceName)
 	row.CalculatedReq = &calculated
 	row.CalculatedRequestValue = &calculatedValue
@@ -719,7 +836,7 @@ func classifyRightsizingFit(row *RightsizingRow, observed float64, req, lim *res
 		return
 	}
 	if row.Fit == FitOversized && !row.HPAEvidenceAvailable {
-		row.RecommendationReason = "hpa_evidence_unavailable"
+		row.RecommendationReason = ReasonHPAEvidenceUnavailable
 		return
 	}
 	if resourceName == "memory" && row.Fit == FitOversized && (row.CurrentPodOOM || row.WindowOOMEvidence) {
@@ -727,7 +844,7 @@ func classifyRightsizingFit(row *RightsizingRow, observed float64, req, lim *res
 		return
 	}
 	if resourceName == "memory" && row.Fit == FitOversized && !row.OOMEvidenceAvailable {
-		row.RecommendationReason = "oom_evidence_unavailable"
+		row.RecommendationReason = ReasonOOMEvidenceUnavailable
 		return
 	}
 	if lim != nil && recommendedValue > quantityToFloat(*lim, resourceName) {
@@ -740,12 +857,32 @@ func classifyRightsizingFit(row *RightsizingRow, observed float64, req, lim *res
 	row.ReductionLimited = reductionLimited
 }
 
-func calculatedRequest(observed float64, resourceName string) string {
-	minimum := float64(rightsizingMemoryMin)
-	if resourceName == "cpu" {
-		minimum = rightsizingCPUMin
+// RowUsageQueryFailed is the queryError a row carries when its own usage query
+// failed, as opposed to a supporting query such as sample coverage.
+const RowUsageQueryFailed = "usage query failed"
+
+// DemandTargetBasis names how CalculatedReq was derived, so a reader can tell a
+// memory target built from a 7-day max from a CPU P95, or from the floor.
+func DemandTargetBasis(row RightsizingRow) string {
+	if row.Observed == nil {
+		return ""
 	}
-	return formatRightsizingValue(max(observed*rightsizingHeadroom, minimum), resourceName)
+	minimum := rightsizingMinimum(row.Resource)
+	if row.Observed.Value*rightsizingHeadroom < minimum {
+		return "minimum request " + formatRightsizingValue(minimum, row.Resource)
+	}
+	return fmt.Sprintf("7d %s x %.2f", row.Observed.Name, rightsizingHeadroom)
+}
+
+func calculatedRequest(observed float64, resourceName string) string {
+	return formatRightsizingValue(max(observed*rightsizingHeadroom, rightsizingMinimum(resourceName)), resourceName)
+}
+
+func rightsizingMinimum(resourceName string) float64 {
+	if resourceName == "cpu" {
+		return rightsizingCPUMin
+	}
+	return float64(rightsizingMemoryMin)
 }
 
 func recommendRequest(observed float64, current *resource.Quantity, resourceName string, conservative bool) (string, bool) {
@@ -873,13 +1010,13 @@ type PVCUsageResponse struct {
 	Used      int64   `json:"used"`     // bytes
 	Capacity  int64   `json:"capacity"` // bytes
 	Ratio     float64 `json:"ratio"`    // 0.0 - 1.0
-	HasData   bool    `json:"hasData"`  // false when no series (CSI not reporting, kubelet not scraped, etc.)
+	HasData   bool    `json:"hasData"`
+	Status    string  `json:"status"` // available, no_series, invalid_data, query_failed
 }
 
 // handlePVCUsage returns current usage for a PVC, computed from
-// kubelet_volume_stats_{used,capacity}_bytes. Returns HasData=false silently
-// when no series — many CSI drivers don't implement NodeGetVolumeStats and
-// some Prom configs (notably GMP default) don't scrape kubelet endpoints.
+// kubelet_volume_stats_{used,capacity}_bytes. Missing measurements do not
+// establish whether the driver reports volume stats or kubelet is scraped.
 func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 	client := GetClient()
 	if client == nil {
@@ -899,17 +1036,14 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 	pvc := prom.SanitizeLabelValue(name)
 
 	// kubelet's native label is `persistentvolumeclaim`; clusters with custom
-	// relabeling that renamed it will return no series and the gauge hides.
+	// relabeling that renamed it will return no series.
 	usedQuery := fmt.Sprintf(`max(kubelet_volume_stats_used_bytes{namespace='%s',persistentvolumeclaim='%s'})`, ns, pvc)
 	capQuery := fmt.Sprintf(`max(kubelet_volume_stats_capacity_bytes{namespace='%s',persistentvolumeclaim='%s'})`, ns, pvc)
 
-	resp := PVCUsageResponse{Namespace: namespace, Name: name}
+	resp := PVCUsageResponse{Namespace: namespace, Name: name, Status: "query_failed"}
 
 	usedRes, err := client.Query(r.Context(), usedQuery)
 	if err != nil {
-		// Distinguish "Prometheus is unreachable" from "CSI doesn't report" so
-		// operators can find this in the errorlog stream when the gauge mysteriously
-		// disappears. The frontend still hides on hasData=false.
 		errorlog.Record("prometheus", "warning", "pvc used-bytes query failed for %s/%s: %v", namespace, name, err)
 		writeJSON(w, http.StatusOK, resp)
 		return
@@ -921,9 +1055,18 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if usedRes == nil || capRes == nil || len(usedRes.Series) == 0 || len(capRes.Series) == 0 ||
+		len(usedRes.Series[0].DataPoints) == 0 || len(capRes.Series[0].DataPoints) == 0 {
+		resp.Status = "no_series"
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
 	used := firstValue(usedRes)
 	capacity := firstValue(capRes)
-	if used == nil || capacity == nil || *capacity <= 0 {
+	if used == nil || capacity == nil || math.IsInf(*used, 0) || math.IsInf(*capacity, 0) ||
+		*used < 0 || *capacity < 1 || *used >= math.Exp2(63) || *capacity >= math.Exp2(63) {
+		resp.Status = "invalid_data"
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
@@ -932,6 +1075,7 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 	resp.Capacity = int64(*capacity)
 	resp.Ratio = *used / *capacity
 	resp.HasData = true
+	resp.Status = "available"
 	writeJSON(w, http.StatusOK, resp)
 }
 

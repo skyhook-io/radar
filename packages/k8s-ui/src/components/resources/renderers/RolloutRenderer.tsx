@@ -257,59 +257,9 @@ export function rolloutConditionTone(cond: { type?: string; status?: string }): 
   }
 }
 
-/** Every CanaryStep variant Argo defines; raw JSON is unreadable in a step list. */
-export function canaryStepLabel(step: any): string {
-  if (!step || typeof step !== 'object') return 'Unknown step'
-
-  if (step.setWeight !== undefined) return `Set weight: ${step.setWeight}%`
-
-  if (step.pause !== undefined) {
-    return step.pause?.duration ? `Pause: ${step.pause.duration}` : 'Pause: until promoted'
-  }
-
-  if (step.analysis) {
-    const templates = (step.analysis.templates || [])
-      .map((t: any) => t.templateName || t.clusterTemplateName)
-      .filter(Boolean)
-    return templates.length > 0 ? `Analysis: ${templates.join(', ')}` : 'Analysis'
-  }
-
-  if (step.experiment) {
-    const templates = (step.experiment.templates || []).map((t: any) => t.name).filter(Boolean)
-    const duration = step.experiment.duration ? ` for ${step.experiment.duration}` : ''
-    return templates.length > 0
-      ? `Experiment: ${templates.join(', ')}${duration}`
-      : `Experiment${duration}`
-  }
-
-  if (step.setCanaryScale) {
-    const { weight, replicas, matchTrafficWeight } = step.setCanaryScale
-    if (matchTrafficWeight) return 'Set canary scale: match traffic weight'
-    if (replicas !== undefined) return `Set canary scale: ${replicas} replicas`
-    if (weight !== undefined) return `Set canary scale: ${weight}%`
-    return 'Set canary scale'
-  }
-
-  if (step.setHeaderRoute) {
-    const { name, match } = step.setHeaderRoute
-    // An empty match list is how a header route is torn down again.
-    if (!match || match.length === 0) return `Remove header route${name ? `: ${name}` : ''}`
-    const headers = match.map((m: any) => m.headerName).filter(Boolean)
-    return `Header route${name ? ` ${name}` : ''}${headers.length ? `: ${headers.join(', ')}` : ''}`
-  }
-
-  if (step.setMirrorRoute) {
-    const { name, match, percentage } = step.setMirrorRoute
-    if (!match || match.length === 0) return `Remove mirror route${name ? `: ${name}` : ''}`
-    const pct = percentage !== undefined ? ` (${percentage}%)` : ''
-    return `Mirror route${name ? ` ${name}` : ''}${pct}`
-  }
-
-  if (step.plugin) return `Plugin: ${step.plugin.name || 'unnamed'}`
-
-  const key = Object.keys(step)[0]
-  return key ? `Unrecognized step: ${key}` : 'Unknown step'
-}
+// canaryStepLabel lives in utils/workload-rollout.ts (not here) so that
+// module doesn't have to import a renderer component just for step text.
+export { canaryStepLabel } from '../../../utils/workload-rollout'
 
 /** AnalysisTemplate/ClusterAnalysisTemplate references on either a canary
  *  step's analysis.templates[] array, or a single Experiment spec.analyses[]

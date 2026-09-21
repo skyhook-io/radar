@@ -32,6 +32,9 @@ type costSourceApplyResponse struct {
 const costSourceApplyTimeout = 58 * time.Second
 
 func (s *Server) handleApplyCostSource(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
 	}

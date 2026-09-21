@@ -63,6 +63,8 @@ type Options struct {
 	IssueSummary  *IssueSummary
 	AuditSummary  *AuditSummary
 	Scheduling    *SchedulingSummary
+	Execution     *ExecutionSummary
+	Serving       *ServingSummary
 	PolicyReports PolicyReportLookup // nil = Kyverno not installed / no findings
 	AppReferences *AppReferences
 	// Attached only after the evidence Job and Pod pass the access gate.
@@ -319,6 +321,8 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	rc.HPASummary = buildHPASummary(obj)
 	rc.StatusSummary = buildStatusSummary(obj)
 	rc.Scheduling = filterSchedulingSummary(ctx, opts.Scheduling, opts.AccessChecker, omitted)
+	rc.Execution = opts.Execution
+	rc.Serving = opts.Serving
 
 	// 4. Pre-computed summaries — pass-through.
 	rc.IssueSummary = opts.IssueSummary
@@ -1392,6 +1396,7 @@ func buildStatusSummary(obj runtime.Object) *StatusSummary {
 	}
 	if conditions, ok, _ := unstructured.NestedSlice(status, "conditions"); ok {
 		if len(conditions) > maxSummaryItems {
+			out.ConditionsTruncated = true
 			conditions = conditions[:maxSummaryItems]
 		}
 		for _, item := range conditions {
@@ -1415,7 +1420,7 @@ func buildStatusSummary(obj runtime.Object) *StatusSummary {
 			out.Conditions = append(out.Conditions, summary)
 		}
 	}
-	if out.Phase == "" && len(out.Conditions) == 0 {
+	if out.Phase == "" && len(out.Conditions) == 0 && !out.ConditionsTruncated {
 		return nil
 	}
 	return out

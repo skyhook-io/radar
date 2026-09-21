@@ -10,22 +10,23 @@ import (
 )
 
 const (
-	maxDiagnosticRefs       = 5
-	maxDiagnosticIssueRefs  = 5
-	maxDiagnosticFacts      = 4
-	factExplicitReference   = "explicit_reference"
-	factOwnerRollup         = "owner_rollup"
-	factSelectedBackend     = "selected_backend_issue"
-	factServiceConfig       = "service_config_mismatch"
-	factServiceEnvReference = "service_env_reference"
-	factProbeTarget         = "probe_target_mismatch"
-	factBlockedInit         = "blocked_init_container"
-	factRestartCause        = "restart_cause"
-	factNodeBlastRadius     = "node_blast_radius"
-	factPVCBlastRadius      = "pvc_blast_radius"
-	factAPIServiceHPA       = "apiservice_hpa"
-	factSecretNotReady      = "secret_not_ready"
-	factAdmissionWebhook    = "admission_webhook_backend"
+	maxDiagnosticRefs            = 5
+	maxDiagnosticIssueRefs       = 5
+	maxDiagnosticFacts           = 4
+	factExplicitReference        = "explicit_reference"
+	factOwnerRollup              = "owner_rollup"
+	factNodeStartupCorroboration = "node_startup_corroboration"
+	factSelectedBackend          = "selected_backend_issue"
+	factServiceConfig            = "service_config_mismatch"
+	factServiceEnvReference      = "service_env_reference"
+	factProbeTarget              = "probe_target_mismatch"
+	factBlockedInit              = "blocked_init_container"
+	factRestartCause             = "restart_cause"
+	factNodeBlastRadius          = "node_blast_radius"
+	factPVCBlastRadius           = "pvc_blast_radius"
+	factAPIServiceHPA            = "apiservice_hpa"
+	factSecretNotReady           = "secret_not_ready"
+	factAdmissionWebhook         = "admission_webhook_backend"
 )
 
 type serviceBackendIssueProvider interface {
@@ -228,6 +229,14 @@ func enrichDiagnosticContextAuthorized(shaped, flat, grouped []Issue, p Provider
 	for idx := range out {
 		var b diagnosticContextBuilder
 		i := &out[idx]
+		if i.DiagnosticContext != nil {
+			for _, fact := range i.DiagnosticContext.Facts {
+				if fact.Type == factNodeStartupCorroboration {
+					b.add(issuesapi.DiagnosticRoleContext, fact)
+					break
+				}
+			}
+		}
 		if changeProvider != nil {
 			i.ChangeContext = changeProvider.ChangeContextForIssue(*i)
 		}
@@ -528,7 +537,7 @@ func addAdmissionWebhookContext(b *diagnosticContextBuilder, root Issue, edges *
 	selfDeadlock := false
 	if failClosed {
 		for _, candidate := range flat {
-			if candidate.Category != issuesapi.CategoryAdmissionWebhookBlocking {
+			if candidate.Category != issuesapi.CategoryAdmissionWebhookBlocking || candidate.Reason != "WebhookUnavailable" {
 				continue
 			}
 			failure, ok := k8s.ParseAdmissionWebhookBackendFailure(diagnosticMessage(candidate))

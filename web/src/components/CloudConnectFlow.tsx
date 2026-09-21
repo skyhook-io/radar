@@ -1,8 +1,10 @@
-import { type ReactNode, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
-import { AlertTriangle, ArrowUpRight, Check, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
-import type { BlockedExit } from './cloudConnectHandoff'
+import { AlertTriangle, ArrowUpRight, Check, Copy, ExternalLink, GitBranch, Info, Loader2, ShieldAlert, X } from 'lucide-react'
+import { type AdminNoteContext, type BlockedExit, composeAdminNote, composeFailureNote, needsAdminHandoff, trimRefusal } from './cloudConnectHandoff'
+import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Collapse'
+import { Tooltip } from './ui/Tooltip'
 import {
   ApiError,
   cancelCloudInstall,
@@ -21,19 +23,22 @@ export function CloudConnectFlow({
   status,
   blocked,
   exit,
+  where,
   onStatus,
   onExit,
 }: {
   status: CloudInstallStatus
   blocked: CloudInstallBlocked | null
   exit: BlockedExit
+  // Which cluster this is, for the note a blocked person hands to an admin.
+  where?: AdminNoteContext
   // Push a mutation's status response into the shared query state.
   onStatus: (st: CloudInstallStatus) => void
   // Leave the flow view (back to the pitch, or close after dismiss).
   onExit: () => void
 }) {
   if (blocked) {
-    return <BlockedView blocked={blocked} exit={exit} onExit={onExit} />
+    return <BlockedView blocked={blocked} exit={exit} where={where} onExit={onExit} />
   }
 
   switch (status.state) {
@@ -59,7 +64,7 @@ export function CloudConnectFlow({
     case 'connected':
       return <ConnectedCard status={status} onStatus={onStatus} onExit={onExit} />
     case 'failed':
-      return <FailedCard status={status} onStatus={onStatus} onExit={onExit} />
+      return <FailedCard status={status} where={where} onStatus={onStatus} onExit={onExit} />
     default:
       return null
   }
@@ -68,13 +73,20 @@ export function CloudConnectFlow({
 function BlockedView({
   blocked,
   exit,
+  where,
   onExit,
 }: {
   blocked: CloudInstallBlocked
   exit: BlockedExit
+  where?: AdminNoteContext
   onExit: () => void
 }) {
   const copy = blockedCopy(blocked, exit)
+  // The person who can act is usually not the one reading this card. What
+  // they need is an ask with the link and the evidence — not the card's
+  // second-person explanation — so the note is composed on its own; the
+  // CopyForAdmin action previews exactly what will be copied.
+  const note = composeAdminNote(blocked, exit, where)
   const icon =
     blocked.reason === 'gitops' ? (
       <GitBranch className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
@@ -97,7 +109,7 @@ function BlockedView({
           <BlockedSection label="What to do">{copy.next}</BlockedSection>
         </div>
       </div>
-      <div className="mt-4 flex items-center gap-4">
+      <div className="relative mt-4 flex items-center gap-4">
         <a
           href={exit.href}
           target="_blank"
@@ -106,6 +118,7 @@ function BlockedView({
         >
           {exit.label}
         </a>
+        <CopyForAdmin note={note} />
         <button
           onClick={onExit}
           className="ml-auto text-[12.5px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
@@ -114,6 +127,132 @@ function BlockedView({
         </button>
       </div>
     </div>
+  )
+}
+
+// The person who can act is usually not the one reading a stop card. This
+// hands them the composed note: a preview panel on hover or focus (card-wide,
+// on the elevated surface, sized to the note — a block of text laid over the
+// card, not a hint), and when the clipboard is refused the panel pins open
+// with the note selected so copying is one keystroke.
+function CopyForAdmin({ note }: { note: string }) {
+  const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle')
+  const [previewing, setPreviewing] = useState(false)
+  const [pinned, setPinned] = useState(false)
+  const noteRef = useRef<HTMLPreElement | null>(null)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  // The panel is anchored above the action row inside the dialog's scroll
+  // area. A hover panel taller than the room visible above the row is only
+  // partly on screen, and scrolling to see the rest moves it out from under
+  // the pointer and closes it. So the ceiling is measured — the row's
+  // distance from the visible top of the scroller — rather than guessed. A
+  // normal note fits and shows whole; only a longer one scrolls inside.
+  const [maxHeight, setMaxHeight] = useState<number>()
+  const shown = previewing || pinned
+  useEffect(() => {
+    if (!shown) return
+    const wrapper = panelRef.current
+    // The positioned ancestor the panel is anchored to — the action row.
+    const row = wrapper?.offsetParent as HTMLElement | null | undefined
+    const scroller = row?.closest<HTMLElement>('.overflow-y-auto')
+    if (!wrapper || !row || !scroller) return
+    const visibleRoom = row.getBoundingClientRect().top - scroller.getBoundingClientRect().top
+    const gap = wrapper.getBoundingClientRect().bottom - (wrapper.firstElementChild?.getBoundingClientRect().bottom ?? 0)
+    setMaxHeight(Math.max(96, Math.floor(visibleRoom - gap - 8)))
+  }, [shown])
+  // Leaving closes on a short delay that entering the panel cancels, so the
+  // pointer can cross the row's own space on its way up into the panel.
+  const closeTimer = useRef<number | undefined>(undefined)
+  const enter = () => {
+    window.clearTimeout(closeTimer.current)
+    setPreviewing(true)
+  }
+  const leave = () => {
+    window.clearTimeout(closeTimer.current)
+    closeTimer.current = window.setTimeout(() => setPreviewing(false), 200)
+  }
+  useEffect(() => () => window.clearTimeout(closeTimer.current), [])
+  const copy = () => {
+    // copyText also serves Radar on a plain-HTTP non-loopback address, where
+    // the async Clipboard API is missing and the legacy command still works.
+    void copyText(note).then((ok) => {
+      setCopied(ok ? 'done' : 'failed')
+      if (ok) setTimeout(() => setCopied('idle'), 2000)
+      else setPinned(true)
+    })
+  }
+  // The panel may not be mounted when the clipboard refuses (the pointer has
+  // left the button), so the selection waits for the pinned render.
+  useEffect(() => {
+    if (!pinned) return
+    const pre = noteRef.current
+    const selection = window.getSelection()
+    if (!pre || !selection) return
+    selection.removeAllRanges()
+    const range = document.createRange()
+    range.selectNodeContents(pre)
+    selection.addRange(range)
+  }, [pinned])
+  return (
+    // Hover is tracked on this wrapper, which contains the panel, and the
+    // gap between button and panel is padding rather than margin, so moving
+    // the pointer up into the panel (to scroll a long note) never counts as
+    // leaving.
+    <span className="contents" onMouseEnter={enter} onMouseLeave={leave}>
+      {shown && (
+        <div ref={panelRef} className="absolute inset-x-0 bottom-full z-20 pb-3">
+        <div
+          id="admin-note-preview"
+          role="tooltip"
+          style={maxHeight ? { maxHeight } : undefined}
+          className="flex flex-col rounded-xl border border-theme-border bg-theme-elevated p-4 shadow-theme-lg"
+        >
+          <div className="mb-1.5 flex items-center justify-between text-[10.5px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+            <span>{pinned ? 'Select and copy' : 'What gets copied'}</span>
+            {pinned && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPinned(false)
+                  setCopied('idle')
+                }}
+                aria-label="Close"
+                className="rounded p-0.5 text-theme-text-tertiary hover:text-theme-text-primary transition-colors"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+          <pre
+            ref={noteRef}
+            className="min-h-0 select-text overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-theme-text-primary"
+          >
+            {note}
+          </pre>
+        </div>
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={copy}
+        onFocus={() => setPreviewing(true)}
+        onBlur={() => setPreviewing(false)}
+        aria-describedby={shown ? 'admin-note-preview' : undefined}
+        className="inline-flex items-center gap-1.5 text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+      >
+        {copied === 'done' ? (
+          <>
+            <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" /> Copied
+          </>
+        ) : copied === 'failed' ? (
+          'Couldn’t copy — the note is selected above, press ⌘C / Ctrl+C'
+        ) : (
+          <>
+            <Copy className="w-3.5 h-3.5" /> Copy for a cluster admin
+          </>
+        )}
+      </button>
+    </span>
   )
 }
 
@@ -126,15 +265,28 @@ function BlockedSection({ label, children }: { label: string; children: ReactNod
   )
 }
 
+// Each line is a Go error chain; the card shows what was attempted and why
+// it was refused, with the whole chain a hover away.
 function BlockingLines({ lines }: { lines: string[] }) {
   return (
     <ul className="mt-1.5 space-y-1 text-[11.5px] text-theme-text-tertiary">
-      {lines.map((line) => (
-        <li key={line} className="flex items-start gap-1.5">
-          <span className="mt-[6px] w-1 h-1 rounded-full bg-amber-500 shrink-0" />
-          {line}
-        </li>
-      ))}
+      {lines.map((line) => {
+        const shown = trimRefusal(line)
+        return (
+          <li key={line} className="flex items-start gap-1.5">
+            <span className="mt-[6px] w-1 h-1 rounded-full bg-amber-500 shrink-0" />
+            <Tooltip
+              content={line}
+              position="bottom"
+              className="max-w-md whitespace-normal"
+              // Off when the trim only added the period, so the hover never repeats the line.
+              disabled={shown === line.trim().replace(/\.?$/, '.')}
+            >
+              <span>{shown}</span>
+            </Tooltip>
+          </li>
+        )
+      })}
     </ul>
   )
 }
@@ -186,12 +338,12 @@ function blockedCopy(blocked: CloudInstallBlocked, exit: BlockedExit): { title: 
       </>
     )
 
-  // Where the exit is an install command, Radar Cloud asks for a cluster name
+  // Where the exit is an install command, Radar Cloud confirms the cluster name (prefilled from the context)
   // first, then shows the instructions — say so, rather than promising a
   // command on the next screen.
   const installNext = (
     <>
-      Have an admin with cluster access get the install command from Radar Cloud: it asks for a cluster name, then
+      Have an admin with cluster access get the install command from Radar Cloud: it confirms the cluster name, then
       shows the Helm, Argo CD or Flux instructions to review before running.
     </>
   )
@@ -223,7 +375,7 @@ function blockedCopy(blocked: CloudInstallBlocked, exit: BlockedExit): { title: 
       why: blocked.message,
       next: exit.install ? (
         <>
-          Have an admin with repo access get the values patch from Radar Cloud: it asks for a cluster name, then shows
+          Have an admin with repo access get the values patch from Radar Cloud: it confirms the cluster name, then shows
           the patch for your controller and the one command that creates the token Secret.
         </>
       ) : (
@@ -237,8 +389,9 @@ function blockedCopy(blocked: CloudInstallBlocked, exit: BlockedExit): { title: 
   // Fresh offered on "nothing running" alone: say what was not confirmed.
   const unconfirmedNext = (
     <>
-      Radar found no Radar running in this cluster but couldn’t read Helm’s release records, so an admin with cluster
-      access should confirm nothing is installed before running a fresh install. {installNext}
+      An admin with cluster access should confirm nothing is installed — Radar couldn’t read Helm’s release records —
+      then get the install command from Radar Cloud: it confirms the cluster name, then shows the Helm, Argo CD or Flux
+      instructions to review before running.
     </>
   )
   const next = exit.install ? (a?.releaseUnread ? unconfirmedNext : installNext) : unknownNext
@@ -262,7 +415,15 @@ function blockedCopy(blocked: CloudInstallBlocked, exit: BlockedExit): { title: 
         title: 'The cluster blocked part of this install',
         tried,
         why: 'The cluster refused: something already there conflicts with the install, or a policy rejects it. More permission wouldn’t change that.',
-        next: exit.install ? <>After the refusals above are resolved: {installNext}</> : next,
+        next: exit.install ? (
+          <>
+            Once the refusals above are resolved, have an admin with cluster access get the install command from Radar
+            Cloud: it confirms the cluster name, then shows the Helm, Argo CD or Flux instructions to review before
+            running.
+          </>
+        ) : (
+          next
+        ),
       }
   }
 }
@@ -644,16 +805,22 @@ function ConnectedCard({
 
 function FailedCard({
   status,
+  where,
   onStatus,
   onExit,
 }: {
   status: CloudInstallStatus
+  where?: AdminNoteContext
   onStatus: (st: CloudInstallStatus) => void
   onExit: () => void
 }) {
   const dismiss = useDismiss(status, onStatus, onExit)
   const failure = status.failure
   if (!failure) return null
+  // After the Hub approved, the guidance is written for an operator — inspect
+  // commands, keep this Hub cluster, don't rerun. Hand it over the same way a
+  // blocked card does, as a request to finish the connection.
+  const handoff = needsAdminHandoff(failure)
   return (
     <div className="px-8 pt-6 pb-5">
       <div className="flex items-start gap-2.5 mb-3">
@@ -666,13 +833,20 @@ function FailedCard({
           showSummary={failure.guidance.summary !== failure.message}
         />
       )}
-      <div className="mt-4 flex items-center gap-4">
+      <div className="relative mt-4 flex items-center gap-4">
         <button
           onClick={dismiss}
           className="px-4 py-1.5 rounded-[10px] bg-theme-elevated hover:bg-theme-hover border border-theme-border text-[12.5px] font-semibold text-theme-text-primary transition-colors"
         >
           {failure.retrySafe ? 'Start over' : 'Close'}
         </button>
+        {handoff && (
+          <CopyForAdmin
+            // The flow's own record of the cluster: a context switch after
+            // the install started must not relabel the note for another.
+            note={composeFailureNote(failure, { context: status.plan?.contextName ?? where?.context, cluster: where?.cluster })}
+          />
+        )}
       </div>
     </div>
   )

@@ -821,7 +821,7 @@ export function adaptDiagnose(
 const DIAGNOSE_METRICS_LABELS: Record<string, string> = {
   cpu: "CPU usage",
   memory: "Memory working set",
-  restarts: "Restarts",
+  restarts: "Restarts in trailing 1h",
 };
 /**
  * The vitals `diagnose` captured inside the same call: one chart per category

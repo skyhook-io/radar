@@ -69,7 +69,9 @@ export type InvestigationEvidenceKind =
   | "alerts"
   | "helm"
   | "permissions"
-  | "metrics";
+  | "metrics"
+  | "ranking"
+  | "posture";
 export type InvestigationSemanticDomain = "issue" | "startup" | "crash" | "dns";
 export interface InvestigationEvidenceSource {
   /** DOM-safe stable identity derived from turn index + the agent step ID. */
@@ -138,6 +140,8 @@ export interface InvestigationResourceSummary {
   name: string;
   namespace?: string;
   status?: string;
+  /** For a search hit: the field that matched and the text around it. */
+  match?: string;
   ready?: string;
   issue?: string;
   age?: string;
@@ -265,6 +269,74 @@ export interface InvestigationHelmRelease {
   managedByFluxHelmRelease?: string;
   lastOperation?: InvestigationHelmOperation;
   resources: InvestigationHelmOwnedResource[];
+  /** Newest first; the tool returns the release's stored revisions. */
+  history?: InvestigationHelmRevision[];
+  hooks?: InvestigationHelmHook[];
+  /** User-supplied values as the tool returned them, secrets already redacted. */
+  values?: Record<string, unknown>;
+}
+export interface InvestigationHelmRevision {
+  revision: number;
+  status: string;
+  chart: string;
+  appVersion?: string;
+  description?: string;
+  updated: string;
+}
+export interface InvestigationHelmHook {
+  name: string;
+  kind: string;
+  namespace?: string;
+  events: string[];
+  weight: number;
+  status?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+/** One row of a live-metrics ranking, as the tool returned it. */
+export interface InvestigationRankingRow {
+  kind: string;
+  namespace?: string;
+  name: string;
+  cpu: string;
+  memory: string;
+  cpuLimit?: string;
+  memoryLimit?: string;
+  restarts?: number;
+  ready?: string;
+  status?: string;
+  /** The investigated resource itself, or one of its own pods. */
+  target: boolean;
+  /** The workload a ranked pod belongs to, when the tool reports one. */
+  owner?: { kind: string; group?: string; namespace?: string; name: string };
+}
+/** A configuration or upgrade finding about one resource. */
+export interface InvestigationPostureFinding {
+  kind: string;
+  group?: string;
+  namespace?: string;
+  name: string;
+  check: string;
+  severity: string;
+  category?: string;
+  message: string;
+  remediation?: string;
+  /** The investigated resource itself. */
+  target: boolean;
+  /** The workload that owns the finding's resource, when the scan names one. */
+  managedBy?: {
+    kind: string;
+    group?: string;
+    namespace?: string;
+    name: string;
+  };
+}
+export interface InvestigationPermissionRule {
+  verbs: string[];
+  apiGroups: string[];
+  resources: string[];
+  resourceNames?: string[];
+  nonResourceURLs?: string[];
 }
 export interface InvestigationPermissionSubject {
   kind: string;
@@ -335,7 +407,7 @@ export type InvestigationEvidenceData =
   | {
       type: "logs";
       pod: string;
-      container: string;
+      container?: string;
       /** Namespace the producing call actually read; absent when unstated. */
       namespace?: string;
       previous: boolean;
@@ -378,9 +450,30 @@ export type InvestigationEvidenceData =
       scope: string;
     }
   | {
+      type: "ranking";
+      /** What was ranked: pods, workloads or nodes. */
+      kind: string;
+      sort: string;
+      rows: InvestigationRankingRow[];
+      scope: string;
+    }
+  | {
+      type: "posture";
+      source: "audit" | "upgrade";
+      findings: InvestigationPostureFinding[];
+      scope: string;
+    }
+  | {
       type: "receipt";
       checked:
-        "issues" | "events" | "changes" | "inventory" | "logs" | "alerts";
+        | "issues"
+        | "events"
+        | "changes"
+        | "inventory"
+        | "logs"
+        | "alerts"
+        | "metrics"
+        | "posture";
       scope: string;
       /**
        * Only when there is something to add. The card already shows the title
@@ -405,6 +498,8 @@ export type InvestigationEvidenceData =
       /** Present for the subject-permissions response shape. */
       bindings?: InvestigationPermissionBinding[];
       flatRulesCount?: number;
+      /** The effective rules themselves, up to the tool's cap. */
+      rules?: InvestigationPermissionRule[];
       truncated?: boolean;
       usedByPods?: string[];
       podsTotal?: number;
@@ -500,6 +595,8 @@ export interface InvestigationEvidenceProjection {
   /** Complete confirmed-success sources eligible for server-authored links. */
   citableSources: InvestigationEvidenceSource[];
   coverage: InvestigationEvidenceCoverage;
+  /** Pods a producer established as the target's own, by name. */
+  targetPods: string[];
 }
 export interface InvestigationRootCauseEvidenceLink {
   source: InvestigationEvidenceSource;

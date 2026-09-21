@@ -1516,8 +1516,33 @@ coverage, or support for other Kueue API versions.
 |----------|-------|---------------|
 | RayCluster | `ray.io/v1` | state + provisioning conditions |
 | RayJob | `ray.io/v1` | jobStatus + jobDeploymentStatus |
-| RayService | `ray.io/v1` | serviceStatus + upgrade/rollback conditions |
+| RayService | `ray.io/v1` | lifecycle conditions (`serviceStatus` fallback) |
 | RayCronJob | `ray.io/v1` | suspend |
+
+For an exact `ray.io/v1` RayService, REST AI detail and MCP `get_resource`
+include `resourceContext.serving.rayService` with named active/pending revisions, native
+observed generation (compare with `resource.metadata.generation`), requested suspension, declared upgrade strategy, reported percentages, and up to eight name-sorted
+Serve application states per revision (with explicit truncation). Readiness,
+upgrade/rollback, and suspension conditions remain independent in the existing
+`statusSummary`: a healthy active service can coexist with a failing pending revision. Requested suspension is
+separate from controller acknowledgement. Embedded RayCluster conditions are
+deliberately excluded: changes to them alone
+do not trigger RayService status writes. Missing percentages stay absent (normal
+for non-incremental upgrades) and explicit zero stays zero. Traffic percentages
+represent configured route weights, not measured requests.
+
+The projection follows KubeRay v1.7.0 and performs no child reads. It does not use
+deprecated state fallbacks or infer health from cluster names. Ready means proxy
+endpoints exist, not that every application is healthy; inspect the native app
+states and, when truncated, the full resource. During `NewCluster` upgrades,
+KubeRay clears the active application map while reconciling the pending revision;
+absence is not proof of an outage. Application messages, deployment
+status and the cross-revision endpoint count remain on the resource. Suspension
+tears down owned resources; resume creates new clusters.
+
+The [KubeRay controller lane](../scripts/kuberay-demo/README.md)
+checks a real healthy active revision and failed pending revision through REST
+and MCP; incremental Gateway traffic shifting is outside that lane's proof.
 
 ### KServe
 
@@ -1551,6 +1576,15 @@ coverage, or support for other Kueue API versions.
 | PyTorchJob / TFJob | `kubeflow.org/v1` | JobCondition pattern |
 | MPIJob | `kubeflow.org` (v1, v2beta1) | JobCondition pattern |
 | TrainJob | `trainer.kubeflow.org/v1alpha1` | Complete / Failed / Suspended conditions + active child jobs |
+
+For `jobset.x-k8s.io/v1alpha2` JobSets, REST AI detail and MCP `get_resource`
+include `resourceContext.execution`: root lifecycle and outcome, controller evidence,
+requested suspension, and JobSet-specific role, child-Job, and recreation counts.
+Missing observations remain distinct from zero. Activity does not guarantee running
+Pods, and a suspension request does not prove observed suspension or its cause.
+Root outcomes require root evidence; child failures alone are not terminal.
+Native spec/status remain available. This does not add JobSet `diagnose`, infer
+admission causes, or replace the JobSet→Job→Pod ownership chain.
 
 Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share kind names with other resources — Radar disambiguates by API group in tables, filters, and status badges.
 

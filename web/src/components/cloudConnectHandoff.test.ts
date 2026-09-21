@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ApiError, type CloudInstallAttempted } from '../api/client'
-import { exitFor, handoffForBlocked, handoffForPrepareError, isHandoffOutcome, signupUrlFor } from './cloudConnectHandoff'
+import { SELF_HOSTED_DOCS_URL, composeAdminNote, composeFailureNote, exitFor, trimRefusal, needsAdminHandoff, handoffForBlocked, handoffForPrepareError, isHandoffOutcome, signupUrlFor } from './cloudConnectHandoff'
 
 const APP = 'https://app.test.example'
 const UTM = 'utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal'
@@ -35,13 +35,15 @@ describe('signupUrlFor', () => {
 })
 
 describe('exitFor — every blocked card has one exit, chosen by what Radar established', () => {
-  it('adopts a release Radar found, pinned to the Helm tab', () => {
+  it('adopts a release Radar found, pinned to the Helm tab, named after the context', () => {
     const h = handoffForBlocked('preflight', attempted({ mode: 'adopt', namespace: 'monitoring', release: 'radar-prod', stage: 'inspect' }))
-    const exit = exitFor(APP, CARD, h)
+    const exit = exitFor(APP, CARD, h, 'prod-east')
     expect(exit).toMatchObject({ install: true, label: 'Get the install command' })
     expect(exit.href).toBe(
-      `${APP}/install?existing=1&ns=monitoring&release=radar-prod&method=helm&${UTM}&utm_content=${CARD}&radar_outcome=blocked_preflight_checks_failed`,
+      `${APP}/install?name=prod-east&existing=1&ns=monitoring&release=radar-prod&method=helm&${UTM}&utm_content=${CARD}&radar_outcome=blocked_preflight_checks_failed`,
     )
+    // Without a context there is simply no name to suggest.
+    expect(exitFor(APP, CARD, h).href).not.toContain('name=')
   })
 
   it('offers a fresh install only from a complete plan whose discovery saw the whole cluster', () => {
@@ -136,5 +138,117 @@ describe('isHandoffOutcome', () => {
     ]) {
       expect(isHandoffOutcome(kind)).toBe(true)
     }
+  })
+})
+
+describe('composeAdminNote — an ask, then the link, then the evidence', () => {
+  const where = { context: 'prod-east', cluster: 'arn:aws:eks:us-east-1:1:cluster/prod-east' }
+
+  it('asks for a permissions block, naming the identity and trimming the refusal to what and why', () => {
+    const blocked = {
+      reason: 'preflight' as const,
+      cause: 'permissions' as const,
+      identity: 'system:serviceaccount:default:limited',
+      message: '',
+      attempted: attempted({ stage: 'inspect', releaseUnread: true }),
+      blocking: [
+        'inspect Helm release "radar" in namespace "radar": failed to inspect existing release: query: failed to query with labels: secrets is forbidden: User "system:serviceaccount:default:limited" cannot list resource "secrets" in API group "" in the namespace "radar"',
+      ],
+    }
+    const exit = exitFor(APP, CARD, handoffForBlocked('preflight', blocked.attempted), where.context)
+    const note = composeAdminNote(blocked, exit, where)
+    expect(note).toMatch(/^Request to connect cluster prod-east to Radar Cloud\n/)
+    expect(note).toContain("the identity in use (system:serviceaccount:default:limited) doesn't have the permissions to install it")
+    expect(note).toContain('Nothing in the cluster was changed. Could someone with cluster access connect it?')
+    // The link a person reads carries only what the page needs — no attribution.
+    // The link a person reads keeps what the page needs to land prefilled,
+    // plus one marker that the arrival came by handoff — no utm noise.
+    expect(note).toContain('Open Radar Cloud to get the install command (sign in, confirm the cluster name, pick Helm / Argo CD / Flux):\n' + `${APP}/install?name=prod-east&method=helm&via=admin_handoff`)
+    expect(note).not.toContain('utm_')
+    expect(note).not.toContain('radar_outcome')
+    expect(note).toContain("Details: No Radar install was found in the cluster; the check stopped while reading Helm's release records.")
+    expect(note).toContain('inspect Helm release "radar" in namespace "radar" — User "system:serviceaccount:default:limited" cannot list resource "secrets" in API group "" in the namespace "radar".')
+    expect(note).toContain('Please confirm nothing is already installed before a fresh install.')
+    // The object of the request and the answer to "no SaaS", before the evidence.
+    expect(note.indexOf('What it is: Radar, the open-source Kubernetes tool')).toBeLessThan(note.indexOf('Details:'))
+    expect(note).toContain(`can be self-hosted in-house: ${SELF_HOSTED_DOCS_URL}`)
+    // Never the card's second person.
+    expect(note).not.toMatch(/\byour\b/i)
+  })
+
+  it('asks for a GitOps values patch from the verified tool', () => {
+    const blocked = { reason: 'gitops' as const, message: 'managed by Flux', attempted: attempted({ mode: 'gitops', stage: 'inspect', method: 'flux' }) }
+    const exit = exitFor(APP, CARD, handoffForBlocked('gitops', blocked.attempted))
+    const note = composeAdminNote(blocked, exit, where)
+    expect(note).toContain('the install is managed by Flux, so connecting it is a values change in the repository')
+    expect(note).toContain('Open Radar Cloud to get the values patch for Flux (sign in, confirm the cluster name')
+    expect(note).toContain(`${APP}/install?existing=1&ns=radar&release=radar&method=flux&via=admin_handoff`)
+    expect(note).toContain('Details: The release radar in namespace radar is managed by Flux.')
+  })
+
+  it('quotes the refusal and sends the admin to Radar Cloud when Radar had no target', () => {
+    const blocked = { reason: 'unsupported' as const, message: 'Multiple Radar installations were found in this cluster.  Use `radar cloud install` to pick one.' }
+    const exit = exitFor(APP, CARD, handoffForBlocked('unsupported'))
+    const note = composeAdminNote(blocked, exit, { cluster: 'kind-dev' })
+    expect(note).toContain('Request to connect cluster kind-dev to Radar Cloud')
+    expect(note).toContain('Radar reported: Multiple Radar installations were found in this cluster. Use `radar cloud install` to pick one. Nothing in the cluster was changed.')
+    expect(note).not.toContain('..')
+    expect(note).toContain('Could someone with cluster access connect it from Radar Cloud?')
+    expect(note).toContain('Open Radar Cloud:\n' + `${APP}/signup?via=admin_handoff`)
+  })
+
+  it('trims a refusal to what was attempted and why, for the card as for the note', () => {
+    expect(
+      trimRefusal('inspect Helm release "radar" in namespace "radar": failed to inspect existing release: query: failed to query with labels: secrets is forbidden: User "u" cannot list resource "secrets" in API group "" in the namespace "radar"'),
+    ).toBe('inspect Helm release "radar" in namespace "radar" — User "u" cannot list resource "secrets" in API group "" in the namespace "radar".')
+  })
+
+  it('keeps the whole line when a refusal has no error chain to trim', () => {
+    const blocked = {
+      reason: 'preflight' as const,
+      cause: 'cluster' as const,
+      message: '',
+      attempted: attempted({}),
+      blocking: ['create Deployment "radar" in namespace "radar": an object already exists but is not owned by the current Helm release'],
+    }
+    const note = composeAdminNote(blocked, exitFor(APP, CARD, handoffForBlocked('preflight', blocked.attempted)))
+    expect(note).toContain('the cluster refused part of the install — a policy, or something already there (details below)')
+    expect(note).toContain('Details: No Radar install was found in the cluster; the dry run of the install stopped. create Deployment "radar" in namespace "radar": an object already exists but is not owned by the current Helm release.')
+  })
+})
+
+describe('composeFailureNote — finishing a connection the Hub already approved', () => {
+  const guidance = {
+    summary: 'Hub cluster "abc123" already exists. Do not rerun the installer; first inspect the existing attempt.',
+    lines: ['The Helm upgrade did not start, so there was no rollback to verify.'],
+    inspect: ['helm status radar -n radar', 'kubectl -n radar get secret/radar-cloud-config'],
+    clusterUrl: 'https://app.radarhq.io/c/abc123?utm_source=x',
+  }
+
+  it('is offered only after the Hub approved and Helm ran', () => {
+    expect(needsAdminHandoff({ kind: 'helm_provision_failed', message: 'x', retrySafe: false })).toBe(true)
+    expect(needsAdminHandoff({ kind: 'installed_but_tunnel_not_confirmed', message: 'x', retrySafe: false })).toBe(true)
+    for (const kind of ['hub_connect_request_failed', 'approval_rejected_in_browser', 'approved_but_credential_pickup_expired', 'canceled_after_approval']) {
+      expect(needsAdminHandoff({ kind, message: 'x', retrySafe: false })).toBe(false)
+    }
+    expect(needsAdminHandoff(undefined)).toBe(false)
+  })
+
+  it('asks to finish the install, links the cluster page, and carries the operator guidance', () => {
+    const note = composeFailureNote(
+      { kind: 'helm_provision_failed', message: 'helm install failed: timed out waiting for the condition', retrySafe: false, guidance },
+      { context: 'prod-east' },
+    )
+    expect(note).toMatch(/^Request to finish connecting cluster prod-east to Radar Cloud\n/)
+    expect(note).toContain('the Helm install of Radar failed. helm install failed: timed out waiting for the condition Could someone with cluster access take it from here?')
+    expect(note).toContain('The cluster in Radar Cloud (its page shows the recovery options):\nhttps://app.radarhq.io/c/abc123?via=admin_handoff')
+    expect(note).toContain('Details: Hub cluster "abc123" already exists. Do not rerun the installer; first inspect the existing attempt. The Helm upgrade did not start, so there was no rollback to verify.')
+    expect(note).toContain('To inspect:\n  helm status radar -n radar\n  kubectl -n radar get secret/radar-cloud-config')
+  })
+
+  it('names the tunnel case for what it is', () => {
+    const note = composeFailureNote({ kind: 'installed_but_tunnel_not_confirmed', message: 'No tunnel within 5 minutes.', retrySafe: false }, {})
+    expect(note).toContain('Radar was installed by Helm, but its connection to Radar Cloud could not be confirmed. No tunnel within 5 minutes.')
+    expect(note).toContain('cluster this cluster to Radar Cloud')
   })
 })

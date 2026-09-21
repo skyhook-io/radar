@@ -3,6 +3,8 @@ package ai
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 // applyMutationTracker derives mutation truth from Radar write-tool results.
@@ -36,7 +38,7 @@ func (t *applyMutationTracker) observe(ev StreamEvent) {
 		return
 	}
 	state, tracked := t.steps[step.ID]
-	if !tracked && !isRadarWriteTool(step.Tool) {
+	if !tracked && !investigation.IsWriteTool(step.Tool) {
 		return
 	}
 	if step.ID == "" {
@@ -51,7 +53,7 @@ func (t *applyMutationTracker) observe(ev StreamEvent) {
 	}
 	switch step.Status {
 	case "running":
-		state.tool = normalizeRadarToolName(step.Tool)
+		state.tool = investigation.NormalizeToolName(step.Tool)
 		state.summary = step.Summary
 	case "done":
 		state.done = true
@@ -59,7 +61,7 @@ func (t *applyMutationTracker) observe(ev StreamEvent) {
 		state.result = step.Result
 		state.truncated = step.Truncated
 		if step.Tool != "" {
-			state.tool = normalizeRadarToolName(step.Tool)
+			state.tool = investigation.NormalizeToolName(step.Tool)
 		}
 		if step.Summary != "" {
 			state.summary = step.Summary

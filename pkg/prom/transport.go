@@ -92,7 +92,7 @@ func (t *HTTPTransport) Do(ctx context.Context, method, path string, params url.
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 
-	resp, err := t.HTTPClient.Do(req)
+	resp, err := SameOriginRedirectClient(t.HTTPClient).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("prom.HTTPTransport: %w", err)
 	}

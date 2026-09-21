@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { AlertCircle, AlertOctagon, AlertTriangle, ChevronDown, ExternalLink, EyeOff, Info, Layers, MoreHorizontal, Search, ShieldCheck, Wrench, X } from 'lucide-react'
-import { AlertBanner, CardBody, CardSection, ClusterName, EmptyState, FilterPill, DistributionBar, DistributionLegendChip, Input, NEUTRAL_CHIP_CLASS, renderProse } from '../ui'
+import { AlertBanner, Disclosure, CardBody, CardSection, ClusterName, EmptyState, FilterPill, DistributionBar, DistributionLegendChip, Input, NEUTRAL_CHIP_CLASS, renderProse } from '../ui'
 import { Collapse, CollapseChevron, useDisclosure, disclosurePanelId } from '../ui/Collapse'
 import { useFilterState, defineFilterSchema } from '../../filter-state'
 import type { CheckMeta, CheckReference } from '../audit'
@@ -17,8 +17,18 @@ import {
 } from './severity'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
+import { CORE_RESOURCES } from '../../utils/api-resources'
 
 const CATEGORIES: readonly string[] = ['Security', 'Reliability', 'Efficiency']
+
+const AUDIT_INPUT_LABELS = new Map<string, string>([
+  ...CORE_RESOURCES.map(({ name, kind }) => [name, kind] as const),
+  ['limitranges', 'LimitRange'],
+  ['poddisruptionbudgets', 'PodDisruptionBudget'],
+  ['replicaset-ownership', 'ReplicaSet ownership'],
+  ['configmap-references', 'ConfigMap references'],
+  ['secret-references', 'Secret references'],
+])
 
 // Leading severity glyph, one per tier of the 4-tier ladder: critical = octagon,
 // high = triangle, medium = circle, low = info.
@@ -355,7 +365,19 @@ export function ChecksView({ checks, catalog, anyData, evaluated, missingInputs 
         <AlertBanner
           variant="warning"
           title="Some checks could not run"
-          message={<>Findings cover only available inputs. Unavailable inputs: {missingInputs.join(', ')}.</>}
+          message={
+            <>
+              Findings cover only available inputs.
+              <Disclosure summary={`Unavailable inputs (${missingInputs.length})`} className="mt-2">
+                {missingInputs.map(input => AUDIT_INPUT_LABELS.get(input) ?? input).join(', ')}.
+              </Disclosure>
+              {(missingInputs.includes('replicasets') || missingInputs.includes('replicaset-ownership')) && (
+                <p className="mt-2">
+                  <em>Running replicas on same node</em> could not be fully evaluated: ReplicaSet inventory or ownership evidence was unavailable, so affected Deployments were skipped, not passed.
+                </p>
+              )}
+            </>
+          }
         />
       )}
 
@@ -803,32 +825,21 @@ function ResourceList({
   onResourceClick?: (ref: CheckResourceRef) => void
 }) {
   const [showAll, setShowAll] = useState(false)
-  // The per-finding message only earns a place when it adds something the line
-  // doesn't already show. Normalize each message by removing its own resource
-  // name, then compare: all-same → it repeats the check or varies only by the
-  // object name (already on the line) → drop it; still-different → real new info
-  // (e.g. a container name) → keep it.
-  const showMessage = useMemo(() => {
-    if (check.findings.length === 0) return false
-    const norm = (f: EffectiveCheckFinding) => {
-      const n = f.resource.name
-      return n ? (f.message ?? '').split(n).join('') : f.message ?? ''
-    }
-    const first = norm(check.findings[0])
-    return check.findings.some((f) => norm(f) !== first)
-  }, [check.findings])
+  const commonMessage = check.findings[0]?.message || ''
+  const shareMessage = !!commonMessage && check.findings.every((f) => f.message === commonMessage)
   const list = showAll ? check.findings : check.findings.slice(0, RESOURCE_CAP)
   const hidden = check.findings.length - list.length
 
   return (
     <section className="flex flex-col gap-1.5">
       {label && <h4 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">{label}</h4>}
+      {shareMessage && <p className="px-2 text-xs whitespace-pre-wrap [overflow-wrap:anywhere] text-theme-text-secondary">{commonMessage}</p>}
       <ul className="flex flex-col gap-px">
         {list.map((f, i) => (
           <FindingLine
             key={`${f.resource.group}/${f.resource.kind}/${f.resource.namespace}/${f.resource.name}#${i}`}
             finding={f}
-            showMessage={showMessage}
+            showMessage={!shareMessage}
             resourceHref={resourceHref}
             onResourceClick={onResourceClick}
           />
@@ -862,18 +873,18 @@ function FindingLine({
   const linkable = !!(onResourceClick || resourceHref)
   const body = (
     <>
-      <span className="shrink-0 font-mono text-[11px] uppercase tracking-wide text-theme-text-tertiary">{r.kind}</span>
-      <span className={`shrink-0 font-medium ${linkable ? 'text-[var(--color-radar-accent)]' : 'text-theme-text-primary'}`}>
-        {r.namespace ? `${r.namespace} / ` : ''}
-        {r.name}
+      <span className="flex min-w-0 items-baseline gap-2">
+        <span className="shrink-0 font-mono text-[11px] uppercase tracking-wide text-theme-text-tertiary">{r.kind}</span>
+        <span className={`min-w-0 break-all font-medium ${linkable ? 'text-[var(--color-radar-accent)]' : 'text-theme-text-primary'}`}>
+          {r.namespace ? `${r.namespace} / ` : ''}
+          {r.name}
+        </span>
+        {linkable && <ExternalLink className="h-3 w-3 shrink-0 text-theme-text-tertiary opacity-0 transition-opacity group-hover/f:opacity-100" />}
       </span>
-      {linkable && <ExternalLink className="h-3 w-3 shrink-0 text-theme-text-tertiary opacity-0 transition-opacity group-hover/f:opacity-100" />}
-      {showMessage && <span className="ml-1 truncate text-xs text-theme-text-tertiary">{finding.message}</span>}
+      {showMessage && finding.message && <span className="text-xs whitespace-pre-wrap [overflow-wrap:anywhere] text-theme-text-tertiary">{finding.message}</span>}
     </>
   )
-  // items-baseline so the smaller mono kind label shares a baseline with the
-  // larger resource name (their line-heights differ).
-  const cls = 'group/f flex w-full items-baseline gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-theme-hover/60'
+  const cls = 'group/f flex w-full min-w-0 flex-col gap-0.5 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-theme-hover/60'
   return (
     <li>
       {onResourceClick ? (
@@ -889,7 +900,7 @@ function FindingLine({
           {body}
         </a>
       ) : (
-        <span className="flex items-center gap-2 rounded-md px-2 py-1 text-sm">{body}</span>
+        <span className="flex min-w-0 flex-col gap-0.5 rounded-md px-2 py-1 text-sm">{body}</span>
       )}
     </li>
   )

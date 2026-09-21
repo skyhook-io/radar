@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -3090,6 +3091,39 @@ func TestSymptomNamesSecret(t *testing.T) {
 	for _, c := range cases {
 		if got := symptomNamesSecret(mk(c.msg, c.ns), "foo"); got != c.want {
 			t.Errorf("symptomNamesSecret(%q) = %v, want %v", c.msg, got, c.want)
+		}
+	}
+}
+
+func TestAdmissionWebhookCallFailureDoesNotBlameService(t *testing.T) {
+	for _, detail := range []string{"dial tcp: connection refused", "context deadline exceeded", "tls: failed to verify certificate: x509: certificate signed by unknown authority", `denied: no endpoints available for service "policy-webhook"`} {
+		for _, readable := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/readable=%v", detail, readable), func(t *testing.T) {
+				message := `failed calling webhook "validate.example.com": Post "https://policy-webhook.hooks.svc:443/validate": ` + detail
+				reason := "WebhookUnavailable"
+				if strings.HasPrefix(detail, "denied:") {
+					message = `admission webhook "policy.example.com" denied the request: ` + message
+					reason = "WebhookDenied"
+				}
+				p := &fakeProvider{
+					problems:    []k8s.Detection{{Kind: "Service", Namespace: "hooks", Name: "policy-webhook", Severity: "warning", Reason: k8s.SelectorMatchesNoPodsReason, Fingerprint: k8s.NoReadyEndpointsFingerprint}},
+					scheduling:  []k8s.Detection{{Kind: "Deployment", Group: "apps", Namespace: "apps", Name: "catalog", Severity: "critical", Reason: reason, Message: message}},
+					webhookRefs: map[string][]AdmissionWebhookRef{"hooks/policy-webhook": {{Configuration: Ref{Group: "admissionregistration.k8s.io", Kind: "ValidatingWebhookConfiguration", Name: "policy"}, WebhookName: "validate.example.com", FailurePolicy: "Fail"}}},
+				}
+				out := Compose(p, Filters{Limit: NoLimit, Grouped: true, CanReadClusterScoped: func(string, string) bool { return readable }})
+				found := false
+				for _, issue := range out {
+					if issue.Kind == "Deployment" {
+						found = true
+						if issue.Category != issuesapi.CategoryAdmissionWebhookBlocking || issue.IncidentParent != nil || !strings.Contains(issue.Message, detail) {
+							t.Fatalf("call failure lost evidence or acquired backend blame: %+v", issue)
+						}
+					}
+				}
+				if !found {
+					t.Fatalf("call-failure issue missing: %+v", out)
+				}
+			})
 		}
 	}
 }

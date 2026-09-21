@@ -6,18 +6,10 @@ import (
 	"net/http"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/certs"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
-
-// sealedSecretsKeyLabel marks a sealed-secrets controller keypair. Those are
-// type=kubernetes.io/tls and parse as real (long-lived, self-signed) x509, but
-// they're an internal encryption key, not a serving certificate anyone renews —
-// so the certificate inventory skips them to stay signal, not noise.
-const sealedSecretsKeyLabel = "sealedsecrets.bitnami.com/sealed-secrets-key"
 
 const (
 	certExpiryWarningDays  = 30
@@ -115,7 +107,7 @@ func (s *Server) handleCertificates(w http.ResponseWriter, r *http.Request) {
 			if !topology.MatchesNamespace(secretNS, sec.Namespace) {
 				continue
 			}
-			if in, ok := secretToCertInput(sec); ok {
+			if in, ok := certs.FromTLSSecret(sec); ok {
 				src.TLSSecrets = append(src.TLSSecrets, in)
 			}
 		}
@@ -138,38 +130,6 @@ func (s *Server) handleCertificates(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, result)
-}
-
-// secretToCertInput projects a kubernetes.io/tls secret into a certs.Input.
-// ok=false for secrets that aren't serving certs: non-TLS types, sealed-secrets
-// controller keypairs (encryption keys, not renew-able certs), and secrets
-// whose tls.crt is missing or unparseable. Reads only tls.crt — never tls.key.
-func secretToCertInput(sec *corev1.Secret) (certs.Input, bool) {
-	if sec.Type != corev1.SecretTypeTLS {
-		return certs.Input{}, false
-	}
-	if _, sealed := sec.Labels[sealedSecretsKeyLabel]; sealed {
-		return certs.Input{}, false
-	}
-	pem, ok := sec.Data["tls.crt"]
-	if !ok || len(pem) == 0 {
-		return certs.Input{}, false
-	}
-	leaf := topology.ParsePEMCertificates(pem)
-	if len(leaf) == 0 {
-		return certs.Input{}, false
-	}
-	in := certs.Input{
-		Name:      sec.Name,
-		Namespace: sec.Namespace,
-		Issuer:    leaf[0].Issuer,
-		Domains:   leaf[0].SANs,
-		Source:    certs.SourceTLSSecret,
-	}
-	if t, err := time.Parse(time.RFC3339, leaf[0].NotAfter); err == nil {
-		in.NotAfter = &t
-	}
-	return in, true
 }
 
 // projectCertManagerCert maps a cert-manager.io Certificate CR (unstructured)

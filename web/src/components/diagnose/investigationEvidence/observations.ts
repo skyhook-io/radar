@@ -17,6 +17,7 @@ import {
 } from "../diagnoseEvidenceTypes";
 import { investigationResourceEvidenceSummary } from "../investigationResourceEvidenceModel";
 import { kindToPluralWithGroup } from "../../../utils/navigation";
+import { pluralToKind } from "@skyhook-io/k8s-ui";
 import { stableHash } from "./identity";
 import { nonEmptyString, parseJSON, record, stringArray } from "./parse";
 import {
@@ -174,6 +175,7 @@ const INVESTIGATION_RESULT_LABELS: Readonly<Record<string, string>> = {
   issues: "Issue scan",
   get_resource: "Resource details",
   list_resources: "Resource inventory",
+  list_namespaces: "Namespace inventory",
   get_events: "Kubernetes events",
   get_pod_logs: "Container logs",
   get_changes: "Recent changes",
@@ -184,11 +186,23 @@ const INVESTIGATION_RESULT_LABELS: Readonly<Record<string, string>> = {
   get_helm_release: "Helm release",
   get_subject_permissions: "Permissions",
   query_prometheus: "Prometheus query",
+  top_resources: "Resource ranking",
+  get_cluster_audit: "Posture findings",
+  get_cluster_upgrade_readiness: "Upgrade readiness",
+  list_helm_releases: "Helm releases",
+  list_packages: "Installed packages",
+  search: "Search results",
+  discover_metrics: "Metric discovery",
+  get_cost: "Cost",
+  get_rightsizing: "Rightsizing",
 };
 export function investigationResultLabel(
   source: InvestigationEvidenceSource,
 ): string {
   return INVESTIGATION_RESULT_LABELS[source.tool] ?? "Investigation result";
+}
+export function sameKind(left: string, right: string): boolean {
+  return pluralToKind(left).toLowerCase() === pluralToKind(right).toLowerCase();
 }
 export function resourceMatchesTarget(
   target: InvestigationEvidenceTarget,
@@ -585,10 +599,33 @@ function resourceObservationSummary(
   if (context?.statusSummary?.phase) return context.statusSummary.phase;
   if (context?.issueSummary?.topReason) return context.issueSummary.topReason;
   return (
+    workloadReadinessFromResource(resource) ||
     investigationResourceEvidenceSummary(resource) ||
     warnings[0] ||
     resource.metadata.namespace
   );
+}
+
+// A workload read that carried no context still states its own readiness;
+// a row that names only its namespace says nothing.
+function workloadReadinessFromResource(
+  resource: InvestigationKubernetesResource,
+): string | undefined {
+  const spec = record(resource.spec);
+  const status = record(resource.status);
+  const count = (value: unknown): number | undefined =>
+    typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  if (resource.kind === "Deployment" || resource.kind === "StatefulSet") {
+    const desired = count(spec?.replicas) ?? (spec ? 1 : undefined);
+    if (desired === undefined) return undefined;
+    return `${count(status?.readyReplicas) ?? 0}/${desired} replicas ready`;
+  }
+  if (resource.kind === "DaemonSet") {
+    const desired = count(status?.desiredNumberScheduled);
+    if (desired === undefined) return undefined;
+    return `${count(status?.numberReady) ?? 0}/${desired} pods ready`;
+  }
+  return undefined;
 }
 // A scaler that cannot act (no metrics, cannot read the target) or is pinned
 // at its ceiling is a captured Radar fact about the workload, so it lifts the
@@ -875,19 +912,20 @@ export function changesSubjectFromArgs(
 export function addLogs(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
-  value: DiagnosisPodLogEntry,
+  value: Omit<DiagnosisPodLogEntry, "container"> & { container?: string },
   previous: boolean,
   warnings: string[] = [],
   relevance: InvestigationEvidenceRelevance = "broader",
   namespace?: string,
 ): void {
   const lines = (value.logs?.lines ?? []).map((line) => stripAnsi(line));
+  const containerLabel = value.container ?? "container unknown";
   const normalizedWarnings = warnings.map((warning) => stripAnsi(warning));
   const normalizedError = value.error ? stripAnsi(value.error) : undefined;
   if (lines.length === 0) {
     builder.limit(
       source,
-      `${value.pod} / ${value.container}`,
+      `${value.pod} / ${containerLabel}`,
       value.error ||
         "No log lines were available. This does not mean the container is healthy.",
       value.error ? "error" : "unknown",
@@ -904,7 +942,9 @@ export function addLogs(
     ),
   );
   const selectedEvidence = value.logs?.fallback !== true && diagnosticSignal;
-  const identity = `logs:${previous ? "previous" : "current"}:${value.pod}:${value.container}`;
+  // Unknown streams from separate reads need not belong to the same container.
+  const streamIdentity = value.container ?? `unknown:${source.id}`;
+  const identity = `logs:${previous ? "previous" : "current"}:${value.pod}:${streamIdentity}`;
   builder.observe(identity, "logs", source, {
     // FilterLogs' raw-tail fallback is useful provenance, but the producer did
     // not select it as diagnostic signal. Keep it in Context; only filtered
@@ -915,7 +955,7 @@ export function addLogs(
     ),
     relevance,
     tone: selectedEvidence || normalizedError ? "warning" : "neutral",
-    title: `${previous ? "Previous" : "Current"} logs · ${value.pod} / ${value.container}`,
+    title: `${previous ? "Previous" : "Current"} logs · ${value.pod} / ${containerLabel}`,
     summary:
       lines.length > 0
         ? `${lines.length} selected line${lines.length === 1 ? "" : "s"}`
@@ -934,7 +974,7 @@ export function addLogs(
   if (normalizedError) {
     builder.limit(
       source,
-      `${value.pod} / ${value.container}`,
+      `${value.pod} / ${containerLabel}`,
       normalizedError,
       "error",
     );

@@ -105,6 +105,8 @@ export interface EvidenceCoverageGroup {
   limitations: InvestigationEvidenceLimitation[];
   hasError: boolean;
   historyOnly: boolean;
+  /** Every entry is a sampling cap or a history bound: bookkeeping for the record, not an open question. */
+  bookkeepingOnly: boolean;
 }
 
 /** Group the presentation, not the underlying limitations or health qualification. */
@@ -158,6 +160,7 @@ export function groupEvidenceCoverage(
         limitations: entries,
         hasError: errors.length > 0,
         historyOnly,
+        bookkeepingOnly: ordinaryLimits,
       };
     })
     .sort(

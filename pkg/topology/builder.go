@@ -12,6 +12,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -289,6 +290,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	replicaSetIDs := make(map[string]string)
 	replicaSetToDeployment := make(map[string]string) // rsKey -> deploymentID (for shortcut edges)
 	replicaSetToRollout := make(map[string]string)    // rsKey -> rolloutID (for shortcut edges)
+	rolloutTrafficByID := make(map[string]rolloutTrafficInfo)
+	// rolloutDataByID keeps a live reference to each Rollout node's Data map so
+	// the replica-based weight backfill (after ReplicaSets are indexed, below)
+	// can update the already-created node in place.
+	rolloutDataByID := make(map[string]map[string]any)
 	serviceIDs := make(map[string]string)
 	jobIDs := make(map[string]string)
 	cronJobIDs := make(map[string]string)
@@ -367,6 +373,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			Status: healthLevelToStatus(health.Workload(deploy, time.Now()).Level),
 			Data: map[string]any{
 				"namespace":     deploy.Namespace,
+				"apiVersion":    appsv1.SchemeGroupVersion.String(),
 				"readyReplicas": ready,
 				"totalReplicas": total,
 				"strategy":      string(deploy.Spec.Strategy.Type),
@@ -431,19 +438,99 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				}
 			}
 
+			// Traffic routing: service names/weights (for Service edge matching
+			// in the loop below) and the live revision pointers (for
+			// classifying owned Pods/ReplicaSets by canary/stable/active/preview
+			// role) — see rolloutTrafficInfo.
+			canaryService, _, _ := unstructured.NestedString(spec, "strategy", "canary", "canaryService")
+			stableService, _, _ := unstructured.NestedString(spec, "strategy", "canary", "stableService")
+			activeService, _, _ := unstructured.NestedString(spec, "strategy", "blueGreen", "activeService")
+			previewService, _, _ := unstructured.NestedString(spec, "strategy", "blueGreen", "previewService")
+
+			var canaryWeight, stableWeight *int64
+			if status != nil {
+				if w, ok, _ := unstructured.NestedInt64(status, "canary", "weights", "canary", "weight"); ok {
+					canaryWeight = &w
+				}
+				if w, ok, _ := unstructured.NestedInt64(status, "canary", "weights", "stable", "weight"); ok {
+					stableWeight = &w
+				}
+			}
+			// When canaryWeight is still nil here (no trafficRouting plugin —
+			// the common case), it's backfilled below from the live
+			// ReplicaSets' own replica counts, once those are indexed.
+			currentPodHash, _, _ := unstructured.NestedString(status, "currentPodHash")
+			stableRS, _, _ := unstructured.NestedString(status, "stableRS")
+			activeSelector, _, _ := unstructured.NestedString(status, "blueGreen", "activeSelector")
+			previewSelector, _, _ := unstructured.NestedString(status, "blueGreen", "previewSelector")
+
+			// Nothing in flight: a canary fully promoted to its current
+			// revision, or a blue-green fully promoted with no preview
+			// tracked. stableRS/currentPodHash are generic fields the
+			// controller populates for every strategy (see
+			// rolloutTrafficRole's own comment on this), so they're only
+			// meaningful for settlement when the Rollout is actually
+			// running the canary strategy — checked via activeSelector's
+			// presence, the blueGreen-only signal.
+			var settled bool
+			if activeSelector != "" || previewSelector != "" {
+				// blue-green: settled unless a distinct preview revision is
+				// actually being tracked. previewSelector can be genuinely
+				// empty on a fully-promoted Rollout with no preview in
+				// flight — that's settled too, not "unknown".
+				settled = previewSelector == "" || previewSelector == activeSelector
+			} else {
+				settled = stableRS != "" && stableRS == currentPodHash
+			}
+
+			rolloutTrafficByID[rolloutID] = rolloutTrafficInfo{
+				currentPodHash:  currentPodHash,
+				stableRS:        stableRS,
+				activeSelector:  activeSelector,
+				previewSelector: previewSelector,
+				canaryService:   canaryService,
+				stableService:   stableService,
+				activeService:   activeService,
+				previewService:  previewService,
+				canaryWeight:    canaryWeight,
+				stableWeight:    stableWeight,
+				settled:         settled,
+			}
+
+			rolloutData := map[string]any{
+				"namespace":     ns,
+				"readyReplicas": ready,
+				"totalReplicas": total,
+				"strategy":      strategy,
+				"labels":        rollout.GetLabels(),
+				"apiVersion":    rollout.GetAPIVersion(),
+			}
+			if canaryService != "" {
+				rolloutData["canaryService"] = canaryService
+			}
+			if stableService != "" {
+				rolloutData["stableService"] = stableService
+			}
+			if activeService != "" {
+				rolloutData["activeService"] = activeService
+			}
+			if previewService != "" {
+				rolloutData["previewService"] = previewService
+			}
+			if canaryWeight != nil {
+				rolloutData["canaryWeight"] = *canaryWeight
+			}
+			if stableWeight != nil {
+				rolloutData["stableWeight"] = *stableWeight
+			}
+			rolloutDataByID[rolloutID] = rolloutData
+
 			nodes = append(nodes, Node{
 				ID:     rolloutID,
 				Kind:   "Rollout",
 				Name:   name,
 				Status: getDeploymentStatus(int32(ready), int32(total)),
-				Data: map[string]any{
-					"namespace":     ns,
-					"readyReplicas": ready,
-					"totalReplicas": total,
-					"strategy":      strategy,
-					"labels":        rollout.GetLabels(),
-					"apiVersion":    rollout.GetAPIVersion(),
-				},
+				Data:   rolloutData,
 			})
 
 			for _, run := range activeAnalysisRuns(status) {
@@ -2463,6 +2550,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			Status: healthLevelToStatus(health.Workload(ds, time.Now()).Level),
 			Data: map[string]any{
 				"namespace":     ds.Namespace,
+				"apiVersion":    appsv1.SchemeGroupVersion.String(),
 				"readyReplicas": ready,
 				"totalReplicas": total,
 				"labels":        ds.Labels,
@@ -2514,6 +2602,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			Status: healthLevelToStatus(health.Workload(sts, time.Now()).Level),
 			Data: map[string]any{
 				"namespace":     sts.Namespace,
+				"apiVersion":    appsv1.SchemeGroupVersion.String(),
 				"readyReplicas": ready,
 				"totalReplicas": total,
 				"labels":        sts.Labels,
@@ -2551,6 +2640,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			Status: healthLevelToStatus(health.Workload(cj, time.Now()).Level),
 			Data: map[string]any{
 				"namespace":        cj.Namespace,
+				"apiVersion":       batchv1.SchemeGroupVersion.String(),
 				"schedule":         cj.Spec.Schedule,
 				"suspend":          cj.Spec.Suspend != nil && *cj.Spec.Suspend,
 				"activeJobs":       len(cj.Status.Active),
@@ -2767,6 +2857,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			Status: status,
 			Data: map[string]any{
 				"namespace":      job.Namespace,
+				"apiVersion":     batchv1.SchemeGroupVersion.String(),
 				"completions":    job.Spec.Completions,
 				"parallelism":    job.Spec.Parallelism,
 				"succeeded":      job.Status.Succeeded,
@@ -2825,6 +2916,85 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 		replicasets = rss
 	}
+	// Rollout ownership must be known before weights can be derived from live
+	// replica counts (below) or nodes/edges built (the main loop further
+	// down), so resolve it here in its own pass over the full ReplicaSet
+	// list first.
+	for _, rs := range replicasets {
+		if !opts.MatchesNamespaceFilter(rs.Namespace) {
+			continue
+		}
+		if rs.Spec.Replicas != nil && *rs.Spec.Replicas == 0 {
+			continue
+		}
+		rsKey := rs.Namespace + "/" + rs.Name
+		for _, ownerRef := range rs.OwnerReferences {
+			ownerKey := rs.Namespace + "/" + ownerRef.Name
+			if ownerRef.Kind == "Deployment" {
+				if ownerID, ok := deploymentIDs[ownerKey]; ok {
+					replicaSetToDeployment[rsKey] = ownerID
+				}
+			} else if ownerRef.Kind == "Rollout" {
+				if ownerID, ok := rolloutIDs[ownerKey]; ok {
+					replicaSetToRollout[rsKey] = ownerID
+				}
+			}
+		}
+	}
+
+	// A basic canary (no trafficRouting plugin) never populates
+	// status.canary.weights — the controller only approximates the split by
+	// scaling replica counts. Derive it from the rollout-owned ReplicaSets'
+	// own desired replica counts instead (what Argo's CLI calls
+	// ActualWeight), which self-corrects during an abort: the canary
+	// ReplicaSet's desired count drops immediately, before status catches up.
+	type liveRolloutReplicas struct{ canary, stable int64 }
+	liveReplicasByRollout := make(map[string]liveRolloutReplicas)
+	for _, rs := range replicasets {
+		if !opts.MatchesNamespaceFilter(rs.Namespace) {
+			continue
+		}
+		if rs.Spec.Replicas != nil && *rs.Spec.Replicas == 0 {
+			continue
+		}
+		rolloutID, ok := replicaSetToRollout[rs.Namespace+"/"+rs.Name]
+		if !ok {
+			continue
+		}
+		info, ok := rolloutTrafficByID[rolloutID]
+		if !ok {
+			continue
+		}
+		total := int64(1)
+		if rs.Spec.Replicas != nil {
+			total = int64(*rs.Spec.Replicas)
+		}
+		counts := liveReplicasByRollout[rolloutID]
+		switch rolloutTrafficRole(rs.Labels[rolloutPodTemplateHashLabel], info) {
+		case "canary":
+			counts.canary += total
+		case "stable":
+			counts.stable += total
+		}
+		liveReplicasByRollout[rolloutID] = counts
+	}
+	for rolloutID, counts := range liveReplicasByRollout {
+		info, ok := rolloutTrafficByID[rolloutID]
+		total := counts.canary + counts.stable
+		if !ok || info.canaryWeight != nil || total == 0 {
+			continue
+		}
+		cw := (counts.canary*100 + total/2) / total // round to nearest
+		sw := int64(100) - cw
+		info.canaryWeight = &cw
+		info.stableWeight = &sw
+		rolloutTrafficByID[rolloutID] = info
+		if data, ok := rolloutDataByID[rolloutID]; ok {
+			data["canaryWeight"] = cw
+			data["stableWeight"] = sw
+		}
+	}
+
 	for _, rs := range replicasets {
 		if !opts.MatchesNamespaceFilter(rs.Namespace) {
 			continue
@@ -2838,27 +3008,47 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		rsID := fmt.Sprintf("replicaset/%s/%s", rs.Namespace, rs.Name)
 		replicaSetIDs[rs.Namespace+"/"+rs.Name] = rsID
 
-		// Track owner for shortcut edges regardless of visibility
-		for _, ownerRef := range rs.OwnerReferences {
-			ownerKey := rs.Namespace + "/" + ownerRef.Name
-			rsKey := rs.Namespace + "/" + rs.Name
-			if ownerRef.Kind == "Deployment" {
-				if ownerID, ok := deploymentIDs[ownerKey]; ok {
-					replicaSetToDeployment[rsKey] = ownerID
-				}
-			} else if ownerRef.Kind == "Rollout" {
-				if ownerID, ok := rolloutIDs[ownerKey]; ok {
-					replicaSetToRollout[rsKey] = ownerID
-				}
-			}
-		}
+		// Rollout-owned ReplicaSets bypass the IncludeReplicaSets collapse
+		// while they're still live AND a transition is actually in
+		// progress — collapsing them then would hide exactly the
+		// canary/stable distinction this node exists to show. Once the
+		// Rollout has settled (see rolloutTrafficInfo.settled), it collapses
+		// the same way a Deployment's ReplicaSets do: subject to
+		// opts.IncludeReplicaSets like everything else.
+		rolloutOwnedRSID, isRolloutOwnedRS := replicaSetToRollout[rs.Namespace+"/"+rs.Name]
+		rolloutSettled := isRolloutOwnedRS && rolloutTrafficByID[rolloutOwnedRSID].settled
+		bypassCollapse := isRolloutOwnedRS && !rolloutSettled
 
 		// Only add node and edges if ReplicaSets are enabled
-		if opts.IncludeReplicaSets {
+		if opts.IncludeReplicaSets || bypassCollapse {
 			ready := rs.Status.ReadyReplicas
 			total := int32(1) // K8s defaults to 1 when unset
 			if rs.Spec.Replicas != nil {
 				total = *rs.Spec.Replicas
+			}
+
+			rsData := map[string]any{
+				"namespace":     rs.Namespace,
+				"apiVersion":    appsv1.SchemeGroupVersion.String(),
+				"readyReplicas": ready,
+				"totalReplicas": total,
+				"labels":        rs.Labels,
+			}
+			// Hoisted out of the trafficRole-setting block below so the
+			// Rollout->ReplicaSet edge (built right after) can reuse it for
+			// its own "Canary · 20%" style label — same role, same text,
+			// wherever it's shown along the traffic path. rolloutTrafficRole
+			// itself returns "" once settled, so both stay empty then.
+			var rsTrafficRole string
+			var rsTrafficInfo rolloutTrafficInfo
+			if isRolloutOwnedRS {
+				if info, ok := rolloutTrafficByID[rolloutOwnedRSID]; ok {
+					if role := rolloutTrafficRole(rs.Labels[rolloutPodTemplateHashLabel], info); role != "" {
+						rsData["trafficRole"] = role
+						rsTrafficRole = role
+						rsTrafficInfo = info
+					}
+				}
 			}
 
 			nodes = append(nodes, Node{
@@ -2866,12 +3056,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Kind:   KindReplicaSet,
 				Name:   rs.Name,
 				Status: healthLevelToStatus(health.Workload(rs, time.Now()).Level),
-				Data: map[string]any{
-					"namespace":     rs.Namespace,
-					"readyReplicas": ready,
-					"totalReplicas": total,
-					"labels":        rs.Labels,
-				},
+				Data:   rsData,
 			})
 
 			// Connect to owner Deployment or Rollout
@@ -2885,11 +3070,16 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					ownerID, found = rolloutIDs[ownerKey]
 				}
 				if found {
+					var label string
+					if ownerRef.Kind == "Rollout" && rsTrafficRole != "" {
+						label = rolloutTrafficEdgeLabel(rsTrafficRole, rsTrafficInfo)
+					}
 					edges = append(edges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s", ownerID, rsID),
 						Source: ownerID,
 						Target: rsID,
 						Type:   EdgeManages,
+						Label:  label,
 					})
 				}
 			}
@@ -2956,19 +3146,94 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				// Small group - add as individual nodes
 				for _, pod := range group.Pods {
 					podID := GetPodID(pod)
-					nodes = append(nodes, CreatePodNode(pod, b.provider, true)) // includeNodeName=true for resources view
+					podNode := CreatePodNode(pod, b.provider, true) // includeNodeName=true for resources view
+					if role := podRolloutTrafficRole(pod, replicaSetToRollout, rolloutTrafficByID); role != "" {
+						podNode.Data["trafficRole"] = role
+					}
+					nodes = append(nodes, podNode)
 
 					// Connect to owner (resources view specific)
-					edges = append(edges, b.createPodOwnerEdges(pod, podID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, jobIDs, jobToCronJob, jobToScaledJob, workflowIDs, workflowToCronWorkflow)...)
+					edges = append(edges, b.createPodOwnerEdges(pod, podID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, rolloutTrafficByID, jobIDs, jobToCronJob, jobToScaledJob, workflowIDs, workflowToCronWorkflow)...)
 				}
 			} else {
 				// Large group - create PodGroup
 				podGroupID := GetPodGroupID(group)
-				nodes = append(nodes, CreatePodGroupNode(group, b.provider))
+				podGroupNode := CreatePodGroupNode(group, b.provider)
 
-				// Connect to owner using first pod's owner (resources view specific)
-				firstPod := group.Pods[0]
-				edges = append(edges, b.createPodOwnerEdges(firstPod, podGroupID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, jobIDs, jobToCronJob, jobToScaledJob, workflowIDs, workflowToCronWorkflow)...)
+				// A large group's pods can span more than one owning
+				// ReplicaSet and traffic role at once (a Rollout mid-
+				// transition splitting stable/canary across >5 pods is
+				// exactly the case this branch exists for) — using only
+				// group.Pods[0] misrepresented the whole group with one
+				// arbitrary pod's role and connected it to only one of the
+				// ReplicaSets actually present. Summarize honestly instead:
+				// one trafficRole badge only when every pod agrees, and an
+				// owner edge to every DISTINCT owner among the group's pods
+				// (deduped by owner key, one representative pod each, not
+				// one call per pod — groups here can be large).
+				roles := map[string]bool{}
+				// Per-pod role, keyed by "namespace/name" — the group badge
+				// below only shows a role when every pod agrees, but an
+				// expanded pod still needs its OWN role to badge correctly
+				// (see the stamping loop after ownerIds, below).
+				podRoleByKey := map[string]string{}
+				ownerReps := map[string]*corev1.Pod{}
+				for _, p := range group.Pods {
+					if role := podRolloutTrafficRole(p, replicaSetToRollout, rolloutTrafficByID); role != "" {
+						roles[role] = true
+						podRoleByKey[p.Namespace+"/"+p.Name] = role
+					}
+					for _, ref := range p.OwnerReferences {
+						ownerKey := p.Namespace + "/" + ref.Kind + "/" + ref.Name
+						if _, ok := ownerReps[ownerKey]; !ok {
+							ownerReps[ownerKey] = p
+						}
+					}
+				}
+				if len(roles) == 1 {
+					for role := range roles {
+						podGroupNode.Data["trafficRole"] = role
+					}
+				}
+				nodes = append(nodes, podGroupNode)
+				seenEdgeID := map[string]bool{}
+				// ownerKeyToSourceIDs records which edge source(s) each
+				// distinct owner actually resolved to (a ReplicaSet's edge
+				// is skipped entirely when it's not visible, for instance),
+				// so expanding the group on the frontend can reconnect each
+				// individual pod to only ITS owner's edge(s) instead of
+				// every owner in the group — see the per-pod "ownerId" set
+				// below and pod_grouping.go's "ownerKey" on each pod.
+				ownerKeyToSourceIDs := map[string][]string{}
+				for ownerKey, p := range ownerReps {
+					for _, e := range b.createPodOwnerEdges(p, podGroupID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, rolloutTrafficByID, jobIDs, jobToCronJob, jobToScaledJob, workflowIDs, workflowToCronWorkflow) {
+						ownerKeyToSourceIDs[ownerKey] = append(ownerKeyToSourceIDs[ownerKey], e.Source)
+						if !seenEdgeID[e.ID] {
+							seenEdgeID[e.ID] = true
+							edges = append(edges, e)
+						}
+					}
+				}
+				if pods, ok := podGroupNode.Data["pods"].([]map[string]any); ok {
+					for _, pd := range pods {
+						if ownerKey, ok := pd["ownerKey"].(string); ok {
+							if sourceIDs := ownerKeyToSourceIDs[ownerKey]; len(sourceIDs) > 0 {
+								pd["ownerIds"] = sourceIDs
+							}
+						}
+						// Expanding the group re-badges each pod from this —
+						// the group's own trafficRole (above) is blank
+						// whenever roles differ, exactly the case this exists
+						// for.
+						if namespace, ok := pd["namespace"].(string); ok {
+							if name, ok := pd["name"].(string); ok {
+								if role := podRoleByKey[namespace+"/"+name]; role != "" {
+									pd["trafficRole"] = role
+								}
+							}
+						}
+					}
+				}
 			}
 		}
 	}
@@ -3015,18 +3280,19 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		svcID := fmt.Sprintf("service/%s/%s", svc.Namespace, svc.Name)
 		serviceIDs[svc.Namespace+"/"+svc.Name] = svcID
 
+		svcData := map[string]any{
+			"namespace": svc.Namespace,
+			"type":      string(svc.Spec.Type),
+			"clusterIP": svc.Spec.ClusterIP,
+			"ports":     serviceTopologyPorts(svc.Spec.Ports),
+			"labels":    svc.Labels,
+		}
 		nodes = append(nodes, Node{
 			ID:     svcID,
 			Kind:   KindService,
 			Name:   svc.Name,
 			Status: StatusHealthy,
-			Data: map[string]any{
-				"namespace": svc.Namespace,
-				"type":      string(svc.Spec.Type),
-				"clusterIP": svc.Spec.ClusterIP,
-				"ports":     serviceTopologyPorts(svc.Spec.Ports),
-				"labels":    svc.Labels,
-			},
+			Data:   svcData,
 		})
 
 		// Connect Service to Deployments via selector (using namespace-indexed lookup)
@@ -3067,31 +3333,73 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				})
 			}
 		}
-		// Check Rollouts (if we have any)
+		// Check Rollouts (if we have any). A canary/stable/active/preview
+		// Service is matched by NAME against the Rollout's
+		// canaryService/stableService/activeService/previewService fields —
+		// its selector is keyed on the live rollouts-pod-template-hash
+		// value, which never appears in the Rollout's static
+		// spec.template.metadata.labels, so selector matching silently
+		// finds nothing for these Services. A Rollout's ordinary/primary
+		// Service (no named split, or a Service that isn't one of the four)
+		// still falls back to selector matching against those static
+		// labels, same as every other workload kind above.
 		if hasRollouts {
 			for _, rollout := range rolloutsByNamespace[svc.Namespace] {
-				spec, _, _ := unstructured.NestedMap(rollout.Object, "spec", "template", "metadata")
-				if spec != nil {
-					if podLabels, ok := spec["labels"].(map[string]any); ok {
-						// Convert map[string]any to map[string]string for matching
-						strLabels := make(map[string]string)
-						for k, v := range podLabels {
-							if s, ok := v.(string); ok {
-								strLabels[k] = s
-							}
-						}
-						if matchesSelector(strLabels, svc.Spec.Selector) {
-							rolloutID := rolloutIDs[rollout.GetNamespace()+"/"+rollout.GetName()]
-							if rolloutID != "" {
-								edges = append(edges, Edge{
-									ID:     fmt.Sprintf("%s-to-%s", svcID, rolloutID),
-									Source: svcID,
-									Target: rolloutID,
-									Type:   EdgeExposes,
-								})
-							}
+				rolloutID := rolloutIDs[rollout.GetNamespace()+"/"+rollout.GetName()]
+				if rolloutID == "" {
+					continue
+				}
+
+				var label, role string
+				if info, ok := rolloutTrafficByID[rolloutID]; ok {
+					switch {
+					case info.canaryService != "" && svc.Name == info.canaryService:
+						role = "canary"
+					case info.stableService != "" && svc.Name == info.stableService:
+						role = "stable"
+					case info.activeService != "" && svc.Name == info.activeService:
+						role = "active"
+					case info.previewService != "" && svc.Name == info.previewService:
+						role = "preview"
+					}
+					// The Service->Rollout edge itself always stays (matched
+					// by name, independent of anything below) — only the
+					// role/label display suppresses while settled, same as
+					// every other hop of the traffic path.
+					if role != "" && !info.settled {
+						label = rolloutTrafficEdgeLabel(role, info)
+					}
+				}
+
+				if role == "" {
+					templateMeta, _, _ := unstructured.NestedMap(rollout.Object, "spec", "template", "metadata")
+					if templateMeta == nil {
+						continue
+					}
+					podLabels, ok := templateMeta["labels"].(map[string]any)
+					if !ok {
+						continue
+					}
+					strLabels := make(map[string]string, len(podLabels))
+					for k, v := range podLabels {
+						if s, ok := v.(string); ok {
+							strLabels[k] = s
 						}
 					}
+					if !matchesSelector(strLabels, svc.Spec.Selector) {
+						continue
+					}
+				}
+
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", svcID, rolloutID),
+					Source: svcID,
+					Target: rolloutID,
+					Type:   EdgeExposes,
+					Label:  label,
+				})
+				if role != "" && !rolloutTrafficByID[rolloutID].settled {
+					svcData["trafficRole"] = role
 				}
 			}
 		}
@@ -3236,10 +3544,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			Name:   ing.Name,
 			Status: StatusHealthy,
 			Data: map[string]any{
-				"namespace": ing.Namespace,
-				"hostname":  host,
-				"tls":       hasTLS,
-				"labels":    ing.Labels,
+				"namespace":  ing.Namespace,
+				"hostname":   host,
+				"tls":        hasTLS,
+				"apiVersion": networkingv1.SchemeGroupVersion.String(),
+				"labels":     ing.Labels,
 			},
 		})
 
@@ -3618,6 +3927,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			Status: hpaNodeHealth(hpa),
 			Data: map[string]any{
 				"namespace":   hpa.Namespace,
+				"apiVersion":  autoscalingv2.SchemeGroupVersion.String(),
 				"minReplicas": hpa.Spec.MinReplicas,
 				"maxReplicas": hpa.Spec.MaxReplicas,
 				"current":     hpa.Status.CurrentReplicas,
@@ -3677,6 +3987,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			Status: status,
 			Data: map[string]any{
 				"namespace":          pdb.Namespace,
+				"apiVersion":         policyv1.SchemeGroupVersion.String(),
 				"disruptionsAllowed": pdb.Status.DisruptionsAllowed,
 				"currentHealthy":     pdb.Status.CurrentHealthy,
 				"desiredHealthy":     pdb.Status.DesiredHealthy,
@@ -3752,6 +4063,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 		nodeData := map[string]any{
 			"namespace":   np.Namespace,
+			"apiVersion":  networkingv1.SchemeGroupVersion.String(),
 			"policyTypes": policyTypes,
 			"labels":      np.Labels,
 		}
@@ -6032,10 +6344,11 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			Name:   ing.Name,
 			Status: StatusHealthy,
 			Data: map[string]any{
-				"namespace": ing.Namespace,
-				"hostname":  host,
-				"tls":       len(ing.Spec.TLS) > 0,
-				"labels":    ing.Labels,
+				"namespace":  ing.Namespace,
+				"hostname":   host,
+				"tls":        len(ing.Spec.TLS) > 0,
+				"apiVersion": networkingv1.SchemeGroupVersion.String(),
+				"labels":     ing.Labels,
 			},
 		})
 
@@ -7207,6 +7520,7 @@ func (b *Builder) createPodOwnerEdges(
 	replicaSetIDs map[string]string,
 	replicaSetToDeployment map[string]string,
 	replicaSetToRollout map[string]string,
+	rolloutTrafficByID map[string]rolloutTrafficInfo,
 	jobIDs map[string]string,
 	jobToCronJob map[string]string,
 	jobToScaledJob map[string]string,
@@ -7240,14 +7554,55 @@ func (b *Builder) createPodOwnerEdges(
 		ownerKey := pod.Namespace + "/" + ownerRef.Name
 		switch ownerRef.Kind {
 		case "ReplicaSet":
-			if opts.IncludeReplicaSets {
+			// Rollout-owned ReplicaSets are visible (see the node-creation
+			// gate above) even when opts.IncludeReplicaSets is off, as long
+			// as a transition is actually in progress — once the Rollout has
+			// settled it collapses like a Deployment's ReplicaSets do, so
+			// its pods take the ordinary hidden-ReplicaSet shortcut path too.
+			rolloutOwnerID := replicaSetToRollout[ownerKey]
+			isLiveRolloutRS := rolloutOwnerID != "" && !rolloutTrafficByID[rolloutOwnerID].settled
+			if opts.IncludeReplicaSets || isLiveRolloutRS {
 				// ReplicaSets visible: connect to ReplicaSet
 				if ownerID, ok := replicaSetIDs[ownerKey]; ok {
+					var label string
+					if isLiveRolloutRS {
+						if info, ok := rolloutTrafficByID[replicaSetToRollout[ownerKey]]; ok {
+							// No percentage on this hop — the pod's own
+							// badge already carries the role, and adjacent
+							// pods' "Stable · 75%" labels stack and overlap.
+							label = rolloutTrafficRoleLabel(rolloutTrafficRole(pod.Labels[rolloutPodTemplateHashLabel], info))
+						}
+					}
 					edges = append(edges, Edge{
 						ID:     fmt.Sprintf("%s-to-%s", ownerID, targetID),
 						Source: ownerID,
 						Target: targetID,
 						Type:   EdgeManages,
+						Label:  label,
+					})
+				}
+				// Rollout->Pod shortcut, same pattern as CronJob/ScaledJob->Pod
+				// below: the main topology view hides ReplicaSet by default, so
+				// without this a Rollout-owned pod has no edge at all once its
+				// ReplicaSet is filtered out of the visible graph.
+				if rolloutID, ok := replicaSetToRollout[ownerKey]; ok {
+					var label string
+					if info, ok := rolloutTrafficByID[rolloutID]; ok {
+						label = rolloutTrafficRoleLabel(rolloutTrafficRole(pod.Labels[rolloutPodTemplateHashLabel], info))
+					}
+					edges = append(edges, Edge{
+						// ownerKey (the specific owning ReplicaSet), not just
+						// rolloutID+targetID: a PodGroup spanning two owners
+						// of the SAME Rollout (canary + stable) calls this
+						// once per owner with an identical target, and an
+						// ID collision here would dedup one shortcut edge
+						// away, silently dropping half the traffic split.
+						ID:                fmt.Sprintf("%s-to-%s-shortcut-%s", rolloutID, targetID, ownerKey),
+						Source:            rolloutID,
+						Target:            targetID,
+						Type:              EdgeManages,
+						Label:             label,
+						SkipIfKindVisible: string(KindReplicaSet),
 					})
 				}
 			} else {

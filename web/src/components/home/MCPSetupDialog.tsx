@@ -3,7 +3,7 @@ import { X, Copy, Check, Radio, Terminal, MessageSquare, Code2, Pin } from 'luci
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { MCP_TOOL_CATALOG } from './mcpToolCatalog'
 import { Tooltip } from '../ui/Tooltip'
-import { Disclosure } from '../ui/Disclosure'
+import { Disclosure } from '@skyhook-io/k8s-ui/components/ui/Disclosure'
 
 interface MCPSetupDialogProps {
   open: boolean

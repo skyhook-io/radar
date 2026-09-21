@@ -61,8 +61,9 @@ func ComputeKubecostSummary(ctx context.Context, client *KubecostClient, opts Ku
 		return &CostSummary{Available: false, Reason: ReasonNoMetrics, Currency: opts.Currency, Source: "kubecost"}, nil
 	}
 
-	out := &CostSummary{Available: true, Currency: opts.Currency, Window: window, Source: "kubecost"}
-	var totalAlloc, totalUsage float64
+	out := &CostSummary{Available: true, Currency: opts.Currency, Window: window, Source: "kubecost", HourlyCostBasis: HourlyCostBasisAllocated}
+	var totalAlloc, totalUsage, unallocated float64
+	sawIdleRow := false
 	for key, allocation := range kubecostAllocationRows(resp) {
 		if allocation == nil {
 			continue
@@ -73,6 +74,14 @@ func ComputeKubecostSummary(ctx context.Context, client *KubecostClient, opts Ku
 				return nil, fmt.Errorf("allocation %q: %w", key, err)
 			}
 			out.TotalIdleCost += maxZero((allocation.CPUCost + allocation.RAMCost) / hours)
+			// The idle row's total also carries GPU idle, which "no workload
+			// requested or used" covers; TotalIdleCost keeps its CPU+RAM basis.
+			idleTotal := allocation.TotalCost
+			if idleTotal == 0 {
+				idleTotal = allocation.CPUCost + allocation.RAMCost
+			}
+			unallocated += maxZero(idleTotal / hours)
+			sawIdleRow = true
 			out.DataThrough = LatestKubecostTimestamp(out.DataThrough, allocation.End)
 			continue
 		}
@@ -122,6 +131,7 @@ func ComputeKubecostSummary(ctx context.Context, client *KubecostClient, opts Ku
 		out.TotalStorageCost += row.StorageCost
 		out.TotalNetworkCost += row.NetworkCost
 		out.TotalIdleCost += row.IdleCost
+		out.TotalUnusedRequestCost += row.IdleCost
 		out.Namespaces = append(out.Namespaces, row)
 		out.DataThrough = LatestKubecostTimestamp(out.DataThrough, allocation.End)
 	}
@@ -133,6 +143,9 @@ func ComputeKubecostSummary(ctx context.Context, client *KubecostClient, opts Ku
 	out.TotalStorageCost = roundTo(out.TotalStorageCost, 4)
 	out.TotalNetworkCost = roundTo(out.TotalNetworkCost, 4)
 	out.TotalIdleCost = roundTo(out.TotalIdleCost, 4)
+	out.TotalUnusedRequestCost = roundTo(out.TotalUnusedRequestCost, 4)
+	out.TotalUnallocatedCost = optionalCost(sawIdleRow, roundTo(unallocated, 4))
+	out.TotalAllocatedCost = out.TotalHourlyCost
 	out.ClusterEfficiency = EfficiencyPercent(totalUsage, totalAlloc)
 	return out, nil
 }
@@ -313,14 +326,14 @@ func ComputeKubecostNodes(ctx context.Context, client *KubecostClient, opts Kube
 	if clusterFilter := kubecostFilter(opts.ClusterID, ""); clusterFilter != "" {
 		filter = clusterFilter + "+" + filter
 	}
-	resp, err := kubecostAssetsWithFallback(ctx, client, KubecostAssetOptions{Accumulate: "true", Filter: filter})
+	resp, window, err := kubecostAssetsWithFallback(ctx, client, KubecostAssetOptions{Accumulate: "true", Filter: filter})
 	if err != nil {
 		return nil, err
 	}
 	if !hasKubecostAssetData(resp) {
-		return &NodeCostResponse{Available: false, Reason: ReasonNoMetrics, Currency: opts.Currency, Source: "kubecost"}, nil
+		return &NodeCostResponse{Available: false, Reason: ReasonNoMetrics, Currency: opts.Currency, Source: "kubecost", Window: window}, nil
 	}
-	out := &NodeCostResponse{Available: true, Currency: opts.Currency, Source: "kubecost"}
+	out := &NodeCostResponse{Available: true, Currency: opts.Currency, Source: "kubecost", Window: window}
 	for key, asset := range kubecostAssetRows(resp) {
 		if asset == nil || !strings.EqualFold(asset.Type, "Node") {
 			continue
@@ -360,46 +373,43 @@ func ComputeKubecostNodes(ctx context.Context, client *KubecostClient, opts Kube
 }
 
 func kubecostAllocationWithFallback(ctx context.Context, client *KubecostClient, opts KubecostAllocationOptions) (*KubecostAllocationResponse, string, error) {
-	for _, window := range []string{kubecostCurrentWindow, kubecostFallbackQueryWindow} {
+	return kubecostWithWindowFallback(ctx, func(window string) (*KubecostAllocationResponse, error) {
 		opts.Window = window
-		resp, err := client.GetAllocation(ctx, opts)
+		return client.GetAllocation(ctx, opts)
+	}, hasKubecostAllocationData)
+}
+
+func kubecostAssetsWithFallback(ctx context.Context, client *KubecostClient, opts KubecostAssetOptions) (*KubecostAssetsResponse, string, error) {
+	return kubecostWithWindowFallback(ctx, func(window string) (*KubecostAssetsResponse, error) {
+		opts.Window = window
+		return client.GetAssets(ctx, opts)
+	}, hasKubecostAssetData)
+}
+
+// kubecostWithWindowFallback tries the current window, then the daily one, and
+// reports the display window it settled on, so a caller can state whether the
+// figures cover an hour or the daily fallback.
+func kubecostWithWindowFallback[T any](ctx context.Context, fetch func(window string) (T, error), hasData func(T) bool) (T, string, error) {
+	var zero T
+	for _, window := range []string{kubecostCurrentWindow, kubecostFallbackQueryWindow} {
+		resp, err := fetch(window)
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil, window, ctx.Err()
+				return zero, kubecostFallbackDisplayWindow, ctx.Err()
 			}
 			if window == kubecostFallbackQueryWindow {
-				return nil, kubecostFallbackDisplayWindow, err
+				return zero, kubecostFallbackDisplayWindow, err
 			}
 			continue
 		}
-		if hasKubecostAllocationData(resp) {
+		if hasData(resp) {
 			if window == kubecostFallbackQueryWindow {
 				return resp, kubecostFallbackDisplayWindow, nil
 			}
 			return resp, kubecostCurrentWindow, nil
 		}
 	}
-	return nil, kubecostFallbackDisplayWindow, nil
-}
-
-func kubecostAssetsWithFallback(ctx context.Context, client *KubecostClient, opts KubecostAssetOptions) (*KubecostAssetsResponse, error) {
-	for _, window := range []string{kubecostCurrentWindow, kubecostFallbackQueryWindow} {
-		opts.Window = window
-		resp, err := client.GetAssets(ctx, opts)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			if window == kubecostFallbackQueryWindow {
-				return nil, err
-			}
-			continue
-		}
-		if hasKubecostAssetData(resp) {
-			return resp, nil
-		}
-	}
-	return nil, nil
+	return zero, kubecostFallbackDisplayWindow, nil
 }
 
 func kubecostAllocationRows(resp *KubecostAllocationResponse) map[string]*KubecostAllocation {

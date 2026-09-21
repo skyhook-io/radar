@@ -187,9 +187,5 @@ func parseAuditSeverity(value string) (checks.Severity, error) {
 }
 
 func loadAuditConfig() settings.AuditConfig {
-	s := settings.Load()
-	if s.Audit != nil {
-		return *s.Audit
-	}
-	return settings.DefaultAuditConfig()
+	return settings.EffectiveAudit()
 }

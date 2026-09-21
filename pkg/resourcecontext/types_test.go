@@ -136,6 +136,8 @@ func TestResourceContextFieldOrdering(t *testing.T) {
 			Source: SchedulingSourceKueue, Domain: SchedulingDomainAdmission,
 			Subject: ContextRef{Kind: "Workload", Name: "trainer"}, Decision: SchedulingDecisionUnsatisfied,
 		}}},
+		Execution:     &ExecutionSummary{Controller: "jobset", Phase: ExecutionActive},
+		Serving:       &ServingSummary{},
 		IssueSummary:  &IssueSummary{Count: 1},
 		AuditSummary:  &AuditSummary{Count: 2},
 		PolicySummary: &PolicySummary{},
@@ -155,6 +157,8 @@ func TestResourceContextFieldOrdering(t *testing.T) {
 		`"runsOn"`,
 		`"scaledBy"`,
 		`"scheduling"`,
+		`"execution"`,
+		`"serving"`,
 		`"issueSummary"`,
 		`"auditSummary"`,
 		`"policySummary"`,
@@ -267,6 +271,24 @@ func TestResourceContextRoundTrip(t *testing.T) {
 				}},
 			},
 		}}},
+		Execution: &ExecutionSummary{
+			Controller:        ExecutionControllerJobSet,
+			SubjectGeneration: 4,
+			Phase:             ExecutionActive,
+			PrimaryCondition: &ConditionSummary{
+				Type: "RestartingJobSet", Status: "True", Reason: "FailurePolicy_retry-workers",
+				ObservedGeneration: 3, Message: "restarting after worker failure",
+				LastTransitionTime: "2026-08-31T10:15:00Z",
+			},
+			JobSet: &JobSetExecution{
+				DeclaredRoles: 2, DeclaredJobs: 5, ObservedRoles: int64Ptr(2),
+				Jobs: &ChildJobCounts{Ready: 1, Active: 3, Failed: 1},
+				Restarts: &JobSetRestartCounts{
+					Global: int64Ptr(1), GlobalCountTowardsMax: int64Ptr(1),
+					Individual: int64Ptr(2), IndividualCountTowardsMax: int64Ptr(1),
+				},
+			},
+		},
 		IssueSummary: &IssueSummary{
 			Count:           3,
 			HighestSeverity: "critical",
@@ -299,7 +321,11 @@ func TestResourceContextRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	wire := string(b)
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(b, &envelope); err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	wire := string(envelope["scheduling"])
 	for _, want := range []string{
 		`"observations"`, `"source":"kueue"`, `"domain":"admission"`, `"decision":"unsatisfied"`,
 		`"subjectGeneration":9`,
@@ -358,6 +384,35 @@ func TestSchedulingProviderFactsMarshalWithoutNavigableRefs(t *testing.T) {
 	if strings.Contains(wire, `"ref"`) {
 		t.Fatalf("unexpected navigable ref in provider-only facts: %s", wire)
 	}
+}
+
+func TestExecutionSummaryOmitsUnavailableCounts(t *testing.T) {
+	b, err := json.Marshal(ExecutionSummary{Controller: ExecutionControllerJobSet, Phase: ExecutionUnknown, JobSet: &JobSetExecution{DeclaredRoles: 1, DeclaredJobs: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"jobs"`, `"restarts"`, `"observedRoles"`, `"outcome"`, `"suspendRequested"`} {
+		if strings.Contains(string(b), field) {
+			t.Fatalf("unavailable field %s serialized: %s", field, b)
+		}
+	}
+}
+
+func TestExecutionSummaryPreservesExplicitFalseAndZero(t *testing.T) {
+	requested := false
+	b, err := json.Marshal(ExecutionSummary{Controller: ExecutionControllerJobSet, Phase: ExecutionPending, SuspendRequested: &requested, JobSet: &JobSetExecution{Jobs: &ChildJobCounts{}, Restarts: &JobSetRestartCounts{Individual: int64Ptr(0)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"suspendRequested":false`, `"active":0`, `"ready":0`, `"failed":0`, `"individual":0`} {
+		if !strings.Contains(string(b), field) {
+			t.Fatalf("known field %s omitted: %s", field, b)
+		}
+	}
+}
+
+func int64Ptr(value int64) *int64 {
+	return &value
 }
 
 // TestResourceSummaryContextRoundTrip covers ResourceSummaryContext + ManagedByRef

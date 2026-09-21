@@ -789,3 +789,18 @@ func TestHandleDiagnoseMetricsNamesTheWorkloadsOwnPods(t *testing.T) {
 		t.Fatalf("bundle podNames = %v truncated=%v, want the owned pod", bundle.PodNames, bundle.PodNamesTruncated)
 	}
 }
+
+// The diagnose tool ships metrics.error in its result, so a Prometheus error
+// quoting the request URL would put the backend — and an auth proxy's token —
+// in front of the model.
+func TestDiagnoseMetricsErrorRedactsTheBackend(t *testing.T) {
+	got := boundDiagnoseMetricsError(`cpu: upstream returned 503 for https://admin:s3cret@prom.internal:9090/api/v1/query_range?token=hunter2: overloaded`)
+	for _, leaked := range []string{"admin", "s3cret", "hunter2", "prom.internal"} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("metrics error leaked %q: %q", leaked, got)
+		}
+	}
+	if !strings.Contains(got, "/api/v1/query_range") || !strings.Contains(got, "overloaded") {
+		t.Errorf("the error should still say which call failed and why: %q", got)
+	}
+}

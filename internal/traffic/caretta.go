@@ -122,9 +122,9 @@ func (c *CarettaSource) applyHeaders(req *http.Request) {
 func NewCarettaSource(client kubernetes.Interface) *CarettaSource {
 	return &CarettaSource{
 		k8sClient: client,
-		httpClient: &http.Client{
+		httpClient: prom.SameOriginRedirectClient(&http.Client{
 			Timeout: 10 * time.Second,
-		},
+		}),
 		inCluster: k8s.IsInCluster(),
 	}
 }

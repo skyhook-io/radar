@@ -1,5 +1,10 @@
 package opencost
 
+// DefaultCurrentWindow is the lookback every "current cost" query uses. It is
+// exported so a response can report the window its numbers cover instead of
+// leaving the field empty for the caller to guess.
+const DefaultCurrentWindow = "1h"
+
 // Unavailability reasons — returned in the "reason" field when available=false
 // so the frontend can show contextual guidance to the user.
 const (
@@ -18,21 +23,42 @@ const (
 	ReasonInsufficientHistory = "insufficient_history"
 )
 
+// HourlyCost bases. On the Prometheus path the cluster total is raised to the
+// summed node cost when nodes cost more than the namespace allocations; that
+// total then already contains unallocated capacity and carries no storage.
+const (
+	HourlyCostBasisAllocated    = "allocated"
+	HourlyCostBasisNodeCapacity = "node_capacity"
+)
+
 // CostSummary is the response for the /api/opencost/summary endpoint.
 type CostSummary struct {
-	Available         bool            `json:"available"`
-	Reason            string          `json:"reason,omitempty"` // Set when available=false; see the Reason* constants above.
-	Source            string          `json:"source,omitempty"`
-	DataThrough       string          `json:"dataThrough,omitempty"`
-	Currency          string          `json:"currency"`
-	Window            string          `json:"window,omitempty"`
-	TotalHourlyCost   float64         `json:"totalHourlyCost,omitempty"`
-	TotalStorageCost  float64         `json:"totalStorageCost,omitempty"`
-	TotalNetworkCost  float64         `json:"totalNetworkCost,omitempty"`
-	TotalIdleCost     float64         `json:"totalIdleCost,omitempty"`
-	ClusterEfficiency float64         `json:"clusterEfficiency,omitempty"` // 0-100
-	NamespaceScope    []string        `json:"namespaceScope,omitempty"`
-	Namespaces        []NamespaceCost `json:"namespaces,omitempty"`
+	TotalNodeCost    *float64 `json:"-"`
+	Available        bool     `json:"available"`
+	Reason           string   `json:"reason,omitempty"` // Set when available=false; see the Reason* constants above.
+	Source           string   `json:"source,omitempty"`
+	DataThrough      string   `json:"dataThrough,omitempty"`
+	Currency         string   `json:"currency"`
+	Window           string   `json:"window,omitempty"`
+	TotalHourlyCost  float64  `json:"totalHourlyCost,omitempty"`
+	TotalStorageCost float64  `json:"totalStorageCost,omitempty"`
+	TotalNetworkCost float64  `json:"totalNetworkCost,omitempty"`
+	TotalIdleCost    float64  `json:"totalIdleCost,omitempty"`
+	// TotalIdleCost adds two different things: node capacity no workload
+	// requested, and requested capacity no workload used. They are recovered
+	// by different actions (removing nodes vs rightsizing), so they are also
+	// reported apart. TotalUnallocatedCost is nil when the source cannot
+	// measure it, and always on a namespace-scoped summary: unrequested node
+	// capacity belongs to the cluster, not to any namespace.
+	TotalUnallocatedCost   *float64 `json:"totalUnallocatedCost,omitempty"`
+	TotalUnusedRequestCost float64  `json:"totalUnusedRequestCost,omitempty"`
+	// TotalAllocatedCost is the sum of the namespace rows. TotalHourlyCost
+	// equals it unless HourlyCostBasis is HourlyCostBasisNodeCapacity.
+	TotalAllocatedCost float64         `json:"totalAllocatedCost,omitempty"`
+	HourlyCostBasis    string          `json:"hourlyCostBasis,omitempty"`
+	ClusterEfficiency  float64         `json:"clusterEfficiency,omitempty"` // 0-100
+	NamespaceScope     []string        `json:"namespaceScope,omitempty"`
+	Namespaces         []NamespaceCost `json:"namespaces,omitempty"`
 }
 
 // NamespaceCost holds per-row cost breakdown. The name reflects the
@@ -109,6 +135,10 @@ type CostTrendResponse struct {
 	WindowEnd   int64             `json:"windowEnd,omitempty"`
 	DataThrough string            `json:"dataThrough,omitempty"`
 	Series      []CostTrendSeries `json:"series,omitempty"`
+	// NamespaceCount is how many namespaces reported cost in the window, which
+	// is more than the series when the top-N cap folded the rest into "other".
+	// Without it a capped answer cannot be told from a whole-cluster one.
+	NamespaceCount int `json:"namespaceCount,omitempty"`
 }
 
 type WorkloadCostTrendResponse struct {
@@ -203,6 +233,7 @@ type ApplicationCostTrendResponse struct {
 
 // CostTrendSeries holds cost data points for a single namespace.
 type CostTrendSeries struct {
+	Remainder  bool            `json:"-"`
 	Namespace  string          `json:"namespace"`
 	DataPoints []CostDataPoint `json:"dataPoints"`
 }
@@ -215,9 +246,13 @@ type CostDataPoint struct {
 
 // NodeCostResponse is the response for the /api/opencost/nodes endpoint.
 type NodeCostResponse struct {
-	Available   bool       `json:"available"`
-	Reason      string     `json:"reason,omitempty"`
-	Source      string     `json:"source,omitempty"`
+	Available bool   `json:"available"`
+	Reason    string `json:"reason,omitempty"`
+	Source    string `json:"source,omitempty"`
+	// Window is the lookback the figures cover. Kubecost answers node assets
+	// from either the current window or its daily fallback, so without this a
+	// reader cannot tell an hour of data from a day of it.
+	Window      string     `json:"window,omitempty"`
 	DataThrough string     `json:"dataThrough,omitempty"`
 	Currency    string     `json:"currency"`
 	Nodes       []NodeCost `json:"nodes,omitempty"`

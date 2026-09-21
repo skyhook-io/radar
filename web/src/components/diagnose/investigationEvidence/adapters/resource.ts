@@ -198,10 +198,39 @@ export function adaptGetResource(
     );
   }
 }
+// A namespace listing is an inventory like any other; its entries carry no
+// kind of their own, so the card gets one.
+export function adaptListNamespaces(
+  builder: ProjectionBuilder,
+  source: InvestigationEvidenceSource,
+  payload: unknown,
+): void {
+  if (!Array.isArray(payload)) {
+    invalidPayload(builder, source);
+    return;
+  }
+  adaptListResources(
+    builder,
+    source,
+    payload.map((entry) => {
+      const item = record(entry);
+      return item
+        ? {
+            kind: "Namespace",
+            name: item.name,
+            status: item.status,
+            terminating: item.status === "Terminating",
+          }
+        : entry;
+    }),
+  );
+}
+
 export function adaptListResources(
   builder: ProjectionBuilder,
   source: InvestigationEvidenceSource,
   payload: unknown,
+  options: { title?: string } = {},
 ): void {
   if (!Array.isArray(payload)) {
     invalidPayload(builder, source);
@@ -226,7 +255,7 @@ export function adaptListResources(
   const namespace = nonEmptyString(args?.namespace)
     ? args.namespace
     : undefined;
-  const title = namespace ? `${noun} in ${namespace}` : noun;
+  const title = options.title ?? (namespace ? `${noun} in ${namespace}` : noun);
   if (resources.length === 0) {
     // list_resources intentionally returns [] for some RBAC-filtered reads;
     // even a successful transport outcome therefore cannot prove absence.
@@ -243,15 +272,24 @@ export function adaptListResources(
     return (
       health === "unhealthy" ||
       health === "degraded" ||
-      (resource.summaryContext?.issueCount ?? 0) > 0
+      (resource.summaryContext?.issueCount ?? 0) > 0 ||
+      nonEmptyString(resource.issue)
     );
   });
-  builder.observe(`inventory:${source.args ?? scope}`, "inventory", source, {
-    tier: "context",
-    relevance: "broader",
-    tone: hasAdverseResource ? "warning" : "neutral",
-    title,
-    summary: `${resources.length} returned${nonEmptyString(args?.group) ? ` · ${args.group}` : ""}`,
-    data: { type: "inventory", resources, scope },
-  });
+  // Listings of different things share an argument shape (a cluster-wide
+  // package list and a cluster-wide Helm list are both "{}"), so the tool is
+  // part of what makes one listing the same card as an earlier read.
+  builder.observe(
+    `inventory:${source.tool}:${source.args ?? scope}`,
+    "inventory",
+    source,
+    {
+      tier: "context",
+      relevance: "broader",
+      tone: hasAdverseResource ? "warning" : "neutral",
+      title,
+      summary: `${resources.length} returned${nonEmptyString(args?.group) ? ` · ${args.group}` : ""}`,
+      data: { type: "inventory", resources, scope },
+    },
+  );
 }
