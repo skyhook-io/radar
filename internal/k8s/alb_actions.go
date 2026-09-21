@@ -93,22 +93,78 @@ type albActionTarget struct {
 	ServicePort string
 }
 
+// albAction holds the fields the controller validates. Keys decode
+// case-insensitively, so both the PascalCase and camelCase spellings work.
 type albAction struct {
-	ForwardConfig *struct {
-		TargetGroups []struct {
-			ServiceName *string             `json:"serviceName"`
-			ServicePort *intstr.IntOrString `json:"servicePort"`
-		} `json:"targetGroups"`
-	} `json:"forwardConfig"`
+	Type                string          `json:"type"`
+	TargetGroupARN      *string         `json:"targetGroupARN"`
+	TargetGroupName     *string         `json:"targetGroupName"`
+	FixedResponseConfig *albStatusCode  `json:"fixedResponseConfig"`
+	RedirectConfig      *albStatusCode  `json:"redirectConfig"`
+	ForwardConfig       *albForwardConf `json:"forwardConfig"`
+}
+
+type albStatusCode struct {
+	StatusCode string `json:"statusCode"`
+}
+
+type albForwardConf struct {
+	TargetGroups []albTargetGroup `json:"targetGroups"`
+}
+
+type albTargetGroup struct {
+	ServiceName     *string             `json:"serviceName"`
+	ServicePort     *intstr.IntOrString `json:"servicePort"`
+	TargetGroupARN  *string             `json:"targetGroupARN"`
+	TargetGroupName *string             `json:"targetGroupName"`
+	Weight          *int64              `json:"weight"`
+}
+
+// valid mirrors the controller's Action.validate. An empty forwardConfig is
+// rejected as well, since it attaches nothing.
+func (a albAction) valid() bool {
+	switch a.Type {
+	case "fixed-response":
+		return a.FixedResponseConfig != nil && a.FixedResponseConfig.StatusCode != ""
+	case "redirect":
+		return a.RedirectConfig != nil && a.RedirectConfig.StatusCode != ""
+	case "forward":
+		external := a.TargetGroupARN != nil || a.TargetGroupName != nil
+		if external == (a.ForwardConfig != nil) {
+			return false
+		}
+		if a.ForwardConfig == nil {
+			return true
+		}
+		groups := a.ForwardConfig.TargetGroups
+		if len(groups) == 0 {
+			return false
+		}
+		for _, tg := range groups {
+			external := tg.TargetGroupARN != nil || tg.TargetGroupName != nil
+			if external == (tg.ServiceName != nil) {
+				return false
+			}
+			if tg.ServiceName != nil && tg.ServicePort == nil {
+				return false
+			}
+			if len(groups) > 1 && tg.Weight == nil {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // parseALBAction reads the action annotation for a use-annotation backend.
 //
 // found is false when no annotation exists for the backend. malformed covers
-// an annotation the controller can't read either, including a blank one.
-// targets list only the backends Radar can check. Redirect and fixed-response
-// actions resolve nothing in-cluster, and neither do target groups given by
-// ARN or name, so both yield no targets with found true.
+// anything the controller would reject. targets list only the backends Radar
+// can check.
+// Redirect and fixed-response actions resolve nothing in-cluster, and neither
+// do target groups given by ARN or name, so those yield no targets with found
+// true.
 func parseALBAction(annotations map[string]string, backendServiceName string) (targets []albActionTarget, found, malformed bool) {
 	raw, ok := annotations[ALBActionAnnotation(backendServiceName)]
 	if !ok {
@@ -119,27 +175,20 @@ func parseALBAction(annotations map[string]string, backendServiceName string) (t
 	}
 
 	var action albAction
-	if err := json.Unmarshal([]byte(raw), &action); err != nil {
+	if err := json.Unmarshal([]byte(raw), &action); err != nil || !action.valid() {
 		return nil, true, true
 	}
-
 	if action.ForwardConfig == nil {
 		return nil, true, false
 	}
 
 	for _, tg := range action.ForwardConfig.TargetGroups {
-		if tg.ServiceName == nil || *tg.ServiceName == "" {
+		if tg.ServiceName == nil {
 			continue
 		}
-
-		port := ""
-		if tg.ServicePort != nil {
-			port = tg.ServicePort.String()
-		}
-
 		targets = append(targets, albActionTarget{
 			ServiceName: *tg.ServiceName,
-			ServicePort: port,
+			ServicePort: tg.ServicePort.String(),
 		})
 	}
 

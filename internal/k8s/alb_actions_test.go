@@ -58,8 +58,107 @@ func TestParseALBAction(t *testing.T) {
 			wantFound:   true,
 		},
 		{
-			name:        "malformed",
+			name:        "simplified forward by ARN",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"forward","targetGroupARN":"arn:aws:x"}`},
+			wantFound:   true,
+		},
+		{
+			name:        "simplified forward by name",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"forward","targetGroupName":"legacy"}`},
+			wantFound:   true,
+		},
+		{
+			name:        "fixed-response",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"fixed-response","fixedResponseConfig":{"contentType":"text/plain","statusCode":"503"}}`},
+			wantFound:   true,
+		},
+		{
+			name:        "malformed JSON",
 			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"Type":"forward",}`},
+			wantFound:   true,
+			wantBad:     true,
+		},
+		{
+			name:        "null",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `null`},
+			wantFound:   true,
+			wantBad:     true,
+		},
+		{
+			name:        "empty object",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{}`},
+			wantFound:   true,
+			wantBad:     true,
+		},
+		{
+			name:        "missing type",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"forwardConfig":{"targetGroups":[{"serviceName":"app","servicePort":80}]}}`},
+			wantFound:   true,
+			wantBad:     true,
+		},
+		{
+			name:        "unknown type",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"proxy","forwardConfig":{"targetGroups":[{"serviceName":"app","servicePort":80}]}}`},
+			wantFound:   true,
+			wantBad:     true,
+		},
+		{
+			name:        "type value is case-sensitive",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"Forward","forwardConfig":{"targetGroups":[{"serviceName":"app","servicePort":80}]}}`},
+			wantFound:   true,
+			wantBad:     true,
+		},
+		{
+			name:        "forward with no config",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"forward"}`},
+			wantFound:   true,
+			wantBad:     true,
+		},
+		{
+			name:        "forward with empty target groups",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"forward","forwardConfig":{"targetGroups":[]}}`},
+			wantFound:   true,
+			wantBad:     true,
+		},
+		{
+			name:        "forward with both simplified and advanced schema",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"forward","targetGroupARN":"arn:aws:x","forwardConfig":{"targetGroups":[{"serviceName":"app","servicePort":80}]}}`},
+			wantFound:   true,
+			wantBad:     true,
+		},
+		{
+			name:        "target group with neither service nor external group",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"forward","forwardConfig":{"targetGroups":[{"weight":100}]}}`},
+			wantFound:   true,
+			wantBad:     true,
+		},
+		{
+			name:        "target group with both service and ARN",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"app","servicePort":80,"targetGroupARN":"arn:aws:x"}]}}`},
+			wantFound:   true,
+			wantBad:     true,
+		},
+		{
+			name:        "service target without servicePort",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"app"}]}}`},
+			wantFound:   true,
+			wantBad:     true,
+		},
+		{
+			name:        "multiple target groups without weights",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"a","servicePort":80},{"serviceName":"b","servicePort":80}]}}`},
+			wantFound:   true,
+			wantBad:     true,
+		},
+		{
+			name:        "redirect without statusCode",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"redirect","redirectConfig":{"protocol":"HTTPS","port":"443"}}`},
+			wantFound:   true,
+			wantBad:     true,
+		},
+		{
+			name:        "fixed-response without config",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"fixed-response"}`},
 			wantFound:   true,
 			wantBad:     true,
 		},
@@ -322,20 +421,17 @@ func TestDetectIngressALBActionDefaultBackend(t *testing.T) {
 		albService("real", 8080),
 		withDefault("redirect", "ssl-redirect", map[string]string{ALBActionAnnotation("ssl-redirect"): `{"type":"redirect","redirectConfig":{"protocol":"HTTPS","port":"443","statusCode":"HTTP_301"}}`}),
 		withDefault("no-action", "orphan", nil),
-		// servicePort omitted: only the Service's existence can be checked.
+		// The controller requires servicePort alongside serviceName.
 		withDefault("no-port", "fwd", map[string]string{ALBActionAnnotation("fwd"): `{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"real"}]}}`}),
-		withDefault("no-port-gone", "fwd", map[string]string{ALBActionAnnotation("fwd"): `{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"gone"}]}}`}),
 	}
 	if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
 
 	problems := detectIngressMissingBackend(GetResourceCache(), "prod", time.Now())
-	for _, name := range []string{"redirect", "no-port"} {
-		for _, p := range problems {
-			if p.Name == name {
-				t.Errorf("%s: want no problems, got %+v", name, p)
-			}
+	for _, p := range problems {
+		if p.Name == "redirect" {
+			t.Errorf("redirect: want no problems, got %+v", p)
 		}
 	}
 	if !findProblem(problems, "Ingress", "prod", "no-action", "Missing ALB action annotation") {
@@ -346,8 +442,8 @@ func TestDetectIngressALBActionDefaultBackend(t *testing.T) {
 			t.Errorf("no-action: message must name defaultBackend, got %q", p.Message)
 		}
 	}
-	if !findProblem(problems, "Ingress", "prod", "no-port-gone", "Missing backend Service") {
-		t.Errorf("no-port-gone: want Missing backend Service, got %+v", problems)
+	if !findProblem(problems, "Ingress", "prod", "no-port", "Invalid ALB action annotation") {
+		t.Errorf("no-port: want Invalid ALB action annotation, got %+v", problems)
 	}
 }
 
