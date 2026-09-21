@@ -117,11 +117,43 @@ describe('JobSetRenderer', () => {
     expect(html).toContain('temporary.*')
   })
 
-  it('combines global and individual Job restarts in the shared restart budget', () => {
+  it('reports native restart counters separately without assuming the RestartJob feature gate', () => {
     const html = render(currentJobSet())
 
-    expect(html).toContain('Restart budget used')
-    expect(html).toContain('2 / 3')
+    expect(html).toContain('Global restarts counted toward limit')
+    expect(html).toContain('Individual restarts counted toward limit')
+    expect(html).toContain('1 (2 of 2 roles reported)')
+    expect(html).not.toContain('Restart budget used')
+  })
+
+  it('distinguishes absent restart observations from a reported zero and partial role coverage', () => {
+    const data = currentJobSet()
+    data.status = {}
+    expect(render(data)).toContain('Not reported')
+    expect(render(data)).not.toContain('0 (2 of 2 roles reported)')
+    data.status = { restarts: 0, replicatedJobsStatus: [{ name: 'leader' }] }
+    expect(render(data)).toContain('0 (1 of 2 roles reported)')
+  })
+
+  it('keeps controller counts separate from the bounded member list and preserves missing status', () => {
+    const data = currentJobSet()
+    data.status.replicatedJobsStatus = [data.status.replicatedJobsStatus[0]]
+    const html = renderToString(<JobSetRenderer data={data} mode="overview" shownMemberCounts={new Map([['workers', 1]])} onSelectRole={() => {}} />).replace(/<!-- -->/g, '')
+    expect(html).toContain('Role progress')
+    expect(html).toContain('leader failed: 0')
+    expect(html).toContain('workers ready: not reported')
+    expect(html).toContain('Status not reported')
+    expect(html).toContain('Inspect 1 shown')
+    expect(html).toContain('leader Ready')
+    expect(html).not.toContain('Parallelism / Job')
+  })
+
+  it('explains external ownership without claiming that remote execution succeeded', () => {
+    const data = currentJobSet()
+    data.spec.managedBy = 'kueue.x-k8s.io/multikueue'
+    expect(render(data)).toContain('Execution may occur on another cluster')
+    data.spec.managedBy = 'jobset.sigs.k8s.io/jobset-controller'
+    expect(render(data)).not.toContain('does not create Jobs')
   })
 
   it('keeps zero-valued coordinator indexes and explicit network choices visible', () => {

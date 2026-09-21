@@ -13,6 +13,9 @@ import { getJobSetStatus } from '../resource-utils-jobset-lws'
 
 interface JobSetRendererProps {
   data: any
+  mode?: 'detail' | 'overview' | 'configuration'
+  shownMemberCounts?: ReadonlyMap<string, number>
+  onSelectRole?: (role: string) => void
 }
 
 export function getJobSetConditionTone(condition: any): ConditionTone | undefined {
@@ -47,7 +50,7 @@ function sumCountArray(value: unknown): number | undefined {
   return value.reduce((total: number, count: unknown) => total + (typeof count === 'number' ? count : 0), 0)
 }
 
-export function JobSetRenderer({ data }: JobSetRendererProps) {
+export function JobSetRenderer({ data, mode = 'detail', shownMemberCounts, onSelectRole }: JobSetRendererProps) {
   const spec = data?.spec || {}
   const status = data?.status || {}
   const conditions: any[] = Array.isArray(status.conditions) ? status.conditions : []
@@ -68,36 +71,84 @@ export function JobSetRenderer({ data }: JobSetRendererProps) {
   const successPolicy = spec.successPolicy
   const failurePolicy = spec.failurePolicy
   const failureRules: any[] = Array.isArray(failurePolicy?.rules) ? failurePolicy.rules : []
-  const countedRestarts =
-    (typeof status.restartsCountTowardsMax === 'number' ? status.restartsCountTowardsMax : 0) +
-    replicatedJobsStatus.reduce((total, entry) => total + (sumCountArray(entry?.jobRestartsCountTowardsMax) ?? 0), 0)
+  const globalCountedRestarts = status.restartsCountTowardsMax ?? (typeof status.restarts === 'number' ? 0 : undefined)
+  const individualCountedRestarts = Array.isArray(status.replicatedJobsStatus)
+    ? replicatedJobsStatus.reduce((total, entry) => total + (sumCountArray(entry?.jobRestartsCountTowardsMax) ?? 0), 0)
+    : undefined
+  const observedRoles = replicatedJobs.filter((role) => statusByName.has(role.name)).length
+  const externalController = spec.managedBy && spec.managedBy !== 'jobset.sigs.k8s.io/jobset-controller'
+  const showSummary = mode !== 'configuration'
+  const showConfiguration = mode !== 'overview'
   const coordinator = spec.coordinator
   const network = spec.network
 
   return (
     <>
-      <ProblemAlerts problems={problems} />
+      {showSummary && <ProblemAlerts problems={problems} />}
 
-      <Section title="JobSet status" icon={Activity}>
+      {showSummary && externalController && (
+        <div className="mb-3 rounded border border-theme-border bg-theme-elevated p-3 text-sm text-theme-text-secondary">
+          Managed by <span className="font-mono">{spec.managedBy}</span>. The built-in JobSet controller does not create Jobs for this resource.
+          {spec.managedBy === 'kueue.x-k8s.io/multikueue' && ' Execution may occur on another cluster; local member absence does not establish remote execution state.'}
+        </div>
+      )}
+
+      {showSummary && <Section title="JobSet status" icon={Activity}>
+        {mode === 'overview' ? (
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-theme-text-secondary">
+            <span className={`badge ${displayedStatus.color}`}>{displayedStatus.text}</span>
+            <span>Suspend requested: {spec.suspend == null ? 'Not reported' : spec.suspend ? 'Yes' : 'No'}</span>
+            <span>Global restarts: {status.restarts ?? 'Not reported'}</span>
+            <span>Role observations: {observedRoles} / {replicatedJobs.length}</span>
+          </div>
+        ) : (
         <PropertyList>
           <Property label="State" value={<span className={`badge ${displayedStatus.color}`}>{displayedStatus.text}</span>} />
           <Property label="Terminal state" value={status.terminalState} />
           <Property label="Global restarts" value={status.restarts} />
-          <Property
-            label="Restart budget used"
-            value={typeof failurePolicy?.maxRestarts === 'number' ? `${countedRestarts} / ${failurePolicy.maxRestarts}` : undefined}
-          />
-          <Property label="Suspended" value={spec.suspend === undefined ? undefined : spec.suspend ? 'Yes' : 'No'} />
+          <Property label="Suspend requested" value={spec.suspend === undefined ? undefined : spec.suspend ? 'Yes' : 'No'} />
           <Property label="Managed by" value={spec.managedBy} />
           <Property
             label="Delete after finish"
             value={spec.ttlSecondsAfterFinished === undefined ? undefined : `${spec.ttlSecondsAfterFinished}s`}
           />
         </PropertyList>
-      </Section>
+        )}
+      </Section>}
 
-      {replicatedJobs.length > 0 && (
-        <Section title={`Replicated jobs (${replicatedJobs.length})`} icon={Boxes}>
+      {mode === 'overview' && replicatedJobs.length > 0 && (
+        <Section title="Role progress" icon={Boxes}>
+          <p className="mb-3 text-xs text-theme-text-secondary">Counts are controller-reported Jobs, not Pods. Active Jobs can have Pending Pods. Dependencies describe startup requirements.</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="text-theme-text-tertiary"><tr>
+                {['Role', 'Declared Jobs', 'Ready', 'Active', 'Succeeded', 'Failed', 'Suspended', 'Starts after', ...(onSelectRole ? ['Members'] : [])].map((label) => <th key={label} className="whitespace-nowrap border-b border-theme-border px-2 py-2 font-medium">{label}</th>)}
+              </tr></thead>
+              <tbody>{replicatedJobs.map((role) => {
+                const observation = statusByName.get(role.name)
+                const shown = shownMemberCounts?.get(role.name) ?? 0
+                return <tr key={role.name} className="border-b border-theme-border-subtle last:border-0">
+                  <th scope="row" className="px-2 py-3 font-medium text-theme-text-primary">{role.name}{!observation && <span className="mt-1 block font-normal text-theme-text-tertiary">Status not reported</span>}</th>
+                  <td className="px-2 py-3">{role.replicas ?? 1}</td>
+                  {['ready', 'active', 'succeeded', 'failed', 'suspended'].map((field) => <td key={field} className="px-2 py-3" aria-label={`${role.name} ${field}: ${observation?.[field] ?? 'not reported'}`}>{observation?.[field] ?? '—'}</td>)}
+                  <td className="px-2 py-3">{role.dependsOn?.map((dependency: any) => `${dependency.name} ${dependency.status}`).join(', ') || 'None'}</td>
+                  {onSelectRole && <td className="px-2 py-3">{shown > 0 ? <button type="button" className="whitespace-nowrap text-accent-text hover:underline" onClick={() => onSelectRole(role.name)}>Inspect {shown} shown</button> : <span className="text-theme-text-tertiary">None shown</span>}</td>}
+                </tr>
+              })}</tbody>
+            </table>
+          </div>
+        </Section>
+      )}
+
+      {mode === 'configuration' && (spec.managedBy || spec.ttlSecondsAfterFinished !== undefined) && (
+        <PropertyList>
+          <Property label="Managed by" value={spec.managedBy} />
+          <Property label="Delete after finish" value={spec.ttlSecondsAfterFinished === undefined ? undefined : `${spec.ttlSecondsAfterFinished}s`} />
+        </PropertyList>
+      )}
+
+      {showConfiguration && replicatedJobs.length > 0 && (
+        <Section title={`Replicated jobs (${replicatedJobs.length})`} icon={Boxes} defaultExpanded={mode === 'detail'}>
           <div className="space-y-2">
             {replicatedJobs.map((replicatedJob, index) => {
               const name = replicatedJob?.name || `Role ${index + 1}`
@@ -172,8 +223,8 @@ export function JobSetRenderer({ data }: JobSetRendererProps) {
         </Section>
       )}
 
-      {(successPolicy || failurePolicy || spec.startupPolicy) && (
-        <Section title="Completion and restart policies" icon={ShieldCheck}>
+      {showConfiguration && (successPolicy || failurePolicy || spec.startupPolicy) && (
+        <Section title="Completion and restart policies" icon={ShieldCheck} defaultExpanded={mode === 'detail'}>
           <PropertyList>
             {successPolicy?.operator && (
               <Property
@@ -194,6 +245,8 @@ export function JobSetRenderer({ data }: JobSetRendererProps) {
               />
             )}
             <Property label="Restart limit" value={failurePolicy?.maxRestarts} />
+            <Property label="Global restarts counted toward limit" value={globalCountedRestarts ?? 'Not reported'} />
+            <Property label="Individual restarts counted toward limit" value={individualCountedRestarts == null ? 'Not reported' : `${individualCountedRestarts} (${observedRoles} of ${replicatedJobs.length} roles reported)`} />
             <Property label="Restart strategy" value={failurePolicy?.restartStrategy} />
             {failurePolicy && <Property label="No matching rule" value="RestartJobSet" />}
             <Property label="Startup order" value={spec.startupPolicy?.startupPolicyOrder} />
@@ -244,8 +297,8 @@ export function JobSetRenderer({ data }: JobSetRendererProps) {
         </Section>
       )}
 
-      {(coordinator || network) && (
-        <Section title="Coordination and network" icon={NetworkIcon}>
+      {showConfiguration && (coordinator || network) && (
+        <Section title="Coordination and network" icon={NetworkIcon} defaultExpanded={mode === 'detail'}>
           <PropertyList>
             <Property label="Coordinator role" value={coordinator?.replicatedJob} />
             <Property label="Coordinator Job index" value={coordinator?.jobIndex} />
@@ -263,7 +316,13 @@ export function JobSetRenderer({ data }: JobSetRendererProps) {
         </Section>
       )}
 
-      <ConditionsSection conditions={conditions} getConditionTone={getJobSetConditionTone} />
+      {mode === 'detail' && <ConditionsSection conditions={conditions} getConditionTone={getJobSetConditionTone} />}
+      {mode === 'overview' && conditions.length > 0 && (
+        <details className="text-sm">
+          <summary className="cursor-pointer py-2 text-accent-text">Controller conditions ({conditions.length})</summary>
+          <ConditionsSection conditions={conditions} getConditionTone={getJobSetConditionTone} />
+        </details>
+      )}
     </>
   )
 }

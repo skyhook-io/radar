@@ -5,14 +5,16 @@ import { BatchExecutionFullscreen } from './BatchExecutionView'
 import { ScheduledWorkloadLogsViewer, workloadRunLogsKey } from '../logs/ScheduledWorkloadLogsViewer'
 
 const state = vi.hoisted(() => ({
-  response: { collection: 'members', runs: [], total: 0, truncated: false } as WorkloadRunsResponse,
+  response: { collection: 'members', runs: [], total: 0, truncated: false } as WorkloadRunsResponse | undefined,
+  isLoading: false,
+  error: undefined as Error | undefined,
   useResource: vi.fn().mockReturnValue({ data: { spec: {} } }),
 }))
 
 vi.mock('../../api/client', () => ({
   useResource: (...args: unknown[]) => state.useResource(...args),
   useWorkloadPods: () => ({ data: { pods: [], total: 0, truncated: false } }),
-  useWorkloadRuns: () => ({ data: state.response }),
+  useWorkloadRuns: () => ({ data: state.response, isLoading: state.isLoading, error: state.error }),
 }))
 vi.mock('../logs/WorkloadLogsViewer', () => ({
   WorkloadLogsViewer: ({ kind, namespace, name }: { kind: string; namespace: string; name: string }) => <div data-log-target={`${kind}/${namespace}/${name}`}>Logs for {name}</div>,
@@ -24,8 +26,8 @@ const member: WorkloadRun = {
   jobset: { replicatedJob: 'workers', jobIndex: '0', replicatedJobReplicas: '2', restartAttempt: '0', jobRestartAttempt: '0' },
 }
 
-function overview(selectedRunKey?: string) {
-  return renderToStaticMarkup(<BatchExecutionFullscreen kind="JobSet" apiKind="jobsets" namespace="training" name="distributed" resource={{ spec: {} }} selectedRunKey={selectedRunKey} />)
+function overview(selectedRunKey?: string, apiVersion = 'jobset.x-k8s.io/v1alpha2') {
+  return renderToStaticMarkup(<BatchExecutionFullscreen kind="JobSet" apiKind="jobsets" namespace="training" name="distributed" resource={{ apiVersion, kind: 'JobSet', spec: { replicatedJobs: [{ name: 'workers', replicas: 2 }] } }} selectedRunKey={selectedRunKey} />)
 }
 function logs(selectedRunKey?: string) {
   return renderToStaticMarkup(<ScheduledWorkloadLogsViewer kind="JobSet" namespace="training" name="distributed" selectedRunKey={selectedRunKey} />)
@@ -33,10 +35,34 @@ function logs(selectedRunKey?: string) {
 
 beforeEach(() => {
   state.response = { collection: 'members', runs: [member], total: 1, truncated: false }
+  state.isLoading = false
+  state.error = undefined
   state.useResource.mockClear()
 })
 
 describe('member collection consumers', () => {
+  it('keeps the root and declared roles visible during the first member load', () => {
+    state.response = undefined
+    state.isLoading = true
+    const html = overview()
+    expect(html).toContain('JobSet overview')
+    expect(html).toContain('Role progress')
+    expect(html).toContain('Loading Jobs')
+    expect(html).not.toContain('No child Jobs currently retained')
+    expect(html).not.toContain('Inspect')
+  })
+
+  it('keeps the root visible when member reads fail, without claiming absence', () => {
+    state.response = undefined
+    state.error = new Error('Forbidden: Jobs are not readable')
+    const html = overview()
+    expect(html).toContain('JobSet overview')
+    expect(html).toContain('Member Jobs unavailable')
+    expect(html).toContain('Forbidden: Jobs are not readable')
+    expect(html).not.toContain('No child Jobs currently retained')
+    expect(overview(undefined, 'other.example/v1')).not.toContain('JobSet overview')
+  })
+
   it('renders nested role, zero index and selected member in Overview and Logs', () => {
     const html = overview('jobs/training/distributed-workers-0')
     expect(html).toContain('Member Jobs')

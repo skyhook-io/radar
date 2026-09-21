@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { Activity, GitBranch, Terminal } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
@@ -20,6 +20,7 @@ import {
   getJobSetReadyJobs,
   getJobSetStatus,
   getJobSetSucceededJobs,
+  isJobSetV1Alpha2,
 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
 import { JobSetRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/JobSetRenderer'
 import { useResource, useWorkloadPods, useWorkloadRuns, type WorkloadRun } from '../../api/client'
@@ -123,10 +124,14 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
   const clusterScoped = kind === 'ClusterWorkflowTemplate'
   const runsQuery = useWorkloadRuns(apiKind, namespace, name, true, { refetchActive: true, clusterScoped })
   const memberCollection = runsQuery.data?.collection === 'members'
+  const jobSetRoot = isJobSetV1Alpha2(resource)
+  const memberShell = memberCollection || (!runsQuery.data && jobSetRoot)
   const runs = runsQuery.data?.runs ?? EMPTY_RUNS
   const defaultRun = useMemo(() => memberCollection ? runs[0] : pickDefaultRun(runs), [memberCollection, runs])
   const [runFilter, setRunFilter] = useState<'all' | 'active' | 'failed'>('all')
   const [runSearch, setRunSearch] = useState('')
+  const [roleFilter, setRoleFilter] = useState('')
+  const previousSelection = useRef(selectedRunKey)
   const referencedDefinitionTarget = workflowDefinitionTarget(kind, resource)
   const referencedDefinitionQuery = useResource<any>(
     referencedDefinitionTarget?.kind ?? '',
@@ -154,6 +159,26 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
   }, [runsQuery.data, runs, selectedRunKey, defaultRun, onSelectRun, selectionMissing])
 
   const selectedRun = selectionMissing ? undefined : runs.find((run) => workloadRunKey(run) === selectedRunKey) ?? defaultRun
+  useEffect(() => {
+    const selectionChanged = previousSelection.current !== selectedRunKey
+    previousSelection.current = selectedRunKey
+    if (selectionChanged && roleFilter && selectedRun?.jobset?.replicatedJob !== roleFilter) setRoleFilter('')
+  }, [selectedRunKey, roleFilter, selectedRun])
+  const shownMemberCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const run of runs) {
+      if (run.jobset?.replicatedJob) counts.set(run.jobset.replicatedJob, (counts.get(run.jobset.replicatedJob) ?? 0) + 1)
+    }
+    return counts
+  }, [runs])
+  const selectRole = (role: string) => {
+    const firstMember = runs.find((run) => run.jobset?.replicatedJob === role)
+    if (!firstMember) return
+    setRoleFilter(role)
+    setRunFilter('all')
+    setRunSearch('')
+    onSelectRun?.(workloadRunKey(firstMember))
+  }
   const shouldResolveLivePods = Boolean(
     selectedRun && (
       memberCollection ||
@@ -178,10 +203,11 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
       : batchRunNextStep(selectedRun, canViewLogs, hasLivePods)
     : null
   const visibleRuns = useMemo(() => runs.filter((run) => {
+    if (roleFilter && run.jobset?.replicatedJob !== roleFilter) return false
     if (runFilter === 'active' && !run.active) return false
     if (runFilter === 'failed' && run.phase !== 'Failed' && run.phase !== 'Error') return false
     return !runSearch || run.name.toLowerCase().includes(runSearch.toLowerCase())
-  }), [runs, runFilter, runSearch])
+  }), [runs, runFilter, runSearch, roleFilter])
   const source = sourceFacts(kind, definitionResource, runs)
   const phaseCounts = countPhases(runs)
   const phaseCountQualifier = memberCollection && runsQuery.data?.truncated ? ' in shown Jobs' : ''
@@ -201,15 +227,15 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
   )
   const runsErrorMessage = runsQuery.error instanceof Error
     ? runsQuery.error.message
-    : memberCollection
+    : memberShell
       ? 'Radar could not load this JobSet’s child Jobs.'
       : 'Radar could not load retained runs.'
 
-  if (runsQuery.isLoading && !memberCollection) {
+  if (runsQuery.isLoading && !jobSetRoot) {
     return <FetchResult loading className="h-full" />
   }
 
-  if (runsQuery.error && !memberCollection) {
+  if (runsQuery.error && !jobSetRoot) {
     return (
       <div className="p-4">
         <EmptyState
@@ -230,12 +256,12 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
             <div className="flex items-center justify-between gap-2">
               <div>
                 <div className="text-xs font-medium uppercase tracking-wide text-theme-text-tertiary">
-                  {memberCollection ? 'Member Jobs' : isTemplateKind(kind) ? 'Workflows using this definition' : 'Run history'}
+                  {memberShell ? 'Member Jobs' : isTemplateKind(kind) ? 'Workflows using this definition' : 'Run history'}
                 </div>
                 <div className="mt-1 text-sm font-semibold text-theme-text-primary">
-                  {memberCollection && runsQuery.isLoading
+                  {memberShell && runsQuery.isLoading
                     ? 'Loading Jobs…'
-                    : memberCollection && runsQuery.error
+                    : memberShell && runsQuery.error
                       ? 'Unavailable'
                       : memberCollection
                         ? pluralizeMemberJobs(runs.length, runsQuery.data?.total, runsQuery.data?.truncated)
@@ -249,8 +275,9 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
               {phaseCounts.succeeded > 0 && <span className="rounded bg-theme-hover px-1.5 py-0.5">{phaseCounts.succeeded} succeeded{phaseCountQualifier}</span>}
             </div>
             <p className="mt-2 text-[10px] leading-4 text-theme-text-tertiary">
-              {memberCollection ? 'Controller-owned Jobs currently visible in Kubernetes.' : 'Retained Kubernetes objects, not all-time history.'}
+              {memberShell ? 'Controller-owned Jobs currently visible in Kubernetes.' : 'Retained Kubernetes objects, not all-time history.'}
             </p>
+            {roleFilter && <div className="mt-2 flex items-center justify-between gap-2 text-xs"><span className="truncate text-theme-text-secondary">Role: {roleFilter}</span><button type="button" className="shrink-0 text-accent-text hover:underline" onClick={() => setRoleFilter('')}>Show all roles</button></div>}
             {retentionCopy && <p className="mt-1 text-[10px] leading-4 text-theme-text-secondary">{retentionCopy}</p>}
             {(runs.length > 8 || phaseCounts.failed > 0) && (
               <div className="mt-3 space-y-2">
@@ -265,9 +292,9 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {memberCollection && runsQuery.isLoading ? (
+            {memberShell && runsQuery.isLoading ? (
               <FetchResult loading className="h-full" />
-            ) : memberCollection && runsQuery.error ? (
+            ) : memberShell && runsQuery.error ? (
               <div className="p-2">
                 <EmptyState tone="neutral" variant="card" headline="Member Jobs unavailable" body={runsErrorMessage} />
               </div>
@@ -307,6 +334,11 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
 
       <main className="min-w-0 flex-1 overflow-auto">
         <div className="space-y-4 p-4">
+          {jobSetRoot && (
+            <section className="rounded-lg border border-theme-border bg-theme-surface p-4" aria-label="JobSet overview">
+              <JobSetRenderer data={resource} mode="overview" shownMemberCounts={shownMemberCounts} onSelectRole={memberCollection ? selectRole : undefined} />
+            </section>
+          )}
           {scheduled && selectedResourceQuery.error && (
             <EmptyState
               tone="neutral"
@@ -321,11 +353,11 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
               }
             />
           )}
-          <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.9fr)]">
+          <div className={clsx('grid items-start gap-4', jobSetRoot ? '2xl:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.9fr)]' : 'lg:grid-cols-[minmax(0,1.7fr)_minmax(320px,0.9fr)]')}>
             <section className="min-w-0 space-y-4">
-              {memberCollection && runsQuery.isLoading ? (
+              {memberShell && runsQuery.isLoading ? (
                 <FetchResult loading className="min-h-40 rounded-lg border border-theme-border bg-theme-surface" />
-              ) : memberCollection && runsQuery.error ? (
+              ) : memberShell && runsQuery.error ? (
                 <EmptyState tone="neutral" variant="card" headline="Member Jobs unavailable" body={runsErrorMessage} />
               ) : selectedRun ? (
                 <section className="rounded-lg border border-theme-border bg-theme-surface">
@@ -405,8 +437,8 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                   <h3 className="text-sm font-semibold text-theme-text-primary">{configurationTitle(kind)}</h3>
                 </div>
                 <div className="space-y-3 p-4">
-                  {kind === 'JobSet' ? (
-                    <JobSetRenderer data={resource} />
+                  {jobSetRoot ? (
+                    <JobSetRenderer data={resource} mode="configuration" />
                   ) : (
                     <SourceFacts
                       source={source}
