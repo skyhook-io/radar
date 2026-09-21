@@ -127,7 +127,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       const previousPods = previousSnapshotPods.current
       const nextPods = resultPods.map(p => p.name)
       previousSnapshotPods.current = nextPods
-      setSelectedPods(selected => previousPods === null || (previousPods.length > 0 && previousPods.every(pod => selected.has(pod)))
+      setSelectedPods(selected => previousPods === null || previousPods.every(pod => selected.has(pod))
         ? new Set(nextPods)
         : new Set(nextPods.filter(pod => selected.has(pod))))
 
