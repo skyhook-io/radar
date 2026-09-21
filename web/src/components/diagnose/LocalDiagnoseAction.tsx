@@ -33,7 +33,7 @@ function DiagnoseResourceButton({
   // Hidden only when the feature can't work here (auth/cloud/--no-mcp). When it's
   // supported but no agent is installed we KEEP the button — clicking opens the
   // setup notice so the feature is discoverable rather than silently absent.
-  if (d.setupState === "off") return null;
+  if (d.setupState === "off" || d.setupState === "unknown") return null;
   const ready = d.available;
   const problem = health === "problem";
   const running =
@@ -122,7 +122,7 @@ export function IssueDiagnoseButton({
   name: string;
 }) {
   const d = useDiagnose();
-  if (d.setupState === "off") return null;
+  if (d.setupState === "off" || d.setupState === "unknown") return null;
   const ready = d.available;
   return (
     <Tooltip
@@ -163,7 +163,7 @@ export function IssueDiagnoseButton({
 export function GlobalDiagnoseButton() {
   const d = useDiagnose();
   const { runningCount } = useDiagnoseLayout();
-  if (d.setupState === "off") return null;
+  if (d.setupState === "off" || d.setupState === "unknown") return null;
   const ready = d.available;
   const agentSuffix = d.hosted
     ? `powered by ${d.agentLabel}`

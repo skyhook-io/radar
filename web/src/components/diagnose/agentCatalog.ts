@@ -13,7 +13,7 @@ export const SUPPORTED_AGENTS: AgentInstall[] = [
     name: "claude",
     label: "Claude Code",
     install: "npm install -g @anthropic-ai/claude-code",
-    docs: "https://docs.claude.com/en/docs/claude-code/setup",
+    docs: "https://code.claude.com/docs/en/setup",
   },
   {
     name: "codex",
@@ -25,6 +25,6 @@ export const SUPPORTED_AGENTS: AgentInstall[] = [
     name: "cursor-agent",
     label: "Cursor CLI",
     install: "curl https://cursor.com/install -fsS | bash",
-    docs: "https://docs.cursor.com/en/cli/overview",
+    docs: "https://cursor.com/docs/cli/overview",
   },
 ];

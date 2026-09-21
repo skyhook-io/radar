@@ -1,20 +1,31 @@
 import { useState } from "react";
 import { Sparkles, Copy, Check, ExternalLink, RotateCw } from "lucide-react";
+import { copyText } from "@skyhook-io/k8s-ui/utils/clipboard";
 import { SUPPORTED_AGENTS, type AgentInstall } from "./agentCatalog";
 import { type DiagnoseSetup } from "./DiagnoseContext";
 
-function CopyButton({ text }: { text: string }) {
+// Just the variable name. Every `VAR=value` form is shell-specific — Windows needs
+// `set` or `$env:` — so a copyable assignment would be wrong for some readers; the
+// name is the part worth copying exactly, and the prose carries the value.
+const CLI_BIN_VAR = "RADAR_AI_CLI_BIN";
+
+function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
       type="button"
       onClick={() => {
-        void navigator.clipboard?.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1100);
+        // The shared helper, not navigator.clipboard directly: a Radar served
+        // over plain HTTP is an insecure origin where the async API rejects,
+        // and the tick must not claim a copy that didn't happen.
+        void copyText(text).then((ok) => {
+          if (!ok) return;
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1100);
+        });
       }}
       className="shrink-0 rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-      aria-label={copied ? "Copied" : "Copy install command"}
+      aria-label={copied ? "Copied" : label}
     >
       {copied ? (
         <Check className="h-3.5 w-3.5 text-emerald-500" />
@@ -46,7 +57,7 @@ function AgentRow({ agent }: { agent: AgentInstall }) {
         <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-xs text-theme-text-secondary">
           {agent.install}
         </code>
-        <CopyButton text={agent.install} />
+        <CopyButton text={agent.install} label="Copy install command" />
       </div>
     </div>
   );
@@ -89,11 +100,34 @@ export function AgentSetupNotice({
       </p>
 
       {!needsRestart && (
-        <div className="mt-4 flex flex-col gap-2.5">
-          {SUPPORTED_AGENTS.map((a) => (
-            <AgentRow key={a.name} agent={a} />
-          ))}
-        </div>
+        <>
+          <div className="mt-4 flex flex-col gap-2.5">
+            {SUPPORTED_AGENTS.map((a) => (
+              <AgentRow key={a.name} agent={a} />
+            ))}
+          </div>
+          <div className="mt-4 rounded-lg border border-theme-border bg-theme-base p-3">
+            <p className="text-sm font-medium text-theme-text-primary">
+              Already have one installed?
+            </p>
+            <p className="mt-1 text-xs text-theme-text-secondary">
+              Radar looks for the CLI on the PATH it was started with, plus the
+              usual install directories. A launch from a shortcut or a service
+              often gets a shorter PATH than your terminal. Start Radar from a
+              terminal where the CLI works, or set this variable to the
+              CLI&apos;s full path before starting Radar:
+            </p>
+            <div className="mt-2 flex items-center gap-1.5 rounded-md bg-theme-elevated px-2 py-1.5">
+              <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-xs text-theme-text-secondary">
+                {CLI_BIN_VAR}
+              </code>
+              <CopyButton
+                text={CLI_BIN_VAR}
+                label="Copy the RADAR_AI_CLI_BIN variable name"
+              />
+            </div>
+          </div>
+        </>
       )}
 
       {/* The panel only re-reads /api/agents on load, so after installing or

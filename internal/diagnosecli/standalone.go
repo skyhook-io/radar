@@ -1,6 +1,7 @@
 package diagnosecli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -95,7 +96,7 @@ func bootEphemeral(kubeconfig string) (base string, shutdown func(), err error) 
 			}
 			if code == http.StatusNotImplemented {
 				close(stopSpin)
-				return "", nil, fmt.Errorf("no supported agent CLI found — install Claude Code, Codex, or Cursor")
+				return "", nil, errors.New(noAgentCLIHint)
 			}
 		}
 		if time.Now().After(deadline) {

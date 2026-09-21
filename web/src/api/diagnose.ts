@@ -257,7 +257,14 @@ export async function fetchAgents(
     signal,
   });
   if (!res.ok) throw new Error(`agents: ${res.status}`);
-  return res.json();
+  const body = (await res.json()) as AgentsResponse & {
+    agents: AgentInfo[] | null;
+  };
+  // The server builds this list with `var out []AgentInfo`, so "no agent found"
+  // arrives as JSON null, not []. Normalise here: that is the single most common
+  // response on a machine with no CLI, and every caller that reached for .filter
+  // would throw on it.
+  return { ...body, agents: body.agents ?? [] };
 }
 
 async function errorText(res: Response): Promise<string> {

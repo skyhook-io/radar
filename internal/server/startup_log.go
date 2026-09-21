@@ -29,6 +29,7 @@ type startupLogSummary struct {
 	proxyGroupsHeader    string
 	mcpEnabled           bool
 	aiAgent              string
+	aiCLIOverride        string
 	cloudMode            bool
 	showRemoteAccessHint bool
 	contextName          string
@@ -51,6 +52,7 @@ func (s *Server) logStartupSummaryBlock() {
 		proxyGroupsHeader:    s.authConfig.GroupsHeader,
 		mcpEnabled:           s.mcpHandler != nil,
 		aiAgent:              aiAgent,
+		aiCLIOverride:        strings.TrimSpace(os.Getenv("RADAR_AI_CLI_BIN")),
 		cloudMode:            cloud.Mode(),
 		showRemoteAccessHint: s.remoteAccessHint,
 		contextName:          k8s.GetContextName(),
@@ -138,9 +140,7 @@ func formatStartupLogSummary(summary startupLogSummary, color bool) []string {
 	} else {
 		lines = append(lines, row("MCP", "disabled"))
 	}
-	if summary.aiAgent != "" {
-		lines = append(lines, row("AI investigations", "enabled via "+summary.aiAgent))
-	}
+	lines = append(lines, row("AI investigations", startupAIStatus(summary)))
 
 	if loopback && summary.showRemoteAccessHint {
 		lines = append(lines, row("Remote", "use --listen-address=0.0.0.0 with authentication and network controls"))
@@ -214,4 +214,32 @@ func startupLogColorEnabled(w io.Writer) bool {
 	}
 	file, ok := w.(*os.File)
 	return ok && term.IsTerminal(int(file.Fd()))
+}
+
+// startupAIStatus explains the AI-investigations state. The disabled cases carry
+// a reason because "no agent CLI found" reads to the user as a bug in Radar when
+// their CLI is installed but sits outside the PATH Radar was launched with. The
+// install advice is held back in-cluster, where there is no user terminal to run
+// it in.
+func startupAIStatus(summary startupLogSummary) string {
+	authMode := strings.ToLower(summary.authMode)
+	switch {
+	case summary.aiAgent != "":
+		return "enabled via " + summary.aiAgent
+	case authMode != "" && authMode != "none":
+		return "disabled (not available when authentication is enabled)"
+	case !summary.mcpEnabled:
+		return "disabled (needs MCP; remove --no-mcp)"
+	case summary.kubeconfig.Mode == "in-cluster":
+		return "disabled (no agent CLI in this container)"
+	case summary.aiCLIOverride != "":
+		// The override wins over detection, so when it names something this
+		// Radar can't run, nothing else was tried. Saying "no agent CLI found"
+		// here would send the user to set the variable they already set.
+		return "disabled (RADAR_AI_CLI_BIN is set to " + summary.aiCLIOverride +
+			", which isn't an executable Radar can run)"
+	default:
+		return "disabled (no agent CLI found). Install Claude Code, Codex, or Cursor, " +
+			"or set RADAR_AI_CLI_BIN to the full path of one you already have"
+	}
 }

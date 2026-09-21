@@ -62,7 +62,11 @@ export type DiagnoseView = "home" | "investigation";
 //                     existed (the engine is decided once, at startup)
 //  - "off":           not available in this deployment (proxy/OIDC auth, --no-mcp,
 //                     or an embed host) — no install nudge would help
-export type DiagnoseSetup = "ready" | "needs-install" | "needs-restart" | "off";
+//  - "unknown":       the agents probe hasn't answered (in flight, or it failed
+//                     and was swallowed). Nothing about the machine or the
+//                     deployment is established yet, so say nothing about either
+export type DiagnoseSetup =
+  "ready" | "needs-install" | "needs-restart" | "off" | "unknown";
 
 interface DiagnoseCtx {
   available: boolean; // an agent CLI is present (button/entry gate)
@@ -167,6 +171,31 @@ const MIN_APP_LEFT_OF_PANEL = 900;
 // area instead. Radar's own minimum width is about 856px, so this is the
 // drawer's floor: below it the investigation is the screen.
 const MIN_APP_PEEK_BESIDE_OVERLAY = 320;
+// resolveSetupState is the ONE mapping from the agents probe to what every
+// surface renders. Exported so it can be pinned by test, since each state drives
+// a different user-facing claim.
+//
+// "unknown" is not the same as "off". `eligible` starts false and the probe's
+// catch leaves it that way, so without a separate state a pending or failed
+// request reads as a confirmed deployment restriction. A non-empty agent list
+// while the engine is off means a drivable CLI appeared after Radar booted.
+export function resolveSetupState({
+  available,
+  eligibilityResolved,
+  eligible,
+  supportedAgentCount,
+}: {
+  available: boolean;
+  eligibilityResolved: boolean;
+  eligible: boolean;
+  supportedAgentCount: number;
+}): DiagnoseSetup {
+  if (available) return "ready";
+  if (!eligibilityResolved) return "unknown";
+  if (!eligible) return "off";
+  return supportedAgentCount > 0 ? "needs-restart" : "needs-install";
+}
+
 export function investigationPanelFillsViewport(
   viewportWidth: number,
   panelWidth: number,
@@ -532,15 +561,12 @@ function RoutedDiagnoseProvider({
     ? "standard"
     : (selectedAgentInfo?.consentSurfaces?.[effectiveProfile] ?? "");
 
-  // `agents` holds only supported CLIs (filtered on fetch), so a non-empty list
-  // while the engine is off means a drivable agent appeared on PATH after boot.
-  const setupState: DiagnoseSetup = available
-    ? "ready"
-    : !eligible
-      ? "off"
-      : agents.length > 0
-        ? "needs-restart"
-        : "needs-install";
+  const setupState = resolveSetupState({
+    available,
+    eligibilityResolved: agentEligibilityResolved,
+    eligible,
+    supportedAgentCount: agents.length,
+  });
 
   useEffect(() => {
     const onResize = () => setViewportW(window.innerWidth);

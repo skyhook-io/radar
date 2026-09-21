@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRun, subscribeRun, type DiagnoseStreamEvent } from "./diagnose";
+import {
+  createRun,
+  fetchAgents,
+  subscribeRun,
+  type DiagnoseStreamEvent,
+} from "./diagnose";
 
 type SSEListener = (event: { data: string; lastEventId: string }) => void;
 
@@ -264,5 +269,44 @@ describe("investigation start requests", () => {
       agent: "hub",
     });
     expect(JSON.parse(init.body as string).issueId).toBe("issue-1");
+  });
+});
+
+describe("fetchAgents agents normalisation", () => {
+  const withFetch = async (body: unknown) => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
+    try {
+      return await fetchAgents();
+    } finally {
+      globalThis.fetch = original;
+    }
+  };
+
+  it("turns the server's null agent list into an empty array", async () => {
+    // Go sends `var out []AgentInfo` as null, and this is the response a machine
+    // with no CLI installed gets — the case callers most need to survive.
+    const r = await withFetch({
+      agents: null,
+      enabled: false,
+      eligible: true,
+      consented: {},
+    });
+    expect(r.agents).toEqual([]);
+    expect(r.eligible).toBe(true);
+  });
+
+  it("leaves a populated list alone", async () => {
+    const r = await withFetch({
+      agents: [{ name: "claude", label: "Claude Code", supported: true }],
+      enabled: true,
+      eligible: true,
+      consented: {},
+    });
+    expect(r.agents.map((a) => a.name)).toEqual(["claude"]);
   });
 });
