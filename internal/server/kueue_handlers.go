@@ -151,7 +151,7 @@ func kueueAdmissionForJobSet(ctx context.Context, root *unstructured.Unstructure
 		}
 		if summary := schedulinginsight.ForResource(item, resourcecontext.TierDiagnostic); summary != nil {
 			filtered, omitted := resourcecontext.FilterSchedulingSummary(ctx, summary, checker)
-			entry.Scheduling, entry.LinksLimited = filtered, len(omitted) > 0
+			entry.Scheduling, entry.LinksLimited = filtered, filtered != nil && len(omitted) > 0
 			entry.Projection = "available"
 			if entry.Scheduling == nil {
 				entry.Projection = "forbidden"

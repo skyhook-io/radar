@@ -47,6 +47,9 @@ function AdmissionObservation({ observation, link }: { observation: SchedulingOb
   const kueue = observation.kueue
   const condition = observation.primaryCondition
   const stale = !!condition?.observedGeneration && !!observation.subjectGeneration && condition.observedGeneration < observation.subjectGeneration
+  const conditions = [condition, ...(observation.disruptions ?? []), kueue?.podsReady, kueue?.waitingForReplacementPods]
+    .filter((entry) => entry != null)
+    .filter((entry, index, entries) => entries.findIndex((candidate) => candidate.type === entry.type) === index)
   return <div className="space-y-2">
     <div className="flex flex-wrap items-center gap-2">
       <Badge severity={stale || observation.decision === 'unknown' ? 'neutral' : observation.decision === 'satisfied' ? 'success' : 'warning'}>{kueue ? phases[kueue.phase] : 'Admission'}</Badge>
@@ -57,12 +60,12 @@ function AdmissionObservation({ observation, link }: { observation: SchedulingOb
     {stale && <p className="text-sm text-theme-text-secondary">The primary condition describes generation {condition!.observedGeneration}; this Workload is now generation {observation.subjectGeneration}. Treat that condition as stale evidence.</p>}
     {!condition && <p className="text-theme-text-secondary">No primary admission condition reported.</p>}
     <ConditionsSection
-      conditions={[condition, ...(observation.disruptions ?? []), kueue?.podsReady, kueue?.waitingForReplacementPods].filter((entry) => entry != null)}
+      conditions={conditions}
       defaultExpanded={true}
       getConditionTone={(entry) => {
         if (entry.status !== 'True' && entry.status !== 'False') return 'unknown'
         if (entry.observedGeneration && observation.subjectGeneration && entry.observedGeneration < observation.subjectGeneration) return 'unknown'
-        if (entry.type === 'Finished') return entry.status === 'False' ? 'unknown' : kueue?.outcome === 'failed' ? 'fail' : 'ok'
+        if (entry.type === 'Finished') return entry.status === 'False' ? 'unknown' : kueue?.outcome === 'failed' ? 'fail' : kueue?.outcome === 'succeeded' ? 'ok' : 'unknown'
         if (entry.type === condition?.type) return observation.decision === 'satisfied' ? 'ok' : observation.decision === 'unknown' ? 'unknown' : 'warning'
         if (entry.type === 'WaitingForReplacementPods' || observation.disruptions?.some((item) => item.type === entry.type)) return entry.status === 'True' ? 'warning' : 'ok'
         return entry.status === 'True' ? 'ok' : 'warning'

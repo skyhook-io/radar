@@ -107,7 +107,7 @@ func TestKueueAdmissionPermissionFilteredRefsAndUnsupportedEvidence(t *testing.T
 		t.Fatalf("bad ref filtering: %+v %+v", entry, queue)
 	}
 	got = kueueAdmissionForJobSet(context.Background(), root, []*unstructured.Unstructured{w}, admissionAccess{})
-	if entry := got.Workloads[0]; entry.Ref != nil || entry.Scheduling != nil || entry.Projection != "forbidden" || entry.Name != "workload" {
+	if entry := got.Workloads[0]; entry.Ref != nil || entry.Scheduling != nil || entry.LinksLimited || entry.Projection != "forbidden" || entry.Name != "workload" {
 		t.Fatalf("list-only should retain identity but withhold get detail: %+v", entry)
 	}
 	w.SetAPIVersion("kueue.x-k8s.io/v1beta1")

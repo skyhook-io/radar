@@ -68,6 +68,19 @@ describe('Kueue admission investigation', () => {
     expect(html).not.toContain('<button')
   })
 
+  it('does not present an unrecognized finish reason as a successful outcome', () => {
+    const html = render(response({ decision: 'unknown', primaryCondition: { type: 'Finished', status: 'True', reason: 'CustomFinish' }, kueue: { phase: 'finished' } }))
+    expect(html).toContain('CustomFinish')
+    expect(html).toContain('lucide-minus')
+    expect(html).not.toContain('lucide-check')
+  })
+
+  it('shows a deactivation condition once when it is also the primary evidence', () => {
+    const condition = { type: 'DeactivationTarget', status: 'True', reason: 'AdmissionCheck' }
+    const html = render(response({ decision: 'held', primaryCondition: condition, disruptions: [condition], kueue: { phase: 'pending', active: false } }))
+    expect(html.match(/DeactivationTarget/g)).toHaveLength(1)
+  })
+
   it('keeps bounded records separate and never names the newest as current', () => {
     const data = response()
     data.total = 9
