@@ -1015,6 +1015,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	// letting the MCP handler answer with 405.
 	r.Handle("/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp/.well-known/*", http.NotFoundHandler())
+	r.Handle("/mcp-apply/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp-readonly/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp-apply/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp-investigation/.well-known/*", http.NotFoundHandler())
@@ -1024,6 +1025,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		r.Mount("/mcp", s.mcpHandler)
 	} else {
 		r.Mount("/mcp", http.NotFoundHandler())
+	}
+	if s.mcpApplyHandler != nil {
+		r.Mount("/mcp-apply", s.mcpApplyHandler)
 	}
 	if s.mcpReadOnlyHandler != nil {
 		r.Mount("/mcp-readonly", s.mcpReadOnlyHandler)

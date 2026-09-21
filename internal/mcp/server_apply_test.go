@@ -1,33 +1,51 @@
 package mcp
 
 import (
-	"net/http"
+	"context"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/skyhook-io/radar/internal/server"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func TestApplyMountExcludesExecTools(t *testing.T) {
-	enableExecToolsForTest(t)
-	for _, base := range []string{"", "/radar"} {
-		t.Run(base, func(t *testing.T) {
-			srv := server.New(server.Config{BasePath: base, MCPHandler: NewHandler(), MCPApplyHandler: NewApplyHandler()})
-			for _, path := range []string{"/mcp", "/mcp-apply"} {
-				req := httptest.NewRequest(http.MethodPost, "http://localhost"+base+path, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
-				req.Header.Set("Content-Type", "application/json")
-				req.Header.Set("Accept", "application/json, text/event-stream")
-				req.Header.Set("MCP-Protocol-Version", "2025-06-18")
-				rec := httptest.NewRecorder()
-				srv.Handler().ServeHTTP(rec, req)
-				if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"apply_resource"`) {
-					t.Fatalf("%s catalog: %d %s", path, rec.Code, rec.Body.String())
-				}
-				if got := strings.Contains(rec.Body.String(), `"name":"exec_pod"`); got != (path == "/mcp") {
-					t.Fatalf("%s exposes exec_pod=%v", path, got)
-				}
-			}
-		})
+func TestApplyHandlerExcludesRuntimeCollection(t *testing.T) {
+	httpServer := httptest.NewServer(NewApplyHandler())
+	defer httpServer.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "apply-boundary-test", Version: "test"}, nil)
+	session, err := client.Connect(ctx, &mcpsdk.StreamableClientTransport{Endpoint: httpServer.URL}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	names := map[string]bool{}
+	cursor := ""
+	for {
+		result, err := session.ListTools(ctx, &mcpsdk.ListToolsParams{Cursor: cursor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tool := range result.Tools {
+			names[tool.Name] = true
+		}
+		cursor = result.NextCursor
+		if cursor == "" {
+			break
+		}
+	}
+	if names["collect_runtime_evidence"] {
+		t.Fatal("operator-only tool listed on apply handler")
+	}
+	for _, tool := range listRegisteredToolsWith(t, true) {
+		if tool.Name != "collect_runtime_evidence" && !names[tool.Name] {
+			t.Errorf("existing tool %s missing from apply handler", tool.Name)
+		}
+	}
+	result, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "collect_runtime_evidence", Arguments: map[string]any{"adapter": "vault", "namespace": "lab", "pod": "vault", "confirm_network_access": true}})
+	if err == nil || !strings.Contains(err.Error(), `unknown tool "collect_runtime_evidence"`) {
+		t.Fatalf("excluded tool accepted: %+v", result)
 	}
 }
