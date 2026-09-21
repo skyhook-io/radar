@@ -91,6 +91,15 @@ func TestParseALBAction(t *testing.T) {
 }
 
 func albIngress(name string, annotations map[string]string, backends ...string) *networkingv1.Ingress {
+	ing := sentinelIngress(name, annotations, backends...)
+	class := "alb"
+	ing.Spec.IngressClassName = &class
+	return ing
+}
+
+// sentinelIngress builds an Ingress whose every backend uses the use-annotation
+// port name, with no IngressClass set.
+func sentinelIngress(name string, annotations map[string]string, backends ...string) *networkingv1.Ingress {
 	pathType := networkingv1.PathTypeImplementationSpecific
 	paths := make([]networkingv1.HTTPIngressPath, 0, len(backends))
 	for i, backend := range backends {
@@ -134,6 +143,7 @@ func TestDetectIngressALBActionBackends(t *testing.T) {
 		{"ServiceName":"app-stable","ServicePort":"80","Weight":100}]}}`
 
 	objects := []runtime.Object{
+		&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "alb"}, Spec: networkingv1.IngressClassSpec{Controller: albIngressController}},
 		albService("app-canary", 80),
 		albService("app-stable", 80),
 		albService("real", 8080),
@@ -202,5 +212,164 @@ func TestDetectIngressALBActionBackends(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("no-action problems = %d, want exactly one for two paths sharing a backend", count)
+	}
+}
+
+// Only the AWS Load Balancer Controller reserves the use-annotation port name.
+// Under another controller it is an ordinary named port, and when no controller
+// can be identified the backend must be left alone.
+func TestDetectIngressSentinelPortByController(t *testing.T) {
+	defer ResetTestState()
+
+	nginx := "nginx"
+	missingClass := "gone"
+	withClass := func(ing *networkingv1.Ingress, class *string) *networkingv1.Ingress {
+		ing.Spec.IngressClassName = class
+		return ing
+	}
+	namedPortService := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "named", Namespace: "prod"},
+		Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: albActionSentinel, Port: 80}}},
+	}
+
+	objects := []runtime.Object{
+		&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "nginx"}, Spec: networkingv1.IngressClassSpec{Controller: "k8s.io/ingress-nginx"}},
+		&networkingv1.IngressClass{
+			ObjectMeta: metav1.ObjectMeta{Name: "alb-default", Annotations: map[string]string{"ingressclass.kubernetes.io/is-default-class": "true"}},
+			Spec:       networkingv1.IngressClassSpec{Controller: albIngressController},
+		},
+		namedPortService,
+		albService("real", 8080),
+
+		// nginx: use-annotation is a real port name on the Service.
+		withClass(sentinelIngress("nginx-named-port", nil, "named"), &nginx),
+		// nginx: the Service exists but has no such port.
+		withClass(sentinelIngress("nginx-no-port", nil, "real"), &nginx),
+		// No class set, cluster default is ALB.
+		sentinelIngress("default-class", nil, "orphan"),
+		// No class set, legacy annotation names alb.
+		sentinelIngress("legacy-alb", map[string]string{"kubernetes.io/ingress.class": "alb"}, "orphan"),
+		// No class set, legacy annotation names something else.
+		sentinelIngress("legacy-nginx", map[string]string{"kubernetes.io/ingress.class": "nginx"}, "named"),
+		// Named class does not exist, alb.* annotation is the only evidence.
+		withClass(sentinelIngress("alb-annotation", map[string]string{"alb.ingress.kubernetes.io/scheme": "internet-facing"}, "orphan"), &missingClass),
+		// Named class does not exist and nothing else identifies the controller.
+		withClass(sentinelIngress("unknown", nil, "orphan"), &missingClass),
+		// Named class does not exist. The legacy annotation is not consulted
+		// once the field is set, so this is unknown too.
+		withClass(sentinelIngress("missing-class-legacy-alb", map[string]string{"kubernetes.io/ingress.class": "alb"}, "orphan"), &missingClass),
+		// A resolved nginx class wins over stale alb.* annotations.
+		withClass(sentinelIngress("nginx-stale-alb", map[string]string{"alb.ingress.kubernetes.io/scheme": "internet-facing"}, "named"), &nginx),
+	}
+	if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	problems := detectIngressMissingBackend(GetResourceCache(), "prod", time.Now())
+	reasonsFor := func(name string) []string {
+		var out []string
+		for _, p := range problems {
+			if p.Name == name && p.Reason != "Missing IngressClass" {
+				out = append(out, p.Reason)
+			}
+		}
+		return out
+	}
+
+	for _, name := range []string{"nginx-named-port", "legacy-nginx", "unknown", "missing-class-legacy-alb", "nginx-stale-alb"} {
+		if got := reasonsFor(name); len(got) != 0 {
+			t.Errorf("%s: want no backend problems, got %v", name, got)
+		}
+	}
+	for name, want := range map[string]string{
+		"nginx-no-port":  "Missing backend Service port",
+		"default-class":  "Missing ALB action annotation",
+		"legacy-alb":     "Missing ALB action annotation",
+		"alb-annotation": "Missing ALB action annotation",
+	} {
+		got := reasonsFor(name)
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("%s: want [%s], got %v", name, want, got)
+		}
+	}
+}
+
+// The ssl-redirect and fixed-response idioms usually sit on spec.defaultBackend
+// rather than a rule path, so that call site must dispatch the same way.
+func TestDetectIngressALBActionDefaultBackend(t *testing.T) {
+	defer ResetTestState()
+
+	class := "alb"
+	withDefault := func(name, backend string, annotations map[string]string) *networkingv1.Ingress {
+		return &networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              name,
+				Namespace:         "prod",
+				CreationTimestamp: metav1.NewTime(time.Now().Add(-90 * 24 * time.Hour)),
+				Annotations:       annotations,
+			},
+			Spec: networkingv1.IngressSpec{
+				IngressClassName: &class,
+				DefaultBackend: &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{
+					Name: backend,
+					Port: networkingv1.ServiceBackendPort{Name: albActionSentinel},
+				}},
+			},
+		}
+	}
+	objects := []runtime.Object{
+		&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: class}, Spec: networkingv1.IngressClassSpec{Controller: albIngressController}},
+		albService("real", 8080),
+		withDefault("redirect", "ssl-redirect", map[string]string{ALBActionAnnotation("ssl-redirect"): `{"type":"redirect","redirectConfig":{"protocol":"HTTPS","port":"443","statusCode":"HTTP_301"}}`}),
+		withDefault("no-action", "orphan", nil),
+		// servicePort omitted: only the Service's existence can be checked.
+		withDefault("no-port", "fwd", map[string]string{ALBActionAnnotation("fwd"): `{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"real"}]}}`}),
+		withDefault("no-port-gone", "fwd", map[string]string{ALBActionAnnotation("fwd"): `{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"gone"}]}}`}),
+	}
+	if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	problems := detectIngressMissingBackend(GetResourceCache(), "prod", time.Now())
+	for _, name := range []string{"redirect", "no-port"} {
+		for _, p := range problems {
+			if p.Name == name {
+				t.Errorf("%s: want no problems, got %+v", name, p)
+			}
+		}
+	}
+	if !findProblem(problems, "Ingress", "prod", "no-action", "Missing ALB action annotation") {
+		t.Errorf("no-action: want Missing ALB action annotation, got %+v", problems)
+	}
+	for _, p := range problems {
+		if p.Name == "no-action" && !strings.HasPrefix(p.Message, "defaultBackend uses port") {
+			t.Errorf("no-action: message must name defaultBackend, got %q", p.Message)
+		}
+	}
+	if !findProblem(problems, "Ingress", "prod", "no-port-gone", "Missing backend Service") {
+		t.Errorf("no-port-gone: want Missing backend Service, got %+v", problems)
+	}
+}
+
+// Two default IngressClasses leave the controller ambiguous, so a class-less
+// use-annotation backend must not be resolved either way.
+func TestDetectIngressSentinelPortAmbiguousDefaultClass(t *testing.T) {
+	defer ResetTestState()
+
+	isDefault := map[string]string{"ingressclass.kubernetes.io/is-default-class": "true"}
+	objects := []runtime.Object{
+		&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "alb", Annotations: isDefault}, Spec: networkingv1.IngressClassSpec{Controller: albIngressController}},
+		&networkingv1.IngressClass{ObjectMeta: metav1.ObjectMeta{Name: "nginx", Annotations: isDefault}, Spec: networkingv1.IngressClassSpec{Controller: "k8s.io/ingress-nginx"}},
+		albService("real", 8080),
+		sentinelIngress("ambiguous", nil, "real"),
+	}
+	if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	for _, p := range detectIngressMissingBackend(GetResourceCache(), "prod", time.Now()) {
+		if p.Name == "ambiguous" && p.Reason != "Missing IngressClass" {
+			t.Errorf("ambiguous default class must stay silent, got %+v", p)
+		}
 	}
 }

@@ -647,7 +647,7 @@ func detectIngressMissingBackend(cache *ResourceCache, namespace string, now tim
 					"Missing ALB action annotation",
 					fmt.Sprintf("%s uses port %q for backend %q but annotation %q is not set", sourcePath, albActionSentinel, svcName, annotation),
 					ing.CreationTimestamp.Time),
-					fmt.Sprintf("Backend %q resolves through annotation %q, which doesn't exist, so the controller has no action to attach and this route serves nothing.", svcName, annotation),
+					fmt.Sprintf("Backend %q resolves through annotation %q, which doesn't exist, so the controller serves a fixed 503 response on this route instead.", svcName, annotation),
 					fmt.Sprintf("Add annotation %q describing a forward, redirect, or fixed-response action, or point the backend at a Service port instead of %q.", annotation, albActionSentinel)))
 				return
 			case malformed:
@@ -655,7 +655,7 @@ func detectIngressMissingBackend(cache *ResourceCache, namespace string, now tim
 					"Invalid ALB action annotation",
 					fmt.Sprintf("%s resolves through annotation %q which is not valid action JSON", sourcePath, annotation),
 					ing.CreationTimestamp.Time),
-					fmt.Sprintf("Annotation %q can't be parsed, so the controller has no action to attach and this route serves nothing.", annotation),
+					fmt.Sprintf("Annotation %q can't be parsed, so the controller fails to reconcile this Ingress and stops applying changes for its whole ingress group.", annotation),
 					fmt.Sprintf("Fix the JSON in annotation %q so it describes a forward, redirect, or fixed-response action.", annotation)))
 				return
 			}
@@ -668,10 +668,23 @@ func detectIngressMissingBackend(cache *ResourceCache, namespace string, now tim
 			}
 		}
 
+		// Only the AWS Load Balancer Controller treats use-annotation as a
+		// sentinel. Under any other controller it is an ordinary port name, and
+		// when the controller can't be identified the backend is left alone.
+		var albServed, albKnown, albResolved bool
 		checkBackend := func(b networkingv1.IngressServiceBackend, sourcePath string) {
 			if b.Port.Name == albActionSentinel {
-				checkALBActionBackend(b.Name, sourcePath)
-				return
+				if !albResolved {
+					albServed, albKnown = ingressServedByALB(cache, ing)
+					albResolved = true
+				}
+				if albServed {
+					checkALBActionBackend(b.Name, sourcePath)
+					return
+				}
+				if !albKnown {
+					return
+				}
 			}
 			checkServiceBackend(b.Name, b.Port.Name, b.Port.Number, sourcePath)
 		}
