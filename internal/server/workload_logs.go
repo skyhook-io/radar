@@ -1121,7 +1121,7 @@ func isSupportedJobSet(jobSet *unstructured.Unstructured) bool {
 func jobSetMemberRuns(jobSet *unstructured.Unstructured, jobs []*batchv1.Job, query jobSetMemberQuery) WorkloadRunsResponse {
 	runs := make([]WorkloadRun, 0)
 	for _, job := range jobs {
-		if !jobSetControlsJob(jobSet, job) {
+		if job == nil || !jobSetControls(jobSet, job) {
 			continue
 		}
 		runs = append(runs, jobSetMemberRunInfo(jobSet, job))
@@ -1156,11 +1156,11 @@ func jobSetMemberRuns(jobSet *unstructured.Unstructured, jobs []*batchv1.Job, qu
 	return result
 }
 
-func jobSetControlsJob(jobSet *unstructured.Unstructured, job *batchv1.Job) bool {
-	if !isSupportedJobSet(jobSet) || job == nil || job.Namespace != jobSet.GetNamespace() {
+func jobSetControls(jobSet *unstructured.Unstructured, child metav1.Object) bool {
+	if !isSupportedJobSet(jobSet) || child == nil || child.GetNamespace() != jobSet.GetNamespace() {
 		return false
 	}
-	owner := metav1.GetControllerOf(job)
+	owner := metav1.GetControllerOf(child)
 	if owner == nil || owner.APIVersion != jobSetAPIVersion || owner.Kind != "JobSet" || owner.Name != jobSet.GetName() {
 		return false
 	}
@@ -1203,7 +1203,7 @@ func resolveJobSetLauncher(ctx context.Context, cache *k8s.ResourceCache, job *b
 }
 
 func jobSetLauncher(jobSet *unstructured.Unstructured, job *batchv1.Job) *WorkloadRunResourceRef {
-	if !isSupportedJobSet(jobSet) || !jobSetControlsJob(jobSet, job) {
+	if job == nil || !jobSetControls(jobSet, job) {
 		return nil
 	}
 	return &WorkloadRunResourceRef{Kind: "JobSet", Namespace: job.Namespace, Name: jobSet.GetName(), Group: "jobset.x-k8s.io"}

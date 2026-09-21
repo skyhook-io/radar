@@ -1571,6 +1571,14 @@ func filterRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, fie
 	return out
 }
 
+// FilterSchedulingSummary applies the same reference permissions as Build without
+// collecting unrelated resource context. The input remains unchanged.
+func FilterSchedulingSummary(ctx context.Context, summary *SchedulingSummary, ac RefAccessChecker) (*SchedulingSummary, []OmittedField) {
+	omitted := newOmittedTracker()
+	filtered := filterSchedulingSummary(ctx, summary, ac, omitted)
+	return filtered, omitted.collect()
+}
+
 func filterSchedulingSummary(ctx context.Context, summary *SchedulingSummary, ac RefAccessChecker, omitted *omittedTracker) *SchedulingSummary {
 	if summary == nil || len(summary.Observations) == 0 {
 		return nil

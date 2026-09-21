@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
 import type {
   AppHistory,
   AppRow,
@@ -6898,6 +6899,17 @@ export function useWorkloadRuns(
           query.state.data?.selected?.active || query.state.data?.runs?.some((run) => run.active) ? 5000 : 30000
       : false,
   });
+}
+
+export function useKueueAdmission(namespace: string, name: string) {
+  return useQuery<KueueAdmissionResponse>({
+    queryKey: ['kueue-admission', 'jobset.x-k8s.io', namespace, name],
+    queryFn: () => fetchJSON(`/kueue/admission/jobsets/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}?group=jobset.x-k8s.io`),
+    enabled: Boolean(namespace && name),
+    staleTime: 5000,
+    refetchInterval: 5000,
+    retry: (count, error) => !(error instanceof ApiError && error.status === 403) && count < 2,
+  })
 }
 
 // Fetch logs for a workload (non-streaming)

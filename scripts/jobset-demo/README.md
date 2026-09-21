@@ -96,6 +96,38 @@ ready and active counts. Schema invariants are documented alongside the
 
 ## Proof boundary
 
+### Optional combined admission lane
+
+`./scripts/jobset-demo.sh up-admission` adds Kueue `v0.19.2` to the same owned,
+single-node cluster, after the JobSet CRD is served. The pinned Kueue release
+[enables the JobSet integration](https://github.com/kubernetes-sigs/kueue/blob/v0.19.2/config/components/manager/controller_manager_config.yaml).
+Four additional JobSets live in `jobset-admission-demo`: `admitted-running`,
+`quota-blocked`, `queue-held`, and `finished`. The original three-scenario lane
+and its inventory assertions remain unchanged. No status is patched.
+
+```bash
+./scripts/jobset-demo.sh up-admission
+./scripts/jobset-demo.sh verify-admission
+RADAR_URL=http://127.0.0.1:9332 ./scripts/jobset-demo.sh verify-admission-radar
+```
+
+The combined verifier checks exact JobSet controller ownership on every
+Workload, real admission/blocker/completion conditions, and absence of Jobs and
+Pods for the two pre-admission blockers. The Radar check runs the original lane
+first (including context/cluster provenance), then checks that each JobSet's
+admission endpoint returns that exact Workload UID, generation, condition,
+decision, and phase. UI clicks, layout, and partial RBAC still need their own
+browser or focused test coverage. Multiple admissions, eviction/requeue,
+MultiKueue remote execution, and unsupported versions are not earned by this
+four-scenario lane.
+
+Re-running `up-admission` preserves existing JobSets. To recreate changed
+fixtures, run `reset` followed by `up-admission`. The ordinary `down` command
+removes this entire owned cluster, including Kueue. Avoid running another kind
+lane concurrently; stop this cluster after verification.
+
+### Base lane
+
 Passing this lane proves that JobSet `v0.12.0` on kind Kubernetes `v1.36.1`
 can create and identify role-, group-, and index-labelled Jobs and Pods,
 withhold a dependent role, produce one explicit terminal failure, and expose

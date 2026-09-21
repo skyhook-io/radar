@@ -1,0 +1,107 @@
+{
+  "apiVersion": "v1",
+  "kind": "List",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "Namespace",
+      "metadata": {
+        "name": "jobset-admission-demo"
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "ResourceFlavor",
+      "metadata": {
+        "name": "jobset-admission"
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "ClusterQueue",
+      "metadata": {
+        "name": "jobset-admission-ready"
+      },
+      "spec": {
+        "namespaceSelector": {
+          "matchLabels": {
+            "kubernetes.io/metadata.name": "jobset-admission-demo"
+          }
+        },
+        "resourceGroups": [
+          {
+            "coveredResources": [
+              "cpu"
+            ],
+            "flavors": [
+              {
+                "name": "jobset-admission",
+                "resources": [
+                  {
+                    "name": "cpu",
+                    "nominalQuota": "2"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "LocalQueue",
+      "metadata": {
+        "name": "ready",
+        "namespace": "jobset-admission-demo"
+      },
+      "spec": {
+        "clusterQueue": "jobset-admission-ready"
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "ClusterQueue",
+      "metadata": {
+        "name": "jobset-admission-held"
+      },
+      "spec": {
+        "namespaceSelector": {
+          "matchLabels": {
+            "kubernetes.io/metadata.name": "jobset-admission-demo"
+          }
+        },
+        "resourceGroups": [
+          {
+            "coveredResources": [
+              "cpu"
+            ],
+            "flavors": [
+              {
+                "name": "jobset-admission",
+                "resources": [
+                  {
+                    "name": "cpu",
+                    "nominalQuota": "2"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "stopPolicy": "Hold"
+      }
+    },
+    {
+      "apiVersion": "kueue.x-k8s.io/v1beta2",
+      "kind": "LocalQueue",
+      "metadata": {
+        "name": "held",
+        "namespace": "jobset-admission-demo"
+      },
+      "spec": {
+        "clusterQueue": "jobset-admission-held"
+      }
+    }
+  ]
+}

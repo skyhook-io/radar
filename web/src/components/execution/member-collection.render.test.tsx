@@ -20,6 +20,7 @@ vi.mock('../../api/client', () => ({
 vi.mock('../logs/WorkloadLogsViewer', () => ({
   WorkloadLogsViewer: ({ kind, namespace, name }: { kind: string; namespace: string; name: string }) => <div data-log-target={`${kind}/${namespace}/${name}`}>Logs for {name}</div>,
 }))
+vi.mock('./JobSetAdmission', () => ({ JobSetAdmission: () => null }))
 
 const member: WorkloadRun = {
   group: 'batch', kind: 'jobs', namespace: 'training', name: 'distributed-workers-0',
