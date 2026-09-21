@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AlertTriangle, ArrowLeft, Check, Loader2, ShieldAlert, ShieldCheck, X } from 'lucide-react'
 import { normalizeYamlForReview, splitYamlDocuments } from '../../utils/yaml'
 import { Badge } from './Badge'
@@ -30,6 +30,10 @@ export interface YamlReviewProps {
   force?: boolean
   isApplying?: boolean
   applyError?: string | null
+  /** What the surface did about the failure — e.g. that it has already
+   *  refreshed this review against the version now in the cluster. Rendered
+   *  under the error, and only meaningful alongside one. */
+  applyErrorHint?: ReactNode
   applyLabel?: string
   onClose?: () => void
   onBack: () => void
@@ -78,6 +82,7 @@ export function YamlReview({
   force = false,
   isApplying = false,
   applyError,
+  applyErrorHint,
   applyLabel = 'Apply reviewed changes',
   onClose,
   onBack,
@@ -350,7 +355,10 @@ export function YamlReview({
       <div className="shrink-0 border-t border-theme-border bg-theme-elevated/80 px-4 py-3">
         {applyError && (
           <div className="mb-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
-            {applyError}
+            <div>{applyError}</div>
+            {applyErrorHint && (
+              <div className="mt-1 text-theme-text-secondary">{applyErrorHint}</div>
+            )}
           </div>
         )}
         {nonAtomic && (

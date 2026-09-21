@@ -55,7 +55,10 @@ import { DiagnoseProvider } from "./components/diagnose/DiagnoseContext";
 declare module "@tanstack/react-query" {
   interface Register {
     mutationMeta: {
-      errorMessage?: string;
+      // A function when the headline depends on why it failed — a conflict is
+      // not the same event as a rejected edit, and "Failed to update resource"
+      // tells neither apart.
+      errorMessage?: string | ((error: Error) => string);
       successMessage?: string;
       successDetail?: string;
     };
@@ -173,7 +176,8 @@ function makeDefaultQueryClient(): QueryClient {
     },
     mutationCache: new MutationCache({
       onError: (error, _variables, _context, mutation) => {
-        const message = mutation.options.meta?.errorMessage;
+        const meta = mutation.options.meta?.errorMessage;
+        const message = typeof meta === "function" ? meta(error as Error) : meta;
         if (message) showApiError(message, (error as Error).message);
       },
       onSuccess: (_data, _variables, _context, mutation) => {

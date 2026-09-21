@@ -17,6 +17,7 @@ import type {
   YamlDocumentIdentity,
   YamlSchemaLoadResult,
 } from '@skyhook-io/k8s-ui'
+import { isConflictSaveError } from '@skyhook-io/k8s-ui'
 import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
 import { showApiError, showApiSuccess } from '../components/ui/Toast'
 import { useCanHelmWrite } from '../contexts/CapabilitiesContext'
@@ -3952,7 +3953,13 @@ export function useUpdateResource() {
       return response.json();
     },
     meta: {
-      errorMessage: "Failed to update resource",
+      // A conflict means the object moved under the editor, not that the edit
+      // was wrong — and the editor has already refreshed the review, so the
+      // headline should point at that rather than read as a rejection.
+      errorMessage: (error: Error) =>
+        isConflictSaveError(error.message)
+          ? "Resource changed in the cluster"
+          : "Failed to update resource",
       successMessage: "Resource updated",
     },
     onSuccess: (updated: any, variables) => {

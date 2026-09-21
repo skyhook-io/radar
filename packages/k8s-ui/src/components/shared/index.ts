@@ -1,5 +1,5 @@
 export { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } from './ResourceRendererDispatch'
-export { EditableYamlView, SaveSuccessAnimation } from './EditableYamlView'
+export { EditableYamlView, SaveSuccessAnimation, isConflictSaveError } from './EditableYamlView'
 export { ResourceActionsBar, RevisionHistoryDialog, isRolloutKind } from './ResourceActionsBar'
 export {
   DrainPlanDialog, DrainPlanContent, canConfirmDrain, planMatches, emptyDirPodsAtRisk, DEFAULT_DRAIN_DIALOG_OPTIONS,

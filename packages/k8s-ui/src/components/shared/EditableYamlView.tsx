@@ -67,8 +67,29 @@ function getEditWarning(
   return null
 }
 
+// A save can fail because the object moved under the editor rather than
+// because anything in the YAML is wrong, and the apiserver says so in a
+// sentence written for controllers ("Operation cannot be fulfilled on
+// deployments.apps \"web\": the object has been modified; please apply your
+// changes to the latest version and try again"). Naming that class lets the
+// caller answer it with the review refresh it already performs, instead of
+// leaving the user to read a conflict as a rejection of their edit.
+export function isConflictSaveError(error: string): boolean {
+  return (
+    error.includes('Operation cannot be fulfilled') ||
+    error.includes('the object has been modified') ||
+    error.includes('changed after review')
+  )
+}
+
 // Parse and simplify Kubernetes error messages
 function formatSaveError(error: string): { summary: string; details?: string } {
+  if (isConflictSaveError(error)) {
+    return {
+      summary: 'The resource changed in the cluster after you opened it, so this save was rejected.',
+      details: error,
+    }
+  }
   if (error.includes('is invalid:')) {
     const parts = error.split('is invalid:')
     const errorPart = parts[1]?.trim() || ''
@@ -217,6 +238,13 @@ export function EditableYamlView({
     nonAtomic: boolean
     context?: string
   } | null>(null)
+  // What happened to the review after a failed apply. The failure path below
+  // silently re-previews so the next Apply carries a current resourceVersion —
+  // which means a conflict is one click from resolved, and nothing on screen
+  // said so. 'refreshed' = the diff under the error is the current object,
+  // 'stale' = the refresh itself failed, so applying again would just repeat
+  // the conflict.
+  const [applyRecovery, setApplyRecovery] = useState<'refreshed' | 'stale' | null>(null)
 
   // Clean up restored draft flag
   useEffect(() => {
@@ -256,6 +284,7 @@ export function EditableYamlView({
     setEditedYaml(resourceToYaml(data))
     setYamlErrors([])
     setPreview(null)
+    setApplyRecovery(null)
     setIsEditing(true)
   }, [data, readOnly])
 
@@ -264,6 +293,7 @@ export function EditableYamlView({
     setEditedYaml('')
     setYamlErrors([])
     setPreview(null)
+    setApplyRecovery(null)
   }, [])
 
   const handleSaveEdit = useCallback(async () => {
@@ -308,6 +338,7 @@ export function EditableYamlView({
 
   const handleApplyReviewed = useCallback(async () => {
     if (!preview || !onSave) return
+    setApplyRecovery(null)
     try {
       await onSave({
         kind: resource.kind,
@@ -341,8 +372,11 @@ export function EditableYamlView({
             nonAtomic: refreshed.nonAtomic,
             context: refreshed.context,
           })
+          setApplyRecovery('refreshed')
         } catch {
-          // Keep the last review visible when refresh is unavailable.
+          // Keep the last review visible when refresh is unavailable — but say
+          // so, because applying it again would fail the same way.
+          setApplyRecovery('stale')
         }
       }
     }
@@ -355,6 +389,16 @@ export function EditableYamlView({
   const yamlContent = yamlStringify(data, { lineWidth: 0, indent: 2 })
   const editWarning = getEditWarning(resource.kind, resource.group)
   const formattedError = saveError ? formatSaveError(saveError) : null
+  // Only a conflict is answered by re-applying: a rejected edit would fail the
+  // same way however fresh the review is, so the hint stays out of its way.
+  const reviewRecoveryHint =
+    saveError && isConflictSaveError(saveError)
+      ? applyRecovery === 'refreshed'
+        ? 'The review below was refreshed against the version now in the cluster. Check the diff — your edit is unchanged — and apply again.'
+        : applyRecovery === 'stale'
+          ? 'This review is from before the save attempt and could not be refreshed. Go back and review again before applying.'
+          : null
+      : null
   const isPending = (isSaving ?? false) || (isPreviewing ?? false)
 
   if (isEditing) {
@@ -367,8 +411,12 @@ export function EditableYamlView({
           nonAtomic={preview.nonAtomic}
           force={preview.force}
           isApplying={isSaving}
-          applyError={saveError}
-          onBack={() => setPreview(null)}
+          applyError={formattedError?.summary ?? saveError}
+          applyErrorHint={reviewRecoveryHint}
+          onBack={() => {
+            setPreview(null)
+            setApplyRecovery(null)
+          }}
           onApply={handleApplyReviewed}
         />
       )
