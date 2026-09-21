@@ -415,7 +415,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                   </div>
                   {memberCollection && <div className="flex flex-wrap items-center gap-3 border-b border-theme-border px-4 py-2 text-xs">
                     {!runs.some(run => workloadRunKey(run) === selectedRunKey) && <span className="text-theme-text-secondary">Selected Job is outside the current filter or shown window.</span>}
-                    {onNavigateToResource && <><button type="button" className="text-accent-text hover:underline" onClick={() => onNavigateToResource(resourceTargetForRun(selectedRun))}>Open Job and all Pods</button><button type="button" className="text-accent-text hover:underline" onClick={() => onNavigateToResource({ ...resourceTargetForRun(selectedRun), tab: 'metrics' })}>Job metrics</button></>}
+                    {onNavigateToResource && <><button type="button" className="text-accent-text hover:underline" onClick={() => onNavigateToResource(resourceTargetForRun(selectedRun))}>Open Job</button><button type="button" className="text-accent-text hover:underline" onClick={() => onNavigateToResource({ ...resourceTargetForRun(selectedRun), tab: 'metrics' })}>Job metrics</button></>}
                     {canViewLogs && <button type="button" className="text-accent-text hover:underline" onClick={onSwitchToLogs}>Job logs</button>}
                   </div>}
                   <RunDetailList run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} scheduledParent={scheduled} memberCollection={memberCollection} />
@@ -1240,7 +1240,7 @@ function JobSetMemberPods({
           ))}
           {truncated && (
             <div className="px-3 py-2 text-xs text-theme-text-tertiary">
-              Showing {pods.length} of {total} Pods, with problems first. Open the Job for the complete list.
+              Showing {pods.length} of {total} Pods, with problems first.
             </div>
           )}
         </div>
