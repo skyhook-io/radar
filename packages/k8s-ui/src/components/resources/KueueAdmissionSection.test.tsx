@@ -78,7 +78,8 @@ describe('Kueue admission investigation', () => {
   it('shows a deactivation condition once when it is also the primary evidence', () => {
     const condition = { type: 'DeactivationTarget', status: 'True', reason: 'AdmissionCheck' }
     const html = render(response({ decision: 'held', primaryCondition: condition, disruptions: [condition], kueue: { phase: 'pending', active: false } }))
-    expect(html.match(/DeactivationTarget/g)).toHaveLength(1)
+    expect(html).toContain('Primary condition: DeactivationTarget')
+    expect(html.match(/AdmissionCheck/g)).toHaveLength(1)
   })
 
   it('keeps bounded records separate and never names the newest as current', () => {

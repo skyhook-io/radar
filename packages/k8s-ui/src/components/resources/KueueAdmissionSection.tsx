@@ -26,7 +26,7 @@ export function KueueAdmissionSection({ data, loading, error, forbidden, hinted,
       <h3 className="text-sm font-semibold text-theme-text-primary">Kueue admission</h3>
       <p className="mt-1 text-xs text-theme-text-secondary">Admission and execution are separate observations. An admitted Workload does not prove that Jobs or Pods are running.</p>
       {loading ? <p className="mt-3 text-sm text-theme-text-secondary">Looking for controller-owned Workloads…</p>
-        : error ? <AlertBanner variant={forbidden ? 'info' : 'warning'} title={forbidden ? 'Admission lookup requires permission' : 'Admission evidence unavailable'} message={error}>{!forbidden && onRetry && <button type="button" className="mt-2 text-accent-text hover:underline" onClick={onRetry}>Retry admission lookup</button>}</AlertBanner>
+        : error ? <div className="mt-3 [&>div]:mb-0"><AlertBanner variant={forbidden ? 'info' : 'warning'} title={forbidden ? 'Admission lookup requires permission' : 'Admission evidence unavailable'} message={error}>{!forbidden && onRetry && <button type="button" className="mt-2 text-accent-text hover:underline" onClick={onRetry}>Retry admission lookup</button>}</AlertBanner></div>
           : data && !data.installed ? <p className="mt-3 text-sm text-theme-text-secondary">Kueue Workloads are not served by this cluster.</p>
             : data && data.workloads.length === 0 ? <p className="mt-3 text-sm text-theme-text-secondary">No controller-owned Kueue Workload observed in this namespace.{externalExecution ? ' This JobSet uses an external controller; local absence does not establish remote admission or execution state.' : ' Queue metadata alone does not establish an admission decision.'}</p>
               : data && <div className="mt-3 space-y-3">
@@ -58,6 +58,7 @@ function AdmissionObservation({ observation, link }: { observation: SchedulingOb
       {kueue?.active === false && <span>Workload inactive</span>}
     </div>
     {stale && <p className="text-sm text-theme-text-secondary">The primary condition describes generation {condition!.observedGeneration}; this Workload is now generation {observation.subjectGeneration}. Treat that condition as stale evidence.</p>}
+    {condition && <p className="text-xs text-theme-text-secondary">Selected admission evidence · Primary condition: {condition.type}</p>}
     {!condition && <p className="text-theme-text-secondary">No primary admission condition reported.</p>}
     <ConditionsSection
       conditions={conditions}
