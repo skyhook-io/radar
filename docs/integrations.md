@@ -1,6 +1,6 @@
 # Ecosystem Integrations
 
-Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar adds dedicated capabilities described below, including detail views, topology edges, smart table columns, and AI-optimized summaries. Coverage varies by integration. Explicit local runtime evidence for RabbitMQ, NATS and Vault uses Pod endpoints rather than CRDs.
+Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar adds dedicated capabilities described below, including detail views, topology edges, smart table columns, and AI-optimized summaries. Coverage varies by integration.
 
 Operational Issues in an open resource detail view refresh after observed root
 resource changes, coalesced to limit expensive checks. A once-per-minute visible-tab
