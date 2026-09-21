@@ -145,7 +145,7 @@ func (a albAction) valid() bool {
 			if external == (tg.ServiceName != nil) {
 				return false
 			}
-			if tg.ServiceName != nil && tg.ServicePort == nil {
+			if tg.ServiceName != nil && !albPortSet(tg.ServicePort) {
 				return false
 			}
 			if len(groups) > 1 && tg.Weight == nil {
@@ -155,6 +155,16 @@ func (a albAction) valid() bool {
 		return true
 	}
 	return false
+}
+
+// albPortSet reports whether a servicePort names something a Service could
+// expose. null, "" and 0 all decode without error but match no port.
+func albPortSet(port *intstr.IntOrString) bool {
+	if port == nil {
+		return false
+	}
+	value := strings.TrimSpace(port.String())
+	return value != "" && value != "0"
 }
 
 // parseALBAction reads the action annotation for a use-annotation backend.

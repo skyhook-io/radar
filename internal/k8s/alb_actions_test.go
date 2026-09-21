@@ -145,6 +145,24 @@ func TestParseALBAction(t *testing.T) {
 			wantBad:     true,
 		},
 		{
+			name:        "service target with null servicePort",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"app","servicePort":null}]}}`},
+			wantFound:   true,
+			wantBad:     true,
+		},
+		{
+			name:        "service target with empty servicePort",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"app","servicePort":""}]}}`},
+			wantFound:   true,
+			wantBad:     true,
+		},
+		{
+			name:        "service target with zero servicePort",
+			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"app","servicePort":0}]}}`},
+			wantFound:   true,
+			wantBad:     true,
+		},
+		{
 			name:        "multiple target groups without weights",
 			annotations: map[string]string{"alb.ingress.kubernetes.io/actions.app": `{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"a","servicePort":80},{"serviceName":"b","servicePort":80}]}}`},
 			wantFound:   true,
@@ -421,8 +439,10 @@ func TestDetectIngressALBActionDefaultBackend(t *testing.T) {
 		albService("real", 8080),
 		withDefault("redirect", "ssl-redirect", map[string]string{ALBActionAnnotation("ssl-redirect"): `{"type":"redirect","redirectConfig":{"protocol":"HTTPS","port":"443","statusCode":"HTTP_301"}}`}),
 		withDefault("no-action", "orphan", nil),
-		// The controller requires servicePort alongside serviceName.
+		// The controller requires a usable servicePort alongside serviceName.
 		withDefault("no-port", "fwd", map[string]string{ALBActionAnnotation("fwd"): `{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"real"}]}}`}),
+		withDefault("empty-port", "fwd", map[string]string{ALBActionAnnotation("fwd"): `{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"real","servicePort":""}]}}`}),
+		withDefault("zero-port", "fwd", map[string]string{ALBActionAnnotation("fwd"): `{"type":"forward","forwardConfig":{"targetGroups":[{"serviceName":"real","servicePort":0}]}}`}),
 	}
 	if err := InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
@@ -442,8 +462,10 @@ func TestDetectIngressALBActionDefaultBackend(t *testing.T) {
 			t.Errorf("no-action: message must name defaultBackend, got %q", p.Message)
 		}
 	}
-	if !findProblem(problems, "Ingress", "prod", "no-port", "Invalid ALB action annotation") {
-		t.Errorf("no-port: want Invalid ALB action annotation, got %+v", problems)
+	for _, name := range []string{"no-port", "empty-port", "zero-port"} {
+		if !findProblem(problems, "Ingress", "prod", name, "Invalid ALB action annotation") {
+			t.Errorf("%s: want Invalid ALB action annotation, got %+v", name, problems)
+		}
 	}
 }
 
