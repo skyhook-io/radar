@@ -413,3 +413,19 @@ For `issues`, read `timing_summary` when present; it explains timing combination
 - **Secret redaction** — Secret `.data` and `.stringData` are never exposed; only key names are shown
 - **Value redaction** — environment variable values and Helm values returned through MCP are scrubbed for known secret patterns; Helm values also use key-aware redaction for names like `password`, `token`, `privateKey`, and `secretKey`
 - **Log redaction** — pod log output and Helm hook log evidence are scrubbed for secret patterns before being returned
+
+## Explicit local runtime evidence
+
+`collect_runtime_evidence` observes one named Pod endpoint for `rabbitmq`, `nats`, or `vault`. Call it only after the operator authorizes endpoint collection, with `namespace`, `pod`, and `confirm_network_access: true`. It opens a temporary localhost-only Kubernetes port-forward under the existing kubeconfig identity; Pod read and port-forward permission are required. No grants, application credentials, Secret reads, exec fallback, endpoint settings or workload changes are introduced.
+
+This tool is available only on the full local MCP surface. Remote HTTP peers, authenticated callers, Radar Cloud and in-cluster deployments are refused. It is absent from read-only and built-in investigation tool sets. Built-in apply turns use `/mcp-apply`, which retains existing operations but excludes runtime collection. Existing read-only investigations do not automatically gain runtime collection. Recognized official images must declare the adapter's default plaintext port; host-network Pods and ambiguous containers are unsupported. Missing configuration is not repaired automatically: custom ports, TLS trust, application authentication and hosted authorization are deferred.
+
+| Adapter | Source | What observations mean |
+|---|---|---|
+| RabbitMQ | Pod port 15692 `/metrics` | Source-reported disk and memory alarms for that node. Both samples must exist and be unambiguous. Metrics responses above 256 KiB, including large per-object metrics payloads, are unavailable; no partial scrape is interpreted. False alarms do not establish cluster health. |
+| NATS | Pod port 8222 `/jsz` with stream/consumer details | Account-scoped pending, acknowledgement-pending and redelivery counts, capped at 20 consumer rows with explicit coverage. A backlog is not necessarily a stuck consumer. JetStream disabled is distinct from zero pending messages. |
+| Vault | Pod port 8200 `/v1/sys/health` | Source HTTP code plus initialized/sealed/standby booleans. A standby is not necessarily a fault, and HTTP 200 alone is not a health conclusion. |
+
+`outcome: observed` carries allowlisted facts; `outcome: unavailable` carries a bounded reason and no facts. Unavailable, denied, missing, malformed, oversized or partial responses must not be described as healthy or as proof that no problem exists. Results apply to the selected Pod endpoint at collection time. Live Pod identity checks bracket collection and discard changed targets; they cannot prevent briefly contacting a replacement Pod with the same name. Image names and identities are selection hints, not attestation of endpoint contents.
+
+RabbitMQ's Cluster Operator enables Prometheus metrics; bare installations may not, and optional metrics authentication can deny access. NATS monitoring availability depends on deployment configuration and is independent of messaging authentication. Vault health needs no Vault token, but TLS/proxy access can still prevent collection. Unsupported configurations return unavailable instead of prompting for settings.

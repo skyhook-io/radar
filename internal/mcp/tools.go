@@ -542,6 +542,12 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	}
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name:        "collect_runtime_evidence",
+		Description: "Explicit local-only observation of one named Pod's RabbitMQ alarm metrics, NATS JetStream consumer counts, or Vault initialization/seal status. Requires operator authorization via confirm_network_access=true and existing Pod read/port-forward permissions. Opens a bounded temporary tunnel; does not mutate workloads. Supports recognized official images and declared default plaintext ports only; no credentials or custom settings. Unavailable or partial evidence is NOT evidence of health or absence of problems. Observations cover only this Pod at collection time; pending messages do not prove a stuck consumer, and Vault standby is not necessarily a fault. Not available to hosted/authenticated callers or built-in/read-only investigations.",
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(false), OpenWorldHint: boolPtr(false)},
+	}, logToolCall("collect_runtime_evidence", handleRuntimeEvidence))
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_workload",
 		Description: "Perform operations on a Kubernetes workload (Deployment, StatefulSet, DaemonSet, or Argo Rollout). " +
 			"Supported actions: 'restart' triggers a rolling restart, 'scale' changes the replica count " +

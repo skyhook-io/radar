@@ -178,13 +178,15 @@ func (*captureTurnAgent) parseStream(reader io.Reader, onEvent func(StreamEvent)
 }
 
 type adapterAuthoredEvidenceAgent struct {
+	spec  turnSpec
 	event StreamEvent
 }
 
 func (*adapterAuthoredEvidenceAgent) Name() string      { return "claude" }
 func (*adapterAuthoredEvidenceAgent) Path() string      { return "printf" }
 func (*adapterAuthoredEvidenceAgent) SigninCmd() string { return "claude auth login" }
-func (*adapterAuthoredEvidenceAgent) command(ctx context.Context, _ turnSpec) (*exec.Cmd, func(), error) {
+func (agent *adapterAuthoredEvidenceAgent) command(ctx context.Context, spec turnSpec) (*exec.Cmd, func(), error) {
+	agent.spec = spec
 	return exec.CommandContext(ctx, "printf", ""), func() {}, nil
 }
 func (agent *adapterAuthoredEvidenceAgent) parseStream(_ io.Reader, onEvent func(StreamEvent)) Diagnosis {
@@ -215,6 +217,18 @@ func TestDiagnoseStreamClearsAdapterProvenanceOnApplyTurn(t *testing.T) {
 	}
 	if delivered == nil || delivered.RadarEvidence {
 		t.Fatalf("apply event retained adapter-authored provenance: %+v", delivered)
+	}
+}
+
+func TestDiagnoseStreamUsesRestrictedApplyMount(t *testing.T) {
+	agent := &adapterAuthoredEvidenceAgent{event: StreamEvent{Type: "step"}}
+	diagnoser := &Diagnoser{agents: map[string]Agent{"claude": agent}, defName: "claude"}
+	_, err := diagnoser.DiagnoseStream(context.Background(), Request{Kind: "Pod", Namespace: "lab", Name: "test", MCPPort: 9280, MCPBasePath: "/radar", Apply: true}, func(StreamEvent) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := agent.spec.mcpURL, "http://localhost:9280/radar/mcp-apply"; got != want {
+		t.Fatalf("URL %q, want %q", got, want)
 	}
 }
 
