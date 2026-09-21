@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
 vi.mock('../../api/client', () => ({
   useResource: (...args: unknown[]) => state.useResource(...args),
   useWorkloadPods: () => ({ data: { pods: [], total: 0, truncated: false } }),
+  useJobSetResources: () => ({ data: undefined, isLoading: false }),
   useWorkloadRuns: () => ({ data: state.response, isLoading: state.isLoading, error: state.error }),
 }))
 vi.mock('../logs/WorkloadLogsViewer', () => ({
@@ -80,7 +81,7 @@ describe('member collection consumers', () => {
   it('does not silently select a different member outside a truncated window', () => {
     state.response = { collection: 'members', runs: [member], total: 201, truncated: true }
     const missing = 'jobs/training/omitted-worker'
-    expect(overview(missing)).toContain('The member list is truncated')
+    expect(overview(missing)).toContain('Selected Job is currently unavailable')
     const html = logs(missing)
     expect(html).toContain('Select a shown member Job')
     expect(html).not.toContain('Logs for')
@@ -94,10 +95,19 @@ describe('member collection consumers', () => {
     expect(html).toContain('Your selection is preserved if it reappears')
     expect(html).not.toContain('truncated window')
     expect(html).not.toContain('Logs for')
-    if (remaining.length === 0) expect(html).not.toContain('<select')
+    if (remaining.length === 0) expect(html).not.toContain('aria-label="Select a shown member Job"')
     state.response = { collection: 'members', runs: [member], total: 1, truncated: false }
     expect(logs(selected)).toContain(`Logs for ${member.name}`)
     expect(overview(selected)).not.toContain('Selected Job is currently unavailable')
+  })
+
+  it('opens the exact selected member outside the list in Overview and Logs', () => {
+    const selected = { ...member, name: 'off-window' }
+    state.response = { collection: 'members', runs: [member], selected, total: 250, filteredTotal: 250, truncated: true }
+    const key = 'jobs/training/off-window'
+    expect(overview(key)).toContain('Selected Job is outside the current filter or shown window')
+    expect(logs(key)).toContain('Logs for off-window')
+    expect(logs(key)).not.toContain('Selected Job is currently unavailable')
   })
 
   it('uses collection semantics even when there are no members', () => {

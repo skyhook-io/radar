@@ -3,6 +3,8 @@ import { Activity, GitBranch, Terminal } from 'lucide-react'
 import { clsx } from 'clsx'
 import {
   Collapse,
+  Disclosure,
+  useDebouncedValue,
   CollapseChevron,
   EmptyState,
   FetchResult,
@@ -23,7 +25,9 @@ import {
   isJobSetV1Alpha2,
 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
 import { JobSetRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/JobSetRenderer'
-import { useResource, useWorkloadPods, useWorkloadRuns, type WorkloadRun } from '../../api/client'
+import { useResource, useWorkloadPods, useWorkloadRuns, useJobSetResources, type WorkloadRun } from '../../api/client'
+import type { ResourceNavigationTarget } from '../../utils/navigation'
+import { JobSetMemberComparison } from './JobSetMemberComparison'
 import type { WorkloadPodInfo } from '../../types'
 import { getScaledJobStatus } from '../resources/resource-utils-keda'
 import { Tooltip } from '../ui/Tooltip'
@@ -116,22 +120,33 @@ interface BatchExecutionProps {
   onSelectRun?: (runKey: string) => void
   onSwitchToLogs?: () => void
   onSwitchToTimeline?: () => void
-  onNavigateToResource?: (resource: { kind: string; namespace: string; name: string; group?: string }) => void
+  onNavigateToResource?: (resource: ResourceNavigationTarget) => void
 }
 
 export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resource, selectedRunKey = '', canViewLogs = false, onSelectRun, onSwitchToLogs, onSwitchToTimeline, onNavigateToResource }: BatchExecutionProps) {
   const scheduled = SCHEDULED_KINDS.has(kind)
   const clusterScoped = kind === 'ClusterWorkflowTemplate'
-  const runsQuery = useWorkloadRuns(apiKind, namespace, name, true, { refetchActive: true, clusterScoped })
-  const memberCollection = runsQuery.data?.collection === 'members'
   const jobSetRoot = isJobSetV1Alpha2(resource)
-  const memberShell = memberCollection || (!runsQuery.data && jobSetRoot)
-  const runs = runsQuery.data?.runs ?? EMPTY_RUNS
-  const defaultRun = useMemo(() => memberCollection ? runs[0] : pickDefaultRun(runs), [memberCollection, runs])
   const [runFilter, setRunFilter] = useState<'all' | 'active' | 'failed'>('all')
   const [runSearch, setRunSearch] = useState('')
+  const debouncedSearch = useDebouncedValue(runSearch, 250)
   const [roleFilter, setRoleFilter] = useState('')
+  const memberOptions = { role: roleFilter, search: debouncedSearch, state: runFilter, selected: selectedRunKey }
+  const runsQuery = useWorkloadRuns(apiKind, namespace, name, true, { refetchActive: true, clusterScoped, ...(jobSetRoot ? memberOptions : {}) })
+  const resourcesQuery = useJobSetResources(namespace, name, jobSetRoot ? resource.metadata?.uid : undefined, memberOptions)
+  const memberCollection = runsQuery.data?.collection === 'members'
+  const memberShell = memberCollection || (!runsQuery.data && jobSetRoot)
+  const runs = runsQuery.data?.runs ?? EMPTY_RUNS
+  const resolvedRuns = useMemo(() => runsQuery.data?.selected && !runs.some(run => workloadRunKey(run) === workloadRunKey(runsQuery.data!.selected!)) ? [...runs, runsQuery.data.selected] : runs, [runs, runsQuery.data?.selected])
+  const defaultRun = useMemo(() => memberCollection ? runs[0] : pickDefaultRun(runs), [memberCollection, runs])
   const previousSelection = useRef(selectedRunKey)
+  const selectedDetail = useRef<HTMLElement>(null)
+  const scrollToSelection = useRef(false)
+  const selectMember = (key: string) => {
+    if (key === selectedRunKey && selectedDetail.current) { selectedDetail.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); return }
+    scrollToSelection.current = true
+    onSelectRun?.(key)
+  }
   const referencedDefinitionTarget = workflowDefinitionTarget(kind, resource)
   const referencedDefinitionQuery = useResource<any>(
     referencedDefinitionTarget?.kind ?? '',
@@ -145,21 +160,22 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
     [kind, resource, referencedDefinitionQuery.data],
   )
 
-  const selectionMissing = memberCollection && selectedRunMissing(runs, selectedRunKey)
+  const selectionMissing = memberCollection && selectedRunMissing(resolvedRuns, selectedRunKey)
 
   useEffect(() => {
-    if (!runsQuery.data || selectionMissing) return
-    if (runs.length === 0) {
+    if (!runsQuery.data || runsQuery.isPlaceholderData || selectionMissing) return
+    if (resolvedRuns.length === 0) {
       if (selectedRunKey) onSelectRun?.('')
       return
     }
-    if (!runs.some((run) => workloadRunKey(run) === selectedRunKey)) {
+    if (!resolvedRuns.some((run) => workloadRunKey(run) === selectedRunKey)) {
       onSelectRun?.(workloadRunKey(defaultRun ?? runs[0]))
     }
-  }, [runsQuery.data, runs, selectedRunKey, defaultRun, onSelectRun, selectionMissing])
+  }, [runsQuery.data, runsQuery.isPlaceholderData, runs, resolvedRuns, selectedRunKey, defaultRun, onSelectRun, selectionMissing])
 
-  const selectedRun = selectionMissing ? undefined : runs.find((run) => workloadRunKey(run) === selectedRunKey) ?? defaultRun
+  const selectedRun = selectionMissing ? undefined : resolvedRuns.find((run) => workloadRunKey(run) === selectedRunKey) ?? defaultRun
   useEffect(() => {
+    if (!selectedRun) return
     const selectionChanged = previousSelection.current !== selectedRunKey
     previousSelection.current = selectedRunKey
     if (selectionChanged && roleFilter && selectedRun?.jobset?.replicatedJob !== roleFilter) setRoleFilter('')
@@ -172,13 +188,12 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
     return counts
   }, [runs])
   const selectRole = (role: string) => {
-    const firstMember = runs.find((run) => run.jobset?.replicatedJob === role)
-    if (!firstMember) return
     setRoleFilter(role)
     setRunFilter('all')
     setRunSearch('')
-    onSelectRun?.(workloadRunKey(firstMember))
+    onSelectRun?.('')
   }
+
   const shouldResolveLivePods = Boolean(
     selectedRun && (
       memberCollection ||
@@ -194,6 +209,12 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
       refetchInterval: memberCollection && selectedRun?.active ? 5000 : false,
     },
   )
+  useEffect(() => {
+    if (scrollToSelection.current && selectedRun && selectedDetail.current) {
+      selectedDetail.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      scrollToSelection.current = false
+    }
+  }, [selectedRun, selectedRunKey])
   const hasLivePods = shouldResolveLivePods && selectedRunPodsQuery.isLoading
     ? undefined
     : Boolean(selectedRunPodsQuery.data?.pods.length)
@@ -202,12 +223,12 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
       ? canViewLogs && hasLivePods ? 'logs' : null
       : batchRunNextStep(selectedRun, canViewLogs, hasLivePods)
     : null
-  const visibleRuns = useMemo(() => runs.filter((run) => {
+  const visibleRuns = useMemo(() => memberCollection ? runs : runs.filter((run) => {
     if (roleFilter && run.jobset?.replicatedJob !== roleFilter) return false
     if (runFilter === 'active' && !run.active) return false
     if (runFilter === 'failed' && run.phase !== 'Failed' && run.phase !== 'Error') return false
     return !runSearch || run.name.toLowerCase().includes(runSearch.toLowerCase())
-  }), [runs, runFilter, runSearch, roleFilter])
+  }), [runs, runFilter, runSearch, roleFilter, memberCollection])
   const source = sourceFacts(kind, definitionResource, runs)
   const phaseCounts = countPhases(runs)
   const phaseCountQualifier = memberCollection && runsQuery.data?.truncated ? ' in shown Jobs' : ''
@@ -250,7 +271,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
 
   return (
     <div className="flex h-full min-h-0 bg-theme-base">
-      {scheduled && (
+      {scheduled && !memberShell && (
         <aside className="flex w-72 shrink-0 flex-col border-r border-theme-border bg-theme-surface">
           <div className="border-b border-theme-border px-3 py-3">
             <div className="flex items-center justify-between gap-2">
@@ -339,6 +360,15 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
               <JobSetRenderer data={resource} mode="overview" shownMemberCounts={shownMemberCounts} onSelectRole={memberCollection ? selectRole : undefined} />
             </section>
           )}
+          {memberShell && <JobSetMemberComparison
+            runs={runs} total={runsQuery.data?.total ?? 0} filteredTotal={runsQuery.data?.filteredTotal ?? runs.length}
+            truncated={runsQuery.data?.truncated ?? false} loading={runsQuery.isLoading} error={runsQuery.error}
+            role={roleFilter} onRoleChange={setRoleFilter} roles={resource.spec?.replicatedJobs?.map((role: { name: string }) => role.name) ?? []}
+            search={runSearch} onSearchChange={setRunSearch} state={runFilter} onStateChange={setRunFilter}
+            selected={selectedRunKey} onSelect={selectMember}
+            resources={resourcesQuery.data?.uid === resource.metadata?.uid ? resourcesQuery.data : undefined}
+            resourceError={resourcesQuery.error} resourcesLoading={resourcesQuery.isLoading} durationFor={formatRunDuration}
+          />}
           {scheduled && selectedResourceQuery.error && (
             <EmptyState
               tone="neutral"
@@ -360,7 +390,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
               ) : memberShell && runsQuery.error ? (
                 <EmptyState tone="neutral" variant="card" headline="Member Jobs unavailable" body={runsErrorMessage} />
               ) : selectedRun ? (
-                <section className="rounded-lg border border-theme-border bg-theme-surface">
+                <section ref={selectedDetail} className="scroll-mt-4 rounded-lg border border-theme-border bg-theme-surface">
                   <div className="flex items-start justify-between gap-3 border-b border-theme-border px-4 py-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
@@ -383,6 +413,11 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                     </div>
                     <span className={clsx('badge', phaseBadgeClass(selectedRun.phase))}>{selectedRun.phase}{selectedRun.deleting ? ' · deleting' : ''}</span>
                   </div>
+                  {memberCollection && <div className="flex flex-wrap items-center gap-3 border-b border-theme-border px-4 py-2 text-xs">
+                    {!runs.some(run => workloadRunKey(run) === selectedRunKey) && <span className="text-theme-text-secondary">Selected Job is outside the current filter or shown window.</span>}
+                    {onNavigateToResource && <><button type="button" className="text-accent-text hover:underline" onClick={() => onNavigateToResource(resourceTargetForRun(selectedRun))}>Open Job and all Pods</button><button type="button" className="text-accent-text hover:underline" onClick={() => onNavigateToResource({ ...resourceTargetForRun(selectedRun), tab: 'metrics' })}>Job metrics</button></>}
+                    {canViewLogs && <button type="button" className="text-accent-text hover:underline" onClick={onSwitchToLogs}>Job logs</button>}
+                  </div>}
                   <RunDetailList run={selectedRun} resource={selectedResource} workflowExecution={workflowExecution} scheduledParent={scheduled} memberCollection={memberCollection} />
                   <RunContext run={selectedRun} resource={selectedResource} definitionResource={definitionResource} workflowExecution={workflowExecution} currentWorkload={{ kind, namespace, name }} onNavigateToResource={onNavigateToResource} />
                   {(selectedRun.message || isFailedRunPhase(selectedRun.phase)) && (
@@ -400,9 +435,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                   headline={selectionMissing ? 'Selected Job is currently unavailable' : memberCollection ? 'No selected Job' : 'No selected run'}
                   body={
                     selectionMissing
-                      ? runsQuery.data?.truncated
-                        ? 'The member list is truncated. This Job may have been removed or fallen outside the shown window. Choose a shown Job to inspect another member.'
-                        : 'This Job is not currently retained. It may have been removed or be waiting for recreation. Your selection is preserved if it reappears; choose another shown Job to switch.'
+                      ? 'This Job is not currently retained. It may have been removed or be waiting for recreation. Your selection is preserved if it reappears; choose another shown Job to switch.'
                       : memberCollection
                       ? 'This JobSet has no readable child Jobs to inspect.'
                       : `There are no retained ${runKindPluralForSchedule(kind)} to inspect.`
@@ -825,12 +858,14 @@ function parameterValue(parameter: WorkflowParameter): string {
 
 function RunDetailList({ run, resource, workflowExecution, scheduledParent, memberCollection }: { run: WorkloadRun; resource: any; workflowExecution: WorkflowExecutionModel | null; scheduledParent: boolean; memberCollection: boolean }) {
   const isWorkflowRun = run.kind === 'workflows' || !!workflowExecution
-  const rows: Array<[string, string]> = [
-    ...(run.jobset?.replicatedJob ? [['Role', run.jobset?.replicatedJob]] as Array<[string, string]> : []),
+  const advancedRows: Array<[string, string]> = [
     ...(run.jobset?.jobIndex ? [['Job index', formatIndexedCount(run.jobset?.jobIndex, run.jobset?.replicatedJobReplicas)]] as Array<[string, string]> : []),
     ...(run.jobset?.globalIndex ? [['Global index', formatIndexedCount(run.jobset?.globalIndex, run.jobset?.globalReplicas)]] as Array<[string, string]> : []),
     ...(run.jobset?.groupName ? [['Group', run.jobset?.groupName]] as Array<[string, string]> : []),
     ...(run.jobset?.groupIndex ? [['Group index', formatIndexedCount(run.jobset?.groupIndex, run.jobset?.groupReplicas)]] as Array<[string, string]> : []),
+  ]
+  const rows: Array<[string, string]> = [
+    ...(run.jobset?.replicatedJob ? [['Role', run.jobset?.replicatedJob]] as Array<[string, string]> : []),
     ...(run.jobset?.restartAttempt ? [['JobSet restart attempt', `#${run.jobset?.restartAttempt}`]] as Array<[string, string]> : []),
     ...(run.jobset?.jobRestartAttempt ? [['Job restart attempt', `#${run.jobset?.jobRestartAttempt}`]] as Array<[string, string]> : []),
     ['Started', run.startedAt ? formatAge(run.startedAt) : '-'],
@@ -854,14 +889,14 @@ function RunDetailList({ run, resource, workflowExecution, scheduledParent, memb
     ] as Array<[string, string]>),
   ]
   return (
-    <div className="grid gap-x-8 gap-y-2 p-4 xl:grid-cols-2">
+    <div><div className="grid gap-x-8 gap-y-2 p-4 xl:grid-cols-2">
       {rows.map(([label, value]) => (
         <div key={label} className="flex items-start justify-between gap-3 text-sm">
           <span className="text-theme-text-tertiary">{label}</span>
           <span className="min-w-0 break-words text-right text-theme-text-primary">{value}</span>
         </div>
       ))}
-    </div>
+    </div>{advancedRows.length > 0 && <Disclosure summary="Member indices" className="px-4 pb-3" summaryClassName="text-xs text-theme-text-tertiary"><div className="flex flex-wrap gap-x-4 gap-y-1 pt-2 text-xs text-theme-text-secondary">{advancedRows.map(([label, value]) => <span key={label}>{label}: {value}</span>)}</div></Disclosure>}</div>
   )
 }
 
@@ -1050,7 +1085,7 @@ function RunContext({ run, resource, definitionResource, workflowExecution, curr
         <div>
           <h4 className="mb-3 text-xs font-medium uppercase tracking-wide text-theme-text-tertiary">Run context</h4>
           <div className="space-y-3">
-            {launcher && <ContextRow label={launcher.kind === 'ScaledJob' ? 'Triggered by' : launcher.kind === 'JobSet' ? 'Member of' : 'Scheduled by'}><GenericResourceButton refInfo={launcher} onNavigateToResource={onNavigateToResource} /></ContextRow>}
+            {launcher && <ContextRow label={launcher.kind === 'ScaledJob' ? 'Triggered by' : launcher.kind === 'JobSet' ? 'Member of' : 'Scheduled by'}><GenericResourceButton refInfo={launcher} selectedMember={launcher.kind === 'JobSet' ? workloadRunKey(run) : undefined} onNavigateToResource={onNavigateToResource} /></ContextRow>}
             {definition && <ContextRow label="Definition"><ResourceButton refInfo={definition} onNavigateToResource={onNavigateToResource} /></ContextRow>}
             {uses.length > 0 && (
               <ContextRow label="Uses">
@@ -1108,10 +1143,10 @@ function sameResource(ref: { kind: string; namespace?: string; name: string }, c
   return ref.kind === current.kind && (ref.namespace ?? '') === current.namespace && ref.name === current.name
 }
 
-function GenericResourceButton({ refInfo, onNavigateToResource }: { refInfo: NonNullable<WorkloadRun['launcher']>; onNavigateToResource?: BatchExecutionProps['onNavigateToResource'] }) {
+function GenericResourceButton({ refInfo, selectedMember, onNavigateToResource }: { selectedMember?: string; refInfo: NonNullable<WorkloadRun['launcher']>; onNavigateToResource?: BatchExecutionProps['onNavigateToResource'] }) {
   const label = `${refInfo.kind} · ${refInfo.namespace ? `${refInfo.namespace}/` : ''}${refInfo.name}`
   if (!onNavigateToResource) return <span>{label}</span>
-  return <button type="button" className="text-accent-text hover:underline" onClick={() => onNavigateToResource({ kind: pluralKind(refInfo.kind), namespace: refInfo.namespace ?? '', name: refInfo.name, group: refInfo.group })}>{label}</button>
+  return <button type="button" className="text-accent-text hover:underline" onClick={() => onNavigateToResource({ kind: pluralKind(refInfo.kind), namespace: refInfo.namespace ?? '', name: refInfo.name, group: refInfo.group, run: selectedMember })}>{label}</button>
 }
 
 function dedupeResourceRefs(refs: WorkflowTemplateReference[]): WorkflowTemplateReference[] {
@@ -1462,7 +1497,7 @@ function workCount(run: WorkloadRun): string {
     if (run.podRunning) return `${run.podRunning} ${run.kind === 'jobs' ? 'active' : 'running'} ${pluralize('pod', run.podRunning)}`
     if (run.podPending && !run.podSucceeded && !run.podFailed) return `${run.podPending} pending ${pluralize('pod', run.podPending)}`
     if (run.podFailed && run.phase !== 'Succeeded') return `${run.podFailed}/${run.podTotal} pods failed`
-    return `${run.podSucceeded ?? 0}/${run.podTotal} pods`
+    return `${run.podSucceeded ?? 0}/${run.podTotal} completed pods`
   }
   if (run.desired) return `${run.succeeded ?? 0}/${run.desired} completions`
   return 'work unknown'

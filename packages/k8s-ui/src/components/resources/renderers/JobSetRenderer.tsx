@@ -132,7 +132,7 @@ export function JobSetRenderer({ data, mode = 'detail', shownMemberCounts, onSel
                   <td className="px-2 py-3">{role.replicas ?? 1}</td>
                   {['ready', 'active', 'succeeded', 'failed', 'suspended'].map((field) => <td key={field} className="px-2 py-3" aria-label={`${role.name} ${field}: ${observation?.[field] ?? 'not reported'}`}>{observation?.[field] ?? '—'}</td>)}
                   <td className="px-2 py-3">{role.dependsOn?.map((dependency: any) => `${dependency.name} ${dependency.status}`).join(', ') || 'None'}</td>
-                  {onSelectRole && <td className="px-2 py-3">{shown > 0 ? <button type="button" className="whitespace-nowrap text-accent-text hover:underline" onClick={() => onSelectRole(role.name)}>Inspect {shown} shown</button> : <span className="text-theme-text-tertiary">None shown</span>}</td>}
+                  {onSelectRole && <td className="px-2 py-3"><button type="button" className="whitespace-nowrap text-accent-text hover:underline" onClick={() => onSelectRole(role.name)}>Inspect members{shown > 0 ? ` (${shown} shown)` : ''}</button></td>}
                 </tr>
               })}</tbody>
             </table>

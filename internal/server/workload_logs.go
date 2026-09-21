@@ -63,10 +63,11 @@ type WorkloadPodInfo struct {
 
 // workloadLogEntry is an internal structure for log lines from pods
 type workloadLogEntry struct {
-	Pod       string `json:"pod"`
-	Container string `json:"container"`
-	Timestamp string `json:"timestamp"`
-	Content   string `json:"content"`
+	Pod         string `json:"pod"`
+	Container   string `json:"container"`
+	Timestamp   string `json:"timestamp"`
+	Content     string `json:"content"`
+	SourceLabel string `json:"sourceLabel,omitempty"`
 }
 
 type workloadLogMetadata struct {
@@ -130,10 +131,12 @@ const (
 
 type WorkloadRunsResponse struct {
 	// Runs are execution roots; members are children of one execution, not its history.
-	Collection WorkloadRunCollection `json:"collection"`
-	Runs       []WorkloadRun         `json:"runs"`
-	Total      int                   `json:"total"`
-	Truncated  bool                  `json:"truncated"`
+	Collection    WorkloadRunCollection `json:"collection"`
+	Runs          []WorkloadRun         `json:"runs"`
+	Total         int                   `json:"total"`
+	Truncated     bool                  `json:"truncated"`
+	FilteredTotal *int                  `json:"filteredTotal,omitempty"`
+	Selected      *WorkloadRun          `json:"selected,omitempty"`
 }
 
 type WorkloadRunResourceRef struct {
@@ -292,7 +295,7 @@ func (s *Server) handleWorkloadRuns(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if kind == "jobset" || kind == "jobsets" {
-		result, err := s.getJobSetMemberRuns(r.Context(), namespace, name)
+		result, err := s.getJobSetMemberRuns(r.Context(), namespace, name, jobSetMemberQueryFromRequest(r))
 		if err != nil {
 			s.writeWorkloadError(w, err)
 			return
@@ -400,14 +403,14 @@ func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Collect logs from all pods concurrently
-	allLogs := collectLogsFromPods(r.Context(), client, namespace, pods, container, tailLines, sinceSeconds)
+	snapshot := collectLogsFromPods(r.Context(), client, namespace, pods, container, tailLines, sinceSeconds, false)
 
-	// Sort by timestamp (string comparison works for RFC3339 format)
-	sortLogsByTimestamp(allLogs)
+	sortLogsByTimestamp(snapshot.Logs)
 
 	s.writeJSON(w, map[string]any{
-		"pods": buildPodInfos(pods),
-		"logs": allLogs,
+		"pods":   buildPodInfos(pods),
+		"logs":   snapshot.Logs,
+		"notice": snapshot.Notice,
 	})
 }
 
@@ -785,8 +788,22 @@ func buildPodInfo(pod *corev1.Pod, now time.Time) WorkloadPodInfo {
 
 // sortLogsByTimestamp sorts log entries by timestamp using efficient sort
 func sortLogsByTimestamp(logs []workloadLogEntry) {
-	sort.Slice(logs, func(i, j int) bool {
-		return logs[i].Timestamp < logs[j].Timestamp
+	sort.SliceStable(logs, func(i, j int) bool {
+		left, le := time.Parse(time.RFC3339Nano, logs[i].Timestamp)
+		right, re := time.Parse(time.RFC3339Nano, logs[j].Timestamp)
+		if le == nil && re == nil && !left.Equal(right) {
+			return left.Before(right)
+		}
+		if (le == nil) != (re == nil) {
+			return le != nil
+		}
+		if le != nil && logs[i].Timestamp != logs[j].Timestamp {
+			return logs[i].Timestamp < logs[j].Timestamp
+		}
+		if logs[i].Pod != logs[j].Pod {
+			return logs[i].Pod < logs[j].Pod
+		}
+		return logs[i].Container < logs[j].Container
 	})
 }
 
@@ -1051,26 +1068,34 @@ func (s *Server) getWorkloadRuns(ctx context.Context, kind, namespace, name stri
 	return runs, nil
 }
 
-func (s *Server) getJobSetMemberRuns(ctx context.Context, namespace, name string) (WorkloadRunsResponse, *workloadError) {
+func (s *Server) getJobSetMemberRuns(ctx context.Context, namespace, name string, query jobSetMemberQuery) (WorkloadRunsResponse, *workloadError) {
+	jobSet, jobs, err := loadJobSetJobs(ctx, namespace, name)
+	if err != nil {
+		return WorkloadRunsResponse{}, err
+	}
+	return jobSetMemberRuns(jobSet, jobs, query), nil
+}
+
+func loadJobSetJobs(ctx context.Context, namespace, name string) (*unstructured.Unstructured, []*batchv1.Job, *workloadError) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return WorkloadRunsResponse{}, &workloadError{http.StatusServiceUnavailable, "resource cache not available"}
+		return nil, nil, &workloadError{http.StatusServiceUnavailable, "resource cache not available"}
 	}
 	jobSet, err := cache.GetDynamicWithGroup(ctx, "JobSet", namespace, name, "jobset.x-k8s.io")
 	if err != nil {
-		return WorkloadRunsResponse{}, workloadParentGetError("jobset", namespace, name, err)
+		return nil, nil, workloadParentGetError("jobset", namespace, name, err)
 	}
 	if !isSupportedJobSet(jobSet) {
-		return WorkloadRunsResponse{}, &workloadError{http.StatusBadRequest, "only jobset.x-k8s.io/v1alpha2 JobSets have child Jobs"}
+		return nil, nil, &workloadError{http.StatusBadRequest, "only jobset.x-k8s.io/v1alpha2 JobSets have child Jobs"}
 	}
 	if cache.Jobs() == nil {
-		return WorkloadRunsResponse{}, &workloadError{http.StatusForbidden, "insufficient permissions to list jobs"}
+		return nil, nil, &workloadError{http.StatusForbidden, "insufficient permissions to list jobs"}
 	}
 	jobs, err := listJobRuns(cache, []string{namespace})
 	if err != nil {
-		return WorkloadRunsResponse{}, &workloadError{http.StatusInternalServerError, err.Error()}
+		return nil, nil, &workloadError{http.StatusInternalServerError, err.Error()}
 	}
-	return jobSetMemberRuns(jobSet, jobs), nil
+	return jobSet, jobs, nil
 }
 
 const maxJobSetMemberRuns = 200
@@ -1093,7 +1118,7 @@ func isSupportedJobSet(jobSet *unstructured.Unstructured) bool {
 	return jobSet != nil && jobSet.GetAPIVersion() == jobSetAPIVersion && jobSet.GetKind() == "JobSet"
 }
 
-func jobSetMemberRuns(jobSet *unstructured.Unstructured, jobs []*batchv1.Job) WorkloadRunsResponse {
+func jobSetMemberRuns(jobSet *unstructured.Unstructured, jobs []*batchv1.Job, query jobSetMemberQuery) WorkloadRunsResponse {
 	runs := make([]WorkloadRun, 0)
 	for _, job := range jobs {
 		if !jobSetControlsJob(jobSet, job) {
@@ -1102,7 +1127,28 @@ func jobSetMemberRuns(jobSet *unstructured.Unstructured, jobs []*batchv1.Job) Wo
 		runs = append(runs, jobSetMemberRunInfo(jobSet, job))
 	}
 	sortJobSetMembers(runs)
-	result := WorkloadRunsResponse{Collection: WorkloadRunCollectionMembers, Runs: runs, Total: len(runs)}
+	result := WorkloadRunsResponse{Collection: WorkloadRunCollectionMembers, Total: len(runs), Runs: []WorkloadRun{}}
+	for _, run := range runs {
+		if "jobs/"+run.Namespace+"/"+run.Name == query.Selected {
+			selected := run
+			result.Selected = &selected
+		}
+		if query.Role != "" && run.JobSet.ReplicatedJob != query.Role {
+			continue
+		}
+		if query.Search != "" && !strings.Contains(strings.ToLower(run.Name), strings.ToLower(query.Search)) {
+			continue
+		}
+		if query.State == "active" && !run.Active {
+			continue
+		}
+		if query.State == "failed" && run.Phase != "Failed" && run.Phase != "Error" {
+			continue
+		}
+		result.Runs = append(result.Runs, run)
+	}
+	filtered := len(result.Runs)
+	result.FilteredTotal = &filtered
 	if len(result.Runs) > maxJobSetMemberRuns {
 		result.Runs = result.Runs[:maxJobSetMemberRuns]
 		result.Truncated = true
@@ -1618,64 +1664,153 @@ func parseTailLines(str string, defaultVal int64) int64 {
 // collectLogsFromPods fetches logs from all pods concurrently. Non-nil even
 // when nothing is retrievable (e.g. every pod is crashlooping) — a nil slice
 // marshals as JSON null and consumers expect an array.
-func collectLogsFromPods(ctx context.Context, client kubernetes.Interface, namespace string, pods []*corev1.Pod, container string, tailLines int64, sinceSeconds *int64) []workloadLogEntry {
-	allLogs := []workloadLogEntry{}
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	for _, pod := range pods {
-		containers := k8s.GetContainersForPod(pod, container, true)
-		for _, c := range containers {
-			wg.Add(1)
-			go func(podName, containerName string) {
-				defer wg.Done()
-
-				entries := fetchPodContainerLogs(ctx, client, namespace, podName, containerName, tailLines, sinceSeconds)
-				if len(entries) > 0 {
-					mu.Lock()
-					allLogs = append(allLogs, entries...)
-					mu.Unlock()
-				}
-			}(pod.Name, c)
-		}
-	}
-
-	wg.Wait()
-	return allLogs
+type workloadLogSnapshot struct {
+	SourcePods map[string]bool
+	Logs       []workloadLogEntry
+	Notice     string
 }
 
-// fetchPodContainerLogs fetches logs for a single pod/container
-func fetchPodContainerLogs(ctx context.Context, client kubernetes.Interface, namespace, podName, containerName string, tailLines int64, sinceSeconds *int64) []workloadLogEntry {
+const maxSnapshotSources = 40
+const maxSnapshotSourceBytes int64 = 64 * 1024
+
+func collectLogsFromPods(ctx context.Context, client kubernetes.Interface, namespace string, pods []*corev1.Pod, container string, tailLines int64, sinceSeconds *int64, bounded bool) workloadLogSnapshot {
+	type source struct {
+		pod, container string
+		running        bool
+		created        time.Time
+	}
+	sources := []source{}
+	for _, pod := range pods {
+		for _, c := range k8s.GetContainersForPod(pod, container, true) {
+			if bounded {
+				started := false
+				for _, statuses := range [][]corev1.ContainerStatus{pod.Status.ContainerStatuses, pod.Status.InitContainerStatuses, pod.Status.EphemeralContainerStatuses} {
+					for _, status := range statuses {
+						if status.Name == c && (status.State.Running != nil || status.State.Terminated != nil) {
+							started = true
+						}
+					}
+				}
+				if !started {
+					continue
+				}
+			}
+			sources = append(sources, source{pod.Name, c, pod.Status.Phase == corev1.PodRunning, pod.CreationTimestamp.Time})
+		}
+	}
+	sort.Slice(sources, func(i, j int) bool {
+		if bounded && sources[i].running != sources[j].running {
+			return sources[i].running
+		}
+		if bounded && !sources[i].created.Equal(sources[j].created) {
+			return sources[i].created.After(sources[j].created)
+		}
+		if sources[i].pod != sources[j].pod {
+			return sources[i].pod < sources[j].pod
+		}
+		return sources[i].container < sources[j].container
+	})
+	total := len(sources)
+	if bounded && len(sources) > maxSnapshotSources {
+		sources = sources[:maxSnapshotSources]
+	}
+	if bounded {
+		tailLines = min(tailLines, 1000)
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
+	result := workloadLogSnapshot{Logs: []workloadLogEntry{}, SourcePods: map[string]bool{}}
+	for _, src := range sources {
+		result.SourcePods[src.pod] = true
+	}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	concurrency := len(sources)
+	if bounded {
+		concurrency = min(concurrency, 8)
+	}
+	sem := make(chan struct{}, concurrency)
+	errors_ := []string{}
+	truncated := 0
+	for _, src := range sources {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				mu.Lock()
+				errors_ = append(errors_, src.pod+"/"+src.container+": request cancelled")
+				mu.Unlock()
+				return
+			}
+			entries, clipped, err := fetchPodContainerLogs(ctx, client, namespace, src.pod, src.container, tailLines, sinceSeconds, bounded)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errors_ = append(errors_, src.pod+"/"+src.container+": "+err.Error())
+			}
+			if clipped {
+				truncated++
+			}
+			result.Logs = append(result.Logs, entries...)
+		}()
+	}
+	wg.Wait()
+	notices := []string{}
+	if total > len(sources) {
+		notices = append(notices, fmt.Sprintf("Showing %d of %d container sources. Narrow the scope to see other sources.", len(sources), total))
+	}
+	if truncated > 0 {
+		notices = append(notices, fmt.Sprintf("%d sources reached the 64 KiB snapshot limit.", truncated))
+	}
+	if len(errors_) > 0 {
+		sort.Strings(errors_)
+		notices = append(notices, fmt.Sprintf("%d sources could not be read: %s", len(errors_), strings.Join(errors_[:min(3, len(errors_))], "; ")))
+	}
+	result.Notice = strings.Join(notices, " ")
+	return result
+}
+
+func fetchPodContainerLogs(ctx context.Context, client kubernetes.Interface, namespace, podName, containerName string, tailLines int64, sinceSeconds *int64, bounded bool) ([]workloadLogEntry, bool, error) {
+	var limit *int64
+	if bounded {
+		n := maxSnapshotSourceBytes + 1
+		limit = &n
+	}
 	stream, err := k8score.GetContainerLogs(ctx, client, namespace, podName, containerName, k8score.LogOptions{
-		TailLines:    &tailLines,
-		SinceSeconds: sinceSeconds,
-		Timestamps:   true,
+		TailLines: &tailLines, SinceSeconds: sinceSeconds, Timestamps: true, LimitBytes: limit,
 	})
 	if err != nil {
-		log.Printf("[workload-logs] Failed to get logs for %s/%s: %v", podName, containerName, err)
-		return nil
+		return nil, false, err
 	}
 	defer stream.Close()
-
-	content, err := io.ReadAll(stream)
-	if err != nil {
-		log.Printf("[workload-logs] Failed to read logs for %s/%s: %v", podName, containerName, err)
-		return nil
+	var reader io.Reader = stream
+	if limit != nil {
+		reader = io.LimitReader(stream, *limit)
 	}
-
-	lines := strings.Split(string(content), "\n")
-	entries := make([]workloadLogEntry, 0, len(lines))
-	for _, line := range lines {
+	content, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, false, err
+	}
+	clipped := bounded && int64(len(content)) > maxSnapshotSourceBytes
+	if clipped {
+		content = content[:maxSnapshotSourceBytes]
+		if last := strings.LastIndexByte(string(content), '\n'); last >= 0 {
+			content = content[:last+1]
+		} else {
+			content = nil
+		}
+	}
+	entries := []workloadLogEntry{}
+	for _, line := range strings.Split(string(content), "\n") {
 		if line == "" {
 			continue
 		}
 		ts, text := parseLogLine(line)
-		entries = append(entries, workloadLogEntry{
-			Pod:       podName,
-			Container: containerName,
-			Timestamp: ts,
-			Content:   text,
-		})
+		entries = append(entries, workloadLogEntry{Pod: podName, Container: containerName, Timestamp: ts, Content: text})
 	}
-	return entries
+	return entries, clipped, nil
 }

@@ -143,7 +143,7 @@ describe('JobSetRenderer', () => {
     expect(html).toContain('leader failed: 0')
     expect(html).toContain('workers ready: not reported')
     expect(html).toContain('Status not reported')
-    expect(html).toContain('Inspect 1 shown')
+    expect(html).toContain('Inspect members (1 shown)')
     expect(html).toContain('leader Ready')
     expect(html).not.toContain('Parallelism / Job')
   })

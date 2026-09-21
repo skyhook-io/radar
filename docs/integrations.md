@@ -1592,6 +1592,12 @@ its backlink to the owning JobSet. Member and Pod lists show their limits explic
 missing children do not imply success, and unreadable data is reported as unavailable.
 The Overview also composes typed root lifecycle, per-role observations, dependencies,
 completion/restart policies, and controller conditions alongside member investigation.
+The member comparison table filters roles, names, and states across all retained Jobs,
+with current CPU/memory usage and explicit reporting coverage. Whole-JobSet totals
+include members outside the displayed window; missing or stale samples are not zeros.
+Extended-resource requests are declared demand, not GPU/TPU utilization. Logs can be
+scoped to one Job (live) or a role/all current members (bounded snapshots with source
+attribution and read failures). Historical goodput and archived logs are not collected.
 
 
 Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share kind names with other resources — Radar disambiguates by API group in tables, filters, and status badges.

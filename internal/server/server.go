@@ -722,6 +722,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/workloads/{kind}/{namespace}/{name}/logs", s.handleWorkloadLogs)
 			r.Get("/workloads/{kind}/{namespace}/{name}/runs", s.handleWorkloadRuns)
 			r.Get("/workloads/{kind}/{namespace}/{name}/pods", s.handleWorkloadPods)
+			r.Get("/jobsets/{namespace}/{name}/resources", s.handleJobSetResources)
+			r.Get("/jobsets/{namespace}/{name}/logs", s.handleJobSetLogs)
 
 			// Helm routes
 			helmHandlers := helm.NewHandlers(s.resolveHelmNamespaces)

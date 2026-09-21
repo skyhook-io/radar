@@ -13,18 +13,23 @@ import { useToast } from '../ui/Toast'
 
 export interface WorkloadRawLog {
   pod: string
+  sourceLabel?: string
   container: string
   timestamp: string
   content: string
 }
 
 export interface WorkloadLogsFetchParams {
+  signal?: AbortSignal
   container?: string
   tailLines?: number
   sinceSeconds?: number
 }
 
 export interface WorkloadLogsResult {
+  capturedAt?: string
+  notice?: string
+  sourceLabels?: Record<string, string>
   pods: WorkloadPodInfo[]
   logs: WorkloadRawLog[]
   emptyReason?: string
@@ -63,6 +68,10 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const [pods, setPods] = useState<WorkloadPodInfo[]>([])
   const [selectedPods, setSelectedPods] = useState<Set<string>>(new Set())
   const [isLoading, setIsLoading] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [capturedAt, setCapturedAt] = useState('')
+  const [sourceLabels, setSourceLabels] = useState<Record<string, string>>({})
+  const fetchController = useRef<AbortController | null>(null)
   const [fetchError, setFetchError] = useState<string | null>(null)
   const [emptyMessage, setEmptyMessage] = useState<string | null>(null)
   const [emptyCommand, setEmptyCommand] = useState<string | null>(null)
@@ -93,13 +102,20 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     podColorIndexRef.current = podColorIndex
   }, [podColorIndex])
 
-  const podsInitialized = useRef(false)
+  const previousSnapshotPods = useRef<string[] | null>(null)
 
   const loadLogs = useCallback(async () => {
+    fetchController.current?.abort()
+    const controller = new AbortController()
+    fetchController.current = controller
     setIsLoading(true)
     setFetchError(null)
     try {
-      const result = await fetchAll({ container: selectedContainer || undefined, tailLines, sinceSeconds })
+      const result = await fetchAll({ container: selectedContainer || undefined, tailLines, sinceSeconds, signal: controller.signal })
+      if (controller.signal.aborted) return
+      setNotice(result.notice || '')
+      setCapturedAt(result.capturedAt || '')
+      setSourceLabels(result.sourceLabels ?? {})
       const resultPods = result.pods ?? []
       const resultLogs = result.logs ?? []
       setEmptyMessage(result.emptyMessage || null)
@@ -108,10 +124,12 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       podColorIndexRef.current = new Map(resultPods.map((pod, i) => [pod.name, i]))
       setPods(resultPods)
 
-      if (!podsInitialized.current && resultPods.length > 0) {
-        podsInitialized.current = true
-        setSelectedPods(new Set(resultPods.map(p => p.name)))
-      }
+      const previousPods = previousSnapshotPods.current
+      const nextPods = resultPods.map(p => p.name)
+      previousSnapshotPods.current = nextPods
+      setSelectedPods(selected => previousPods === null || (previousPods.length > 0 && previousPods.every(pod => selected.has(pod)))
+        ? new Set(nextPods)
+        : new Set(nextPods.filter(pod => selected.has(pod))))
 
       const indexByPod = new Map<string, number>()
       resultPods.forEach((pod, i) => indexByPod.set(pod.name, i))
@@ -121,13 +139,15 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         content: log.content,
         container: log.container,
         pod: log.pod,
+        sourceLabel: log.sourceLabel,
         podColorIndex: indexByPod.get(log.pod),
       })))
     } catch (err) {
+      if (controller.signal.aborted) return
       console.error('Failed to fetch workload logs:', err)
       setFetchError(err instanceof Error ? err.message : 'Failed to fetch logs')
     } finally {
-      setIsLoading(false)
+      if (!controller.signal.aborted) setIsLoading(false)
     }
   }, [fetchAll, selectedContainer, tailLines, sinceSeconds, set])
 
@@ -140,6 +160,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     if (!willAutoStream || userStoppedRef.current) loadLogs()
   }, [loadLogs, willAutoStream])
   useEffect(() => { stopStreaming() }, [selectedContainer, stopStreaming])
+  useEffect(() => () => { fetchController.current?.abort() }, [])
 
   // If auto-stream turns off while a stream is open, stop following so live
   // appends don't race the snapshot.
@@ -154,6 +175,11 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     // The stream replays the last N lines per pod (TailLines + Follow); clear
     // first so they don't duplicate lines already in the buffer (the snapshot on
     // the manual path, or an earlier stream on restart).
+    fetchController.current?.abort()
+    setIsLoading(false)
+    setNotice('')
+    setCapturedAt('')
+    setFetchError(null)
     clear()
     startStreaming(
       () => createStream({ container: selectedContainer || undefined, tailLines: 50, sinceSeconds }),
@@ -296,7 +322,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
             </div>
             {pods.map(pod => {
               const dotBg = palette.podColors[(podColorIndex.get(pod.name) ?? 0) % palette.podColors.length].bg
-              const primaryLabel = pod.stepName || pod.name
+              const primaryLabel = sourceLabels[pod.name] || pod.stepName || pod.name
               const secondaryLabel = pod.stepName ? pod.name : ''
               const stateLabel = pod.stepPhase || pod.phase || (pod.ready ? 'Ready' : 'Not Ready')
               let readyColor: string
@@ -354,7 +380,11 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const isConnecting = willAutoStream && connecting && entries.length === 0
 
   return (
-    <LogCore
+    <div className="flex h-full min-h-0 flex-col">
+    {notice && <div role="status" className="shrink-0 border-b border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">{notice}</div>}
+    {capturedAt && <div className="shrink-0 border-b border-theme-border px-3 py-1 text-xs text-theme-text-secondary">Snapshot captured {new Date(capturedAt).toLocaleTimeString()}</div>}
+    {(fetchError || streamError) && entries.length > 0 && <div role="alert" className="shrink-0 border-b border-theme-border bg-theme-surface px-3 py-2 text-xs text-theme-text-secondary">{fetchError || streamError} · Previously loaded logs remain below.</div>}
+    <div className="min-h-0 flex-1"><LogCore
       entries={filteredEntries}
       allEntries={entries}
       isLoading={isLoading || isConnecting}
@@ -368,8 +398,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       showPodName
       emptyMessage={emptyMessage || (pods.length === 0 ? 'No pods found' : 'No logs available')}
       emptyCommand={emptyCommand}
-      errorMessage={fetchError || (entries.length === 0 ? streamError : null)}
+      errorMessage={entries.length === 0 ? fetchError || streamError : null}
       forceDark={forceDark}
-    />
+    /></div></div>
   )
 }

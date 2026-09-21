@@ -441,12 +441,14 @@ export function parseLogfmt(content: string): Record<string, string> | null {
  * Handle SSE error events from log streams.
  * Parses server-sent error data and logs it, then calls onClose.
  */
-export function handleSSEError(event: Event, prefix: string, onClose: () => void): void {
+export function handleSSEError(event: Event, prefix: string, onClose: () => void): string {
+  let message = prefix
   const me = event as MessageEvent
   if (me.data) {
     try {
       const data = JSON.parse(me.data)
-      console.error(`${prefix}:`, data.error || data.message || me.data)
+      message = typeof data.error === 'string' ? data.error : typeof data.message === 'string' ? data.message : prefix
+      console.error(`${prefix}:`, message)
     } catch {
       console.error(`${prefix}:`, me.data)
     }
@@ -454,4 +456,5 @@ export function handleSSEError(event: Event, prefix: string, onClose: () => void
     console.error(`${prefix} connection error`)
   }
   onClose()
+  return message
 }

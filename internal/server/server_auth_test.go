@@ -309,6 +309,8 @@ func TestProxyAuth_PodMetricsNamespaceGated(t *testing.T) {
 	paths := []string{
 		"/api/metrics/pods/default/web-0",
 		"/api/metrics/pods/default/web-0/history",
+		"/api/jobsets/default/training/resources",
+		"/api/jobsets/default/training/logs",
 	}
 
 	for _, path := range paths {

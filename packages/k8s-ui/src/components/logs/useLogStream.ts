@@ -112,8 +112,7 @@ export function useLogStream() {
       // The browser fires 'error' on the normal close that follows a clean
       // 'end'; that's not a failure, so don't log it or surface it.
       if (endedRef.current) return
-      handleSSEError(event, errorContext, () => {})
-      setStreamError(errorContext)
+      setStreamError(handleSSEError(event, errorContext, () => {}))
     })
 
     eventSourceRef.current = es
