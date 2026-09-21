@@ -59,7 +59,7 @@ export interface KueueAdmissionWorkload {
   ref?: SchedulingRef
   projection: 'available' | 'unsupported' | 'forbidden'
   scheduling?: { observations?: SchedulingObservation[] }
-  omitted?: { field: string; reason: string }[]
+  linksLimited: boolean
 }
 
 export interface KueueAdmissionResponse {

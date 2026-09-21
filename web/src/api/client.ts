@@ -6907,8 +6907,8 @@ export function useKueueAdmission(namespace: string, name: string) {
     queryFn: () => fetchJSON(`/kueue/admission/jobsets/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}?group=jobset.x-k8s.io`),
     enabled: Boolean(namespace && name),
     staleTime: 5000,
-    refetchInterval: 5000,
-    retry: (count, error) => !(error instanceof ApiError && error.status === 403) && count < 2,
+    refetchInterval: (query) => query.state.data?.installed === false || (query.state.error instanceof ApiError && query.state.error.status < 500) ? false : 5000,
+    retry: (count, error) => !(error instanceof ApiError && error.status < 500) && count < 2,
   })
 }
 

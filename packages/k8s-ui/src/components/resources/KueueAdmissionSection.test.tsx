@@ -6,7 +6,7 @@ import type { KueueAdmissionResponse, SchedulingObservation } from '../../types/
 const ref = { kind: 'Workload', group: 'kueue.x-k8s.io', namespace: 'ml', name: 'training-abc' }
 function response(observation: Partial<SchedulingObservation> = {}): KueueAdmissionResponse {
   return { installed: true, total: 1, truncated: false, workloads: [{
-    apiVersion: 'kueue.x-k8s.io/v1beta2', name: ref.name, namespace: 'ml', uid: 'uid', generation: 2, createdAt: null, deleting: false, ref, projection: 'available',
+    apiVersion: 'kueue.x-k8s.io/v1beta2', name: ref.name, namespace: 'ml', uid: 'uid', generation: 2, createdAt: null, deleting: false, ref, projection: 'available', linksLimited: false,
     scheduling: { observations: [{ source: 'kueue', domain: 'admission', subject: ref, subjectGeneration: 2, decision: 'unsatisfied', kueue: { phase: 'pending' }, ...observation }] },
   }] }
 }
@@ -22,6 +22,7 @@ describe('Kueue admission investigation', () => {
     expect(render(undefined, { loading: true })).toContain('Looking for controller-owned Workloads')
     expect(render(empty, { error: 'Forbidden', onRetry: () => {} })).toContain('Admission evidence unavailable: Forbidden')
     expect(render(empty, { error: 'Cache not ready' })).not.toContain('No controller-owned')
+    expect(render(empty, { error: 'Workload list denied', forbidden: true, onRetry: () => {} })).not.toContain('Retry admission lookup')
     expect(render({ ...empty, installed: false }, { hinted: true })).toContain('not served by this cluster')
   })
 

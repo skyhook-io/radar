@@ -112,7 +112,7 @@ RADAR_URL=http://127.0.0.1:9332 ./scripts/jobset-demo.sh verify-admission-radar
 ```
 
 The combined verifier checks exact JobSet controller ownership on every
-Workload, real admission/blocker/completion conditions, and absence of Jobs and
+Workload, real admission/blocker/completion conditions, and suspended child Jobs with zero
 Pods for the two pre-admission blockers. The Radar check runs the original lane
 first (including context/cluster provenance), then checks that each JobSet's
 admission endpoint returns that exact Workload UID, generation, condition,

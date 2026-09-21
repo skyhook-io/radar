@@ -110,7 +110,7 @@ wait_until() {
     sleep 2
   done
   warn "Last controller snapshot for '${description}':" >&2
-  kc -n "${DEMO_NS}" get jobsets.jobset.x-k8s.io,jobs,pods --request-timeout=10s -o json | \
+  kc -n "${SNAPSHOT_NS:-${DEMO_NS}}" get "${SNAPSHOT_KINDS:-jobsets.jobset.x-k8s.io,jobs,pods}" --request-timeout=10s -o json | \
     jq -c '.items[:10][] | {kind, name: .metadata.name, terminalState: .status.terminalState, roles: .status.replicatedJobsStatus, phase: .status.phase, conditions: .status.conditions}' >&2 || true
   fail "Timed out after ${WAIT_SECONDS}s waiting for ${description}. Inspect the lane with CLUSTER_NAME='${CLUSTER_NAME}' $0 status"
 }

@@ -7,7 +7,6 @@ import (
 	"sort"
 
 	"github.com/go-chi/chi/v5"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -28,17 +27,17 @@ type KueueAdmissionResponse struct {
 }
 
 type KueueAdmissionWorkload struct {
-	APIVersion string                             `json:"apiVersion"`
-	Namespace  string                             `json:"namespace"`
-	Name       string                             `json:"name"`
-	UID        string                             `json:"uid"`
-	Generation int64                              `json:"generation"`
-	CreatedAt  metav1.Time                        `json:"createdAt"`
-	Deleting   bool                               `json:"deleting"`
-	Ref        *resourcecontext.ContextRef        `json:"ref,omitempty"`
-	Projection string                             `json:"projection"` // available, unsupported, forbidden
-	Scheduling *resourcecontext.SchedulingSummary `json:"scheduling,omitempty"`
-	Omitted    []resourcecontext.OmittedField     `json:"omitted,omitempty"`
+	APIVersion   string                             `json:"apiVersion"`
+	Namespace    string                             `json:"namespace"`
+	Name         string                             `json:"name"`
+	UID          string                             `json:"uid"`
+	Generation   int64                              `json:"generation"`
+	CreatedAt    metav1.Time                        `json:"createdAt"`
+	Deleting     bool                               `json:"deleting"`
+	Ref          *resourcecontext.ContextRef        `json:"ref,omitempty"`
+	Projection   string                             `json:"projection"` // available, unsupported, forbidden
+	Scheduling   *resourcecontext.SchedulingSummary `json:"scheduling,omitempty"`
+	LinksLimited bool                               `json:"linksLimited"`
 }
 
 func (s *Server) handleKueueAdmission(w http.ResponseWriter, r *http.Request) {
@@ -59,9 +58,23 @@ func (s *Server) handleKueueAdmission(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
 		return
 	}
+	discovery, dynamic := k8s.GetResourceDiscovery(), k8s.GetDynamicResourceCache()
+	if discovery == nil || dynamic == nil || dynamic.GetDiscoveryStatus() != k8score.CRDDiscoveryComplete {
+		s.writeError(w, http.StatusServiceUnavailable, "Admission discovery is not ready; retry shortly")
+		return
+	}
+	rootGVR, found := discovery.GetGVRWithGroup("JobSet", "jobset.x-k8s.io")
+	if !found {
+		if discovery.GroupHadPartialDiscovery("jobset.x-k8s.io") {
+			s.writeError(w, http.StatusServiceUnavailable, "JobSet discovery is incomplete; retry shortly")
+		} else {
+			s.writeError(w, http.StatusNotFound, "JobSets are not served by this cluster")
+		}
+		return
+	}
 	root, err := cache.GetDynamicWithGroup(r.Context(), "JobSet", namespace, name, "jobset.x-k8s.io")
 	if err != nil {
-		if apierrors.IsNotFound(err) {
+		if workloadParentGetError("JobSet", namespace, name, err).statusCode == http.StatusNotFound && dynamic.IsNamespaceSynced(rootGVR, namespace) {
 			s.writeError(w, http.StatusNotFound, "JobSet not found")
 		} else {
 			log.Printf("[kueue] Failed to read JobSet %s/%s: %v", namespace, name, err)
@@ -73,12 +86,11 @@ func (s *Server) handleKueueAdmission(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "Kueue admission lookup supports JobSet v1alpha2")
 		return
 	}
-	discovery, dynamic := k8s.GetResourceDiscovery(), k8s.GetDynamicResourceCache()
-	if discovery == nil || dynamic == nil || dynamic.GetDiscoveryStatus() != k8score.CRDDiscoveryComplete {
-		s.writeError(w, http.StatusServiceUnavailable, "Kueue discovery is not ready; retry shortly")
-		return
-	}
 	if _, found := discovery.GetGVRWithGroup("Workload", kueueGroup); !found {
+		if discovery.GroupHadPartialDiscovery(kueueGroup) {
+			s.writeError(w, http.StatusServiceUnavailable, "Kueue discovery is incomplete; retry shortly")
+			return
+		}
 		s.writeJSON(w, KueueAdmissionResponse{Workloads: []KueueAdmissionWorkload{}})
 		return
 	}
@@ -138,7 +150,8 @@ func kueueAdmissionForJobSet(ctx context.Context, root *unstructured.Unstructure
 			entry.Ref = &resourcecontext.ContextRef{Group: kueueGroup, Kind: "Workload", Namespace: item.GetNamespace(), Name: item.GetName()}
 		}
 		if summary := schedulinginsight.ForResource(item, resourcecontext.TierDiagnostic); summary != nil {
-			entry.Scheduling, entry.Omitted = resourcecontext.FilterSchedulingSummary(ctx, summary, checker)
+			filtered, omitted := resourcecontext.FilterSchedulingSummary(ctx, summary, checker)
+			entry.Scheduling, entry.LinksLimited = filtered, len(omitted) > 0
 			entry.Projection = "available"
 			if entry.Scheduling == nil {
 				entry.Projection = "forbidden"

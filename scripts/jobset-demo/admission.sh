@@ -8,6 +8,7 @@ admission_webhook_ready() {
 
 cmd_up_admission() {
   cmd_up
+  local SNAPSHOT_NS="${ADMISSION_NS}" SNAPSHOT_KINDS="jobsets.jobset.x-k8s.io,jobs,pods,workloads.kueue.x-k8s.io"
   [[ "${KUEUE_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "KUEUE_VERSION must be a pinned release"
   step "Installing Kueue ${KUEUE_VERSION} after JobSet integration is served"
   kc apply --server-side -f "https://github.com/kubernetes-sigs/kueue/releases/download/${KUEUE_VERSION}/manifests.yaml" >/dev/null
@@ -47,15 +48,16 @@ admission_condition_is() {
 }
 
 admission_children_match() {
-  local name="$1" expected="$2" uid jobs pods
+  local name="$1" suspended="$2" expected_pods="$3" uid jobs pods
   uid="$(kc -n "${ADMISSION_NS}" get jobsets.jobset.x-k8s.io "${name}" -o jsonpath='{.metadata.uid}')" || return 1
   jobs="$(kc -n "${ADMISSION_NS}" get jobs -o json)" || return 1
   pods="$(kc -n "${ADMISSION_NS}" get pods -l "jobset.sigs.k8s.io/jobset-uid=${uid}" -o json)" || return 1
-  jq -e --arg uid "${uid}" --argjson expected "${expected}" '[.items[] | select(any(.metadata.ownerReferences[]?; .uid == $uid and .controller == true))] | length == $expected' <<<"${jobs}" >/dev/null &&
-    jq -e --argjson expected "${expected}" '.items | length == $expected' <<<"${pods}" >/dev/null
+  jq -e --arg uid "${uid}" --argjson suspended "${suspended}" '[.items[] | select(any(.metadata.ownerReferences[]?; .uid == $uid and .controller == true))] | length == 1 and all(.[]; .spec.suspend == $suspended)' <<<"${jobs}" >/dev/null &&
+    jq -e --argjson expected "${expected_pods}" '.items | length == $expected and all(.[]; .status.phase == "Running")' <<<"${pods}" >/dev/null
 }
 
 cmd_verify_admission() {
+  local SNAPSHOT_NS="${ADMISSION_NS}" SNAPSHOT_KINDS="jobsets.jobset.x-k8s.io,jobs,pods,workloads.kueue.x-k8s.io"
   require_owned_cluster
   assert_cluster_contract
   step "Verifying real JobSet–Kueue admission and pre-Pod blockers"
@@ -63,9 +65,9 @@ cmd_verify_admission() {
   wait_until "quota-blocked JobSet" admission_condition_is quota-blocked QuotaReserved False Pending
   wait_until "queue-held JobSet" admission_condition_is queue-held QuotaReserved False Inadmissible
   wait_until "finished JobSet" admission_condition_is finished Finished True Succeeded
-  wait_until "admitted Job/Pod" admission_children_match admitted-running 1
-  admission_children_match quota-blocked 0 || fail "Quota-blocked child absence could not be established"
-  admission_children_match queue-held 0 || fail "Queue-held child absence could not be established"
+  wait_until "admitted Job and Running Pod" admission_children_match admitted-running false 1
+  wait_until "quota-blocked suspended Job without Pods" admission_children_match quota-blocked true 0
+  wait_until "queue-held suspended Job without Pods" admission_children_match queue-held true 0
   ok "All four Workloads have exact controller ownership and expected Kueue conditions"
 }
 
@@ -85,6 +87,7 @@ radar_admission_matches() {
 
 cmd_verify_admission_radar() {
   cmd_verify_radar
+  local SNAPSHOT_NS="${ADMISSION_NS}" SNAPSHOT_KINDS="jobsets.jobset.x-k8s.io,jobs,pods,workloads.kueue.x-k8s.io"
   cmd_verify_admission
   wait_until "Radar admitted admission" radar_admission_matches admitted-running satisfied admitted Admitted True Admitted
   wait_until "Radar quota blocker" radar_admission_matches quota-blocked unsatisfied pending QuotaReserved False Pending

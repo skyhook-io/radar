@@ -103,7 +103,7 @@ func TestKueueAdmissionPermissionFilteredRefsAndUnsupportedEvidence(t *testing.T
 	got := kueueAdmissionForJobSet(context.Background(), root, []*unstructured.Unstructured{w}, admissionAccess{"Workload": true})
 	entry := got.Workloads[0]
 	queue := entry.Scheduling.Observations[0].Queues[0]
-	if queue.Name != "training" || queue.Ref != nil || len(entry.Omitted) != 1 || entry.Ref == nil {
+	if queue.Name != "training" || queue.Ref != nil || !entry.LinksLimited || entry.Ref == nil {
 		t.Fatalf("bad ref filtering: %+v %+v", entry, queue)
 	}
 	got = kueueAdmissionForJobSet(context.Background(), root, []*unstructured.Unstructured{w}, admissionAccess{})

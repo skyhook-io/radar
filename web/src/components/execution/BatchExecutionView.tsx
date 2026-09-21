@@ -1676,7 +1676,7 @@ export function emptyRunsCopy(kind: string, resource: any): { headline: string; 
   if (kind === 'JobSet') {
     return {
       headline: 'No child Jobs currently retained',
-      body: 'No readable Jobs owned by this JobSet are currently available. They may be waiting on dependencies or may already have been cleaned up.',
+      body: 'No readable Jobs owned by this JobSet are currently available. Use the JobSet status, role dependencies, and admission evidence to investigate.',
     }
   }
   if (isTemplateKind(kind)) {

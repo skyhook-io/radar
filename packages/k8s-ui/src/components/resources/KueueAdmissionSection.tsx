@@ -7,6 +7,7 @@ interface KueueAdmissionSectionProps {
   data?: KueueAdmissionResponse
   loading: boolean
   error?: string
+  forbidden?: boolean
   hinted: boolean
   externalExecution: boolean
   onRetry?: () => void
@@ -15,7 +16,7 @@ interface KueueAdmissionSectionProps {
 
 const phases = { pending: 'Pending admission', quota_reserved: 'Quota reserved', admitted: 'Admitted', finished: 'Finished' }
 
-export function KueueAdmissionSection({ data, loading, error, hinted, externalExecution, onRetry, onNavigate }: KueueAdmissionSectionProps) {
+export function KueueAdmissionSection({ data, loading, error, forbidden, hinted, externalExecution, onRetry, onNavigate }: KueueAdmissionSectionProps) {
   if (!loading && !error && data && data.workloads.length === 0 && !hinted) return null
   const link = (name: string, ref?: SchedulingRef) => ref
     ? <ResourceLink {...ref} kind={kindToPluralWithGroup(ref.kind, ref.group ?? '')} label={name} onNavigate={onNavigate} />
@@ -25,7 +26,7 @@ export function KueueAdmissionSection({ data, loading, error, hinted, externalEx
       <h3 className="text-sm font-semibold text-theme-text-primary">Kueue admission</h3>
       <p className="mt-1 text-xs text-theme-text-secondary">Admission and execution are separate observations. An admitted Workload does not prove that Jobs or Pods are running.</p>
       {loading ? <p className="mt-3 text-sm text-theme-text-secondary">Looking for controller-owned Workloads…</p>
-        : error ? <div className="mt-3 text-sm text-theme-text-secondary"><p>Admission evidence unavailable: {error}</p>{onRetry && <button type="button" className="mt-2 text-accent-text hover:underline" onClick={onRetry}>Retry admission lookup</button>}</div>
+        : error ? <div className="mt-3 text-sm text-theme-text-secondary"><p>{forbidden ? 'Admission lookup requires permission: ' : 'Admission evidence unavailable: '}{error}</p>{!forbidden && onRetry && <button type="button" className="mt-2 text-accent-text hover:underline" onClick={onRetry}>Retry admission lookup</button>}</div>
           : data && !data.installed ? <p className="mt-3 text-sm text-theme-text-secondary">Kueue Workloads are not served by this cluster.</p>
             : data && data.workloads.length === 0 ? <p className="mt-3 text-sm text-theme-text-secondary">No controller-owned Kueue Workload observed in this namespace.{externalExecution ? ' This JobSet uses an external controller; local absence does not establish remote admission or execution state.' : ' Queue metadata alone does not establish an admission decision.'}</p>
               : data && <div className="mt-3 space-y-3">
@@ -35,7 +36,7 @@ export function KueueAdmissionSection({ data, loading, error, hinted, externalEx
                   {workload.projection === 'unsupported' ? <p className="text-theme-text-secondary">Associated Workload found. Scheduling projection is unavailable for {workload.apiVersion}; inspect the resource for native evidence.</p>
                     : workload.projection === 'forbidden' ? <p className="text-theme-text-secondary">Associated Workload found, but permission to get this Workload is required for its scheduling detail.</p>
                       : workload.scheduling?.observations?.map((observation, index) => <AdmissionObservation key={index} observation={observation} link={link} />)}
-                  {!!workload.omitted?.length && <p className="text-xs text-theme-text-tertiary">Some resource links or details are withheld by permissions. Names already reported by the Workload remain visible.</p>}
+                  {workload.linksLimited && <p className="text-xs text-theme-text-tertiary">Some resource links are unavailable. Names already reported by the Workload remain visible.</p>}
                 </article>)}
               </div>}
     </section>
