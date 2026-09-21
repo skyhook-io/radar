@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
+import { useState } from 'react'
 import { createTwoFilesPatch } from 'diff'
 import { clsx } from 'clsx'
 import { FileText, GitCompare, Maximize2, Rows, ShieldOff, X } from 'lucide-react'
 import type { GitOpsResourceDiff } from '../../../types'
 import { DiffLine, hasDiffBodyChange } from '../../shared/UnifiedDiff'
 import { CodeViewer } from '../../ui/CodeViewer'
+import { DialogPortal } from '../../ui/DialogPortal'
 import { YamlDiffEditor } from '../../ui/YamlEditor'
 import { Tooltip } from '../../ui/Tooltip'
 
@@ -80,7 +80,13 @@ export function ArgoResourceDiff({ diff, loading, error }: ArgoResourceDiffProps
         </div>
       )}
 
-      {maximized && <ArgoResourceDiffOverlay diff={diff} onClose={() => setMaximized(false)} />}
+      <DialogPortal
+        open={maximized}
+        onClose={() => setMaximized(false)}
+        className="dialog flex h-[90vh] w-full max-w-6xl flex-col"
+      >
+        <ArgoResourceDiffContent diff={diff} onClose={() => setMaximized(false)} />
+      </DialogPortal>
     </div>
   )
 }
@@ -96,117 +102,91 @@ function RedactedChip() {
 
 type ViewMode = 'diff' | 'live' | 'desired'
 
-// Full-screen compare overlay: a Diff / Live manifest / Desired manifest mode
-// switch, and — within Diff — the same Monaco-backed YamlDiffEditor
-// ResourceCompareView uses, with its "Diff only" (collapse unchanged regions,
-// on by default) and "Unified" (side-by-side vs single-column) toggles.
-// Portaled to body so it escapes the expanded row's overflow clipping.
-function ArgoResourceDiffOverlay({ diff, onClose }: { diff: GitOpsResourceDiff; onClose: () => void }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose()
-        // Consumed: stop it here so it doesn't keep bubbling to window-level
-        // Escape handlers (e.g. the bottom dock's maximize toggle) and
-        // dismiss something behind this overlay in the same keystroke.
-        e.stopPropagation()
-      }
-    }
-    // Bubble phase, not capture: the embedded CodeViewer's own search bar
-    // (Live/Desired manifest mode) handles Escape on its input and calls
-    // stopPropagation to close just the search, not this whole overlay — a
-    // capture-phase listener here would run before that input ever sees the
-    // event and always win, closing the full-screen view out from under an
-    // in-progress search instead. Search's own handler runs first (target
-    // phase, before this document-level one) and stops propagation when it
-    // acts, so this listener only ever fires when search isn't consuming
-    // the key itself.
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [onClose])
-
+function ArgoResourceDiffContent({ diff, onClose }: { diff: GitOpsResourceDiff; onClose: () => void }) {
   const [viewMode, setViewMode] = useState<ViewMode>('diff')
   const [unified, setUnified] = useState(false)
   const [hideUnchanged, setHideUnchanged] = useState(true)
 
   const unchanged = !docsDiffer(diff.desired, diff.live)
 
-  return createPortal(
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="dialog relative flex h-[90vh] w-full max-w-6xl flex-col">
-        <div className="flex items-center justify-between gap-2 border-b border-theme-border px-4 py-3">
-          <div className="flex min-w-0 items-center gap-2">
-            <GitCompare className="h-4 w-4 shrink-0 text-theme-text-secondary" />
-            <span className="truncate text-sm font-medium text-theme-text-primary">
-              desired (Git-rendered) <span className="mx-0.5 text-theme-text-tertiary">→</span> live (normalized)
-            </span>
-            {diff.redacted && <RedactedChip />}
-          </div>
-          <button
-            onClick={onClose}
-            className="flex shrink-0 items-center gap-1 rounded px-2 py-1 text-xs text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary"
-          >
-            <X className="h-3.5 w-3.5" />
-            Close
-          </button>
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2 border-b border-theme-border px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <GitCompare className="h-4 w-4 shrink-0 text-theme-text-secondary" />
+          <span className="truncate text-sm font-medium text-theme-text-primary">
+            desired (Git-rendered) <span className="mx-0.5 text-theme-text-tertiary">→</span> live (normalized)
+          </span>
+          {diff.redacted && <RedactedChip />}
         </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-theme-border px-4 py-2">
-          <div className="flex gap-1.5" role="tablist" aria-label="View">
-            {([
-              ['diff', 'Diff'],
-              ['live', 'Live manifest'],
-              ['desired', 'Desired manifest'],
-            ] as const).map(([mode, label]) => (
-              <button
-                key={mode}
-                type="button"
-                role="tab"
-                aria-selected={viewMode === mode}
-                onClick={() => setViewMode(mode)}
-                className={clsx(
-                  'rounded-md border px-2.5 py-1 text-xs transition-colors',
-                  viewMode === mode
-                    ? 'selection selection-text selection-ring border-transparent'
-                    : 'border-theme-border text-theme-text-secondary hover:bg-theme-hover',
-                )}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          {viewMode === 'diff' && !unchanged && (
-            <div className="flex items-center gap-1">
-              <ToggleButton active={hideUnchanged} onClick={() => setHideUnchanged((v) => !v)} icon={<FileText className="h-3.5 w-3.5" />} label="Diff only" tooltip="Collapse unchanged regions" />
-              <ToggleButton active={unified} onClick={() => setUnified((v) => !v)} icon={<Rows className="h-3.5 w-3.5" />} label="Unified" tooltip="Switch between side-by-side and single-column" />
-            </div>
-          )}
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-auto bg-theme-base/50">
-          {viewMode === 'live' ? (
-            <CodeViewer code={diff.live} language="yaml" showLineNumbers showCopyButton maxHeight="calc(90vh - 180px)" />
-          ) : viewMode === 'desired' ? (
-            <CodeViewer code={diff.desired} language="yaml" showLineNumbers showCopyButton maxHeight="calc(90vh - 180px)" />
-          ) : unchanged ? (
-            <div className="p-6 text-sm text-theme-text-secondary">
-              No differences between the Git-rendered desired state and live cluster state.
-            </div>
-          ) : (
-            <YamlDiffEditor
-              original={diff.desired}
-              modified={diff.live}
-              unified={unified}
-              hideUnchanged={hideUnchanged}
-              height="100%"
-              bleed
-            />
-          )}
-        </div>
+        <button
+          onClick={onClose}
+          className="flex shrink-0 items-center gap-1 rounded px-2 py-1 text-xs text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary"
+        >
+          <X className="h-3.5 w-3.5" />
+          Close
+        </button>
       </div>
-    </div>,
-    document.body,
+
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-theme-border px-4 py-2">
+        <div className="flex gap-1.5" role="tablist" aria-label="View">
+          {([
+            ['diff', 'Diff'],
+            ['live', 'Live manifest'],
+            ['desired', 'Desired manifest'],
+          ] as const).map(([mode, label]) => (
+            <button
+              key={mode}
+              type="button"
+              role="tab"
+              aria-selected={viewMode === mode}
+              onClick={() => setViewMode(mode)}
+              className={clsx(
+                'rounded-md border px-2.5 py-1 text-xs transition-colors',
+                viewMode === mode
+                  ? 'selection selection-text selection-ring border-transparent'
+                  : 'border-theme-border text-theme-text-secondary hover:bg-theme-hover',
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        {viewMode === 'diff' && !unchanged && (
+          <div className="flex items-center gap-1">
+            <ToggleButton active={hideUnchanged} onClick={() => setHideUnchanged((v) => !v)} icon={<FileText className="h-3.5 w-3.5" />} label="Diff only" tooltip="Collapse unchanged regions" />
+            <ToggleButton active={unified} onClick={() => setUnified((v) => !v)} icon={<Rows className="h-3.5 w-3.5" />} label="Unified" tooltip="Switch between side-by-side and single-column" />
+          </div>
+        )}
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-auto bg-theme-base/50">
+        {viewMode !== 'diff' ? (
+          diff[viewMode] ? (
+            <CodeViewer key={viewMode} code={diff[viewMode]} language="yaml" showLineNumbers showCopyButton maxHeight="calc(90vh - 180px)" />
+          ) : (
+            <div className="p-6 text-sm text-theme-text-secondary">
+              {viewMode === 'live'
+                ? 'This resource is not present in the live cluster state.'
+                : 'This resource is not present in the Git-rendered desired state.'}
+            </div>
+          )
+        ) : unchanged ? (
+          <div className="p-6 text-sm text-theme-text-secondary">
+            No differences between the Git-rendered desired state and live cluster state.
+          </div>
+        ) : (
+          <YamlDiffEditor
+            original={diff.desired}
+            modified={diff.live}
+            unified={unified}
+            hideUnchanged={hideUnchanged}
+            height="100%"
+            bleed
+          />
+        )}
+      </div>
+    </>
   )
 }
 
