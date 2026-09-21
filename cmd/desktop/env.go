@@ -7,8 +7,8 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -80,15 +80,17 @@ func enrichEnv() {
 	// env on macOS/Linux, and if enrichment doesn't fire the user may see
 	// fewer clusters than they expect in the switcher. We surface this via
 	// the errorlog so it shows up in bug report diagnostics.
-	kubeconfigVal, kubeconfigFound := captured["KUBECONFIG"]
+	kubeconfigVal := captured["KUBECONFIG"]
 	switch {
-	case originalKubeconfig != "" && kubeconfigFound && kubeconfigVal != "":
+	case originalKubeconfig != "":
 		pathCount := len(filepath.SplitList(originalKubeconfig))
 		log.Printf("KUBECONFIG enrichment skipped: already set in process env (%d path(s))", pathCount)
-		errorlog.Record("env-enrich", "warning",
-			"KUBECONFIG enrichment skipped: already set in process env with %d path(s); "+
-				"login shell value ignored", pathCount)
-	case !kubeconfigFound || kubeconfigVal == "":
+		if kubeconfigVal != "" {
+			errorlog.Record("env-enrich", "warning",
+				"KUBECONFIG enrichment skipped: already set in process env with %d path(s); "+
+					"login shell value ignored", pathCount)
+		}
+	case kubeconfigVal == "":
 		shellName := "unknown"
 		if s := os.Getenv("SHELL"); s != "" {
 			shellName = filepath.Base(s)
@@ -100,25 +102,10 @@ func enrichEnv() {
 	}
 }
 
-// envRecordStart matches the start of a KEY=VALUE record in `env` output,
-// used only to discover candidate variable *names* — never to extract
-// values. `env` output isn't safe to split into records by newline: a
-// multiline value has continuation lines that don't match, and bash's
-// exported-function entries (`BASH_FUNC_name%%=() { ... }`) don't match
-// either, so treating non-matching lines as continuations would glom a
-// function body onto whatever real variable preceded it.
-var envRecordStart = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
-
 // getShellEnv runs the user's login shell to capture environment variables.
 // It uses -i (interactive) so that zsh reads ~/.zshrc, where tools like
 // Homebrew's google-cloud-sdk add their PATH/KUBECONFIG entries. Without -i,
 // a non-interactive login shell skips ~/.zshrc.
-//
-// Values are never read off the raw `env` dump: an exact key or a
-// prefix-matched name discovered there is instead fetched in a second pass
-// by asking the shell to print it directly, framed with control-byte
-// separators a real path/URL/API-key value won't contain, so a value that
-// spans multiple lines can't be mis-split or bleed into another variable.
 func getShellEnv(keys []string, prefixes []string) map[string]string {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
@@ -129,56 +116,34 @@ func getShellEnv(keys []string, prefixes []string) map[string]string {
 		}
 	}
 
-	raw := runLoginShell(shell, "env")
-	if raw == "" {
-		return nil
-	}
-
-	names := make(map[string]bool, len(keys))
-	for _, k := range keys {
-		names[k] = true
-	}
-	for _, line := range strings.Split(raw, "\n") {
-		if !envRecordStart.MatchString(line) {
-			continue
-		}
-		key := line[:strings.IndexByte(line, '=')]
-		for _, p := range prefixes {
-			if strings.HasPrefix(key, p) {
-				names[key] = true
-				break
-			}
-		}
-	}
-	if len(names) == 0 {
-		return nil
-	}
-
-	const nameValueSep = "\x01"
-	const recordSep = "\x02"
-
 	var script strings.Builder
-	for name := range names {
-		script.WriteString("printf '%s\\001%s\\002' " + name + " \"$" + name + "\"\n")
+	// Fixed keys can be unexported shell variables, which env alone omits.
+	// NUL framing preserves every byte an env value can hold.
+	for _, key := range keys {
+		script.WriteString("printf '%s\\000' \"" + key + "=$" + key + "\"\n")
 	}
+	script.WriteString("command env -0 || exit 1\n")
 
 	payload := runLoginShell(shell, script.String())
 	if payload == "" {
 		return nil
 	}
-	// runLoginShell's markers are separated from the payload by the
-	// newlines `echo` itself prints, which would otherwise land inside the
-	// first record's name — trim them before splitting on the byte-level
-	// record separator.
-	payload = strings.Trim(payload, "\n")
-
-	result := make(map[string]string, len(names))
-	for _, record := range strings.Split(payload, recordSep) {
-		idx := strings.IndexByte(record, nameValueSep[0])
-		if idx < 0 {
+	result := make(map[string]string, len(keys))
+	for _, record := range strings.Split(payload, "\x00") {
+		key, value, ok := strings.Cut(record, "=")
+		if !ok {
 			continue
 		}
-		result[record[:idx]] = record[idx+1:]
+		if slices.Contains(keys, key) {
+			result[key] = value
+			continue
+		}
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(key, prefix) {
+				result[key] = value
+				break
+			}
+		}
 	}
 	return result
 }
@@ -187,13 +152,15 @@ func getShellEnv(keys []string, prefixes []string) map[string]string {
 // output it printed between two unique markers, so any prompt/motd/rc-file
 // chatter around it is discarded.
 func runLoginShell(shell, script string) string {
-	const startMarker = "__RADAR_ENV_START__"
-	const endMarker = "__RADAR_ENV_END__"
+	// Whole NUL-delimited markers cannot appear inside an environment value.
+	const startMarker = "\x00__RADAR_ENV_START__\x00"
+	const endMarker = "\x00__RADAR_ENV_END__\x00"
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, shell, "-l", "-i", "-c", "echo "+startMarker+"\n"+script+"\necho "+endMarker)
+	cmd := exec.CommandContext(ctx, shell, "-l", "-i", "-c",
+		"printf '\\000__RADAR_ENV_START__\\000'\n"+script+"\nprintf '\\000__RADAR_ENV_END__\\000'")
 	cmd.Env = []string{
 		"HOME=" + os.Getenv("HOME"),
 		"USER=" + os.Getenv("USER"),
