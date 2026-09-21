@@ -20,7 +20,8 @@ describe('Per-cluster metrics settings', () => {
   })
   it('makes compatible backends and authentication distinct from storage details', () => {
     const html = render({ headerKeys: ['Authorization', 'X-Scope-OrgID'] })
-    expect(html).toContain('Works with Prometheus, VictoriaMetrics, Thanos and Grafana Mimir.')
+    expect(html).toContain('Connect a Prometheus-compatible backend, such as Prometheus, VictoriaMetrics, Thanos or Grafana Mimir.')
+    expect(html).toContain('Available charts depend on the metrics collected.')
     expect(html).toMatch(/<h4[^>]*>Authentication headers<\/h4>/)
     expect(html).toContain('Authorization, X-Scope-OrgID')
     expect(html).toContain('Changing servers requires replacing or clearing the saved headers.')

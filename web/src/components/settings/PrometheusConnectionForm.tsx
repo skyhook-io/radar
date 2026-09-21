@@ -95,10 +95,10 @@ export function PrometheusConnectionForm({
     <div>
       <div className="mb-4 space-y-1">
         <p className="text-sm text-theme-text-secondary">
-          Works with Prometheus, VictoriaMetrics, Thanos and Grafana Mimir.
+          Connect a Prometheus-compatible backend, such as Prometheus, VictoriaMetrics, Thanos or Grafana Mimir.
         </p>
         <p className="text-xs text-theme-text-tertiary">
-          Charts cover resource usage, workload HTTP metrics and rightsizing when those metrics are available.
+          Available charts depend on the metrics collected.
         </p>
       </div>
       <label className="block text-sm font-medium text-theme-text-primary mb-1">
