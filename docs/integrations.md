@@ -1621,7 +1621,9 @@ Radar's local MCP tool `collect_runtime_evidence` collects a bounded snapshot fr
 
 Collection uses existing Kubernetes Pod-read and port-forward permissions, a recognized official image (`rabbitmq`, `nats`, or `hashicorp/vault`; repackaged images such as Bitnami are unsupported), and a declared default plaintext port. It introduces no application credentials, Secret reads, exec fallback, or settings. RabbitMQ needs its metrics endpoint enabled; NATS needs monitoring enabled independently of messaging authentication; Vault health is token-free but TLS/proxy requirements may prevent collection.
 
-Only the full local MCP surface exposes this action. Authenticated, remote, hosted and in-cluster callers and built-in investigations do not receive it. Custom ports, TLS and application authentication are outside this slice. Denied, missing, malformed or oversized evidence returns unavailable rather than healthy or empty. Results describe the selected endpoint at collection time, not the whole cluster.
+The full local MCP surface and local resource-detail action expose collection. Authenticated, remote, hosted and in-cluster callers and built-in investigations do not receive it. Custom ports, TLS and application authentication are outside this slice. Denied, missing, malformed or oversized evidence returns unavailable rather than healthy or empty. Results describe the selected endpoint at collection time, not the whole cluster.
+
+Local resource details also offer **Collect application evidence** when Radar can identify a supported Pod endpoint and verify Pod-read and port-forward permissions. Open the dialog, choose one Pod, then collect explicitly. The result includes the observation time, target and coverage limitations; opening a resource or refreshing the page does not collect application evidence. Results are temporary and clear when the resource or cluster changes. The UI action is unavailable on authenticated, remote, hosted and in-cluster deployments.
 
 See [explicit local runtime evidence](mcp.md#explicit-local-runtime-evidence) for invocation, consent, response limits and interpretation.
 
