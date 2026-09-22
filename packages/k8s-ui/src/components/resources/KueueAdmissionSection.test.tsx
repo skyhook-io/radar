@@ -5,7 +5,7 @@ import type { KueueAdmissionResponse, SchedulingObservation } from '../../types/
 
 const ref = { kind: 'Workload', group: 'kueue.x-k8s.io', namespace: 'ml', name: 'training-abc' }
 function response(observation: Partial<SchedulingObservation> = {}): KueueAdmissionResponse {
-  return { installed: true, total: 1, truncated: false, workloads: [{
+  return { uid: 'root-uid', installed: true, total: 1, truncated: false, workloads: [{
     apiVersion: 'kueue.x-k8s.io/v1beta2', name: ref.name, namespace: 'ml', uid: 'uid', generation: 2, createdAt: null, deleting: false, ref, projection: 'available', linksLimited: false,
     scheduling: { observations: [{ source: 'kueue', domain: 'admission', subject: ref, subjectGeneration: 2, decision: 'unsatisfied', kueue: { phase: 'pending' }, ...observation }] },
   }] }
@@ -16,7 +16,7 @@ function render(data?: KueueAdmissionResponse, props: Partial<React.ComponentPro
 
 describe('Kueue admission investigation', () => {
   it('hides confirmed empty unhinted roots but preserves unavailable and in-flight evidence', () => {
-    const empty = { installed: true, total: 0, truncated: false, workloads: [] }
+    const empty = { uid: 'root-uid', installed: true, total: 0, truncated: false, workloads: [] }
     expect(render(empty)).toBe('')
     expect(render(empty, { hinted: true })).toContain('No controller-owned Kueue Workload observed')
     expect(render(undefined, { loading: true })).toContain('Looking for controller-owned Workloads')
@@ -27,7 +27,7 @@ describe('Kueue admission investigation', () => {
   })
 
   it('does not claim that local absence proves remote execution failed', () => {
-    expect(render({ installed: true, total: 0, truncated: false, workloads: [] }, { hinted: true, externalExecution: true })).toContain('local absence does not establish remote admission or execution state')
+    expect(render({ uid: 'root-uid', installed: true, total: 0, truncated: false, workloads: [] }, { hinted: true, externalExecution: true })).toContain('local absence does not establish remote admission or execution state')
   })
 
   it('shows reported queue reasons and stale generation without inferring causality', () => {

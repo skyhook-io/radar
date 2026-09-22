@@ -63,6 +63,7 @@ export interface KueueAdmissionWorkload {
 }
 
 export interface KueueAdmissionResponse {
+  uid: string
   installed: boolean
   workloads: KueueAdmissionWorkload[]
   total: number

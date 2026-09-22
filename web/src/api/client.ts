@@ -6901,13 +6901,17 @@ export function useWorkloadRuns(
   });
 }
 
-export function useKueueAdmission(namespace: string, name: string) {
+export function useKueueAdmission(namespace: string, name: string, uid: string | undefined) {
   return useQuery<KueueAdmissionResponse>({
-    queryKey: ['kueue-admission', 'jobset.x-k8s.io', namespace, name],
+    queryKey: ['kueue-admission', 'jobset.x-k8s.io', namespace, name, uid],
     queryFn: () => fetchJSON(`/kueue/admission/jobsets/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}?group=jobset.x-k8s.io`),
-    enabled: Boolean(namespace && name),
+    enabled: Boolean(namespace && name && uid),
     staleTime: 5000,
-    refetchInterval: (query) => query.state.data?.installed === false || (query.state.error instanceof ApiError && query.state.error.status < 500) ? false : 5000,
+    refetchInterval: (query) => {
+      if (query.state.error instanceof ApiError && query.state.error.status < 500) return false
+      if (query.state.data?.uid === uid && query.state.data?.installed === false) return false
+      return 5000
+    },
     retry: (count, error) => !(error instanceof ApiError && error.status < 500) && count < 2,
   })
 }

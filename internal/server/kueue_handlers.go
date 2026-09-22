@@ -20,6 +20,7 @@ const kueueGroup = "kueue.x-k8s.io"
 const maxKueueAdmissionWorkloads = 8
 
 type KueueAdmissionResponse struct {
+	UID       string                   `json:"uid"`
 	Installed bool                     `json:"installed"`
 	Workloads []KueueAdmissionWorkload `json:"workloads"`
 	Total     int                      `json:"total"`
@@ -91,7 +92,7 @@ func (s *Server) handleKueueAdmission(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusServiceUnavailable, "Kueue discovery is incomplete; retry shortly")
 			return
 		}
-		s.writeJSON(w, KueueAdmissionResponse{Workloads: []KueueAdmissionWorkload{}})
+		s.writeJSON(w, KueueAdmissionResponse{UID: string(root.GetUID()), Workloads: []KueueAdmissionWorkload{}})
 		return
 	}
 	if !s.canRead(r, kueueGroup, "workloads", namespace, "list") {
@@ -136,7 +137,7 @@ func kueueAdmissionForJobSet(ctx context.Context, root *unstructured.Unstructure
 		}
 		return a.GetUID() < b.GetUID()
 	})
-	response := KueueAdmissionResponse{Installed: true, Workloads: make([]KueueAdmissionWorkload, 0), Total: len(matches), Truncated: len(matches) > maxKueueAdmissionWorkloads}
+	response := KueueAdmissionResponse{UID: string(root.GetUID()), Installed: true, Workloads: make([]KueueAdmissionWorkload, 0), Total: len(matches), Truncated: len(matches) > maxKueueAdmissionWorkloads}
 	if response.Truncated {
 		matches = matches[:maxKueueAdmissionWorkloads]
 	}

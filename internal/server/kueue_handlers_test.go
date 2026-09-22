@@ -138,3 +138,12 @@ func TestProxyAuth_KueueAdmissionRejectsUnsupportedAndUnreadableRoot(t *testing.
 		}
 	}
 }
+
+func TestKueueAdmissionRecreatedRoot(t *testing.T) {
+	oldRoot := testJobSet("ml", "training", "old-uid")
+	newRoot := testJobSet("ml", "training", "new-uid")
+	got := kueueAdmissionForJobSet(context.Background(), newRoot, []*unstructured.Unstructured{admissionWorkload(oldRoot, "old-workload")}, nil)
+	if got.UID != "new-uid" || got.Total != 0 || len(got.Workloads) != 0 {
+		t.Fatalf("recreated root received old admission evidence: %+v", got)
+	}
+}

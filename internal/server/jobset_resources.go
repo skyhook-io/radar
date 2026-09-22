@@ -168,6 +168,9 @@ func buildJobSetResources(root *unstructured.Unstructured, jobs []*batchv1.Job, 
 	for _, run := range collection.Runs {
 		result.Members[run.Name] = &jobSetUsage{}
 	}
+	if collection.Selected != nil {
+		result.Members[collection.Selected.Name] = &jobSetUsage{}
+	}
 	for _, owned := range pods {
 		pod := owned.Pod
 		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {

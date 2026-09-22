@@ -81,6 +81,10 @@ func TestJobSetResourceCoverageAndOwnership(t *testing.T) {
 	if len(got.Members) != 1 || got.Members["c"].CPU != nil || got.Members["c"].RunningPods != 0 {
 		t.Fatalf("completed member: %+v", got.Members)
 	}
+	got = buildJobSetResources(root, jobs, owned, metrics, jobSetMemberQuery{Role: "prepare", Selected: "jobs/training/a"}, now)
+	if len(got.Members) != 2 || got.Members["a"] == nil || got.Members["a"].CPU == nil || *got.Members["a"].CPU != 25000000 {
+		t.Fatalf("selected member outside role filter lost usage: %+v", got.Members)
+	}
 	metric.Timestamp = now.Add(-3 * time.Minute).Format(time.RFC3339Nano)
 	metrics[pods[1].Name] = metric
 	got = buildJobSetResources(root, jobs, owned, metrics, jobSetMemberQuery{}, now)
