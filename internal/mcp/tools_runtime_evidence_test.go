@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -139,5 +140,28 @@ func TestRuntimeEvidenceCancelsAcrossContextABA(t *testing.T) {
 	case <-requestCancelled:
 	case <-time.After(2 * time.Second):
 		t.Fatal("in-flight Kubernetes request was not cancelled")
+	}
+}
+
+func TestRuntimeEvidenceRefusesContextOperationBeforeConfigUse(t *testing.T) {
+	defer k8s.SetTestLocalMode()()
+	t.Setenv("RADAR_CLOUD_MODE", "false")
+	defer k8s.SetTestContextOperationInProgress(true)()
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+	old := k8s.SetTestConfig(&rest.Config{Host: srv.URL})
+	defer k8s.SetTestConfig(old)
+	ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), runtimeLocalCallerKey{}, true), time.Second)
+	defer cancel()
+	_, result, err := handleRuntimeEvidence(ctx, nil, RuntimeEvidenceInput{Application: "vault", Namespace: "lab", Pod: "vault", ConfirmNetworkAccess: true})
+	if err == nil || !strings.Contains(err.Error(), "connection is changing") || result != nil {
+		t.Fatalf("accepted ongoing context operation: result=%+v err=%v", result, err)
+	}
+	if requests.Load() != 0 {
+		t.Fatal("queried stale cluster config during a context operation")
 	}
 }

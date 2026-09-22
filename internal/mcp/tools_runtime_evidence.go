@@ -61,6 +61,9 @@ func handleRuntimeEvidence(ctx context.Context, _ *mcpsdk.CallToolRequest, input
 		return nil, nil, fmt.Errorf("application must be rabbitmq, nats, or vault")
 	}
 	operationCtx := k8s.OperationContext()
+	if k8s.ContextOperationInProgress() {
+		return nil, nil, fmt.Errorf("Kubernetes connection is changing; retry application evidence collection after it completes")
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	stop := context.AfterFunc(operationCtx, cancel)
 	defer stop()
