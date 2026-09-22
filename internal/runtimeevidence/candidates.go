@@ -192,7 +192,7 @@ func ResolveCandidates(ctx context.Context, deps trace.Deps, subject Subject) Ca
 	if err != nil {
 		return limited
 	}
-	result := CandidatesForPods(selected, truncated)
+	result := CandidatesForPods(selected, false)
 	result.CoverageLimited = truncated
 	result.SubjectUID = string(owner.GetUID())
 	return result
@@ -244,7 +244,7 @@ func CandidatesFromTrace(deps trace.Deps, tr *trace.Trace) CandidateSet {
 			}
 		}
 	}
-	result := CandidatesForPods(pods, partial)
+	result := CandidatesForPods(pods, false)
 	result.CoverageLimited = partial
 	return result
 }

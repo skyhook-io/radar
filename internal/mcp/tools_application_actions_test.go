@@ -93,6 +93,9 @@ func TestApplicationActionsAccessAndIdentity(t *testing.T) {
 			calls := 0
 			client.PrependReactor("create", "selfsubjectaccessreviews", func(kt.Action) (bool, runtime.Object, error) {
 				calls++
+				if tc.name == "unknown" {
+					return true, &authv1.SelfSubjectAccessReview{Status: authv1.SubjectAccessReviewStatus{Allowed: true, EvaluationError: "authorizer unavailable"}}, nil
+				}
 				if tc.slow {
 					time.Sleep(510 * time.Millisecond)
 				}
