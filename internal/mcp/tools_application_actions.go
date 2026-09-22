@@ -2,9 +2,9 @@ package mcp
 
 import (
 	"context"
+	"sync"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/k8s"
 	collector "github.com/skyhook-io/radar/internal/runtimeevidence"
 	"github.com/skyhook-io/radar/internal/trace"
 	evidence "github.com/skyhook-io/radar/pkg/runtimeevidence"
@@ -14,6 +14,7 @@ import (
 type applicationActionsDisabledKey struct{}
 
 type applicationEvidenceAction struct {
+	CoverageLimited bool `json:"coverageLimited,omitempty"`
 	collector.Candidate
 	Tool                  string              `json:"tool"`
 	Arguments             map[string]any      `json:"arguments"`
@@ -34,8 +35,8 @@ func applicationActions(ctx context.Context, deps trace.Deps, set collector.Cand
 	}
 	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	defer cancel()
-	client := k8s.ClientFromContext(ctx)
-	var actions []applicationEvidenceAction
+	client := deps.Client
+	var pending []applicationEvidenceAction
 	for _, candidate := range set.Candidates {
 		if !deps.NamespaceAllowed(candidate.Target.Namespace) {
 			continue
@@ -45,10 +46,23 @@ func applicationActions(ctx context.Context, deps trace.Deps, set collector.Cand
 			continue
 		}
 		reason := applicationActionReason(p, candidate)
-		if reason == "" || !collector.CheckAccess(ctx, client, candidate.Target) {
+		if reason == "" {
 			continue
 		}
-		actions = append(actions, applicationEvidenceAction{Candidate: candidate, Tool: "collect_application_evidence", Arguments: map[string]any{"application": candidate.Application, "namespace": candidate.Target.Namespace, "pod": candidate.Target.Pod}, WhyThisHelps: reason, SourceRefs: []trace.ResourceRef{{Kind: "Pod", Namespace: p.Namespace, Name: p.Name}}, AuthorizationRequired: "Ask the operator before setting confirm_network_access=true; the declared endpoint may still be unavailable.", CandidatesTruncated: set.Truncated || set.CoverageLimited})
+		pending = append(pending, applicationEvidenceAction{Candidate: candidate, Tool: "collect_application_evidence", Arguments: map[string]any{"application": candidate.Application, "namespace": candidate.Target.Namespace, "pod": candidate.Target.Pod, "pod_uid": candidate.Target.UID}, WhyThisHelps: reason, SourceRefs: []trace.ResourceRef{{Kind: "Pod", Namespace: p.Namespace, Name: p.Name}}, AuthorizationRequired: "Ask the operator before setting confirm_network_access=true; the declared endpoint may still be unavailable.", CandidatesTruncated: set.Truncated, CoverageLimited: set.CoverageLimited})
+	}
+	allowed := make([]bool, len(pending))
+	var wg sync.WaitGroup
+	for i := range pending {
+		wg.Add(1)
+		go func() { defer wg.Done(); allowed[i] = collector.CheckAccess(ctx, client, pending[i].Target) }()
+	}
+	wg.Wait()
+	var actions []applicationEvidenceAction
+	for i, action := range pending {
+		if allowed[i] {
+			actions = append(actions, action)
+		}
 	}
 	return actions
 }
@@ -57,14 +71,14 @@ func applicationActionReason(p *corev1.Pod, c collector.Candidate) string {
 	if p == nil || c.Application == evidence.NATS {
 		return ""
 	}
-	if !collector.ReadinessFailure(p, c.Target.Container) {
+	if !collector.RelevantReadinessFailure(p, c.Application, c.Target.Container) {
 		return ""
 	}
 	switch c.Application {
 	case evidence.Vault:
 		return "The Vault container is not ready; its initialization and seal state may explain why it is not serving. Standby alone is not a fault."
 	case evidence.RabbitMQ:
-		return "The RabbitMQ container is not ready; its node-local disk and memory alarms may provide application-state evidence. An alarm-free node does not rule out problems on other nodes."
+		return "The RabbitMQ alarm-specific readiness check is failing; collect its node-local disk and memory alarm state. An alarm-free node does not rule out problems on other nodes."
 	}
 
 	return ""
