@@ -23,18 +23,20 @@ import (
 )
 
 type applicationEvidenceAPI struct {
-	snapshot       func() (*rest.Config, string)
-	currentContext func() string
-	resolve        func(context.Context, trace.Deps, collector.Subject) collector.CandidateSet
-	collect        func(context.Context, kubernetes.Interface, *rest.Config, evidence.Adapter, collector.Target) collector.Result
+	operationContext func() context.Context
+	snapshot         func() (*rest.Config, string)
+	currentContext   func() string
+	resolve          func(context.Context, trace.Deps, collector.Subject) collector.CandidateSet
+	collect          func(context.Context, kubernetes.Interface, *rest.Config, evidence.Adapter, collector.Target) collector.Result
 }
 
 func newApplicationEvidenceAPI() *applicationEvidenceAPI {
 	return &applicationEvidenceAPI{
-		snapshot:       k8s.GetConfigSnapshot,
-		currentContext: k8s.ActiveClusterContext,
-		resolve:        collector.ResolveCandidates,
-		collect:        collector.SharedCollector().CollectTarget,
+		operationContext: k8s.OperationContext,
+		snapshot:         k8s.GetConfigSnapshot,
+		currentContext:   k8s.ActiveClusterContext,
+		resolve:          collector.ResolveCandidates,
+		collect:          collector.SharedCollector().CollectTarget,
 	}
 }
 
@@ -84,6 +86,11 @@ func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *h
 		return
 	}
 	api := s.applicationEvidence
+	operation := api.operationContext()
+	collectionCtx, cancelCollection := context.WithCancel(r.Context())
+	defer cancelCollection()
+	stop := context.AfterFunc(operation, cancelCollection)
+	defer stop()
 	config, capturedContext := api.snapshot()
 	if config == nil || capturedContext == "" {
 		s.writeError(w, http.StatusServiceUnavailable, "Kubernetes connection unavailable")
@@ -108,14 +115,14 @@ func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *h
 			kind = resource.Kind
 		}
 	}
-	response.CandidateSet = api.resolve(r.Context(), trace.Deps{
+	response.CandidateSet = api.resolve(collectionCtx, trace.Deps{
 		Cache: k8s.GetResourceCache(), Dynamic: k8s.GetDynamicResourceCache(), Discovery: k8s.GetResourceDiscovery(), AllowedNamespaces: namespaces,
 	}, collector.Subject{Group: group, Kind: kind, Namespace: q.Get("namespace"), Name: q.Get("name")})
 	permissionBudget := 500 * time.Millisecond
 	if q.Get("retryPermissions") == "true" {
 		permissionBudget = 2 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), permissionBudget)
+	ctx, cancel := context.WithTimeout(collectionCtx, permissionBudget)
 	defer cancel()
 	allowedTargets := make([]bool, len(response.Candidates))
 	var checks sync.WaitGroup
@@ -137,7 +144,7 @@ func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *h
 		}
 	}
 	response.Candidates = allowed
-	if api.currentContext() != capturedContext {
+	if operation.Err() != nil || api.currentContext() != capturedContext {
 		s.writeError(w, http.StatusConflict, "cluster context changed; reopen the resource")
 		return
 	}
@@ -187,8 +194,13 @@ func (s *Server) handleCollectApplicationEvidence(w http.ResponseWriter, r *http
 		return
 	}
 	api := s.applicationEvidence
+	operation := api.operationContext()
+	collectionCtx, cancelCollection := context.WithCancel(r.Context())
+	defer cancelCollection()
+	stop := context.AfterFunc(operation, cancelCollection)
+	defer stop()
 	config, capturedContext := api.snapshot()
-	if capturedContext != input.Context || api.currentContext() != input.Context {
+	if operation.Err() != nil || capturedContext != input.Context || api.currentContext() != input.Context {
 		s.writeError(w, http.StatusConflict, "cluster context changed; reopen the resource before collecting evidence")
 		return
 	}
@@ -201,8 +213,8 @@ func (s *Server) handleCollectApplicationEvidence(w http.ResponseWriter, r *http
 		s.writeError(w, http.StatusServiceUnavailable, "Kubernetes connection unavailable")
 		return
 	}
-	result := api.collect(r.Context(), client, config, input.Application, collector.Target{Namespace: input.Namespace, Pod: input.Pod, UID: input.UID})
-	if api.currentContext() != capturedContext {
+	result := api.collect(collectionCtx, client, config, input.Application, collector.Target{Namespace: input.Namespace, Pod: input.Pod, UID: input.UID})
+	if operation.Err() != nil || api.currentContext() != capturedContext {
 		s.writeError(w, http.StatusConflict, "cluster context changed; collected evidence was discarded")
 		return
 	}
