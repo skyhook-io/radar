@@ -93,10 +93,10 @@ function EvidenceDialog({ data, onClose }: { data: EvidenceCandidates; onClose: 
     <p className="mt-2 text-xs text-theme-text-tertiary">Collection may be unavailable if the endpoint requires credentials or cannot be reached. Results describe this Pod at collection time.</p>
     {error && <p role="alert" className="mt-4 text-sm text-theme-text-primary">{error}</p>}
     {result && <ApplicationEvidenceObservation result={result} />}
-    <div className="mt-5 flex justify-end gap-2">
-      {result && <button type="button" className="btn-brand-muted" onClick={async () => { const success = await copyText(JSON.stringify({ context: data.context, ...result }, null, 2)); setCopied(success); if (!success) setError('Could not copy the observation.'); }}>{copied ? 'Copied' : 'Copy observation'}</button>}
-      <button type="button" className="btn-brand-muted" onClick={onClose}>{pending ? 'Cancel' : 'Close'}</button>
-      <button type="button" className="btn-brand" disabled={pending} onClick={collect}>{pending ? 'Collecting…' : result ? 'Collect again' : 'Collect evidence'}</button>
+    <div className="mt-5 flex flex-wrap justify-end gap-2">
+      {result && <button type="button" className="btn-brand-muted px-3 py-2 text-sm" onClick={async () => { const success = await copyText(JSON.stringify({ context: data.context, ...result }, null, 2)); setCopied(success); if (!success) setError('Could not copy the observation.'); }}>{copied ? 'Copied' : 'Copy observation'}</button>}
+      <button type="button" className="btn-brand-muted px-3 py-2 text-sm" onClick={onClose}>{pending ? 'Cancel' : 'Close'}</button>
+      <button type="button" className="btn-brand px-3 py-2 text-sm" disabled={pending} onClick={collect}>{pending ? 'Collecting…' : result ? 'Collect again' : 'Collect evidence'}</button>
     </div>
   </DialogPortal>
 }
