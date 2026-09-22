@@ -15,7 +15,7 @@ const unavailableReasons: Record<string, string> = {
   port_forward_unavailable: 'Radar could not open a Kubernetes port-forward to this Pod.',
   pod_read_unavailable: 'Radar could not read the selected Pod.',
   pod_recheck_unavailable: 'Radar could not verify the Pod identity after collection.',
-  target_changed: 'The selected Pod changed. Reopen the resource to select its replacement.',
+  target_changed: 'The selected Pod changed. Close this dialog and reopen the collection action to select a current target.',
   collection_busy: 'Other evidence collections are running. Try again shortly.',
   collection_cancelled: 'Collection was cancelled or timed out.',
   response_too_large: 'The endpoint response exceeded the collection size limit.',
@@ -52,20 +52,20 @@ export function ApplicationEvidenceAction(props: Props) {
   const retry = () => { if (retryPermissions) void refetch(); else setPermissionRetryTarget(subjectKey) }
   return <>
     {data.permissionCheckTimedOut && <div className="mt-3 text-sm text-theme-text-secondary">Application evidence permissions could not be verified in time. <button type="button" className="text-accent-text hover:underline disabled:opacity-50" disabled={isFetching} onClick={retry}>{isFetching ? 'Checking…' : 'Retry permission check'}</button></div>}
-    {data.candidates.length > 0 && <EvidenceControl key={`${context}:${props.uid}`} data={{ ...data, context: data.context }} />}
+    {data.candidates.length > 0 && <EvidenceControl key={`${context}:${props.uid}`} data={{ ...data, context: data.context }} refreshing={isFetching} onTargetChanged={() => { void refetch() }} />}
   </>
 }
 
-function EvidenceControl({ data }: { data: AvailableCandidates }) {
+function EvidenceControl({ data, refreshing, onTargetChanged }: { data: AvailableCandidates; refreshing: boolean; onTargetChanged: () => void }) {
   const [snapshot, setSnapshot] = useState<AvailableCandidates>()
   const names = [...new Set(data.candidates.map(item => applicationNames[item.application]))].join(', ')
   return <div className="mt-3">
-    <button type="button" className="text-sm text-accent-text hover:underline" onClick={() => setSnapshot(data)}>Collect {names} evidence</button>
-    {snapshot && <EvidenceDialog data={snapshot} onClose={() => setSnapshot(undefined)} />}
+    <button type="button" className="text-sm text-accent-text hover:underline disabled:opacity-50" disabled={refreshing} onClick={() => setSnapshot(data)}>Collect {names} evidence</button>
+    {snapshot && <EvidenceDialog data={snapshot} onTargetChanged={onTargetChanged} onClose={() => setSnapshot(undefined)} />}
   </div>
 }
 
-function EvidenceDialog({ data, onClose }: { data: AvailableCandidates; onClose: () => void }) {
+function EvidenceDialog({ data, onClose, onTargetChanged }: { data: AvailableCandidates; onClose: () => void; onTargetChanged: () => void }) {
   const [selected, setSelected] = useState(0)
   const [result, setResult] = useState<ApplicationEvidenceResult>()
   const [error, setError] = useState<string>()
@@ -84,7 +84,10 @@ function EvidenceDialog({ data, onClose }: { data: AvailableCandidates; onClose:
     setError(undefined)
     try {
       const response = await collectApplicationEvidence(candidate, data.context, controller.signal)
-      if (!controller.signal.aborted) setResult(response)
+      if (!controller.signal.aborted) {
+        setResult(response)
+        if (response.reason === 'target_changed') onTargetChanged()
+      }
     } catch (e) {
       if (!controller.signal.aborted) setError(e instanceof Error ? e.message : 'Collection failed')
     } finally {
@@ -108,7 +111,7 @@ function EvidenceDialog({ data, onClose }: { data: AvailableCandidates; onClose:
     <div className="mt-5 flex flex-wrap justify-end gap-2">
       {result && <button type="button" className="btn-brand-muted px-3 py-2 text-sm" onClick={async () => { const success = await copyText(JSON.stringify({ context: data.context, ...result }, null, 2)); setCopied(success); if (!success) setError('Could not copy the observation.'); }}>{copied ? 'Copied' : 'Copy observation'}</button>}
       <button type="button" className="btn-brand-muted px-3 py-2 text-sm" onClick={onClose}>{pending ? 'Cancel' : 'Close'}</button>
-      <button type="button" className="btn-brand px-3 py-2 text-sm" disabled={pending} onClick={collect}>{pending ? 'Collecting…' : result ? 'Collect again' : 'Collect evidence'}</button>
+      <button type="button" className="btn-brand px-3 py-2 text-sm" disabled={pending || result?.reason === 'target_changed'} onClick={collect}>{pending ? 'Collecting…' : result ? 'Collect again' : 'Collect evidence'}</button>
     </div>
   </DialogPortal>
 }
