@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Badge, Disclosure, Input } from '@skyhook-io/k8s-ui'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, Check } from 'lucide-react'
 import {
   apiUrl,
   getApiBase,
@@ -145,6 +145,7 @@ export function LocalConnectionSettings({
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [messageWarning, setMessageWarning] = useState(false)
+  const [messageRevision, setMessageRevision] = useState('')
   const [url, setUrl] = useState(profile.url)
   const [insecureTls, setInsecureTls] = useState(profile.insecureTls)
   const [mode, setMode] = useState<CostConnectionDraft['mode']>(
@@ -164,6 +165,7 @@ export function LocalConnectionSettings({
   const trigger = useRef<HTMLElement | null>(null)
   const mounted = useRef(true)
   const shared = (profile.connection?.uses.length ?? 0) > 1
+  const sharedSummary = shared && profile.state === 'saved'
   const removalConnection =
     pending?.action === 'delete'
       ? catalog.find((connection) => connection.id === pending.connectionId)
@@ -297,17 +299,10 @@ export function LocalConnectionSettings({
     setTask('main')
     setPending(null)
     setSelected(null)
-    const scope =
-      update.action === 'update_shared'
-        ? `${data.affected} contexts`
-        : profile.target.context
+    setMessageRevision(data.profiles[kind].revision)
     setMessageWarning(!!data.error)
     setMessage(
-      data.error
-        ? data.error
-        : data.checked
-          ? `Saved for ${scope} · connection checked`
-          : 'Settings updated'
+      data.error ? data.error : data.checked ? 'Connection checked' : 'Saved'
     )
     return data
   }
@@ -403,6 +398,24 @@ export function LocalConnectionSettings({
     })
     openTask('replace')
   }
+  const feedback =
+    message &&
+    task === 'main' &&
+    messageRevision === profile.revision &&
+    (messageWarning || !dirty) ? (
+      <p
+        role="status"
+        className={`flex items-start gap-1.5 text-xs ${messageWarning ? 'text-warning-text' : 'text-theme-text-secondary'}`}
+      >
+        {!messageWarning && (
+          <Check
+            aria-hidden="true"
+            className="mt-0.5 h-3 w-3 shrink-0 text-[var(--color-success-dark)] dark:text-[var(--color-success-light)]"
+          />
+        )}
+        {message}
+      </p>
+    ) : null
   return (
     <fieldset
       ref={region}
@@ -467,24 +480,12 @@ export function LocalConnectionSettings({
           </div>
         </div>
       )}
-      <div className="flex justify-between items-start gap-3 text-xs">
-        <p className="min-w-0 break-words text-theme-text-secondary">
-          Cluster:{' '}
-          <span className="font-medium text-theme-text-primary">
-            {profile.target.context || 'Not selected'}
-          </span>
-        </p>
-        {task === 'main' && (
-          <button
-            type="button"
-            disabled={dirty}
-            onClick={() => void loadTask('main')}
-            className="shrink-0 text-accent-text hover:underline disabled:opacity-50"
-          >
-            Reload settings
-          </button>
-        )}
-      </div>
+      <p className="min-w-0 break-words text-xs text-theme-text-secondary">
+        Cluster:{' '}
+        <span className="font-medium text-theme-text-primary">
+          {profile.target.context || 'Not selected'}
+        </span>
+      </p>
       {task === 'main' && (
         <>
           {profile.state === 'launch' ? (
@@ -527,6 +528,15 @@ export function LocalConnectionSettings({
                   Review changes
                 </button>
               )}
+              {profile.state === 'error' && !error && (
+                <button
+                  type="button"
+                  className="text-xs text-accent-text hover:underline"
+                  onClick={() => void loadTask('main')}
+                >
+                  Reload latest settings
+                </button>
+              )}
               {profile.connection && (
                 <button
                   type="button"
@@ -537,21 +547,12 @@ export function LocalConnectionSettings({
                 </button>
               )}
             </div>
-          ) : shared ? (
-            <div className="space-y-3 border-b border-theme-border pb-4">
-              <div className="flex flex-wrap justify-between gap-2">
+          ) : sharedSummary ? (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <h4 className="text-sm font-medium text-theme-text-primary">
                   {profile.connection!.name}
                 </h4>
-                <Badge tone="note">
-                  Used by {profile.connection!.uses.length} contexts
-                </Badge>
-              </div>
-              <p className="text-xs text-theme-text-secondary break-all">
-                {profile.url}
-              </p>
-              <ConnectionUses uses={profile.connection!.uses} />
-              <div className="flex flex-wrap gap-3">
                 <button
                   type="button"
                   className="btn-brand px-3 py-2 text-xs"
@@ -559,12 +560,67 @@ export function LocalConnectionSettings({
                 >
                   Edit shared connection
                 </button>
+              </div>
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-4 gap-y-2 text-xs">
+                <dt className="text-theme-text-tertiary">Endpoint</dt>
+                <dd className="break-all text-theme-text-primary">
+                  {profile.url}
+                </dd>
+                <dt className="text-theme-text-tertiary">Authentication</dt>
+                <dd className="min-w-0 break-words text-theme-text-secondary">
+                  {kind === 'metrics'
+                    ? profile.headerKeys.length
+                      ? profile.headerKeys
+                          .map((key) =>
+                            profile.envHeaderKeys.includes(key)
+                              ? `${key} (environment)`
+                              : key
+                          )
+                          .join(', ')
+                      : 'No headers configured'
+                    : kind === 'argocd'
+                      ? profile.secretSet
+                        ? 'Token configured'
+                        : 'No token configured'
+                      : profile.secretSet
+                        ? 'API key configured'
+                        : 'No API key configured'}
+                </dd>
+                {kind === 'argocd' && (
+                  <>
+                    <dt className="text-theme-text-tertiary">
+                      TLS verification
+                    </dt>
+                    <dd
+                      className={
+                        profile.insecureTls
+                          ? 'text-warning-text'
+                          : 'text-theme-text-secondary'
+                      }
+                    >
+                      {profile.insecureTls ? 'Off' : 'On'}
+                    </dd>
+                  </>
+                )}
+              </dl>
+              {feedback}
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-theme-text-secondary">
+                  Shared by {profile.connection!.uses.length} contexts
+                </p>
+                <ConnectionUses
+                  uses={profile.connection!.uses}
+                  currentBinding={profile.target.binding}
+                  compact
+                />
+              </div>
+              <div>
                 <button
                   type="button"
-                  className="text-xs text-accent-text hover:underline"
+                  className="break-words text-left text-xs text-accent-text hover:underline"
                   onClick={() => openTask('fork')}
                 >
-                  Customize for this cluster
+                  Customize for {profile.target.context}
                 </button>
               </div>
               {kind === 'cost' && (
@@ -726,14 +782,7 @@ export function LocalConnectionSettings({
             }
           />
         ))}
-      {message && task === 'main' && (
-        <p
-          role="status"
-          className={`text-xs ${messageWarning ? 'text-warning-text' : 'text-theme-text-secondary'}`}
-        >
-          {message}
-        </p>
-      )}
+      {!sharedSummary && feedback}
       {task === 'use' && (
         <div className="space-y-3">
           <p className="text-sm text-theme-text-secondary">
@@ -1061,7 +1110,7 @@ export function LocalConnectionSettings({
             onClick={() => void loadTask('main')}
             className="underline"
           >
-            {dirty ? 'Discard draft & reload' : 'Reload settings'}
+            {dirty ? 'Discard draft & reload' : 'Reload latest settings'}
           </button>
         </p>
       )}
@@ -1095,17 +1144,87 @@ export function LocalConnectionSettings({
 
 function ConnectionUses({
   uses,
-  onForget
+  onForget,
+  currentBinding,
+  compact = false,
+  showUnavailable = true
 }: {
   uses: Usage[]
   onForget?: (use: Usage) => void
+  currentBinding?: string
+  compact?: boolean
+  showUnavailable?: boolean
 }) {
   const unavailable = uses.filter(
     (use) => use.availability !== 'available'
   ).length
+  if (compact) {
+    const ordered =
+      uses.length > 4
+        ? [
+            ...uses.filter((use) => use.binding === currentBinding),
+            ...uses.filter((use) => use.binding !== currentBinding)
+          ]
+        : uses
+    return (
+      <div className="space-y-2 text-xs text-theme-text-secondary">
+        <ul className="flex flex-wrap gap-x-4 gap-y-2">
+          {ordered.slice(0, 4).map((use) => (
+            <li key={use.binding} className="min-w-0 break-words">
+              <span
+                className={
+                  use.binding === currentBinding
+                    ? 'font-medium text-theme-text-primary'
+                    : undefined
+                }
+              >
+                {use.context}
+                {use.binding === currentBinding ? ' (current)' : ''}
+              </span>
+              {uses.some(
+                (other) =>
+                  other.binding !== use.binding && other.context === use.context
+              ) && (
+                <span className="block break-all text-theme-text-tertiary">
+                  {use.source} · {use.inFileName}
+                </span>
+              )}
+            </li>
+          ))}
+          {uses.length > 4 && (
+            <li className="text-theme-text-tertiary">
+              +{uses.length - 4} more
+            </li>
+          )}
+        </ul>
+        {showUnavailable && unavailable > 0 && (
+          <p className="text-warning-text">
+            {unavailable} {unavailable === 1 ? 'context is' : 'contexts are'}{' '}
+            not available in this session.
+          </p>
+        )}
+        <Disclosure
+          summary={
+            uses.length > 4
+              ? 'All contexts and source details'
+              : 'Source details'
+          }
+          summaryClassName="text-xs text-theme-text-tertiary"
+        >
+          <div className="pt-2">
+            <ConnectionUses
+              uses={uses}
+              currentBinding={currentBinding}
+              showUnavailable={false}
+            />
+          </div>
+        </Disclosure>
+      </div>
+    )
+  }
   return (
     <div className="space-y-1 text-xs text-theme-text-secondary">
-      {unavailable > 0 && (
+      {showUnavailable && unavailable > 0 && (
         <p>
           {unavailable} {unavailable === 1 ? 'context is' : 'contexts are'} not
           available in this session.
@@ -1115,6 +1234,7 @@ function ConnectionUses({
         <div key={use.binding} className="flex justify-between gap-3">
           <div className="min-w-0">
             <span className="font-medium break-words">{use.context}</span>
+            {use.binding === currentBinding && <span> (current)</span>}
             {use.availability === 'removed' && (
               <span> · removed from kubeconfig</span>
             )}
