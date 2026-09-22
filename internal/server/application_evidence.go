@@ -1,0 +1,177 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net"
+	"net/http"
+	"time"
+
+	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+
+	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/cloud"
+	"github.com/skyhook-io/radar/internal/k8s"
+	collector "github.com/skyhook-io/radar/internal/runtimeevidence"
+	"github.com/skyhook-io/radar/internal/trace"
+	evidence "github.com/skyhook-io/radar/pkg/runtimeevidence"
+)
+
+type applicationEvidenceAPI struct {
+	snapshot       func() (*rest.Config, string)
+	currentContext func() string
+	resolve        func(context.Context, trace.Deps, collector.Subject) collector.CandidateSet
+	collect        func(context.Context, kubernetes.Interface, *rest.Config, evidence.Adapter, collector.Target) collector.Result
+}
+
+func newApplicationEvidenceAPI() *applicationEvidenceAPI {
+	return &applicationEvidenceAPI{
+		snapshot:       k8s.GetConfigSnapshot,
+		currentContext: k8s.ActiveClusterContext,
+		resolve:        collector.ResolveCandidates,
+		collect:        collector.SharedCollector().CollectTarget,
+	}
+}
+
+type applicationEvidenceCandidatesResponse struct {
+	Enabled bool   `json:"enabled"`
+	Context string `json:"context,omitempty"`
+	collector.CandidateSet
+}
+
+type applicationEvidenceRequest struct {
+	Application          evidence.Adapter `json:"application"`
+	Namespace            string           `json:"namespace"`
+	Pod                  string           `json:"pod"`
+	UID                  string           `json:"uid"`
+	Context              string           `json:"context"`
+	ConfirmNetworkAccess bool             `json:"confirmNetworkAccess"`
+}
+
+func (s *Server) applicationEvidenceEnabled(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	ip := net.ParseIP(host)
+	return err == nil && ip != nil && ip.IsLoopback() &&
+		deploymentMode() == k8s.DeploymentModeLocal && !s.authConfig.Enabled() &&
+		!s.cloudConnectCfg.CloudTunnelConfigured && !cloud.IsAuthenticatedTunnelRequest(r.Context()) &&
+		auth.UserFromContext(r.Context()) == nil
+}
+
+func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *http.Request) {
+	response := applicationEvidenceCandidatesResponse{CandidateSet: collector.CandidateSet{Candidates: []collector.Candidate{}}}
+	if !s.applicationEvidenceEnabled(r) {
+		s.writeJSON(w, response)
+		return
+	}
+	if !s.requireConnected(w) {
+		return
+	}
+	q := r.URL.Query()
+	if len(validation.IsDNS1123Label(q.Get("namespace"))) != 0 || len(validation.IsDNS1123Subdomain(q.Get("name"))) != 0 || q.Get("kind") == "" {
+		s.writeError(w, http.StatusBadRequest, "a resource kind, namespace and name are required")
+		return
+	}
+	namespaces := s.parseNamespacesForUser(r)
+	if noNamespaceAccess(namespaces) || !namespaceAllowed(namespaces, q.Get("namespace")) {
+		s.writeError(w, http.StatusForbidden, "no access to the selected namespace")
+		return
+	}
+	api := s.applicationEvidence
+	config, capturedContext := api.snapshot()
+	if config == nil || capturedContext == "" {
+		s.writeError(w, http.StatusServiceUnavailable, "Kubernetes connection unavailable")
+		return
+	}
+	client, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Kubernetes connection unavailable")
+		return
+	}
+	kind, group := canonicalDiagnoseTarget(r.Context(), q.Get("kind"), q.Get("group"), q.Get("namespace"), q.Get("name"))
+	response.CandidateSet = api.resolve(r.Context(), trace.Deps{
+		Cache: k8s.GetResourceCache(), Dynamic: k8s.GetDynamicResourceCache(), Discovery: k8s.GetResourceDiscovery(), AllowedNamespaces: namespaces,
+	}, collector.Subject{Group: group, Kind: kind, Namespace: q.Get("namespace"), Name: q.Get("name")})
+	ctx, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
+	defer cancel()
+	allowed := make([]collector.Candidate, 0, len(response.Candidates))
+	for _, candidate := range response.Candidates {
+		if collector.CheckAccess(ctx, client, candidate.Target) {
+			allowed = append(allowed, candidate)
+		} else {
+			response.CoverageLimited = true
+		}
+	}
+	response.Candidates = allowed
+	if api.currentContext() != capturedContext {
+		s.writeError(w, http.StatusConflict, "cluster context changed; reopen the resource")
+		return
+	}
+	response.Enabled = true
+	response.Context = capturedContext
+	s.writeJSON(w, response)
+}
+
+func (s *Server) handleCollectApplicationEvidence(w http.ResponseWriter, r *http.Request) {
+	if !s.applicationEvidenceEnabled(r) {
+		s.writeError(w, http.StatusNotFound, "application evidence collection is not available on this deployment")
+		return
+	}
+	if !s.sameOriginOK(r) {
+		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
+	var input applicationEvidenceRequest
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid application evidence request")
+		return
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		s.writeError(w, http.StatusBadRequest, "expected one application evidence request")
+		return
+	}
+	if !input.ConfirmNetworkAccess || input.UID == "" || input.Context == "" ||
+		len(validation.IsDNS1123Label(input.Namespace)) != 0 || len(validation.IsDNS1123Subdomain(input.Pod)) != 0 {
+		s.writeError(w, http.StatusBadRequest, "explicit collection authorization, current context and selected Pod identity are required")
+		return
+	}
+	switch input.Application {
+	case evidence.RabbitMQ, evidence.NATS, evidence.Vault:
+	default:
+		s.writeError(w, http.StatusBadRequest, "unsupported application")
+		return
+	}
+	if !s.requireConnected(w) {
+		return
+	}
+	namespaces := s.parseNamespacesForUser(r)
+	if noNamespaceAccess(namespaces) || !namespaceAllowed(namespaces, input.Namespace) {
+		s.writeError(w, http.StatusForbidden, "no access to the selected namespace")
+		return
+	}
+	api := s.applicationEvidence
+	config, capturedContext := api.snapshot()
+	if capturedContext != input.Context || api.currentContext() != input.Context {
+		s.writeError(w, http.StatusConflict, "cluster context changed; reopen the resource before collecting evidence")
+		return
+	}
+	if config == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Kubernetes connection unavailable")
+		return
+	}
+	client, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Kubernetes connection unavailable")
+		return
+	}
+	result := api.collect(r.Context(), client, config, input.Application, collector.Target{Namespace: input.Namespace, Pod: input.Pod, UID: input.UID})
+	if api.currentContext() != capturedContext {
+		s.writeError(w, http.StatusConflict, "cluster context changed; collected evidence was discarded")
+		return
+	}
+	s.writeJSON(w, result)
+}
