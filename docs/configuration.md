@@ -29,9 +29,9 @@ not accepted. The existing `0.0.0.0` wildcard retains dual-stack behavior where
 supported by the OS; `::` selects an IPv6 wildcard.
 
 Browser launch and built-in AI investigations use the selected address.
-`radar diagnose` discovers the address through `~/.radar/mcp-port`; an older
-CLI connecting to a newer server with an explicit IP needs
-`--server http://<address>:<port>` (with brackets around IPv6 addresses).
+`radar diagnose` discovers the address through `~/.radar/mcp-port`. Use
+`--server http://<address>:<port>` to select an instance explicitly (with
+brackets around IPv6 addresses).
 External MCP clients should use that address in their configured URL too.
 This flag affects Radar's HTTP server; port-forward address options remain
 `127.0.0.1`/`localhost` and `0.0.0.0`.

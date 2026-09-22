@@ -290,7 +290,6 @@ func resolveServer(explicit string) (string, error) {
 		return "", fmt.Errorf("no running Radar found (%s missing) — start radar first, or pass --server http://localhost:<port>",
 			filepath.Join(home, ".radar", "mcp-port"))
 	}
-	// Installed servers predating host discovery only write port/base path.
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
 	port, err := strconv.Atoi(strings.TrimSpace(lines[0]))
 	if err != nil || port <= 0 {

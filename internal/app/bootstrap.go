@@ -612,8 +612,9 @@ var mcpPortFileDisabled bool
 // DisableMCPPortFile makes Write/RemoveMCPPortFile no-ops for this process.
 func DisableMCPPortFile() { mcpPortFileDisabled = true }
 
-// Older installed CLIs parse the whole file as a port, so localhost keeps the
-// port-only shape unless a base path is needed. A non-localhost host is line 3.
+// Desktop and CLI installations share this file and can update independently.
+// Keep localhost discovery port-only unless a base path is needed; an explicit
+// host occupies line 3.
 func WriteMCPPortFile(address string, basePath string) {
 	path := mcpPortFilePath()
 	if path == "" || mcpPortFileDisabled {
