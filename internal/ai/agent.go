@@ -55,7 +55,7 @@ type turnSpec struct {
 }
 
 // resolveAgent picks a backend from the CLI binary name (e.g. RADAR_AI_CLI_BIN or
-// the detected CLI): "cursor-agent" → Cursor, "codex" → Codex, else → Claude.
+// the detected CLI): Cursor, Codex, OpenCode, or Claude by default.
 func resolveAgent(bin string) Agent {
 	base := strings.ToLower(filepath.Base(bin))
 	switch {
@@ -63,6 +63,8 @@ func resolveAgent(bin string) Agent {
 		return &cursorAgent{bin: bin}
 	case strings.Contains(base, "codex"):
 		return &codexAgent{bin: bin}
+	case strings.TrimSuffix(base, filepath.Ext(base)) == "opencode" || strings.HasPrefix(base, "opencode-"):
+		return &opencodeAgent{bin: bin}
 	default:
 		return &claudeAgent{bin: bin}
 	}

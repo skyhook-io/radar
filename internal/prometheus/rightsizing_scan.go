@@ -939,7 +939,7 @@ func snapshotScanWorkloads(ctx context.Context, cache *k8s.ResourceCache, scopes
 		}
 	}
 
-	enrichScanHPA(cache, scopes, workloads)
+	enrichScanHPA(ctx, cache, scopes, workloads)
 	enrichScanCurrentOOM(ctx, cache, scopes, workloads)
 	out := make([]scanWorkload, 0, len(workloads))
 	for _, workload := range workloads {
@@ -1001,12 +1001,17 @@ func listDaemonSets(lister listersappsv1.DaemonSetLister, namespaces []string) (
 	return out, nil
 }
 
-func enrichScanHPA(cache *k8s.ResourceCache, scopes map[string][]string, workloads map[string]*scanWorkload) {
-	if !cache.IsDeferredSynced() {
-		return
-	}
+func enrichScanHPA(ctx context.Context, cache *k8s.ResourceCache, scopes map[string][]string, workloads map[string]*scanWorkload) {
 	lister := cache.HorizontalPodAutoscalers()
 	if lister == nil {
+		return
+	}
+	// Only this informer's sync state says whether the HPA inventory is
+	// readable. The deferred phase as a whole reports false while any unrelated
+	// kind is warming, and permanently once one fails, which would withhold a
+	// correct recommendation for a reason that has nothing to do with
+	// autoscaling.
+	if !waitForInformerSynced(ctx, cache, string(k8score.HorizontalPodAutoscalers)) {
 		return
 	}
 	namespaces := scanScopeNamespaces(scopes)

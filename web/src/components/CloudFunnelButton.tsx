@@ -15,6 +15,7 @@ import {
   signupUrlFor as buildSignupUrl,
 } from './cloudConnectHandoff'
 import { showApiError } from './ui/Toast'
+import { useConnection } from '../context/ConnectionContext'
 import {
   ApiError,
   cloudInstallActive,
@@ -113,6 +114,8 @@ export function CloudFunnelButton() {
   const capabilities = useCapabilities()
   const clusterInfo = useClusterInfo()
   const lane = capabilities.data?.cloudConnect?.lane ?? 'wizard'
+  const clusterConnected = useConnection().connection.state === 'connected'
+  const pitchLane = lane === 'driver' && !clusterConnected ? 'wizard' : lane
   const appUrl = capabilities.data?.cloudConnect?.appUrl || FALLBACK_APP_URL
   // utm_content names the link that was clicked. It travels only in the link
   // the user opens; Radar sends nothing on its own. Only the blocked card may
@@ -124,7 +127,7 @@ export function CloudFunnelButton() {
   // learns that someone opened it, which is congruent with what the dialog is
   // for; it must not learn that Radar is merely running.
   const connectInfo = useCloudConnectInfo(capabilities.data?.cloudConnect?.apiUrl, open, {
-    lane,
+    lane: pitchLane,
     mode: capabilities.data?.deployment?.mode,
   })
 
@@ -138,14 +141,14 @@ export function CloudFunnelButton() {
   // carries Cloud settings — installed by a colleague after a handoff, or from
   // another machine. The plan would refuse to install over it; better to say
   // "already connected" and point at it than to offer a click that ends blocked.
-  const discovered = useCloudInstallDiscover(open && lane === 'driver', clusterInfo.data?.context)
+  const discovered = useCloudInstallDiscover(open && lane === 'driver' && clusterConnected, clusterInfo.data?.context)
   // The server ranks these: one it can link to first. A failed lookup is
   // not a verdict — the CTA returns and the plan does its own inspection —
   // and neither is the previous opening's answer: this component outlives
   // the dialog, so a reopen refetches over cached data, and the gate must
   // hold for that refetch too (isFetching, not isPending) while a refetch
   // that fails must not keep showing what it found last time.
-  const alreadyConnected = discovered.isError ? undefined : discovered.data?.connected[0]
+  const alreadyConnected = !clusterConnected || discovered.isError ? undefined : discovered.data?.connected[0]
   const discoverPending = lane === 'driver' && discovered.isFetching
 
   // The flow is server-owned: polling here both drives the live progress view
@@ -332,10 +335,11 @@ export function CloudFunnelButton() {
         ) : (
           <>
             <div className="min-h-0 overflow-y-auto">
-              <PitchBody lane={lane} freeTier={connectInfo.data?.freeTier} />
+              <PitchBody lane={pitchLane} freeTier={connectInfo.data?.freeTier} />
             </div>
             <ModalFooter
               lane={lane}
+              clusterConnected={clusterConnected}
               signupUrl={signupUrl}
               // One link name whether or not an attempt preceded the click; the
               // outcome, when present, is what says an attempt happened.
@@ -398,6 +402,7 @@ function Eyebrow() {
 
 function ModalFooter({
   lane,
+  clusterConnected,
   signupUrl,
   driverBrowserUrl,
   prepareFailed,
@@ -415,6 +420,7 @@ function ModalFooter({
   onLater,
 }: {
   lane: 'driver' | 'wizard'
+  clusterConnected: boolean
   signupUrl: string
   // Same destination as signupUrl, distinct utm_content, and the outcome of
   // an in-app attempt when one preceded this render.
@@ -534,7 +540,7 @@ function ModalFooter({
               {alreadyConnected.clusterUrl ? 'Open in Radar Cloud' : 'Open Radar Cloud'}
             </a>
           )
-        ) : lane === 'driver' ? (
+        ) : lane === 'driver' && clusterConnected ? (
           <>
             <button
               onClick={onConnect}
@@ -559,14 +565,14 @@ function ModalFooter({
           </>
         ) : cliOnly ? null : (
           <a
-            href={self?.wizardUrl || signupUrl}
+            href={lane === 'driver' ? driverBrowserUrl : self?.wizardUrl || signupUrl}
             aria-disabled={selfPending}
             target="_blank"
             rel="noopener noreferrer"
             onClick={(e) => { if (selfPending) e.preventDefault() }}
             className={`px-5 py-2 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[13.5px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all ${selfPending ? 'opacity-60 pointer-events-none' : ''}`}
           >
-            {self?.ownership === 'helm' || gitops ? 'Connect this cluster' : 'Try Cloud free'}
+            {lane === 'driver' ? 'Continue in Radar Cloud' : self?.ownership === 'helm' || gitops ? 'Connect this cluster' : 'Try Cloud free'}
           </a>
         )}
         <button onClick={onLater} className="ml-auto whitespace-nowrap text-[12px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">
@@ -584,7 +590,7 @@ function ModalFooter({
       )}
       {/* Mechanics, not marketing: a falsifiable claim the plan card then
           fulfills. Sits next to the button whose click it de-risks. */}
-      {lane === 'driver' && !alreadyConnected && (
+      {lane === 'driver' && clusterConnected && !alreadyConnected && (
         <p className="mt-2.5 text-[11px] leading-relaxed text-theme-text-tertiary">
           Nothing installs on click. Radar inspects{' '}
           {clusterName ? <span className="text-theme-text-secondary">{clusterName}</span> : 'the cluster'} and shows

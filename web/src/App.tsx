@@ -9,7 +9,7 @@ import { DebugOverlay } from './components/DebugOverlay'
 import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
 import { investigationWorkspaceSearch, isInvestigationWorkspacePath, useDiagnoseLayout } from './components/diagnose/DiagnoseContext'
 import { DiagnoseSurface } from './components/diagnose/DiagnoseSurface'
-import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader, assetUrl } from '@skyhook-io/k8s-ui'
+import { TopologyGraph, TopologySearch, TopologyBreadcrumb, TopologyFilterSidebar, TopologyControls, FreshnessControl, gitOpsRouteForKind, gitOpsRouteForResource, ScopePill, PaneLoader } from '@skyhook-io/k8s-ui'
 import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useAPIResources, findAPIResourceForRoute } from './api/apiResources'
 import { TimelineView } from './components/timeline/TimelineView'
@@ -49,7 +49,6 @@ import { UserMenu } from './components/UserMenu'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { UpdateNotification } from './components/ui/UpdateNotification'
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
-import { CommandPalette } from './components/ui/CommandPalette'
 import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
 import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe, useAudit } from './api/client'
@@ -61,7 +60,7 @@ import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { useDocumentTitle } from './hooks/useDocumentTitle'
 import type { ClusterLoadState } from './types/clusterLoadState'
 import { useClusterLoadState } from './hooks/useClusterLoadState'
-import { Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug, SquareTerminal, ShieldCheck, GitBranch, Gauge, HelpCircle, Loader2, RefreshCw } from 'lucide-react'
+import { Network, Sun, Moon, Star, Bug, SquareTerminal, HelpCircle, Loader2, RefreshCw } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
@@ -72,8 +71,6 @@ import { findSelectedTopologyNode } from './utils/topology-selection'
 import { type OmnibarHandle } from './components/ui/Omnibar'
 import { RadarOmnibar } from './components/ui/RadarOmnibar'
 import type { ContextSwitcherHandle } from './components/ContextSwitcher'
-
-const radarLogoUrl = assetUrl('/images/radar/radar-icon.svg')
 
 // All possible node kinds (core + GitOps)
 const ALL_NODE_KINDS: NodeKind[] = [
@@ -343,30 +340,23 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     [navCustomization],
   )
   // Resolve every host-takeover URL ONCE (memoized on navCustomization) so the
-  // setMainView intercept, redirect effect, nav-pill filtering, inline-view
-  // gating, and the cert click handler all consume the SAME value — host
+  // setMainView intercept, redirect effect, inline-view gating, and the cert
+  // click handler all consume the SAME value — host
   // callbacks aren't guaranteed idempotent (scope / flags / signed URLs can
   // shift between calls). undefined = not taken over → Radar renders the view
-  // itself. `clusterChecksHref` is the deprecated pre-1.7 hook, folded into the
-  // 'checks' target for back-compat.
+  // itself.
   const takeover: Record<FleetTakeoverTarget, string | undefined> = useMemo(
     () => ({
       issues: navCustomization.fleetTakeoverHref?.('issues'),
       gitops: navCustomization.fleetTakeoverHref?.('gitops'),
-      checks: navCustomization.fleetTakeoverHref?.('checks') ?? navCustomization.clusterChecksHref?.(),
+      checks: navCustomization.fleetTakeoverHref?.('checks'),
       certs: navCustomization.fleetTakeoverHref?.('certs'),
     }),
     [navCustomization],
   )
   const { pinned: navRailPinned, togglePinned: toggleNavRailPinned } = useNavRailPinned()
-  // Standalone Radar gets the left nav rail; embedded hosts (Radar Hub) own
-  // the left chrome via their own fleet rail and keep Radar's top-bar pills.
-  const showNavRail = !navCustomization.embedded
-  // Chromeless embed: the host (Radar Hub) owns ALL chrome and drives view
-  // navigation + scope from its own UI, so Radar renders just the active view's
-  // content — no top bar, no view-switcher. Used for per-cluster views surfaced
-  // as native cloud destinations behind a cluster picker.
-  const chromeless = navCustomization.embedded === true && navCustomization.chrome === 'none'
+  const embedded = navCustomization.embedded === true
+  const showNavRail = !embedded
   // Force the slim rail on narrow windows: a pinned 176px rail needs viewport
   // ≥976 to keep content above its ~800px floor (collapsed needs only ≥856).
   // Below 976 we render collapsed regardless of the pin preference — a
@@ -513,15 +503,14 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   }, [diagnoseOpen, diagnoseMaximized, dismissDiagnoseForNavigation, setMainView])
 
   // Cloud (embedded) takes over the "fleet-shaped" per-cluster views with its
-  // own fleet pages scoped to this cluster — owned by the host's left rail — so
-  // Radar drops the matching pills (see the nav below). In-app nav hands off in
+  // own fleet pages scoped to this cluster. In-app navigation hands off in
   // setMainView (above); direct /<view> URL entry funnels through the redirect
   // effect below. Both consume the memoized `takeover` resolved above. Standalone
   // OSS (no fleetTakeoverHref) is unaffected and renders the in-app view.
   //
   // Has the host claimed this view? View-shaped targets only ('certs' has no
-  // Radar view — only its Home card consults `takeover`). Used to drop the nav
-  // pill and gate the inline view render in favor of the "Opening…" splash.
+  // Radar view — only its Home card consults `takeover`). Used to gate the
+  // inline view render in favor of the "Opening…" splash.
   const isViewTakenOver = (view: ExtendedMainView): boolean =>
     (view === 'issues' || view === 'gitops' || view === 'checks') && !!takeover[view]
   // The host's URL for the CURRENT view, if taken over. Drives the redirect
@@ -564,9 +553,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Help overlay state
   const [showHelp, setShowHelp] = useState(false)
-
-  // Command palette state
-  const [showCommandPalette, setShowCommandPalette] = useState(false)
 
   // Settings dialog state
   const [showSettings, setShowSettings] = useState(false)
@@ -683,7 +669,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Dialog-kind overlays wait their exit duration (shorter than the entrance);
   // drawers keep the symmetric slide.
   const helpOverlay = useAnimatedUnmount(showHelp, overlayExitMs('dialog'))
-  const commandPaletteAnim = useAnimatedUnmount(showCommandPalette, overlayExitMs('dialog'))
   const diagnosticsOverlay = useAnimatedUnmount(showDiagnostics, overlayExitMs('dialog'))
 
   // Hold last valid values so drawers can animate out before data disappears
@@ -830,7 +815,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Theme toggle for keyboard shortcut
   const { toggleTheme } = useTheme()
 
-  // Context switching for command palette
   const switchContext = useSwitchContext()
 
   // Refs for dropdown components to trigger them via shortcuts
@@ -909,10 +893,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       category: 'General' as const,
       scope: 'global' as const,
       allowInInputs: true,
-      // Standalone focuses the top-center omnibar; embedded opens the modal. In
-      // a chromeless embed the HOST owns ⌘K (its own omnibar), so do nothing —
-      // otherwise both the host omnibar and Radar's palette fire on one ⌘K.
-      handler: () => { if (showNavRail) omnibarRef.current?.focus(); else if (!chromeless) setShowCommandPalette(true) },
+      // Radar Hub owns its own omnibar.
+      handler: () => { if (!embedded) omnibarRef.current?.focus() },
     },
     {
       id: 'diagnostics',
@@ -1008,7 +990,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const { clusterLoadState, showHomeClusterLoadFallback, clusterLoadInitial } = useClusterLoadState({
     namespaces,
     mainView,
-    chromeless,
+    chromeless: embedded,
     contentReady,
     onClusterLoadStateChange,
   })
@@ -1752,46 +1734,20 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           − nav rail), not the viewport, so it collapses gracefully on narrow windows.
           The AI panel docks BELOW the navbar and pushes only the content region, so the
           navbar is never squeezed by it — these thresholds react to real window width. */}
-      {!chromeless && (
+      {!embedded && (
       <header className="@container relative z-50 flex items-center justify-between px-4 py-2 bg-theme-base/90 backdrop-blur-sm border-b border-theme-border/50">
-        {/* Left: Logo + Cluster info. In the standalone (nav-rail) layout this
-            is a FIXED-WIDTH column so the omnibar after it is force-pinned: the
-            scope pill + status dot can change width (cluster/namespace value)
-            without ever shifting the search box. The pill's own name/value caps
-            keep it inside this width; the embedded/pill layout keeps auto width
-            (its center bar is absolutely positioned). */}
-        <div className={`flex items-center gap-4 shrink-0 ${showNavRail ? 'w-[492px]' : ''}`}>
-          {/* Standalone rail owns the brand; only the embedded/pill layout
-              shows it in the header (host may override via brandSlot). */}
-          {navCustomization.brandSlot ?? (showNavRail ? null : <Logo />)}
-
-          <div className={`flex items-center gap-2 min-w-0 ${showNavRail ? 'flex-1' : ''}`}>
-            {navCustomization.contextSlot ? (
-              // Embedded host supplies its own cluster switcher — keep the two
-              // controls separate (the host owns the cluster chip's styling).
-              <>
-                {navCustomization.contextSlot}
-                <NamespaceSwitcher
-                  ref={namespaceSwitcherRef}
-                  disabled={namespaceFilter.disabled}
-                  disabledTooltip={namespaceFilter.tooltip}
-                />
-              </>
-            ) : (
-              // Standalone: cluster + namespace as one "scope" pill — two
-              // borderless segments split by a divider, reading as a single
-              // "what am I looking at" unit. The shared ScopePill shell is the
-              // same one Radar Hub's cluster top bar uses, so the two match.
-              <ScopePill>
-                <ContextSwitcher ref={contextSwitcherRef} variant="segment" />
-                <NamespaceSwitcher
-                  ref={namespaceSwitcherRef}
-                  variant="segment"
-                  disabled={namespaceFilter.disabled}
-                  disabledTooltip={namespaceFilter.tooltip}
-                />
-              </ScopePill>
-            )}
+        {/* Fixed width keeps the omnibar steady as cluster and namespace names change. */}
+        <div className="flex items-center gap-4 shrink-0 w-[492px]">
+          <div className="flex items-center gap-2 min-w-0 flex-1">
+            <ScopePill>
+              <ContextSwitcher ref={contextSwitcherRef} variant="segment" />
+              <NamespaceSwitcher
+                ref={namespaceSwitcherRef}
+                variant="segment"
+                disabled={namespaceFilter.disabled}
+                disabledTooltip={namespaceFilter.tooltip}
+              />
+            </ScopePill>
             {/* Connection status — a fixed-size dot (state in the tooltip), an
                 optional reconnect button, and when the header is wide enough
                 (xl+), a label. The label is nowrap and unbounded: it overflows
@@ -1817,7 +1773,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
                   }`}
                 />
               </Tooltip>
-              {showNavRail && headerConnectionDisplayLabel && (
+              {headerConnectionDisplayLabel && (
                 <span className="hidden xl:flex items-center gap-1.5 whitespace-nowrap text-[11px] text-theme-text-tertiary">
                   {showClusterWarmupLabel && <Loader2 className="w-3 h-3 animate-spin" />}
                   {headerConnectionDisplayLabel}
@@ -1842,65 +1798,6 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           </div>
         </div>
 
-        {/* Center: View tabs — embedded/pill layout only. Standalone Radar
-            navigates via the left rail (showNavRail), so the pill bar is
-            suppressed there to avoid a duplicate primary nav. */}
-        {!showNavRail && (
-        <div className="@min-[920px]:absolute @min-[920px]:left-1/2 @min-[920px]:-translate-x-1/2 flex items-center gap-0.5 bg-theme-elevated/50 rounded-full p-1 ml-2 @min-[920px]:ml-0">
-          {([
-            { view: 'home' as const, icon: Home, label: 'Home' },
-            { view: 'topology' as const, icon: Network, label: 'Topology' },
-            { view: 'resources' as const, icon: List, label: 'Resources' },
-            { view: 'capacity' as const, icon: Gauge, label: 'Capacity' },
-            { view: 'timeline' as const, icon: Clock, label: 'Timeline' },
-            { view: 'helm' as const, icon: Package, label: 'Helm' },
-            { view: 'gitops' as const, icon: GitBranch, label: 'GitOps' },
-            // Applications is intentionally hidden from the pill bar for now —
-            // the bar is full, and the view's primary home is Cloud's fleet
-            // rail. The view still exists and is reachable via /applications
-            // and the view-switching shortcuts. Same treatment as Cost below.
-            { view: 'traffic' as const, icon: Activity, label: 'Live Traffic' },
-            // Cost is intentionally hidden from the pill bar for now — the view still
-            // exists and is reachable via /cost, the Home dashboard card, and the
-            // command palette (⌘K). Remove this comment to restore it.
-            { view: 'checks' as const, icon: ShieldCheck, label: 'Checks' },
-          ] as const)
-            // In Cloud, fleet-shaped views (Checks, Issues, GitOps) are owned by
-            // the host's left rail; the per-cluster view is just that fleet page
-            // filtered to this cluster, so duplicating it as a peer pill here
-            // would be a second copy that teleports out of the cluster shell.
-            // Drop any pill the host took over — cluster-scoped access stays
-            // available via the Home cards (redirected by the takeover effect
-            // above), ⌘K, and bookmarks. Standalone OSS keeps every pill.
-            .filter(({ view }) => !isViewTakenOver(view))
-            .map(({ view, icon: Icon, label }) => (
-            <Tooltip key={view} content={label} delay={100} position="bottom">
-              <button
-                onClick={() => setMainView(view)}
-                className={`flex items-center gap-1 px-2 py-1 text-[13px] rounded-full transition-colors ${
-                  mainView === view || (mainView === 'helmCompare' && view === 'helm')
-                    ? 'bg-skyhook-600 dark:bg-skyhook-500 text-white shadow-glow-brand-sm'
-                    : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover'
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                {/* Labels appear only when the absolute-centered nav has
-                    enough horizontal room past the left section. Right-side
-                    chrome that adds further pressure (Connected text, star
-                    count) is intentionally pushed to the next tier (xl) so
-                    label rendering and right-side expansion stay decoupled.
-                    Per-button Tooltip discloses labels on hover when the
-                    icon-only viewport is in effect. The 1440 anchor is an
-                    off-system breakpoint chosen by measurement at the time
-                    of this PR — recompute if the cluster switcher cap or
-                    other left-section chrome changes appreciably. */}
-                <span className="hidden @min-[1264px]:inline">{label}</span>
-              </button>
-            </Tooltip>
-          ))}
-        </div>
-        )}
-
         {/* Center: omnibar — standalone search + command surface (the ⌘K entry).
             Its container is one of three EQUAL flex-1 columns (see the left/right
             groups): equal side columns keep this middle column — and the search
@@ -1908,60 +1805,37 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             chrome gets (cluster name, namespace label, "Discovering…" /
             "Disconnected" text). Overflowing side content truncates instead of
             dragging the box. Same pattern as Radar Hub's ClusterTopBar. */}
-        {showNavRail && (
-          <div className="hidden @min-[720px]:flex flex-1 justify-center min-w-0 px-3">
-            <RadarOmnibar
-              ref={omnibarRef}
-              onNavigateView={(view) => setMainView(view)}
-              onNavigateKind={(kind, group) => {
-                const params = new URLSearchParams(searchParams)
-                params.delete('kind')
-                if (group) params.set('apiGroup', group); else params.delete('apiGroup')
-                params.delete('resource')
-                params.delete('full')
-                params.delete('tab')
-                navigate({ pathname: `/resources/${kind}`, search: params.toString() })
-              }}
-              onSwitchContext={(name) => switchContext.mutate({ name }, { onSettled: () => setNamespaces([]) })}
-              onSetNamespaces={(ns) => { setNamespaces(ns); setActiveNamespace.mutate({ namespaces: ns }) }}
-              onToggleTheme={toggleTheme}
-              onShowDiagnostics={() => setShowDiagnostics(true)}
-              onOpenResource={(hit) => navigateToResourceList(searchHitToSelectedResource(hit))}
-            />
-          </div>
-        )}
+        <div className="hidden @min-[720px]:flex flex-1 justify-center min-w-0 px-3">
+          <RadarOmnibar
+            ref={omnibarRef}
+            onNavigateView={(view) => setMainView(view)}
+            onNavigateKind={(kind, group) => {
+              const params = new URLSearchParams(searchParams)
+              params.delete('kind')
+              if (group) params.set('apiGroup', group); else params.delete('apiGroup')
+              params.delete('resource')
+              params.delete('full')
+              params.delete('tab')
+              navigate({ pathname: `/resources/${kind}`, search: params.toString() })
+            }}
+            onSwitchContext={(name) => switchContext.mutate({ name }, { onSettled: () => setNamespaces([]) })}
+            onSetNamespaces={(ns) => { setNamespaces(ns); setActiveNamespace.mutate({ namespaces: ns }) }}
+            onToggleTheme={toggleTheme}
+            onShowDiagnostics={() => setShowDiagnostics(true)}
+            onOpenResource={(hit) => navigateToResourceList(searchHitToSelectedResource(hit))}
+          />
+        </div>
 
         {/* Right: Controls */}
         <div className="flex items-center gap-3 shrink-0">
-          {/* Command palette trigger — embedded only; standalone has the
-              top-center omnibar (which is the ⌘K surface). */}
-          {!showNavRail && (
-          <button
-            onClick={() => setShowCommandPalette(true)}
-            aria-label="Open command palette"
-            className="hidden lg:flex items-center gap-2 h-7 px-2.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
-          >
-            <Search className="w-3.5 h-3.5" />
-            <kbd className="text-[10px] text-theme-text-tertiary bg-theme-surface px-1 py-0.5 rounded border border-theme-border-light">
-              {typeof navigator !== 'undefined' && navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'}K
-            </kbd>
-          </button>
-          )}
-
-          {/* GitHub star — hidden in embedded mode (not OSS-distribution chrome). */}
-          {!navCustomization.embedded && (
-            <div className="hidden @min-[1100px]:block">
-              <GitHubStarButton />
-            </div>
-          )}
+          <div className="hidden @min-[1100px]:block">
+            <GitHubStarButton />
+          </div>
 
           {/* AI investigations (self-hides when no agent CLI is present) */}
           <GlobalDiagnoseButton />
 
-          {/* Radar Cloud funnel — OSS-only chrome, same gate as the star.
-              Cloud embeds render chromeless anyway; the explicit gate is
-              belt-and-braces for future chrome-bearing embedders. */}
-          {!navCustomization.embedded && <CloudFunnelButton />}
+          <CloudFunnelButton />
 
           {/* Local terminal */}
           {capabilities.localTerminal && (
@@ -1976,50 +1850,28 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
             </Tooltip>
           )}
 
-          {/* Theme toggle — hidden in embedded mode. Host apps (e.g. Radar
-              Cloud) own the user-theme preference and mount their own picker
-              in the account menu; a second toggle in Radar's topbar would
-              fight them (one writes to Radar's localStorage key, the other
-              to the host's cookie/backend) and the user would see the theme
-              bounce on every navigation between host routes and /c/:id. */}
-          {!navCustomization.embedded && (
-            <div className="hidden @min-[920px]:flex items-center">
-              <ThemeToggle />
-            </div>
-          )}
+          <div className="hidden @min-[920px]:flex items-center">
+            <ThemeToggle />
+          </div>
 
-          {/* Help + Report-a-bug — standalone only (the left rail owns chrome;
-              embedded hosts provide their own help/support). These replace the
-              old floating bottom-right pair. Settings moved to the rail bottom. */}
-          {showNavRail && (
-            <>
-              <Tooltip content="Keyboard shortcuts (?)">
-              <button
-                onClick={() => setShowHelp(true)}
-                aria-label="Show keyboard shortcuts"
-                className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
-              >
-                <HelpCircle className="w-4 h-4" />
-              </button>
-              </Tooltip>
-              <Tooltip content="Report a bug / Diagnostics">
-              <button
-                onClick={() => setShowDiagnostics(true)}
-                aria-label="Open diagnostics"
-                className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
-              >
-                <Bug className="w-4 h-4" />
-              </button>
-              </Tooltip>
-            </>
-          )}
-
-          {/* Account moved to the rail bottom (standalone). Embedded never showed
-              Radar's UserMenu — the host provides its own via rightExtras. */}
-
-          {/* Consumer-provided extras (e.g. Radar Hub's Install button +
-              avatar menu) appended to the right of the action bar. */}
-          {navCustomization.rightExtras}
+          <Tooltip content="Keyboard shortcuts (?)">
+            <button
+              onClick={() => setShowHelp(true)}
+              aria-label="Show keyboard shortcuts"
+              className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+            >
+              <HelpCircle className="w-4 h-4" />
+            </button>
+          </Tooltip>
+          <Tooltip content="Report a bug / Diagnostics">
+            <button
+              onClick={() => setShowDiagnostics(true)}
+              aria-label="Open diagnostics"
+              className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+            >
+              <Bug className="w-4 h-4" />
+            </button>
+          </Tooltip>
         </div>
       </header>
       )}
@@ -2454,7 +2306,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           initialTab={drawerInitialTab}
           // No Radar header in chromeless embeds (Radar Hub) — anchor the drawer
           // to the top of the content area instead of leaving a 49px gap.
-          headerHeight={chromeless ? 0 : undefined}
+          headerHeight={embedded ? 0 : undefined}
           rightInset={contentGutter}
           isOpen={resourceDrawer.isOpen}
           expanded={drawerExpandedProp}
@@ -2523,7 +2375,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           maximized = fills the frame. */}
       {diagnoseOpen && (
         <DiagnoseSurface
-          topInset={chromeless ? 0 : APP_HEADER_HEIGHT}
+          topInset={embedded ? 0 : APP_HEADER_HEIGHT}
           onBrowseIssues={() => setMainView('issues')}
           onOpenResource={(ref, investigationRunID) => {
             const resource: SelectedResource = {
@@ -2579,54 +2431,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       {/* Spacer for dock */}
       <DockSpacer />
 
-      {/* Floating action buttons — embedded only, and not in chromeless (the
-          host owns help/diagnostics chrome). Standalone moved help + bug to
-          visible top-bar icons (the rail owns chrome). */}
-      {!showNavRail && !chromeless && (
-        <FloatingButtons showHelp={showHelp} showCommandPalette={showCommandPalette} showDiagnostics={showDiagnostics} onHelp={() => setShowHelp(true)} onBugReport={() => setShowDiagnostics(true)} />
-      )}
-
       {/* Keyboard shortcut help overlay */}
       {helpOverlay.shouldRender && <ShortcutHelpOverlay isOpen={helpOverlay.isOpen} onClose={() => setShowHelp(false)} currentView={mainView} />}
-
-      {/* Command palette */}
-      {commandPaletteAnim.shouldRender && (
-        <CommandPalette
-          isOpen={commandPaletteAnim.isOpen}
-          onClose={() => setShowCommandPalette(false)}
-          onNavigateView={(view) => setMainView(view)}
-          onNavigateKind={(kind, group) => {
-            const params = new URLSearchParams(searchParams)
-            params.delete('kind')
-            if (group) params.set('apiGroup', group)
-            else params.delete('apiGroup')
-            params.delete('resource')
-            params.delete('full')
-            params.delete('tab')
-            navigate({ pathname: `/resources/${kind}`, search: params.toString() })
-            // Focus the table search after navigation — the user came from ⌘K
-            // (keyboard flow) and expects to type a resource name immediately.
-            setTimeout(() => {
-              (document.querySelector('input[placeholder="Search... (press /)"]') as HTMLInputElement)?.focus()
-            }, 100)
-          }}
-          onSwitchContext={(name) => switchContext.mutate(
-            { name },
-            // Namespace filter from the previous context may not exist in the
-            // new one — clear it so resource lists don't silently go empty.
-            // The server clears all per-user picks on context switch already;
-            // local state mirrors that via the namespace-scope effect.
-            { onSettled: () => setNamespaces([]) },
-          )}
-          onSetNamespaces={(ns) => {
-            if (namespaceScope?.cacheScoped && ns.length !== 1) return
-            setNamespaces(ns)
-            setActiveNamespace.mutate({ namespaces: ns })
-          }}
-          onToggleTheme={toggleTheme}
-          onShowDiagnostics={() => setShowDiagnostics(true)}
-        />
-      )}
 
       {/* Diagnostics overlay */}
       {diagnosticsOverlay.shouldRender && <DiagnosticsOverlay isOpen={diagnosticsOverlay.isOpen} onClose={() => setShowDiagnostics(false)} />}
@@ -2666,29 +2472,6 @@ function DockSpacer() {
   )
 }
 
-// Floating action buttons that position themselves above the dock
-function FloatingButtons({ showHelp, showCommandPalette, showDiagnostics, onHelp, onBugReport }: { showHelp: boolean; showCommandPalette: boolean; showDiagnostics: boolean; onHelp: () => void; onBugReport: () => void }) {
-  const { tabs } = useDock()
-  if (showHelp || showCommandPalette || showDiagnostics) return null
-  // When dock tab bar is visible (36px), shift the buttons up above it
-  const bottom = tabs.length > 0 ? 'bottom-10' : 'bottom-2'
-  const btnClass = 'w-7 h-7 flex items-center justify-center rounded-full bg-theme-elevated/80 hover:bg-theme-hover border border-theme-border-light text-theme-text-tertiary hover:text-theme-text-secondary text-xs font-medium shadow-sm backdrop-blur-sm transition-all'
-  return (
-    <div className={`fixed ${bottom} right-4 z-40 flex items-center gap-1.5`}>
-      <Tooltip content="Report bug / Diagnostics" position="top">
-        <button onClick={onBugReport} aria-label="Open diagnostics" className={btnClass}>
-          <Bug className="w-3.5 h-3.5" />
-        </button>
-      </Tooltip>
-      <Tooltip content="Keyboard shortcuts (?)" position="top">
-        <button onClick={onHelp} aria-label="Show keyboard shortcuts" className={btnClass}>
-          ?
-        </button>
-      </Tooltip>
-    </div>
-  )
-}
-
 // Main App component wrapped with providers
 function App({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadStateChange }: AppProps) {
   return (
@@ -2707,37 +2490,6 @@ function App({ manageDocumentTitle = false, documentTitleSuffix, onClusterLoadSt
         </ContextSwitchProvider>
       </CapabilitiesProvider>
     </ConnectionProvider>
-  )
-}
-
-// Header brand: emerald-square radar icon + stacked "Radar" / "by Skyhook"
-// wordmark. Shares its visual shape with the radar-hub-web shell so the
-// standalone OSS app and the embedded Cloud experience read as the same
-// product, and is narrow enough to leave room for the cluster switcher
-// and nav block on standard laptop viewports.
-function Logo() {
-  return (
-    <div className="flex items-center gap-2.5">
-      <div className="relative w-7 h-7 rounded-lg overflow-hidden flex-shrink-0 bg-emerald-500/10 border border-emerald-500/20">
-        <img
-          src={radarLogoUrl}
-          alt=""
-          aria-hidden
-          className="w-full h-full p-0.5"
-          // Fail loud on a missing/blocked asset rather than rendering an
-          // empty emerald square next to the wordmark — the latter reads
-          // as broken chrome with no diagnostics. Most likely cause is a
-          // build/deploy path mismatch.
-          onError={(e) =>
-            console.error('Radar logo asset failed to load:', (e.currentTarget as HTMLImageElement).src)
-          }
-        />
-      </div>
-      <div className="flex flex-col leading-none">
-        <span className="font-semibold text-[15px] tracking-tight text-theme-text-primary">Radar</span>
-        <span className="text-[9px] mt-0.5 tracking-wide uppercase text-theme-text-tertiary">by Skyhook</span>
-      </div>
-    </div>
   )
 }
 

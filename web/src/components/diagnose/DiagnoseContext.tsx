@@ -179,6 +179,7 @@ const AGENT_LABELS: Record<string, string> = {
   codex: "Codex",
   gemini: "Gemini CLI",
   "cursor-agent": "Cursor Agent",
+  opencode: "OpenCode",
 };
 
 export function agentLabelFor(name: string, fallbackLabel?: string): string {

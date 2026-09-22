@@ -178,7 +178,7 @@ func (a *codexAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnos
 			if e.Item != nil && e.Item.Type == "mcp_tool_call" {
 				onEvent(StreamEvent{Type: "step", Step: &StepInfo{
 					ID: e.Item.ID, Tool: e.Item.Tool, Status: "running",
-					Summary: codexArgsText(e.Item.Arguments),
+					Summary: toolArgsText(e.Item.Arguments),
 				}})
 			}
 		case "item.completed":
@@ -222,15 +222,6 @@ func (a *codexAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnos
 	d := diagnosisFromText(answer.String())
 	d.SessionID = sessionID
 	return d
-}
-
-func codexArgsText(raw json.RawMessage) string {
-	s := strings.TrimSpace(string(raw))
-	if s == "" || s == "null" || s == "{}" {
-		return ""
-	}
-	args, _ := capPayload(s)
-	return args
 }
 
 // codexResultText joins the text parts of a Codex mcp_tool_call result (already

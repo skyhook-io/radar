@@ -27,4 +27,10 @@ export const SUPPORTED_AGENTS: AgentInstall[] = [
     install: "curl https://cursor.com/install -fsS | bash",
     docs: "https://docs.cursor.com/en/cli/overview",
   },
+  {
+    name: "opencode",
+    label: "OpenCode",
+    install: "npm install -g opencode-ai",
+    docs: "https://opencode.ai/docs/",
+  },
 ];

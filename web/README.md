@@ -1,6 +1,6 @@
 # @skyhook-io/radar-app
 
-Radar's full web UI as a reusable React component. Used by Radar's own binary and by external host apps (e.g. Radar Hub) that want to embed the Radar UI inside their own frontend.
+Radar's web UI, shared by the OSS binary and Radar Hub.
 
 This package is source-only — it ships TypeScript + TSX files under `src/`. Consumers need a bundler that transpiles TSX (Vite, Next.js, esbuild, etc.).
 
@@ -27,9 +27,6 @@ export function ClusterPage({ clusterId }: { clusterId: string }) {
       basename={`/c/${clusterId}`}
       navSlots={{
         embedded: true,
-        brandSlot: <MyBrand />,
-        contextSlot: <MyClusterSwitcher />,
-        rightExtras: <MyUserMenu />,
       }}
     />
   );
@@ -42,7 +39,7 @@ See `RadarAppProps` + `NavCustomization` in the type declarations for the full s
 
 When `navSlots.embedded` is true, Radar sizes itself to the host container (`height: 100%`) instead of owning the browser viewport. Mount it inside a container with a definite height so the host chrome owns the page scrollbar.
 
-Chromeless hosts (`navSlots.chrome = 'none'`) can pass `onClusterLoadStateChange` and render `state.message` in their own topbar while Radar finishes loading deferred cluster resources.
+Embedded mode renders only the active view. Radar Hub owns the sidebar, top bar, cluster selector, and navigation. `onClusterLoadStateChange` supplies the loading status for Hub's top bar.
 
 ## Tailwind
 
@@ -67,7 +64,3 @@ Host apps can override Radar's runtime behavior without passing props:
 - `setCredentialsMode(mode)` — fetch credentials mode (`same-origin` | `include` | `omit`).
 
 Call these before mounting `<RadarApp>`.
-
-## Backwards compatibility
-
-The `RadarApp` props (`apiBase`, `basename`, `router`, `navSlots`, `queryClient`, `manageDocumentTitle`, `documentTitleSuffix`, `initialPath`, `onClusterLoadStateChange`) and the runtime-config setters are the stable surface. Adding to them is fine; removing or renaming is a breaking change.

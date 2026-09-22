@@ -122,7 +122,7 @@ describe('PVC metrics next step', () => {
     expect(render()).not.toContain('Configure metrics')
   })
   it('does not offer inaccessible standalone settings in an embedded host', () => {
-    const text = renderToString(<NavCustomizationProvider value={{ embedded: true, rightExtras: null }}><PVCUsageBar namespace="demo" name="disk" /></NavCustomizationProvider>)
+    const text = renderToString(<NavCustomizationProvider value={{ embedded: true }}><PVCUsageBar namespace="demo" name="disk" /></NavCustomizationProvider>)
     expect(text).not.toContain('Configure metrics')
     expect(text).toContain('check metrics availability')
   })

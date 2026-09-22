@@ -235,7 +235,7 @@ const defaultMaxTurns = 15
 
 // agentCLICandidates are CLIs whose event stream we can parse + drive. Order is
 // the default-selection preference when several are installed.
-var agentCLICandidates = []string{"claude", "codex", "cursor-agent"}
+var agentCLICandidates = []string{"claude", "codex", "cursor-agent", "opencode"}
 
 // Detector / Diagnoser ------------------------------------------------------
 
@@ -871,6 +871,15 @@ func (v *investigationEvidenceValidator) validate(event StreamEvent) StreamEvent
 	step.RadarEvidence = true
 	v.claimed[step.EvidenceRef] = struct{}{}
 	return event
+}
+
+func toolArgsText(raw json.RawMessage) string {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" || s == "{}" {
+		return ""
+	}
+	args, _ := capPayload(s)
+	return args
 }
 
 // capPayload truncates s to maxToolPayload runes, reporting whether it cut.

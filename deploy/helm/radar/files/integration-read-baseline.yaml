@@ -3,6 +3,13 @@
 # All grant rows mean get/list/watch on full objects, not redacted projections.
 # Existing grants are preserved; withhold does not revoke rights from other roles.
 entries:
+  - group: "kafka.strimzi.io"
+    resources: ["kafkaconnectors"]
+    scope: Namespaced
+    collection: "strimzi"
+    decision: withhold
+    reason: "Connector configuration and failure traces can contain credentials; this detector adds no caller grants."
+    source: "https://strimzi.io/docs/operators/1.2.0/configuring.html#type-KafkaConnector-reference"
   - group: ""
     resources: ["nodes","persistentvolumes"]
     scope: Cluster

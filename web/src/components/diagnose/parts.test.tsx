@@ -1031,6 +1031,24 @@ describe("ConsentCard execution profile treatment", () => {
     expect(html).toContain("Radar does not override them");
     expect(html).not.toContain("Radar still enables the agent CLI");
   });
+
+  it("does not claim Radar enables a sandbox for OpenCode's normal setup", () => {
+    const html = renderToStaticMarkup(
+      <ConsentCard
+        agentName="OpenCode"
+        agent="opencode"
+        profile="full-local"
+        onApprove={noop}
+        onCancel={noop}
+      />,
+    );
+    expect(html).toContain("Radar runs OpenCode with --auto");
+    expect(html).toContain("automatically approves actions");
+    expect(html).toContain("built-in tools and configured MCP servers");
+    expect(html).toContain("Explicit denials still apply");
+    expect(html).toContain("Radar does not enforce a CLI sandbox");
+    expect(html).not.toContain("Radar still enables the agent CLI");
+  });
 });
 
 // The consent card's error box is the ONLY place a refused approval is
