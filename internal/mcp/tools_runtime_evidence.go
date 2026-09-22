@@ -60,6 +60,14 @@ func handleRuntimeEvidence(ctx context.Context, _ *mcpsdk.CallToolRequest, input
 	if adapter != evidence.RabbitMQ && adapter != evidence.NATS && adapter != evidence.Vault {
 		return nil, nil, fmt.Errorf("application must be rabbitmq, nats, or vault")
 	}
+	operationCtx := k8s.OperationContext()
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(operationCtx, cancel)
+	defer stop()
+	defer cancel()
+	if operationCtx.Err() != nil {
+		return nil, nil, fmt.Errorf("Kubernetes context changed; no application evidence retained")
+	}
 	config := k8s.ConfigFromContext(ctx)
 	if config == nil {
 		return nil, nil, fmt.Errorf("Kubernetes connection unavailable; no runtime evidence collected")
@@ -69,7 +77,14 @@ func handleRuntimeEvidence(ctx context.Context, _ *mcpsdk.CallToolRequest, input
 	if err != nil {
 		return nil, nil, fmt.Errorf("Kubernetes client unavailable; no runtime evidence collected")
 	}
-	return toJSONResult(runtimeCollector.CollectTarget(ctx, client, config, adapter, collector.Target{Namespace: input.Namespace, Pod: input.Pod, UID: input.PodUID}))
+	if operationCtx.Err() != nil {
+		return nil, nil, fmt.Errorf("Kubernetes context changed; no application evidence retained")
+	}
+	result := runtimeCollector.CollectTarget(ctx, client, config, adapter, collector.Target{Namespace: input.Namespace, Pod: input.Pod, UID: input.PodUID})
+	if operationCtx.Err() != nil {
+		return nil, nil, fmt.Errorf("Kubernetes context changed; no application evidence retained")
+	}
+	return toJSONResult(result)
 }
 
 func applicationEvidenceInputSchema() *jsonschema.Schema {
