@@ -4,12 +4,7 @@ import {
   activityPreviewItems,
   selectedRunMissing,
   effectiveDefinitionResource,
-  emptyRunsCopy,
   isDirectRunKind,
-  jobSetDependencyLabels,
-  jobSetMemberIdentity,
-  jobSetStatusFacts,
-  pluralizeMemberJobs,
   resourceTargetForRun,
   retentionHistoryCopy,
   runMessageNeedsDisclosure,
@@ -187,28 +182,6 @@ describe('direct run identity', () => {
 })
 
 describe('JobSet member presentation', () => {
-  it('uses role and native indexes without calling Jobs retained runs', () => {
-    const member = {
-      kind: 'jobs',
-      group: 'batch',
-      namespace: 'training',
-      name: 'distributed-workers-2',
-      phase: 'Running',
-      active: true,
-      jobset: { replicatedJob: 'workers', jobIndex: '2', groupName: 'trainers', groupIndex: '1' },
-      running: 1,
-      podTotal: 1,
-      podRunning: 1,
-    }
-
-    expect(jobSetMemberIdentity(member)).toBe('workers #2 · trainers #1 · 1 active pod')
-    expect(pluralizeMemberJobs(200, 240, true)).toBe('200 of 240 Jobs')
-    expect(emptyRunsCopy('JobSet', {})).toEqual({
-      headline: 'No child Jobs currently retained',
-      body: 'No readable Jobs owned by this JobSet are currently available. Use the JobSet status, role dependencies, and admission evidence to investigate.',
-    })
-  })
-
   it('keeps the selected Job as the core Kubernetes intermediate', () => {
     expect(resourceTargetForRun({
       kind: 'jobs',
@@ -223,30 +196,6 @@ describe('JobSet member presentation', () => {
       namespace: 'training',
       name: 'distributed-workers-2',
     })
-  })
-
-  it('preserves the controller dependency status', () => {
-    expect(jobSetDependencyLabels([
-      { name: 'workers', dependsOn: [{ name: 'coordinator', status: 'Ready' }] },
-      { name: 'report', dependsOn: [{ name: 'workers', status: 'Complete' }] },
-    ])).toEqual([
-      'workers after coordinator is Ready',
-      'report after workers is Complete',
-    ])
-  })
-
-  it('does not turn absent or partial controller status into complete zeroes', () => {
-    expect(jobSetStatusFacts({}, 2)).toEqual([
-      ['Ready / succeeded / failed', 'Not reported'],
-    ])
-    expect(jobSetStatusFacts({
-      status: {
-        replicatedJobsStatus: [{ name: 'coordinator', ready: 1, succeeded: 0, failed: 0 }],
-      },
-    }, 2)).toEqual([
-      ['Ready / succeeded / failed', '1 / 0 / 0'],
-      ['Controller status coverage', '1 of 2 roles reported'],
-    ])
   })
 })
 

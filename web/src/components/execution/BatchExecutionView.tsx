@@ -17,13 +17,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { buildWorkflowExecutionModel, flattenWorkflowExecution, type WorkflowExecutionActivity, type WorkflowExecutionModel, type WorkflowExecutionNode, type WorkflowExecutionRow, type WorkflowTemplateReference } from '@skyhook-io/k8s-ui/utils/workflow-execution'
 import { midTruncate } from '@skyhook-io/k8s-ui/utils/format'
-import {
-  getJobSetFailedJobs,
-  getJobSetReadyJobs,
-  getJobSetStatus,
-  getJobSetSucceededJobs,
-  isJobSetV1Alpha2,
-} from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
+import { isJobSetV1Alpha2 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
 import { JobSetRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/JobSetRenderer'
 import { useResource, useWorkloadPods, useWorkloadRuns, useJobSetResources, type WorkloadRun } from '../../api/client'
 import type { ResourceNavigationTarget } from '../../utils/navigation'
@@ -231,14 +225,11 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
       : batchRunNextStep(selectedRun, canViewLogs, hasLivePods)
     : null
   const visibleRuns = useMemo(() => memberCollection ? runs : runs.filter((run) => {
-    if (roleFilter && run.jobset?.replicatedJob !== roleFilter) return false
     if (runFilter === 'active' && !run.active) return false
     if (runFilter === 'failed' && run.phase !== 'Failed' && run.phase !== 'Error') return false
     return !runSearch || run.name.toLowerCase().includes(runSearch.toLowerCase())
-  }), [runs, runFilter, runSearch, roleFilter, memberCollection])
-  const source = sourceFacts(kind, definitionResource, runs)
+  }), [runs, runFilter, runSearch, memberCollection])
   const phaseCounts = countPhases(runs)
-  const phaseCountQualifier = memberCollection && runsQuery.data?.truncated ? ' in shown Jobs' : ''
   const retentionCopy = memberCollection ? null : retentionHistoryCopy(kind, resource, phaseCounts)
   const fetchTarget = selectedRun && scheduled ? resourceTargetForRun(selectedRun) : null
   const selectedResourceQuery = useResource<any>(
@@ -284,28 +275,21 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
             <div className="flex items-center justify-between gap-2">
               <div>
                 <div className="text-xs font-medium uppercase tracking-wide text-theme-text-tertiary">
-                  {memberShell ? 'Member Jobs' : isTemplateKind(kind) ? 'Workflows using this definition' : 'Run history'}
+                  {isTemplateKind(kind) ? 'Workflows using this definition' : 'Run history'}
                 </div>
                 <div className="mt-1 text-sm font-semibold text-theme-text-primary">
-                  {memberShell && runsQuery.isLoading
-                    ? 'Loading Jobs…'
-                    : memberShell && runsQuery.error
-                      ? 'Unavailable'
-                      : memberCollection
-                        ? pluralizeMemberJobs(runs.length, runsQuery.data?.total, runsQuery.data?.truncated)
-                        : pluralizeRuns(runs.length)}
+                  {pluralizeRuns(runs.length)}
                 </div>
               </div>
             </div>
             <div className="mt-2 flex flex-wrap gap-1 text-[10px] text-theme-text-tertiary">
-              {phaseCounts.running > 0 && <span className="rounded bg-theme-hover px-1.5 py-0.5">{phaseCounts.running} running{phaseCountQualifier}</span>}
-              {phaseCounts.failed > 0 && <span className="rounded bg-theme-hover px-1.5 py-0.5">{phaseCounts.failed} failed{phaseCountQualifier}</span>}
-              {phaseCounts.succeeded > 0 && <span className="rounded bg-theme-hover px-1.5 py-0.5">{phaseCounts.succeeded} succeeded{phaseCountQualifier}</span>}
+              {phaseCounts.running > 0 && <span className="rounded bg-theme-hover px-1.5 py-0.5">{phaseCounts.running} running</span>}
+              {phaseCounts.failed > 0 && <span className="rounded bg-theme-hover px-1.5 py-0.5">{phaseCounts.failed} failed</span>}
+              {phaseCounts.succeeded > 0 && <span className="rounded bg-theme-hover px-1.5 py-0.5">{phaseCounts.succeeded} succeeded</span>}
             </div>
             <p className="mt-2 text-[10px] leading-4 text-theme-text-tertiary">
-              {memberShell ? 'Controller-owned Jobs currently visible in Kubernetes.' : 'Retained Kubernetes objects, not all-time history.'}
+              Retained Kubernetes objects, not all-time history.
             </p>
-            {roleFilter && <div className="mt-2 flex items-center justify-between gap-2 text-xs"><span className="truncate text-theme-text-secondary">Role: {roleFilter}</span><button type="button" className="shrink-0 text-accent-text hover:underline" onClick={() => setRoleFilter('')}>Show all roles</button></div>}
             {retentionCopy && <p className="mt-1 text-[10px] leading-4 text-theme-text-secondary">{retentionCopy}</p>}
             {(runs.length > 8 || phaseCounts.failed > 0) && (
               <div className="mt-3 space-y-2">
@@ -314,19 +298,13 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                     <button key={filter} type="button" onClick={() => setRunFilter(filter)} className={clsx('rounded px-2 py-1 text-[10px] font-medium capitalize', runFilter === filter ? 'selection' : 'text-theme-text-tertiary hover:bg-theme-hover')}>{filter}</button>
                   ))}
                 </div>
-                {runs.length > 20 && <input value={runSearch} onChange={(event) => setRunSearch(event.target.value)} placeholder={memberCollection ? 'Filter Job names' : 'Filter run names'} className="w-full rounded-md border border-theme-border bg-theme-elevated px-2 py-1.5 text-xs text-theme-text-primary placeholder:text-theme-text-tertiary" />}
+                {runs.length > 20 && <input value={runSearch} onChange={(event) => setRunSearch(event.target.value)} placeholder="Filter run names" className="w-full rounded-md border border-theme-border bg-theme-elevated px-2 py-1.5 text-xs text-theme-text-primary placeholder:text-theme-text-tertiary" />}
               </div>
             )}
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {memberShell && runsQuery.isLoading ? (
-              <FetchResult loading className="h-full" />
-            ) : memberShell && runsQuery.error ? (
-              <div className="p-2">
-                <EmptyState tone="neutral" variant="card" headline="Member Jobs unavailable" body={runsErrorMessage} />
-              </div>
-            ) : runs.length === 0 ? (
+            {runs.length === 0 ? (
               <div className="p-2">
                 <EmptyState
                   tone="neutral"
@@ -339,8 +317,8 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
               <EmptyState
                 tone="filtered"
                 variant="card"
-                headline={memberCollection ? 'No Jobs match these filters' : 'No runs match these filters'}
-                body={memberCollection ? `Change the status filter, Job-name search${roleFilter ? ', or role filter' : ''}.` : 'Change the status filter or run-name search.'}
+                headline="No runs match these filters"
+                body="Change the status filter or run-name search."
               />
             ) : (
               <div className="space-y-1">
@@ -349,7 +327,6 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                     key={workloadRunKey(run)}
                     run={run}
                     showNamespace={clusterScoped}
-                    memberCollection={memberCollection}
                     selected={Boolean(selectedRun && workloadRunKey(selectedRun) === workloadRunKey(run))}
                     onClick={() => onSelectRun?.(workloadRunKey(run))}
                   />
@@ -482,7 +459,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
                     <JobSetRenderer data={resource} mode="configuration" />
                   ) : (
                     <SourceFacts
-                      source={source}
+                      source={sourceFacts(kind, definitionResource, runs)}
                       namespace={selectedRun?.namespace || namespace}
                       definitionLoading={Boolean(referencedDefinitionTarget) && referencedDefinitionQuery.isLoading}
                       definitionError={referencedDefinitionTarget ? referencedDefinitionQuery.error : undefined}
@@ -657,41 +634,6 @@ function sourceFacts(kind: string, resource: any, runs: WorkloadRun[]) {
         ['Replica range', `${spec.minReplicaCount ?? 0} min / ${spec.maxReplicaCount ?? '-'} max`],
       ],
       definition,
-    }
-  }
-  if (kind === 'JobSet') {
-    const replicatedJobs = Array.isArray(spec.replicatedJobs) ? spec.replicatedJobs : []
-    const declaredJobs = replicatedJobs.reduce(
-      (sum: number, replicatedJob: any) => sum + Number(replicatedJob?.replicas ?? 1),
-      0,
-    )
-    const jobSetStatus = getJobSetStatus(resource)
-    const dependencies = jobSetDependencyLabels(replicatedJobs)
-    return {
-      state: jobSetStatus.text,
-      stateTone:
-        jobSetStatus.level === 'unhealthy'
-          ? 'error'
-          : jobSetStatus.level === 'degraded'
-            ? 'warning'
-            : jobSetStatus.level === 'healthy'
-              ? 'success'
-              : 'info',
-      progress: '',
-      duration: '',
-      work: `${runs.length} visible`,
-      facts: [
-        [
-          'Roles',
-          replicatedJobs.length
-            ? replicatedJobs.map((replicatedJob: any) => `${replicatedJob.name} × ${replicatedJob.replicas ?? 1}`).join(', ')
-            : '-',
-        ],
-        ['Declared Jobs', String(declaredJobs)],
-        ...jobSetStatusFacts(resource, replicatedJobs.length),
-        ['Dependencies', dependencies.length ? dependencies.join(', ') : 'None'],
-      ],
-      definition: null,
     }
   }
   if (kind === 'Job') {
@@ -1296,7 +1238,7 @@ function ResourceButton({ refInfo, onNavigateToResource }: { refInfo: WorkflowTe
   )
 }
 
-function RunRailButton({ run, selected, showNamespace, memberCollection, onClick }: { run: WorkloadRun; selected: boolean; showNamespace: boolean; memberCollection: boolean; onClick: () => void }) {
+function RunRailButton({ run, selected, showNamespace, onClick }: { run: WorkloadRun; selected: boolean; showNamespace: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
@@ -1311,50 +1253,12 @@ function RunRailButton({ run, selected, showNamespace, memberCollection, onClick
           <span className="block truncate text-xs font-medium text-theme-text-primary">{showNamespace ? `${run.namespace}/` : ''}{midTruncate(run.name, 34)}</span>
         </Tooltip>
         <span className="mt-0.5 block truncate text-[10px] text-theme-text-tertiary">
-          {memberCollection
-            ? jobSetMemberIdentity(run)
-            : <>{formatRunTime(run) || 'time unknown'}{formatRunDuration(run) ? ` · ${formatRunDuration(run)}` : ''} · {workCount(run)}</>}
+          {formatRunTime(run) || 'time unknown'}{formatRunDuration(run) ? ` · ${formatRunDuration(run)}` : ''} · {workCount(run)}
         </span>
       </span>
       <span className={clsx('badge-sm shrink-0', phaseBadgeClass(run.phase))}>{shortPhase(run.phase)}{run.deleting ? ' · deleting' : ''}</span>
     </button>
   )
-}
-
-export function jobSetMemberIdentity(run: WorkloadRun): string {
-  const identity = run.jobset?.replicatedJob
-    ? `${run.jobset?.replicatedJob}${run.jobset?.jobIndex ? ` #${run.jobset?.jobIndex}` : ''}`
-    : 'Role unknown'
-  const group = run.jobset?.groupName
-    ? ` · ${run.jobset?.groupName}${run.jobset?.groupIndex ? ` #${run.jobset?.groupIndex}` : ''}`
-    : ''
-  return `${identity}${group} · ${workCount(run)}`
-}
-
-export function jobSetDependencyLabels(replicatedJobs: any[]): string[] {
-  return replicatedJobs.flatMap((replicatedJob: any) =>
-    Array.isArray(replicatedJob?.dependsOn)
-      ? replicatedJob.dependsOn.map((dependency: any) => {
-          const dependencyName = dependency?.name ?? 'dependency'
-          return `${replicatedJob.name} after ${dependencyName}${dependency?.status ? ` is ${dependency.status}` : ''}`
-        })
-      : [],
-  )
-}
-
-export function jobSetStatusFacts(resource: any, declaredRoleCount: number): Array<[string, string]> {
-  const statuses = resource?.status?.replicatedJobsStatus
-  if (!Array.isArray(statuses) || statuses.length === 0) {
-    return [['Ready / succeeded / failed', 'Not reported']]
-  }
-  const facts: Array<[string, string]> = [[
-    'Ready / succeeded / failed',
-    `${getJobSetReadyJobs(resource)} / ${getJobSetSucceededJobs(resource)} / ${getJobSetFailedJobs(resource)}`,
-  ]]
-  if (statuses.length < declaredRoleCount) {
-    facts.push(['Controller status coverage', `${statuses.length} of ${declaredRoleCount} roles reported`])
-  }
-  return facts
 }
 
 function FactTile({ label, value, tone, mono }: { label: string; value: string | number; tone?: string; mono?: boolean }) {
@@ -1661,24 +1565,13 @@ function pluralizeRuns(count: number): string {
   return count === 1 ? '1 retained run' : `${count} retained runs`
 }
 
-export function pluralizeMemberJobs(returned: number, total?: number, truncated?: boolean): string {
-  if (truncated && total !== undefined) return `${returned} of ${total} Jobs`
-  return returned === 1 ? '1 child Job' : `${returned} child Jobs`
-}
-
 function runKindPluralForSchedule(kind: string): string {
   if (kind === 'CronJob' || kind === 'ScaledJob') return 'Jobs'
   if (kind === 'CronWorkflow' || kind === 'WorkflowTemplate' || kind === 'ClusterWorkflowTemplate') return 'Workflows'
   return 'runs'
 }
 
-export function emptyRunsCopy(kind: string, resource: any): { headline: string; body: string } {
-  if (kind === 'JobSet') {
-    return {
-      headline: 'No child Jobs currently retained',
-      body: 'No readable Jobs owned by this JobSet are currently available. Use the JobSet status, role dependencies, and admission evidence to investigate.',
-    }
-  }
+function emptyRunsCopy(kind: string, resource: any): { headline: string; body: string } {
   if (isTemplateKind(kind)) {
     return { headline: 'No retained Workflows use this definition', body: 'No readable Workflow objects currently reference this definition.' }
   }
