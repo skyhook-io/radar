@@ -156,6 +156,8 @@ func newOperationContextForGeneration(generation uint64, timeout time.Duration) 
 	return ctx, cancel, true
 }
 
+func ContextOperationInProgress() bool { return activeContextOperations.Load() != 0 }
+
 // OperationContext returns the current operation context. Callers that need
 // WithCancel semantics (instead of WithTimeout) should derive from this.
 func OperationContext() context.Context {
