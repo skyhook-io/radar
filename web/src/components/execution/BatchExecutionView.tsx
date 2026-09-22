@@ -137,7 +137,13 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
   const memberCollection = runsQuery.data?.collection === 'members'
   const memberShell = memberCollection || (!runsQuery.data && jobSetRoot)
   const runs = runsQuery.data?.runs ?? EMPTY_RUNS
-  const resolvedRuns = useMemo(() => runsQuery.data?.selected && !runs.some(run => workloadRunKey(run) === workloadRunKey(runsQuery.data!.selected!)) ? [...runs, runsQuery.data.selected] : runs, [runs, runsQuery.data?.selected])
+  const selectedRunFromResponse = runsQuery.data?.selected
+  const resolvedRuns = useMemo(
+    () => selectedRunFromResponse && !runs.some(run => workloadRunKey(run) === workloadRunKey(selectedRunFromResponse))
+      ? [...runs, selectedRunFromResponse]
+      : runs,
+    [runs, selectedRunFromResponse],
+  )
   const defaultRun = useMemo(() => memberCollection ? runs[0] : pickDefaultRun(runs), [memberCollection, runs])
   const previousSelection = useRef(selectedRunKey)
   const selectedDetail = useRef<HTMLElement>(null)

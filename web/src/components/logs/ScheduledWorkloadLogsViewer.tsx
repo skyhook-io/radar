@@ -27,7 +27,13 @@ export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRun
   const runsQuery = useWorkloadRuns(kind, namespace, name, true, { clusterScoped, refetchActive: true, ...(jobSet ? { selected: effectiveRunKey } : {}) })
   const memberCollection = runsQuery.data?.collection === 'members'
   const runs = runsQuery.data?.runs ?? EMPTY_RUNS
-  const resolvedRuns = useMemo(() => runsQuery.data?.selected && !runs.some(run => workloadRunKey(run) === workloadRunKey(runsQuery.data!.selected!)) ? [...runs, runsQuery.data.selected] : runs, [runs, runsQuery.data?.selected])
+  const selectedRunFromResponse = runsQuery.data?.selected
+  const resolvedRuns = useMemo(
+    () => selectedRunFromResponse && !runs.some(run => workloadRunKey(run) === workloadRunKey(selectedRunFromResponse))
+      ? [...runs, selectedRunFromResponse]
+      : runs,
+    [runs, selectedRunFromResponse],
+  )
   const defaultRun = useMemo(() => memberCollection ? runs[0] : pickDefaultRun(runs), [memberCollection, runs])
   const roles: string[] = [...new Set<string>([...(rootQuery.data?.spec?.replicatedJobs?.map((r: { name: string }) => r.name) ?? []), ...(role ? [role] : [])])]
   const effectiveRole = role || roles[0] || ''
