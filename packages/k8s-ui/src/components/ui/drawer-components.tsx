@@ -292,8 +292,10 @@ export function defaultConditionTone(cond: { type?: string; status?: string }): 
 export function ConditionsSection({
   conditions,
   getConditionTone,
+  defaultExpanded,
 }: {
   conditions?: any[]
+  defaultExpanded?: boolean
   getConditionTone?: (condition: any) => ConditionTone | undefined
 }) {
   if (!conditions || conditions.length === 0) return null
@@ -312,7 +314,7 @@ export function ConditionsSection({
   return (
     <Section
       title={`Conditions (${conditions.length})${failCount > 0 ? ` · ${failCount} failing` : ''}`}
-      defaultExpanded={conditions.length <= 6}
+      defaultExpanded={defaultExpanded ?? conditions.length <= 6}
     >
       <div className="relative">
         {/* Timeline line — sits between timestamp column and dot */}

@@ -1462,7 +1462,7 @@ Radar statically evaluates Calico selectors against workload pod templates and t
 
 ## GPU & Batch Ecosystem (basic support)
 
-Basic resource support for the GPU scheduling, batch, and inference-serving ecosystem: **status badges, smart table columns, status filters, and sidebar grouping** for every kind below. Detail views use the standard spec/status renderer; topology participation and typed detail views land with the deeper per-tool integrations.
+Basic resource support for the GPU scheduling, batch, and inference-serving ecosystem: **status badges, smart table columns, status filters, and sidebar grouping** for every kind below. JobSet `v1alpha2` also has typed definition and lifecycle detail plus contextual execution drilldown through controller-owned member Jobs, their Pods, logs, and activity. The remaining kinds use the standard spec/status renderer until their deeper per-tool integrations land.
 
 This is resource reconnaissance, not GPU accounting or end-to-end workload diagnosis. It does not inventory physical devices, distinguish virtual or fractional GPUs such as HAMi, report utilization, or explain the complete workload-to-queue-to-Pod scheduling path.
 
@@ -1590,6 +1590,15 @@ JobSet detail also provides controller-owned member Jobs with role, index, group
 and restart-attempt metadata. Select a Job to inspect its Pods and logs, or follow
 its backlink to the owning JobSet. Member and Pod lists show their limits explicitly;
 missing children do not imply success, and unreadable data is reported as unavailable.
+The Overview also composes typed root lifecycle, per-role observations, dependencies,
+completion/restart policies, and controller conditions alongside member investigation.
+The member comparison table filters roles, names, and states across all retained Jobs,
+with current CPU/memory usage and explicit reporting coverage. Whole-JobSet totals
+include members outside the displayed window; missing or stale samples are not zeros.
+Extended-resource requests are declared demand, not GPU/TPU utilization. Logs can be
+scoped to one Job (live) or a role/all current members (bounded snapshots with source
+attribution and read failures). Historical goodput and archived logs are not collected.
+
 
 Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share kind names with other resources — Radar disambiguates by API group in tables, filters, and status badges.
 

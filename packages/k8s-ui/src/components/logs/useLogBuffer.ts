@@ -4,6 +4,7 @@ import { isLogfmt } from '../../utils/log-format'
 export type LogLevel = 'error' | 'warn' | 'info' | 'debug' | 'unknown'
 
 export interface LogEntry {
+  sourceLabel?: string
   id: number
   timestamp: string
   content: string

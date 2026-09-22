@@ -64,6 +64,7 @@ describe('supportsBatchExecution', () => {
     expect(supportsBatchExecution('JobSet', 'jobsets', 'jobset.x-k8s.io', 'jobset.x-k8s.io/v1alpha2')).toBe(true)
     expect(supportsBatchExecution('JobSet', 'jobsets', 'jobset.x-k8s.io')).toBe(false)
     expect(supportsBatchExecution('JobSet', 'jobsets', 'example.io', 'example.io/v1alpha2')).toBe(false)
+    expect(supportsBatchExecution('JobSet', 'jobsets', 'example.io', 'jobset.x-k8s.io/v1alpha2')).toBe(false)
     expect(supportsBatchExecution('JobSet', 'jobsets', 'jobset.x-k8s.io', 'jobset.x-k8s.io/v1beta1')).toBe(false)
   })
 

@@ -1183,10 +1183,10 @@ function LogLine({
       )}
       {showPodName && entry.pod && (
         <span
-          className={`${podTextColor} select-none pr-2 whitespace-nowrap min-w-[80px] max-w-[120px] truncate`}
-          title={entry.pod}
+          className={`${podTextColor} select-none pr-2 whitespace-nowrap min-w-[80px] max-w-[220px] truncate`}
+          title={entry.sourceLabel || entry.pod}
         >
-          [{entry.pod.split('-').slice(-2).join('-')}]
+          [{entry.sourceLabel || entry.pod.split('-').slice(-2).join('-')}]
         </span>
       )}
       <span className="flex-1 min-w-0">{contentElement}</span>

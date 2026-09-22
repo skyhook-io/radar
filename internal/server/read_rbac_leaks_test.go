@@ -186,3 +186,27 @@ func TestProxyAuth_JobSetMembersRequireParentAndJobsAccess(t *testing.T) {
 		})
 	}
 }
+
+func TestProxyAuth_JobSetEvidenceRequiresEachReadPermission(t *testing.T) {
+	targets := []struct{ verb, group, resource string }{{"get", "jobset.x-k8s.io", "jobsets"}, {"list", "batch", "jobs"}, {"list", "", "pods"}, {"get", "", "pods/log"}}
+	for _, endpoint := range []string{"resources", "logs"} {
+		for denied := range targets {
+			if endpoint == "resources" && denied == 3 {
+				continue
+			}
+			t.Run(endpoint+"/"+targets[denied].resource, func(t *testing.T) {
+				env := newAuthTestServer(t)
+				permissions := &auth.UserPermissions{AllowedNamespaces: []string{"default"}}
+				for i, target := range targets {
+					permissions.SetCanI(target.verb, target.group, target.resource, "default", i != denied)
+				}
+				env.srv.permCache.Set("alice", nil, permissions)
+				resp := env.authGet(t, "/api/jobsets/default/training/"+endpoint, "alice", "")
+				defer resp.Body.Close()
+				if resp.StatusCode != http.StatusForbidden {
+					t.Fatalf("status = %d", resp.StatusCode)
+				}
+			})
+		}
+	}
+}
