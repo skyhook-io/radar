@@ -139,7 +139,7 @@ func TestStrimziCandidateBudgetPrecedesAuthorizationAndRelevance(t *testing.T) {
 				}
 				return false
 			}, reader)
-			if !out.Truncated || len(out.Findings) != 0 || strings.Contains(out.Coverage, "500") {
+			if !out.Truncated || len(out.Findings) != 0 || strings.Contains(out.Coverage, "500") || !strings.Contains(out.Coverage, "were not checked") {
 				t.Fatalf("unauthorized count leaked: %+v", out)
 			}
 			if calls != 0 {

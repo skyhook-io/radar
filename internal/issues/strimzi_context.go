@@ -133,6 +133,7 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 	}
 	if truncated || len(rows) > maxStrimziContextScan {
 		out.Truncated = true
+		out.Coverage = "Connector findings were not checked because this namespace exceeds the inspection budget; missing findings do not establish application health."
 		return out
 	}
 	var matched []*unstructured.Unstructured
