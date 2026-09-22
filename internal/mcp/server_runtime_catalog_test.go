@@ -77,17 +77,17 @@ func TestRuntimeCatalogUsesRequestEligibility(t *testing.T) {
 					break
 				}
 			}
-			if names["collect_runtime_evidence"] != tc.allowed {
-				t.Fatalf("collector listed=%v allowed=%v", names["collect_runtime_evidence"], tc.allowed)
+			if names["collect_application_evidence"] != tc.allowed {
+				t.Fatalf("collector listed=%v allowed=%v", names["collect_application_evidence"], tc.allowed)
 			}
 			for _, tool := range existing {
-				if tool.Name != "collect_runtime_evidence" && !names[tool.Name] {
+				if tool.Name != "collect_application_evidence" && !names[tool.Name] {
 					t.Errorf("existing tool %s removed", tool.Name)
 				}
 			}
 			if !tc.allowed {
-				_, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "collect_runtime_evidence", Arguments: map[string]any{"adapter": "vault", "namespace": "lab", "pod": "vault", "confirm_network_access": true}})
-				if err == nil || !strings.Contains(err.Error(), `unknown tool "collect_runtime_evidence"`) {
+				_, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "collect_application_evidence", Arguments: map[string]any{"application": "vault", "namespace": "lab", "pod": "vault", "confirm_network_access": true}})
+				if err == nil || !strings.Contains(err.Error(), `unknown tool "collect_application_evidence"`) {
 					t.Fatalf("expected unknown tool, got %v", err)
 				}
 			}

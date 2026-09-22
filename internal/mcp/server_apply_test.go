@@ -36,16 +36,16 @@ func TestApplyHandlerExcludesRuntimeCollection(t *testing.T) {
 			break
 		}
 	}
-	if names["collect_runtime_evidence"] {
+	if names["collect_application_evidence"] {
 		t.Fatal("operator-only tool listed on apply handler")
 	}
 	for _, tool := range listRegisteredToolsWith(t, true) {
-		if tool.Name != "collect_runtime_evidence" && !names[tool.Name] {
+		if tool.Name != "collect_application_evidence" && !names[tool.Name] {
 			t.Errorf("existing tool %s missing from apply handler", tool.Name)
 		}
 	}
-	result, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "collect_runtime_evidence", Arguments: map[string]any{"adapter": "vault", "namespace": "lab", "pod": "vault", "confirm_network_access": true}})
-	if err == nil || !strings.Contains(err.Error(), `unknown tool "collect_runtime_evidence"`) {
+	result, err := session.CallTool(ctx, &mcpsdk.CallToolParams{Name: "collect_application_evidence", Arguments: map[string]any{"application": "vault", "namespace": "lab", "pod": "vault", "confirm_network_access": true}})
+	if err == nil || !strings.Contains(err.Error(), `unknown tool "collect_application_evidence"`) {
 		t.Fatalf("excluded tool accepted: %+v", result)
 	}
 }

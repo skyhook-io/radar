@@ -1611,7 +1611,7 @@ Volcano Job, the Volcano/KAI Queues and PodGroups, and KAITO Workspaces share ki
 
 ## Local runtime evidence: RabbitMQ, NATS and Vault
 
-Radar's local MCP tool `collect_runtime_evidence` collects a bounded snapshot from one named Pod after explicit operator consent. These adapters do not require CRDs and do not add automatic Issues detection, application-specific resource renderers, or cluster-wide health conclusions.
+Radar's local MCP tool `collect_application_evidence` collects a bounded snapshot from one named Pod after explicit operator consent. These adapters do not require CRDs and do not add automatic Issues detection, application-specific resource renderers, or cluster-wide health conclusions.
 
 | Integration | Endpoint | Evidence |
 |---|---|---|
