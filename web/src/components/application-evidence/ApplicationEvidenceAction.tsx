@@ -32,16 +32,24 @@ export function ApplicationEvidenceAction(props: Props) {
   const { data: cluster } = useClusterInfo()
   const { data: capabilities } = useCapabilities()
   const context = cluster?.context
-  const { data } = useQuery({
-    queryKey: ['application-evidence-candidates', context, props.kind, props.group, props.namespace, props.name, props.uid],
-    queryFn: ({ signal }) => fetchJSON<EvidenceCandidates>(`/application-evidence/candidates?${new URLSearchParams({ kind: props.kind, group: props.group ?? '', namespace: props.namespace, name: props.name })}`, signal),
+  const subjectKey = `${context}:${props.kind}:${props.group}:${props.namespace}:${props.name}:${props.uid}`
+  const [permissionRetryTarget, setPermissionRetryTarget] = useState<string>()
+  const retryPermissions = permissionRetryTarget === subjectKey
+  const { data, refetch, isFetching } = useQuery({
+    queryKey: ['application-evidence-candidates', context, props.kind, props.group, props.namespace, props.name, props.uid, retryPermissions],
+    queryFn: ({ signal }) => fetchJSON<EvidenceCandidates>(`/application-evidence/candidates?${new URLSearchParams({ kind: props.kind, group: props.group ?? '', namespace: props.namespace, name: props.name, retryPermissions: String(retryPermissions) })}`, signal),
     enabled: !!context && !!props.uid && capabilities?.deployment?.mode === 'local',
+    placeholderData: previous => previous,
     retry: false,
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   })
-  if (!data?.enabled || !data.candidates.length || data.context !== context || data.subjectUID !== props.uid) return null
-  return <EvidenceControl key={`${context}:${props.uid}`} data={data} />
+  if (!data?.enabled || data.context !== context || data.subjectUID !== props.uid) return null
+  const retry = () => { if (retryPermissions) void refetch(); else setPermissionRetryTarget(subjectKey) }
+  return <>
+    {data.permissionCheckTimedOut && <div className="mt-3 text-sm text-theme-text-secondary">Application evidence permissions could not be verified in time. <button type="button" className="text-accent-text hover:underline disabled:opacity-50" disabled={isFetching} onClick={retry}>{isFetching ? 'Checking…' : 'Retry permission check'}</button></div>}
+    {data.candidates.length > 0 && <EvidenceControl key={`${context}:${props.uid}`} data={data} />}
+  </>
 }
 
 function EvidenceControl({ data }: { data: EvidenceCandidates }) {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -213,5 +214,42 @@ func TestApplicationEvidenceChecksCandidatesConcurrently(t *testing.T) {
 	}
 	if w.Code != 200 || len(result.Candidates) != 3 || result.CoverageLimited {
 		t.Fatalf("status=%d result=%+v", w.Code, result)
+	}
+}
+
+func TestApplicationEvidencePermissionTimeoutCanBeRetried(t *testing.T) {
+	permissions := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(300 * time.Millisecond):
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectAccessReview","status":{"allowed":true}}`))
+	}))
+	defer permissions.Close()
+	t.Cleanup(k8s.SetTestLocalMode())
+	api := &applicationEvidenceAPI{
+		snapshot:       func() (*rest.Config, string) { return &rest.Config{Host: permissions.URL}, "test-context" },
+		currentContext: func() string { return "test-context" },
+		resolve: func(context.Context, trace.Deps, collector.Subject) collector.CandidateSet {
+			return collector.CandidateSet{SubjectUID: "uid", Candidates: []collector.Candidate{{Application: evidence.Vault, Target: collector.Target{Namespace: "default", Pod: "vault-0", UID: "uid"}}}}
+		},
+		collect: func(context.Context, kubernetes.Interface, *rest.Config, evidence.Adapter, collector.Target) collector.Result {
+			t.Fatal("permission retry collected application evidence")
+			return collector.Result{}
+		},
+	}
+	s := &Server{applicationEvidence: api}
+	for _, retry := range []bool{false, true} {
+		w := httptest.NewRecorder()
+		s.handleApplicationEvidenceCandidates(w, evidenceRequest(http.MethodGet, fmt.Sprintf("/api/application-evidence/candidates?kind=Pod&namespace=default&name=vault-0&retryPermissions=%t", retry), ""))
+		var result applicationEvidenceCandidatesResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if w.Code != 200 || result.PermissionCheckTimedOut == retry || (len(result.Candidates) == 1) != retry {
+			t.Fatalf("retry=%t status=%d result=%+v", retry, w.Code, result)
+		}
 	}
 }
