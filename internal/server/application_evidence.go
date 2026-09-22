@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -76,7 +77,7 @@ func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *h
 		s.writeError(w, http.StatusBadRequest, "a resource kind, namespace and name are required")
 		return
 	}
-	namespaces := s.parseNamespacesForUser(r)
+	namespaces := s.traceNamespaceCeiling(r)
 	if noNamespaceAccess(namespaces) || !namespaceAllowed(namespaces, q.Get("namespace")) {
 		s.writeError(w, http.StatusForbidden, "no access to the selected namespace")
 		return
@@ -111,9 +112,19 @@ func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *h
 	}, collector.Subject{Group: group, Kind: kind, Namespace: q.Get("namespace"), Name: q.Get("name")})
 	ctx, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
 	defer cancel()
+	allowedTargets := make([]bool, len(response.Candidates))
+	var checks sync.WaitGroup
+	for i, candidate := range response.Candidates {
+		checks.Add(1)
+		go func() {
+			defer checks.Done()
+			allowedTargets[i] = collector.CheckAccess(ctx, client, candidate.Target)
+		}()
+	}
+	checks.Wait()
 	allowed := make([]collector.Candidate, 0, len(response.Candidates))
-	for _, candidate := range response.Candidates {
-		if collector.CheckAccess(ctx, client, candidate.Target) {
+	for i, candidate := range response.Candidates {
+		if allowedTargets[i] {
 			allowed = append(allowed, candidate)
 		} else {
 			response.CoverageLimited = true
@@ -164,7 +175,7 @@ func (s *Server) handleCollectApplicationEvidence(w http.ResponseWriter, r *http
 	if !s.requireConnected(w) {
 		return
 	}
-	namespaces := s.parseNamespacesForUser(r)
+	namespaces := s.traceNamespaceCeiling(r)
 	if noNamespaceAccess(namespaces) || !namespaceAllowed(namespaces, input.Namespace) {
 		s.writeError(w, http.StatusForbidden, "no access to the selected namespace")
 		return

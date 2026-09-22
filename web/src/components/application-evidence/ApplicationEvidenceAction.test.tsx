@@ -21,7 +21,7 @@ describe('application observations', () => {
   it('does not display facts when collection is unavailable', () => {
     const html = renderToStaticMarkup(<ApplicationEvidenceObservation result={{ ...result, outcome: 'unavailable', reason: 'endpoint_denied', facts: { rabbitmq: { diskAlarm: false, memoryAlarm: false } } }} />)
     expect(html).toContain('Evidence unavailable')
-    expect(html).toContain('endpoint denied')
+    expect(html).toContain('requires authorization')
     expect(html).not.toContain('Disk alarm')
   })
   it('keeps NATS partial coverage and account identity visible', () => {
