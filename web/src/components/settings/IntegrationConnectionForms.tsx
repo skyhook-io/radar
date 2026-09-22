@@ -123,8 +123,8 @@ export function ArgoCDConnectionForm({
   return (
     <fieldset disabled={busy} className="min-w-0 space-y-4">
       <p className="text-sm text-theme-text-secondary">
-        Connect Argo CD for Git-rendered desired-versus-live diffs and its
-        resource health verdicts. Auto-discovery works without setup where
+        Compare Git configuration with live resources and show Argo CD health.
+        Auto-discovery works without setup where
         anonymous reads are allowed.
       </p>
       <div className="space-y-1">
@@ -226,6 +226,8 @@ export function CostConnectionForm({
   const [secret, setSecret] = useState<SecretEdit>({ action: 'keep' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [overridesOpen, setOverridesOpen] = useState(!!value.url || !!value.clusterId || secretSet)
+  const automatic = !shared && value.mode === 'auto'
   useEffect(
     () => onDirtyChange?.(secret.action !== 'keep'),
     [secret, onDirtyChange]
@@ -238,6 +240,7 @@ export function CostConnectionForm({
       setSecret({ action: 'keep' })
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error))
+      setOverridesOpen(true)
     } finally {
       setBusy(false)
     }
@@ -254,12 +257,13 @@ export function CostConnectionForm({
           <select
             aria-label="Cost source"
             value={value.mode}
-            onChange={(e) =>
+            onChange={(e) => {
+              if (e.target.value === 'auto' && (value.url || value.clusterId || secretSet || secret.action !== 'keep')) setOverridesOpen(true)
               onChange({
                 ...value,
                 mode: e.target.value as CostConnectionDraft['mode']
               })
-            }
+            }}
             className="block w-full rounded-md border border-theme-border bg-theme-elevated px-3 py-2 text-sm"
           >
             <option value="auto">Auto-detect</option>
@@ -269,7 +273,13 @@ export function CostConnectionForm({
         </label>
       )}
       {value.mode !== 'prometheus' && (
-        <>
+        <Disclosure
+          summary={value.url || value.clusterId || secretSet || secret.action !== 'keep' ? 'Kubecost connection overrides · configured' : 'Kubecost connection overrides (optional)'}
+          summaryClassName={automatic ? 'text-sm font-medium text-theme-text-secondary' : 'hidden'}
+          open={!automatic || overridesOpen}
+          onOpenChange={setOverridesOpen}
+        >
+        <div className={automatic ? 'space-y-4 pt-3' : 'space-y-4'}>
           <div className="space-y-1">
             <label
               htmlFor={id}
@@ -331,7 +341,8 @@ export function CostConnectionForm({
               </div>
             </Disclosure>
           )}
-        </>
+        </div>
+        </Disclosure>
       )}
       <button
         type="button"

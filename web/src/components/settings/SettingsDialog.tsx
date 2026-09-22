@@ -30,9 +30,10 @@ import {
   costIntegrationUnavailableMessage,
   costSourceLabel,
 } from '../cost/source'
-import { costSourceApplyLabel, shouldOfferCostReview, shouldShowSettingsFooter } from './settings-state'
+import { costSourceApplyLabel, integrationSectionLabels, pendingIntegrationSections, shouldShowSettingsFooter } from './settings-state'
 import { PrometheusConfigField } from './PrometheusConfigField'
 import { LocalConnectionSettings, type IntegrationProfiles, type IntegrationKind } from './LocalConnectionSettings'
+import { LocalIntegrationStatus } from './LocalIntegrationStatus'
 import { useContextSwitch } from '../../context/ContextSwitchContext'
 import type { SettingsSectionId } from './settings-state'
 import { OperatorManagedNotice } from './OperatorManagedNotice'
@@ -149,6 +150,12 @@ export function SettingsDialog({
   const settingsApiBase = getApiBase()
   const [prometheusCredentialDirty, setPrometheusCredentialDirty] = useState(false)
   const [localDirty, setLocalDirty] = useState<Record<IntegrationKind, boolean>>({ metrics: false, argocd: false, cost: false })
+  const [discardGeneration, setDiscardGeneration] = useState(0)
+  const [localBusy, setLocalBusy] = useState<Record<IntegrationKind, boolean>>({ metrics: false, argocd: false, cost: false })
+  const integrationBusy = Object.values(localBusy).some(Boolean)
+  const metricsBusyChange = useCallback((busy: boolean) => setLocalBusy(value => ({ ...value, metrics: busy })), [])
+  const argoBusyChange = useCallback((busy: boolean) => setLocalBusy(value => ({ ...value, argocd: busy })), [])
+  const costBusyChange = useCallback((busy: boolean) => setLocalBusy(value => ({ ...value, cost: busy })), [])
   const metricsDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, metrics: dirty })), [])
   const argoDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, argocd: dirty })), [])
   const costDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, cost: dirty })), [])
@@ -172,9 +179,10 @@ export function SettingsDialog({
   const configSavingRef = useRef(false)
   const costCurrencySavingRef = useRef(false)
   const pendingCloseActionRef = useRef<(() => void) | null>(null)
-  const { data: argoSectionStatus, refetch: refetchArgoSectionStatus } = useArgoStatus(
+  const argoStatusQuery = useArgoStatus(
     open && section === 'argocd'
   )
+  const { data: argoSectionStatus, refetch: refetchArgoSectionStatus } = argoStatusQuery
 
   // Local AI preferences save independently of the owner-gated server settings.
   const diag = useDiagnose()
@@ -218,11 +226,16 @@ export function SettingsDialog({
   const advancedDirty = mcpDirty || timelineDirty
   const configDirty = configData != null && (connectionDirty || advancedDirty)
   const prometheusDirty = prometheusCredentialDirty || localDirty.metrics || (editedConfig.prometheusUrl ?? '') !== (configData?.effective.prometheusUrl ?? '')
+  const pendingIntegrations = pendingIntegrationSections({ prometheus: prometheusDirty, cost: costIntegrationDirty, argocd: localDirty.argocd })
+  const integrationDirty = pendingIntegrations.length > 0
+  const reviewIntegration = pendingIntegrations.find(pending => pending !== section)
+  const settingsBusy = saving || costCurrencySaving || integrationBusy
   const metricsDraft = useRef({ open, scope: `${settingsApiBase}:${settingsCluster?.context}`, dirty: false })
   const [draftFrozen, setDraftFrozen] = useState(false)
   const [reloadVersion, setReloadVersion] = useState(0)
   const settingsScope = `${settingsApiBase}:${settingsCluster?.context}`
   const targetChangedWithDraft = open && metricsDraft.current.open && metricsDraft.current.dirty && (isSwitching || metricsDraft.current.scope !== settingsScope)
+  const showLocalStatus = open && !draftFrozen && !targetChangedWithDraft && !isSwitching
   useEffect(() => {
     if (!open) {
       setDraftFrozen(false)
@@ -299,7 +312,7 @@ export function SettingsDialog({
   }, [])
 
   const saveConfig = useCallback(async (): Promise<boolean> => {
-    if (!configData || draftFrozen || targetChangedWithDraft || configSavingRef.current || costCurrencySavingRef.current) return false
+    if (!configData || integrationBusy || draftFrozen || targetChangedWithDraft || configSavingRef.current || costCurrencySavingRef.current) return false
     configSavingRef.current = true
     setSaving(true)
     setSaveMessage(null)
@@ -343,7 +356,7 @@ export function SettingsDialog({
       configSavingRef.current = false
       setSaving(false)
     }
-  }, [editedConfig, configData, draftFrozen, targetChangedWithDraft])
+  }, [editedConfig, configData, integrationBusy, draftFrozen, targetChangedWithDraft])
 
   const saveCostCurrency = useCallback(async (value: string): Promise<void> => {
     if (!configData) throw new Error('Radar configuration is not available')
@@ -401,12 +414,15 @@ export function SettingsDialog({
     // destructive). configData.file holds the committed config, including the
     // live integration fields, so restoring it drops drafts without touching
     // what's saved.
-    if (!configData) return
+    if (!configData || settingsBusy || draftFrozen || targetChangedWithDraft) return
     setEditedConfig({ ...configData.file, prometheusUrl: configData.effective.prometheusUrl })
     setCostCredentialDirty(false)
+    setPrometheusCredentialDirty(false)
+    setDiscardGeneration(value => value + 1)
+    setLocalDirty({ metrics: false, argocd: false, cost: false })
     setCostDraftReset((current) => current + 1)
     setSaveMessage(null)
-  }, [configData])
+  }, [configData, settingsBusy, draftFrozen, targetChangedWithDraft])
 
   const finishClose = useCallback(() => {
     const action = pendingCloseActionRef.current
@@ -420,23 +436,28 @@ export function SettingsDialog({
     if (ok) finishClose()
   }, [saveConfig, finishClose])
 
-  const reviewCostDraft = useCallback(() => {
+  const reviewIntegrationDraft = () => {
+    if (!reviewIntegration) return
     setConfirmingClose(false)
-    setSection('cost')
-    requestAnimationFrame(() => {
-      const applyButton = document.getElementById('cost-apply-source')
-      applyButton?.scrollIntoView({ block: 'center' })
-      applyButton?.focus()
-    })
-  }, [])
+    setSection(reviewIntegration)
+    focusIntegration.current = true
+  }
+  const focusIntegration = useRef(false)
+  useEffect(() => {
+    if (!focusIntegration.current) return
+    focusIntegration.current = false
+    const panel = dialogRef.current?.querySelector<HTMLElement>('[role="tabpanel"]:not([inert])')
+    panel?.querySelector<HTMLElement>('fieldset[tabindex], input, select, button')?.focus()
+  }, [section])
 
   // Close guard: a pending startup edit prompts an inline confirm rather than
   // silently discarding. An unsaved AI draft is re-derivable, so it's fine to
   // drop it on close.
   const requestCloseRef = useRef<(afterClose?: () => void) => void>(() => {})
   requestCloseRef.current = (afterClose) => {
+    if (settingsBusy) return
     pendingCloseActionRef.current = afterClose ?? null
-    if (canEditConfig && (configDirty || costIntegrationDirty || prometheusDirty || localDirty.argocd)) setConfirmingClose(true)
+    if (canEditConfig && (configDirty || integrationDirty)) setConfirmingClose(true)
     else finishClose()
   }
 
@@ -495,13 +516,11 @@ export function SettingsDialog({
     { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, ownerOnly: true, dirty: advancedDirty },
   ]
 
-  const offerCostReview = shouldOfferCostReview(costIntegrationDirty, section)
   const showFooter = shouldShowSettingsFooter({
     canEditConfig,
     confirmingClose,
     configDirty,
-    costIntegrationDirty,
-    section,
+    integrationDirty,
     hasSaveMessage: Boolean(saveMessage),
   })
 
@@ -557,11 +576,15 @@ export function SettingsDialog({
           </div>
           <button
             onClick={() => requestCloseRef.current()}
-            className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+            aria-label="Close settings"
+            disabled={settingsBusy}
+            className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {integrationBusy && <p role="status" className="px-4 py-2 text-xs text-theme-text-secondary">Updating connection settings…</p>}
 
         {/* Body: sidebar + content */}
         <div className="flex flex-col sm:flex-row flex-1 min-h-0">
@@ -615,7 +638,7 @@ export function SettingsDialog({
             </div>}
             {!configData && !['overview', 'perms', 'ai'].includes(section) ? (
               <p className="text-sm text-theme-text-secondary">{loadError ? 'Configuration is unavailable. Close Settings and try again.' : 'Loading configuration…'}</p>
-            ) : <div inert={draftFrozen || undefined} className={draftFrozen ? 'opacity-60' : undefined}>
+            ) : <div inert={draftFrozen || settingsBusy || undefined} className={draftFrozen ? 'opacity-60' : undefined}>
             {operatorManaged && section !== 'perms' && section !== 'ai' && <div className="mb-4"><OperatorManagedNotice /></div>}
             {/* Overview — status at a glance; the landing section */}
             <div className={clsx(section !== 'overview' && 'hidden')} role="tabpanel" inert={section !== 'overview' || undefined}>
@@ -684,8 +707,10 @@ export function SettingsDialog({
               live
               locked={!canEditConfig}
             >
-              {configData?.integrationProfiles ? <LocalConnectionSettings key={JSON.stringify(configData.integrationProfiles.metrics.target)} kind="metrics" profiles={configData.integrationProfiles} onChange={connectionsChanged} onDirtyChange={metricsDirtyChange} /> : <PrometheusConfigField
-                key={settingsApiBase}
+              {showLocalStatus && section === 'prometheus' && configData?.integrationProfiles && !['error', 'target_changed'].includes(configData.integrationProfiles.metrics.state) && <LocalIntegrationStatus kind="metrics" profile={configData.integrationProfiles.metrics} argo={argoStatusQuery} busy={integrationBusy} />}
+              {configData?.integrationProfiles ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.metrics.target)}`} kind="metrics" profiles={configData.integrationProfiles} onChange={connectionsChanged} onDirtyChange={metricsDirtyChange} onBusyChange={metricsBusyChange} /> : <PrometheusConfigField
+                key={`${settingsApiBase}:${discardGeneration}`}
+                onBusyChange={metricsBusyChange}
                 onDirtyChange={setPrometheusCredentialDirty}
                 local={deploymentMode === 'local'}
                 value={editedConfig.prometheusUrl ?? ''}
@@ -716,8 +741,9 @@ export function SettingsDialog({
               live
               locked={!canEditConfig}
             >
+              {showLocalStatus && section === 'cost' && configData?.integrationProfiles && !['error', 'target_changed'].includes(configData.integrationProfiles.cost.state) && <LocalIntegrationStatus kind="cost" profile={configData.integrationProfiles.cost} argo={argoStatusQuery} busy={integrationBusy} />}
               <CostSection
-                integration={configData?.integrationProfiles ? <LocalConnectionSettings key={JSON.stringify(configData.integrationProfiles.cost.target)} kind="cost" profiles={configData.integrationProfiles} onChange={connectionsChanged} onDirtyChange={costDirtyChange} /> : undefined}
+                integration={configData?.integrationProfiles ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.cost.target)}`} kind="cost" profiles={configData.integrationProfiles} onChange={connectionsChanged} onDirtyChange={costDirtyChange} onBusyChange={costBusyChange} /> : undefined}
                 currency={editedConfig.opencostCurrency ?? ''}
                 source={editedConfig.costSource ?? 'auto'}
                 url={editedConfig.kubecostUrl ?? ''}
@@ -730,7 +756,7 @@ export function SettingsDialog({
                 managed={configData?.openCostCurrencyManaged ?? false}
                 effectiveCurrency={configData?.effective.opencostCurrency ?? ''}
                 deploymentMode={deploymentMode}
-                settingsSaving={saving}
+                settingsSaving={settingsBusy}
                 onNavigateToResource={navigateFromSettings}
                 onApplyCurrency={saveCostCurrency}
                 onChangeSource={(value) => updateConfigField('costSource', value)}
@@ -762,7 +788,8 @@ export function SettingsDialog({
               live
               locked={!canEditConfig}
             >
-              {configData?.integrationProfiles ? <LocalConnectionSettings key={JSON.stringify(configData.integrationProfiles.argocd.target)} kind="argocd" profiles={configData.integrationProfiles} cliSession={configData.argoCdCliSession} onChange={connectionsChanged} onDirtyChange={argoDirtyChange} /> : <ArgoCDConfigField
+              {showLocalStatus && section === 'argocd' && configData?.integrationProfiles && !['error', 'target_changed'].includes(configData.integrationProfiles.argocd.state) && <LocalIntegrationStatus kind="argocd" profile={configData.integrationProfiles.argocd} argo={argoStatusQuery} busy={integrationBusy} />}
+              {configData?.integrationProfiles ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.argocd.target)}`} kind="argocd" profiles={configData.integrationProfiles} cliSession={configData.argoCdCliSession} onChange={connectionsChanged} onDirtyChange={argoDirtyChange} onBusyChange={argoBusyChange} /> : <ArgoCDConfigField
                 url={editedConfig.argoCdUrl ?? ''}
                 insecureTls={editedConfig.argoCdInsecureTls ?? false}
                 tokenSet={configData?.argoCdTokenSet ?? false}
@@ -895,36 +922,35 @@ export function SettingsDialog({
           <div className="flex items-center justify-between gap-3 px-4 py-2.5">
             {confirmingClose ? (
               <>
-                <span className="text-xs text-theme-text-secondary">
-                  {prometheusDirty
-                    ? 'Metrics connection changes have not been applied.'
-                    : costIntegrationDirty && configDirty
-                    ? 'Cost source changes are not applied, and other changes are unsaved.'
-                    : costIntegrationDirty
-                      ? 'Cost source changes have not been applied.'
-                      : 'Unsaved changes.'}
-                </span>
+                <div className="space-y-1 text-xs text-theme-text-secondary">
+                  <p>
+                  {integrationDirty
+                    ? `${pendingIntegrations.map(pending => integrationSectionLabels[pending]).join(', ')} changes have not been applied.${configDirty ? ' Other changes are unsaved.' : ''}`
+                    : 'Unsaved changes.'}
+                  </p>
+                  {saveMessage && <p role="status" className={saveMessage.startsWith('Error') ? 'text-semantic-error' : undefined}>{saveMessage}</p>}
+                </div>
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => {
                       pendingCloseActionRef.current = null
                       setConfirmingClose(false)
                     }}
-                    disabled={saving}
+                    disabled={settingsBusy}
                     className="px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50"
                   >
                     Keep editing
                   </button>
                   <button
                     onClick={finishClose}
-                    disabled={saving}
+                    disabled={settingsBusy}
                     className="px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50"
                   >
                     Discard
                   </button>
-                  {offerCostReview && (
+                  {reviewIntegration && (
                     <button
-                      onClick={reviewCostDraft}
+                      onClick={reviewIntegrationDraft}
                       className={clsx(
                         'flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium',
                         configDirty
@@ -932,17 +958,17 @@ export function SettingsDialog({
                           : 'btn-brand',
                       )}
                     >
-                      Review Cost
+                      Review {integrationSectionLabels[reviewIntegration]}
                     </button>
                   )}
                   {configDirty && (
                     <button
-                      onClick={costIntegrationDirty || prometheusDirty ? saveConfig : handleSaveAndClose}
-                      disabled={saving || costCurrencySaving || draftFrozen || targetChangedWithDraft}
+                      onClick={integrationDirty ? saveConfig : handleSaveAndClose}
+                      disabled={settingsBusy || draftFrozen || targetChangedWithDraft}
                       className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
                     >
                       {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      {costIntegrationDirty || prometheusDirty ? 'Save other changes' : 'Save'}
+                      {integrationDirty ? 'Save other changes' : 'Save'}
                     </button>
                   )}
                 </div>
@@ -953,7 +979,7 @@ export function SettingsDialog({
                   <Tooltip content="Discard unsaved changes and revert to the last saved values">
                     <button
                       onClick={discardChanges}
-                      disabled={saving || (!configDirty && !costIntegrationDirty)}
+                      disabled={settingsBusy || draftFrozen || targetChangedWithDraft || (!configDirty && !integrationDirty)}
                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50 disabled:pointer-events-none"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
@@ -967,9 +993,9 @@ export function SettingsDialog({
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  {offerCostReview && (
+                  {reviewIntegration && (
                     <button
-                      onClick={reviewCostDraft}
+                      onClick={reviewIntegrationDraft}
                       className={clsx(
                         'flex items-center gap-1.5 rounded-md px-4 py-1.5 text-sm font-medium',
                         configDirty
@@ -977,17 +1003,17 @@ export function SettingsDialog({
                           : 'btn-brand',
                       )}
                     >
-                      Review Cost
+                      Review {integrationSectionLabels[reviewIntegration]}
                     </button>
                   )}
                   {configDirty && (
                     <button
                       onClick={saveConfig}
-                      disabled={saving || costCurrencySaving || draftFrozen || targetChangedWithDraft}
+                      disabled={settingsBusy || draftFrozen || targetChangedWithDraft}
                       className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
                     >
                       {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                      Save
+                      {integrationDirty ? 'Save other changes' : 'Save'}
                     </button>
                   )}
                 </div>
@@ -1898,6 +1924,7 @@ function CostSection({
         <label htmlFor="cost-currency" className="block text-sm font-semibold text-theme-text-primary">
           Display currency
         </label>
+        {deploymentMode === 'local' && <p className="mt-1 text-xs text-theme-text-secondary">Display preference · all local clusters. Saved automatically.</p>}
         <p id="cost-currency-help" className="mb-1 mt-0.5 text-xs text-theme-text-tertiary">
           Auto uses the currency reported by the active cost source, or USD when unavailable.
           Overrides relabel amounts; Radar does not convert them.

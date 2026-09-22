@@ -26,6 +26,12 @@ func apply(t *testing.T, r *Resolver, target k8s.ProfileTarget, req Update) Sele
 	t.Helper()
 	req.Target = target
 	req.Revision = r.Resolve(target, req.Kind, false).View.Revision
+	if req.Action == "reconfirm" {
+		req.Revisions = map[config.Integration]string{}
+		for _, kind := range req.Kinds {
+			req.Revisions[kind] = r.Resolve(target, kind, false).View.Revision
+		}
+	}
 	pending, err := r.Prepare(target, req)
 	if err != nil {
 		t.Fatal(err)
@@ -148,5 +154,101 @@ func TestLegacyCostAdoptionPreservesSource(t *testing.T) {
 				t.Fatalf("source import changed semantics or retained inactive credentials: %+v", got.Assignment)
 			}
 		})
+	}
+}
+
+func TestIntegrationDraftSurvivesSiblingSave(t *testing.T) {
+	r, target, _ := setupResolver(t)
+	draft := r.Resolve(target, config.IntegrationMetrics, true)
+	argo := apply(t, r, target, Update{Kind: config.IntegrationArgoCD, Action: "save", URL: stringPtr("https://argo.example"), Secret: &SecretEdit{Action: "set", Value: "token"}})
+	pending, err := r.Prepare(target, Update{Target: target, Kind: config.IntegrationMetrics, Action: "save", Revision: draft.View.Revision, URL: stringPtr("https://metrics.example")})
+	if err != nil {
+		t.Fatalf("sibling save invalidated metrics draft: %v", err)
+	}
+	if err := r.Commit(context.Background(), pending); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Resolve(target, config.IntegrationArgoCD, false); got.View.Revision != argo.View.Revision || got.Connection.ArgoCD.Token != "token" {
+		t.Fatal("metrics save changed Argo settings")
+	}
+}
+
+func TestIntegrationRevisionRejectsInvisibleCredentialRotation(t *testing.T) {
+	for _, kind := range config.IntegrationKinds {
+		t.Run(string(kind), func(t *testing.T) {
+			r, target, _ := setupResolver(t)
+			req := Update{Kind: kind, Action: "save", URL: stringPtr("https://backend.example"), Secret: &SecretEdit{Action: "set", Value: "before"}}
+			if kind == config.IntegrationMetrics {
+				req.Secret = nil
+				req.Headers = []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "before"}}
+			}
+			before := apply(t, r, target, req)
+			originalRevision := before.View.Revision
+			external := NewResolver(r.Store, target, nil)
+			if kind == config.IntegrationMetrics {
+				req.Headers[0].Value = "rotated"
+			} else {
+				req.Secret.Value = "rotated"
+			}
+			apply(t, external, target, req)
+			after := r.Resolve(target, kind, true)
+			if before.View.Revision == after.View.Revision {
+				t.Fatal("credential rotation did not change the revision")
+			}
+			before.View.Revision = after.View.Revision
+			oldJSON, _ := json.Marshal(before.View)
+			newJSON, _ := json.Marshal(after.View)
+			if string(oldJSON) != string(newJSON) {
+				t.Fatal("test rotation changed visible fields")
+			}
+			req.Target, req.Revision = target, originalRevision
+			_, err := r.Prepare(target, req)
+			if !errors.Is(err, config.ErrProfileConflict) {
+				t.Fatalf("stale secret overwrite accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestSiblingWriteDuringProbeRemainsAtomic(t *testing.T) {
+	r, target, _ := setupResolver(t)
+	before := r.Resolve(target, config.IntegrationMetrics, false)
+	pending, err := r.Prepare(target, Update{Target: target, Kind: config.IntegrationMetrics, Action: "save", Revision: before.View.Revision, URL: stringPtr("https://metrics.example")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(t, r, target, Update{Kind: config.IntegrationArgoCD, Action: "save", URL: stringPtr("https://argo.example")})
+	if err := r.Commit(context.Background(), pending); !errors.Is(err, config.ErrProfileConflict) {
+		t.Fatalf("whole-file candidate overwrote sibling save: %v", err)
+	}
+	if got := r.Resolve(target, config.IntegrationArgoCD, false); got.View.URL != "https://argo.example" {
+		t.Fatal("sibling settings were lost")
+	}
+}
+
+func TestReconfirmChecksEverySelectedIntegrationRevision(t *testing.T) {
+	r, target, _ := setupResolver(t)
+	apply(t, r, target, Update{Kind: config.IntegrationMetrics, Action: "save", URL: stringPtr("https://metrics.example")})
+	apply(t, r, target, Update{Kind: config.IntegrationArgoCD, Action: "save", URL: stringPtr("https://argo.example"), Secret: &SecretEdit{Action: "set", Value: "before"}})
+	original := target
+	target.Fingerprint = "new-target"
+	views := r.ResolveAll(target, true)
+	req := Update{Target: target, Kind: config.IntegrationMetrics, Action: "reconfirm", Revision: views[config.IntegrationMetrics].View.Revision, Kinds: []config.Integration{config.IntegrationMetrics, config.IntegrationArgoCD}, Revisions: map[config.Integration]string{config.IntegrationMetrics: views[config.IntegrationMetrics].View.Revision, config.IntegrationArgoCD: views[config.IntegrationArgoCD].View.Revision}}
+	apply(t, r, original, Update{Kind: config.IntegrationArgoCD, Action: "save", URL: stringPtr("https://argo.example"), Secret: &SecretEdit{Action: "set", Value: "rotated"}})
+	if _, err := r.Prepare(target, req); !errors.Is(err, config.ErrProfileConflict) {
+		t.Fatalf("accepted an unseen credential for a new target: %v", err)
+	}
+	req.Revisions[config.IntegrationArgoCD] = r.Resolve(target, config.IntegrationArgoCD, true).View.Revision
+	pending, err := r.Prepare(target, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Commit(context.Background(), pending); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range req.Kinds {
+		if r.Resolve(target, kind, false).Err != nil {
+			t.Fatalf("confirmed %s still blocked", kind)
+		}
 	}
 }

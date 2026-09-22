@@ -6,7 +6,6 @@ import (
 	"log"
 	"maps"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"

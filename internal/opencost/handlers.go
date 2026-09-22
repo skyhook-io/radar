@@ -61,7 +61,7 @@ func handleSummaryScoped(w http.ResponseWriter, r *http.Request, resolveCurrency
 	}
 	client, connectionErr := prometheuspkg.ClientForOperation()
 	if connectionErr != nil {
-		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: currency, Source: "prometheus"})
+		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: ConnectionFailureReason(connectionErr), Currency: currency, Source: "prometheus"})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
@@ -115,7 +115,7 @@ func handleWorkloadsScoped(w http.ResponseWriter, r *http.Request, resolveCurren
 
 	client, connectionErr := prometheuspkg.ClientForOperation()
 	if connectionErr != nil {
-		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: pkgopencost.ReasonNoPrometheus, Currency: currency, Source: "prometheus"})
+		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: ConnectionFailureReason(connectionErr), Currency: currency, Source: "prometheus"})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
@@ -212,7 +212,7 @@ func handleTrendScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 	}
 	client, connectionErr := prometheuspkg.ClientForOperation()
 	if connectionErr != nil {
-		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: currency, Source: "prometheus", Range: r.URL.Query().Get("range")})
+		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: ConnectionFailureReason(connectionErr), Currency: currency, Source: "prometheus", Range: r.URL.Query().Get("range")})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
@@ -253,7 +253,7 @@ func handleNodesScoped(w http.ResponseWriter, r *http.Request, resolveCurrency f
 	}
 	client, connectionErr := prometheuspkg.ClientForOperation()
 	if connectionErr != nil {
-		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus, Currency: currency, Source: "prometheus"})
+		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: ConnectionFailureReason(connectionErr), Currency: currency, Source: "prometheus"})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
@@ -333,7 +333,7 @@ func ConnectionFailureReason(err error) string {
 	if errors.Is(err, ErrNoCostSource) {
 		return pkgopencost.ReasonNoCostSource
 	}
-	if errors.Is(err, prometheuspkg.ErrPrometheusNotFound) {
+	if errors.Is(err, prometheuspkg.ErrPrometheusNotFound) || errors.Is(err, prometheuspkg.ErrPrometheusUnavailable) {
 		return pkgopencost.ReasonNoPrometheus
 	}
 	if errors.Is(err, ErrKubecostNoData) {

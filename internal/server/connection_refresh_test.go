@@ -153,7 +153,7 @@ func TestLocalArgoTargetChangeStaysEditableAndReportsStatus(t *testing.T) {
 	if cfg.ArgoCDEnvManaged || view.State != "target_changed" || strings.Contains(response.Body.String(), "saved-test-token") {
 		t.Fatal("target failure hid local recovery or exposed credentials")
 	}
-	request := connections.Update{Target: view.Target, Revision: view.Revision, Kind: config.IntegrationArgoCD, Action: "reconfirm", Kinds: []config.Integration{config.IntegrationArgoCD}}
+	request := connections.Update{Target: view.Target, Revision: view.Revision, Revisions: map[config.Integration]string{config.IntegrationArgoCD: view.Revision}, Kind: config.IntegrationArgoCD, Action: "reconfirm", Kinds: []config.Integration{config.IntegrationArgoCD}}
 	body, _ := json.Marshal(request)
 	result := httptest.NewRecorder()
 	s.handleUpdateLocalConnection(result, httptest.NewRequest(http.MethodPut, "/api/integrations/connections", strings.NewReader(string(body))))
@@ -256,7 +256,7 @@ func TestManageConnectionsWithoutActiveCluster(t *testing.T) {
 	if len(catalog.Connections) != 1 {
 		t.Fatal("offline catalog lost saved connection")
 	}
-	data, _ := json.Marshal(connections.Update{Revision: catalog.Revision, Kind: config.IntegrationMetrics, Action: "rename", ConnectionID: catalog.Connections[0].ID, Name: "Offline rename"})
+	data, _ := json.Marshal(connections.Update{Revision: catalog.Profiles[config.IntegrationMetrics].Revision, Kind: config.IntegrationMetrics, Action: "rename", ConnectionID: catalog.Connections[0].ID, Name: "Offline rename"})
 	response = httptest.NewRecorder()
 	s.handleUpdateLocalConnection(response, httptest.NewRequest(http.MethodPut, "/api/integrations/connections", strings.NewReader(string(data))))
 	if response.Code != 200 {

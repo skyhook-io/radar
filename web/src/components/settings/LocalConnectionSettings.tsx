@@ -128,13 +128,15 @@ export function LocalConnectionSettings({
   profiles,
   cliSession,
   onChange,
-  onDirtyChange
+  onDirtyChange,
+  onBusyChange
 }: {
   kind: IntegrationKind
   profiles: IntegrationProfiles
   cliSession?: { server: string; user: string; insecure?: boolean }
   onChange: (profiles: IntegrationProfiles) => void
   onDirtyChange: (dirty: boolean) => void
+  onBusyChange?: (busy: boolean) => void
 }) {
   const [snapshot, setSnapshot] = useState(profiles)
   const profile = snapshot[kind]
@@ -159,6 +161,7 @@ export function LocalConnectionSettings({
   const [keepUnused, setKeepUnused] = useState(false)
   const [confirmBack, setConfirmBack] = useState(false)
   const [accepted, setAccepted] = useState<IntegrationKind[]>([])
+  const acceptedChanges = accepted.filter(k => snapshot[k].state === 'target_changed')
   const request = useRef<AbortController | null>(null)
   const heading = useRef<HTMLHeadingElement>(null)
   const region = useRef<HTMLFieldSetElement>(null)
@@ -188,6 +191,7 @@ export function LocalConnectionSettings({
     !!pending ||
     (task === 'rename' && rename !== selected?.customName)
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange])
+  useEffect(() => () => onBusyChange?.(false), [onBusyChange])
   useEffect(() => {
     mounted.current = true
     return () => {
@@ -220,6 +224,8 @@ export function LocalConnectionSettings({
     ) {
       setSnapshot(profiles)
       resetDraft(profiles[kind])
+    } else if ((Object.keys(profiles) as IntegrationKind[]).some(k => k !== kind && profiles[k] !== snapshot[k])) {
+      setSnapshot({ ...profiles, [kind]: snapshot[kind] })
     }
   }, [profiles, snapshot, kind, dirty, task])
   const leaveTask = () => {
@@ -250,6 +256,7 @@ export function LocalConnectionSettings({
     request.current = controller
     const base = getApiBase()
     setBusy(true)
+    onBusyChange?.(true)
     try {
       const response = await fetch(apiUrl('/integrations/connections'), {
         method: update ? 'PUT' : 'GET',
@@ -263,6 +270,7 @@ export function LocalConnectionSettings({
                 target: profile.target,
                 kind,
                 revision: profile.revision,
+                ...(update.action === 'reconfirm' ? { revisions: Object.fromEntries(update.kinds!.map(k => [k, snapshot[k].revision])) } : {}),
                 legacyRevision: profile.legacy?.revision
               })
             }
@@ -282,7 +290,10 @@ export function LocalConnectionSettings({
       return data
     } finally {
       if (request.current === controller) request.current = null
-      if (mounted.current) setBusy(false)
+      if (mounted.current) {
+        setBusy(false)
+        onBusyChange?.(false)
+      }
     }
   }
   const receive = (data: ConnectionResponse) => {
@@ -730,7 +741,7 @@ export function LocalConnectionSettings({
             scopeDescription={
               task === 'shared'
                 ? 'Updates this saved connection everywhere it is assigned.'
-                : 'Saved for this context. No restart needed.'
+                : 'Applies only to this context. No restart needed.'
             }
             onApply={async () => {
               throw new Error('Header operations required')
@@ -997,7 +1008,11 @@ export function LocalConnectionSettings({
                 void act({ ...pending, confirmRemoval: true, keepUnused })
               }
             >
-              Confirm
+              {pending.action === 'delete'
+                ? 'Delete connection'
+                : ['use', 'replace', 'save'].includes(pending.action)
+                  ? 'Replace connection'
+                  : 'Remove saved settings'}
             </button>
             <button
               type="button"
@@ -1064,9 +1079,9 @@ export function LocalConnectionSettings({
             ))}
           <button
             type="button"
-            disabled={!accepted.length}
+            disabled={!acceptedChanges.length}
             className="btn-brand px-3 py-2 text-xs"
-            onClick={() => void act({ action: 'reconfirm', kinds: accepted })}
+            onClick={() => void act({ action: 'reconfirm', kinds: acceptedChanges })}
           >
             Use selected connections for this target
           </button>

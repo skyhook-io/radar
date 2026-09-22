@@ -126,39 +126,9 @@ export function PrometheusConnectionForm({
           placeholder="http://prometheus-server.monitoring:9090"
           className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
         />
-        <Tooltip content="Save and apply this connection, then check reachability. Applying clears any workload scope override and resumes automatic identity matching." wrapperClassName="shrink-0">
-          <button
-            onClick={handleApply}
-            disabled={apply.status === 'applying'}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-md disabled:opacity-50"
-          >
-            {apply.status === 'applying'
-              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              : <Plug className="w-3.5 h-3.5" />}
-            {applyLabel}
-          </button>
-        </Tooltip>
       </div>
-      {apply.status === 'connected' ? (
-        <p role="status" className="mt-1 flex items-center gap-1 text-xs text-green-600 dark:text-green-400/80">
-          <Check className="w-3 h-3 shrink-0" />
-          Connected to {apply.address} — applied, no restart needed
-        </p>
-      ) : apply.status === 'unreachable' ? (
-        <p role="status" className="mt-1 text-xs text-amber-600 dark:text-amber-400/80">
-          Saved, but not reachable: {apply.error}
-        </p>
-      ) : apply.status === 'failed' ? (
-        <p role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400/80">
-          Couldn't apply: {apply.error}
-        </p>
-      ) : (
-        <p className="mt-1 text-xs text-theme-text-tertiary">
-          Saves and applies before checking the connection.
-        </p>
-      )}
       <p className="mt-2 text-xs text-theme-text-tertiary">
-        {scopeDescription ?? (local ? 'Saved for this cluster.' : 'Changes affect this Radar installation. Use deployment settings for configuration that survives Pod replacement.')}
+        {scopeDescription ?? (local ? 'Applies only to this cluster.' : 'Changes affect this Radar installation. Use deployment settings for configuration that survives Pod replacement.')}
       </p>
       {value.startsWith('http://') && (configuredHeaderKeys.length > 0 || operations.some(operation => operation.action === 'set')) && (
         <p className="mt-2 text-xs text-warning-text">Headers will travel over unencrypted HTTP. Prefer HTTPS outside a trusted private network.</p>
@@ -273,6 +243,33 @@ export function PrometheusConnectionForm({
           <p className="mt-1 text-xs text-warning-text">Headers will be cleared when you click Apply now.</p>
         )}
       </section>}
+      <div className="mt-4 space-y-1">
+        <Tooltip content="Save and apply this connection, then check reachability. Applying clears any workload scope override and resumes automatic identity matching.">
+          <button
+            type="button"
+            onClick={handleApply}
+            disabled={apply.status === 'applying'}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium btn-brand rounded-md disabled:opacity-50"
+          >
+            {apply.status === 'applying'
+              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              : <Plug className="w-3.5 h-3.5" />}
+            {applyLabel}
+          </button>
+        </Tooltip>
+        {onApplyOperations && (apply.status === 'connected' || apply.status === 'unreachable') ? null : apply.status === 'connected' ? (
+          <p role="status" className="flex items-center gap-1 text-xs text-theme-text-secondary">
+            <Check className="w-3 h-3 shrink-0 text-[var(--color-success-dark)] dark:text-[var(--color-success-light)]" />
+            Connected to {apply.address} — applied, no restart needed
+          </p>
+        ) : apply.status === 'unreachable' ? (
+          <p role="status" className="text-xs text-warning-text">Saved, but not reachable: {apply.error}</p>
+        ) : apply.status === 'failed' ? (
+          <p role="alert" className="text-xs text-semantic-error">Couldn't apply: {apply.error}</p>
+        ) : (
+          <p className="text-xs text-theme-text-tertiary">Saves and applies before checking the connection.</p>
+        )}
+      </div>
     </div>
   )
 }

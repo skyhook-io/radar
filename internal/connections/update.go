@@ -20,24 +20,25 @@ type SecretEdit struct {
 }
 
 type Update struct {
-	Target         k8s.ProfileTarget      `json:"target"`
-	Revision       string                 `json:"revision"`
-	Kind           config.Integration     `json:"kind"`
-	Action         string                 `json:"action"`
-	ConnectionID   string                 `json:"connectionId,omitempty"`
-	Binding        string                 `json:"binding,omitempty"`
-	Name           string                 `json:"name,omitempty"`
-	URL            *string                `json:"url,omitempty"`
-	Headers        []prom.HeaderOperation `json:"headers,omitempty"`
-	Secret         *SecretEdit            `json:"secret,omitempty"`
-	InsecureTLS    *bool                  `json:"insecureTls,omitempty"`
-	Mode           *string                `json:"mode,omitempty"`
-	ClusterID      *string                `json:"clusterId,omitempty"`
-	KeepUnused     bool                   `json:"keepUnused"`
-	ConfirmRemoval bool                   `json:"confirmRemoval"`
-	LegacyRevision string                 `json:"legacyRevision,omitempty"`
-	UseCLIToken    bool                   `json:"useCliToken,omitempty"`
-	Kinds          []config.Integration   `json:"kinds,omitempty"`
+	Target         k8s.ProfileTarget             `json:"target"`
+	Revision       string                        `json:"revision"`
+	Revisions      map[config.Integration]string `json:"revisions,omitempty"`
+	Kind           config.Integration            `json:"kind"`
+	Action         string                        `json:"action"`
+	ConnectionID   string                        `json:"connectionId,omitempty"`
+	Binding        string                        `json:"binding,omitempty"`
+	Name           string                        `json:"name,omitempty"`
+	URL            *string                       `json:"url,omitempty"`
+	Headers        []prom.HeaderOperation        `json:"headers,omitempty"`
+	Secret         *SecretEdit                   `json:"secret,omitempty"`
+	InsecureTLS    *bool                         `json:"insecureTls,omitempty"`
+	Mode           *string                       `json:"mode,omitempty"`
+	ClusterID      *string                       `json:"clusterId,omitempty"`
+	KeepUnused     bool                          `json:"keepUnused"`
+	ConfirmRemoval bool                          `json:"confirmRemoval"`
+	LegacyRevision string                        `json:"legacyRevision,omitempty"`
+	UseCLIToken    bool                          `json:"useCliToken,omitempty"`
+	Kinds          []config.Integration          `json:"kinds,omitempty"`
 }
 
 type Pending struct {
@@ -74,7 +75,7 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 	if err != nil {
 		return pending, err
 	}
-	if req.Revision != p.Revision(revision) {
+	if req.Revision != p.integrationRevisions[req.Kind] {
 		return pending, config.ErrProfileConflict
 	}
 	if !slices.Contains(config.IntegrationKinds, req.Kind) {
@@ -174,6 +175,9 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 		for _, kind := range req.Kinds {
 			if !slices.Contains(config.IntegrationKinds, kind) {
 				return pending, errors.New("unknown integration type")
+			}
+			if req.Revisions[kind] != p.integrationRevisions[kind] {
+				return pending, config.ErrProfileConflict
 			}
 			selected := next.Assignment(target.Binding, kind)
 			if !selected.NeedsTarget() || selected.Target == target.Fingerprint {

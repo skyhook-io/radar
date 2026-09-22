@@ -9,12 +9,61 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/config"
+	"github.com/skyhook-io/radar/internal/connections"
 	"github.com/skyhook-io/radar/internal/k8s"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	pkgopencost "github.com/skyhook-io/radar/pkg/opencost"
 	"github.com/skyhook-io/radar/pkg/prom"
 	fakeclientset "k8s.io/client-go/kubernetes/fake"
 )
+
+func TestCostRoutesClassifyMetricsRefreshFailure(t *testing.T) {
+	originalConfig := ConfigSnapshot()
+	t.Cleanup(func() { _ = Configure(originalConfig) })
+	t.Cleanup(func() { connections.RegisterRefresh(nil) })
+	if err := Configure(ManagerConfig{Source: SourcePrometheus}); err != nil {
+		t.Fatal(err)
+	}
+	for name, handler := range map[string]func(http.ResponseWriter, *http.Request, func() string, RouteScope){
+		"summary":   handleSummaryScoped,
+		"workloads": handleWorkloadsScoped,
+		"trend":     handleTrendScoped,
+		"nodes":     handleNodesScoped,
+	} {
+		for _, tc := range []struct {
+			name   string
+			err    error
+			reason string
+		}{
+			{"missing", prometheuspkg.ErrPrometheusUnavailable, pkgopencost.ReasonNoPrometheus},
+			{"not_found", prometheuspkg.ErrPrometheusNotFound, pkgopencost.ReasonNoPrometheus},
+			{"stale_profile", config.ErrProfileConflict, pkgopencost.ReasonQueryError},
+			{"invalid_profile", config.ErrProfileInvalid, pkgopencost.ReasonQueryError},
+			{"disconnected", errors.New("cluster disconnected"), pkgopencost.ReasonQueryError},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				connections.RegisterRefresh(func(kind config.Integration) error {
+					if kind == config.IntegrationMetrics {
+						return fmt.Errorf("refresh: %w", tc.err)
+					}
+					return nil
+				})
+				w := httptest.NewRecorder()
+				handler(w, httptest.NewRequest(http.MethodGet, "/opencost/"+name+"?namespace=default", nil), nil, RouteScope{})
+				var result struct {
+					Reason string `json:"reason"`
+				}
+				if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+					t.Fatal(err)
+				}
+				if w.Code != http.StatusOK || result.Reason != tc.reason {
+					t.Fatalf("status=%d body=%s, want reason=%s", w.Code, w.Body.String(), tc.reason)
+				}
+			})
+		}
+	}
+}
 
 func TestUnavailableResponsesIncludeCurrency(t *testing.T) {
 	tests := []struct {

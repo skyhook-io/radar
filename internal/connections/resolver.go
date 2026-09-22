@@ -79,13 +79,14 @@ type Selection struct {
 }
 
 type Resolver struct {
-	Store        *config.ProfileStore
-	mu           sync.Mutex
-	file         config.ClusterProfiles
-	fileRevision string
-	key          [32]byte
-	launchTarget k8s.ProfileTarget
-	launch       map[config.Integration]Bundle
+	Store                *config.ProfileStore
+	mu                   sync.Mutex
+	file                 config.ClusterProfiles
+	fileRevision         string
+	integrationRevisions map[config.Integration]string
+	key                  [32]byte
+	launchTarget         k8s.ProfileTarget
+	launch               map[config.Integration]Bundle
 }
 
 func NewResolver(store *config.ProfileStore, target k8s.ProfileTarget, launch map[config.Integration]Bundle) *Resolver {
@@ -104,16 +105,51 @@ func (p *Resolver) Revision(digest string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
+// Include the whole integration catalog and its assignments: a shared edit's
+// impact can change on another context, and redacted credentials still conflict.
+func (p *Resolver) integrationRevision(file config.ClusterProfiles, kind config.Integration) string {
+	scope := config.ClusterProfiles{
+		Version:     file.Version,
+		Profiles:    map[string]config.ClusterProfile{},
+		Connections: map[string]config.SavedConnection{},
+		Imported:    map[config.Integration]bool{kind: file.Imported[kind]},
+		Dismissed:   map[string]map[config.Integration]bool{},
+	}
+	for id, connection := range file.Connections {
+		if connection.Type == kind {
+			scope.Connections[id] = connection
+		}
+	}
+	for binding, profile := range file.Profiles {
+		if assignment, ok := profile.Integrations[kind]; ok {
+			profile.Integrations = map[config.Integration]config.IntegrationAssignment{kind: assignment}
+			scope.Profiles[binding] = profile
+		}
+	}
+	for binding, dismissed := range file.Dismissed {
+		if dismissed[kind] {
+			scope.Dismissed[binding] = map[config.Integration]bool{kind: true}
+		}
+	}
+	data, _ := json.Marshal(scope)
+	return p.Revision(string(data))
+}
+
 func (p *Resolver) read() (config.ClusterProfiles, string, error) {
 	file, revision, changed, err := p.Store.ReadSince(p.fileRevision)
 	if err != nil {
 		p.fileRevision = ""
 		p.file = config.ClusterProfiles{}
+		p.integrationRevisions = nil
 		return file, "", err
 	}
 	if changed || p.file.Profiles == nil {
 		p.file = file
 		p.fileRevision = revision
+		p.integrationRevisions = make(map[config.Integration]string, len(config.IntegrationKinds))
+		for _, kind := range config.IntegrationKinds {
+			p.integrationRevisions[kind] = p.integrationRevision(file, kind)
+		}
 	}
 	return p.file, revision, nil
 }
@@ -225,7 +261,7 @@ func (p *Resolver) ResolveAll(target k8s.ProfileTarget, details bool) map[config
 }
 
 func (p *Resolver) resolve(file config.ClusterProfiles, revision string, err error, target k8s.ProfileTarget, kind config.Integration, details bool) Selection {
-	s := Selection{View: ProfileView{Target: target, Revision: p.Revision(revision), State: "auto", Mode: "auto", HeaderKeys: []string{}, EnvHeaderKeys: []string{}}, fileRevision: revision}
+	s := Selection{View: ProfileView{Target: target, Revision: p.integrationRevisions[kind], State: "auto", Mode: "auto", HeaderKeys: []string{}, EnvHeaderKeys: []string{}}, fileRevision: revision}
 	s.Assignment = config.IntegrationAssignment{Mode: "auto"}
 	s.Connection = emptyConnection(kind)
 	if err != nil {

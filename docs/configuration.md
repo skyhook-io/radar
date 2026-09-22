@@ -381,7 +381,12 @@ Radar also validates cross-record references and integration-specific rules.
 CLI and Desktop reread bounded file contents on the next integration operation,
 including background consumers, not only when Settings opens. A content hash
 avoids reparsing unchanged data. Concurrent saves use a file lock and revision
-checks: stale drafts must reload rather than overwrite another process.
+checks. Draft revisions cover each integration's saved connections, credentials
+and assignments: saving Argo CD does not invalidate an unfinished Metrics draft.
+Changes within the same integration still require reloading stale drafts, including
+secret rotation and changes to a shared connection's context assignments.
+The final write also checks the entire file, so overlapping saves during a
+connection test can still conflict rather than overwrite another process.
 Malformed JSON, unknown fields or an unsupported version block the file without
 overwriting it. A semantically invalid connection blocks its consumers, not
 unrelated valid connections; unrelated edits preserve that invalid entry.
