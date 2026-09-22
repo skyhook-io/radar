@@ -1291,6 +1291,23 @@ export function WorkloadView({
           <>
             {diagnoseInline}
             {diagnoseHint}
+            {(!!resourceResponse?.relatedApplicationFindings?.findings?.length || resourceResponse?.relatedApplicationFindings?.truncated) && (
+              <div className="space-y-2">
+                <ResourceIssuesSection
+                  heading="Related connector findings"
+                  issues={resourceResponse.relatedApplicationFindings.findings}
+                  onResourceClick={rest.onNavigateToResource ? (ref) => rest.onNavigateToResource?.({
+                    kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
+                    namespace: ref.namespace ?? '', name: ref.name, group: ref.group ?? '',
+                  }) : undefined}
+                />
+                <p className="text-xs text-theme-text-secondary">
+                  Associated with KafkaConnect {resourceResponse.relatedApplicationFindings.source.name}; these findings do not establish a problem in this resource.
+                  {' '}{resourceResponse.relatedApplicationFindings.coverage}
+                  {resourceResponse.relatedApplicationFindings.truncated && ' Additional connector evidence may be omitted.'}
+                </p>
+              </div>
+            )}
             <FluxSourceConsumersSection kind={k} namespace={ns} name={n} />
             <AuditOverviewSection
               findings={auditFindings ?? []}

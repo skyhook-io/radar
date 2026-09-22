@@ -469,14 +469,15 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	auditSum := s.computeAuditSummaryForResource(r, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
-		Reflections:   k8s.ReflectionLookup{Cache: cache},
-		Tier:          resourcecontext.TierBasic,
-		AccessChecker: s.newRequestScopedChecker(r),
-		IssueSummary:  issueSum,
-		AuditSummary:  auditSum,
-		Scheduling:    schedulinginsight.ForResource(obj, resourcecontext.TierBasic),
-		Execution:     executioninsight.ForResource(obj, resourcecontext.TierBasic),
-		Serving:       servinginsight.ForResource(obj),
+		RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, s.strimziEvidenceAccess(r)),
+		Reflections:                k8s.ReflectionLookup{Cache: cache},
+		Tier:                       resourcecontext.TierBasic,
+		AccessChecker:              s.newRequestScopedChecker(r),
+		IssueSummary:               issueSum,
+		AuditSummary:               auditSum,
+		Scheduling:                 schedulinginsight.ForResource(obj, resourcecontext.TierBasic),
+		Execution:                  executioninsight.ForResource(obj, resourcecontext.TierBasic),
+		Serving:                    servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),
@@ -626,4 +627,12 @@ func (s *Server) computeAuditSummaryForResource(r *http.Request, cache *k8s.Reso
 
 func (s *Server) computeAuditSummaryAndRows(r *http.Request, cache *k8s.ResourceCache, group, kind, namespace, name string) (*resourcecontext.AuditSummary, []bpaudit.Finding) {
 	return auditcontext.SummarizeResource(cache, group, kind, namespace, name, s.auditOptions(r))
+}
+
+func (s *Server) strimziEvidenceAccess(r *http.Request) func(issues.Ref) bool {
+	checker := s.newRequestScopedChecker(r)
+	scoped := s.issueRelatedResourceAccess(r)
+	return func(ref issues.Ref) bool {
+		return scoped(ref) && checker.CanRead(r.Context(), ref.Group, ref.Kind, ref.Namespace)
+	}
 }

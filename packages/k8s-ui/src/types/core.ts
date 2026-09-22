@@ -1,3 +1,4 @@
+import type { Issue, IssueResourceRef } from '../components/issues/types'
 import type { CapacityIntegrationState } from './capacity'
 
 // Topology types matching the Go backend
@@ -739,7 +740,15 @@ export interface HPAMetricSummary {
 }
 
 // Resource with computed relationships and optional certificate info (API response wrapper)
+export interface RelatedApplicationFindings {
+  source: IssueResourceRef
+  findings?: Issue[]
+  coverage: string
+  truncated?: boolean
+}
+
 export interface ResourceWithRelationships<T = unknown> {
+  relatedApplicationFindings?: RelatedApplicationFindings
   resource: T
   relationships?: Relationships
   certificateInfo?: SecretCertificateInfo
