@@ -87,6 +87,10 @@ func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *h
 	}
 	api := s.applicationEvidence
 	operation := api.operationContext()
+	if k8s.ContextOperationInProgress() {
+		s.writeError(w, http.StatusConflict, "cluster context is changing; retry when the connection is ready")
+		return
+	}
 	collectionCtx, cancelCollection := context.WithCancel(r.Context())
 	defer cancelCollection()
 	stop := context.AfterFunc(operation, cancelCollection)
@@ -195,6 +199,10 @@ func (s *Server) handleCollectApplicationEvidence(w http.ResponseWriter, r *http
 	}
 	api := s.applicationEvidence
 	operation := api.operationContext()
+	if k8s.ContextOperationInProgress() {
+		s.writeError(w, http.StatusConflict, "cluster context is changing; retry when the connection is ready")
+		return
+	}
 	collectionCtx, cancelCollection := context.WithCancel(r.Context())
 	defer cancelCollection()
 	stop := context.AfterFunc(operation, cancelCollection)
