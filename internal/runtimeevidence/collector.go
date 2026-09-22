@@ -71,9 +71,18 @@ type Collector struct {
 	start tunnelStarter
 }
 
+var sharedCollector = NewCollector()
+
+func SharedCollector() *Collector { return sharedCollector }
+
 func NewCollector() *Collector { return &Collector{slots: make(chan struct{}, 4), start: startTunnel} }
 
 func (c *Collector) Collect(ctx context.Context, client kubernetes.Interface, config *rest.Config, adapter evidence.Adapter, namespace, pod string) Result {
+	return c.CollectTarget(ctx, client, config, adapter, Target{Namespace: namespace, Pod: pod})
+}
+
+func (c *Collector) CollectTarget(ctx context.Context, client kubernetes.Interface, config *rest.Config, adapter evidence.Adapter, target Target) Result {
+	namespace, pod := target.Namespace, target.Pod
 	result := Result{Adapter: adapter, Target: Target{Namespace: namespace, Pod: pod}, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano), Source: "selected_pod_endpoint", Outcome: "unavailable", Limitations: []string{"One selected Pod endpoint only; unavailable evidence is not absence of a problem.", "Image and Pod identity checks do not attest endpoint contents; a same-name Pod replacement can be contacted before the final identity check.", "Plaintext default endpoint only; credentials, custom ports and TLS endpoints are not supported."}}
 	fail := func(reason string) Result { result.Reason = reason; return result }
 	ep, ok := endpointFor(adapter)
@@ -97,6 +106,9 @@ func (c *Collector) Collect(ctx context.Context, client kubernetes.Interface, co
 	before, err := client.CoreV1().Pods(namespace).Get(ctx, pod, metav1.GetOptions{})
 	if err != nil {
 		return fail("pod_read_unavailable")
+	}
+	if target.UID != "" && target.UID != string(before.UID) {
+		return fail("target_changed")
 	}
 	identity, reason := identify(before, ep)
 	if reason != "" {
