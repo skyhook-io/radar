@@ -1296,7 +1296,7 @@ export function WorkloadView({
                 <p className="text-xs text-theme-text-secondary">
                   Associated with KafkaConnect {resourceResponse.relatedApplicationFindings.source.name}; these findings do not establish a problem in this resource.
                   {' '}{resourceResponse.relatedApplicationFindings.coverage}
-                  {resourceResponse.relatedApplicationFindings.truncated && ' Additional cached findings were omitted.'}
+                  {resourceResponse.relatedApplicationFindings.truncated && ' Additional connector evidence may be omitted.'}
                 </p>
               </div>
             )}
