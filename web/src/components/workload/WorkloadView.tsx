@@ -1,3 +1,4 @@
+import { ApplicationEvidenceAction } from '../application-evidence/ApplicationEvidenceAction'
 import { useMemo, useEffect, useCallback, useRef, useState } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
@@ -1283,6 +1284,7 @@ export function WorkloadView({
           <>
             {diagnoseInline}
             {diagnoseHint}
+            <ApplicationEvidenceAction kind={k} namespace={ns} name={n} group={g} uid={resource?.metadata?.uid ?? ''} />
             <FluxSourceConsumersSection kind={k} namespace={ns} name={n} />
             <AuditOverviewSection
               findings={auditFindings ?? []}
