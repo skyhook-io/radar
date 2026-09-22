@@ -264,7 +264,7 @@ func controlledRunManager(t *testing.T, store RunStore) (*RunManager, *Run, <-ch
 	ctx, cancel := context.WithCancel(context.Background())
 	calls := make(chan controlledDiagnoseCall, 4)
 	m := &RunManager{
-		mcpPort: func() int { return 9280 }, ctxLabel: func() string { return "ctx" },
+		mcpAddress: func() string { return "localhost:9280" }, ctxLabel: func() string { return "ctx" },
 		baseCtx: ctx, baseCancel: cancel, store: store,
 		runs: map[string]*Run{}, maxConcurrent: 3, maxRetained: 10,
 	}
@@ -1183,7 +1183,7 @@ func TestTurnCompletionOrdersTerminalBeforeNextTurn(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := &RunManager{
-		d: &Diagnoser{}, mcpPort: func() int { return 0 }, ctxLabel: func() string { return "ctx" },
+		d: &Diagnoser{}, mcpAddress: func() string { return "" }, ctxLabel: func() string { return "ctx" },
 		baseCtx: ctx, baseCancel: cancel, store: st,
 		runs: map[string]*Run{}, maxConcurrent: 3, maxRetained: 10,
 	}
@@ -1525,7 +1525,7 @@ func TestRunMatchesTarget(t *testing.T) {
 // enough for persistence-path tests (nothing spawns an agent).
 func persistedManager(t *testing.T, store RunStore, ctx string) *RunManager {
 	t.Helper()
-	m := NewRunManager(nil, func() int { return 0 }, "", func() string { return ctx }, store)
+	m := NewRunManager(nil, func() string { return "" }, "", func() string { return ctx }, store)
 	t.Cleanup(func() {
 		// Don't let Shutdown close the shared test store between phases.
 		m.baseCancel()
@@ -1806,7 +1806,7 @@ func TestPersistenceGracefulShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := NewRunManager(nil, func() int { return 0 }, "", func() string { return "ctx-a" }, st)
+	m := NewRunManager(nil, func() string { return "" }, "", func() string { return "ctx-a" }, st)
 	r := &Run{ID: "run-1", Kind: "Pod", Name: "p", Context: "ctx-a", store: st,
 		status: "running", inFlight: true, hydrated: true,
 		CreatedAt: nowUTC(), updatedAt: nowUTC(), subs: map[int]chan RunEvent{}}
@@ -1893,7 +1893,7 @@ func TestContextSwitchIdempotentOnStale(t *testing.T) {
 // store whose existing contents couldn't be loaded (manager refuses it — new
 // runs must not mint colliding ids against unknown DB contents).
 func TestHistoryUnavailableSurfaces(t *testing.T) {
-	m := NewRunManager(nil, func() int { return 0 }, "", func() string { return "ctx" }, nil)
+	m := NewRunManager(nil, func() string { return "" }, "", func() string { return "ctx" }, nil)
 	if m.HistoryDegraded() {
 		t.Error("memory-only by CONFIG must not read as degraded")
 	}
@@ -1910,7 +1910,7 @@ func TestHistoryUnavailableSurfaces(t *testing.T) {
 		Status: "done", CreatedAt: nowUTC(), UpdatedAt: nowUTC()})
 	st.(*sqliteRunStore).barrier()
 	st.Close() // LoadRuns will fail in loadPersisted
-	m2 := NewRunManager(nil, func() int { return 0 }, "", func() string { return "ctx" }, st)
+	m2 := NewRunManager(nil, func() string { return "" }, "", func() string { return "ctx" }, st)
 	if !m2.HistoryDegraded() {
 		t.Error("load failure must surface as degraded")
 	}
@@ -2101,7 +2101,7 @@ func TestClearHistoryFencesStartAndAddTurn(t *testing.T) {
 			close(agentFinished)
 			return Diagnosis{}, errors.New("test agent finished")
 		},
-		mcpPort:       func() int { return 9280 },
+		mcpAddress:    func() string { return "localhost:9280" },
 		ctxLabel:      func() string { return "ctx-a" },
 		baseCtx:       baseCtx,
 		baseCancel:    baseCancel,

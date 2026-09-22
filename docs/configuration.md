@@ -21,9 +21,24 @@ opt into a shared listener explicitly:
 radar --listen-address=0.0.0.0
 ```
 
-An all-interface listener can be reached by non-browser clients; CORS is not an
+To bind only a specific local IP, use e.g. `--listen-address=192.168.1.5` or
+`--listen-address=::1`. IPv6 addresses are passed without brackets; URLs use
+brackets, e.g. `http://[::1]:9280`. The address must be assigned on the machine.
+Hostnames other than `localhost`, interface names, CIDRs, and IPv6 zone IDs are
+not accepted. The existing `0.0.0.0` wildcard retains dual-stack behavior where
+supported by the OS; `::` selects an IPv6 wildcard.
+
+Browser launch and built-in AI investigations use the selected address.
+`radar diagnose` discovers the address through `~/.radar/mcp-port`; an older
+CLI connecting to a newer server with an explicit IP needs
+`--server http://<address>:<port>` (with brackets around IPv6 addresses).
+External MCP clients should use that address in their configured URL too.
+This flag affects Radar's HTTP server; port-forward address options remain
+`127.0.0.1`/`localhost` and `0.0.0.0`.
+
+A non-loopback listener can be reached by non-browser clients; CORS is not an
 authentication boundary. Enable Radar authentication and restrict network
-access whenever using `0.0.0.0`. The loopback `Host` protection above does not
+access whenever binding a non-loopback address. The loopback `Host` protection above does not
 apply to a shared listener, and Origin checks alone do not stop DNS rebinding
 there. Treat an unauthenticated shared listener as accessible to any browser
 that can reach the network and do not expose it outside a fully trusted network.
