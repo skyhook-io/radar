@@ -5,6 +5,7 @@ import { BatchExecutionFullscreen } from './BatchExecutionView'
 vi.mock('../../api/client', () => ({
   useResource: () => ({}),
   useWorkloadPods: () => ({}),
+  useJobSetResources: () => ({ data: undefined, isLoading: false }),
   useWorkloadRuns: () => ({ data: { collection: 'runs', runs: [], total: 0, truncated: false } }),
 }))
 

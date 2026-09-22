@@ -12,6 +12,7 @@ import (
 // LogOptions configures log fetching behavior.
 type LogOptions struct {
 	TailLines    *int64
+	LimitBytes   *int64
 	SinceSeconds *int64
 	Previous     bool
 	Timestamps   bool
@@ -27,6 +28,7 @@ func GetContainerLogs(ctx context.Context, client kubernetes.Interface, namespac
 	podLogOpts := &corev1.PodLogOptions{
 		Container:    containerName,
 		TailLines:    opts.TailLines,
+		LimitBytes:   opts.LimitBytes,
 		SinceSeconds: opts.SinceSeconds,
 		Previous:     opts.Previous,
 		Timestamps:   opts.Timestamps,

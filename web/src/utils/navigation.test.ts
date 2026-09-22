@@ -43,3 +43,13 @@ describe('resource navigation paths', () => {
     ).toBe('/workload/pods/default/batch')
   })
 })
+
+
+describe('JobSet investigation navigation', () => {
+  it('preserves selected member and tab on the exact JobSet route', () => {
+    expect(relatedResourcePath({ kind: 'jobsets', namespace: 'training', name: 'wide', group: 'jobset.x-k8s.io', run: 'jobs/training/worker-240', tab: 'logs' })).toBe('/workload/jobsets/training/wide?apiGroup=jobset.x-k8s.io&run=jobs%2Ftraining%2Fworker-240&tab=logs')
+  })
+  it('leaves colliding JobSet kinds in their group-aware drawer', () => {
+    expect(relatedResourcePath({ kind: 'jobsets', namespace: 'training', name: 'wide', group: 'other.example' })).toBe('/resources/jobsets?resource=training%2Fwide&apiGroup=other.example')
+  })
+})

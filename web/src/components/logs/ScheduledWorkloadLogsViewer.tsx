@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Loader2, Terminal } from 'lucide-react'
 import { clsx } from 'clsx'
-import { useWorkloadRuns, type WorkloadRun } from '../../api/client'
+import { useWorkloadRuns, useResource, type WorkloadRun } from '../../api/client'
 import { WorkloadLogsViewer } from './WorkloadLogsViewer'
 import { pickDefaultRun, selectedRunMissing, workloadRunKey } from '../execution/BatchExecutionView'
 
@@ -17,28 +17,42 @@ const EMPTY_RUNS: WorkloadRun[] = []
 
 export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRunKey, onSelectRun }: ScheduledWorkloadLogsViewerProps) {
   const clusterScoped = kind === 'ClusterWorkflowTemplate' || kind === 'clusterworkflowtemplates'
-  const runsQuery = useWorkloadRuns(kind, namespace, name, true, { clusterScoped, refetchActive: true })
-  const memberCollection = runsQuery.data?.collection === 'members'
-  const runs = runsQuery.data?.runs ?? EMPTY_RUNS
-  const defaultRun = useMemo(() => memberCollection ? runs[0] : pickDefaultRun(runs), [memberCollection, runs])
+  const jobSet = kind.toLowerCase() === 'jobset' || kind.toLowerCase() === 'jobsets'
   const [localRunKey, setLocalRunKey] = useState('')
   const effectiveRunKey = selectedRunKey ?? localRunKey
   const selectRun = onSelectRun ?? setLocalRunKey
+  const [scope, setScope] = useState('selected')
+  const [role, setRole] = useState('')
+  const rootQuery = useResource<any>('jobsets', namespace, name, 'jobset.x-k8s.io', { enabled: jobSet })
+  const runsQuery = useWorkloadRuns(kind, namespace, name, true, { clusterScoped, refetchActive: true, ...(jobSet ? { selected: effectiveRunKey } : {}) })
+  const memberCollection = runsQuery.data?.collection === 'members'
+  const runs = runsQuery.data?.runs ?? EMPTY_RUNS
+  const resolvedRuns = useMemo(() => runsQuery.data?.selected && !runs.some(run => workloadRunKey(run) === workloadRunKey(runsQuery.data!.selected!)) ? [...runs, runsQuery.data.selected] : runs, [runs, runsQuery.data?.selected])
+  const defaultRun = useMemo(() => memberCollection ? runs[0] : pickDefaultRun(runs), [memberCollection, runs])
+  const roles: string[] = [...new Set<string>([...(rootQuery.data?.spec?.replicatedJobs?.map((r: { name: string }) => r.name) ?? []), ...(role ? [role] : [])])]
+  const effectiveRole = role || roles[0] || ''
+  const aggregate = memberCollection && scope !== 'selected'
+  const scopeControls = memberCollection && <div className="flex flex-wrap items-center gap-2 border-b border-theme-border bg-theme-surface px-3 py-2 text-xs">
+    <label htmlFor="jobset-log-scope" className="text-theme-text-secondary">Log scope</label>
+    <select id="jobset-log-scope" value={scope} onChange={event => { if (event.target.value === 'role') setRole(effectiveRole); setScope(event.target.value) }} className="rounded border border-theme-border bg-theme-elevated px-2 py-1 text-theme-text-primary"><option value="selected">Selected Job</option><option value="role" disabled={roles.length === 0}>Role</option><option value="all">All current members</option></select>
+    {scope === 'role' && <select aria-label="Log role" value={effectiveRole} onChange={event => setRole(event.target.value)} className="rounded border border-theme-border bg-theme-elevated px-2 py-1 text-theme-text-primary">{roles.map(r => <option key={r} value={r}>{r}</option>)}</select>}
+    {aggregate && <span className="text-theme-text-secondary">Snapshot · Refresh for new logs · up to 40 container sources, 1,000 lines and 64 KiB per source · retained Pods only</span>}
+  </div>
 
-  const selectionMissing = memberCollection && selectedRunMissing(runs, effectiveRunKey)
+  const selectionMissing = memberCollection && selectedRunMissing(resolvedRuns, effectiveRunKey)
 
   useEffect(() => {
-    if (!runsQuery.data || selectionMissing) return
-    if (runs.length === 0) {
+    if (!runsQuery.data || runsQuery.isPlaceholderData || selectionMissing) return
+    if (resolvedRuns.length === 0) {
       if (effectiveRunKey) selectRun('')
       return
     }
-    if (!runs.some(run => workloadRunKey(run) === effectiveRunKey)) {
+    if (!resolvedRuns.some(run => workloadRunKey(run) === effectiveRunKey)) {
       selectRun(workloadRunKey(defaultRun ?? runs[0]))
     }
-  }, [runsQuery.data, runs, effectiveRunKey, defaultRun, selectRun, selectionMissing])
+  }, [runsQuery.data, runsQuery.isPlaceholderData, runs, resolvedRuns, effectiveRunKey, defaultRun, selectRun, selectionMissing])
 
-  const selectedRun = selectionMissing ? undefined : runs.find(run => workloadRunKey(run) === effectiveRunKey) ?? defaultRun
+  const selectedRun = selectionMissing ? undefined : resolvedRuns.find(run => workloadRunKey(run) === effectiveRunKey) ?? defaultRun
 
   if (runsQuery.isLoading) {
     return (
@@ -60,12 +74,12 @@ export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRun
     )
   }
 
+  if (aggregate) return <div className="flex h-full min-h-0 flex-col">{scopeControls}<div className="min-h-0 flex-1"><WorkloadLogsViewer key={JSON.stringify([rootQuery.data?.metadata?.uid, scope, effectiveRole])} kind="jobsets" namespace={namespace} name={name} snapshotOnly role={scope === 'role' ? effectiveRole : undefined} autoStream={false} /></div></div>
+
   if (selectionMissing) {
     return (
-      <div className="space-y-3 p-4">
-        <p className="text-sm text-theme-text-secondary">{runsQuery.data?.truncated
-          ? 'Selected Job is not among the shown members. It may have been removed or fallen outside the truncated window. Choose a shown Job below.'
-          : 'Selected Job is currently unavailable. It may have been removed or be waiting for recreation. Your selection is preserved if it reappears; choose another shown Job to switch.'}</p>
+      <div className="space-y-3 p-4">{scopeControls}
+        <p className="text-sm text-theme-text-secondary">Selected Job is currently unavailable. It may have been removed or be waiting for recreation. Your selection is preserved if it reappears; choose another shown Job to switch.</p>
         {runs.length > 0 && <select aria-label="Select a shown member Job" value={effectiveRunKey} onChange={(event) => selectRun(event.target.value)} className="max-w-full rounded-md border border-theme-border bg-theme-elevated px-2 py-1 text-sm text-theme-text-primary">
           <option value={effectiveRunKey} disabled>Choose a shown Job</option>
           {runs.map((run) => <option key={workloadRunKey(run)} value={workloadRunKey(run)}>{formatRunOption(run, false, true)}</option>)}
@@ -85,6 +99,7 @@ export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRun
 
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {scopeControls}
       <div className="shrink-0 border-b border-theme-border bg-theme-surface px-3 py-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-medium text-theme-text-secondary">{memberCollection ? 'Job' : 'Run'}</span>
@@ -93,7 +108,7 @@ export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRun
             onChange={(event) => selectRun(event.target.value)}
             className="min-w-0 max-w-full rounded-md border border-theme-border bg-theme-elevated px-2 py-1 text-sm text-theme-text-primary"
           >
-            {runs.map(run => (
+            {resolvedRuns.map(run => (
               <option key={workloadRunKey(run)} value={workloadRunKey(run)}>
                 {formatRunOption(run, clusterScoped, memberCollection)}
               </option>
@@ -152,7 +167,7 @@ function formatRunOption(run: WorkloadRun, showNamespace: boolean, memberCollect
   }
   if (run.progress) bits.push(run.progress)
   else if (run.desired) bits.push(`${run.succeeded ?? 0}/${run.desired}`)
-  const work = run.podTotal ? `${run.podSucceeded ?? 0}/${run.podTotal} pods` : ''
+  const work = run.podTotal ? `${run.podSucceeded ?? 0}/${run.podTotal} completed Pods` : ''
   if (work) bits.push(work)
   return bits.join(' · ')
 }

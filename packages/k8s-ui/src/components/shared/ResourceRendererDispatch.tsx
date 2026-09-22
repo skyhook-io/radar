@@ -70,7 +70,7 @@ import { getResourceClaimStatus, getResourceClaimTemplateStatus, getDeviceClassS
 import { getNvidiaClusterPolicyStatus, getNvidiaDriverStatus } from '../resources/resource-utils-nvidia'
 import { getClusterQueueStatus, getLocalQueueStatus, getKueueWorkloadStatus, getResourceFlavorStatus, getAdmissionCheckStatus, getProvisioningRequestStatus } from '../resources/resource-utils-kueue'
 import { getRayClusterStatus, getRayJobStatus, getRayServiceStatus, getRayCronJobStatus } from '../resources/resource-utils-ray'
-import { getLeaderWorkerSetStatus, getJobSetStatus } from '../resources/resource-utils-jobset-lws'
+import { getLeaderWorkerSetStatus, getJobSetStatus, isJobSetV1Alpha2 } from '../resources/resource-utils-jobset-lws'
 import { getInferenceServiceStatus, getServingRuntimeStatus, getInferenceGraphStatus, getTrainedModelStatus, getLLMInferenceServiceStatus } from '../resources/resource-utils-kserve'
 import { getInferencePoolStatus, getInferenceObjectiveStatus } from '../resources/resource-utils-inference-gateway'
 import { getVolcanoJobStatus, getVolcanoQueueStatus, getVolcanoPodGroupStatus, getJobFlowStatus, getJobTemplateStatus } from '../resources/resource-utils-volcano'
@@ -114,6 +114,7 @@ import {
   ConfigMapRenderer,
   SecretRenderer,
   JobRenderer,
+  JobSetRenderer,
   CronJobRenderer,
   CronWorkflowRenderer,
   HPARenderer,
@@ -433,6 +434,7 @@ export interface RendererOverrides {
 const KNOWN_KINDS = new Set([
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
   'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'cronworkflows',
+  'jobsets',
   'hpas', 'horizontalpodautoscalers', 'nodes', 'persistentvolumeclaims',
   'rollouts', 'analysisruns', 'analysistemplates', 'clusteranalysistemplates', 'experiments', 'certificates', 'workflows', 'persistentvolumes',
   'storageclasses', 'certificaterequests', 'clusterissuers', 'issuers',
@@ -685,7 +687,7 @@ export function ResourceRendererDispatch({
   const isGroupGatedKind =
     kind === 'clusters' || kind === 'backups' || kind === 'scheduledbackups' || kind === 'poolers'
     || kind === 'objectstores' || kind === 'databases' || kind === 'publications'
-    || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs'
+    || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs' || kind === 'jobsets'
     || kind === 'policies' || kind === 'rollouts' || kind === 'experiments'
     || kind === 'machines' || kind === 'machinesets'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
@@ -707,6 +709,7 @@ export function ResourceRendererDispatch({
     || (kind === 'experiments' && isApiGroup(data?.apiVersion, 'argoproj.io'))
     || ((kind === 'machines' || kind === 'machinesets')
       && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io'))
+    || (kind === 'jobsets' && isJobSetV1Alpha2(data))
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
   const calicoApiVersionMatched = isCalicoApiVersion(data?.apiVersion)
@@ -795,6 +798,7 @@ export function ResourceRendererDispatch({
         {kind === 'configmaps' && <ConfigMapRenderer data={data} relationships={relationships} onNavigate={onNavigate} />}
         {kind === 'secrets' && <SecretRenderer data={data} relationships={relationships} onNavigate={onNavigate} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
         {kind === 'jobs' && !nonCoreJobFallthrough && <JobRenderer data={data} />}
+        {kind === 'jobsets' && isJobSetV1Alpha2(data) && <JobSetRenderer data={data} />}
         {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'cronworkflows' && <CronWorkflowRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPAComp data={data} onNavigate={onNavigate} hpaDiagnosis={hpaDiagnosis} />}
@@ -1095,7 +1099,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'rayservices' && data?.apiVersion?.startsWith('ray.io/')) return getRayServiceStatus(data)
   if (k === 'raycronjobs' && data?.apiVersion?.startsWith('ray.io/')) return getRayCronJobStatus(data)
   if (k === 'leaderworkersets' && data?.apiVersion?.startsWith('leaderworkerset.x-k8s.io/')) return getLeaderWorkerSetStatus(data)
-  if (k === 'jobsets' && data?.apiVersion?.startsWith('jobset.x-k8s.io/')) return getJobSetStatus(data)
+  if (k === 'jobsets' && isJobSetV1Alpha2(data)) return getJobSetStatus(data)
   if (k === 'inferenceservices' && data?.apiVersion?.startsWith('serving.kserve.io/')) return getInferenceServiceStatus(data)
   if ((k === 'servingruntimes' || k === 'clusterservingruntimes') && data?.apiVersion?.startsWith('serving.kserve.io/')) return getServingRuntimeStatus(data)
   if (k === 'inferencegraphs' && data?.apiVersion?.startsWith('serving.kserve.io/')) return getInferenceGraphStatus(data)

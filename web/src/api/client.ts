@@ -6840,6 +6840,8 @@ export interface JobSetMember {
 
 export interface WorkloadRunsResponse {
   collection: "runs" | "members";
+  filteredTotal?: number;
+  selected?: WorkloadRun;
   runs: WorkloadRun[];
   total: number;
   truncated: boolean;
@@ -6869,16 +6871,22 @@ export function useWorkloadRuns(
   namespace: string,
   name: string,
   enabled = true,
-  options?: { refetchActive?: boolean; clusterScoped?: boolean },
+  options?: { refetchActive?: boolean; clusterScoped?: boolean; role?: string; search?: string; state?: string; selected?: string },
 ) {
   const clusterScoped = options?.clusterScoped ?? false;
   const ns = clusterScoped ? "_" : namespace;
   const params = new URLSearchParams();
   if (clusterScoped) params.set("clusterScoped", "true");
+  for (const key of ["role", "search", "state", "selected"] as const) { if (options?.[key]) params.set(key, options[key]); }
   const queryString = params.toString();
 
   return useQuery<WorkloadRunsResponse>({
-    queryKey: ["workload-runs", kind, namespace, name, clusterScoped],
+    queryKey: ["workload-runs", kind, namespace, name, clusterScoped, options?.role ?? '', options?.search ?? '', options?.state ?? '', options?.selected ?? ''],
+    placeholderData: (previous, query) => {
+      if (previous?.collection !== 'members') return undefined
+      const identity = ["workload-runs", kind, namespace, name, clusterScoped, options?.role ?? '', options?.search ?? '', options?.state ?? '']
+      return identity.every((value, index) => query?.queryKey[index] === value) ? previous : undefined
+    },
     queryFn: () =>
       fetchJSON(
         `/workloads/${kind}/${ns}/${name}/runs${queryString ? `?${queryString}` : ""}`,
@@ -6887,7 +6895,7 @@ export function useWorkloadRuns(
     staleTime: 10000,
     refetchInterval: options?.refetchActive
       ? (query) =>
-          query.state.data?.runs?.some((run) => run.active) ? 5000 : 30000
+          query.state.data?.selected?.active || query.state.data?.runs?.some((run) => run.active) ? 5000 : 30000
       : false,
   });
 }
@@ -7184,4 +7192,35 @@ export function useDiagnostics(enabled: boolean) {
     staleTime: 0,
     gcTime: 0,
   });
+}
+
+export interface JobSetUsage {
+  runningPods: number
+  reportingPods: number
+  stalePods: number
+  cpu: number | null
+  memory: number | null
+  cpuRequest: number
+  memoryRequest: number
+  observedAt?: string
+  extendedRequests?: Record<string, string>
+}
+export interface JobSetResources {
+  uid: string
+  total: JobSetUsage
+  members: Record<string, JobSetUsage>
+  source: string
+  unavailable?: string
+}
+export function useJobSetResources(namespace: string, name: string, uid: string | undefined, options: { role: string; search: string; state: string }) {
+  const params = new URLSearchParams()
+  for (const key of ["role", "search", "state"] as const) if (options[key]) params.set(key, options[key])
+  return useQuery<JobSetResources>({
+    queryKey: ['jobset-resources', namespace, name, uid, params.toString()],
+    queryFn: ({ signal }) => fetchJSON(`/jobsets/${namespace}/${name}/resources?${params}`, { signal }),
+    enabled: Boolean(namespace && name && uid),
+    staleTime: 25000,
+    refetchInterval: 30000,
+    retry: false,
+  })
 }

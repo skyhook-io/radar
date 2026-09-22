@@ -390,7 +390,7 @@ func TestJobSetMemberRunsRequireExactControllerIdentity(t *testing.T) {
 	missingLabels.Name = "distributed-chief-0"
 	missingLabels.Labels = nil
 
-	result := jobSetMemberRuns(jobSet, []*batchv1.Job{wrongGroup, staleUID, nonController, labelOnly, member, missingLabels})
+	result := jobSetMemberRuns(jobSet, []*batchv1.Job{wrongGroup, staleUID, nonController, labelOnly, member, missingLabels}, jobSetMemberQuery{})
 
 	if result.Collection != WorkloadRunCollectionMembers || result.Total != 2 || result.Truncated || len(result.Runs) != 2 {
 		t.Fatalf("unexpected member bounds: %#v", result)
@@ -424,7 +424,7 @@ func TestJobSetMemberRunsRequireExactControllerIdentity(t *testing.T) {
 	}
 	missingUID := jobSet.DeepCopy()
 	missingUID.SetUID("")
-	if got := jobSetMemberRuns(missingUID, []*batchv1.Job{member}); got.Total != 0 {
+	if got := jobSetMemberRuns(missingUID, []*batchv1.Job{member}, jobSetMemberQuery{}); got.Total != 0 {
 		t.Fatalf("JobSet without authoritative UID matched %d members", got.Total)
 	}
 }
@@ -501,7 +501,7 @@ func TestJobSetMemberRunsAreBoundedAndProblemFirst(t *testing.T) {
 		jobs = append(jobs, job)
 	}
 
-	result := jobSetMemberRuns(jobSet, jobs)
+	result := jobSetMemberRuns(jobSet, jobs, jobSetMemberQuery{})
 
 	if result.Total != maxJobSetMemberRuns+1 || !result.Truncated || len(result.Runs) != maxJobSetMemberRuns {
 		t.Fatalf("unexpected member bounds: total=%d returned=%d truncated=%v", result.Total, len(result.Runs), result.Truncated)
@@ -537,7 +537,7 @@ func TestJobSetMemberRunsPutTerminatingAttemptsAfterReplacements(t *testing.T) {
 		OwnerReferences: []metav1.OwnerReference{owner},
 	}}
 
-	result := jobSetMemberRuns(jobSet, []*batchv1.Job{old, replacement})
+	result := jobSetMemberRuns(jobSet, []*batchv1.Job{old, replacement}, jobSetMemberQuery{})
 
 	if result.Runs[0].Name != "workers-new" || result.Runs[1].Phase != "Pending" || !result.Runs[1].Deleting || !result.Runs[1].Active {
 		t.Fatalf("unexpected restart ordering: %#v", result.Runs)
