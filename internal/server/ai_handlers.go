@@ -578,14 +578,15 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	auditSum := s.computeAuditSummaryForResource(r, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
-		Reflections:   k8s.ReflectionLookup{Cache: cache},
-		Tier:          resourcecontext.TierBasic,
-		AccessChecker: s.newRequestScopedChecker(r),
-		IssueSummary:  issueSum,
-		AuditSummary:  auditSum,
-		Scheduling:    schedulinginsight.ForResource(obj, resourcecontext.TierBasic),
-		Execution:     executioninsight.ForResource(obj, resourcecontext.TierBasic),
-		Serving:       servinginsight.ForResource(obj),
+		RelatedApplicationFindings: issues.CachedStrimziEvidence(obj, s.strimziEvidenceAccess(r)),
+		Reflections:                k8s.ReflectionLookup{Cache: cache},
+		Tier:                       resourcecontext.TierBasic,
+		AccessChecker:              s.newRequestScopedChecker(r),
+		IssueSummary:               issueSum,
+		AuditSummary:               auditSum,
+		Scheduling:                 schedulinginsight.ForResource(obj, resourcecontext.TierBasic),
+		Execution:                  executioninsight.ForResource(obj, resourcecontext.TierBasic),
+		Serving:                    servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),
@@ -781,4 +782,12 @@ func (s *Server) writeIncompleteAIList(w http.ResponseWriter, target listTarget,
 		ErrorCode: code,
 		Coverage:  &resourceapi.Coverage{Status: resourceapi.CoveragePartial, Scope: target.scope(), NarrowedBy: target.narrowedBy, Gaps: target.placeGaps(gaps, nil)},
 	})
+}
+
+func (s *Server) strimziEvidenceAccess(r *http.Request) func(issues.Ref) bool {
+	checker := s.newRequestScopedChecker(r)
+	scoped := s.issueRelatedResourceAccess(r)
+	return func(ref issues.Ref) bool {
+		return scoped(ref) && checker.CanRead(r.Context(), ref.Group, ref.Kind, ref.Namespace)
+	}
 }

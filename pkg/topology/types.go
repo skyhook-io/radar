@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/pkg/hpadiag"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	k8score "github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -787,10 +788,11 @@ type MembersCoverage struct {
 
 // ResourceWithRelationships wraps a K8s resource with computed relationships
 type ResourceWithRelationships struct {
-	Resource        any                    `json:"resource"`
-	Relationships   *Relationships         `json:"relationships,omitempty"`
-	CertificateInfo *SecretCertificateInfo `json:"certificateInfo,omitempty"`
-	HPADiagnosis    *hpadiag.Diagnosis     `json:"hpaDiagnosis,omitempty"`
+	RelatedApplicationFindings *issuesapi.RelatedApplicationFindings `json:"relatedApplicationFindings,omitempty"`
+	Resource                   any                                   `json:"resource"`
+	Relationships              *Relationships                        `json:"relationships,omitempty"`
+	CertificateInfo            *SecretCertificateInfo                `json:"certificateInfo,omitempty"`
+	HPADiagnosis               *hpadiag.Diagnosis                    `json:"hpaDiagnosis,omitempty"`
 }
 
 // ResourceStatus holds computed status for a resource.

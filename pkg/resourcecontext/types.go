@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
 // ResourceContext is the top-level enrichment block attached to a resource
@@ -32,6 +33,7 @@ import (
 // emerges that needs deterministic prose, add it as a separate
 // `explain_resource` tool rather than re-introducing it inline here.
 type ResourceContext struct {
+	RelatedApplicationFindings *issuesapi.RelatedApplicationFindings `json:"relatedApplicationFindings,omitempty"`
 	CrossplanePause CrossplanePauseState `json:"crossplanePause,omitempty"`
 
 	Reflection *ReflectionContext `json:"reflection,omitempty"`
