@@ -126,6 +126,9 @@ func (*captureTurnAgent) Path() string      { return "printf" }
 func (*captureTurnAgent) SigninCmd() string { return "claude auth login" }
 func (agent *captureTurnAgent) command(ctx context.Context, spec turnSpec) (*exec.Cmd, func(), error) {
 	agent.spec = spec
+	if spec.apply {
+		return exec.CommandContext(ctx, "printf", ""), func() {}, nil
+	}
 	u, err := url.Parse(spec.mcpURL)
 	if err != nil {
 		return nil, func() {}, err
@@ -150,6 +153,33 @@ func (agent *captureTurnAgent) command(ctx context.Context, spec turnSpec) (*exe
 	return exec.CommandContext(ctx, "printf", "%s\n", stream), func() {}, nil
 }
 
+func TestDiagnoseStreamUsesListenerAddress(t *testing.T) {
+	for _, address := range []string{"192.0.2.10:9280", "[::1]:9280", "[2001:db8::10]:9280"} {
+		for _, apply := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/apply=%t", address, apply), func(t *testing.T) {
+				refs := investigationrefs.NewRegistry()
+				agent := &captureTurnAgent{refs: refs}
+				diagnoser := &Diagnoser{agents: map[string]Agent{"claude": agent}, defName: "claude", evidenceRefs: refs}
+				scope := strings.Repeat("a", 26)
+				_, err := diagnoser.DiagnoseStream(context.Background(), Request{
+					Kind: "Pod", Namespace: "shop", Name: "api", MCPAddress: address,
+					MCPBasePath: "/radar", EvidenceScope: scope, Apply: apply,
+				}, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := "http://" + address + "/radar/mcp"
+				if !apply {
+					want += "-investigation?scope=" + scope
+				}
+				if agent.spec.mcpURL != want {
+					t.Fatalf("agent MCP URL = %q, want %q", agent.spec.mcpURL, want)
+				}
+			})
+		}
+	}
+}
+
 func TestDiagnoseStreamClosesEvidenceScopeOnEarlyAgentFailure(t *testing.T) {
 	scope := strings.Repeat("a", 26)
 	refs := investigationrefs.NewRegistry()
@@ -160,7 +190,7 @@ func TestDiagnoseStreamClosesEvidenceScopeOnEarlyAgentFailure(t *testing.T) {
 		evidenceRefs: refs,
 	}
 	_, err := diagnoser.DiagnoseStream(context.Background(), Request{
-		Kind: "Pod", Namespace: "shop", Name: "api", MCPPort: 9280,
+		Kind: "Pod", Namespace: "shop", Name: "api", MCPAddress: "localhost:9280",
 		EvidenceScope: scope,
 	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "fixture command failure") {
@@ -205,7 +235,7 @@ func TestDiagnoseStreamClearsAdapterProvenanceOnApplyTurn(t *testing.T) {
 	}
 	var delivered *StepInfo
 	_, err := diagnoser.DiagnoseStream(context.Background(), Request{
-		Kind: "Deployment", Namespace: "shop", Name: "api", MCPPort: 9280,
+		Kind: "Deployment", Namespace: "shop", Name: "api", MCPAddress: "localhost:9280",
 		Apply: true,
 	}, func(event StreamEvent) {
 		if event.Step != nil {
@@ -243,7 +273,7 @@ func TestDiagnoseStreamUsesPerTurnScopedInvestigationMount(t *testing.T) {
 	scope := strings.Repeat("a", 26)
 	var evidenceStep *StepInfo
 	diagnosis, err := diagnoser.DiagnoseStream(context.Background(), Request{
-		Kind: "Pod", Namespace: "shop", Name: "api", MCPPort: 9280,
+		Kind: "Pod", Namespace: "shop", Name: "api", MCPAddress: "localhost:9280",
 		MCPBasePath: "/radar", EvidenceScope: scope,
 	}, func(event StreamEvent) {
 		if event.Step != nil && event.Step.Status == "done" {
@@ -604,7 +634,7 @@ func TestDiagnoseStream_ProcessAndStreamErrors(t *testing.T) {
 		}
 		scope := strings.Repeat("a", 26)
 		diagnosis, diagnoseErr := d.DiagnoseStream(context.Background(), Request{
-			Kind: "Pod", Namespace: "ns", Name: "p", MCPPort: 1,
+			Kind: "Pod", Namespace: "ns", Name: "p", MCPAddress: "localhost:1",
 			EvidenceScope: scope,
 		}, nil)
 		if refs.Active(scope) {
@@ -726,7 +756,7 @@ func TestDiagnoseStreamReportsHandshakeOnce(t *testing.T) {
 	finished := make(chan outcome, 1)
 	go func() {
 		diag, err := d.DiagnoseStream(context.Background(), Request{
-			Kind: "Pod", Namespace: "ns", Name: "p", MCPPort: 1, EvidenceScope: scope,
+			Kind: "Pod", Namespace: "ns", Name: "p", MCPAddress: "localhost:1", EvidenceScope: scope,
 		}, func(ev StreamEvent) {
 			if ev.Type != "phase" {
 				return
@@ -815,7 +845,7 @@ func TestDiagnoseStreamReportsHandshakeOnShortTurn(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		var phases []string
 		diag, err := diagnoser.DiagnoseStream(context.Background(), Request{
-			Kind: "Pod", Namespace: "ns", Name: "p", MCPPort: 1,
+			Kind: "Pod", Namespace: "ns", Name: "p", MCPAddress: "localhost:1",
 			EvidenceScope: strings.Repeat("e", 26),
 		}, func(ev StreamEvent) {
 			if ev.Type == "phase" {

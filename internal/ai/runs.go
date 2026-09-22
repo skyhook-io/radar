@@ -33,7 +33,7 @@ import (
 type RunManager struct {
 	d           *Diagnoser
 	diagnose    func(context.Context, Request, func(StreamEvent)) (Diagnosis, error)
-	mcpPort     func() int    // resolved lazily — the listener port isn't known at construction
+	mcpAddress  func() string // resolved lazily — the listener port isn't known at construction
 	mcpBasePath string        // --base-path prefix the MCP mounts sit under ("" at the root)
 	ctxLabel    func() string // current kube-context label, for the run's baseline
 
@@ -206,11 +206,11 @@ func turnTimeout() time.Duration {
 	return defaultTurnTimeout
 }
 
-// NewRunManager builds a manager over a resolved Diagnoser. mcpPort/ctxLabel are
+// NewRunManager builds a manager over a resolved Diagnoser. mcpAddress/ctxLabel are
 // callbacks because the listener port and kube-context are only known at runtime.
 // store persists history across restarts (nil = memory-only); persisted runs are
 // hydrated into the manager here.
-func NewRunManager(d *Diagnoser, mcpPort func() int, mcpBasePath string, ctxLabel func() string, store RunStore) *RunManager {
+func NewRunManager(d *Diagnoser, mcpAddress func() string, mcpBasePath string, ctxLabel func() string, store RunStore) *RunManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	// Best-effort: a failure here just means runs get no shared workdir (logged).
 	root, err := os.MkdirTemp("", "radar-ai-")
@@ -220,7 +220,7 @@ func NewRunManager(d *Diagnoser, mcpPort func() int, mcpBasePath string, ctxLabe
 	}
 	m := &RunManager{
 		d:             d,
-		mcpPort:       mcpPort,
+		mcpAddress:    mcpAddress,
 		mcpBasePath:   mcpBasePath,
 		ctxLabel:      ctxLabel,
 		baseCtx:       ctx,
@@ -677,7 +677,7 @@ func (m *RunManager) executeTurns(r *Run, turn runTurn) {
 		var mutation applyMutationTracker
 		diag, err := diagnose(turn.ctx, Request{
 			Kind: r.Kind, Group: r.Group, Namespace: r.Namespace, Name: r.Name,
-			MCPPort: m.mcpPort(), MCPBasePath: m.mcpBasePath,
+			MCPAddress: m.mcpAddress(), MCPBasePath: m.mcpBasePath,
 			EvidenceScope: turn.evidenceScope, SessionID: turn.canonicalSession,
 			Question: turn.question, Apply: turn.apply, Fix: turn.fix, Verify: turn.verify,
 			Explanation: turn.explanation,

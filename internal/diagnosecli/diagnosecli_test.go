@@ -8,10 +8,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/ai"
+	"github.com/skyhook-io/radar/internal/app"
 )
 
 func TestCursorConsentNoticeDisclosesAutoApprovedTools(t *testing.T) {
@@ -272,6 +274,10 @@ func TestResolveServerReadsBasePathFromDiscoveryFile(t *testing.T) {
 		{name: "nested base path", contents: "9280\n/tools/radar\n", want: "http://localhost:9280/tools/radar"},
 		{name: "trailing slash trimmed", contents: "9280\n/radar/\n", want: "http://localhost:9280/radar"},
 		{name: "no trailing newline", contents: "9280\n/radar", want: "http://localhost:9280/radar"},
+		{name: "ipv4 no base path", contents: "9280\n\n192.0.2.10\n", want: "http://192.0.2.10:9280"},
+		{name: "ipv4 base path", contents: "9280\n/radar\n192.0.2.10\n", want: "http://192.0.2.10:9280/radar"},
+		{name: "ipv6 no base path", contents: "9280\n\n::1\n", want: "http://[::1]:9280"},
+		{name: "ipv6 base path", contents: "9280\n/radar\n2001:db8::10\n", want: "http://[2001:db8::10]:9280/radar"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -291,6 +297,37 @@ func TestResolveServerReadsBasePathFromDiscoveryFile(t *testing.T) {
 				t.Errorf("resolveServer() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestDiscoveryFileRoundTrip(t *testing.T) {
+	for _, address := range []string{"localhost:9280", "192.0.2.10:9281", "[::1]:9282", "[2001:db8::10]:9283"} {
+		for _, basePath := range []string{"", "/radar"} {
+			t.Run(address+basePath, func(t *testing.T) {
+				t.Setenv("HOME", t.TempDir())
+				app.WriteMCPPortFile(address, basePath)
+				if address == "localhost:9280" && basePath == "" {
+					data, err := os.ReadFile(filepath.Join(os.Getenv("HOME"), ".radar", "mcp-port"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if port, err := strconv.Atoi(strings.TrimSpace(string(data))); err != nil || port != 9280 {
+						t.Fatalf("port-only CLI cannot read discovery file %q: %v", data, err)
+					}
+				}
+				got, err := resolveServer("")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if want := "http://" + address + basePath; got != want {
+					t.Fatalf("discovered %q, want %q", got, want)
+				}
+				explicit := "http://[::1]:1234/other"
+				if got, err := resolveServer(explicit); err != nil || got != explicit {
+					t.Fatalf("explicit override = %q, %v", got, err)
+				}
+			})
+		}
 	}
 }
 

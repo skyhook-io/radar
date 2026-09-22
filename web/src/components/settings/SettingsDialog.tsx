@@ -35,12 +35,8 @@ import type { SettingsSectionId } from './settings-state'
 import { OperatorManagedNotice } from './OperatorManagedNotice'
 export type { SettingsSectionId } from './settings-state'
 
-// The loopback URL an MCP client is told to connect to. Shared by the overview
-// row and the MCP section: both must carry the base path, or the URL they
-// advertise 404s under a subpath deployment.
-function mcpLoopbackUrl(): string {
-  const port = Number(window.location.port) || 80
-  return `http://localhost:${port}${routePath('/mcp')}`
+function mcpEndpointUrl(): string {
+  return `${window.location.origin}${routePath('/mcp')}`
 }
 
 interface Config {
@@ -1183,7 +1179,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
   const agentLabel =
     diag.agents.find((a) => a.name === diag.selectedAgent)?.label ?? diag.agents[0]?.label
   const mcpOn = capabilities.mcpEnabled
-  const mcpUrl = mcpLoopbackUrl()
+  const mcpUrl = mcpEndpointUrl()
   const costMissing = cost?.reason === 'no_prometheus' || cost?.reason === 'no_cost_source' || cost?.reason === 'no_metrics'
   const costUnavailableDetail = cost?.reason === 'no_prometheus'
     ? 'Connect OpenCost metrics in Metrics.'
@@ -1900,7 +1896,7 @@ function MCPSection({
   const [copied, setCopied] = useState(false)
 
   const currentPort = Number(window.location.port) || 80
-  const mcpUrl = mcpLoopbackUrl()
+  const mcpUrl = mcpEndpointUrl()
 
   const handleCopy = () => {
     navigator.clipboard.writeText(mcpUrl)

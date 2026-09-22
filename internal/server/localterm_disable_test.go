@@ -135,15 +135,18 @@ func TestLocalTerminalRejectsSpoofedLoopbackHostOnSharedListener(t *testing.T) {
 	t.Cleanup(k8s.SetTestLocalMode())
 
 	k8s.ForceDisableLocalTerminal = false
-	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "http://localhost:9280/api/local-terminal", nil)
-	(&Server{listenAddress: AllInterfacesAddress}).handleLocalTerminal(w, req)
-
-	if w.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusForbidden)
-	}
-	if got, want := w.Body.String(), "{\"error\":\"local terminal is only available over a loopback address\"}\n"; got != want {
-		t.Errorf("body = %q, want %q", got, want)
+	for _, address := range []string{AllInterfacesAddress, "192.0.2.10", "2001:db8::10", "::"} {
+		t.Run(address, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "http://localhost:9280/api/local-terminal", nil)
+			(&Server{listenAddress: address}).handleLocalTerminal(w, req)
+			if w.Code != http.StatusForbidden {
+				t.Errorf("status = %d, want %d", w.Code, http.StatusForbidden)
+			}
+			if got, want := w.Body.String(), "{\"error\":\"local terminal is only available over a loopback address\"}\n"; got != want {
+				t.Errorf("body = %q, want %q", got, want)
+			}
+		})
 	}
 }
 

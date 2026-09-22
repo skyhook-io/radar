@@ -67,6 +67,28 @@ func TestFormatStartupLogSummaryUnauthenticatedWildcard(t *testing.T) {
 	}
 }
 
+func TestFormatStartupLogSummaryExplicitIPs(t *testing.T) {
+	for _, tt := range []struct {
+		address string
+		want    string
+	}{
+		{"127.0.0.2", "URL:         http://127.0.0.2:9280/radar/"},
+		{"::1", "URL:         http://[::1]:9280/radar/"},
+		{"192.0.2.10", "Listener:    192.0.2.10:9280"},
+		{"2001:db8::10", "Listener:    [2001:db8::10]:9280"},
+		{"::", "Listener:    [::]:9280"},
+	} {
+		t.Run(tt.address, func(t *testing.T) {
+			got := strings.Join(formatStartupLogSummary(startupLogSummary{
+				listenAddress: tt.address, port: 9280, basePath: "/radar",
+			}, false), "\n")
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("summary missing %q:\n%s", tt.want, got)
+			}
+		})
+	}
+}
+
 func TestFormatStartupLogSummaryCloudListener(t *testing.T) {
 	got := strings.Join(formatStartupLogSummary(startupLogSummary{
 		listenAddress: AllInterfacesAddress,

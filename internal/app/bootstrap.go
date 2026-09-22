@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -615,23 +616,29 @@ var mcpPortFileDisabled bool
 // DisableMCPPortFile makes Write/RemoveMCPPortFile no-ops for this process.
 func DisableMCPPortFile() { mcpPortFileDisabled = true }
 
-// WriteMCPPortFile writes the actual server port to ~/.radar/mcp-port so MCP
-// clients can discover the running instance without hardcoding a port. A
-// non-empty basePath is written as a second line: the routes it identifies sit
-// under that prefix, so the port alone is not enough to reach them. The port
-// stays on the first line so a port-only reader keeps working.
-func WriteMCPPortFile(port int, basePath string) {
+// Desktop and CLI installations share this file and can update independently.
+// Keep localhost discovery port-only unless a base path is needed; an explicit
+// host occupies line 3.
+func WriteMCPPortFile(address string, basePath string) {
 	path := mcpPortFilePath()
 	if path == "" || mcpPortFileDisabled {
+		return
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		log.Printf("[mcp] Invalid discovery address %q: %v", address, err)
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		log.Printf("[mcp] Failed to create directory for port file: %v", err)
 		return
 	}
-	contents := fmt.Appendf(nil, "%d\n", port)
-	if basePath != "" {
+	contents := fmt.Appendf(nil, "%s\n", port)
+	if basePath != "" || host != "localhost" {
 		contents = fmt.Appendf(contents, "%s\n", basePath)
+	}
+	if host != "localhost" {
+		contents = fmt.Appendf(contents, "%s\n", host)
 	}
 	if err := os.WriteFile(path, contents, 0o644); err != nil {
 		log.Printf("[mcp] Failed to write port file: %v", err)
