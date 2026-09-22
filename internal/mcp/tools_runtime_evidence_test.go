@@ -61,9 +61,9 @@ func TestRuntimeEvidenceRequiresExplicitConsentAndValidTarget(t *testing.T) {
 	t.Setenv("RADAR_CLOUD_MODE", "false")
 	ctx := context.WithValue(context.Background(), runtimeLocalCallerKey{}, true)
 	for _, input := range []RuntimeEvidenceInput{
-		{Adapter: "nats", Namespace: "lab", Pod: "nats"},
-		{Adapter: "nats", Namespace: "../secret", Pod: "nats", ConfirmNetworkAccess: true},
-		{Adapter: "custom-url", Namespace: "lab", Pod: "nats", ConfirmNetworkAccess: true},
+		{Application: "nats", Namespace: "lab", Pod: "nats"},
+		{Application: "nats", Namespace: "../secret", Pod: "nats", ConfirmNetworkAccess: true},
+		{Application: "custom-url", Namespace: "lab", Pod: "nats", ConfirmNetworkAccess: true},
 	} {
 		if _, _, err := handleRuntimeEvidence(ctx, nil, input); err == nil {
 			t.Fatalf("accepted invalid/unauthorized input: %+v", input)
@@ -72,13 +72,13 @@ func TestRuntimeEvidenceRequiresExplicitConsentAndValidTarget(t *testing.T) {
 }
 
 func TestRuntimeEvidenceAbsentFromReadOnlyCatalog(t *testing.T) {
-	if investigation.IsReadOnlyTool("collect_runtime_evidence") || investigation.IsWriteTool("collect_runtime_evidence") {
+	if investigation.IsReadOnlyTool("collect_application_evidence") || investigation.IsWriteTool("collect_application_evidence") {
 		t.Fatal("runtime collector exposed to built-in investigation")
 	}
 	for _, writes := range []bool{false, true} {
 		found := false
 		for _, tool := range listRegisteredToolsWith(t, writes) {
-			if tool.Name == "collect_runtime_evidence" {
+			if tool.Name == "collect_application_evidence" {
 				found = true
 			}
 		}

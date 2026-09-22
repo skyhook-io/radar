@@ -40,6 +40,7 @@ func CandidatesForPods(pods []*corev1.Pod, truncated bool) CandidateSet {
 		result.CoverageLimited = true
 		return result
 	}
+	readiness := map[string]bool{}
 	for _, p := range pods {
 		for _, a := range []evidence.Adapter{evidence.RabbitMQ, evidence.NATS, evidence.Vault} {
 			ep, _ := endpointFor(a)
@@ -47,6 +48,7 @@ func CandidatesForPods(pods []*corev1.Pod, truncated bool) CandidateSet {
 			if reason != "" {
 				continue
 			}
+			readiness[id.uid+"/"+id.name] = ReadinessFailure(p, id.name)
 			facts := []string{"initialized", "sealed", "standby"}
 			if a == evidence.RabbitMQ {
 				facts = []string{"node disk alarm", "node memory alarm"}
@@ -59,6 +61,9 @@ func CandidatesForPods(pods []*corev1.Pod, truncated bool) CandidateSet {
 	}
 	sort.Slice(result.Candidates, func(i, j int) bool {
 		a, b := result.Candidates[i], result.Candidates[j]
+		if readiness[a.Target.UID+"/"+a.Target.Container] != readiness[b.Target.UID+"/"+b.Target.Container] {
+			return readiness[a.Target.UID+"/"+a.Target.Container]
+		}
 		return a.Target.Namespace+"/"+a.Target.Pod+"/"+string(a.Application) < b.Target.Namespace+"/"+b.Target.Pod+"/"+string(b.Application)
 	})
 	if len(result.Candidates) > MaxCandidates {
@@ -108,6 +113,13 @@ func ResolveCandidates(ctx context.Context, deps trace.Deps, subject Subject) Ca
 			return limited
 		}
 		result := CandidatesFromTrace(deps, tr)
+		if group == "gateway.networking.k8s.io" && deps.Dynamic != nil && deps.Discovery != nil {
+			if gvr, ok := deps.Discovery.GetGVRWithGroup(canonical, group); ok {
+				if obj, err := deps.Dynamic.GetWatched(gvr, subject.Namespace, subject.Name); err == nil {
+					result.SubjectUID = string(obj.GetUID())
+				}
+			}
+		}
 		if obj, err := k8s.FetchResource(deps.Cache, kind, subject.Namespace, subject.Name); err == nil {
 			if m, err := meta.Accessor(obj); err == nil {
 				result.SubjectUID = string(m.GetUID())
@@ -241,4 +253,21 @@ func CheckAccess(ctx context.Context, client kubernetes.Interface, target Target
 		}
 	}
 	return true
+}
+
+func ReadinessFailure(p *corev1.Pod, containerName string) bool {
+	if p == nil {
+		return false
+	}
+	for _, c := range p.Spec.Containers {
+		if c.Name != containerName || c.ReadinessProbe == nil {
+			continue
+		}
+		for _, status := range p.Status.ContainerStatuses {
+			if status.Name == containerName {
+				return !status.Ready
+			}
+		}
+	}
+	return false
 }

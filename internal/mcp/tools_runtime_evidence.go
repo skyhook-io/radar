@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
@@ -20,13 +21,13 @@ import (
 
 type runtimeLocalCallerKey struct{}
 
-var runtimeCollector = collector.NewCollector()
+var runtimeCollector = collector.SharedCollector()
 
 type RuntimeEvidenceInput struct {
-	Adapter              string `json:"adapter" jsonschema:"rabbitmq, nats, or vault"`
-	Namespace            string `json:"namespace" jsonschema:"namespace of the explicitly selected Pod"`
-	Pod                  string `json:"pod" jsonschema:"name of the explicitly selected Pod; no Service or workload fanout"`
-	ConfirmNetworkAccess bool   `json:"confirm_network_access" jsonschema:"must be true only after the operator authorizes endpoint collection; opens a temporary Kubernetes port-forward using existing permissions"`
+	Application          string `json:"application" jsonschema:"application to observe"`
+	Namespace            string `json:"namespace" jsonschema:"selected Pod namespace"`
+	Pod                  string `json:"pod" jsonschema:"selected Pod name"`
+	ConfirmNetworkAccess bool   `json:"confirm_network_access" jsonschema:"true only after operator authorization for temporary endpoint port-forward"`
 }
 
 func runtimeLocalCaller(next http.Handler) http.Handler {
@@ -54,9 +55,9 @@ func handleRuntimeEvidence(ctx context.Context, _ *mcpsdk.CallToolRequest, input
 	if len(validation.IsDNS1123Label(input.Namespace)) != 0 || len(validation.IsDNS1123Subdomain(input.Pod)) != 0 {
 		return nil, nil, fmt.Errorf("a valid namespace and Pod name are required")
 	}
-	adapter := evidence.Adapter(input.Adapter)
+	adapter := evidence.Adapter(input.Application)
 	if adapter != evidence.RabbitMQ && adapter != evidence.NATS && adapter != evidence.Vault {
-		return nil, nil, fmt.Errorf("adapter must be rabbitmq, nats, or vault")
+		return nil, nil, fmt.Errorf("application must be rabbitmq, nats, or vault")
 	}
 	config := k8s.ConfigFromContext(ctx)
 	if config == nil {
@@ -68,4 +69,13 @@ func handleRuntimeEvidence(ctx context.Context, _ *mcpsdk.CallToolRequest, input
 		return nil, nil, fmt.Errorf("Kubernetes client unavailable; no runtime evidence collected")
 	}
 	return toJSONResult(runtimeCollector.Collect(ctx, client, config, adapter, input.Namespace, input.Pod))
+}
+
+func applicationEvidenceInputSchema() *jsonschema.Schema {
+	schema, err := jsonschema.For[RuntimeEvidenceInput](nil)
+	if err != nil {
+		panic(err)
+	}
+	schema.Properties["application"].Enum = []any{"rabbitmq", "nats", "vault"}
+	return schema
 }

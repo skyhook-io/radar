@@ -460,7 +460,7 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		// diagnose is read-only EXCEPT its optional in_cluster=true arg, which creates
 		// ONE transient, self-destructing probe pod - so it is non-read-only but NOT
 		// destructive (additive + self-deleting). Runtime collection likewise requires explicit network authorization.
-		if tool.Name == "diagnose" || tool.Name == "collect_runtime_evidence" {
+		if tool.Name == "diagnose" || tool.Name == "collect_application_evidence" {
 			if tool.Annotations.ReadOnlyHint {
 				t.Errorf("diagnose must NOT set readOnlyHint=true - in_cluster=true creates a transient pod")
 			}
@@ -706,7 +706,7 @@ func TestDiagnoserAllowlistCoversAllReadTools(t *testing.T) {
 	registered := map[string]bool{}
 	for _, tool := range listRegisteredTools(t) {
 		registered[tool.Name] = true
-		if writes[tool.Name] || tool.Name == "collect_runtime_evidence" || allowed[tool.Name] {
+		if writes[tool.Name] || tool.Name == "collect_application_evidence" || allowed[tool.Name] {
 			continue
 		}
 		missing = append(missing, tool.Name)

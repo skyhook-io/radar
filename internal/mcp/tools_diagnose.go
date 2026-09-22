@@ -23,6 +23,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/internal/reachability"
+	collector "github.com/skyhook-io/radar/internal/runtimeevidence"
 	"github.com/skyhook-io/radar/internal/trace"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
@@ -60,6 +61,7 @@ type diagnoseReadOnlyInput struct {
 }
 
 func handleDiagnoseReadOnly(ctx context.Context, req *mcp.CallToolRequest, input diagnoseReadOnlyInput) (*mcp.CallToolResult, any, error) {
+	ctx = context.WithValue(ctx, applicationActionsDisabledKey{}, true)
 	return handleDiagnose(ctx, req, diagnoseInput{diagnoseCommonInput: input.diagnoseCommonInput})
 }
 
@@ -72,6 +74,7 @@ func handleDiagnoseReadOnly(ctx context.Context, req *mcp.CallToolRequest, input
 // NarrowHint is set when the resolved pod set was capped for log fan-out
 // — see capDiagnosePods.
 type diagnoseResponse struct {
+	ApplicationEvidenceActions  []applicationEvidenceAction      `json:"applicationEvidenceActions,omitempty"`
 	Resource                    any                              `json:"resource"`
 	ResourceContext             *resourcecontext.ResourceContext `json:"resourceContext,omitempty"`
 	LogsCurrent                 []podLogEntry                    `json:"logsCurrent,omitempty"`
@@ -497,6 +500,11 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		// the shared row filter as a fail-closed defense if a timeline result's
 		// identity does not match the source Radar asked for.
 		resp.RecentChanges = filterRecentChangesRBAC(ctx, changesResult.Changes)
+	}
+	if applicationActionsAllowed(ctx) {
+		deps := trace.Deps{Cache: cache, AllowedNamespaces: filterNamespacesForUser(ctx, nil)}
+		candidates := collector.ResolveCandidates(ctx, deps, collector.Subject{Kind: canonicalKind, Group: canonicalGroup, Namespace: input.Namespace, Name: input.Name})
+		resp.ApplicationEvidenceActions = applicationActions(ctx, deps, candidates)
 	}
 	resp.DNSContext = dnsContextForDiagnose(ctx, cache, obj, pods, resp.LogsCurrent, resp.LogsPrevious, resp.Events)
 	resp.Warnings = objectWarnings(obj, resCtx)
@@ -976,7 +984,8 @@ func networkDiagnoseGroup(kind string) string {
 // per-probe dump - that story is already projected into routes + localization.
 // No flat RelatedIssues: the per-hop Findings are the non-duplicated home for it.
 type networkDiagnoseResponse struct {
-	Subject trace.ResourceRef `json:"subject"`
+	ApplicationEvidenceActions []applicationEvidenceAction `json:"applicationEvidenceActions,omitempty"`
+	Subject                    trace.ResourceRef           `json:"subject"`
 	// Verdict is a coarse rollup enum (healthy | degraded | broken | unknown) that
 	// agents may key follow-up actions on. It is intentionally lossy: `healthy`
 	// means "no failing route was found" - it can include routes that were only
@@ -1165,6 +1174,9 @@ func handleNetworkTraceDiagnose(ctx context.Context, input diagnoseInput, kind s
 	}
 	resp := buildNetworkDiagnoseResponse(tr)
 	resp.InClusterTests = inClusterTests
+	if applicationActionsAllowed(ctx) {
+		resp.ApplicationEvidenceActions = applicationActions(ctx, deps, collector.CandidatesFromTrace(deps, tr))
+	}
 	return toJSONResult(resp)
 }
 
