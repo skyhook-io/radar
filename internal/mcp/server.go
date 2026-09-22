@@ -57,15 +57,16 @@ func newFullServer() *mcpsdk.Server { return newServer(true, true, serverInstruc
 
 // RunStdio runs the MCP server over stdio (full tool set).
 func RunStdio(ctx context.Context) error {
-	return RunStdioMode(ctx, false)
+	return RunStdioMode(ctx, false, true)
 }
 
 // RunStdioMode uses the same read-only catalog and enforcement as HTTP.
-func RunStdioMode(ctx context.Context, readOnly bool) error {
+func RunStdioMode(ctx context.Context, readOnly, allowApplicationEvidence bool) error {
 	ctx = context.WithValue(ctx, runtimeLocalCallerKey{}, true)
 	server := newServer(!readOnly, !readOnly, serverInstructions(!readOnly))
-	if !runtimeEvidenceAllowed(ctx) {
-		server.RemoveTools("delete_resource", "collect_application_evidence")
+	if !allowApplicationEvidence || !runtimeEvidenceAllowed(ctx) {
+		server.RemoveTools("collect_application_evidence")
+		ctx = context.WithValue(ctx, applicationActionsDisabledKey{}, true)
 	}
 	return server.Run(ctx, &mcpsdk.StdioTransport{})
 }
