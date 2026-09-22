@@ -847,6 +847,8 @@ Missing or malformed observations do not establish health. Radar suppresses thes
 
 The source contract is Strimzi's [KafkaConnector status schema](https://strimzi.io/docs/operators/1.2.0/configuring.html#type-KafkaConnectorStatus-reference) and [connector management documentation](https://strimzi.io/docs/operators/1.2.0/deploying.html#con-switching-api-to-kafka-connector-str). Discovery uses the served preferred version; partial-discovery recovery probes `v1` and `v1beta2`.
 
+`diagnose` accepts `KafkaConnector` and `KafkaConnect` and reads already-watched operator status without opening application endpoints or fetching logs. KafkaConnect details, and workloads/Pods with an already-watched, verified owner-UID chain to KafkaConnect, show bounded related connector findings with their original issue identity. These links do not change parent health or issue counts. The association uses the connector's `strimzi.io/cluster` label in the same namespace; unavailable, unauthorized or unwatched relationships are omitted. Results describe cached operator snapshots, not a complete live health assessment. The Pod/workload bridge is opportunistic: intermediary resources such as StrimziPodSet must already be watched and readable. No additional watchers or RBAC grants are introduced.
+
 ## CloudNativePG
 
 [CloudNativePG](https://cloudnative-pg.io/) (CNPG) is the Kubernetes operator for PostgreSQL, covering the full lifecycle from bootstrapping to monitoring, with high availability, automated failover, and backup management.

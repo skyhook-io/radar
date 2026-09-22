@@ -553,3 +553,11 @@ var CELBindings = []CELBinding{
 	{Name: "operation_retry_count", Type: BindingInt},
 	{Name: "stuck", Type: BindingBool},
 }
+
+// RelatedApplicationFindings links canonical source findings without changing the subject's health.
+type RelatedApplicationFindings struct {
+	Source    Ref     `json:"source"`
+	Findings  []Issue `json:"findings,omitempty"`
+	Coverage  string  `json:"coverage"`
+	Truncated bool    `json:"truncated,omitempty"`
+}
