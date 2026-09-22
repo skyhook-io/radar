@@ -101,6 +101,10 @@ func TestCandidateOwnerUIDAndServiceScope(t *testing.T) {
 	if len(got.Candidates) != 2 {
 		t.Fatalf("service must include notready selected pods: %+v", got)
 	}
+	partial := CandidatesFromTrace(deps, &trace.Trace{Truncated: true, Downstream: []trace.Hop{{Resource: Subject{Kind: "Service", Namespace: "lab", Name: "rabbit"}}}})
+	if !partial.CoverageLimited || partial.Truncated {
+		t.Fatalf("partial input is not candidate truncation: %+v", partial)
+	}
 	got = ResolveCandidates(context.Background(), deps, Subject{Kind: "Deployment", Group: "other.io", Namespace: "lab", Name: "rabbit"})
 	if len(got.Candidates) != 0 {
 		t.Fatal("wrong group")
