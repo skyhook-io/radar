@@ -7,12 +7,14 @@ import (
 	"io"
 	"log"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -28,11 +30,13 @@ import (
 	"github.com/skyhook-io/radar/internal/summarycontext"
 	"github.com/skyhook-io/radar/internal/timeline"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/executioninsight"
 	"github.com/skyhook-io/radar/pkg/health"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/schedulinginsight"
+	"github.com/skyhook-io/radar/pkg/servinginsight"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 	"github.com/skyhook-io/radar/pkg/upgradereadiness"
 )
@@ -101,6 +105,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"context: pod status, readiness, restarts, owner workload, requests, and " +
 			"limits. kind=pods ranks individual Pods, kind=workloads aggregates Pods " +
 			"to Deployments/StatefulSets/DaemonSets/Jobs, and kind=nodes ranks Nodes. " +
+			"This is live usage, not recommendations — for whether requests/limits should " +
+			"change, use get_rightsizing. " +
 			"Use before reading logs when the symptom mentions CPU, memory, GC, OOM, " +
 			"latency, or load.",
 		Annotations: readOnly,
@@ -121,7 +127,7 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 		Name: "get_resource",
 		Description: "Use AFTER narrowing to one resource. Returns the resource's " +
 			"Kubernetes-shaped spec/status/metadata plus resourceContext when available " +
-			"(relationships, refs, scheduling, issue/audit/policy rollups — issues carry " +
+			"(relationships, refs, controller observations, issue/audit/policy rollups — issues carry " +
 			"diagnostic_context with cross-subject causal links + a confidence tier; " +
 			"audit findings are static posture and remediation priority, not evidence " +
 			"of an active outage; auditSummary.highestSeverity uses the Checks ladder " +
@@ -470,6 +476,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"type=instant returns current values; type=range returns time series for a window " +
 			"(since=1h default). For live top-N snapshots prefer top_resources; for metric/label " +
 			"NAME discovery use discover_metrics first — do not guess metric names. " +
+			"For cluster or namespace spend use get_cost rather than hand-writing cost queries — " +
+			"it handles currency, idle attribution, and the Kubecost vs OpenCost source split. " +
 			"Empty results include a bounded list of related active metric names when a metric family can be inferred. " +
 			"High-cardinality queries must be wrapped in topk(5, ...): oversized results return a " +
 			"summary with a suggested rewrite instead of data.",
@@ -497,6 +505,20 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 			"(default 50) with truncated=true — narrow rather than paging.",
 		Annotations: readOnly,
 	}, logToolCall("get_prometheus_rules", handleGetPrometheusRules))
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name:        "get_cost",
+		InputSchema: costInputSchema(),
+		Description: "Read estimated Kubernetes costs from OpenCost or Kubecost. Choose summary, workloads (needs namespace; add kind+name for one workload), nodes, or trend. Use get_rightsizing for request recommendations and top_resources for live usage. Check availability, scope, and cost basis before reporting totals.",
+		Annotations: readOnly,
+	}, logToolCall("get_cost", handleGetCost))
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name:        "get_rightsizing",
+		InputSchema: rightsizingInputSchema(),
+		Description: "Recommend CPU/memory requests for Deployments, StatefulSets, and DaemonSets using 7 days of usage. scope=workload is cheap and precise; namespace/cluster scans run in the background for up to 3 minutes. Follow nextCall while scanStatus=running. Results are retained up to 15 minutes; use refresh=true after changes. Scans rank safety risks and increases before reductions. Scan once, then inspect workloads. Check confidence, missing evidence, and manual-review reasons. Request reductions do not directly imply bill savings.",
+		Annotations: readOnly,
+	}, logToolCall("get_rightsizing", handleGetRightsizing))
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "get_workload_logs",
@@ -638,7 +660,7 @@ type getResourceInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"namespace for namespaced kinds. Leave empty for cluster-scoped kinds (Node, ClusterRole, ClusterRoleBinding, IngressClass, PriorityClass, StorageClass, etc.)."`
 	Name      string `json:"name" jsonschema:"resource name"`
 	Include   string `json:"include,omitempty" jsonschema:"optional supplemental data after narrowing to this object: events, metrics, changes, revisions. Comma-separated. Separate from context. include=revisions lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout (number, image, isCurrent; Rollouts also mark isStable, the revision an abort reverts to) — fetch before manage_workload rollback. For logs use get_pod_logs / get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle."`
-	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches managedBy / exposes / selectedBy / uses / runsOn / issueSummary / auditSummary rollups) or 'none' (bare minified resource). issueSummary uses live-operational critical|warning; auditSummary uses the Checks posture-remediation ladder critical|high|medium|low (current built-ins high|medium) and is not evidence of an active outage. For full diagnostic tier with logs + events bundled, use the diagnose tool instead."`
+	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches relationships and available resource-specific summaries) or 'none' (bare minified resource). issueSummary uses live-operational critical|warning; auditSummary uses the Checks posture-remediation ladder critical|high|medium|low (current built-ins high|medium) and is not evidence of an active outage. For full diagnostic tier with logs + events bundled, use the diagnose tool for supported kinds."`
 }
 
 type topologyInput struct {
@@ -666,7 +688,7 @@ type getChangesInput struct {
 type podLogsInput struct {
 	Namespace string `json:"namespace" jsonschema:"pod namespace"`
 	Name      string `json:"name" jsonschema:"pod name"`
-	Container string `json:"container,omitempty" jsonschema:"container name, defaults to first container"`
+	Container string `json:"container,omitempty" jsonschema:"container name; optional for single-container pods, specify for multi-container pods"`
 	TailLines int    `json:"tail_lines,omitempty" jsonschema:"number of lines to fetch from the end (default 200)"`
 	Grep      string `json:"grep,omitempty" jsonschema:"optional regex; when set, only matching lines are returned, like kubectl logs | grep PATTERN; when omitted, lines are auto-filtered for diagnostic relevance"`
 	Since     string `json:"since,omitempty" jsonschema:"only return logs newer than this duration (e.g. 30s, 10m, 1h), like kubectl logs --since"`
@@ -1215,14 +1237,17 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 	canonicalGroup := gvk.Group
 
 	issueSum := computeMCPIssueSummary(ctx, cache, canonicalGroup, canonicalKind, namespace, name)
-	auditSum := computeMCPAuditSummary(cache, canonicalGroup, canonicalKind, namespace, name)
+	auditSum := computeMCPAuditSummary(ctx, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
+		Reflections:   k8s.ReflectionLookup{Cache: cache},
 		Tier:          tier,
 		AccessChecker: newMCPRequestScopedChecker(ctx),
 		IssueSummary:  issueSum,
 		AuditSummary:  auditSum,
 		Scheduling:    schedulinginsight.ForResource(obj, tier),
+		Execution:     executioninsight.ForResource(obj, tier),
+		Serving:       servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),
@@ -1563,6 +1588,24 @@ func applyClusterScopedTopologyRBAC(ctx context.Context, topo *topology.Topology
 	if topo == nil {
 		return
 	}
+	allowedSecrets := map[topology.SARTuple]bool{}
+	tuples := topo.SecretRBACTuples()
+	if len(tuples) > 0 {
+		if canReadInNamespace(ctx, "", "secrets", "", "list") {
+			for _, tuple := range tuples {
+				allowedSecrets[tuple] = true
+			}
+		} else {
+			namespaces := make([]string, 0, len(tuples))
+			for _, tuple := range tuples {
+				namespaces = append(namespaces, tuple.Namespace)
+			}
+			for _, ns := range filterNamespacesByCanRead(ctx, "", "secrets", "list", namespaces) {
+				allowedSecrets[topology.SARTuple{Resource: "secrets", Namespace: ns}] = true
+			}
+		}
+	}
+	topo.StripSecretsExcept(allowedSecrets)
 	nodesBefore, edgesBefore := len(topo.Nodes), len(topo.Edges)
 	if deny := deniedClusterScopedTopoKinds(ctx); len(deny) > 0 {
 		topo.StripNodeKinds(deny)
@@ -1901,6 +1944,10 @@ func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input events
 	// Always wrap into the response struct so capped + uncapped agree on
 	// wire shape ({events: [...], narrowHint?: "..."}).
 	resp := getEventsResponseMCP{Events: deduplicated}
+	if input.Namespace == "" && len(allowed) > 0 {
+		resp.PartialScope = true
+		resp.ScopeNamespaces = slices.Sorted(slices.Values(allowed))
+	}
 	if totalGroups > len(deduplicated) {
 		hint := fmt.Sprintf(
 			"returned %d of %d deduplicated event groups — narrow with namespace=, kind=, or name=",
@@ -1920,6 +1967,12 @@ type getEventsResponseMCP struct {
 	// AccessDenied is set when the requested namespace is outside the caller's
 	// allowed set, so an empty Events list is a denial rather than an absence.
 	AccessDenied bool `json:"accessDenied,omitempty"`
+	// PartialScope is set when a cluster-wide request was narrowed to the
+	// namespaces the caller may read. Without it an empty Events list from a
+	// narrowed read would pass as a clean bill of health for the whole cluster.
+	// ScopeNamespaces names what was actually read.
+	PartialScope    bool     `json:"partialScope,omitempty"`
+	ScopeNamespaces []string `json:"scopeNamespaces,omitempty"`
 }
 
 func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLogsInput) (*mcp.CallToolResult, any, error) {
@@ -1953,6 +2006,14 @@ func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLo
 	}
 	if input.Container != "" {
 		opts.Container = input.Container
+	} else {
+		// Pin an unambiguous container so the returned evidence names the stream
+		// actually requested. Pod metadata may be forbidden while pods/log is
+		// allowed; preserve that read without inventing a container identity.
+		pod, err := clientset.CoreV1().Pods(input.Namespace).Get(ctx, input.Name, metav1.GetOptions{})
+		if err == nil && len(pod.Spec.Containers) == 1 {
+			opts.Container = pod.Spec.Containers[0].Name
+		}
 	}
 
 	stream, err := clientset.CoreV1().Pods(input.Namespace).GetLogs(input.Name, opts).Stream(ctx)
@@ -1974,7 +2035,7 @@ func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLo
 		return nil, nil, fmt.Errorf("invalid grep regex: %w", err)
 	}
 
-	warnings := computePodLogsWarnings(input.Namespace, input.Name, input.Container, input.Previous, rawLines)
+	warnings := computePodLogsWarnings(input.Namespace, input.Name, opts.Container, input.Previous, rawLines)
 	var narrowHint string
 	// Heuristic: if we received tailLines or more raw lines, the kubectl
 	// stream was likely capped (there may be older lines we didn't fetch).
@@ -1984,11 +2045,9 @@ func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLo
 			rawLines,
 		)
 	}
-	if narrowHint == "" && len(warnings) == 0 {
-		return toJSONResult(filtered)
-	}
 	return toJSONResult(podLogsResponseMCP{
 		FilteredLogs: filtered,
+		Container:    opts.Container,
 		NarrowHint:   narrowHint,
 		Warnings:     warnings,
 	})
@@ -2119,9 +2178,10 @@ func countLines(s string) int {
 }
 
 // podLogsResponseMCP embeds FilteredLogs so the JSON shape stays identical
-// except for added narrowHint + warnings fields.
+// except for stream identity, narrowing hints, and warnings.
 type podLogsResponseMCP struct {
 	aicontext.FilteredLogs
+	Container  string   `json:"container,omitempty"`
 	NarrowHint string   `json:"narrowHint,omitempty"`
 	Warnings   []string `json:"warnings,omitempty"`
 }

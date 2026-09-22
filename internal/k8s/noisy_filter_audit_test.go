@@ -158,9 +158,9 @@ func TestComputeDiff_UnknownCRDArbitraryStatus_Detected(t *testing.T) {
 }
 
 func TestRecordToTimelineStore_SyncAddMarksResourceSeen(t *testing.T) {
-	prev := initialSyncComplete
-	initialSyncComplete = false
-	defer func() { initialSyncComplete = prev }()
+	prev := initialSyncComplete.Load()
+	initialSyncComplete.Store(false)
+	defer func() { initialSyncComplete.Store(prev) }()
 
 	timeline.ResetStore()
 	if err := timeline.InitStore(timeline.DefaultStoreConfig()); err != nil {

@@ -4,14 +4,16 @@ import { describe, expect, it, vi } from "vitest";
 import {
   INVESTIGATION_DISCLOSURE_SETTLE_MS,
   InvestigationEvidencePane,
-  VISIBLE_LOG_EVIDENCE_LINES,
-  partitionInvestigationEvidence,
   investigationDisclosureSettleDelay,
   investigationDisclosureScrollTop,
+} from "./InvestigationEvidencePane";
+import { VISIBLE_LOG_EVIDENCE_LINES } from "./investigationEvidence/bodies/streams";
+import {
+  partitionInvestigationEvidence,
   investigationEvidenceFullRowFlags,
   investigationEvidenceRevealCollection,
   investigationEvidenceShouldRevealHistory,
-} from "./InvestigationEvidencePane";
+} from "./investigationEvidencePartition";
 import {
   investigationEvidenceSourceDomId,
   investigationEvidenceStepIdsByTurn,
@@ -32,6 +34,53 @@ import { groupEvidenceCoverage } from "./investigationEvidencePresentation";
 import { metricsChangeMarkers } from "./investigationMetrics";
 
 const onViewSource = vi.fn();
+
+describe("coverage already summarized by the assessment", () => {
+  it("removes only the repeated collapsed preview, retaining source details and new gaps", () => {
+    const projection = project(
+      tool(
+        "logs-denied",
+        "get_pod_logs",
+        { error: "pods/log is forbidden" },
+        { isError: true },
+      ),
+      tool("issues-cut", "issues", {}, { truncated: true }),
+    );
+    const groups = groupEvidenceCoverage(projection.limitations);
+    const line = `${groups[0].label}: ${groups[0].summary}`;
+    const renderStory = (summarizedLimits: string[], summary = "Assessment") =>
+      renderToStaticMarkup(
+        <InvestigationEvidencePane
+          projection={projection}
+          story={{ summary, report: "Analysis [[radar:evidence=0]]" }}
+          summarizedLimits={summarizedLimits}
+          collecting={false}
+          animateGroupIds={new Set()}
+          onViewSource={onViewSource}
+          onViewActivity={() => {}}
+        />,
+      );
+    const preview = (html: string) =>
+      html.match(
+        /<button[^>]*aria-controls="investigation-evidence-coverage"[\s\S]*?<\/button>/,
+      )?.[0] ?? "";
+    const firstSummary = renderToStaticMarkup(<>{groups[0].summary}</>);
+    expect(preview(renderStory([]))).toContain(firstSummary);
+    const html = renderStory([line]);
+    expect(preview(html)).not.toContain(firstSummary);
+    expect(preview(html)).toContain(groups[1].summary);
+    expect(html).toContain('aria-label="View result for Container logs"');
+    expect(html).toContain("Evidence coverage update:");
+    const allSummarized = renderStory(
+      groups.map((g) => `${g.label}: ${g.summary}`),
+    );
+    expect(preview(allSummarized)).not.toContain("line-clamp-2");
+    expect(preview(allSummarized)).toContain("Evidence coverage is incomplete");
+    for (const summary of ["", "   "]) {
+      expect(preview(renderStory([line], summary))).toContain(firstSummary);
+    }
+  });
+});
 const target = {
   kind: "Deployment",
   group: "apps",
@@ -529,7 +578,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(html).not.toContain("Secret values are never shown");
     expect(html).not.toContain("aria-expanded=");
     expect(html).toContain(
-      'aria-label="View source for Secret dev/skyhook-agent"',
+      'aria-label="View result for Secret dev/skyhook-agent"',
     );
     expect(html).not.toContain("Relationship to target not established");
   });
@@ -870,7 +919,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
           onViewSource={onViewSource}
         />,
       ),
-    ).toContain("View Get Resource source used for this assessment");
+    ).toContain("View Get Resource result used for this assessment");
     expect(html).toContain("Evidence coverage is incomplete");
     expect(html).toContain("couldn&#x27;t summarize this investigation step");
     expect(html.match(new RegExp(anchor, "g"))).toHaveLength(1);
@@ -1142,7 +1191,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     expect(html).not.toContain("strongest");
     expect(html).not.toContain("main proof");
     expect(html).toContain("CrashLoopBackOff");
-    expect(html).toContain('aria-label="View source for CrashLoopBackOff"');
+    expect(html).toContain('aria-label="View result for CrashLoopBackOff"');
     expect(html).toContain(
       `id="${investigationEvidenceSourceDomId(source.id)}"`,
     );
@@ -1266,7 +1315,7 @@ describe("InvestigationEvidencePane hierarchy and provenance", () => {
     );
     projection.groups[0].latest.tone = "neutral";
     const html = render(projection);
-    expect(html).toContain("More evidence about this workload");
+    expect(html).toContain("More evidence about this resource");
     expect(html).not.toContain("with warnings or errors");
     expect(
       investigationEvidenceRevealCollection(
@@ -1748,8 +1797,8 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(receipt).toBeDefined();
 
     const html = render(projection);
-    expect(html).toContain("More evidence about this workload");
-    expect(html).toContain("No matching warning events");
+    expect(html).toContain("More evidence about this resource");
+    expect(html).toContain("No warning events");
     expect(html).not.toContain("What Radar did not find");
     expect(html).not.toContain(`${receipt!.id}-body`);
   });
@@ -1845,7 +1894,7 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(projection.coverage.checked).toBe(0);
     expect(projection.groups).toHaveLength(0);
     expect(html).not.toContain('id="investigation-checked-heading"');
-    expect(html).not.toContain("No matching warning events");
+    expect(html).not.toContain("No warning events");
     expect(html).toContain("Evidence coverage is incomplete");
   });
 
@@ -2002,7 +2051,7 @@ describe("InvestigationEvidencePane honest result states", () => {
     expect(html).toContain(
       "Only part of this investigation result was saved, so Radar could not summarize it here.",
     );
-    expect(html).toContain('aria-label="View source for Issue scan"');
+    expect(html).toContain('aria-label="View result for Issue scan"');
     expect(source.primaryGroupId).toBeUndefined();
     expect(html).toContain(
       `id="${investigationEvidenceSourceDomId(source.id)}"`,
@@ -2108,6 +2157,7 @@ describe("InvestigationEvidencePane honest result states", () => {
       sources: [],
       evidenceRefSources: [],
       citableSources: [],
+      targetPods: [],
       coverage: { attempted: 0, projected: 0, limited: 0, checked: 0 },
     };
     const collecting = render(empty, true);
@@ -2260,7 +2310,7 @@ describe("Track A evidence bodies and deep links", () => {
     ]);
     const html = render(projection, false, undefined, undefined, () => {});
     expect(html).toContain("MongoServerError: Authentication failed.");
-    expect(html).toContain("Unfiltered log tail");
+    expect(html).toContain("Log tail · filter matched nothing");
     expect(html).toContain(
       "Open current Pod shop/api-68c7b766dc-fmphn in Radar",
     );
@@ -2706,32 +2756,6 @@ describe("cited broader cards and coverage rows", () => {
     ]);
     expect(cited.hiddenBroader).toBe(1);
 
-    // A later turn's citations widen the selection; they never take one away.
-    // Replacing the assessment's resolution with a follow-up's used to push
-    // the assessment's own cited evidence back into the withheld count.
-    // A later turn's citation widens the selection; it never takes one away,
-    // and it carries the source that cited it so a broader card can actually
-    // be promoted rather than selected-but-withheld.
-    const withheld = projection.groups.find(
-      (group) => !cited.collectionByGroup.has(group.id),
-    );
-    expect(withheld).toBeDefined();
-    const widened = partitionInvestigationEvidence(
-      projection.groups,
-      resolution,
-      undefined,
-      [
-        {
-          groupId: withheld!.id,
-          source: withheld!.latest.source,
-        },
-      ],
-    );
-    for (const group of cited.main) {
-      expect(widened.main).toContain(group);
-    }
-    expect(widened.main).toContain(withheld);
-    expect(widened.hiddenBroader).toBe(cited.hiddenBroader - 1);
     const html = render(projection, false, undefined, resolution);
     expect(html).toContain("6/12 pods Unschedulable");
     expect(html).toContain(
@@ -2759,7 +2783,7 @@ describe("cited broader cards and coverage rows", () => {
       (group) => group.latest.data.type === "receipt",
     );
     expect(receipts.map((group) => group.latest.title)).toEqual([
-      "No events matched",
+      "No events in this window",
     ]);
     expect(receipts[0].latest.data).toMatchObject({
       type: "receipt",
@@ -2802,7 +2826,7 @@ describe("cited broader cards and coverage rows", () => {
     expect(projection.limitations[0].sources).toHaveLength(3);
     const html = render(projection);
     const message =
-      "Kubernetes events was narrowed to keep this investigation bounded. Additional matching evidence may exist.";
+      "Kubernetes events returned part of the matching results to keep this investigation fast. More may exist.";
     // Live region, strip summary, the group row's label and its text: never
     // a second identical detail row beneath it.
     expect(
@@ -2872,7 +2896,8 @@ describe("InvestigationEvidencePane metrics cards", () => {
       metric: "container_memory_working_set_bytes",
       matchers: [
         { label: "namespace", op: "=", value: "shop" },
-        { label: "pod", op: "=~", value: "api-.*" },
+        { label: "workload", op: "=", value: "api" },
+        { label: "workload_type", op: "=", value: "deployment" },
       ],
     },
   ];
@@ -2880,7 +2905,7 @@ describe("InvestigationEvidencePane metrics cards", () => {
     return {
       query:
         query ??
-        'sum(container_memory_working_set_bytes{namespace="shop",pod=~"api-.*"})',
+        'sum(container_memory_working_set_bytes{namespace="shop",workload="api",workload_type="deployment"})',
       type: "range",
       ...window,
       step: "60s",
@@ -2906,8 +2931,8 @@ describe("InvestigationEvidencePane metrics cards", () => {
     expect(partition.workload.map((group) => group.kind)).toEqual(["metrics"]);
     expect(partition.hiddenMetrics).toBe(0);
     const html = render(projection);
-    expect(html).toContain("container_memory_working_set_bytes");
-    expect(html).toContain("Prometheus · 1 series");
+    expect(html).toContain("Memory working set");
+    expect(html).toContain("container_memory_working_set_bytes · 1 series");
     expect(html).not.toContain("Prometheus metrics");
     expect(html).not.toContain("metric result");
   });
@@ -3030,7 +3055,7 @@ describe("InvestigationEvidencePane metrics cards", () => {
       tool("prom", "query_prometheus", {
         ...rangeResult(
           targetSelectors,
-          'rate(container_cpu_usage_seconds_total{namespace="shop",pod=~"api-.*"}[5m])',
+          'rate(container_cpu_usage_seconds_total{namespace="shop",workload="api"}[5m])',
         ),
         series: [
           {
@@ -3059,9 +3084,7 @@ describe("InvestigationEvidencePane metrics cards", () => {
     expect(html).toContain(
       "1 series has a single sample in this window, listed with its time:",
     );
-    expect(html).toContain(
-      "1 series returned no finite values in this window: ",
-    );
+    expect(html).toContain("1 series had no usable samples in this window: ");
     expect(html).toContain("pod=api-7f6-abc, container=init");
     expect(html).not.toContain("2 series have a single sample");
   });
@@ -3151,6 +3174,62 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
     ],
   };
 
+  it("says a window is clean only when changes were actually looked up", () => {
+    const withChanges = render(
+      project(
+        tool("diag", "diagnose", {
+          resource: {
+            apiVersion: "apps/v1",
+            kind: "Deployment",
+            metadata: { namespace: "shop", name: "api" },
+          },
+          pods: 1,
+          recentChanges: [],
+          metrics: vitals,
+        }),
+      ),
+    );
+    expect(withChanges).toContain(
+      "None of the changes Radar read fall in this window.",
+    );
+
+    // The same chart with no change lookup in the turn must stay silent: an
+    // empty marker list there means nobody looked, not that nothing happened.
+    const withoutChanges = render(
+      project(
+        tool("prom", "query_prometheus", {
+          query:
+            'sum(container_memory_working_set_bytes{namespace="shop",workload="api",workload_type="deployment"})',
+          type: "range",
+          ...window,
+          step: "60s",
+          series: [
+            {
+              labels: {},
+              dataPoints: [
+                { timestamp: Date.parse(window.start) / 1000, value: 1 },
+                { timestamp: Date.parse(window.end) / 1000, value: 2 },
+              ],
+            },
+          ],
+          selectors: [
+            {
+              metric: "container_memory_working_set_bytes",
+              matchers: [
+                { label: "namespace", op: "=", value: "shop" },
+                { label: "workload", op: "=", value: "api" },
+                { label: "workload_type", op: "=", value: "deployment" },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+    expect(withoutChanges).not.toContain(
+      "None of the changes Radar read fall in this window.",
+    );
+  });
+
   it("keeps an uncited diagnose chart in the workload collection and marks the same-turn change on it", () => {
     const projection = project(
       tool("diag", "diagnose", {
@@ -3199,7 +3278,7 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
       partition.workload
         .filter((group) => group.kind === "receipt")
         .map((group) => group.latest.title),
-    ).toEqual(["No classified workload issues", "No matching warning events"]);
+    ).toEqual(["Radar's diagnosis found no live issues", "No warning events"]);
     const onOpenResource = vi.fn();
     const html = render(
       projection,
@@ -3209,7 +3288,7 @@ describe("InvestigationEvidencePane diagnose vitals", () => {
       onOpenResource,
     );
     expect(html).toContain("CPU usage · shop/api");
-    expect(html).toContain("1 pod · 60m window · 1m2s step");
+    expect(html).toContain("1 current pod · 60m window · 1m2s step");
     expect(html).toContain("(cores)");
     expect(html.match(/data-chart-annotation="change"/g)).toHaveLength(1);
     expect(html).toContain("Deployment api");

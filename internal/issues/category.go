@@ -56,7 +56,8 @@ func Classify(in classifyInput) issuesapi.Category {
 		// the control-plane "backend down"; everything else is a dangling
 		// config/resource reference.
 		switch in.Reason {
-		case "Missing backend Service", "Missing backend Service port":
+		case "Missing backend Service", "Missing backend Service port",
+			"Missing ALB action annotation", "Invalid ALB action annotation":
 			return issuesapi.CategoryIngressBackendMissing
 		case "Missing IngressClass":
 			return issuesapi.CategoryIngressClassMissing

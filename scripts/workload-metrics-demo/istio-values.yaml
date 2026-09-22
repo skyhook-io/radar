@@ -1,0 +1,23 @@
+revision: radar-lab
+autoscaleEnabled: false
+replicaCount: 1
+podAnnotations:
+  prometheus.io/scrape: "false"
+resources:
+  requests: {cpu: 100m, memory: 256Mi}
+  limits: {cpu: "1", memory: 768Mi}
+global:
+  istioNamespace: radar-metrics-istio-system
+  proxy:
+    resources:
+      requests: {cpu: 25m, memory: 64Mi}
+      limits: {cpu: 200m, memory: 128Mi}
+meshConfig:
+  enablePrometheusMerge: false
+  defaultConfig:
+    concurrency: 1
+  discoverySelectors:
+    - matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: In
+          values: [radar-metrics-fixture, radar-metrics-istio-system]

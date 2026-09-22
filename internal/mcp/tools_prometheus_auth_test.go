@@ -177,3 +177,26 @@ func TestPrometheusTools_SARErrorFailsClosedWithoutCaching(t *testing.T) {
 		t.Fatalf("once the apiserver answers, the same user should pass: %v", err)
 	}
 }
+
+// The not-connected message reaches every caller of query_prometheus,
+// discover_metrics and get_prometheus_rules. Both halves can carry the
+// backend's credentials: the configured address, and the wrapped transport
+// error that quotes the request URL.
+func TestNotConnectedMessageRedactsTheBackend(t *testing.T) {
+	got := notConnectedMessage(
+		"https://admin:s3cret@prom.internal:9090?token=hunter2",
+		errors.New(`Get "https://admin:s3cret@prom.internal:9090/api/v1/query?token=hunter2": dial tcp: i/o timeout`),
+	)
+	for _, leaked := range []string{"admin", "s3cret", "hunter2"} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("message leaked %q: %q", leaked, got)
+		}
+	}
+	// The host still names which backend was tried; the request URL does not.
+	if !strings.Contains(got, "last address: https://prom.internal:9090") {
+		t.Errorf("the address should still name the backend: %q", got)
+	}
+	if !strings.Contains(got, "/api/v1/query") || !strings.Contains(got, "i/o timeout") {
+		t.Errorf("the message should still say which call failed and why: %q", got)
+	}
+}

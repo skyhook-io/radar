@@ -2,12 +2,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { AgentClaimNote, AgentRoleChip } from "./AgentCase";
 import { describe, expect, it, vi } from "vitest";
 
+import { InvestigationEvidencePane } from "./InvestigationEvidencePane";
 import {
-  InvestigationEvidencePane,
   investigationCaseByGroup,
   investigationEvidenceShouldRevealHistory,
   partitionInvestigationEvidence,
-} from "./InvestigationEvidencePane";
+} from "./investigationEvidencePartition";
 import {
   projectInvestigationEvidence,
   resolveInvestigationRootCauseEvidence,
@@ -18,11 +18,10 @@ import {
 import {
   resolveInvestigationCase,
   type InvestigationCaseResolution,
-  investigationCaseItemsStillRendered,
-  mergeInvestigationCases,
-  type InvestigationCaseItem,
 } from "./investigationCase";
 import { AssessmentSources, ResultCard, assessmentSourceRows } from "./parts";
+import { namedInventoryRows } from "./investigationEvidence/bodies/inventory";
+import { LogsBody } from "./investigationEvidence/bodies/streams";
 import type { Diagnosis, DiagnosisEvidenceItem } from "../../api/diagnose";
 
 const onViewSource = vi.fn();
@@ -145,6 +144,7 @@ const diagnoseBundle = {
     },
   },
   pods: 1,
+  podNames: ["api-abc"],
   relatedIssues: [criticalIssue],
   logsCurrent: [
     { pod: "api-abc", container: "api", logs: logs(["ERROR auth failed"]) },
@@ -188,6 +188,918 @@ describe("agent case placement (D-1, D-1b)", () => {
     expect(html).not.toContain("data-agent-claim");
   });
 
+  it("forgives a group on a core kind and a named entry on a listing", () => {
+    const listRef = evidenceRef("c", "d");
+    const withListing = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "cms",
+        "list_resources",
+        [{ kind: "ConfigMap", name: "kube-root-ca.crt" }],
+        {
+          evidenceRef: listRef,
+          summary: JSON.stringify({ kind: "configmaps", namespace: "shop" }),
+        },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      withListing,
+      {
+        evidence: [
+          linked(ref, "cause", "The previous log names the error.", {
+            group: "apps",
+            kind: "Pod",
+            namespace: "shop",
+            name: "api-abc",
+            container: "api",
+            stream: "previous",
+            observation: "logs",
+          }),
+          linked(listRef, "context", "Only the CA bundle exists.", {
+            kind: "ConfigMap",
+            namespace: "shop",
+            name: "kube-root-ca.crt",
+            observation: "resource",
+          }),
+          linked(listRef, "rules_out", "No nginx config lives here.", {
+            kind: "ConfigMap",
+            namespace: "shop",
+            observation: "resource",
+          }),
+          linked(ref, "symptom", "BackOff keeps firing on the pod.", {
+            kind: "Pod",
+            namespace: "shop",
+            name: "api-abc",
+            observation: "events",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items.map((item) => item.placement)).toEqual([
+      "card",
+      "card",
+      "card",
+      "card",
+    ]);
+  });
+
+  it("places a resource-shaped result cited as 'resource': a Helm release, a permissions check, a neighborhood, a packages entry", () => {
+    const helmRef = evidenceRef("h", "a");
+    const permRef = evidenceRef("p", "b");
+    const graphRef = evidenceRef("g", "c");
+    const pkgRef = evidenceRef("k", "d");
+    const projection = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "helm",
+        "get_helm_release",
+        {
+          name: "shop",
+          namespace: "shop",
+          chart: "shop",
+          chartVersion: "1.4.2",
+          status: "deployed",
+          revision: 7,
+          updated: "2026-09-07T07:00:00Z",
+          resources: [
+            {
+              kind: "Deployment",
+              apiVersion: "apps/v1",
+              name: "api",
+              namespace: "shop",
+            },
+          ],
+        },
+        {
+          evidenceRef: helmRef,
+          summary: JSON.stringify({ namespace: "shop", name: "shop" }),
+        },
+      ),
+      tool(
+        "perm",
+        "get_subject_permissions",
+        {
+          subject: {
+            kind: "ServiceAccount",
+            namespace: "shop",
+            name: "default",
+          },
+          usedByPods: ["api-abc"],
+          bindings: [],
+          flatRules: [],
+        },
+        {
+          evidenceRef: permRef,
+          summary: JSON.stringify({
+            kind: "ServiceAccount",
+            namespace: "shop",
+            name: "default",
+          }),
+        },
+      ),
+      tool(
+        "graph",
+        "get_neighborhood",
+        {
+          root: { kind: "Service", group: "", namespace: "shop", name: "api" },
+          subgraph: {
+            nodes: [
+              {
+                id: "service/shop/api",
+                kind: "Service",
+                name: "api",
+                data: { namespace: "shop" },
+              },
+              {
+                id: "deployment/shop/api",
+                kind: "Deployment",
+                name: "api",
+                data: { namespace: "shop" },
+              },
+            ],
+            edges: [
+              {
+                source: "service/shop/api",
+                target: "deployment/shop/api",
+                type: "exposes",
+              },
+            ],
+          },
+          truncated: false,
+        },
+        {
+          evidenceRef: graphRef,
+          summary: JSON.stringify({
+            kind: "Service",
+            namespace: "shop",
+            name: "api",
+          }),
+        },
+      ),
+      tool(
+        "pkgs",
+        "list_packages",
+        {
+          packages: [
+            {
+              chart: "shop",
+              namespace: "shop",
+              releaseName: "shop",
+              version: "1.4.2",
+              health: { status: "healthy" },
+              sources: ["H", "F"],
+            },
+          ],
+          sourceLegend: { H: "Helm", F: "Flux" },
+        },
+        { evidenceRef: pkgRef, summary: JSON.stringify({}) },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(helmRef, "context", "Deployed at revision 7.", {
+            kind: "HelmRelease",
+            namespace: "shop",
+            name: "shop",
+            observation: "resource",
+          }),
+          linked(permRef, "context", "Only implicit discovery grants.", {
+            kind: "ServiceAccount",
+            namespace: "shop",
+            name: "default",
+            observation: "resource",
+          }),
+          linked(graphRef, "context", "The Service is the only neighbour.", {
+            kind: "Service",
+            namespace: "shop",
+            name: "api",
+            observation: "resource",
+          }),
+          linked(
+            pkgRef,
+            "context",
+            "The package is healthy from every source.",
+            {
+              group: "helm.toolkit.fluxcd.io",
+              kind: "HelmRelease",
+              namespace: "shop",
+              name: "shop",
+              observation: "resource",
+            },
+          ),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items.map((item) => item.placement)).toEqual([
+      "card",
+      "card",
+      "card",
+      "card",
+    ]);
+  });
+
+  it("does not hold the evidence word against a call whose only observation is a receipt", () => {
+    const metricsRef = evidenceRef("m", "a");
+    const upgradeRef = evidenceRef("u", "b");
+    const projection = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "names",
+        "discover_metrics",
+        {
+          match: "container_restarts",
+          count: 0,
+          metrics: [],
+          truncated: false,
+        },
+        {
+          evidenceRef: metricsRef,
+          summary: JSON.stringify({ match: "container_restarts" }),
+        },
+      ),
+      tool(
+        "upgrade",
+        "get_cluster_upgrade_readiness",
+        {
+          currentVersion: "1.35.7",
+          targetVersion: "1.36",
+          check: {
+            id: "webhooks",
+            title: "Admission webhooks",
+            category: "api",
+            status: "fail",
+            findings: [
+              {
+                title: "Webhook has no failure policy",
+                level: "blocker",
+                resource: {
+                  kind: "ValidatingWebhookConfiguration",
+                  name: "kyverno",
+                },
+              },
+            ],
+          },
+        },
+        {
+          evidenceRef: upgradeRef,
+          summary: JSON.stringify({ targetVersion: "1.36" }),
+        },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(
+            metricsRef,
+            "context",
+            "No metric name contains container_restarts.",
+            {
+              kind: "Pod",
+              namespace: "shop",
+              name: "api-abc",
+              observation: "metrics",
+            },
+          ),
+          linked(
+            upgradeRef,
+            "context",
+            "None of the findings concern this workload.",
+            {
+              group: "apps",
+              kind: "Deployment",
+              namespace: "shop",
+              name: "api",
+              observation: "resource",
+            },
+          ),
+          linked(ref, "symptom", "The bundle's events.", {
+            kind: "Pod",
+            namespace: "shop",
+            name: "api-abc",
+            observation: "startup",
+          }),
+        ],
+      },
+      0,
+    );
+    // The bundle yields many observations, so a word it cannot satisfy still
+    // leaves that item at its source.
+    expect(resolved.items.map((item) => item.placement)).toEqual([
+      "card",
+      "card",
+      "source",
+    ]);
+  });
+
+  it("holds a bare read to the evidence word: 'logs' does not name a resource card", () => {
+    const readRef = evidenceRef("r", "a");
+    const projection = project(
+      tool("read", "get_resource", deployment, {
+        evidenceRef: readRef,
+        summary: JSON.stringify({
+          kind: "deployment",
+          namespace: "shop",
+          name: "api",
+        }),
+      }),
+    );
+    const resolved = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(readRef, "context", "Zero ready.", {
+            group: "apps",
+            kind: "Deployment",
+            namespace: "shop",
+            name: "api",
+            observation: "logs",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items[0].placement).toBe("source");
+  });
+
+  it("leads a cited package listing with one row when two aliases name it, and holds a Package subject to its namespace", () => {
+    const pkgRef = evidenceRef("k", "e");
+    const projection = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "pkgs",
+        "list_packages",
+        {
+          packages: [
+            {
+              chart: "podinfo",
+              namespace: "prod",
+              releaseName: "podinfo",
+              version: "6.15.0",
+              health: { status: "healthy" },
+              sources: ["H"],
+            },
+            {
+              chart: "redis",
+              namespace: "prod",
+              releaseName: "redis",
+              version: "1.0.0",
+              health: { status: "healthy" },
+              sources: ["H"],
+            },
+          ],
+          sourceLegend: { H: "Helm" },
+        },
+        { evidenceRef: pkgRef, summary: JSON.stringify({}) },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(pkgRef, "context", "Declared by Flux.", {
+            group: "helm.toolkit.fluxcd.io",
+            kind: "HelmRelease",
+            namespace: "flux-system",
+            name: "podinfo",
+            observation: "resource",
+          }),
+          linked(pkgRef, "context", "Installed by Helm.", {
+            kind: "HelmRelease",
+            namespace: "staging",
+            name: "podinfo",
+            observation: "resource",
+          }),
+          linked(pkgRef, "context", "Another namespace's package.", {
+            kind: "Package",
+            namespace: "staging",
+            name: "podinfo",
+            observation: "resource",
+          }),
+        ],
+      },
+      0,
+    );
+    // All three bind to the listing; only the two declaring-object aliases
+    // name the prod row, and it leads the list once.
+    expect(resolved.items.map((item) => item.placement)).toEqual([
+      "card",
+      "card",
+      "card",
+    ]);
+    const listing = projection.groups.find(
+      (group) => group.latest.data.type === "inventory",
+    )!.latest.data;
+    if (listing.type !== "inventory") throw new Error("expected inventory");
+    expect(
+      namedInventoryRows(listing.resources, resolved.items).map(
+        (named) => named.matches,
+      ),
+    ).toEqual([1, 1, 0]);
+    expect(
+      namedInventoryRows(listing.resources, [...resolved.items].reverse()).map(
+        (named) => named.matches,
+      ),
+    ).toEqual([0, 1, 1]);
+    const html = render(projection, resolved);
+    const cited = html.match(/data-inventory-row="cited"/g) ?? [];
+    expect(cited).toHaveLength(1);
+    const marker = html.indexOf('data-inventory-row="cited"');
+    expect(marker).toBeGreaterThan(-1);
+    expect(marker).toBeLessThan(html.indexOf("prod/redis"));
+    expect(html.match(/prod\/podinfo/g)).toHaveLength(1);
+  });
+
+  it("reaches a posture finding through the workload that owns its resource, and holds a mixed-kind card to the names it holds", () => {
+    const upgradeRef = evidenceRef("u", "c");
+    const projection = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "upgrade",
+        "get_cluster_upgrade_readiness",
+        {
+          currentVersion: "1.35.7",
+          targetVersion: "1.36",
+          check: {
+            id: "removed-apis",
+            title: "Removed APIs",
+            category: "api",
+            status: "fail",
+            findings: [
+              {
+                title: "Uses autoscaling/v2beta2",
+                level: "blocker",
+                resource: {
+                  kind: "HorizontalPodAutoscaler",
+                  namespace: "shop",
+                  name: "api-hpa",
+                },
+                managedBy: {
+                  kind: "Deployment",
+                  group: "apps",
+                  namespace: "shop",
+                  name: "api",
+                },
+              },
+              {
+                title: "Uses networking/v1beta1",
+                level: "warning",
+                resource: { kind: "Ingress", namespace: "shop", name: "api" },
+                managedBy: {
+                  kind: "Deployment",
+                  group: "apps",
+                  namespace: "shop",
+                  name: "api",
+                },
+              },
+            ],
+          },
+        },
+        {
+          evidenceRef: upgradeRef,
+          summary: JSON.stringify({
+            targetVersion: "1.36",
+            check: "removed-apis",
+          }),
+        },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(
+            upgradeRef,
+            "context",
+            "The HPA and the Ingress need new APIs.",
+            {
+              group: "apps",
+              kind: "Deployment",
+              namespace: "shop",
+              name: "api",
+              observation: "resource",
+            },
+          ),
+          linked(upgradeRef, "context", "Names nothing on the card.", {
+            kind: "Service",
+            namespace: "shop",
+            name: "api",
+            observation: "resource",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items.map((item) => item.placement)).toEqual([
+      "card",
+      "source",
+    ]);
+  });
+
+  it("reaches a pod ranking through the workload its marked pods belong to", () => {
+    const rankRef = evidenceRef("t", "b");
+    const projection = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "top",
+        "top_resources",
+        {
+          kind: "pods",
+          sort: "memory",
+          metricsAvailable: true,
+          items: [
+            {
+              kind: "Pod",
+              namespace: "shop",
+              name: "worker-1",
+              cpuMilli: 9,
+              memoryMi: 400,
+            },
+            {
+              kind: "Pod",
+              namespace: "shop",
+              name: "api-abc",
+              owner: { group: "apps", kind: "Deployment", name: "api" },
+              cpuMilli: 5,
+              memoryMi: 300,
+            },
+          ],
+        },
+        {
+          evidenceRef: rankRef,
+          summary: JSON.stringify({
+            kind: "pods",
+            namespace: "shop",
+            sort: "memory",
+          }),
+        },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(rankRef, "context", "The API pod is second by memory.", {
+            group: "apps",
+            kind: "Deployment",
+            namespace: "shop",
+            name: "api",
+            observation: "resource",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items[0].placement).toBe("card");
+  });
+
+  it("marks the investigated workload's own row in a workload ranking", () => {
+    const rankRef = evidenceRef("t", "a");
+    const projection = project(
+      tool(
+        "top",
+        "top_resources",
+        {
+          kind: "workloads",
+          sort: "cpu",
+          namespace: "shop",
+          metricsAvailable: true,
+          workloads: [
+            {
+              kind: "Deployment",
+              namespace: "shop",
+              name: "web",
+              cpuMilli: 9,
+              memoryMi: 40,
+            },
+            {
+              kind: "Deployment",
+              namespace: "shop",
+              name: "api",
+              cpuMilli: 5,
+              memoryMi: 30,
+            },
+          ],
+        },
+        {
+          evidenceRef: rankRef,
+          summary: JSON.stringify({ kind: "workloads", namespace: "shop" }),
+        },
+      ),
+    );
+    const group = projection.groups.find(
+      (g) => g.latest.data.type === "ranking",
+    )!;
+    const data = group.latest.data;
+    if (data.type !== "ranking") throw new Error("expected ranking");
+    expect(data.rows.map((row) => row.target)).toEqual([false, true]);
+    expect(group.latest.relevance).toBe("producer-related");
+  });
+
+  it("places a declaring-object citation on a package listing scoped to the workload's namespace", () => {
+    const pkgRef = evidenceRef("k", "f");
+    const projection = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "pkgs",
+        "list_packages",
+        {
+          packages: [
+            {
+              chart: "shop",
+              namespace: "shop",
+              releaseName: "shop",
+              version: "1.4.2",
+              health: "healthy",
+              sources: ["F"],
+            },
+          ],
+          sourceLegend: { F: "Flux" },
+        },
+        { evidenceRef: pkgRef, summary: JSON.stringify({ namespace: "shop" }) },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(pkgRef, "context", "Declared by Flux.", {
+            group: "helm.toolkit.fluxcd.io",
+            kind: "HelmRelease",
+            namespace: "flux-system",
+            name: "shop",
+            observation: "resource",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items[0].placement).toBe("card");
+  });
+
+  it("keeps an ordinary listing's held entry to the listing's namespace", () => {
+    const listRef = evidenceRef("c", "e");
+    const projection = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "cms",
+        "list_resources",
+        [{ kind: "ConfigMap", name: "kube-root-ca.crt" }],
+        {
+          evidenceRef: listRef,
+          summary: JSON.stringify({ kind: "configmaps", namespace: "shop" }),
+        },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      projection,
+      {
+        evidence: [
+          linked(listRef, "context", "Another namespace's CA bundle.", {
+            kind: "ConfigMap",
+            namespace: "prod",
+            name: "kube-root-ca.crt",
+            observation: "resource",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items[0].placement).toBe("source");
+  });
+
+  it("binds a Pod subject to events only for the target's own pod or a pod an event names whole", () => {
+    const workerRef = evidenceRef("e", "f");
+    const canaryBundle = {
+      ...diagnoseBundle,
+      events: [
+        {
+          reason: "BackOff",
+          message: "Back-off restarting failed container in pod api-abc-canary",
+          type: "Warning",
+          count: 4,
+          lastTimestamp: "2026-09-02T10:00:00Z",
+        },
+      ],
+    };
+    const withWorker = project(
+      tool("diag", "diagnose", canaryBundle, { evidenceRef: ref }),
+      tool(
+        "ev",
+        "get_events",
+        { events: [] },
+        {
+          evidenceRef: workerRef,
+          summary: JSON.stringify({
+            kind: "Deployment",
+            namespace: "shop",
+            name: "worker",
+          }),
+        },
+      ),
+    );
+    const podEvents = (name: string, cite = ref) =>
+      linked(cite, "symptom", `${name} keeps backing off.`, {
+        kind: "Pod",
+        namespace: "shop",
+        name,
+        observation: "events",
+      });
+    const resolved = resolveInvestigationCase(
+      withWorker,
+      {
+        evidence: [
+          podEvents("api-abc"),
+          podEvents("api-abc-canary"),
+          podEvents("abc-canary"),
+          podEvents("api-zzz"),
+          podEvents("api-abc", workerRef),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items.map((item) => item.placement)).toEqual([
+      "card",
+      "card",
+      "source",
+      "source",
+      "source",
+    ]);
+  });
+
+  it("binds an alert citation to the rule it names when one result holds several rules", () => {
+    const rulesRef = evidenceRef("i", "j");
+    const rule = (name: string) => ({
+      group: "kubernetes-apps",
+      type: "alerting",
+      name,
+      query: "vector(1)",
+      state: "firing",
+      health: "ok",
+      labels: { severity: "warning" },
+      annotations: { summary: name },
+      alerts: [
+        {
+          state: "firing",
+          activeAt: "2026-09-07T07:58:00Z",
+          value: "1e+00",
+          labels: {
+            alertname: name,
+            namespace: "shop",
+            pod: "api-abc",
+            container: "api",
+          },
+        },
+      ],
+    });
+    const withRules = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "rules",
+        "get_prometheus_rules",
+        {
+          count: 2,
+          rules: [
+            rule("KubePodCrashLooping"),
+            rule("KubeDeploymentReplicasMismatch"),
+          ],
+        },
+        { evidenceRef: rulesRef, summary: JSON.stringify({ state: "firing" }) },
+      ),
+    );
+    const cite = (name?: string) =>
+      linked(rulesRef, "symptom", "The rule is firing for this pod.", {
+        kind: "PrometheusRule",
+        namespace: "shop",
+        ...(name ? { name } : {}),
+        observation: "alerts",
+      });
+    const resolved = resolveInvestigationCase(
+      withRules,
+      {
+        evidence: [
+          cite("KubeDeploymentReplicasMismatch"),
+          cite("KubePodCrashLooping"),
+          cite(),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items.map((item) => item.placement)).toEqual([
+      "card",
+      "card",
+      "source",
+    ]);
+    expect(resolved.items[0].observation?.title).toContain(
+      "KubeDeploymentReplicasMismatch",
+    );
+    const wrongCase = resolveInvestigationCase(
+      withRules,
+      { evidence: [cite("kubepodcrashlooping")] },
+      0,
+    );
+    expect(wrongCase.items.map((item) => item.placement)).toEqual(["source"]);
+  });
+
+  it("still binds a named entry the listing does not hold to the listing", () => {
+    const listRef = evidenceRef("c", "d");
+    const withListing = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "cms",
+        "list_resources",
+        [{ kind: "ConfigMap", name: "kube-root-ca.crt" }],
+        {
+          evidenceRef: listRef,
+          summary: JSON.stringify({ kind: "configmaps", namespace: "shop" }),
+        },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      withListing,
+      {
+        evidence: [
+          linked(listRef, "context", "The nginx config is mounted from here.", {
+            kind: "ConfigMap",
+            namespace: "shop",
+            name: "nginx-config",
+            observation: "resource",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items.map((item) => item.placement)).toEqual(["card"]);
+  });
+
+  it("places a Namespace citation on a namespace listing, whose call names no kind", () => {
+    const nsRef = evidenceRef("g", "h");
+    const withNamespaces = project(
+      tool("diag", "diagnose", diagnoseBundle, { evidenceRef: ref }),
+      tool(
+        "ns",
+        "list_namespaces",
+        [
+          { name: "shop", status: "Active" },
+          { name: "capi-system", status: "Terminating" },
+        ],
+        { evidenceRef: nsRef, summary: "{}" },
+      ),
+    );
+    const resolved = resolveInvestigationCase(
+      withNamespaces,
+      {
+        evidence: [
+          linked(nsRef, "context", "Only two namespaces exist.", {
+            kind: "Namespace",
+            observation: "resource",
+          }),
+          linked(nsRef, "rules_out", "shop is not terminating.", {
+            kind: "Namespace",
+            name: "shop",
+            observation: "resource",
+          }),
+        ],
+      },
+      0,
+    );
+    expect(resolved.items.map((item) => item.placement)).toEqual([
+      "card",
+      "card",
+    ]);
+  });
+
+  it.each(["issue", "issues"])(
+    "pins a %s citation to the issue observation",
+    (observation) => {
+      const resolved = resolveInvestigationCase(
+        projection,
+        {
+          evidence: [
+            linked(ref, "symptom", "The issue is the symptom.", {
+              kind: "Deployment",
+              group: "apps",
+              namespace: "shop",
+              name: "api",
+              observation,
+            }),
+          ],
+        },
+        0,
+      );
+      expect(resolved.items[0].placement).toBe("card");
+      expect(
+        projection.groups.find(
+          (group) => group.id === resolved.items[0].groupId,
+        )?.kind,
+      ).toBe("issue");
+    },
+  );
+
   it("pins a subject-bearing item to exactly the observation it names", () => {
     const resolved = resolveInvestigationCase(
       projection,
@@ -208,6 +1120,11 @@ describe("agent case placement (D-1, D-1b)", () => {
           linked(ref, "context", "Events only repeat the back-off.", {
             kind: "Deployment",
             name: "api",
+            observation: "events",
+          }),
+          linked(ref, "context", "Namespace-named events land too.", {
+            kind: "Namespace",
+            name: "shop",
             observation: "events",
           }),
           linked(
@@ -240,6 +1157,7 @@ describe("agent case placement (D-1, D-1b)", () => {
         kind: "resource",
       },
       "Events only repeat the back-off.": { placement: "card", kind: "events" },
+      "Namespace-named events land too.": { placement: "card", kind: "events" },
       "Ambiguous: two observations share this subject.": {
         placement: "source",
         kind: undefined,
@@ -296,6 +1214,61 @@ describe("agent case placement (D-1, D-1b)", () => {
       ["card", "logs:current:api-abc:proxy"],
     ]);
   });
+
+  it.each([
+    ["resolved", "app", "app", "card"],
+    ["wrong container", "proxy", "app", "source"],
+    ["unknown container", undefined, "app", "source"],
+  ] as const)(
+    "places a named log claim only against its %s stream",
+    (_name, container, claimedContainer, placement) => {
+      const ref = evidenceRef("a", "b");
+      const projection = project(
+        tool(
+          "logs",
+          "get_pod_logs",
+          {
+            container,
+            lines: ["ERROR missing configuration"],
+            totalLines: 1,
+            matchedLines: 1,
+            fallback: false,
+          },
+          {
+            summary: JSON.stringify({ namespace: "shop", name: "api-abc" }),
+            evidenceRef: ref,
+          },
+        ),
+      );
+      const resolved = resolveInvestigationCase(
+        projection,
+        {
+          evidence: [
+            linked(ref, "cause", "The application is missing configuration.", {
+              kind: "Pod",
+              namespace: "shop",
+              name: "api-abc",
+              container: claimedContainer,
+              observation: "logs",
+            }),
+          ],
+        },
+        0,
+      );
+      expect(resolved.items[0].placement).toBe(placement);
+      if (placement === "card") {
+        expect(resolved.items[0].groupId).toBe(projection.groups[0].id);
+      }
+      if (container === undefined) {
+        const data = projection.groups[0].latest.data;
+        expect(data.type).toBe("logs");
+        if (data.type !== "logs") throw new Error("expected log evidence");
+        const html = renderToStaticMarkup(<LogsBody data={data} />);
+        expect(html).toContain("container unknown");
+        expect(html).not.toContain("default container");
+      }
+    },
+  );
 
   it("binds to the exact earlier read and renders on its revision row, not the card head", () => {
     const first = evidenceRef("a", "c");
@@ -1069,130 +2042,6 @@ describe("follow-up answers that cite evidence", () => {
   });
 });
 
-describe("carrying earlier assessments' card notes", () => {
-  const item = (
-    index: number,
-    groupId: string | undefined,
-    placement: "card" | "revision" | "source",
-    role: "cause" | "context" | "demoted" = "context",
-  ) =>
-    ({
-      index,
-      role,
-      claim: `claim ${index}`,
-      source: { id: `s${index}` },
-      placement,
-      groupId,
-    }) as unknown as InvestigationCaseItem;
-
-  it("keeps an earlier turn's note on a card the live turn did not address", () => {
-    const live = {
-      items: [item(0, "chart", "card")],
-      ruledOut: [],
-    } as unknown as InvestigationCaseResolution;
-    const first = {
-      items: [
-        item(0, "logs", "card", "demoted"),
-        item(1, "chart", "card", "cause"),
-        item(2, undefined, "source"),
-        item(3, "deploy", "revision"),
-      ],
-      ruledOut: [{ hypothesis: "x" }],
-    } as unknown as InvestigationCaseResolution;
-    const merged = mergeInvestigationCases(live, [first]);
-    expect(merged?.items.map((entry) => [entry.groupId, entry.role])).toEqual([
-      ["chart", "context"],
-      ["logs", "demoted"],
-      ["deploy", "context"],
-    ]);
-    expect(merged?.ruledOut).toEqual([]);
-  });
-
-  it("lets the newer earlier turn win a card and leaves a lone live case untouched", () => {
-    const live = {
-      items: [],
-      ruledOut: [],
-    } as unknown as InvestigationCaseResolution;
-    const newer = {
-      items: [item(0, "logs", "card", "context")],
-      ruledOut: [],
-    } as unknown as InvestigationCaseResolution;
-    const older = {
-      items: [item(0, "logs", "card", "demoted"), item(1, "pod", "card")],
-      ruledOut: [],
-    } as unknown as InvestigationCaseResolution;
-    const merged = mergeInvestigationCases(live, [newer, older]);
-    expect(merged?.items.map((entry) => [entry.groupId, entry.role])).toEqual([
-      ["logs", "context"],
-      ["pod", "context"],
-    ]);
-    expect(mergeInvestigationCases(live, [])).toBe(live);
-    expect(mergeInvestigationCases(undefined, [])).toBeUndefined();
-  });
-
-  it("recognises its own surviving notes across a re-resolved merge", () => {
-    // The pane feeds the merge freshly resolved copies of every turn, so the
-    // assessment's own items arrive equal but not identical. An identity test
-    // reported them as gone, which silently retired the conflict banner's
-    // reframing whenever any unrelated follow-up arrived.
-    const assessmentItems = [
-      item(0, "logs", "card", "demoted"),
-      item(1, "crash", "card", "demoted"),
-    ];
-    const reResolved = assessmentItems.map(
-      (entry) => ({ ...entry }) as InvestigationCaseItem,
-    );
-    expect(reResolved[0]).not.toBe(assessmentItems[0]);
-    expect(
-      investigationCaseItemsStillRendered(assessmentItems, reResolved).map(
-        (entry) => entry.groupId,
-      ),
-    ).toEqual(["logs", "crash"]);
-    // A note the merge dropped is correctly reported as gone.
-    expect(
-      investigationCaseItemsStillRendered(assessmentItems, [reResolved[0]]).map(
-        (entry) => entry.groupId,
-      ),
-    ).toEqual(["logs"]);
-    expect(investigationCaseItemsStillRendered(assessmentItems, [])).toEqual(
-      [],
-    );
-  });
-
-  it("carries every note the winning assessment left on a card, not just the first", () => {
-    // A card note and a note pinned to a superseded read are two readings of
-    // one group by the same assessment. Taking coverage per item dropped the
-    // second, so a visible Cause note could vanish behind a revision note.
-    const live = {
-      items: [item(0, "other", "card", "context")],
-      ruledOut: [],
-    } as unknown as InvestigationCaseResolution;
-    const winner = {
-      items: [
-        item(1, "logs", "revision", "context"),
-        item(2, "logs", "card", "cause"),
-      ],
-      ruledOut: [],
-    } as unknown as InvestigationCaseResolution;
-    const older = {
-      items: [item(3, "logs", "card", "demoted")],
-      ruledOut: [],
-    } as unknown as InvestigationCaseResolution;
-    const merged = mergeInvestigationCases(live, [winner, older]);
-    expect(
-      merged?.items.map((entry) => [
-        entry.groupId,
-        entry.placement,
-        entry.role,
-      ]),
-    ).toEqual([
-      ["other", "card", "context"],
-      ["logs", "revision", "context"],
-      ["logs", "card", "cause"],
-    ]);
-  });
-});
-
 describe("agent case robustness", () => {
   const ref = evidenceRef("a", "b");
 
@@ -1294,7 +2143,7 @@ describe("agent case robustness", () => {
     );
   });
 
-  it("keeps valid items when siblings are unlinked, malformed, foreign, or from another turn", () => {
+  it("keeps valid items when siblings are unlinked or malformed, and places an earlier turn's read", () => {
     const stale = evidenceRef("a", "z");
     const projection = projectInvestigationEvidence(
       [
@@ -1346,6 +2195,7 @@ describe("agent case robustness", () => {
     );
     expect(resolved.items.map((item) => [item.index, item.placement])).toEqual([
       [1, "card"],
+      [4, "revision"],
       [5, "source"],
     ]);
     expect(resolved.ruledOut.map((entry) => entry.hypothesis)).toEqual([
@@ -1522,9 +2372,38 @@ describe("the agent's contribution is one attributed row", () => {
     expect(html).not.toContain("OOMKilled");
   });
 
+  it("says how many were lost rather than repairing them", () => {
+    const html = renderToStaticMarkup(
+      <AssessmentSources unlinkedEvidence={2} onViewSource={onViewSource} />,
+    );
+    expect(html).toContain(
+      "2 agent notes could not be linked to Radar results and are not shown.",
+    );
+    const one = renderToStaticMarkup(
+      <AssessmentSources unlinkedEvidence={1} onViewSource={onViewSource} />,
+    );
+    expect(one).toContain("1 agent note could not be linked");
+    // Nothing lost, nothing said.
+    expect(
+      renderToStaticMarkup(
+        <AssessmentSources unlinkedEvidence={0} onViewSource={onViewSource} />,
+      ),
+    ).toBe("");
+  });
+
+  it("says the notes were unreadable when they were not a list at all", () => {
+    // There is no count to give here, so the pane states the fact instead of
+    // inventing a number.
+    const html = renderToStaticMarkup(
+      <AssessmentSources evidenceMalformed onViewSource={onViewSource} />,
+    );
+    expect(html).toContain("could not be read, so none are shown");
+    expect(html).not.toContain("could not be linked");
+  });
+
   it("labels the role that says an adverse result is not a live problem", () => {
     const html = renderToStaticMarkup(<AgentRoleChip role="benign" />);
-    expect(html).toContain("Not a problem");
+    expect(html).toContain("Not a live problem");
   });
 
   it("still shows an attributed role when the agent left no sentence", () => {

@@ -34,15 +34,20 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/cloudinstall"
@@ -70,16 +75,20 @@ const (
 	cloudFlowFailed           = "failed"
 )
 
+// Failure kinds read as a sentence fragment on their own: they travel into
+// the browser-wizard link the user opens next, where the person sees them in
+// the address bar with no other context.
 const (
-	cloudFailConnect           = "connect_failed"
-	cloudFailRejected          = "rejected"
-	cloudFailExpired           = "expired"
-	cloudFailPickupExpired     = "pickup_expired"
-	cloudFailApprovalUnknown   = "approval_unknown"
-	cloudFailCanceled          = "canceled"
+	cloudFailConnectRequest    = "hub_connect_request_failed"
+	cloudFailApprovalPoll      = "hub_approval_poll_failed"
+	cloudFailRejected          = "approval_rejected_in_browser"
+	cloudFailExpired           = "approval_window_expired"
+	cloudFailPickupExpired     = "approved_but_credential_pickup_expired"
+	cloudFailApprovalUnknown   = "approval_outcome_unknown"
+	cloudFailCanceled          = "canceled_before_approval_page"
 	cloudFailCanceledApproved  = "canceled_after_approval"
-	cloudFailProvision         = "provision_failed"
-	cloudFailTunnelUnconfirmed = "tunnel_unconfirmed"
+	cloudFailProvision         = "helm_provision_failed"
+	cloudFailTunnelUnconfirmed = "installed_but_tunnel_not_confirmed"
 )
 
 const (
@@ -125,14 +134,21 @@ type cloudInstallClients struct {
 // cloudInstallBackend is the seam between the flow manager's state machine and
 // the real discovery/prepare/preflight/provision/Hub machinery.
 type cloudInstallBackend struct {
-	captureClients   func() (cloudInstallClients, string, error)
-	contextSource    func(name string) (sourceFile, inFileName string, ok bool)
-	inspectPlan      func(ctx context.Context, c cloudInstallClients, namespace, release string) (cloudinstall.InstallPlan, error)
+	captureClients func() (cloudInstallClients, string, error)
+	contextSource  func(name string) (sourceFile, inFileName string, ok bool)
+	inspectPlan    func(ctx context.Context, c cloudInstallClients, namespace, release string) (cloudinstall.InstallPlan, error)
+	// discover is the workload half of inspectPlan on its own: the chart's
+	// Deployments and what their args say, without reading Helm storage.
+	discover         func(ctx context.Context, c cloudInstallClients) (cloudinstall.DiscoveryResult, error)
 	prepare          func(ctx context.Context, c cloudInstallClients, cfg cloudinstall.PrepareConfig) (preparedInstall, error)
 	preflight        func(ctx context.Context, c cloudInstallClients, prepared preparedInstall) (cloudinstall.PreflightResult, error)
 	provision        func(ctx context.Context, c cloudInstallClients, prepared preparedInstall, cfg cloudinstall.ProvisionConfig) error
 	newConnectClient func() cloudConnectClient
 	connectMetadata  func(ctx context.Context, c cloudInstallClients, clusterName string) cloud.ConnectMetadata
+	// whoAmI names the identity the clients act as, for the note a blocked
+	// person hands to an admin. Best effort: empty when the API server does
+	// not answer, never an error.
+	whoAmI func(ctx context.Context, c cloudInstallClients) string
 }
 
 type cloudInstallConnected struct {
@@ -175,9 +191,64 @@ type cloudInstallPlanSummary struct {
 // cloudInstallBlocked explains why the driver lane cannot serve this cluster.
 // It is returned by prepare without retaining a flow.
 type cloudInstallBlocked struct {
-	Reason   string   `json:"reason"` // gitops | preflight | unsupported
-	Message  string   `json:"message"`
-	Blocking []string `json:"blocking,omitempty"`
+	Reason string `json:"reason"` // gitops | preflight | unsupported
+	// Cause narrows a preflight refusal to what would unblock it:
+	// permissions | cluster | verification (cloudinstall.BlockCause).
+	Cause string `json:"cause,omitempty"`
+	// Identity is the Kubernetes user the attempt acted as, so the note the
+	// person hands to an admin can name it without parsing a refusal line.
+	Identity string `json:"identity,omitempty"`
+	// Attempted is the Helm operation preflight dry-ran, so the card can say
+	// what Radar tried before saying why it stopped; the plan card that would
+	// have shown it never renders when preflight blocks.
+	Attempted *cloudInstallAttempted `json:"attempted,omitempty"`
+	Message   string                 `json:"message"`
+	Blocking  []string               `json:"blocking,omitempty"`
+}
+
+type cloudInstallAttempted struct {
+	Mode      string `json:"mode"` // fresh | adopt | gitops
+	Namespace string `json:"namespace"`
+	Release   string `json:"release"`
+	// Method is the Hub install-page tab a GitOps-managed release belongs to
+	// (argocd | flux), from its verified owning controller; empty when the
+	// owner is unverified or unrecognized, in which case the card offers the
+	// generic Radar Cloud entry rather than a values patch for the wrong tool.
+	Method string `json:"method,omitempty"`
+	// Stage is how far Radar got before stopping — inspect (reading the
+	// release's Helm state), prepare (rendering the chart), preflight (the dry
+	// run) — so the card describes what was done, not what was planned.
+	Stage string `json:"stage"`
+	// PartialScan: discovery could only see the default namespace, so a fresh
+	// plan does not establish that no Radar exists elsewhere. The card still
+	// tells what was attempted but offers no install link.
+	PartialScan bool `json:"partialScan,omitempty"`
+	// ReleaseUnread: a complete scan found no Radar running, but reading Helm's
+	// release records was refused, so a leftover release (its Deployment
+	// deleted) cannot be ruled out. A fresh install is offered with a
+	// "confirm nothing is installed first" — the harm case is a not-running
+	// leftover whose values a fresh install would reset.
+	ReleaseUnread bool `json:"releaseUnread,omitempty"`
+}
+
+const (
+	attemptStageInspect   = "inspect"
+	attemptStagePrepare   = "prepare"
+	attemptStagePreflight = "preflight"
+)
+
+// preflightBlockedMessage is the body under the blocked card's headline. The
+// blocking lines render right below it, so it says what kind of stop this is
+// and who can clear it, not what the lines already say.
+func preflightBlockedMessage(cause cloudinstall.BlockCause) string {
+	switch cause {
+	case cloudinstall.BlockCausePermissions:
+		return "Your Kubernetes credentials lack permissions this install needs. Have a cluster admin get the install command from Radar Cloud's install page (Helm, Argo CD or Flux) and connect this cluster."
+	case cloudinstall.BlockCauseVerification:
+		return "This version of Radar can't confirm every change the current chart would make, so it won't install it from here. Radar Cloud's install page installs the same chart with Helm directly."
+	default:
+		return "Something already on the cluster, or a cluster policy, refused the changes listed below. Have a cluster admin resolve them and connect this cluster from Radar Cloud's install page."
+	}
 }
 
 type cloudInstallFlow struct {
@@ -250,6 +321,11 @@ func newCloudInstallManager(cfg CloudConnectConfig) *cloudInstallManager {
 		inspectPlan: func(ctx context.Context, c cloudInstallClients, namespace, release string) (cloudinstall.InstallPlan, error) {
 			return cloudinstall.InspectInstallPlan(ctx, c.Kubernetes, c.Dynamic, c.Helm, namespace, release, false)
 		},
+		discover: func(ctx context.Context, c cloudInstallClients) (cloudinstall.DiscoveryResult, error) {
+			return cloudinstall.DiscoverRadarTargets(ctx, c.Kubernetes, c.Dynamic, cloudinstall.DiscoveryOptions{
+				Namespace: cloudinstall.DefaultInstallNamespace, ReleaseName: cloudinstall.DefaultReleaseName, ClusterWide: true,
+			})
+		},
 		prepare: func(ctx context.Context, c cloudInstallClients, cfg cloudinstall.PrepareConfig) (preparedInstall, error) {
 			return cloudinstall.Prepare(ctx, c.Helm, c.Kubernetes, cfg)
 		},
@@ -278,6 +354,18 @@ func newCloudInstallManager(cfg CloudConnectConfig) *cloudInstallManager {
 		},
 		newConnectClient: func() cloudConnectClient {
 			return cloud.NewConnectClient(cfg.HubAPIURL)
+		},
+		whoAmI: func(ctx context.Context, c cloudInstallClients) string {
+			if c.Kubernetes == nil {
+				return ""
+			}
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			review, err := c.Kubernetes.AuthenticationV1().SelfSubjectReviews().Create(ctx, &authenticationv1.SelfSubjectReview{}, metav1.CreateOptions{})
+			if err != nil {
+				return ""
+			}
+			return review.Status.UserInfo.Username
 		},
 		connectMetadata: func(ctx context.Context, c cloudInstallClients, clusterName string) cloud.ConnectMetadata {
 			meta := cloud.ConnectMetadata{
@@ -321,6 +409,122 @@ func (m *cloudInstallManager) commandTarget(contextName string) cloudinstall.Com
 // prepare runs discovery → classification → chart prepare → preflight, with no
 // Hub contact. On success the flow is retained in "ready"; a blocked result
 // retains nothing.
+// cloudInstallDiscovered is what the dialog learns about the cluster when it
+// opens, before anyone clicks: the chart's Deployments that already carry
+// Cloud connection settings. A person whose cluster is already connected —
+// by a colleague, or by themselves from another machine — is told so and
+// pointed at it, instead of being offered an install that would be refused.
+type cloudInstallDiscovered struct {
+	Connected []cloudInstallConnectedRadar `json:"connected"`
+	// PartialScan: listing Deployments cluster-wide was refused, so only the
+	// default namespace was checked.
+	PartialScan bool `json:"partialScan"`
+}
+
+type cloudInstallConnectedRadar struct {
+	Namespace  string `json:"namespace"`
+	Deployment string `json:"deployment"`
+	Release    string `json:"release,omitempty"`
+	// HubHost is the Hub the Deployment's --cloud-url names, when it is one
+	// other than the Hub this Radar is configured for.
+	HubHost string `json:"hubHost,omitempty"`
+	// ClusterURL is the cluster's page in the configured Hub's frontend, when
+	// the Deployment names that Hub and its cluster id is a literal value.
+	ClusterURL string `json:"clusterUrl,omitempty"`
+}
+
+func (m *cloudInstallManager) discoverConnected(ctx context.Context) (*cloudInstallDiscovered, error) {
+	clients, _, err := m.backend.captureClients()
+	if err != nil {
+		return nil, err
+	}
+	result, err := m.backend.discover(ctx, clients)
+	if err != nil {
+		return nil, err
+	}
+	out := &cloudInstallDiscovered{Connected: []cloudInstallConnectedRadar{}, PartialScan: result.ClusterWideError != nil}
+	for _, t := range cloudinstall.DiscoveredTargets(result, false) {
+		if !t.Runtime.AlreadyCloud {
+			continue
+		}
+		out.Connected = append(out.Connected, m.connectedRadar(t))
+	}
+	// The dialog leads with the first entry: one it can link to, before one
+	// it can only name, before one whose settings say nothing about where.
+	sort.SliceStable(out.Connected, func(i, j int) bool {
+		return connectedRank(out.Connected[i]) < connectedRank(out.Connected[j])
+	})
+	return out, nil
+}
+
+func connectedRank(c cloudInstallConnectedRadar) int {
+	switch {
+	case c.ClusterURL != "":
+		return 0
+	case c.HubHost != "":
+		return 1
+	default:
+		return 2
+	}
+}
+
+// connectedRadar links a Deployment to its cluster page only when its
+// --cloud-url names the Hub this Radar is configured for: the frontend origin
+// of any other Hub is not derivable from its API origin, so that one is named
+// by host and not linked.
+func (m *cloudInstallManager) connectedRadar(t cloudinstall.RadarTarget) cloudInstallConnectedRadar {
+	c := cloudInstallConnectedRadar{Namespace: t.Namespace, Deployment: t.DeploymentName, Release: t.ReleaseName}
+	rt := t.Runtime
+	if !rt.CloudURLConfigured || rt.CloudURLUnresolved || rt.CloudURL == "" {
+		return c
+	}
+	origin, err := cloud.HubOriginFromWebSocketURL(rt.CloudURL)
+	if err != nil {
+		return c
+	}
+	if !sameHubOrigin(origin, m.cfg.HubAPIURL) {
+		c.HubHost = hostOf(origin)
+		return c
+	}
+	if rt.ClusterNameConfigured && !rt.ClusterNameUnresolved && rt.ClusterName != "" {
+		c.ClusterURL = cloud.ClusterURL(m.cfg.HubAppURL, rt.ClusterName)
+	} else {
+		c.ClusterURL = cloud.ClustersURL(m.cfg.HubAppURL)
+	}
+	return c
+}
+
+// sameHubOrigin compares two Hub origins by scheme, host and effective port,
+// so https://api.example and https://api.example:443 are one Hub.
+func sameHubOrigin(a, b string) bool {
+	ua, errA := url.Parse(a)
+	ub, errB := url.Parse(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return strings.EqualFold(ua.Scheme, ub.Scheme) &&
+		strings.EqualFold(ua.Hostname(), ub.Hostname()) &&
+		effectivePort(ua) == effectivePort(ub)
+}
+
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return "443"
+	}
+	return "80"
+}
+
+func hostOf(origin string) string {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return origin
+	}
+	return u.Host
+}
+
 func (m *cloudInstallManager) prepare(ctx context.Context) (*cloudInstallFlow, *cloudInstallBlocked, error) {
 	flow := &cloudInstallFlow{id: newCloudFlowID(), state: cloudFlowPreparing}
 	m.mu.Lock()
@@ -335,12 +539,98 @@ func (m *cloudInstallManager) prepare(ctx context.Context) (*cloudInstallFlow, *
 	blocked, err := m.runPrepare(ctx, flow)
 	if blocked != nil || err != nil {
 		m.clearFlow(flow)
+		if blocked != nil && m.backend.whoAmI != nil {
+			blocked.Identity = m.backend.whoAmI(ctx, flow.clients)
+		}
 		return nil, blocked, err
 	}
 	return flow, nil, nil
 }
 
 var errFlowActive = errors.New("a Cloud connection flow is already in progress")
+
+// connectRequestFailure turns a failed connect-request creation into a
+// failure the card can show: a headline that says what happened in words,
+// the raw error kept as inspectable detail. Nothing exists at the Hub yet in
+// any of these cases, so starting over is always safe.
+func connectRequestFailure(err error) *cloudInstallFailure {
+	var unreachable *cloud.HubUnreachableError
+	switch {
+	case errors.As(err, &unreachable):
+		return &cloudInstallFailure{
+			Kind:    cloudFailConnectRequest,
+			Message: "Radar couldn't reach Radar Hub, so no connection was requested.",
+			Guidance: &cloudinstall.RecoveryGuidance{
+				Summary: fmt.Sprintf("Check that this machine can reach %s (VPN, proxy, firewall), then start over.", unreachable.HubBase),
+				Inspect: []string{err.Error()},
+			},
+			RetrySafe: true,
+		}
+	default:
+		if status, declined := cloud.HubDeclinedStatus(err); declined {
+			return &cloudInstallFailure{
+				Kind:    cloudFailConnectRequest,
+				Message: fmt.Sprintf("Radar Hub declined the connection request (HTTP %d).", status),
+				Guidance: &cloudinstall.RecoveryGuidance{
+					Summary: "Nothing was created. If this keeps happening, the Hub's response below says why.",
+					Inspect: []string{err.Error()},
+				},
+				RetrySafe: true,
+			}
+		}
+		return &cloudInstallFailure{
+			Kind:    cloudFailConnectRequest,
+			Message: "Radar couldn't start the connection request.",
+			Guidance: &cloudinstall.RecoveryGuidance{
+				Summary: "Nothing was created; it is safe to start over.",
+				Inspect: []string{err.Error()},
+			},
+			RetrySafe: true,
+		}
+	}
+}
+
+// inspectBlocked sorts an error from the steps before the dry run — finding
+// the existing install, reading its Helm state, preparing the chart — into
+// what the person can act on. A permission denial is the same story as a
+// denied preflight and gets the same card (cause permissions, nothing
+// attempted yet). Any other Kubernetes API error is Radar failing to inspect,
+// which is a retryable failure, not a refusal. What remains is the inspection
+// itself refusing: several Radars, one already connected, ownership Radar
+// will not guess at, an incompatible existing release.
+//
+// attempted is the plan when inspection already produced one: the handoff
+// link must keep pointing at the existing release to adopt even though the
+// dry run never ran, or the Hub would offer a fresh install over it.
+func inspectBlocked(err error, attempted *cloudInstallAttempted) (*cloudInstallBlocked, error) {
+	if cloudinstall.IsAuthorizationDenial(err) {
+		return &cloudInstallBlocked{
+			Reason:    "preflight",
+			Cause:     string(cloudinstall.BlockCausePermissions),
+			Attempted: attempted,
+			Message:   preflightBlockedMessage(cloudinstall.BlockCausePermissions),
+			Blocking:  []string{err.Error()},
+		}, nil
+	}
+	var status apierrors.APIStatus
+	if errors.As(err, &status) {
+		return nil, err
+	}
+	return &cloudInstallBlocked{Reason: "unsupported", Attempted: attempted, Message: err.Error()}, nil
+}
+
+// attemptedFor describes what Radar did with the plan. A fresh plan built on
+// a discovery that could only see the default namespace is flagged: another
+// Radar may exist elsewhere, the plan card would have said so and asked for
+// an acknowledgement, and the blocked card has no such step, so it must not
+// offer an install link — but it still tells the truth about the stage
+// reached, or its refusals below would describe a dry run it denied running.
+func attemptedFor(plan cloudinstall.InstallPlan, stage string) *cloudInstallAttempted {
+	return &cloudInstallAttempted{
+		Mode: string(plan.Mode), Namespace: plan.Namespace, Release: plan.Release, Stage: stage,
+		PartialScan: plan.Mode == cloudinstall.InstallModeFresh && plan.ClusterWideScanError != nil,
+	}
+}
 
 func (m *cloudInstallManager) runPrepare(ctx context.Context, flow *cloudInstallFlow) (*cloudInstallBlocked, error) {
 	clients, contextName, err := m.backend.captureClients()
@@ -360,7 +650,24 @@ func (m *cloudInstallManager) runPrepare(ctx context.Context, flow *cloudInstall
 				Message: "Multiple Radar installations were found in this cluster. Use `radar cloud install --namespace <ns> --release <name>` in a terminal to pick one explicitly.",
 			}, nil
 		}
-		return &cloudInstallBlocked{Reason: "unsupported", Message: err.Error()}, nil
+		// Reading the release's Helm state was refused after discovery had run.
+		// Discovery can establish one thing on its own: the release it found,
+		// which the card may still point at to adopt. It can never establish
+		// that a fresh install is safe — a Helm release outlives a deleted or
+		// unlabeled Deployment, and the Hub's fresh command would reset its
+		// values — so with no release found the target stays unknown and the
+		// card offers no install link. Only a completed plan establishes fresh.
+		var inspect *cloudinstall.ReleaseInspectError
+		if errors.As(err, &inspect) {
+			switch {
+			case inspect.Existing:
+				return inspectBlocked(err, &cloudInstallAttempted{Mode: string(cloudinstall.InstallModeAdopt), Namespace: inspect.Namespace, Release: inspect.Release, Stage: attemptStageInspect})
+			case !inspect.Found && !inspect.ScanIncomplete:
+				// Nothing running anywhere; only the release records were unread.
+				return inspectBlocked(err, &cloudInstallAttempted{Mode: string(cloudinstall.InstallModeFresh), Namespace: inspect.Namespace, Release: inspect.Release, Stage: attemptStageInspect, ReleaseUnread: true})
+			}
+		}
+		return inspectBlocked(err, nil)
 	}
 	flow.plan = plan
 
@@ -369,10 +676,19 @@ func (m *cloudInstallManager) runPrepare(ctx context.Context, flow *cloudInstall
 		if plan.Target != nil {
 			target = fmt.Sprintf(" (%s/%s)", plan.Target.Namespace, plan.Target.DeploymentName)
 		}
+		// Same deep link the in-cluster wizard lane builds: only a verified
+		// owner picks the tab, and only a recognized tool gets one at all.
+		attempted := &cloudInstallAttempted{Mode: string(cloudinstall.InstallModeGitOps), Namespace: plan.Namespace, Release: plan.Release, Stage: attemptStageInspect}
+		if plan.Target != nil {
+			if owner := verifiedController(plan.Target.Ownership.Controllers); owner != nil {
+				attempted.Method = wizardMethodFor(owner.Ref)
+			}
+		}
 		return &cloudInstallBlocked{
-			Reason: "gitops",
+			Reason:    "gitops",
+			Attempted: attempted,
 			Message: fmt.Sprintf(
-				"This Radar install%s is managed by a GitOps controller, so connecting it means changing its source of truth — not applying a live mutation. Run `radar cloud install` in a terminal: it generates the exact values and token-Secret handoff for your Git workflow.",
+				"This Radar install%s is managed by a GitOps controller, so connecting it means changing its source of truth — not applying a live mutation. The connection is a values change in your repository plus one command that creates the token Secret; Radar Cloud generates both, and so does `radar cloud install` in a terminal.",
 				target,
 			),
 		}, nil
@@ -384,7 +700,7 @@ func (m *cloudInstallManager) runPrepare(ctx context.Context, flow *cloudInstall
 		AdoptExisting: plan.Mode == cloudinstall.InstallModeAdopt,
 	})
 	if err != nil {
-		return &cloudInstallBlocked{Reason: "unsupported", Message: err.Error()}, nil
+		return inspectBlocked(err, attemptedFor(plan, attemptStagePrepare))
 	}
 	flow.prepared = prepared
 
@@ -394,9 +710,11 @@ func (m *cloudInstallManager) runPrepare(ctx context.Context, flow *cloudInstall
 	}
 	if !pf.OK() {
 		return &cloudInstallBlocked{
-			Reason:   "preflight",
-			Message:  "Your current Kubernetes identity cannot perform the exact planned Radar operation. Ask a platform operator to connect this cluster instead.",
-			Blocking: pf.Blocking,
+			Reason:    "preflight",
+			Cause:     string(pf.Cause()),
+			Attempted: attemptedFor(plan, attemptStagePreflight),
+			Message:   preflightBlockedMessage(pf.Cause()),
+			Blocking:  pf.Blocking,
 		}, nil
 	}
 
@@ -502,11 +820,7 @@ func (m *cloudInstallManager) start(req cloudInstallStartRequest) (*cloudInstall
 	}
 	if err != nil {
 		flow.state = cloudFlowFailed
-		flow.failure = &cloudInstallFailure{
-			Kind:      cloudFailConnect,
-			Message:   fmt.Sprintf("couldn't start the connect flow: %v", err),
-			RetrySafe: true,
-		}
+		flow.failure = connectRequestFailure(err)
 		return flow, nil
 	}
 
@@ -580,8 +894,9 @@ func (m *cloudInstallManager) run(ctx context.Context, flow *cloudInstallFlow, c
 				ClusterURL: clustersURL,
 			}, false)
 		default:
-			fail(cloudFailConnect, fmt.Sprintf("connect failed: %v", err), &cloudinstall.RecoveryGuidance{
-				Summary:    "Check the clusters list before retrying:",
+			fail(cloudFailApprovalPoll, "Radar lost track of the connection request while waiting for approval.", &cloudinstall.RecoveryGuidance{
+				Summary:    "An approval may have gone through. Check the clusters list before starting over:",
+				Inspect:    []string{err.Error()},
 				ClusterURL: clustersURL,
 			}, false)
 		}
@@ -840,6 +1155,25 @@ func (s *Server) handleCloudInstallPrepare(w http.ResponseWriter, r *http.Reques
 		_ = flow
 		s.writeJSON(w, s.cloudInstall.status())
 	}
+}
+
+func (s *Server) handleCloudInstallDiscover(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCloudConnectDriver(w, r, false) {
+		return
+	}
+	if !s.requireConnected(w) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), cloudInstallRequestTimeout)
+	defer cancel()
+	discovered, err := s.cloudInstall.discoverConnected(ctx)
+	w.Header().Set("Cache-Control", "no-store")
+	if err != nil {
+		log.Printf("[cloud-install] Failed to discover Radar installs: %v", err)
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, discovered)
 }
 
 func (s *Server) handleCloudInstallStart(w http.ResponseWriter, r *http.Request) {

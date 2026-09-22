@@ -30,6 +30,12 @@ don't assume every discoverable resource has a CRD object.
   per-group read-access toggles; don't rely on an opt-in wildcard or request write
   permissions for a read-only integration. The chart coverage test checks groups,
   not every resource/verb or rendered toggle combination.
+- [ ] Make an explicit Radar Cloud caller-permission decision in
+  `deploy/helm/radar/files/integration-read-baseline.yaml`: grant, existing, or
+  withhold with a reason. Check exact scope and credential-bearing fields; a
+  collection grant or renderer is not permission approval. See
+  [the default read policy](cloud-rbac-baseline.md). Coverage tests compare the
+  policy with backend catalogs and curated frontend identities.
 - [ ] Keep namespace filtering, per-user authorization and context-switch behavior
   intact. Missing, not-yet-watched and forbidden are not interchangeable. If adding
   a typed `ResourcePermissions` field, follow `capabilities_alignment_test.go` in

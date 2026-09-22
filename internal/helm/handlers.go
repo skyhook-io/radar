@@ -2,6 +2,8 @@ package helm
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -33,6 +35,23 @@ func userCreds(r *http.Request) (string, []string) {
 	return "", nil
 }
 
+// decodeApplyValuesRequest parses an apply-values body. Apply always targets
+// the release's current chart; changing the chart version goes through the
+// upgrade endpoints. Preview shares the request type and accepts
+// Version/Repository, so a chart-change request here fails loudly instead of
+// applying against the current chart while the caller believes the version
+// changed.
+func decodeApplyValuesRequest(body io.Reader) (ApplyValuesRequest, error) {
+	var req ApplyValuesRequest
+	if err := json.NewDecoder(body).Decode(&req); err != nil {
+		return req, fmt.Errorf("invalid request body: %s", err.Error())
+	}
+	if req.Version != "" || req.Repository != "" {
+		return req, errors.New("version and repository are not supported when applying values; use the upgrade endpoint to change the chart version")
+	}
+	return req, nil
+}
+
 func decodeOptionalApplyValuesRequest(body io.Reader) (map[string]any, error) {
 	if body == nil {
 		return nil, nil
@@ -49,6 +68,7 @@ func decodeOptionalApplyValuesRequest(body io.Reader) (map[string]any, error) {
 
 // Handlers provides HTTP handlers for Helm endpoints
 type Handlers struct {
+	ConfigWriteAllowed func(http.ResponseWriter, *http.Request) bool
 	// resolveNamespaces maps a request to the namespaces a Helm list should
 	// query. It returns (nil, true) for cluster-wide access, (namespaces, true)
 	// to list those namespaces and merge, and (_, false) when the identity has
@@ -867,9 +887,9 @@ func (h *Handlers) handleApplyValues(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	var req ApplyValuesRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+	req, err := decodeApplyValuesRequest(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -962,6 +982,9 @@ func (h *Handlers) handleListOCISources(w http.ResponseWriter, r *http.Request) 
 // requireHelmWrite (same as repo refresh): it mutates pod-local config and
 // underpins later upgrades, but is not a cluster mutation.
 func (h *Handlers) handleAddOCISource(w http.ResponseWriter, r *http.Request) {
+	if h.ConfigWriteAllowed != nil && !h.ConfigWriteAllowed(w, r) {
+		return
+	}
 	if !requireHelmWrite(w, r) {
 		return
 	}
@@ -980,6 +1003,9 @@ func (h *Handlers) handleAddOCISource(w http.ResponseWriter, r *http.Request) {
 
 // handleRemoveOCISource unregisters an OCI chart-source prefix.
 func (h *Handlers) handleRemoveOCISource(w http.ResponseWriter, r *http.Request) {
+	if h.ConfigWriteAllowed != nil && !h.ConfigWriteAllowed(w, r) {
+		return
+	}
 	if !requireHelmWrite(w, r) {
 		return
 	}

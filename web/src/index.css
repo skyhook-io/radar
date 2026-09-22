@@ -21,6 +21,23 @@
 }
 
 @layer components {
+  .metrics-layout {
+    container-type: inline-size;
+    container-name: metrics;
+  }
+  .metrics-chart-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+  }
+  @container metrics (min-width: 760px) {
+    .metrics-chart-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .metrics-chart-wide { grid-column: 1 / -1; }
+  }
+  @container metrics (min-width: 1200px) {
+    .metrics-chart-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .metrics-chart-wide { grid-column: auto; }
+  }
   .investigation-assessment {
     background: var(--color-investigation-assessment);
     border-color: var(--color-investigation-assessment-border);
@@ -327,10 +344,26 @@ body {
   animation: status-enter 140ms ease-out both;
 }
 
+/* Reduced motion is an app-level policy, not a per-class list. Durations and
+   delays go to ~0 (a delay left in place would hold a fill-mode:both element
+   invisible), every loop runs once (an infinite animation at 0.01ms is still an
+   active animation — pulse, ping, Monaco's progress bit), and status spinners
+   keep turning because they convey state, not motion. Components that coordinate motion in
+   JS (presence hooks, drawer morph) check prefersReducedMotion() themselves and
+   dispose at logical close. */
 @media (prefers-reduced-motion: reduce) {
-  .animate-transcript-enter,
-  .animate-status-enter {
-    animation: none;
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* The one exception: a spinner that stops reads as "done", not "calm". */
+  .animate-spin {
+    animation-duration: 1s !important;
+    animation-iteration-count: infinite !important;
   }
 }
 
@@ -385,9 +418,6 @@ body {
     background: none;
     -webkit-text-fill-color: currentColor;
     color: var(--text-secondary);
-  }
-  .animate-result-in {
-    animation: none;
   }
 }
 

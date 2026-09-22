@@ -1,5 +1,7 @@
 // Pure presentation decisions over the durable transcript and evidence projection.
 // Keep React/DOM orchestration in InvestigationView; these rules have no UI runtime.
+import { isDiagnosableWorkloadKind } from "./investigationEvidence/observations";
+import { evidenceKindIsAdverse } from "./investigationEvidenceKinds";
 import {
   DiagnoseError,
   type DiagnoseStreamEvent,
@@ -74,7 +76,7 @@ export function canOfferInvestigationApply(input: {
   lastApplyAttemptIdx: number;
   localApplyAttemptAssessmentIdx: number;
   interactionsBlocked: boolean;
-  hosted: boolean;
+  canApply: boolean;
   hasNewerEvidence: boolean;
 }): boolean {
   return (
@@ -85,7 +87,7 @@ export function canOfferInvestigationApply(input: {
         input.localApplyAttemptAssessmentIdx,
       ) &&
     !input.interactionsBlocked &&
-    !input.hosted &&
+    input.canApply &&
     !input.hasNewerEvidence
   );
 }
@@ -272,32 +274,130 @@ export function investigationEvidenceInputsEqual(
 }
 
 /**
- * The turn whose agent case annotates the Evidence pane. A follow-up answer
- * that cites evidence ("chart this and cite it") must reach Findings, so the
- * newest completed non-apply, non-explanation turn carrying a bound case or
- * linked root-cause refs wins; earlier turns keep their case read-only.
+ * Which turns are assessments — the ones Findings may show. The initial turn
+ * and explicit verifications always are; an ordinary question is one only
+ * when its verdict says so with `revisesAssessment` AND carries a complete
+ * verdict (a headline and a finding), because agents restate the root cause
+ * on most answers and a bare flag must never retire what the reader is
+ * looking at. The server enforces the same completeness rule; this mirrors it
+ * so a hosted backend that forgets cannot rewrite Findings by accident.
  */
-export function investigationLiveCaseTurnIndex(
+export function investigationIsAssessmentTurn(
+  turn: Pick<
+    Turn,
+    | "status"
+    | "apply"
+    | "explainAssessment"
+    | "question"
+    | "verify"
+    | "diagnosis"
+  >,
+): boolean {
+  const dx = turn.diagnosis;
+  if (!dx || turn.status !== "done" || turn.apply || turn.explainAssessment)
+    return false;
+  const structured =
+    !!dx.rootCause ||
+    (dx.remediation?.length ?? 0) > 0 ||
+    !!dx.healthy ||
+    !!dx.inconclusive;
+  if (!structured) return false;
+  if (!turn.question || turn.verify) return true;
+  return (
+    dx.revisesAssessment === true &&
+    !!dx.summary &&
+    (!!dx.rootCause || !!dx.healthy || !!dx.inconclusive)
+  );
+}
+
+/**
+ * Later turns whose reads do not make the assessment "earlier": a question
+ * the agent answered under the story contract and marked as not revising it.
+ * The contract is only in force when the assessment itself carries a summary;
+ * older runs never asked, so every later read still counts as newer evidence.
+ */
+export function investigationSettledAnswerTurnIndexes(
   turns: readonly Pick<
     Turn,
-    "status" | "apply" | "explainAssessment" | "diagnosis"
+    | "status"
+    | "apply"
+    | "explainAssessment"
+    | "question"
+    | "verify"
+    | "diagnosis"
   >[],
   currentAssessmentIdx: number,
-): number {
-  for (let index = turns.length - 1; index >= 0; index -= 1) {
-    const turn = turns[index];
-    if (turn.status !== "done" || turn.apply || turn.explainAssessment)
-      continue;
-    const diagnosis = turn.diagnosis;
-    if (!diagnosis) continue;
+): Set<number> {
+  const settled = new Set<number>();
+  const assessment = turns[currentAssessmentIdx]?.diagnosis;
+  if (!assessment?.summary) return settled;
+  turns.forEach((turn, index) => {
+    if (index <= currentAssessmentIdx) return;
     if (
-      diagnosis.evidence?.some((item) => item.status === "linked") ||
-      (diagnosis.rootCause && diagnosis.rootCauseEvidence?.status === "linked")
-    ) {
-      return Math.max(index, currentAssessmentIdx);
-    }
-  }
-  return currentAssessmentIdx;
+      turn.status === "done" &&
+      turn.diagnosis &&
+      !turn.apply &&
+      !turn.verify &&
+      !turn.explainAssessment &&
+      turn.diagnosis.revisesAssessment !== true
+    )
+      settled.add(index);
+  });
+  return settled;
+}
+
+export function investigationAssessmentTurnIndexes(
+  turns: readonly Pick<
+    Turn,
+    | "status"
+    | "apply"
+    | "explainAssessment"
+    | "question"
+    | "verify"
+    | "diagnosis"
+  >[],
+): number[] {
+  const indexes: number[] = [];
+  turns.forEach((turn, index) => {
+    if (investigationIsAssessmentTurn(turn)) indexes.push(index);
+  });
+  return indexes;
+}
+
+/** The two coverage gaps that carry no limitation of their own, named so Still open can say which. */
+export function investigationEvidenceCoverageGaps(
+  projection: Pick<InvestigationEvidenceProjection, "coverage"> & {
+    sources: readonly { id: string; tool: string; confirmedSuccess: boolean }[];
+    groups: readonly {
+      latest: {
+        relevance: "target" | "producer-related" | "broader";
+        source: { id: string };
+      };
+    }[];
+  },
+  targetKind?: string,
+): { noEvidence: boolean; noTargetDiagnosis: boolean } {
+  // Diagnose covers workloads only; a target it cannot bundle (an HPA, a
+  // Service) is read through get_resource and issues, and that is complete.
+  if (targetKind !== undefined && !isDiagnosableWorkloadKind(targetKind))
+    return {
+      noEvidence: projection.coverage.projected === 0,
+      noTargetDiagnosis: false,
+    };
+  const completeDiagnosisSourceIds = new Set(
+    projection.sources
+      .filter((source) => source.tool === "diagnose" && source.confirmedSuccess)
+      .map((source) => source.id),
+  );
+  const hasTargetDiagnosis = projection.groups.some(
+    (group) =>
+      group.latest.relevance !== "broader" &&
+      completeDiagnosisSourceIds.has(group.latest.source.id),
+  );
+  return {
+    noEvidence: projection.coverage.projected === 0,
+    noTargetDiagnosis: !hasTargetDiagnosis,
+  };
 }
 
 export function investigationEvidenceCoverageLimited(
@@ -317,34 +417,15 @@ export function investigationEvidenceCoverageLimited(
       };
     }[];
   },
+  targetKind?: string,
 ): boolean {
-  const completeDiagnosisSourceIds = new Set(
-    projection.sources
-      .filter((source) => source.tool === "diagnose" && source.confirmedSuccess)
-      .map((source) => source.id),
-  );
-  const hasTargetDiagnosis = projection.groups.some(
-    (group) =>
-      group.latest.relevance !== "broader" &&
-      completeDiagnosisSourceIds.has(group.latest.source.id),
-  );
+  const gaps = investigationEvidenceCoverageGaps(projection, targetKind);
   return (
     projection.limitations.length > 0 ||
-    projection.coverage.projected === 0 ||
-    !hasTargetDiagnosis
+    gaps.noEvidence ||
+    gaps.noTargetDiagnosis
   );
 }
-
-const HEALTH_CONFLICT_EVIDENCE_KINDS = new Set([
-  "issue",
-  "startup",
-  "crash",
-  "resource",
-  "logs",
-  "events",
-  "dns",
-  "network",
-]);
 
 /**
  * A model-authored all-clear must not overrule active adverse Radar evidence.
@@ -363,7 +444,140 @@ interface HealthConflictGroup {
     tier: "key" | "supporting" | "context" | "checked";
     tone: string;
     title?: string;
+    summary?: string;
+    /** The card's payload; an events card carries the events it summarises. */
+    data?: {
+      type: string;
+      events?: readonly { reason: string; message: string; type?: string }[];
+    };
+    /** Which turn captured this reading; a note cannot explain a later one. */
+    source?: { turnIndex: number; id?: string };
   };
+}
+
+// Group ids that are the same observation for the reader's question. Two
+// routes: a shared display identity (a log stream read through two calls),
+// and for events, the same warning recorded at two scopes about the
+// investigated workload — its Deployment's event feed and its Pod's carry one
+// readiness failure as two cards. The event's own reason and message decide,
+// within one namespace and only among cards about this target; a name never
+// does.
+function healthTwinIds(
+  groups: readonly HealthConflictGroup[],
+): (group: HealthConflictGroup) => Set<string> {
+  const byKey = new Map<string, Set<string>>();
+  const keysOf = (group: HealthConflictGroup): string[] => {
+    const keys: string[] = [];
+    if (group.identity) keys.push(`${group.kind}\u0000${group.identity}`);
+    if (
+      group.kind === "events" &&
+      group.latest.relevance !== "broader" &&
+      group.identity &&
+      group.latest.data?.type === "events"
+    ) {
+      // The whole adverse set has to match: a Pod card with warning A is not
+      // the Deployment card that carries A and B.
+      const events = group.latest.data.events ?? [];
+      const warnings = events.filter(
+        (event) => event.type === undefined || event.type === "Warning",
+      );
+      const namespace = /^\S+\s+([^/\s]+)\//.exec(group.identity)?.[1];
+      if (warnings.length > 0 && namespace) {
+        const set = [
+          ...new Set(
+            warnings.map(
+              (event) =>
+                `${event.reason.toLowerCase()}|${event.message.toLowerCase().replace(/\s+/g, " ").trim()}`,
+            ),
+          ),
+        ]
+          .sort()
+          .join("\u0001");
+        keys.push(`events\u0000${namespace}\u0000${set}`);
+      }
+    }
+    return keys;
+  };
+  for (const group of groups) {
+    if (!group.id) continue;
+    for (const key of keysOf(group)) {
+      const ids = byKey.get(key) ?? new Set<string>();
+      ids.add(group.id);
+      byKey.set(key, ids);
+    }
+  }
+  return (group) => {
+    const ids = new Set<string>([group.id ?? ""]);
+    for (const key of keysOf(group))
+      for (const id of byKey.get(key) ?? []) ids.add(id);
+    return ids;
+  };
+}
+
+/**
+ * One adverse Radar card on a healthy verdict, with the agent's position on
+ * it: it read the card as not a live problem (explained), as related but not
+ * what matters (related), never linked a reading to it (unaddressed), or
+ * called it a cause or symptom while still reporting healthy (contradiction).
+ * The reader sees which of the four it is, in words, next to the verdict.
+ */
+export interface InvestigationHealthSignal {
+  groupId?: string;
+  sourceId?: string;
+  title: string;
+  status: "explained" | "related" | "unaddressed" | "contradiction";
+  role?: string;
+  claim?: string;
+}
+
+export function investigationHealthSignals(
+  projection: { groups: readonly HealthConflictGroup[] },
+  caseItems:
+    | readonly {
+        role: string;
+        placement: "card" | "revision" | "source";
+        claim: string;
+        groupId?: string;
+        source?: { turnIndex: number };
+      }[]
+    | undefined,
+): InvestigationHealthSignal[] {
+  const conflicting = investigationHealthConflictGroups(projection);
+  if (conflicting.length === 0) return [];
+  const twinsOf = healthTwinIds(projection.groups);
+  return conflicting.map((group) => {
+    const sameStream = twinsOf(group);
+    const fresh = (caseItems ?? []).filter(
+      (item) =>
+        item.groupId &&
+        sameStream.has(item.groupId) &&
+        item.placement === "card" &&
+        !(
+          group.latest.source !== undefined &&
+          item.source !== undefined &&
+          group.latest.source.turnIndex > item.source.turnIndex
+        ),
+    );
+    const base = {
+      groupId: group.id,
+      sourceId: group.latest.source?.id,
+      title: group.latest.title ?? group.kind,
+    };
+    const asserting = fresh.find(
+      (item) => item.role === "cause" || item.role === "symptom",
+    );
+    if (asserting)
+      return { ...base, status: "contradiction", role: asserting.role };
+    const benign = fresh.find(
+      (item) => item.role === "benign" && item.claim.trim() !== "",
+    );
+    if (benign) return { ...base, status: "explained", claim: benign.claim };
+    const demoted = fresh.find(
+      (item) => item.role === "demoted" && item.claim.trim() !== "",
+    );
+    if (demoted) return { ...base, status: "related", claim: demoted.claim };
+    return { ...base, status: "unaddressed" };
+  });
 }
 
 export function investigationHealthConflictGroups<
@@ -374,8 +588,13 @@ export function investigationHealthConflictGroups<
       !group.historical &&
       group.latest.relevance !== "broader" &&
       (group.latest.tier === "key" || group.latest.tier === "supporting") &&
-      (group.latest.tone === "warning" || group.latest.tone === "error") &&
-      HEALTH_CONFLICT_EVIDENCE_KINDS.has(group.kind),
+      // Radar's adverse tones run warning → alert → error; "high" severity
+      // from the Go side lands on alert, so leaving it out silently excused
+      // every high-severity finding.
+      (group.latest.tone === "warning" ||
+        group.latest.tone === "alert" ||
+        group.latest.tone === "error") &&
+      evidenceKindIsAdverse(group.kind),
   );
 }
 
@@ -401,6 +620,7 @@ export function investigationHealthConflictExplainedBy(
         placement: "card" | "revision" | "source";
         claim: string;
         groupId?: string;
+        source?: { turnIndex: number };
       }[]
     | undefined,
 ): string[] | null {
@@ -412,19 +632,10 @@ export function investigationHealthConflictExplainedBy(
   // agent addressed the stream: it explained one card, and the conflict is
   // recorded on its twin. Group ids that share an identity are the same
   // underlying observation for this question.
-  const twins = new Map<string, Set<string>>();
-  for (const group of projection.groups) {
-    if (!group.id || !group.identity) continue;
-    const key = `${group.kind}\u0000${group.identity}`;
-    const ids = twins.get(key) ?? new Set<string>();
-    ids.add(group.id);
-    twins.set(key, ids);
-  }
+  const twinsOf = healthTwinIds(projection.groups);
   const titles: string[] = [];
   for (const group of conflicting) {
-    const sameStream =
-      (group.identity && twins.get(`${group.kind}\u0000${group.identity}`)) ||
-      new Set<string>([group.id ?? ""]);
+    const sameStream = twinsOf(group);
     const onGroup = caseItems.filter(
       (item) => item.groupId && sameStream.has(item.groupId),
     );
@@ -450,7 +661,17 @@ export function investigationHealthConflictExplainedBy(
         // `rules_out` excludes some other hypothesis and `demoted` says the
         // card is peripheral — both true of a still-active problem — so
         // neither reconciles a healthy verdict with evidence contradicting it.
-        item.role === "benign",
+        item.role === "benign" &&
+        // An assessment cannot have addressed a reading taken after it. The
+        // twin lookup above deliberately crosses calls, because one log
+        // stream read twice lands in two groups; without this, it would also
+        // let a note about an earlier failure explain a different one that
+        // the same stream reported in a later turn.
+        !(
+          group.latest.source !== undefined &&
+          item.source !== undefined &&
+          group.latest.source.turnIndex > item.source.turnIndex
+        ),
     );
     if (!explained) return null;
     titles.push(group.latest.title ?? group.kind);

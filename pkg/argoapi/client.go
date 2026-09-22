@@ -141,6 +141,89 @@ func (c *Client) RevisionMetadata(ctx context.Context, q RevisionMetadataQuery) 
 	return &out, nil
 }
 
+// Application returns an Application's per-resource health via a plain
+// GET /api/v1/applications/{name} (no refresh: argocd-server fills
+// status.resources[].health from its tree cache on that path even when the
+// controller does not persist it in the object).
+func (c *Client) Application(ctx context.Context, q ApplicationQuery) (*ApplicationHealth, error) {
+	if q.AppName == "" {
+		return nil, errors.New("argoapi: Application requires AppName")
+	}
+	params := url.Values{}
+	setNonEmpty(params, "appNamespace", q.AppNamespace)
+	setNonEmpty(params, "project", q.Project)
+
+	var out struct {
+		Metadata struct {
+			UID string `json:"uid"`
+		} `json:"metadata"`
+		Status struct {
+			ResourceHealthSource string `json:"resourceHealthSource"`
+			Resources            []struct {
+				Group     string `json:"group"`
+				Kind      string `json:"kind"`
+				Namespace string `json:"namespace"`
+				Name      string `json:"name"`
+				Health    *struct {
+					Status  string `json:"status"`
+					Message string `json:"message"`
+				} `json:"health"`
+			} `json:"resources"`
+		} `json:"status"`
+	}
+	if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(q.AppName), params, &out); err != nil {
+		return nil, err
+	}
+	res := &ApplicationHealth{UID: out.Metadata.UID, ResourceHealthSource: out.Status.ResourceHealthSource}
+	for _, r := range out.Status.Resources {
+		rh := ResourceHealth{Group: r.Group, Kind: r.Kind, Namespace: r.Namespace, Name: r.Name}
+		if r.Health != nil {
+			rh.Health, rh.Message = r.Health.Status, r.Health.Message
+		}
+		res.Resources = append(res.Resources, rh)
+	}
+	return res, nil
+}
+
+// ResourceTree returns the per-resource health of an Application's tree via
+// GET /api/v1/applications/{name}/resource-tree — the fallback when a plain
+// GET answers without health. The tree also lists generated children
+// (ReplicaSets, Pods); callers match on refs and ignore the rest. The tree
+// carries no Application UID, so identity is the caller's to establish.
+func (c *Client) ResourceTree(ctx context.Context, q ApplicationQuery) (*ApplicationHealth, error) {
+	if q.AppName == "" {
+		return nil, errors.New("argoapi: ResourceTree requires AppName")
+	}
+	params := url.Values{}
+	setNonEmpty(params, "appNamespace", q.AppNamespace)
+	setNonEmpty(params, "project", q.Project)
+
+	var out struct {
+		Nodes []struct {
+			Group     string `json:"group"`
+			Kind      string `json:"kind"`
+			Namespace string `json:"namespace"`
+			Name      string `json:"name"`
+			Health    *struct {
+				Status  string `json:"status"`
+				Message string `json:"message"`
+			} `json:"health"`
+		} `json:"nodes"`
+	}
+	if err := c.get(ctx, "/api/v1/applications/"+url.PathEscape(q.AppName)+"/resource-tree", params, &out); err != nil {
+		return nil, err
+	}
+	res := &ApplicationHealth{}
+	for _, n := range out.Nodes {
+		rh := ResourceHealth{Group: n.Group, Kind: n.Kind, Namespace: n.Namespace, Name: n.Name}
+		if n.Health != nil {
+			rh.Health, rh.Message = n.Health.Status, n.Health.Message
+		}
+		res.Resources = append(res.Resources, rh)
+	}
+	return res, nil
+}
+
 // Repositories returns the configured repositories and Argo CD's cached
 // connection state for each, via GET /api/v1/repositories.
 func (c *Client) Repositories(ctx context.Context) ([]Repository, error) {

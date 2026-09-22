@@ -5,6 +5,7 @@ import {
   type InvestigationEvidenceTimelineItem,
 } from "./investigationEvidence";
 import {
+  metricsChangeCoverage,
   metricsChangeMarkers,
   metricsDomain,
   metricsUnitForExpression,
@@ -43,7 +44,7 @@ const window = { start: "2026-09-06T07:00:00Z", end: "2026-09-06T09:00:00Z" };
 function rangeResult(selectors: unknown[]) {
   return {
     query:
-      'sum(container_memory_working_set_bytes{namespace="shop",pod=~"api-.*"})',
+      'sum(container_memory_working_set_bytes{namespace="shop",workload="api",workload_type="deployment"})',
     type: "range",
     ...window,
     step: "60s",
@@ -65,7 +66,8 @@ const targetSelectors = [
     metric: "container_memory_working_set_bytes",
     matchers: [
       { label: "namespace", op: "=", value: "shop" },
-      { label: "pod", op: "=~", value: "api-.*" },
+      { label: "workload", op: "=", value: "api" },
+      { label: "workload_type", op: "=", value: "deployment" },
     ],
   },
 ];
@@ -126,7 +128,7 @@ describe("metricsUnitForExpression", () => {
   it("keeps the unit every metric states through aggregations and wrappers", () => {
     expect(
       metricsUnitForExpression(
-        'sum(max by (pod,namespace,container) (container_memory_working_set_bytes{namespace="shop", pod=~"api-.*"}))',
+        'sum(max by (pod,namespace,container) (container_memory_working_set_bytes{namespace="shop", workload="api"}))',
         selector("container_memory_working_set_bytes"),
       ),
     ).toBe("bytes");
@@ -434,5 +436,277 @@ describe("metricsChangeMarkers", () => {
       "prom",
     );
     expect(markers).toEqual([]);
+  });
+});
+
+describe("units only survive expressions that keep the meaning", () => {
+  const bytes = [
+    {
+      metric: "container_memory_working_set_bytes",
+      matchers: [{ label: "namespace", op: "=", value: "shop" }],
+    },
+  ];
+  const seconds = [
+    {
+      metric: "http_request_duration_seconds_bucket",
+      matchers: [{ label: "namespace", op: "=", value: "shop" }],
+    },
+  ];
+
+  it("refuses a unit for expressions that produce a different quantity", () => {
+    // Each of these is a number the metric's name no longer describes: a
+    // boolean, a presence flag, a variance in bytes squared, a ratio.
+    for (const query of [
+      "container_memory_working_set_bytes > bool 0",
+      "group(container_memory_working_set_bytes)",
+      "stdvar(container_memory_working_set_bytes)",
+      "stddev(container_memory_working_set_bytes)",
+      "container_memory_working_set_bytes / 1024",
+      "container_memory_working_set_bytes * 2",
+      "count by (pod) (container_memory_working_set_bytes)",
+      "absent(container_memory_working_set_bytes)",
+      "changes(container_memory_working_set_bytes[5m])",
+      "predict_linear(container_memory_working_set_bytes[1h], 3600)",
+    ]) {
+      expect(metricsUnitForExpression(query, bytes), query).toBe("");
+    }
+  });
+
+  it("keeps the unit through aggregation and the counter's own change", () => {
+    for (const query of [
+      "sum(container_memory_working_set_bytes)",
+      "max by (pod) (container_memory_working_set_bytes)",
+      "sum(increase(container_memory_working_set_bytes[1h]))",
+      "delta(container_memory_working_set_bytes[5m])",
+      "max_over_time(container_memory_working_set_bytes[1h])",
+    ]) {
+      expect(metricsUnitForExpression(query, bytes), query).toBe("bytes");
+    }
+  });
+
+  it("refuses a unit for a histogram's counting parts", () => {
+    // A _bucket or _count series counts observations; only the `le` boundary
+    // carries the measured unit, and nothing here reads it. The quantile of
+    // those buckets is in seconds, but this cannot tell that from the
+    // expression, so it says nothing rather than something wrong.
+    expect(
+      metricsUnitForExpression(
+        "histogram_quantile(0.99, sum by (le) (http_request_duration_seconds_bucket))",
+        seconds,
+      ),
+    ).toBe("");
+    expect(
+      metricsUnitForExpression("sum(http_request_duration_seconds_count)", [
+        {
+          metric: "http_request_duration_seconds_count",
+          matchers: [{ label: "namespace", op: "=", value: "shop" }],
+        },
+      ]),
+    ).toBe("");
+    // The sum of the observed values does measure what was observed.
+    expect(
+      metricsUnitForExpression("sum(http_request_duration_seconds_sum)", [
+        {
+          metric: "http_request_duration_seconds_sum",
+          matchers: [{ label: "namespace", op: "=", value: "shop" }],
+        },
+      ]),
+    ).toBe("seconds");
+  });
+
+  it("refuses the shapes an axis label cannot survive", () => {
+    const bytesOf = (metric: string) => [
+      {
+        metric,
+        matchers: [{ label: "namespace", op: "=", value: "shop" }],
+      },
+    ];
+    // A set operator mixes two expressions whose units may differ; a second
+    // rate divides by time twice; a comment can hide a call from a reader and
+    // from this; a string can contain anything at all.
+    for (const [query, selectors] of [
+      [
+        "container_memory_working_set_bytes and rate(other_bytes_total[5m])",
+        bytesOf("container_memory_working_set_bytes"),
+      ],
+      [
+        "rate(container_memory_working_set_bytes[5m]) or container_memory_working_set_bytes",
+        bytesOf("container_memory_working_set_bytes"),
+      ],
+      [
+        "deriv(rate(container_memory_working_set_bytes[5m])[10m:])",
+        bytesOf("container_memory_working_set_bytes"),
+      ],
+      [
+        "container_memory_working_set_bytes-other_bytes",
+        bytesOf("container_memory_working_set_bytes"),
+      ],
+    ] as const) {
+      expect(metricsUnitForExpression(query, selectors), query).toBe("");
+    }
+    // A `#` inside a label value is not a comment. Reading comments before
+    // strings let it swallow the rest of the query, so a dimensionless 0/1
+    // and a ratio both came back in bytes.
+    expect(
+      metricsUnitForExpression(
+        'container_memory_working_set_bytes{note="#"} > bool 0',
+        bytesOf("container_memory_working_set_bytes"),
+      ),
+    ).toBe("");
+    expect(
+      metricsUnitForExpression(
+        'container_memory_working_set_bytes{note="#"} / container_memory_working_set_bytes',
+        bytesOf("container_memory_working_set_bytes"),
+      ),
+    ).toBe("");
+    // A comment is not a call: stripping it leaves a plain metric in bytes.
+    expect(
+      metricsUnitForExpression(
+        "container_memory_working_set_bytes # rate(",
+        bytesOf("container_memory_working_set_bytes"),
+      ),
+    ).toBe("bytes");
+    // A backtick string cannot smuggle a call past the reader either.
+    expect(
+      metricsUnitForExpression(
+        'label_replace(container_memory_working_set_bytes, "note", `rate(`, "pod", ".*")',
+        bytesOf("container_memory_working_set_bytes"),
+      ),
+    ).toBe("bytes");
+  });
+
+  it("keeps the unit through ordering, and drops it for an angle", () => {
+    const bytesOf = (metric: string) => [
+      {
+        metric,
+        matchers: [{ label: "namespace", op: "=", value: "shop" }],
+      },
+    ];
+    // Sorting reorders samples without touching their values.
+    for (const fn of ["sort", "sort_desc"]) {
+      expect(
+        metricsUnitForExpression(
+          `${fn}(container_memory_working_set_bytes)`,
+          bytesOf("container_memory_working_set_bytes"),
+        ),
+      ).toBe("bytes");
+    }
+    expect(
+      metricsUnitForExpression(
+        'sort_by_label(container_memory_working_set_bytes, "pod")',
+        bytesOf("container_memory_working_set_bytes"),
+      ),
+    ).toBe("bytes");
+    // atan2 is spelled as a word but is a binary operator, and returns an
+    // angle however many bytes went into it.
+    expect(
+      metricsUnitForExpression(
+        "container_memory_working_set_bytes atan2 container_memory_working_set_bytes",
+        bytesOf("container_memory_working_set_bytes"),
+      ),
+    ).toBe("");
+  });
+
+  it("still turns a rate of bytes into bytes per second and a rate of seconds into nothing", () => {
+    expect(
+      metricsUnitForExpression(
+        "sum(rate(container_memory_working_set_bytes[5m]))",
+        bytes,
+      ),
+    ).toBe("bytes/s");
+    expect(
+      metricsUnitForExpression(
+        "sum(rate(container_cpu_usage_seconds_total[5m]))",
+        [
+          {
+            metric: "container_cpu_usage_seconds_total",
+            matchers: [{ label: "namespace", op: "=", value: "shop" }],
+          },
+        ],
+      ),
+    ).toBe("");
+  });
+});
+
+describe("metricsChangeCoverage", () => {
+  function coverageFor(
+    timelines: InvestigationEvidenceTimelineItem[][],
+    sourceId: string,
+  ) {
+    const projection = projectInvestigationEvidence(
+      timelines.map((timeline) => ({ timeline })),
+      target,
+    );
+    const observation = projection.groups
+      .flatMap((group) => group.observations)
+      .find(
+        (item) =>
+          item.data.type === "metrics" && item.source.stepId === sourceId,
+      );
+    if (!observation) throw new Error("metrics observation missing");
+    return metricsChangeCoverage(projection.groups, observation);
+  }
+
+  it("reports a checked window when the turn captured changes and none landed in it", () => {
+    const coverage = coverageFor(
+      [
+        [
+          tool("diag", "diagnose", { ...diagnoseBundle, recentChanges: [] }),
+          tool(
+            "changes",
+            "get_changes",
+            {
+              changes: [
+                change("Deployment", "api", "2020-01-01T00:00:00Z", "apps/v1"),
+              ],
+            },
+            {
+              summary: JSON.stringify({
+                kind: "Deployment",
+                namespace: "shop",
+                name: "api",
+              }),
+            },
+          ),
+          tool("prom", "query_prometheus", rangeResult(targetSelectors)),
+        ],
+      ],
+      "prom",
+    );
+    expect(coverage.markers).toEqual([]);
+    expect(coverage.checked).toBe(true);
+  });
+
+  it("does not call the window checked when only a broader change result was captured", () => {
+    const coverage = coverageFor(
+      [
+        [tool("diag", "diagnose", diagnoseBundle)],
+        [
+          tool(
+            "broad",
+            "get_changes",
+            {
+              changes: [
+                change("Deployment", "api", "2026-09-06T08:10:00Z", "apps/v1"),
+              ],
+            },
+            { summary: JSON.stringify({ namespace: "shop" }) },
+          ),
+          tool("prom", "query_prometheus", rangeResult(targetSelectors)),
+        ],
+      ],
+      "prom",
+    );
+    expect(coverage.markers).toEqual([]);
+    expect(coverage.checked).toBe(false);
+  });
+
+  it("does not call the window checked when the turn captured no changes at all", () => {
+    const coverage = coverageFor(
+      [[tool("prom", "query_prometheus", rangeResult(targetSelectors))]],
+      "prom",
+    );
+    expect(coverage.markers).toEqual([]);
+    expect(coverage.checked).toBe(false);
   });
 });

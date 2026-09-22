@@ -17,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/remotecommand"
 
@@ -718,7 +719,6 @@ func (s *Server) handleNodeDebug(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleNodeDebugCleanup deletes debug pods for a node
 func (s *Server) handleNodeDebugCleanup(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -730,15 +730,30 @@ func (s *Server) handleNodeDebugCleanup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	auth.AuditLog(r, "", nodeName)
+	namespace := r.URL.Query().Get("namespace")
+	podName := r.URL.Query().Get("podName")
+	uid := r.URL.Query().Get("uid")
+	if err := k8score.ValidateNodeDebugPodIdentity(namespace, podName, types.UID(uid)); err != nil {
+		s.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	auth.AuditLog(r, namespace, podName)
 	client := s.getClientForRequest(r)
 	if client == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
 	}
 
-	if err := k8score.DeleteNodeDebugPods(r.Context(), client, nodeName); err != nil {
-		log.Printf("[exec] Failed to cleanup node debug pods for %s: %v", nodeName, err)
+	if err := k8score.DeleteNodeDebugPod(r.Context(), client, namespace, podName, types.UID(uid)); err != nil {
+		if apierrors.IsConflict(err) {
+			s.writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if apierrors.IsForbidden(err) {
+			s.writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		log.Printf("[exec] Failed to cleanup node debug pod %s/%s: %v", namespace, podName, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

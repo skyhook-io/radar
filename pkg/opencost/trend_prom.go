@@ -118,11 +118,19 @@ func ComputeCostTrendFromProm(ctx context.Context, client *prom.Client, opts Tre
 				dps = append(dps, CostDataPoint{Timestamp: ts, Value: roundTo(val, 4)})
 			}
 			sort.Slice(dps, func(i, j int) bool { return dps[i].Timestamp < dps[j].Timestamp })
-			series = append(series, CostTrendSeries{Namespace: "other", DataPoints: dps})
+			series = append(series, CostTrendSeries{Namespace: "other", Remainder: true, DataPoints: dps})
 		}
 	}
 
-	return &CostTrendResponse{Available: true, Range: label, Series: series}
+	return &CostTrendResponse{Available: true, Range: label, Series: series, NamespaceCount: len(ranks)}
+}
+
+// SupportedTrendRange reports whether resolveTrendRange and kubecostTrendConfig
+// serve this range verbatim. Both quietly fall back to 24h for anything else,
+// so callers that must not silently answer a different range check here first.
+func SupportedTrendRange(value string) bool {
+	_, _, _, label := resolveTrendRange(value)
+	return value == "" || value == label
 }
 
 // resolveTrendRange returns the start/end/step/label for the named Range.

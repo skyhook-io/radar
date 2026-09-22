@@ -294,9 +294,7 @@ describe("RecentList", () => {
 
 describe("InvestigationHome", () => {
   it("points users toward history or a focused resource investigation", () => {
-    const html = renderToStaticMarkup(
-      <InvestigationHome agentLabel="Codex" />,
-    );
+    const html = renderToStaticMarkup(<InvestigationHome agentLabel="Codex" />);
     const text = visible(html);
     expect(text).toContain("Choose an investigation");
     expect(text).toContain("start a focused investigation with Codex");

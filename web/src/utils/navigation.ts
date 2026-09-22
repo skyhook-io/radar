@@ -14,7 +14,7 @@ export function searchHitToSelectedResource(hit: SearchHit): SelectedResource {
 }
 
 // Re-export shared navigation utilities from @skyhook-io/k8s-ui.
-export { kindToPlural, kindToPluralWithGroup, pluralToKind, refToSelectedResource, apiVersionToGroup } from '@skyhook-io/k8s-ui/utils/navigation'
+export { kindToPlural, kindToPluralWithGroup, pluralToKind, knownKindForPluralWithGroup, refToSelectedResource, apiVersionToGroup } from '@skyhook-io/k8s-ui/utils/navigation'
 export type { NavigateToResource } from '@skyhook-io/k8s-ui/utils/navigation'
 
 const NETWORK_POLICY_TOPOLOGY_KINDS = new Set([
@@ -67,12 +67,18 @@ export function getNetworkPolicyResourceTarget(topology: Topology | null): { kin
  * positional and WorkloadViewRoute can parse it back. '_' is safe — it's not a
  * valid DNS-1123 namespace label, so it can never collide with a real one.
  */
-export function buildWorkloadPath(resource: SelectedResource): string {
+export type ResourceNavigationTarget = SelectedResource & { run?: string; tab?: string }
+
+export function buildWorkloadPath(resource: ResourceNavigationTarget): string {
   const kind = encodeURIComponent(resource.kind)
   const namespace = encodeURIComponent(resource.namespace || '_')
   const name = encodeURIComponent(resource.name)
   const base = `/workload/${kind}/${namespace}/${name}`
-  return resource.group ? `${base}?apiGroup=${encodeURIComponent(resource.group)}` : base
+  const params = new URLSearchParams()
+  if (resource.group) params.set('apiGroup', resource.group)
+  if (resource.run) params.set('run', resource.run)
+  if (resource.tab) params.set('tab', resource.tab)
+  return params.size ? `${base}?${params}` : base
 }
 
 /**
@@ -101,9 +107,9 @@ export function resourcePath(resource: SelectedResource): string {
 
 const FULLSCREEN_RESOURCE_KINDS = new Set(['pods', 'deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs', 'nodes'])
 
-export function relatedResourcePath(resource: SelectedResource): string {
+export function relatedResourcePath(resource: ResourceNavigationTarget): string {
   const apiKind = kindToPluralWithGroup(resource.kind, resource.group ?? '').toLowerCase()
-  if (FULLSCREEN_RESOURCE_KINDS.has(apiKind)) {
+  if (FULLSCREEN_RESOURCE_KINDS.has(apiKind) || (apiKind === 'jobsets' && resource.group === 'jobset.x-k8s.io')) {
     return buildWorkloadPath({ ...resource, kind: apiKind })
   }
   return resourcePath(resource)

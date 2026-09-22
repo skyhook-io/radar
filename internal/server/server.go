@@ -62,6 +62,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/perfstats"
+	"github.com/skyhook-io/radar/pkg/prom"
 	"github.com/skyhook-io/radar/pkg/rbac"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 )
@@ -88,6 +89,9 @@ type Server struct {
 	effectiveConfig         *config.Config // running config for GET /api/config
 	openCostCurrency        *opencost.CurrencyResolver
 	currencyManaged         bool
+	prometheusConfigMu      sync.Mutex
+	promURLFlag             bool
+	promHeaderFlags         bool
 	authConfig              auth.Config
 	permCache               *auth.PermissionCache
 	oidcHandler             *auth.OIDCHandler
@@ -144,6 +148,9 @@ type Server struct {
 	// burst. Index is a pure projection of four cached listers — TTL has
 	// no semantic effect.
 	rbacMemo *rbac.Memoizer
+	// gitopsIssuesMemo shares the issues-engine composition between the
+	// GitOps tree and insights requests of one page load (per user).
+	gitopsIssuesMemo *gitopsIssuesMemo
 
 	capacityIssueMemo *capacityIssueMemo
 
@@ -171,7 +178,7 @@ type Server struct {
 // Config holds server configuration
 type Config struct {
 	Port                    int
-	ListenAddress           string                      // 127.0.0.1/localhost for local-only; 0.0.0.0 for shared access
+	ListenAddress           string
 	BasePath                string                      // Optional URL path prefix for self-hosted subpath deployments
 	StartupLog              bool                        // Emit the operator-facing startup block after a successful bind
 	RemoteAccessHint        bool                        // Explain the explicit shared-listener opt-in (native CLI only)
@@ -184,10 +191,12 @@ type Config struct {
 	InvestigationRefs       *investigationrefs.Registry // shared private evidence issuance ledger
 	DiagConfig              *DiagConfig                 // Sanitized config for diagnostics endpoint
 	EffectiveConfig         *config.Config              // Running startup config for GET /api/config
-	OpenCostCurrency        string                      // ISO 4217 code labeling values returned by OpenCost endpoints
-	OpenCostManaged         bool                        // true when an explicit CLI/Helm flag owns the running value
-	AuthConfig              auth.Config                 // Authentication configuration
-	AIHistoryDB             string                      // AI run-history SQLite path ("" = memory-only runs)
+	PrometheusURLFlag       bool
+	PrometheusHeaderFlags   bool
+	OpenCostCurrency        string      // ISO 4217 code labeling values returned by OpenCost endpoints
+	OpenCostManaged         bool        // true when an explicit CLI/Helm flag owns the running value
+	AuthConfig              auth.Config // Authentication configuration
+	AIHistoryDB             string      // AI run-history SQLite path ("" = memory-only runs)
 	CloudConnect            CloudConnectConfig
 	MCPToken                string // per-process token for the local write-capable MCP mount
 }
@@ -221,17 +230,21 @@ func New(cfg Config) *Server {
 		mcpToken:                cfg.MCPToken,
 		diagConfig:              cfg.DiagConfig,
 		effectiveConfig:         cfg.EffectiveConfig,
+		promURLFlag:             cfg.PrometheusURLFlag,
+		promHeaderFlags:         cfg.PrometheusHeaderFlags,
 		openCostCurrency:        opencost.NewCurrencyResolver(cfg.OpenCostCurrency),
 		currencyManaged:         cfg.OpenCostManaged,
 		authConfig:              cfg.AuthConfig,
 		cloudConnectCfg:         cfg.CloudConnect,
 		topoMemo:                topology.NewMemoizer(5 * time.Second),
+		gitopsIssuesMemo:        newGitopsIssuesMemo(5 * time.Second),
 		rbacMemo:                rbac.NewMemoizer(5 * time.Second),
 		capacityIssueMemo:       newCapacityIssueMemo(5 * time.Second),
 		yamlSchemaCache:         make(map[string][]byte),
 		yamlSchemaPathCache:     make(map[string]yamlSchemaPathCacheEntry),
 		yamlSchemaBundleCache:   make(map[string]yamlSchemaBundleCacheEntry),
 	}
+	opencost.PublishCurrencyResolver(s.openCostCurrency)
 	s.cloudInstall = newCloudInstallManager(cfg.CloudConnect)
 	s.cloudInstall.sharedListener = s.sharedListener
 
@@ -239,7 +252,7 @@ func New(cfg Config) *Server {
 	// subscription). nil when none is found — the feature stays disabled.
 	//
 	// Gated to no-auth (local/standalone) Radar: the engine drives the CLI
-	// against this server's own private localhost investigation MCP mount with no
+	// against this server's own investigation MCP mount with no
 	// credentials, which only works when MCP is unauthenticated. When the optional
 	// local session token is enabled, Radar injects it into write-capable apply
 	// turns against /mcp. Under proxy/OIDC auth (team / cloud deployments) the MCP
@@ -247,7 +260,7 @@ func New(cfg Config) *Server {
 	// are the embedding host's job (e.g. Radar Hub) anyway.
 	// Also requires /mcp to be mounted — the agent reaches the cluster only
 	// through it, so with --no-mcp the feature can't work.
-	if !s.authConfig.Enabled() && s.mcpHandler != nil &&
+	if s.configManagement() != "operator" && !s.authConfig.Enabled() && s.mcpHandler != nil &&
 		s.mcpInvestigationHandler != nil && cfg.InvestigationRefs != nil {
 		if d, err := ai.NewDetected(context.Background(), cfg.InvestigationRefs); err == nil {
 			s.aiDiagnoser = d
@@ -264,7 +277,7 @@ func New(cfg Config) *Server {
 					store = st
 				}
 			}
-			s.aiRuns = ai.NewRunManager(d, s.ActualPort, s.basePath, k8s.GetContextName, store)
+			s.aiRuns = ai.NewRunManager(d, s.ActualAddr, s.basePath, k8s.GetContextName, store)
 			s.aiRuns.SetMCPToken(s.mcpToken)
 			s.aiRuns.MetricsAvailability = func(ctx context.Context) ai.MetricsAvailability {
 				state := prometheuspkg.Availability(ctx)
@@ -557,6 +570,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// the gate (local + no auth + no tunnel). prepare/start are
 			// registered above, outside the 60s timeout.
 			r.Get("/cloud/install/status", s.handleCloudInstallStatus)
+			r.Get("/cloud/install/discover", s.handleCloudInstallDiscover)
 			r.Post("/cloud/install/cancel", s.handleCloudInstallCancel)
 			r.Post("/cloud/install/dismiss", s.handleCloudInstallDismiss)
 			r.Get("/cloud/connect/self", s.handleCloudConnectSelf)
@@ -666,12 +680,15 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/nodes/{name}/debug", s.handleNodeDebug)
 			r.Delete("/nodes/{name}/debug", s.handleNodeDebugCleanup)
 
-			// Node operations (cordon/uncordon)
+			// Node operations (cordon/uncordon) and the read-only drain plan.
+			// The drain itself lives outside this timeout group, see above.
 			r.Post("/nodes/{name}/cordon", s.handleCordonNode)
 			r.Post("/nodes/{name}/uncordon", s.handleUncordonNode)
+			r.Post("/nodes/{name}/drain-plan", s.handleDrainPlan)
 
 			// Pod file browser
 			r.Get("/pods/{namespace}/{name}/files", s.handlePodFileList)
+			r.Get("/pods/{namespace}/{name}/file", s.handlePodFilePreview)
 
 			// Metrics (from metrics.k8s.io API)
 			r.Get("/metrics/pods/{namespace}/{name}", s.handlePodMetrics)
@@ -712,9 +729,12 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/workloads/{kind}/{namespace}/{name}/logs", s.handleWorkloadLogs)
 			r.Get("/workloads/{kind}/{namespace}/{name}/runs", s.handleWorkloadRuns)
 			r.Get("/workloads/{kind}/{namespace}/{name}/pods", s.handleWorkloadPods)
+			r.Get("/jobsets/{namespace}/{name}/resources", s.handleJobSetResources)
+			r.Get("/jobsets/{namespace}/{name}/logs", s.handleJobSetLogs)
 
 			// Helm routes
 			helmHandlers := helm.NewHandlers(s.resolveHelmNamespaces)
+			helmHandlers.ConfigWriteAllowed = s.requireConfigEditable
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes
@@ -726,6 +746,9 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// through this gate before querying — see prometheusAuthGate.
 			prometheuspkg.SetAuthGate(s.prometheusAuthGate)
 			r.Post("/prometheus/rightsizing/scan", s.handleRightsizingScan)
+			r.Get("/prometheus/rightsizing/scan", s.handleRightsizingScan)
+			r.Get("/prometheus/rightsizing/scan/{scanId}", s.handleRightsizingScan)
+			r.Delete("/prometheus/rightsizing/scan/{scanId}", s.handleRightsizingScan)
 			prometheuspkg.RegisterRoutes(r)
 
 			// OpenCost routes
@@ -744,6 +767,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// Argo Rollouts progressive-delivery control plane. Rollback and
 			// revision history are served by the /workloads routes above.
 			r.Get("/rollouts/{namespace}/{name}/capabilities", s.handleRolloutCapabilities)
+			r.Get("/rollouts/{namespace}/{name}/analysisruns", s.handleRolloutAnalysisRuns)
 			r.Post("/rollouts/{namespace}/{name}/{action}", s.handleRolloutOperation)
 
 			// ArgoCD routes
@@ -1156,9 +1180,9 @@ func (s *Server) BasePath() string {
 	return s.basePath
 }
 
-// ActualAddr returns the address the server is listening on (e.g. "localhost:9280").
+// ActualAddr returns a locally dialable host:port, including for wildcard binds.
 func (s *Server) ActualAddr() string {
-	return fmt.Sprintf("localhost:%d", s.ActualPort())
+	return clientAddress(s.listenAddress, s.ActualPort())
 }
 
 // SetUpdater attaches a desktop updater to the server, enabling the
@@ -1194,6 +1218,7 @@ func (s *Server) Handler() http.Handler {
 
 // Stop gracefully stops the server and releases the listening port.
 func (s *Server) Stop() {
+	prometheuspkg.RightsizingScans().Invalidate()
 	StopAllLocalTermSessions()
 	if s.aiRuns != nil {
 		s.aiRuns.Shutdown() // cancel investigations so agent children don't outlive us
@@ -1300,6 +1325,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		WorkloadImages: true,
 	}
 	caps.AuthEnabled = s.authConfig.Enabled()
+	caps.ConfigManagement = s.configManagement()
 	status, _ := s.localTerminalUnavailable(r)
 	caps.LocalTerminal = status == 0
 	if user := auth.UserFromContext(r.Context()); user != nil {
@@ -1760,6 +1786,24 @@ func (s *Server) applyClusterScopedTopologyRBAC(r *http.Request, topo *topology.
 	if topo == nil {
 		return
 	}
+	allowedSecrets := map[topology.SARTuple]bool{}
+	tuples := topo.SecretRBACTuples()
+	if len(tuples) > 0 {
+		if s.canRead(r, "", "secrets", "", "list") {
+			for _, tuple := range tuples {
+				allowedSecrets[tuple] = true
+			}
+		} else {
+			namespaces := make([]string, 0, len(tuples))
+			for _, tuple := range tuples {
+				namespaces = append(namespaces, tuple.Namespace)
+			}
+			for _, ns := range s.filterNamespacesByCanRead(r, "", "secrets", "list", namespaces) {
+				allowedSecrets[topology.SARTuple{Resource: "secrets", Namespace: ns}] = true
+			}
+		}
+	}
+	topo.StripSecretsExcept(allowedSecrets)
 	if deny := s.deniedClusterScopedTopoKinds(r); len(deny) > 0 {
 		topo.StripNodeKinds(deny)
 	}
@@ -2039,11 +2083,23 @@ func (s *Server) preflightResourceList(r *http.Request, kind, group string, name
 		}
 	}
 
+	if (kind == "limitranges" || kind == "limitrange") && group == "" {
+		scopes := namespaces
+		if scopes == nil {
+			scopes = []string{""}
+		}
+		for _, ns := range scopes {
+			if !s.canRead(r, "", "limitranges", ns, "list") {
+				return nil, http.StatusForbidden, "insufficient permissions to list limitranges", false
+			}
+		}
+	}
+
 	return namespaces, 0, "", true
 }
 
 func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireConnectedOrSyncing(w) {
 		return
 	}
 	kind := normalizeKind(chi.URLParam(r, "kind"))
@@ -2069,11 +2125,15 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	// DiscoverNamespaces if needed). canRead below relies on it.
 	namespaces := s.parseNamespacesForUser(r)
 
-	// Shared RBAC gate. REST converts denies to 200 with `[]` (legacy shape
-	// the frontend tolerates and that doesn't leak kind existence); the AI path
-	// returns the explicit status.
-	finalNamespaces, _, _, ok := s.preflightResourceList(r, kind, group, namespaces)
+	// Most REST lists preserve the empty-list denial response. LimitRange
+	// lookups need an explicit denial so an unreadable namespace is not
+	// presented as having no admission rules.
+	finalNamespaces, status, msg, ok := s.preflightResourceList(r, kind, group, namespaces)
 	if !ok {
+		if kind == "limitranges" && group == "" {
+			s.writeError(w, status, msg)
+			return
+		}
 		// Denied, not empty. writeResourceList resolves columns for an empty
 		// list, and that lookup runs as Radar's own identity — so routing a
 		// denial through it would answer a caller who cannot list the kind with
@@ -2083,9 +2143,8 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	}
 	namespaces = finalNamespaces
 
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
+	cache, ok := s.gateResourceRead(w, kind, group)
+	if !ok {
 		return
 	}
 
@@ -2181,7 +2240,14 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try typed cache for known resource types first
+	// Try typed cache for known resource types first. Canonicalize aliases
+	// ("pod", "pvc", "hpa") to their informer key first: gateResourceRead
+	// admits the whole typed vocabulary mid-sync, and an alias falling
+	// through to the dynamic path would hit a cache that does not exist yet.
+	// The get handler's switch already accepts these aliases directly.
+	if key := informerKeyForKind(kind); key != "" {
+		kind = key
+	}
 	switch kind {
 	case "pods":
 		if cache.Pods() == nil {
@@ -2408,9 +2474,19 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		}
 		result, err = cache.IngressClasses().List(labels.Everything())
 	case "limitranges":
-		if cache.LimitRanges() == nil {
+		if cache.IsDeferredPending("limitranges") || cache.LimitRanges() == nil {
 			notReadyOrForbidden("limitranges")
 			return
+		}
+		scopes := namespaces
+		if scopes == nil {
+			scopes = []string{""}
+		}
+		for _, ns := range scopes {
+			if !cache.KindCoversNamespace("limitranges", ns) {
+				s.writeError(w, http.StatusForbidden, "Radar does not have LimitRange visibility for the requested namespace scope")
+				return
+			}
 		}
 		result, err = listPerNs(
 			func() (any, error) { return cache.LimitRanges().List(labels.Everything()) },
@@ -2491,6 +2567,150 @@ func normalizeKind(kind string) string {
 	return strings.ToLower(kind)
 }
 
+// informerKeyForKind maps a normalized URL kind segment — including the
+// aliases the list/get handlers accept — to its typed informer key. Returns
+// "" for kinds outside the typed informer set (CRDs, dynamic fallthrough).
+func informerKeyForKind(kind string) string {
+	switch kind {
+	case "pods", "pod":
+		return "pods"
+	case "services", "service":
+		return "services"
+	case "deployments", "deployment":
+		return "deployments"
+	case "daemonsets", "daemonset":
+		return "daemonsets"
+	case "statefulsets", "statefulset":
+		return "statefulsets"
+	case "replicasets", "replicaset":
+		return "replicasets"
+	case "ingresses", "ingress":
+		return "ingresses"
+	case "ingressclasses", "ingressclass":
+		return "ingressclasses"
+	case "configmaps", "configmap":
+		return "configmaps"
+	case "secrets", "secret":
+		return "secrets"
+	case "events", "event":
+		return "events"
+	case "persistentvolumeclaims", "persistentvolumeclaim", "pvcs", "pvc":
+		return "persistentvolumeclaims"
+	case "persistentvolumes", "persistentvolume", "pvs", "pv":
+		return "persistentvolumes"
+	case "storageclasses", "storageclass", "sc":
+		return "storageclasses"
+	case "poddisruptionbudgets", "poddisruptionbudget", "pdbs", "pdb":
+		return "poddisruptionbudgets"
+	case "serviceaccounts", "serviceaccount":
+		return "serviceaccounts"
+	case "jobs", "job":
+		return "jobs"
+	case "cronjobs", "cronjob":
+		return "cronjobs"
+	case "hpas", "hpa", "horizontalpodautoscalers", "horizontalpodautoscaler":
+		return "horizontalpodautoscalers"
+	case "nodes", "node":
+		return "nodes"
+	case "namespaces", "namespace":
+		return "namespaces"
+	case "limitranges", "limitrange":
+		return "limitranges"
+	case "resourcequotas", "resourcequota":
+		return "resourcequotas"
+	case "networkpolicies", "networkpolicy", "netpol":
+		return "networkpolicies"
+	case "roles", "role":
+		return "roles"
+	case "clusterroles", "clusterrole":
+		return "clusterroles"
+	case "rolebindings", "rolebinding":
+		return "rolebindings"
+	case "clusterrolebindings", "clusterrolebinding":
+		return "clusterrolebindings"
+	}
+	return ""
+}
+
+// gateResourceRead enforces per-kind readiness for the typed resource read
+// handlers and picks which cache serves the request. Post-connect that is
+// the promoted singleton — readiness must keep gating deferred/promoted kinds
+// syncing in background, or a partial store would serve as an empty or
+// truncated list. During initial sync it is the mid-sync handle, so kinds
+// become readable one by one instead of waiting behind the global connected
+// gate.
+//
+// Returns (cache, true) when the read may proceed; otherwise writes the
+// response and returns (nil, false). Kinds outside the typed informer set —
+// and typed kinds with no informer on this cluster (RBAC-disabled) — fall
+// through with ok=true so the handlers' existing dynamic/forbidden semantics
+// apply unchanged; the dynamic path keeps the connected gate (the dynamic
+// cache exists only after full initialization).
+func (s *Server) gateResourceRead(w http.ResponseWriter, kind, group string) (*k8s.ResourceCache, bool) {
+	key := informerKeyForKind(kind)
+	if key == "" || (group != "" && !k8s.TypedKindOwnsGroup(kind, group)) {
+		if !s.requireConnected(w) {
+			return nil, false
+		}
+		cache := k8s.GetResourceCache()
+		if cache == nil {
+			s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
+			return nil, false
+		}
+		return cache, true
+	}
+	cache, readiness := k8s.ReadableCacheForKind(key)
+	if cache == nil {
+		s.writeNotConnected(w)
+		return nil, false
+	}
+	switch readiness {
+	case k8s.KindPending:
+		s.writeErrorCode(w, http.StatusServiceUnavailable, "kind_sync_pending",
+			fmt.Sprintf("%s are still loading, please retry shortly", key))
+		return nil, false
+	case k8s.KindFailed:
+		s.writeErrorCode(w, http.StatusServiceUnavailable, "kind_sync_failed",
+			fmt.Sprintf("%s failed to load within the sync deadline", key))
+		return nil, false
+	case k8s.KindUnavailable:
+		// No informer for a typed-vocabulary kind (RBAC-disabled). The
+		// existing forbidden semantics need the fully-initialized stack —
+		// mid-sync there is no dynamic cache to fall through to, so answer
+		// "still loading" rather than 500 off a half-built path.
+		if k8s.GetResourceCache() == nil {
+			s.writeErrorCode(w, http.StatusServiceUnavailable, "kind_sync_pending",
+				fmt.Sprintf("%s are still loading, please retry shortly", key))
+			return nil, false
+		}
+		return cache, true
+	default: // KindReady
+		return cache, true
+	}
+}
+
+// requireConnectedOrSyncing is the progressive-read variant of
+// requireConnected: during initial sync the mid-sync cache handle stands in
+// for connectedness, and per-kind readiness (gateResourceRead) does the real
+// gating. Fully disconnected states keep the exact 503 they had before.
+func (s *Server) requireConnectedOrSyncing(w http.ResponseWriter) bool {
+	if k8s.IsConnected() {
+		return true
+	}
+	// Cache handles stand in for connectedness only during startup: the
+	// mid-sync handle while Phase 1 runs, and the promoted singleton in the
+	// window where later subsystems (discovery, helm, traffic) are still
+	// initializing. A disconnected cluster keeps its 503 even though a stale
+	// handle may still exist.
+	if k8s.GetConnectionStatus().State == k8s.StateConnecting {
+		if promoted, syncing := k8s.SnapshotCaches(); promoted != nil || syncing != nil {
+			return true
+		}
+	}
+	s.writeNotConnected(w)
+	return false
+}
+
 // setTypeMeta sets the APIVersion and Kind fields on typed resources.
 // Delegates to k8s.SetTypeMeta.
 func setTypeMeta(resource any) {
@@ -2550,19 +2770,28 @@ func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, gr
 		if (kind == "secrets" || kind == "secret") && !s.canRead(r, "", "secrets", namespace, "get") {
 			return http.StatusForbidden, fmt.Sprintf("no access to secrets in namespace %q", namespace), false
 		}
+		if (kind == "limitranges" || kind == "limitrange") && group == "" && !s.canRead(r, "", "limitranges", namespace, "get") {
+			return http.StatusForbidden, fmt.Sprintf("no access to limitranges in namespace %q", namespace), false
+		}
 	default:
 		// Empty namespace and not a recognized cluster-scoped kind: an empty
 		// namespace means the target is cluster-scoped, but ClassifyKindScope
-		// couldn't identify it (an undiscovered CRD), so no SAR ran. Fail closed —
-		// serving such a resource ungated would let the caller read a cluster-
-		// scoped manifest they may lack `get` on (esp. via the Argo diff token).
+		// couldn't identify it (an undiscovered CRD), so no SAR ran. While
+		// discovery has not initialized yet (progressive startup, context
+		// switch), "unrecognized" means "not discovered yet", not "does not
+		// exist" — answer retryable rather than a permission-shaped terminal
+		// error for a deep link that resolves seconds later. Still fail
+		// closed either way: the resource is never served ungated.
+		if k8s.GetResourceDiscovery() == nil {
+			return http.StatusServiceUnavailable, fmt.Sprintf("%s is not discovered yet, please retry shortly", kind), false
+		}
 		return http.StatusForbidden, fmt.Sprintf("cannot verify access to %q (unrecognized cluster-scoped resource)", kind), false
 	}
 	return 0, "", true
 }
 
 func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
+	if !s.requireConnectedOrSyncing(w) {
 		return
 	}
 	kind := normalizeKind(chi.URLParam(r, "kind"))
@@ -2585,13 +2814,19 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	// filtered list — gate the GET via the user's namespace access for the
 	// requested name, not via cluster-scoped SAR.
 	if status, msg, ok := s.preflightResourceGet(r, kind, namespace, name, group); !ok {
+		if status == http.StatusServiceUnavailable {
+			// Discovery hasn't seen the kind yet (progressive startup): carry
+			// the retryable code so detail hooks keep polling instead of
+			// reporting the cluster unavailable after one retry.
+			s.writeErrorCode(w, status, "cluster_connecting", msg)
+			return
+		}
 		s.writeError(w, status, msg)
 		return
 	}
 
-	cache := k8s.GetResourceCache()
-	if cache == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
+	cache, ok := s.gateResourceRead(w, kind, group)
+	if !ok {
 		return
 	}
 
@@ -2643,6 +2878,10 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		// kind/plural collisions like Knative Service vs core Service).
 		var relationships *topology.Relationships
 		if cachedTopo, relIdx := s.broadcaster.GetCachedTopologyWithIndex(); cachedTopo != nil {
+			if auth.UserFromContext(r.Context()) != nil {
+				cachedTopo = s.relationshipTopologyForUser(r, cachedTopo)
+				relIdx = nil
+			}
 			relationships = topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
 				k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
 				k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
@@ -2792,8 +3031,12 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		}
 		resource, err = cache.IngressClasses().Get(name)
 	case "limitranges", "limitrange":
-		if cache.LimitRanges() == nil {
+		if cache.IsDeferredPending("limitranges") || cache.LimitRanges() == nil {
 			notReadyOrForbiddenGet("limitranges")
+			return
+		}
+		if !cache.KindCoversNamespace("limitranges", namespace) {
+			s.writeError(w, http.StatusForbidden, "Radar does not have LimitRange visibility for the requested namespace")
 			return
 		}
 		resource, err = cache.LimitRanges().LimitRanges(namespace).Get(name)
@@ -2855,12 +3098,23 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 
 	// Get relationships from cached topology. Pass the already-fetched
 	// resource so ManagedBy synthesis uses the authoritative object instead
-	// of a group-blind kind/name lookup.
+	// of a group-blind kind/name lookup. Skipped while serving from the
+	// mid-sync handle (ready singleton still nil) — relationships computed
+	// against a partially-synced cache would be silently incomplete.
 	var relationships *topology.Relationships
-	if cachedTopo, relIdx := s.broadcaster.GetCachedTopologyWithIndex(); cachedTopo != nil {
-		relationships = topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
-			k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
-			k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
+	// One Load, reused: readers are lock-free and a context switch mid-request
+	// could otherwise pass the nil check on one handle and hand the provider a
+	// different (or nil) one.
+	if promoted := k8s.GetResourceCache(); promoted != nil {
+		if cachedTopo, relIdx := s.broadcaster.GetCachedTopologyWithIndex(); cachedTopo != nil {
+			if auth.UserFromContext(r.Context()) != nil {
+				cachedTopo = s.relationshipTopologyForUser(r, cachedTopo)
+				relIdx = nil
+			}
+			relationships = topology.GetRelationshipsWithObject(kind, namespace, name, resource, cachedTopo,
+				k8s.NewTopologyResourceProvider(promoted),
+				k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), relIdx)
+		}
 	}
 
 	// Return resource with relationships
@@ -3855,14 +4109,12 @@ func (s *Server) handleApplyResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "failed to read request body")
+	body, ok := s.readBoundedTextBody(w, r, maxYAMLApplyRequestBytes)
+	if !ok {
 		return
 	}
-	defer r.Body.Close()
 
-	yamlContent := strings.TrimSpace(string(body))
+	yamlContent := strings.TrimSpace(body)
 	if yamlContent == "" {
 		s.writeError(w, http.StatusBadRequest, "request body is empty")
 		return
@@ -3891,6 +4143,19 @@ func (s *Server) handleApplyResource(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Validate the whole request before reaching for a cluster client.
+	docs := k8s.SplitYAMLDocuments(yamlContent)
+	if len(docs) > maxYAMLApplyDocuments {
+		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("apply supports at most %d YAML documents", maxYAMLApplyDocuments))
+		return
+	}
+	for index := range reviewedResourceVersions {
+		if index < 0 || index >= len(docs) {
+			s.writeError(w, http.StatusBadRequest, "reviewedVersions contains an invalid document index")
+			return
+		}
+	}
+
 	client, contextName := s.getDynamicClientSnapshotForRequest(r)
 	if client == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
@@ -3899,15 +4164,6 @@ func (s *Server) handleApplyResource(w http.ResponseWriter, r *http.Request) {
 	if reviewedContext != "" && reviewedContext != contextName {
 		s.writeError(w, http.StatusConflict, "cluster context changed after review; review the YAML again before applying")
 		return
-	}
-
-	// Split multi-document YAML
-	docs := k8s.SplitYAMLDocuments(yamlContent)
-	for index := range reviewedResourceVersions {
-		if index < 0 || index >= len(docs) {
-			s.writeError(w, http.StatusBadRequest, "reviewedVersions contains an invalid document index")
-			return
-		}
 	}
 
 	var results []k8s.ApplyResourceResult
@@ -4443,6 +4699,9 @@ func (s *Server) handleListContexts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	name := chi.URLParam(r, "name")
 	if name == "" {
 		s.writeError(w, http.StatusBadRequest, "context name is required")
@@ -4519,6 +4778,21 @@ func (s *Server) handleConnectionStatus(w http.ResponseWriter, r *http.Request) 
 	if r.URL.Query().Get("contexts") != "0" {
 		contexts, _ := k8s.GetAvailableContexts() // Always works (reads kubeconfig)
 		response["contexts"] = contexts
+	}
+	// While the initial sync is running, expose per-kind readiness so the
+	// frontend can render the app shell progressively instead of the splash.
+	// GetSyncSnapshot is deliberately cheap (no lister walks) — this endpoint
+	// is polled sub-second during the connecting phase.
+	if status.State == k8s.StateConnecting {
+		promoted, syncing := k8s.SnapshotCaches()
+		if syncing != nil {
+			response["syncStatus"] = syncing.GetSyncSnapshot()
+		} else if promoted != nil {
+			// Phase-1 done but later subsystems still initializing: keep the
+			// progressive shell up (deferred kinds keep ticking) instead of
+			// collapsing back to the splash until 'connected'.
+			response["syncStatus"] = promoted.GetSyncSnapshot()
+		}
 	}
 
 	s.writeJSON(w, response)
@@ -4614,6 +4888,9 @@ func (s *Server) handleCAPIClusterKubeconfig(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	if !s.requireConnected(w) {
 		return
 	}
@@ -4819,10 +5096,22 @@ func (s *Server) requireCloudRole(w http.ResponseWriter, r *http.Request, min au
 // Use at the start of handlers that require an active cluster connection.
 func (s *Server) requireConnected(w http.ResponseWriter) bool {
 	if !k8s.IsConnected() {
-		s.writeError(w, http.StatusServiceUnavailable, "Not connected to cluster")
+		s.writeNotConnected(w)
 		return false
 	}
 	return true
+}
+
+// writeNotConnected answers a request that needs the cluster while none is
+// available. During the connecting phase the 503 carries cluster_connecting so
+// the frontend keeps the surface in a loading state ("still loading") instead
+// of declaring a healthy, still-syncing cluster unavailable.
+func (s *Server) writeNotConnected(w http.ResponseWriter) {
+	if k8s.GetConnectionStatus().State == k8s.StateConnecting {
+		s.writeErrorCode(w, http.StatusServiceUnavailable, "cluster_connecting", "Cluster is still connecting, please retry shortly")
+		return
+	}
+	s.writeError(w, http.StatusServiceUnavailable, "Not connected to cluster")
 }
 
 // Auth handlers and helpers
@@ -5218,6 +5507,10 @@ func deploymentMode() k8s.DeploymentMode {
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	if s.configManagement() == "operator" {
+		s.writeJSON(w, map[string]any{"preferenceStorage": "browser"})
+		return
+	}
 	loaded := settings.Load()
 	// Desktop's own state: on a shared instance this would hand every viewer
 	// the cluster name from whenever this $HOME last ran the Desktop app.
@@ -5232,6 +5525,9 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	var patch settings.Settings
 	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
@@ -5273,15 +5569,19 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 // configResponse bundles the on-disk config file with the effective startup
 // config so the UI can show "currently running" hints for values that differ.
 type configResponse struct {
-	File      config.Config `json:"file"`
-	Effective config.Config `json:"effective"`
-	IsDesktop bool          `json:"isDesktop"`
+	Management string        `json:"management"`
+	File       config.Config `json:"file"`
+	Effective  config.Config `json:"effective"`
+	IsDesktop  bool          `json:"isDesktop"`
 	// OpenCostManaged tells Settings that an explicit startup flag owns the
 	// running value even when the persisted file changes.
 	OpenCostManaged bool `json:"openCostCurrencyManaged,omitempty"`
 	// PrometheusHeaderKeys lists the configured Prometheus header names so the UI
 	// can show what's set without ever receiving the (secret) values.
-	PrometheusHeaderKeys []string `json:"prometheusHeaderKeys,omitempty"`
+	PrometheusHeaderKeys     []string `json:"prometheusHeaderKeys,omitempty"`
+	PrometheusServerManaged  bool     `json:"prometheusServerManaged"`
+	PrometheusHeadersManaged bool     `json:"prometheusHeadersManaged"`
+	PrometheusURLFromFlag    bool     `json:"prometheusUrlFromFlag"`
 	// ArgoCDTokenSet tells the UI a token is configured without exposing it.
 	ArgoCDTokenSet     bool   `json:"argoCdTokenSet,omitempty"`
 	KubecostAPIKeySet  bool   `json:"kubecostApiKeySet,omitempty"`
@@ -5304,14 +5604,19 @@ type configResponse struct {
 // PrometheusHeaders are redacted — they may contain Bearer tokens / tenant IDs and the
 // diagnostics endpoint already masks them as a presence bool.
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	if s.configManagement() == "operator" {
+		s.handleGetOperatorConfig(w, r)
+		return
+	}
 	file := config.Load()
 	normalizedCurrency, err := config.NormalizeOpenCostCurrency(file.OpenCostCurrency)
 	if err != nil {
 		normalizedCurrency = ""
 	}
 	file.OpenCostCurrency = normalizedCurrency
-	headerKeys := make([]string, 0, len(file.PrometheusHeaders))
-	for k := range file.PrometheusHeaders {
+	currentURL, currentHeaders := prometheuspkg.CurrentConfig()
+	headerKeys := make([]string, 0, len(currentHeaders))
+	for k := range currentHeaders {
 		headerKeys = append(headerKeys, k)
 	}
 	sort.Strings(headerKeys)
@@ -5355,16 +5660,20 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resp := configResponse{
-		File:                 file,
-		IsDesktop:            version.IsDesktop(),
-		OpenCostManaged:      s.currencyManaged,
-		PrometheusHeaderKeys: headerKeys,
-		ArgoCDTokenSet:       tokenSet,
-		KubecostAPIKeySet:    kubecostAPIKeySet,
-		KubecostEnvManaged:   kubecostEnvManaged,
-		KubecostEnvError:     kubecostEnvError,
-		ArgoCDEnvManaged:     envManaged,
-		ArgoCDEnvError:       envError,
+		Management:               s.configManagement(),
+		File:                     file,
+		IsDesktop:                version.IsDesktop(),
+		OpenCostManaged:          s.currencyManaged,
+		PrometheusHeaderKeys:     headerKeys,
+		PrometheusServerManaged:  s.promURLFlag || s.promHeaderFlags || len(file.PrometheusHeadersFromEnv) > 0,
+		PrometheusHeadersManaged: s.promHeaderFlags || len(file.PrometheusHeadersFromEnv) > 0,
+		PrometheusURLFromFlag:    s.promURLFlag,
+		ArgoCDTokenSet:           tokenSet,
+		KubecostAPIKeySet:        kubecostAPIKeySet,
+		KubecostEnvManaged:       kubecostEnvManaged,
+		KubecostEnvError:         kubecostEnvError,
+		ArgoCDEnvManaged:         envManaged,
+		ArgoCDEnvError:           envError,
 	}
 	// Best-effort: surface a detected Argo CD CLI login so the UI can offer it.
 	// A malformed CLI config just means "no session offered", never a failure.
@@ -5384,6 +5693,7 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		effective.ArgoCDToken = ""
 		resp.Effective = effective
 	}
+	resp.Effective.PrometheusURL = currentURL
 	s.writeJSON(w, resp)
 }
 
@@ -5393,6 +5703,9 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 // Live integration fields are preserved from the on-disk file: their dedicated endpoints
 // apply them, and GET redacts their credentials, so a UI round-trip must not replace them.
 func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
 	}
@@ -5483,6 +5796,9 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 // response carries the live reachability result so the UI can confirm the URL
 // actually works. An empty URL reverts to auto-discovery.
 func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConfigEditable(w, r) {
+		return
+	}
 	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
 		return
 	}
@@ -5506,19 +5822,74 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 	// Reject anything startup would log.Fatalf on, so "Apply now" can't persist a
 	// config that bricks the next launch. Empty reverts to auto-discovery.
 	if rawURL != "" {
-		if u, err := url.Parse(rawURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-			s.writeError(w, http.StatusBadRequest, "Prometheus URL must be a valid HTTP(S) URL (e.g., http://prometheus-server.monitoring:9090)")
+		if u, err := url.Parse(rawURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			s.writeError(w, http.StatusBadRequest, "Prometheus URL must be an HTTP(S) base URL without credentials, query parameters or fragments (e.g., http://prometheus-server.monitoring:9090)")
+			return
+		}
+		if _, valid := prom.NormalizeOrigin(rawURL); !valid {
+			s.writeError(w, http.StatusBadRequest, "Prometheus URL has an invalid port; use a numeric port no greater than 65535")
 			return
 		}
 	}
 
 	var headers map[string]string
 	if body.Headers != nil {
-		headers = make(map[string]string, len(*body.Headers))
-		for k, v := range *body.Headers {
-			if k = strings.TrimSpace(k); k != "" {
-				headers[k] = v
-			}
+		headers = *body.Headers
+		if err := prom.ValidateHeaders(headers); err != nil {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+
+	// Serialize the credential check, persistence and live application. Otherwise
+	// a URL-only edit can reuse credentials replaced by another request mid-save.
+	s.prometheusConfigMu.Lock()
+	defer s.prometheusConfigMu.Unlock()
+	currentURL, currentHeaders := prometheuspkg.CurrentConfig()
+	previous := config.Load()
+	if body.Headers != nil && (s.promHeaderFlags || len(previous.PrometheusHeadersFromEnv) > 0) {
+		s.writeError(w, http.StatusConflict, "Prometheus headers are configured outside Settings. Update their startup flags, environment references or Helm values, then restart Radar; no changes were saved.")
+		return
+	}
+
+	// On restart, URL or header flags can split a saved endpoint/credential pair.
+	// Bind edits to the immutable startup URL, not the mutable running client.
+	if (s.promURLFlag || s.promHeaderFlags) && (s.effectiveConfig == nil || !sameIntegrationOrigin(rawURL, s.effectiveConfig.PrometheusURL)) {
+		s.writeError(w, http.StatusConflict, "Prometheus is configured by startup flags. Update the URL and header flags together, then restart Radar to set or change the server, or enable auto-discovery.")
+		return
+	}
+
+	if rawURL != "" {
+		savedHeaderURL := previous.PrometheusURL
+		if savedHeaderURL == "" && (s.promURLFlag || s.promHeaderFlags) && s.effectiveConfig != nil {
+			savedHeaderURL = s.effectiveConfig.PrometheusURL
+		}
+		if len(previous.PrometheusHeadersFromEnv) > 0 &&
+			(!sameIntegrationOrigin(rawURL, currentURL) || previous.PrometheusURL != "" && !sameIntegrationOrigin(rawURL, previous.PrometheusURL)) {
+			s.writeError(w, http.StatusConflict, "Prometheus headers are loaded from environment references in the configuration file. Update the URL and header references together in that file, then restart Radar.")
+			return
+		}
+		if body.Headers == nil &&
+			(len(currentHeaders) > 0 && !sameIntegrationOrigin(rawURL, currentURL) ||
+				len(previous.PrometheusHeaders) > 0 && !sameIntegrationOrigin(rawURL, savedHeaderURL)) {
+			s.writeError(w, http.StatusBadRequest, "Changing the Prometheus server requires replacing or clearing its headers. Existing credentials cannot be sent to a different server.")
+			return
+		}
+	}
+
+	// Headers without a URL would send credentials to auto-discovered
+	// endpoints, so the pair is refused before anything is persisted. The
+	// check runs against what will actually be in effect: the submitted
+	// headers, or when they aren't being edited the running client's (which
+	// already fold in flags, env and file), plus env-sourced headers on disk
+	// that the next start resolves again regardless of what's submitted here.
+	if rawURL == "" {
+		effective := body.Headers != nil && len(headers) > 0 ||
+			body.Headers == nil && (len(currentHeaders) > 0 || len(previous.PrometheusHeaders) > 0) ||
+			len(previous.PrometheusHeadersFromEnv) > 0
+		if effective {
+			s.writeError(w, http.StatusBadRequest, "Prometheus headers require a Prometheus URL: keep a URL, or clear the headers (including any prometheusHeadersFromEnv in the Helm values) before switching back to auto-discovery")
+			return
 		}
 	}
 
@@ -5535,15 +5906,22 @@ func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Apply to the running client. Reset() drops the cached connection so the
-	// probe below rediscovers against the new URL instead of the old endpoint.
-	prometheuspkg.SetManualURL(rawURL)
-	traffic.SetMetricsURL(rawURL)
-	if body.Headers != nil {
-		prometheuspkg.SetHeaders(headers)
-		traffic.SetMetricsHeaders(headers)
+	// Apply URL and headers to the running client in one step, dropping the
+	// cached connection with them, so no request can probe the previous
+	// endpoint with the new credentials.
+	effectiveHeaders := headers
+	if body.Headers == nil {
+		effectiveHeaders = currentHeaders
 	}
-	prometheuspkg.Reset()
+	prometheuspkg.Configure(rawURL, effectiveHeaders)
+	// A live traffic source copies URL and headers at construction and reads
+	// them lock-free afterwards, so the only way rotated or cleared
+	// credentials stop being used is to rebuild it — the same teardown a
+	// context switch performs.
+	traffic.SetMetricsConfig(rawURL, effectiveHeaders)
+	if err := k8s.RestartTrafficSubsystem(); err != nil {
+		log.Printf("[traffic] Failed to reinitialize after Prometheus config change: %v", err)
+	}
 	if s.openCostCurrency != nil {
 		s.openCostCurrency.Invalidate()
 	}

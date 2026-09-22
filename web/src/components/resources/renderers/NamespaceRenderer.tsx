@@ -1,7 +1,7 @@
 import { NamespaceRenderer as BaseNamespaceRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/NamespaceRenderer'
 import type { ResourceRef } from '@skyhook-io/k8s-ui'
 import { useRBACNamespace } from '../../../api/rbac'
-import { useNamespaceQuotas } from '../../../api/quotas'
+import { useNamespaceLimitRanges, useNamespaceQuotas } from '../../../api/quotas'
 import { isForbiddenError } from '../../../api/client'
 
 interface NamespaceRendererProps {
@@ -17,6 +17,9 @@ export function NamespaceRenderer({ data, onNavigate }: NamespaceRendererProps) 
   // RBAC sections). Surface other errors (500/503) so a quota-constrained
   // namespace doesn't silently render as quota-free.
   const quotaErr = quotaError && !isForbiddenError(quotaError) ? (quotaError as Error) : null
+  // LimitRanges keep their 403: the section states the denial rather than
+  // hiding, because "no rules apply here" is the wrong thing to imply.
+  const { data: limitRangeData, isLoading: limitRangeLoading, error: limitRangeError } = useNamespaceLimitRanges(name, !!name)
   return (
     <BaseNamespaceRenderer
       data={data}
@@ -25,6 +28,9 @@ export function NamespaceRenderer({ data, onNavigate }: NamespaceRendererProps) 
       rbacError={error as Error | null}
       quotaData={quotaData}
       quotaError={quotaErr}
+      limitRangeData={limitRangeData}
+      limitRangeLoading={limitRangeLoading}
+      limitRangeError={limitRangeError}
       onNavigate={onNavigate}
     />
   )

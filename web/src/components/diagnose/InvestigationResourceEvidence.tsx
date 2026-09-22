@@ -51,6 +51,26 @@ function ConfigMapEvidence({
             </colgroup>
             <tbody className="divide-y divide-theme-border/70">
               {entries.map((entry) => {
+                // A file-shaped value (YAML, a config) reads as a block under
+                // its key, not squeezed into the right-hand column.
+                const value = entry.value ?? "";
+                const block =
+                  !entry.sensitive &&
+                  !entry.binary &&
+                  (value.includes("\n") || value.length > 80);
+                if (block)
+                  return (
+                    <tr key={`data-${entry.key}`}>
+                      <td colSpan={2} className="px-2.5 py-1.5 align-top">
+                        <span className="block font-mono text-xs font-medium text-theme-text-secondary">
+                          {entry.key}
+                        </span>
+                        <pre className="mt-1 max-h-48 overflow-auto whitespace-pre font-mono text-xs leading-relaxed text-theme-text-primary">
+                          {value}
+                        </pre>
+                      </td>
+                    </tr>
+                  );
                 return (
                   <tr key={`${entry.binary ? "binary" : "data"}-${entry.key}`}>
                     <th

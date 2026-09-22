@@ -10,7 +10,15 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/prom"
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 // These tests drive the HTTP metrics routes end-to-end against a fake
@@ -28,6 +36,7 @@ type authFakeProm struct {
 	rangeParams []url.Values
 	queryCalls  int
 	rangeBody   string
+	queryBody   string // instant-query body; empty falls back to authVectorBody
 }
 
 func (f *authFakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -41,7 +50,11 @@ func (f *authFakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.queryCalls++
-		_, _ = w.Write([]byte(authVectorBody))
+		body := f.queryBody
+		if body == "" {
+			body = authVectorBody
+		}
+		_, _ = w.Write([]byte(body))
 	case "/api/v1/query_range":
 		f.rangeParams = append(f.rangeParams, q)
 		body := f.rangeBody
@@ -77,12 +90,37 @@ func setupAuthFakeProm(t *testing.T) *authFakeProm {
 	srv := httptest.NewServer(f)
 	Initialize(nil, nil, "auth-test")
 	SetManualURL(srv.URL)
+	seedScopeCache(t)
 	t.Cleanup(func() {
 		srv.Close()
 		Reset()
 		Initialize(nil, nil, "")
 	})
 	return f
+}
+
+// seedScopeCache gives the workload rows of the matrix pods to resolve:
+// Deployment alpha/web owns one pod through a ReplicaSet, CronJob
+// alpha/nightly owns one through a Job. Without a cluster cache the chart
+// handler refuses rather than guessing pods from the name.
+func seedScopeCache(t *testing.T) {
+	t.Helper()
+	isController := true
+	owner := func(kind, name string) metav1.OwnerReference {
+		return metav1.OwnerReference{APIVersion: "apps/v1", Kind: kind, Name: name, Controller: &isController}
+	}
+	objects := []runtime.Object{
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "web"}},
+		&appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "web-7f6", OwnerReferences: []metav1.OwnerReference{owner("Deployment", "web")}}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "web-7f6-a", OwnerReferences: []metav1.OwnerReference{owner("ReplicaSet", "web-7f6")}}},
+		&batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "nightly"}},
+		&batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "nightly-1", OwnerReferences: []metav1.OwnerReference{owner("CronJob", "nightly")}}},
+		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "alpha", Name: "nightly-1-k", OwnerReferences: []metav1.OwnerReference{owner("Job", "nightly-1")}}},
+	}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(objects...)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestState)
 }
 
 func metricsRouter() http.Handler {
@@ -349,5 +387,131 @@ func TestMetricsKindResourceCoversSupportedKinds(t *testing.T) {
 	SetAuthGate(func(*http.Request, string, string, string, string) bool { return true })
 	if canReadMetricsResource(httptest.NewRequest(http.MethodGet, "/", nil), "Widget", "alpha") {
 		t.Error("an unmapped kind must be denied even when the gate allows everything")
+	}
+	// A builtin Radar does not chart resolves in the shared GVR catalogues but
+	// is not chartable, so the supported-kind allowlist must still refuse it.
+	if _, _, _, ok := metricsKindResource("Secret"); ok {
+		t.Error("a builtin kind outside prom.SupportedKinds must not map")
+	}
+}
+
+// The workload chart reports how its pods were established, and never falls
+// back to a name prefix that would also chart a sibling workload's pods.
+func TestResourceMetricsNamesTheWorkloadsOwnPods(t *testing.T) {
+	SetAuthGate(nil)
+	f := setupAuthFakeProm(t)
+	h := metricsRouter()
+
+	rec := getMetrics(t, h, "/prometheus/resources/Deployment/alpha/web?category=cpu")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp ResourceMetricsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Pods == nil || *resp.Pods != 1 || resp.PodsTotal != 1 {
+		t.Fatalf("pods = %v/%d, want the one owned pod counted", resp.Pods, resp.PodsTotal)
+	}
+	queries := f.queries(t)
+	if len(queries) == 0 {
+		t.Fatal("no range query reached prometheus")
+	}
+	last := queries[len(queries)-1]
+	if !strings.Contains(last, `pod=~'^(web-7f6-a)$'`) {
+		t.Fatalf("query should name the owned pod exactly: %s", last)
+	}
+	if strings.Contains(last, "web-.*") {
+		t.Fatalf("query still infers pods from the workload name: %s", last)
+	}
+	if !strings.Contains(last, "by (pod,namespace)") {
+		t.Fatalf("the workload page needs one series per pod: %s", last)
+	}
+}
+
+// Membership comes from the cluster, not from Prometheus, so an empty
+// Prometheus answer does not change which pods the query names.
+func TestResourceMetricsMembershipDoesNotDependOnPrometheus(t *testing.T) {
+	SetAuthGate(nil)
+	f := setupAuthFakeProm(t)
+	f.queryBody = `{"status":"success","data":{"resultType":"vector","result":[]}}`
+	h := metricsRouter()
+
+	rec := getMetrics(t, h, "/prometheus/resources/Deployment/alpha/web?category=cpu")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp ResourceMetricsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Pods == nil || *resp.Pods != 1 {
+		t.Fatalf("pods = %v, want 1", resp.Pods)
+	}
+	queries := f.queries(t)
+	last := queries[len(queries)-1]
+	if !strings.Contains(last, `pod=~'^(web-7f6-a)$'`) || strings.Contains(last, "web-.*") {
+		t.Fatalf("query should name the owned pod exactly: %s", last)
+	}
+}
+
+// A permission failure and a cache that is not ready yet are different
+// answers: one will never succeed on retry. The repo maps RBAC denial to 403
+// and an unready cache to 503, and a chart that cannot name its pods has to
+// tell them apart.
+func TestResourceMetricsSeparatesDenialFromUnreadiness(t *testing.T) {
+	SetAuthGate(nil)
+	setupAuthFakeProm(t)
+	// Pods are watched in another namespace only, so alpha cannot be answered
+	// for — the shape probe-based RBAC gating produces on a denied
+	// cluster-wide list.
+	if err := k8s.InitScopedTestResourceCache(
+		fake.NewClientset(),
+		map[string]k8score.ResourceScope{
+			k8score.Pods: {Enabled: true, Namespace: "beta"},
+		},
+	); err != nil {
+		t.Fatalf("InitScopedTestResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+
+	rec := getMetrics(t, metricsRouter(), "/prometheus/resources/Deployment/alpha/web?category=cpu")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 for a namespace the cache cannot list; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// A workload with no pods must not be charted from a name pattern. The
+// selection matches nothing rather than falling back to the namespace.
+func TestResourceMetricsChartsNothingForAWorkloadWithNoPods(t *testing.T) {
+	SetAuthGate(nil)
+	f := setupAuthFakeProm(t)
+	h := metricsRouter()
+
+	f.queryBody = `{"status":"success","data":{"resultType":"vector","result":[]}}`
+	rec := getMetrics(t, h, "/prometheus/resources/Deployment/alpha/ghost?category=cpu")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 with an empty result; body=%s", rec.Code, rec.Body.String())
+	}
+	var resp ResourceMetricsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Zero has to survive the wire: the caption that tells an empty chart
+	// apart from a kind with no pod scope reads this field, and an omitted
+	// zero is indistinguishable from a Node.
+	if !strings.Contains(rec.Body.String(), `"pods":0`) {
+		t.Fatalf("a workload with no pods must serialize pods:0, got %s", rec.Body.String())
+	}
+	if resp.Pods == nil || *resp.Pods != 0 {
+		t.Fatalf("pods = %v, want 0", resp.Pods)
+	}
+	queries := f.queries(t)
+	last := queries[len(queries)-1]
+	if !strings.Contains(last, `pod=~'a^'`) {
+		t.Fatalf("a workload with no pods must match nothing, got: %s", last)
+	}
+	if strings.Contains(last, "ghost-.*") {
+		t.Fatalf("query fell back to a name pattern: %s", last)
 	}
 }

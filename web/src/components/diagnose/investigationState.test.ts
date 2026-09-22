@@ -14,6 +14,7 @@ import {
   investigationClosedEventIsLive,
   investigationClosedRunIsUnavailable,
   investigationEvidenceInputsEqual,
+  investigationEvidenceCoverageGaps,
   investigationEvidenceCoverageLimited,
   investigationEvidenceConflictsWithHealthy,
   investigationHealthConflictExplainedBy,
@@ -22,7 +23,10 @@ import {
   investigationInteractionsBlocked,
   investigationIsReadOnly,
   investigationPaneCenteredScrollTop,
-  investigationLiveCaseTurnIndex,
+  investigationAssessmentTurnIndexes,
+  investigationHealthSignals,
+  investigationSettledAnswerTurnIndexes,
+  investigationIsAssessmentTurn,
 } from "./investigationState";
 
 describe("investigation terminal presentation", () => {
@@ -169,6 +173,38 @@ describe("investigation terminal presentation", () => {
 });
 
 describe("investigation evidence projection stability", () => {
+  it("does not call a resource read partial when Diagnose cannot bundle the kind", () => {
+    const projection = {
+      limitations: [],
+      coverage: { attempted: 1, projected: 1, limited: 0, checked: 0 },
+      sources: [
+        { id: "resource", tool: "get_resource", confirmedSuccess: true },
+      ],
+      groups: [
+        {
+          latest: { relevance: "target" as const, source: { id: "resource" } },
+        },
+      ],
+    };
+    expect(
+      investigationEvidenceCoverageGaps(projection, "HorizontalPodAutoscaler"),
+    ).toEqual({ noEvidence: false, noTargetDiagnosis: false });
+    expect(
+      investigationEvidenceCoverageLimited(
+        projection,
+        "HorizontalPodAutoscaler",
+      ),
+    ).toBe(false);
+    expect(investigationEvidenceCoverageGaps(projection, "Deployment")).toEqual(
+      {
+        noEvidence: false,
+        noTargetDiagnosis: true,
+      },
+    );
+    expect(investigationEvidenceCoverageLimited(projection, "Deployment")).toBe(
+      true,
+    );
+  });
   it("treats zero projected producer evidence as limited coverage", () => {
     expect(
       investigationEvidenceCoverageLimited({
@@ -358,6 +394,8 @@ describe("investigation evidence projection stability", () => {
         note("g2", "rules_out"),
       ]),
     ).toBe(null);
+    // A note on a superseded revision of the card is not an explanation of
+    // the card as it now stands.
     expect(
       investigationHealthConflictExplainedBy(projection, [
         note("g1", "benign"),
@@ -573,14 +611,14 @@ describe("investigation action gating", () => {
       lastApplyAttemptIdx: -1,
       localApplyAttemptAssessmentIdx: -1,
       interactionsBlocked: false,
-      hosted: false,
+      canApply: true,
       hasNewerEvidence: false,
     };
     expect(canOfferInvestigationApply(base)).toBe(true);
     expect(
       canOfferInvestigationApply({ ...base, hasNewerEvidence: true }),
     ).toBe(false);
-    expect(canOfferInvestigationApply({ ...base, hosted: true })).toBe(false);
+    expect(canOfferInvestigationApply({ ...base, canApply: false })).toBe(false);
     expect(
       canOfferInvestigationApply({ ...base, interactionsBlocked: true }),
     ).toBe(false);
@@ -815,84 +853,423 @@ describe("investigation action gating", () => {
   });
 });
 
-describe("investigationLiveCaseTurnIndex", () => {
-  const linkedItem = {
-    status: "linked" as const,
-    ref: "ev_x",
-    role: "context" as const,
-    claim: "c",
-  };
+describe("investigationAssessmentTurnIndexes", () => {
   const assessment = {
     status: "done" as const,
     diagnosis: { healthy: true, rootCause: "", report: "", remediation: [] },
   };
-  it("keeps the assessment when no later turn cites evidence", () => {
-    const answer = {
+  it("keeps the assessment across answers that only restate a root cause", () => {
+    // Agents restate the cause on most answers; without an explicit revision
+    // signal every question would rewrite Findings.
+    const restating = {
       status: "done" as const,
-      question: "why?",
-      diagnosis: { rootCause: "", report: "because", remediation: [] },
-    };
-    expect(investigationLiveCaseTurnIndex([assessment, answer], 0)).toBe(0);
-  });
-  it("moves to an answer turn that carries a bound case or linked root-cause refs", () => {
-    const cited = {
-      status: "done" as const,
-      question: "chart it and cite it",
+      question: "get the secret",
       diagnosis: {
-        rootCause: "",
+        rootCause: "Secret x does not exist",
         report: "",
         remediation: [],
-        evidence: [linkedItem],
       },
     };
-    expect(investigationLiveCaseTurnIndex([assessment, cited], 0)).toBe(1);
-    const legacy = {
-      status: "done" as const,
-      question: "what broke?",
-      diagnosis: {
-        rootCause: "x",
-        report: "",
-        remediation: [],
-        rootCauseEvidence: { status: "linked" as const, refs: ["ev_x"] },
-      },
-    };
-    expect(investigationLiveCaseTurnIndex([assessment, legacy], 0)).toBe(1);
-    const unlinkedOnly = {
-      ...cited,
-      diagnosis: {
-        ...cited.diagnosis,
-        evidence: [{ status: "unlinked" as const }],
-      },
-    };
-    expect(investigationLiveCaseTurnIndex([assessment, unlinkedOnly], 0)).toBe(
-      0,
+    expect(investigationAssessmentTurnIndexes([assessment, restating])).toEqual(
+      [0],
     );
+    expect(investigationIsAssessmentTurn(restating)).toBe(false);
   });
-  it("ignores apply, explanation, running, and superseded turns", () => {
-    const cited = {
+  it("accepts a question turn only when it revises with a complete verdict", () => {
+    const revised = {
       status: "done" as const,
-      question: "cite",
+      question: "could it be OOM?",
       diagnosis: {
-        rootCause: "",
+        rootCause: "The container is OOM-killed.",
+        summary: "The app runs out of memory.",
+        revisesAssessment: true,
         report: "",
         remediation: [],
-        evidence: [linkedItem],
       },
     };
+    expect(investigationAssessmentTurnIndexes([assessment, revised])).toEqual([
+      0, 1,
+    ]);
+    const flagOnly = {
+      ...revised,
+      diagnosis: { ...revised.diagnosis, summary: undefined },
+    };
+    expect(investigationIsAssessmentTurn(flagOnly)).toBe(false);
+    const noVerdict = {
+      ...revised,
+      diagnosis: {
+        rootCause: "",
+        summary: "Words.",
+        revisesAssessment: true,
+        report: "",
+        remediation: ["x"],
+      },
+    };
+    expect(investigationIsAssessmentTurn(noVerdict)).toBe(false);
+  });
+  it("always takes verifications and never apply, explanation or running turns", () => {
+    const verify = { ...assessment, question: "re-check", verify: true };
     expect(
-      investigationLiveCaseTurnIndex(
+      investigationAssessmentTurnIndexes([
+        assessment,
+        { ...assessment, apply: true },
+        { ...assessment, explainAssessment: 2 },
+        { ...assessment, status: "running" as const },
+        verify,
+      ]),
+    ).toEqual([0, 4]);
+  });
+});
+
+describe("adverse evidence and the healthy-conflict banner", () => {
+  const group = (kind: string, tone: string) => ({
+    id: `${kind}-1`,
+    kind,
+    historical: false,
+    latest: { tier: "supporting" as const, relevance: "target" as const, tone },
+  });
+
+  it("counts every kind Radar can capture a live problem in", () => {
+    // The round that added alerts and Helm cards forgot this rule, so a
+    // firing alert naming the workload sat under a green banner.
+    for (const kind of [
+      "issue",
+      "startup",
+      "crash",
+      "resource",
+      "logs",
+      "events",
+      "dns",
+      "network",
+      "alerts",
+      "helm",
+    ]) {
+      expect(
+        investigationEvidenceConflictsWithHealthy({
+          groups: [group(kind, "error")],
+        }),
+        kind,
+      ).toBe(true);
+    }
+    // A change, a receipt, a chart or a permission grant describe the world,
+    // not a problem in it.
+    for (const kind of [
+      "changes",
+      "receipt",
+      "metrics",
+      "permissions",
+      "relationships",
+      "topology",
+      "inventory",
+    ]) {
+      expect(
+        investigationEvidenceConflictsWithHealthy({
+          groups: [group(kind, "error")],
+        }),
+        kind,
+      ).toBe(false);
+    }
+  });
+
+  // `observe` splits one log stream read by two calls into two groups, so the
+  // explained check deliberately matches a note across groups sharing a kind
+  // and identity. That crossing must not reach forward in time: a later turn
+  // reading the same stream can report a different failure, and the
+  // assessment never saw it.
+  it("refuses a note as explaining a reading captured after the assessment", () => {
+    const logGroup = (id: string, turnIndex: number) => ({
+      id,
+      // Same stream, different calls: what the twin lookup exists for.
+      identity: "logs:current:api-7f6-a:api",
+      kind: "logs",
+      historical: false,
+      latest: {
+        tier: "supporting" as const,
+        relevance: "target" as const,
+        tone: "warning",
+        title: "Error logs",
+        source: { turnIndex },
+      },
+    });
+    const note = (groupId: string, turnIndex: number) => ({
+      role: "benign",
+      placement: "card" as const,
+      claim: "the warmup error clears once the cache fills",
+      groupId,
+      source: { turnIndex },
+    });
+
+    // Two calls in the assessment's own turn read the same stream. The note
+    // sits on one group and explains its twin as well.
+    expect(
+      investigationHealthConflictExplainedBy(
+        { groups: [logGroup("g-a", 0), logGroup("g-b", 0)] },
+        [note("g-a", 0)],
+      ),
+    ).toEqual(["Error logs", "Error logs"]);
+
+    // A later turn reads the same stream and reports a different failure.
+    // The turn-0 note was about something else and must not soften it.
+    expect(
+      investigationHealthConflictExplainedBy(
+        { groups: [logGroup("g-a", 0), logGroup("g-c", 1)] },
+        [note("g-a", 0)],
+      ),
+    ).toBe(null);
+  });
+
+  it("counts the intermediate alert tone, which carries every high severity", () => {
+    for (const tone of ["warning", "alert", "error"]) {
+      expect(
+        investigationEvidenceConflictsWithHealthy({
+          groups: [group("issue", tone)],
+        }),
+        tone,
+      ).toBe(true);
+    }
+    for (const tone of ["neutral", "info", "success"]) {
+      expect(
+        investigationEvidenceConflictsWithHealthy({
+          groups: [group("issue", tone)],
+        }),
+        tone,
+      ).toBe(false);
+    }
+  });
+});
+
+describe("investigationSettledAnswerTurnIndexes", () => {
+  const assessment = {
+    status: "done" as const,
+    diagnosis: { rootCause: "x", report: "s", remediation: [], summary: "S." },
+  };
+  const answer = (revises?: boolean) => ({
+    status: "done" as const,
+    question: "q",
+    diagnosis: {
+      rootCause: "",
+      report: "a",
+      remediation: [],
+      revisesAssessment: revises,
+    },
+  });
+  it("settles non-revising answers under the story contract only", () => {
+    expect(
+      investigationSettledAnswerTurnIndexes(
         [
           assessment,
-          { ...cited, apply: true },
-          { ...cited, explainAssessment: 2 },
-          { ...cited, status: "running" as const },
+          answer(false),
+          answer(true),
+          { ...answer(), verify: true },
         ],
         0,
       ),
-    ).toBe(0);
-    // A newer assessment after the cited answer is the current one.
+    ).toEqual(new Set([1]));
+    const legacy = {
+      ...assessment,
+      diagnosis: { ...assessment.diagnosis, summary: undefined },
+    };
     expect(
-      investigationLiveCaseTurnIndex([assessment, cited, assessment], 2),
-    ).toBe(2);
+      investigationSettledAnswerTurnIndexes([legacy, answer(false)], 0),
+    ).toEqual(new Set());
+  });
+});
+
+describe("investigationHealthSignals", () => {
+  const adverse = (id: string, title: string) => ({
+    id,
+    identity: id,
+    historical: false,
+    kind: "issue",
+    latest: {
+      relevance: "target" as const,
+      tier: "key" as const,
+      tone: "warning",
+      title,
+      source: { turnIndex: 0, id: `src-${id}` },
+    },
+  });
+  it("classifies each adverse card by the agent's position on it", () => {
+    const projection = {
+      groups: [
+        adverse("a", "Readiness probe failing"),
+        adverse("b", "Restarts"),
+        adverse("c", "OOM"),
+        adverse("d", "Evicted"),
+      ],
+    };
+    const items = [
+      {
+        role: "benign",
+        placement: "card" as const,
+        claim: "Timeouts never removed it from endpoints.",
+        groupId: "a",
+        source: { turnIndex: 0 },
+      },
+      {
+        role: "demoted",
+        placement: "card" as const,
+        claim: "Old restarts.",
+        groupId: "b",
+        source: { turnIndex: 0 },
+      },
+      {
+        role: "symptom",
+        placement: "card" as const,
+        claim: "",
+        groupId: "c",
+        source: { turnIndex: 0 },
+      },
+    ];
+    expect(
+      investigationHealthSignals(projection, items).map((s) => [
+        s.title,
+        s.status,
+      ]),
+    ).toEqual([
+      ["Readiness probe failing", "explained"],
+      ["Restarts", "related"],
+      ["OOM", "contradiction"],
+      ["Evicted", "unaddressed"],
+    ]);
+  });
+});
+
+describe("investigationHealthSignals twins across scopes", () => {
+  const warning = {
+    reason: "Unhealthy",
+    message:
+      "Readiness probe failed: check failed http://localhost:9898/readyz",
+    type: "Warning",
+  };
+  const eventsGroup = (
+    id: string,
+    identity: string,
+    patch: {
+      relevance?: "target" | "producer-related" | "broader";
+      events?: (typeof warning)[];
+      turnIndex?: number;
+    } = {},
+  ) => ({
+    id,
+    identity,
+    historical: false,
+    kind: "events",
+    latest: {
+      relevance: patch.relevance ?? ("target" as const),
+      tier: "key" as const,
+      tone: "warning",
+      title: "Kubernetes events",
+      summary: `${warning.reason}: ${warning.message} · ${identity}`,
+      data: { type: "events", events: patch.events ?? [warning] },
+      source: { turnIndex: patch.turnIndex ?? 0, id },
+    },
+  });
+  const benignOnPod = [
+    {
+      role: "benign",
+      placement: "card" as const,
+      claim:
+        "Probe timeouts during a node stall; the pod has been Ready since.",
+      groupId: "events-pod",
+      source: { turnIndex: 0 },
+    },
+  ];
+
+  it("lets a benign note on the Pod's copy of a warning explain the Deployment's copy", () => {
+    const groups = [
+      eventsGroup("events-deploy", "deployment demo/podinfo"),
+      eventsGroup("events-pod", "pod demo/podinfo-676569b68b-6278c"),
+    ];
+    expect(
+      investigationHealthSignals({ groups }, benignOnPod).map((signal) => [
+        signal.groupId,
+        signal.status,
+      ]),
+    ).toEqual([
+      ["events-deploy", "explained"],
+      ["events-pod", "explained"],
+    ]);
+    expect(
+      investigationHealthConflictExplainedBy({ groups }, benignOnPod),
+    ).toEqual(["Kubernetes events", "Kubernetes events"]);
+  });
+
+  it("does not let an earlier turn's note on the Pod explain the Deployment's copy captured later", () => {
+    const groups = [
+      eventsGroup("events-deploy", "deployment demo/podinfo", { turnIndex: 1 }),
+      eventsGroup("events-pod", "pod demo/podinfo-676569b68b-6278c"),
+    ];
+    expect(
+      investigationHealthSignals({ groups }, benignOnPod).map((signal) => [
+        signal.groupId,
+        signal.status,
+      ]),
+    ).toEqual([
+      ["events-deploy", "unaddressed"],
+      ["events-pod", "explained"],
+    ]);
+  });
+
+  it("never twins a cluster-scoped card with a namespaced one", () => {
+    const groups = [
+      eventsGroup("events-node", "node worker-1"),
+      eventsGroup("events-pod", "pod demo/podinfo-676569b68b-6278c"),
+    ];
+    expect(
+      investigationHealthSignals({ groups }, benignOnPod).map((signal) => [
+        signal.groupId,
+        signal.status,
+      ]),
+    ).toEqual([
+      ["events-node", "unaddressed"],
+      ["events-pod", "explained"],
+    ]);
+  });
+
+  it("does not let a card with one warning explain a card that carries that warning and another", () => {
+    const extra = {
+      reason: "BackOff",
+      message: "Back-off restarting failed container",
+      type: "Warning",
+    };
+    const groups = [
+      eventsGroup("events-deploy", "deployment demo/podinfo", {
+        events: [warning, extra],
+      }),
+      eventsGroup("events-pod", "pod demo/podinfo-676569b68b-6278c"),
+    ];
+    expect(
+      investigationHealthSignals({ groups }, benignOnPod).map((signal) => [
+        signal.groupId,
+        signal.status,
+      ]),
+    ).toEqual([
+      ["events-deploy", "unaddressed"],
+      ["events-pod", "explained"],
+    ]);
+  });
+
+  it("keeps a different warning, another namespace, or a broader card as its own signal", () => {
+    const groups = [
+      eventsGroup("events-deploy", "deployment demo/podinfo", {
+        events: [{ ...warning, message: "Liveness probe failed: timeout" }],
+      }),
+      eventsGroup("events-elsewhere", "deployment other/podinfo"),
+      eventsGroup("events-broader", "deployment demo/frontend", {
+        relevance: "broader",
+      }),
+      eventsGroup("events-pod", "pod demo/podinfo-676569b68b-6278c"),
+    ];
+    expect(
+      investigationHealthSignals({ groups }, benignOnPod).map((signal) => [
+        signal.groupId,
+        signal.status,
+      ]),
+    ).toEqual([
+      ["events-deploy", "unaddressed"],
+      ["events-elsewhere", "unaddressed"],
+      ["events-pod", "explained"],
+    ]);
   });
 });

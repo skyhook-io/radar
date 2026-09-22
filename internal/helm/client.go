@@ -56,6 +56,10 @@ type Client struct {
 	mu         sync.RWMutex
 	settings   *cli.EnvSettings
 	kubeconfig string
+	// chartPathLocator is a test seam for chart transport. Production callers
+	// leave it nil and use locateChartPath, which wires Helm's registry client
+	// for OCI references.
+	chartPathLocator func(*action.Configuration, string, string) (string, error)
 	// restConfig, when set, is the explicit rest.Config all actions target —
 	// used by callers that resolve the cluster themselves before Radar's k8s
 	// singleton is up (the CLI install driver), so Helm can't diverge onto a
@@ -351,7 +355,7 @@ func (c *Client) ListReleasesAcrossNamespaces(namespaces []string, username stri
 	if namespaces == nil {
 		return c.ListReleasesAsUser("", username, groups)
 	}
-	var all []HelmRelease
+	all := make([]HelmRelease, 0)
 	var lastForbidden error
 	authorized := false
 	for _, ns := range namespaces {
@@ -2561,10 +2565,197 @@ func (c *Client) upgradeWithValues(actionConfig *action.Configuration, name, tar
 }
 
 func (c *Client) chartForUpgradeTarget(actionConfig *action.Configuration, rel *release.Release, targetVersion, repositoryName string, sendProgress func(phase, message, detail string)) (*chart.Chart, error) {
-	if targetVersion == "" || targetVersion == rel.Chart.Metadata.Version {
-		return rel.Chart, nil
+	return c.chartForUpgradeTargetWithLoader(actionConfig, rel, targetVersion, repositoryName, sendProgress, c.loadTargetChart)
+}
+
+type targetChartLoader func(*action.Configuration, *release.Release, string, string, func(string, string, string)) (*chart.Chart, error)
+
+// chartForUpgradeTargetWithLoader returns a chart that is safe to render. Helm's
+// stored release representation does not serialize Chart.dependencies, so an
+// umbrella release can retain dependency declarations in Chart.yaml while all
+// child chart bodies are absent. Reusing that object for a same-version values
+// operation renders only the parent and makes the resulting upgrade destructive.
+//
+// A complete in-memory release chart remains reusable. An incomplete one is
+// reconstructed through the same configured-source resolver used by upgrades,
+// pinned to the installed chart version. The loaded chart is checked again so a
+// source package that merely declares (but does not vendor) dependencies fails
+// closed.
+func (c *Client) chartForUpgradeTargetWithLoader(actionConfig *action.Configuration, rel *release.Release, targetVersion, repositoryName string, sendProgress func(phase, message, detail string), load targetChartLoader) (*chart.Chart, error) {
+	if rel == nil || rel.Chart == nil || rel.Chart.Metadata == nil {
+		return nil, fmt.Errorf("release has no usable chart metadata")
 	}
-	return c.loadTargetChart(actionConfig, rel, targetVersion, repositoryName, sendProgress)
+
+	currentVersion := rel.Chart.Metadata.Version
+	if targetVersion == "" {
+		targetVersion = currentVersion
+	}
+
+	reconstructingStoredChart := false
+	if targetVersion == currentVersion {
+		if err := validateChartDependencyBodies(rel.Chart); err == nil {
+			return rel.Chart, nil
+		}
+		reconstructingStoredChart = true
+	}
+
+	loaded, err := load(actionConfig, rel, targetVersion, repositoryName, sendProgress)
+	if err != nil {
+		if reconstructingStoredChart {
+			return nil, fmt.Errorf("cannot edit values for this release: Radar could not rebuild the full chart. This release has subcharts, and Helm does not store their contents, so Radar has to fetch %s version %s again - and no configured Helm repository has it. Add the repository this release was installed from, then try again. Applying without the subcharts would delete the resources they created: %w", rel.Chart.Metadata.Name, targetVersion, err)
+		}
+		return nil, err
+	}
+	if err := validateChartDependencyBodies(loaded); err != nil {
+		return nil, fmt.Errorf("cannot use chart %s version %s: the package declares subcharts but does not include them, so rendering it would delete the resources those subcharts created. The chart needs fixing where it is published: %w", rel.Chart.Metadata.Name, targetVersion, err)
+	}
+	if reconstructingStoredChart {
+		if err := storedChartMatchesReconstructed(rel.Chart, loaded); err != nil {
+			return nil, fmt.Errorf("cannot edit values for this release: Radar found %s version %s in a configured Helm repository, but that copy does not match the chart this release was installed from, so applying it could replace your release with a different chart. Add the repository this release came from so Radar can pick the right one: %w", rel.Chart.Metadata.Name, targetVersion, err)
+		}
+	}
+	return loaded, nil
+}
+
+// storedChartMatchesReconstructed compares the parent chart we downloaded against
+// the parent chart Helm has stored for the release.
+//
+// Reconstruction resolves by chart name and version through the configured
+// sources. The values-apply path supplies no repository hint at all, and the
+// resolver accepts a sole candidate, so on a cluster where more than one source
+// publishes the same name and version it can return a chart that is not the one
+// the release was installed from - and then apply it. Release storage drops the
+// dependency bodies but keeps the parent's own templates and values, so the
+// stored chart is trustworthy ground truth for exactly the comparison that
+// catches this.
+//
+// Scoped to reconstruction on purpose. A real version upgrade is expected to
+// bring different parent content, so this must not run on that path.
+//
+// Only the parent's templates and values schema are compared, and that is a
+// deliberate ceiling rather than an oversight. Helm rewrites a chart on its way
+// into release storage, so most of what storage keeps cannot be compared against
+// a freshly downloaded package of the same chart:
+//
+//   - Dependency.Name is replaced by the alias, so a chart declaring redis twice
+//     as cache-a and cache-b is stored as two dependencies named cache-a and
+//     cache-b, matching neither declaration in the package
+//   - Dependency.Enabled is set while conditions are resolved
+//   - subchart defaults and a global key are coalesced into the parent's Values
+//
+// Comparing any of those rejects ordinary umbrella releases. The residual gap is
+// real: two charts sharing a name, a version, their parent templates and their
+// schema still compare equal while carrying different subchart bodies. Closing
+// it needs recorded provenance of where the release was installed from, not a
+// better fingerprint of a chart Helm has already altered.
+func storedChartMatchesReconstructed(stored, loaded *chart.Chart) error {
+	if stored == nil || loaded == nil {
+		return fmt.Errorf("chart missing for comparison")
+	}
+	if err := filesMatch("parent template", stored.Templates, loaded.Templates); err != nil {
+		return err
+	}
+	if !bytes.Equal(stored.Schema, loaded.Schema) {
+		return fmt.Errorf("values schema differs from the installed release")
+	}
+	return nil
+}
+
+func filesMatch(label string, stored, loaded []*chart.File) error {
+	storedByName := filesByName(stored)
+	loadedByName := filesByName(loaded)
+	if len(storedByName) != len(loadedByName) {
+		return fmt.Errorf("installed release has %d %ss, resolved chart has %d", len(storedByName), label, len(loadedByName))
+	}
+	names := make([]string, 0, len(storedByName))
+	for name := range storedByName {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		loadedBody, ok := loadedByName[name]
+		if !ok {
+			return fmt.Errorf("resolved chart is missing %s %q", label, name)
+		}
+		if !bytes.Equal(storedByName[name], loadedBody) {
+			return fmt.Errorf("%s %q differs from the installed release", label, name)
+		}
+	}
+	return nil
+}
+
+func filesByName(files []*chart.File) map[string][]byte {
+	out := make(map[string][]byte, len(files))
+	for _, f := range files {
+		if f == nil {
+			continue
+		}
+		out[f.Name] = f.Data
+	}
+	return out
+}
+
+func canonicalMatch(label string, stored, loaded any) error {
+	storedJSON, err := json.Marshal(stored)
+	if err != nil {
+		return fmt.Errorf("could not compare %s of the installed release: %w", label, err)
+	}
+	loadedJSON, err := json.Marshal(loaded)
+	if err != nil {
+		return fmt.Errorf("could not compare %s of the resolved chart: %w", label, err)
+	}
+	if !bytes.Equal(storedJSON, loadedJSON) {
+		return fmt.Errorf("%s differ from the installed release", label)
+	}
+	return nil
+}
+
+// validateChartDependencyBodies verifies that every dependency declared by each
+// chart in the tree has a corresponding loaded chart body. Alias names are
+// accepted because Helm rewrites an aliased child name while processing values.
+//
+// A body satisfies every declaration that names it and is deliberately not
+// consumed by the first match. Helm vendors one directory per chart name, so a
+// chart declaring the same subchart twice under two aliases legitimately ships
+// fewer bodies than declarations; chartutil.ProcessDependencies clones the body
+// per alias at render time. Consuming a body would reject such a chart as
+// incomplete, and since this selection path also serves ordinary upgrades and
+// upgrade preview, that rejection would reach every operation on it.
+func validateChartDependencyBodies(ch *chart.Chart) error {
+	if ch == nil || ch.Metadata == nil {
+		return fmt.Errorf("chart metadata is missing")
+	}
+
+	children := ch.Dependencies()
+	for _, declared := range ch.Metadata.Dependencies {
+		if declared == nil {
+			continue
+		}
+		found := false
+		for _, child := range children {
+			if child == nil || child.Metadata == nil {
+				continue
+			}
+			if child.Metadata.Name == declared.Name || (declared.Alias != "" && child.Metadata.Name == declared.Alias) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			name := declared.Name
+			if declared.Alias != "" {
+				name += " (alias " + declared.Alias + ")"
+			}
+			return fmt.Errorf("dependency body %q declared by chart %q is missing", name, ch.Metadata.Name)
+		}
+	}
+
+	for _, child := range children {
+		if err := validateChartDependencyBodies(child); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // loadTargetChart resolves, downloads and loads the chart for a target upgrade
@@ -2589,7 +2780,7 @@ func (c *Client) loadTargetChart(actionConfig *action.Configuration, rel *releas
 	// OCI pulls need a registry client on the action; Radar's action config
 	// doesn't carry one by default. Wire it from the user's helm registry login.
 	if registry.IsOCI(chartPath) {
-		rc, err := c.newRegistryClientConcrete()
+		rc, err := c.newRegistryClientForChartPull()
 		if err != nil {
 			return nil, fmt.Errorf("failed to build OCI registry client: %w", err)
 		}
@@ -2710,6 +2901,62 @@ func (c *Client) resolveUpgradeChartPathWithOCIResolver(chartName, targetVersion
 
 func isAbsoluteChartURL(path string) bool {
 	return strings.HasPrefix(path, "http://") || strings.HasPrefix(path, "https://") || registry.IsOCI(path)
+}
+
+// resolveOCIChartURL accepts either a complete OCI chart reference or a
+// registry/repository prefix. InstallWizard sends the selected repository URL
+// and the chart name separately, so append the name only when it is not already
+// the final path component.
+func resolveOCIChartURL(source, chartName string) (string, error) {
+	source = strings.TrimSuffix(strings.TrimSpace(source), "/")
+	chartName = strings.Trim(strings.TrimSpace(chartName), "/")
+	if !registry.IsOCI(source) {
+		return "", fmt.Errorf("chart source %q is not an OCI reference", source)
+	}
+	if chartName == "" {
+		return "", fmt.Errorf("chart name is empty")
+	}
+	chartPath := source
+	lastSlash := strings.LastIndex(chartPath, "/")
+	if lastSlash >= 0 {
+		lastComponent := chartPath[lastSlash+1:]
+		if selector := strings.IndexAny(lastComponent, ":@"); selector >= 0 {
+			chartPath = chartPath[:lastSlash+1] + lastComponent[:selector]
+		}
+	}
+	if strings.HasSuffix(chartPath, "/"+chartName) {
+		return source, nil
+	}
+	return source + "/" + chartName, nil
+}
+
+// locateChartPath resolves one exact chart version. OCI pulls require a
+// registry client explicitly; Radar builds it from Helm's existing registry
+// credential store and never changes the configured OCI source inventory.
+func (c *Client) locateChartPath(actionConfig *action.Configuration, chartURL, version string) (string, error) {
+	if registry.IsOCI(chartURL) && version == "latest" {
+		version = ""
+	}
+	if c.chartPathLocator != nil {
+		return c.chartPathLocator(actionConfig, chartURL, version)
+	}
+	if actionConfig == nil {
+		var err error
+		actionConfig, err = c.getActionConfig("")
+		if err != nil {
+			return "", err
+		}
+	}
+	locator := action.NewInstall(actionConfig)
+	locator.Version = version
+	if registry.IsOCI(chartURL) {
+		registryClient, err := c.newRegistryClientForChartPull()
+		if err != nil {
+			return "", fmt.Errorf("failed to build OCI registry client: %w", err)
+		}
+		locator.SetRegistryClient(registryClient)
+	}
+	return locator.ChartPathOptions.LocateChart(chartURL, c.settings)
 }
 
 // BatchCheckUpgrades checks for upgrades for all releases at once (more efficient)
@@ -2994,11 +3241,17 @@ func (c *Client) ApplyValuesAsUser(namespace, name string, newValues map[string]
 }
 
 func (c *Client) applyValuesWith(actionConfig *action.Configuration, name string, newValues map[string]any) error {
-	// Get the current release to reuse its chart
+	// Get the current release and reconstruct its exact installed chart when
+	// Helm storage omitted vendored dependency bodies.
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
 	if err != nil {
 		return fmt.Errorf("failed to get current release: %w", err)
+	}
+	noop := func(phase, message, detail string) {}
+	applyChart, err := c.chartForUpgradeTarget(actionConfig, rel, "", "", noop)
+	if err != nil {
+		return err
 	}
 
 	// Create upgrade action — no Wait, Radar shows resource status in real-time
@@ -3007,8 +3260,8 @@ func (c *Client) applyValuesWith(actionConfig *action.Configuration, name string
 	upgradeAction.Timeout = 120 * time.Second
 	upgradeAction.ResetValues = true // Use only the provided values, don't merge
 
-	// Run the upgrade with the existing chart and new values
-	_, err = upgradeAction.Run(name, rel.Chart, newValues)
+	// Run the upgrade with the complete installed-version chart and new values.
+	_, err = upgradeAction.Run(name, applyChart, newValues)
 	if err != nil {
 		return fmt.Errorf("failed to apply values: %w", err)
 	}
@@ -3165,6 +3418,31 @@ func (c *Client) SearchCharts(query string, allVersions bool) (*ChartSearchResul
 
 // GetChartDetail returns detailed information about a specific chart version
 func (c *Client) GetChartDetail(repoName, chartName, version string) (*ChartDetail, error) {
+	if registry.IsOCI(repoName) {
+		chartURL, err := resolveOCIChartURL(repoName, chartName)
+		if err != nil {
+			return nil, err
+		}
+		chartPath, err := c.locateChartPath(nil, chartURL, version)
+		if err != nil {
+			return nil, fmt.Errorf("failed to locate OCI chart: %w", err)
+		}
+		loadedChart, err := loader.Load(chartPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load OCI chart: %w", err)
+		}
+		return chartDetailFromChart(loadedChart, ChartInfo{
+			Name:        loadedChart.Metadata.Name,
+			Version:     loadedChart.Metadata.Version,
+			AppVersion:  loadedChart.Metadata.AppVersion,
+			Description: loadedChart.Metadata.Description,
+			Icon:        loadedChart.Metadata.Icon,
+			Repository:  repoName,
+			Home:        loadedChart.Metadata.Home,
+			Deprecated:  loadedChart.Metadata.Deprecated,
+		}), nil
+	}
+
 	repoFile := c.settings.RepositoryConfig
 	f, err := repo.LoadFile(repoFile)
 	if err != nil {
@@ -3216,20 +3494,11 @@ func (c *Client) GetChartDetail(repoName, chartName, version string) (*ChartDeta
 
 	// Download and load the chart to get README and values
 	chartURL := chartVersion.URLs[0]
-	if !strings.HasPrefix(chartURL, "http://") && !strings.HasPrefix(chartURL, "https://") {
+	if !isAbsoluteChartURL(chartURL) {
 		chartURL = strings.TrimSuffix(repoEntry.URL, "/") + "/" + chartURL
 	}
 
-	// Use ChartPathOptions to locate/download
-	actionConfig, err := c.getActionConfig("")
-	if err != nil {
-		return nil, err
-	}
-
-	client := action.NewInstall(actionConfig)
-	client.Version = chartVersion.Version
-
-	cp, err := client.ChartPathOptions.LocateChart(chartURL, c.settings)
+	cp, err := c.locateChartPath(nil, chartURL, chartVersion.Version)
 	if err != nil {
 		// If we can't download, return basic info from index
 		return &ChartDetail{
@@ -3244,10 +3513,11 @@ func (c *Client) GetChartDetail(repoName, chartName, version string) (*ChartDeta
 		}, nil
 	}
 
-	// Build detail response
-	detail := &ChartDetail{
-		ChartInfo: chartVersionToInfo(chartVersion, repoName),
-	}
+	return chartDetailFromChart(chart, chartVersionToInfo(chartVersion, repoName)), nil
+}
+
+func chartDetailFromChart(chart *chart.Chart, info ChartInfo) *ChartDetail {
+	detail := &ChartDetail{ChartInfo: info}
 
 	// Extract README
 	for _, f := range chart.Files {
@@ -3283,7 +3553,7 @@ func (c *Client) GetChartDetail(repoName, chartName, version string) (*ChartDeta
 	detail.Sources = chart.Metadata.Sources
 	detail.Keywords = chart.Metadata.Keywords
 
-	return detail, nil
+	return detail
 }
 
 // Install installs a new Helm release
@@ -3307,11 +3577,19 @@ func (c *Client) InstallAsUser(req *InstallRequest, username string, groups []st
 func (c *Client) installWith(actionConfig *action.Configuration, req *InstallRequest) (*HelmRelease, error) {
 
 	var chartURL string
+	resolvedVersion := req.Version
 
 	// Check if the repository is a URL (for ArtifactHub installs) or a local repo name
 	isRepoURL := strings.HasPrefix(req.Repository, "http://") || strings.HasPrefix(req.Repository, "https://")
+	isOCI := registry.IsOCI(req.Repository)
 
-	if isRepoURL {
+	if isOCI {
+		var err error
+		chartURL, err = resolveOCIChartURL(req.Repository, req.ChartName)
+		if err != nil {
+			return nil, err
+		}
+	} else if isRepoURL {
 		// Direct URL - fetch the repository index to find the chart
 		repoURL := strings.TrimSuffix(req.Repository, "/")
 
@@ -3368,10 +3646,11 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 		if chartVersion == nil {
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
+		resolvedVersion = chartVersion.Version
 
 		// Build chart URL
 		chartURL = chartVersion.URLs[0]
-		if !strings.HasPrefix(chartURL, "http://") && !strings.HasPrefix(chartURL, "https://") {
+		if !isAbsoluteChartURL(chartURL) {
 			chartURL = repoURL + "/" + chartURL
 		}
 	} else {
@@ -3423,10 +3702,11 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 		if chartVersion == nil {
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
+		resolvedVersion = chartVersion.Version
 
 		// Build chart URL
 		chartURL = chartVersion.URLs[0]
-		if !strings.HasPrefix(chartURL, "http://") && !strings.HasPrefix(chartURL, "https://") {
+		if !isAbsoluteChartURL(chartURL) {
 			chartURL = strings.TrimSuffix(repoEntry.URL, "/") + "/" + chartURL
 		}
 	}
@@ -3436,10 +3716,7 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 		return nil, err
 	}
 
-	// action.Install carries ChartPathOptions; instantiated here as a locator only.
-	locator := action.NewInstall(actionConfig)
-	locator.Version = req.Version
-	cp, err := locator.ChartPathOptions.LocateChart(chartURL, c.settings)
+	cp, err := c.locateChartPath(actionConfig, chartURL, resolvedVersion)
 	if err != nil {
 		return nil, fmt.Errorf("failed to locate chart: %w", err)
 	}
@@ -3487,11 +3764,20 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 	}
 
 	var chartURL string
+	resolvedVersion := req.Version
 
 	// Check if the repository is a URL (for ArtifactHub installs) or a local repo name
 	isRepoURL := strings.HasPrefix(req.Repository, "http://") || strings.HasPrefix(req.Repository, "https://")
+	isOCI := registry.IsOCI(req.Repository)
 
-	if isRepoURL {
+	if isOCI {
+		var err error
+		chartURL, err = resolveOCIChartURL(req.Repository, req.ChartName)
+		if err != nil {
+			return nil, err
+		}
+		sendProgress("resolving", "Resolving chart from OCI registry...", chartURL)
+	} else if isRepoURL {
 		sendProgress("fetching", "Fetching repository index...", req.Repository)
 
 		repoURL := strings.TrimSuffix(req.Repository, "/")
@@ -3547,9 +3833,10 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		if chartVersion == nil {
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
+		resolvedVersion = chartVersion.Version
 
 		chartURL = chartVersion.URLs[0]
-		if !strings.HasPrefix(chartURL, "http://") && !strings.HasPrefix(chartURL, "https://") {
+		if !isAbsoluteChartURL(chartURL) {
 			chartURL = repoURL + "/" + chartURL
 		}
 	} else {
@@ -3600,9 +3887,10 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		if chartVersion == nil {
 			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
 		}
+		resolvedVersion = chartVersion.Version
 
 		chartURL = chartVersion.URLs[0]
-		if !strings.HasPrefix(chartURL, "http://") && !strings.HasPrefix(chartURL, "https://") {
+		if !isAbsoluteChartURL(chartURL) {
 			chartURL = strings.TrimSuffix(repoEntry.URL, "/") + "/" + chartURL
 		}
 	}
@@ -3617,37 +3905,48 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 
 	sendProgress("downloading", fmt.Sprintf("Downloading chart %s-%s...", req.ChartName, req.Version), chartURL)
 
-	// Download the chart archive directly via HTTP, bypassing the Helm SDK's
-	// ChartPathOptions.LocateChart / ChartDownloader machinery. That code loads
-	// every locally-registered repo's cached index file and fails with "no cached
-	// repo found" if any index file is stale or missing (e.g. a bitnami repo
-	// entry exists in repositories.yaml but the index cache was deleted).
-	chartResp, err := httpClient.Get(chartURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to download chart: %w", err)
-	}
-	defer chartResp.Body.Close()
-	if chartResp.StatusCode != 200 {
-		return nil, fmt.Errorf("failed to download chart: server returned %d", chartResp.StatusCode)
-	}
+	var loadedChart *chart.Chart
+	if registry.IsOCI(chartURL) {
+		chartPath, err := c.locateChartPath(actionConfig, chartURL, resolvedVersion)
+		if err != nil {
+			return nil, fmt.Errorf("failed to locate chart: %w", err)
+		}
+		sendProgress("loading", "Loading chart...", chartPath)
+		loadedChart, err = loader.Load(chartPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load chart: %w", err)
+		}
+	} else {
+		// Preserve the existing direct HTTP path. Helm's ChartDownloader loads all
+		// locally registered indexes and can fail because an unrelated cache entry
+		// is stale or missing.
+		chartResp, err := httpClient.Get(chartURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to download chart: %w", err)
+		}
+		defer chartResp.Body.Close()
+		if chartResp.StatusCode != 200 {
+			return nil, fmt.Errorf("failed to download chart: server returned %d", chartResp.StatusCode)
+		}
 
-	tmpChart, err := os.CreateTemp("", "helm-chart-*.tgz")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create temp file for chart: %w", err)
-	}
-	defer os.Remove(tmpChart.Name())
-	defer tmpChart.Close()
+		tmpChart, err := os.CreateTemp("", "helm-chart-*.tgz")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create temp file for chart: %w", err)
+		}
+		defer os.Remove(tmpChart.Name())
+		defer tmpChart.Close()
 
-	if _, err := tmpChart.ReadFrom(chartResp.Body); err != nil {
-		return nil, fmt.Errorf("failed to write chart to temp file: %w", err)
-	}
-	tmpChart.Close()
+		if _, err := tmpChart.ReadFrom(chartResp.Body); err != nil {
+			return nil, fmt.Errorf("failed to write chart to temp file: %w", err)
+		}
+		tmpChart.Close()
 
-	sendProgress("loading", "Loading chart...", tmpChart.Name())
+		sendProgress("loading", "Loading chart...", tmpChart.Name())
 
-	chart, err := loader.Load(tmpChart.Name())
-	if err != nil {
-		return nil, fmt.Errorf("failed to load chart: %w", err)
+		loadedChart, err = loader.Load(tmpChart.Name())
+		if err != nil {
+			return nil, fmt.Errorf("failed to load chart: %w", err)
+		}
 	}
 
 	switch mode {
@@ -3662,7 +3961,7 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		sendProgress("installing", fmt.Sprintf("Recovering prior failed release %s in %s...", req.ReleaseName, req.Namespace), "")
 	}
 
-	rel, err := runInstallOrUpgrade(actionConfig, req, chart, mode)
+	rel, err := runInstallOrUpgrade(actionConfig, req, loadedChart, mode)
 	if err != nil {
 		return nil, fmt.Errorf("install failed: %w", err)
 	}

@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 // codexAgent drives the Codex CLI (`codex exec`). Codex has no per-MCP-tool
@@ -196,7 +198,7 @@ func (a *codexAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnos
 			if e.Item != nil && e.Item.Type == "mcp_tool_call" {
 				onEvent(StreamEvent{Type: "step", Step: &StepInfo{
 					ID: e.Item.ID, Tool: e.Item.Tool, Status: "running",
-					Summary: codexArgsText(e.Item.Arguments),
+					Summary: toolArgsText(e.Item.Arguments),
 				}})
 			}
 		case "item.completed":
@@ -205,7 +207,7 @@ func (a *codexAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnos
 			}
 			switch e.Item.Type {
 			case "mcp_tool_call":
-				resultText, evidenceRef := splitInvestigationEvidenceMarker(
+				resultText, evidenceRef := investigation.SplitRefMarker(
 					codexResultText(e.Item),
 				)
 				res, trunc := capPayload(resultText)
@@ -240,15 +242,6 @@ func (a *codexAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnos
 	d := diagnosisFromText(answer.String())
 	d.SessionID = sessionID
 	return d
-}
-
-func codexArgsText(raw json.RawMessage) string {
-	s := strings.TrimSpace(string(raw))
-	if s == "" || s == "null" || s == "{}" {
-		return ""
-	}
-	args, _ := capPayload(s)
-	return args
 }
 
 // codexResultText joins the text parts of a Codex mcp_tool_call result (already

@@ -6,6 +6,7 @@ export {
   WORKLOAD_METRIC_CATEGORIES,
   NODE_METRIC_CATEGORIES,
   METRIC_TIME_RANGES,
+  describePodCoverage,
 } from './PrometheusChartsView'
 export type {
   PrometheusChartsViewProps,

@@ -258,8 +258,9 @@ release_radar_app() {
   echo "This publishes @skyhook-io/radar-app to npm."
   echo "Tags use the prefix 'radar-app-' (e.g. radar-app-v0.1.0)."
   echo ""
+  K8S_UI_PEER=$(node -p "require('./web/package.json').peerDependencies['@skyhook-io/k8s-ui']")
   warn "Reminder: radar-app's peerDependency on @skyhook-io/k8s-ui resolves"
-  warn "to '>=1.5.0'. If your changes rely on new k8s-ui exports, publish"
+  warn "to '${K8S_UI_PEER}'. If your changes rely on new k8s-ui exports, publish"
   warn "the matching k8s-ui version FIRST (option 3)."
   echo ""
 

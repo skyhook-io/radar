@@ -1,6 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import type { WorkflowExecutionActivity } from '@skyhook-io/k8s-ui/utils/workflow-execution'
-import { activityPreviewItems, effectiveDefinitionResource, isDirectRunKind, retentionHistoryCopy, runMessageNeedsDisclosure, workflowDefinitionParameters, workflowDefinitionTarget, workflowRunArguments } from './BatchExecutionView'
+import {
+  activityPreviewItems,
+  selectedRunMissing,
+  effectiveDefinitionResource,
+  emptyRunsCopy,
+  isDirectRunKind,
+  jobSetDependencyLabels,
+  jobSetMemberIdentity,
+  jobSetStatusFacts,
+  pluralizeMemberJobs,
+  resourceTargetForRun,
+  retentionHistoryCopy,
+  runMessageNeedsDisclosure,
+  workflowDefinitionParameters,
+  workflowDefinitionTarget,
+  workflowRunArguments,
+  workloadRunKey,
+} from './BatchExecutionView'
 
 function activity(id: string, tone: WorkflowExecutionActivity['tone'] = 'success'): WorkflowExecutionActivity {
   return { id, at: '2026-01-01T00:00:00Z', label: id, tone }
@@ -166,5 +183,90 @@ describe('direct run identity', () => {
     expect(isDirectRunKind('Workflow', 'workflows')).toBe(true)
     expect(isDirectRunKind('CronJob', 'jobs')).toBe(false)
     expect(isDirectRunKind('WorkflowTemplate', 'workflows')).toBe(false)
+  })
+})
+
+describe('JobSet member presentation', () => {
+  it('uses role and native indexes without calling Jobs retained runs', () => {
+    const member = {
+      kind: 'jobs',
+      group: 'batch',
+      namespace: 'training',
+      name: 'distributed-workers-2',
+      phase: 'Running',
+      active: true,
+      jobset: { replicatedJob: 'workers', jobIndex: '2', groupName: 'trainers', groupIndex: '1' },
+      running: 1,
+      podTotal: 1,
+      podRunning: 1,
+    }
+
+    expect(jobSetMemberIdentity(member)).toBe('workers #2 · trainers #1 · 1 active pod')
+    expect(pluralizeMemberJobs(200, 240, true)).toBe('200 of 240 Jobs')
+    expect(emptyRunsCopy('JobSet', {})).toEqual({
+      headline: 'No child Jobs currently retained',
+      body: 'No readable Jobs owned by this JobSet are currently available. They may be waiting on dependencies or may already have been cleaned up.',
+    })
+  })
+
+  it('keeps the selected Job as the core Kubernetes intermediate', () => {
+    expect(resourceTargetForRun({
+      kind: 'jobs',
+      group: 'batch',
+      namespace: 'training',
+      name: 'distributed-workers-2',
+      phase: 'Running',
+      active: true,
+    })).toEqual({
+      kind: 'jobs',
+      group: 'batch',
+      namespace: 'training',
+      name: 'distributed-workers-2',
+    })
+  })
+
+  it('preserves the controller dependency status', () => {
+    expect(jobSetDependencyLabels([
+      { name: 'workers', dependsOn: [{ name: 'coordinator', status: 'Ready' }] },
+      { name: 'report', dependsOn: [{ name: 'workers', status: 'Complete' }] },
+    ])).toEqual([
+      'workers after coordinator is Ready',
+      'report after workers is Complete',
+    ])
+  })
+
+  it('does not turn absent or partial controller status into complete zeroes', () => {
+    expect(jobSetStatusFacts({}, 2)).toEqual([
+      ['Ready / succeeded / failed', 'Not reported'],
+    ])
+    expect(jobSetStatusFacts({
+      status: {
+        replicatedJobsStatus: [{ name: 'coordinator', ready: 1, succeeded: 0, failed: 0 }],
+      },
+    }, 2)).toEqual([
+      ['Ready / succeeded / failed', '1 / 0 / 0'],
+      ['Controller status coverage', '1 of 2 roles reported'],
+    ])
+  })
+})
+
+describe('selection across a member refresh', () => {
+  it('preserves a selected Job that has fallen outside the shown window', () => {
+    const shown = [{ kind: 'jobs', group: 'batch', namespace: 'training', name: 'current', phase: 'Running', active: true }]
+    expect(selectedRunMissing(shown, 'jobs/training/earlier')).toBe(true)
+    expect(selectedRunMissing(shown, 'jobs/training/current')).toBe(false)
+    expect(selectedRunMissing([], 'jobs/training/earlier')).toBe(true)
+    expect(selectedRunMissing(shown, '')).toBe(false)
+  })
+})
+
+
+describe('run navigation identity', () => {
+  it('uses the reported group and preserves the released selection address', () => {
+    const run = { group: 'batch', kind: 'jobs', namespace: 'training', name: 'worker', phase: 'Running', active: true }
+    expect(workloadRunKey(run)).toBe('jobs/training/worker')
+    expect(resourceTargetForRun(run).group).toBe('batch')
+    expect(resourceTargetForRun({ ...run, group: 'batch.volcano.sh' }).group).toBe('batch.volcano.sh')
+    expect(resourceTargetForRun({ ...run, group: 'argoproj.io', kind: 'workflows' }).group).toBe('argoproj.io')
   })
 })

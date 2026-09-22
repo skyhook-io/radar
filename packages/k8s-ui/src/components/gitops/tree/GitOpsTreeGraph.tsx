@@ -20,10 +20,12 @@ import { PaneLoader } from '../../ui/PaneLoader'
 import { Input } from '../../ui/Input'
 import { clsx } from 'clsx'
 
-import type { GitOpsResourceTree, GitOpsTreeNode, GitOpsTreeRef, HealthStatus } from '../../../types'
+import type { GitOpsIssue, GitOpsResourceTree, GitOpsTreeNode, GitOpsTreeRef, HealthStatus } from '../../../types'
 import { displayKind } from '../../../types'
 import { healthToSeverity, SEVERITY_DOT } from '../../../utils/badge-colors'
 import { formatCompactAge } from '../../../utils/format'
+import { radarHealthNote } from '../health-provenance'
+import { servicePortsTooltip, type ServicePortEntry } from '../../topology/K8sResourceNode'
 import { getTopologyIcon } from '../../../utils/resource-icons'
 import { Tooltip } from '../../ui/Tooltip'
 import { hasGitOpsTreeFilters, matchesGitOpsTreeFilters, type GitOpsTreeFilters } from './tree-helpers'
@@ -64,6 +66,22 @@ interface GitOpsTreeGraphProps {
   onQueryChange?: (query: string) => void
   filters?: GitOpsTreeFilters
   showToolbar?: boolean
+  // Root-cause issues from the same detail page's insights fetch (already
+  // loaded alongside the tree — no extra request). Matched onto tree nodes
+  // by ref so an unhealthy node's hover reveals WHY, not just THAT.
+  issues?: GitOpsIssue[]
+}
+
+// refKey builds a stable lookup key from either a tree ref or an insight
+// ref. Namespace is omitted for cluster-scoped resources on both sides, so
+// normalize the missing case the same way instead of using `undefined` vs
+// `''` as accidentally distinct keys. Group is included for the same
+// reason CLAUDE.md calls out elsewhere (Knative Service vs core Service,
+// CNPG Cluster vs CAPI Cluster) — kind+namespace+name alone collides across
+// a real, documented class of same-plural CRDs, which would show one
+// resource's cause/tooltip on a completely unrelated node.
+function refKey(ref: { group?: string; kind: string; namespace?: string; name: string }): string {
+  return `${ref.group ?? ''}/${ref.kind}/${ref.namespace ?? ''}/${ref.name}`
 }
 
 export function GitOpsTreeGraph(props: GitOpsTreeGraphProps) {
@@ -85,6 +103,7 @@ function GitOpsTreeGraphInner({
   onQueryChange,
   filters,
   showToolbar = true,
+  issues,
 }: GitOpsTreeGraphProps) {
   const [internalPreset, setInternalPreset] = useState<GitOpsTreePreset>('compact')
   const [internalQuery, setInternalQuery] = useState('')
@@ -104,7 +123,20 @@ function GitOpsTreeGraphInner({
   useEffect(() => {
     if (preset !== 'compact') setExpandedGroups(new Set())
   }, [preset])
-  const { nodes, edges } = useMemo(() => buildFlowGraph(tree, preset, query, filters, expandedGroups), [tree, preset, query, filters, expandedGroups])
+  const causeByRef = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const issue of issues ?? []) {
+      const cause = issue.cause
+      const ref = issue.refs?.[0]
+      if (!cause || !ref) continue
+      const key = refKey(ref)
+      // First match wins — issues arrive ranked by severity, so a node
+      // that's the subject of multiple issues keeps its most severe cause.
+      if (!map.has(key)) map.set(key, cause)
+    }
+    return map
+  }, [issues])
+  const { nodes, edges } = useMemo(() => buildFlowGraph(tree, preset, query, filters, expandedGroups, causeByRef), [tree, preset, query, filters, expandedGroups, causeByRef])
 
   useEffect(() => {
     if (nodes.length === 0) return
@@ -297,7 +329,7 @@ function getEdgeColor(type: string): string {
   }
 }
 
-function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePreset, query: string, filters?: GitOpsTreeFilters, expandedGroups?: Set<string>): { nodes: Node[]; edges: Edge[] } {
+function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePreset, query: string, filters?: GitOpsTreeFilters, expandedGroups?: Set<string>, causeByRef?: Map<string, string>): { nodes: Node[]; edges: Edge[] } {
   if (!tree) return { nodes: [], edges: [] }
   const visibleTree = applyGraphFilters(applyPreset(tree, preset, expandedGroups), filters)
   const byID = new Map(visibleTree.nodes.map(node => [node.id, node]))
@@ -321,6 +353,7 @@ function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePrese
       data: {
         node,
         highlighted: normalizedQuery !== '' && matchesQuery(node, normalizedQuery),
+        cause: causeByRef?.get(refKey(node.ref)),
       },
     }
   })
@@ -543,7 +576,7 @@ function positionRanks(ranks: Map<number, string[]>, nodes: Map<string, GitOpsTr
   return positioned
 }
 
-const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<Node<{ node: GitOpsTreeNode; highlighted?: boolean }>>) {
+const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<Node<{ node: GitOpsTreeNode; highlighted?: boolean; cause?: string }>>) {
   const node = data.node
   const kind = normalizeDisplayKind(node)
   const status = normalizeHealth(node.topologyStatus)
@@ -552,10 +585,25 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
   const chips = buildChips(node)
   const dim = getNodeDimensions(node)
   const KindIcon = getTopologyIcon(kind)
+  // Only unhealthy nodes carry a cause worth surfacing — a healthy node
+  // matched by a stale/unrelated issue ref shouldn't show a tooltip.
+  const cause = status === 'unhealthy' || status === 'degraded' ? data.cause : undefined
+  // Only declared resources can carry the controller's verdict, so only
+  // there does "this one is Radar's" mean anything. Generated children
+  // (ReplicaSets, Pods) are always Radar's read; marking each would be
+  // noise.
+  const radarNote = node.role === 'declared' ? radarHealthNote(node) : ''
+  // A Service's subtitle names its first port and counts the rest, so without a
+  // hover the ones behind "+1 more" can't be reached from the graph at all. Same
+  // affordance the topology graph's Service node carries, same renderer. Stood
+  // down when the card already explains an unhealthy verdict: that reason is
+  // what the hover should say, and only one tooltip is ever visible anyway.
+  const portsTooltip = kind === 'Service' && !cause
+    ? servicePortsTooltip((node.data?.ports as ServicePortEntry[] | undefined) ?? [])
+    : null
+  const subtitle = getSubtitle(node)
 
-  return (
-    <>
-      <Handle type="target" position={Position.Left} className="!h-0 !w-0 !border-0 !bg-transparent" />
+  const card = (
       <div
         className={clsx(
           'relative overflow-hidden rounded-lg border bg-theme-surface shadow-md transition-colors',
@@ -616,7 +664,13 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
               own page". The subtitle text alone wasn't enough — users were
               treating the count as an immutable fact rather than a button. */}
           <div className="mt-0.5 flex items-center gap-1 text-xs text-theme-text-secondary">
-            <span className="truncate">{getSubtitle(node)}</span>
+            {portsTooltip ? (
+              <Tooltip content={portsTooltip} position="bottom" wrapperClassName="min-w-0">
+                <span className="cursor-help truncate">{subtitle}</span>
+              </Tooltip>
+            ) : (
+              <span className="truncate">{subtitle}</span>
+            )}
             {(node.role === 'group' || gitopsTool) && <ChevronRight className="ml-auto h-3 w-3 shrink-0 text-theme-text-tertiary" />}
           </div>
           {chips.length > 0 && (
@@ -636,10 +690,23 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
                   {chip.label ? `${chip.label}: ` : ''}{chip.value}
                 </span>
               ))}
+              {radarNote && (
+                <Tooltip content={radarNote} delay={200}>
+                  <span className="rounded border border-theme-border bg-theme-elevated/70 px-1.5 py-0.5 text-[10px] leading-3 text-theme-text-tertiary">
+                    Found by Radar
+                  </span>
+                </Tooltip>
+              )}
             </div>
           )}
         </div>
       </div>
+  )
+
+  return (
+    <>
+      <Handle type="target" position={Position.Left} className="!h-0 !w-0 !border-0 !bg-transparent" />
+      {cause ? <Tooltip content={cause} delay={200}>{card}</Tooltip> : card}
       <Handle type="source" position={Position.Right} className="!h-0 !w-0 !border-0 !bg-transparent" />
     </>
   )
@@ -704,7 +771,21 @@ function buildChips(node: GitOpsTreeNode): Array<{ label?: string; value: string
   return chips
 }
 
-function getSubtitle(node: GitOpsTreeNode): string {
+// The subtitle is the node's one line of prose, and sync, health and the
+// backend's info line all want it. It can't be won on precedence: the backend
+// derives a health for every node it can build an info line for, so a rule that
+// only reaches info when health is absent never reaches it at all, and a
+// Service's ports, a Pod's phase and an Ingress's host stay invisible.
+//
+// So all three share the line, and "Healthy" is the part that yields when the
+// space is contested. It is the one health value the node already states without
+// words — healthToTopology maps it onto the green status dot and the green left
+// stripe, one value to one colour. Progressing and Suspended are both yellow and
+// Degraded and Missing are both red, so for those the word is the only thing
+// that tells them apart and it keeps its place. "Healthy" gives up the line only
+// when there is a concrete info line to spend it on, so a node with nothing to
+// say instead still reads as Healthy.
+export function getSubtitle(node: GitOpsTreeNode): string {
   if (node.role === 'group') {
     // Action-oriented copy invites the click; "collapsed" alone reads as
     // a state description, not an affordance.
@@ -713,10 +794,10 @@ function getSubtitle(node: GitOpsTreeNode): string {
   if (isNodeTerminating(node)) {
     return 'Pending deletion'
   }
-  if (node.sync || node.health) {
-    return [node.sync, node.health].filter(Boolean).join(' • ')
-  }
-  if (node.info?.[0]?.value) return node.info[0].value
+  const info = node.info?.[0]?.value
+  const health = node.health === 'Healthy' && info ? undefined : node.health
+  const parts = [node.sync, health, info].filter(Boolean)
+  if (parts.length > 0) return parts.join(' • ')
   return node.ref.namespace || ''
 }
 

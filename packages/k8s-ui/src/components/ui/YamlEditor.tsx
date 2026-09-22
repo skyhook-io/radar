@@ -7,7 +7,8 @@ import Editor, {
   type OnMount,
 } from '@monaco-editor/react'
 import type { editor } from 'monaco-editor'
-import { AlertCircle, AlertTriangle, ChevronDown, ChevronRight, Info } from 'lucide-react'
+import { AlertCircle, AlertTriangle, Info } from 'lucide-react'
+import { Collapse, CollapseChevron, useDisclosure } from './Collapse'
 import { parseAllDocuments, parseDocument } from 'yaml'
 import { isMac } from '../../utils/platform'
 import { splitYamlDocuments } from '../../utils/yaml'
@@ -228,6 +229,7 @@ export function YamlEditor({
   const [runtimeAttempt, setRuntimeAttempt] = useState(0)
   const [diagnostics, setDiagnostics] = useState<YamlDiagnostic[]>([])
   const [problemsOpen, setProblemsOpen] = useState(false)
+  const problemsDisclosure = useDisclosure(problemsOpen)
   const [schemaStatus, setSchemaStatus] = useState<SchemaStatus>(schemaLoader ? 'loading' : 'idle')
   const [schemaMessage, setSchemaMessage] = useState('')
   const [schemaUnavailable, setSchemaUnavailable] = useState<
@@ -613,16 +615,12 @@ export function YamlEditor({
       {showProblems && (
         <div className="shrink-0 border-t border-theme-border bg-theme-elevated/60">
           <button
+            {...problemsDisclosure.buttonProps}
             type="button"
             onClick={() => setProblemsOpen((open) => !open)}
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-theme-text-secondary hover:bg-theme-hover"
-            aria-expanded={problemsOpen}
           >
-            {problemsOpen ? (
-              <ChevronDown className="h-3.5 w-3.5" />
-            ) : (
-              <ChevronRight className="h-3.5 w-3.5" />
-            )}
+            <CollapseChevron open={problemsOpen} className="h-3.5 w-3.5" />
             <span className="font-medium text-theme-text-primary">Problems</span>
             <span>{problemSummary}</span>
             <span className="ml-auto flex min-w-0 items-center gap-3 text-theme-text-tertiary">
@@ -646,7 +644,7 @@ export function YamlEditor({
               )}
             </span>
           </button>
-          {problemsOpen && (
+          <Collapse open={problemsOpen} id={problemsDisclosure.panelId}>
             <div className="max-h-36 overflow-auto border-t border-theme-border py-1">
               {diagnostics.length === 0 && schemaUnavailable.length === 0 ? (
                 <div className="px-3 py-2 text-xs text-theme-text-tertiary">
@@ -699,7 +697,7 @@ export function YamlEditor({
                 )
               })}
             </div>
-          )}
+          </Collapse>
         </div>
       )}
     </div>

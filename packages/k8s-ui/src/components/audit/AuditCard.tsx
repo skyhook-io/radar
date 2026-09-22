@@ -1,9 +1,10 @@
-import { ClipboardCheck, ArrowRight, Check } from 'lucide-react'
+import { ClipboardCheck, ArrowRight, Check, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
 import { SEVERITY_TEXT, SEVERITY_DOT } from '../../utils/badge-colors'
 import { SEVERITY_FILL_CLASS, SEVERITY_TEXT_CLASS } from '../checks/severity'
 
 export interface AuditCardData {
+  missingInputs?: string[]
   passing: number
   /** Raw compatibility counts; warning renders as Medium and danger as High. */
   warning: number
@@ -17,16 +18,17 @@ interface AuditCardProps {
   onNavigate: () => void
 }
 
-type SeverityLevel = 'success' | 'high' | 'medium'
+type SeverityLevel = 'success' | 'high' | 'medium' | 'neutral'
 
 function getSeverityLevel(data: AuditCardData): SeverityLevel {
-  if (data.warning + data.danger === 0) return 'success'
+  if (data.warning + data.danger === 0) return data.missingInputs?.length || data.passing === 0 ? 'neutral' : 'success'
   const highRatio = data.danger / (data.warning + data.danger)
   if (highRatio > 0.2) return 'high'
   return 'medium'
 }
 
 const ACCENT_BG: Record<SeverityLevel, string> = {
+  neutral: 'bg-theme-elevated',
   success: 'bg-green-500/10',
   high: 'bg-orange-500/10',
   medium: 'bg-yellow-500/10',
@@ -35,9 +37,10 @@ const ACCENT_BG: Record<SeverityLevel, string> = {
 export function AuditCard({ data, onNavigate }: AuditCardProps) {
   const total = data.passing + data.warning + data.danger
   const issueCount = data.warning + data.danger
-  const allPassing = issueCount === 0
+  const incomplete = (data.missingInputs?.length ?? 0) > 0
+  const allPassing = issueCount === 0 && total > 0 && !incomplete
   const level = getSeverityLevel(data)
-  const accentColor = level === 'success' ? SEVERITY_TEXT.success : SEVERITY_TEXT_CLASS[level]
+  const accentColor = level === 'neutral' ? 'text-theme-text-secondary' : level === 'success' ? SEVERITY_TEXT.success : SEVERITY_TEXT_CLASS[level]
   const accentBg = ACCENT_BG[level]
 
   return (
@@ -56,7 +59,7 @@ export function AuditCard({ data, onNavigate }: AuditCardProps) {
               </span>
             ) : (
               <span className={clsx('badge-sm', accentBg, accentColor)}>
-                <Check className="w-3 h-3" />
+                {allPassing ? <Check className="w-3 h-3" /> : <ClipboardCheck className="w-3 h-3" />}
               </span>
             )}
           </div>
@@ -70,6 +73,12 @@ export function AuditCard({ data, onNavigate }: AuditCardProps) {
               {total > 0 && (
                 <span className="text-xs text-theme-text-tertiary">{total} checks across {Object.keys(data.categories).length} categories</span>
               )}
+            </div>
+          ) : issueCount === 0 ? (
+            <div className="flex flex-col items-center gap-2 text-center">
+              {incomplete ? <AlertTriangle className="w-8 h-8 text-warning-text" /> : <ClipboardCheck className="w-8 h-8 text-theme-text-tertiary" />}
+              <span className="text-sm font-medium text-theme-text-primary">{incomplete ? 'Some checks could not run' : 'No resources evaluated'}</span>
+              <span className="text-xs text-theme-text-secondary">{incomplete ? 'No findings in the available data.' : 'Check the selected scope and check settings.'}</span>
             </div>
           ) : (
             <>
@@ -107,7 +116,7 @@ export function AuditCard({ data, onNavigate }: AuditCardProps) {
                           )}
                         </div>
                       ) : (
-                        <span className={clsx('text-xs font-semibold', SEVERITY_TEXT.success)}>All passing</span>
+                        <span className={clsx('text-xs font-semibold', incomplete ? 'text-theme-text-secondary' : SEVERITY_TEXT.success)}>{incomplete ? 'No findings' : 'All passing'}</span>
                       )}
                     </div>
                   )
@@ -116,6 +125,8 @@ export function AuditCard({ data, onNavigate }: AuditCardProps) {
             </>
           )}
         </div>
+
+        {incomplete && issueCount > 0 && <p className="px-4 pb-2 text-xs text-warning-text">Some checks could not run.</p>}
 
         <div className="px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-end">
           <span className={clsx(

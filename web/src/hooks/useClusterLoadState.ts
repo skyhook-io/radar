@@ -21,8 +21,8 @@ interface UseClusterLoadStateResult {
 }
 
 // Tracks cluster-data warmup (deferred/partial dashboard load) once the main
-// connection is usable. Standalone / embedded-with-chrome render it in Radar's
-// topbar; chromeless hosts (Radar Hub) receive it via onClusterLoadStateChange;
+// connection is usable. Standalone renders it in Radar's topbar; Radar Hub
+// receives it via onClusterLoadStateChange;
 // a chromeless host without a callback gets a fallback row on Home.
 export function useClusterLoadState({
   namespaces,

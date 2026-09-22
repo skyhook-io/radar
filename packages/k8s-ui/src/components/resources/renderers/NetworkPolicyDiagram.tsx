@@ -6,6 +6,8 @@ import {
   NETWORK_POLICY_PEER_STYLES,
   type NetworkPolicyPeerType,
 } from './network-policy-peer-styles'
+import { effectivePolicyTypes, formatNetworkPolicyPort } from '../../../utils/network-policy'
+import { formatKubernetesLabelSelector } from '../resource-utils-calico'
 
 interface NetworkPolicyDiagramProps {
   spec: any
@@ -20,16 +22,12 @@ interface NetworkPolicyDiagramProps {
  */
 export function NetworkPolicyDiagram({ spec, staged = false }: NetworkPolicyDiagramProps) {
   const podSelector = spec.podSelector || {}
-  const matchLabels = podSelector.matchLabels || {}
-  const policyTypes: string[] = spec.policyTypes || []
   const ingress: any[] | undefined = spec.ingress
   const egress: any[] | undefined = spec.egress
 
-  const hasIngress = policyTypes.includes('Ingress')
-  const hasEgress = policyTypes.includes('Egress')
-  const targetLabel = Object.keys(matchLabels).length > 0
-    ? Object.entries(matchLabels).map(([k, v]) => `${k}=${v}`).join(', ')
-    : 'All pods'
+  const { ingress: hasIngress, egress: hasEgress } = effectivePolicyTypes(spec)
+  const target = formatSelector(podSelector)
+  const targetLabel = target === 'all' ? 'All pods' : target
 
   const ingressDenied = hasIngress && (!ingress || ingress.length === 0)
   const egressDenied = hasEgress && (!egress || egress.length === 0)
@@ -159,18 +157,13 @@ function extractPeers(peers: any[] | undefined): PeerInfo[] {
 
 function extractPorts(ports: any[] | undefined): string[] {
   if (!ports || ports.length === 0) return []
-  return ports.map((p: any) => {
-    const proto = p.protocol || 'TCP'
-    const port = p.port || '*'
-    const endPort = p.endPort
-    return endPort ? `${proto}/${port}-${endPort}` : `${proto}/${port}`
-  })
+  return ports.map(formatNetworkPolicyPort)
 }
 
+// matchExpressions select too; a selector made only of them is not "all".
 function formatSelector(selector: any): string {
-  const labels = selector?.matchLabels || {}
-  if (Object.keys(labels).length === 0) return 'all'
-  return Object.entries(labels).map(([k, v]) => `${k}=${v}`).join(', ')
+  const text = formatKubernetesLabelSelector(selector)
+  return text === 'all workloads' ? 'all' : text
 }
 
 function FlowRow({

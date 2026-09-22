@@ -16,6 +16,36 @@ function render(resource: InvestigationKubernetesResource): string {
 }
 
 describe("InvestigationResourceEvidence", () => {
+  it("hides a multi-line sensitive value instead of rendering it as a block", () => {
+    const html = render({
+      apiVersion: "v1",
+      kind: "ConfigMap",
+      metadata: { namespace: "dev", name: "certs" },
+      data: {
+        "tls.key":
+          "-----BEGIN RSA PRIVATE KEY-----\nMIIEabc\n-----END RSA PRIVATE KEY-----",
+      },
+    });
+    expect(html).toContain("Value hidden");
+    expect(html).not.toMatch(/<pre[^>]*>-----BEGIN/);
+    expect(html).not.toContain("MIIEabc");
+  });
+
+  it("renders a file-shaped ConfigMap value as a block under its key", () => {
+    const html = render({
+      apiVersion: "v1",
+      kind: "ConfigMap",
+      metadata: { namespace: "kourier-system", name: "kourier-bootstrap" },
+      data: {
+        "envoy-bootstrap.yaml":
+          "dynamic_resources:\n  ads_config:\n    transport_api_version: V3\n    api_type: GRPC\n",
+        LOG_LEVEL: "info",
+      },
+    });
+    expect(html).toMatch(/colspan="2"/i);
+    expect(html).toMatch(/<pre[^>]*>dynamic_resources:\n {2}ads_config:/);
+    expect(html).toContain("LOG_LEVEL");
+  });
   it("keeps every ConfigMap key inspectable in a bounded table and hides sensitive-looking values", () => {
     const html = render({
       apiVersion: "v1",

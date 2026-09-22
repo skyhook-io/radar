@@ -7,6 +7,7 @@ describe('workloadRunTimelineEvents', () => {
     const runs: WorkloadRun[] = [
       {
         kind: 'jobs',
+      group: 'batch',
         namespace: 'dev',
         name: 'nightly-1',
         phase: 'Succeeded',
@@ -17,6 +18,7 @@ describe('workloadRunTimelineEvents', () => {
       },
       {
         kind: 'jobs',
+      group: 'batch',
         namespace: 'dev',
         name: 'nightly-2',
         phase: 'Failed',
@@ -43,6 +45,7 @@ describe('workloadRunTimelineEvents', () => {
   it('uses Workflow resource identity for Argo runs', () => {
     const events = workloadRunTimelineEvents([{
       kind: 'workflows',
+      group: 'argoproj.io',
       namespace: 'dev',
       name: 'migration-abc',
       phase: 'Error',

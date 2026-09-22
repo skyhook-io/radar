@@ -73,6 +73,33 @@ func TestRolloutTopologyInfoAndPriority(t *testing.T) {
 	}
 }
 
+func TestServiceTopologyInfoShowsAllPorts(t *testing.T) {
+	info := infoFromTopology(topology.Node{
+		Kind: topology.KindService,
+		Data: map[string]any{
+			"type": "ClusterIP",
+			"ports": []map[string]any{
+				{"name": "http", "port": int32(80), "protocol": "TCP"},
+				{"name": "https", "port": int32(443), "protocol": "TCP"},
+			},
+		},
+	})
+	if len(info) != 1 || info[0].Name != "Service" || info[0].Value != "ClusterIP :80 +1 more" {
+		t.Fatalf("service info = %#v, want Service \"ClusterIP :80 +1 more\"", info)
+	}
+
+	singlePort := infoFromTopology(topology.Node{
+		Kind: topology.KindService,
+		Data: map[string]any{
+			"type":  "ClusterIP",
+			"ports": []map[string]any{{"port": int32(80), "protocol": "TCP"}},
+		},
+	})
+	if len(singlePort) != 1 || singlePort[0].Value != "ClusterIP :80" {
+		t.Fatalf("single-port service info = %#v, want Service \"ClusterIP :80\"", singlePort)
+	}
+}
+
 func TestSummarize_ExcludesRootAndGroupFromDegraded(t *testing.T) {
 	nodes := []Node{
 		{Role: RoleRoot, Ref: ResourceRef{Kind: "Application", Name: "app"}, Health: "Degraded", Sync: "OutOfSync"}, // the app itself — must NOT count
@@ -80,7 +107,7 @@ func TestSummarize_ExcludesRootAndGroupFromDegraded(t *testing.T) {
 		{Role: RoleDeclared, Ref: ResourceRef{Kind: "Deployment", Name: "d"}, Health: "Healthy", Sync: "OutOfSync"},
 		{Role: RoleGroup, Ref: ResourceRef{Kind: "ConfigMap", Name: "3 ConfigMaps"}, Health: "Degraded", Count: 3}, // synthetic bucket — must NOT count
 	}
-	s := summarize(nodes)
+	s := Summarize(nodes)
 	if s.Degraded != 1 {
 		t.Errorf("Degraded = %d, want 1 (only the managed HTTPRoute; not the app or the group)", s.Degraded)
 	}

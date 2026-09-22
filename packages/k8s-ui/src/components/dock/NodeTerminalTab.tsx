@@ -2,17 +2,20 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { Loader2, AlertCircle, RefreshCw } from 'lucide-react'
 import { TerminalTab } from './TerminalTab'
 
+export interface NodeDebugPod {
+  podName: string
+  namespace: string
+  uid: string
+  containerName: string
+}
+
 export interface NodeTerminalTabProps {
   nodeName: string
   isActive?: boolean
-  /** Create a debug pod on the node, returns pod coordinates for exec */
-  createNodeDebugPod: (nodeName: string) => Promise<{
-    podName: string
-    namespace: string
-    containerName: string
-  }>
-  /** Clean up debug pod(s) for this node */
-  cleanupNodeDebugPod: (nodeName: string) => Promise<void>
+  /** Create a debug pod and return its identity and exec coordinates. */
+  createNodeDebugPod: (nodeName: string) => Promise<NodeDebugPod>
+  /** Clean up only this creation result, using its UID as a precondition. */
+  cleanupNodeDebugPod: (nodeName: string, pod: NodeDebugPod) => Promise<void>
   /** Return WebSocket URL for exec into a pod container */
   createSession: (namespace: string, podName: string, containerName: string) => Promise<{ wsUrl: string }>
 }
@@ -24,15 +27,11 @@ export function NodeTerminalTab({
   cleanupNodeDebugPod,
   createSession,
 }: NodeTerminalTabProps) {
-  const [debugPod, setDebugPod] = useState<{
-    podName: string
-    namespace: string
-    containerName: string
-  } | null>(null)
+  const [debugPod, setDebugPod] = useState<NodeDebugPod | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(true)
-  const cleanupDoneRef = useRef(false)
-  // Stable refs for callbacks
+  const [attempt, setAttempt] = useState(0)
+  // Stable refs avoid restarting creation when the host renders new callbacks.
   const createNodeDebugPodRef = useRef(createNodeDebugPod)
   const cleanupNodeDebugPodRef = useRef(cleanupNodeDebugPod)
   const createSessionRef = useRef(createSession)
@@ -40,44 +39,49 @@ export function NodeTerminalTab({
   useEffect(() => { cleanupNodeDebugPodRef.current = cleanupNodeDebugPod }, [cleanupNodeDebugPod])
   useEffect(() => { createSessionRef.current = createSession }, [createSession])
 
-  const createPod = useCallback(async () => {
-    cleanupDoneRef.current = false
+  const createPod = useCallback(() => setAttempt(value => value + 1), [])
+
+  useEffect(() => {
+    // Each attempt owns its result, including retries and Strict Mode remounts.
+    let disposed = false
+    let pod: NodeDebugPod | null = null
+    let cleanupDone = false
+    const cleanup = cleanupNodeDebugPodRef.current
+    const dispose = () => {
+      disposed = true
+      if (!pod || cleanupDone) return
+      cleanupDone = true
+      cleanup(nodeName, pod).catch((err) => {
+        console.warn('[NodeTerminal] Cleanup failed:', err)
+      })
+    }
+
+    setDebugPod(null)
     setIsCreating(true)
     setError(null)
-    try {
-      const result = await createNodeDebugPodRef.current(nodeName)
-      setDebugPod(result)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create debug pod')
-    } finally {
-      setIsCreating(false)
+    const create = async () => {
+      try {
+        pod = await createNodeDebugPodRef.current(nodeName)
+        if (disposed) {
+          dispose()
+        } else {
+          setDebugPod(pod)
+        }
+      } catch (err) {
+        if (!disposed) setError(err instanceof Error ? err.message : 'Failed to create debug pod')
+      } finally {
+        if (!disposed) setIsCreating(false)
+      }
     }
-  }, [nodeName])
+    void create()
 
-  useEffect(() => {
-    createPod()
+    // The host uses keepalive for best-effort delivery during page unload.
+    window.addEventListener('beforeunload', dispose)
     return () => {
-      if (!cleanupDoneRef.current) {
-        cleanupDoneRef.current = true
-        cleanupNodeDebugPodRef.current(nodeName).catch((err) => {
-          console.warn('[NodeTerminal] Cleanup on unmount failed:', err)
-        })
-      }
+      window.removeEventListener('beforeunload', dispose)
+      dispose()
     }
-  }, [nodeName, createPod])
-
-  // Best-effort cleanup on page unload — uses keepalive so the browser
-  // does not cancel the request when the page navigates away.
-  useEffect(() => {
-    const handleUnload = () => {
-      if (!cleanupDoneRef.current) {
-        cleanupDoneRef.current = true
-        cleanupNodeDebugPodRef.current(nodeName).catch(() => {})
-      }
-    }
-    window.addEventListener('beforeunload', handleUnload)
-    return () => window.removeEventListener('beforeunload', handleUnload)
-  }, [nodeName])
+  }, [nodeName, attempt])
 
   if (isCreating) {
     return (

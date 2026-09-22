@@ -2,8 +2,12 @@ package prometheus
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"sync/atomic"
+
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 // AuthGate is the per-request resource read check used by handlers that read
@@ -68,24 +72,20 @@ func canReadMetricsResource(r *http.Request, kind, namespace string) bool {
 	return canRead(r, group, resource, namespace, "get")
 }
 
+// metricsKindResource maps a chartable kind to the (group, resource) a
+// SubjectAccessReview needs. prom.SupportedKinds is the allowlist, so a kind
+// Radar does not chart is refused here even if it is a perfectly ordinary
+// builtin; the GVRs themselves come from the shared catalogues rather than a
+// second hand-written copy that could disagree with them.
 func metricsKindResource(kind string) (group, resource string, clusterScoped, ok bool) {
-	switch strings.ToLower(kind) {
-	case "pod":
-		return "", "pods", false, true
-	case "node":
-		return "", "nodes", true, true
-	case "deployment":
-		return "apps", "deployments", false, true
-	case "statefulset":
-		return "apps", "statefulsets", false, true
-	case "daemonset":
-		return "apps", "daemonsets", false, true
-	case "replicaset":
-		return "apps", "replicasets", false, true
-	case "job":
-		return "batch", "jobs", false, true
-	case "cronjob":
-		return "batch", "cronjobs", false, true
+	if !slices.ContainsFunc(prom.SupportedKinds(), func(k string) bool { return strings.EqualFold(k, kind) }) {
+		return "", "", false, false
+	}
+	if g, r, found := k8s.ClusterOnlyKindGVR(kind); found {
+		return g, r, true, true
+	}
+	if g, r, found := k8s.NamespacedBuiltinGVR(kind); found {
+		return g, r, false, true
 	}
 	return "", "", false, false
 }

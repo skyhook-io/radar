@@ -114,7 +114,6 @@ radar/
 │   │   │   ├── logs/          # Logs viewer component
 │   │   │   ├── portforward/   # Port forward manager
 │   │   │   ├── resource/      # Single resource detail page
-│   │   │   ├── resource-drawer/ # Resource drawer overlay
 │   │   │   ├── resources/     # Resource list panels (thin wrappers over @skyhook-io/k8s-ui)
 │   │   │   ├── audit/         # Cluster audit detail view
 │   │   │   ├── cost/          # Cost tracking and visualization

@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { skipToken } from '@tanstack/react-query'
 import { getRightsizingScanCacheConfig } from './client'
 
 describe('rightsizing scan cache config', () => {
-  it('is manual-only and retained briefly', () => {
+  it('retains result lookups briefly', () => {
     const config = getRightsizingScanCacheConfig(['staging', 'default'], 'cluster-a')
 
-    expect(config.queryFn).toBe(skipToken)
     expect(config.gcTime).toBe(5 * 60 * 1000)
+  })
+
+  it('isolates identities', () => {
+    expect(getRightsizingScanCacheConfig([], 'a', 'alice').queryKey).not.toEqual(getRightsizingScanCacheConfig([], 'a', 'bob').queryKey)
   })
 
   it('normalizes namespace order and isolates cluster and namespace scopes', () => {
@@ -16,6 +18,8 @@ describe('rightsizing scan cache config', () => {
     expect(config.namespaceKey).toBe('default,staging')
     expect(config.queryKey).toEqual([
       'prometheus-rightsizing-scan',
+      '/api',
+      '',
       'cluster-a',
       'default,staging',
     ])

@@ -1,3 +1,4 @@
+import { hasReflectorDetails } from '../resources/renderers/ReflectorSection'
 import { clsx } from 'clsx'
 import { SEVERITY_BADGE, HEALTH_BADGE_COLORS } from '../../utils/badge-colors'
 import { isArgoRolloutResource } from '../../utils/workload-rollout'
@@ -69,7 +70,7 @@ import { getResourceClaimStatus, getResourceClaimTemplateStatus, getDeviceClassS
 import { getNvidiaClusterPolicyStatus, getNvidiaDriverStatus } from '../resources/resource-utils-nvidia'
 import { getClusterQueueStatus, getLocalQueueStatus, getKueueWorkloadStatus, getResourceFlavorStatus, getAdmissionCheckStatus, getProvisioningRequestStatus } from '../resources/resource-utils-kueue'
 import { getRayClusterStatus, getRayJobStatus, getRayServiceStatus, getRayCronJobStatus } from '../resources/resource-utils-ray'
-import { getLeaderWorkerSetStatus, getJobSetStatus } from '../resources/resource-utils-jobset-lws'
+import { getLeaderWorkerSetStatus, getJobSetStatus, isJobSetV1Alpha2 } from '../resources/resource-utils-jobset-lws'
 import { getInferenceServiceStatus, getServingRuntimeStatus, getInferenceGraphStatus, getTrainedModelStatus, getLLMInferenceServiceStatus } from '../resources/resource-utils-kserve'
 import { getInferencePoolStatus, getInferenceObjectiveStatus } from '../resources/resource-utils-inference-gateway'
 import { getVolcanoJobStatus, getVolcanoQueueStatus, getVolcanoPodGroupStatus, getJobFlowStatus, getJobTemplateStatus } from '../resources/resource-utils-volcano'
@@ -113,6 +114,7 @@ import {
   ConfigMapRenderer,
   SecretRenderer,
   JobRenderer,
+  JobSetRenderer,
   CronJobRenderer,
   CronWorkflowRenderer,
   HPARenderer,
@@ -120,6 +122,8 @@ import {
   PVCRenderer,
   RolloutRenderer,
   AnalysisRunRenderer,
+  AnalysisTemplateRenderer,
+  ExperimentRenderer,
   CertificateRenderer,
   WorkflowRenderer,
   PersistentVolumeRenderer,
@@ -231,6 +235,7 @@ import {
   PriorityClassRenderer,
   RuntimeClassRenderer,
   LeaseRenderer,
+  LimitRangeRenderer,
   TraefikIngressRouteRenderer,
   TraefikMiddlewareRenderer,
   TraefikServiceRenderer,
@@ -396,6 +401,10 @@ export interface RendererOverrides {
   // Namespace RBAC summary: host fetches /api/rbac/namespace/{ns} so the
   // namespace page can show bindings configured here without falling
   // through to GenericRenderer.
+  CAPIClusterRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
   NamespaceRenderer?: React.ComponentType<{
     data: any
     onNavigate?: (ref: ResourceRef) => void
@@ -425,8 +434,9 @@ export interface RendererOverrides {
 const KNOWN_KINDS = new Set([
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
   'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'cronworkflows',
+  'jobsets',
   'hpas', 'horizontalpodautoscalers', 'nodes', 'persistentvolumeclaims',
-  'rollouts', 'analysisruns', 'certificates', 'workflows', 'persistentvolumes',
+  'rollouts', 'analysisruns', 'analysistemplates', 'clusteranalysistemplates', 'experiments', 'certificates', 'workflows', 'persistentvolumes',
   'storageclasses', 'certificaterequests', 'clusterissuers', 'issuers',
   'orders', 'challenges',
   'gateways', 'gatewayclasses', 'httproutes', 'grpcroutes', 'tcproutes', 'tlsroutes', 'sealedsecrets', 'workflowtemplates', 'clusterworkflowtemplates',
@@ -473,7 +483,7 @@ const KNOWN_KINDS = new Set([
   'virtualservices', 'destinationrules', 'serviceentries',
   'peerauthentications', 'authorizationpolicies',
   'mutatingwebhookconfigurations', 'validatingwebhookconfigurations',
-  'ingressclasses', 'priorityclasses', 'runtimeclasses', 'leases',
+  'ingressclasses', 'priorityclasses', 'runtimeclasses', 'leases', 'limitranges',
   'knativeservices', 'knativeconfigurations', 'knativerevisions', 'knativeroutes',
   'brokers', 'triggers', 'eventtypes', 'pingsources', 'apiserversources', 'containersources', 'sinkbindings',
   'channels', 'inmemorychannels', 'subscriptions', 'sequences', 'parallels',
@@ -677,8 +687,9 @@ export function ResourceRendererDispatch({
   const isGroupGatedKind =
     kind === 'clusters' || kind === 'backups' || kind === 'scheduledbackups' || kind === 'poolers'
     || kind === 'objectstores' || kind === 'databases' || kind === 'publications'
-    || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs'
-    || kind === 'policies' || kind === 'rollouts' || kind === 'machines' || kind === 'machinesets'
+    || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs' || kind === 'jobsets'
+    || kind === 'policies' || kind === 'rollouts' || kind === 'experiments'
+    || kind === 'machines' || kind === 'machinesets'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
     (kind === 'clusters' && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'cluster.x-k8s.io')))
@@ -691,8 +702,14 @@ export function ResourceRendererDispatch({
       && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'messaging.knative.dev')))
     || (kind === 'policies' && isApiGroup(data?.apiVersion, 'kyverno.io'))
     || (kind === 'rollouts' && isArgoRolloutResource(data))
+    // Katib (kubeflow.org) ships its own, unrelated Experiment CRD sharing
+    // this plural — without this gate it got the Argo Rollouts Experiment
+    // renderer's mostly-empty status view instead of its actual resource
+    // details, the same collision shape as every other check in this block.
+    || (kind === 'experiments' && isApiGroup(data?.apiVersion, 'argoproj.io'))
     || ((kind === 'machines' || kind === 'machinesets')
       && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io'))
+    || (kind === 'jobsets' && isJobSetV1Alpha2(data))
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
   const calicoApiVersionMatched = isCalicoApiVersion(data?.apiVersion)
@@ -738,14 +755,19 @@ export function ResourceRendererDispatch({
   const RoleComp = rendererOverrides?.RoleRenderer ?? RoleRenderer
   const RoleBindingComp = rendererOverrides?.RoleBindingRenderer ?? RoleBindingRenderer
   const NamespaceComp = rendererOverrides?.NamespaceRenderer ?? NamespaceRenderer
+  const CAPIClusterComp = rendererOverrides?.CAPIClusterRenderer ?? CAPIClusterRenderer
   const HPAComp = rendererOverrides?.HPARenderer ?? HPARenderer
   const PVCComp = rendererOverrides?.PVCRenderer ?? PVCRenderer
   const RolloutComp = rendererOverrides?.RolloutRenderer ?? RolloutRenderer
+  const showsReflection = (kind === 'configmaps' || kind === 'secrets') && hasReflectorDetails(data, relationships?.reflection)
+  const reflectionRefs = showsReflection ? [relationships?.reflection?.source, ...(relationships?.reflection?.mirrors ?? [])].filter((ref): ref is ResourceRef => !!ref) : []
+  const withoutReflection = (refs: ResourceRef[] | undefined) => refs?.filter(ref => !reflectionRefs.some(mirror => mirror.kind === ref.kind && mirror.namespace === ref.namespace && mirror.name === ref.name && (mirror.group ?? '') === (ref.group ?? '')))
+  const sidebarRelationships = showsReflection && relationships ? { ...relationships, configRefs: withoutReflection(relationships.configRefs), consumers: withoutReflection(relationships.consumers) } : relationships
   const scaleBlockedBy = replicaScalers(relationships?.scalers)
 
   const sidebarContent = showCommonSections && (
     <>
-      <RelatedResourcesSection relationships={relationships} onNavigate={onNavigate} />
+      <RelatedResourcesSection relationships={sidebarRelationships} onNavigate={onNavigate} />
       {kind !== 'events' && <EventsSection events={events || []} updates={updates || []} isLoading={eventsLoading ?? false} eventsError={eventsError ?? null} updatesError={updatesError ?? null} hint={eventsHint} />}
       <LabelsSection data={data} />
       <AnnotationsSection data={data} />
@@ -773,9 +795,10 @@ export function ResourceRendererDispatch({
         {kind === 'services' && !data?.apiVersion?.includes('serving.knative.dev') && <ServiceComp data={data} onCopy={onCopy} copied={copied} onNavigate={onNavigate} />}
         {kind === 'endpointslices' && <EndpointSliceRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'ingresses' && !data?.apiVersion?.includes('networking.internal.knative.dev') && <IngressRenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'configmaps' && <ConfigMapRenderer data={data} />}
-        {kind === 'secrets' && <SecretRenderer data={data} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
+        {kind === 'configmaps' && <ConfigMapRenderer data={data} relationships={relationships} onNavigate={onNavigate} />}
+        {kind === 'secrets' && <SecretRenderer data={data} relationships={relationships} onNavigate={onNavigate} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
         {kind === 'jobs' && !nonCoreJobFallthrough && <JobRenderer data={data} />}
+        {kind === 'jobsets' && isJobSetV1Alpha2(data) && <JobSetRenderer data={data} />}
         {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'cronworkflows' && <CronWorkflowRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPAComp data={data} onNavigate={onNavigate} hpaDiagnosis={hpaDiagnosis} />}
@@ -783,6 +806,8 @@ export function ResourceRendererDispatch({
         {kind === 'persistentvolumeclaims' && <PVCComp data={data} onNavigate={onNavigate} />}
         {kind === 'rollouts' && isArgoRolloutResource(data) && <RolloutComp data={data} onNavigate={onNavigate} />}
         {kind === 'analysisruns' && <AnalysisRunRenderer data={data} onNavigate={onNavigate} />}
+        {(kind === 'analysistemplates' || kind === 'clusteranalysistemplates') && <AnalysisTemplateRenderer data={data} />}
+        {kind === 'experiments' && isApiGroup(data?.apiVersion, 'argoproj.io') && <ExperimentRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'certificates' && !data?.apiVersion?.includes('networking.internal.knative.dev') && <CertificateRenderer data={data} />}
         {kind === 'workflows' && <WorkflowRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'persistentvolumes' && <PersistentVolumeRenderer data={data} onNavigate={onNavigate} />}
@@ -876,7 +901,7 @@ export function ResourceRendererDispatch({
         {kind === 'clusterexternalsecrets' && <ClusterExternalSecretRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'secretstores' || kind === 'clustersecretstores') && <SecretStoreRenderer data={data} />}
         {kind === 'clusters' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGClusterComp data={data} onNavigate={onNavigate} />}
-        {kind === 'clusters' && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && <CAPIClusterRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'clusters' && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io') && <CAPIClusterComp data={data} onNavigate={onNavigate} />}
         {kind === 'scheduledbackups' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGScheduledBackupRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'poolers' && isApiGroup(data?.apiVersion, CNPG_GROUP) && <CNPGPoolerRenderer data={data} onNavigate={onNavigate} />}
         {/* Cluster API (CAPI) */}
@@ -920,6 +945,7 @@ export function ResourceRendererDispatch({
         {kind === 'priorityclasses' && <PriorityClassRenderer data={data} />}
         {kind === 'runtimeclasses' && <RuntimeClassRenderer data={data} />}
         {kind === 'leases' && <LeaseRenderer data={data} />}
+        {kind === 'limitranges' && <LimitRangeRenderer data={data} />}
         {/* Knative Serving */}
         {(kind === 'services' && data?.apiVersion?.includes('serving.knative.dev')) && <KnativeServiceRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'knativeservices' && <KnativeServiceRenderer data={data} onNavigate={onNavigate} />}
@@ -1073,7 +1099,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'rayservices' && data?.apiVersion?.startsWith('ray.io/')) return getRayServiceStatus(data)
   if (k === 'raycronjobs' && data?.apiVersion?.startsWith('ray.io/')) return getRayCronJobStatus(data)
   if (k === 'leaderworkersets' && data?.apiVersion?.startsWith('leaderworkerset.x-k8s.io/')) return getLeaderWorkerSetStatus(data)
-  if (k === 'jobsets' && data?.apiVersion?.startsWith('jobset.x-k8s.io/')) return getJobSetStatus(data)
+  if (k === 'jobsets' && isJobSetV1Alpha2(data)) return getJobSetStatus(data)
   if (k === 'inferenceservices' && data?.apiVersion?.startsWith('serving.kserve.io/')) return getInferenceServiceStatus(data)
   if ((k === 'servingruntimes' || k === 'clusterservingruntimes') && data?.apiVersion?.startsWith('serving.kserve.io/')) return getServingRuntimeStatus(data)
   if (k === 'inferencegraphs' && data?.apiVersion?.startsWith('serving.kserve.io/')) return getInferenceGraphStatus(data)
@@ -1103,6 +1129,10 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'nodes') return getNodeStatus(data)
   if (k === 'persistentvolumeclaims') return getPVCStatus(data)
   if (k === 'analysisruns') return getAnalysisRunStatus(data)
+  // Same collision guard as the render branch above — Katib's unrelated
+  // Experiment CRD (kubeflow.org) shares this plural and doesn't report the
+  // AnalysisPhase vocabulary getAnalysisRunStatus expects.
+  if (k === 'experiments' && isApiGroup(data?.apiVersion, 'argoproj.io')) return getAnalysisRunStatus(data)
   if (k === 'workflows') return getWorkflowStatus(data)
   if (k === 'cronworkflows') return getCronWorkflowStatus(data)
   if (k === 'certificates') {

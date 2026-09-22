@@ -12,6 +12,9 @@ spec:
   sourceRepos:
     - https://github.com/argoproj/argocd-example-apps
     - https://github.com/argoproj/argocd-example-apps.git
+    # The argo3-health scenario sources its manifests from this repository.
+    - https://github.com/skyhook-io/radar
+    - https://github.com/skyhook-io/radar.git
   destinations:
     - server: https://kubernetes.default.svc
       namespace: 'demo-*'
@@ -20,6 +23,11 @@ spec:
     # the parent fails with InvalidSpecError and never creates children.
     - server: https://kubernetes.default.svc
       namespace: argocd
+    # guestbook-remote targets a cluster this Argo doesn't have; the project
+    # must still allow the destination or the app fails on the project rule
+    # instead of the (intended) unknown-cluster condition.
+    - server: https://spoke-1.example.com:6443
+      namespace: 'demo-*'
   clusterResourceWhitelist:
     - group: ''
       kind: Namespace
@@ -29,4 +37,6 @@ spec:
     - group: apps
       kind: '*'
     - group: networking.k8s.io
+      kind: '*'
+    - group: radar.demo
       kind: '*'

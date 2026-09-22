@@ -8,6 +8,20 @@
 # enabled (single PVC + SQLite cannot be safely shared across pods).
 replicaCount: 1
 
+# Shared OSS configuration is read-only in the UI. These values are loaded at
+# startup; changing them rolls the Pod. Cloud keeps its existing settings path.
+# null retains Radar's default ignored system namespaces. To include all
+# namespaces, set audit: {ignoredNamespaces: [], disabledChecks: []}.
+audit: null
+# audit:
+#   ignoredNamespaces: [kube-system, kube-node-lease, kube-public, "*-system"]
+#   disabledChecks: [] # Check IDs from GET /api/audit -> checks
+
+helm:
+  # Prefixes, not full chart references. Registry credentials are not stored here.
+  ociSources: []
+  # - oci://ghcr.io/myorg/charts
+
 image:
   repository: ghcr.io/skyhook-io/radar
   pullPolicy: IfNotPresent
@@ -66,7 +80,16 @@ rbac:
   # Automatically enables secrets read access (needed for Helm release storage).
   helm: false
 
-  # Allow reading secrets (shows secrets in resource list)
+  # Allow reading secrets (shows secrets in the resource list, and backs the
+  # Helm releases view in no-auth installs since Helm stores releases in Secrets).
+  # Auto-enabled when rbac.helm is on, when auth is on (auth.mode != none), or in
+  # cloud mode. Under auth/cloud every Secret read is re-checked against the
+  # requesting user's own RBAC, so the ServiceAccount grant only lets the shared
+  # cache hold Secrets; it does not expose them to users who can't read them
+  # themselves. Like viewRBAC and viewWebhooks, this flag therefore only changes
+  # no-auth installs. The grant is cluster-wide get/list/watch on all Secrets, and
+  # setting this to false does not remove it in those modes: read the rendered
+  # ClusterRole.
   secrets: false
 
   # Allow reading RBAC objects (Roles, RoleBindings, ClusterRoles, ClusterRoleBindings)
@@ -260,11 +283,11 @@ httpRoute:
 
 resources:
   limits:
-    cpu: 500m
-    memory: 512Mi
+    cpu: 2
+    memory: 1Gi
   requests:
-    cpu: 100m
-    memory: 128Mi
+    cpu: 200m
+    memory: 256Mi
 
 # Timeline storage configuration
 #
@@ -474,6 +497,17 @@ cloud:
       viewer: true
       member: true
       owner: true
+    # Read Radar's curated integrations with explicit group/resource grants.
+    # Includes full specs/status (including inline configuration), not just UI
+    # summaries. Credential-bearing exceptions are listed in files/integration-read-baseline.yaml.
+    # Independent of *ClusterRole: custom base roles still receive this add-on.
+    # Cluster kinds additionally require clusterScopedRead.<tier>. A false here
+    # removes only this add-on, not grants from other roles. For customer-managed
+    # RBAC only, set defaultRbac.create=false and supply your own group bindings.
+    integrationRead:
+      viewer: true
+      member: true
+      owner: true
     # Grant the owner tier node cordon/drain. Cluster-scoped WRITE, so OFF by
     # default. Blast radius when enabled: `patch nodes` can't be field-scoped
     # by RBAC (also permits label/taint edits cluster-wide), and
@@ -522,8 +556,19 @@ traffic:
   #   http://vmsingle.victoria-metrics:8428
   #   http://vmselect.victoria-metrics:8481/select/0/prometheus
   prometheusUrl: ""
+  # Optional workload-metrics scope override, not a feature enable switch.
+  # Leave both unset for automatic matching; set at most one mode.
+  # Does not scope rightsizing, node/HPA/PVC or legacy network/storage queries.
+  prometheusSingleCluster: false
+  prometheusClusterLabels: {}
+  # Beyla Live Traffic matcher fragment. Workload charts use it only with an
+  # explicit scope override and accept one job equality or regex matcher.
+  # Automatic workload matching discovers custom jobs without this override.
+  beylaJobSelector: ""
   # HTTP headers sent with every Prometheus request. Required for
   # auth-protected backends (Bearer tokens, X-Scope-OrgID multi-tenancy, etc.).
+  # Setting headers requires prometheusUrl: Radar never sends credentials to
+  # auto-discovered endpoints, and the chart schema rejects the combination.
   # Values are rendered into the pod spec; use prometheusHeadersFromEnv for
   # secrets.
   # Example:
@@ -548,9 +593,8 @@ traffic:
 # Provisions the Argo CD API connection declaratively so it survives pod
 # restarts and needs no interactive Settings paste — the right shape for
 # in-cluster / Cloud deployments. Powers the full Git-rendered desired-vs-live
-# diff on GitOps Application pages. Leave token/existingSecret empty to configure
-# it interactively in Settings instead (note: that pick is stored under
-# /home/nonroot and is lost on restart unless persistence is enabled).
+# diff on GitOps Application pages. Configure shared OSS through these values;
+# Settings shows connection status but cannot edit installation configuration.
 #
 # Setting a token here makes the integration environment-managed: read-only in
 # the Settings UI, never written to disk. Mint a token with

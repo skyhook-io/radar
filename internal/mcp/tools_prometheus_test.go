@@ -53,6 +53,7 @@ type fakeProm struct {
 	rangeBody      string
 	rangeDelay     time.Duration                  // sleep before answering /api/v1/query_range, outside the lock so concurrent callers are not serialized
 	rangeBodyFunc  func(params url.Values) string // when set, renders the range body from the request (wins over rangeBody)
+	queryBodyFunc  func(params url.Values) string // same for /api/v1/query; an empty return falls back to queryBody
 	labelStatus    int
 	labelBody      string
 	labelDelay     time.Duration
@@ -79,7 +80,13 @@ func (f *fakeProm) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeFakeBody(w, 0, probeOKBody)
 			return
 		}
-		writeFakeBody(w, f.queryStatus, orDefault(f.queryBody, emptyVectorBody))
+		body := f.queryBody
+		if f.queryBodyFunc != nil {
+			if rendered := f.queryBodyFunc(q); rendered != "" {
+				body = rendered
+			}
+		}
+		writeFakeBody(w, f.queryStatus, orDefault(body, emptyVectorBody))
 	case path == "/api/v1/query_range":
 		f.rangeParams = append(f.rangeParams, q)
 		body := f.rangeBody

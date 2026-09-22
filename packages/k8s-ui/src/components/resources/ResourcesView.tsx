@@ -3,6 +3,7 @@ import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useDebouncedValue } from '../../hooks/useDebouncedValue'
 import { PaneLoader } from '../ui/PaneLoader'
 import { RestrictedState } from '../ui/RestrictedState'
+import { FetchResult } from '../ui/FetchResult'
 import { Input } from '../ui/Input'
 import type { TopPodMetrics, TopNodeMetrics, ContainerResourceMetrics } from '../../types'
 import {
@@ -709,6 +710,23 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Phase', width: 'w-28' },
     { key: 'trigger', label: 'Trigger', width: 'w-32', tooltip: 'Which part of the Rollout started this run' },
     { key: 'metrics', label: 'Metrics', width: 'w-40', tooltip: 'Per-metric verdicts' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  analysistemplates: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    { key: 'metricCount', label: 'Metrics', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  clusteranalysistemplates: [
+    { key: 'name', label: 'Name' },
+    { key: 'metricCount', label: 'Metrics', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  experiments: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    { key: 'status', label: 'Phase', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   workflows: [
@@ -2826,6 +2844,9 @@ const CURATED_COLUMN_GROUPS: Record<string, readonly string[]> = {
   sbomreports: ['aquasecurity.github.io'],
   vulnerabilityreports: ['aquasecurity.github.io'],
   analysisruns: ['argoproj.io'],
+  analysistemplates: ['argoproj.io'],
+  clusteranalysistemplates: ['argoproj.io'],
+  experiments: ['argoproj.io'],
   applications: ['argoproj.io'],
   applicationsets: ['argoproj.io'],
   appprojects: ['argoproj.io'],
@@ -4987,11 +5008,13 @@ export function ResourcesView({
   // forbidden/unavailable in counts (e.g. an informer not yet synced at counts
   // time) while the list query has since returned data — show the table, not
   // RestrictedState. A 403 on the list itself never carries rows, so it still
-  // forces the restricted state.
+  // forces the restricted state. A non-403 list error also beats the counts
+  // entry: a kind whose sync deadline fired is reported unavailable by counts,
+  // but the list knows it failed to load — that is not an RBAC answer.
   const selectedHasRows = Array.isArray(resources) && resources.length > 0
   const isSelectedForbidden =
     isForbiddenError(selectedQueryError) ||
-    (!selectedHasRows && forbiddenKinds.has(selectedKindCountKey))
+    (!selectedHasRows && !selectedQueryError && forbiddenKinds.has(selectedKindCountKey))
 
   // Reset sort and filters when kind changes (but not when syncing from URL navigation)
   // Track previous kind to skip on mount (where the effect fires but kind hasn't actually changed)
@@ -6277,6 +6300,15 @@ export function ResourcesView({
                 />
               </div>
             </div>
+          ) : selectedQueryError && !Array.isArray(resources) ? (
+            // A failed fetch with no rows to fall back on must not reach the
+            // empty state below — it would tell the user the cluster has none.
+            <FetchResult
+              loading={false}
+              error={selectedQueryError}
+              onRetry={selectedQuery?.refetch}
+              className="absolute inset-0"
+            />
           ) : largeListGuard ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-theme-text-tertiary px-6 text-center">
               <AlertTriangle className="w-8 h-8 text-amber-400 mb-2" />
@@ -7081,6 +7113,11 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <RolloutCell resource={resource} column={column} />
     case 'analysisruns':
       return <AnalysisRunCell resource={resource} column={column} />
+    case 'analysistemplates':
+    case 'clusteranalysistemplates':
+      return <AnalysisTemplateCell resource={resource} column={column} />
+    case 'experiments':
+      return <ExperimentCell resource={resource} column={column} />
     case 'workflows':
       return <WorkflowCell resource={resource} column={column} />
     case 'cronworkflows':
@@ -8746,6 +8783,23 @@ function RolloutCell({ resource, column }: { resource: any; column: string }) {
   }
 }
 
+// An Experiment reports status.phase from the same AnalysisPhase vocabulary
+// as AnalysisRun (Successful/Running/Pending/Inconclusive/Failed/Error), so
+// getAnalysisRunStatus's mapping applies directly — routing here instead of
+// GenericCell avoids the generic phase heuristic's HEALTHY_PHASES set, which
+// doesn't recognize 'Successful' and treats 'Running' as healthy (neither
+// true for this vocabulary).
+function ExperimentCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'status': {
+      const status = getAnalysisRunStatus(resource)
+      return <span className={clsx('badge', status.color)}>{status.text}</span>
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
 function AnalysisRunCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'status': {
@@ -8778,6 +8832,17 @@ function AnalysisRunCell({ resource, column }: { resource: any; column: string }
           </span>
         </Tooltip>
       )
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+function AnalysisTemplateCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'metricCount': {
+      const count = (resource.spec?.metrics || []).length
+      return <span className="text-sm text-theme-text-secondary">{count}</span>
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>

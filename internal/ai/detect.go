@@ -20,14 +20,22 @@ type AgentInfo struct {
 	Supported       bool                        `json:"supported"`
 	Profiles        []ExecutionProfile          `json:"profiles,omitempty"`
 	ConsentSurfaces map[ExecutionProfile]string `json:"consentSurfaces,omitempty"`
+	// Apply and Verification declare what the backend driving this agent
+	// performs beyond a read-only investigation: a user-confirmed remediation
+	// turn, and the automatic re-check after one. The frontend reads the
+	// declaration for policy and the verdict for shape; a backend that omits
+	// them is read-only.
+	Apply        bool `json:"apply,omitempty"`
+	Verification bool `json:"verification,omitempty"`
 }
 
 // knownAgents are the CLI names we probe for — a FIXED list. We never exec a
 // user-supplied name/path: only these literals, resolved through PATH, are run.
-var knownAgents = []string{"claude", "codex", "gemini", "cursor-agent"}
+var knownAgents = []string{"claude", "codex", "gemini", "cursor-agent", "opencode"}
 
 var agentLabels = map[string]string{
 	"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini CLI", "cursor-agent": "Cursor Agent",
+	"opencode": "OpenCode",
 }
 
 // AgentLabel is the display name for an agent CLI — the ONE table every
@@ -68,7 +76,7 @@ func ProfilesFor(agent string) []ExecutionProfile {
 		return []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}
 	case "codex":
 		return []ExecutionProfile{ExecutionProfileSafeguarded, ExecutionProfileFullLocal}
-	case "cursor-agent":
+	case "cursor-agent", "opencode":
 		return []ExecutionProfile{ExecutionProfileFullLocal}
 	default:
 		return nil

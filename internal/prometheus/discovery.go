@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/errorlog"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/portforward"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
@@ -73,9 +75,14 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 
 	if manualURL != "" {
 		addr := strings.TrimRight(manualURL, "/")
-		if c.probe(ctx, addr) {
+		c.mu.RLock()
+		tr := prom.NewHTTPTransport(addr, "", c.httpClient)
+		tr.Headers = copyHeaders(c.headers)
+		c.mu.RUnlock()
+		ok, reason := prom.NewClient(tr).ProbeQueryAPI(ctx)
+		if ok {
 			log.Printf("[prometheus] connected via manual URL %s (%s)", addr, took(start))
-			if !c.markConnected(addr, "", startGen) {
+			if !c.markConnected(addr, "", "url:"+addr, startGen) {
 				return "", "", errDiscoverySuperseded
 			}
 			return addr, "", nil
@@ -86,10 +93,21 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 			logDiscoveryEnded(start, err)
 			return "", "", err
 		}
-		if !discoveryDiagnosticsSuppressed(ctx) {
-			errorlog.Record("prometheus", "error", "manual Prometheus URL %s not reachable", addr)
+		message := "The configured Prometheus endpoint could not be reached. Check its address, network access and TLS configuration."
+		switch reason {
+		case prom.ProbeReasonAuthError:
+			message = "The configured Prometheus endpoint rejected authentication or access (HTTP 401/403). Check credentials, tenant headers and permissions."
+		case prom.ProbeReasonPromError:
+			message = "The configured Prometheus query API returned an error. Check the backend's query and storage health, including ingester/store availability; this is not an empty metrics result."
+		case prom.ProbeReasonHTTPError:
+			message = "The configured Prometheus endpoint responded with an HTTP error. Check the backend and proxy health; this is not a network reachability failure."
+		case prom.ProbeReasonNotPrometheus:
+			message = "The configured endpoint did not return a Prometheus query response. Check the API base path and whether a proxy is returning a login page."
 		}
-		return "", "", fmt.Errorf("manual Prometheus URL %s not reachable", addr)
+		if !discoveryDiagnosticsSuppressed(ctx) {
+			errorlog.Record("prometheus", "error", "%s", message)
+		}
+		return "", "", errors.New(message)
 	}
 
 	// Reuse of an existing managed port-forward happens later, per candidate, in
@@ -145,11 +163,11 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 	// so endpoint selection is deterministic.
 	directStart := time.Now()
 	directCtx, cancelDirect := context.WithTimeout(ctx, directProbeBudget)
-	idx := c.probeCandidatesConcurrently(directCtx, candidates)
+	idx, reasons := c.probeCandidatesWithReasons(directCtx, candidates)
 	cancelDirect()
 	if idx >= 0 {
 		cand := candidates[idx]
-		if !c.markConnected(cand.ClusterAddr, cand.BasePath, startGen) {
+		if !c.markConnected(cand.ClusterAddr, cand.BasePath, cand.Key(), startGen) {
 			return "", "", errDiscoverySuperseded
 		}
 		log.Printf("[prometheus] connected to %s/%s via direct probe at %s (source=%s, score=%d, direct %s, total %s)",
@@ -175,6 +193,20 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		c.mu.Lock()
 		c.discoveryService = nil
 		c.mu.Unlock()
+		blocked := c.attributeNetworkPolicyBlock(ctx, k8s.GetResourceCache(), candidates, reasons)
+		// Attribution reads the API; a run superseded or timed out during it
+		// must end as such, not be recorded as a cluster without Prometheus.
+		if err := ctx.Err(); err != nil {
+			logDiscoveryEnded(start, err)
+			return "", "", err
+		}
+		if blocked != nil {
+			log.Printf("[prometheus] %v", blocked)
+			if !discoveryDiagnosticsSuppressed(ctx) {
+				errorlog.Record("prometheus", "warning", "%v", blocked)
+			}
+			return "", "", blocked
+		}
 		if !discoveryDiagnosticsSuppressed(ctx) {
 			errorlog.Record("prometheus", "warning", "no Prometheus service reachable in cluster")
 		}
@@ -205,7 +237,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 		// order as the port-forward attempts below.
 		if pfAddr := portforward.GetAddressForService(portforward.OwnerPrometheus, contextName, cand.Namespace, cand.Name); pfAddr != "" {
 			if c.probe(ctx, pfAddr+cand.BasePath) {
-				if !c.markConnected(pfAddr, cand.BasePath, startGen) {
+				if !c.markConnected(pfAddr, cand.BasePath, cand.Key(), startGen) {
 					// Superseded mid-reuse: drop the stale service metadata we just
 					// published, same as the port-forward path below. The forward
 					// itself is pre-existing (own from a prior run, or a peer's), so
@@ -252,7 +284,7 @@ func (c *Client) discover(ctx context.Context, gen uint64) (string, string, erro
 
 		addr := connInfo.Address
 		if c.probe(ctx, addr+cand.BasePath) {
-			if !c.markConnected(addr, cand.BasePath, startGen) {
+			if !c.markConnected(addr, cand.BasePath, cand.Key(), startGen) {
 				// Superseded: don't leave the shared forward up for an endpoint
 				// we're discarding.
 				portforward.Stop(portforward.OwnerPrometheus)
@@ -348,15 +380,26 @@ const (
 // recorded-but-unpublished). Selection stays deterministic: a lower-priority
 // success never wins while a higher-priority probe is still pending.
 func (c *Client) probeCandidatesConcurrently(ctx context.Context, candidates []prom.Candidate) int {
+	idx, _ := c.probeCandidatesWithReasons(ctx, candidates)
+	return idx
+}
+
+// probeCandidatesWithReasons is probeCandidatesConcurrently that also returns
+// each candidate's rejection reason (empty for a candidate that succeeded or
+// was never reached before the pass ended).
+func (c *Client) probeCandidatesWithReasons(ctx context.Context, candidates []prom.Candidate) (int, []prom.ProbeReason) {
 	n := len(candidates)
+	reasons := make([]prom.ProbeReason, n)
 	if n == 0 {
-		return -1
+		return -1, reasons
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel() // stops in-flight/queued probes once we return
 
+	var reasonsMu sync.Mutex
 	state := make([]atomic.Int32, n)
+	launched := make([]atomic.Bool, n)
 	sem := make(chan struct{}, maxConcurrentProbes)
 	woke := make(chan struct{}, n) // wake-ups; buffered so a worker never blocks
 
@@ -370,9 +413,14 @@ func (c *Client) probeCandidatesConcurrently(ctx context.Context, candidates []p
 			go func(i int) {
 				defer func() { <-sem }()
 				outcome := probeFailed
-				if c.probeReachable(ctx, candidates[i].ClusterAddr+candidates[i].BasePath, false) {
+				launched[i].Store(true)
+				ok, reason := c.probeWithReason(ctx, candidates[i].ClusterAddr+candidates[i].BasePath, false)
+				if ok {
 					outcome = probeSucceeded
 				}
+				reasonsMu.Lock()
+				reasons[i] = reason
+				reasonsMu.Unlock()
 				state[i].Store(outcome)
 				select {
 				case woke <- struct{}{}:
@@ -390,6 +438,22 @@ func (c *Client) probeCandidatesConcurrently(ctx context.Context, candidates []p
 		}
 		return -1
 	}
+	// A probe still running when the pass ends got no answer in the time the
+	// pass allowed — a policy that silently drops packets looks exactly like
+	// that — so it counts as a transport failure. One never launched stays
+	// unexplained.
+	snapshot := func() []prom.ProbeReason {
+		reasonsMu.Lock()
+		defer reasonsMu.Unlock()
+		out := make([]prom.ProbeReason, n)
+		copy(out, reasons)
+		for i := range out {
+			if out[i] == "" && launched[i].Load() && state[i].Load() == probePending {
+				out[i] = prom.ProbeReasonTransportError
+			}
+		}
+		return out
+	}
 
 	frontier := 0
 	for {
@@ -399,17 +463,17 @@ func (c *Client) probeCandidatesConcurrently(ctx context.Context, candidates []p
 				break
 			}
 			if s == probeSucceeded {
-				return frontier
+				return frontier, snapshot()
 			}
 			frontier++
 		}
 		if frontier == n {
-			return -1 // every candidate resolved, none reachable
+			return -1, snapshot() // every candidate resolved, none reachable
 		}
 		select {
 		case <-woke:
 		case <-ctx.Done():
-			return earliestSuccess()
+			return earliestSuccess(), snapshot()
 		}
 	}
 }
@@ -439,7 +503,7 @@ func (c *Client) setDiscoveryServiceFromCandidate(cand prom.Candidate) {
 // published over the newer configuration. Returns whether it committed, so the
 // caller can surface a retryable error instead of a hollow success (a connected
 // address with an empty baseURL).
-func (c *Client) markConnected(addr, basePath string, gen uint64) bool {
+func (c *Client) markConnected(addr, basePath, identity string, gen uint64) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// A stale generation, or a client retired by Reinitialize, means the result
@@ -448,6 +512,12 @@ func (c *Client) markConnected(addr, basePath string, gen uint64) bool {
 	if c.discoveryGen != gen || c.retired {
 		return false
 	}
+	if c.connectedIdentity != "" && c.connectedIdentity != identity {
+		c.connectionEpoch++
+		c.workloadScope = nil
+		c.cancelWorkloadAttributionsLocked()
+	}
+	c.connectedIdentity = identity
 	c.baseURL = addr
 	c.basePath = basePath
 	c.prom = nil

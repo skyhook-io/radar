@@ -1,0 +1,54 @@
+{{- $rbac := .Values.cloud.defaultRbac -}}
+{{- $integration := $rbac.integrationRead | default dict -}}
+{{- $cluster := $rbac.clusterScopedRead | default dict -}}
+{{- if and .Values.cloud.enabled .Values.rbac.create $rbac.create -}}
+{{- $root := . -}}
+{{- $baseline := .Files.Get "files/integration-read-baseline.yaml" | fromYaml -}}
+{{- range $scope := list "Namespaced" "Cluster" -}}
+{{- $tiers := list -}}
+{{- range $tier := list "viewer" "member" "owner" -}}
+{{- /* Missing keys in --reuse-values upgrades follow default-on; explicit false survives. */ -}}
+{{- if and (index $rbac $tier) (ne (toString (index $integration $tier)) "false") (or (eq $scope "Namespaced") (ne (toString (index $cluster $tier)) "false")) -}}
+{{- $tiers = append $tiers $tier -}}
+{{- end -}}
+{{- end -}}
+{{- $rules := list -}}
+{{- range $entry := $baseline.entries -}}
+{{- if and (eq $entry.decision "grant") (eq $entry.scope $scope) (or $root.Values.rbac.crdGroups.all (index $root.Values.rbac.crdGroups $entry.collection)) -}}
+{{- $rules = append $rules (dict "apiGroups" (list $entry.group) "resources" $entry.resources "verbs" (list "get" "list" "watch")) -}}
+{{- end -}}
+{{- end -}}
+{{- if and $tiers $rules }}
+{{- $name := printf "%s-integration-read-%s" (include "radar.fullname" $root) (lower $scope) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "radar.labels" $root | nindent 4 }}
+rules:
+  {{- toYaml $rules | nindent 2 }}
+{{- range $tier := $tiers }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "radar.fullname" $root }}-cloud-{{ $tier }}-integration-read-{{ lower $scope }}
+  labels:
+    {{- include "radar.labels" $root | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: Group
+    name: radar:{{ $tier }}
+    apiGroup: rbac.authorization.k8s.io
+  - kind: Group
+    name: cloud:{{ $tier }}
+    apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -24,9 +24,11 @@ import (
 	"github.com/skyhook-io/radar/internal/diagnosecli"
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
+	"github.com/skyhook-io/radar/internal/memlimit"
 	"github.com/skyhook-io/radar/internal/reachability"
 	"github.com/skyhook-io/radar/internal/server"
 	versionpkg "github.com/skyhook-io/radar/internal/version"
+	"github.com/skyhook-io/radar/pkg/prom"
 	"golang.org/x/net/http/httpguts"
 	authv1 "k8s.io/api/authorization/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -101,7 +103,7 @@ func main() {
 	namespace := flag.String("namespace", fileCfg.Namespace, "Initial namespace filter (empty = all namespaces)")
 	namespaces := flag.String("namespaces", fileCfg.NamespacesFlag(), "Initial namespace filters as a comma-separated list (e.g. ns1,ns2,ns3). Use this when you can list resources in specific namespaces but cannot list namespaces cluster-wide.")
 	port := flag.Int("port", fileCfg.PortOr(9280), "Server port")
-	listenAddress := flag.String("listen-address", server.DefaultListenAddress, "HTTP listen address: 127.0.0.1 or localhost for local-only access; 0.0.0.0 for remote/shared access")
+	listenAddress := flag.String("listen-address", server.DefaultListenAddress, "HTTP listen IP address (IPv4 or IPv6), or localhost; loopback is local-only, other addresses (including 0.0.0.0) expose shared access")
 	basePath := flag.String("base-path", "", "URL path prefix to serve Radar under, e.g. /radar (empty = root). Use when an ingress forwards a subpath without stripping it.")
 	noBrowser := flag.Bool("no-browser", fileCfg.NoBrowser, "Don't auto-open browser")
 	browser := flag.String("browser", fileCfg.Browser, "Browser to use when opening the UI (default: OS default browser; macOS app names supported)")
@@ -127,6 +129,22 @@ func main() {
 	aiHistory := flag.Bool("ai-history", fileCfg.AIHistoryOr(true), "Persist AI investigations (transcripts + conclusions) to ~/.radar/ai-runs.db so they survive restarts")
 	// Traffic/metrics options
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
+	workloadSingleCluster := flag.Bool("prometheus-single-cluster", false, "Optional workload-metrics scope override: assert that the backend contains only this Kubernetes cluster. Replaces automatic matching; not saved, and cleared when the cluster, backend or credentials change. Does not scope other metrics features.")
+	workloadClusterLabels := map[string]string{}
+	flag.Func("prometheus-cluster-label", "Optional workload-metrics scope override: exact label=value identifying this cluster, e.g. cluster=production (repeatable, ANDed). Alternative to --prometheus-single-cluster, with the same lifetime and workload-only scope; leave both unset for automatic matching.", func(raw string) error {
+		key, value, ok := strings.Cut(raw, "=")
+		if !ok {
+			return fmt.Errorf("expected label=value")
+		}
+		if _, err := (prom.WorkloadMetricsScope{ClusterLabels: map[string]string{key: value}}).Matchers(); err != nil {
+			return err
+		}
+		if _, exists := workloadClusterLabels[key]; exists {
+			return fmt.Errorf("duplicate cluster label %q", key)
+		}
+		workloadClusterLabels[key] = value
+		return nil
+	})
 	openCostCurrency := flag.String("opencost-currency", fileCfg.OpenCostCurrency, "Override the ISO 4217 currency label for OpenCost values (empty: auto-detect, then USD)")
 	// --prometheus-header Key=Value, repeatable. Defaults populated from
 	// config file; any --prometheus-header flag replaces the file value rather
@@ -135,7 +153,7 @@ func main() {
 	flag.Var(promHeaders, "prometheus-header", "HTTP header to send with Prometheus requests, e.g. 'Authorization=Bearer <token>' (repeatable). Required for auth-protected backends.")
 	promHeadersFromEnv := newHeaderFromEnvFlag(fileCfg.PrometheusHeadersFromEnv)
 	flag.Var(promHeadersFromEnv, "prometheus-header-from-env", "HTTP header to send with Prometheus requests, sourced from an env var, e.g. 'Authorization=PROMETHEUS_TOKEN' (repeatable).")
-	beylaJobSelector := flag.String("beyla-job-selector", "", `PromQL job-label matcher fragment Beyla traffic queries use to scope Prometheus series, e.g. 'job=~"my-beyla.*"' (empty = built-in default matching *beyla* or *alloy* job names)`)
+	beylaJobSelector := flag.String("beyla-job-selector", "", `PromQL matcher fragment for Beyla Live Traffic, e.g. 'job=~"my-beyla.*"' (empty = *beyla* or *alloy* jobs). Workload charts use this override only with an explicit Prometheus scope flag and accept one job equality or regex matcher; automatic workload matching discovers custom jobs without it.`)
 	// MCP server
 	noMCP := flag.Bool("no-mcp", !fileCfg.MCPEnabledOr(true), "Disable MCP (Model Context Protocol) server for AI tools")
 	mcpCatalogStdio := flag.Bool("mcp-catalog-stdio", false, "Start only the MCP catalog over stdio for registry/inspector introspection; skips Kubernetes initialization")
@@ -183,6 +201,11 @@ func main() {
 	namespaceListTimeout := flag.Duration("namespace-list-timeout", k8s.EnvDurationOr("RADAR_NAMESPACE_LIST_TIMEOUT", 5*time.Second), "Timeout for the cluster-wide namespace LIST used to decide if the user is RBAC-namespace-restricted (default: 5s). Widen to 30s or more on slow control planes — a timeout here is misreported in the UI as 'Limited list — RBAC'. Env: RADAR_NAMESPACE_LIST_TIMEOUT")
 	maxScopeCandidates := flag.Int("max-scope-candidates", k8s.EnvIntOr("RADAR_MAX_SCOPE_CANDIDATES", 20), "Cap on the namespace-fallback probe fanout for users who can list namespaces cluster-wide but not list a specific kind cluster-wide (default: 20). Raise for clusters with more than 20 namespaces to avoid silently marking kinds as denied in dropped namespaces. Env: RADAR_MAX_SCOPE_CANDIDATES")
 	flag.Parse()
+	if *workloadSingleCluster || len(workloadClusterLabels) > 0 {
+		if _, err := (prom.WorkloadMetricsScope{SingleCluster: *workloadSingleCluster, ClusterLabels: workloadClusterLabels}).Matchers(); err != nil {
+			log.Fatalf("Invalid workload metrics scope: %v", err)
+		}
+	}
 
 	// An explicit --reachability-image override applies to BOTH probe paths. It must
 	// win over the in-cluster self-read, so record it as the configured override
@@ -235,6 +258,7 @@ func main() {
 		startupMode = "Radar Cloud"
 	}
 	log.Printf("Radar %s starting (mode=%s, auth=%s)...", version, startupMode, *authMode)
+	memlimit.Apply()
 
 	// Validate flags
 	switch *authMode {
@@ -273,6 +297,7 @@ func main() {
 	namespaceFlagSet := false
 	namespacesFlagSet := false
 	openCostCurrencyFlagSet := false
+	prometheusURLFlagSet := false
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "no-mcp":
@@ -287,6 +312,8 @@ func main() {
 			namespacesFlagSet = true
 		case "opencost-currency":
 			openCostCurrencyFlagSet = true
+		case "prometheus-url":
+			prometheusURLFlagSet = true
 		}
 	})
 	if *mcpCatalogOnly && noMCPFlagSet && *noMCP {
@@ -297,6 +324,11 @@ func main() {
 	}
 	if strings.TrimSpace(os.Getenv(mcppkg.SessionTokenEnv)) != "" && *mcpCatalogStdio {
 		log.Fatalf("%s applies to HTTP only and cannot be combined with --mcp-catalog-stdio", mcppkg.SessionTokenEnv)
+	}
+	inheritsPrometheusHeaders := !promHeaders.overrides && len(fileCfg.PrometheusHeaders) > 0 ||
+		!promHeadersFromEnv.overrides && len(fileCfg.PrometheusHeadersFromEnv) > 0
+	if err := app.ValidatePrometheusHeaderDestination(fileCfg.PrometheusURL, *prometheusURL, inheritsPrometheusHeaders); err != nil {
+		log.Fatalf("Invalid Prometheus header configuration: %v", err)
 	}
 	resolvedPrometheusHeaders, err := app.ResolvePrometheusHeaders(promHeaders.value(), promHeadersFromEnv.value())
 	if err != nil {
@@ -372,7 +404,10 @@ func main() {
 		KubecostClusterIDContext: fileCfg.KubecostClusterIDContext,
 		PrometheusHeaders:        resolvedPrometheusHeaders,
 		PrometheusHeadersFromEnv: promHeadersFromEnv.value(),
+		PrometheusURLFlag:        prometheusURLFlagSet,
+		PrometheusHeaderFlags:    promHeaders.overrides || promHeadersFromEnv.overrides,
 		BeylaJobSelector:         *beylaJobSelector,
+		WorkloadMetricsScope:     prom.WorkloadMetricsScope{SingleCluster: *workloadSingleCluster, ClusterLabels: workloadClusterLabels},
 		MCPEnabled:               mcpEnabled,
 		AIHistory:                *aiHistory,
 		AIHistoryDBPath:          fileCfg.AIHistoryDBPath,
@@ -481,7 +516,7 @@ func main() {
 
 	// Open browser — server is confirmed ready to accept connections
 	if !cfg.NoBrowser {
-		targetURL := fmt.Sprintf("http://localhost:%d%s", cfg.Port, cfg.BasePath)
+		targetURL := "http://" + srv.ActualAddr() + cfg.BasePath
 		if cfg.BasePath != "" {
 			targetURL += "/"
 		}
@@ -521,12 +556,14 @@ func main() {
 			cancel()
 			namespace := os.Getenv("MY_POD_NAMESPACE")
 			deploymentName := os.Getenv("MY_DEPLOYMENT_NAME")
+			helmRelease := os.Getenv("RADAR_HELM_RELEASE")
 			runErr := cloud.Run(rootCtx, cloud.Config{
 				URL:                *cloudURL,
 				Token:              *cloudToken,
 				ClusterID:          *cloudClusterName,
 				ClusterName:        *cloudClusterName,
 				Namespace:          namespace,
+				Release:            helmRelease,
 				APIServerURL:       apiServerURL,
 				InsecureSkipVerify: *cloudInsecureSkipVerify,
 				// Ask the apiserver whether this ServiceAccount may actually
@@ -583,7 +620,7 @@ func startServer(srv *server.Server, startupStart time.Time) (context.Context, c
 	k8s.LogTiming(" Server listening: %v (since start)", time.Since(startupStart))
 
 	// Write port file so MCP clients can discover the running server
-	app.WriteMCPPortFile(srv.ActualPort(), srv.BasePath())
+	app.WriteMCPPortFile(srv.ActualAddr(), srv.BasePath())
 
 	return rootCtx, rootCancel
 }

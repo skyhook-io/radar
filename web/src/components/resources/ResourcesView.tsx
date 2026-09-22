@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit } from '../../api/client'
+import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, isKindSyncFailed, isStillLoadingError, useCapabilities, useNamespaceCapabilities, useResources, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads, useAudit } from '../../api/client'
 import { isBadgeWorthy } from '../../utils/auditBadges'
 import type { AuditBadgeMessage } from '@skyhook-io/k8s-ui'
 import { apiUrl, getAuthHeaders, getCredentialsMode, stripBasename } from '../../api/config'
@@ -143,7 +143,18 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       }
     },
     staleTime: 10000,
-    refetchInterval: 60000, // Safety net — SSE k8s_event drives near-real-time invalidation
+    // SSE invalidation isn't running while connecting, and mid-sync counts
+    // are what unlatch guarded kinds as their informers finish — poll fast
+    // during the shell, settle to the safety net once connected.
+    refetchInterval: connection.state === 'connecting' ? 3000 : 60000,
+    // During the first seconds of the progressive shell the endpoint 503s
+    // (cluster_connecting) until the mid-sync cache handle exists; keep the
+    // query pending rather than parking it in error state, which would
+    // unlatch the large-list guard at the connected flip.
+    retry: (failureCount: number, error: Error) =>
+      isStillLoadingError(error) ? true : failureCount < 3,
+    retryDelay: (failureCount: number, error: Error) =>
+      isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   })
 
   // Determine if selected kind is a CRD (only CRDs should send ?group= to backend)
@@ -200,8 +211,29 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const isSelectedKindGuarded = selectedCountKey !== '' && LARGE_RESOURCE_LIST_GUARD_KEYS.has(selectedCountKey)
   const selectedKindSummaryServed = SUMMARY_LIST_KINDS.has(selectedCountKey)
   const selectedKindRowLimit = selectedKindSummaryServed ? SUMMARY_LIST_LIMIT : LARGE_RESOURCE_LIST_LIMIT
-  const waitingForGuardCount = isSelectedKindGuarded && !countsData && !countsIsError
-  const largeListBlocked = isSelectedKindGuarded && countsData != null && (selectedCountUnavailable || (selectedCountKnown && (selectedCount ?? 0) > selectedKindRowLimit))
+  // While still 'connecting', /resource-counts is unavailable — its error
+  // must NOT unlatch the large-list guard, or a huge Pods list could fetch
+  // unguarded on exactly the clusters the guard protects. Counts arrive
+  // right after 'connected' and settle the guard then.
+  const syncShellActive = connection.state === 'connecting'
+  // A kind whose sync deadline fired is unavailable-with-a-reason: hand it to
+  // the list endpoint, whose 503 kind_sync_failed renders the honest error —
+  // the guard would otherwise trap it on "count unavailable" forever. Safe to
+  // unblock: the server serves no rows for a failed kind.
+  const selectedCountFailedSync =
+    selectedCountUnavailable && countsData?.reasons?.[selectedCountKey] === 'kind_sync_failed'
+  // A guarded kind whose informer hasn't finished reports unavailable with a
+  // kind_sync_pending reason — "count not known YET", so keep the loading
+  // state. Keyed on the reason, not on connection.state: deferred kinds sync
+  // after connect. Reasonless unavailable stays a real verification failure
+  // and blocks the view as before.
+  const selectedCountPendingSync =
+    (selectedCountUnavailable && countsData?.reasons?.[selectedCountKey] === 'kind_sync_pending') ||
+    (syncShellActive && selectedCountUnavailable && !selectedCountFailedSync)
+  const waitingForGuardCount = isSelectedKindGuarded &&
+    ((!countsData && (!countsIsError || syncShellActive)) || selectedCountPendingSync)
+  const largeListBlocked = isSelectedKindGuarded && countsData != null && !selectedCountPendingSync && !selectedCountFailedSync &&
+    (selectedCountUnavailable || (selectedCountKnown && (selectedCount ?? 0) > selectedKindRowLimit))
   const selectedKindQueryBlocked = waitingForGuardCount || largeListBlocked
   const podCount = countsData?.counts.Pod
   const podCountKnown = hasResourceCount(countsData?.counts, 'Pod')
@@ -285,9 +317,15 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     staleTime: 30000,
     refetchInterval: 120000, // Safety net — SSE k8s_event drives near-real-time invalidation
     retry: (failureCount: number, error: Error) => {
-      if (isForbiddenError(error)) return false
+      if (isForbiddenError(error) || isKindSyncFailed(error)) return false
+      // Cluster still connecting, or this kind's informer still completing
+      // its initial sync: keep the query in its loading state and retry —
+      // the header's sync-progress label explains the wait.
+      if (isStillLoadingError(error)) return true
       return failureCount < 3
     },
+    retryDelay: (failureCount: number, error: Error) =>
+      isStillLoadingError(error) ? 2000 : Math.min(1000 * 2 ** failureCount, 30000),
   })
 
   // Map to ResourceQueryResult shape
@@ -398,7 +436,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       resourceUnavailable={countsData?.unavailable}
       selectedKindQuery={selectedKindQueryResult}
       printerTable={selectedKindQueryBlocked ? null : selectedKindQuery.data?.printerTable ?? null}
-      connectionState={connection.state}
+      connectionState={connection.state === 'connecting' && connection.syncStatus ? 'syncing' : connection.state}
       largeListGuard={largeListGuard}
       onSelectedKindChange={setSelectedKind}
       topPodMetrics={topPodMetrics}

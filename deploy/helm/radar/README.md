@@ -126,6 +126,41 @@ applies to GitOps users: manage the Secret with SealedSecrets / SOPS /
 External Secrets and reference it via `cloud.existingSecret`; Helm never
 touches its contents.
 
+### Radar Cloud default integration reads
+
+Radar Cloud's default viewer/member/owner bindings receive explicit `get/list/watch`
+grants for Radar's curated integrations, in addition to their existing roles.
+These are full-object Kubernetes permissions: inline configuration in specs and
+status is visible, not just Radar's summaries. The baseline adds no writes,
+Secret grants, RBAC-object grants, or wildcard resources/groups.
+
+```yaml
+cloud:
+  defaultRbac:
+    integrationRead:
+      viewer: true
+      member: true
+      owner: true
+    clusterScopedRead:
+      viewer: false  # retains namespaced integration reads, not cluster kinds
+```
+
+Each integration follows its `rbac.crdGroups` collection flag; `all=true` enables
+only the reviewed finite baseline, not arbitrary caller access. Custom base
+roles (`viewerClusterRole`, etc.) do **not** disable these separate bindings.
+`integrationRead.<tier>=false` removes only the new add-on; existing cluster-read,
+base roles, vendor aggregation and customer bindings can still grant access.
+For entirely customer-managed user RBAC, set `cloud.defaultRbac.create=false`
+and supply your own bindings. Kubernetes permissions are additive, not denies.
+
+The [permission table](files/integration-read-baseline.yaml) records exact tuples
+and intentional exceptions. See [the policy and upgrade guide](../../../docs/cloud-rbac-baseline.md)
+for sensitive-resource exclusions, enterprise group bindings and rollout details.
+An **installed chart upgrade** is needed to apply these grants; updating only the
+Radar binary (including Radar Cloud self-upgrade) does not update RBAC. Missing new keys
+on an older `--reuse-values` installation default to enabled; set explicit false
+before upgrading if the added visibility is unwanted.
+
 ### Connecting to Argo CD (GitOps deep diff)
 
 Radar's GitOps pages show a Git-rendered desired-vs-live diff when connected to
@@ -207,17 +242,38 @@ trend charts remain unavailable for Kubecost.
 | `cost.kubecost.existingSecret` | Secret holding an optional Kubecost service-account API key; setting it disables automatic port-9008 auth bypass | `""` |
 | `cost.kubecost.existingSecretKey` | Key within `cost.kubecost.existingSecret`; sent as `X-API-KEY` | `api-key` |
 | `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) | `""` |
-| `traffic.prometheusHeaders` | HTTP headers sent with every Prometheus request (auth-protected backends) | `{}` |
-| `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers | `{}` |
+| `traffic.prometheusHeaders` | HTTP headers sent with every Prometheus request (auth-protected backends). Requires `traffic.prometheusUrl` — credentials are never sent to auto-discovered endpoints | `{}` |
+| `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers. Requires `traffic.prometheusUrl` | `{}` |
+| `traffic.prometheusSingleCluster` | Optional workload-metrics override: assert that the backend contains only this cluster. Replaces automatic matching; does not scope rightsizing or other metrics features | `false` |
+| `traffic.prometheusClusterLabels` | Optional exact label/value constraints for workload metrics in a shared store, ANDed. Alternative to `prometheusSingleCluster`; leave both unset for automatic matching | `{}` |
+| `traffic.beylaJobSelector` | Beyla Live Traffic matcher fragment. Workload charts use it only with an explicit scope override and accept one `job` equality or regex matcher; custom workload jobs are normally discovered automatically | `""` |
 | `argocd.existingSecret` | Name of a Secret holding the Argo CD API token (recommended — keeps it out of the release) | `""` |
 | `argocd.existingSecretKey` | Key within `argocd.existingSecret` holding the token | `token` |
 | `argocd.token` | Inline Argo CD API token (dev only — lands in the release state) | `""` |
 | `argocd.url` | Explicit `argocd-server` URL; blank auto-discovers in-cluster | `""` |
 | `argocd.insecureTls` | Skip TLS verification for a self-signed `argocd-server` | `false` |
-| `resources.limits.memory` | Memory limit | `512Mi` |
-| `resources.requests.memory` | Memory request | `128Mi` |
+| `resources.requests.cpu` | CPU request | `200m` |
+| `resources.requests.memory` | Memory request | `256Mi` |
+| `resources.limits.cpu` | CPU limit | `2` |
+| `resources.limits.memory` | Memory limit. Radar sets `GOMEMLIMIT` to 85% of the container's cgroup limit at startup, so the GC collects harder as it approaches the limit; set `GOMEMLIMIT` under `env` to override | `1Gi` |
 
 See `values.yaml` for all configuration options.
+
+### Installation-owned settings (OSS)
+
+Shared OSS Settings is read-only. Configure integrations through the values above,
+audit policy through `audit.ignoredNamespaces` / `audit.disabledChecks`, and OCI
+chart prefixes through `helm.ociSources`. `audit: null` preserves the default system
+namespace exclusions; explicitly empty lists include all namespaces and checks.
+The chart mounts a versioned, non-secret operator settings ConfigMap read-only and
+rolls Radar when it changes. No runtime ConfigMap/Secret writes or extra RBAC are
+required. External Secret rotation requires a restart.
+
+Before upgrading, resupply any old UI-written integration settings as Helm values;
+Pod-local files are not adopted as deployment configuration. Use matching chart
+and image versions. Cloud keeps its existing settings path and does not mount the
+OSS operator file. See [installation settings](../../../docs/in-cluster.md#installation-settings)
+for examples and run-mode behavior.
 
 ### Timeline storage: memory vs sqlite vs postgres
 
@@ -287,7 +343,7 @@ Disabled by default for security:
 
 | Feature | Value | Description |
 |---------|-------|-------------|
-| Secrets | `rbac.secrets: true` | View secrets in resource list |
+| Secrets | `rbac.secrets: true` | View secrets in resource list. Also granted by `rbac.helm` (Helm stores releases in Secrets), by auth (`auth.mode` other than `none`), and in cloud mode, where every Secret read is re-checked against the requesting user's own RBAC. The grant is cluster-wide `get/list/watch` on all Secrets; `rbac.secrets: false` does not remove it in those modes. |
 | Terminal | `rbac.podExec: true` | Shell access to pods |
 | Port Forward | `rbac.portForward: true` | Port forwarding to pods. Also the fallback for traffic sources (Hubble/Caretta) — Radar dials the relay/metrics Service directly first, so in-cluster installs only need this when a NetworkPolicy or routing blocks Radar's namespace from reaching the service |
 | Logs | `rbac.podLogs: true` | View pod logs (**enabled by default**) |

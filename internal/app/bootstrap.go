@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -29,6 +30,7 @@ import (
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
 	versionpkg "github.com/skyhook-io/radar/internal/version"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 var clusterConnectionProbe = k8s.TestClusterConnection
@@ -76,7 +78,10 @@ type AppConfig struct {
 	KubecostClusterIDContext  string
 	PrometheusHeaders         map[string]string
 	PrometheusHeadersFromEnv  map[string]string
+	PrometheusURLFlag         bool
+	PrometheusHeaderFlags     bool
 	BeylaJobSelector          string
+	WorkloadMetricsScope      prom.WorkloadMetricsScope
 	Version                   string
 	MCPEnabled                bool
 	AIHistory                 bool   // persist AI investigations across restarts
@@ -279,7 +284,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 	})
 
 	// Initialize Prometheus metrics client (must come before SetManualURL)
-	prometheuspkg.Initialize(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
+	prometheuspkg.Initialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 
 	if cfg.PrometheusURL != "" {
 		u, err := url.Parse(cfg.PrometheusURL)
@@ -292,6 +297,9 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 	if len(cfg.PrometheusHeaders) > 0 {
 		traffic.SetMetricsHeaders(cfg.PrometheusHeaders)
 		prometheuspkg.SetHeaders(cfg.PrometheusHeaders)
+		if prom.HeadersRequireURL(cfg.PrometheusURL, cfg.PrometheusHeaders) {
+			log.Printf("[prometheus] Warning: %v", prom.ErrHeadersRequireURL)
+		}
 	}
 	cfg = persistKubecostContextBindings(cfg)
 	if err := internalopencost.ConfigureStartup(internalopencost.ManagerConfig{
@@ -307,18 +315,28 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 	if cfg.BeylaJobSelector != "" {
 		traffic.SetBeylaJobSelector(cfg.BeylaJobSelector)
 	}
+	if cfg.WorkloadMetricsScope.SingleCluster || len(cfg.WorkloadMetricsScope.ClusterLabels) > 0 {
+		if err := prometheuspkg.SetWorkloadMetricsScope(cfg.WorkloadMetricsScope, cfg.BeylaJobSelector); err != nil {
+			log.Fatalf("Invalid workload metrics scope: %v", err)
+		}
+	}
 
 	k8s.RegisterTrafficFuncs(traffic.Reset, func() error {
-		return traffic.ReinitializeWithConfig(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
+		return traffic.ReinitializeWithConfig(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 	})
 
 	// Reinitialize carries the current manual URL + headers forward (including any
 	// applied live via /integrations/prometheus). Re-applying the captured startup
 	// cfg here would revert a live change on context switch, so we don't.
 	k8s.RegisterPrometheusFuncs(prometheuspkg.Reset, func() error {
-		prometheuspkg.Reinitialize(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
+		prometheuspkg.Reinitialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 		return nil
 	})
+	// Reinitialize only builds the new client; discovery for the new cluster has
+	// to be started explicitly, and the callback fires once subsystem init is
+	// done so the run sees a populated cache.
+	k8s.OnContextSwitch(func(_ string) { prometheuspkg.Prewarm() })
+	k8s.OnNamespaceRescope(func(_ string) { prometheuspkg.Prewarm() })
 	k8s.RegisterCostResetFunc(internalopencost.Reset)
 }
 
@@ -358,6 +376,9 @@ func persistKubecostContextBindings(cfg AppConfig) AppConfig {
 
 // CreateServer creates the HTTP server with the given configuration.
 func CreateServer(cfg AppConfig) *server.Server {
+	if err := loadOperatorSettings(cfg); err != nil {
+		log.Fatalf("Invalid operator settings: %v", err)
+	}
 	restoreLastDesktopContext := remembersLastContext(cfg)
 	costSource := cfg.CostSource
 	kubecostURL := cfg.KubecostURL
@@ -403,17 +424,19 @@ func CreateServer(cfg AppConfig) *server.Server {
 	}
 
 	serverCfg := server.Config{
-		Port:             cfg.Port,
-		ListenAddress:    cfg.ListenAddress,
-		BasePath:         cfg.BasePath,
-		StartupLog:       true,
-		RemoteAccessHint: cfg.ShowRemoteAccessHint,
-		DevMode:          cfg.DevMode,
-		StaticFS:         static.FS,
-		StaticRoot:       "dist",
-		EffectiveConfig:  effectiveCfg,
-		OpenCostCurrency: cfg.OpenCostCurrency,
-		OpenCostManaged:  cfg.OpenCostFlagSet,
+		Port:                  cfg.Port,
+		ListenAddress:         cfg.ListenAddress,
+		BasePath:              cfg.BasePath,
+		StartupLog:            true,
+		RemoteAccessHint:      cfg.ShowRemoteAccessHint,
+		DevMode:               cfg.DevMode,
+		StaticFS:              static.FS,
+		StaticRoot:            "dist",
+		EffectiveConfig:       effectiveCfg,
+		PrometheusURLFlag:     cfg.PrometheusURLFlag,
+		PrometheusHeaderFlags: cfg.PrometheusHeaderFlags,
+		OpenCostCurrency:      cfg.OpenCostCurrency,
+		OpenCostManaged:       cfg.OpenCostFlagSet,
 		DiagConfig: &server.DiagConfig{
 			Port:                 cfg.Port,
 			DevMode:              cfg.DevMode,
@@ -600,21 +623,7 @@ func InitializeCluster() {
 		ClusterName: k8s.GetClusterName(),
 	})
 
-	// Auto-discover Prometheus in the background so charts are ready immediately
-	go func() {
-		pt := time.Now()
-		promCtx, promCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer promCancel()
-		client := prometheuspkg.GetClient()
-		if client == nil {
-			return
-		}
-		if _, _, err := client.EnsureConnected(promCtx); err != nil {
-			log.Printf("[prometheus] Auto-discovery failed (%v): %v", time.Since(pt), err)
-		} else {
-			log.Printf("[prometheus] Auto-discovery succeeded (%v)", time.Since(pt))
-		}
-	}()
+	prometheuspkg.Prewarm()
 }
 
 // mcpPortFileDisabled suppresses port-file writes AND removals — an ephemeral
@@ -625,23 +634,29 @@ var mcpPortFileDisabled bool
 // DisableMCPPortFile makes Write/RemoveMCPPortFile no-ops for this process.
 func DisableMCPPortFile() { mcpPortFileDisabled = true }
 
-// WriteMCPPortFile writes the actual server port to ~/.radar/mcp-port so MCP
-// clients can discover the running instance without hardcoding a port. A
-// non-empty basePath is written as a second line: the routes it identifies sit
-// under that prefix, so the port alone is not enough to reach them. The port
-// stays on the first line so a port-only reader keeps working.
-func WriteMCPPortFile(port int, basePath string) {
+// Desktop and CLI installations share this file and can update independently.
+// Keep localhost discovery port-only unless a base path is needed; an explicit
+// host occupies line 3.
+func WriteMCPPortFile(address string, basePath string) {
 	path := mcpPortFilePath()
 	if path == "" || mcpPortFileDisabled {
+		return
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		log.Printf("[mcp] Invalid discovery address %q: %v", address, err)
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		log.Printf("[mcp] Failed to create directory for port file: %v", err)
 		return
 	}
-	contents := fmt.Appendf(nil, "%d\n", port)
-	if basePath != "" {
+	contents := fmt.Appendf(nil, "%s\n", port)
+	if basePath != "" || host != "localhost" {
 		contents = fmt.Appendf(contents, "%s\n", basePath)
+	}
+	if host != "localhost" {
+		contents = fmt.Appendf(contents, "%s\n", host)
 	}
 	if err := os.WriteFile(path, contents, 0o644); err != nil {
 		log.Printf("[mcp] Failed to write port file: %v", err)

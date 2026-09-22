@@ -5,6 +5,7 @@ import { CurlButton, CurlPanel, isHttpishPort, defaultScheme, defaultPathForPort
 import { useResources } from '../../../api/client'
 import { useNamespacedCapabilities, useIsLocalDeployment } from '../../../contexts/CapabilitiesContext'
 import type { ResourceRef } from '../../../types'
+import { DURATION_DISCLOSURE } from '@skyhook-io/k8s-ui/utils/animation'
 
 interface ServiceRendererProps {
   data: any
@@ -32,7 +33,7 @@ export function ServiceRenderer({ data, onCopy, copied, onNavigate }: ServiceRen
     setCurl((p) => (p ? { ...p, closing: true } : null))
     // Only drop the panel if it's still the one closing. Opening another port
     // (which sets closing:false) before this fires must not clear the new panel.
-    window.setTimeout(() => setCurl((p) => (p?.closing ? null : p)), 220)
+    window.setTimeout(() => setCurl((p) => (p?.closing ? null : p)), DURATION_DISCLOSURE + 20)
   }, [])
   const spec = data.spec || {}
   const shouldLoadEndpointSlices = Boolean(

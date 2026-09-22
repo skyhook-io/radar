@@ -7,6 +7,7 @@ import { FetchResult } from '../ui/FetchResult'
 import { PaneLoader } from '../ui/PaneLoader'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { clsx } from 'clsx'
+import { Collapse } from '../ui/Collapse'
 import {
   ArrowLeft,
   ArrowRight,
@@ -36,7 +37,7 @@ import {
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis, WorkloadPodInfo } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
 import type { NavigateToResource } from '../../utils/navigation'
-import { refToSelectedResource, pluralToKind, kindToPlural, kindToPluralWithGroup, apiVersionToGroup } from '../../utils/navigation'
+import { refToSelectedResource, pluralToKind, knownKindForPluralWithGroup, kindToPlural, kindToPluralWithGroup, apiVersionToGroup } from '../../utils/navigation'
 import { neighborhoodFor, seedNodeIds } from '../../utils/topology-neighborhood'
 import { TopologyGraph } from '../topology/TopologyGraph'
 import { gitOpsOwnerFromRelationships, type GitOpsOwnerRef } from '../../utils/gitops-owner'
@@ -731,7 +732,7 @@ export function WorkloadView({
     | ((ctx: { kind: string; group?: string; namespace: string; name: string; health?: DiagnoseHealthHint }) => ReactNode)
     | undefined
   const diagnoseAction = renderDiagnose?.({
-    kind: apiKind,
+    kind: resource?.kind ?? knownKindForPluralWithGroup(apiKind, group ?? '') ?? apiKind,
     group,
     namespace,
     name,
@@ -741,8 +742,7 @@ export function WorkloadView({
   const showMetricsTab = isMetricsAvailable ? isMetricsAvailable(kind, resource) : false
   const showCostTab = isCostAvailable ? isCostAvailable(kind, resource) : false
   const normalizedKind = kindToPlural(kind).toLowerCase()
-  const logsWithoutPods = LOGS_TAB_WITHOUT_PODS_KINDS.has(normalizedKind) &&
-    (normalizedKind !== 'jobs' || isCoreBatchJob(kind, group))
+  const logsWithoutPods = supportsLogsWithoutPods(normalizedKind, kind, group, resource?.apiVersion)
   const logsTabVisible = Boolean(renderLogsTab) && (allPods.length > 0 || logsWithoutPods)
   const metricsTabVisible = Boolean(showMetricsTab && renderMetricsTab)
   const costTabVisible = Boolean(showCostTab && renderCostTab)
@@ -1736,10 +1736,25 @@ const LOGS_TAB_WITHOUT_PODS_KINDS = new Set([
   'workflowtemplates',
   'clusterworkflowtemplates',
   'scaledjobs',
+  'jobsets',
 ])
 const RUNTIME_WORKLOAD_OVERVIEW_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'jobs', 'cronjobs'])
 const ROLLOUT_STATUS_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'rollouts'])
 type RuntimeOverviewShape = 'replicated' | 'job' | 'cronjob'
+
+export function supportsLogsWithoutPods(
+  normalizedKind: string,
+  kind: string,
+  group?: string,
+  apiVersion?: string,
+): boolean {
+  if (!LOGS_TAB_WITHOUT_PODS_KINDS.has(normalizedKind)) return false
+  if (normalizedKind === 'jobs') return isCoreBatchJob(kind, group)
+  if (normalizedKind === 'jobsets') {
+    return group === 'jobset.x-k8s.io' && apiVersion === 'jobset.x-k8s.io/v1alpha2'
+  }
+  return true
+}
 
 function isRuntimeWorkloadOverviewKind(kind: string, group?: string) {
   const normalizedKind = kindToPlural(kind).toLowerCase()
@@ -2949,20 +2964,15 @@ function PodListFrame({
         {children}
       </div>
       {hasOverflow && (
-        <div
-          className={clsx(
-            'grid transition-[grid-template-rows,opacity] duration-200',
-            expanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0',
-          )}
-          style={{ transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)' }}
-          aria-hidden={!expanded || undefined}
-        >
-          <div className={clsx('min-h-0 overflow-hidden', expanded && 'max-h-[26rem] overflow-y-auto pr-1')} inert={!expanded || undefined}>
+        <Collapse open={expanded}>
+          {/* Long overflow lists scroll inside a capped box once open; the
+              cap comes off while closed so the collapse measures to zero. */}
+          <div className={clsx(expanded && 'max-h-[26rem] overflow-y-auto pr-1')}>
             <div className="space-y-2">
               {overflow}
             </div>
           </div>
-        </div>
+        </Collapse>
       )}
       {toggle}
     </div>
@@ -3015,7 +3025,7 @@ function podSeverityRank(pod: WorkloadPodInfo): number {
   }
 }
 
-function workloadPodDetail(pod: WorkloadPodInfo): string {
+export function workloadPodDetail(pod: WorkloadPodInfo): string {
   const parts: string[] = []
   if (pod.phase) parts.push(pod.reason ? `${pod.phase} / ${pod.reason}` : pod.phase)
   else if (pod.reason) parts.push(pod.reason)
@@ -3028,7 +3038,7 @@ function workloadPodDetail(pod: WorkloadPodInfo): string {
   return parts.join(' · ')
 }
 
-function podStatusLabel(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null): string {
+export function podStatusLabel(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null): string {
   if (healthLevel === 'unhealthy') return 'Unhealthy'
   if (healthLevel === 'degraded') return 'Degraded'
   if (healthLevel === 'neutral') return ready ? 'Ready' : 'Neutral'
@@ -3036,7 +3046,7 @@ function podStatusLabel(healthLevel: WorkloadPodInfo['healthLevel'] | undefined,
   return ready === null ? 'Unknown' : ready ? 'Ready' : 'Not ready'
 }
 
-function podStatusClass(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null): string {
+export function podStatusClass(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null): string {
   if (healthLevel === 'unhealthy') return 'status-unhealthy'
   if (healthLevel === 'degraded') return 'status-degraded'
   if (healthLevel === 'neutral') return 'status-neutral'
@@ -3044,7 +3054,7 @@ function podStatusClass(healthLevel: WorkloadPodInfo['healthLevel'] | undefined,
   return ready ? 'status-healthy' : 'status-degraded'
 }
 
-function podDotClass(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null): string {
+export function podDotClass(healthLevel: WorkloadPodInfo['healthLevel'] | undefined, ready: boolean | null): string {
   if (healthLevel === 'unhealthy') return 'bg-red-500'
   if (healthLevel === 'degraded') return 'bg-amber-500'
   if (healthLevel === 'neutral') return 'bg-skyhook-500'

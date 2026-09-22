@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
-import { AlertOctagon, AlertTriangle, ArrowRight, ChevronRight, CircleCheck, Clock, ExternalLink, Layers, Terminal, Workflow } from 'lucide-react';
+import { useMemo, useState, type ComponentType, type ReactNode } from 'react';
+import { AlertOctagon, AlertTriangle, ArrowRight, CircleCheck, Clock, ExternalLink, Layers, Terminal, Workflow } from 'lucide-react';
 import { CardBody, CardSection, ClusterName, EmptyState, KIND_CHIP_CLASS, TerminalBlock } from '../ui';
+import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse';
 import { Tooltip } from '../ui/Tooltip';
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
 import { diagnosticRoleLabel, diagnosticFactLabel, confidenceTitle, incidentParentLabel } from './diagnostic';
@@ -207,7 +208,7 @@ export function IssueRow({
   const cluster = clusterLabel?.(issue);
   const affected = affectedSummary(issue.affected);
   const { headline } = issueMessageParts(issue);
-  const [renderDetails, setRenderDetails] = useState(open);
+  const { panelId, buttonProps } = useDisclosure(open);
   const Container = as;
   const severity = normalizeIssueSeverity(issue.severity);
   const SeverityIcon = ISSUE_SEVERITY_ICON[severity];
@@ -220,6 +221,7 @@ export function IssueRow({
   // query toggles: inline at the row's right edge on a wide container, and on a
   // line of its own below the resource line once the row is too narrow to hold
   // it beside the title — so the title never has to truncate to make room.
+  const nodeCorroboration = issue.diagnostic_context?.facts?.find(fact => fact.type === 'node_startup_corroboration');
   const metaChips = (wrapperClass: string) => (
     <div className={`items-center gap-3 ${wrapperClass}`}>
       <span className={`badge-sm shrink-0 px-2.5 py-0.5 text-xs font-semibold ${open ? ISSUE_SEVERITY_SOLID_CLASS[severity] : ISSUE_SEVERITY_BADGE_CLASS[severity]}`}>
@@ -236,6 +238,11 @@ export function IssueRow({
           </time>
         </Tooltip>
       ) : null}
+      {nodeCorroboration ? (
+        <Tooltip content={nodeCorroboration.message} delay={200}>
+          <span className="badge-sm inline-flex items-center gap-1 border border-theme-border text-[10px] text-theme-text-secondary"><Workflow className="h-3 w-3 shrink-0" aria-hidden />Same-node evidence</span>
+        </Tooltip>
+      ) : null}
       {timing ? (
         <Tooltip content={timing.tooltip} delay={200}>
           <span className="badge-sm text-[10px] text-theme-text-secondary">{timing.chip}</span>
@@ -243,17 +250,6 @@ export function IssueRow({
       ) : null}
     </div>
   );
-
-  useEffect(() => {
-    if (open) {
-      setRenderDetails(true);
-      return;
-    }
-    if (!renderDetails) return;
-
-    const timeout = window.setTimeout(() => setRenderDetails(false), 200);
-    return () => window.clearTimeout(timeout);
-  }, [open, renderDetails]);
 
   return (
     <Container
@@ -276,9 +272,9 @@ export function IssueRow({
           be invalid). Collapsed: neutral row + rail. Expanded: severity-tinted
           band + solid pill — the tint is a focus signal, not per-row alarm. */}
       <div
+        {...buttonProps}
         role="button"
         tabIndex={0}
-        aria-expanded={open}
         onClick={onToggle}
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return;
@@ -357,50 +353,41 @@ export function IssueRow({
         <div className="flex shrink-0 items-center gap-3">
           {metaChips('hidden @2xl/issue:flex')}
           {renderActions?.(slotCtx)}
-          <ChevronRight className={`h-4 w-4 shrink-0 text-theme-text-tertiary transition-transform duration-200 ${open ? 'rotate-90' : ''}`} />
+          <CollapseChevron open={open} className="h-4 w-4" />
         </div>
       </div>
 
-      {renderDetails ? (
-        <div
-          className={`issue-details-motion ${open ? 'issue-details-motion-open' : ''}`}
-          onTransitionEnd={(event) => {
-            if (event.target !== event.currentTarget) return;
-            if (event.propertyName !== 'grid-template-rows') return;
-            if (!open) setRenderDetails(false);
-          }}
-        >
-          <div className="overflow-hidden">
-            {/* Body sits on the card surface (not a recessed grey panel) so its
-                text keeps enough contrast. */}
-            <div className="border-t border-theme-border bg-theme-surface py-4 pl-6 pr-4">
-              <div className="flex flex-col divide-y divide-theme-border/70 [&>*]:py-4 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
-                <Diagnosis issue={issue} source={diagnosisSource} />
-                {issue.incident_parent ? (
-                  <section className="flex flex-col gap-1">
-                    <h4 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
-                      {incidentParentLabel(issue.incident_parent.fact_type, issue.incident_parent.confidence)}
-                      {issue.incident_parent.confidence ? (
-                        <Tooltip content={confidenceTitle(issue.incident_parent.confidence)} delay={200}>
-                          <span className="ml-2 badge-sm text-[10px] font-normal text-theme-text-tertiary">
-                            {issue.incident_parent.confidence} confidence
-                          </span>
-                        </Tooltip>
-                      ) : null}
-                    </h4>
-                    <ul className="flex flex-col gap-px">
-                      <ResourceLine refForLink={memberRef(issue, issue.incident_parent.ref)} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
-                    </ul>
-                  </section>
-                ) : null}
-                <DiagnosticContext issue={issue} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
-                <AffectedResources issue={issue} hideSubject={hideSubject} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
-                {renderDetailSection?.(slotCtx)}
-              </div>
-            </div>
+      {/* Details unmount after the close transition: a list can hold hundreds
+          of rows and the body is the expensive part, so closed rows stay light. */}
+      <Collapse open={open} unmountOnExit id={panelId}>
+        {/* Body sits on the card surface (not a recessed grey panel) so its
+            text keeps enough contrast. */}
+        <div className="border-t border-theme-border bg-theme-surface py-4 pl-6 pr-4">
+          <div className="flex flex-col divide-y divide-theme-border/70 [&>*]:py-4 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
+            <Diagnosis issue={issue} source={diagnosisSource} />
+            {issue.incident_parent ? (
+              <section className="flex flex-col gap-1">
+                <h4 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+                  {incidentParentLabel(issue.incident_parent.fact_type, issue.incident_parent.confidence)}
+                  {issue.incident_parent.confidence ? (
+                    <Tooltip content={confidenceTitle(issue.incident_parent.confidence)} delay={200}>
+                      <span className="ml-2 badge-sm text-[10px] font-normal text-theme-text-tertiary">
+                        {issue.incident_parent.confidence} confidence
+                      </span>
+                    </Tooltip>
+                  ) : null}
+                </h4>
+                <ul className="flex flex-col gap-px">
+                  <ResourceLine refForLink={memberRef(issue, issue.incident_parent.ref)} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
+                </ul>
+              </section>
+            ) : null}
+            <DiagnosticContext issue={issue} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
+            <AffectedResources issue={issue} hideSubject={hideSubject} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
+            {renderDetailSection?.(slotCtx)}
           </div>
         </div>
-      ) : null}
+      </Collapse>
     </Container>
   );
 }

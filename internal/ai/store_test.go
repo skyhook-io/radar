@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 func testStore(t *testing.T) (RunStore, string) {
@@ -74,11 +76,13 @@ func TestStoreEvidenceProvenanceSurvivesReopen(t *testing.T) {
 			RadarEvidence: true, IsError: &success,
 		}}},
 		{Seq: 4, Event: StreamEvent{Type: "done", Diag: &Diagnosis{
-			RootCause: "The workload uses a stale database credential.",
-			Report:    "The pod logs and Secret state agree.",
-			RootCauseEvidence: &RootCauseEvidence{
-				Status: EvidenceLinked,
-				Refs:   []string{firstRef, secondRef},
+			Verdict: investigation.Verdict{
+				RootCause: "The workload uses a stale database credential.",
+				Report:    "The pod logs and Secret state agree.",
+				RootCauseEvidence: &investigation.RootCauseEvidence{
+					Status: investigation.Linked,
+					Refs:   []string{firstRef, secondRef},
+				},
 			},
 		}}},
 	}

@@ -16,7 +16,7 @@ import (
 
 var (
 	goldenStripMetadataKeys = []string{
-		"resourceVersion", "uid", "generation", "selfLink", "generateName",
+		"resourceVersion", "uid", "selfLink", "generateName",
 		"managedFields", "deletionGracePeriodSeconds", "finalizers",
 	}
 	goldenStripPodSpecFields = []string{
@@ -106,9 +106,10 @@ func goldenPodSpecFixture() map[string]any {
 
 func goldenMetadataFixture(name string) map[string]any {
 	meta := map[string]any{
-		"name":      name,
-		"namespace": "default",
-		"labels":    map[string]any{"app": name},
+		"name":       name,
+		"namespace":  "default",
+		"generation": int64(7),
+		"labels":     map[string]any{"app": name},
 		"annotations": map[string]any{
 			"app.kubernetes.io/name":  name,
 			"custom.example.com/note": "kept-at-detail-only",
@@ -259,6 +260,9 @@ func assertGoldenMetadata(t *testing.T, meta map[string]any, level VerbosityLeve
 	t.Helper()
 	assertKeysAbsent(t, where, meta, goldenStripMetadataKeys)
 	assertKeysPresent(t, where, meta, []string{"name", "namespace", "labels"})
+	if meta["generation"] != int64(7) {
+		t.Errorf("%s: generation = %v, want 7", where, meta["generation"])
+	}
 	annotations := nestedMap(t, meta, "annotations")
 	assertKeysPresent(t, where+".annotations", annotations, []string{"app.kubernetes.io/name"})
 	if level == LevelCompact {

@@ -1,5 +1,6 @@
 import type { SelectedResource, ResourceRef, APIResource } from '../types/core'
 import { englishPlural, englishSingular, isEnglishPlural } from './pluralize'
+import { CORE_RESOURCES } from './api-resources'
 
 /**
  * Canonical callback type for navigating to a resource.
@@ -44,6 +45,15 @@ const BUILTIN_PLURAL_TO_KIND: Record<string, string> = {
 
 const BUILTIN_GROUP_KIND_TO_PLURAL: Record<string, string> = {
   'scheduling.k8s.io/podgroup': 'podgroups',
+  'metrics.k8s.io/podmetrics': 'pods',
+  'metrics.k8s.io/nodemetrics': 'nodes',
+}
+
+const BUILTIN_GROUP_PLURAL_TO_KIND: Record<string, string> = {
+  ...Object.fromEntries(CORE_RESOURCES.map(r => [`${r.group}/${r.name}`, r.kind])),
+  'metrics.k8s.io/pods': 'PodMetrics',
+  'metrics.k8s.io/nodes': 'NodeMetrics',
+  'scheduling.k8s.io/podgroups': 'PodGroup',
 }
 
 // Dynamic map built from API discovery — populated by initNavigationMap().
@@ -51,6 +61,7 @@ const BUILTIN_GROUP_KIND_TO_PLURAL: Record<string, string> = {
 let discoveredPluralToKind: Record<string, string> | null = null
 let discoveredKindToPlural: Record<string, string> | null = null
 let discoveredGroupKindToPlural: Record<string, string> | null = null
+let discoveredGroupPluralToKind: Record<string, string> | null = null
 
 /**
  * Initialize navigation maps from discovered API resources.
@@ -61,6 +72,7 @@ export function initNavigationMap(resources: APIResource[]) {
   const p2k: Record<string, string> = { ...BUILTIN_PLURAL_TO_KIND }
   const k2p: Record<string, string> = {}
   const gk2p: Record<string, string> = {}
+  const gp2k: Record<string, string> = { ...BUILTIN_GROUP_PLURAL_TO_KIND }
   for (const r of resources) {
     const plural = r.name.toLowerCase()
     // First-wins on plurals: BUILTIN_PLURAL_TO_KIND seeds canonical core mappings
@@ -69,10 +81,13 @@ export function initNavigationMap(resources: APIResource[]) {
     if (!(plural in p2k)) p2k[plural] = r.kind
     k2p[r.kind.toLowerCase()] = plural
     gk2p[`${r.group}/${r.kind.toLowerCase()}`] = plural
+    const groupPlural = `${r.group}/${plural}`
+    if (!(groupPlural in gp2k)) gp2k[groupPlural] = r.kind
   }
   discoveredPluralToKind = p2k
   discoveredKindToPlural = k2p
   discoveredGroupKindToPlural = gk2p
+  discoveredGroupPluralToKind = gp2k
 }
 
 /** Reset navigation maps to builtin-only state. For testing. */
@@ -80,6 +95,7 @@ export function resetNavigationMap() {
   discoveredPluralToKind = null
   discoveredKindToPlural = null
   discoveredGroupKindToPlural = null
+  discoveredGroupPluralToKind = null
 }
 
 function getPluralToKind(): Record<string, string> {
@@ -164,6 +180,15 @@ export function pluralToKind(plural: string): string {
   // Fallback: basic de-pluralization + capitalize first letter
   const singular = englishSingular(lower)
   return singular.charAt(0).toUpperCase() + singular.slice(1)
+}
+
+/** Return an exact Kind only when the input or group-qualified discovery proves it. */
+export function knownKindForPluralWithGroup(plural: string, group: string): string | undefined {
+  if (!plural) return undefined
+  if (plural[0] !== plural[0].toLowerCase()) return plural
+  const groupPlural = `${group}/${plural.toLowerCase()}`
+  return discoveredGroupPluralToKind?.[groupPlural]
+    ?? BUILTIN_GROUP_PLURAL_TO_KIND[groupPlural]
 }
 
 /**

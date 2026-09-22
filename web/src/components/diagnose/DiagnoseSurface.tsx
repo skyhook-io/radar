@@ -22,15 +22,14 @@ import {
   Check,
   RotateCcw,
   PanelLeftOpen,
-  Link,
-  Lock,
-  Users,
 } from "lucide-react";
 import { Tooltip } from "../ui/Tooltip";
-import { ConfirmDialog } from "../ui/ConfirmDialog";
-import { Badge } from "@skyhook-io/k8s-ui/components/ui/Badge";
 import { useAnimatedUnmount } from "../../hooks/useAnimatedUnmount";
-import { TRANSITION_BACKDROP, TRANSITION_DRAWER } from "../../utils/animation";
+import {
+  TRANSITION_BACKDROP,
+  TRANSITION_DRAWER,
+  overlayTransitionStyle,
+} from "../../utils/animation";
 import {
   useDiagnose,
   useDiagnoseLayout,
@@ -51,11 +50,7 @@ import {
 import { AgentSetupNotice } from "./AgentSetupNotice";
 import { ConsentCard } from "./parts";
 import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
-import {
-  updateRunVisibility,
-  type RunSummary,
-  type ExecutionProfile,
-} from "../../api/diagnose";
+import { type RunSummary, type ExecutionProfile } from "../../api/diagnose";
 import { routePath } from "../../api/config";
 import { useCapabilitiesContext } from "../../contexts/CapabilitiesContext";
 import { useContexts } from "../../api/client";
@@ -190,153 +185,6 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
   );
 }
 
-export function canCopyRunLink(
-  run: RunSummary | null | undefined,
-): run is RunSummary & { radarUrl: string } {
-  return typeof run?.radarUrl === "string" && run.radarUrl.length > 0;
-}
-
-function CopyRunLink({
-  radarUrl,
-  visibility,
-}: {
-  radarUrl: string;
-  visibility: RunSummary["visibility"];
-}) {
-  const label =
-    visibility === "private"
-      ? "Copy private link (only you can open it)"
-      : "Copy investigation link";
-  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
-    "idle",
-  );
-  const copy = async () => {
-    try {
-      if (!navigator.clipboard) throw new Error("clipboard unavailable");
-      await navigator.clipboard.writeText(
-        new URL(radarUrl, window.location.origin).href,
-      );
-      setCopyState("copied");
-    } catch {
-      setCopyState("error");
-    }
-    setTimeout(() => setCopyState("idle"), 1500);
-  };
-  return (
-    <Tooltip
-      content={
-        copyState === "copied"
-          ? "Link copied"
-          : copyState === "error"
-            ? "Couldn’t copy link"
-            : label
-      }
-      position="bottom"
-    >
-      <button
-        onClick={copy}
-        className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-        aria-label={label}
-      >
-        {copyState === "copied" ? (
-          <Check className="h-4 w-4 text-emerald-500" />
-        ) : (
-          <Link className="h-4 w-4" />
-        )}
-      </button>
-    </Tooltip>
-  );
-}
-
-function VisibilityControl({
-  run,
-  onChanged,
-}: {
-  run: RunSummary;
-  onChanged: (run: RunSummary) => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(false);
-  const [confirmShare, setConfirmShare] = useState(false);
-  if (!run.canManageVisibility) {
-    return run.visibility === "organization" ? (
-      <Tooltip content="Shared with your organization" position="bottom">
-        <Badge severity="neutral" size="sm" className="shrink-0">
-          <Users className="h-3 w-3" />
-          Organization
-        </Badge>
-      </Tooltip>
-    ) : run.visibility === "private" ? (
-      <Tooltip
-        content="Only you can view this investigation. Other organization members don’t have access."
-        position="bottom"
-      >
-        <Badge severity="neutral" size="sm" className="shrink-0">
-          <Lock className="h-3 w-3" />
-          Private
-        </Badge>
-      </Tooltip>
-    ) : null;
-  }
-  const shared = run.visibility === "organization";
-  const update = () => {
-    if (busy) return;
-    setBusy(true);
-    setError(false);
-    updateRunVisibility(run.id, shared ? "private" : "organization")
-      .then((updated) => {
-        onChanged(updated);
-        setConfirmShare(false);
-      })
-      .catch(() => setError(true))
-      .finally(() => setBusy(false));
-  };
-  const label = shared ? "Organization" : "Private";
-  return (
-    <>
-      <Tooltip
-        content={
-          error
-            ? "Couldn't change sharing"
-            : shared
-              ? "Shared with your organization — make private"
-              : "Private — click to let organization members access this investigation"
-        }
-        position="bottom"
-      >
-        <button
-          onClick={() => (shared ? update() : setConfirmShare(true))}
-          disabled={busy}
-          className="flex items-center gap-1 rounded-md border border-theme-border/70 px-1.5 py-1 text-[11px] font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary disabled:opacity-50"
-          aria-label={
-            shared
-              ? "Shared with your organization — make private"
-              : "Private — click to let organization members access this investigation"
-          }
-        >
-          {shared ? (
-            <Users className="h-3.5 w-3.5" />
-          ) : (
-            <Lock className="h-3.5 w-3.5" />
-          )}
-          {label}
-        </button>
-      </Tooltip>
-      <ConfirmDialog
-        open={confirmShare}
-        onClose={() => !busy && setConfirmShare(false)}
-        onConfirm={update}
-        title="Share this investigation?"
-        message="Everyone in your organization can read this entire investigation—including your questions and the logs and manifests Radar read—and can continue or stop it."
-        confirmLabel="Share with organization"
-        showWarning={false}
-        variant="warning"
-        isLoading={busy}
-      />
-    </>
-  );
-}
-
 // The panel is an ABSOLUTE slot inside the app's body frame (the column under the
 // header, right of the nav rail) — App renders it there and passes topInset (the
 // header height; 0 in chromeless embeds). It shares that frame with the resource/
@@ -443,37 +291,37 @@ function DiagnoseHeaderIdentity({
   onOpenSettings: (() => void) | null;
 }) {
   return (
-    <div className={`min-w-0 ${className}`}>
-      <div className="flex min-w-0 items-center gap-2">
-        <div className="min-w-0 flex-1 truncate text-sm font-medium text-theme-text-primary">
+    <div className={`flex min-w-0 items-center gap-3 ${className}`}>
+      <div className="min-w-0 flex-1">
+        <div className="min-w-0 truncate text-sm font-medium text-theme-text-primary">
           {title}
         </div>
-        {runMeta ? (
-          <div
-            className={`${MAXIMIZED_RUN_META_VISIBILITY_CLASS} shrink-0 items-center gap-1 text-[11px] tabular-nums text-theme-text-tertiary`}
-          >
-            <span className={`font-medium ${runMeta.labelClass}`}>
-              {runMeta.label}
-            </span>
-            <span aria-hidden>·</span>
-            <time dateTime={runMeta.dateTime}>{runMeta.time}</time>
-          </div>
-        ) : null}
+        <div className="flex items-center gap-1 text-xs text-theme-text-tertiary">
+          <span className="truncate">{configLine}</span>
+          {onOpenSettings && (
+            <Tooltip content="AI settings" position="bottom">
+              <button
+                onClick={onOpenSettings}
+                className="shrink-0 rounded p-0.5 text-theme-text-tertiary hover:text-theme-text-primary"
+                aria-label="AI settings"
+              >
+                <Settings2 className="h-3 w-3" />
+              </button>
+            </Tooltip>
+          )}
+        </div>
       </div>
-      <div className="flex items-center gap-1 text-xs text-theme-text-tertiary">
-        <span className="truncate">{configLine}</span>
-        {onOpenSettings && (
-          <Tooltip content="AI settings" position="bottom">
-            <button
-              onClick={onOpenSettings}
-              className="shrink-0 rounded p-0.5 text-theme-text-tertiary hover:text-theme-text-primary"
-              aria-label="AI settings"
-            >
-              <Settings2 className="h-3 w-3" />
-            </button>
-          </Tooltip>
-        )}
-      </div>
+      {runMeta ? (
+        <div
+          className={`${MAXIMIZED_RUN_META_VISIBILITY_CLASS} shrink-0 items-center gap-1 whitespace-nowrap text-[11px] tabular-nums text-theme-text-tertiary`}
+        >
+          <span className={`font-medium ${runMeta.labelClass}`}>
+            {runMeta.label}
+          </span>
+          <span aria-hidden>·</span>
+          <time dateTime={runMeta.dateTime}>{runMeta.time}</time>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -552,13 +400,17 @@ export function DiagnoseSurface({
   }, []);
   // Injected settings action: undefined = Radar's own Settings dialog;
   // null = hide the gear + links.
-  const { consentCopy, onOpenSettings: hostOpenSettings } =
-    useDiagnoseCustomization();
+  const {
+    consentCopy,
+    onOpenSettings: hostOpenSettings,
+    renderRunActions,
+  } = useDiagnoseCustomization();
   const { embedded } = useNavCustomization();
   const openSettings =
     hostOpenSettings === undefined ? openDiagnoseSettings : hostOpenSettings;
   const {
     maximized,
+    fullWidthForced,
     setMaximized,
     panelWidth: width,
     setPanelWidth: setWidth,
@@ -574,8 +426,7 @@ export function DiagnoseSurface({
     view: d.view,
     surfaceWidth,
   });
-  const historyOverlay =
-    !persistentHistory && historyOverlayOpen;
+  const historyOverlay = !persistentHistory && historyOverlayOpen;
   const { shouldRender: historyOverlayPresent, isOpen: historySlideOpen } =
     useAnimatedUnmount(historyOverlay);
   const dismissHistory = useCallback(() => {
@@ -694,9 +545,11 @@ export function DiagnoseSurface({
 
   // Absolute within the body frame: maximized fills it; docked is a right slot.
   // topInset clears the header (the frame spans the full column incl. the header).
-  const positionStyle: React.CSSProperties = maximized
-    ? { top: topInset, left: 0, right: 0, bottom: 0 }
-    : { top: topInset, right: 0, bottom: 0, width, maxWidth: "100%" };
+  // A forced fill keeps the docked single-pane layout; only the frame grows.
+  const positionStyle: React.CSSProperties =
+    maximized || fullWidthForced
+      ? { top: topInset, left: 0, right: 0, bottom: 0 }
+      : { top: topInset, right: 0, bottom: 0, width, maxWidth: "100%" };
 
   // The detail pane (right side when expanded; the whole body when docked).
   // Keyed by run id so toggling Expand doesn't remount a focused run's view.
@@ -838,7 +691,7 @@ export function DiagnoseSurface({
       )}
 
       {/* Header */}
-      <div className="relative z-30 flex items-center justify-between border-b border-theme-border bg-theme-surface px-4 py-2.5">
+      <div className="relative z-30 flex items-center justify-between gap-3 border-b border-theme-border bg-theme-surface px-4 py-2.5">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           {showHistory && (d.view !== "home" || !persistentHistory) ? (
             <Tooltip
@@ -893,7 +746,7 @@ export function DiagnoseSurface({
             )}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-0.5">
+        <div className="flex shrink-0 items-center gap-1">
           {activeRun &&
             canRerunInvestigation(d.view, activeRun, d.needsConsent) && (
               <Tooltip
@@ -922,21 +775,14 @@ export function DiagnoseSurface({
             <div
               className={`items-center gap-1 ${headerPresentation.runActionsClass || "flex"}`}
             >
-              <VisibilityControl
-                key={visibleRunDetail.id}
-                run={visibleRunDetail}
-                onChanged={d.updateRunSummary}
-              />
-              {canCopyRunLink(visibleRunDetail) && (
-                <CopyRunLink
-                  radarUrl={visibleRunDetail.radarUrl}
-                  visibility={visibleRunDetail.visibility}
-                />
-              )}
+              {renderRunActions?.({
+                run: visibleRunDetail,
+                onRunUpdated: d.updateRunSummary,
+              })}
               <InvestigationMenu run={visibleRunDetail} />
             </div>
           )}
-          {(!maximized || d.canRestoreWorkspace) && (
+          {!fullWidthForced && (!maximized || d.canRestoreWorkspace) && (
             <Tooltip
               content={maximized ? "Restore" : "Expand"}
               position="bottom"
@@ -982,6 +828,7 @@ export function DiagnoseSurface({
             aria-hidden="true"
             onClick={dismissHistory}
             className={`absolute inset-0 z-10 bg-black/20 ${TRANSITION_BACKDROP} motion-reduce:transition-none ${historySlideOpen ? "opacity-100" : "opacity-0"} ${historyOverlay ? "" : "pointer-events-none"}`}
+            style={overlayTransitionStyle(historySlideOpen, "drawer")}
           />
         )}
         {showHistory && (

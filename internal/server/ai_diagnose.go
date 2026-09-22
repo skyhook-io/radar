@@ -92,7 +92,7 @@ func (s *Server) detectDiagnoseHealth(r *http.Request, kind, group, namespace, n
 		canonicalKind = kind
 	}
 	issueSum, issueRows := computeIssueSummaryAndRows(cache, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), gvk.Group, canonicalKind, namespace, name)
-	auditSum, auditRows := computeAuditSummaryAndRows(cache, gvk.Group, canonicalKind, namespace, name)
+	auditSum, auditRows := s.computeAuditSummaryAndRows(r, cache, gvk.Group, canonicalKind, namespace, name)
 
 	var issueCount int
 	signal := &ai.ResourceHealthSignal{}
@@ -113,6 +113,7 @@ func (s *Server) detectDiagnoseHealth(r *http.Request, kind, group, namespace, n
 		signal.Health = summary.Health
 	}
 	if auditSum != nil {
+		signal.AuditMissingInputs = auditSum.MissingInputs
 		signal.AuditCount = auditSum.Count
 		signal.AuditSeverity = auditSum.HighestSeverity
 		signal.TopFinding = auditSum.TopFinding
@@ -184,6 +185,12 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		agents = mergeDetectedWithDrivable(agents, s.aiDiagnoser.AgentInfos(r.Context(), withVersions))
 	} else {
 		agents = ai.DetectAgents(r.Context(), withVersions)
+	}
+	// Every local agent runs through the run manager, which performs the
+	// confirmed apply turn and the verification that follows it.
+	for i := range agents {
+		agents[i].Apply = true
+		agents[i].Verification = true
 	}
 	// eligible: this run mode supports local BYO-agent investigations (no proxy/OIDC
 	// auth, /mcp mounted) — the SAME gate the boot-time engine init uses. It's true
@@ -258,7 +265,7 @@ func (s *Server) handleDiagnoseConsent(w http.ResponseWriter, r *http.Request) {
 // writes the error) when unavailable.
 func (s *Server) aiReady(w http.ResponseWriter) bool {
 	if s.aiRuns == nil {
-		s.writeError(w, http.StatusNotImplemented, "no agent CLI available — install Claude Code, Codex, or Cursor (cursor-agent) to enable AI investigations")
+		s.writeError(w, http.StatusNotImplemented, "no agent CLI available — install Claude Code, Codex, Cursor (cursor-agent), or OpenCode to enable AI investigations")
 		return false
 	}
 	return s.requireConnected(w)

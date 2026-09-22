@@ -29,4 +29,20 @@ describe('integer axes', () => {
     expect(compact.fontSize).toBeGreaterThan(full.fontSize)
     expect(compact.height / compact.width).toBeGreaterThan(full.height / full.width)
   })
+
+  it('keeps dashboard axes readable without changing existing layouts', () => {
+    const dashboard = chartLayout(false, true)
+    expect([dashboard.width, dashboard.height, dashboard.fontSize]).toEqual([600, 240, 14])
+    expect(chartLayout(true, true)).toEqual(chartLayout(true))
+    expect(chartLayout(false).width).toBe(1000)
+  })
+  it('fits dashboard plots to their container without scaling text or height', () => {
+    for (const width of [280, 380, 550, 1050]) {
+      const layout = chartLayout(width < 420, true, width)
+      expect(layout.width).toBe(width)
+      expect(layout.height).toBe(240)
+      expect(layout.fontSize).toBe(12)
+    }
+    expect(chartLayout(false, false, 500)).toEqual(chartLayout(false))
+  })
 })

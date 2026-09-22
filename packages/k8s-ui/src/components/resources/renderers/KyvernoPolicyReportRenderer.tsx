@@ -1,8 +1,9 @@
 import type React from 'react'
-import { Shield, ShieldCheck, ShieldAlert, FileWarning, ListChecks, ChevronDown, ChevronRight } from 'lucide-react'
+import { Shield, ShieldCheck, ShieldAlert, FileWarning, ListChecks } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useState } from 'react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { Collapse, CollapseChevron } from '../../ui/Collapse'
 import {
   getPolicyReportSummary,
   getPolicyReportResults,
@@ -60,7 +61,7 @@ function ResultRow({ result }: { result: any }) {
         onClick={() => hasMessage && setExpanded(!expanded)}
       >
         {hasMessage ? (
-          expanded ? <ChevronDown className="w-3 h-3 text-theme-text-tertiary shrink-0" /> : <ChevronRight className="w-3 h-3 text-theme-text-tertiary shrink-0" />
+          <CollapseChevron open={expanded} className="w-3 h-3" />
         ) : (
           <span className="w-3 shrink-0" />
         )}
@@ -80,7 +81,8 @@ function ResultRow({ result }: { result: any }) {
           <span className="text-theme-text-tertiary truncate">/ {result.rule}</span>
         )}
       </div>
-      {expanded && message && (
+      {/* A report can hold hundreds of rows; each detail renders on first open. */}
+      <Collapse open={expanded && hasMessage} mountLazily>
         <div className="px-2 pb-2 pl-7">
           <div className="text-xs text-theme-text-secondary break-all card-inner">
             {message}
@@ -97,7 +99,7 @@ function ResultRow({ result }: { result: any }) {
             </div>
           )}
         </div>
-      )}
+      </Collapse>
     </div>
   )
 }

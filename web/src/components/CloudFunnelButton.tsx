@@ -5,17 +5,29 @@ import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Coll
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { Tooltip } from './ui/Tooltip'
 import { CloudConnectFlow } from './CloudConnectFlow'
+import {
+  type Handoff,
+  SELF_HOSTED_DOCS_URL,
+  exitFor,
+  handoffForBlocked,
+  handoffForPrepareError,
+  isHandoffOutcome,
+  signupUrlFor as buildSignupUrl,
+} from './cloudConnectHandoff'
 import { showApiError } from './ui/Toast'
+import { useConnection } from '../context/ConnectionContext'
 import {
   ApiError,
   cloudInstallActive,
   type CloudConnectSelf,
+  type CloudInstallConnectedRadar,
   type CloudInstallBlocked,
   type CloudInstallStatus,
   prepareCloudInstall,
   useCapabilities,
   useCloudConnectInfo,
   useCloudConnectSelf,
+  useCloudInstallDiscover,
   useCloudInstallStatus,
   useClusterInfo,
 } from '../api/client'
@@ -27,8 +39,10 @@ import {
 //
 // The only outbound call is the Hub's own copy, fetched when the dialog opens
 // (never on a poll or a timer) and falling back per-field to the constants
-// below. Conversion is otherwise measured on the receiving end: utm_content
-// distinguishes which lane sent the user.
+// below. The request names the lane the footer renders and where this Radar
+// runs, both closed enums. The links into the Hub carry utm_content naming
+// the link that was clicked and, after an in-app attempt that did not connect,
+// radar_outcome saying what happened; see cloudConnectHandoff.ts.
 const FALLBACK_APP_URL = 'https://app.radarhq.io'
 
 // Rendered until (or unless) the Hub states its own. Keeping the compiled-in
@@ -47,10 +61,17 @@ const DEFAULT_ASSURANCES = [
   'SOC 2 Type II',
   '3 clusters free, no card required',
 ]
-const SIGNUP_QUERY = '?utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal'
+// Other OSS surfaces (a GitOps app that deploys to another cluster, say)
+// point at Radar Cloud by asking this button to open its dialog, so there
+// is one pitch and one flow. The button is mounted whenever Radar runs
+// standalone; embedded hosts never mount it and never dispatch this.
+const OPEN_EVENT = 'radar:open-cloud-funnel'
+
+export function openCloudFunnel() {
+  window.dispatchEvent(new Event(OPEN_EVENT))
+}
 const ABOUT_URL = 'https://radarhq.io/about'
 const PRICING_URL = 'https://radarhq.io/pricing'
-const SELF_HOSTED_DOCS_URL = 'https://radarhq.io/docs/cloud/self-hosted/'
 const SEEN_KEY = 'radar.cloudFunnel.seen'
 
 // localStorage access can throw (SecurityError) where storage is denied —
@@ -79,31 +100,56 @@ export function CloudFunnelButton() {
   const [seen, setSeen] = useState(readSeen)
   const [inFlowView, setInFlowView] = useState(false)
   const [blocked, setBlocked] = useState<CloudInstallBlocked | null>(null)
-  // Set once an in-app attempt has actually failed, so the CTA reads "Try
-  // again" instead of implying a first attempt. Survives closing the modal
-  // (the failure belongs to the cluster, not the dialog session) but not a
-  // reload, and is reset below when the kubeconfig context changes — it must
-  // never describe a cluster the user has switched away from.
-  const [prepareFailed, setPrepareFailed] = useState(false)
+  // Set once an in-app attempt has ended without connecting, naming what
+  // happened (a flow failure kind, a blocked plan, a canceled plan, or the
+  // prepare call itself failing) and whether it is worth trying again. It
+  // relabels the CTA "Try again" for a retryable failure and lets the browser
+  // link say what the person is coming from. Survives closing the modal (the
+  // outcome belongs to the cluster, not the dialog session) but not a reload,
+  // and is reset below when the kubeconfig context changes — it must never
+  // describe a cluster the user has switched away from.
+  const [handoff, setHandoff] = useState<Handoff | null>(null)
+  const prepareFailed = handoff?.retryable ?? false
 
   const capabilities = useCapabilities()
+  const clusterInfo = useClusterInfo()
   const lane = capabilities.data?.cloudConnect?.lane ?? 'wizard'
+  const clusterConnected = useConnection().connection.state === 'connected'
+  const pitchLane = lane === 'driver' && !clusterConnected ? 'wizard' : lane
   const appUrl = capabilities.data?.cloudConnect?.appUrl || FALLBACK_APP_URL
-  // utm_content distinguishes the lane that opened the Hub — measured Hub-side
-  // only when the user actually navigates there; Radar transmits nothing.
-  const signupUrlFor = (content: string) => `${appUrl}/signup${SIGNUP_QUERY}&utm_content=${content}`
-  const signupUrl = signupUrlFor('funnel-cta')
+  // utm_content names the link that was clicked. It travels only in the link
+  // the user opens; Radar sends nothing on its own. Only the blocked card may
+  // deep-link the install page (see exitFor); the pitch buttons and the
+  // footer link go to signup.
+  const signupUrl = buildSignupUrl(appUrl, 'wizard-signup-button')
 
   // Only while the dialog is open — never on the capabilities poll. The Hub
   // learns that someone opened it, which is congruent with what the dialog is
   // for; it must not learn that Radar is merely running.
-  const connectInfo = useCloudConnectInfo(capabilities.data?.cloudConnect?.apiUrl, open)
+  const connectInfo = useCloudConnectInfo(capabilities.data?.cloudConnect?.apiUrl, open, {
+    lane: pitchLane,
+    mode: capabilities.data?.deployment?.mode,
+  })
 
   // In-cluster Radar can't install its own connection, but it knows exactly
   // which install it is — so the wizard link can carry the real target, and a
   // GitOps-owned install can be told the imperative command isn't for it.
   const inCluster = capabilities.data?.deployment?.mode === 'in-cluster'
   const self = useCloudConnectSelf(open && inCluster)
+
+  // Each time the dialog opens, look for a Radar in the cluster that already
+  // carries Cloud settings — installed by a colleague after a handoff, or from
+  // another machine. The plan would refuse to install over it; better to say
+  // "already connected" and point at it than to offer a click that ends blocked.
+  const discovered = useCloudInstallDiscover(open && lane === 'driver' && clusterConnected, clusterInfo.data?.context)
+  // The server ranks these: one it can link to first. A failed lookup is
+  // not a verdict — the CTA returns and the plan does its own inspection —
+  // and neither is the previous opening's answer: this component outlives
+  // the dialog, so a reopen refetches over cached data, and the gate must
+  // hold for that refetch too (isFetching, not isPending) while a refetch
+  // that fails must not keep showing what it found last time.
+  const alreadyConnected = !clusterConnected || discovered.isError ? undefined : discovered.data?.connected[0]
+  const discoverPending = lane === 'driver' && discovered.isFetching
 
   // The flow is server-owned: polling here both drives the live progress view
   // and re-attaches to an ongoing flow after a reload or modal close.
@@ -135,7 +181,7 @@ export function CloudFunnelButton() {
       // Anything else failed before a flow existed. Return to the pitch rather
       // than leaving the flow view armed, where a later status change would
       // pull the user into a screen they did not ask for.
-      exitFlow(true)
+      exitFlow(handoffForPrepareError(err))
       showApiError('Could not inspect this cluster for Cloud connect', err instanceof Error ? err.message : undefined)
     },
     // No meta.errorMessage: the global handler cannot tell a single-flight 409
@@ -153,19 +199,48 @@ export function CloudFunnelButton() {
 
   const startConnect = () => {
     setBlocked(null)
-    setPrepareFailed(false)
+    setHandoff(null)
     setInFlowView(true)
     prepare.mutate()
   }
 
-  // A flow that ended in failure returns to a pitch whose CTA must not read
-  // like a first attempt. The caller passes the outcome because dismissing
-  // already overwrote the status by this point.
-  const exitFlow = (failed = false) => {
-    if (failed) setPrepareFailed(true)
+  // A flow that ended without connecting returns to a pitch whose CTA must
+  // not read like a first attempt, and whose browser link knows what happened.
+  // The caller passes the outcome because dismissing already overwrote the
+  // status by this point. Every exit sets it, null included, so a connected
+  // flow clears what an earlier attempt left behind.
+  const exitFlow = (outcome: Handoff | null = null) => {
+    setHandoff(outcome)
     setInFlowView(false)
     setBlocked(null)
   }
+
+  // What the person is coming from. A blocked plan is read from local state,
+  // not the status: the status query keeps serving its last polled value
+  // (idle, usually) while the blocked view is up. A blocked plan counts as an
+  // attempt: the user tried the in-app path and was refused, and the wizard
+  // is the right next step for a GitOps-owned install. A failed flow carries
+  // the server's kind and its own verdict on retrying — the failed card
+  // already honors retrySafe, and the pitch must not contradict it two clicks
+  // later. Leaving a live plan is the user canceling it, not a failure. Only
+  // a connected flow, or no flow at all, leaves nothing to carry.
+  const outcomeOf = (st: CloudInstallStatus): Handoff | null => {
+    if (blocked) return handoffForBlocked(blocked.reason, blocked.attempted)
+    if (st.state === 'failed') {
+      return {
+        outcome: isHandoffOutcome(st.failure?.kind) ? st.failure.kind : 'failure_kind_unknown',
+        retryable: st.failure?.retrySafe ?? false,
+      }
+    }
+    if (st.state === 'blocked' && st.blocked) return handoffForBlocked(st.blocked.reason, st.blocked.attempted)
+    if (st.state === 'connected' || st.state === 'idle') return null
+    return { outcome: 'install_plan_canceled', retryable: false }
+  }
+
+  useEffect(() => {
+    window.addEventListener(OPEN_EVENT, openModal)
+    return () => window.removeEventListener(OPEN_EVENT, openModal)
+  })
 
   // Re-attach to a server-owned flow whenever one is observed while the modal
   // is open — the status query may resolve after openModal ran.
@@ -173,13 +248,16 @@ export function CloudFunnelButton() {
     if (open && lane === 'driver' && flowLive) setInFlowView(true)
   }, [open, lane, flowLive])
 
-  // prepareFailed outlives the dialog but must not outlive the cluster it
-  // describes: a context switch swaps every query cache, yet this component
-  // stays mounted, so without the reset cluster A's failure would relabel the
-  // CTA for cluster B.
-  const contextName = useClusterInfo().data?.context
+  // handoff and a blocked plan outlive the dialog but must not outlive the
+  // cluster they describe: a context switch swaps every query cache, yet this
+  // component stays mounted, so without the reset cluster A's outcome would
+  // relabel the CTA (and the link) for cluster B, and a blocked view left
+  // armed would reopen on B with A's refusal, feeding it back into the
+  // outcome on Back.
+  const contextName = clusterInfo.data?.context
   useEffect(() => {
-    setPrepareFailed(false)
+    setHandoff(null)
+    setBlocked(null)
   }, [contextName])
 
   // The server owns the "nothing to pitch" decision: an already-tunneled
@@ -248,26 +326,35 @@ export function CloudFunnelButton() {
             <CloudConnectFlow
               status={flowForView}
               blocked={blocked}
-              signupUrl={signupUrlFor('flow-escape')}
+              exit={exitFor(appUrl, 'driver-blocked-card-browser-link', outcomeOf(flowForView), clusterInfo.data?.context)}
+              where={{ context: clusterInfo.data?.context, cluster: clusterInfo.data?.cluster }}
               onStatus={applyStatus}
-              onExit={() => exitFlow(flowForView.state === 'failed')}
+              onExit={() => exitFlow(outcomeOf(flowForView))}
             />
           </div>
         ) : (
           <>
             <div className="min-h-0 overflow-y-auto">
-              <PitchBody lane={lane} freeTier={connectInfo.data?.freeTier} />
+              <PitchBody lane={pitchLane} freeTier={connectInfo.data?.freeTier} />
             </div>
             <ModalFooter
               lane={lane}
+              clusterConnected={clusterConnected}
               signupUrl={signupUrl}
-              // driver-escape after a failed attempt, driver-alt before one, so
-              // the Hub can tell "prefers the browser" from "app path broke".
-              driverEscapeUrl={signupUrlFor(prepareFailed ? 'driver-escape' : 'driver-alt')}
+              // One link name whether or not an attempt preceded the click; the
+              // outcome, when present, is what says an attempt happened.
+              driverBrowserUrl={buildSignupUrl(appUrl, 'driver-footer-browser-link', handoff)}
               prepareFailed={prepareFailed}
+              // A prepare error's reason, kept on the pitch after its toast is gone.
+              prepareError={handoff?.detail}
               assurances={connectInfo.data?.assurances}
               notice={connectInfo.data?.notice}
               self={inCluster ? self.data : undefined}
+              clusterName={clusterInfo.data?.context}
+              alreadyConnected={alreadyConnected}
+              connectedCount={alreadyConnected ? (discovered.data?.connected.length ?? 0) : 0}
+              discoverPending={discoverPending}
+              clustersUrl={`${appUrl}/clusters`}
               // Also covers the capabilities query: until it resolves, lane
               // defaults to wizard and Radar does not yet know it is
               // in-cluster, so the CTA would escape before classification.
@@ -315,22 +402,31 @@ function Eyebrow() {
 
 function ModalFooter({
   lane,
+  clusterConnected,
   signupUrl,
-  driverEscapeUrl,
+  driverBrowserUrl,
   prepareFailed,
+  prepareError,
   assurances,
   notice,
   self,
   selfLoading,
+  clusterName,
+  alreadyConnected,
+  connectedCount = 0,
+  discoverPending = false,
+  clustersUrl,
   onConnect,
   onLater,
 }: {
   lane: 'driver' | 'wizard'
+  clusterConnected: boolean
   signupUrl: string
-  // Same destination as signupUrl, distinct utm_content: the caller encodes
-  // whether this render follows a failed in-app attempt.
-  driverEscapeUrl: string
+  // Same destination as signupUrl, distinct utm_content, and the outcome of
+  // an in-app attempt when one preceded this render.
+  driverBrowserUrl: string
   prepareFailed: boolean
+  prepareError?: string
   // Live copy from the Hub; undefined until (or unless) it arrives.
   assurances?: string[]
   notice?: string
@@ -338,6 +434,20 @@ function ModalFooter({
   self?: CloudConnectSelf
   // True while in-cluster self-classification is still in flight.
   selfLoading?: boolean
+  // The kubeconfig context, named under the CTA so the click is about a
+  // specific cluster — kept out of the button, whose width must not depend
+  // on the name.
+  clusterName?: string
+  // Driver lane: a Radar in the cluster that already carries Cloud settings.
+  alreadyConnected?: CloudInstallConnectedRadar
+  connectedCount?: number
+  // True while that lookup is in flight: a click now would start the very
+  // plan the lookup exists to pre-empt, and the flow view would then hide
+  // its answer.
+  discoverPending?: boolean
+  // The configured Hub's clusters list — where to look when an install's
+  // settings say it is connected but not where.
+  clustersUrl?: string
   onConnect: () => void
   onLater: () => void
 }) {
@@ -394,12 +504,48 @@ function ModalFooter({
       {notice && (
         <div className="mb-3.5 card-inner p-3 text-[12px] leading-relaxed text-theme-text-secondary">{notice}</div>
       )}
+      {lane === 'driver' && alreadyConnected && (
+        <div className="mb-3.5 card-inner p-3 text-[12px] leading-relaxed text-theme-text-secondary">
+          <span className="font-semibold text-theme-text-primary">This cluster is already connected to Radar Cloud.</span>{' '}
+          Found release{' '}
+          <code className="font-mono text-[11px] text-theme-text-primary">{alreadyConnected.release || alreadyConnected.deployment}</code>{' '}
+          in namespace <code className="font-mono text-[11px] text-theme-text-primary">{alreadyConnected.namespace}</code>{' '}
+          {alreadyConnected.hubHost ? (
+            <>
+              configured for a Radar Cloud at{' '}
+              <code className="font-mono text-[11px] text-theme-text-primary">{alreadyConnected.hubHost}</code> — open that one to see
+              this cluster.
+            </>
+          ) : alreadyConnected.clusterUrl ? (
+            <>configured to connect. Open Radar Cloud to see it; if it isn’t there, its page shows the recovery options.</>
+          ) : (
+            <>
+              with Cloud settings Radar can’t read from here. Look for it in Radar Cloud; if it isn’t there, an admin can
+              recover the pairing with <code className="font-mono text-[11px] text-theme-text-primary">radar cloud status</code>.
+            </>
+          )}
+          {connectedCount > 1 && <> {connectedCount - 1} more install{connectedCount > 2 ? 's' : ''} carry Cloud settings too.</>}
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-x-5 gap-y-2.5">
-        {lane === 'driver' ? (
+        {lane === 'driver' && alreadyConnected ? (
+          // Another Hub is named, not linked: the link would open ours.
+          !alreadyConnected.hubHost && (
+            <a
+              href={alreadyConnected.clusterUrl || clustersUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="whitespace-nowrap px-6 py-2.5 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[14px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all"
+            >
+              {alreadyConnected.clusterUrl ? 'Open in Radar Cloud' : 'Open Radar Cloud'}
+            </a>
+          )
+        ) : lane === 'driver' && clusterConnected ? (
           <>
             <button
               onClick={onConnect}
-              className="whitespace-nowrap px-6 py-2.5 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[14px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all"
+              disabled={discoverPending}
+              className={`whitespace-nowrap px-6 py-2.5 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[14px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all ${discoverPending ? 'opacity-60 pointer-events-none' : ''}`}
             >
               {/* Trailing ellipsis: further input follows the click — the
                   inspect step and a plan the user approves in the browser. */}
@@ -409,7 +555,7 @@ function ModalFooter({
                 a recovery path — install-averse operators need the door before
                 anything fails, or they close the modal instead. */}
             <a
-              href={driverEscapeUrl}
+              href={driverBrowserUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="whitespace-nowrap text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary hover:underline underline-offset-2 transition-colors"
@@ -419,26 +565,36 @@ function ModalFooter({
           </>
         ) : cliOnly ? null : (
           <a
-            href={self?.wizardUrl || signupUrl}
+            href={lane === 'driver' ? driverBrowserUrl : self?.wizardUrl || signupUrl}
             aria-disabled={selfPending}
             target="_blank"
             rel="noopener noreferrer"
             onClick={(e) => { if (selfPending) e.preventDefault() }}
             className={`px-5 py-2 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[13.5px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all ${selfPending ? 'opacity-60 pointer-events-none' : ''}`}
           >
-            {self?.ownership === 'helm' || gitops ? 'Connect this cluster' : 'Try Cloud free'}
+            {lane === 'driver' ? 'Continue in Radar Cloud' : self?.ownership === 'helm' || gitops ? 'Connect this cluster' : 'Try Cloud free'}
           </a>
         )}
         <button onClick={onLater} className="ml-auto whitespace-nowrap text-[12px] text-theme-text-tertiary hover:text-theme-text-primary transition-colors">
-          Maybe later
+          {lane === 'driver' && alreadyConnected ? 'Close' : 'Maybe later'}
         </button>
       </div>
+      {/* The last attempt's stop, when Radar could not even inspect the
+          cluster: the toast that first said so is gone in seconds, and "Try
+          again" alone does not say what to try again for. The footer link
+          above is the way around it. */}
+      {lane === 'driver' && prepareError && (
+        <p className="mt-2.5 text-[11.5px] leading-relaxed text-amber-600 dark:text-amber-400">
+          Radar couldn’t inspect this cluster: {prepareError}
+        </p>
+      )}
       {/* Mechanics, not marketing: a falsifiable claim the plan card then
           fulfills. Sits next to the button whose click it de-risks. */}
-      {lane === 'driver' && (
+      {lane === 'driver' && clusterConnected && !alreadyConnected && (
         <p className="mt-2.5 text-[11px] leading-relaxed text-theme-text-tertiary">
-          Nothing installs on click. Radar inspects the cluster and shows you a plan; you approve it in
-          the browser before anything changes.
+          Nothing installs on click. Radar inspects{' '}
+          {clusterName ? <span className="text-theme-text-secondary">{clusterName}</span> : 'the cluster'} and shows
+          you a plan; you approve it in the browser before anything changes.
         </p>
       )}
       {/* A 2-column grid, not flex-wrap: the long data-locality chip cannot

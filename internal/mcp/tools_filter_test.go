@@ -478,6 +478,53 @@ func TestHandleGetEvents_RestrictedAggregatesAllowed(t *testing.T) {
 	}
 }
 
+// A cluster-wide get_events (no namespace) from a namespace-restricted caller
+// answers for the readable namespaces alone. Without a marker the narrowed
+// answer would be filed as a receipt covering the whole cluster, so the
+// response names both the narrowing and the namespaces it actually read.
+func TestHandleGetEvents_ClusterWideMarksPartialScope(t *testing.T) {
+	setupFakeCacheForFilterTests(t)
+
+	restricted := callGetEventsCtx(t, withRestrictedUser(t, "alice", []string{"beta", "alpha"}), eventsInput{})
+	if !restricted.PartialScope {
+		t.Error("a cluster-wide read narrowed to a subset must set partialScope")
+	}
+	if got := strings.Join(restricted.ScopeNamespaces, ","); got != "alpha,beta" {
+		t.Errorf("scopeNamespaces = %q, want the namespaces actually read", got)
+	}
+	if restricted.AccessDenied {
+		t.Error("a partial read is not a denial; accessDenied would make the adapter drop the whole result")
+	}
+
+	// Unrestricted: the read covered everything it asked for, so no marker.
+	everything := callGetEventsCtx(t, withClusterAdmin(t, "root"), eventsInput{})
+	if everything.PartialScope || len(everything.ScopeNamespaces) != 0 {
+		t.Errorf("an unnarrowed cluster-wide read must carry no scope marker, got %+v", everything)
+	}
+
+	// A single namespace the caller cannot read stays a denial, not a partial.
+	denied := callGetEventsCtx(t, withRestrictedUser(t, "bob", []string{"alpha"}), eventsInput{Namespace: "beta"})
+	if !denied.AccessDenied {
+		t.Error("a denied namespace must still set accessDenied")
+	}
+	if denied.PartialScope {
+		t.Error("a denied namespace is not a partial scope")
+	}
+}
+
+func callGetEventsCtx(t *testing.T, ctx context.Context, input eventsInput) getEventsResponseMCP {
+	t.Helper()
+	res, _, err := handleGetEvents(ctx, nil, input)
+	if err != nil {
+		t.Fatalf("handleGetEvents(%+v): %v", input, err)
+	}
+	var resp getEventsResponseMCP
+	if uerr := json.Unmarshal([]byte(extractText(t, res)), &resp); uerr != nil {
+		t.Fatalf("unmarshal: %v", uerr)
+	}
+	return resp
+}
+
 // --- Per-namespace Secret RBAC ---
 //
 // The chart grants the Radar SA cluster-wide secrets so Helm release

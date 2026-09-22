@@ -101,8 +101,15 @@ func setupFakeCacheWithPodFleet(t *testing.T, n int) {
 	t.Helper()
 	const ns = "alpha"
 	selector := map[string]string{"app": "fleet"}
+	isController := true
+	rsOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "fleet", Controller: &isController}
+	podOwner := metav1.OwnerReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: "fleet-rs", Controller: &isController}
 	objs := []runtime.Object{
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ns}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
+		&appsv1.ReplicaSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "fleet-rs", Namespace: ns, Labels: selector, OwnerReferences: []metav1.OwnerReference{rsOwner}},
+			Spec:       appsv1.ReplicaSetSpec{Selector: &metav1.LabelSelector{MatchLabels: selector}},
+		},
 		&appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: "fleet", Namespace: ns},
 			Spec: appsv1.DeploymentSpec{
@@ -116,7 +123,7 @@ func setupFakeCacheWithPodFleet(t *testing.T, n int) {
 	}
 	for i := 0; i < n; i++ {
 		objs = append(objs, &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{Name: fleetPodName(i), Namespace: ns, Labels: selector},
+			ObjectMeta: metav1.ObjectMeta{Name: fleetPodName(i), Namespace: ns, Labels: selector, OwnerReferences: []metav1.OwnerReference{podOwner}},
 			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "fleet"}}},
 			Status:     corev1.PodStatus{Phase: corev1.PodRunning},
 		})
@@ -737,5 +744,63 @@ func TestDiagnoseMetricsCanBeSwitchedOff(t *testing.T) {
 		if _, ok := got[key]; !ok {
 			t.Errorf("bundle lost %q when vitals were switched off", key)
 		}
+	}
+}
+
+// setupFakeCacheWithOwnershipHistory installs the Deployment → ReplicaSet →
+// Pod chain the vitals resolve membership through.
+func TestHandleDiagnoseMetricsNamesTheWorkloadsOwnPods(t *testing.T) {
+	setupFakeCacheForDiagnoseTests(t)
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	f := setupFakeProm(t)
+	f.rangeBodyFunc = metricsMatrixForRequest("1")
+	ctx := withClusterAdmin(t, "admin")
+	grantDiagnoseDeploymentRead(t, "admin")
+
+	// The vitals cover the pods the workload controls now, named exactly.
+	got, m := diagnoseMetricsResult(t, ctx, testDiagnoseInput("deployment", "alpha", "cart"))
+	if m == nil {
+		t.Fatal("diagnose omitted metrics")
+	}
+	if m.Pods != 1 {
+		t.Fatalf("pods = %d, want the single owned pod", m.Pods)
+	}
+	for _, s := range m.Series {
+		if !strings.Contains(s.Query, `pod=~'^(cart-abc123)$'`) {
+			t.Errorf("%s query should name the owned pod set: %s", s.Category, s.Query)
+		}
+		if strings.Contains(s.Query, "cart-.*") {
+			t.Errorf("%s query uses a name prefix: %s", s.Category, s.Query)
+		}
+	}
+	var bundle struct {
+		PodNames          []string `json:"podNames"`
+		PodNamesTruncated bool     `json:"podNamesTruncated"`
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &bundle); err != nil {
+		t.Fatal(err)
+	}
+	if len(bundle.PodNames) != 1 || bundle.PodNames[0] != "cart-abc123" || bundle.PodNamesTruncated {
+		t.Fatalf("bundle podNames = %v truncated=%v, want the owned pod", bundle.PodNames, bundle.PodNamesTruncated)
+	}
+}
+
+// The diagnose tool ships metrics.error in its result, so a Prometheus error
+// quoting the request URL would put the backend — and an auth proxy's token —
+// in front of the model.
+func TestDiagnoseMetricsErrorRedactsTheBackend(t *testing.T) {
+	got := boundDiagnoseMetricsError(`cpu: upstream returned 503 for https://admin:s3cret@prom.internal:9090/api/v1/query_range?token=hunter2: overloaded`)
+	for _, leaked := range []string{"admin", "s3cret", "hunter2", "prom.internal"} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("metrics error leaked %q: %q", leaked, got)
+		}
+	}
+	if !strings.Contains(got, "/api/v1/query_range") || !strings.Contains(got, "overloaded") {
+		t.Errorf("the error should still say which call failed and why: %q", got)
 	}
 }

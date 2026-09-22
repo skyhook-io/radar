@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kuberay-demo
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: radar-ray-serve
+  namespace: kuberay-demo
+data:
+  radar_serve.py: |
+    from ray import serve
+
+    @serve.deployment
+    class RadarDemo:
+        def __call__(self):
+            return "radar-kuberay-ready"
+
+    app = RadarDemo.bind()

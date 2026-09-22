@@ -1,5 +1,5 @@
-import { useState, useMemo, useRef, useEffect, type Dispatch, type SetStateAction } from 'react'
-import { ShieldAlert, AlertTriangle, ChevronRight, CheckCircle2, ExternalLink, MoreHorizontal, EyeOff, Layers } from 'lucide-react'
+import { useState, useMemo, useRef, useEffect, useId, type Dispatch, type SetStateAction } from 'react'
+import { ShieldAlert, AlertTriangle, CheckCircle2, ExternalLink, MoreHorizontal, EyeOff, Layers } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { AuditFinding } from './AuditAlerts'
 import { BP_CATEGORY_BADGE, DEFAULT_BADGE_COLOR } from '../../utils/badge-colors'
@@ -8,6 +8,7 @@ import { SearchBox } from '../ui/SearchBox'
 import { FilterPill } from '../ui/FilterPill'
 import { pluralize } from '../../utils/pluralize'
 import { SEVERITY_TEXT_CLASS } from '../checks/severity'
+import { Collapse, CollapseChevron, useDisclosure, disclosurePanelId } from '../ui/Collapse'
 
 const CATEGORIES = ['Security', 'Reliability', 'Efficiency'] as const
 const RAW_SEVERITIES = ['danger', 'warning'] as const
@@ -68,6 +69,9 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
   const [searchTerm, setSearchTerm] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [expandedNS, setExpandedNS] = useState<Set<string>>(new Set())
+  // Namespace rows are mapped inline, so they can't each call useDisclosure;
+  // one generated prefix plus the namespace keeps aria-controls unique.
+  const nsPanelBase = useId()
   const [groupByNS, setGroupByNS] = useState(false)
 
   const toggleInSet = (setter: Dispatch<SetStateAction<Set<string>>>, value: string) => {
@@ -328,6 +332,7 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
                   role="button"
                   tabIndex={0}
                   aria-expanded={nsExpanded}
+                  aria-controls={disclosurePanelId(nsPanelBase, ns)}
                   onClick={() => toggleNS(ns)}
                   onKeyDown={(e) => {
                     if (e.target !== e.currentTarget) return
@@ -335,7 +340,7 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
                   }}
                   className="group flex items-center gap-3 w-full px-4 py-2 rounded-lg hover:bg-theme-hover/30 transition-colors text-left cursor-pointer focus-visible:ring-2 focus-visible:ring-theme-text-primary/20 focus-visible:outline-none"
                 >
-                  <ChevronRight className={clsx('w-4 h-4 text-theme-text-tertiary shrink-0 transition-transform duration-200', nsExpanded && 'rotate-90')} />
+                  <CollapseChevron open={nsExpanded} className="w-4 h-4" />
                   <span className="text-sm font-semibold text-theme-text-primary">{ns}</span>
                   <span className="text-xs text-theme-text-tertiary">{pluralize(nsGroups.length, 'resource')}</span>
                   <span className="flex-1" />
@@ -347,18 +352,13 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
                     <ContextMenu items={[{ label: `Hide ${ns} namespace`, onClick: () => onHideNamespace(ns) }]} />
                   )}
                 </div>
-                <div
-                  className="grid transition-[grid-template-rows] duration-200 ease-out"
-                  style={{ gridTemplateRows: nsExpanded ? '1fr' : '0fr' }}
-                >
-                  <div className="overflow-hidden">
-                    <div className="pl-4">
-                      {nsGroups.map(g => (
-                        <ResourceGroupRow key={`${g.kind}/${g.namespace}/${g.name}`} group={g} checks={checks} expanded={expanded} onToggle={toggle} onResourceClick={onResourceClick} onHideCheck={onHideCheck} onHideCategory={onHideCategory} />
-                      ))}
-                    </div>
+                <Collapse open={nsExpanded} id={disclosurePanelId(nsPanelBase, ns)}>
+                  <div className="pl-4">
+                    {nsGroups.map(g => (
+                      <ResourceGroupRow key={`${g.kind}/${g.namespace}/${g.name}`} group={g} checks={checks} expanded={expanded} onToggle={toggle} onResourceClick={onResourceClick} onHideCheck={onHideCheck} onHideCategory={onHideCategory} />
+                    ))}
                   </div>
-                </div>
+                </Collapse>
               </div>
             )
           })}
@@ -441,13 +441,14 @@ function ResourceGroupRow({ group: g, checks, expanded, onToggle, onResourceClic
   const key = `${g.kind}/${g.namespace}/${g.name}`
   const isExpanded = expanded.has(key)
   const hasHigh = g.danger > 0
+  const { panelId, buttonProps } = useDisclosure(isExpanded)
 
   return (
     <div>
       <div
+        {...buttonProps}
         role="button"
         tabIndex={0}
-        aria-expanded={isExpanded}
         onClick={() => onToggle(key)}
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return
@@ -455,7 +456,7 @@ function ResourceGroupRow({ group: g, checks, expanded, onToggle, onResourceClic
         }}
         className="group flex items-center gap-3 w-full px-4 py-2.5 rounded-lg hover:bg-theme-hover/50 transition-colors text-left cursor-pointer focus-visible:ring-2 focus-visible:ring-theme-text-primary/20 focus-visible:outline-none"
       >
-        <ChevronRight className={clsx('w-3.5 h-3.5 text-theme-text-tertiary shrink-0 transition-transform duration-200', isExpanded && 'rotate-90')} />
+        <CollapseChevron open={isExpanded} className="w-3.5 h-3.5" />
         {hasHigh ? (
           <ShieldAlert className={clsx('w-4 h-4 shrink-0', SEVERITY_TEXT_CLASS.high)} />
         ) : (
@@ -485,18 +486,13 @@ function ResourceGroupRow({ group: g, checks, expanded, onToggle, onResourceClic
           <ContextMenu items={[{ label: `Hide ${g.namespace} namespace`, onClick: () => onHideNamespace(g.namespace) }]} />
         )}
       </div>
-      <div
-        className="grid transition-[grid-template-rows] duration-200 ease-out"
-        style={{ gridTemplateRows: isExpanded ? '1fr' : '0fr' }}
-      >
-        <div className="overflow-hidden">
-          <div className="pl-11 pb-1">
-            {g.findings.map((f, i) => (
-              <FindingDetail key={`${f.checkID}-${i}`} finding={f} meta={checks?.[f.checkID]} onHideCheck={onHideCheck} onHideCategory={onHideCategory} />
-            ))}
-          </div>
+      <Collapse open={isExpanded} id={panelId}>
+        <div className="pl-11 pb-1">
+          {g.findings.map((f, i) => (
+            <FindingDetail key={`${f.checkID}-${i}`} finding={f} meta={checks?.[f.checkID]} onHideCheck={onHideCheck} onHideCategory={onHideCategory} />
+          ))}
         </div>
-      </div>
+      </Collapse>
     </div>
   )
 }

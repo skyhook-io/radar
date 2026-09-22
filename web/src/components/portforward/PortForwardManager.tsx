@@ -33,6 +33,7 @@ import { openExternal } from '../../utils/navigation'
 import { apiUrl } from '../../api/config'
 import { apiFetch, useCapabilities } from '../../api/client'
 import { pluralize } from '@skyhook-io/k8s-ui'
+import { Collapse } from '@skyhook-io/k8s-ui/components/ui/Collapse'
 
 // --- Types -------------------------------------------------------------------
 
@@ -661,17 +662,10 @@ export function PortForwardPanel() {
           keeping border and rounded corners correct at every intermediate height. */}
       <div className="overflow-hidden rounded-xl bg-theme-surface dark:bg-theme-elevated border-2 border-skyhook-500/35 dark:border-skyhook-400/40 shadow-2xl dark:shadow-[0_24px_60px_-12px_rgba(0,0,0,0.75),0_10px_24px_-6px_rgba(0,0,0,0.45)]">
 
-        {/* Grid sizer — the height engine. grid-template-rows 0fr→1fr animates
-            height from 0 to auto. Content clips from the bottom up, creating a
-            natural top-to-bottom reveal (header appears first, sessions follow). */}
-        <div
-          className={clsx(
-            'grid transition-[grid-template-rows] duration-300',
-            isPanelOpen ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
-          )}
-          style={{ transitionTimingFunction: 'cubic-bezier(0.16, 1, 0.3, 1)' }}
-        >
-          <div className="overflow-hidden">
+        {/* Height engine — Collapse animates grid-template-rows 0fr→1fr so the
+            shell grows from 0 to auto. Content clips from the bottom up, creating
+            a natural top-to-bottom reveal (header appears first, sessions follow). */}
+        <Collapse open={isPanelOpen}>
 
       {/* Header — tinted green when all sessions running, red when any have failed. */}
       <div
@@ -927,8 +921,7 @@ export function PortForwardPanel() {
         )}
       </div>
 
-          </div>{/* /overflow-hidden */}
-        </div>{/* /grid-sizer */}
+        </Collapse>
       </div>{/* /panel-shell */}
 
       {/* Caret — rendered after the shell so it paints on top (z-10). Opaque fill

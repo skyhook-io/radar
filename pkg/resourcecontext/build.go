@@ -29,7 +29,8 @@ import (
 // in internal/* pre-compute IssueSummary / AuditSummary / PolicyReports and
 // pass them in, so we don't reach into internal/issues or internal/audit.
 type Options struct {
-	Tier ContextTier
+	Reflections ReflectionLookup
+	Tier        ContextTier
 
 	// AccessChecker gates every emitted ContextRef. nil = no gating (treat
 	// as fully authorized — local-kubeconfig / tests).
@@ -62,6 +63,8 @@ type Options struct {
 	IssueSummary  *IssueSummary
 	AuditSummary  *AuditSummary
 	Scheduling    *SchedulingSummary
+	Execution     *ExecutionSummary
+	Serving       *ServingSummary
 	PolicyReports PolicyReportLookup // nil = Kyverno not installed / no findings
 	AppReferences *AppReferences
 	// Attached only after the evidence Job and Pod pass the access gate.
@@ -297,6 +300,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	if svc, ok := obj.(*corev1.Service); ok {
 		rc.ServiceSummary = buildServiceSummary(ctx, svc, opts.ServiceBackends, opts.AccessChecker, omitted)
 	}
+	rc.Reflection = buildReflection(ctx, obj, opts.Reflections, opts.AccessChecker, omitted)
 	rc.ReferencedBy = buildReferencedBy(ctx, obj, opts.Provider, opts.AccessChecker, omitted)
 	if uses := buildUsesFromWorkload(ctx, obj, opts.AccessChecker, omitted); uses != nil {
 		rc.Uses = uses
@@ -317,6 +321,8 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	rc.HPASummary = buildHPASummary(obj)
 	rc.StatusSummary = buildStatusSummary(obj)
 	rc.Scheduling = filterSchedulingSummary(ctx, opts.Scheduling, opts.AccessChecker, omitted)
+	rc.Execution = opts.Execution
+	rc.Serving = opts.Serving
 
 	// 4. Pre-computed summaries — pass-through.
 	rc.IssueSummary = opts.IssueSummary
@@ -1209,16 +1215,16 @@ func buildScaledBy(ctx context.Context, scalers []topology.ResourceRef, provider
 		return nil
 	}
 	out := make([]ScalerRef, 0, len(refs))
-	var hpas []*autoscalingv2.HorizontalPodAutoscaler
+	var hpas map[string]*autoscalingv2.HorizontalPodAutoscaler
 	hpasLoaded := false
 	for _, ref := range refs {
 		entry := ScalerRef{ContextRef: ref}
 		if isHPARef(ref) && provider != nil {
 			if !hpasLoaded {
-				hpas, _ = provider.HorizontalPodAutoscalers()
+				hpas = indexHPAs(provider)
 				hpasLoaded = true
 			}
-			if hpa := findHPA(hpas, ref.Namespace, ref.Name); hpa != nil {
+			if hpa := hpas[hpaKey(ref.Namespace, ref.Name)]; hpa != nil {
 				entry.HPASummary = buildHPASummary(hpa)
 				entry.ManagedBy = kedaScaledObjectRef(ctx, hpa, ac, omitted)
 			}
@@ -1259,13 +1265,29 @@ func kedaScaledObjectRef(ctx context.Context, hpa *autoscalingv2.HorizontalPodAu
 	return ref
 }
 
-func findHPA(hpas []*autoscalingv2.HorizontalPodAutoscaler, namespace, name string) *autoscalingv2.HorizontalPodAutoscaler {
-	for _, hpa := range hpas {
-		if hpa != nil && hpa.Namespace == namespace && hpa.Name == name {
-			return hpa
+// indexHPAs keys the provider's HPAs so each scaler ref is one map lookup.
+// A workload can name several scalers and the cluster can hold thousands of
+// HPAs, so scanning the list per ref makes a context build quadratic in the
+// worst case. The list itself is the provider's only read API.
+func indexHPAs(provider topology.ResourceProvider) map[string]*autoscalingv2.HorizontalPodAutoscaler {
+	list, _ := provider.HorizontalPodAutoscalers()
+	byKey := make(map[string]*autoscalingv2.HorizontalPodAutoscaler, len(list))
+	for _, hpa := range list {
+		if hpa == nil {
+			continue
+		}
+		// Two HPAs cannot share a namespace and name, so a repeat key is a
+		// provider artefact; the first entry is the one to keep.
+		key := hpaKey(hpa.Namespace, hpa.Name)
+		if _, seen := byKey[key]; !seen {
+			byKey[key] = hpa
 		}
 	}
-	return nil
+	return byKey
+}
+
+func hpaKey(namespace, name string) string {
+	return namespace + "\x00" + name
 }
 
 func buildHPASummary(obj runtime.Object) *HPASummary {
@@ -1374,6 +1396,7 @@ func buildStatusSummary(obj runtime.Object) *StatusSummary {
 	}
 	if conditions, ok, _ := unstructured.NestedSlice(status, "conditions"); ok {
 		if len(conditions) > maxSummaryItems {
+			out.ConditionsTruncated = true
 			conditions = conditions[:maxSummaryItems]
 		}
 		for _, item := range conditions {
@@ -1397,7 +1420,7 @@ func buildStatusSummary(obj runtime.Object) *StatusSummary {
 			out.Conditions = append(out.Conditions, summary)
 		}
 	}
-	if out.Phase == "" && len(out.Conditions) == 0 {
+	if out.Phase == "" && len(out.Conditions) == 0 && !out.ConditionsTruncated {
 		return nil
 	}
 	return out

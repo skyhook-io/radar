@@ -9,9 +9,10 @@ interface Props {
   data: any
   onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
   apiBase?: string
+  canConnect?: boolean
 }
 
-export function CAPIClusterRenderer({ data, onNavigate, apiBase = '' }: Props) {
+export function CAPIClusterRenderer({ data, onNavigate, apiBase = '', canConnect = true }: Props) {
   const status = data.status || {}
   const spec = data.spec || {}
   const conditions = status.v1beta2?.conditions || status.conditions || []
@@ -125,7 +126,7 @@ export function CAPIClusterRenderer({ data, onNavigate, apiBase = '' }: Props) {
 
       {/* Kubeconfig Actions */}
       <div className="px-3 py-2 flex items-center gap-2">
-        <button
+        {canConnect && <button
           onClick={handleConnectToCluster}
           disabled={connectState === 'loading' || connectState === 'success'}
           className="btn-brand flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-md"
@@ -135,7 +136,7 @@ export function CAPIClusterRenderer({ data, onNavigate, apiBase = '' }: Props) {
           {connectState === 'error' && <AlertCircle className="w-3.5 h-3.5" />}
           {connectState === 'idle' && <Globe className="w-3.5 h-3.5" />}
           {connectState === 'loading' ? 'Connecting...' : connectState === 'success' ? 'Connected — reloading...' : 'Connect to Cluster'}
-        </button>
+        </button>}
         <button
           onClick={handleDownloadKubeconfig}
           disabled={downloadState === 'loading'}

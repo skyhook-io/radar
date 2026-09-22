@@ -31,10 +31,11 @@ Not everything is in this file. The following files contain critical details tha
 | Working on **resource renderers** | `packages/k8s-ui/src/components/resources/renderers/` — all existing renderers live here |
 | Understanding **cluster connection behavior** | [docs/configuration.md](docs/configuration.md) — kubeconfig precedence, multi-context, in-cluster |
 | Working on **MCP tools or AI context** | [docs/mcp.md](docs/mcp.md) + `internal/mcp/tools.go` — tool definitions and design rationale |
+| Working on the **investigation verdict, story or Findings pane** | [docs/mcp.md](docs/mcp.md#the-story-contract) — the verdict JSON, `[[radar:evidence=N]]` placement grammar, run-scoped citation, and the assessment-turn rule. The contract lives in `pkg/investigation` (shared with Radar Hub): prompt suite `prompt.go` (`SystemPrompt`, `TaskPrompt`, `verdictContract`, `storyGuidance`), verdict types and caps `verdict.go`, parser `parse.go`, binder `bind.go`; OSS orchestration and ref eligibility stay in `internal/ai/runs.go`; frontend tokenizer `web/src/components/diagnose/investigationStory.ts`, story `AnalysisStory.tsx`, turn rule `investigationState.ts` (`investigationIsAssessmentTurn`) |
 | Writing or modifying **frontend UI / styling** | [DESIGN.md](DESIGN.md) — theme tokens, do's/don'ts, component patterns |
 | Touching anything library consumers import | `web/package.json` + `web/src/index.ts` — `web/` IS the `@skyhook-io/radar-app` npm package. Public surface: `RadarApp`, runtime-config setters (`setApiBase` etc.), `NavCustomization`. Breaking it breaks all downstream consumers. |
 | Adding or changing **api/fetch call sites** | `web/src/api/config.ts` — all fetches go through `getApiBase()`, `apiUrl()`, `getWsUrl()`, `getAuthHeaders()`, `getCredentialsMode()`. New fetch sites must use these helpers so library consumers (Radar Hub) can override per-cluster. |
-| Embedding Radar inside another app | `web/src/RadarApp.tsx` + `web/src/context/NavCustomization.tsx` — `apiBase`, `basename`, `router`, `navSlots` props. Changes to this API surface are breaking. |
+| Embedding Radar inside another app | `web/src/RadarApp.tsx` + `web/src/context/NavCustomization.tsx` — `apiBase`, `basename`, `router`, `navSlots` props. Check Radar Hub call sites when changing this interface. |
 
 ## Library distribution
 
@@ -45,11 +46,11 @@ Publish with tag `radar-app-v<semver>` — see `.github/workflows/publish-radar-
 Consumers get:
 - `<RadarApp apiBase basename router navSlots queryClient />` — the whole app as one component
 - Runtime config setters for cross-cutting behavior (`setApiBase`, `setBasename`, `setAuthHeadersProvider`, `setCredentialsMode`) for non-React code paths
-- `NavCustomization` type for nav slot injection
+- `NavCustomization` type for embedded layout and Hub navigation hooks
 
 Known consumers: Radar Hub (`skyhook-dev/radar-hub-web`).
 
-**Backwards-compat rule:** adding props is fine; removing or renaming `apiBase` / `basename` / `navSlots` fields is breaking. Bump major version.
+**Consumer scope:** Radar OSS and Radar Hub are the supported consumers. Coordinate interface changes with Hub; do not preserve unused modes or add migration machinery for hypothetical consumers. `navSlots.embedded` hides all Radar chrome; Hub owns its sidebar and top bar.
 
 ## Architecture
 
@@ -125,7 +126,7 @@ Use `/visual-test` command for the full workflow (cluster check, Playwright MCP,
 
 ### Demo clusters (scripted test fixtures)
 
-Ten scripted `kind` clusters under `scripts/*-demo.sh` reproduce the states each integration needs — states that are hard or impossible to conjure by hand (frozen controllers holding all phases at once, configurations that fail in ways that look like success, connection lanes toggled on demand).
+Scripted `kind` clusters under `scripts/*-demo.sh` reproduce the states each integration needs — states that are hard or impossible to conjure by hand (frozen controllers holding all phases at once, configurations that fail in ways that look like success, connection lanes toggled on demand).
 
 **Before using one, read its `scripts/<name>-demo/README.md` — this is not optional.** Each README is the only complete account of what the scenarios cover, which modes are NOT interchangeable, and why the cluster is shaped the way it is; the shape encodes hard-won constraints that look like bugs if you don't know them. Don't improvise against the fixtures or "fix" what looks broken before reading it.
 
@@ -144,6 +145,9 @@ After `make <name>-demo`, run `kubectl config use-context kind-radar-<name>-demo
 | Crossplane | `make crossplane-demo` | Crossplane renderers and spec-shape dispatch |
 | Rollouts | `make rollouts-demo` | Argo Rollouts progression. `-roll` advances a rollout |
 | GPU ecosystem | `make gpu-ecosystem-demo` | All 37 curated GPU, batch, distributed-training, and inference resource identities. `install-radar` verifies default chart RBAC and group-aware discovery |
+| Kueue admission | `make kueue-demo` | Real Kueue reconciliation: admitted/running, quota-blocked with no Pod, and held-queue with no Pod |
+| JobSet | `make jobset-demo` | Real JobSet reconciliation: role/index Job-to-Pod lineage, dependency gating, and explicit terminal failure |
+| KubeRay | `make kuberay-demo` | Real RayService reconciliation: healthy active Serve revision plus an intentionally failed pending NewCluster revision |
 
 `scripts/rbac-demo.sh` is the odd one out: it seeds RBAC scenarios into the *current* context (no cluster of its own).
 
@@ -166,7 +170,7 @@ After `make <name>-demo`, run `kubectl config use-context kind-radar-<name>-demo
 - GitOps controller actions: `/api/argo/applications/...` (sync, refresh, terminate, suspend, resume, rollback, selective-sync), `/api/flux/{kind}/...` (reconcile, suspend, resume, sync-with-source)
 - Argo CD API integration: `PUT /api/integrations/argocd` (URL/token, probe-before-persist, token preserved across GET-redaction round-trips); `/api/argo/applications/{ns}/{name}/resource-diff` (Git-rendered desired vs live via argocd-server managed-resources; dual RBAC gate + structural Secret redaction; see docs/gitops.md)
 - GitOps detail data: `/api/gitops/tree/{kind}/{ns}/{name}` (resource tree + ownership edges), `/api/gitops/insights/{kind}/{ns}/{name}` (curated diagnosis: summary + issues + drift + events + plan + history + capabilities)
-- Nodes: `/api/nodes/{name}/...` (cordon, uncordon, drain, debug)
+- Nodes: `/api/nodes/{name}/...` (cordon, uncordon, drain, drain-plan (read-only estimate: per-pod evict/skip/may-block with reasons), debug)
 - Audit: `/api/audit`, `/api/audit/resource/{kind}/{ns}/{name}`, `/api/settings/audit` (GET/PUT)
 - Network trace: `/api/trace/{kind}/{ns}/{name}` (path-shaped diagnosis for Service/Ingress/HTTPRoute/GRPCRoute/Gateway; `?probe=true` runs DNS/TCP/TLS/HTTP probes against the declared path - direct TCP in-cluster, K8s API server proxy from a laptop, gated by the user's `services/proxy` + `pods/proxy` RBAC).
 - Capacity (Karpenter): `/api/capacity` (overview), `/api/capacity/pools` (+ `/{name}`, `/{name}/members`), `/api/capacity/demand` (`?state=`, `?pool=`, `?owner=ns/Kind/name`, `?pod=ns/name`), `/api/capacity/activity` — all read-only, all gated on the caller's ability to list NodePools; deliberately cluster-wide (no namespace view-filter forwarding). See [docs/capacity.md](docs/capacity.md)
@@ -217,6 +221,7 @@ WebSocket pod exec: `internal/server/exec.go` — xterm.js terminal, container/s
   - **Nested navigation**: `classifyGitOpsKind` tags nodes with `data.gitopsTool` + `data.gitopsKind`. Portal nodes route to child detail pages; lineage breadcrumb (`?from=kind|ns|name`) enables back navigation.
   - **Severity vocabulary**: `critical` (0, red) → `alert` (1, orange) → `warning` (2, amber) → `info` (3, blue). Adding a new severity requires updating both Go `severityRank` and TS union in `gitops-insights.ts`.
   - **Single-cluster limitation**: Application↔resource edges only render when controller + workloads are in same cluster (ArgoCD hub-spoke deployments won't show connections).
+  - **Per-resource health**: read a tree node's resolved `health` + `healthSource` (`controller` | `radar`), never `status.resources[].health` directly — Argo CD 3 doesn't persist it, and `overlayRadarHealth` (`internal/server/gitops_handlers.go`) fills the gap from the issues engine. See [docs/gitops.md](docs/gitops.md#per-resource-health)
   - **Per-resource drift**: computed from `kubectl.kubernetes.io/last-applied-configuration` annotation. SSA/Helm-installed resources lack this; SSA fallback tracked in [#601](https://github.com/skyhook-io/radar/issues/601).
 
 ### Timeline + resource relationships
@@ -237,7 +242,7 @@ Pod **Permissions** is the differentiator — frames the SA's grant as blast rad
 
 ### MCP Server
 
-Stateless HTTP at `/mcp` (JSON-RPC). Read tools use `readOnlyHint`, write tools use `destructiveHint: true`. Respects cluster RBAC (impersonates via `DynamicClientFromContext` for write/exec/logs). Enabled by default; `--no-mcp` to disable. Tool catalogue + design rationale lives in `internal/mcp/tools.go` + [docs/mcp.md](docs/mcp.md) — don't restate it here. **When adding/removing a tool in `registerTools`, also update the user-facing setup dialog catalog `web/src/components/home/mcpToolCatalog.ts`** — `TestSetupDialogCoversAllTools` fails CI if the two diverge. A **write** tool additionally needs adding to both write-tool lists in `internal/mcp/tools_catalog_test.go` (`writeTools` in `TestRegisteredToolAnnotations` and `writeToolNames`) — the second is what keeps it out of the read-only mount. New tools also consume the `maxCatalogBytes` description budget; raise it deliberately rather than gutting routing guidance.
+Stateless HTTP at `/mcp` (JSON-RPC). Read tools use `readOnlyHint`, write tools use `destructiveHint: true`. Respects cluster RBAC (impersonates via `DynamicClientFromContext` for write/exec/logs). Enabled by default; `--no-mcp` to disable. Tool catalogue + design rationale lives in `internal/mcp/tools.go` + [docs/mcp.md](docs/mcp.md) — don't restate it here. **When adding/removing a tool in `registerTools`, also update the user-facing setup dialog catalog `web/src/components/home/mcpToolCatalog.ts`** — `TestSetupDialogCoversAllTools` fails CI if the two diverge. A **read** tool additionally needs adding to `radarReadTools` in `internal/ai/diagnoser.go` — the allowlist Radar's own Diagnose agent calls through; a tool missing there reaches every external client but not the product's own agent (`TestDiagnoserAllowlistCoversAllReadTools` fails CI). A **write** tool instead needs adding to both write-tool lists in `internal/mcp/tools_catalog_test.go` (`writeTools` in `TestRegisteredToolAnnotations` and `writeToolNames`) — the second is what keeps it out of the read-only mount, and `radarWriteTools` gates it to confirmed apply turns. New tools also consume the `maxCatalogBytes` description budget; raise it deliberately rather than gutting routing guidance.
 
 ### Error Handling (Backend)
 
@@ -246,6 +251,7 @@ Handlers emit `{"error": "..."}` via `s.writeError(w, status, msg)`. Status conv
 - **403** RBAC denied (nil lister or apiserver Forbidden)
 - **404** resource doesn't exist — check via `apierrors.IsNotFound(err)`
 - **409** operation already in progress (sync running, etc.)
+- **413** request body over the route's cap — the body is bounded *before* it is read (`readBoundedTextBody` for raw YAML, `decodeBoundedJSONBody` for JSON), so nothing has parsed it yet and 400 would wrongly blame the content. Reserve 400 for input that was read and found invalid — including caps counted after parsing, like the YAML document limit
 - **503** cache/connection not ready — most cluster-touching handlers call `s.requireConnected(w)` at the top
 - **500** unexpected — always `log.Printf("[module] Failed to <action> %s/%s: %v", ns, name, err)` before returning
 
@@ -273,6 +279,7 @@ Centralized `@layer components` classes in `theme/components.css` (Tailwind util
 - Buttons: `.btn-brand` — not hand-rolled `bg-blue-*`
 - Badges: `<Badge severity="...">` or `<Badge kind="...">` — never hand-write color strings
 - Shadows: `shadow-theme-sm/md/lg` — not raw Tailwind shadows
+- Motion: `<Collapse>` / `<CollapseChevron>` / `useDisclosure` for anything that expands in place; `useAnimatedUnmount(open, overlayExitMs(kind))` + `overlayTransitionStyle` for menus, dialogs, sheets. All timing comes from `packages/k8s-ui/src/utils/animation.ts` — never an inline duration or curve, never `open && (...)` for a disclosure, no native `<details>`. See DESIGN.md §7 Motion.
 
 ### Printer columns (uncurated CRDs)
 

@@ -27,6 +27,12 @@ import argoCdLogo from "../../assets/gitops/argocd.png";
 import fluxLogo from "../../assets/gitops/flux.svg";
 import { StatusDot, mapHealthToTone } from "../ui/status-tone";
 import { Tooltip } from "../ui/Tooltip";
+import { useAnimatedUnmount } from "../../hooks/useAnimatedUnmount";
+import {
+  TRANSITION_MENU,
+  overlayExitMs,
+  overlayTransitionStyle,
+} from "../../utils/animation";
 import { EmptyState } from "../ui/EmptyState";
 import { ResourceRefBadge } from "../ui/drawer-components";
 import { TopologyGraph } from "../topology/TopologyGraph";
@@ -2884,6 +2890,10 @@ function ApplicationScopeSelector({
   onFocus: (owner: WorkloadFocus) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const { shouldRender, isOpen } = useAnimatedUnmount(
+    open,
+    overlayExitMs("menu"),
+  );
   const [query, setQuery] = useState("");
   const rootRef = useDismissablePopover<HTMLDivElement>(open, setOpen);
   const selectedKey = selectedWorkload ? workloadKey(selectedWorkload) : null;
@@ -2944,10 +2954,19 @@ function ApplicationScopeSelector({
           aria-hidden
         />
       </button>
-      {open && (
+      {shouldRender && (
         <div
           role="listbox"
-          className="absolute left-0 top-full z-50 mt-1 w-[min(32rem,calc(100vw-2rem))] overflow-hidden rounded-md border border-theme-border bg-theme-surface shadow-theme-md"
+          inert={!open}
+          className={clsx(
+            "absolute left-0 top-full z-50 mt-1 w-[min(32rem,calc(100vw-2rem))] origin-top-left overflow-hidden rounded-md border border-theme-border bg-theme-surface shadow-theme-md",
+            TRANSITION_MENU,
+            isOpen
+              ? "opacity-100 translate-y-0 scale-100"
+              : "opacity-0 -translate-y-1 scale-[0.97]",
+            !open && "pointer-events-none",
+          )}
+          style={overlayTransitionStyle(isOpen, "menu")}
           onMouseLeave={() => onFocus(null)}
         >
           <div className="border-b border-theme-border p-1">
@@ -3371,6 +3390,10 @@ function EnvSwitcher({
   onSwitch?: (appKey: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const { shouldRender, isOpen } = useAnimatedUnmount(
+    open,
+    overlayExitMs("menu"),
+  );
   const rootRef = useDismissablePopover<HTMLDivElement>(open, setOpen);
 
   const envInstances = useMemo(
@@ -3475,10 +3498,19 @@ function EnvSwitcher({
       </button>
       {evidenceChip}
       {lagChip}
-      {open && (
+      {shouldRender && (
         <div
           role="listbox"
-          className="absolute left-0 top-full z-50 mt-1 max-h-80 w-80 overflow-y-auto rounded-md border border-theme-border bg-theme-surface p-1 shadow-theme-md"
+          inert={!open}
+          className={clsx(
+            "absolute left-0 top-full z-50 mt-1 max-h-80 w-80 origin-top-left overflow-y-auto rounded-md border border-theme-border bg-theme-surface p-1 shadow-theme-md",
+            TRANSITION_MENU,
+            isOpen
+              ? "opacity-100 translate-y-0 scale-100"
+              : "opacity-0 -translate-y-1 scale-[0.97]",
+            !open && "pointer-events-none",
+          )}
+          style={overlayTransitionStyle(isOpen, "menu")}
         >
           {instances.map((inst) => {
             const isActive = inst.appKey === activeKey;

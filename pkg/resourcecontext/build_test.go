@@ -1119,6 +1119,49 @@ func TestBuild_Unstructured_StatusSummary(t *testing.T) {
 	}
 }
 
+func TestBuild_StatusConditionsTruncation(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		count         int
+		invalidPrefix bool
+		wantCount     int
+		truncated     bool
+	}{
+		{"below cap", 11, false, 11, false},
+		{"at cap", 12, false, 12, false},
+		{"over cap", 13, false, 12, true},
+		{"cap precedes filtering", 13, true, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conditions := make([]any, tc.count)
+			for i := range conditions {
+				conditions[i] = map[string]any{"type": "Ready", "status": "True", "observedGeneration": int64(i + 1)}
+				if tc.invalidPrefix && i < 12 {
+					conditions[i] = map[string]any{}
+				}
+			}
+			obj := &unstructured.Unstructured{Object: map[string]any{"status": map[string]any{"conditions": conditions}}}
+			rc := Build(context.Background(), obj, Options{Tier: TierBasic})
+			got := rc.StatusSummary
+			if got == nil || len(got.Conditions) != tc.wantCount || got.ConditionsTruncated != tc.truncated {
+				t.Fatalf("summary = %+v", got)
+			}
+			for i, condition := range got.Conditions {
+				if condition.ObservedGeneration != int64(i+1) {
+					t.Fatal("source order changed")
+				}
+			}
+			wire, err := json.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(wire), `"conditionsTruncated"`) != tc.truncated {
+				t.Fatalf("truncation marker presence: %s", wire)
+			}
+		})
+	}
+}
+
 func TestBuild_ConfigMapReferencedBy(t *testing.T) {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: "app-config", Namespace: "prod"},
@@ -1868,5 +1911,25 @@ func TestBuild_Deployment_ScaledByKEDAManagedHPA_NamesTheScaledObject(t *testing
 	}
 	if rc.ScaledBy[0].HPASummary == nil {
 		t.Errorf("the HPA's own diagnosis still belongs on the ref: %+v", rc.ScaledBy[0])
+	}
+}
+
+func TestBuild_PassesThroughExecutionSummary(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "jobset.x-k8s.io/v1alpha2",
+		"kind":       "JobSet",
+		"metadata": map[string]any{
+			"name":      "train",
+			"namespace": "ml",
+		},
+	}}
+	execution := &ExecutionSummary{
+		Controller: "jobset",
+		Phase:      ExecutionPending,
+		JobSet:     &JobSetExecution{DeclaredRoles: 2, DeclaredJobs: 5},
+	}
+	rc := Build(context.Background(), obj, Options{Tier: TierBasic, Execution: execution})
+	if rc.Execution != execution {
+		t.Fatalf("execution = %+v, want pass-through %+v", rc.Execution, execution)
 	}
 }

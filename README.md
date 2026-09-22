@@ -175,7 +175,7 @@ The table below covers common startup flags. See the [full CLI reference](https:
 | `--namespaces` | (all) | Initial namespace filters as a comma-separated list, e.g. `--namespaces ns1,ns2,ns3`. Use this when your identity can list resources in specific namespaces but cannot list namespaces cluster-wide. |
 | `--namespace-scope` | `false` | Pin namespaced informer caches to a **single** namespace for large clusters (scoping to multiple namespaces is not supported yet). Requires `--namespace`, a kubeconfig context namespace, or a saved local single-namespace pick. Local mode can rebuild the cache when switching namespaces; auth/cloud mode locks the shared cache to the startup namespace. |
 | `--port` | `9280` | Server port |
-| `--listen-address` | `127.0.0.1` | HTTP listen address. Use `127.0.0.1` or `localhost` for local-only access; use `0.0.0.0` explicitly for containers, VMs, WSL, or remote/shared access, together with authentication and network controls. |
+| `--listen-address` | `127.0.0.1` | HTTP listen IP address (IPv4 or IPv6), or `localhost`. Bind a specific local IP or use `0.0.0.0` for all interfaces. Non-loopback access needs authentication and network controls. |
 | `--base-path` | | Serve Radar under a URL prefix such as `/radar`. Use when an ingress forwards a subpath without stripping it — everything, including `/api/health`, moves under the prefix. Not supported with `--cloud-url`. |
 | `--no-browser` | `false` | Don't auto-open browser |
 | `--browser` | | Browser to use when opening the UI, e.g. `firefox`, `google-chrome`, or `Google Chrome` on macOS |
@@ -193,8 +193,11 @@ The table below covers common startup flags. See the [full CLI reference](https:
 | `--namespace-list-timeout` | `5s` | Timeout for the cluster-wide namespace LIST used to decide if the user is RBAC-namespace-restricted. A timeout on a slow control plane is misreported in the UI as "Limited list — RBAC". Env: `RADAR_NAMESPACE_LIST_TIMEOUT`. |
 | `--max-scope-candidates` | `20` | Cap on the namespace-fallback probe fanout (used by accounts that can list namespaces cluster-wide but not list a specific kind cluster-wide). Raise above `20` for clusters with more than 20 namespaces. Env: `RADAR_MAX_SCOPE_CANDIDATES`. |
 | `--prometheus-url` | (auto-discover) | Manual PromQL-compatible query URL, including Prometheus, VictoriaMetrics, Thanos, or Mimir (skips auto-discovery) |
+| `--prometheus-single-cluster` | `false` | Optional workload-metrics scope override: assert that the backend contains only this cluster. Replaces automatic identity matching; does not scope rightsizing or other metrics features. [Scope and lifetime](docs/workload-metrics.md#optional-operator-override). |
+| `--prometheus-cluster-label` | (automatic matching) | Optional workload-metrics override for a shared backend, e.g. `cluster=production` (repeatable, ANDed). Alternative to `--prometheus-single-cluster`; leave both unset for automatic matching. Not persisted. |
 | `--prometheus-header` | | HTTP header sent with every Prometheus request, format `Key=Value` (repeatable). Required for auth-protected backends. |
 | `--prometheus-header-from-env` | | HTTP header sent with every Prometheus request, sourced from an environment variable, format `Key=ENV_VAR` (repeatable). |
+| `--beyla-job-selector` | (empty) | Beyla Live Traffic matcher fragment (empty matches Beyla/Alloy jobs there). Workload charts use it only with an explicit scope override and accept one `job` equality or regex matcher. Automatic workload matching discovers custom jobs without it. [Details](docs/workload-metrics.md#request-sources). |
 | `--opencost-currency` | (auto-detect, then USD) | Override the ISO 4217 currency label for OpenCost values. Radar labels values but does not convert them. |
 | `--auth-mode` | `none` | Authentication mode: `none`, `proxy`, or `oidc` ([details](docs/authentication.md)) |
 | `--no-mcp` | `false` | Disable MCP server for AI tool integration |
@@ -382,6 +385,20 @@ Visualize live network traffic between services using Hubble, Caretta, Istio, or
 - Filter by namespace, protocol, or status code
 - Setup wizard to install a traffic source if none is detected
 
+### Workload Metrics
+
+Open a Deployment, StatefulSet or DaemonSet's **Metrics** tab to investigate
+request rate, HTTP errors, latency, CPU, memory and throttling. Radar reads an
+existing Prometheus-compatible backend; resource charts do not require HTTP
+instrumentation, and request charts use supported Beyla or Istio observations.
+
+- Workload history includes previous replicas when metrics and ownership are retained
+- Compare current Pods to find resource outliers
+- Automatic discovery and identity checks, with missing or partial data labeled explicitly
+
+See [Workload metrics](docs/workload-metrics.md) for screenshots, prerequisites,
+supported configurations and local multi-cluster setup limitations.
+
 ### Capacity (Karpenter)
 
 Read-only diagnosis for Karpenter-managed fleets — why is my pod pending, which NodePool could take it, why aren't my nodes joining, what is disruption doing to my fleet? Appears automatically when Karpenter NodePools are detected (RBAC-gated).
@@ -505,6 +522,7 @@ Upgrade impact also gets list-only access to CSIStorageCapacities, FlowSchemas, 
 | **GitOps (ArgoCD)** | Application, ApplicationSet, AppProject |
 | **Argo Rollouts** | Rollout |
 | **Argo Workflows** | Workflow, WorkflowTemplate |
+| **[Reflector](docs/integrations.md#configmap-and-secret-reflection-reflector)** | ConfigMap/Secret reflection details, source and mirror relationships, recorded copy evidence |
 | **cert-manager** | Certificate, CertificateRequest, Order, Challenge, Issuer, ClusterIssuer |
 | **Gateway API** | Gateway, GatewayClass, HTTPRoute, GRPCRoute, TCPRoute, TLSRoute |
 | **Istio** | VirtualService, DestinationRule, Gateway, ServiceEntry, PeerAuthentication, AuthorizationPolicy |
@@ -519,6 +537,7 @@ Upgrade impact also gets list-only access to CSIStorageCapacities, FlowSchemas, 
 | **KEDA** | ScaledObject, ScaledJob, TriggerAuthentication, ClusterTriggerAuthentication |
 | **Prometheus Operator** | ServiceMonitor, PodMonitor, PrometheusRule, Alertmanager |
 | **Security (Trivy)** | VulnerabilityReport, ConfigAuditReport, ExposedSecretReport, ClusterComplianceReport, SbomReport, RbacAssessmentReport, InfraAssessmentReport |
+| **Strimzi** | [KafkaConnector failure evidence](docs/integrations.md#strimzi-kafka-connectors) (connector/task status) |
 | **Velero** | Backup, Restore, Schedule, BackupStorageLocation, VolumeSnapshotLocation |
 | **External Secrets** | ExternalSecret, ClusterExternalSecret, SecretStore, ClusterSecretStore |
 | **CloudNativePG** | Cluster, Backup, ScheduledBackup, Pooler |

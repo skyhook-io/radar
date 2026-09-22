@@ -15,6 +15,7 @@ function sq(s: string): string {
 
 export function launchAgentLabel(run: RunSummary): string {
   if (run.agent === "codex") return "Codex";
+  if (run.agent === "opencode") return "OpenCode";
   if (run.agent === "cursor-agent") return "Cursor";
   return "Claude Code";
 }
@@ -41,6 +42,9 @@ export function buildLaunchCommand(
   mcpUrl: string,
 ): string | null {
   if (!run.sessionId || run.status === "stale") return null;
+
+  // OpenCode terminal handoff needs a persistent MCP configuration outside the run workspace.
+  if (run.agent === "opencode") return null;
 
   if (run.agent === "cursor-agent") {
     // Cursor's --resume is workspace-scoped, and Radar runs each investigation in a

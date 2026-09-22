@@ -2,8 +2,11 @@ package ai
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 func TestClaudeExecutionProfiles(t *testing.T) {
@@ -24,6 +27,12 @@ func TestClaudeExecutionProfiles(t *testing.T) {
 	}
 	if safeguarded.Env == nil {
 		t.Error("safeguarded Claude must use a minimized environment")
+	}
+	if strings.Contains(safeguardedArgs, " go") || safeguarded.Stdin == nil {
+		t.Errorf("the prompt must reach Claude over stdin, not as an argument: %q", safeguardedArgs)
+	}
+	if body, _ := io.ReadAll(safeguarded.Stdin); string(body) != "go" {
+		t.Errorf("stdin carries %q, want the prompt", body)
 	}
 
 	fullLocal, cleanupFullLocal, err := a.command(context.Background(), turnSpec{
@@ -63,7 +72,7 @@ func TestClaudeSafeguardedApplyAllowsEveryRadarWriteTool(t *testing.T) {
 	}
 	defer cleanup()
 	args := strings.Join(cmd.Args, " ")
-	for _, tool := range radarWriteTools {
+	for _, tool := range investigation.WriteTools {
 		if !strings.Contains(args, "mcp__radar__"+tool) {
 			t.Errorf("safeguarded apply command missing write tool %q: %q", tool, args)
 		}

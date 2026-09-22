@@ -4,7 +4,6 @@ import {
   INVESTIGATION_HISTORY_MIN_WIDTH,
   MAXIMIZED_RUN_META_VISIBILITY_CLASS,
   canRerunInvestigation,
-  canCopyRunLink,
   investigationHistoryIsPersistent,
   investigationHeaderPresentation,
   openInvestigationEvidenceResource,
@@ -49,9 +48,9 @@ describe("canRerunInvestigation", () => {
 
   it("stays hidden while a turn is in flight", () => {
     // A start would be handed back the live run, so the button does nothing.
-    expect(
-      canRerunInvestigation("investigation", run("running"), false),
-    ).toBe(false);
+    expect(canRerunInvestigation("investigation", run("running"), false)).toBe(
+      false,
+    );
   });
 
   it("stays hidden on a stale run", () => {
@@ -63,9 +62,9 @@ describe("canRerunInvestigation", () => {
   });
 
   it("blocks fresh starts while a human turn stops, but allows a separate human run from an automatic one", () => {
-    expect(
-      canRerunInvestigation("investigation", run("stopping"), false),
-    ).toBe(false);
+    expect(canRerunInvestigation("investigation", run("stopping"), false)).toBe(
+      false,
+    );
     expect(
       canRerunInvestigation(
         "investigation",
@@ -90,9 +89,9 @@ describe("canRerunInvestigation", () => {
     expect(canRerunInvestigation("investigation", run("error"), false)).toBe(
       true,
     );
-    expect(
-      canRerunInvestigation("investigation", run("stopped"), false),
-    ).toBe(true);
+    expect(canRerunInvestigation("investigation", run("stopped"), false)).toBe(
+      true,
+    );
   });
 });
 
@@ -334,25 +333,6 @@ describe("canContinueInvestigation", () => {
         true,
       ),
     ).toBe(false);
-  });
-});
-
-describe("canCopyRunLink", () => {
-  it("does not expose collaboration UI for an OSS run", () => {
-    expect(canCopyRunLink(run("done"))).toBe(false);
-  });
-
-  it("exposes the copy action only for a canonical hosted URL", () => {
-    expect(
-      canCopyRunLink({
-        ...run("done"),
-        radarUrl: "/c/cluster-1?org=org-1&ai-run=r1",
-      }),
-    ).toBe(true);
-  });
-
-  it("treats an empty hosted URL as unavailable", () => {
-    expect(canCopyRunLink({ ...run("done"), radarUrl: "" })).toBe(false);
   });
 });
 

@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 // writeCursorShim writes a fake cursor-agent that mimics a Cursor release where
@@ -173,7 +175,7 @@ func TestCursorParseStreamPreservesUncappedProducerResultForValidation(t *testin
 	ref := testEvidenceRef('a', 'b')
 	payload := strings.Repeat("x", maxToolPayload+500)
 	marked, err := json.Marshal(
-		investigationEvidenceMarkerPrefix + ref + investigationEvidenceMarkerSuffix + payload,
+		investigation.RefMarker(ref) + payload,
 	)
 	if err != nil {
 		t.Fatal(err)

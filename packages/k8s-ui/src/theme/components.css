@@ -95,6 +95,11 @@
     border-style: solid;
     border-color: transparent;
     line-height: 1.25rem;
+    /* A badge sits in table cells the reader can drag narrower than the label.
+       Without a ceiling it keeps its intrinsic width and draws straight over
+       the next column, so two cells become unreadable instead of one. */
+    max-width: 100%;
+    overflow: hidden;
   }
 
   .badge-sm {
@@ -108,6 +113,17 @@
     border-style: solid;
     border-color: transparent;
     line-height: 1.25rem;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  /* The icon is the one part of a badge that must never be traded for text:
+     a 12px glyph squeezed to 5px reads as a rendering fault, and a severity
+     icon that shrinks is worse than one that is cropped away cleanly. Flex
+     would otherwise shrink it first, because it is the item with slack. */
+  .badge > svg,
+  .badge-sm > svg {
+    flex-shrink: 0;
   }
 
   /* ── INNER CARDS ── */
@@ -124,25 +140,6 @@
     border-radius: 0.625rem;
     border: 1px solid var(--border-subtle);
     padding: 0.75rem;
-  }
-
-  /* ── ISSUE ROW DETAILS ── */
-
-  .issue-details-motion {
-    display: grid;
-    grid-template-rows: 0fr;
-    overflow: hidden;
-    transition: grid-template-rows 200ms ease-out;
-  }
-
-  .issue-details-motion-open {
-    grid-template-rows: 1fr;
-  }
-
-  @starting-style {
-    .issue-details-motion-open {
-      grid-template-rows: 0fr;
-    }
   }
 
   /* ── SUBTLE BORDERS ── */

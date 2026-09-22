@@ -1,5 +1,12 @@
 export * from './resource-utils'
 export * from './resource-utils-hpa'
+export {
+  HPADiagnosisSummary,
+  hpaBadgeSeverity,
+  hpaReasonGroups,
+  isHPAReasonRedundant,
+} from './HPADiagnosisSummary'
+export type { HPADiagnosisSummaryProps, HPAReasonGroups } from './HPADiagnosisSummary'
 export * from './resource-utils-argo'
 export * from './resource-utils-certmanager'
 export * from './resource-utils-cnpg'

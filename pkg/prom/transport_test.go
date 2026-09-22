@@ -5,9 +5,129 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
+
+func TestSameOriginRedirectClientCanonicalOrigins(t *testing.T) {
+	for _, tc := range []struct {
+		from, to string
+		allowed  bool
+	}{
+		{"http://prom.example/start", "http://PROM.example:80/end", true},
+		{"http://prom.example:080/start", "http://prom.example/end", true},
+		{"https://prom.example:0443/start", "https://prom.example:443/end", true},
+		{"http://prom.example:09090/start", "http://prom.example:9090/end", true},
+		{"http://prom.example:65536/start", "http://prom.example:65536/end", false},
+		{"https://prom.example/start", "https://prom.example:443/end", true},
+		{"http://[::1]/start", "http://[::1]:80/end", true},
+		{"https://prom.example/start", "https://sub.prom.example/end", false},
+		{"http://prom.example/start", "https://prom.example/end", false},
+		{"https://prom.example/start", "http://prom.example/end", false},
+		{"http://prom.example/start", "http://prom.example:8080/end", false},
+	} {
+		t.Run(tc.to, func(t *testing.T) {
+			first, _ := http.NewRequest(http.MethodGet, tc.from, nil)
+			next, _ := http.NewRequest(http.MethodGet, tc.to, nil)
+			err := SameOriginRedirectClient(&http.Client{}).CheckRedirect(next, []*http.Request{first})
+			if (err == nil) != tc.allowed {
+				t.Fatalf("redirect %s → %s = %v, allowed = %t", tc.from, tc.to, err, tc.allowed)
+			}
+			if err != nil && !strings.Contains(err.Error(), "configure the final backend URL directly") {
+				t.Fatalf("redirect error is not actionable: %v", err)
+			}
+		})
+	}
+}
+
+func TestHTTPTransportRejectsCrossOriginRedirects(t *testing.T) {
+	for _, scenario := range []string{"default-client", "custom-policy", "policy-rewrites-url", "https-downgrade"} {
+		t.Run(scenario, func(t *testing.T) {
+			var received atomic.Int32
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				received.Add(1)
+				w.WriteHeader(http.StatusOK)
+			}))
+			t.Cleanup(target.Close)
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				destination := target.URL
+				if scenario == "policy-rewrites-url" {
+					destination = "/same-origin"
+				}
+				http.Redirect(w, r, destination, http.StatusFound)
+			})
+			var source *httptest.Server
+			if scenario == "https-downgrade" {
+				source = httptest.NewTLSServer(handler)
+			} else {
+				source = httptest.NewServer(handler)
+			}
+			t.Cleanup(source.Close)
+			client := source.Client()
+			if scenario == "custom-policy" || scenario == "policy-rewrites-url" {
+				client.CheckRedirect = func(r *http.Request, _ []*http.Request) error {
+					if scenario == "policy-rewrites-url" {
+						r.URL, _ = url.Parse(target.URL)
+					}
+					return nil
+				}
+			}
+			transport := NewHTTPTransport(source.URL, "", client)
+			transport.Headers = map[string]string{"Authorization": "Bearer secret", "X-Scope-OrgID": "tenant", "X-API-Key": "api-secret"}
+			_, err := transport.Do(context.Background(), http.MethodGet, "/api/v1/query", nil)
+			if err == nil || !strings.Contains(err.Error(), "cross-origin redirect refused") {
+				t.Fatalf("error = %v, want refused redirect", err)
+			}
+			if received.Load() != 0 {
+				t.Fatal("redirect target received a request")
+			}
+		})
+	}
+}
+
+func TestHTTPTransportSameOriginRedirectPolicy(t *testing.T) {
+	for _, scenario := range []string{"allow", "deny", "loop"} {
+		t.Run(scenario, func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				if r.URL.Path == "/start" || scenario == "loop" {
+					http.Redirect(w, r, "/end", http.StatusFound)
+					return
+				}
+				if r.Header.Get("X-API-Key") != "secret" {
+					t.Error("same-origin redirect lost its header")
+				}
+				_, _ = w.Write([]byte("ok"))
+			}))
+			t.Cleanup(server.Close)
+			client := server.Client()
+			denied := errors.New("caller policy")
+			if scenario == "deny" {
+				client.CheckRedirect = func(*http.Request, []*http.Request) error { return denied }
+			}
+			transport := NewHTTPTransport(server.URL, "", client)
+			transport.Headers = map[string]string{"X-API-Key": "secret"}
+			_, err := transport.Do(context.Background(), http.MethodGet, "/start", nil)
+			switch scenario {
+			case "allow":
+				if err != nil || requests.Load() != 2 || client.CheckRedirect != nil {
+					t.Fatalf("same-origin redirect failed or changed caller client: %v", err)
+				}
+			case "deny":
+				if !errors.Is(err, denied) || requests.Load() != 1 {
+					t.Fatalf("caller policy not honored: %v", err)
+				}
+			case "loop":
+				if err == nil || !strings.Contains(err.Error(), "stopped after 10 redirects") || requests.Load() != 10 {
+					t.Fatalf("redirect loop not bounded: %v (%d requests)", err, requests.Load())
+				}
+			}
+		})
+	}
+}
 
 func TestHTTPTransportRejectsOversizedResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

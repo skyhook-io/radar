@@ -28,6 +28,7 @@ export type {
 } from './api/timelineSource';
 export type {
   RenderDiagnoseAction,
+  RenderInvestigationRunActions,
   DiagnoseConsentCopy,
 } from './context/DiagnoseCustomization';
 

@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 // TestCodexParseStream_FormatPin locks the Codex `exec --json` JSONL schema we
@@ -82,7 +84,7 @@ func TestCodexParseStreamPreservesUncappedProducerResultForValidation(t *testing
 	ref := testEvidenceRef('a', 'b')
 	payload := strings.Repeat("x", maxToolPayload+500)
 	marked, err := json.Marshal(
-		investigationEvidenceMarkerPrefix + ref + investigationEvidenceMarkerSuffix + payload,
+		investigation.RefMarker(ref) + payload,
 	)
 	if err != nil {
 		t.Fatal(err)

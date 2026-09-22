@@ -7,6 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 // claudeAgent drives Claude Code. In safeguarded mode, --tools "" disables all
@@ -31,8 +34,11 @@ func (a *claudeAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(
 		return nil, nil, err
 	}
 
+	// The prompt goes over stdin, not as an argument: it carries the saved
+	// story and every claim on an explanation turn, none of which is bounded,
+	// and one argument is capped at 128 KiB on Linux.
 	args := []string{
-		"-p", s.prompt,
+		"-p",
 		"--mcp-config", cfgPath,
 	}
 	if s.profile == ExecutionProfileSafeguarded {
@@ -41,11 +47,11 @@ func (a *claudeAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(
 			"--tools", "", // disable all built-in tools — cluster access is MCP-only
 			"--allowedTools",
 		)
-		for _, t := range radarReadTools {
+		for _, t := range investigation.ReadOnlyTools {
 			args = append(args, "mcp__radar__"+t)
 		}
 		if s.apply {
-			for _, t := range radarWriteTools {
+			for _, t := range investigation.WriteTools {
 				args = append(args, "mcp__radar__"+t)
 			}
 		}
@@ -65,6 +71,7 @@ func (a *claudeAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(
 	}
 
 	cmd := exec.CommandContext(ctx, a.bin, args...)
+	cmd.Stdin = strings.NewReader(s.prompt)
 	if s.profile == ExecutionProfileSafeguarded {
 		cmd.Env = scrubbedEnv()
 	}

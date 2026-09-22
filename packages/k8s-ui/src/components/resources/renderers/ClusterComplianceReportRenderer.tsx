@@ -1,7 +1,8 @@
-import { useState, useMemo } from 'react'
-import { ShieldCheck, ChevronDown, ChevronRight, CheckCircle2, XCircle, Search } from 'lucide-react'
+import { useState, useMemo, useId } from 'react'
+import { ShieldCheck, CheckCircle2, XCircle, Search } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, AlertBanner } from '../../ui/drawer-components'
+import { Collapse, CollapseChevron, useDisclosure, disclosurePanelId } from '../../ui/Collapse'
 import { Input } from '../../ui/Input'
 import { formatAge } from '../resource-utils'
 import { SEVERITY_BADGE_COLORS, SEVERITY_ORDER } from './trivy-shared'
@@ -15,6 +16,10 @@ interface ClusterComplianceReportRendererProps {
 export function ClusterComplianceReportRenderer({ data }: ClusterComplianceReportRendererProps) {
   const [expandedSection, setExpandedSection] = useState(true)
   const [expandedControls, setExpandedControls] = useState<Set<string>>(new Set())
+  const sectionDisclosure = useDisclosure(expandedSection)
+  // Control rows are mapped inline, so they can't each call useDisclosure;
+  // one generated prefix plus the control id keeps aria-controls unique.
+  const controlPanelBase = useId()
   const [searchTerm, setSearchTerm] = useState('')
   const [showFailedOnly, setShowFailedOnly] = useState(false)
 
@@ -127,13 +132,14 @@ export function ClusterComplianceReportRenderer({ data }: ClusterComplianceRepor
       {sortedChecks.length > 0 && (
         <Section title="Controls">
           <button
+            {...sectionDisclosure.buttonProps}
             onClick={() => setExpandedSection(!expandedSection)}
             className="flex items-center gap-1 text-xs text-theme-text-secondary hover:text-theme-text-primary mb-2"
           >
-            {expandedSection ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+            <CollapseChevron open={expandedSection} className="w-3.5 h-3.5" />
             {sortedChecks.length} controls
           </button>
-          {expandedSection && (
+          <Collapse open={expandedSection} unmountOnExit id={sectionDisclosure.panelId}>
             <>
             {/* Search and filter */}
             <div className="flex items-center gap-2 mb-2">
@@ -174,10 +180,14 @@ export function ClusterComplianceReportRenderer({ data }: ClusterComplianceRepor
               {filteredChecks.map((check: any) => {
                 const hasFail = (check.totalFail || 0) > 0
                 const controlDef = controlMap.get(check.id)
-                const isExpanded = expandedControls.has(check.id)
+                // One predicate for header, caret and panel: a control with no
+                // definition has nothing to show, so it never reads as expanded.
+                const isExpanded = expandedControls.has(check.id) && !!controlDef
                 return (
                   <div key={check.id}>
                     <button
+                      aria-expanded={isExpanded}
+                      aria-controls={disclosurePanelId(controlPanelBase, check.id)}
                       onClick={() => toggleControl(check.id)}
                       className="w-full flex items-center gap-2 py-1.5 px-1 rounded hover:bg-theme-hover/50 text-left"
                     >
@@ -193,22 +203,18 @@ export function ClusterComplianceReportRenderer({ data }: ClusterComplianceRepor
                       <span className="text-[10px] text-theme-text-tertiary shrink-0">
                         {check.totalFail || 0}F / {check.totalPass || 0}P
                       </span>
-                      {isExpanded ? (
-                        <ChevronDown className="w-3 h-3 text-theme-text-tertiary shrink-0" />
-                      ) : (
-                        <ChevronRight className="w-3 h-3 text-theme-text-tertiary shrink-0" />
-                      )}
+                      <CollapseChevron open={isExpanded} className="w-3 h-3" />
                     </button>
-                    {isExpanded && controlDef && (
+                    <Collapse open={isExpanded} mountLazily id={disclosurePanelId(controlPanelBase, check.id)}>
                       <div className="ml-6 mr-1 mb-2 p-2.5 bg-theme-elevated/50 rounded border border-theme-border/50 space-y-2">
                         <div className="text-[10px] font-mono text-theme-text-tertiary">{check.id}</div>
-                        {controlDef.description && (
+                        {controlDef?.description && (
                           <div>
                             <div className="text-[10px] font-medium text-theme-text-tertiary uppercase tracking-wider mb-0.5">Description</div>
                             <div className="text-xs text-theme-text-secondary">{controlDef.description}</div>
                           </div>
                         )}
-                        {controlDef.checks?.length > 0 && (
+                        {controlDef?.checks?.length > 0 && (
                           <div>
                             <div className="text-[10px] font-medium text-theme-text-tertiary uppercase tracking-wider mb-0.5">Check IDs</div>
                             <div className="flex flex-wrap gap-1">
@@ -219,7 +225,7 @@ export function ClusterComplianceReportRenderer({ data }: ClusterComplianceRepor
                           </div>
                         )}
                       </div>
-                    )}
+                    </Collapse>
                   </div>
                 )
               })}
@@ -230,7 +236,7 @@ export function ClusterComplianceReportRenderer({ data }: ClusterComplianceRepor
               )}
             </div>
             </>
-          )}
+          </Collapse>
         </Section>
       )}
     </>

@@ -26,6 +26,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { clsx } from 'clsx'
 import { Calendar, ChevronDown, ChevronLeft, ChevronRight, Minus, Plus } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
+import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
+import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import {
   barHeight,
   clampLensToSelection,
@@ -100,6 +102,7 @@ function DateTimeField({ label, valueMs, onChange, nowMs }: {
   nowMs: number
 }) {
   const [open, setOpen] = useState(false)
+  const { shouldRender, isOpen } = useAnimatedUnmount(open, overlayExitMs('menu'))
   const rootRef = useRef<HTMLDivElement>(null)
   const value = new Date(valueMs)
   const [viewY, setViewY] = useState(() => value.getFullYear())
@@ -145,9 +148,16 @@ function DateTimeField({ label, valueMs, onChange, nowMs }: {
         {fieldStamp(valueMs)}
         <Calendar className="h-3 w-3 shrink-0 text-theme-text-tertiary" />
       </button>
-      {open && (
+      {shouldRender && (
         <div
-          className="absolute left-0 top-full z-[60] mt-1 w-[232px] rounded-lg border border-theme-border bg-theme-surface p-2.5 shadow-theme-lg"
+          inert={!open}
+          className={clsx(
+            'absolute left-0 top-full z-[60] mt-1 w-[232px] origin-top-left rounded-lg border border-theme-border bg-theme-surface p-2.5 shadow-theme-lg',
+            TRANSITION_MENU,
+            isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]',
+            !open && 'pointer-events-none',
+          )}
+          style={overlayTransitionStyle(isOpen, 'menu')}
           role="dialog"
           aria-label={`Pick ${label.toLowerCase()} date and time`}
         >
@@ -294,6 +304,7 @@ export function TimelineStrip({
   const trackRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(800)
   const [pickerOpen, setPickerOpen] = useState(false)
+  const { shouldRender: pickerRender, isOpen: pickerShown } = useAnimatedUnmount(pickerOpen, overlayExitMs('menu'))
   const [customFromMs, setCustomFromMs] = useState(0)
   const [customToMs, setCustomToMs] = useState(0)
 
@@ -528,11 +539,22 @@ export function TimelineStrip({
               <ChevronDown className="h-3 w-3 text-theme-text-tertiary" />
             </button>
           </Tooltip>
-          {pickerOpen && (
+          {pickerRender && (
             // NO overflow-hidden: the DateTimeField calendars pop past the
             // dialog's bottom edge and were getting clipped to a header sliver.
             // The footer rounds its own bottom corners instead.
-            <div className="absolute left-0 top-full z-50 mt-2 w-[460px] max-w-[92vw] rounded-xl border border-theme-border bg-theme-surface shadow-theme-lg" role="dialog" aria-label="Time range picker">
+            <div
+              inert={!pickerOpen}
+              className={clsx(
+                'absolute left-0 top-full z-50 mt-2 w-[460px] max-w-[92vw] origin-top-left rounded-xl border border-theme-border bg-theme-surface shadow-theme-lg',
+                TRANSITION_MENU,
+                pickerShown ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 -translate-y-1 scale-[0.97]',
+                !pickerOpen && 'pointer-events-none',
+              )}
+              style={overlayTransitionStyle(pickerShown, 'menu')}
+              role="dialog"
+              aria-label="Time range picker"
+            >
               <p className="border-b border-theme-border/60 px-4 py-2.5 text-[11px] leading-relaxed text-theme-text-secondary">
                 How much history to load. The blue band zooms into a slice of it.
               </p>

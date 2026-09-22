@@ -1,7 +1,9 @@
 package server
 
 import (
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -117,5 +119,94 @@ func TestProxyAuth_NamespaceGatedReadPaths(t *testing.T) {
 				t.Errorf("%s: expected 403 for namespace-restricted user, got %d", p, resp.StatusCode)
 			}
 		})
+	}
+}
+
+func TestProxyAuth_PodBackedReadsRequireExactAccess(t *testing.T) {
+	tests := []struct {
+		name          string
+		path          string
+		parentAllowed bool
+		podsAllowed   bool
+		wantStatus    int
+	}{
+		{name: "pods parent denied", path: "/api/workloads/deployments/default/nginx/pods?limit=1", podsAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "pods list denied", path: "/api/workloads/deployments/default/nginx/pods?limit=1", parentAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "pods both allowed", path: "/api/workloads/deployments/default/nginx/pods?limit=1", parentAllowed: true, podsAllowed: true, wantStatus: http.StatusOK},
+		{name: "logs parent denied", path: "/api/workloads/deployments/default/nginx/logs", podsAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "logs pods denied", path: "/api/workloads/deployments/default/nginx/logs", parentAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "logs subresource denied", path: "/api/workloads/deployments/default/nginx/logs", parentAllowed: true, podsAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "stream parent denied", path: "/api/workloads/deployments/default/nginx/logs/stream", podsAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "stream pods denied", path: "/api/workloads/deployments/default/nginx/logs/stream", parentAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "stream subresource denied", path: "/api/workloads/deployments/default/nginx/logs/stream", parentAllowed: true, podsAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "pod logs subresource denied", path: "/api/pods/default/nginx/logs", parentAllowed: true, podsAllowed: true, wantStatus: http.StatusForbidden},
+		{name: "pod stream subresource denied", path: "/api/pods/default/nginx/logs/stream", parentAllowed: true, podsAllowed: true, wantStatus: http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newAuthTestServer(t)
+			env.srv.permCache.Set("alice", nil, &auth.UserPermissions{AllowedNamespaces: []string{"default"}})
+			permissions := env.srv.permCache.Get("alice", nil)
+			permissions.SetCanI("get", "apps", "deployments", "default", tt.parentAllowed)
+			permissions.SetCanI("list", "", "pods", "default", tt.podsAllowed)
+
+			resp := env.authGet(t, tt.path, "alice", "")
+			defer resp.Body.Close()
+			if resp.StatusCode != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestProxyAuth_JobSetMembersRequireParentAndJobsAccess(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		parent, jobs bool
+		wantStatus   int
+	}{{"parent denied", false, true, http.StatusForbidden}, {"member list denied", true, false, http.StatusForbidden}, {"both allowed", true, true, http.StatusInternalServerError}} {
+		t.Run(test.name, func(t *testing.T) {
+			env := newAuthTestServer(t)
+			permissions := &auth.UserPermissions{AllowedNamespaces: []string{"default"}}
+			permissions.SetCanI("get", "jobset.x-k8s.io", "jobsets", "default", test.parent)
+			permissions.SetCanI("list", "batch", "jobs", "default", test.jobs)
+			env.srv.permCache.Set("alice", nil, permissions)
+			resp := env.authGet(t, "/api/workloads/jobsets/default/training/runs", "alice", "")
+			defer resp.Body.Close()
+			if resp.StatusCode != test.wantStatus {
+				t.Fatalf("status = %d, want %d", resp.StatusCode, test.wantStatus)
+			}
+			if test.parent && test.jobs {
+				body, err := io.ReadAll(resp.Body)
+				if err != nil || !strings.Contains(string(body), "failed to get jobset default/training:") {
+					t.Fatalf("did not reach JobSet lookup: %s (%v)", body, err)
+				}
+			}
+		})
+	}
+}
+
+func TestProxyAuth_JobSetEvidenceRequiresEachReadPermission(t *testing.T) {
+	targets := []struct{ verb, group, resource string }{{"get", "jobset.x-k8s.io", "jobsets"}, {"list", "batch", "jobs"}, {"list", "", "pods"}, {"get", "", "pods/log"}}
+	for _, endpoint := range []string{"resources", "logs"} {
+		for denied := range targets {
+			if endpoint == "resources" && denied == 3 {
+				continue
+			}
+			t.Run(endpoint+"/"+targets[denied].resource, func(t *testing.T) {
+				env := newAuthTestServer(t)
+				permissions := &auth.UserPermissions{AllowedNamespaces: []string{"default"}}
+				for i, target := range targets {
+					permissions.SetCanI(target.verb, target.group, target.resource, "default", i != denied)
+				}
+				env.srv.permCache.Set("alice", nil, permissions)
+				resp := env.authGet(t, "/api/jobsets/default/training/"+endpoint, "alice", "")
+				defer resp.Body.Close()
+				if resp.StatusCode != http.StatusForbidden {
+					t.Fatalf("status = %d", resp.StatusCode)
+				}
+			})
+		}
 	}
 }

@@ -310,8 +310,10 @@ type BatchUpgradeInfo struct {
 }
 
 // ApplyValuesRequest is the request body for previewing/applying new values to a
-// release. Version/Repository are optional: when set, the preview renders against
-// that target chart version; when empty, the release's current chart is used.
+// release. Version/Repository are preview-only: when set, the preview renders
+// against that target chart version; when empty, the release's current chart is
+// used. Apply rejects them — changing the chart version goes through the
+// upgrade endpoints.
 type ApplyValuesRequest struct {
 	Values     map[string]any `json:"values"`
 	Version    string         `json:"version,omitempty"`

@@ -1,8 +1,8 @@
 import { ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Section } from '../../ui/drawer-components'
+import { Collapse, CollapseChevron, useDisclosure } from '../../ui/Collapse'
 import { SEVERITY_BADGE } from '../../../utils/badge-colors'
 import { isForbiddenError } from '../../../types/fetch-error'
 import { LookupFailureNote } from './LookupFailureNote'
@@ -829,6 +829,7 @@ function PassingGroup({
 }) {
   const [open, setOpen] = useState(false)
   const [showAll, setShowAll] = useState(false)
+  const { panelId, buttonProps } = useDisclosure(open)
 
   // Nothing to open: the count is real but the subjects did not survive the
   // server cap, so the label stands alone rather than offering an empty drawer.
@@ -843,14 +844,16 @@ function PassingGroup({
   return (
     <div className="pt-0.5">
       <button
+        {...buttonProps}
         type="button"
         onClick={() => setOpen(!open)}
         className="flex items-center gap-1 text-xs text-theme-text-tertiary hover:text-theme-text-secondary"
       >
-        {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        <CollapseChevron open={open} className="w-3 h-3" />
         {label}
       </button>
-      {open && (
+      {/* One of these per rule; the subject list only renders once opened. */}
+      <Collapse open={open} mountLazily id={panelId}>
         <div className="space-y-1.5 mt-1.5">
           {visible.map((s, i) => (
             <SubjectRow
@@ -891,7 +894,7 @@ function PassingGroup({
             </div>
           )}
         </div>
-      )}
+      </Collapse>
     </div>
   )
 }

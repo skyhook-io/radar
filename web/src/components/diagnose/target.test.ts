@@ -26,6 +26,25 @@ describe("investigation target identity", () => {
     ).toBe("Rollout.argoproj.io prod/checkout");
   });
 
+  it("formats saved plural targets as Kubernetes Kinds", () => {
+    expect(
+      formatInvestigationTarget({
+        kind: "deployments",
+        group: "apps",
+        namespace: "prod",
+        name: "api",
+      }),
+    ).toBe("Deployment.apps prod/api");
+    expect(
+      formatInvestigationTarget({
+        kind: "pods",
+        group: "metrics.k8s.io",
+        namespace: "prod",
+        name: "api",
+      }),
+    ).toBe("PodMetrics.metrics.k8s.io prod/api");
+  });
+
   it("keeps the core target label compact", () => {
     expect(
       formatInvestigationTarget({

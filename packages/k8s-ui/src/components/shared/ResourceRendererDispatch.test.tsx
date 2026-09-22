@@ -180,6 +180,27 @@ function renderCollidingKind(kind: string, apiVersion: string): string {
   )
 }
 
+describe('LimitRange dispatch', () => {
+  const limitRange = {
+    apiVersion: 'v1',
+    kind: 'LimitRange',
+    metadata: { name: 'team-limits', namespace: 'dev' },
+    spec: { limits: [{ type: 'Container', defaultRequest: { cpu: '100m' }, default: { cpu: '500m' } }] },
+  }
+
+  it('renders the declared rules instead of the generic fallback', () => {
+    const html = renderKind('limitranges', limitRange, 'dev')
+    expect(html).toContain('Defaults &amp; Constraints')
+    expect(html).toContain('100m')
+  })
+
+  // A LimitRange has no status. Reporting one would be an invention, and the
+  // drawer header would disagree with the object.
+  it('reports no health for a kind that has none', () => {
+    expect(getResourceStatus('limitranges', limitRange)).toBeNull()
+  })
+})
+
 describe('getResourceStatus — workload rollout activity', () => {
   const steadyDegraded = {
     metadata: { generation: 4 },
@@ -275,6 +296,30 @@ describe('getResourceStatus — colliding plurals', () => {
       apiVersion: 'cluster.x-k8s.io/v1beta1',
       status: { phase: 'Provisioned' },
     })).not.toBeNull()
+  })
+
+  it('reads an Argo Rollouts Experiment with the AnalysisPhase vocabulary', () => {
+    expect(getResourceStatus('experiments', {
+      apiVersion: 'argoproj.io/v1alpha1',
+      status: { phase: 'Successful' },
+    })).toMatchObject({ text: 'Successful', level: 'healthy' })
+
+    expect(getResourceStatus('experiments', {
+      apiVersion: 'argoproj.io/v1alpha1',
+      status: { phase: 'Running' },
+    })).toMatchObject({ level: 'degraded' })
+  })
+
+  // Katib ships its own Experiment at kubeflow.org sharing this plural, and it
+  // does not report AnalysisPhase. Falling through to the generic reader is
+  // fine; being scored with Argo's vocabulary is not, because that attaches a
+  // HealthLevel derived from a phase Katib never reports.
+  it('does not score a Katib Experiment with the Argo vocabulary', () => {
+    const katib = getResourceStatus('experiments', {
+      apiVersion: 'kubeflow.org/v1beta1',
+      status: { conditions: [{ type: 'Running', status: 'True' }] },
+    })
+    expect(katib?.level).toBeUndefined()
   })
 
   it('fabricates no engine status for a third-party backups CRD', () => {
@@ -899,17 +944,64 @@ describe('GPU ecosystem kind collisions', () => {
 })
 
 describe('GPU ecosystem status edge cases', () => {
-  it('JobSet with minimal status is Pending, not Running', () => {
+  it('dispatches the current JobSet API to typed detail', () => {
+    const html = renderKind('jobsets', {
+      apiVersion: 'jobset.x-k8s.io/v1alpha2',
+      kind: 'JobSet',
+      metadata: { name: 'training', namespace: 'ml' },
+      spec: { replicatedJobs: [{ name: 'workers', replicas: 2, template: { spec: {} } }] },
+      status: { replicatedJobsStatus: [{ name: 'workers', active: 1, ready: 1, succeeded: 0, failed: 0, suspended: 0 }] },
+    }, 'ml')
+
+    expect(html).toContain('JobSet status')
+    expect(html).toContain('Replicated jobs (1)')
+    expect(html).not.toContain('Specification')
+  })
+
+  it.each(['jobset.x-k8s.io/v1alpha1', 'batch.example.io/v1'])(
+    'keeps unsupported or foreign JobSet collisions generic for %s',
+    (apiVersion) => {
+      const data = {
+        apiVersion,
+        kind: 'JobSet',
+        metadata: { name: 'foreign', namespace: 'ml' },
+        spec: { collisionProbe: COLLISION_PROBE },
+      }
+      const html = renderKind('jobsets', data, 'ml')
+
+      expect(html).toContain(COLLISION_PROBE)
+      expect(html).not.toContain('JobSet status')
+      expect(getResourceStatus('jobsets', data)).toBeNull()
+    },
+  )
+
+  it('JobSet distinguishes observed inactivity from active child Jobs', () => {
     const fresh = getResourceStatus('jobsets', {
       apiVersion: 'jobset.x-k8s.io/v1alpha2',
+      kind: 'JobSet',
       status: { replicatedJobsStatus: [{ name: 'w', active: 0, ready: 0 }] },
     })
     const live = getResourceStatus('jobsets', {
       apiVersion: 'jobset.x-k8s.io/v1alpha2',
+      kind: 'JobSet',
       status: { replicatedJobsStatus: [{ name: 'w', active: 1, ready: 1 }] },
     })
     expect(fresh?.text).toBe('Pending')
-    expect(live?.text).toBe('Running')
+    expect(live?.text).toBe('Active')
+  })
+
+  it('keeps a wrong-kind object generic even at the supported JobSet API version', () => {
+    const data = {
+      apiVersion: 'jobset.x-k8s.io/v1alpha2',
+      kind: 'OtherSet',
+      metadata: { name: 'collision', namespace: 'ml' },
+      spec: { collisionProbe: COLLISION_PROBE },
+    }
+    const html = renderKind('jobsets', data, 'ml')
+
+    expect(html).toContain(COLLISION_PROBE)
+    expect(html).not.toContain('JobSet status')
+    expect(getResourceStatus('jobsets', data)).toBeNull()
   })
 
   it('InferencePool with only an empty-parentRef default entry reads Not referenced', () => {

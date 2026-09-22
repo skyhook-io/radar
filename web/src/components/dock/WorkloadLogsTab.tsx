@@ -17,7 +17,8 @@ export function WorkloadLogsTab({
     normalizedKind === 'cronworkflow' || normalizedKind === 'cronworkflows' ||
     normalizedKind === 'workflowtemplate' || normalizedKind === 'workflowtemplates' ||
     normalizedKind === 'clusterworkflowtemplate' || normalizedKind === 'clusterworkflowtemplates' ||
-    normalizedKind === 'scaledjob' || normalizedKind === 'scaledjobs'
+    normalizedKind === 'scaledjob' || normalizedKind === 'scaledjobs' ||
+    normalizedKind === 'jobset' || normalizedKind === 'jobsets'
 
   return (
     <div className="h-full">

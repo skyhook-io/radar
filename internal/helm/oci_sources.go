@@ -82,10 +82,21 @@ func rejectLinkLocalHost(ref string) error {
 
 // ListOCISources returns the registered OCI prefixes (normalized).
 func ListOCISources() []string {
-	s := settings.Load()
-	out := make([]string, 0, len(s.HelmOCISources))
-	out = append(out, s.HelmOCISources...)
-	return out
+	return settings.EffectiveOCISources()
+}
+
+func ValidateOCISources(sources []string) ([]string, error) {
+	result := make([]string, 0, len(sources))
+	for _, source := range sources {
+		prefix, err := normalizeOCIPrefix(source)
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Contains(result, prefix) {
+			result = append(result, prefix)
+		}
+	}
+	return result, nil
 }
 
 // AddOCISource registers a prefix. Idempotent: re-adding an existing prefix is a
@@ -154,9 +165,8 @@ type ociTagLister interface {
 	Tags(ref string) ([]string, error)
 }
 
-// newRegistryClientConcrete builds a helm OCI registry client that authenticates
-// from the user's existing `helm registry login` store (settings.RegistryConfig).
-// Radar stores no registry secrets of its own.
+// newRegistryClientConcrete builds the timeout-bounded helm OCI registry client
+// used for registry probes. Radar stores no registry secrets of its own.
 func (c *Client) newRegistryClientConcrete() (*registry.Client, error) {
 	return registry.NewClient(
 		registry.ClientOptEnableCache(true),
@@ -164,6 +174,16 @@ func (c *Client) newRegistryClientConcrete() (*registry.Client, error) {
 		// Bound every request (incl. dial) so an unreachable registered registry
 		// can't stall the synchronous upgrade check.
 		registry.ClientOptHTTPClient(&http.Client{Timeout: ociProbeTimeout}),
+	)
+}
+
+// newRegistryClientForChartPull builds a helm OCI registry client for chart
+// downloads. Pulls intentionally use helm's normal transport without the short
+// timeout that bounds synchronous registry probes.
+func (c *Client) newRegistryClientForChartPull() (*registry.Client, error) {
+	return registry.NewClient(
+		registry.ClientOptEnableCache(true),
+		registry.ClientOptCredentialsFile(c.settings.RegistryConfig),
 	)
 }
 

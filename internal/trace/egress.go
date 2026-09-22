@@ -9,6 +9,8 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+
+	"github.com/skyhook-io/radar/pkg/netpol"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
@@ -463,8 +465,7 @@ func everyPodDenyAllEgress(pols []*networkingv1.NetworkPolicy, pods []*corev1.Po
 		}
 		selected := false
 		for _, np := range pols {
-			sel, err := metav1.LabelSelectorAsSelector(&np.Spec.PodSelector)
-			if err != nil || !sel.Matches(labels.Set(pod.Labels)) {
+			if selects, err := netpol.Selects(np, pod); err != nil || !selects {
 				continue
 			}
 			selected = true
@@ -495,8 +496,7 @@ func everyPodAllowAllEgress(pols []*networkingv1.NetworkPolicy, pods []*corev1.P
 		}
 		allowAll := false
 		for _, np := range pols {
-			sel, err := metav1.LabelSelectorAsSelector(&np.Spec.PodSelector)
-			if err != nil || !sel.Matches(labels.Set(pod.Labels)) {
+			if selects, err := netpol.Selects(np, pod); err != nil || !selects {
 				continue
 			}
 			for i := range np.Spec.Egress {
@@ -529,8 +529,7 @@ func everyPodEgressSelected(pols []*networkingv1.NetworkPolicy, pods []*corev1.P
 	for _, pod := range pods {
 		selected := false
 		for _, np := range pols {
-			sel, err := metav1.LabelSelectorAsSelector(&np.Spec.PodSelector)
-			if err != nil || !sel.Matches(labels.Set(pod.Labels)) {
+			if selects, err := netpol.Selects(np, pod); err != nil || !selects {
 				continue
 			}
 			selected = true

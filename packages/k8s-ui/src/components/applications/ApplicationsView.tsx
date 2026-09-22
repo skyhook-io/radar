@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react'
 import type { ReactNode } from 'react'
 import { ChevronRight, Layers, Boxes, HeartPulse, Shapes, Globe, Tag } from 'lucide-react'
+import { CollapseChevron } from '../ui/Collapse'
 import { clsx } from 'clsx'
 import { StatusDot, mapHealthToTone } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
@@ -497,7 +498,7 @@ export function ApplicationsView({ entries: allEntries, variant, onSelect, title
                           <Tooltip content={applicationRuntimeLabel(r.members.map((member) => member.row), r.workloadClass, r.health)} delay={150}>
                             <span className={clsx('h-8 w-1 shrink-0 rounded-full', HEALTH_META[r.health].bar)} />
                           </Tooltip>
-                          <ChevronRight className={clsx('h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform', r.expanded && 'rotate-90')} aria-hidden />
+                          <CollapseChevron open={r.expanded} className="h-3.5 w-3.5" />
                           <span className="truncate font-semibold text-theme-text-primary">{r.label}</span>
                           {r.workloadClass !== 'job' && <BatchSignalChip signal={firstBatchSignal(r.members.map((m) => m.row))} />}
                           <Tooltip

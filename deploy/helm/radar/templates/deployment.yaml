@@ -46,9 +46,14 @@ spec:
       {{- include "radar.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
+      {{- if or .Values.podAnnotations (not .Values.cloud.enabled) }}
       annotations:
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if not .Values.cloud.enabled }}
+        checksum/operator-settings: {{ include "radar.operatorSettings" . | sha256sum }}
+        {{- end }}
       {{- end }}
       labels:
         {{- include "radar.selectorLabels" . | nindent 8 }}
@@ -98,6 +103,15 @@ spec:
             - --history-limit={{ .Values.timeline.historyLimit }}
             {{- if .Values.traffic.prometheusUrl }}
             - --prometheus-url={{ .Values.traffic.prometheusUrl }}
+            {{- end }}
+            {{- if .Values.traffic.prometheusSingleCluster }}
+            - --prometheus-single-cluster
+            {{- end }}
+            {{- range $k, $v := .Values.traffic.prometheusClusterLabels }}
+            - {{ printf "--prometheus-cluster-label=%s=%s" $k $v | quote }}
+            {{- end }}
+            {{- if .Values.traffic.beylaJobSelector }}
+            - {{ printf "--beyla-job-selector=%s" .Values.traffic.beylaJobSelector | quote }}
             {{- end }}
             {{- if .Values.cost.currency }}
             - --opencost-currency={{ .Values.cost.currency }}
@@ -198,6 +212,10 @@ spec:
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           env:
+            {{- if not .Values.cloud.enabled }}
+            - name: RADAR_OPERATOR_SETTINGS_FILE
+              value: /etc/radar/operator/settings.json
+            {{- end }}
             {{- if .Values.cost.source }}
             - name: RADAR_COST_SOURCE
               value: {{ .Values.cost.source | quote }}
@@ -317,6 +335,11 @@ spec:
               value: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
             - name: MY_DEPLOYMENT_NAME
               value: {{ include "radar.fullname" . }}
+            # The Helm release name, reported to Radar Cloud on connect so the
+            # dashboard's token-rotation command targets this release instead
+            # of assuming `radar`. Read-only self-description, like the two above.
+            - name: RADAR_HELM_RELEASE
+              value: {{ .Release.Name | quote }}
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -343,6 +366,11 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
+            {{- if not .Values.cloud.enabled }}
+            - name: operator-settings
+              mountPath: /etc/radar/operator
+              readOnly: true
+            {{- end }}
             - name: tmp
               mountPath: /tmp
             - name: home
@@ -355,6 +383,11 @@ spec:
             {{- toYaml . | nindent 12 }}
             {{- end }}
       volumes:
+        {{- if not .Values.cloud.enabled }}
+        - name: operator-settings
+          configMap:
+            name: {{ include "radar.fullname" . }}-operator-settings
+        {{- end }}
         - name: tmp
           emptyDir: {}
         - name: home

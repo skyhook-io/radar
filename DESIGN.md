@@ -207,7 +207,38 @@ Wider than Tailwind defaults — Radar is a desktop-first tool.
 
 Dark mode adds heavier shadows with subtle white inset borders for edge definition.
 
-## 7. Do's and Don'ts
+## 7. Motion
+
+One curve, a handful of durations, and a primitive per surface. All timing lives in `packages/k8s-ui/src/utils/animation.ts`; radar-hub-web re-exports it so Radar and Radar Cloud move alike. Never write a duration or curve inline.
+
+| Surface | Primitive | Timing |
+|---------|-----------|--------|
+| In-flow disclosure (section, row expander, "show details") | `<Collapse open>` + `<CollapseChevron open>` + `useDisclosure(open)` | `DURATION_DISCLOSURE` 300ms, symmetric, height-only (`grid-template-rows` 0fr↔1fr) |
+| Menu / popover / listbox | `useAnimatedUnmount(open, overlayExitMs('menu'))` + `TRANSITION_MENU` + `overlayTransitionStyle(isOpen, 'menu')` | 140ms in / 100ms out, from the anchor corner (`origin-top-left` etc.) |
+| Dialog / command palette | `DialogPortal`, or the same recipe with `'dialog'` | 220ms in / 160ms out |
+| Bottom sheet | recipe with `'sheet'` | 280ms in / 220ms out |
+| Side drawer | `TRANSITION_DRAWER`; backdrop uses `'drawer'` | 300ms both ways |
+| Dock height, drawer↔fullscreen morph | `DURATION_DOCK`, `DURATION_DRAWER_MORPH` | Deliberately their own clocks — direct manipulation, not a reveal |
+
+The curve everywhere is `CSS_EASE` = `cubic-bezier(0.32, 0.72, 0, 1)` (fast out of the gate, gentle settle: the click reads as the cause of the motion and content is legible early).
+
+**Disclosure rules**
+- Height only. No opacity fade on the panel, no overflow release at the end; the caret rotates on the same clock as the panel so an interrupted toggle reverses cleanly.
+- Pick the mount policy per site, it is not cosmetic: default keeps content mounted and `inert` while closed (cheap static content); `mountLazily` for many instances with heavy collapsed content; `unmountOnExit` for subtrees that poll, subscribe, hold an editor, or must reset on close.
+- One predicate drives the header's `aria-expanded`, the caret and the panel's `open`. If the panel can't open (no content yet), the header must not announce expanded.
+- Rows mapped inline can't call `useDisclosure`; build ids with `disclosurePanelId(useId(), key)` so display keys with spaces don't split `aria-controls`.
+- Caret convention: in-flow disclosures use `CollapseChevron` (ChevronRight → 90°). Menu triggers keep a `ChevronDown` flip toward the menu. Inside a tinted header (amber warning, red error) pass `inheritColor`.
+- No native `<details>` on primary paths; `web/src/components/ui/Disclosure.tsx` is the drop-in.
+
+**Presence rules (menus, dialogs, sheets)**
+- Logical close → visual exit → disposal. Render on `shouldRender`, drive classes from `isOpen`, key dismiss / focus / keyboard logic on the logical `open`.
+- While exiting: `inert` + `pointer-events-none`. Keep the last placement through the exit (don't clear an anchor at logical close). Effects that need the menu in the DOM depend on `shouldRender`, not just `open`.
+- `TRANSITION_BACKDROP` / `TRANSITION_PANEL` / `TRANSITION_MENU` carry no duration on purpose; every element that uses them also gets `overlayTransitionStyle(isOpen, kind)`.
+- Modal: focus restore and scroll unlock happen at logical close, not after the exit.
+
+**Reduced motion** is an app-level policy in `web/src/index.css` (durations and delays → 0, every loop runs once, spinners exempt), not a per-class list. JS-coordinated motion checks `prefersReducedMotion()` and disposes at logical close.
+
+## 8. Do's and Don'ts
 
 ### Do
 - Use `bg-theme-surface`, `text-theme-text-secondary`, `border-theme-border` etc. for all surfaces, text, and borders
@@ -217,6 +248,7 @@ Dark mode adds heavier shadows with subtle white inset borders for edge definiti
 - Use `.status-healthy` / `.status-degraded` / etc. for status cells in tables
 - Use `shadow-theme-sm` / `shadow-theme-md` / `shadow-theme-lg` for elevation
 - Use `font-sans` (DM Sans) and `font-mono` (DM Mono) — they're the defaults
+- Use `<Collapse>` + `<CollapseChevron>` for anything that expands in place, and the presence recipe (`useAnimatedUnmount` + `overlayExitMs` + `overlayTransitionStyle`) for anything that floats — see §7 Motion
 - Use `light-dark()` in CSS when adding new custom properties that need theme awareness. Note: `light-dark()` doesn't work for comma-separated values (e.g., multi-layer shadows) — use a `.dark {}` override block instead, as done in `variables.css`
 
 ### Don't
@@ -228,12 +260,13 @@ Dark mode adds heavier shadows with subtle white inset borders for edge definiti
 - Don't hand-write badge color strings like `bg-emerald-100 text-emerald-700 ...` — use `<Badge>` or `badge-colors.ts` helpers
 - Don't use `dark:` variants for colors that have theme tokens — the theme handles light/dark automatically
 - Don't use template literals to construct Tailwind class names — Tailwind can't scan dynamic strings
+- Don't hand-roll a `grid-template-rows` transition, write `duration-200` / `ease-out` / a bezier inline, render a disclosure with `open && (...)` (it snaps shut), or reach for native `<details>` — see §7 Motion
 
 **Exceptions:** Raw Tailwind color scales (`red-*`, `emerald-*`, etc.) are acceptable in:
 - `Badge.tsx` and `badge-colors.ts` — static color definitions that Tailwind scans
 - One-off visual effects (e.g., topology node glow, chart highlights) where no semantic token applies — use `dark:` variants for these
 
-## 8. Responsive Behavior
+## 9. Responsive Behavior
 
 Desktop-first tool. Most views assume 1100px+ viewport. Key patterns:
 - Topology graph fills available space
@@ -241,7 +274,7 @@ Desktop-first tool. Most views assume 1100px+ viewport. Key patterns:
 - Drawers overlay from the right at fixed width
 - Bottom dock (terminal/logs) collapses vertically
 
-## 9. Agent Quick Reference
+## 10. Agent Quick Reference
 
 ### Most Common Tokens
 ```
@@ -264,6 +297,10 @@ Card container:      .card-inner / .card-inner-lg
 Dialog/modal:        .dialog
 
 Elevation:           shadow-theme-sm / shadow-theme-md / shadow-theme-lg
+
+Disclosure:          <Collapse open> + <CollapseChevron open> + useDisclosure(open)
+Menu / popover:      useAnimatedUnmount(open, overlayExitMs('menu')) + TRANSITION_MENU + overlayTransitionStyle
+Dialog:              <DialogPortal>  (or the recipe above with 'dialog')
 
 Status badge:        <Badge severity="success|warning|error|info|neutral">
 Kind badge:          <Badge kind="Deployment|Pod|Service|...">

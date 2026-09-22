@@ -15,6 +15,10 @@ export interface AgentInfo {
   hosted?: boolean;
   /** Hosted backends opt in only when they implement assessment-bound, tool-free explanations. */
   assessmentExplanations?: boolean;
+  /** The backend performs a user-confirmed Apply turn. Absent means read-only. */
+  apply?: boolean;
+  /** The backend re-checks the resource after an Apply. Absent means it does not. */
+  verification?: boolean;
 }
 
 export interface AgentsResponse {
@@ -52,7 +56,14 @@ export interface RootCauseEvidence {
   refs?: string[];
 }
 
-/** How the agent frames one cited Radar result. Roles order cards; they never hide one. */
+/**
+ * How the agent frames one cited Radar result. Roles order cards; they never
+ * hide one.
+ *
+ * One half of a Go↔TS contract: `Roles` in pkg/investigation/verdict.go and
+ * EVIDENCE_ROLES in components/diagnose/investigationCase.ts must list exactly
+ * these roles. Change all three together.
+ */
 export type DiagnosisEvidenceRole =
   "cause" | "symptom" | "context" | "benign" | "demoted" | "rules_out";
 
@@ -65,7 +76,8 @@ export interface DiagnosisEvidenceSubject {
   group?: string;
   kind: string;
   namespace?: string;
-  name: string;
+  /** Absent when the subject is a listing cited for what it does not contain. */
+  name?: string;
   container?: string;
   stream?: "current" | "previous";
   /** Evidence kind (resource, logs, events, changes, metrics, …). */
@@ -78,6 +90,8 @@ export interface DiagnosisEvidenceItem {
   ref?: string;
   role?: DiagnosisEvidenceRole;
   claim?: string;
+  /** The agent's own statement of what this result does not cover. */
+  gap?: string;
   subject?: DiagnosisEvidenceSubject;
 }
 
@@ -87,15 +101,48 @@ export interface DiagnosisRuledOut {
   evidenceIndex: number;
 }
 
+export type DiagnosisCertainty = "established" | "likely" | "suspected";
+export type DiagnosisStepKind = "mitigate" | "verify" | "investigate";
+
+/** One typed next step; `remediation` mirrors `steps[].text` when steps are present. */
+export interface DiagnosisStep {
+  text: string;
+  kind: DiagnosisStepKind;
+  /** The condition under which this step is the right one, when the agent named one. */
+  precondition?: string;
+}
+
 export interface Diagnosis {
   healthy?: boolean;
   inconclusive?: boolean; // investigated but couldn't determine — distinct from healthy
   rootCause: string;
+  /**
+   * The plain-language headline; `rootCause` stays the technical one-liner.
+   * Present only on turns from a backend that emits the story contract; its
+   * absence selects the previous rendering.
+   */
+  summary?: string;
+  /** The agent's own word for how sure it is; rendered in the agent tone, never as a Radar mark. */
+  certainty?: DiagnosisCertainty;
+  /** What would change the answer or could not be verified. Rendered above the story fold. */
+  unresolved?: string[];
+  /** A follow-up answer that replaces the assessment on screen (server-validated as a complete verdict). */
+  revisesAssessment?: boolean;
+  /** Typed next steps; absent on older runs, where `remediation` is the only list. */
+  steps?: DiagnosisStep[];
   rootCauseEvidence?: RootCauseEvidence;
   /** The agent's case over Radar's evidence; absent from hosted backends and older runs. */
   evidence?: DiagnosisEvidenceItem[];
+  /** How many of the agent's evidence entries never reached the UI, including ones cut before they got a slot in `evidence`. */
+  unlinkedEvidence?: number;
+  /** The agent's evidence field was not a list, so none of it could be read. */
+  evidenceMalformed?: boolean;
+  /** Valid next steps, open items and ruled-out hypotheses a count cap left out of this record. */
+  omittedEntries?: number;
   ruledOut?: DiagnosisRuledOut[];
   report: string;
+  /** The agent's evidence ledger, written before its verdict block; shown in Activity, never in Findings. */
+  notes?: string;
   remediation: string[];
   recommendedIndex?: number; // 1-based index into remediation of the step Apply performs
   recommendedReason?: string; // why the recommended step is the safe pick
@@ -172,6 +219,7 @@ export interface DiagnoseStreamEvent {
 // server runs.
 export interface RunSummary {
   id: string;
+  /** Stored target Kind; existing hosted runs may contain a plural API resource name. */
   kind: string;
   /** Kubernetes API group; empty means the core API group. */
   group: string;
@@ -299,20 +347,6 @@ export async function getRun(
     credentials: getCredentialsMode(),
     headers: getAuthHeaders(),
     signal,
-  });
-  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
-  return res.json();
-}
-
-export async function updateRunVisibility(
-  id: string,
-  visibility: "private" | "organization",
-): Promise<RunSummary> {
-  const res = await fetch(`${RUNS()}/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    credentials: getCredentialsMode(),
-    headers: { "Content-Type": "application/json", ...getAuthHeaders() },
-    body: JSON.stringify({ visibility }),
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
   return res.json();

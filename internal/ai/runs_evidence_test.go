@@ -1,10 +1,13 @@
 package ai
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/investigationrefs"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 func evidenceStep(ref string, patch func(*StepInfo)) RunEvent {
@@ -23,28 +26,43 @@ func evidenceStep(ref string, patch func(*StepInfo)) RunEvent {
 	return RunEvent{Event: StreamEvent{Type: "step", Step: step}}
 }
 
-func bindEvidence(events []RunEvent, request evidenceReferenceRequest, scope string) *RootCauseEvidence {
+// rootCauseCitations builds the citation request the parser would produce
+// for a verdict citing refs; a nil list omits the field, so the request is
+// "missing" rather than empty.
+func rootCauseCitations(refs []string) investigation.Citations {
+	field := ""
+	if refs != nil {
+		quoted := make([]string, len(refs))
+		for i, ref := range refs {
+			quoted[i] = `"` + ref + `"`
+		}
+		field = `,"root_cause_evidence_refs":[` + strings.Join(quoted, ",") + `]`
+	}
+	return investigation.Parse("```json\n{\"root_cause\":\"x\"" + field + "}\n```").Citations
+}
+
+func bindEvidence(events []RunEvent, citations investigation.Citations, scope string) *investigation.RootCauseEvidence {
 	issued := make(investigationrefs.Records)
 	for _, event := range events {
 		if step := event.Event.Step; step != nil && step.EvidenceRef != "" {
 			issued[step.EvidenceRef] = step.Result
 		}
 	}
-	return bindEvidenceWithIssued(events, request, scope, issued)
+	return bindEvidenceWithIssued(events, citations, scope, issued)
 }
 
 func bindEvidenceWithIssued(
 	events []RunEvent,
-	request evidenceReferenceRequest,
+	citations investigation.Citations,
 	scope string,
 	issued investigationrefs.Records,
-) *RootCauseEvidence {
+) *investigation.RootCauseEvidence {
 	run := &Run{events: events}
 	diagnosis := Diagnosis{
-		RootCause:       "The image tag is invalid.",
-		evidenceRequest: request,
-		evidenceScope:   scope,
-		issuedEvidence:  issued,
+		Verdict:        investigation.Verdict{RootCause: "The image tag is invalid."},
+		citations:      citations,
+		evidenceScope:  scope,
+		issuedEvidence: issued,
 	}
 	run.mu.Lock()
 	run.bindRootCauseEvidenceLocked(&diagnosis)
@@ -65,10 +83,8 @@ func TestBindRootCauseEvidenceLinksUpgradeReadinessAlongsideResource(t *testing.
 			step.Result = `{"verdict":"blocked"}`
 		}),
 	}
-	got := bindEvidence(events, evidenceReferenceRequest{
-		present: true, refs: []string{resourceRef, upgradeRef},
-	}, scope)
-	if got == nil || got.Status != EvidenceLinked || len(got.Refs) != 2 {
+	got := bindEvidence(events, rootCauseCitations([]string{resourceRef, upgradeRef}), scope)
+	if got == nil || got.Status != investigation.Linked || len(got.Refs) != 2 {
 		t.Fatalf("registered read tool must not invalidate the citation set: %+v", got)
 	}
 }
@@ -77,16 +93,16 @@ func TestBindRootCauseEvidenceRequiresExactPrivateTransportIssuance(t *testing.T
 	scope := strings.Repeat("a", 26)
 	ref := "ev_" + scope + "_" + strings.Repeat("b", 26)
 	events := []RunEvent{{Event: StreamEvent{Type: "turn"}}, evidenceStep(ref, nil)}
-	request := evidenceReferenceRequest{present: true, refs: []string{ref}}
+	request := rootCauseCitations([]string{ref})
 
 	tests := []struct {
 		name   string
 		issued investigationrefs.Records
-		want   EvidenceLinkStatus
+		want   investigation.LinkStatus
 	}{
-		{name: "exact issued payload", issued: investigationrefs.Records{ref: `{"kind":"Pod"}`}, want: EvidenceLinked},
-		{name: "invented fresh ref", issued: investigationrefs.Records{}, want: EvidenceInvalid},
-		{name: "payload substitution", issued: investigationrefs.Records{ref: `{"kind":"Deployment"}`}, want: EvidenceInvalid},
+		{name: "exact issued payload", issued: investigationrefs.Records{ref: `{"kind":"Pod"}`}, want: investigation.Linked},
+		{name: "invented fresh ref", issued: investigationrefs.Records{}, want: investigation.Invalid},
+		{name: "payload substitution", issued: investigationrefs.Records{ref: `{"kind":"Deployment"}`}, want: investigation.Invalid},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -94,7 +110,7 @@ func TestBindRootCauseEvidenceRequiresExactPrivateTransportIssuance(t *testing.T
 			if got == nil || got.Status != test.want {
 				t.Fatalf("evidence = %+v, want %s", got, test.want)
 			}
-			if test.want != EvidenceLinked && len(got.Refs) != 0 {
+			if test.want != investigation.Linked && len(got.Refs) != 0 {
 				t.Fatalf("invalid evidence promoted refs: %v", got.Refs)
 			}
 		})
@@ -114,10 +130,10 @@ func TestBindRootCauseEvidenceLinksOnlyCurrentCompleteSuccessfulSteps(t *testing
 			evidenceStep(first, func(step *StepInfo) { step.Tool = "" }),
 			evidenceStep(second, func(step *StepInfo) { step.ID = "call-2" }),
 		},
-		evidenceReferenceRequest{present: true, refs: []string{second, first}},
+		rootCauseCitations([]string{second, first}),
 		scope,
 	)
-	if got == nil || got.Status != EvidenceLinked {
+	if got == nil || got.Status != investigation.Linked {
 		t.Fatalf("evidence = %+v, want linked", got)
 	}
 	if len(got.Refs) != 2 || got.Refs[0] != second || got.Refs[1] != first {
@@ -129,12 +145,12 @@ func TestBindRootCauseEvidenceMissingAndInvalidRequests(t *testing.T) {
 	scope := strings.Repeat("a", 26)
 	for _, test := range []struct {
 		name    string
-		request evidenceReferenceRequest
-		status  EvidenceLinkStatus
+		request investigation.Citations
+		status  investigation.LinkStatus
 	}{
-		{name: "omitted", status: EvidenceMissing},
-		{name: "empty", request: evidenceReferenceRequest{present: true}, status: EvidenceMissing},
-		{name: "parser rejected", request: evidenceReferenceRequest{present: true, invalid: true}, status: EvidenceInvalid},
+		{name: "omitted", request: rootCauseCitations(nil), status: investigation.Missing},
+		{name: "empty", request: rootCauseCitations([]string{}), status: investigation.Missing},
+		{name: "parser rejected", request: investigation.Parse("```json\n{\"root_cause\":\"x\",\"root_cause_evidence_refs\":null}\n```").Citations, status: investigation.Invalid},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got := bindEvidence([]RunEvent{{Event: StreamEvent{Type: "turn"}}}, test.request, scope)
@@ -186,8 +202,8 @@ func TestBindRootCauseEvidenceRejectsUnverifiableRefsAsASet(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := bindEvidence(test.events, evidenceReferenceRequest{present: true, refs: test.refs}, scope)
-			if got == nil || got.Status != EvidenceInvalid || len(got.Refs) != 0 {
+			got := bindEvidence(test.events, rootCauseCitations(test.refs), scope)
+			if got == nil || got.Status != investigation.Invalid || len(got.Refs) != 0 {
 				t.Fatalf("evidence = %+v, want invalid with no promoted refs", got)
 			}
 		})
@@ -216,9 +232,9 @@ func TestBindRootCauseEvidenceIgnoresRejectedCallbackAndRepeatedHostIDs(t *testi
 	}
 
 	diagnosis := Diagnosis{
-		RootCause:       "bad tag",
-		evidenceRequest: evidenceReferenceRequest{present: true, refs: []string{currentRef}},
-		evidenceScope:   scope,
+		Verdict:       investigation.Verdict{RootCause: "bad tag"},
+		citations:     rootCauseCitations([]string{currentRef}),
+		evidenceScope: scope,
 		issuedEvidence: investigationrefs.Records{
 			currentRef: `{"kind":"Pod"}`,
 		},
@@ -226,17 +242,17 @@ func TestBindRootCauseEvidenceIgnoresRejectedCallbackAndRepeatedHostIDs(t *testi
 	run.mu.Lock()
 	run.bindRootCauseEvidenceLocked(&diagnosis)
 	run.mu.Unlock()
-	if diagnosis.RootCauseEvidence == nil || diagnosis.RootCauseEvidence.Status != EvidenceLinked {
+	if diagnosis.RootCauseEvidence == nil || diagnosis.RootCauseEvidence.Status != investigation.Linked {
 		t.Fatalf("same host id across turns should bind by current ref: %+v", diagnosis.RootCauseEvidence)
 	}
-	if diagnosis.issuedEvidence != nil || diagnosis.evidenceScope != "" || diagnosis.evidenceRequest.present {
+	if diagnosis.issuedEvidence != nil || diagnosis.evidenceScope != "" || !reflect.DeepEqual(diagnosis.citations, investigation.Citations{}) {
 		t.Fatalf("private binding material survived promotion: %+v", diagnosis)
 	}
 
 	diagnosis = Diagnosis{
-		RootCause:       "bad tag",
-		evidenceRequest: evidenceReferenceRequest{present: true, refs: []string{rejectedRef}},
-		evidenceScope:   scope,
+		Verdict:       investigation.Verdict{RootCause: "bad tag"},
+		citations:     rootCauseCitations([]string{rejectedRef}),
+		evidenceScope: scope,
 		issuedEvidence: investigationrefs.Records{
 			currentRef: `{"kind":"Pod"}`,
 		},
@@ -244,15 +260,17 @@ func TestBindRootCauseEvidenceIgnoresRejectedCallbackAndRepeatedHostIDs(t *testi
 	run.mu.Lock()
 	run.bindRootCauseEvidenceLocked(&diagnosis)
 	run.mu.Unlock()
-	if diagnosis.RootCauseEvidence.Status != EvidenceInvalid {
+	if diagnosis.RootCauseEvidence.Status != investigation.Invalid {
 		t.Fatalf("rejected callback became evidence: %+v", diagnosis.RootCauseEvidence)
 	}
 }
 
 func TestBindRootCauseEvidenceOmittedWithoutRootCause(t *testing.T) {
 	diagnosis := Diagnosis{
-		Healthy:           true,
-		RootCauseEvidence: &RootCauseEvidence{Status: EvidenceLinked, Refs: []string{"should-clear"}},
+		Verdict: investigation.Verdict{
+			Healthy:           true,
+			RootCauseEvidence: &investigation.RootCauseEvidence{Status: investigation.Linked, Refs: []string{"should-clear"}},
+		},
 	}
 	run := &Run{}
 	run.mu.Lock()

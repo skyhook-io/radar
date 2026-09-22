@@ -26,37 +26,51 @@ export { ConfirmDialog } from './ConfirmDialog'
 export { HealthRing } from './HealthRing'
 export { MetricsChart, MetricsSparkline } from './MetricsChart'
 export * from './drawer-components'
-export { Collapse, CollapseChevron } from './Collapse'
+export { Collapse, CollapseChevron, useDisclosure, disclosurePanelId } from './Collapse'
+export { Disclosure } from './Disclosure'
 export { ResourceBar } from './ResourceBar'
 export { ForceDeleteConfirmDialog } from './ForceDeleteConfirmDialog'
 export { InClusterConsentDialog } from './InClusterConsentDialog'
 export { ToastProvider, useToast, showApiError, showApiSuccess } from './Toast'
 export { CodeViewer } from './CodeViewer'
 export { YamlEditor, YamlDiffEditor } from './YamlEditor'
+// Boots the self-hosted Monaco runtime (bundled editor, local workers) without
+// pulling monaco-editor into the main bundle. Anything that mounts a bare
+// `Editor` must await this first, or @monaco-editor/react reaches for its CDN.
+export const ensureMonacoRuntime = () =>
+  import("./monacoRuntime").then(({ ensureMonaco }) => ensureMonaco());
 export type {
   YamlDiagnostic,
   YamlDocumentIdentity,
   YamlEditorProps,
   YamlSchemaLoader,
   YamlSchemaLoadResult,
-} from './YamlEditor'
-export { YamlReview } from './YamlReview'
-export type { YamlPreviewResult, YamlReviewProps } from './YamlReview'
-export { RowActionMenu } from './RowActionMenu'
-export type { RowActionItem } from './RowActionMenu'
+} from "./YamlEditor";
+export { YamlReview } from "./YamlReview";
+export type { YamlPreviewResult, YamlReviewProps } from "./YamlReview";
+export { RowActionMenu } from "./RowActionMenu";
+export type { RowActionItem } from "./RowActionMenu";
 
-export { PageHeader } from './PageHeader'
-export { SummaryTile } from './SummaryTile'
-export type { SummaryTone } from './SummaryTile'
-export { Facet, FacetSection, FacetButton } from './Facet'
-export type { FacetTone } from './Facet'
-export { SortableTh, TH_CLASS } from './SortableTh'
-export type { SortDir } from './SortableTh'
-export { DistributionBar, DistributionLegendChip } from './DistributionBar'
-export type { DistributionSegment } from './DistributionBar'
-export { SearchPillInput } from './SearchPillInput'
-export type { SearchModifier, SearchPillInputProps } from './SearchPillInput'
-export { CardSection, CardBody, TerminalBlock, renderProse, NEUTRAL_CHIP_CLASS, KIND_CHIP_CLASS } from './CardSection'
-export type { CardSectionTone } from './CardSection'
-export { MultiSelectPicker } from './MultiSelectPicker'
-export type { MultiSelectPickerProps } from './MultiSelectPicker'
+export { PageHeader } from "./PageHeader";
+export { SummaryTile } from "./SummaryTile";
+export type { SummaryTone } from "./SummaryTile";
+export { Facet, FacetSection, FacetButton } from "./Facet";
+export type { FacetTone } from "./Facet";
+export { SortableTh, TH_CLASS } from "./SortableTh";
+export type { SortDir } from "./SortableTh";
+export { DistributionBar, DistributionLegendChip } from "./DistributionBar";
+export type { DistributionSegment } from "./DistributionBar";
+export { SearchPillInput } from "./SearchPillInput";
+export type { SearchModifier, SearchPillInputProps } from "./SearchPillInput";
+export {
+  CardSection,
+  CardBody,
+  TerminalBlock,
+  TerminalBlockLabel,
+  renderProse,
+  NEUTRAL_CHIP_CLASS,
+  KIND_CHIP_CLASS,
+} from "./CardSection";
+export type { CardSectionTone } from "./CardSection";
+export { MultiSelectPicker } from "./MultiSelectPicker";
+export type { MultiSelectPickerProps } from "./MultiSelectPicker";

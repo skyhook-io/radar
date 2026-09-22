@@ -220,7 +220,7 @@ func (s *Server) handleStartPortForward(w http.ResponseWriter, r *http.Request) 
 		localPort = port
 	}
 
-	listenAddr, err := NormalizeListenAddress(req.ListenAddress)
+	listenAddr, err := normalizePortForwardAddress(req.ListenAddress)
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return

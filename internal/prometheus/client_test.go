@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,6 +21,45 @@ func TestHasManualURL(t *testing.T) {
 	client.manualURL = "https://prometheus.example.com"
 	if !client.HasManualURL() {
 		t.Fatal("HasManualURL() = false with a configured URL")
+	}
+}
+
+func TestExplicitFilteredStoreStaysConnected(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-only" || r.URL.Path != "/prometheus/api/v1/query" {
+			t.Error("lost auth or base path")
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+	}))
+	defer srv.Close()
+	c := &Client{manualURL: srv.URL + "/prometheus", headers: map[string]string{"Authorization": "Bearer test-only"}, httpClient: srv.Client()}
+	for i := 0; i < 2; i++ {
+		base, _, err := c.EnsureConnected(context.Background())
+		if err != nil || base != c.manualURL {
+			t.Fatalf("connect/reprobe %d: %s %v", i, base, err)
+		}
+	}
+}
+
+func TestExplicitProbeDiagnosticsDoNotEchoUpstream(t *testing.T) {
+	for _, tc := range []struct {
+		status     int
+		body, want string
+	}{
+		{401, "SECRET", "authentication"},
+		{500, `{"status":"error","error":"SECRET ring failure"}`, "query and storage health"},
+		{200, "<html>SECRET</html>", "API base path"},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(tc.status)
+			_, _ = w.Write([]byte(tc.body))
+		}))
+		c := &Client{manualURL: srv.URL, httpClient: srv.Client()}
+		_, _, err := c.EnsureConnected(context.Background())
+		srv.Close()
+		if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "SECRET") {
+			t.Fatalf("unsafe/unhelpful error: %v", err)
+		}
 	}
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { allShellSafe, isShellSafeValue } from './shell-safe'
+import { allShellSafe, isShellSafeAWSProfile, isShellSafeValue } from './shell-safe'
 
 describe('isShellSafeValue', () => {
   it('accepts the values real provider context names produce', () => {
@@ -51,5 +51,29 @@ describe('allShellSafe', () => {
     expect(allShellSafe('prod', 'us-east-1', '123456789012')).toBe(true)
     expect(allShellSafe('prod', 'us-east-1; id')).toBe(false)
     expect(allShellSafe('prod', null)).toBe(false)
+  })
+})
+
+describe('isShellSafeAWSProfile', () => {
+  it('accepts simple and slash-separated profile names', () => {
+    expect(isShellSafeAWSProfile('default')).toBe(true)
+    expect(isShellSafeAWSProfile('myorg/my-account/my-role')).toBe(true)
+    expect(isShellSafeAWSProfile('prod-account')).toBe(true)
+  })
+
+  it('rejects shell metacharacters', () => {
+    expect(isShellSafeAWSProfile('prod; id')).toBe(false)
+    expect(isShellSafeAWSProfile('prod$(id)')).toBe(false)
+    expect(isShellSafeAWSProfile('prod profile')).toBe(false)
+  })
+
+  it('rejects leading dash', () => {
+    expect(isShellSafeAWSProfile('-rf')).toBe(false)
+  })
+
+  it('rejects empty and absent values', () => {
+    expect(isShellSafeAWSProfile('')).toBe(false)
+    expect(isShellSafeAWSProfile(null)).toBe(false)
+    expect(isShellSafeAWSProfile(undefined)).toBe(false)
   })
 })

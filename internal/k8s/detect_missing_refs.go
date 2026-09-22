@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"log"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +36,7 @@ import (
 //   - HPA → scaleTargetRef                       (HPA inert until target exists)
 //   - Ingress → backend Service                  (route returns nothing)
 //   - Ingress → backend service port             (proxy config breaks, traffic dropped)
+//   - Ingress → ALB action annotation            (use-annotation backend with no action to attach)
 //   - Ingress → TLS secretName                   (TLS falls back to default cert)
 //   - PVC → StorageClass (when specified)        (PVC stays Pending)
 //   - RoleBinding / ClusterRoleBinding → Role / ClusterRole (binding inert)
@@ -546,6 +548,7 @@ func detectIngressMissingBackend(cache *ResourceCache, namespace string, now tim
 		age := now.Sub(ing.CreationTimestamp.Time)
 		seenSvc := map[string]bool{}
 		seenSec := map[string]bool{}
+		seenAction := map[string]bool{}
 		classLister := cache.IngressClasses()
 		if age >= missingIngressClassGrace &&
 			ingressstatus.ClassifyUnresolvedClass(ing) == ingressstatus.NamedClassMissing &&
@@ -571,60 +574,119 @@ func detectIngressMissingBackend(cache *ResourceCache, namespace string, now tim
 			}
 		}
 
-		// checkBackend verifies (a) the Service exists, and (b) the port
+		// checkServiceBackend verifies (a) the Service exists, and (b) the port
 		// reference resolves against the Service's port list. A backend that
 		// names a Service which exists but doesn't expose the named/numbered
 		// port silently drops traffic just as badly as a missing Service.
-		checkBackend := func(b networkingv1.IngressServiceBackend, sourcePath string) {
-			if b.Name == "" {
+		checkServiceBackend := func(svcName, portName string, portNumber int32, sourcePath string) {
+			if svcName == "" {
 				return
 			}
-			key := b.Name + "|" + b.Port.Name + "|" + fmt.Sprint(b.Port.Number)
+			key := svcName + "|" + portName + "|" + fmt.Sprint(portNumber)
 			if seenSvc[key] {
 				return
 			}
 			seenSvc[key] = true
-			svc, err := svcLister.Services(ing.Namespace).Get(b.Name)
+			svc, err := svcLister.Services(ing.Namespace).Get(svcName)
 			if err != nil {
 				// Unverifiable (uncovered namespace / non-NotFound error): stay
 				// silent — can't confirm the Service NOR check its ports.
 				if refKnownMissing(cache, "services", ing.Namespace, err) {
 					out = append(out, withFix(missingRefProblem(now, "Ingress", "networking.k8s.io", ing.Namespace, ing.Name,
 						"Missing backend Service",
-						fmt.Sprintf("%s references Service %q which does not exist", sourcePath, b.Name),
+						fmt.Sprintf("%s references Service %q which does not exist", sourcePath, svcName),
 						ing.CreationTimestamp.Time),
-						fmt.Sprintf("Service %q doesn't exist, so this route serves nothing.", b.Name),
-						fmt.Sprintf("Point the backend at an existing Service in namespace %q, remove the stale backend, or create Service %q if it should still receive traffic.", ing.Namespace, b.Name)))
+						fmt.Sprintf("Service %q doesn't exist, so this route serves nothing.", svcName),
+						fmt.Sprintf("Point the backend at an existing Service in namespace %q, remove the stale backend, or create Service %q if it should still receive traffic.", ing.Namespace, svcName)))
 				}
 				return
 			}
 			// Service exists — verify the port resolves.
-			if b.Port.Name == "" && b.Port.Number == 0 {
+			if portName == "" && portNumber == 0 {
 				return
 			}
 			matched := false
 			for _, sp := range svc.Spec.Ports {
-				if b.Port.Name != "" && sp.Name == b.Port.Name {
+				if portName != "" && sp.Name == portName {
 					matched = true
 					break
 				}
-				if b.Port.Number != 0 && sp.Port == b.Port.Number {
+				if portNumber != 0 && sp.Port == portNumber {
 					matched = true
 					break
 				}
 			}
 			if !matched {
-				portDesc := b.Port.Name
+				portDesc := portName
 				if portDesc == "" {
-					portDesc = fmt.Sprintf("%d", b.Port.Number)
+					portDesc = fmt.Sprintf("%d", portNumber)
 				}
 				out = append(out, withFix(missingRefProblem(now, "Ingress", "networking.k8s.io", ing.Namespace, ing.Name,
 					"Missing backend Service port",
-					fmt.Sprintf("%s targets Service %q port %q which the Service does not expose", sourcePath, b.Name, portDesc),
+					fmt.Sprintf("%s targets Service %q port %q which the Service does not expose", sourcePath, svcName, portDesc),
 					ing.CreationTimestamp.Time),
-					fmt.Sprintf("Service %q does not expose port %q, so traffic to this route is dropped.", b.Name, portDesc),
-					fmt.Sprintf("Point the backend at a port Service %q already exposes in namespace %q, or add port %q to the Service's spec.ports if it should expose it.", b.Name, ing.Namespace, portDesc)))
+					fmt.Sprintf("Service %q does not expose port %q, so traffic to this route is dropped.", svcName, portDesc),
+					fmt.Sprintf("Point the backend at a port Service %q already exposes in namespace %q, or add port %q to the Service's spec.ports if it should expose it.", svcName, ing.Namespace, portDesc)))
 			}
+		}
+
+		// checkALBActionBackend resolves a use-annotation backend the way the
+		// AWS Load Balancer Controller does. The Service/port pair in the rule
+		// is inert, and the route's real backends come from the action
+		// annotation named after the backend.
+		checkALBActionBackend := func(svcName, sourcePath string) {
+			if svcName == "" || seenAction[svcName] {
+				return
+			}
+			seenAction[svcName] = true
+			annotation := ALBActionAnnotation(svcName)
+			targets, found, malformed := parseALBAction(ing.Annotations, svcName)
+			switch {
+			case !found:
+				out = append(out, withFix(missingRefProblem(now, "Ingress", "networking.k8s.io", ing.Namespace, ing.Name,
+					"Missing ALB action annotation",
+					fmt.Sprintf("%s uses port %q for backend %q but annotation %q is not set", sourcePath, albActionSentinel, svcName, annotation),
+					ing.CreationTimestamp.Time),
+					fmt.Sprintf("Backend %q resolves through annotation %q, which doesn't exist, so the controller serves a fixed 503 response on this route instead.", svcName, annotation),
+					fmt.Sprintf("Add annotation %q describing a forward, redirect, or fixed-response action, or point the backend at a Service port instead of %q.", annotation, albActionSentinel)))
+				return
+			case malformed:
+				out = append(out, withFix(missingRefProblem(now, "Ingress", "networking.k8s.io", ing.Namespace, ing.Name,
+					"Invalid ALB action annotation",
+					fmt.Sprintf("%s resolves through annotation %q which is not valid action JSON", sourcePath, annotation),
+					ing.CreationTimestamp.Time),
+					fmt.Sprintf("Annotation %q can't be parsed, so the controller fails to reconcile this Ingress and stops applying changes for its whole ingress group.", annotation),
+					fmt.Sprintf("Fix the JSON in annotation %q so it describes a forward, redirect, or fixed-response action.", annotation)))
+				return
+			}
+			for _, target := range targets {
+				portName, portNumber := target.ServicePort, int32(0)
+				if n, err := strconv.ParseInt(portName, 10, 32); err == nil {
+					portName, portNumber = "", int32(n)
+				}
+				checkServiceBackend(target.ServiceName, portName, portNumber, fmt.Sprintf("%s via annotation %q", sourcePath, annotation))
+			}
+		}
+
+		// Only the AWS Load Balancer Controller treats use-annotation as a
+		// sentinel. Under any other controller it is an ordinary port name. An
+		// unidentified controller is left alone.
+		var albServed, albKnown, albResolved bool
+		checkBackend := func(b networkingv1.IngressServiceBackend, sourcePath string) {
+			if b.Port.Name == albActionSentinel {
+				if !albResolved {
+					albServed, albKnown = ingressServedByALB(cache, ing)
+					albResolved = true
+				}
+				if albServed {
+					checkALBActionBackend(b.Name, sourcePath)
+					return
+				}
+				if !albKnown {
+					return
+				}
+			}
+			checkServiceBackend(b.Name, b.Port.Name, b.Port.Number, sourcePath)
 		}
 
 		if ing.Spec.DefaultBackend != nil && ing.Spec.DefaultBackend.Service != nil {

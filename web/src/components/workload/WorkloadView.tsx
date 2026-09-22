@@ -29,6 +29,7 @@ import {
   type WorkloadImageTarget,
 } from '@skyhook-io/k8s-ui'
 import type { ServicePortRenderProps } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
+import { isJobSetV1Alpha2 } from '@skyhook-io/k8s-ui/components/resources/resource-utils-jobset-lws'
 import type { SelectedResource, ResourceRef, Relationships, ResourceWithRelationships } from '../../types'
 import {
   kindToPlural,
@@ -70,6 +71,8 @@ import {
   useCordonNode,
   useUncordonNode,
   useDrainNode,
+  useDrainPlan,
+  DrainPlanUnsupportedError,
   useCascadeDeletePreview,
   useResourceEvents,
   useResource,
@@ -81,7 +84,7 @@ import {
 import { PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
 import { RestartEventLane } from '../resource/RestartChart'
-import { RightsizingPanel, RightsizingStrip } from '../resource/RightsizingStrip'
+import { RightsizingPanel } from '../resource/RightsizingStrip'
 import { WorkloadCostTab } from '../cost/WorkloadCostTab'
 import { isOpenCostWorkloadKind } from '../cost/kinds'
 import { useResourceAudit, useResourceIssues, useResources, useTrace, fetchTraceWithProbes, fetchInClusterCapability, runInClusterMerged } from '../../api/client'
@@ -119,6 +122,7 @@ import { ServiceAccountRenderer } from '../resources/renderers/ServiceAccountRen
 import { RoleRenderer } from '../resources/renderers/RoleRenderer'
 import { RoleBindingRenderer } from '../resources/renderers/RoleBindingRenderer'
 import { NamespaceRenderer } from '../resources/renderers/NamespaceRenderer'
+import { CAPIClusterRenderer } from '../resources/renderers/CAPIClusterRenderer'
 import { HPARenderer } from '../resources/renderers/HPARenderer'
 import { PVCRenderer } from '../resources/renderers/PVCRenderer'
 import { RolloutRenderer } from '../resources/renderers/RolloutRenderer'
@@ -150,10 +154,21 @@ const BATCH_EXECUTION_KINDS = new Set([
   'WorkflowTemplate',
   'ClusterWorkflowTemplate',
   'ScaledJob',
+  'JobSet',
 ])
+
+export function supportsBatchExecution(kind: string, apiKind: string, group?: string, apiVersion?: string): boolean {
+  if (!BATCH_EXECUTION_KINDS.has(kind)) return false
+  if (kind === 'Job') return isCoreBatchJob(apiKind, group)
+  if (kind === 'JobSet') {
+    return group === 'jobset.x-k8s.io' && isJobSetV1Alpha2({ kind, apiVersion })
+  }
+  return true
+}
 
 // Stable reference — web renderer wrappers inject platform hooks internally
 const rendererOverrides: RendererOverrides = {
+  CAPIClusterRenderer,
   PodRenderer,
   KarpenterNodePoolRenderer,
   NodeRenderer,
@@ -381,6 +396,7 @@ function useActionsBarProps(
   const cordonMutation = useCordonNode()
   const uncordonMutation = useUncordonNode()
   const drainMutation = useDrainNode()
+  const drainPlanMutation = useDrainPlan()
 
   const { renderAction: renderDiagnose } = useDiagnoseCustomization()
 
@@ -485,6 +501,13 @@ function useActionsBarProps(
     onDrainNode: (params: Parameters<typeof drainMutation.mutate>[0]) =>
       drainMutation.mutate(params),
     isDrainingNode: drainMutation.isPending,
+    onPlanDrain: (params: Parameters<typeof drainPlanMutation.mutate>[0]) =>
+      drainPlanMutation.mutate(params),
+    onPlanDrainReset: () => drainPlanMutation.reset(),
+    drainPlan: drainPlanMutation.data ?? null,
+    isPlanningDrain: drainPlanMutation.isPending,
+    drainPlanError: drainPlanMutation.error?.message ?? null,
+    drainPlanUnsupported: drainPlanMutation.error instanceof DrainPlanUnsupportedError,
   }
 }
 
@@ -538,18 +561,6 @@ export function WorkloadView({
     [searchParams, setSearchParams],
   )
 
-  const batchKind = pluralToKind(apiKind)
-  const batchExecution = BATCH_EXECUTION_KINDS.has(batchKind) &&
-    (batchKind !== 'Job' || isCoreBatchJob(apiKind, rest.group))
-  const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
-    refetchActive: true,
-    clusterScoped: batchKind === 'ClusterWorkflowTemplate',
-  })
-  const relatedTimelineEvents = useMemo(
-    () => workloadRunTimelineEvents(batchRunsQuery.data?.runs ?? []),
-    [batchRunsQuery.data?.runs],
-  )
-
   // Fetch resource with relationships
   const {
     data: resourceResponse,
@@ -569,6 +580,16 @@ export function WorkloadView({
   // of itself. Fall back to the group derived from the fetched resource, then
   // to undefined (which the gate treats as "group unknown → allow").
   const effectiveGroup = rest.group || resourceGroup || undefined
+  const batchKind = pluralToKind(apiKind)
+  const batchExecution = supportsBatchExecution(batchKind, apiKind, effectiveGroup, resource?.apiVersion)
+  const batchRunsQuery = useWorkloadRuns(apiKind, namespace, name, expanded && batchExecution, {
+    refetchActive: true,
+    clusterScoped: batchKind === 'ClusterWorkflowTemplate',
+  })
+  const relatedTimelineEvents = useMemo(
+    () => batchKind === 'JobSet' ? [] : workloadRunTimelineEvents(batchRunsQuery.data?.runs ?? []),
+    [batchKind, batchRunsQuery.data?.runs],
+  )
   // Reachability for a workload IS the reachability of the Services in front of
   // it - a Deployment has no address of its own. Empty for a workload nothing
   // selects, which correctly leaves the tab hidden: there is no path to trace.
@@ -732,9 +753,15 @@ export function WorkloadView({
     [helmOwner, helmSourceResource],
   )
 
-  // Fetch topology for hierarchy building (only when expanded)
+  // Fetch topology for hierarchy building (only when expanded). Polled like
+  // useTrace's "drawer feeling live" pattern — without this, a resource
+  // whose status/labels/edges change without its node/edge identity changing
+  // (a canary weight step, a Pod's traffic role flipping to stable, an
+  // AnalysisRun finishing) never refreshes until something else forces a
+  // remount; a genuinely stuck-looking Topology tab, not just a stale one.
   const { data: topology } = useTopology([namespace], 'resources', {
     enabled: expanded,
+    refetchInterval: expanded ? 5000 : false,
   })
 
   // Always fetched so Recent Events populates on drawer open; allEvents below is
@@ -1153,7 +1180,7 @@ export function WorkloadView({
         // Timeline
         allEvents={allEvents}
         relatedTimelineEvents={relatedTimelineEvents}
-        eventsLoading={eventsLoading || (batchExecution && batchRunsQuery.isLoading)}
+        eventsLoading={eventsLoading || (batchExecution && batchKind !== 'JobSet' && batchRunsQuery.isLoading)}
         topology={topology}
         resourceFocusedK8sEvents={resourceFocusedK8sEvents}
         resourceFocusedUpdates={resourceFocusedUpdates}
@@ -1183,8 +1210,7 @@ export function WorkloadView({
           />
         )}
         renderExpandedOverview={({ kind: k, apiKind, namespace: ns, name: n, resource: res }) =>
-          BATCH_EXECUTION_KINDS.has(k) &&
-          (k !== 'Job' || isCoreBatchJob(apiKind, effectiveGroup)) &&
+          supportsBatchExecution(k, apiKind, effectiveGroup, res?.apiVersion) &&
           res ? (
             <BatchExecutionFullscreen
               kind={k}
@@ -1545,6 +1571,7 @@ const SCHEDULED_LOG_KINDS = new Set([
   'WorkflowTemplate',
   'ClusterWorkflowTemplate',
   'ScaledJob',
+  'JobSet',
 ])
 
 function LogsTabContent({
@@ -1576,7 +1603,7 @@ function LogsTabContent({
   selectedRunKey: string
   onSelectRun: (runKey: string) => void
 }) {
-  if (SCHEDULED_LOG_KINDS.has(kind)) {
+  if (SCHEDULED_LOG_KINDS.has(kind) && supportsBatchExecution(kind, apiKind, group, resource?.apiVersion)) {
     return (
       <div className="h-full">
         <ScheduledWorkloadLogsViewer
@@ -2411,16 +2438,9 @@ function MetricsTabContent({
   resource: any
   expanded: boolean
 }) {
-  const showRightsizing = expanded && ['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind)
-
   if (expanded) {
     return (
       <div className="flex flex-col h-full">
-        {showRightsizing && (
-          <div className="px-4 pt-4">
-            <RightsizingStrip kind={kind} namespace={namespace} name={name} />
-          </div>
-        )}
         <div className="flex-1 min-h-0">
           <PrometheusChartsGrid kind={kind} namespace={namespace} name={name} resource={resource} />
         </div>
@@ -2446,9 +2466,17 @@ function DrawerMetricsContent({
 }) {
   const [chartRange, setChartRange] = useState<import('../../api/client').PrometheusTimeRange>('1h')
   const showRestartLane = isPrometheusSupported(kind) && kind !== 'Node'
+  const navigate = useNavigate()
 
   return (
     <div className="flex flex-col h-full">
+      {['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind) && (
+        <div className="px-4 pt-3">
+          <button className="text-xs text-accent hover:underline" onClick={() => navigate(`${buildWorkloadPath({ kind, namespace, name })}?tab=metrics&metricsRange=${chartRange}`)}>
+            Open request and resource dashboard →
+          </button>
+        </div>
+      )}
       <div className="flex-1 min-h-0">
         <PrometheusCharts
           kind={kind}

@@ -49,9 +49,11 @@ import (
 	"github.com/skyhook-io/radar/internal/summarycontext"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	bpaudit "github.com/skyhook-io/radar/pkg/audit"
+	"github.com/skyhook-io/radar/pkg/executioninsight"
 	"github.com/skyhook-io/radar/pkg/policyreports"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/schedulinginsight"
+	"github.com/skyhook-io/radar/pkg/servinginsight"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -464,14 +466,17 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	canonicalGroup := gvk.Group
 
 	issueSum := computeIssueSummaryForResource(cache, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), canonicalGroup, canonicalKind, namespace, name)
-	auditSum := computeAuditSummaryForResource(cache, canonicalGroup, canonicalKind, namespace, name)
+	auditSum := s.computeAuditSummaryForResource(r, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
+		Reflections:   k8s.ReflectionLookup{Cache: cache},
 		Tier:          resourcecontext.TierBasic,
 		AccessChecker: s.newRequestScopedChecker(r),
 		IssueSummary:  issueSum,
 		AuditSummary:  auditSum,
 		Scheduling:    schedulinginsight.ForResource(obj, resourcecontext.TierBasic),
+		Execution:     executioninsight.ForResource(obj, resourcecontext.TierBasic),
+		Serving:       servinginsight.ForResource(obj),
 		AppReferences: resourcecontextrefs.AppReferencesFromEnvChecks(
 			k8s.FindEnvServiceRefChecksForObject(cache, obj),
 			k8s.FindDuplicateEnvVarsForObject(obj),
@@ -614,11 +619,11 @@ func computeIssueSummaryAndRows(cache *k8s.ResourceCache, canReadClusterScoped f
 	}, matched
 }
 
-func computeAuditSummaryForResource(cache *k8s.ResourceCache, group, kind, namespace, name string) *resourcecontext.AuditSummary {
-	sum, _ := auditcontext.SummarizeResource(cache, group, kind, namespace, name)
+func (s *Server) computeAuditSummaryForResource(r *http.Request, cache *k8s.ResourceCache, group, kind, namespace, name string) *resourcecontext.AuditSummary {
+	sum, _ := auditcontext.SummarizeResource(cache, group, kind, namespace, name, s.auditOptions(r))
 	return sum
 }
 
-func computeAuditSummaryAndRows(cache *k8s.ResourceCache, group, kind, namespace, name string) (*resourcecontext.AuditSummary, []bpaudit.Finding) {
-	return auditcontext.SummarizeResource(cache, group, kind, namespace, name)
+func (s *Server) computeAuditSummaryAndRows(r *http.Request, cache *k8s.ResourceCache, group, kind, namespace, name string) (*resourcecontext.AuditSummary, []bpaudit.Finding) {
+	return auditcontext.SummarizeResource(cache, group, kind, namespace, name, s.auditOptions(r))
 }

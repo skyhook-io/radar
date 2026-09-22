@@ -80,6 +80,14 @@ func TestComputeKubecostSummaryFallsBackFromNullHourAndNormalizesActualDuration(
 	if resp.TotalIdleCost != 2.25 {
 		t.Fatalf("totalIdleCost = %v, want 2.25", resp.TotalIdleCost)
 	}
+	// The idle total adds unrequested node capacity (__idle__, 24 over a day)
+	// to requested-but-unused capacity; the two are reported apart too.
+	if resp.TotalUnallocatedCost == nil || *resp.TotalUnallocatedCost != 1 || resp.TotalUnusedRequestCost != 1.25 {
+		t.Fatalf("idle split = unallocated %v, unused request %v; want 1 and 1.25", resp.TotalUnallocatedCost, resp.TotalUnusedRequestCost)
+	}
+	if resp.TotalAllocatedCost != 2.75 || resp.HourlyCostBasis != HourlyCostBasisAllocated {
+		t.Fatalf("allocated = %v basis %q, want 2.75 allocated", resp.TotalAllocatedCost, resp.HourlyCostBasis)
+	}
 	if len(transport.requests) != 2 || transport.requests[0].params.Get("window") != "1h" || transport.requests[1].params.Get("window") != "24h" {
 		t.Fatalf("requests = %#v, want 1h then rolling 24h", transport.requests)
 	}
@@ -519,5 +527,21 @@ func TestKubecostUsageCostDistinguishesUnavailableFromZero(t *testing.T) {
 	}
 	if cost, available := kubecostUsageCost(1, floatPointer(2), floatPointer(0)); !available || cost != 0 {
 		t.Fatalf("zero usage = (%v, %v), want (0, true)", cost, available)
+	}
+}
+
+func TestComputeKubecostSummaryUnallocatedIncludesGPUIdle(t *testing.T) {
+	transport := &fakeKubecostTransport{responses: []string{
+		`{"code":200,"data":[{"__idle__/__idle__":{"properties":{"cluster":"__idle__","namespace":"__idle__"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":1,"ramCost":1,"totalCost":5},"c/demo":{"properties":{"cluster":"c","namespace":"demo"},"start":"2026-08-26T00:00:00Z","end":"2026-08-26T01:00:00Z","cpuCost":2,"ramCost":2,"totalCost":4}}]}`,
+	}}
+	resp, err := ComputeKubecostSummary(context.Background(), NewKubecostClient(transport), KubecostCurrentOptions{ClusterID: "c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.TotalUnallocatedCost == nil || *resp.TotalUnallocatedCost != 5 {
+		t.Errorf("TotalUnallocatedCost=%v, want 5: the idle row's total carries GPU idle", resp.TotalUnallocatedCost)
+	}
+	if resp.TotalIdleCost != 2 {
+		t.Errorf("TotalIdleCost=%v, want 2: the Costs UI keeps its CPU+RAM basis", resp.TotalIdleCost)
 	}
 }

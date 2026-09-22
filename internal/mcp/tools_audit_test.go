@@ -24,7 +24,7 @@ func TestCollectAuditToolFindingsUsesCanonicalSeverity(t *testing.T) {
 		},
 	}
 
-	categories, findings := collectAuditToolFindings(raw, bp.CheckRegistry, nil, "", "")
+	categories, findings := collectAuditToolFindings(raw, bp.CheckRegistry, "", "")
 	if len(findings) != 2 {
 		t.Fatalf("findings = %d, want 2", len(findings))
 	}
@@ -61,7 +61,7 @@ func TestCollectAuditToolFindingsFiltersCanonicalSeverity(t *testing.T) {
 		{filter: checks.SeverityMedium, want: checks.SeverityMedium},
 	} {
 		t.Run(string(tc.filter), func(t *testing.T) {
-			categories, findings := collectAuditToolFindings(raw, bp.CheckRegistry, nil, "", tc.filter)
+			categories, findings := collectAuditToolFindings(raw, bp.CheckRegistry, "", tc.filter)
 			if len(findings) != 1 || findings[0].Severity != tc.want {
 				t.Fatalf("findings = %+v, want one %s finding", findings, tc.want)
 			}

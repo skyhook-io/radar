@@ -398,7 +398,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// Cert health is derived from TLS Secrets — gate by per-user secrets RBAC.
 	resp.CertificateHealth = s.getDashboardCertificateHealth(s.secretReadableNamespaces(r, namespaces))
 	resp.NetworkPolicyCoverage = s.getDashboardNetworkPolicyCoverage(r, cache, namespaces)
-	resp.Audit = getDashboardAudit(cache, namespaces)
+	resp.Audit = s.getDashboardAudit(r, cache, namespaces)
 	resp.GitOpsControllers = s.getDashboardGitOpsControllers(cache, namespaces)
 
 	if canReadNodes {
@@ -1891,10 +1891,11 @@ func (s *Server) getDashboardNetworkPolicyCoverage(r *http.Request, cache *k8s.R
 
 // DashboardAudit is the audit summary in the dashboard response.
 type DashboardAudit struct {
-	Passing    int                                 `json:"passing"`
-	Warning    int                                 `json:"warning"`
-	Danger     int                                 `json:"danger"`
-	Categories map[string]DashboardCategorySummary `json:"categories"`
+	MissingInputs []string                            `json:"missingInputs,omitempty"`
+	Passing       int                                 `json:"passing"`
+	Warning       int                                 `json:"warning"`
+	Danger        int                                 `json:"danger"`
+	Categories    map[string]DashboardCategorySummary `json:"categories"`
 }
 
 // DashboardCategorySummary provides per-category counts for the dashboard.
@@ -1904,8 +1905,8 @@ type DashboardCategorySummary struct {
 	Danger  int `json:"danger"`
 }
 
-func getDashboardAudit(cache *k8s.ResourceCache, namespaces []string) *DashboardAudit {
-	results := applyAuditSettings(getCachedResults(cache, namespaces), getAuditConfig())
+func (s *Server) getDashboardAudit(r *http.Request, cache *k8s.ResourceCache, namespaces []string) *DashboardAudit {
+	results := applyAuditSettings(getCachedResults(cache, namespaces, s.auditOptions(r)), getAuditConfig())
 	if results == nil {
 		return nil
 	}
@@ -1918,9 +1919,10 @@ func getDashboardAudit(cache *k8s.ResourceCache, namespaces []string) *Dashboard
 		}
 	}
 	return &DashboardAudit{
-		Passing:    results.Summary.Passing,
-		Warning:    results.Summary.Warning,
-		Danger:     results.Summary.Danger,
-		Categories: cats,
+		MissingInputs: results.MissingInputs,
+		Passing:       results.Summary.Passing,
+		Warning:       results.Summary.Warning,
+		Danger:        results.Summary.Danger,
+		Categories:    cats,
 	}
 }

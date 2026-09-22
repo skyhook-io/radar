@@ -42,6 +42,7 @@ import type { TimelineSourceConfig } from "./api/timelineSource";
 import { DiagnoseCustomizationProvider } from "./context/DiagnoseCustomization";
 import type {
   RenderDiagnoseAction,
+  RenderInvestigationRunActions,
   DiagnoseConsentCopy,
 } from "./context/DiagnoseCustomization";
 import { defaultDiagnoseAction } from "./components/diagnose/LocalDiagnoseAction";
@@ -83,12 +84,7 @@ export interface RadarAppProps {
    * prefer to share its client rather than nest two providers.
    */
   queryClient?: QueryClient;
-  /**
-   * Slot-based customization of Radar's top nav. Use to inject host-app
-   * brand, replace the kubeconfig context picker with a product-level
-   * cluster switcher, and append items to the right action bar.
-   * See ./context/NavCustomization for the slot shape.
-   */
+  /** Embedded layout and host navigation hooks for Radar Hub. */
   navSlots?: NavCustomization;
   /**
    * Whether Radar may set the browser tab title (`document.title`) per view.
@@ -113,6 +109,8 @@ export interface RadarAppProps {
    * agent-free. See ./context/DiagnoseCustomization for the render-prop shape.
    */
   renderDiagnoseAction?: RenderDiagnoseAction;
+  /** Host-owned controls for the focused investigation; absent in standalone Radar. */
+  renderInvestigationRunActions?: RenderInvestigationRunActions;
   /**
    * Replaces the first-run consent card's trust copy. REQUIRED of any host whose
    * backend runs the agent somewhere other than the user's own machine — the
@@ -125,14 +123,14 @@ export interface RadarAppProps {
   /**
    * Initial route for `router: 'memory'` (ignored for 'browser'). Lets a host
    * deep-link a specific view (e.g. '/topology') without owning the URL bar —
-   * used with `navSlots.chrome: 'none'` to render a single per-cluster view
+   * used with `navSlots.embedded: true` to render a single per-cluster view
    * chromeless under the host's own chrome (Radar Hub's per-cluster destinations).
    */
   initialPath?: string;
   /**
    * Reports cluster-data warmup after the main connection is usable. Embedders
    * with their own chrome (Radar Hub) can render this in their topbar while
-   * Radar runs with `navSlots.chrome: 'none'`.
+   * Radar runs with `navSlots.embedded: true`.
    */
   onClusterLoadStateChange?: (state: ClusterLoadState) => void;
   /**
@@ -202,6 +200,7 @@ export function RadarApp({
   manageDocumentTitle = false,
   documentTitleSuffix,
   renderDiagnoseAction,
+  renderInvestigationRunActions,
   diagnoseConsent,
   initialPath,
   onClusterLoadStateChange,
@@ -234,6 +233,7 @@ export function RadarApp({
                 <DiagnoseCustomizationProvider
                   value={renderDiagnoseAction ?? defaultDiagnoseAction}
                   consentCopy={diagnoseConsent}
+                  renderRunActions={renderInvestigationRunActions}
                 >
                   <DiagnoseProvider
                     browserURLState={router !== "memory"}

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/investigation"
 )
 
 // RunManager owns AI investigations as durable, server-side jobs. An investigation
@@ -31,7 +33,7 @@ import (
 type RunManager struct {
 	d           *Diagnoser
 	diagnose    func(context.Context, Request, func(StreamEvent)) (Diagnosis, error)
-	mcpPort     func() int    // resolved lazily — the listener port isn't known at construction
+	mcpAddress  func() string // resolved lazily — the listener port isn't known at construction
 	mcpBasePath string        // --base-path prefix the MCP mounts sit under ("" at the root)
 	mcpToken    string        // per-process bearer token for write-capable local turns
 	ctxLabel    func() string // current kube-context label, for the run's baseline
@@ -205,11 +207,11 @@ func turnTimeout() time.Duration {
 	return defaultTurnTimeout
 }
 
-// NewRunManager builds a manager over a resolved Diagnoser. mcpPort/ctxLabel are
+// NewRunManager builds a manager over a resolved Diagnoser. mcpAddress/ctxLabel are
 // callbacks because the listener port and kube-context are only known at runtime.
 // store persists history across restarts (nil = memory-only); persisted runs are
 // hydrated into the manager here.
-func NewRunManager(d *Diagnoser, mcpPort func() int, mcpBasePath string, ctxLabel func() string, store RunStore) *RunManager {
+func NewRunManager(d *Diagnoser, mcpAddress func() string, mcpBasePath string, ctxLabel func() string, store RunStore) *RunManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	// Best-effort: a failure here just means runs get no shared workdir (logged).
 	root, err := os.MkdirTemp("", "radar-ai-")
@@ -219,7 +221,7 @@ func NewRunManager(d *Diagnoser, mcpPort func() int, mcpBasePath string, ctxLabe
 	}
 	m := &RunManager{
 		d:             d,
-		mcpPort:       mcpPort,
+		mcpAddress:    mcpAddress,
 		mcpBasePath:   mcpBasePath,
 		ctxLabel:      ctxLabel,
 		baseCtx:       ctx,
@@ -616,31 +618,6 @@ type runTurn struct {
 	timeout           time.Duration
 }
 
-func isRadarWriteTool(tool string) bool {
-	tool = normalizeRadarToolName(tool)
-	for _, candidate := range radarWriteTools {
-		if tool == candidate {
-			return true
-		}
-	}
-	return false
-}
-
-func isRadarReadTool(tool string) bool {
-	tool = normalizeRadarToolName(tool)
-	for _, candidate := range radarReadTools {
-		if tool == candidate {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeRadarToolName(tool string) string {
-	tool = strings.TrimPrefix(tool, "mcp__radar__")
-	return strings.TrimPrefix(tool, "radar.")
-}
-
 // launchTurn emits a turn marker then runs the agent in a manager-owned goroutine.
 // The caller has already marked the run in-flight (atomically with the cap check).
 // Subscribers stay attached across turns — only stale / evict closes them (a
@@ -709,7 +686,7 @@ func (m *RunManager) executeTurns(r *Run, turn runTurn) {
 		var mutation applyMutationTracker
 		diag, err := diagnose(turn.ctx, Request{
 			Kind: r.Kind, Group: r.Group, Namespace: r.Namespace, Name: r.Name,
-			MCPPort: m.mcpPort(), MCPBasePath: m.mcpBasePath, MCPToken: m.mcpToken,
+			MCPAddress: m.mcpAddress(), MCPBasePath: m.mcpBasePath, MCPToken: m.mcpToken,
 			EvidenceScope: turn.evidenceScope, SessionID: turn.canonicalSession,
 			Question: turn.question, Apply: turn.apply, Fix: turn.fix, Verify: turn.verify,
 			Explanation: turn.explanation,
@@ -922,15 +899,16 @@ func (r *Run) finishTurnWithBarrier(diag Diagnosis, turnErr error, apply bool, t
 	if r.activeTurnLocked().ExplainAssessment != 0 {
 		// An explanation is prose about a saved assessment, even if the model
 		// repeats the structured diagnosis format from its resumed session.
-		diag = Diagnosis{Report: diag.Report, SessionID: diag.SessionID, CostUSD: diag.CostUSD, Turns: diag.Turns}
+		diag = Diagnosis{Verdict: diag.Verdict.AsExplanation(), SessionID: diag.SessionID, CostUSD: diag.CostUSD, Turns: diag.Turns}
 	}
 	if !apply {
 		r.bindRootCauseEvidenceLocked(&diag)
 	}
-	if diag.RootCause != "" {
-		r.preview = diag.RootCause
-	} else if diag.Healthy {
-		r.preview = "Healthy"
+	if diag.SettleRevision() {
+		log.Printf("[ai] run %s: revises_assessment set without a complete verdict; treating the turn as an answer", r.ID)
+	}
+	if preview := diag.Preview(); preview != "" {
+		r.preview = preview
 	}
 	r.status = "done"
 	if beforeTerminalAppend != nil {
@@ -941,12 +919,18 @@ func (r *Run) finishTurnWithBarrier(diag Diagnosis, turnErr error, apply bool, t
 }
 
 // bindRootCauseEvidenceLocked promotes the model's private reference request
-// only when every ref maps to exactly one complete, confirmed-success result in
-// the current turn AND to the exact clean producer payload Radar's private MCP
-// transport recorded while that turn's scope was active. The model-visible ref
-// is correlation data, not authority. The method scans canonical retained events
-// while r.mu is held, so a callback rejected after Stop/context-switch can never
-// become proof. Radar's read-tool allowlist is retained as defense in depth.
+// only when every ref maps to exactly one complete, confirmed-success read
+// result of this run. A ref from the current turn must also match the exact
+// clean producer payload Radar's private MCP transport recorded while the
+// turn's scope was active; a ref from an earlier turn is accepted on the
+// persisted RadarEvidence flag, which only that turn's stream validator could
+// have set against its own live lease. Widening to the run lets a revised
+// assessment keep the observations it still rests on — a previous log or a
+// resource state that may no longer be re-readable — while the frontend shows
+// when each was captured. The model-visible ref is correlation data, not
+// authority. The method scans canonical retained events while r.mu is held, so
+// a callback rejected after Stop/context-switch can never become proof. Radar's
+// read-tool allowlist is retained as defense in depth.
 //
 // The same match table binds the agent's case (Evidence, RuledOut) for every
 // assessment, healthy and inconclusive included; a failed item is dropped on
@@ -956,20 +940,16 @@ func (r *Run) bindRootCauseEvidenceLocked(diag *Diagnosis) {
 	// on every branch so the terminal in-memory event does not retain duplicate
 	// producer payloads or untrusted model requests after public provenance exists.
 	defer func() {
-		diag.evidenceRequest = evidenceReferenceRequest{}
-		diag.caseRequest = caseRequest{}
+		diag.citations = investigation.Citations{}
 		diag.evidenceScope = ""
 		diag.issuedEvidence = nil
 	}()
-	matches := r.turnEvidenceMatchesLocked(diag)
-	scopeValid := evidenceScopeRe.MatchString(diag.evidenceScope)
-	scopePrefix := "ev_" + diag.evidenceScope + "_"
+	matches := r.runEvidenceMatchesLocked(diag)
 	refLinked := func(ref string) bool {
 		candidate := matches[ref]
-		return scopeValid && strings.HasPrefix(ref, scopePrefix) && candidate.count == 1 && candidate.valid
+		return candidate.count == 1 && candidate.valid
 	}
-	bindRootCauseRefs(diag, refLinked)
-	bindCase(diag, refLinked)
+	investigation.Bind(&diag.Verdict, diag.citations, refLinked)
 }
 
 type evidenceMatch struct {
@@ -977,7 +957,7 @@ type evidenceMatch struct {
 	valid bool
 }
 
-func (r *Run) turnEvidenceMatchesLocked(diag *Diagnosis) map[string]evidenceMatch {
+func (r *Run) runEvidenceMatchesLocked(diag *Diagnosis) map[string]evidenceMatch {
 	turnStart := len(r.events)
 	for i := len(r.events) - 1; i >= 0; i-- {
 		if r.events[i].Event.Type == "turn" {
@@ -985,120 +965,80 @@ func (r *Run) turnEvidenceMatchesLocked(diag *Diagnosis) map[string]evidenceMatc
 			break
 		}
 	}
+	scopeValid := investigation.ValidScope(diag.evidenceScope)
+	scopePrefix := "ev_" + diag.evidenceScope + "_"
 	// Claude omits the tool name from terminal result rows, so establish one
-	// unambiguous tool identity per host call ID across the current turn before
+	// unambiguous tool identity per host call ID within each turn before
 	// evaluating marker-bearing results. Codex/Cursor repeat the name on done;
 	// accepting that exact terminal identity also keeps a dropped running event
-	// from needlessly invalidating otherwise complete evidence.
+	// from needlessly invalidating otherwise complete evidence. Call IDs repeat
+	// across turns, so the key carries the turn.
 	type toolIdentity struct {
 		name      string
 		known     bool
 		conflicts bool
 	}
-	toolsByStepID := make(map[string]toolIdentity)
-	for _, retained := range r.events[turnStart:] {
+	type stepKey struct {
+		turn int
+		id   string
+	}
+	toolsByStep := make(map[stepKey]toolIdentity)
+	turnOf := make([]int, len(r.events))
+	turn := 0
+	for i, retained := range r.events {
+		if retained.Event.Type == "turn" {
+			turn++
+		}
+		turnOf[i] = turn
 		step := retained.Event.Step
 		if retained.Event.Type != "step" || step == nil || step.ID == "" || step.Tool == "" {
 			continue
 		}
-		tool := normalizeRadarToolName(step.Tool)
-		identity := toolsByStepID[step.ID]
+		tool := investigation.NormalizeToolName(step.Tool)
+		key := stepKey{turn, step.ID}
+		identity := toolsByStep[key]
 		if !identity.known {
 			identity.name = tool
 			identity.known = true
 		} else if identity.name != tool {
 			identity.conflicts = true
 		}
-		toolsByStepID[step.ID] = identity
+		toolsByStep[key] = identity
 	}
 
 	matches := make(map[string]evidenceMatch)
-	for _, retained := range r.events[turnStart:] {
+	for i, retained := range r.events {
 		step := retained.Event.Step
 		if retained.Event.Type != "step" || step == nil || step.EvidenceRef == "" {
 			continue
 		}
 		candidate := matches[step.EvidenceRef]
 		candidate.count++
-		tool := toolsByStepID[step.ID]
-		issuedPayload, issued := diag.issuedEvidence[step.EvidenceRef]
+		tool := toolsByStep[stepKey{turnOf[i], step.ID}]
+		current := i >= turnStart
+		// The current turn is proven against the private transport snapshot
+		// taken as this turn closed. An earlier turn's snapshot is gone; its
+		// proof is the RadarEvidence flag its own validator persisted, and its
+		// ref must not carry this turn's scope (a marker minted now cannot have
+		// been observed then).
+		var authenticated bool
+		if current {
+			issuedPayload, issued := diag.issuedEvidence[step.EvidenceRef]
+			authenticated = scopeValid && strings.HasPrefix(step.EvidenceRef, scopePrefix) &&
+				issued && step.Result == issuedPayload
+		} else {
+			authenticated = !scopeValid || !strings.HasPrefix(step.EvidenceRef, scopePrefix)
+		}
 		candidate.valid = candidate.count == 1 &&
-			issued && step.Result == issuedPayload &&
+			authenticated &&
 			step.RadarEvidence &&
-			step.ID != "" && tool.known && !tool.conflicts && isRadarReadTool(tool.name) &&
+			step.ID != "" && tool.known && !tool.conflicts && investigation.IsReadOnlyTool(tool.name) &&
 			step.Status == "done" &&
 			step.IsError != nil && !*step.IsError &&
 			!step.Truncated && strings.TrimSpace(step.Result) != ""
 		matches[step.EvidenceRef] = candidate
 	}
 	return matches
-}
-
-func bindRootCauseRefs(diag *Diagnosis, refLinked func(string) bool) {
-	if diag.RootCause == "" {
-		diag.RootCauseEvidence = nil
-		return
-	}
-	request := diag.evidenceRequest
-	if request.invalid {
-		diag.RootCauseEvidence = &RootCauseEvidence{Status: EvidenceInvalid}
-		return
-	}
-	if !request.present || len(request.refs) == 0 {
-		diag.RootCauseEvidence = &RootCauseEvidence{Status: EvidenceMissing}
-		return
-	}
-	for _, ref := range request.refs {
-		if !refLinked(ref) {
-			diag.RootCauseEvidence = &RootCauseEvidence{Status: EvidenceInvalid}
-			return
-		}
-	}
-	diag.RootCauseEvidence = &RootCauseEvidence{
-		Status: EvidenceLinked,
-		Refs:   append([]string(nil), request.refs...),
-	}
-}
-
-// bindCase keeps every item at its parsed index so ruled_out indexes stay
-// meaningful; an item that fails validation becomes unlinked and a ruled-out
-// entry pointing at an unlinked or missing item is dropped.
-func bindCase(diag *Diagnosis, refLinked func(string) bool) {
-	request := diag.caseRequest
-	diag.Evidence = nil
-	diag.RuledOut = nil
-	if len(request.items) == 0 {
-		return
-	}
-	items := make([]DiagnosisEvidenceItem, len(request.items))
-	for i, item := range request.items {
-		if !item.valid || !refLinked(item.ref) {
-			items[i] = DiagnosisEvidenceItem{Status: EvidenceUnlinked}
-			continue
-		}
-		items[i] = DiagnosisEvidenceItem{
-			Status: EvidenceLinked, Ref: item.ref, Role: item.role, Claim: item.claim,
-		}
-		if item.subject != nil {
-			subject := *item.subject
-			if subject.Group != nil {
-				group := *subject.Group
-				subject.Group = &group
-			}
-			if subject.Namespace != nil {
-				namespace := *subject.Namespace
-				subject.Namespace = &namespace
-			}
-			items[i].Subject = &subject
-		}
-	}
-	diag.Evidence = items
-	for _, entry := range request.ruledOut {
-		if entry.EvidenceIndex >= len(items) || items[entry.EvidenceIndex].Status != EvidenceLinked {
-			continue
-		}
-		diag.RuledOut = append(diag.RuledOut, entry)
-	}
 }
 
 // Stop cancels a run's in-flight agent (killing its process group) and marks it stopped.

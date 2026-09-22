@@ -307,7 +307,7 @@ func TestArgoResourceChangesSyncResultGating(t *testing.T) {
 					"syncResult": tc.syncResult,
 				}},
 			})
-			out := argoResourceChanges(root, nil)
+			out := argoResourceChanges(root, nil, nil)
 			if len(out) != 1 {
 				t.Fatalf("expected 1 change, got %d", len(out))
 			}
@@ -929,13 +929,14 @@ type fakeResolver struct {
 	statuses map[string]string            // finalizer → status string
 	calls    []string                     // finalizers passed (in order)
 	problems map[string][]ResourceProblem // resource name → workload problems
+	events   map[string][]EventSummary    // resource name → recent events
 }
 
 func (f *fakeResolver) GetLive(string, string, string, string) *unstructured.Unstructured {
 	return nil
 }
-func (f *fakeResolver) RecentEvents(string, string, string, string) []EventSummary {
-	return nil
+func (f *fakeResolver) RecentEvents(_, _, _, name string) []EventSummary {
+	return f.events[name]
 }
 func (f *fakeResolver) ResourceProblems(_, _, _, name string) []ResourceProblem {
 	return f.problems[name]
@@ -984,6 +985,167 @@ func TestBuildIssues_EnrichesDegradedResourceWithWorkloadCause(t *testing.T) {
 	plain := resourceIssue(buildIssues(root, nil, "argocd", nil))
 	if plain == nil || plain.Cause != "" {
 		t.Errorf("nil resolver should yield a resource issue with empty Cause, got %+v", plain)
+	}
+}
+
+// TestBuildIssues_DegradedAppFallsBackToLoudestResourceEvent pins the
+// weakest attribution tier: an Application whose aggregate health is
+// Degraded with no per-resource health.status in status.resources[] (the
+// Argo CD 3.x default — resource health is no longer persisted in the CR),
+// and nothing classified by the issues engine for any managed resource. The
+// fallback attributes the app-level Degraded badge to the managed resource
+// with the loudest Warning event instead of leaving it unexplained.
+func TestBuildIssues_DegradedAppFallsBackToLoudestResourceEvent(t *testing.T) {
+	root := argoApp(map[string]any{
+		"health": map[string]any{"status": "Degraded"},
+		"resources": []any{
+			map[string]any{
+				"group": "external-secrets.io", "kind": "ClusterSecretStore", "name": "platform-secret-store",
+				"status": "Synced",
+			},
+			map[string]any{
+				"kind": "Namespace", "name": "platform-secrets",
+				"status": "Synced",
+			},
+		},
+	})
+	r := &fakeResolver{events: map[string][]EventSummary{
+		"platform-secret-store": {
+			{Type: "Warning", Reason: "InvalidProviderConfig", Message: "no route to host", Count: 17},
+			{Type: "Normal", Reason: "Synced", Message: "resource synced", Count: 40},
+		},
+	}}
+	issues := buildIssues(root, nil, "argocd", r)
+	if len(issues) != 1 {
+		t.Fatalf("expected exactly 1 fallback issue, got %d: %+v", len(issues), issues)
+	}
+	got := issues[0]
+	if got.Scope != ScopeResource {
+		t.Errorf("Scope = %q, want %q", got.Scope, ScopeResource)
+	}
+	if len(got.Refs) != 1 || got.Refs[0].Name != "platform-secret-store" {
+		t.Errorf("Refs = %+v, want a single ref to platform-secret-store", got.Refs)
+	}
+	if got.Reason != "PossibleCause" || got.Severity != SeverityWarning || got.Cause != "no route to host" {
+		t.Errorf("issue = %+v, want a warning-tier PossibleCause lead carrying the winning event's message as Cause", got)
+	}
+
+	empty := buildIssues(root, nil, "argocd", &fakeResolver{})
+	if len(empty) != 0 {
+		t.Errorf("expected no issues when no resource has a Warning event, got %+v", empty)
+	}
+
+	// A nil resolver can't look up events → no fabricated issue either.
+	plain := buildIssues(root, nil, "argocd", nil)
+	if len(plain) != 0 {
+		t.Errorf("expected no issues with a nil resolver, got %+v", plain)
+	}
+}
+
+// TestBuildIssues_DegradedAppLeadIsGatedAndDoesNotExplain: the live-state
+// tier only runs for an app deploying to this cluster (Radar's engine and
+// events describe local objects), still runs alongside an informational
+// Running row, and an events lead leaves the degraded-resources summary
+// visible because it is a pointer, not an explanation.
+func TestBuildIssues_DegradedAppLeadIsGatedAndDoesNotExplain(t *testing.T) {
+	status := func() map[string]any {
+		return map[string]any{
+			"health":         map[string]any{"status": "Degraded"},
+			"operationState": map[string]any{"phase": "Running"},
+			"resources": []any{
+				map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "web", "status": "Synced"},
+			},
+		}
+	}
+	r := &fakeResolver{events: map[string][]EventSummary{"web": {{Type: "Warning", Reason: "BackOff", Message: "restarting", Count: 3}}}}
+	tree := &gitopstree.ResourceTree{Summary: gitopstree.Summary{Degraded: 2}}
+
+	local := buildIssues(argoApp(status()), tree, "argocd", r)
+	var lead, running, summary bool
+	for _, iss := range local {
+		switch iss.Reason {
+		case "PossibleCause":
+			lead = true
+		case "Running":
+			running = true
+		case "DegradedResources":
+			summary = true
+		}
+	}
+	if !lead || !running || !summary {
+		t.Errorf("want the events lead, the Running info row AND the degraded summary together, got %+v", local)
+	}
+
+	remoteApp := argoApp(status())
+	remoteApp.Object["spec"] = map[string]any{"destination": map[string]any{"server": "https://spoke-1.example.com:6443"}}
+	for _, iss := range buildIssues(remoteApp, tree, "argocd", r) {
+		if iss.Reason == "PossibleCause" {
+			t.Errorf("remote-destination app must not get a locally derived lead, got %+v", iss)
+		}
+	}
+}
+
+// TestBuildIssues_DriftLoopDoesNotHideDegradedFallback: StuckDriftLoop is a
+// sync signal, not a health explanation; a Degraded app in a drift loop
+// still gets the live-state attribution and the tree summary.
+func TestBuildIssues_DriftLoopDoesNotHideDegradedFallback(t *testing.T) {
+	root := argoApp(map[string]any{
+		"health":         map[string]any{"status": "Degraded"},
+		"sync":           map[string]any{"status": "OutOfSync"},
+		"reconciledAt":   time.Now().UTC().Format(time.RFC3339),
+		"operationState": map[string]any{"phase": "Succeeded", "finishedAt": time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)},
+		"resources": []any{
+			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "web", "status": "OutOfSync"},
+		},
+	})
+	root.Object["spec"] = map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{"selfHeal": true}}}
+	r := &fakeResolver{events: map[string][]EventSummary{"web": {{Type: "Warning", Reason: "BackOff", Message: "restarting", Count: 3}}}}
+	issues := buildIssues(root, &gitopstree.ResourceTree{Summary: gitopstree.Summary{Degraded: 1}}, "argocd", r)
+	var drift, lead, summary bool
+	for _, iss := range issues {
+		switch iss.Reason {
+		case "StuckDriftLoop":
+			drift = true
+		case "PossibleCause":
+			lead = true
+		case "DegradedResources":
+			summary = true
+		}
+	}
+	if !drift {
+		t.Fatalf("fixture did not trigger the StuckDriftLoop detector, got %+v", issues)
+	}
+	if !lead || !summary {
+		t.Errorf("drift loop must suppress neither the events lead nor the degraded summary, got %+v", issues)
+	}
+}
+
+// TestBuildIssues_DegradedAppFallsBackEvenWhenEventCountIsZero pins that a
+// genuine single-occurrence Warning event isn't treated as "no signal" just
+// because it has no explicit Count — the events.k8s.io/v1 API only sets a
+// count once an event has repeated into a series, so a real, first-time
+// Warning commonly reports Count == 0 on modern clusters.
+func TestBuildIssues_DegradedAppFallsBackEvenWhenEventCountIsZero(t *testing.T) {
+	root := argoApp(map[string]any{
+		"health": map[string]any{"status": "Degraded"},
+		"resources": []any{
+			map[string]any{
+				"group": "external-secrets.io", "kind": "ClusterSecretStore", "name": "platform-secret-store",
+				"status": "Synced",
+			},
+		},
+	})
+	r := &fakeResolver{events: map[string][]EventSummary{
+		"platform-secret-store": {
+			{Type: "Warning", Reason: "InvalidProviderConfig", Message: "no route to host", Count: 0},
+		},
+	}}
+	issues := buildIssues(root, nil, "argocd", r)
+	if len(issues) != 1 {
+		t.Fatalf("expected exactly 1 fallback issue for a zero-count Warning, got %d: %+v", len(issues), issues)
+	}
+	if issues[0].Cause != "no route to host" {
+		t.Errorf("Cause = %q, want the zero-count event's message", issues[0].Cause)
 	}
 }
 
@@ -1448,26 +1610,243 @@ func TestDedupeIssues_SameNameDifferentNamespaceKept(t *testing.T) {
 	}
 }
 
-func TestEnrichChangeHealthFromTree_BackfillsEmptyHealth(t *testing.T) {
-	tree := &gitopstree.ResourceTree{Nodes: []gitopstree.Node{
-		{Ref: gitopstree.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "staging", Name: "radar-hub"}, Health: "Degraded"},
-		{Ref: gitopstree.ResourceRef{Kind: "Service", Namespace: "staging", Name: "radar-hub"}, Health: "Healthy"},
+func TestArgoResourceChanges_TakesTreeHealthWhenCRHasNone(t *testing.T) {
+	root := argoApp(map[string]any{
+		"resourceHealthSource": "appTree",
+		"resources": []any{
+			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "staging", "name": "radar-hub", "status": "Synced"},
+			map[string]any{"kind": "Service", "namespace": "staging", "name": "radar-hub", "status": "Synced", "health": map[string]any{"status": "Progressing", "message": "argo says so"}},
+			map[string]any{"kind": "ConfigMap", "namespace": "staging", "name": "vars", "status": "Synced"},
+			map[string]any{"kind": "SealedSecret", "namespace": "staging", "name": "x", "status": "Synced"},
+		},
+	})
+	tree := &gitopstree.ResourceTree{HealthMode: gitopstree.HealthModeAppTree, Nodes: []gitopstree.Node{
+		{Ref: gitopstree.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "staging", Name: "radar-hub"}, Health: "Degraded", HealthSource: gitopstree.HealthSourceRadar, HealthReason: "CrashLoopBackOff", HealthMessage: "back-off restarting failed container", HealthSeverity: "critical"},
+		{Ref: gitopstree.ResourceRef{Kind: "Service", Namespace: "staging", Name: "radar-hub"}, Health: "Healthy", HealthSource: gitopstree.HealthSourceRadar},
 		{Ref: gitopstree.ResourceRef{Kind: "ConfigMap", Namespace: "staging", Name: "vars"}, Health: ""},
 	}}
-	changes := []Change{
-		{Ref: Ref{Group: "apps", Kind: "Deployment", Namespace: "staging", Name: "radar-hub"}, Health: ""}, // backfilled → Degraded
-		{Ref: Ref{Kind: "Service", Namespace: "staging", Name: "radar-hub"}, Health: "Progressing"},        // already set → unchanged
-		{Ref: Ref{Kind: "ConfigMap", Namespace: "staging", Name: "vars"}, Health: ""},                      // tree node empty → stays empty
-		{Ref: Ref{Kind: "SealedSecret", Namespace: "staging", Name: "x"}, Health: ""},                      // not in tree → stays empty
+	byName := map[string]Change{}
+	for _, c := range argoResourceChanges(root, tree, nil) {
+		byName[c.Ref.Name+"/"+c.Ref.Kind] = c
 	}
-	enrichChangeHealthFromTree(changes, tree)
-	if changes[0].Health != "Degraded" {
-		t.Errorf("Deployment health = %q, want Degraded (backfilled from tree)", changes[0].Health)
+	dep := byName["radar-hub/Deployment"]
+	if dep.Health != "Degraded" || dep.HealthSource != "radar" || dep.HealthReason != "CrashLoopBackOff" || dep.Message != "back-off restarting failed container" || dep.Category != CategoryDegraded {
+		t.Errorf("Deployment should take the tree's Radar-derived health with provenance, got %+v", dep)
 	}
-	if changes[1].Health != "Progressing" {
-		t.Errorf("Service health = %q, want Progressing (already set, unchanged)", changes[1].Health)
+	svc := byName["radar-hub/Service"]
+	if svc.Health != "Progressing" || svc.HealthSource != "controller" || svc.Message != "argo says so" {
+		t.Errorf("Service has controller health in the CR; it must win over the tree, got %+v", svc)
 	}
-	if changes[2].Health != "" || changes[3].Health != "" {
-		t.Errorf("resources with no tree health must stay empty: %q %q", changes[2].Health, changes[3].Health)
+	if cm := byName["vars/ConfigMap"]; cm.Health != "" || cm.HealthSource != "" {
+		t.Errorf("ConfigMap has no health anywhere; must stay empty, got %+v", cm)
+	}
+	if ss := byName["x/SealedSecret"]; ss.Health != "" {
+		t.Errorf("SealedSecret is not in the tree; must stay empty, got %+v", ss)
+	}
+}
+
+// TestArgoResourceChanges_APIOverlayBeatsInlineValue: when the host filled
+// the tree from Argo's API, a value the CR still carries inline is older
+// and must not win.
+func TestArgoResourceChanges_APIOverlayBeatsInlineValue(t *testing.T) {
+	root := argoApp(map[string]any{
+		"resourceHealthSource": "appTree",
+		"resources": []any{
+			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "p", "name": "web", "status": "Synced", "health": map[string]any{"status": "Degraded", "message": "old story"}},
+		},
+	})
+	tree := &gitopstree.ResourceTree{HealthMode: gitopstree.HealthModeAppTree, HealthFromAPI: true, Nodes: []gitopstree.Node{
+		{Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "p", Name: "web"}, Health: "Healthy", HealthSource: gitopstree.HealthSourceControllerAPI},
+	}}
+	out := argoResourceChanges(root, tree, nil)
+	if len(out) != 1 || out[0].Health != "Healthy" || out[0].HealthSource != "controllerApi" || out[0].Message != "" {
+		t.Errorf("API overlay must beat the CR's inline value, got %+v", out)
+	}
+}
+
+// TestBuildIssues_RadarDerivedHealthYieldsEngineIssue pins the Argo 3
+// shape: no per-resource health in the CR, the tree carries the issues
+// engine's finding (overlaid by the host), and the resulting Issue is the
+// engine's finding — its reason, message and severity, with source=radar —
+// not an Argo-vocabulary "is Degraded" row.
+func TestBuildIssues_RadarDerivedHealthYieldsEngineIssue(t *testing.T) {
+	root := argoApp(map[string]any{
+		"health":               map[string]any{"status": "Degraded"},
+		"resourceHealthSource": "appTree",
+		"resources": []any{
+			map[string]any{"group": "external-secrets.io", "kind": "ClusterSecretStore", "name": "platform", "status": "Synced"},
+			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "platform", "name": "web", "status": "Synced"},
+		},
+	})
+	tree := &gitopstree.ResourceTree{HealthMode: gitopstree.HealthModeAppTree, Nodes: []gitopstree.Node{
+		{Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "external-secrets.io", Kind: "ClusterSecretStore", Name: "platform"}, Health: "Degraded", HealthSource: gitopstree.HealthSourceRadar, HealthReason: "Ready: InvalidProviderConfig", HealthMessage: "no route to host", HealthSeverity: "warning"},
+		{Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "platform", Name: "web"}, Health: "Degraded", HealthSource: gitopstree.HealthSourceRadar, HealthReason: "CrashLoopBackOff", HealthMessage: "back-off restarting", HealthSeverity: "critical"},
+	}}
+	tree.Summary = gitopstree.Summarize(tree.Nodes)
+	issues := buildIssues(root, tree, "argocd", &fakeResolver{})
+	if len(issues) != 2 {
+		t.Fatalf("expected one Issue per Radar-derived Degraded resource, got %d: %+v", len(issues), issues)
+	}
+	// Severity-sorted: the critical crashloop first.
+	if issues[0].Reason != "CrashLoopBackOff" || issues[0].Severity != SeverityCritical || issues[0].Source != "radar" {
+		t.Errorf("crashloop Issue = %+v, want engine reason, critical, source=radar", issues[0])
+	}
+	if issues[1].Reason != "Ready: InvalidProviderConfig" || issues[1].Severity != SeverityWarning || issues[1].Source != "radar" {
+		t.Errorf("condition Issue = %+v, want engine reason, WARNING (engine severity, not promoted), source=radar", issues[1])
+	}
+	if !strings.Contains(issues[1].Message, "no route to host") {
+		t.Errorf("Message = %q, want the engine message", issues[1].Message)
+	}
+	for _, iss := range issues {
+		if iss.Reason == "DegradedResources" {
+			t.Errorf("tree-summary fallback must not fire when per-resource findings exist: %+v", iss)
+		}
+	}
+
+	// Warning-tier findings alone still name their resources; the count
+	// must not stack on them either.
+	tree.Nodes = tree.Nodes[:1]
+	tree.Summary = gitopstree.Summarize(tree.Nodes)
+	for _, iss := range buildIssues(root, tree, "argocd", &fakeResolver{}) {
+		if iss.Reason == "DegradedResources" || iss.Reason == "PossibleCause" {
+			t.Errorf("neither the count nor an events lead may stack on a warning-tier finding: %+v", iss)
+		}
+	}
+}
+
+// TestBuildIssues_TopologyReadIsWarningAndSilentOnHealthyApp: Radar's own
+// topology read (no engine reason) is an observation, not a verdict — a
+// warning-tier Issue on a Degraded app, and no Issue at all when Argo calls
+// the app Healthy.
+func TestBuildIssues_TopologyReadIsWarningAndSilentOnHealthyApp(t *testing.T) {
+	mk := func(health string) *unstructured.Unstructured {
+		return argoApp(map[string]any{
+			"health":               map[string]any{"status": health},
+			"resourceHealthSource": "appTree",
+			"resources": []any{
+				map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "web", "status": "Synced"},
+			},
+		})
+	}
+	tree := &gitopstree.ResourceTree{HealthMode: gitopstree.HealthModeAppTree, Nodes: []gitopstree.Node{
+		{Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "web"}, Health: "Degraded", HealthSource: gitopstree.HealthSourceRadar},
+	}}
+	tree.Summary = gitopstree.Summarize(tree.Nodes)
+	degraded := buildIssues(mk("Degraded"), tree, "argocd", &fakeResolver{})
+	if len(degraded) != 1 || degraded[0].Severity != SeverityWarning || degraded[0].Source != "radar" {
+		t.Errorf("topology read on a Degraded app = %+v, want one warning-tier radar Issue", degraded)
+	}
+	for _, iss := range buildIssues(mk("Healthy"), tree, "argocd", &fakeResolver{}) {
+		if iss.Scope == ScopeResource || iss.Reason == "DegradedResources" {
+			t.Errorf("neither a per-resource Issue nor the degraded count may contradict a Healthy app, got %+v", iss)
+		}
+	}
+}
+
+// TestBuildIssues_EventsLeadYieldsToRadarFinding: once the tree carries a
+// Radar-sourced finding for a resource (even a warning-tier one), the
+// Warning-event lead stays out — it would only restate the same app.
+func TestBuildIssues_EventsLeadYieldsToRadarFinding(t *testing.T) {
+	root := argoApp(map[string]any{
+		"health":               map[string]any{"status": "Degraded"},
+		"resourceHealthSource": "appTree",
+		"resources": []any{
+			map[string]any{"group": "radar.demo", "kind": "Gadget", "namespace": "demo", "name": "g", "status": "Synced"},
+		},
+	})
+	tree := &gitopstree.ResourceTree{HealthMode: gitopstree.HealthModeAppTree, Nodes: []gitopstree.Node{
+		{Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Group: "radar.demo", Kind: "Gadget", Namespace: "demo", Name: "g"}, Health: "Degraded", HealthSource: gitopstree.HealthSourceRadar, HealthReason: "Ready: NotConfigured", HealthMessage: "no config", HealthSeverity: "warning"},
+	}}
+	tree.Summary = gitopstree.Summarize(tree.Nodes)
+	r := &fakeResolver{events: map[string][]EventSummary{"g": {{Type: "Warning", Reason: "Bad", Message: "boom", Count: 9}}}}
+	for _, iss := range buildIssues(root, tree, "argocd", r) {
+		if iss.Reason == "PossibleCause" {
+			t.Errorf("events lead must not stack on a Radar finding, got %+v", iss)
+		}
+	}
+}
+
+func TestBuildIssues_ControllerHealthIssueKeepsArgoVocabulary(t *testing.T) {
+	root := argoApp(map[string]any{
+		"health": map[string]any{"status": "Degraded"},
+		"resources": []any{
+			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "platform", "name": "web", "status": "Synced", "health": map[string]any{"status": "Degraded"}},
+		},
+	})
+	issues := buildIssues(root, nil, "argocd", nil)
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 issue, got %d: %+v", len(issues), issues)
+	}
+	if issues[0].Reason != "Degraded" || issues[0].Source != "controller" || issues[0].Severity != SeverityCritical {
+		t.Errorf("controller-sourced Issue = %+v, want Reason=Degraded, Source=controller, critical", issues[0])
+	}
+}
+
+// TestBuildIssues_TreeFallbackNotSuppressedByInfoIssue: a running sync is
+// informational and does not explain degraded resources, so the tree-summary
+// fallback must still fire alongside it.
+func TestBuildIssues_TreeFallbackNotSuppressedByInfoIssue(t *testing.T) {
+	root := argoApp(map[string]any{
+		"health":         map[string]any{"status": "Degraded"},
+		"operationState": map[string]any{"phase": "Running"},
+		"resources":      []any{},
+	})
+	tree := &gitopstree.ResourceTree{Summary: gitopstree.Summary{Degraded: 2}}
+	issues := buildIssues(root, tree, "argocd", nil)
+	var sawRunning, sawTree bool
+	for _, iss := range issues {
+		if iss.Reason == "Running" {
+			sawRunning = true
+		}
+		if iss.Reason == "DegradedResources" {
+			sawTree = true
+		}
+	}
+	if !sawRunning || !sawTree {
+		t.Errorf("want both the Running info row and the DegradedResources fallback, got %+v", issues)
+	}
+}
+
+func TestBuildIssues_RemoteDestinationSkipsLocalCauseBridge(t *testing.T) {
+	root := argoApp(map[string]any{
+		"health": map[string]any{"status": "Degraded"},
+		"resources": []any{
+			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "web", "status": "Synced", "health": map[string]any{"status": "Degraded"}},
+		},
+	})
+	r := &fakeResolver{problems: map[string][]ResourceProblem{"web": {{Reason: "CrashLoopBackOff", Message: "a LOCAL deployment's problem", Severity: "critical"}}}}
+	issues := buildIssues(root, &gitopstree.ResourceTree{RemoteDestination: true}, "argocd", r)
+	if len(issues) != 1 || issues[0].Cause != "" {
+		t.Errorf("remote app must not borrow a local resource's cause, got %+v", issues)
+	}
+	local := buildIssues(root, &gitopstree.ResourceTree{}, "argocd", r)
+	if len(local) != 1 || local[0].Cause == "" {
+		t.Errorf("in-cluster app keeps the cause bridge, got %+v", local)
+	}
+}
+
+func TestBuildChanges_RemoteDestinationSkipsLocalEnrichment(t *testing.T) {
+	root := argoApp(map[string]any{
+		"resources": []any{
+			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "web", "status": "OutOfSync"},
+		},
+	})
+	r := &fakeResolver{events: map[string][]EventSummary{"web": {{Type: "Warning", Reason: "BackOff", Message: "local pod"}}}}
+	remote := buildChanges(root, &gitopstree.ResourceTree{RemoteDestination: true}, "argocd", r)
+	if len(remote) != 1 || len(remote[0].RecentEvents) != 0 || remote[0].Drift != nil {
+		t.Errorf("remote app must not carry local events/drift, got %+v", remote)
+	}
+	local := buildChanges(root, &gitopstree.ResourceTree{}, "argocd", r)
+	if len(local) != 1 || len(local[0].RecentEvents) != 1 {
+		t.Errorf("in-cluster app keeps event enrichment, got %+v", local)
+	}
+}
+
+func TestBuild_SummaryCarriesHealthModeAndDestination(t *testing.T) {
+	root := argoApp(map[string]any{"resourceHealthSource": "appTree"})
+	tree := &gitopstree.ResourceTree{HealthMode: gitopstree.HealthModeAppTree, RemoteDestination: true}
+	out := Build(root, tree, nil)
+	if out.Summary.ResourceHealthMode != "appTree" || !out.Summary.RemoteDestination {
+		t.Errorf("Summary = %+v, want resourceHealthMode=appTree, remoteDestination=true", out.Summary)
 	}
 }

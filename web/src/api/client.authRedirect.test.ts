@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Deterministic config so the 401 handler's basename/routePath math is fixed and
 // independent of window/env. client.ts only consumes these six exports.
@@ -66,6 +66,17 @@ function make401(authMode: string): Response {
     },
   } as unknown as Response
 }
+
+// Each test re-imports ./client after resetModules, and the first import in the
+// file is the one that transforms client.ts and everything it pulls in. That is
+// seconds of work on a contended machine, and it would otherwise be charged to
+// whichever test happens to run first, failing it on timeout while the rest of
+// the suite passes in under a second. Pay it once, outside any test's budget —
+// resetModules drops module instances but keeps the transform cache, so the
+// per-test re-import stays cheap.
+beforeAll(async () => {
+  await import('./client')
+}, 120_000)
 
 beforeEach(() => {
   // Reset module state so the redirect gate starts fresh.
