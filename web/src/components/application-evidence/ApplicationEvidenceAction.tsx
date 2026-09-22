@@ -37,7 +37,7 @@ export function ApplicationEvidenceAction(props: Props) {
   const subjectKey = `${context}:${props.kind}:${props.group}:${props.namespace}:${props.name}:${props.uid}`
   const [permissionRetryTarget, setPermissionRetryTarget] = useState<string>()
   const retryPermissions = permissionRetryTarget === subjectKey
-  const { data, refetch, isFetching } = useQuery({
+  const { data, error, refetch, isFetching } = useQuery({
     queryKey: ['application-evidence-candidates', context, props.kind, props.group, props.namespace, props.name, props.uid, retryPermissions],
     queryFn: ({ signal }) => fetchJSON<EvidenceCandidates>(`/application-evidence/candidates?${new URLSearchParams({ kind: props.kind, group: props.group ?? '', namespace: props.namespace, name: props.name, retryPermissions: String(retryPermissions) })}`, signal),
     enabled: !!context && !!props.uid && !!props.namespace && capabilities?.deployment?.mode === 'local',
@@ -46,6 +46,8 @@ export function ApplicationEvidenceAction(props: Props) {
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   })
+  if (!context || !props.namespace || capabilities?.deployment?.mode !== 'local') return null
+  if (retryPermissions && error) return <div className="mt-3"><AlertBanner variant="warning" title="Permission check failed" message={<>{error instanceof Error ? error.message : 'Could not verify application evidence permissions.'} <button type="button" className="text-accent-text hover:underline disabled:opacity-50" disabled={isFetching} onClick={() => void refetch()}>{isFetching ? 'Checking…' : 'Retry permission check'}</button></>} /></div>
   if (!data?.enabled || !data.context || data.context !== context || data.subjectUID !== props.uid) return null
   const retry = () => { if (retryPermissions) void refetch(); else setPermissionRetryTarget(subjectKey) }
   return <>
