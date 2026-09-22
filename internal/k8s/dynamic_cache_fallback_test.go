@@ -93,6 +93,8 @@ func TestRegisterSupportedCRDFallbacks_RegistersSupportedCRDFromPartialDiscovery
 		kind       string
 		objectName string
 	}{
+		{name: "strimzi KafkaConnect v1", group: "kafka.strimzi.io", version: "v1", resource: "kafkaconnects", kind: "KafkaConnect", objectName: "connect"},
+		{name: "strimzi KafkaConnect v1beta2", group: "kafka.strimzi.io", version: "v1beta2", resource: "kafkaconnects", kind: "KafkaConnect", objectName: "connect"},
 		{
 			name:       "istio virtualservice",
 			group:      "networking.istio.io",

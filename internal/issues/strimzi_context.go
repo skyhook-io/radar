@@ -20,7 +20,7 @@ const maxStrimziContextScan = 500
 
 type strimziContextReader struct {
 	get  func(Ref) (runtime.Object, error)
-	list func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, error)
+	list func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error)
 }
 
 func CachedStrimziEvidence(obj any, canRead func(Ref) bool) *issuesapi.RelatedApplicationFindings {
@@ -45,16 +45,16 @@ func CachedStrimziEvidence(obj any, canRead func(Ref) bool) *issuesapi.RelatedAp
 			}
 			return dynamic.GetWatched(gvr, ref.Namespace, ref.Name)
 		},
-		list: func(namespace string) ([]*unstructured.Unstructured, schema.GroupVersionResource, error) {
+		list: func(namespace string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
 			gvr, ok := discovery.GetGVRWithGroup("KafkaConnector", strimziGroup)
 			if !ok {
-				return nil, gvr, k8s.ErrUnknownDynamicKind
+				return nil, gvr, false, k8s.ErrUnknownDynamicKind
 			}
 			if !dynamic.IsNamespaceSynced(gvr, namespace) {
-				return nil, gvr, fmt.Errorf("cache not synced")
+				return nil, gvr, false, fmt.Errorf("cache not synced")
 			}
-			rows, err := dynamic.ListWatchedReadOnly(gvr)
-			return rows, gvr, err
+			rows, truncated, err := dynamic.ListWatchedNamespaceReadOnly(gvr, namespace, maxStrimziContextScan)
+			return rows, gvr, truncated, err
 		},
 	}
 	runtimeObj, ok := obj.(runtime.Object)
@@ -127,8 +127,12 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 	if obj.GetObjectKind().GroupVersionKind().Kind == "KafkaConnector" {
 		return out
 	}
-	rows, gvr, err := reader.list(connect.Namespace)
+	rows, gvr, truncated, err := reader.list(connect.Namespace)
 	if err != nil {
+		return out
+	}
+	if truncated || len(rows) > maxStrimziContextScan {
+		out.Truncated = true
 		return out
 	}
 	var matched []*unstructured.Unstructured
@@ -140,15 +144,12 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 		if canRead != nil && !canRead(ref) {
 			continue
 		}
-		if len(matched) == maxStrimziContextScan {
-			out.Truncated = true
-			break
-		}
 		matched = append(matched, row)
 	}
-	out.Coverage = fmt.Sprintf("Checked %d authorized cached connector snapshots; missing findings do not establish application health.", len(matched))
 	sort.Slice(matched, func(i, j int) bool { return strings.Compare(matched[i].GetName(), matched[j].GetName()) < 0 })
+	checked := 0
 	for _, row := range matched {
+		checked++
 		findings := detectStrimziConnectorIssues(gvr, row)
 		if len(findings) == 0 {
 			continue
@@ -159,5 +160,6 @@ func strimziEvidence(obj runtime.Object, canRead func(Ref) bool, reader strimziC
 		}
 		out.Findings = append(out.Findings, findings...)
 	}
+	out.Coverage = fmt.Sprintf("Checked %d authorized cached connector snapshots; missing findings do not establish application health.", checked)
 	return out
 }
