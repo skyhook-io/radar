@@ -9,6 +9,7 @@ export interface EvidenceCandidate {
   coverage: string
 }
 export interface EvidenceCandidates {
+  permissionCheckTimedOut?: boolean
   enabled: boolean
   context: string
   subjectUID: string

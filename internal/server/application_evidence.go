@@ -39,8 +39,9 @@ func newApplicationEvidenceAPI() *applicationEvidenceAPI {
 }
 
 type applicationEvidenceCandidatesResponse struct {
-	Enabled bool   `json:"enabled"`
-	Context string `json:"context,omitempty"`
+	Enabled                 bool   `json:"enabled"`
+	Context                 string `json:"context,omitempty"`
+	PermissionCheckTimedOut bool   `json:"permissionCheckTimedOut,omitempty"`
 	collector.CandidateSet
 }
 
@@ -110,7 +111,11 @@ func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *h
 	response.CandidateSet = api.resolve(r.Context(), trace.Deps{
 		Cache: k8s.GetResourceCache(), Dynamic: k8s.GetDynamicResourceCache(), Discovery: k8s.GetResourceDiscovery(), AllowedNamespaces: namespaces,
 	}, collector.Subject{Group: group, Kind: kind, Namespace: q.Get("namespace"), Name: q.Get("name")})
-	ctx, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
+	permissionBudget := 500 * time.Millisecond
+	if q.Get("retryPermissions") == "true" {
+		permissionBudget = 2 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), permissionBudget)
 	defer cancel()
 	allowedTargets := make([]bool, len(response.Candidates))
 	var checks sync.WaitGroup
@@ -122,6 +127,7 @@ func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *h
 		}()
 	}
 	checks.Wait()
+	response.PermissionCheckTimedOut = ctx.Err() == context.DeadlineExceeded
 	allowed := make([]collector.Candidate, 0, len(response.Candidates))
 	for i, candidate := range response.Candidates {
 		if allowedTargets[i] {
