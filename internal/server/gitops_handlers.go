@@ -1133,8 +1133,9 @@ func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []g
 // namespaces, redacting related refs the caller can't read.
 func (r *insightsResolver) composeIssues() ([]issues.Issue, []issues.Issue) {
 	flat := issues.Compose(issues.NewCacheProvider(), issues.Filters{
-		Namespaces: r.allowedNamespaces,
-		Limit:      issues.NoLimit,
+		SkipPodTemplateContext: true,
+		Namespaces:             r.allowedNamespaces,
+		Limit:                  issues.NoLimit,
 		CanReadRelated: func(ref issues.Ref) bool {
 			return r.canAccess != nil && r.canAccess(ref.Group, ref.Kind, ref.Namespace, ref.Name)
 		},

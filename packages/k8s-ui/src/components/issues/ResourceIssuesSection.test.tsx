@@ -87,3 +87,22 @@ it('makes typed node corroboration discoverable without replacing the failure or
   expect(expanded).not.toContain('Caused by')
   expect(renderToString(<IssueRow issue={{ ...correlated, diagnostic_context: undefined }} open onToggle={() => {}} />)).not.toContain('Same-node evidence')
 })
+
+it('keeps pod/template evidence in expanded neutral context with navigable witnesses', () => {
+  const contextual: Issue = {
+    ...issue, kind: 'Pod', name: 'worker', reason: 'OOMKilled', cause: 'Container was OOMKilled.',
+    diagnostic_context: { role: 'context', facts: [{
+      type: 'pod_template_divergence', message: 'Memory limit is 64Mi; template specifies 128Mi. Writer and timing are unknown.',
+      refs: [{ kind: 'Pod', namespace: 'demo', name: 'worker' }, { kind: 'ReplicaSet', group: 'apps', namespace: 'demo', name: 'owner' }],
+    }] },
+  }
+  const collapsed = renderToString(<ResourceIssuesSection issues={[contextual]} />)
+  expect(collapsed).toContain('OOMKilled')
+  expect(collapsed).not.toContain('Pod/template differences')
+  const expanded = renderToString(<IssueRow issue={contextual} open onToggle={() => {}} resourceHref={ref => `/resources/${ref.kind}/${ref.namespace}/${ref.name}`} />)
+  expect(expanded).toContain('Pod/template differences')
+  expect(expanded).toContain('Writer and timing are unknown')
+  expect(expanded).toContain('/resources/ReplicaSet/demo/owner')
+  expect(expanded).not.toContain('confidence')
+  expect(expanded).not.toContain('Caused by')
+})

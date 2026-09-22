@@ -136,6 +136,8 @@ type Detection struct {
 	// enough evidence. Empty for detectors without a parser. RemediationKind
 	// names a structured one-click fix (e.g. "create-namespace") and
 	// RemediationTarget the resource it acts on.
+	// Cross-resource diagnosis must be withheld when its source is unreadable.
+	DiagnosisSource   *corev1.ObjectReference `json:"-"`
 	Cause             string
 	Action            string
 	RemediationKind   string
@@ -494,7 +496,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				message = init.message
 				fingerprint = init.fingerprint
 			}
-			cause, action := oomLimitDiagnosis(cache, pod, reason, lastTermReason, now)
+			cause, action, diagnosisSource := oomLimitDiagnosis(cache, pod, reason, lastTermReason, now)
 			if cause == "" {
 				if reason == crashLoopReason {
 					cause, action = health.PodCrashLoopDiagnosis(pod, now)
@@ -610,6 +612,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				OwnerName:            ownerName,
 				IssueTiming:          podIssueTiming.IssueTiming,
 				IssueTimingBasis:     podIssueTiming.Basis,
+				DiagnosisSource:      diagnosisSource,
 				Cause:                cause,
 				Action:               action,
 			}

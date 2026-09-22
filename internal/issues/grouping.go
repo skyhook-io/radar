@@ -19,17 +19,23 @@ func RelatedIssues(p Provider, opts RelatedIssueOptions, group, kind, namespace,
 	// not the grouped issue's inline Members (capped at maxInlineMembers) — is
 	// what makes member #11..#N in a large fan-out resolve correctly.
 	flat := Compose(p, Filters{
-		Namespaces:           opts.Namespaces,
-		Limit:                NoLimit,
-		CanReadClusterScoped: opts.CanReadClusterScoped,
-		CanReadRelated:       opts.CanReadRelated,
+		SkipPodTemplateContext: true,
+		Namespaces:             opts.Namespaces,
+		Limit:                  NoLimit,
+		CanReadClusterScoped:   opts.CanReadClusterScoped,
+		CanReadRelated:         opts.CanReadRelated,
 	})
 	grouped := GroupIssues(flat)
 	// Run the grouped-mode enrichment (mirrors the cluster path) so the grouped
 	// issues get coverage-gated incident_parent pointers — GroupIssues alone only
 	// carries the representative's DiagnosticContext, never the reverse pointer.
 	grouped = enrichDiagnosticContextAuthorized(grouped, flat, grouped, p, opts.CanReadClusterScoped)
-	return RelatedIssuesFrom(flat, grouped, opts, group, kind, namespace, name)
+	matched := RelatedIssuesFrom(flat, grouped, opts, group, kind, namespace, name)
+	if !opts.SkipPodTemplateContext {
+		matched = enrichPodTemplateContext(matched, flat, p, podTemplateAccess{opts.CanReadClusterScoped, opts.CanReadRelated}, true,
+			Ref{Group: group, Kind: kind, Namespace: namespace, Name: name})
+	}
+	return matched
 }
 
 // RelatedIssuesFrom is the matching half of RelatedIssues over an

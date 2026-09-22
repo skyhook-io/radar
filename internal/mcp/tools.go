@@ -127,8 +127,8 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 		Name: "get_resource",
 		Description: "Use AFTER narrowing to one resource. Returns the resource's " +
 			"Kubernetes-shaped spec/status/metadata plus resourceContext when available " +
-			"(relationships, refs, controller observations, issue/audit/policy rollups — issues carry " +
-			"diagnostic_context with cross-subject causal links + a confidence tier; " +
+			"(relationships, refs, controller observations, issue/audit/policy rollups; " +
+			"use include=issues for bounded failures and diagnostic facts, or diagnose for a bundle; " +
 			"audit findings are static posture and remediation priority, not evidence " +
 			"of an active outage; auditSummary.highestSeverity uses the Checks ladder " +
 			"(critical|high|medium|low; current built-ins are high|medium), separate " +
@@ -659,7 +659,7 @@ type getResourceInput struct {
 	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. cluster.x-k8s.io for CAPI Cluster vs CNPG Cluster)"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"namespace for namespaced kinds. Leave empty for cluster-scoped kinds (Node, ClusterRole, ClusterRoleBinding, IngressClass, PriorityClass, StorageClass, etc.)."`
 	Name      string `json:"name" jsonschema:"resource name"`
-	Include   string `json:"include,omitempty" jsonschema:"optional supplemental data after narrowing to this object: events, metrics, changes, revisions. Comma-separated. Separate from context. include=revisions lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout (number, image, isCurrent; Rollouts also mark isStable, the revision an abort reverts to) — fetch before manage_workload rollback. For logs use get_pod_logs / get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle."`
+	Include   string `json:"include,omitempty" jsonschema:"optional supplemental data after narrowing to this object: events, metrics, changes, revisions, issues. Comma-separated. include=issues returns up to 3 relatedIssues with diagnostic_context and total/truncated indicators; pod/template differences are context, not proof of admission mutation. Separate from context. include=revisions lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout (number, image, isCurrent; Rollouts also mark isStable, the revision an abort reverts to) — fetch before manage_workload rollback. For logs use get_pod_logs / get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle."`
 	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches relationships and available resource-specific summaries) or 'none' (bare minified resource). issueSummary uses live-operational critical|warning; auditSummary uses the Checks posture-remediation ladder critical|high|medium|low (current built-ins high|medium) and is not evidence of an active outage. For full diagnostic tier with logs + events bundled, use the diagnose tool for supported kinds."`
 }
 
@@ -1105,10 +1105,16 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	includes := parseIncludes(input.Include)
 	skipContext := contextMode == "none"
 
+	var issueSummary *resourcecontext.IssueSummary
+	var issueRows []issues.Issue
+	if !skipContext || includes["issues"] {
+		gvk := rawObj.GetObjectKind().GroupVersionKind()
+		issueSummary, issueRows = computeMCPIssueContext(ctx, cache, gvk.Group, gvk.Kind, namespace, name, includes["issues"])
+	}
 	var resourceCtx *resourcecontext.ResourceContext
 	var warnings []string
 	if !skipContext {
-		resourceCtx = buildMCPResourceContext(ctx, rawObj, kind, namespace, name, resourcecontext.TierBasic)
+		resourceCtx = buildMCPResourceContext(ctx, rawObj, kind, namespace, name, resourcecontext.TierBasic, issueSummary)
 
 		// State-derived advisory warnings (deletionTimestamp, external manager,
 		// terminating namespace, workload health-condition history, PVC stuck
@@ -1162,6 +1168,9 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	}
 
 	result := map[string]any{"resource": resourceData}
+	if includes["issues"] {
+		attachRelatedIssueDetails(result, issueRows)
+	}
 	if resourceCtx != nil {
 		result["resourceContext"] = resourceCtx
 	}
@@ -1211,7 +1220,7 @@ func recentChangesSourceTracked(gvk schema.GroupVersionKind) bool {
 // fallback resolve Relationships via topology.GetRelationshipsWithObject
 // (which applies KindForGVK so cross-group CRDs map to the right
 // topology node).
-func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier) *resourcecontext.ResourceContext {
+func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, issueSummary *resourcecontext.IssueSummary) *resourcecontext.ResourceContext {
 	return buildMCPResourceContextWithStaleChecks(
 		ctx,
 		obj,
@@ -1220,10 +1229,11 @@ func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, name
 		name,
 		tier,
 		k8s.FindStaleSecretEnvChecksForObject(ctx, k8s.GetResourceCache(), obj),
+		issueSummary,
 	)
 }
 
-func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, staleChecks []k8s.StaleSecretEnvCheck) *resourcecontext.ResourceContext {
+func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier, staleChecks []k8s.StaleSecretEnvCheck, issueSummary *resourcecontext.IssueSummary) *resourcecontext.ResourceContext {
 	if obj == nil {
 		return nil
 	}
@@ -1236,14 +1246,13 @@ func buildMCPResourceContextWithStaleChecks(ctx context.Context, obj runtime.Obj
 	}
 	canonicalGroup := gvk.Group
 
-	issueSum := computeMCPIssueSummary(ctx, cache, canonicalGroup, canonicalKind, namespace, name)
 	auditSum := computeMCPAuditSummary(ctx, cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
 		Reflections:   k8s.ReflectionLookup{Cache: cache},
 		Tier:          tier,
 		AccessChecker: newMCPRequestScopedChecker(ctx),
-		IssueSummary:  issueSum,
+		IssueSummary:  issueSummary,
 		AuditSummary:  auditSum,
 		Scheduling:    schedulinginsight.ForResource(obj, tier),
 		Execution:     executioninsight.ForResource(obj, tier),
@@ -1360,14 +1369,14 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 	var unknown []string
 	for tok := range includes {
 		switch tok {
-		case "events", "metrics", "logs", "changes", "revisions":
+		case "events", "metrics", "logs", "changes", "revisions", "issues":
 		default:
 			unknown = append(unknown, tok)
 		}
 	}
 	if len(unknown) > 0 {
 		sort.Strings(unknown)
-		result["includeError"] = fmt.Sprintf("unknown include value(s): %s (valid: events, metrics, changes, revisions)", strings.Join(unknown, ", "))
+		result["includeError"] = fmt.Sprintf("unknown include value(s): %s (valid: events, metrics, changes, revisions, issues)", strings.Join(unknown, ", "))
 	}
 
 }

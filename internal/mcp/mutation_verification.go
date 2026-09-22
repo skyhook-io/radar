@@ -762,9 +762,10 @@ func relatedIssuesForObject(ctx context.Context, obj *unstructured.Unstructured)
 	}
 	namespaces := issueNamespacesForResource(obj.GetNamespace())
 	matched := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
-		Namespaces:           namespaces,
-		CanReadClusterScoped: issueClusterScopedAccess(ctx),
-		CanReadRelated:       issueRelatedResourceAccess(ctx),
+		SkipPodTemplateContext: true,
+		Namespaces:             namespaces,
+		CanReadClusterScoped:   issueClusterScopedAccess(ctx),
+		CanReadRelated:         issueRelatedResourceAccess(ctx),
 	}, gvk.Group, kind, obj.GetNamespace(), obj.GetName())
 	if len(matched) == 0 {
 		return nil

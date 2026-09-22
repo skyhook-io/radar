@@ -16,9 +16,11 @@ type CELFilter = filter.Filter
 // so the data model — Issue, Severity, Source, Category, Ref — stays a pure
 // leaf with no dependency on the CEL implementation; HTTP/MCP own compilation.
 type Filters struct {
-	Namespaces []string
-	Severities []Severity
-	Kinds      []string
+	// Count-only and reduced-output callers do not need pod/template comparisons.
+	SkipPodTemplateContext bool
+	Namespaces             []string
+	Severities             []Severity
+	Kinds                  []string
 	// IncludeClusterScopedKarpenter keeps cluster-scoped Karpenter rows when
 	// Namespaces is non-empty. Public namespace-filtered issue queries leave this
 	// false; mixed-scope internal projections such as Capacity opt in explicitly.
@@ -53,7 +55,8 @@ type Filters struct {
 // direct subject and evidence-member matches remain governed by the caller's
 // authorization of the requested resource.
 type RelatedIssueOptions struct {
-	Namespaces []string
+	SkipPodTemplateContext bool
+	Namespaces             []string
 	// CanReadClusterScoped mirrors Filters.CanReadClusterScoped — it gates
 	// cluster-scoped Issue rows AND the cluster-scoped state (NodePool specs)
 	// folded into per-issue signals such as capacity relevance. Omitting it here

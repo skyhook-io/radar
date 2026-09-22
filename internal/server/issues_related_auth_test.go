@@ -96,3 +96,22 @@ func relatedMissingNodeClassIssueForAuthTest(pool, nodeClass issues.Ref) []issue
 		}}},
 	}}
 }
+
+func TestRESTPodTemplateEvidenceRequiresKindRead(t *testing.T) {
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	s.permCache.Set("template-reader", nil, perms)
+	r := requestWithUser(http.MethodGet, "/api/issues", &auth.User{Username: "template-reader"})
+	access := s.issueRelatedResourceAccess(r)
+	for _, tc := range []struct{ kind, group, resource string }{{"ReplicaSet", "apps", "replicasets"}, {"Job", "batch", "jobs"}, {"LimitRange", "", "limitranges"}} {
+		ref := issues.Ref{Kind: tc.kind, Group: tc.group, Namespace: "test", Name: "evidence"}
+		perms.SetCanI("get", tc.group, tc.resource, "test", false)
+		if access(ref) {
+			t.Fatalf("namespace visibility exposed denied %s", tc.kind)
+		}
+		perms.SetCanI("get", tc.group, tc.resource, "test", true)
+		if !access(ref) {
+			t.Fatalf("readable %s hidden", tc.kind)
+		}
+	}
+}

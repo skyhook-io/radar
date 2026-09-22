@@ -91,6 +91,7 @@ func (s *Server) capacityIssuesForRequest(r *http.Request) capacityIssueProjecti
 	resource, dynamic, discovery := provider.CacheIdentity()
 	flat, available := s.capacityIssueMemo.load(contextName, resource, dynamic, discovery, func() []issues.Issue {
 		composed := issues.Compose(provider, issues.Filters{
+			SkipPodTemplateContext:        true,
 			Limit:                         issues.NoLimit,
 			IncludeClusterScopedKarpenter: true,
 		})

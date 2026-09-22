@@ -382,7 +382,7 @@ For `get_cost` and `get_rightsizing`, see [Cost and rightsizing evidence limits]
 | `top_resources` | Live metrics ranked like `kubectl top | sort`, joined with K8s context (status, restarts, owner, requests/limits). Use for CPU/memory/OOM/load symptoms. | `kind` (optional: `pods` default, `workloads`, `nodes`), `namespace` (optional), `sort` (optional: `cpu` default, `memory`), `limit` (optional, default 20, max 100) |
 | `list_resources` | List resources of a kind with minified summaries + per-row `summaryContext` (managedBy / health / issueCount). | `kind` (required), `group` (optional), `namespace` (optional), `context` (optional: default / `none`) |
 | `search` | Find resources by content/term match (config keys, env refs, images, label values, CRD fields, status messages). Tokens AND'd; secret values never indexed. Supports `kind:`/`ns:`/`label:`/`image:` modifiers and CEL `filter`. | `query` (required), `filter` (optional CEL), `limit` (optional) |
-| `get_resource` | Inspect one known resource: minified spec, status, and metadata, plus default-on `resourceContext` with relationships and available resource-specific summaries. Operational issues and static audit posture remain distinct; audit findings are not evidence of an active outage. See [integration documentation](integrations.md) for controller-specific context and limits. Optional supplemental data adds events, metrics, recent changes, or rollback revisions. For logs use `get_pod_logs`, `get_workload_logs`, or `diagnose` for supported kinds. | `kind` (required), `name` (required), `namespace` (optional — omit for cluster-scoped kinds), `group` (optional, for ambiguous kinds), `include` (optional, comma-separated: `events,metrics,changes,revisions`; `revisions` lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout), `context` (optional: `basic` default, `none` to omit `resourceContext`) |
+| `get_resource` | Inspect one known resource: minified spec, status, and metadata, plus default-on `resourceContext` with relationships and available resource-specific summaries. Operational issues and static audit posture remain distinct; audit findings are not evidence of an active outage. See [integration documentation](integrations.md) for controller-specific context and limits. Optional supplemental data adds events, metrics, recent changes, rollback revisions, or detailed issue context. `include=issues` returns up to three `relatedIssues`, with `relatedIssuesTotal` and `relatedIssuesTruncated`; this is independent of `context=none`. For logs use `get_pod_logs`, `get_workload_logs`, or `diagnose` for supported kinds. | `kind` (required), `name` (required), `namespace` (optional — omit for cluster-scoped kinds), `group` (optional, for ambiguous kinds), `include` (optional, comma-separated: `events,metrics,changes,revisions,issues`; `revisions` lists rollback targets for Deployment/StatefulSet/DaemonSet/Rollout), `context` (optional: `basic` default, `none` to omit `resourceContext`) |
 | `get_topology` | Whole-namespace/cluster topology graph (nodes + edges). Use `summary` format for LLM-friendly text chains. Once you have a suspect root, prefer `get_neighborhood`. | `namespace` (optional), `view` (optional: `traffic` or `resources`), `format` (optional: `graph` or `summary`) |
 | `get_neighborhood` | BFS-expanded topology neighborhood around one known root — cheaper and clearer than `get_topology` for cross-resource failures (routing, selector/endpoint, refs, owner chains). RBAC-filtered. | `kind` (required), `namespace` (optional), `name` (required), `profile` (optional: `auto` default / `all`), `hops` (optional, default 1, max 2) |
 | `get_events` | Recent Kubernetes events, deduplicated and sorted **Warning-groups-first then by recency** — all types by default, so warnings lead and lifecycle events follow as timeline evidence. Filter by resource kind/name to scope; `type=Warning` for warnings only, `type=Normal` for lifecycle only. A namespace the caller cannot read returns an empty list with `accessDenied: true`, so an empty result without the marker means nothing is recorded for that scope. A request with no `namespace` means cluster-wide; when the caller may read only some namespaces the answer covers those alone and says so with `partialScope: true` and `scopeNamespaces`, so a narrowed empty result is never read as a clean cluster. | `namespace` (optional), `limit` (optional, default 20, max 100), `kind` (optional), `name` (optional), `type` (optional: `all` default, `Warning`, `Normal`) |
@@ -448,3 +448,49 @@ See [Strimzi Kafka connector evidence](integrations.md#strimzi-kafka-connectors)
 - **Secret redaction** — Secret `.data` and `.stringData` are never exposed; only key names are shown
 - **Value redaction** — environment variable values and Helm values returned through MCP are scrubbed for known secret patterns; Helm values also use key-aware redaction for names like `password`, `token`, `privateKey`, and `secretKey`
 - **Log redaction** — pod log output and Helm hook log evidence are scrubbed for secret patterns before being returned
+
+### Pod/template differences in issue context
+
+Existing OOM/restart, unschedulable, and image-pull issues can carry a neutral
+`pod_template_divergence` fact. The UI labels it **Pod/template differences** in
+the existing Context section, including resource drawers opened from topology.
+It adds no issue, severity, health status, topology edge, or audit finding. MCP
+`issues` and `diagnose` expose the same fact; `get_resource` requires
+`include=issues` for detailed rows and keeps its default issue summary compact.
+
+The baseline is the current template of the Pod's immediate ReplicaSet or Job,
+matched by controller reference, API group, and UID. StatefulSet/DaemonSet
+revision reconstruction, Pod-level resource budgets, and RuntimeClass overhead
+are outside this comparison. OOM context compares lower
+memory limits on status-identified OOM containers; scheduling context compares
+higher requests, priority class, node selectors, required affinity, and lost or
+changed tolerations; image-pull context compares the failing container's image.
+Injected containers, equivalent quantities/image spellings, ordinary
+limit-to-request defaulting, added tolerations, and preferred affinity stay quiet.
+Environment values, commands, and arbitrary spec diffs are excluded.
+
+One fact shows at most three fields and three candidate objects, with truncation
+disclosed; candidate display order does not imply likelihood. A grouped issue
+compares at most ten distinct affected Pods in representative order and labels
+its first matching witness as an example. A specific Pod lookup compares only
+that Pod, including members beyond the group's inline evidence cap. Existing
+diagnostic facts take precedence when the four-fact budget is full.
+
+Candidates are current configuration to inspect, **not attribution**: matching
+LimitRange defaults for omitted resource keys, the observed global-default
+PriorityClass when the template omitted it, and mutating webhooks whose current
+core/v1 Pod CREATE rules and selectors match (UPDATE candidates apply only to
+image differences). Pod resize subresource rules are not inspected. Namespace selectors use
+namespace labels. CEL match conditions are not evaluated, so those webhooks are
+omitted. CREATE-only configurations newer than the Pod are excluded. Validating
+webhooks and Pod Security Admission are not mutation candidates. All named
+evidence is permission-filtered before producing prose; unreadable or unsynced
+candidate configuration does not suppress an observable Pod/template difference.
+The existing OOM diagnosis also records its template source internally so an
+unreadable ReplicaSet limit cannot reappear through the issue cause text.
+
+Comparisons use cached current objects, not an admission-time snapshot. Resizing,
+other writers, and later template/configuration edits can explain differences.
+Candidate inspection is non-exhaustive and does not perform live admission calls
+or start watches. Verify provenance with configuration history or
+[Kubernetes admission audit records](https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/#monitoring-admission-webhooks).

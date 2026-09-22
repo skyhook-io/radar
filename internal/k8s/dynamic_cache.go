@@ -202,6 +202,7 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	// in get_changes (a mutating webhook that rewrites a field leaves no event
 	// trail otherwise — see classifyAdmissionFailure, which only sees denials).
 	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "mutatingwebhookconfigurations", Kind: "MutatingWebhookConfiguration", Namespaced: false},
+	{Group: "scheduling.k8s.io", Versions: []string{"v1"}, Resource: "priorityclasses", Kind: "PriorityClass", Namespaced: false},
 	{Group: "admissionregistration.k8s.io", Versions: []string{"v1"}, Resource: "validatingwebhookconfigurations", Kind: "ValidatingWebhookConfiguration", Namespaced: false},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "gatewayclasses", Kind: "GatewayClass", Namespaced: false},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "gateways", Kind: "Gateway", Namespaced: true},

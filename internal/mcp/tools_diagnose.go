@@ -331,6 +331,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	if err != nil && !podsNotListable && !podsCacheWarming {
 		return nil, nil, err
 	}
+	issueSummary, issueRows := computeMCPIssueContext(ctx, cache, canonicalGroup, canonicalKind, input.Namespace, input.Name, true)
 	resCtx := buildMCPResourceContextWithStaleChecks(
 		ctx,
 		obj,
@@ -339,6 +340,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		input.Name,
 		resourcecontext.TierDiagnostic,
 		k8s.FindStaleSecretEnvChecksForPods(ctx, cache, pods),
+		issueSummary,
 	)
 
 	tailLines := int64(100)
@@ -377,11 +379,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		// Surface the issues Radar already classified for this object (subject
 		// or affected member), scoped to its namespace — so the agent sees
 		// "crashloop + missing ConfigMap" up front, not just raw logs.
-		RelatedIssues: issues.RelatedIssues(issues.NewCacheProvider(), issues.RelatedIssueOptions{
-			Namespaces:           issueNamespacesForResource(input.Namespace),
-			CanReadClusterScoped: issueClusterScopedAccess(ctx),
-			CanReadRelated:       issueRelatedResourceAccess(ctx),
-		}, canonicalGroup, canonicalKind, input.Namespace, input.Name),
+		RelatedIssues: issueRows,
 	}
 
 	// Cap the log fan-out so a DaemonSet with 50 nodes doesn't trigger

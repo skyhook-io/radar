@@ -40,6 +40,8 @@ export function diagnosticFactLabel(type: string): string {
       return 'Init container';
     case 'restart_cause':
       return 'Restart evidence';
+    case 'pod_template_divergence':
+      return 'Pod/template differences';
     case 'node_blast_radius':
       return 'Affected workloads';
     case 'pvc_blast_radius':

@@ -149,6 +149,12 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 			if pr.CapacityRelevantCorrelated && canFoldCorrelation() {
 				pr.CapacityRelevant = true
 			}
+			if ref := pr.DiagnosisSource; ref != nil && f.CanReadRelated != nil {
+				gv, err := schema.ParseGroupVersion(ref.APIVersion)
+				if err != nil || !f.CanReadRelated(Ref{Group: gv.Group, Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}) {
+					pr.Cause, pr.Action = "", ""
+				}
+			}
 			out = append(out, fromProblem(pr, now, source))
 		}
 	}
@@ -194,6 +200,9 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 		groupedForContext = out
 	}
 	out = enrichDiagnosticContextAuthorized(out, flatForContext, groupedForContext, p, f.CanReadClusterScoped)
+	if !f.SkipPodTemplateContext {
+		out = enrichPodTemplateContext(out, flatForContext, p, podTemplateAccess{f.CanReadClusterScoped, f.CanReadRelated}, f.Grouped, Ref{})
+	}
 
 	return finalizeShapedIssues(out, f, !f.Grouped, uncapped)
 }

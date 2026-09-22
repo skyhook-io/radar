@@ -91,7 +91,7 @@ func (s *Server) detectDiagnoseHealth(r *http.Request, kind, group, namespace, n
 	if canonicalKind == "" {
 		canonicalKind = kind
 	}
-	issueSum, issueRows := computeIssueSummaryAndRows(cache, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), gvk.Group, canonicalKind, namespace, name)
+	issueSum, issueRows := computeIssueSummaryAndRows(cache, s.issueClusterScopedAccess(r), s.issueRelatedResourceAccess(r), gvk.Group, canonicalKind, namespace, name, true)
 	auditSum, auditRows := s.computeAuditSummaryAndRows(r, cache, gvk.Group, canonicalKind, namespace, name)
 
 	var issueCount int

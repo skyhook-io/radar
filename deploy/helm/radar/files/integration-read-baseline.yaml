@@ -3,6 +3,13 @@
 # All grant rows mean get/list/watch on full objects, not redacted projections.
 # Existing grants are preserved; withhold does not revoke rights from other roles.
 entries:
+  - group: "scheduling.k8s.io"
+    resources: ["priorityclasses"]
+    scope: Cluster
+    collection: ""
+    decision: existing
+    reason: "Covered by the existing cluster-read add-on and its existing collection/tier gates."
+    source: "internal/k8s/dynamic_cache.go; existing cloud-rbac-cluster-read.yaml"
   - group: "kafka.strimzi.io"
     resources: ["kafkaconnectors"]
     scope: Namespaced

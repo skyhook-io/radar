@@ -19,14 +19,14 @@ type oomLimitDiscrepancy struct {
 	limitSource   string
 }
 
-func oomLimitDiagnosis(cache *ResourceCache, pod *corev1.Pod, reason, lastTerminatedReason string, now time.Time) (string, string) {
+func oomLimitDiagnosis(cache *ResourceCache, pod *corev1.Pod, reason, lastTerminatedReason string, now time.Time) (string, string, *corev1.ObjectReference) {
 	if !podReasonClassifiesAsOOM(reason, lastTerminatedReason) {
-		return "", ""
+		return "", "", nil
 	}
 
 	discrepancy, ok := activeOOMLimitDiscrepancy(cache, pod, now)
 	if !ok {
-		return "", ""
+		return "", "", nil
 	}
 
 	var cause string
@@ -54,7 +54,7 @@ func oomLimitDiagnosis(cache *ResourceCache, pod *corev1.Pod, reason, lastTermin
 	}
 
 	action := "Determine why the Pod and ReplicaSet differ: inspect Pod resize status, VPA or admission mutation, and whether the ReplicaSet template changed after Pod creation before changing the workload memory limit."
-	return cause, action
+	return cause, action, &corev1.ObjectReference{APIVersion: "apps/v1", Kind: "ReplicaSet", Namespace: pod.Namespace, Name: discrepancy.replicaSet}
 }
 
 func activeOOMLimitDiscrepancy(cache *ResourceCache, pod *corev1.Pod, now time.Time) (oomLimitDiscrepancy, bool) {

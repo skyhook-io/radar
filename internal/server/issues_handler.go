@@ -174,7 +174,16 @@ func (s *Server) issueRelatedResourceAccess(r *http.Request) func(issues.Ref) bo
 		}
 		if ref.Namespace != "" || strings.EqualFold(ref.Kind, "Namespace") {
 			_, _, ok := s.preflightResourceGet(r, normalizeKind(ref.Kind), ref.Namespace, ref.Name, ref.Group)
-			return ok
+			if !ok {
+				return false
+			}
+			switch {
+			case ref.Group == "apps" && ref.Kind == "ReplicaSet":
+				return s.canRead(r, ref.Group, "replicasets", ref.Namespace, "get")
+			case ref.Group == "batch" && ref.Kind == "Job":
+				return s.canRead(r, ref.Group, "jobs", ref.Namespace, "get")
+			}
+			return true
 		}
 		clusterScoped, group, resource := k8s.ClassifyKindScope(ref.Kind, ref.Group)
 		return clusterScoped && s.canRead(r, group, resource, "", "get")

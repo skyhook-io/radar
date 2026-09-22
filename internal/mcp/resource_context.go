@@ -93,7 +93,7 @@ func (l mcpServiceBackendLookup) PodsForServiceSelector(namespace string, select
 	return l.cache.Pods().Pods(namespace).List(selector)
 }
 
-// computeMCPIssueSummary rolls up per-resource issue-composer rows
+// computeMCPIssueContext rolls up per-resource issue-composer rows
 // (problem + condition) into an IssueSummary. Mirrors the
 // REST handler's computeIssueSummaryForResource — same composer call, same
 // group-aware iteration filter, same deterministic sort. The composer's
@@ -104,13 +104,13 @@ func (l mcpServiceBackendLookup) PodsForServiceSelector(namespace string, select
 // Pascal-singular kind required: the composer's Filters.Kinds matcher
 // case-folds both sides but doesn't plural-to-singular convert. Callers
 // pass canonicalKind from obj's TypeMeta.
-func computeMCPIssueSummary(ctx context.Context, cache *k8s.ResourceCache, group, kind, namespace, name string) *resourcecontext.IssueSummary {
+func computeMCPIssueContext(ctx context.Context, cache *k8s.ResourceCache, group, kind, namespace, name string, includeFacts bool) (*resourcecontext.IssueSummary, []issues.Issue) {
 	if cache == nil {
-		return nil
+		return nil, nil
 	}
 	provider := issues.NewCacheProvider()
 	if provider == nil {
-		return nil
+		return nil, nil
 	}
 	namespaces := issueNamespacesForResource(namespace)
 	// RelatedIssues is owner-aware and uncapped: get_resource on a workload
@@ -118,12 +118,13 @@ func computeMCPIssueSummary(ctx context.Context, cache *k8s.ResourceCache, group
 	// old flat-by-exact-resource match looked for Kind=Deployment rows, but the
 	// evidence is Kind=Pod), and on a pod past the inline-Members cap too.
 	matched := issues.RelatedIssues(provider, issues.RelatedIssueOptions{
-		Namespaces:           namespaces,
-		CanReadClusterScoped: issueClusterScopedAccess(ctx),
-		CanReadRelated:       issueRelatedResourceAccess(ctx),
+		Namespaces:             namespaces,
+		SkipPodTemplateContext: !includeFacts,
+		CanReadClusterScoped:   issueClusterScopedAccess(ctx),
+		CanReadRelated:         issueRelatedResourceAccess(ctx),
 	}, group, kind, namespace, name)
 	if len(matched) == 0 {
-		return nil
+		return nil, nil
 	}
 	bySource := make(map[string]int, len(matched))
 	for _, row := range matched {
@@ -142,7 +143,7 @@ func computeMCPIssueSummary(ctx context.Context, cache *k8s.ResourceCache, group
 		HighestSeverity: string(matched[0].Severity),
 		TopReason:       matched[0].Reason,
 		BySource:        bySource,
-	}
+	}, matched
 }
 
 func issueNamespacesForResource(namespace string) []string {
@@ -150,6 +151,19 @@ func issueNamespacesForResource(namespace string) []string {
 		return nil
 	}
 	return []string{namespace}
+}
+
+func attachRelatedIssueDetails(result map[string]any, rows []issues.Issue) {
+	const limit = 3
+	result["relatedIssuesTotal"] = len(rows)
+	result["relatedIssuesTruncated"] = len(rows) > limit
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	if rows == nil {
+		rows = []issues.Issue{}
+	}
+	result["relatedIssues"] = rows
 }
 
 // issueClusterScopedAccess mirrors the issues_list gate so every composer entry
@@ -170,6 +184,14 @@ func issueRelatedResourceAccess(ctx context.Context) func(issues.Ref) bool {
 		if ref.Namespace != "" {
 			if !checkNamespaceAccess(ctx, ref.Namespace) {
 				return false
+			}
+			switch {
+			case ref.Group == "apps" && ref.Kind == "ReplicaSet":
+				return canReadInNamespace(ctx, ref.Group, "replicasets", ref.Namespace, "get")
+			case ref.Group == "batch" && ref.Kind == "Job":
+				return canReadInNamespace(ctx, ref.Group, "jobs", ref.Namespace, "get")
+			case ref.Group == "" && ref.Kind == "LimitRange":
+				return canReadInNamespace(ctx, ref.Group, "limitranges", ref.Namespace, "get")
 			}
 			if strings.EqualFold(ref.Kind, "Secret") {
 				return canReadInNamespace(ctx, ref.Group, "secrets", ref.Namespace, "get")

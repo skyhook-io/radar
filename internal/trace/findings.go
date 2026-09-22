@@ -21,7 +21,7 @@ func hopFindings(p *issues.CacheProvider, ref ResourceRef) []Finding {
 	// Empty options means no namespace filter, and nil authorization predicates
 	// that fail closed on cross-resource diagnostic references rather than
 	// widening what a hop can surface.
-	related := issues.RelatedIssues(p, issues.RelatedIssueOptions{}, ref.Group, ref.Kind, ref.Namespace, ref.Name)
+	related := issues.RelatedIssues(p, issues.RelatedIssueOptions{SkipPodTemplateContext: true}, ref.Group, ref.Kind, ref.Namespace, ref.Name)
 	if len(related) == 0 {
 		return nil
 	}

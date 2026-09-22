@@ -38,8 +38,9 @@ type CacheProvider struct {
 	dynamic   *k8s.DynamicResourceCache
 	discovery *k8s.ResourceDiscovery
 
-	webhookRefsOnce sync.Once
-	webhookRefs     []k8s.AdmissionWebhookServiceReference
+	webhookRefsOnce    sync.Once
+	webhookRefs        []k8s.AdmissionWebhookServiceReference
+	podTemplateSources podTemplateSources
 }
 
 // NewCacheProvider returns a Provider over the live radar caches, or

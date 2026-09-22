@@ -188,8 +188,9 @@ func CanonicalSingular(kind string) string {
 // which the consumer materialises anyway.
 func BuildIssueIndex(p issues.Provider, namespaces []string) IssueIndex {
 	filters := issues.Filters{
-		Namespaces: namespaces,
-		Limit:      issues.NoLimit,
+		SkipPodTemplateContext: true,
+		Namespaces:             namespaces,
+		Limit:                  issues.NoLimit,
 	}
 	// Compose FLAT (uncapped): every evidence row carries the grouped issue ID
 	// (enrichIdentity keys it on owner-else-self + category) and its resolved
