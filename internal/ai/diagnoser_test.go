@@ -169,7 +169,9 @@ func TestDiagnoseStreamUsesListenerAddress(t *testing.T) {
 					t.Fatal(err)
 				}
 				want := "http://" + address + "/radar/mcp"
-				if !apply {
+				if apply {
+					want += "-apply"
+				} else {
 					want += "-investigation?scope=" + scope
 				} else {
 					want += "-apply"
@@ -255,7 +257,7 @@ func TestDiagnoseStreamClearsAdapterProvenanceOnApplyTurn(t *testing.T) {
 func TestDiagnoseStreamUsesRestrictedApplyMount(t *testing.T) {
 	agent := &adapterAuthoredEvidenceAgent{event: StreamEvent{Type: "step"}}
 	diagnoser := &Diagnoser{agents: map[string]Agent{"claude": agent}, defName: "claude"}
-	_, err := diagnoser.DiagnoseStream(context.Background(), Request{Kind: "Pod", Namespace: "lab", Name: "test", MCPPort: 9280, MCPBasePath: "/radar", Apply: true}, func(StreamEvent) {})
+	_, err := diagnoser.DiagnoseStream(context.Background(), Request{Kind: "Pod", Namespace: "lab", Name: "test", MCPAddress: "localhost:9280", MCPBasePath: "/radar", Apply: true}, func(StreamEvent) {})
 	if err != nil {
 		t.Fatal(err)
 	}
