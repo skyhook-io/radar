@@ -2,9 +2,12 @@ package mcp
 
 import (
 	"context"
+	"k8s.io/client-go/rest"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -85,5 +88,56 @@ func TestRuntimeEvidenceAbsentFromReadOnlyCatalog(t *testing.T) {
 		if found != writes {
 			t.Fatalf("includeWrites=%v found=%v", writes, found)
 		}
+	}
+}
+
+func TestRuntimeEvidenceCancelsAcrossContextABA(t *testing.T) {
+	defer k8s.SetTestLocalMode()()
+	t.Setenv("RADAR_CLOUD_MODE", "false")
+	requestStarted := make(chan struct{})
+	requestCancelled := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/namespaces/lab/pods/vault" {
+			t.Errorf("unexpected request %s", r.URL.Path)
+		}
+		close(requestStarted)
+		<-r.Context().Done()
+		close(requestCancelled)
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), runtimeLocalCallerKey{}, true))
+	defer cancel()
+	old := k8s.SetTestConfig(&rest.Config{Host: srv.URL})
+	defer k8s.SetTestConfig(old)
+	oldName := k8s.SetTestContextName("same-context")
+	defer k8s.SetTestContextName(oldName)
+	k8s.CancelOngoingOperations()
+	done := make(chan error, 1)
+	go func() {
+		_, result, err := handleRuntimeEvidence(ctx, nil, RuntimeEvidenceInput{Application: "vault", Namespace: "lab", Pod: "vault", ConfirmNetworkAccess: true})
+		if result != nil {
+			t.Errorf("retained evidence after supersession: %+v", result)
+		}
+		done <- err
+	}()
+	select {
+	case <-requestStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Pod read did not start")
+	}
+	k8s.CancelOngoingOperations()
+	k8s.CancelOngoingOperations()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "context changed") {
+			t.Fatalf("wrong result: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("collection outlived cluster operation")
+	}
+	select {
+	case <-requestCancelled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight Kubernetes request was not cancelled")
 	}
 }
