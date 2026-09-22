@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { AlertBanner } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
 import { SelectMenu } from '@skyhook-io/k8s-ui/components/ui/SelectMenu'
 import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
@@ -26,6 +27,7 @@ const unavailableReasons: Record<string, string> = {
   redirect_refused: 'The endpoint redirected the request; Radar does not follow redirects.',
 }
 const applicationNames = { rabbitmq: 'RabbitMQ', nats: 'NATS', vault: 'Vault' }
+type AvailableCandidates = EvidenceCandidates & { context: string }
 interface Props { kind: string; group?: string; namespace: string; name: string; uid: string }
 
 export function ApplicationEvidenceAction(props: Props) {
@@ -38,22 +40,22 @@ export function ApplicationEvidenceAction(props: Props) {
   const { data, refetch, isFetching } = useQuery({
     queryKey: ['application-evidence-candidates', context, props.kind, props.group, props.namespace, props.name, props.uid, retryPermissions],
     queryFn: ({ signal }) => fetchJSON<EvidenceCandidates>(`/application-evidence/candidates?${new URLSearchParams({ kind: props.kind, group: props.group ?? '', namespace: props.namespace, name: props.name, retryPermissions: String(retryPermissions) })}`, signal),
-    enabled: !!context && !!props.uid && capabilities?.deployment?.mode === 'local',
+    enabled: !!context && !!props.uid && !!props.namespace && capabilities?.deployment?.mode === 'local',
     placeholderData: previous => previous,
     retry: false,
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   })
-  if (!data?.enabled || data.context !== context || data.subjectUID !== props.uid) return null
+  if (!data?.enabled || !data.context || data.context !== context || data.subjectUID !== props.uid) return null
   const retry = () => { if (retryPermissions) void refetch(); else setPermissionRetryTarget(subjectKey) }
   return <>
     {data.permissionCheckTimedOut && <div className="mt-3 text-sm text-theme-text-secondary">Application evidence permissions could not be verified in time. <button type="button" className="text-accent-text hover:underline disabled:opacity-50" disabled={isFetching} onClick={retry}>{isFetching ? 'Checking…' : 'Retry permission check'}</button></div>}
-    {data.candidates.length > 0 && <EvidenceControl key={`${context}:${props.uid}`} data={data} />}
+    {data.candidates.length > 0 && <EvidenceControl key={`${context}:${props.uid}`} data={{ ...data, context: data.context }} />}
   </>
 }
 
-function EvidenceControl({ data }: { data: EvidenceCandidates }) {
-  const [snapshot, setSnapshot] = useState<EvidenceCandidates>()
+function EvidenceControl({ data }: { data: AvailableCandidates }) {
+  const [snapshot, setSnapshot] = useState<AvailableCandidates>()
   const names = [...new Set(data.candidates.map(item => applicationNames[item.application]))].join(', ')
   return <div className="mt-3">
     <button type="button" className="text-sm text-accent-text hover:underline" onClick={() => setSnapshot(data)}>Collect {names} evidence</button>
@@ -61,7 +63,7 @@ function EvidenceControl({ data }: { data: EvidenceCandidates }) {
   </div>
 }
 
-function EvidenceDialog({ data, onClose }: { data: EvidenceCandidates; onClose: () => void }) {
+function EvidenceDialog({ data, onClose }: { data: AvailableCandidates; onClose: () => void }) {
   const [selected, setSelected] = useState(0)
   const [result, setResult] = useState<ApplicationEvidenceResult>()
   const [error, setError] = useState<string>()
@@ -99,7 +101,7 @@ function EvidenceDialog({ data, onClose }: { data: EvidenceCandidates; onClose: 
     <p className="mt-1 text-xs text-theme-text-tertiary">{candidate.coverage}</p>
     {(data.truncated || data.coverageLimited) && <p className="mt-2 text-xs text-theme-text-secondary">This is a limited set of candidate endpoints; it does not cover every replica.</p>}
     <p className="mt-2 text-xs text-theme-text-tertiary">Collection may be unavailable if the endpoint requires credentials or cannot be reached. Results describe this Pod at collection time.</p>
-    {error && <p role="alert" className="mt-4 text-sm text-theme-text-primary">{error}</p>}
+    {error && <div role="alert" className="mt-4"><AlertBanner variant="error" title="Could not complete the request" message={error} /></div>}
     {result && <ApplicationEvidenceObservation result={result} />}
     <div className="mt-5 flex flex-wrap justify-end gap-2">
       {result && <button type="button" className="btn-brand-muted px-3 py-2 text-sm" onClick={async () => { const success = await copyText(JSON.stringify({ context: data.context, ...result }, null, 2)); setCopied(success); if (!success) setError('Could not copy the observation.'); }}>{copied ? 'Copied' : 'Copy observation'}</button>}

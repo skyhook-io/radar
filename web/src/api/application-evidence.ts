@@ -1,21 +1,21 @@
 import { fetchJSON } from './client'
 
 export type EvidenceApplication = 'rabbitmq' | 'nats' | 'vault'
-export interface EvidenceTarget { namespace: string; pod: string; uid: string; container: string }
+export interface EvidenceTarget { namespace: string; pod: string; uid?: string; container?: string }
 export interface EvidenceCandidate {
   application: EvidenceApplication
-  target: EvidenceTarget
+  target: EvidenceTarget & { uid: string; container: string }
   expectedEvidence: string[]
   coverage: string
 }
 export interface EvidenceCandidates {
   permissionCheckTimedOut?: boolean
   enabled: boolean
-  context: string
-  subjectUID: string
+  context?: string
+  subjectUID?: string
   candidates: EvidenceCandidate[]
-  truncated: boolean
-  coverageLimited: boolean
+  truncated?: boolean
+  coverageLimited?: boolean
 }
 export interface ApplicationEvidenceResult {
   adapter: EvidenceApplication
