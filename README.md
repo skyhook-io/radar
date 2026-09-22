@@ -557,6 +557,18 @@ Upgrade impact also gets list-only access to CSIStorageCapacities, FlowSchemas, 
 | **Cost (OpenCost / Kubecost)** | Namespace/workload/node cost via compatible Prometheus metrics or the Kubecost 3 Aggregator (no CRDs) |
 | **CRDs** | Any Custom Resource Definition in your cluster (auto-discovered) |
 
+### Local runtime evidence via MCP
+
+With explicit operator consent, Radar can collect a bounded snapshot from a named Pod using existing Kubernetes Pod-read and port-forward permissions:
+
+| Integration | Evidence collected |
+|---|---|
+| [RabbitMQ](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault) | Node-reported disk and memory alarms |
+| [NATS](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault) | JetStream consumer pending, acknowledgement-pending and redelivery counts |
+| [Vault](docs/integrations.md#local-runtime-evidence-rabbitmq-nats-and-vault) | Initialized, sealed and standby state |
+
+These are explicit local MCP observations, not automatic Issues detectors or full application-health checks. Recognized images and default plaintext endpoints are required; unavailable evidence never establishes health. No application credentials or new settings are used. See the [collection requirements and limitations](docs/mcp.md#explicit-local-runtime-evidence).
+
 ---
 
 ## Keyboard Shortcuts

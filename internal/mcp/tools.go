@@ -542,6 +542,13 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	}
 
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
+		Name:        "collect_application_evidence",
+		Description: "Collect bounded application-state observations from one selected Pod through a temporary Kubernetes port-forward. Use for questions Kubernetes status and logs cannot answer. Requires operator authorization and Pod-read/port-forward access. Local only; unavailable evidence does not establish health.",
+		InputSchema: applicationEvidenceInputSchema(),
+		Annotations: &mcp.ToolAnnotations{DestructiveHint: boolPtr(false), OpenWorldHint: boolPtr(false)},
+	}, logToolCall("collect_application_evidence", handleRuntimeEvidence))
+
+	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_workload",
 		Description: "Perform operations on a Kubernetes workload (Deployment, StatefulSet, DaemonSet, or Argo Rollout). " +
 			"Supported actions: 'restart' triggers a rolling restart, 'scale' changes the replica count " +

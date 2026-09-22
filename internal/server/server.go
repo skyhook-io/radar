@@ -83,6 +83,7 @@ type Server struct {
 	listener                net.Listener
 	updater                 *updater.Updater
 	mcpHandler              http.Handler
+	mcpApplyHandler         http.Handler
 	mcpReadOnlyHandler      http.Handler
 	mcpInvestigationHandler http.Handler
 	diagConfig              *DiagConfig
@@ -183,6 +184,7 @@ type Config struct {
 	StaticFS                embed.FS                    // Embedded frontend files
 	StaticRoot              string                      // Path within StaticFS
 	MCPHandler              http.Handler                // MCP server handler (nil = MCP disabled)
+	MCPApplyHandler         http.Handler                // built-in apply tools; excludes operator-only collection
 	MCPReadOnlyHandler      http.Handler                // public read-only MCP handler (read tools only)
 	MCPInvestigationHandler http.Handler                // internal read-only MCP handler with evidence correlation
 	InvestigationRefs       *investigationrefs.Registry // shared private evidence issuance ledger
@@ -221,6 +223,7 @@ func New(cfg Config) *Server {
 		devMode:                 cfg.DevMode,
 		startTime:               time.Now(),
 		mcpHandler:              cfg.MCPHandler,
+		mcpApplyHandler:         cfg.MCPApplyHandler,
 		mcpReadOnlyHandler:      cfg.MCPReadOnlyHandler,
 		mcpInvestigationHandler: cfg.MCPInvestigationHandler,
 		diagConfig:              cfg.DiagConfig,
@@ -874,12 +877,16 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	// letting the MCP handler answer with 405.
 	r.Handle("/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp/.well-known/*", http.NotFoundHandler())
+	r.Handle("/mcp-apply/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp-readonly/.well-known/*", http.NotFoundHandler())
 	r.Handle("/mcp-investigation/.well-known/*", http.NotFoundHandler())
 
 	// MCP server (Model Context Protocol for AI tools)
 	if s.mcpHandler != nil {
 		r.Mount("/mcp", s.mcpHandler)
+	}
+	if s.mcpApplyHandler != nil {
+		r.Mount("/mcp-apply", s.mcpApplyHandler)
 	}
 	if s.mcpReadOnlyHandler != nil {
 		r.Mount("/mcp-readonly", s.mcpReadOnlyHandler)
