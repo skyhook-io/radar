@@ -1920,7 +1920,9 @@ Radar's local MCP tool `collect_application_evidence` reads one Pod's applicatio
 
 Collection requires Kubernetes Pod-read and port-forward permissions, a recognized image (`rabbitmq`, `nats`, or `hashicorp/vault`), and its declared default plaintext port. RabbitMQ metrics and NATS monitoring must be enabled. Custom ports, TLS and endpoints requiring application credentials are unsupported.
 
-Collection is available only through full local MCP, outside built-in investigations and Apply. Authenticated, remote, hosted and in-cluster deployments are unsupported.
+The full local MCP surface and local resource-detail action expose collection. Authenticated, remote, hosted and in-cluster callers and built-in investigations do not receive it. Custom ports, TLS and application authentication are outside this slice. Denied, missing, malformed or oversized evidence returns unavailable rather than healthy or empty. Results describe the selected endpoint at collection time, not the whole cluster.
+
+Local resource details also offer **Collect application evidence** when Radar can identify a supported Pod endpoint and verify Pod-read and port-forward permissions. Open the dialog, choose one Pod, then collect explicitly. The result includes the observation time, target and coverage limitations; opening a resource or refreshing the page does not collect application evidence. Results are temporary and clear when the resource or cluster changes. The UI action is unavailable on authenticated, remote, hosted and in-cluster deployments.
 
 Results describe the selected endpoint at collection time. Unavailable evidence does not establish health or absence of problems. See [explicit local runtime evidence](mcp.md#explicit-local-runtime-evidence) for invocation and result interpretation.
 
