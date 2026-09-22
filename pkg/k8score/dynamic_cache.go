@@ -1212,6 +1212,39 @@ func (d *DynamicResourceCache) ListWatchedReadOnly(gvr schema.GroupVersionResour
 	return result, nil
 }
 
+// ListWatchedNamespaceReadOnly reads an already-watched namespace when it fits
+// within the candidate budget. Larger namespaces return no rows and truncated
+// coverage rather than an unstable sample. The client-go namespace index allocates its namespace-sized
+// result first; this avoids materializing other namespaces and bounds subsequent
+// object inspection, not the index lookup allocation. Returned objects must not
+// be mutated or retained beyond the synchronous read.
+func (d *DynamicResourceCache) ListWatchedNamespaceReadOnly(gvr schema.GroupVersionResource, namespace string, limit int) ([]*unstructured.Unstructured, bool, error) {
+	if d == nil {
+		return nil, false, fmt.Errorf("dynamic resource cache not initialized")
+	}
+	if namespace == "" || limit <= 0 {
+		return nil, false, fmt.Errorf("namespace and positive candidate limit are required")
+	}
+	entries := d.readEntries(gvr, namespace)
+	if len(entries) == 0 || !entriesSynced(entries) {
+		return nil, false, fmt.Errorf("namespace cache is not synchronized")
+	}
+	items, err := indexerItems(entries, namespace)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(items) > limit {
+		return nil, true, nil
+	}
+	result := make([]*unstructured.Unstructured, 0, len(items))
+	for _, item := range items {
+		if u, ok := item.(*unstructured.Unstructured); ok {
+			result = append(result, u)
+		}
+	}
+	return result, false, nil
+}
+
 // GetWatched reads one object only from already-watched informer stores. It
 // never probes RBAC, starts an informer, or waits for a cache sync.
 func (d *DynamicResourceCache) GetWatched(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {

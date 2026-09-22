@@ -4,6 +4,13 @@
 # Existing grants are preserved; withhold does not revoke rights from other roles.
 entries:
   - group: "kafka.strimzi.io"
+    resources: ["kafkaconnects"]
+    scope: Namespaced
+    collection: "strimzi"
+    decision: withhold
+    reason: "Kafka Connect configuration can contain credentials; cached relationship discovery adds no caller grants."
+    source: "https://strimzi.io/docs/operators/1.2.0/configuring.html#type-KafkaConnect-reference"
+  - group: "kafka.strimzi.io"
     resources: ["kafkaconnectors"]
     scope: Namespaced
     collection: "strimzi"

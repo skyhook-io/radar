@@ -29,8 +29,8 @@ func TestStrimziContextExactAuthorizedAndImmutable(t *testing.T) {
 	collision.SetAPIVersion("other.io/v1")
 	rows = append(rows, collision)
 	before, _ := json.Marshal(rows)
-	reader := strimziContextReader{list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, error) {
-		return rows, schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, nil
+	reader := strimziContextReader{list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
+		return rows, schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, false, nil
 	}}
 	seen := []string{}
 	out := strimziEvidence(connect, func(r Ref) bool { seen = append(seen, r.Namespace+"/"+r.Name); return r.Name != "denied" }, reader)
@@ -61,8 +61,8 @@ func TestStrimziContextOwnerUIDAndMissing(t *testing.T) {
 	pod.SetAPIVersion("v1")
 	yes := false
 	pod.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "kafka.strimzi.io/v1", Kind: "KafkaConnect", Name: "connect", UID: types.UID("connect-uid"), Controller: &yes}})
-	reader := strimziContextReader{get: func(Ref) (runtime.Object, error) { return connect, nil }, list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, error) {
-		return nil, schema.GroupVersionResource{}, fmt.Errorf("not watched")
+	reader := strimziContextReader{get: func(Ref) (runtime.Object, error) { return connect, nil }, list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
+		return nil, schema.GroupVersionResource{}, false, fmt.Errorf("not watched")
 	}}
 	if out := strimziEvidence(pod, nil, reader); out == nil || out.Coverage == "" {
 		t.Fatal("valid UID path lost")
@@ -86,8 +86,8 @@ func TestStrimziContextBoundsAndGeneration(t *testing.T) {
 	for n := 0; n < 8; n++ {
 		rows = append(rows, contextConnector("app", fmt.Sprintf("c%d", n), "connect"))
 	}
-	reader := strimziContextReader{list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, error) {
-		return rows, schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, nil
+	reader := strimziContextReader{list: func(string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
+		return rows, schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, false, nil
 	}}
 	out := strimziEvidence(connect, nil, reader)
 	if len(out.Findings) != 5 || !out.Truncated {
@@ -104,7 +104,47 @@ func TestStrimziContextBoundsAndGeneration(t *testing.T) {
 		rows = append(rows, contextConnector("app", fmt.Sprintf("c%d", n), "connect"))
 	}
 	out = strimziEvidence(connect, nil, reader)
-	if !out.Truncated || len(out.Findings) != maxStrimziContextFindings {
+	if !out.Truncated || len(out.Findings) != 0 {
 		t.Fatal("scan cap missed")
+	}
+}
+
+func TestStrimziCandidateBudgetPrecedesAuthorizationAndRelevance(t *testing.T) {
+	for _, mode := range []string{"unrelated", "denied"} {
+		t.Run(mode, func(t *testing.T) {
+			connect := contextStrimzi("KafkaConnect", "app", "connect")
+			var rows []*unstructured.Unstructured
+			for n := 0; n < maxStrimziContextScan; n++ {
+				cluster := "connect"
+				if mode == "unrelated" {
+					cluster = "another"
+				}
+				rows = append(rows, contextConnector("app", fmt.Sprintf("skip-%d", n), cluster))
+			}
+			rows = append(rows, contextConnector("app", "beyond-budget", "connect"))
+			reader := strimziContextReader{list: func(ns string) ([]*unstructured.Unstructured, schema.GroupVersionResource, bool, error) {
+				if ns != "app" {
+					t.Fatalf("wrong namespace %q", ns)
+				}
+				return rows, schema.GroupVersionResource{Group: strimziGroup, Version: "v1", Resource: "kafkaconnectors"}, true, nil
+			}}
+			calls := 0
+			out := strimziEvidence(connect, func(ref Ref) bool {
+				if ref.Kind == "KafkaConnect" {
+					return true
+				}
+				calls++
+				if ref.Name == "beyond-budget" {
+					t.Fatal("examined candidate beyond scan cap")
+				}
+				return false
+			}, reader)
+			if !out.Truncated || len(out.Findings) != 0 || strings.Contains(out.Coverage, "500") {
+				t.Fatalf("unauthorized count leaked: %+v", out)
+			}
+			if calls != 0 {
+				t.Fatalf("oversized namespace triggered permission checks: %d", calls)
+			}
+		})
 	}
 }
