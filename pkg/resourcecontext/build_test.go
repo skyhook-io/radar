@@ -1762,7 +1762,7 @@ func TestBuild_Deployment_ScaledByHPA_AttachesSummary(t *testing.T) {
 		t.Fatalf("ScaledBy: got %+v want one entry", rc)
 	}
 	entry := rc.ScaledBy[0]
-	if entry.Kind != "HorizontalPodAutoscaler" || entry.Namespace != "prod" || entry.Name != "api-hpa" {
+	if entry.Kind != "HorizontalPodAutoscaler" || entry.Group != "autoscaling" || entry.Namespace != "prod" || entry.Name != "api-hpa" {
 		t.Fatalf("ScaledBy[0] ref: got %+v", entry.ContextRef)
 	}
 	if entry.HPASummary == nil {
@@ -1785,7 +1785,7 @@ func TestBuild_Deployment_ScaledByHPA_AttachesSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(b), `"scaledBy":[{"kind":"HorizontalPodAutoscaler","namespace":"prod","name":"api-hpa","hpaSummary":{`) {
+	if !strings.Contains(string(b), `"scaledBy":[{"kind":"HorizontalPodAutoscaler","group":"autoscaling","namespace":"prod","name":"api-hpa","hpaSummary":{`) {
 		t.Errorf("scaledBy entry should serialize as the flat ref plus hpaSummary; got %s", b)
 	}
 }
@@ -1794,7 +1794,7 @@ func TestBuild_Deployment_ScaledByHPA_DeniedHPAIsOmittedWithoutLeak(t *testing.T
 	deploy, topo, hpa := scaledByFixture(topology.KindHPA, "horizontalpodautoscaler/prod/api-hpa")
 	rc := Build(context.Background(), deploy, Options{
 		Tier:          TierBasic,
-		AccessChecker: denyChecker{group: "", kind: "HorizontalPodAutoscaler", namespace: "prod"},
+		AccessChecker: denyChecker{group: "autoscaling", kind: "HorizontalPodAutoscaler", namespace: "prod"},
 		Topology:      topo,
 		Provider:      mockResourceProvider{hpas: []*autoscalingv2.HorizontalPodAutoscaler{hpa}},
 	})
