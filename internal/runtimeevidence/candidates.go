@@ -2,6 +2,7 @@ package runtimeevidence
 
 import (
 	"context"
+	"path"
 	"sort"
 	"strings"
 
@@ -12,7 +13,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -48,7 +51,7 @@ func CandidatesForPods(pods []*corev1.Pod, truncated bool) CandidateSet {
 			if reason != "" {
 				continue
 			}
-			readiness[id.uid+"/"+id.name] = ReadinessFailure(p, id.name)
+			readiness[id.uid+"/"+id.name] = RelevantReadinessFailure(p, a, id.name)
 			facts := []string{"initialized", "sealed", "standby"}
 			if a == evidence.RabbitMQ {
 				facts = []string{"node disk alarm", "node memory alarm"}
@@ -140,55 +143,54 @@ func ResolveCandidates(ctx context.Context, deps trace.Deps, subject Subject) Ca
 		return result
 	}
 	canonical := k8s.CanonicalWorkloadKind(kind)
-	if canonical == "" || (subject.Group != "" && !k8s.TypedKindOwnsGroup(kind, subject.Group)) {
+	if canonical == "" {
 		return limited
 	}
-	obj, err := k8s.FetchResource(deps.Cache, kind, subject.Namespace, subject.Name)
-	if err != nil {
+	var obj runtime.Object
+	var selector *metav1.LabelSelector
+	var err error
+	if canonical == "Rollout" {
+		if (subject.Group != "" && subject.Group != "argoproj.io") || deps.Dynamic == nil || deps.Discovery == nil {
+			return limited
+		}
+		gvr, ok := deps.Discovery.GetGVRWithGroup("Rollout", "argoproj.io")
+		if !ok {
+			return limited
+		}
+		obj, err = deps.Dynamic.GetWatched(gvr, subject.Namespace, subject.Name)
+		if err != nil {
+			return limited
+		}
+		selector, err = k8s.ResolveRolloutSelector(deps.Cache, obj.(*unstructured.Unstructured))
+	} else {
+		if subject.Group != "" && !k8s.TypedKindOwnsGroup(kind, subject.Group) {
+			return limited
+		}
+		obj, err = k8s.FetchResource(deps.Cache, kind, subject.Namespace, subject.Name)
+		if err != nil {
+			return limited
+		}
+		selector, err = k8s.GetWorkloadSelector(deps.Cache, kind, subject.Namespace, subject.Name)
+	}
+	if err != nil || selector == nil {
 		return limited
 	}
 	owner, err := meta.Accessor(obj)
 	if err != nil || owner.GetUID() == "" {
 		return limited
 	}
-	pods, err := deps.Cache.Pods().Pods(subject.Namespace).List(labels.Everything())
-	if err != nil || len(pods) > maxCandidatePods {
+	parsed, err := metav1.LabelSelectorAsSelector(selector)
+	if err != nil {
 		return limited
 	}
-	var selected []*corev1.Pod
-	for _, p := range pods {
-		ref := metav1.GetControllerOf(p)
-		if ref == nil {
-			continue
-		}
-		if ref.Kind == canonical && ref.Name == subject.Name && ref.UID == owner.GetUID() && k8s.GroupFromAPIVersion(ref.APIVersion) == subjectGroup(canonical) {
-			selected = append(selected, p)
-			continue
-		}
-		if canonical != "Deployment" || ref.Kind != "ReplicaSet" || k8s.GroupFromAPIVersion(ref.APIVersion) != "apps" {
-			continue
-		}
-		if !cacheCovers(deps.Cache, "replicasets", subject.Namespace) || deps.Cache.ReplicaSets() == nil {
-			return limited
-		}
-		rs, err := deps.Cache.ReplicaSets().ReplicaSets(subject.Namespace).Get(ref.Name)
-		if err != nil || rs.UID != ref.UID {
-			continue
-		}
-		parent := metav1.GetControllerOf(rs)
-		if parent != nil && parent.Kind == canonical && parent.Name == subject.Name && parent.UID == owner.GetUID() && k8s.GroupFromAPIVersion(parent.APIVersion) == "apps" {
-			selected = append(selected, p)
-		}
+	selected, truncated, err := k8s.WorkloadPodsWithOptions(deps.Cache, kind, subject.Namespace, subject.Name, k8s.WorkloadPodOptions{OwnerUID: owner.GetUID(), Selector: parsed, MaxCandidates: maxCandidatePods})
+	if err != nil {
+		return limited
 	}
-	result := CandidatesForPods(selected, false)
+	result := CandidatesForPods(selected, truncated)
+	result.CoverageLimited = truncated
 	result.SubjectUID = string(owner.GetUID())
 	return result
-}
-func subjectGroup(kind string) string {
-	if kind == "Job" || kind == "CronJob" {
-		return "batch"
-	}
-	return "apps"
 }
 
 func CandidatesFromTrace(deps trace.Deps, tr *trace.Trace) CandidateSet {
@@ -243,12 +245,12 @@ func CandidatesFromTrace(deps trace.Deps, tr *trace.Trace) CandidateSet {
 }
 
 func CheckAccess(ctx context.Context, client kubernetes.Interface, target Target) bool {
-	if client == nil {
+	if client == nil || ctx.Err() != nil {
 		return false
 	}
 	for _, op := range []struct{ verb, sub string }{{"get", ""}, {"create", "portforward"}} {
 		r, err := client.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, &authv1.SelfSubjectAccessReview{Spec: authv1.SelfSubjectAccessReviewSpec{ResourceAttributes: &authv1.ResourceAttributes{Namespace: target.Namespace, Verb: op.verb, Resource: "pods", Subresource: op.sub, Name: target.Pod}}}, metav1.CreateOptions{})
-		if err != nil || !r.Status.Allowed || r.Status.Denied || r.Status.EvaluationError != "" {
+		if err != nil || ctx.Err() != nil || !r.Status.Allowed || r.Status.Denied || r.Status.EvaluationError != "" {
 			return false
 		}
 	}
@@ -266,6 +268,36 @@ func ReadinessFailure(p *corev1.Pod, containerName string) bool {
 		for _, status := range p.Status.ContainerStatuses {
 			if status.Name == containerName {
 				return !status.Ready
+			}
+		}
+	}
+	return false
+}
+
+func RelevantReadinessFailure(p *corev1.Pod, application evidence.Adapter, containerName string) bool {
+	if !ReadinessFailure(p, containerName) {
+		return false
+	}
+	if application == evidence.Vault {
+		return true
+	}
+	if application != evidence.RabbitMQ {
+		return false
+	}
+	for _, c := range p.Spec.Containers {
+		if c.Name != containerName || c.ReadinessProbe == nil || c.ReadinessProbe.Exec == nil {
+			continue
+		}
+		cmd := c.ReadinessProbe.Exec.Command
+		if len(cmd) >= 3 && path.Base(cmd[0]) == "gosu" {
+			cmd = cmd[2:]
+		}
+		if len(cmd) == 0 || path.Base(cmd[0]) != "rabbitmq-diagnostics" {
+			continue
+		}
+		for _, arg := range cmd[1:] {
+			if arg == "check_local_alarms" || arg == "check_alarms" {
+				return true
 			}
 		}
 	}
