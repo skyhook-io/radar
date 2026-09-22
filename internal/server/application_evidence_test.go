@@ -287,3 +287,24 @@ func TestApplicationEvidenceCandidatesDiscardSwitchedContext(t *testing.T) {
 		t.Fatalf("stale response: %d %s", w.Code, w.Body)
 	}
 }
+
+func TestApplicationEvidenceRefusesTransitionBeforeSnapshot(t *testing.T) {
+	t.Cleanup(k8s.SetTestLocalMode())
+	t.Cleanup(k8s.SetTestContextOperationInProgress(true))
+	api := &applicationEvidenceAPI{
+		operationContext: context.Background,
+		snapshot:         func() (*rest.Config, string) { t.Fatal("read a configuration during transition"); return nil, "" },
+	}
+	s := &Server{applicationEvidence: api}
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		w := httptest.NewRecorder()
+		if method == http.MethodGet {
+			s.handleApplicationEvidenceCandidates(w, evidenceRequest(method, "/api/application-evidence/candidates?kind=Pod&namespace=default&name=vault-0", ""))
+		} else {
+			s.handleCollectApplicationEvidence(w, evidenceRequest(method, "/api/application-evidence/collect", evidenceRequestBody))
+		}
+		if w.Code != http.StatusConflict {
+			t.Fatalf("%s: status=%d body=%s", method, w.Code, w.Body)
+		}
+	}
+}
