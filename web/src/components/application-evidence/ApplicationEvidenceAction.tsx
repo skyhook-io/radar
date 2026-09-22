@@ -52,15 +52,16 @@ export function ApplicationEvidenceAction(props: Props) {
   const retry = () => { if (retryPermissions) void refetch(); else setPermissionRetryTarget(subjectKey) }
   return <>
     {data.permissionCheckTimedOut && <div className="mt-3 text-sm text-theme-text-secondary">Application evidence permissions could not be verified in time. <button type="button" className="text-accent-text hover:underline disabled:opacity-50" disabled={isFetching} onClick={retry}>{isFetching ? 'Checking…' : 'Retry permission check'}</button></div>}
-    {data.candidates.length > 0 && <EvidenceControl key={`${context}:${props.uid}`} data={{ ...data, context: data.context }} refreshing={isFetching} onTargetChanged={() => { void refetch() }} />}
+    <EvidenceControl key={`${context}:${props.uid}`} data={{ ...data, context: data.context }} refreshing={isFetching} onTargetChanged={() => { void refetch() }} />
   </>
 }
 
 function EvidenceControl({ data, refreshing, onTargetChanged }: { data: AvailableCandidates; refreshing: boolean; onTargetChanged: () => void }) {
   const [snapshot, setSnapshot] = useState<AvailableCandidates>()
+  if (!snapshot && data.candidates.length === 0) return null
   const names = [...new Set(data.candidates.map(item => applicationNames[item.application]))].join(', ')
   return <div className="mt-3">
-    <button type="button" className="text-sm text-accent-text hover:underline disabled:opacity-50" disabled={refreshing} onClick={() => setSnapshot(data)}>Collect {names} evidence</button>
+    {data.candidates.length > 0 && <button type="button" className="text-sm text-accent-text hover:underline disabled:opacity-50" disabled={refreshing} onClick={() => setSnapshot(data)}>Collect {names} evidence</button>}
     {snapshot && <EvidenceDialog data={snapshot} onTargetChanged={onTargetChanged} onClose={() => setSnapshot(undefined)} />}
   </div>
 }
