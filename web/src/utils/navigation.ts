@@ -1,5 +1,6 @@
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../api/config'
 import { apiVersionToGroup, kindToPluralWithGroup } from '@skyhook-io/k8s-ui/utils/navigation'
+import { topologyNodeResourceKind } from '@skyhook-io/k8s-ui/utils/topology-neighborhood'
 import type { SelectedResource, Topology } from '@skyhook-io/k8s-ui/types/core'
 import type { SearchHit } from '../api/client'
 
@@ -48,7 +49,7 @@ export function getNetworkPolicyResourceTarget(topology: Topology | null): { kin
 
     const group = networkPolicyGroup(node)
     const target = {
-      kind: kindToPluralWithGroup(node.kind, group ?? ''),
+      kind: kindToPluralWithGroup(topologyNodeResourceKind(node), group ?? ''),
       ...(group ? { group } : {}),
     }
     targets.set(`${target.kind}\u0000${target.group ?? ''}`, target)

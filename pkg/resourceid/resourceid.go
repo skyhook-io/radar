@@ -26,8 +26,10 @@ func BuiltinGroup(kind string) (string, bool) {
 		"PersistentVolume", "PersistentVolumeClaim", "ServiceAccount", "Event",
 		"LimitRange", "ResourceQuota", "Endpoints":
 		return "", true
-	case "Deployment", "DaemonSet", "StatefulSet", "ReplicaSet":
+	case "Deployment", "DaemonSet", "StatefulSet", "ReplicaSet", "ControllerRevision":
 		return "apps", true
+	case "ResourceClaim", "ResourceClaimTemplate", "ResourceSlice", "DeviceClass":
+		return "resource.k8s.io", true
 	case "Job", "CronJob":
 		return "batch", true
 	case "HorizontalPodAutoscaler":

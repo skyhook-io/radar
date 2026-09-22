@@ -165,6 +165,10 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 	topology.ReadvertiseCalicoPolicyNodes(sub.Nodes, func(t topology.SARTuple) bool {
 		return s.canRead(r, t.Group, t.Resource, t.Namespace, "get")
 	})
+	if len(sub.Nodes) > 0 && topology.IsCalicoPolicyKind(sub.Nodes[0].Kind) {
+		apiVersion, _ := sub.Nodes[0].Data["apiVersion"].(string)
+		sub.Root.Group = topology.APIVersionGroup(apiVersion)
+	}
 	if sub.AmbiguousRoot {
 		s.writeError(w, http.StatusBadRequest, "resource kind is ambiguous; provide group")
 		return

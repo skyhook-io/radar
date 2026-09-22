@@ -1,3 +1,4 @@
+import { builtinGroupForKind } from './api-resources'
 import type { ResourceRef } from '../types/core'
 import { groupQualifiesLaneId, laneId, laneResourceKey, parseLaneId } from './navigation'
 import { rolloutActivityLevel, type WorkloadRolloutActivity } from './workload-rollout'
@@ -1459,8 +1460,15 @@ export function resolveAppWorkloadSelection(
   workloadKeys: readonly string[],
   hostSelected: string | null,
 ): { selected: string | null; hostKeyIsStale: boolean } {
-  const matched =
-    hostSelected && workloadKeys.includes(hostSelected) ? hostSelected : null;
+  let matched = hostSelected && workloadKeys.includes(hostSelected) ? hostSelected : null;
+  const ref = hostSelected ? parseLaneId(hostSelected) : null;
+  if (!matched && ref && !ref.group && builtinGroupForKind(ref.kind) === undefined) {
+    const matches = workloadKeys.filter(key => {
+      const candidate = parseLaneId(key);
+      return candidate && laneResourceKey(candidate.kind, candidate.namespace, candidate.name) === hostSelected;
+    });
+    if (matches.length === 1) matched = matches[0];
+  }
   const soleWorkload = workloadKeys.length === 1 ? workloadKeys[0] : null;
   return {
     selected: matched ?? soleWorkload,

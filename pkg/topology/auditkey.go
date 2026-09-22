@@ -80,8 +80,7 @@ func nodeResourceKeys(node *Node) []string {
 // suite emits findings under (audit.ResourceKey == pkg/resourceid.ResourceKey),
 // so the frontend can join Cluster Audit findings onto topology nodes with a
 // single string lookup instead of re-deriving identity from apiVersion/kind
-// (which is fragile across the collision pseudo-kinds above). Group follows the
-// audit convention exactly: built-ins → their group, everything else → "".
+// (which is fragile across the collision pseudo-kinds above).
 func stampAuditKeys(nodes []Node) []Node {
 	for i := range nodes {
 		k8sKind := KubernetesKindForNode(&nodes[i])
@@ -92,9 +91,9 @@ func stampAuditKeys(nodes []Node) []Node {
 			nodes[i].Data["resourceKind"] = k8sKind
 		}
 		ns, _ := nodes[i].Data["namespace"].(string)
-		group := resourceid.GroupForBuiltinKind(k8sKind)
-		if nodeGroup := nodeAPIGroupFromData(&nodes[i]); nodeGroup != "" && nodeGroup != group {
-			group = ""
+		group := nodeAPIGroupFromData(&nodes[i])
+		if group == "" {
+			group = resourceid.GroupForBuiltinKind(k8sKind)
 		}
 		nodes[i].Data["auditKey"] = resourceid.ResourceKey(
 			group, k8sKind, ns, nodes[i].Name)

@@ -8,11 +8,15 @@ describe('canonicalResourceGroup', () => {
     expect(builtinGroupForKind('PodDisruptionBudget')).toBe('policy')
     expect(canonicalResourceGroup('Deployment', undefined)).toBe('apps')
     expect(canonicalResourceGroup('Job', '')).toBe('batch')
+    expect(canonicalResourceGroup('ResourceClaim', undefined)).toBe('resource.k8s.io')
+    expect(canonicalResourceGroup('ControllerRevision', undefined)).toBe('apps')
+    expect(canonicalResourceGroup('Endpoints', undefined)).toBe('')
   })
 
   it('never overwrites an explicit custom group', () => {
     expect(canonicalResourceGroup('Job', 'batch.volcano.sh')).toBe('batch.volcano.sh')
     expect(canonicalResourceGroup('Widget', undefined)).toBeUndefined()
+    expect(canonicalResourceGroup('Widget', '')).toBeUndefined()
   })
 })
 

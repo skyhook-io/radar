@@ -1122,6 +1122,26 @@ describe('group-qualified lane identity', () => {
     expect(lanes[0].appKey).toBeUndefined()
   })
 
+  it('does not join an ambiguous lane when the other identity is outside the app index', () => {
+    const appIndex = buildAppMembershipIndex([{
+      key: 'volcano', name: 'volcano', health: 'healthy',
+      workloads: [
+        { kind: 'Job', group: 'batch.volcano.sh', namespace: 'ml', name: 'train', health: 'healthy', ready: 1, desired: 1, restarts: 0 },
+        { kind: 'Deployment', group: 'apps', namespace: 'ml', name: 'dashboard', health: 'healthy', ready: 1, desired: 1, restarts: 0 },
+      ],
+    }])
+    const topology = { nodes: [
+      { id: 'core', kind: 'Job', name: 'train', data: { namespace: 'ml', apiVersion: 'batch/v1' } },
+      { id: 'volcano', kind: 'Job', name: 'train', data: { namespace: 'ml', apiVersion: 'batch.volcano.sh/v1alpha1' } },
+    ], edges: [] } as unknown as Topology
+    const lanes = buildResourceHierarchy({
+      events: [changeEvent('Job', 'ml', 'train'), changeEvent('Deployment', 'ml', 'dashboard', { apiVersion: 'apps/v1' })],
+      grouping: 'app', appIndex, topology,
+    })
+    expect(lanes.find(lane => lane.identityAmbiguous)?.appKey).toBeUndefined()
+    expect(lanes.some(lane => lane.identityAmbiguous)).toBe(true)
+  })
+
   it('keeps exact core and custom lanes in their own app memberships after a collision', () => {
     const appIndex = buildAppMembershipIndex([
       {
@@ -1170,6 +1190,8 @@ describe('group-qualified lane identity', () => {
     expect(ids).not.toContain('Job/ml/train')
     const ambiguousLane = lanes.find((lane) => lane.id !== 'Job.batch.volcano.sh/ml/train')
     expect(ambiguousLane?.events.map((event) => event.id)).toEqual(['persisted'])
+    expect(ambiguousLane?.group).toBeUndefined()
+    expect(ambiguousLane?.identityAmbiguous).toBe(true)
   })
 
   it('joins collision-labeled topology nodes to their real Kubernetes kind', () => {
@@ -1225,6 +1247,30 @@ describe('group-qualified lane identity', () => {
     expect(lanes.find((lane) => lane.name === 'core')?.children?.map((lane) => lane.id)).toEqual(['Job/ml/train'])
     expect(lanes.find((lane) => lane.name === 'volcano')?.children?.map((lane) => lane.id))
       .toEqual(['Job.batch.volcano.sh/ml/train'])
+  })
+
+  it.each([
+    ['Deployment', 'ReplicaSet'],
+    ['CronJob', 'Job'],
+    ['Rollout', 'ReplicaSet'],
+  ])('preserves %s -> %s -> Pod ownership despite shortcut edges', (root, intermediate) => {
+    const topology = {
+      nodes: [
+        { id: 'root', kind: root, name: 'app', data: { namespace: 'dev' } },
+        { id: 'pod', kind: 'Pod', name: 'worker', data: { namespace: 'dev' } },
+      ],
+      edges: [{ id: 'shortcut', source: 'root', target: 'pod', type: 'manages' }],
+    } as unknown as Topology
+    const lanes = buildResourceHierarchy({
+      events: [
+        changeEvent(root, 'dev', 'app'),
+        changeEvent(intermediate, 'dev', 'run', { owner: { kind: root, name: 'app' } }),
+        changeEvent('Pod', 'dev', 'worker', { owner: { kind: intermediate, name: 'run' } }),
+      ], topology, grouping: 'owner',
+    })
+    expect(lanes).toHaveLength(1)
+    expect(lanes[0].children?.map(child => child.kind)).toEqual([intermediate])
+    expect(lanes[0].children?.[0].children?.map(child => child.name)).toEqual(['worker'])
   })
 
   it('uses an exact manages edge when a persisted owner ref is group-less', () => {

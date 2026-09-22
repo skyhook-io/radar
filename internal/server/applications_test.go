@@ -8,6 +8,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/health"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/packages"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/rollouts"
@@ -553,7 +554,7 @@ func TestGroupApplications_ForeignManagerKindStaysRaw(t *testing.T) {
 		t.Fatalf("got %d rows, want 1", len(rows))
 	}
 	row := rows[0]
-	if row.Key != "operators/Application/platform@apps.example.io" || row.Tier != 0 || row.SourceRef != nil {
+	if row.Key != "operators/Application/platform" || row.Tier != 0 || row.SourceRef != nil {
 		t.Fatalf("foreign Application was attributed as Argo CD: %+v", row)
 	}
 }
@@ -1470,5 +1471,36 @@ func TestApplicationRevisionTargetsSkipDeploymentBeforeNewReplicaSetExists(t *te
 
 	if target := applicationRevisionTargets(context.Background(), k8s.GetResourceCache(), []string{"prod"}, nil)["Deployment/prod/checkout"]; target.label != "" {
 		t.Fatalf("revision target = %#v, want none before an updated replica exists", target)
+	}
+}
+
+func TestUnambiguousCustomAppKeepsExistingKey(t *testing.T) {
+	input := rawInput("Rollout", "dev", "api", "v1", "healthy")
+	row := &appRow{}
+	identifyApp(row, []appWorkloadInput{input}, map[string]map[string]bool{input.rootKey: {input.rootGroup: true}})
+	if row.Key != "dev/Rollout/api" || row.Name != "api" {
+		t.Fatalf("unambiguous app changed identity: %+v", row)
+	}
+}
+
+func TestWarningEventIndexResolvesOnlyUnambiguousGroups(t *testing.T) {
+	event := &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "warning", Namespace: "dev"}, Type: "Warning", Reason: "Failed", InvolvedObject: corev1.ObjectReference{Kind: "Rollout", Name: "api"}}
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{Client: fake.NewSimpleClientset(event), ResourceTypes: map[string]bool{k8score.Events: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer core.Stop()
+	cache := &k8s.ResourceCache{ResourceCache: core}
+	graph := &appGraph{byID: map[string]topology.Node{
+		"argo": {Kind: topology.KindRollout, Name: "api", Data: map[string]any{"namespace": "dev", "apiVersion": "argoproj.io/v1alpha1"}},
+	}}
+	index := indexWarningEventsByObject(cache, []string{"dev"}, graph)
+	if got := eventsForWorkload(index["dev"], "argoproj.io", "Rollout", "api", nil); len(got) != 1 {
+		t.Fatalf("unambiguous warning missing: %+v", index)
+	}
+	graph.byID["other"] = topology.Node{Kind: topology.KindRollout, Name: "api", Data: map[string]any{"namespace": "dev", "apiVersion": "other.io/v1"}}
+	index = indexWarningEventsByObject(cache, []string{"dev"}, graph)
+	if got := eventsForWorkload(index["dev"], "argoproj.io", "Rollout", "api", nil); len(got) != 0 {
+		t.Fatalf("ambiguous warning attributed: %+v", got)
 	}
 }

@@ -146,6 +146,10 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 	topology.ReadvertiseCalicoPolicyNodes(sub.Nodes, func(t topology.SARTuple) bool {
 		return canReadInNamespace(ctx, t.Group, t.Resource, t.Namespace, "get")
 	})
+	if len(sub.Nodes) > 0 && topology.IsCalicoPolicyKind(sub.Nodes[0].Kind) {
+		apiVersion, _ := sub.Nodes[0].Data["apiVersion"].(string)
+		sub.Root.Group = topology.APIVersionGroup(apiVersion)
+	}
 	if sub.AmbiguousRoot {
 		return nil, nil, fmt.Errorf("resource kind is ambiguous for %s/%s/%s; provide group", input.Kind, input.Namespace, input.Name)
 	}

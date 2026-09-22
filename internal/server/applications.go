@@ -865,7 +865,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 	var out []appWorkloadInput
 
 	podsByNS := indexPodsByNamespace(cache, namespaces)
-	eventsByObj := indexWarningEventsByObject(cache, namespaces)
+	eventsByObj := indexWarningEventsByObject(cache, namespaces, g)
 	cronJobBatches := cronJobBatchSummaries(cache, namespaces)
 	scaledJobBatches := scaledJobBatchSummaries(cache, namespaces)
 	cronWorkflowBatches := cronWorkflowBatchSummaries(ctx, cache, namespaces)
@@ -1742,10 +1742,17 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 		members[comp] = append(members[comp], in)
 	}
 
+	rootGroups := make(map[string]map[string]bool)
+	for _, in := range inputs {
+		if rootGroups[in.rootKey] == nil {
+			rootGroups[in.rootKey] = make(map[string]bool)
+		}
+		rootGroups[in.rootKey][in.rootGroup] = true
+	}
 	for _, comp := range order {
 		ins := members[comp]
 		r := &appRow{}
-		identifyApp(r, ins)
+		identifyApp(r, ins, rootGroups)
 		servingHealth := packages.Health("")
 		appVers := map[string]struct{}{}
 		labeled := 0
@@ -1857,7 +1864,7 @@ func inputAtoms(in appWorkloadInput, argoAppNamespaces map[string]map[string]boo
 // carries an explicit tier + confidence); otherwise the structural root — and
 // when that root is a GitOps manager, its kind synthesizes the tier so the
 // surface still attributes provenance (Argo/Flux) for unlabeled in-cluster apps.
-func identifyApp(r *appRow, ins []appWorkloadInput) {
+func identifyApp(r *appRow, ins []appWorkloadInput, rootGroups map[string]map[string]bool) {
 	var best *subject.Signal
 	for i := range ins {
 		if ins[i].overlay == nil {
@@ -1883,7 +1890,7 @@ func identifyApp(r *appRow, ins []appWorkloadInput) {
 		if t, c, ok := managerTier(root.rootKind, root.rootGroup); ok {
 			r.Tier = t
 			r.Confidence = c
-		} else if root.rootGroup != "" && root.rootGroup != resourceid.GroupForBuiltinKind(root.rootKind) {
+		} else if len(rootGroups[root.rootKey]) > 1 && root.rootGroup != "" && root.rootGroup != resourceid.GroupForBuiltinKind(root.rootKind) {
 			r.Key += "@" + root.rootGroup
 		}
 	}
@@ -2438,11 +2445,25 @@ func indexPodsByNamespace(cache *k8s.ResourceCache, namespaces []string) map[str
 // indexWarningEventsByObject lists events once per namespace and indexes the
 // Warnings by involvedObject name, so each workload joins its events in O(1)
 // instead of re-scanning the whole namespace event stream.
-func indexWarningEventsByObject(cache *k8s.ResourceCache, namespaces []string) map[string]map[string][]*corev1.Event {
+func indexWarningEventsByObject(cache *k8s.ResourceCache, namespaces []string, graph *appGraph) map[string]map[string][]*corev1.Event {
 	out := map[string]map[string][]*corev1.Event{}
 	lister := cache.Events()
 	if lister == nil {
 		return out
+	}
+	groups := make(map[string]string)
+	ambiguous := make(map[string]bool)
+	if graph != nil {
+		for _, node := range graph.byID {
+			kind := topology.KubernetesKindForNode(&node)
+			ns, _ := node.Data["namespace"].(string)
+			key := resourceid.ResourceKey("", kind, ns, node.Name)
+			group := appGraphNodeGroup(&node, kind)
+			if previous, ok := groups[key]; ok && previous != group {
+				ambiguous[key] = true
+			}
+			groups[key] = group
+		}
 	}
 	add := func(ns string) {
 		var evs []*corev1.Event
@@ -2461,8 +2482,16 @@ func indexWarningEventsByObject(cache *k8s.ResourceCache, namespaces []string) m
 				out[e.Namespace] = m
 			}
 			group := topology.APIVersionGroup(e.InvolvedObject.APIVersion)
-			if builtinGroup, builtin := resourceid.BuiltinGroup(e.InvolvedObject.Kind); group == "" && builtin {
-				group = builtinGroup
+			if e.InvolvedObject.APIVersion == "" {
+				unqualified := resourceid.ResourceKey("", e.InvolvedObject.Kind, e.Namespace, e.InvolvedObject.Name)
+				if ambiguous[unqualified] {
+					continue
+				}
+				if resolved, ok := groups[unqualified]; ok {
+					group = resolved
+				} else {
+					group = resourceid.GroupForBuiltinKind(e.InvolvedObject.Kind)
+				}
 			}
 			key := resourceid.ResourceKey(group, e.InvolvedObject.Kind, "", e.InvolvedObject.Name)
 			m[key] = append(m[key], e)

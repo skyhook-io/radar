@@ -1910,6 +1910,7 @@ func checkCrossplaneStuck(tr *evalTracker, input *CheckInput) []Finding {
 		}
 		findings = append(findings, Finding{
 			Kind:      u.GetKind(),
+			Group:     u.GroupVersionKind().Group,
 			Namespace: u.GetNamespace(),
 			Name:      u.GetName(),
 			CheckID:   "crossplaneStuck",

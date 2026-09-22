@@ -41,6 +41,7 @@ export interface ResourceLane {
   /** True when group identity came from apiVersion/topology or an unambiguous
    *  live identity, including the explicit core group (`''`). */
   identityResolved?: boolean
+  identityAmbiguous?: boolean
   namespace: string
   name: string
   events: TimelineEvent[]
@@ -301,6 +302,7 @@ function contractParentId(
  *  falls back to owner grouping until hub-side membership snapshots (the
  *  retention-grade fix) exist. */
 function cascadeRootMembership(lane: ResourceLane, appIndex: AppMembershipIndex): RootGroupAssignment | null {
+  if (lane.identityAmbiguous) return null
   const unqualified = laneResourceKey(lane.kind, lane.namespace, lane.name)
   const direct = lane.identityResolved
     ? appIndex.byResource.get(lane.id)
@@ -576,7 +578,8 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
     laneMap.set(id, {
       id,
       kind: p.kind,
-      group,
+      group: group === AMBIGUOUS_GROUP ? undefined : group,
+      identityAmbiguous: ambiguousResourceKeys.has(rk),
       identityResolved: groupByKey.has(rk) && !ambiguousResourceKeys.has(rk),
       namespace: p.namespace,
       name: p.name,
@@ -643,7 +646,8 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       laneMap.set(id, {
         id,
         kind: event.kind,
-        group,
+        group: group === AMBIGUOUS_GROUP ? undefined : group,
+        identityAmbiguous: !hasAPIVersion && ambiguousResourceKeys.has(rk),
         identityResolved: hasAPIVersion || (groupByKey.has(rk) && !ambiguousResourceKeys.has(rk)),
         namespace: event.namespace,
         name: event.name,
@@ -654,7 +658,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       })
       registerLaneKey(rk, id)
     } else {
-      if (!existing.group && group) existing.group = group
+      if (!existing.group && group && group !== AMBIGUOUS_GROUP) existing.group = group
       if (hasAPIVersion || (groupByKey.has(rk) && !ambiguousResourceKeys.has(rk))) existing.identityResolved = true
       existing.events.push(event)
     }
@@ -726,20 +730,14 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
         laneParent.set(childId, ensureTopologyLane(parentId))
       }
 
-      // Exact topology ownership supersedes the persisted group-less owner ref.
-      // This matters when two controller API groups share kind/namespace/name
-      // (a real Kubernetes ownerReference chain, e.g. Deployment->RS->Pod or a
-      // collision-prone controller like Volcano's Job).
-      //
-      // A FluxCD source (GitRepository/OCIRepository/HelmRepository) also
-      // reaches its Kustomization/HelmRelease through a 'manages' edge, but
-      // that's spec.sourceRef, not an ownerReference the source controls --
-      // applying the same override here would nest an app-group root under a
-      // materialized, event-less source lane and hide it from the top level.
-      const sourceKind = parseLaneId(sourceId)?.kind
-      const sourceIsGitOpsSource = sourceKind === 'GitRepository' || sourceKind === 'OCIRepository' || sourceKind === 'HelmRepository'
+      // A manages edge can represent inventory membership or a shortcut over
+      // ReplicaSets/Jobs. Only refine the owner actually recorded by the event.
       if (edge.type === 'manages') {
-        if (targetExists && !sourceIsGitOpsSource && !sameAppMembers(targetId, sourceId)) {
+        const source = parseLaneId(sourceId)!
+        const owner = laneMap.get(targetId)?.events.find(event => event.owner)?.owner
+        if (targetExists && owner?.kind === source.kind && owner.name === source.name
+          && laneMap.get(targetId)?.namespace === source.namespace
+          && !sameAppMembers(targetId, sourceId)) {
           laneParent.set(targetId, ensureTopologyLane(sourceId))
         }
         continue

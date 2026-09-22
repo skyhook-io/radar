@@ -2455,15 +2455,18 @@ function ApplicationHistoryLine({
   onNavigateToResource?: (resource: ResourceRef) => void;
   onOpenSource?: (source: AppSourceRef) => void;
 }) {
-  const workload = item.resource
-    ? workloads.find(
-        (candidate) =>
-          candidate.kind.toLowerCase() === item.resource!.kind.toLowerCase() &&
-          canonicalResourceGroup(candidate.kind, candidate.group) === canonicalResourceGroup(item.resource!.kind, item.resource!.group) &&
-          candidate.namespace === item.resource!.namespace &&
-          candidate.name === item.resource!.name,
-      )
+  const candidates = item.resource
+    ? workloads.filter(candidate =>
+        candidate.kind.toLowerCase() === item.resource!.kind.toLowerCase() &&
+        candidate.namespace === item.resource!.namespace &&
+        candidate.name === item.resource!.name)
+    : [];
+  const resourceGroup = item.resource
+    ? canonicalResourceGroup(item.resource.kind, item.resource.group)
     : undefined;
+  const workload = resourceGroup !== undefined
+    ? candidates.find(candidate => canonicalResourceGroup(candidate.kind, candidate.group) === resourceGroup)
+    : candidates.length === 1 ? candidates[0] : undefined;
   const Icon =
     item.category === "deployment"
       ? GitCommit

@@ -1,9 +1,10 @@
+import type { Topology } from '@skyhook-io/k8s-ui/types/core'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   initNavigationMap,
   resetNavigationMap,
 } from '@skyhook-io/k8s-ui/utils/navigation'
-import { relatedResourcePath, resourcePath } from './navigation'
+import { getNetworkPolicyResourceTarget, relatedResourcePath, resourcePath } from './navigation'
 
 afterEach(resetNavigationMap)
 
@@ -52,4 +53,10 @@ describe('JobSet investigation navigation', () => {
   it('leaves colliding JobSet kinds in their group-aware drawer', () => {
     expect(relatedResourcePath({ kind: 'jobsets', namespace: 'training', name: 'wide', group: 'other.example' })).toBe('/resources/jobsets?resource=training%2Fwide&apiGroup=other.example')
   })
+})
+
+
+it('uses the Kubernetes kind for a Calico aggregate target', () => {
+  expect(getNetworkPolicyResourceTarget({nodes: [{id: 'policy', kind: 'CalicoNetworkPolicy', name: 'allow', status: 'healthy', data: {apiVersion: 'crd.projectcalico.org/v1', resourceKind: 'NetworkPolicy'}}], edges: []} as unknown as Topology))
+    .toEqual({kind: 'networkpolicies', group: 'crd.projectcalico.org'})
 })

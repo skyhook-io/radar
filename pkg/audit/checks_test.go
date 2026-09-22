@@ -2421,6 +2421,9 @@ func TestCheckCrossplaneStuck(t *testing.T) {
 		if bySeverity[f.Severity] == nil {
 			bySeverity[f.Severity] = map[string]Finding{}
 		}
+		if f.Group != "kubernetes.crossplane.io" {
+			t.Errorf("Crossplane finding lost its group: %+v", f)
+		}
 		bySeverity[f.Severity][f.Name] = f
 	}
 

@@ -53,16 +53,26 @@ export const CORE_RESOURCES: APIResource[] = [
   { group: 'storage.k8s.io', version: 'v1', kind: 'VolumeAttachment', name: 'volumeattachments', namespaced: false, isCrd: false, verbs: ['list', 'get', 'watch'] },
 ]
 
+// These identities are built-in but must not become always-present sidebar rows.
+const ADDITIONAL_BUILTIN_IDENTITIES: Record<string, string> = {
+  endpoints: '',
+  controllerrevision: 'apps', controllerrevisions: 'apps',
+  resourceclaim: 'resource.k8s.io', resourceclaims: 'resource.k8s.io',
+  resourceclaimtemplate: 'resource.k8s.io', resourceclaimtemplates: 'resource.k8s.io',
+  resourceslice: 'resource.k8s.io', resourceslices: 'resource.k8s.io',
+  deviceclass: 'resource.k8s.io', deviceclasses: 'resource.k8s.io',
+};
+
 export function builtinGroupForKind(kindOrResource: string): string | undefined {
   const value = kindOrResource.toLowerCase()
   return CORE_RESOURCES.find(resource =>
     resource.kind.toLowerCase() === value || resource.name.toLowerCase() === value,
-  )?.group
+  )?.group ?? ADDITIONAL_BUILTIN_IDENTITIES[value]
 }
 
 export function canonicalResourceGroup(kindOrResource: string, group: string | undefined): string | undefined {
   const builtin = builtinGroupForKind(kindOrResource)
-  if (group === undefined || (group === '' && builtin !== undefined)) return builtin
+  if (!group) return builtin
   return group
 }
 

@@ -622,7 +622,7 @@ func TestBuildNeighborhood_GroupEmptyRootDefaultsToCoreWhenCRDCollides(t *testin
 	}
 }
 
-func TestBuildNeighborhood_GroupEmptyUniqueCustomBuiltinKindKeepsGroup(t *testing.T) {
+func TestBuildNeighborhood_GroupEmptyBuiltinKindDoesNotResolveCustom(t *testing.T) {
 	volcano := Node{
 		ID:     "job/ml/train/batch.volcano.sh",
 		Kind:   KindJob,
@@ -641,11 +641,8 @@ func TestBuildNeighborhood_GroupEmptyUniqueCustomBuiltinKindKeepsGroup(t *testin
 		nil,
 		nil,
 	)
-	if sub.AmbiguousRoot || len(sub.Nodes) != 1 || sub.Nodes[0].ID != volcano.ID {
-		t.Fatalf("group-less unique custom Job resolved to nodes=%v ambiguous=%v", nodeIDs(sub), sub.AmbiguousRoot)
-	}
-	if sub.Root.Kind != "Job" || sub.Root.Group != "batch.volcano.sh" {
-		t.Fatalf("resolved root = %#v, want exact Volcano Job identity", sub.Root)
+	if sub.AmbiguousRoot || len(sub.Nodes) != 0 {
+		t.Fatalf("group-less Job must not resolve a Volcano Job: %+v", sub)
 	}
 }
 

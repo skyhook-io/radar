@@ -454,6 +454,7 @@ func findNodeByRef(nodes []Node, ref ResourceRef, dp DynamicProvider) (*Node, bo
 	// caller-facing Kubernetes kind and Radar's topology pseudo-kind.
 	resourceKind := normalizeKindWithGroup(ref.Kind, ref.Group, dp)
 	wantKind := pseudoKindFor(resourceKind, ref.Group)
+	builtinGroup, builtin := resourceid.BuiltinGroup(resourceKind)
 	var match *Node
 	matchGroup := ""
 	for i := range nodes {
@@ -476,6 +477,9 @@ func findNodeByRef(nodes []Node, ref ResourceRef, dp DynamicProvider) (*Node, bo
 			}
 		}
 		group := nodeAPIGroupFromData(n)
+		if ref.Group == "" && builtin && group != "" && group != builtinGroup {
+			continue
+		}
 		if match != nil && group != matchGroup {
 			return nil, true
 		}

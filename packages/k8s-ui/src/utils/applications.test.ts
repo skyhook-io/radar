@@ -628,3 +628,15 @@ describe('buildAppMembershipIndex', () => {
     expect(idx.byEvidence.get('instance:team-b:shared')?.appName).toBe('app-b')
   })
 })
+
+
+describe('persisted group-less workload selection', () => {
+  it('resolves an unambiguous custom selection', () => {
+    expect(resolveAppWorkloadSelection(['Rollout.argoproj.io/dev/api', 'Deployment/dev/worker'], 'Rollout/dev/api'))
+      .toEqual({ selected: 'Rollout.argoproj.io/dev/api', hostKeyIsStale: false })
+  })
+  it('does not guess between groups or redirect a built-in kind to a custom group', () => {
+    expect(resolveAppWorkloadSelection(['Rollout.argoproj.io/dev/api', 'Rollout.example.io/dev/api'], 'Rollout/dev/api').hostKeyIsStale).toBe(true)
+    expect(resolveAppWorkloadSelection(['Job.batch.volcano.sh/dev/api', 'Deployment/dev/worker'], 'Job/dev/api').selected).toBeNull()
+  })
+})

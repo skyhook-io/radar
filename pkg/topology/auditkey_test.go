@@ -4,6 +4,7 @@ import "testing"
 
 func TestStampAuditKeys(t *testing.T) {
 	nodes := []Node{
+		{Kind: "Role", Name: "cloud-role", Data: map[string]any{"apiVersion": "iam.aws.upbound.io/v1beta1"}},
 		{Kind: KindDeployment, Name: "api", Data: map[string]any{"namespace": "prod", "apiVersion": "apps/v1"}},
 		{Kind: "IngressRoute", Name: "r", Data: map[string]any{"namespace": "web"}},     // CRD → group ""
 		{Kind: KindIstioGateway, Name: "gw", Data: map[string]any{"namespace": "mesh"}}, // collision → real kind "Gateway"
@@ -13,10 +14,11 @@ func TestStampAuditKeys(t *testing.T) {
 	out := stampAuditKeys(nodes)
 
 	want := map[string]string{
-		"api":    "apps|Deployment|prod|api",
-		"r":      "|IngressRoute|web|r",
-		"gw":     "|Gateway|mesh|gw", // remapped from KindIstioGateway, group still "" (audit convention)
-		"team-a": "|Namespace||team-a",
+		"cloud-role": "iam.aws.upbound.io|Role||cloud-role",
+		"api":        "apps|Deployment|prod|api",
+		"r":          "|IngressRoute|web|r",
+		"gw":         "|Gateway|mesh|gw", // remapped from KindIstioGateway, group still "" (audit convention)
+		"team-a":     "|Namespace||team-a",
 	}
 	for _, n := range out {
 		got, _ := n.Data["auditKey"].(string)
@@ -24,10 +26,10 @@ func TestStampAuditKeys(t *testing.T) {
 			t.Errorf("auditKey for %q = %q, want %q", n.Name, got, want[n.Name])
 		}
 	}
-	if got := out[2].Data["resourceKind"]; got != "Gateway" {
+	if got := out[3].Data["resourceKind"]; got != "Gateway" {
 		t.Errorf("resourceKind for Istio Gateway = %v, want Gateway", got)
 	}
-	if _, ok := out[0].Data["resourceKind"]; ok {
+	if _, ok := out[1].Data["resourceKind"]; ok {
 		t.Error("ordinary topology node unexpectedly received resourceKind")
 	}
 }

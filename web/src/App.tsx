@@ -1314,7 +1314,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
     // detail page with tree + insights + ops that the drawer can't reproduce.
     // Route there from the main topology when the node is one of those kinds;
     // everything else falls back to the drawer.
-    const gitOpsPath = gitOpsRouteForKind(resourceKind, namespace, node.name, nodeGroup)
+    const gitOpsPath = gitOpsRouteForKind(resourceKind, namespace, node.name, nodeGroup, true)
     if (gitOpsPath) {
       navigate(gitOpsPath)
       return

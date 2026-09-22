@@ -1241,7 +1241,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   // lane's button is filled and always visible (in the pinned section or its
   // original spot); an unpinned one reveals on row hover.
   const renderPinButton = useCallback((lane: ResourceLane): React.ReactNode => {
-    if (!onTogglePin) return null
+    if (!onTogglePin || lane.identityAmbiguous) return null
     const pinned = pinnedIdSet.has(lane.id)
     const ref: PinnedLaneRef = lane.isAppGroup && lane.appKey
       ? { type: 'appGroup', id: lane.id, appKey: lane.appKey, appName: lane.title ?? lane.name }
@@ -1662,10 +1662,10 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                      chip + namespace. Only the NAME navigates; the rest is inert. */
                   <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                     <div className="flex items-center gap-1.5 min-w-0">
-                      <Tooltip content={lane.name} wrapperClassName="min-w-0 flex-1">
+                      <Tooltip content={lane.identityAmbiguous ? `${lane.name} · API group unknown` : lane.name} wrapperClassName="min-w-0 flex-1">
                         <span
-                          onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group, lane.identityResolved)}
-                          className={clsx('min-w-0 w-full text-sm text-theme-text-primary hover:text-accent-text hover:underline cursor-pointer', compact ? 'font-medium' : 'font-semibold font-mono')}
+                          onClick={lane.identityAmbiguous ? undefined : () => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group, lane.identityResolved)}
+                          className={clsx('min-w-0 w-full text-sm text-theme-text-primary', !lane.identityAmbiguous && 'hover:text-accent-text hover:underline cursor-pointer', compact ? 'font-medium' : 'font-semibold font-mono')}
                         >
                           <MiddleEllipsis text={lane.name} className="block" />
                         </span>
@@ -1718,7 +1718,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
             hasChildren={hasVisibleChildren}
             expanded={isExpanded}
             onToggle={hasVisibleChildren ? () => toggleLane(lane.id) : undefined}
-            onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group, lane.identityResolved)}
+            onClick={lane.identityAmbiguous ? undefined : () => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group, lane.identityResolved)}
             pinButton={renderPinButton(lane)}
             title={
               lane.nestedByContract ? `${lane.name} · linked by naming`
@@ -2254,7 +2254,7 @@ function GroupChip({ group }: { group: string }) {
   )
 }
 
-function ChildLaneLabel({ kind, group, showGroupChip, kindTitle, name, labelWidthClass = 'w-[360px]', isLast, onClick, pinButton, title, depth = 1, hasChildren, expanded, onToggle }: { kind: string; group?: string; showGroupChip?: boolean; kindTitle?: string; name: string; labelWidthClass?: string; isLast: boolean; onClick: () => void; pinButton?: React.ReactNode; title?: string; depth?: number; hasChildren?: boolean; expanded?: boolean; onToggle?: () => void }) {
+function ChildLaneLabel({ kind, group, showGroupChip, kindTitle, name, labelWidthClass = 'w-[360px]', isLast, onClick, pinButton, title, depth = 1, hasChildren, expanded, onToggle }: { kind: string; group?: string; showGroupChip?: boolean; kindTitle?: string; name: string; labelWidthClass?: string; isLast: boolean; onClick?: () => void; pinButton?: React.ReactNode; title?: string; depth?: number; hasChildren?: boolean; expanded?: boolean; onToggle?: () => void }) {
   // Tree rails: the INCOMING trunk sits under the parent's chevron (rail d-1), the
   // row's own chevron sits on its CHILDREN's rail (rail d). Deriving both from one
   // ROOT keeps every level's vertical aligned under the chevron above it.
@@ -2296,7 +2296,7 @@ function ChildLaneLabel({ kind, group, showGroupChip, kindTitle, name, labelWidt
       <Tooltip content={title ?? name} wrapperClassName="min-w-0 flex-1">
         <span
           onClick={onClick}
-          className="min-w-0 w-full text-[13px] font-mono text-theme-text-secondary hover:text-accent-text hover:underline cursor-pointer"
+          className={clsx("min-w-0 w-full text-[13px] font-mono text-theme-text-secondary", onClick && "hover:text-accent-text hover:underline cursor-pointer")}
         >
           <MiddleEllipsis text={name} className="block" />
         </span>

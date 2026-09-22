@@ -382,14 +382,15 @@ func TestBuildPrefersModernTraefikGroupWithoutDoubleRendering(t *testing.T) {
 	}
 }
 
-func TestGenericCRDSkipsBuiltInGroupsBeforeProviderFallback(t *testing.T) {
+func TestGenericPassSkipsTypedBuiltinsButPreservesDRA(t *testing.T) {
 	tests := []struct {
-		name string
-		gvr  schema.GroupVersionResource
-		kind string
+		name      string
+		gvr       schema.GroupVersionResource
+		kind      string
+		wantNodes int
 	}{
-		{name: "typed apps API", gvr: schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, kind: "Deployment"},
-		{name: "dynamically watched DRA API", gvr: schema.GroupVersionResource{Group: "resource.k8s.io", Version: "v1", Resource: "resourceclaims"}, kind: "ResourceClaim"},
+		{name: "typed apps API", gvr: schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, kind: "Deployment", wantNodes: 1},
+		{name: "dynamically watched DRA API", gvr: schema.GroupVersionResource{Group: "resource.k8s.io", Version: "v1", Resource: "resourceclaims"}, kind: "ResourceClaim", wantNodes: 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -405,11 +406,11 @@ func TestGenericCRDSkipsBuiltInGroupsBeforeProviderFallback(t *testing.T) {
 			fallbackProvider := &dynamicProviderWithoutExactCRD{DynamicProvider: dynamic}
 
 			nodes, _ = (&Builder{dynamic: fallbackProvider}).addGenericCRDNodes(nodes, nil, DefaultBuildOptions())
-			if dynamic.listCalls[tt.gvr] != 0 {
+			if tt.wantNodes == 1 && dynamic.listCalls[tt.gvr] != 0 {
 				t.Fatalf("generic CRD fallback listed built-in %s %d times", tt.gvr, dynamic.listCalls[tt.gvr])
 			}
-			if len(nodes) != 1 {
-				t.Fatalf("built-in %s was rendered as a generic CRD: %+v", tt.kind, nodes)
+			if len(nodes) != tt.wantNodes {
+				t.Fatalf("%s nodes = %d, want %d: %+v", tt.kind, len(nodes), tt.wantNodes, nodes)
 			}
 		})
 	}

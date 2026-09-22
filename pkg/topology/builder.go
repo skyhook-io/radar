@@ -8853,7 +8853,8 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 	selected := make(map[string]watchedCRD)
 	var selectedKeys []string
 	for _, gvr := range watched {
-		if k8score.IsBuiltInAPIGroup(gvr.Group) {
+		// DRA resources use dynamic discovery and have no typed topology builder.
+		if k8score.IsBuiltInAPIGroup(gvr.Group) && gvr.Group != "resource.k8s.io" {
 			continue
 		}
 		kind := resourceDiscovery.GetKindForGVR(gvr)
