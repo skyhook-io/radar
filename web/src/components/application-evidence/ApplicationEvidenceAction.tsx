@@ -1,20 +1,41 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { SelectMenu } from '@skyhook-io/k8s-ui/components/ui/SelectMenu'
+import { copyText } from '@skyhook-io/k8s-ui/utils/clipboard'
 import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
-import { fetchJSON, useClusterInfo } from '../../api/client'
+import { fetchJSON, useClusterInfo, useCapabilities } from '../../api/client'
 import { collectApplicationEvidence, type ApplicationEvidenceResult, type EvidenceCandidates } from '../../api/application-evidence'
 
 const vaultNames: Record<string, string> = { initialized: 'Initialized', sealed: 'Sealed', standby: 'Standby', performanceStandby: 'Performance standby' }
+const unavailableReasons: Record<string, string> = {
+  endpoint_denied: 'The application endpoint requires authorization.',
+  endpoint_unavailable: 'The application endpoint could not be reached.',
+  endpoint_response_unavailable: 'The application endpoint did not return a readable response.',
+  port_forward_unavailable: 'Radar could not open a Kubernetes port-forward to this Pod.',
+  pod_read_unavailable: 'Radar could not read the selected Pod.',
+  pod_recheck_unavailable: 'Radar could not verify the Pod identity after collection.',
+  target_changed: 'The selected Pod changed. Reopen the resource to select its replacement.',
+  collection_busy: 'Other evidence collections are running. Try again shortly.',
+  collection_cancelled: 'Collection was cancelled or timed out.',
+  response_too_large: 'The endpoint response exceeded the collection size limit.',
+  missing_alarm_metrics: 'The response did not include the required RabbitMQ alarm metrics.',
+  invalid_alarm_metric: 'The endpoint returned an invalid alarm value.',
+  ambiguous_alarm_metric: 'The endpoint returned conflicting alarm values.',
+  unexpected_shape: 'The response did not match the supported application format.',
+  unexpected_http_status: 'The endpoint returned an unsupported HTTP status.',
+  redirect_refused: 'The endpoint redirected the request; Radar does not follow redirects.',
+}
 const applicationNames = { rabbitmq: 'RabbitMQ', nats: 'NATS', vault: 'Vault' }
 interface Props { kind: string; group?: string; namespace: string; name: string; uid: string }
 
 export function ApplicationEvidenceAction(props: Props) {
   const { data: cluster } = useClusterInfo()
+  const { data: capabilities } = useCapabilities()
   const context = cluster?.context
   const { data } = useQuery({
     queryKey: ['application-evidence-candidates', context, props.kind, props.group, props.namespace, props.name, props.uid],
     queryFn: ({ signal }) => fetchJSON<EvidenceCandidates>(`/application-evidence/candidates?${new URLSearchParams({ kind: props.kind, group: props.group ?? '', namespace: props.namespace, name: props.name })}`, signal),
-    enabled: !!context && !!props.uid,
+    enabled: !!context && !!props.uid && capabilities?.deployment?.mode === 'local',
     retry: false,
     staleTime: 30_000,
     refetchOnWindowFocus: false,
@@ -25,8 +46,9 @@ export function ApplicationEvidenceAction(props: Props) {
 
 function EvidenceControl({ data }: { data: EvidenceCandidates }) {
   const [snapshot, setSnapshot] = useState<EvidenceCandidates>()
+  const names = [...new Set(data.candidates.map(item => applicationNames[item.application]))].join(', ')
   return <div className="mt-3">
-    <button type="button" className="text-sm text-accent-text hover:underline" onClick={() => setSnapshot(data)}>Collect application evidence</button>
+    <button type="button" className="text-sm text-accent-text hover:underline" onClick={() => setSnapshot(data)}>Collect {names} evidence</button>
     {snapshot && <EvidenceDialog data={snapshot} onClose={() => setSnapshot(undefined)} />}
   </div>
 }
@@ -35,6 +57,7 @@ function EvidenceDialog({ data, onClose }: { data: EvidenceCandidates; onClose: 
   const [selected, setSelected] = useState(0)
   const [result, setResult] = useState<ApplicationEvidenceResult>()
   const [error, setError] = useState<string>()
+  const [copied, setCopied] = useState(false)
   const [pending, setPending] = useState(false)
   const request = useRef<AbortController | undefined>(undefined)
   useEffect(() => () => request.current?.abort(), [])
@@ -45,6 +68,7 @@ function EvidenceDialog({ data, onClose }: { data: EvidenceCandidates; onClose: 
     request.current = controller
     setPending(true)
     setResult(undefined)
+    setCopied(false)
     setError(undefined)
     try {
       const response = await collectApplicationEvidence(candidate, data.context, controller.signal)
@@ -60,16 +84,17 @@ function EvidenceDialog({ data, onClose }: { data: EvidenceCandidates; onClose: 
     <p className="mt-2 text-sm text-theme-text-secondary">Read one Pod’s application endpoint through a temporary Kubernetes port-forward using your current permissions.</p>
     <p className="mt-2 break-all text-xs text-theme-text-tertiary">Context: {data.context}</p>
     <label className="mt-4 block text-sm text-theme-text-primary" htmlFor="application-evidence-target">Pod endpoint</label>
-    <select id="application-evidence-target" className="mt-1 w-full rounded border border-theme-border bg-theme-surface p-2 text-sm text-theme-text-primary" value={selected} disabled={pending} onChange={e => { setSelected(Number(e.target.value)); setResult(undefined); setError(undefined) }}>
-      {data.candidates.map((item, index) => <option key={`${item.target.uid}:${item.application}`} value={index}>{applicationNames[item.application]} · {item.target.namespace}/{item.target.pod} · {item.target.container}</option>)}
-    </select>
+    <SelectMenu id="application-evidence-target" ariaLabel="Pod endpoint" className="mt-1" value={String(selected)} disabled={pending}
+      options={data.candidates.map((item, index) => ({ value: String(index), label: `${applicationNames[item.application]} · ${item.target.namespace}/${item.target.pod} · ${item.target.container}` }))}
+      onChange={value => { setSelected(Number(value)); setResult(undefined); setError(undefined); setCopied(false) }} />
     <p className="mt-2 text-sm text-theme-text-secondary">Collects: {candidate.expectedEvidence.join(', ')}.</p>
     <p className="mt-1 text-xs text-theme-text-tertiary">{candidate.coverage}</p>
     {(data.truncated || data.coverageLimited) && <p className="mt-2 text-xs text-theme-text-secondary">This is a limited set of candidate endpoints; it does not cover every replica.</p>}
-    <p className="mt-2 text-xs text-theme-text-tertiary">Endpoint availability is not yet verified. Results describe the selected Pod at collection time.</p>
+    <p className="mt-2 text-xs text-theme-text-tertiary">Collection may be unavailable if the endpoint requires credentials or cannot be reached. Results describe this Pod at collection time.</p>
     {error && <p role="alert" className="mt-4 text-sm text-theme-text-primary">{error}</p>}
     {result && <ApplicationEvidenceObservation result={result} />}
     <div className="mt-5 flex justify-end gap-2">
+      {result && <button type="button" className="btn-brand-muted" onClick={async () => { const success = await copyText(JSON.stringify({ context: data.context, ...result }, null, 2)); setCopied(success); if (!success) setError('Could not copy the observation.'); }}>{copied ? 'Copied' : 'Copy observation'}</button>}
       <button type="button" className="btn-brand-muted" onClick={onClose}>{pending ? 'Cancel' : 'Close'}</button>
       <button type="button" className="btn-brand" disabled={pending} onClick={collect}>{pending ? 'Collecting…' : result ? 'Collect again' : 'Collect evidence'}</button>
     </div>
@@ -83,7 +108,7 @@ export function ApplicationEvidenceObservation({ result }: { result: Application
     <h3 className="font-semibold">{result.outcome === 'observed' ? 'Endpoint observations' : 'Evidence unavailable'}</h3>
     <p className="mt-1 break-all text-xs text-theme-text-secondary">{result.target.namespace}/{result.target.pod}{result.target.container && ` · ${result.target.container}`}</p>
     <p className="mt-1 text-xs text-theme-text-tertiary">{new Date(result.observedAt).toLocaleString()} · {result.source.replaceAll('_', ' ')}{result.httpStatus !== undefined && ` · HTTP ${result.httpStatus}`}</p>
-    {result.reason && <p className="mt-2">{result.reason.replaceAll('_', ' ')}. No conclusion about application health can be drawn from unavailable evidence.</p>}
+    {result.reason && <p className="mt-2">{unavailableReasons[result.reason] ?? `Collection unavailable (${result.reason}).`} No conclusion about application health can be drawn from unavailable evidence.</p>}
     {facts?.rabbitmq && <dl className="mt-3 grid grid-cols-2 gap-2"><dt>Disk alarm</dt><dd>{facts.rabbitmq.diskAlarm ? 'Reported' : 'Not reported'}</dd><dt>Memory alarm</dt><dd>{facts.rabbitmq.memoryAlarm ? 'Reported' : 'Not reported'}</dd></dl>}
     {facts?.vault && <dl className="mt-3 grid grid-cols-2 gap-2">{Object.entries(facts.vault).map(([key, value]) => <div key={key} className="contents"><dt>{vaultNames[key]}</dt><dd>{value ? 'Yes' : 'No'}</dd></div>)}</dl>}
     {nats && <div className="mt-3 space-y-2">

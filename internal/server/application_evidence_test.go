@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -27,11 +29,17 @@ func evidenceRequest(method, url, body string) *http.Request {
 
 func TestApplicationEvidenceDeploymentGate(t *testing.T) {
 	t.Cleanup(k8s.SetTestLocalMode())
-	for _, mode := range []string{"remote", "auth", "tunnel", "user"} {
+	for _, mode := range []string{"remote", "auth", "tunnel", "user", "cloud", "in-cluster"} {
 		t.Run(mode, func(t *testing.T) {
 			s := &Server{}
 			r := evidenceRequest(http.MethodPost, "/api/application-evidence/collect", evidenceRequestBody)
 			switch mode {
+			case "cloud":
+				t.Setenv("RADAR_CLOUD_MODE", "true")
+			case "in-cluster":
+				old := k8s.ForceInCluster
+				k8s.ForceInCluster = true
+				t.Cleanup(func() { k8s.ForceInCluster = old })
 			case "remote":
 				r.RemoteAddr = "192.0.2.1:1234"
 			case "auth":
@@ -166,5 +174,44 @@ func TestApplicationEvidenceCandidatesDoNotCollect(t *testing.T) {
 	}
 	if !result.Enabled || len(result.Candidates) != 0 || !result.CoverageLimited {
 		t.Fatalf("denied target advertised: %+v", result)
+	}
+}
+
+func TestApplicationEvidenceChecksCandidatesConcurrently(t *testing.T) {
+	var arrived atomic.Int32
+	ready := make(chan struct{})
+	permissions := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if arrived.Add(1) == 3 {
+			close(ready)
+		}
+		select {
+		case <-ready:
+		case <-r.Context().Done():
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectAccessReview","status":{"allowed":true}}`))
+	}))
+	defer permissions.Close()
+	t.Cleanup(k8s.SetTestLocalMode())
+	api := &applicationEvidenceAPI{
+		snapshot:       func() (*rest.Config, string) { return &rest.Config{Host: permissions.URL}, "test-context" },
+		currentContext: func() string { return "test-context" },
+		resolve: func(context.Context, trace.Deps, collector.Subject) collector.CandidateSet {
+			candidates := make([]collector.Candidate, 3)
+			for i := range candidates {
+				candidates[i] = collector.Candidate{Application: evidence.Vault, Target: collector.Target{Namespace: "default", Pod: fmt.Sprintf("vault-%d", i), UID: fmt.Sprint(i)}}
+			}
+			return collector.CandidateSet{Candidates: candidates}
+		},
+	}
+	w := httptest.NewRecorder()
+	(&Server{applicationEvidence: api}).handleApplicationEvidenceCandidates(w, evidenceRequest(http.MethodGet, "/api/application-evidence/candidates?kind=Pod&namespace=default&name=vault-0", ""))
+	var result applicationEvidenceCandidatesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != 200 || len(result.Candidates) != 3 || result.CoverageLimited {
+		t.Fatalf("status=%d result=%+v", w.Code, result)
 	}
 }
