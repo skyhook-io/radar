@@ -101,9 +101,10 @@ type Server struct {
 	// newExecutor builds the exec client for pod file transfers. Nil in
 	// production, where the package default is used; tests substitute a fake so
 	// the transfer can be driven end to end without a cluster.
-	newExecutor     func(*rest.Config, *url.URL) (remotecommand.Executor, error)
-	cloudConnectCfg CloudConnectConfig
-	cloudInstall    *cloudInstallManager
+	newExecutor         func(*rest.Config, *url.URL) (remotecommand.Executor, error)
+	cloudConnectCfg     CloudConnectConfig
+	cloudInstall        *cloudInstallManager
+	applicationEvidence *applicationEvidenceAPI
 	// nsPreferences holds each user's active-namespace pick from the in-app
 	// switcher. Key shape: "<username>\x00<contextName>" when auth is enabled,
 	// "\x00<contextName>" when auth is disabled. Cleared on context switch
@@ -244,6 +245,7 @@ func New(cfg Config) *Server {
 	}
 	opencost.PublishCurrencyResolver(s.openCostCurrency)
 	s.cloudInstall = newCloudInstallManager(cfg.CloudConnect)
+	s.applicationEvidence = newApplicationEvidenceAPI()
 	s.cloudInstall.sharedListener = s.sharedListener
 
 	// Resolve a local agent CLI for AI investigations (keyless, on the user's own
@@ -622,6 +624,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			// Network path trace - path-shaped diagnosis for Service /
 			// Ingress / HTTPRoute / GRPCRoute / Gateway. See internal/trace.
 			r.Get("/trace/{kind}/{namespace}/{name}", s.handleTrace)
+			r.Get("/application-evidence/candidates", s.handleApplicationEvidenceCandidates)
+			r.Post("/application-evidence/collect", s.handleCollectApplicationEvidence)
 			// Whether the active "test from inside the cluster" (a short-lived,
 			// restricted, self-destructing probe Job as the caller's RBAC) can
 			// run - gates the UI button and names the cluster + namespace the
