@@ -516,3 +516,12 @@ func allTestResourceTypes() map[string]bool {
 		"limitranges":              true,
 	}
 }
+
+func SetTestContextOperationInProgress(active bool) func() {
+	var value int32
+	if active {
+		value = 1
+	}
+	previous := activeContextOperations.Swap(value)
+	return func() { activeContextOperations.Store(previous) }
+}
