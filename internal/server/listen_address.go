@@ -16,10 +16,17 @@ const (
 	AllInterfacesAddress = "0.0.0.0"
 )
 
-// NormalizeListenAddress validates the supported listener intents and returns
-// a concrete address suitable for net.Listen. Radar's local clients always
-// dial localhost, so arbitrary interface addresses are intentionally rejected.
 func NormalizeListenAddress(address string) (string, error) {
+	if address == "" || address == "localhost" {
+		return DefaultListenAddress, nil
+	}
+	if ip := net.ParseIP(address); ip != nil {
+		return ip.String(), nil
+	}
+	return "", fmt.Errorf("listen address must be an IPv4 or IPv6 address, or %q", "localhost")
+}
+
+func normalizePortForwardAddress(address string) (string, error) {
 	switch address {
 	case "", DefaultListenAddress:
 		return DefaultListenAddress, nil
@@ -30,6 +37,16 @@ func NormalizeListenAddress(address string) (string, error) {
 	default:
 		return "", fmt.Errorf("listen address must be %q, %q, or %q", DefaultListenAddress, "localhost", AllInterfacesAddress)
 	}
+}
+
+func clientAddress(listenAddress string, port int) string {
+	switch listenAddress {
+	case "", DefaultListenAddress, "localhost", AllInterfacesAddress:
+		listenAddress = "localhost"
+	case "::":
+		listenAddress = "::1"
+	}
+	return net.JoinHostPort(listenAddress, strconv.Itoa(port))
 }
 
 // socketAddress preserves the explicit 0.0.0.0 operator-facing opt-in while

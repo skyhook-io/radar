@@ -177,7 +177,7 @@ type Server struct {
 // Config holds server configuration
 type Config struct {
 	Port                    int
-	ListenAddress           string                      // 127.0.0.1/localhost for local-only; 0.0.0.0 for shared access
+	ListenAddress           string
 	BasePath                string                      // Optional URL path prefix for self-hosted subpath deployments
 	StartupLog              bool                        // Emit the operator-facing startup block after a successful bind
 	RemoteAccessHint        bool                        // Explain the explicit shared-listener opt-in (native CLI only)
@@ -252,7 +252,7 @@ func New(cfg Config) *Server {
 	// subscription). nil when none is found — the feature stays disabled.
 	//
 	// Gated to no-auth (local/standalone) Radar: the engine drives the CLI
-	// against this server's own private localhost investigation MCP mount with no
+	// against this server's own investigation MCP mount with no
 	// credentials, which only works when MCP is unauthenticated. Under proxy/OIDC
 	// auth (team / cloud deployments) the MCP requires identity headers the local
 	// CLI can't supply, and AI investigations are the embedding host's job (e.g.
@@ -276,7 +276,7 @@ func New(cfg Config) *Server {
 					store = st
 				}
 			}
-			s.aiRuns = ai.NewRunManager(d, s.ActualPort, s.basePath, k8s.GetContextName, store)
+			s.aiRuns = ai.NewRunManager(d, s.ActualAddr, s.basePath, k8s.GetContextName, store)
 			s.aiRuns.MetricsAvailability = func(ctx context.Context) ai.MetricsAvailability {
 				state := prometheuspkg.Availability(ctx)
 				return ai.MetricsAvailability{
@@ -1182,9 +1182,9 @@ func (s *Server) BasePath() string {
 	return s.basePath
 }
 
-// ActualAddr returns the address the server is listening on (e.g. "localhost:9280").
+// ActualAddr returns a locally dialable host:port, including for wildcard binds.
 func (s *Server) ActualAddr() string {
-	return fmt.Sprintf("localhost:%d", s.ActualPort())
+	return clientAddress(s.listenAddress, s.ActualPort())
 }
 
 // SetUpdater attaches a desktop updater to the server, enabling the

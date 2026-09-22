@@ -103,7 +103,7 @@ func main() {
 	namespace := flag.String("namespace", fileCfg.Namespace, "Initial namespace filter (empty = all namespaces)")
 	namespaces := flag.String("namespaces", fileCfg.NamespacesFlag(), "Initial namespace filters as a comma-separated list (e.g. ns1,ns2,ns3). Use this when you can list resources in specific namespaces but cannot list namespaces cluster-wide.")
 	port := flag.Int("port", fileCfg.PortOr(9280), "Server port")
-	listenAddress := flag.String("listen-address", server.DefaultListenAddress, "HTTP listen address: 127.0.0.1 or localhost for local-only access; 0.0.0.0 for remote/shared access")
+	listenAddress := flag.String("listen-address", server.DefaultListenAddress, "HTTP listen IP address (IPv4 or IPv6), or localhost; loopback is local-only, other addresses (including 0.0.0.0) expose shared access")
 	basePath := flag.String("base-path", "", "URL path prefix to serve Radar under, e.g. /radar (empty = root). Use when an ingress forwards a subpath without stripping it.")
 	noBrowser := flag.Bool("no-browser", fileCfg.NoBrowser, "Don't auto-open browser")
 	browser := flag.String("browser", fileCfg.Browser, "Browser to use when opening the UI (default: OS default browser; macOS app names supported)")
@@ -513,7 +513,7 @@ func main() {
 
 	// Open browser — server is confirmed ready to accept connections
 	if !cfg.NoBrowser {
-		targetURL := fmt.Sprintf("http://localhost:%d%s", cfg.Port, cfg.BasePath)
+		targetURL := "http://" + srv.ActualAddr() + cfg.BasePath
 		if cfg.BasePath != "" {
 			targetURL += "/"
 		}
@@ -617,7 +617,7 @@ func startServer(srv *server.Server, startupStart time.Time) (context.Context, c
 	k8s.LogTiming(" Server listening: %v (since start)", time.Since(startupStart))
 
 	// Write port file so MCP clients can discover the running server
-	app.WriteMCPPortFile(srv.ActualPort(), srv.BasePath())
+	app.WriteMCPPortFile(srv.ActualAddr(), srv.BasePath())
 
 	return rootCtx, rootCancel
 }

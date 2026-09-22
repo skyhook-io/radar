@@ -77,7 +77,7 @@ func bootEphemeral(kubeconfig string) (base string, shutdown func(), err error) 
 	case <-time.After(15 * time.Second):
 		return "", nil, fmt.Errorf("temporary Radar didn't start listening\n%s", tail.String())
 	}
-	base = fmt.Sprintf("http://localhost:%d", srv.ActualPort())
+	base = "http://" + srv.ActualAddr()
 
 	stopSpin := make(chan struct{})
 	go bootSpinner(stopSpin) // self-gates on TTY + NO_COLOR

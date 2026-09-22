@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 
 	"golang.org/x/term"
@@ -99,11 +101,11 @@ func formatStartupLogSummary(summary startupLogSummary, color bool) []string {
 	loopback := cloud.IsLoopbackHostname(summary.listenAddress)
 	if loopback {
 		lines = append(lines,
-			row("URL", fmt.Sprintf("http://localhost:%d%s", summary.port, startupURLPath(summary.basePath))),
+			row("URL", "http://"+clientAddress(summary.listenAddress, summary.port)+startupURLPath(summary.basePath)),
 			row("Access", paint(startupANSICyan, "LOCAL ONLY")+" ("+summary.listenAddress+")"),
 		)
 	} else {
-		lines = append(lines, row("Listener", fmt.Sprintf("%s:%d", summary.listenAddress, summary.port)))
+		lines = append(lines, row("Listener", net.JoinHostPort(summary.listenAddress, strconv.Itoa(summary.port))))
 		if summary.cloudMode {
 			lines = append(lines, row("Access", paint(startupANSICyan, "HEALTH CHECK ONLY")+" (application traffic uses the Cloud tunnel)"))
 		} else {
