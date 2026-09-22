@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log"
 	"net/http"
 	"time"
 
@@ -15,6 +16,9 @@ func (s *Server) handleJobSetLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	root, _, owned, err := loadJobSetPods(r.Context(), namespace, name)
 	if err != nil {
+		if err.statusCode == http.StatusInternalServerError {
+			log.Printf("[jobset] Failed to load Pods for log snapshot %s/%s: %v", namespace, name, err)
+		}
 		s.writeWorkloadError(w, err)
 		return
 	}

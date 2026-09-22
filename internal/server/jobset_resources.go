@@ -123,6 +123,9 @@ func (s *Server) handleJobSetResources(w http.ResponseWriter, r *http.Request) {
 	}
 	root, jobs, pods, err := loadJobSetPods(r.Context(), namespace, name)
 	if err != nil {
+		if err.statusCode == http.StatusInternalServerError {
+			log.Printf("[jobset] Failed to load Pods for resource snapshot %s/%s: %v", namespace, name, err)
+		}
 		s.writeWorkloadError(w, err)
 		return
 	}

@@ -129,7 +129,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
   const jobSetRoot = isJobSetV1Alpha2(resource)
   const [runFilter, setRunFilter] = useState<'all' | 'active' | 'failed'>('all')
   const [runSearch, setRunSearch] = useState('')
-  const debouncedSearch = useDebouncedValue(runSearch, 250)
+  const debouncedSearch = useDebouncedValue(runSearch, 250, value => value === '')
   const [roleFilter, setRoleFilter] = useState('')
   const memberOptions = { role: roleFilter, search: debouncedSearch, state: runFilter, selected: selectedRunKey }
   const runsQuery = useWorkloadRuns(apiKind, namespace, name, true, { refetchActive: true, clusterScoped, ...(jobSetRoot ? memberOptions : {}) })

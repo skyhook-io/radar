@@ -15,7 +15,11 @@ interface ScheduledWorkloadLogsViewerProps {
 
 const EMPTY_RUNS: WorkloadRun[] = []
 
-export function ScheduledWorkloadLogsViewer({ kind, namespace, name, selectedRunKey, onSelectRun }: ScheduledWorkloadLogsViewerProps) {
+export function ScheduledWorkloadLogsViewer(props: ScheduledWorkloadLogsViewerProps) {
+  return <ScheduledWorkloadLogsContent key={JSON.stringify([props.kind, props.namespace, props.name])} {...props} />
+}
+
+function ScheduledWorkloadLogsContent({ kind, namespace, name, selectedRunKey, onSelectRun }: ScheduledWorkloadLogsViewerProps) {
   const clusterScoped = kind === 'ClusterWorkflowTemplate' || kind === 'clusterworkflowtemplates'
   const jobSet = kind.toLowerCase() === 'jobset' || kind.toLowerCase() === 'jobsets'
   const [localRunKey, setLocalRunKey] = useState('')
