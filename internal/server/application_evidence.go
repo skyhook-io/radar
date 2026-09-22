@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -61,6 +62,7 @@ func (s *Server) applicationEvidenceEnabled(r *http.Request) bool {
 }
 
 func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	response := applicationEvidenceCandidatesResponse{CandidateSet: collector.CandidateSet{Candidates: []collector.Candidate{}}}
 	if !s.applicationEvidenceEnabled(r) {
 		s.writeJSON(w, response)
@@ -90,7 +92,20 @@ func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *h
 		s.writeError(w, http.StatusServiceUnavailable, "Kubernetes connection unavailable")
 		return
 	}
-	kind, group := canonicalDiagnoseTarget(r.Context(), q.Get("kind"), q.Get("group"), q.Get("namespace"), q.Get("name"))
+	kind, group := strings.TrimSpace(q.Get("kind")), strings.TrimSpace(q.Get("group"))
+	if gvr, ok := k8s.BuiltinGVR(kind, group); ok {
+		kind, _ = k8s.BuiltinKindForResource(gvr.Resource)
+		group = gvr.Group
+	} else if group == "" {
+		if gvr, ok := k8s.BuiltinGVRAnyGroup(kind); ok {
+			kind, _ = k8s.BuiltinKindForResource(gvr.Resource)
+			group = gvr.Group
+		}
+	} else if discovery := k8s.GetResourceDiscovery(); discovery != nil {
+		if resource, ok := discovery.GetResourceWithGroup(kind, group); ok {
+			kind = resource.Kind
+		}
+	}
 	response.CandidateSet = api.resolve(r.Context(), trace.Deps{
 		Cache: k8s.GetResourceCache(), Dynamic: k8s.GetDynamicResourceCache(), Discovery: k8s.GetResourceDiscovery(), AllowedNamespaces: namespaces,
 	}, collector.Subject{Group: group, Kind: kind, Namespace: q.Get("namespace"), Name: q.Get("name")})
@@ -115,6 +130,7 @@ func (s *Server) handleApplicationEvidenceCandidates(w http.ResponseWriter, r *h
 }
 
 func (s *Server) handleCollectApplicationEvidence(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if !s.applicationEvidenceEnabled(r) {
 		s.writeError(w, http.StatusNotFound, "application evidence collection is not available on this deployment")
 		return
