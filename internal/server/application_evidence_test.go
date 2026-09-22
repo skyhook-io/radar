@@ -94,15 +94,26 @@ func TestApplicationEvidenceRejectsUnapprovedRequests(t *testing.T) {
 
 func TestApplicationEvidenceCollectContextAndIdentity(t *testing.T) {
 	t.Cleanup(k8s.SetTestLocalMode())
-	for _, scenario := range []string{"collect", "stale before", "changed during", "cancelled"} {
+	for _, scenario := range []string{"collect", "stale before", "changed during", "switched away and back", "cancelled"} {
 		t.Run(scenario, func(t *testing.T) {
+			operation, cancelOperation := context.WithCancel(context.Background())
+			defer cancelOperation()
 			active := "test-context"
 			calls := 0
 			api := &applicationEvidenceAPI{
-				snapshot:       func() (*rest.Config, string) { return &rest.Config{Host: "https://unused.invalid"}, "test-context" },
-				currentContext: func() string { return active },
+				operationContext: func() context.Context { return operation },
+				snapshot:         func() (*rest.Config, string) { return &rest.Config{Host: "https://unused.invalid"}, "test-context" },
+				currentContext:   func() string { return active },
 				collect: func(ctx context.Context, _ kubernetes.Interface, _ *rest.Config, a evidence.Adapter, target collector.Target) collector.Result {
 					calls++
+					if scenario == "switched away and back" {
+						cancelOperation()
+						select {
+						case <-ctx.Done():
+						case <-time.After(time.Second):
+							t.Fatal("context switch did not cancel collection")
+						}
+					}
 					if a != evidence.Vault || target.UID != "pod-uid" || target.Namespace != "default" || target.Pod != "vault-0" {
 						t.Fatalf("wrong selected target: %+v", target)
 					}
@@ -127,7 +138,7 @@ func TestApplicationEvidenceCollectContextAndIdentity(t *testing.T) {
 			w := httptest.NewRecorder()
 			(&Server{applicationEvidence: api}).handleCollectApplicationEvidence(w, r)
 			want := http.StatusOK
-			if scenario == "stale before" || scenario == "changed during" {
+			if scenario == "stale before" || scenario == "changed during" || scenario == "switched away and back" {
 				want = http.StatusConflict
 			}
 			if w.Code != want {
@@ -139,7 +150,7 @@ func TestApplicationEvidenceCollectContextAndIdentity(t *testing.T) {
 			if scenario != "stale before" && calls != 1 {
 				t.Fatalf("calls=%d", calls)
 			}
-			if scenario == "changed during" && strings.Contains(w.Body.String(), "pod-uid") {
+			if (scenario == "changed during" || scenario == "switched away and back") && strings.Contains(w.Body.String(), "pod-uid") {
 				t.Fatal("stale result escaped")
 			}
 		})
@@ -154,8 +165,9 @@ func TestApplicationEvidenceCandidatesDoNotCollect(t *testing.T) {
 	}))
 	defer permissionServer.Close()
 	api := &applicationEvidenceAPI{
-		snapshot:       func() (*rest.Config, string) { return &rest.Config{Host: permissionServer.URL}, "test-context" },
-		currentContext: func() string { return "test-context" },
+		operationContext: context.Background,
+		snapshot:         func() (*rest.Config, string) { return &rest.Config{Host: permissionServer.URL}, "test-context" },
+		currentContext:   func() string { return "test-context" },
 		resolve: func(_ context.Context, _ trace.Deps, subject collector.Subject) collector.CandidateSet {
 			return collector.CandidateSet{SubjectUID: "subject-uid", Candidates: []collector.Candidate{{Application: evidence.Vault, Target: collector.Target{Namespace: "default", Pod: "vault-0", UID: "pod-uid"}}}}
 		},
@@ -196,8 +208,9 @@ func TestApplicationEvidenceChecksCandidatesConcurrently(t *testing.T) {
 	defer permissions.Close()
 	t.Cleanup(k8s.SetTestLocalMode())
 	api := &applicationEvidenceAPI{
-		snapshot:       func() (*rest.Config, string) { return &rest.Config{Host: permissions.URL}, "test-context" },
-		currentContext: func() string { return "test-context" },
+		operationContext: context.Background,
+		snapshot:         func() (*rest.Config, string) { return &rest.Config{Host: permissions.URL}, "test-context" },
+		currentContext:   func() string { return "test-context" },
 		resolve: func(context.Context, trace.Deps, collector.Subject) collector.CandidateSet {
 			candidates := make([]collector.Candidate, 3)
 			for i := range candidates {
@@ -230,8 +243,9 @@ func TestApplicationEvidencePermissionTimeoutCanBeRetried(t *testing.T) {
 	defer permissions.Close()
 	t.Cleanup(k8s.SetTestLocalMode())
 	api := &applicationEvidenceAPI{
-		snapshot:       func() (*rest.Config, string) { return &rest.Config{Host: permissions.URL}, "test-context" },
-		currentContext: func() string { return "test-context" },
+		operationContext: context.Background,
+		snapshot:         func() (*rest.Config, string) { return &rest.Config{Host: permissions.URL}, "test-context" },
+		currentContext:   func() string { return "test-context" },
 		resolve: func(context.Context, trace.Deps, collector.Subject) collector.CandidateSet {
 			return collector.CandidateSet{SubjectUID: "uid", Candidates: []collector.Candidate{{Application: evidence.Vault, Target: collector.Target{Namespace: "default", Pod: "vault-0", UID: "uid"}}}}
 		},
@@ -251,5 +265,25 @@ func TestApplicationEvidencePermissionTimeoutCanBeRetried(t *testing.T) {
 		if w.Code != 200 || result.PermissionCheckTimedOut == retry || (len(result.Candidates) == 1) != retry {
 			t.Fatalf("retry=%t status=%d result=%+v", retry, w.Code, result)
 		}
+	}
+}
+
+func TestApplicationEvidenceCandidatesDiscardSwitchedContext(t *testing.T) {
+	t.Cleanup(k8s.SetTestLocalMode())
+	operation, switchContext := context.WithCancel(context.Background())
+	defer switchContext()
+	api := &applicationEvidenceAPI{
+		operationContext: func() context.Context { return operation },
+		snapshot:         func() (*rest.Config, string) { return &rest.Config{Host: "https://unused.invalid"}, "test-context" },
+		currentContext:   func() string { return "test-context" },
+		resolve: func(context.Context, trace.Deps, collector.Subject) collector.CandidateSet {
+			switchContext()
+			return collector.CandidateSet{SubjectUID: "old-subject", Candidates: []collector.Candidate{}}
+		},
+	}
+	w := httptest.NewRecorder()
+	(&Server{applicationEvidence: api}).handleApplicationEvidenceCandidates(w, evidenceRequest(http.MethodGet, "/api/application-evidence/candidates?kind=Pod&namespace=default&name=vault-0", ""))
+	if w.Code != http.StatusConflict || strings.Contains(w.Body.String(), "old-subject") {
+		t.Fatalf("stale response: %d %s", w.Code, w.Body)
 	}
 }
