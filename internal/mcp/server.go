@@ -37,10 +37,10 @@ func newServer(includeWrites bool) *mcpsdk.Server {
 }
 
 // RunStdio runs the MCP server over stdio with tools allowed in the current mode.
-func RunStdio(ctx context.Context) error {
+func RunStdio(ctx context.Context, allowApplicationEvidence bool) error {
 	ctx = context.WithValue(ctx, runtimeLocalCallerKey{}, true)
 	var server *mcpsdk.Server
-	if runtimeEvidenceAllowed(ctx) {
+	if allowApplicationEvidence && runtimeEvidenceAllowed(ctx) {
 		server = newServer(true)
 	} else {
 		server = newApplyServer()

@@ -305,6 +305,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'application', required: true, desc: 'rabbitmq, nats, or vault' },
       { arg: 'namespace', required: true, desc: 'Pod namespace' },
       { arg: 'pod', required: true, desc: 'one explicitly selected Pod' },
+      { arg: 'pod_uid', desc: 'expected Pod UID from a diagnosis suggestion' },
       { arg: 'confirm_network_access', required: true, desc: 'true after operator authorization to collect endpoint evidence' },
     ],
   },

@@ -492,7 +492,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		resp.RecentChanges = filterRecentChangesRBAC(ctx, changesResult.Changes)
 	}
 	if applicationActionsAllowed(ctx) {
-		deps := trace.Deps{Cache: cache, AllowedNamespaces: filterNamespacesForUser(ctx, nil)}
+		deps := trace.Deps{Cache: cache, Client: k8s.ClientFromContext(ctx), Dynamic: k8s.GetDynamicResourceCache(), Discovery: k8s.GetResourceDiscovery(), AllowedNamespaces: filterNamespacesForUser(ctx, nil)}
 		candidates := collector.ResolveCandidates(ctx, deps, collector.Subject{Kind: canonicalKind, Group: canonicalGroup, Namespace: input.Namespace, Name: input.Name})
 		resp.ApplicationEvidenceActions = applicationActions(ctx, deps, candidates)
 	}

@@ -65,7 +65,7 @@ func TestCandidateOwnerUIDAndServiceScope(t *testing.T) {
 	ref := func(kind, name, uid string) metav1.OwnerReference {
 		return metav1.OwnerReference{APIVersion: "apps/v1", Kind: kind, Name: name, UID: types.UID(uid), Controller: &yes}
 	}
-	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "lab", Name: "rabbit", UID: "deploy-new"}}
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "lab", Name: "rabbit", UID: "deploy-new"}, Spec: appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "rabbit"}}}}
 	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{Namespace: "lab", Name: "rabbit-rs", UID: "rs-new", OwnerReferences: []metav1.OwnerReference{ref("Deployment", "rabbit", "deploy-new")}}}
 	p := testPod()
 	p.OwnerReferences = []metav1.OwnerReference{ref("ReplicaSet", "rabbit-rs", "rs-new")}
@@ -74,7 +74,14 @@ func TestCandidateOwnerUIDAndServiceScope(t *testing.T) {
 	stale.Name = "stale"
 	stale.OwnerReferences[0].UID = "rs-old"
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Namespace: "lab", Name: "rabbit", UID: "service-id"}, Spec: corev1.ServiceSpec{Selector: map[string]string{"app": "rabbit"}}}
-	core, err := k8score.NewResourceCache(k8score.CacheConfig{Client: fake.NewClientset(d, rs, p, stale, svc), ResourceTypes: map[string]bool{"pods": true, "deployments": true, "replicasets": true, "services": true}, DeferredTypes: map[string]bool{}})
+	objects := []runtime.Object{d, rs, p, stale, svc}
+	for i := 0; i < 205; i++ {
+		unrelated := testPod()
+		unrelated.Name = fmt.Sprintf("unrelated-%d", i)
+		unrelated.Labels = map[string]string{"app": "other"}
+		objects = append(objects, unrelated)
+	}
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{Client: fake.NewClientset(objects...), ResourceTypes: map[string]bool{"pods": true, "deployments": true, "replicasets": true, "services": true}, DeferredTypes: map[string]bool{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,5 +139,40 @@ func TestExplicitStaleTargetNeverOpensTunnel(t *testing.T) {
 	r := c.CollectTarget(context.Background(), fake.NewClientset(testPod()), &rest.Config{}, evidence.RabbitMQ, Target{Namespace: "lab", Pod: "rabbit", UID: "old"})
 	if r.Reason != "target_changed" || r.Facts != nil {
 		t.Fatalf("%+v", r)
+	}
+}
+
+func TestRelevantCandidatePrecedesUnrelatedNATSCandidates(t *testing.T) {
+	var pods []*corev1.Pod
+	for i := 0; i < 4; i++ {
+		p := testPod()
+		p.Name = fmt.Sprintf("a-nats-%d", i)
+		p.UID = types.UID(p.Name)
+		p.Spec.Containers[0].Image = "nats:2"
+		p.Spec.Containers[0].Ports[0].ContainerPort = 8222
+		p.Spec.Containers[0].ReadinessProbe = &corev1.Probe{}
+		pods = append(pods, p)
+	}
+	v := testPod()
+	v.Name = "z-vault"
+	v.UID = "vault-uid"
+	v.Spec.Containers[0].Image = "hashicorp/vault:1"
+	v.Spec.Containers[0].Ports[0].ContainerPort = 8200
+	v.Spec.Containers[0].ReadinessProbe = &corev1.Probe{}
+	pods = append(pods, v)
+	got := CandidatesForPods(pods, false)
+	if len(got.Candidates) != 3 || got.Candidates[0].Application != evidence.Vault || !got.Truncated {
+		t.Fatalf("%+v", got)
+	}
+}
+func TestRabbitHintRequiresAlarmSpecificProbe(t *testing.T) {
+	p := testPod()
+	p.Spec.Containers[0].ReadinessProbe = &corev1.Probe{ProbeHandler: corev1.ProbeHandler{Exec: &corev1.ExecAction{Command: []string{"rabbitmq-diagnostics", "-q", "ping"}}}}
+	if RelevantReadinessFailure(p, evidence.RabbitMQ, "rabbit") {
+		t.Fatal("generic readiness suggested alarm check")
+	}
+	p.Spec.Containers[0].ReadinessProbe.Exec.Command = []string{"gosu", "rabbitmq", "rabbitmq-diagnostics", "-q", "check_local_alarms"}
+	if !RelevantReadinessFailure(p, evidence.RabbitMQ, "rabbit") {
+		t.Fatal("alarm-specific readiness omitted")
 	}
 }

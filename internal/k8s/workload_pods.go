@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // WorkloadPods returns the pods a workload controls right now, by controller
@@ -24,26 +25,44 @@ import (
 // returns ErrWorkloadCacheWarming, so an empty answer is never mistaken for
 // "no pods". Pods are sorted by name.
 func WorkloadPods(cache *ResourceCache, kind, namespace, name string) ([]*corev1.Pod, error) {
+	pods, _, err := WorkloadPodsWithOptions(cache, kind, namespace, name, WorkloadPodOptions{})
+	return pods, err
+}
+
+type WorkloadPodOptions struct {
+	OwnerUID      types.UID
+	Selector      labels.Selector
+	MaxCandidates int
+}
+
+func WorkloadPodsWithOptions(cache *ResourceCache, kind, namespace, name string, options WorkloadPodOptions) ([]*corev1.Pod, bool, error) {
 	canonical := CanonicalWorkloadKind(kind)
 	if canonical == "" {
-		return nil, fmt.Errorf("unsupported workload kind: %s", kind)
+		return nil, false, fmt.Errorf("unsupported workload kind: %s", kind)
 	}
 	kind = canonical
 	if cache == nil || cache.ResourceCache == nil || cache.Pods() == nil {
-		return nil, fmt.Errorf("%w: list pods", ErrWorkloadAccessDenied)
+		return nil, false, fmt.Errorf("%w: list pods", ErrWorkloadAccessDenied)
 	}
 	// Every kind reaches its pods through this lister, including the ones
 	// that need no ownership hop, so it is gated before the hop is chosen.
 	if err := requireCovers(cache, "pods", namespace); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	ownedBy, err := workloadOwnershipTest(cache, kind, namespace, name)
+	ownedBy, err := workloadOwnershipTest(cache, kind, namespace, name, options.OwnerUID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	pods, err := cache.Pods().Pods(namespace).List(labels.Everything())
+	selector := options.Selector
+	if selector == nil {
+		selector = labels.Everything()
+	}
+	pods, err := cache.Pods().Pods(namespace).List(selector)
 	if err != nil {
-		return nil, fmt.Errorf("list pods in %s: %w", namespace, err)
+		return nil, false, fmt.Errorf("list pods in %s: %w", namespace, err)
+	}
+	if options.MaxCandidates > 0 && len(pods) > options.MaxCandidates {
+		return nil, true, nil
 	}
 	var owned []*corev1.Pod
 	for _, pod := range pods {
@@ -52,7 +71,7 @@ func WorkloadPods(cache *ResourceCache, kind, namespace, name string) ([]*corev1
 		}
 	}
 	sort.Slice(owned, func(i, j int) bool { return owned[i].Name < owned[j].Name })
-	return owned, nil
+	return owned, false, nil
 }
 
 // WorkloadPodNames is WorkloadPods reduced to sorted names.
@@ -98,10 +117,10 @@ func CanonicalWorkloadKind(kind string) string {
 // ends at kind/name". Intermediate owners are looked up in the cache; when
 // that lister is unavailable the answer is ErrWorkloadAccessDenied rather
 // than a silently empty set.
-func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string) (func(*corev1.Pod) bool, error) {
+func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string, expectedUID types.UID) (func(*corev1.Pod) bool, error) {
 	direct := func(pod *corev1.Pod) bool {
 		owner := metav1.GetControllerOf(pod)
-		return owner != nil && owner.Kind == kind && owner.Name == name
+		return owner != nil && owner.Kind == kind && owner.Name == name && (expectedUID == "" || (owner.UID == expectedUID && GroupFromAPIVersion(owner.APIVersion) == ownerGroup(kind)))
 	}
 	switch kind {
 	case "Deployment", "Rollout":
@@ -118,11 +137,11 @@ func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string) (
 				return false
 			}
 			rs, err := rsLister.ReplicaSets(pod.Namespace).Get(owner.Name)
-			if err != nil {
+			if err != nil || (expectedUID != "" && (owner.UID != rs.UID || GroupFromAPIVersion(owner.APIVersion) != "apps")) {
 				return false
 			}
 			rsOwner := metav1.GetControllerOf(rs)
-			return rsOwner != nil && rsOwner.Kind == kind && rsOwner.Name == name
+			return rsOwner != nil && rsOwner.Kind == kind && rsOwner.Name == name && (expectedUID == "" || (rsOwner.UID == expectedUID && GroupFromAPIVersion(rsOwner.APIVersion) == ownerGroup(kind)))
 		}, nil
 	case "CronJob":
 		jobLister := cache.Jobs()
@@ -138,11 +157,11 @@ func workloadOwnershipTest(cache *ResourceCache, kind, namespace, name string) (
 				return false
 			}
 			job, err := jobLister.Jobs(pod.Namespace).Get(owner.Name)
-			if err != nil {
+			if err != nil || (expectedUID != "" && (owner.UID != job.UID || GroupFromAPIVersion(owner.APIVersion) != "batch")) {
 				return false
 			}
 			jobOwner := metav1.GetControllerOf(job)
-			return jobOwner != nil && jobOwner.Kind == "CronJob" && jobOwner.Name == name
+			return jobOwner != nil && jobOwner.Kind == "CronJob" && jobOwner.Name == name && (expectedUID == "" || (jobOwner.UID == expectedUID && GroupFromAPIVersion(jobOwner.APIVersion) == "batch"))
 		}, nil
 	default:
 		return direct, nil
@@ -175,4 +194,15 @@ func requireSynced(cache *ResourceCache, key string) error {
 		return fmt.Errorf("%w: %s", ErrWorkloadCacheWarming, key)
 	}
 	return nil
+}
+
+func ownerGroup(kind string) string {
+	switch kind {
+	case "Rollout", "Workflow":
+		return "argoproj.io"
+	case "Job", "CronJob":
+		return "batch"
+	default:
+		return "apps"
+	}
 }

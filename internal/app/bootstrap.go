@@ -475,7 +475,10 @@ func CreateServer(cfg AppConfig) *server.Server {
 		// handler records exactly what Radar returned inside those scopes.
 		evidenceRefs := investigationrefs.NewRegistry()
 		serverCfg.InvestigationRefs = evidenceRefs
-		serverCfg.MCPHandler = mcppkg.NewHandler()
+		serverCfg.MCPHandler = mcppkg.NewApplyHandler()
+		if !cfg.AuthConfig.Enabled() && !cfg.CloudTunnelConfigured {
+			serverCfg.MCPHandler = mcppkg.NewHandler()
+		}
 		serverCfg.MCPApplyHandler = mcppkg.NewApplyHandler()
 		serverCfg.MCPReadOnlyHandler = mcppkg.NewReadOnlyHandler()
 		serverCfg.MCPInvestigationHandler = mcppkg.NewInvestigationHandler(evidenceRefs)

@@ -27,6 +27,7 @@ type RuntimeEvidenceInput struct {
 	Application          string `json:"application" jsonschema:"application to observe"`
 	Namespace            string `json:"namespace" jsonschema:"selected Pod namespace"`
 	Pod                  string `json:"pod" jsonschema:"selected Pod name"`
+	PodUID               string `json:"pod_uid,omitempty" jsonschema:"expected Pod UID from a diagnosis suggestion; rejects replacement"`
 	ConfirmNetworkAccess bool   `json:"confirm_network_access" jsonschema:"true only after operator authorization for temporary endpoint port-forward"`
 }
 
@@ -68,7 +69,7 @@ func handleRuntimeEvidence(ctx context.Context, _ *mcpsdk.CallToolRequest, input
 	if err != nil {
 		return nil, nil, fmt.Errorf("Kubernetes client unavailable; no runtime evidence collected")
 	}
-	return toJSONResult(runtimeCollector.Collect(ctx, client, config, adapter, input.Namespace, input.Pod))
+	return toJSONResult(runtimeCollector.CollectTarget(ctx, client, config, adapter, collector.Target{Namespace: input.Namespace, Pod: input.Pod, UID: input.PodUID}))
 }
 
 func applicationEvidenceInputSchema() *jsonschema.Schema {
