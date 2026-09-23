@@ -106,8 +106,8 @@ func TestRecognizedLargeResourceWarmsWhileUnknownLargeResourceDefers(t *testing.
 	if !cache.WaitForSync(recognized, 3*time.Second) {
 		t.Fatal("recognized Workload informer did not sync")
 	}
-	if got := cache.Observation(recognized); got.State != k8score.DynamicObservationWatched || got.Origin != k8score.DynamicObservationOriginWarmup {
-		t.Fatalf("recognized large resource observation = %+v, want watched warmup", got)
+	if got := cache.Observation(recognized); got.State != k8score.DynamicObservationSynced || got.Origin != k8score.DynamicObservationOriginWarmup {
+		t.Fatalf("recognized large resource observation = %+v, want synced warmup", got)
 	}
 	if got := cache.Observation(listOnly); got.State != k8score.DynamicObservationUnsupported || got.ReasonCode != "list_watch_unsupported" {
 		t.Fatalf("recognized list-only resource observation = %+v, want unsupported", got)
