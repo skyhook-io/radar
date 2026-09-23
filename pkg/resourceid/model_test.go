@@ -40,10 +40,10 @@ func TestNormalizeGroup(t *testing.T) {
 }
 
 func TestRef(t *testing.T) {
-	core := NewRef("core", "Job", "ml", "train")
+	core := NewRef("", "Job", "ml", "train")
 	volcano := NewRef("batch.volcano.sh", "Job", "ml", "train")
-	if core.Group != "" {
-		t.Fatalf("NewRef kept the core spelling: %+v", core)
+	if NewRef("core", "Job", "ml", "train").Key() == core.Key() {
+		t.Fatal(`NewRef treated a group named "core" as the core group`)
 	}
 	if core.Key() == volcano.Key() {
 		t.Fatalf("refs in different groups share a key: %q", core.Key())

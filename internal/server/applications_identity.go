@@ -6,12 +6,13 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/skyhook-io/radar/pkg/gitops"
-	"github.com/skyhook-io/radar/pkg/packages"
-	"github.com/skyhook-io/radar/pkg/resourceid"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	listerscorev1 "k8s.io/client-go/listers/core/v1"
+
+	"github.com/skyhook-io/radar/pkg/gitops"
+	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // resourceLister is the slice of the resource cache the app identity resolver
@@ -1060,7 +1061,7 @@ func argoManagedWorkloads(item *unstructured.Unstructured) []workloadRef {
 			continue
 		}
 		group, _ := m["group"].(string)
-		out = append(out, workloadRef{Group: resourceid.NormalizeGroup(group), Kind: kind, Namespace: ns, Name: nm})
+		out = append(out, workloadRef{Group: group, Kind: kind, Namespace: ns, Name: nm})
 	}
 	return out
 }
@@ -1176,7 +1177,6 @@ func addArgoManagedSourceRefs(out map[string][]appSourceRef, items []*unstructur
 			}
 			name, _ := resMap["name"].(string)
 			group, _ := resMap["group"].(string)
-			group = resourceid.NormalizeGroup(group)
 			ns, _ := resMap["namespace"].(string)
 			if ns == "" {
 				ns = destNamespace

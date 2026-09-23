@@ -27,7 +27,6 @@ func (b Builtin) APIVersion() string {
 	return APIVersion(b.Group, b.Version)
 }
 
-// GroupKind returns the resource's group and Kind.
 func (b Builtin) GroupKind() GroupKind {
 	return GroupKind{Group: b.Group, Kind: b.Kind}
 }

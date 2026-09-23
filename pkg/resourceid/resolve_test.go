@@ -32,7 +32,7 @@ func TestReferenceConstructors(t *testing.T) {
 		{"core apiVersion is the core group", ReferenceFromAPIVersion("v1", "Pod", "ns", "p"), "", GroupObserved},
 		{"empty apiVersion is missing, not core", ReferenceFromAPIVersion("", "Pod", "ns", "p"), "", GroupMissing},
 		{"CRD apiVersion", ReferenceFromAPIVersion("batch.volcano.sh/v1alpha1", "Job", "ml", "train"), "batch.volcano.sh", GroupObserved},
-		{"Flux spells core as core", ObservedReference("core", "Service", "ns", "s"), "", GroupObserved},
+		{"a group named core is kept as given", ObservedReference("core", "Service", "ns", "s"), "core", GroupObserved},
 		{"omitted field takes its API default", DefaultedReference("", false, "gateway.networking.k8s.io", "Gateway", "ns", "gw"), "gateway.networking.k8s.io", GroupDefaulted},
 		{"explicitly empty field names the core group", DefaultedReference("", true, "gateway.networking.k8s.io", "Service", "ns", "api"), "", GroupObserved},
 		{"present field beats the default", DefaultedReference("networking.istio.io", true, "gateway.networking.k8s.io", "Gateway", "ns", "gw"), "networking.istio.io", GroupObserved},
@@ -110,9 +110,9 @@ func TestResolveCurrent(t *testing.T) {
 			want: Unresolved,
 		},
 		{
-			name: "catalog spellings of core and duplicates are normalized",
-			ref:  UnqualifiedReference("Thing", "ns", "t"), catalog: fakeCatalog{complete: true, groups: map[string][]string{"Thing": {"core", ""}}},
-			want: InferredUnique, group: "",
+			name: "duplicate catalog groups count once",
+			ref:  UnqualifiedReference("Thing", "ns", "t"), catalog: fakeCatalog{complete: true, groups: map[string][]string{"Thing": {"things.example.com", "things.example.com"}}},
+			want: InferredUnique, group: "things.example.com",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

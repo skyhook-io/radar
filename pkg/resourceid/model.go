@@ -27,17 +27,16 @@ type Ref struct {
 	Name      string `json:"name"`
 }
 
-// NewRef builds a Ref, normalizing the core group's "core" spelling to "".
+// NewRef builds a Ref. The group is taken as given; translate a source's own
+// spelling of the core group with NormalizeGroup where that source is parsed.
 func NewRef(group, kind, namespace, name string) Ref {
-	return Ref{Group: NormalizeGroup(group), Kind: kind, Namespace: namespace, Name: name}
+	return Ref{Group: group, Kind: kind, Namespace: namespace, Name: name}
 }
 
-// Key returns the ResourceKey index key for r.
 func (r Ref) Key() string {
 	return ResourceKey(r.Group, r.Kind, r.Namespace, r.Name)
 }
 
-// GroupKind returns r's group and Kind.
 func (r Ref) GroupKind() GroupKind {
 	return GroupKind{Group: r.Group, Kind: r.Kind}
 }
@@ -50,8 +49,9 @@ func (r Ref) String() string {
 	return r.GroupKind().String() + " " + r.Namespace + "/" + r.Name
 }
 
-// NormalizeGroup maps the spellings of the core group to "". Argo CD and the
-// Kubernetes API use "", while Flux inventory IDs and some tools write "core".
+// NormalizeGroup maps "core" to "", for sources that spell the core group that
+// way (Flux inventory IDs, some Gateway API references). Apply it only where
+// such a source is parsed: elsewhere "core" is an ordinary group name.
 func NormalizeGroup(group string) string {
 	if group == "core" {
 		return ""

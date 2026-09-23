@@ -86,13 +86,13 @@ func (r Result) OK() bool {
 func ResolveCurrent(ref Reference, catalog Catalog) Result {
 	res := Result{Ref: Ref{Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}, UID: ref.UID}
 	if ref.HasGroup() {
-		res.Ref.Group = NormalizeGroup(ref.Group)
+		res.Ref.Group = ref.Group
 		res.Resolution = Resolved
 		return res
 	}
 	var groups []string
 	if catalog != nil {
-		groups = normalizedGroups(catalog.GroupsForKind(ref.Kind))
+		groups = distinctSorted(catalog.GroupsForKind(ref.Kind))
 	}
 	if group, ok := BuiltinGroup(ref.Kind); ok {
 		res.Ref.Group = group
@@ -124,17 +124,16 @@ func ResolveCurrent(ref Reference, catalog Catalog) Result {
 func ResolveHistorical(ref Reference) Result {
 	res := Result{Ref: Ref{Kind: ref.Kind, Namespace: ref.Namespace, Name: ref.Name}, UID: ref.UID}
 	if ref.HasGroup() {
-		res.Ref.Group = NormalizeGroup(ref.Group)
+		res.Ref.Group = ref.Group
 		res.Resolution = Resolved
 	}
 	return res
 }
 
-func normalizedGroups(groups []string) []string {
+func distinctSorted(groups []string) []string {
 	seen := make(map[string]bool, len(groups))
 	out := make([]string, 0, len(groups))
 	for _, g := range groups {
-		g = NormalizeGroup(g)
 		if !seen[g] {
 			seen[g] = true
 			out = append(out, g)

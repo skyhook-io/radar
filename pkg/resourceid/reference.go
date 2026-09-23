@@ -57,7 +57,7 @@ func (r Reference) HasGroup() bool {
 // ObservedReference is a reference whose group was recorded by the evidence
 // ("" meaning core), such as Argo CD status.resources or a Flux inventory ID.
 func ObservedReference(group, kind, namespace, name string) Reference {
-	return Reference{Group: NormalizeGroup(group), GroupSource: GroupObserved, Kind: kind, Namespace: namespace, Name: name}
+	return Reference{Group: group, GroupSource: GroupObserved, Kind: kind, Namespace: namespace, Name: name}
 }
 
 // ReferenceFromAPIVersion builds a reference from an apiVersion field. An
@@ -86,7 +86,7 @@ func DefaultedReference(group string, present bool, defaultGroup, kind, namespac
 	if present {
 		return ObservedReference(group, kind, namespace, name)
 	}
-	return Reference{Group: NormalizeGroup(defaultGroup), GroupSource: GroupDefaulted, Kind: kind, Namespace: namespace, Name: name}
+	return Reference{Group: defaultGroup, GroupSource: GroupDefaulted, Kind: kind, Namespace: namespace, Name: name}
 }
 
 // RestoredReference reattaches a built-in Kind's group, for evidence known to
