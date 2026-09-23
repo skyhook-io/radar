@@ -43,7 +43,7 @@ export function LogsViewer({ namespace, podName, containers, initialContainer, a
       fetchLogs={fetchLogs}
       createStream={makeStream}
       overrideDownload={desktopDownload}
-      forceDark={theme === 'dark' ? true : undefined}
+      defaultDark={theme === 'dark'}
       autoStream={autoStream}
     />
   )
