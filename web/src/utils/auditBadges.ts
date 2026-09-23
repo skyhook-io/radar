@@ -30,7 +30,7 @@ export function isBadgeWorthy(
 /**
  * buildAuditSeverityMap keys badge-worthy findings by the same resource key the
  * backend stamps onto topology nodes (`node.data.auditKey`): `group|Kind|ns|name`,
- * group following the audit convention (built-ins → their group, CRDs → "").
+ * using the resource’s actual API group.
  */
 export function buildAuditSeverityMap(
   findings: AuditFinding[] | undefined,

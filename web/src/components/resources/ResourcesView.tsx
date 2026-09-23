@@ -179,14 +179,14 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
   // Cluster Audit findings for the selected kind, keyed by "namespace/name" for
   // the resource list. The list shows ONE kind at a time, so ns/name is enough;
-  // we still match the finding's group (built-ins → real group, CRDs → "") so a
+  // we still match the finding's group for every resource so a
   // kind shared across groups doesn't bleed findings across the two lists. Only
   // "badge-worthy" findings count (reference-integrity / lifecycle) — posture
   // and best-practice nags fire near-universally and would just be noise.
   const audit = useAudit(namespaces)
   const auditBadges = useMemo(() => {
     if (!selectedKind || !audit.data?.findings) return undefined
-    const wantGroup = isSelectedCrd ? '' : selectedKind.group
+    const wantGroup = selectedKind.group
     const map: Record<string, { danger: number; warning: number; messages: AuditBadgeMessage[] }> = {}
     for (const f of audit.data.findings) {
       if (f.kind !== selectedKindCanonical || (f.group ?? '') !== wantGroup) continue
@@ -202,7 +202,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       cur.messages.sort((a, b) => (a.severity === 'danger' ? 0 : 1) - (b.severity === 'danger' ? 0 : 1))
     }
     return map
-  }, [audit.data?.findings, audit.data?.checks, selectedKind, selectedKindCanonical, isSelectedCrd])
+  }, [audit.data?.findings, audit.data?.checks, selectedKind, selectedKindCanonical])
 
   const selectedCountKey = selectedKind ? resourceCountKey(selectedKind) : ''
   const selectedCount = selectedCountKey ? countsData?.counts[selectedCountKey] : undefined
