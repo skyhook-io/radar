@@ -7,9 +7,7 @@ import { Collapse, CollapseChevron, useDisclosure } from '../ui/Collapse'
 
 export interface AuditFinding {
   kind: string
-  /** API group, backfilled by the backend from the builtin Kind→group table
-   *  (built-ins → e.g. "apps"/"batch"; CRDs → ""). Part of the resource key
-   *  used to join findings onto topology nodes / list rows. */
+  /** Actual API group; part of the identity joining findings to topology nodes and list rows. */
   group?: string
   namespace: string
   name: string
