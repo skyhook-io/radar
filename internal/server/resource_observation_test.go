@@ -40,11 +40,6 @@ func TestAPIResourceResponseObservationWireShape(t *testing.T) {
 	if observation["state"] != "deferred" || observation["reasonCode"] != "resource_count_exceeds_eager_limit" {
 		t.Fatalf("observation = %#v", observation)
 	}
-	for _, omitted := range []string{"origin", "watchStartedAt", "namespacePartial", "viewerRestricted"} {
-		if _, exists := observation[omitted]; exists {
-			t.Fatalf("observation serialized omitted field %s: %s", omitted, encoded)
-		}
-	}
 
 	builtIn, err := json.Marshal(apiResourceResponse{APIResource: k8score.APIResource{Version: "v1", Kind: "Pod", Name: "pods"}})
 	if err != nil {

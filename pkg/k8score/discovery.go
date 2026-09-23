@@ -27,31 +27,24 @@ type APIResource struct {
 
 // DiscoveryStats holds read-only stats about API discovery state.
 type DiscoveryStats struct {
-	TotalResources        int
-	CRDCount              int
-	LastRefresh           time.Time
-	LastSuccessfulRefresh time.Time
-	LastError             string
-	Partial               bool
-	Stale                 bool
+	TotalResources int
+	CRDCount       int
+	LastRefresh    time.Time
 }
 
 // ResourceDiscovery manages discovery and caching of API resources.
 // It is safe for concurrent use.
 type ResourceDiscovery struct {
-	client                discovery.DiscoveryInterface
-	resources             []APIResource
-	resourceMap           map[string]APIResource // keyed by lowercase kind
-	gvrMap                map[string]schema.GroupVersionResource
-	lastRefresh           time.Time
-	lastSuccessfulRefresh time.Time
-	lastError             string
-	partial               bool
-	freshPartial          bool
-	failedGroup           map[string]bool
-	cacheTTL              time.Duration
-	refreshMu             sync.Mutex
-	mu                    sync.RWMutex
+	client      discovery.DiscoveryInterface
+	resources   []APIResource
+	resourceMap map[string]APIResource // keyed by lowercase kind
+	gvrMap      map[string]schema.GroupVersionResource
+	lastRefresh time.Time
+	partial     bool
+	failedGroup map[string]bool
+	cacheTTL    time.Duration
+	refreshMu   sync.Mutex
+	mu          sync.RWMutex
 }
 
 // DiscoveryOption is a functional option for NewResourceDiscovery.
@@ -217,7 +210,6 @@ func (d *ResourceDiscovery) refresh() error {
 	if err != nil && !hasResourceData {
 		d.mu.Lock()
 		d.lastRefresh = time.Now()
-		d.lastError = err.Error()
 		d.mu.Unlock()
 		return err
 	}
@@ -228,7 +220,6 @@ func (d *ResourceDiscovery) refresh() error {
 		}
 	}
 	partial := discovery.IsGroupDiscoveryFailedError(err) || len(failedGroups) > 0
-	freshPartial := err != nil
 	log.Printf("API resource discovery took %v", time.Since(start))
 
 	d.mu.Lock()
@@ -269,13 +260,7 @@ func (d *ResourceDiscovery) refresh() error {
 	}
 
 	d.lastRefresh = time.Now()
-	d.lastSuccessfulRefresh = d.lastRefresh
-	d.lastError = ""
-	if err != nil {
-		d.lastError = err.Error()
-	}
 	d.partial = partial
-	d.freshPartial = freshPartial
 	d.failedGroup = failedGroups
 	log.Printf("Discovered %d API resources (%d unique kinds)", len(d.resources), len(d.resourceMap)/2)
 
@@ -422,13 +407,9 @@ func (d *ResourceDiscovery) Stats() DiscoveryStats {
 	}
 
 	return DiscoveryStats{
-		TotalResources:        len(d.resources),
-		CRDCount:              crdCount,
-		LastRefresh:           d.lastRefresh,
-		LastSuccessfulRefresh: d.lastSuccessfulRefresh,
-		LastError:             d.lastError,
-		Partial:               d.freshPartial,
-		Stale:                 !d.lastSuccessfulRefresh.IsZero() && !d.lastRefresh.Equal(d.lastSuccessfulRefresh),
+		TotalResources: len(d.resources),
+		CRDCount:       crdCount,
+		LastRefresh:    d.lastRefresh,
 	}
 }
 
