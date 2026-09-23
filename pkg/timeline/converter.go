@@ -133,9 +133,10 @@ func NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name string
 	}
 }
 
-// Generic unstructured Kinds already shipped group-less historical IDs. Only
-// the typed-extractor collision path can be qualified without duplicating that
-// persisted history when an upgrade re-extracts resources.
+// Historical IDs of generic unstructured Kinds stay group-less, so the IDs of
+// history already stored for them never change. Only the Kinds with typed
+// extractors, whose same-named CRDs otherwise produced no history, take the
+// API group of a foreign-group object into the ID.
 func historicalCollisionGroup(kind, apiVersion string) string {
 	switch kind {
 	case "Pod", "Deployment", "ReplicaSet", "StatefulSet", "DaemonSet",
