@@ -64,6 +64,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/perfstats"
 	"github.com/skyhook-io/radar/pkg/prom"
 	"github.com/skyhook-io/radar/pkg/rbac"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -3815,8 +3816,14 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		ClusterContext: k8s.ActiveClusterContext(),
 	}
 	if r.URL.Query().Has("group") {
-		opts.APIGroups = []string{r.URL.Query().Get("group")}
-		opts.RequireAPIVersion = true
+		group := r.URL.Query().Get("group")
+		opts.APIGroups = []string{group}
+		// Dynamic informers always record apiVersion, so a versionless row for a
+		// built-in kind came from its typed informer (rows persisted before
+		// typed apiVersions were stamped). Only a drill-down into a group that
+		// shadows the built-in needs positive version evidence.
+		builtinGroup, builtin := resourceid.BuiltinGroup(kind)
+		opts.RequireAPIVersion = !builtin || builtinGroup != group
 	}
 	if sinceSeqStr != "" {
 		n, err := strconv.ParseInt(sinceSeqStr, 10, 64)

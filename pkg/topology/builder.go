@@ -83,17 +83,25 @@ func targetRefMatchesTopologyKind(kind, apiVersion string) bool {
 // owner ref with no recorded apiVersion is unknown, not mismatched -- many
 // call sites (tests included) construct references without it -- so it is
 // treated permissively, the same way targetRefMatchesTopologyKind treats an
-// empty apiVersion. Kinds outside resourceid.BuiltinGroup's table have no
-// single canonical group to check against and are permissive too.
+// empty apiVersion. Curated CRD owners are checked against the group their ID
+// maps hold; any other kind has no single canonical group and is permissive.
 func ownerGroupMatches(kind, apiVersion string) bool {
 	if apiVersion == "" {
 		return true
 	}
 	expected, known := resourceid.BuiltinGroup(kind)
 	if !known {
+		expected, known = curatedOwnerGroups[kind]
+	}
+	if !known {
 		return true
 	}
 	return gitops.GroupFromAPIVersion(apiVersion) == expected
+}
+
+var curatedOwnerGroups = map[string]string{
+	"Rollout":   "argoproj.io",
+	"ScaledJob": "keda.sh",
 }
 
 // Build constructs a topology based on the given options
@@ -2924,6 +2932,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 		// Connect to owner CronJob or KEDA ScaledJob
 		for _, ownerRef := range job.OwnerReferences {
+			if !ownerGroupMatches(ownerRef.Kind, ownerRef.APIVersion) {
+				continue
+			}
 			switch ownerRef.Kind {
 			case "CronJob":
 				ownerKey := job.Namespace + "/" + ownerRef.Name
@@ -2978,7 +2989,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 		rsKey := rs.Namespace + "/" + rs.Name
 		for _, ownerRef := range rs.OwnerReferences {
-			if ownerRef.Kind == "Deployment" && !ownerGroupMatches(ownerRef.Kind, ownerRef.APIVersion) {
+			if !ownerGroupMatches(ownerRef.Kind, ownerRef.APIVersion) {
 				continue
 			}
 			ownerKey := rs.Namespace + "/" + ownerRef.Name
@@ -3113,7 +3124,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 			// Connect to owner Deployment or Rollout
 			for _, ownerRef := range rs.OwnerReferences {
-				if ownerRef.Kind == "Deployment" && !ownerGroupMatches(ownerRef.Kind, ownerRef.APIVersion) {
+				if !ownerGroupMatches(ownerRef.Kind, ownerRef.APIVersion) {
 					continue
 				}
 				ownerKey := rs.Namespace + "/" + ownerRef.Name

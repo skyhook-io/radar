@@ -485,3 +485,29 @@ func TestRelationshipsWithObjectUsesExactGroupWhenDirectIDCollides(t *testing.T)
 		t.Fatalf("managed-by = %+v, want exact JobSet owner %+v", rel.ManagedBy, rel.Owner)
 	}
 }
+
+func TestRelationshipsPodShortcutsSkipCrossGroupReplicaSets(t *testing.T) {
+	topo := &Topology{
+		Nodes: []Node{
+			{ID: "deployment/ns/a", Kind: KindDeployment, Name: "a", Data: map[string]any{"namespace": "ns"}},
+			{ID: "deployment/ns/b", Kind: KindDeployment, Name: "b", Data: map[string]any{"namespace": "ns"}},
+			{ID: "replicaset/ns/r", Kind: KindReplicaSet, Name: "r", Data: map[string]any{"namespace": "ns"}},
+			{ID: "replicaset/ns/r/other.example", Kind: NodeKind("ReplicaSet"), Name: "r", Data: map[string]any{"namespace": "ns", "apiVersion": "other.example/v1"}},
+			{ID: "pod/ns/p", Kind: KindPod, Name: "p", Data: map[string]any{"namespace": "ns"}},
+		},
+		Edges: []Edge{
+			{ID: "a-crd", Source: "deployment/ns/a", Target: "replicaset/ns/r/other.example", Type: EdgeManages},
+			{ID: "b-core", Source: "deployment/ns/b", Target: "replicaset/ns/r", Type: EdgeManages},
+			{ID: "core-pod", Source: "replicaset/ns/r", Target: "pod/ns/p", Type: EdgeManages},
+		},
+	}
+
+	a := GetRelationships("Deployment", "ns", "a", topo, nil, nil)
+	if a == nil || len(a.Pods) != 0 {
+		t.Fatalf("Deployment a pods = %+v, want none from the core ReplicaSet owned by b", a)
+	}
+	b := GetRelationships("Deployment", "ns", "b", topo, nil, nil)
+	if b == nil || len(b.Pods) != 1 || b.Pods[0].Name != "p" {
+		t.Fatalf("Deployment b pods = %+v, want pod p", b)
+	}
+}

@@ -263,7 +263,6 @@ function contractParentId(
   lane: ResourceLane,
   laneMap: Map<string, ResourceLane>,
   laneParent: Map<string, string>,
-  laneIdByResourceKey: Map<string, string>,
 ): string | null {
   const contract = KIND_CONTRACTS.find((c) => c.childKind === lane.kind)
   if (!contract) return null
@@ -273,11 +272,11 @@ function contractParentId(
   const suffix = lane.name.slice(cut + 1)
   if (!contract.suffix.test(suffix)) return null
   for (const parentKind of contract.parentKinds) {
-    // Resolve the parent's canonical (possibly group-qualified) lane id via the
-    // group-less registry — contract parent kinds are built-in, but going through
-    // the registry keeps this correct regardless of id shape.
-    const parentId = laneIdByResourceKey.get(laneResourceKey(parentKind, lane.namespace, parentName))
-    if (!parentId || parentId === lane.id) continue
+    // The contracts are built-in controllers' naming, so only the built-in
+    // parent's bare lane id qualifies; a same-named CRD lane (Volcano's Job) must
+    // never win through a group-less lookup.
+    const parentId = laneResourceKey(parentKind, lane.namespace, parentName)
+    if (parentId === lane.id) continue
     if (!laneMap.has(parentId)) continue
     if (chainReaches(parentId, lane.id, laneParent)) continue
     return parentId
@@ -874,7 +873,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
   if (grouping !== 'flat') {
     for (const [id, lane] of laneMap) {
       if (laneParent.has(id)) continue
-      const parentId = contractParentId(lane, laneMap, laneParent, laneIdByKey)
+      const parentId = contractParentId(lane, laneMap, laneParent)
       if (!parentId) continue
       laneParent.set(id, parentId)
       lane.nestedByContract = true

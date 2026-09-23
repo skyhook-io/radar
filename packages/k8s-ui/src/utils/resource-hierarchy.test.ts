@@ -343,6 +343,22 @@ describe('buildResourceHierarchy kind-contract nesting', () => {
     expect(pod?.nestedByContract).toBe(true)
   })
 
+  it('resolves a contract parent to the built-in lane regardless of a same-named CRD lane or event order', () => {
+    const volcano = changeEvent('Job', 'ml', 'train', { id: 'volcano', apiVersion: 'batch.volcano.sh/v1alpha1' })
+    const core = changeEvent('Job', 'ml', 'train', { id: 'core', apiVersion: 'batch/v1' })
+    const pod = changeEvent('Pod', 'ml', 'train-abc12', { owner: { kind: 'Job', name: 'train' } })
+    for (const events of [[volcano, core, pod], [core, volcano, pod]]) {
+      const lanes = buildResourceHierarchy({ events, grouping: 'owner' })
+      const coreLane = lanes.find((l) => l.id === 'Job/ml/train')
+      expect(coreLane?.children?.map((c) => c.id)).toEqual(['Pod/ml/train-abc12'])
+      expect(lanes.find((l) => l.id === 'Job.batch.volcano.sh/ml/train')?.children ?? []).toEqual([])
+    }
+
+    const ownerlessPod = changeEvent('Pod', 'ml', 'train-abc12')
+    const volcanoOnly = buildResourceHierarchy({ events: [volcano, ownerlessPod], grouping: 'owner' })
+    expect(volcanoOnly.find((l) => l.id === 'Job.batch.volcano.sh/ml/train')?.children ?? []).toEqual([])
+  })
+
   it('nests an ownerless ReplicaSet under its Deployment (pod-template-hash)', () => {
     const events = [
       changeEvent('Deployment', 'ns', 'web'),

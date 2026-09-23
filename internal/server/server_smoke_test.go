@@ -2036,9 +2036,20 @@ func TestSmokeChangesExactGroup(t *testing.T) {
 	if err := timeline.RecordEvents(context.Background(), events); err != nil {
 		t.Fatal(err)
 	}
-	var body []timeline.TimelineEvent
-	assertOK(t, get(t, "/api/changes?namespace=default&kind=Job&name=smoke-group-job&group=batch&include_managed=true&filter=all&limit=1"), &body)
-	if len(body) != 1 || body[0].APIVersion != "batch/v1" {
-		t.Fatalf("wrong group events: %+v", body)
+	versions := func(group string) map[string]bool {
+		var body []timeline.TimelineEvent
+		assertOK(t, get(t, "/api/changes?namespace=default&kind=Job&name=smoke-group-job&group="+group+"&include_managed=true&filter=all"), &body)
+		got := map[string]bool{}
+		for _, event := range body {
+			got[event.APIVersion] = true
+		}
+		return got
+	}
+	// A versionless Job row can only come from the typed batch informer.
+	if got := versions("batch"); len(got) != 2 || !got["batch/v1"] || !got[""] {
+		t.Fatalf("built-in Job history = %v, want batch/v1 and versionless rows", got)
+	}
+	if got := versions("batch.volcano.sh"); len(got) != 1 || !got["batch.volcano.sh/v1alpha1"] {
+		t.Fatalf("Volcano Job history = %v, want only its own versioned rows", got)
 	}
 }

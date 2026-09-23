@@ -1305,3 +1305,52 @@ func TestBuildEmptyClusterMarshalsEmptyArraysNeverNull(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildJobOwnerRequiresCronJobGroup(t *testing.T) {
+	job := func(name, ownerAPIVersion string) *batchv1.Job {
+		return &batchv1.Job{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "prod", OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: ownerAPIVersion, Kind: "CronJob", Name: "nightly",
+			}}},
+			Status: batchv1.JobStatus{Active: 1},
+		}
+	}
+	provider := &mockProvider{
+		cronJobs: []*batchv1.CronJob{{ObjectMeta: metav1.ObjectMeta{Name: "nightly", Namespace: "prod"}}},
+		jobs:     []*batchv1.Job{job("nightly-1", "batch/v1"), job("nightly-2", "other.example/v1")},
+	}
+
+	topo, err := NewBuilder(provider).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatalf("Build returned error: %v", err)
+	}
+	targets := map[string]bool{}
+	for _, edge := range topo.Edges {
+		if edge.Source == "cronjob/prod/nightly" && edge.Type == EdgeManages {
+			targets[edge.Target] = true
+		}
+	}
+	if !targets["job/prod/nightly-1"] || targets["job/prod/nightly-2"] {
+		t.Fatalf("CronJob managed targets = %v, want only the batch-owned Job", targets)
+	}
+}
+
+func TestOwnerGroupMatchesCuratedCRDOwners(t *testing.T) {
+	for _, tc := range []struct {
+		kind, apiVersion string
+		want             bool
+	}{
+		{"Rollout", "argoproj.io/v1alpha1", true},
+		{"Rollout", "rollouts.kruise.io/v1beta1", false},
+		{"ScaledJob", "keda.sh/v1alpha1", true},
+		{"ScaledJob", "other.example/v1", false},
+		{"CronJob", "batch/v1", true},
+		{"CronJob", "other.example/v1", false},
+		{"Rollout", "", true},
+		{"Widget", "other.example/v1", true},
+	} {
+		if got := ownerGroupMatches(tc.kind, tc.apiVersion); got != tc.want {
+			t.Errorf("ownerGroupMatches(%q, %q) = %v, want %v", tc.kind, tc.apiVersion, got, tc.want)
+		}
+	}
+}

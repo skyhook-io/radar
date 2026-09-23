@@ -486,7 +486,10 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	// Deployment → show grandchild Pods (Deployment→ReplicaSet→Pod)
 	if kindLower == "deployments" || kindLower == "deployment" {
 		for _, child := range rel.Children {
-			if strings.EqualFold(child.Kind, "ReplicaSet") {
+			// The shortcut IDs below are group-less, so only the built-in
+			// ReplicaSet may take it; a same-named CRD would resolve to another
+			// workload's ReplicaSet.
+			if strings.EqualFold(child.Kind, "ReplicaSet") && isAppsGroup(child.Group) {
 				childID := buildNodeID(child.Kind, child.Namespace, child.Name, dp)
 				_, childOutgoing := edgesForNode(topo, lookupIndex, childID)
 				for _, edge := range childOutgoing {
@@ -504,7 +507,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 
 	// Pod → if owner is a ReplicaSet, also show the grandparent Deployment
 	if kindLower == "pods" || kindLower == "pod" {
-		if rel.Owner != nil && strings.EqualFold(rel.Owner.Kind, "ReplicaSet") {
+		if rel.Owner != nil && strings.EqualFold(rel.Owner.Kind, "ReplicaSet") && isAppsGroup(rel.Owner.Group) {
 			ownerID := buildNodeID(rel.Owner.Kind, rel.Owner.Namespace, rel.Owner.Name, dp)
 			ownerIncoming, _ := edgesForNode(topo, lookupIndex, ownerID)
 			for _, edge := range ownerIncoming {
@@ -1261,4 +1264,8 @@ func normalizeKind(kind string, dp DynamicProvider) string {
 		}
 	}
 	return kind
+}
+
+func isAppsGroup(group string) bool {
+	return group == "" || group == "apps"
 }
