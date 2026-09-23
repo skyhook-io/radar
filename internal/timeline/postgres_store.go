@@ -188,7 +188,7 @@ func validatePostgresSchema(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `
 		SELECT id, timestamp, source, kind, api_version, namespace, name, uid,
 		       event_type, reason, message, diff_json, health_state, owner_kind,
-		       owner_name, labels_json, count, correlation_id, created_at,
+		       owner_name, owner_api_version, owner_uid, owner_evidence, labels_json, count, correlation_id, created_at,
 		       cluster_context, resource_created_at, seq
 		FROM radar_timeline_events
 		LIMIT 0
@@ -251,11 +251,11 @@ func (s *PostgresStore) AppendBatch(ctx context.Context, events []TimelineEvent)
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO radar_timeline_events (
 			id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
-			reason, message, diff_json, health_state, owner_kind, owner_name,
+			reason, message, diff_json, health_state, owner_kind, owner_name, owner_api_version, owner_uid, owner_evidence,
 			labels_json, count, correlation_id, cluster_context, resource_created_at, seq
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-			$16, $17, $18, $19, $20, nextval('radar_timeline_event_seq')
+			$16, $17, $18, $19, $20, $21, $22, $23, nextval('radar_timeline_event_seq')
 		)
 		ON CONFLICT(id) DO UPDATE SET
 			timestamp = excluded.timestamp,
@@ -268,8 +268,12 @@ func (s *PostgresStore) AppendBatch(ctx context.Context, events []TimelineEvent)
 			namespace = excluded.namespace,
 			uid = excluded.uid,
 			resource_created_at = COALESCE(excluded.resource_created_at, radar_timeline_events.resource_created_at),
-			owner_kind = CASE WHEN excluded.owner_kind != '' THEN excluded.owner_kind ELSE radar_timeline_events.owner_kind END,
-			owner_name = CASE WHEN excluded.owner_name != '' THEN excluded.owner_name ELSE radar_timeline_events.owner_name END,
+			-- The owner tuple moves as one; OwnerReplacesOnUpsert states the rule.
+			owner_kind = CASE WHEN (excluded.owner_evidence IN ('enriched', 'unidentified') OR (COALESCE(excluded.owner_evidence, '') = '' AND COALESCE(excluded.owner_kind, '') != '')) THEN excluded.owner_kind ELSE radar_timeline_events.owner_kind END,
+			owner_name = CASE WHEN (excluded.owner_evidence IN ('enriched', 'unidentified') OR (COALESCE(excluded.owner_evidence, '') = '' AND COALESCE(excluded.owner_kind, '') != '')) THEN excluded.owner_name ELSE radar_timeline_events.owner_name END,
+			owner_api_version = CASE WHEN (excluded.owner_evidence IN ('enriched', 'unidentified') OR (COALESCE(excluded.owner_evidence, '') = '' AND COALESCE(excluded.owner_kind, '') != '')) THEN excluded.owner_api_version ELSE radar_timeline_events.owner_api_version END,
+			owner_uid = CASE WHEN (excluded.owner_evidence IN ('enriched', 'unidentified') OR (COALESCE(excluded.owner_evidence, '') = '' AND COALESCE(excluded.owner_kind, '') != '')) THEN excluded.owner_uid ELSE radar_timeline_events.owner_uid END,
+			owner_evidence = CASE WHEN (excluded.owner_evidence IN ('enriched', 'unidentified') OR (COALESCE(excluded.owner_evidence, '') = '' AND COALESCE(excluded.owner_kind, '') != '')) THEN excluded.owner_evidence ELSE radar_timeline_events.owner_evidence END,
 			labels_json = CASE WHEN excluded.labels_json IS NOT NULL THEN excluded.labels_json ELSE radar_timeline_events.labels_json END
 		WHERE radar_timeline_events.source = 'k8s_event'
 			AND excluded.source = 'k8s_event'
@@ -282,7 +286,7 @@ func (s *PostgresStore) AppendBatch(ctx context.Context, events []TimelineEvent)
 
 	for _, event := range events {
 		var diffJSON, labelsJSON any
-		var ownerKind, ownerName string
+		var ownerKind, ownerName, ownerAPIVersion, ownerUID string
 
 		if event.Diff != nil {
 			b, err := json.Marshal(event.Diff)
@@ -303,6 +307,8 @@ func (s *PostgresStore) AppendBatch(ctx context.Context, events []TimelineEvent)
 		if event.Owner != nil {
 			ownerKind = event.Owner.Kind
 			ownerName = event.Owner.Name
+			ownerAPIVersion = event.Owner.APIVersion
+			ownerUID = event.Owner.UID
 		}
 
 		var resourceCreatedAt any
@@ -326,6 +332,9 @@ func (s *PostgresStore) AppendBatch(ctx context.Context, events []TimelineEvent)
 			string(event.HealthState),
 			ownerKind,
 			ownerName,
+			ownerAPIVersion,
+			ownerUID,
+			string(event.OwnerEvidence),
 			labelsJSON,
 			event.Count,
 			event.CorrelationID,
@@ -442,7 +451,7 @@ func (s *PostgresStore) GetEvent(ctx context.Context, id string) (*TimelineEvent
 	ctx, cancel := withPostgresOperationTimeout(ctx)
 	defer cancel()
 	query := `SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
-		reason, message, diff_json, health_state, owner_kind, owner_name,
+		reason, message, diff_json, health_state, owner_kind, owner_name, owner_api_version, owner_uid, owner_evidence,
 		labels_json, count, correlation_id, cluster_context, resource_created_at, seq
 		FROM radar_timeline_events WHERE id = $1`
 
@@ -466,7 +475,7 @@ func (s *PostgresStore) GetChangesForOwner(ctx context.Context, ownerKind, owner
 	}
 
 	query := `SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
-		reason, message, diff_json, health_state, owner_kind, owner_name,
+		reason, message, diff_json, health_state, owner_kind, owner_name, owner_api_version, owner_uid, owner_evidence,
 		labels_json, count, correlation_id, cluster_context, resource_created_at, seq
 		FROM radar_timeline_events
 		WHERE owner_kind = $1 AND owner_name = $2 AND namespace = $3`
@@ -830,7 +839,7 @@ func (s *PostgresStore) storageBytes(ctx context.Context) int64 {
 func (s *PostgresStore) buildQuery(opts QueryOptions) (string, []any, error) {
 	query := strings.Builder{}
 	query.WriteString(`SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
-		reason, message, diff_json, health_state, owner_kind, owner_name,
+		reason, message, diff_json, health_state, owner_kind, owner_name, owner_api_version, owner_uid, owner_evidence,
 		labels_json, count, correlation_id, cluster_context, resource_created_at, seq
 		FROM radar_timeline_events WHERE 1=1`)
 
@@ -958,7 +967,7 @@ func (s *PostgresStore) scanEvent(scanner eventScanner) (TimelineEvent, error) {
 	var event TimelineEvent
 	var source, eventType, healthState string
 	var apiVersion, uid, reason, message, correlationID, clusterContext sql.NullString
-	var ownerKind, ownerName sql.NullString
+	var ownerKind, ownerName, ownerAPIVersion, ownerUID, ownerEvidence sql.NullString
 	var diffJSON, labelsJSON []byte
 	var resourceCreatedAt sql.NullInt64
 	var timestampNanos int64
@@ -979,6 +988,9 @@ func (s *PostgresStore) scanEvent(scanner eventScanner) (TimelineEvent, error) {
 		&healthState,
 		&ownerKind,
 		&ownerName,
+		&ownerAPIVersion,
+		&ownerUID,
+		&ownerEvidence,
 		&labelsJSON,
 		&event.Count,
 		&correlationID,
@@ -1017,10 +1029,13 @@ func (s *PostgresStore) scanEvent(scanner eventScanner) (TimelineEvent, error) {
 	}
 	if ownerKind.Valid && ownerKind.String != "" {
 		event.Owner = &OwnerInfo{
-			Kind: ownerKind.String,
-			Name: ownerName.String,
+			Kind:       ownerKind.String,
+			Name:       ownerName.String,
+			APIVersion: ownerAPIVersion.String,
+			UID:        ownerUID.String,
 		}
 	}
+	event.OwnerEvidence = OwnerEvidence(ownerEvidence.String)
 	if len(diffJSON) > 0 {
 		var diff DiffInfo
 		if json.Unmarshal(diffJSON, &diff) == nil {

@@ -207,18 +207,68 @@ func TestK8sEvent_LiveEnrichmentRequiresExactSubject(t *testing.T) {
 		name         string
 		event        *corev1.Event
 		wantEnriched bool
+		wantEvidence timeline.OwnerEvidence
 	}{
-		{"the exact object", event("apps/v1", "rs-live"), true},
-		{"no UID cannot prove the incarnation", event("apps/v1", ""), false},
-		{"an earlier incarnation", event("apps/v1", "rs-deleted"), false},
-		{"a same-named ReplicaSet of another group", event("example.com/v1", "rs-live"), false},
-		{"no apiVersion cannot prove the group", event("", "rs-live"), false},
+		{"the exact object", event("apps/v1", "rs-live"), true, timeline.OwnerEnriched},
+		{"no UID cannot identify the subject", event("apps/v1", ""), false, timeline.OwnerUnidentified},
+		{"an earlier incarnation", event("apps/v1", "rs-deleted"), false, timeline.OwnerMissed},
+		{"a same-named ReplicaSet of another group", event("example.com/v1", "rs-live"), false, timeline.OwnerMissed},
+		{"no apiVersion cannot prove the group", event("", "rs-live"), false, timeline.OwnerMissed},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			owner, _, _ := enrichInvolvedObject(tc.event)
+			owner, _, _, evidence := enrichInvolvedObject(tc.event)
 			if tc.wantEnriched != (owner != nil && owner.Kind == "Deployment" && owner.Name == "web") {
 				t.Fatalf("owner = %+v, want enriched=%v", owner, tc.wantEnriched)
 			}
+			if evidence != tc.wantEvidence {
+				t.Fatalf("evidence = %q, want %q", evidence, tc.wantEvidence)
+			}
+			if tc.wantEnriched && owner.APIVersion != "apps/v1" {
+				t.Fatalf("owner reference incomplete: %+v", owner)
+			}
 		})
+	}
+}
+
+// An informer row records its owner as observed on the object at that moment;
+// the historical rows extracted alongside it carry the same owner as
+// reconstructed — the object's current owner applied to earlier timestamps —
+// and the object's own UID.
+func TestInformerAdd_RecordsOwnerEvidence(t *testing.T) {
+	initMemoryTimeline(t)
+	initialSyncComplete.Store(true)
+	t.Cleanup(func() { initialSyncComplete.Store(false) })
+
+	pod := tombstoneTestPod("web-ev", time.Now())
+	pod.OwnerReferences[0].APIVersion = "apps/v1"
+	pod.OwnerReferences[0].UID = types.UID("rs-uid")
+	recordToTimelineStore(ActiveClusterContext(), "Pod", "shop", "web-ev", string(pod.UID), "add", nil, pod, nil, false)
+
+	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
+		Kinds: []string{"Pod"}, IncludeManaged: true,
+	})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	want := timeline.OwnerInfo{Kind: "ReplicaSet", Name: "web-rs", APIVersion: "apps/v1", UID: "rs-uid"}
+	seen := map[timeline.EventSource]bool{}
+	for _, e := range events {
+		seen[e.Source] = true
+		if e.Owner == nil || *e.Owner != want {
+			t.Fatalf("%s row owner = %+v, want %+v", e.Source, e.Owner, want)
+		}
+		switch e.Source {
+		case timeline.SourceInformer:
+			if e.OwnerEvidence != timeline.OwnerObserved {
+				t.Fatalf("informer row evidence = %q", e.OwnerEvidence)
+			}
+		case timeline.SourceHistorical:
+			if e.OwnerEvidence != timeline.OwnerReconstructed || e.UID != string(pod.UID) {
+				t.Fatalf("historical row evidence = %q uid = %q", e.OwnerEvidence, e.UID)
+			}
+		}
+	}
+	if !seen[timeline.SourceInformer] || !seen[timeline.SourceHistorical] {
+		t.Fatalf("expected informer and historical rows, got %v", seen)
 	}
 }

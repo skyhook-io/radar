@@ -667,9 +667,10 @@ func recordK8sEventToTimeline(clusterContext string, obj any) {
 		timeline.IncrementReceived("K8sEvent:" + event.InvolvedObject.Kind)
 	}
 
-	owner, labels, createdAt := enrichInvolvedObject(event)
+	owner, labels, createdAt, ownerEvidence := enrichInvolvedObject(event)
 
 	timelineEvent := timeline.NewK8sEventTimelineEvent(event, owner)
+	timelineEvent.OwnerEvidence = ownerEvidence
 	timelineEvent.Labels = labels
 	timelineEvent.CreatedAt = createdAt
 	timelineEvent.ClusterContext = clusterContext
@@ -686,17 +687,21 @@ func recordK8sEventToTimeline(clusterContext string, obj any) {
 // controller owner, grouping labels, and creation time. The live informer cache
 // is consulted first (freshest); the tombstone second, which is what carries the
 // answer for delete-time and late events (e.g. "Killing") whose involved object
-// has already left the cache. A total miss returns nils — the event ships with
-// whatever the event itself provides, exactly as before.
-func enrichInvolvedObject(event *corev1.Event) (owner *timeline.OwnerInfo, labels map[string]string, createdAt *time.Time) {
+// has already left the cache. The evidence says which happened: the subject
+// was found, missed, or can't be identified at all because the event carries
+// no UID for it.
+func enrichInvolvedObject(event *corev1.Event) (owner *timeline.OwnerInfo, labels map[string]string, createdAt *time.Time, evidence timeline.OwnerEvidence) {
 	subject := timeline.K8sEventSubject(event)
+	if subject.UID == "" {
+		return nil, nil, nil, timeline.OwnerUnidentified
+	}
 	if o, l, c, ok := liveInvolvedObject(subject); ok {
-		return o, l, c
+		return o, l, c, timeline.OwnerEnriched
 	}
 	if entry, ok := tombstones.Get(subject.UID, event.InvolvedObject.APIVersion, subject.Kind, subject.Namespace, subject.Name); ok {
-		return entry.Owner, entry.Labels, entry.CreatedAt
+		return entry.Owner, entry.Labels, entry.CreatedAt, timeline.OwnerEnriched
 	}
-	return nil, nil, nil
+	return nil, nil, nil, timeline.OwnerMissed
 }
 
 // liveInvolvedObject reads the involved object straight from the typed informer
@@ -728,7 +733,7 @@ func liveInvolvedObject(subject resourceid.Reference) (owner *timeline.OwnerInfo
 		if err != nil || pod == nil || !uidMatches(pod) {
 			return nil, nil, nil, false
 		}
-		return controllerOwner(pod.OwnerReferences), timeline.ExtractLabels(pod), creationPtr(pod), true
+		return liveEntry(pod)
 	case "ReplicaSet":
 		if cache.ReplicaSets() == nil {
 			return nil, nil, nil, false
@@ -737,28 +742,16 @@ func liveInvolvedObject(subject resourceid.Reference) (owner *timeline.OwnerInfo
 		if err != nil || rs == nil || !uidMatches(rs) {
 			return nil, nil, nil, false
 		}
-		return controllerOwner(rs.OwnerReferences), timeline.ExtractLabels(rs), creationPtr(rs), true
+		return liveEntry(rs)
 	}
 	return nil, nil, nil, false
 }
 
-// controllerOwner returns the controller owner reference as OwnerInfo, or nil
-// when the object has no controller (e.g. a bare pod).
-func controllerOwner(refs []metav1.OwnerReference) *timeline.OwnerInfo {
-	for _, ref := range refs {
-		if ref.Controller != nil && *ref.Controller {
-			return &timeline.OwnerInfo{Kind: ref.Kind, Name: ref.Name}
-		}
-	}
-	return nil
-}
-
-func creationPtr(obj metav1.Object) *time.Time {
-	ct := obj.GetCreationTimestamp().Time
-	if ct.IsZero() {
-		return nil
-	}
-	return &ct
+// liveEntry extracts a live object's enrichment exactly as its tombstone would,
+// so an event's owner doesn't depend on whether the subject is still cached.
+func liveEntry(obj metav1.Object) (*timeline.OwnerInfo, map[string]string, *time.Time, bool) {
+	entry, _ := timeline.ExtractTombstoneEntry(obj)
+	return entry.Owner, entry.Labels, entry.CreatedAt, true
 }
 
 // emitSyncProgress is the SyncProgress callback wired into the resource
@@ -913,6 +906,10 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	// the tombstone.
 	entry, extracted := timeline.ExtractTombstoneEntry(obj)
 	owner := entry.Owner
+	var ownerEvidence timeline.OwnerEvidence
+	if extracted {
+		ownerEvidence = timeline.OwnerObserved
+	}
 	labels := entry.Labels
 	createdAt := entry.CreatedAt
 	healthState := classifyTimelineHealth(kind, obj, time.Now())
@@ -1015,6 +1012,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 		createdAt,
 	)
 	event.ClusterContext = clusterContext
+	event.OwnerEvidence = ownerEvidence
 	if recreated {
 		event.Reason = timeline.ReasonRecreated
 	}
@@ -1024,6 +1022,10 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 		historicalEvents := extractTimelineHistoricalEvents(clusterContext, kind, apiVersion, namespace, name, newObj, owner, labels)
 		for i := range historicalEvents {
 			historicalEvents[i].ClusterContext = event.ClusterContext
+			historicalEvents[i].UID = uid
+			if extracted {
+				historicalEvents[i].OwnerEvidence = timeline.OwnerReconstructed
+			}
 		}
 		events = append(events, historicalEvents...)
 	}

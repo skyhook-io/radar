@@ -151,46 +151,28 @@ func historicalCollisionGroup(kind, apiVersion string) string {
 	return group
 }
 
-// ExtractOwner gets the controller owner reference from an object
-// For K8s Events, it extracts the involvedObject instead
+// ExtractOwner returns an object's owner as its ownerReferences name it: the
+// controller when one is marked, otherwise the first reference. Scope is left
+// for the caller, which can consult discovery.
 func ExtractOwner(obj any) *OwnerInfo {
-	// Special case: K8s Events use involvedObject, not ownerReferences
-	if event, ok := obj.(*corev1.Event); ok {
-		if event.InvolvedObject.Kind != "" && event.InvolvedObject.Name != "" {
-			return &OwnerInfo{
-				Kind: event.InvolvedObject.Kind,
-				Name: event.InvolvedObject.Name,
-			}
-		}
-		return nil
-	}
-
 	meta, ok := obj.(metav1.Object)
 	if !ok {
 		return nil
 	}
-
 	refs := meta.GetOwnerReferences()
-
-	// First, try to find a controller owner (most accurate)
 	for _, ref := range refs {
 		if ref.Controller != nil && *ref.Controller {
-			return &OwnerInfo{
-				Kind: ref.Kind,
-				Name: ref.Name,
-			}
+			return ownerFromReference(ref)
 		}
 	}
-
-	// Fallback: use first owner reference if no controller is marked
 	if len(refs) > 0 {
-		return &OwnerInfo{
-			Kind: refs[0].Kind,
-			Name: refs[0].Name,
-		}
+		return ownerFromReference(refs[0])
 	}
-
 	return nil
+}
+
+func ownerFromReference(ref metav1.OwnerReference) *OwnerInfo {
+	return &OwnerInfo{Kind: ref.Kind, Name: ref.Name, APIVersion: ref.APIVersion, UID: string(ref.UID)}
 }
 
 // ExtractLabels extracts labels useful for grouping from an object

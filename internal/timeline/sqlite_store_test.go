@@ -1745,3 +1745,60 @@ func TestOpenSQLiteWithRecovery_TransientErrorDoesNotQuarantine(t *testing.T) {
 		t.Fatalf("data lost across transient failure, got %+v", events)
 	}
 }
+
+// A database without the owner evidence columns gains them as NULL: its stored
+// owner reads back with unknown evidence, and a re-ingested event whose subject
+// can't be identified clears that owner.
+func TestSQLiteStore_OwnerEvidenceMigration(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw db: %v", err)
+	}
+	legacySchema := `CREATE TABLE events (
+		id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, source TEXT NOT NULL,
+		kind TEXT NOT NULL, namespace TEXT, name TEXT NOT NULL, uid TEXT,
+		event_type TEXT NOT NULL, reason TEXT, message TEXT, diff_json TEXT,
+		health_state TEXT, owner_kind TEXT, owner_name TEXT, labels_json TEXT,
+		count INTEGER DEFAULT 0, correlation_id TEXT,
+		created_at TEXT DEFAULT (datetime('now')),
+		cluster_context TEXT NOT NULL DEFAULT '', api_version TEXT,
+		resource_created_at TEXT, seq INTEGER NOT NULL DEFAULT 0
+	)`
+	if _, err := db.Exec(legacySchema); err != nil {
+		t.Fatalf("legacy schema: %v", err)
+	}
+	base := time.Now().UTC()
+	if _, err := db.Exec(`INSERT INTO events (id, timestamp, source, kind, namespace, name, event_type, health_state, owner_kind, owner_name, seq)
+		VALUES ('evt-1', ?, 'k8s_event', 'ReplicaSet', 'shop', 'web-rs', 'Warning', '', 'Deployment', 'web', 1)`,
+		base.Format(sqliteTimeLayout)); err != nil {
+		t.Fatalf("legacy insert: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close raw db: %v", err)
+	}
+
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+
+	legacy, err := store.GetEvent(ctx, "evt-1")
+	if err != nil || legacy == nil || legacy.Owner == nil || legacy.Owner.Name != "web" || legacy.OwnerEvidence != "" {
+		t.Fatalf("legacy row = %+v, %v; want its owner with unknown evidence", legacy, err)
+	}
+
+	if err := store.Append(ctx, TimelineEvent{
+		ID: "evt-1", Timestamp: base.Add(time.Minute), Source: SourceK8sEvent,
+		Kind: "ReplicaSet", Namespace: "shop", Name: "web-rs", EventType: EventTypeWarning, Count: 2,
+		OwnerEvidence: OwnerUnidentified,
+	}); err != nil {
+		t.Fatalf("Append bump: %v", err)
+	}
+	bumped, err := store.GetEvent(ctx, "evt-1")
+	if err != nil || bumped == nil || bumped.Owner != nil || bumped.OwnerEvidence != OwnerUnidentified || bumped.Count != 2 {
+		t.Fatalf("bumped row = %+v, %v; want the borrowed owner cleared", bumped, err)
+	}
+}

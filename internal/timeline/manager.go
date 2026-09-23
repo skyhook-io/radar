@@ -41,9 +41,10 @@ type (
 	StoreConfig = pkgtimeline.StoreConfig
 
 	// k8score alias chain
-	OwnerInfo   = pkgtimeline.OwnerInfo
-	DiffInfo    = pkgtimeline.DiffInfo
-	FieldChange = pkgtimeline.FieldChange
+	OwnerInfo     = pkgtimeline.OwnerInfo
+	OwnerEvidence = pkgtimeline.OwnerEvidence
+	DiffInfo      = pkgtimeline.DiffInfo
+	FieldChange   = pkgtimeline.FieldChange
 
 	// Tombstone cache types
 	TombstoneCache = pkgtimeline.TombstoneCache
@@ -52,6 +53,13 @@ type (
 
 // Re-export constants from pkg/timeline.
 const (
+	// Owner evidence and scope
+	OwnerObserved      = pkgtimeline.OwnerObserved
+	OwnerReconstructed = pkgtimeline.OwnerReconstructed
+	OwnerEnriched      = pkgtimeline.OwnerEnriched
+	OwnerMissed        = pkgtimeline.OwnerMissed
+	OwnerUnidentified  = pkgtimeline.OwnerUnidentified
+
 	// EventSource constants
 	SourceInformer   = pkgtimeline.SourceInformer
 	SourceK8sEvent   = pkgtimeline.SourceK8sEvent
@@ -115,7 +123,6 @@ func K8sEventSubject(event *corev1.Event) resourceid.Reference {
 func NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
 	return pkgtimeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name, ts, reason, message, healthState, owner, labels)
 }
-func ExtractOwner(obj any) *OwnerInfo         { return pkgtimeline.ExtractOwner(obj) }
 func ExtractLabels(obj any) map[string]string { return pkgtimeline.ExtractLabels(obj) }
 func ExtractTombstoneEntry(obj any) (TombstoneEntry, bool) {
 	return pkgtimeline.ExtractTombstoneEntry(obj)

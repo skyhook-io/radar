@@ -11,6 +11,45 @@ import (
 
 // Type aliases — canonical definitions live in pkg/k8score.
 type OwnerInfo = k8score.OwnerInfo
+
+// OwnerEvidence says how a row's Owner was determined. Only an observed owner
+// describes the row's own moment; the others describe the owner as of when the
+// row was recorded.
+type OwnerEvidence string
+
+const (
+	// OwnerObserved: read from the object itself when the row was recorded (an
+	// informer change). A nil owner means the object had none.
+	OwnerObserved OwnerEvidence = "observed"
+	// OwnerReconstructed: read from the object's current state and applied to a
+	// historical row dated earlier; not proof of ownership at that time.
+	OwnerReconstructed OwnerEvidence = "reconstructed"
+	// OwnerEnriched: a K8s Event row whose subject was found (the live object or
+	// its UID-keyed tombstone). A nil owner means the subject had none.
+	OwnerEnriched OwnerEvidence = "enriched"
+	// OwnerMissed: a K8s Event row whose subject lookup found nothing; the owner
+	// is unknown.
+	OwnerMissed OwnerEvidence = "missed"
+	// OwnerUnidentified: a K8s Event row whose subject carries no UID, so no
+	// lookup can identify it and no previously stored owner stands.
+	OwnerUnidentified OwnerEvidence = "unidentified"
+)
+
+// OwnerReplacesOnUpsert reports whether a re-ingested K8s Event row's owner
+// tuple (owner and evidence) replaces the stored one. A lookup that found the
+// subject, or proved it can't be identified, is the fresher truth; a miss keeps
+// what the row already knew. A row without evidence replaces the stored owner
+// only when it carries one. The SQL stores encode the same rule.
+func OwnerReplacesOnUpsert(incoming TimelineEvent) bool {
+	switch incoming.OwnerEvidence {
+	case OwnerEnriched, OwnerUnidentified:
+		return true
+	case "":
+		return incoming.Owner != nil && incoming.Owner.Kind != ""
+	}
+	return false
+}
+
 type DiffInfo = k8score.DiffInfo
 type FieldChange = k8score.FieldChange
 
@@ -113,10 +152,12 @@ type TimelineEvent struct {
 	Message   string    `json:"message,omitempty"`
 
 	// Rich context (computed at write time)
-	Diff        *DiffInfo         `json:"diff,omitempty"`
-	HealthState HealthState       `json:"healthState,omitempty"`
-	Owner       *OwnerInfo        `json:"owner,omitempty"`
-	Labels      map[string]string `json:"labels,omitempty"` // For app-label grouping
+	Diff        *DiffInfo   `json:"diff,omitempty"`
+	HealthState HealthState `json:"healthState,omitempty"`
+	Owner       *OwnerInfo  `json:"owner,omitempty"`
+	// OwnerEvidence says how Owner — including its absence — was determined.
+	OwnerEvidence OwnerEvidence     `json:"ownerEvidence,omitempty"`
+	Labels        map[string]string `json:"labels,omitempty"` // For app-label grouping
 
 	// K8s Event specific
 	Count int32 `json:"count,omitempty"`

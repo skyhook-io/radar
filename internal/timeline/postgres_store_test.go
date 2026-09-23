@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/url"
 	"os"
@@ -88,8 +89,8 @@ func TestNewPostgresStoreRunsMigrations(t *testing.T) {
 	).Scan(&versions); err != nil {
 		t.Fatalf("query migration versions: %v", err)
 	}
-	if versions != 1 {
-		t.Fatalf("migration versions = %d, want 1", versions)
+	if versions != embeddedPostgresMigrationCount(t) {
+		t.Fatalf("migration versions = %d, want %d", versions, embeddedPostgresMigrationCount(t))
 	}
 
 	for _, relation := range []string{
@@ -139,8 +140,8 @@ func TestNewPostgresStoreMigrationsAreIdempotent(t *testing.T) {
 	).Scan(&versions); err != nil {
 		t.Fatalf("query migration versions: %v", err)
 	}
-	if versions != 1 {
-		t.Fatalf("migration versions = %d, want 1", versions)
+	if versions != embeddedPostgresMigrationCount(t) {
+		t.Fatalf("migration versions = %d, want %d", versions, embeddedPostgresMigrationCount(t))
 	}
 }
 
@@ -214,8 +215,8 @@ func TestNewPostgresStoreConcurrentMigrations(t *testing.T) {
 	).Scan(&versions); err != nil {
 		t.Fatalf("query migration versions: %v", err)
 	}
-	if versions != 1 {
-		t.Fatalf("migration versions = %d, want 1", versions)
+	if versions != embeddedPostgresMigrationCount(t) {
+		t.Fatalf("migration versions = %d, want %d", versions, embeddedPostgresMigrationCount(t))
 	}
 }
 
@@ -1278,4 +1279,13 @@ func TestPostgresStore_ClearSurvivesQueuePressure(t *testing.T) {
 	if reopened.IsResourceSeen("cluster-a", "", "Deployment", "default", "recreated") {
 		t.Fatal("clear was lost under queue pressure: the resource is still marked seen after restart")
 	}
+}
+
+func embeddedPostgresMigrationCount(t *testing.T) int {
+	t.Helper()
+	entries, err := fs.ReadDir(postgresMigrations, "migrations/postgres")
+	if err != nil {
+		t.Fatalf("read embedded migrations: %v", err)
+	}
+	return len(entries)
 }

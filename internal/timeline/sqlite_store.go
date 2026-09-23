@@ -159,6 +159,9 @@ func (s *SQLiteStore) initSchema() error {
 		health_state TEXT,
 		owner_kind TEXT,
 		owner_name TEXT,
+		owner_api_version TEXT,
+		owner_uid TEXT,
+		owner_evidence TEXT,
 		labels_json TEXT,
 		count INTEGER DEFAULT 0,
 		correlation_id TEXT,
@@ -197,6 +200,7 @@ func (s *SQLiteStore) initSchema() error {
 	hasClusterContext := false
 	hasResourceCreatedAt := false
 	hasSeq := false
+	hasOwnerColumn := map[string]bool{}
 	for rows.Next() {
 		var cid int
 		var name, ctype string
@@ -214,6 +218,8 @@ func (s *SQLiteStore) initSchema() error {
 			hasResourceCreatedAt = true
 		case "seq":
 			hasSeq = true
+		case "owner_api_version", "owner_uid", "owner_evidence":
+			hasOwnerColumn[name] = true
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -230,6 +236,14 @@ func (s *SQLiteStore) initSchema() error {
 		// deliberately exclude them rather than guess.
 		if _, err := s.db.Exec("ALTER TABLE events ADD COLUMN cluster_context TEXT NOT NULL DEFAULT ''"); err != nil {
 			return err
+		}
+	}
+	// NULL in these columns means unknown owner reference fields and evidence.
+	for _, column := range []string{"owner_api_version", "owner_uid", "owner_evidence"} {
+		if !hasOwnerColumn[column] {
+			if _, err := s.db.Exec("ALTER TABLE events ADD COLUMN " + column + " TEXT"); err != nil {
+				return err
+			}
 		}
 	}
 	if !hasResourceCreatedAt {
@@ -358,9 +372,9 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT INTO events (
 			id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
-			reason, message, diff_json, health_state, owner_kind, owner_name,
+			reason, message, diff_json, health_state, owner_kind, owner_name, owner_api_version, owner_uid, owner_evidence,
 			labels_json, count, correlation_id, cluster_context, resource_created_at, seq
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			timestamp = excluded.timestamp,
 			event_type = excluded.event_type,
@@ -372,8 +386,12 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 			namespace = excluded.namespace,
 			uid = excluded.uid,
 			resource_created_at = COALESCE(excluded.resource_created_at, events.resource_created_at),
-			owner_kind = CASE WHEN excluded.owner_kind != '' THEN excluded.owner_kind ELSE events.owner_kind END,
-			owner_name = CASE WHEN excluded.owner_name != '' THEN excluded.owner_name ELSE events.owner_name END,
+			-- The owner tuple moves as one; OwnerReplacesOnUpsert states the rule.
+			owner_kind = CASE WHEN (excluded.owner_evidence IN ('enriched', 'unidentified') OR (COALESCE(excluded.owner_evidence, '') = '' AND COALESCE(excluded.owner_kind, '') != '')) THEN excluded.owner_kind ELSE events.owner_kind END,
+			owner_name = CASE WHEN (excluded.owner_evidence IN ('enriched', 'unidentified') OR (COALESCE(excluded.owner_evidence, '') = '' AND COALESCE(excluded.owner_kind, '') != '')) THEN excluded.owner_name ELSE events.owner_name END,
+			owner_api_version = CASE WHEN (excluded.owner_evidence IN ('enriched', 'unidentified') OR (COALESCE(excluded.owner_evidence, '') = '' AND COALESCE(excluded.owner_kind, '') != '')) THEN excluded.owner_api_version ELSE events.owner_api_version END,
+			owner_uid = CASE WHEN (excluded.owner_evidence IN ('enriched', 'unidentified') OR (COALESCE(excluded.owner_evidence, '') = '' AND COALESCE(excluded.owner_kind, '') != '')) THEN excluded.owner_uid ELSE events.owner_uid END,
+			owner_evidence = CASE WHEN (excluded.owner_evidence IN ('enriched', 'unidentified') OR (COALESCE(excluded.owner_evidence, '') = '' AND COALESCE(excluded.owner_kind, '') != '')) THEN excluded.owner_evidence ELSE events.owner_evidence END,
 			labels_json = CASE WHEN excluded.labels_json != '' THEN excluded.labels_json ELSE events.labels_json END
 		WHERE events.source = 'k8s_event'
 			AND excluded.source = 'k8s_event'
@@ -386,7 +404,7 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 
 	for _, event := range events {
 		var diffJSON, labelsJSON []byte
-		var ownerKind, ownerName string
+		var ownerKind, ownerName, ownerAPIVersion, ownerUID string
 		var err error
 
 		if event.Diff != nil {
@@ -408,6 +426,8 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 		if event.Owner != nil {
 			ownerKind = event.Owner.Kind
 			ownerName = event.Owner.Name
+			ownerAPIVersion = event.Owner.APIVersion
+			ownerUID = event.Owner.UID
 		}
 		var resourceCreatedAt any
 		if event.CreatedAt != nil {
@@ -433,6 +453,9 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 			string(event.HealthState),
 			ownerKind,
 			ownerName,
+			ownerAPIVersion,
+			ownerUID,
+			string(event.OwnerEvidence),
 			string(labelsJSON),
 			event.Count,
 			event.CorrelationID,
@@ -453,7 +476,7 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 	// Build query
 	query := strings.Builder{}
 	query.WriteString("SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type, ")
-	query.WriteString("reason, message, diff_json, health_state, owner_kind, owner_name, ")
+	query.WriteString("reason, message, diff_json, health_state, owner_kind, owner_name, owner_api_version, owner_uid, owner_evidence, ")
 	query.WriteString("labels_json, count, correlation_id, cluster_context, resource_created_at, seq FROM events WHERE 1=1")
 
 	var args []any
@@ -697,7 +720,7 @@ func (s *SQLiteStore) QueryGrouped(ctx context.Context, opts QueryOptions) (*Tim
 // GetEvent retrieves a single event by ID
 func (s *SQLiteStore) GetEvent(ctx context.Context, id string) (*TimelineEvent, error) {
 	query := `SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
-		reason, message, diff_json, health_state, owner_kind, owner_name,
+		reason, message, diff_json, health_state, owner_kind, owner_name, owner_api_version, owner_uid, owner_evidence,
 		labels_json, count, correlation_id, cluster_context, resource_created_at, seq FROM events WHERE id = ?`
 
 	row := s.db.QueryRowContext(ctx, query, id)
@@ -718,7 +741,7 @@ func (s *SQLiteStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNa
 	}
 
 	query := `SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
-		reason, message, diff_json, health_state, owner_kind, owner_name,
+		reason, message, diff_json, health_state, owner_kind, owner_name, owner_api_version, owner_uid, owner_evidence,
 		labels_json, count, correlation_id, cluster_context, resource_created_at, seq FROM events
 		WHERE owner_kind = ? AND owner_name = ? AND namespace = ?`
 
@@ -1115,7 +1138,8 @@ func (s *SQLiteStore) scanEvent(rows *sql.Rows) (TimelineEvent, error) {
 	var timestamp string
 	var source, eventType, healthState string
 	var apiVersion, uid, reason, message, diffJSON, labelsJSON sql.NullString
-	var ownerKind, ownerName, correlationID, clusterContext, resourceCreatedAt sql.NullString
+	var ownerKind, ownerName, ownerAPIVersion, ownerUID, ownerEvidence sql.NullString
+	var correlationID, clusterContext, resourceCreatedAt sql.NullString
 
 	err := rows.Scan(
 		&event.ID,
@@ -1133,6 +1157,9 @@ func (s *SQLiteStore) scanEvent(rows *sql.Rows) (TimelineEvent, error) {
 		&healthState,
 		&ownerKind,
 		&ownerName,
+		&ownerAPIVersion,
+		&ownerUID,
+		&ownerEvidence,
 		&labelsJSON,
 		&event.Count,
 		&correlationID,
@@ -1180,10 +1207,13 @@ func (s *SQLiteStore) scanEvent(rows *sql.Rows) (TimelineEvent, error) {
 
 	if ownerKind.Valid && ownerKind.String != "" {
 		event.Owner = &OwnerInfo{
-			Kind: ownerKind.String,
-			Name: ownerName.String,
+			Kind:       ownerKind.String,
+			Name:       ownerName.String,
+			APIVersion: ownerAPIVersion.String,
+			UID:        ownerUID.String,
 		}
 	}
+	event.OwnerEvidence = OwnerEvidence(ownerEvidence.String)
 
 	if labelsJSON.Valid && labelsJSON.String != "" {
 		json.Unmarshal([]byte(labelsJSON.String), &event.Labels)
@@ -1198,7 +1228,8 @@ func (s *SQLiteStore) scanEventRow(row *sql.Row) (TimelineEvent, error) {
 	var timestamp string
 	var source, eventType, healthState string
 	var apiVersion, uid, reason, message, diffJSON, labelsJSON sql.NullString
-	var ownerKind, ownerName, correlationID, clusterContext, resourceCreatedAt sql.NullString
+	var ownerKind, ownerName, ownerAPIVersion, ownerUID, ownerEvidence sql.NullString
+	var correlationID, clusterContext, resourceCreatedAt sql.NullString
 
 	err := row.Scan(
 		&event.ID,
@@ -1216,6 +1247,9 @@ func (s *SQLiteStore) scanEventRow(row *sql.Row) (TimelineEvent, error) {
 		&healthState,
 		&ownerKind,
 		&ownerName,
+		&ownerAPIVersion,
+		&ownerUID,
+		&ownerEvidence,
 		&labelsJSON,
 		&event.Count,
 		&correlationID,
@@ -1263,10 +1297,13 @@ func (s *SQLiteStore) scanEventRow(row *sql.Row) (TimelineEvent, error) {
 
 	if ownerKind.Valid && ownerKind.String != "" {
 		event.Owner = &OwnerInfo{
-			Kind: ownerKind.String,
-			Name: ownerName.String,
+			Kind:       ownerKind.String,
+			Name:       ownerName.String,
+			APIVersion: ownerAPIVersion.String,
+			UID:        ownerUID.String,
 		}
 	}
+	event.OwnerEvidence = OwnerEvidence(ownerEvidence.String)
 
 	if labelsJSON.Valid && labelsJSON.String != "" {
 		json.Unmarshal([]byte(labelsJSON.String), &event.Labels)

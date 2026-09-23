@@ -89,10 +89,13 @@ type FieldChange struct {
 	NewValue any    `json:"newValue"`
 }
 
-// OwnerInfo represents the owner/controller of a resource.
+// OwnerInfo represents the owner/controller of a resource, as its
+// ownerReference names it.
 type OwnerInfo struct {
-	Kind string `json:"kind"`
-	Name string `json:"name"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	APIVersion string `json:"apiVersion,omitempty"`
+	UID        string `json:"uid,omitempty"`
 }
 
 // ResourceScope describes the access scope for a single resource type.

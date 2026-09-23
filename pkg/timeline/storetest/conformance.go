@@ -376,6 +376,57 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 		}
 	})
 
+	t.Run("a re-ingested k8s event moves its owner tuple as one", func(t *testing.T) {
+		storedOwner := &timeline.OwnerInfo{Kind: "ReplicaSet", Name: "web-old", APIVersion: "apps/v1", UID: "rs-old"}
+		replacement := &timeline.OwnerInfo{Kind: "Job", Name: "batch"}
+		for _, tc := range []struct {
+			name         string
+			storedEvid   timeline.OwnerEvidence
+			incoming     *timeline.OwnerInfo
+			incomingEvid timeline.OwnerEvidence
+			offset       time.Duration
+			wantOwner    *timeline.OwnerInfo
+			wantEvidence timeline.OwnerEvidence
+		}{
+			{"a missed lookup keeps what the row knew", timeline.OwnerEnriched, nil, timeline.OwnerMissed, time.Minute, storedOwner, timeline.OwnerEnriched},
+			{"a found subject without an owner replaces it", timeline.OwnerEnriched, nil, timeline.OwnerEnriched, time.Minute, nil, timeline.OwnerEnriched},
+			{"a found owner replaces every field, not just kind and name", timeline.OwnerEnriched, replacement, timeline.OwnerEnriched, time.Minute, replacement, timeline.OwnerEnriched},
+			{"an unidentified subject clears an enriched owner", timeline.OwnerEnriched, nil, timeline.OwnerUnidentified, time.Minute, nil, timeline.OwnerUnidentified},
+			{"an unidentified subject clears an owner of unknown provenance", "", nil, timeline.OwnerUnidentified, time.Minute, nil, timeline.OwnerUnidentified},
+			{"an unidentified bump at the same instant still applies", timeline.OwnerEnriched, nil, timeline.OwnerUnidentified, 0, nil, timeline.OwnerUnidentified},
+			{"an older unidentified revision does not clobber the row", timeline.OwnerEnriched, nil, timeline.OwnerUnidentified, -time.Minute, storedOwner, timeline.OwnerEnriched},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				store := newStore(t)
+				stored := k8sEvent("evt-owner", 0, 1)
+				owner := *storedOwner
+				stored.Owner, stored.OwnerEvidence = &owner, tc.storedEvid
+				mustAppend(t, store, stored)
+
+				bump := k8sEvent("evt-owner", tc.offset, 2)
+				bump.Owner, bump.OwnerEvidence = tc.incoming, tc.incomingEvid
+				mustAppend(t, store, bump)
+
+				check := func(where string, got timeline.TimelineEvent) {
+					t.Helper()
+					if (got.Owner == nil) != (tc.wantOwner == nil) || (got.Owner != nil && *got.Owner != *tc.wantOwner) || got.OwnerEvidence != tc.wantEvidence {
+						t.Fatalf("%s: owner = %+v (%q), want %+v (%q)", where, got.Owner, got.OwnerEvidence, tc.wantOwner, tc.wantEvidence)
+					}
+				}
+				rows := queryAll(t, store, 0, 100)
+				if len(rows) != 1 {
+					t.Fatalf("rows = %d, want 1", len(rows))
+				}
+				check("Query", rows[0])
+				one, err := store.GetEvent(ctx, "evt-owner")
+				if err != nil || one == nil {
+					t.Fatalf("GetEvent: %v %v", one, err)
+				}
+				check("GetEvent", *one)
+			})
+		}
+	})
+
 	t.Run("seq paging from zero backfills every row in arrival order", func(t *testing.T) {
 		store := newStore(t)
 		for i := range 7 {
@@ -624,7 +675,8 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 		want.HealthState = timeline.HealthHealthy
 		want.ClusterContext = "cluster-x"
 		want.CreatedAt = &born
-		want.Owner = &timeline.OwnerInfo{Kind: "ReplicaSet", Name: "api-rs"}
+		want.Owner = &timeline.OwnerInfo{Kind: "ReplicaSet", Name: "api-rs", APIVersion: "apps/v1", UID: "rs-uid"}
+		want.OwnerEvidence = timeline.OwnerObserved
 		want.Labels = map[string]string{"app": "api", "tier": "back"}
 		want.Diff = &timeline.DiffInfo{
 			Summary: "replicas 1 -> 3",
@@ -647,8 +699,8 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 				got.ClusterContext != want.ClusterContext {
 				t.Errorf("%s: scalar field lost: %+v", where, got)
 			}
-			if got.Owner == nil || got.Owner.Kind != "ReplicaSet" || got.Owner.Name != "api-rs" {
-				t.Errorf("%s: owner = %+v", where, got.Owner)
+			if got.Owner == nil || *got.Owner != *want.Owner || got.OwnerEvidence != want.OwnerEvidence {
+				t.Errorf("%s: owner = %+v (%q), want %+v (%q)", where, got.Owner, got.OwnerEvidence, want.Owner, want.OwnerEvidence)
 			}
 			if len(got.Labels) != 2 || got.Labels["app"] != "api" || got.Labels["tier"] != "back" {
 				t.Errorf("%s: labels = %v", where, got.Labels)

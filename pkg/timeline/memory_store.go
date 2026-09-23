@@ -83,7 +83,7 @@ func (m *MemoryStore) appendLocked(event TimelineEvent) {
 		if idx, ok := m.index[event.ID]; ok && m.records[idx].ID == event.ID {
 			// K8s Events bump count/message on the same uid, but an out-of-order
 			// older revision must not clobber a newer one.
-			if event.Source == SourceK8sEvent && !event.Timestamp.Before(m.records[idx].Timestamp) {
+			if event.Source == SourceK8sEvent && m.records[idx].Source == SourceK8sEvent && !event.Timestamp.Before(m.records[idx].Timestamp) {
 				// A bump that lost its enrichment (tombstone expired, object gone
 				// from the live cache) must not erase what the row already knows;
 				// a bump that carries enrichment wins as the fresher truth.
@@ -91,8 +91,8 @@ func (m *MemoryStore) appendLocked(event TimelineEvent) {
 				if event.CreatedAt == nil {
 					event.CreatedAt = old.CreatedAt
 				}
-				if event.Owner == nil {
-					event.Owner = old.Owner
+				if !OwnerReplacesOnUpsert(event) {
+					event.Owner, event.OwnerEvidence = old.Owner, old.OwnerEvidence
 				}
 				if event.Labels == nil {
 					event.Labels = old.Labels
