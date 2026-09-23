@@ -1,3 +1,4 @@
+import { isKueueConditionStale } from './resource-utils-kueue'
 import { Badge } from '../ui/Badge'
 import { AlertBanner, ConditionsSection, ResourceLink } from '../ui/drawer-components'
 import { kindToPluralWithGroup } from '../../utils/navigation'
@@ -46,7 +47,7 @@ export function KueueAdmissionSection({ data, loading, error, forbidden, hinted,
 function AdmissionObservation({ observation, link }: { observation: SchedulingObservation; link: (name: string, ref?: SchedulingRef) => React.ReactNode }) {
   const kueue = observation.kueue
   const condition = observation.primaryCondition
-  const stale = !!condition?.observedGeneration && !!observation.subjectGeneration && condition.observedGeneration < observation.subjectGeneration
+  const stale = isKueueConditionStale(condition, observation.subjectGeneration)
   const conditions = [condition, ...(observation.disruptions ?? []), kueue?.podsReady, kueue?.waitingForReplacementPods]
     .filter((entry) => entry != null)
     .filter((entry, index, entries) => entries.findIndex((candidate) => candidate.type === entry.type) === index)
@@ -65,7 +66,7 @@ function AdmissionObservation({ observation, link }: { observation: SchedulingOb
       defaultExpanded={true}
       getConditionTone={(entry) => {
         if (entry.status !== 'True' && entry.status !== 'False') return 'unknown'
-        if (entry.observedGeneration && observation.subjectGeneration && entry.observedGeneration < observation.subjectGeneration) return 'unknown'
+        if (isKueueConditionStale(entry, observation.subjectGeneration)) return 'unknown'
         if (entry.type === 'Finished') return entry.status === 'False' ? 'unknown' : kueue?.outcome === 'failed' ? 'fail' : kueue?.outcome === 'succeeded' ? 'ok' : 'unknown'
         if (entry.type === condition?.type) return observation.decision === 'satisfied' ? 'ok' : observation.decision === 'unknown' ? 'unknown' : 'warning'
         if (entry.type === 'WaitingForReplacementPods' || observation.disruptions?.some((item) => item.type === entry.type)) return entry.status === 'True' ? 'warning' : 'ok'

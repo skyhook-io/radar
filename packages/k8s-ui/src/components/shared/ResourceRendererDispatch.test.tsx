@@ -1012,3 +1012,16 @@ describe('GPU ecosystem status edge cases', () => {
     expect(pool?.text).toBe('Not referenced')
   })
 })
+
+describe('Kueue Workload detail dispatch', () => {
+  it.each(['kueue.x-k8s.io/v1beta1', 'kueue.x-k8s.io/v1beta2'])('renders %s with curated admission detail', (apiVersion) => {
+    expect(renderKind('workloads', { apiVersion, kind: 'Workload', spec: { podSets: [] } })).toContain('No PodSets declared')
+  })
+  it.each(['example.com/v1', 'fake.kueue.x-k8s.io/v1', undefined])('leaves %s generic', (apiVersion) => {
+    const data = { apiVersion, kind: 'Workload', spec: { uniqueForeignField: 'visible' } }
+    const html = renderKind('workloads', data)
+    expect(html).not.toContain('No PodSets declared')
+    expect(html).toContain('visible')
+    expect(getResourceStatus('workloads', data)).toBeNull()
+  })
+})

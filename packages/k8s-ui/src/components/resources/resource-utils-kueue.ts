@@ -5,6 +5,14 @@ import { healthColors } from './resource-utils'
 
 const failedFinishedReasons = new Set(['Failed', 'FailedToStart', 'OutOfSync', 'OwnerNotFound'])
 
+export function isKueueConditionStale(condition: { observedGeneration?: number } | undefined, generation?: number): boolean {
+  return !!condition?.observedGeneration && !!generation && condition.observedGeneration < generation
+}
+
+export function isKueueWorkloadFailureReason(reason: string): boolean {
+  return failedFinishedReasons.has(reason)
+}
+
 // ============================================================================
 // SHARED HELPERS
 // ============================================================================
@@ -83,36 +91,30 @@ export function getLocalQueueAdmittedWorkloads(resource: any): string {
 // KUEUE WORKLOAD UTILITIES
 // ============================================================================
 
+export function getKueueWorkloadStatusCondition(resource: any): any {
+  for (const type of ['Finished', 'Evicted', 'Preempted', 'Admitted', 'QuotaReserved']) {
+    const condition = findCondition(resource, type)
+    if (condition?.status === 'True') return condition
+  }
+}
+
 export function getKueueWorkloadStatus(resource: any): StatusBadge {
-  const finished = findCondition(resource, 'Finished')
-  if (finished?.status === 'True') {
-    if (failedFinishedReasons.has(finished.reason)) {
-      return { text: finished.reason, color: healthColors.unhealthy, level: 'unhealthy' }
-    }
-    return { text: 'Finished', color: healthColors.neutral, level: 'neutral' }
+  const condition = getKueueWorkloadStatusCondition(resource)
+  switch (condition?.type) {
+    case 'Finished':
+      return isKueueWorkloadFailureReason(condition.reason)
+        ? { text: condition.reason, color: healthColors.unhealthy, level: 'unhealthy' }
+        : { text: 'Finished', color: healthColors.neutral, level: 'neutral' }
+    case 'Evicted':
+    case 'Preempted':
+      return { text: condition.type, color: healthColors.degraded, level: 'degraded' }
+    case 'Admitted':
+      return { text: 'Admitted', color: healthColors.healthy, level: 'healthy' }
+    case 'QuotaReserved':
+      return { text: 'QuotaReserved', color: healthColors.neutral, level: 'neutral' }
+    default:
+      return { text: 'Pending', color: healthColors.neutral, level: 'neutral' }
   }
-
-  const evicted = findCondition(resource, 'Evicted')
-  if (evicted?.status === 'True') {
-    return { text: 'Evicted', color: healthColors.degraded, level: 'degraded' }
-  }
-
-  const preempted = findCondition(resource, 'Preempted')
-  if (preempted?.status === 'True') {
-    return { text: 'Preempted', color: healthColors.degraded, level: 'degraded' }
-  }
-
-  const admitted = findCondition(resource, 'Admitted')
-  if (admitted?.status === 'True') {
-    return { text: 'Admitted', color: healthColors.healthy, level: 'healthy' }
-  }
-
-  const quotaReserved = findCondition(resource, 'QuotaReserved')
-  if (quotaReserved?.status === 'True') {
-    return { text: 'QuotaReserved', color: healthColors.neutral, level: 'neutral' }
-  }
-
-  return { text: 'Pending', color: healthColors.neutral, level: 'neutral' }
 }
 
 export function getKueueWorkloadQueueName(resource: any): string {

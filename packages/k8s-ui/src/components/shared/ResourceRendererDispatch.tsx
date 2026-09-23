@@ -115,6 +115,7 @@ import {
   SecretRenderer,
   JobRenderer,
   JobSetRenderer,
+  KueueWorkloadRenderer,
   CronJobRenderer,
   CronWorkflowRenderer,
   HPARenderer,
@@ -435,6 +436,7 @@ const KNOWN_KINDS = new Set([
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
   'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'cronworkflows',
   'jobsets',
+  'workloads',
   'hpas', 'horizontalpodautoscalers', 'nodes', 'persistentvolumeclaims',
   'rollouts', 'analysisruns', 'analysistemplates', 'clusteranalysistemplates', 'experiments', 'certificates', 'workflows', 'persistentvolumes',
   'storageclasses', 'certificaterequests', 'clusterissuers', 'issuers',
@@ -689,7 +691,7 @@ export function ResourceRendererDispatch({
     || kind === 'objectstores' || kind === 'databases' || kind === 'publications'
     || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs' || kind === 'jobsets'
     || kind === 'policies' || kind === 'rollouts' || kind === 'experiments'
-    || kind === 'machines' || kind === 'machinesets'
+    || kind === 'machines' || kind === 'machinesets' || kind === 'workloads'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
     (kind === 'clusters' && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'cluster.x-k8s.io')))
@@ -710,6 +712,7 @@ export function ResourceRendererDispatch({
     || ((kind === 'machines' || kind === 'machinesets')
       && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io'))
     || (kind === 'jobsets' && isJobSetV1Alpha2(data))
+    || (kind === 'workloads' && isApiGroup(data?.apiVersion, 'kueue.x-k8s.io'))
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
   const calicoApiVersionMatched = isCalicoApiVersion(data?.apiVersion)
@@ -798,6 +801,7 @@ export function ResourceRendererDispatch({
         {kind === 'configmaps' && <ConfigMapRenderer data={data} relationships={relationships} onNavigate={onNavigate} />}
         {kind === 'secrets' && <SecretRenderer data={data} relationships={relationships} onNavigate={onNavigate} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
         {kind === 'jobs' && !nonCoreJobFallthrough && <JobRenderer data={data} />}
+        {kind === 'workloads' && isApiGroup(data?.apiVersion, 'kueue.x-k8s.io') && <KueueWorkloadRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'jobsets' && isJobSetV1Alpha2(data) && <JobSetRenderer data={data} />}
         {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'cronworkflows' && <CronWorkflowRenderer data={data} onNavigate={onNavigate} />}

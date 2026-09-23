@@ -1487,6 +1487,12 @@ This is resource reconnaissance, not GPU accounting or end-to-end workload diagn
 | AdmissionCheck | `kueue.x-k8s.io` | `Active` condition |
 | ProvisioningRequest | `autoscaling.x-k8s.io` (v1, v1beta1) | Provisioned / Failed / CapacityRevoked / BookingExpired conditions |
 
+Workload detail shows PodSet counts and controller-evaluated resource requests,
+quota reservations and assigned flavors, admission-check states and messages,
+and conditions. Links connect submission LocalQueues, reservation ClusterQueues,
+ResourceFlavors and AdmissionChecks. Reservation is distinguished from admission;
+resource totals are requests, not measured usage.
+
 For an exact `kueue.x-k8s.io/v1beta2` Workload, the REST AI resource endpoint
 and MCP `get_resource` also project a bounded admission summary into
 `resourceContext.scheduling.observations`. The first adapter emits one Kueue

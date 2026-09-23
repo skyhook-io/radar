@@ -180,3 +180,5 @@ export * from './KyvernoGlobalContextRenderer'
 export * from './KyvernoQueueRenderers'
 export * from './CNPGObjectStoreRenderer'
 export * from './CNPGDeclarativeRenderer'
+
+export { KueueWorkloadRenderer } from './KueueWorkloadRenderer'
