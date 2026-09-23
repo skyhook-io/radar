@@ -12,9 +12,8 @@ import (
 	"strings"
 	"sync"
 
-	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
-	"github.com/skyhook-io/radar/pkg/gitops/diagnose"
-	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
@@ -23,6 +22,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
+
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/gitops/diagnose"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // Type aliases — canonical definitions live in pkg/k8score.
@@ -89,14 +92,14 @@ func ComputeDiff(kind string, oldObj, newObj any) *DiffInfo {
 	registration, ok := diffFunctions[kind]
 	oldAPIVersion := extractAPIVersion(kind, oldObj)
 	newAPIVersion := extractAPIVersion(kind, newObj)
-	if oldAPIVersion != "" && newAPIVersion != "" && GroupFromAPIVersion(oldAPIVersion) != GroupFromAPIVersion(newAPIVersion) {
+	if oldAPIVersion != "" && newAPIVersion != "" && resourceid.GroupFromAPIVersion(oldAPIVersion) != resourceid.GroupFromAPIVersion(newAPIVersion) {
 		return nil
 	}
 	apiVersion := newAPIVersion
 	if apiVersion == "" {
 		apiVersion = oldAPIVersion
 	}
-	if ok && apiVersion != "" && GroupFromAPIVersion(apiVersion) != registration.group {
+	if ok && apiVersion != "" && resourceid.GroupFromAPIVersion(apiVersion) != registration.group {
 		ok = false
 	}
 	if !ok {

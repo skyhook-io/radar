@@ -691,7 +691,7 @@ func buildAppGraph(cache *k8s.ResourceCache, namespaces []string) *appGraph {
 
 func appGraphNodeGroup(node *topology.Node, kind string) string {
 	apiVersion, _ := node.Data["apiVersion"].(string)
-	if group := topology.APIVersionGroup(apiVersion); group != "" {
+	if group := resourceid.GroupFromAPIVersion(apiVersion); group != "" {
 		return group
 	}
 	return resourceid.GroupForBuiltinKind(kind)
@@ -892,7 +892,7 @@ func collectAppWorkloads(ctx context.Context, cache *k8s.ResourceCache, namespac
 		overlay := subject.ResolveOverlay(&meta, false)
 		group := appWorkloadAPIGroup(kind)
 		if resource, ok := obj.(*unstructured.Unstructured); ok {
-			group = topology.APIVersionGroup(resource.GetAPIVersion())
+			group = resourceid.GroupFromAPIVersion(resource.GetAPIVersion())
 		}
 		rootKey, rootKind, rootGroup, rootIdentity := g.rootOf(group, kind, ns, name)
 		rels := g.relationshipsFor(kind, ns, name, obj)
@@ -2481,7 +2481,7 @@ func indexWarningEventsByObject(cache *k8s.ResourceCache, namespaces []string, g
 				m = map[string][]*corev1.Event{}
 				out[e.Namespace] = m
 			}
-			group := topology.APIVersionGroup(e.InvolvedObject.APIVersion)
+			group := resourceid.GroupFromAPIVersion(e.InvolvedObject.APIVersion)
 			if e.InvolvedObject.APIVersion == "" {
 				unqualified := resourceid.ResourceKey("", e.InvolvedObject.Kind, e.Namespace, e.InvolvedObject.Name)
 				if ambiguous[unqualified] {

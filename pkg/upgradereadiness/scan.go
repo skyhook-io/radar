@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -460,7 +462,7 @@ func scanManifestCompatibility(input *Input, target *utilversion.Version) Check 
 				appliesFrom = minorString(deprecated)
 			}
 
-			group := groupForAPIVersion(resource.APIVersion)
+			group := resourceid.GroupFromAPIVersion(resource.APIVersion)
 			ref := &ResourceRef{Group: group, Kind: resource.Kind, Namespace: resource.Namespace, Name: resource.Name}
 			var managedBy *ResourceRef
 			if resource.Source == "Helm" {
@@ -1347,14 +1349,6 @@ func minorString(v *utilversion.Version) string {
 	return fmt.Sprintf("%d.%d", v.Major(), v.Minor())
 }
 
-func groupForAPIVersion(apiVersion string) string {
-	group, _, ok := strings.Cut(apiVersion, "/")
-	if !ok {
-		return ""
-	}
-	return group
-}
-
 var strictNetworkSourceGroups = map[string]string{
 	"CronJob": "batch", "DaemonSet": "apps", "Deployment": "apps", "EndpointSlice": "discovery.k8s.io",
 	"Endpoints": "", "Job": "batch", "NetworkPolicy": "networking.k8s.io", "Node": "",
@@ -1368,8 +1362,8 @@ func IsUpgradeSourceObjectCandidate(kind, group string) bool {
 		return true
 	}
 	for _, entry := range bp.DeprecationTable {
-		deprecatedGroup := groupForAPIVersion(entry.GroupVersion)
-		replacementGroup := groupForAPIVersion(entry.Replacement)
+		deprecatedGroup := resourceid.GroupFromAPIVersion(entry.GroupVersion)
+		replacementGroup := resourceid.GroupFromAPIVersion(entry.Replacement)
 		if (entry.Kind == kind && (deprecatedGroup == group || replacementGroup == group)) || (entry.Kind == "" && deprecatedGroup == group) {
 			return true
 		}

@@ -26,8 +26,9 @@ import (
 	"encoding/hex"
 	"strings"
 
-	"github.com/skyhook-io/radar/pkg/resourceid"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // ============================= TIER 1: SUBJECT =============================
@@ -266,7 +267,7 @@ func (p HeuristicPodOwnerResolver) ParentOf(child Ref) (Ref, bool) {
 		if ref.Kind == "ReplicaSet" {
 			return Ref{Group: "apps", Kind: "Deployment", Namespace: p.Pod.GetNamespace(), Name: StripReplicaSetHash(ref.Name)}, true
 		}
-		return Ref{Group: groupFromAPIVersion(ref.APIVersion), Kind: ref.Kind, Namespace: p.Pod.GetNamespace(), Name: ref.Name}, true
+		return Ref{Group: resourceid.GroupFromAPIVersion(ref.APIVersion), Kind: ref.Kind, Namespace: p.Pod.GetNamespace(), Name: ref.Name}, true
 	}
 	for _, ref := range refs {
 		if ref.Controller != nil && *ref.Controller {
@@ -279,17 +280,6 @@ func (p HeuristicPodOwnerResolver) ParentOf(child Ref) (Ref, bool) {
 	// an arbitrary non-controller owner; that is exactly the "management edge as
 	// identity" the contract forbids, so it's dropped here.)
 	return Ref{}, false
-}
-
-// groupFromAPIVersion extracts the API group from an ownerReference APIVersion
-// ("apps/v1" -> "apps", "v1" -> ""). Pods own no native group-bearing
-// references beyond apps/batch, but operator CRs (CNPG, Strimzi) carry their
-// group here, which the operator-root hook keys on.
-func groupFromAPIVersion(apiVersion string) string {
-	if i := strings.Index(apiVersion, "/"); i >= 0 {
-		return apiVersion[:i]
-	}
-	return ""
 }
 
 // StripReplicaSetHash moves verbatim from top_metrics.go (idx<=0 guard preserved).

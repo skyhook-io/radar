@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -148,7 +150,7 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 	})
 	if len(sub.Nodes) > 0 && topology.IsCalicoPolicyKind(sub.Nodes[0].Kind) {
 		apiVersion, _ := sub.Nodes[0].Data["apiVersion"].(string)
-		sub.Root.Group = topology.APIVersionGroup(apiVersion)
+		sub.Root.Group = resourceid.GroupFromAPIVersion(apiVersion)
 	}
 	if sub.AmbiguousRoot {
 		return nil, nil, fmt.Errorf("resource kind is ambiguous for %s/%s/%s; provide group", input.Kind, input.Namespace, input.Name)
@@ -240,7 +242,7 @@ func canReadNeighborhoodNodeMCP(ctx context.Context, n *topology.Node) bool {
 		group := ""
 		if n.Data != nil {
 			if v, ok := n.Data["apiVersion"].(string); ok {
-				group = topology.APIVersionGroup(v)
+				group = resourceid.GroupFromAPIVersion(v)
 			}
 		}
 		clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(string(n.Kind), group)

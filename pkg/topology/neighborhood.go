@@ -188,10 +188,7 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 	resolvedKind := KubernetesKindForNode(rootNode)
 	resolvedGroup := root.Group
 	if resolvedGroup == "" {
-		resolvedGroup = nodeAPIGroupFromData(rootNode)
-		if builtinGroup, builtin := resourceid.BuiltinGroup(resolvedKind); resolvedGroup == "" && builtin {
-			resolvedGroup = builtinGroup
-		}
+		resolvedGroup = nodeGroup(rootNode)
 	}
 	sub.Root = ResourceRef{
 		Kind:      resolvedKind,
@@ -574,27 +571,6 @@ func nodeNamespaceFromData(n *Node) string {
 	return ""
 }
 
-// APIVersionGroup extracts the API group from a Kubernetes apiVersion
-// string by splitting on the first '/'. The core group has no slash and
-// returns "" — matches K8s convention.
-//
-//	"v1"                     → ""
-//	"apps/v1"                → "apps"
-//	"serving.knative.dev/v1" → "serving.knative.dev"
-//	""                       → ""
-//
-// Exported so REST + MCP handlers share one implementation; previously
-// internal/server, internal/mcp, and this package each carried their own
-// copy of the same split-on-first-slash logic.
-func APIVersionGroup(apiVersion string) string {
-	for i := 0; i < len(apiVersion); i++ {
-		if apiVersion[i] == '/' {
-			return apiVersion[:i]
-		}
-	}
-	return ""
-}
-
 // nodeMatchesAPIGroup reports whether a node can be addressed through the given
 // API group. A Calico policy is served by both projectcalico.org and
 // crd.projectcalico.org, and is represented by a single node, so a reference
@@ -623,10 +599,22 @@ func nodeMatchesAPIGroup(n *Node, group string) bool {
 	return false
 }
 
+// nodeReference is what a topology node records about the object it draws.
+// Nodes built from typed informers carry no apiVersion, so their group is
+// missing rather than known to be core.
+func nodeReference(n *Node) resourceid.Reference {
+	apiVersion, _ := n.Data["apiVersion"].(string)
+	return resourceid.ReferenceFromAPIVersion(apiVersion, KubernetesKindForNode(n), nodeNamespaceFromData(n), n.Name)
+}
+
+// nodeGroup is a node's API group resolved against the current cluster; it is
+// "" for the core group and for groups that cannot be established.
+func nodeGroup(n *Node) string {
+	return resourceid.ResolveCurrent(nodeReference(n), nil).Ref.Group
+}
+
 // nodeAPIGroupFromData extracts the API group from a Node's Data map.
-// Returns "" when no apiVersion is set on the node. Thin wrapper around
-// APIVersionGroup so callers walking topology nodes don't have to read
-// the Data map themselves.
+// Returns "" when no apiVersion is set on the node.
 func nodeAPIGroupFromData(n *Node) string {
 	if n.Data == nil {
 		return ""
@@ -635,5 +623,5 @@ func nodeAPIGroupFromData(n *Node) string {
 	if !ok {
 		return ""
 	}
-	return APIVersionGroup(v)
+	return resourceid.GroupFromAPIVersion(v)
 }

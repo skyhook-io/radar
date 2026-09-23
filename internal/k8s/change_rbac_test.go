@@ -1,6 +1,10 @@
 package k8s
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
+)
 
 func TestGroupFromAPIVersion(t *testing.T) {
 	cases := map[string]string{
@@ -11,8 +15,8 @@ func TestGroupFromAPIVersion(t *testing.T) {
 		"":                             "",
 	}
 	for in, want := range cases {
-		if got := GroupFromAPIVersion(in); got != want {
-			t.Errorf("GroupFromAPIVersion(%q) = %q, want %q", in, got, want)
+		if got := resourceid.GroupFromAPIVersion(in); got != want {
+			t.Errorf("resourceid.GroupFromAPIVersion(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

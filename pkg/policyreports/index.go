@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -499,7 +501,7 @@ func extractFindings(report *unstructured.Unstructured, dst map[string][]sourced
 
 	scopeGroup, scopeKind, scopeNS, scopeName := reportScope(report)
 	// The report's OWN group — which family it came from — not the subject's.
-	reportGroup := groupFromAPIVersion(report.GetAPIVersion())
+	reportGroup := resourceid.GroupFromAPIVersion(report.GetAPIVersion())
 
 	rawResults, found, err := unstructured.NestedFieldNoCopy(report.Object, "results")
 	if err != nil || !found {
@@ -587,7 +589,7 @@ func reportScope(report *unstructured.Unstructured) (group, kind, namespace, nam
 	if !ok {
 		return "", "", "", ""
 	}
-	return groupFromAPIVersion(stringField(scope, "apiVersion")),
+	return resourceid.GroupFromAPIVersion(stringField(scope, "apiVersion")),
 		stringField(scope, "kind"),
 		stringField(scope, "namespace"),
 		stringField(scope, "name")
@@ -626,30 +628,13 @@ func resultResources(entry map[string]any) ([]subjectRef, bool) {
 			continue
 		}
 		refs = append(refs, subjectRef{
-			group:     groupFromAPIVersion(stringField(m, "apiVersion")),
+			group:     resourceid.GroupFromAPIVersion(stringField(m, "apiVersion")),
 			kind:      stringField(m, "kind"),
 			namespace: stringField(m, "namespace"),
 			name:      stringField(m, "name"),
 		})
 	}
 	return refs, true
-}
-
-// groupFromAPIVersion extracts the API group from a Kubernetes apiVersion
-// string ("apps/v1" → "apps", "v1" → "", "" → ""). The pkg/gitops package
-// has a public helper that does the same job, but we copy it here so that
-// the policyreports package stays free of cross-package dependencies (it
-// is reused by callers that don't want the gitops surface).
-func groupFromAPIVersion(apiVersion string) string {
-	if apiVersion == "" || apiVersion == "v1" {
-		return ""
-	}
-	if before, _, ok := strings.Cut(apiVersion, "/"); ok {
-		return before
-	}
-	// apiVersion without a slash is a non-core group with no version
-	// (rare/malformed) — treat the whole string as the group.
-	return apiVersion
 }
 
 func stringField(m map[string]any, key string) string {

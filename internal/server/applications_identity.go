@@ -1060,10 +1060,7 @@ func argoManagedWorkloads(item *unstructured.Unstructured) []workloadRef {
 			continue
 		}
 		group, _ := m["group"].(string)
-		if builtinGroup, builtin := resourceid.BuiltinGroup(kind); group == "" && builtin {
-			group = builtinGroup
-		}
-		out = append(out, workloadRef{Group: group, Kind: kind, Namespace: ns, Name: nm})
+		out = append(out, workloadRef{Group: resourceid.NormalizeGroup(group), Kind: kind, Namespace: ns, Name: nm})
 	}
 	return out
 }
@@ -1179,9 +1176,7 @@ func addArgoManagedSourceRefs(out map[string][]appSourceRef, items []*unstructur
 			}
 			name, _ := resMap["name"].(string)
 			group, _ := resMap["group"].(string)
-			if builtinGroup, builtin := resourceid.BuiltinGroup(kind); group == "" && builtin {
-				group = builtinGroup
-			}
+			group = resourceid.NormalizeGroup(group)
 			ns, _ := resMap["namespace"].(string)
 			if ns == "" {
 				ns = destNamespace
@@ -1211,9 +1206,6 @@ func addFluxKustomizationManagedSourceRefs(ctx context.Context, cache resourceLi
 			group, kind, namespace, name, ok := gitops.ParseFluxInventoryID(id)
 			if !ok {
 				continue
-			}
-			if builtinGroup, builtin := resourceid.BuiltinGroup(kind); group == "" && builtin {
-				group = builtinGroup
 			}
 			if !argoWorkloadKinds[kind] {
 				continue

@@ -33,31 +33,37 @@ func TestAddGitOpsManagedResourceEdgesPreservesArgoAPIGroup(t *testing.T) {
 	}
 }
 
-func TestAddGitOpsManagedResourceEdgesDefaultsArgoBuiltinGroup(t *testing.T) {
+// Argo CD records each managed resource's actual group and omits it only for
+// the core group, so the recorded group is exact: an entry without one names a
+// core resource and never matches a batch Job of the same name.
+func TestAddGitOpsManagedResourceEdgesTreatsArgoGroupAsExact(t *testing.T) {
 	nodes := []Node{
 		{ID: "application/argocd/training", Kind: KindApplication, Name: "training", Data: map[string]any{"namespace": "argocd", "apiVersion": "argoproj.io/v1alpha1"}},
 		{ID: "job/ml/train", Kind: KindJob, Name: "train", Data: map[string]any{"namespace": "ml"}},
 		{ID: "job/ml/train/batch.volcano.sh", Kind: KindJob, Name: "train", Data: map[string]any{"namespace": "ml", "apiVersion": "batch.volcano.sh/v1alpha1"}},
 	}
-	app := &unstructured.Unstructured{Object: map[string]any{
-		"metadata": map[string]any{"namespace": "argocd", "name": "training"},
-		"spec":     map[string]any{"destination": map[string]any{"namespace": "ml"}},
-		"status": map[string]any{"resources": []any{
-			map[string]any{"kind": "Job", "name": "train"},
-		}},
-	}}
+	edgesFor := func(resource map[string]any) []Edge {
+		app := &unstructured.Unstructured{Object: map[string]any{
+			"metadata": map[string]any{"namespace": "argocd", "name": "training"},
+			"spec":     map[string]any{"destination": map[string]any{"namespace": "ml"}},
+			"status":   map[string]any{"resources": []any{resource}},
+		}}
+		return addGitOpsManagedResourceEdges(
+			nodes,
+			nil,
+			[]*unstructured.Unstructured{app},
+			map[string]string{"argocd/training": "application/argocd/training"},
+			map[string]string{"application/argocd/training": "ml"},
+			nil,
+			nil,
+		)
+	}
 
-	edges := addGitOpsManagedResourceEdges(
-		nodes,
-		nil,
-		[]*unstructured.Unstructured{app},
-		map[string]string{"argocd/training": "application/argocd/training"},
-		map[string]string{"application/argocd/training": "ml"},
-		nil,
-		nil,
-	)
-	if len(edges) != 1 || edges[0].Target != "job/ml/train" {
+	if edges := edgesFor(map[string]any{"group": "batch", "kind": "Job", "name": "train"}); len(edges) != 1 || edges[0].Target != "job/ml/train" {
 		t.Fatalf("Argo edges = %+v, want only the built-in Job", edges)
+	}
+	if edges := edgesFor(map[string]any{"kind": "Job", "name": "train"}); len(edges) != 0 {
+		t.Fatalf("a core-group Job entry matched %+v", edges)
 	}
 }
 

@@ -3,6 +3,8 @@ package tree
 import (
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
@@ -149,7 +151,7 @@ func fluxSourceRef(root *unstructured.Unstructured, defaultNamespace string, fie
 	if namespace == "" {
 		namespace = defaultNamespace
 	}
-	group := gitops.GroupFromAPIVersion(gitops.StringValue(source["apiVersion"]))
+	group := resourceid.GroupFromAPIVersion(gitops.StringValue(source["apiVersion"]))
 	if group == "" {
 		group = fluxSourceGroup
 	}

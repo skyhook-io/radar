@@ -3962,7 +3962,7 @@ func (s *Server) filterEventsByRBAC(r *http.Request, events []timeline.TimelineE
 	resolved := make([]resolution, len(events))
 	distinct := make(map[key]struct{})
 	for i, e := range events {
-		g, res, clusterScoped, ok := k8s.ResolveChangeGVR(e.Kind, k8s.GroupFromAPIVersion(e.APIVersion))
+		g, res, clusterScoped, ok := k8s.ResolveChangeGVR(e.Kind, resourceid.GroupFromAPIVersion(e.APIVersion))
 		// Cluster-scoped kinds authorize at namespace "": the event row may carry
 		// a namespace (a K8s Event about a Node stores the Event's own namespace),
 		// and a namespaced SAR is strictly broader than the cluster-scoped read.

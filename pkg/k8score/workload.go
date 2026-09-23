@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -174,10 +176,7 @@ func (m *WorkloadManager) prepareUpdateResource(opts UpdateResourceOptions) (*un
 	if obj.GetKind() != "" {
 		kindForLookup = obj.GetKind()
 	}
-	apiGroup := ""
-	if apiVersion := obj.GetAPIVersion(); strings.Contains(apiVersion, "/") {
-		apiGroup = strings.SplitN(apiVersion, "/", 2)[0]
-	}
+	apiGroup := resourceid.GroupFromAPIVersion(obj.GetAPIVersion())
 	var gvr schema.GroupVersionResource
 	var ok bool
 	if apiGroup != "" {
@@ -308,10 +307,7 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 	}
 
 	// Resolve GVR using group from apiVersion for disambiguation
-	group := ""
-	if parts := strings.SplitN(apiVersion, "/", 2); len(parts) == 2 {
-		group = parts[0]
-	}
+	group := resourceid.GroupFromAPIVersion(apiVersion)
 
 	var gvr schema.GroupVersionResource
 	var ok bool

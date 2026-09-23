@@ -185,6 +185,10 @@ After `make <name>-demo`, run `kubectl config use-context kind-radar-<name>-demo
 
 ## Key Patterns
 
+### Resource identity
+
+`pkg/resourceid` is the one model of resource identity: `Ref` (group + Kind + namespace + name; version is not identity), `Reference` (a possibly-partial reference that records where its group came from, so the core group `""` is never confused with "not recorded"), the `Builtins` table, `GroupFromAPIVersion` / `NormalizeGroup`, and the two resolution policies — `ResolveCurrent` (live joins and user requests; may infer a built-in or uniquely-served group) and `ResolveHistorical` (stored observations; never infers). Use it instead of parsing apiVersions or defaulting groups locally. Controller-recorded groups (Argo CD `status.resources`, Flux inventory) are exact: an omitted group there is core, not unknown.
+
 ### K8s Caching
 - Core informer logic lives in `pkg/k8score` — a shared package with no internal/ imports, designed for reuse
 - `internal/k8s/cache.go` wraps it as a singleton and wires Radar-specific callbacks (timeline recording, noisy filtering, diff computation)

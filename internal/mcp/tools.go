@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -2408,7 +2410,7 @@ type mcpWarningObject struct {
 func warningObjectFromRef(ref aicontext.EventObjectRef) mcpWarningObject {
 	return mcpWarningObject{
 		Kind:      ref.Kind,
-		Group:     aicontext.GroupOfAPIVersion(ref.APIVersion),
+		Group:     resourceid.GroupFromAPIVersion(ref.APIVersion),
 		Namespace: ref.Namespace,
 		Name:      ref.Name,
 	}

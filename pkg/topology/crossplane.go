@@ -5,6 +5,8 @@ import (
 	"log"
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -142,13 +144,6 @@ type crossplaneRef struct {
 	name      string
 }
 
-func groupFromAPIVersion(apiVersion string) string {
-	if i := strings.IndexByte(apiVersion, '/'); i >= 0 {
-		return apiVersion[:i]
-	}
-	return ""
-}
-
 func refFromMap(m map[string]interface{}) (crossplaneRef, bool) {
 	kind, _ := m["kind"].(string)
 	name, _ := m["name"].(string)
@@ -157,7 +152,7 @@ func refFromMap(m map[string]interface{}) (crossplaneRef, bool) {
 	}
 	apiVersion, _ := m["apiVersion"].(string)
 	namespace, _ := m["namespace"].(string)
-	return crossplaneRef{group: groupFromAPIVersion(apiVersion), kind: kind, namespace: namespace, name: name}, true
+	return crossplaneRef{group: resourceid.GroupFromAPIVersion(apiVersion), kind: kind, namespace: namespace, name: name}, true
 }
 
 // getBoundXRRef returns the XR a v1 Claim is bound to (spec.resourceRef,
@@ -268,7 +263,7 @@ func (b *Builder) addCrossplaneNodes(nodes []Node, edges []Edge, opts BuildOptio
 				continue
 			}
 			name := r.GetName()
-			group := groupFromAPIVersion(r.GetAPIVersion())
+			group := resourceid.GroupFromAPIVersion(r.GetAPIVersion())
 			nodeID := fmt.Sprintf("%s/%s/%s/%s", strings.ToLower(kind), ns, name, group)
 			objects = append(objects, xpObject{obj: r, nodeID: nodeID})
 			index[crossplaneIndexKey(group, kind, ns, name)] = nodeID

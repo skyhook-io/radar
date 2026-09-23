@@ -1148,7 +1148,7 @@ func filterEventsByInvolvedObject(events []*corev1.Event, displayKind, group, na
 		if e.Type != corev1.EventTypeWarning {
 			continue
 		}
-		involvedGroup := k8s.GroupFromAPIVersion(e.InvolvedObject.APIVersion)
+		involvedGroup := resourceid.GroupFromAPIVersion(e.InvolvedObject.APIVersion)
 		if e.InvolvedObject.APIVersion == "" {
 			involvedGroup = resourceid.GroupForBuiltinKind(e.InvolvedObject.Kind)
 		}

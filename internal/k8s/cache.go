@@ -878,7 +878,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 		apiGroup = gvr.Group
 	}
 	if apiVersion != "" {
-		apiGroup = GroupFromAPIVersion(apiVersion)
+		apiGroup = resourceid.GroupFromAPIVersion(apiVersion)
 	}
 
 	if op == "add" {

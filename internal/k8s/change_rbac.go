@@ -1,6 +1,10 @@
 package k8s
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
+)
 
 // namespacedBuiltinKinds maps the lowercase Kind of the well-known namespaced
 // builtin resources to their canonical (group, resource) for SAR lookups. It is
@@ -134,15 +138,6 @@ func LookupResourceGVR(kind, group string) (gvrGroup, resource string) {
 	return "", ""
 }
 
-// GroupFromAPIVersion extracts the API group from an apiVersion string
-// ("apps/v1" → "apps", "v1" → "", "cluster.x-k8s.io/v1beta1" → "cluster.x-k8s.io").
-func GroupFromAPIVersion(apiVersion string) string {
-	if i := strings.IndexByte(apiVersion, '/'); i >= 0 {
-		return apiVersion[:i]
-	}
-	return ""
-}
-
 // ChangeReadAllowed reports whether a change/diff/drop row for (kind, apiVersion,
 // namespace) may be shown to a caller whose per-kind read authority is `authorize`
 // (returns true iff the caller may "list" that group/resource in that namespace).
@@ -153,7 +148,7 @@ func GroupFromAPIVersion(apiVersion string) string {
 // can't be resolved — during discovery warmup an authenticated caller briefly
 // sees fewer rows rather than unauthorized ones.
 func ChangeReadAllowed(kind, apiVersion, namespace string, authorize func(group, resource, namespace string) bool) bool {
-	group, resource, clusterScoped, ok := ResolveChangeGVR(kind, GroupFromAPIVersion(apiVersion))
+	group, resource, clusterScoped, ok := ResolveChangeGVR(kind, resourceid.GroupFromAPIVersion(apiVersion))
 	if !ok {
 		return false
 	}

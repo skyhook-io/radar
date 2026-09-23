@@ -60,10 +60,7 @@ func nodeResourceKeys(node *Node) []string {
 			namespace = parts[1]
 		}
 	}
-	group := nodeAPIGroupFromData(node)
-	if group == "" {
-		group = resourceid.GroupForBuiltinKind(kind)
-	}
+	group := nodeGroup(node)
 	keys := []string{resourceid.ResourceKey(group, kind, namespace, node.Name)}
 	if !IsCalicoPolicyKind(node.Kind) {
 		return keys
@@ -91,10 +88,7 @@ func stampAuditKeys(nodes []Node) []Node {
 			nodes[i].Data["resourceKind"] = k8sKind
 		}
 		ns, _ := nodes[i].Data["namespace"].(string)
-		group := nodeAPIGroupFromData(&nodes[i])
-		if group == "" {
-			group = resourceid.GroupForBuiltinKind(k8sKind)
-		}
+		group := nodeGroup(&nodes[i])
 		nodes[i].Data["auditKey"] = resourceid.ResourceKey(
 			group, k8sKind, ns, nodes[i].Name)
 	}

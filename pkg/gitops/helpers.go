@@ -3,6 +3,8 @@ package gitops
 import (
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -14,18 +16,6 @@ func StringValue(v any) string {
 		return s
 	}
 	return ""
-}
-
-// GroupFromAPIVersion extracts the API group from a Kubernetes apiVersion
-// string. Returns "" for the core group ("v1" or empty input).
-func GroupFromAPIVersion(apiVersion string) string {
-	if apiVersion == "" || apiVersion == "v1" {
-		return ""
-	}
-	if before, _, ok := strings.Cut(apiVersion, "/"); ok {
-		return before
-	}
-	return apiVersion
 }
 
 // IsInClusterDestination reports whether an Argo Application deploys to the
@@ -84,14 +74,11 @@ func ParseFluxInventoryID(id string) (group, kind, namespace, name string, ok bo
 		return "", "", "", "", false
 	}
 	kind = parts[len(parts)-1]
-	group = parts[len(parts)-2]
+	group = resourceid.NormalizeGroup(parts[len(parts)-2])
 	namespace = parts[0]
 	name = strings.Join(parts[1:len(parts)-2], "_")
 	if kind == "" || name == "" {
 		return "", "", "", "", false
-	}
-	if group == "core" {
-		group = ""
 	}
 	return group, kind, namespace, name, true
 }

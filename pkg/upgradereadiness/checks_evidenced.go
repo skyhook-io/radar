@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	policyv1 "k8s.io/api/policy/v1"
@@ -685,7 +687,7 @@ func scanStrictIPCIDRValidation(input *Input) Check {
 			if len(errs) == 0 {
 				continue
 			}
-			check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "Source manifest contains a value rejected by strict validation", Level: LevelReview, Resource: &ResourceRef{Group: groupForAPIVersion(resource.APIVersion), Kind: resource.Kind, Namespace: resource.Namespace, Name: resource.Name}, Evidence: Evidence{Source: resource.Source, Path: candidate.path, Detail: candidate.value}, AppliesFrom: check.AppliesFrom, Impact: "A future update that touches this field can be rejected once strict IP/CIDR validation applies; existing stored values may remain because validation ratchets.", Remediation: "Normalize this source value to canonical IP or CIDR syntax, then reconcile it before upgrading.", References: append([]Reference(nil), check.References...)})
+			check.Findings = append(check.Findings, Finding{RuleID: check.ID, Title: "Source manifest contains a value rejected by strict validation", Level: LevelReview, Resource: &ResourceRef{Group: resourceid.GroupFromAPIVersion(resource.APIVersion), Kind: resource.Kind, Namespace: resource.Namespace, Name: resource.Name}, Evidence: Evidence{Source: resource.Source, Path: candidate.path, Detail: candidate.value}, AppliesFrom: check.AppliesFrom, Impact: "A future update that touches this field can be rejected once strict IP/CIDR validation applies; existing stored values may remain because validation ratchets.", Remediation: "Normalize this source value to canonical IP or CIDR syntax, then reconcile it before upgrading.", References: append([]Reference(nil), check.References...)})
 		}
 	}
 	if check.Inspected == 0 {

@@ -5,14 +5,17 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/skyhook-io/radar/internal/k8s"
-	bp "github.com/skyhook-io/radar/pkg/audit"
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/validation"
+
+	"github.com/skyhook-io/radar/internal/k8s"
+	bp "github.com/skyhook-io/radar/pkg/audit"
 )
 
 type dynamicConfigRefHandler func(*unstructured.Unstructured) []bp.ConfigObjectRef
@@ -184,7 +187,7 @@ func gatewayConfigRefs(u *unstructured.Unstructured) []bp.ConfigObjectRef {
 			if kind != "" && kind != "Secret" {
 				continue
 			}
-			if group != "" && group != "core" {
+			if resourceid.NormalizeGroup(group) != "" {
 				continue
 			}
 			refNS := stringValue(ref["namespace"])

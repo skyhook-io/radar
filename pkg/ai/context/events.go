@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -297,7 +299,7 @@ func identityForInvolvedObject(obj *corev1.ObjectReference) eventObjectIdentity 
 	}
 	return eventObjectIdentity{
 		Kind:      obj.Kind,
-		Group:     GroupOfAPIVersion(obj.APIVersion),
+		Group:     resourceid.GroupFromAPIVersion(obj.APIVersion),
 		Namespace: obj.Namespace,
 		Name:      obj.Name,
 	}
@@ -307,15 +309,6 @@ func identityForInvolvedObject(obj *corev1.ObjectReference) eventObjectIdentity 
 type objectSighting struct {
 	Ref  EventObjectRef
 	Last time.Time
-}
-
-// GroupOfAPIVersion returns the API group portion of an apiVersion string
-// ("apps/v1" → "apps"; "v1" or "" → "" for the core group).
-func GroupOfAPIVersion(apiVersion string) string {
-	if idx := strings.IndexByte(apiVersion, '/'); idx > 0 {
-		return apiVersion[:idx]
-	}
-	return ""
 }
 
 // selectGroupObjects orders a group's distinct involved objects by most
@@ -333,7 +326,7 @@ func selectGroupObjects(seen map[eventObjectIdentity]objectSighting, limit int) 
 	for _, s := range seen {
 		id := eventObjectIdentity{
 			Kind:      s.Ref.Kind,
-			Group:     GroupOfAPIVersion(s.Ref.APIVersion),
+			Group:     resourceid.GroupFromAPIVersion(s.Ref.APIVersion),
 			Namespace: s.Ref.Namespace,
 			Name:      s.Ref.Name,
 		}

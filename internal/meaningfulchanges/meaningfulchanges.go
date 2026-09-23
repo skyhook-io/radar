@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -571,11 +573,7 @@ func eventGroupMatchesTracked(kind, apiVersion string) bool {
 	if !ok {
 		return true
 	}
-	group := "" // bare "v1" = core group
-	if idx := strings.IndexByte(apiVersion, '/'); idx > 0 {
-		group = apiVersion[:idx]
-	}
-	return group == expected
+	return resourceid.GroupFromAPIVersion(apiVersion) == expected
 }
 
 func rankedChanges(events []timeline.TimelineEvent, name string, limit, fieldLimit int) ([]issuesapi.RecentChange, bool, error) {

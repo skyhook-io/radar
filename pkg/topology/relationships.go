@@ -321,10 +321,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 	if resourceKind == "" {
 		resourceKind = normalizeKindWithGroup(kind, objectGroup, dp)
 	}
-	resourceGroup := objectGroup
-	if builtinGroup, builtin := resourceid.BuiltinGroup(resourceKind); resourceGroup == "" && builtin {
-		resourceGroup = builtinGroup
-	}
+	resourceGroup := resourceid.ResolveCurrent(resourceid.OptionalGroupReference(objectGroup, resourceKind, namespace, name), nil).Ref.Group
 	if exactNode := lookupIndex.nodesByResourceKey[resourceid.ResourceKey(resourceGroup, resourceKind, namespace, name)]; exactNode != nil {
 		nodeID = exactNode.ID
 		directNode = exactNode
@@ -750,10 +747,7 @@ func resourceRefForNode(node *Node, dp DynamicProvider) *ResourceRef {
 		return nil
 	}
 	ref.Kind = KubernetesKindForNode(node)
-	ref.Group = nodeAPIGroupFromData(node)
-	if ref.Group == "" {
-		ref.Group = resourceid.GroupForBuiltinKind(ref.Kind)
-	}
+	ref.Group = nodeGroup(node)
 	return ref
 }
 
@@ -764,7 +758,7 @@ type objectGVKReader interface {
 
 func objectGVK(obj any) (kind, group string) {
 	if reader, ok := obj.(objectGVKReader); ok {
-		return reader.GetKind(), APIVersionGroup(reader.GetAPIVersion())
+		return reader.GetKind(), resourceid.GroupFromAPIVersion(reader.GetAPIVersion())
 	}
 	if object, ok := obj.(runtime.Object); ok {
 		gvk := object.GetObjectKind().GroupVersionKind()

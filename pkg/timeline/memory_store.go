@@ -3,9 +3,10 @@ package timeline
 import (
 	"context"
 	"slices"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // MemoryStore is an in-memory implementation of EventStore using a ring buffer.
@@ -430,11 +431,7 @@ func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf
 		return false
 	}
 	if len(opts.APIGroups) > 0 && event.APIVersion != "" {
-		group := ""
-		if idx := strings.IndexByte(event.APIVersion, '/'); idx > 0 {
-			group = event.APIVersion[:idx]
-		}
-		if !slices.Contains(opts.APIGroups, group) {
+		if !slices.Contains(opts.APIGroups, resourceid.GroupFromAPIVersion(event.APIVersion)) {
 			return false
 		}
 	}

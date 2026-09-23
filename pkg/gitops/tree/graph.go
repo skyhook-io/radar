@@ -6,8 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/skyhook-io/radar/pkg/topology"
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 // nodeFromTopology builds a node for a managed resource Radar's topology
@@ -220,11 +223,7 @@ func mergeData(node Node, data map[string]any) Node {
 }
 
 func apiGroup(obj *unstructured.Unstructured) string {
-	apiVersion := obj.GetAPIVersion()
-	if strings.Contains(apiVersion, "/") {
-		return strings.SplitN(apiVersion, "/", 2)[0]
-	}
-	return ""
+	return resourceid.GroupFromAPIVersion(obj.GetAPIVersion())
 }
 
 // HealthToTopology maps a controller health vocabulary value to the graph's

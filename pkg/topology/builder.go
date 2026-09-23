@@ -74,7 +74,7 @@ func targetRefMatchesTopologyKind(kind, apiVersion string) bool {
 	default:
 		return false
 	}
-	return APIVersionGroup(apiVersion) == group
+	return resourceid.GroupFromAPIVersion(apiVersion) == group
 }
 
 // ownerGroupMatches reports whether an owner reference's group is consistent
@@ -96,7 +96,7 @@ func ownerGroupMatches(kind, apiVersion string) bool {
 	if !known {
 		return true
 	}
-	return gitops.GroupFromAPIVersion(apiVersion) == expected
+	return resourceid.GroupFromAPIVersion(apiVersion) == expected
 }
 
 var curatedOwnerGroups = map[string]string{
@@ -5848,10 +5848,9 @@ func addGitOpsManagedResourceEdges(
 		if sourceID == "" || kind == "" || name == "" {
 			return
 		}
-		if builtinGroup, builtin := resourceid.BuiltinGroup(kind); group == "" && builtin {
-			group = builtinGroup
-		}
-		targetID := resourceIDs[resourceid.ResourceKey(group, kind, namespace, name)]
+		// Argo CD and Flux record the core group as "" (Flux: "core"), so the
+		// recorded group is exact and must not be re-inferred from the Kind.
+		targetID := resourceIDs[resourceid.NewRef(group, kind, namespace, name).Key()]
 		if targetID == "" {
 			return
 		}
@@ -8928,7 +8927,7 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 					continue
 				}
 				ownerResources = append(ownerResources, ResourceRef{
-					Group: APIVersionGroup(ref.APIVersion), Kind: ref.Kind, Namespace: ns, Name: ref.Name,
+					Group: resourceid.GroupFromAPIVersion(ref.APIVersion), Kind: ref.Kind, Namespace: ns, Name: ref.Name,
 				})
 			}
 			if len(ownerResources) == 0 {

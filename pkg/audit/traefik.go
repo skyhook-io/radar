@@ -2,7 +2,8 @@ package audit
 
 import (
 	"fmt"
-	"strings"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -45,11 +46,11 @@ func checkTraefikDanglingRefs(tr *evalTracker, input *CheckInput) []Finding {
 	// targets, never the legacy group.
 	traefikServices := make(map[string]bool, len(input.TraefikServices)) // group\x00ns/name
 	for _, ts := range input.TraefikServices {
-		traefikServices[traefikGroupOf(ts)+"\x00"+ts.GetNamespace()+"/"+ts.GetName()] = true
+		traefikServices[resourceid.GroupFromAPIVersion(ts.GetAPIVersion())+"\x00"+ts.GetNamespace()+"/"+ts.GetName()] = true
 	}
 	middlewares := make(map[string]bool, len(input.Middlewares)) // group\x00kind\x00ns/name
 	for _, mw := range input.Middlewares {
-		middlewares[traefikGroupOf(mw)+"\x00"+mw.GetKind()+"\x00"+mw.GetNamespace()+"/"+mw.GetName()] = true
+		middlewares[resourceid.GroupFromAPIVersion(mw.GetAPIVersion())+"\x00"+mw.GetKind()+"\x00"+mw.GetNamespace()+"/"+mw.GetName()] = true
 	}
 	// authoritative[group\x00Kind]: only assert a kind's absence when a synced
 	// cluster-wide informer backs it (else the cache may know a subset of ns).
@@ -65,7 +66,7 @@ func checkTraefikDanglingRefs(tr *evalTracker, input *CheckInput) []Finding {
 		seen[key] = true
 		findings = append(findings, Finding{
 			Kind:      subject.GetKind(),
-			Group:     traefikGroupOf(subject),
+			Group:     resourceid.GroupFromAPIVersion(subject.GetAPIVersion()),
 			Namespace: subject.GetNamespace(), Name: subject.GetName(),
 			CheckID: checkID, Category: CategoryReliability, Severity: SeverityWarning,
 			Message: msg,
@@ -119,7 +120,7 @@ func checkTraefikDanglingRefs(tr *evalTracker, input *CheckInput) []Finding {
 	}
 
 	for _, route := range input.IngressRoutes {
-		group := traefikGroupOf(route)
+		group := resourceid.GroupFromAPIVersion(route.GetAPIVersion())
 		routeKind := route.GetKind()
 		routeNs := route.GetNamespace()
 
@@ -184,7 +185,7 @@ func checkTraefikDanglingRefs(tr *evalTracker, input *CheckInput) []Finding {
 	// chain/error-page simply doesn't work. Only HTTP Middlewares carry chain/
 	// errors; a MiddlewareTCP has neither key, so its loops are no-ops.
 	for _, mw := range input.MiddlewareSubjects {
-		group := traefikGroupOf(mw)
+		group := resourceid.GroupFromAPIVersion(mw.GetAPIVersion())
 		mwKind := mw.GetKind()
 		mwNs := mw.GetNamespace()
 
@@ -221,15 +222,6 @@ func checkTraefikDanglingRefs(tr *evalTracker, input *CheckInput) []Finding {
 		}
 	}
 	return findings
-}
-
-// traefikGroupOf returns the API group of an unstructured object (apiVersion
-// before the "/"), e.g. "traefik.io" or "traefik.containo.us".
-func traefikGroupOf(u *unstructured.Unstructured) string {
-	if group, _, ok := strings.Cut(u.GetAPIVersion(), "/"); ok {
-		return group
-	}
-	return u.GetAPIVersion()
 }
 
 // traefikRefLabel shows the namespace only when it differs from the router's,

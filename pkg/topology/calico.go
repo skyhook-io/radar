@@ -7,6 +7,8 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -128,7 +130,7 @@ func calicoNodeAPIVersions(node *Node) []string {
 func calicoNodeAPIGroups(node *Node) []string {
 	var groups []string
 	for _, apiVersion := range calicoNodeAPIVersions(node) {
-		if group := APIVersionGroup(apiVersion); group != "" {
+		if group := resourceid.GroupFromAPIVersion(apiVersion); group != "" {
 			groups = append(groups, group)
 		}
 	}
@@ -278,7 +280,7 @@ func readvertiseCalicoPolicy(node *Node, authorize func(SARTuple) bool) {
 	namespace := nodeNamespaceFromData(node)
 	tupleFor := func(apiVersion string) SARTuple {
 		return SARTuple{
-			Group:     strings.ToLower(APIVersionGroup(apiVersion)),
+			Group:     strings.ToLower(resourceid.GroupFromAPIVersion(apiVersion)),
 			Resource:  definition.resource,
 			Namespace: namespace,
 		}

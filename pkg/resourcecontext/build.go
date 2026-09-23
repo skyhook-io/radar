@@ -3,7 +3,8 @@ package resourcecontext
 import (
 	"context"
 	"sort"
-	"strings"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -468,17 +469,10 @@ func ownerFromObject(obj runtime.Object, namespace string) *ContextRef {
 	}
 	return &ContextRef{
 		Kind:      chosen.Kind,
-		Group:     groupFromAPIVersion(chosen.APIVersion),
+		Group:     resourceid.GroupFromAPIVersion(chosen.APIVersion),
 		Namespace: namespace,
 		Name:      chosen.Name,
 	}
-}
-
-func groupFromAPIVersion(apiVersion string) string {
-	if apiVersion == "" || !strings.Contains(apiVersion, "/") {
-		return ""
-	}
-	return strings.SplitN(apiVersion, "/", 2)[0]
 }
 
 // ---------------------------------------------------------------------------
@@ -1197,7 +1191,7 @@ func buildCronJobSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 		}
 		active = append(active, ContextRef{
 			Kind:      ref.Kind,
-			Group:     groupFromAPIVersion(ref.APIVersion),
+			Group:     resourceid.GroupFromAPIVersion(ref.APIVersion),
 			Namespace: cj.Namespace,
 			Name:      ref.Name,
 		})
@@ -1246,7 +1240,7 @@ func isHPARef(ref ContextRef) bool {
 func kedaScaledObjectRef(ctx context.Context, hpa *autoscalingv2.HorizontalPodAutoscaler, ac RefAccessChecker, omitted *omittedTracker) *ContextRef {
 	name := ""
 	for _, owner := range hpa.OwnerReferences {
-		if owner.Kind == "ScaledObject" && groupFromAPIVersion(owner.APIVersion) == "keda.sh" {
+		if owner.Kind == "ScaledObject" && resourceid.GroupFromAPIVersion(owner.APIVersion) == "keda.sh" {
 			name = owner.Name
 			break
 		}
@@ -1304,7 +1298,7 @@ func buildHPASummary(obj runtime.Object) *HPASummary {
 		Summary: diagnosis.Summary,
 		Target: &ContextRef{
 			Kind:      diagnosis.Target.Kind,
-			Group:     groupFromAPIVersion(diagnosis.Target.APIVersion),
+			Group:     resourceid.GroupFromAPIVersion(diagnosis.Target.APIVersion),
 			Namespace: hpa.Namespace,
 			Name:      diagnosis.Target.Name,
 		},

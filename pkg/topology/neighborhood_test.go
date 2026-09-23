@@ -3,6 +3,8 @@ package topology
 import (
 	"sort"
 	"testing"
+
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // makeNode is a tiny helper for the BFS tests. It assembles a Node with a
@@ -997,8 +999,8 @@ func TestAPIVersionGroup(t *testing.T) {
 		{"apps/v1/extra", "apps"}, // multi-slash → split on FIRST
 	}
 	for _, tc := range cases {
-		if got := APIVersionGroup(tc.in); got != tc.want {
-			t.Errorf("APIVersionGroup(%q) = %q, want %q", tc.in, got, tc.want)
+		if got := resourceid.GroupFromAPIVersion(tc.in); got != tc.want {
+			t.Errorf("resourceid.GroupFromAPIVersion(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }

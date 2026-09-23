@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	"github.com/go-chi/chi/v5"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -167,7 +169,7 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 	})
 	if len(sub.Nodes) > 0 && topology.IsCalicoPolicyKind(sub.Nodes[0].Kind) {
 		apiVersion, _ := sub.Nodes[0].Data["apiVersion"].(string)
-		sub.Root.Group = topology.APIVersionGroup(apiVersion)
+		sub.Root.Group = resourceid.GroupFromAPIVersion(apiVersion)
 	}
 	if sub.AmbiguousRoot {
 		s.writeError(w, http.StatusBadRequest, "resource kind is ambiguous; provide group")
@@ -292,7 +294,7 @@ func (s *Server) canReadNeighborhoodNode(r *http.Request, n *topology.Node) bool
 		group := ""
 		if n.Data != nil {
 			if v, ok := n.Data["apiVersion"].(string); ok {
-				group = topology.APIVersionGroup(v)
+				group = resourceid.GroupFromAPIVersion(v)
 			}
 		}
 		clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(string(n.Kind), group)

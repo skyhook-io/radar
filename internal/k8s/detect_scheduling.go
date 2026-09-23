@@ -10,10 +10,6 @@ import (
 	"strings"
 	"time"
 
-	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
-	"github.com/skyhook-io/radar/pkg/karpenter"
-	"github.com/skyhook-io/radar/pkg/resourceid"
-	"github.com/skyhook-io/radar/pkg/scheduling"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -22,6 +18,11 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+
+	capacitymodel "github.com/skyhook-io/radar/internal/capacity"
+	"github.com/skyhook-io/radar/pkg/karpenter"
+	"github.com/skyhook-io/radar/pkg/resourceid"
+	"github.com/skyhook-io/radar/pkg/scheduling"
 )
 
 // Scheduling failure decomposition.
@@ -1160,7 +1161,7 @@ func admissionObjectGroup(obj corev1.ObjectReference) string {
 	if strings.TrimSpace(obj.APIVersion) == "" {
 		return resourceid.GroupForBuiltinKind(obj.Kind)
 	}
-	return GroupFromAPIVersion(obj.APIVersion)
+	return resourceid.GroupFromAPIVersion(obj.APIVersion)
 }
 
 func admissionProblemKey(group, kind, namespace, name string) string {

@@ -783,7 +783,7 @@ func TestCollectArgoClaims(t *testing.T) {
 				"destination": map[string]any{"name": "prod-cluster", "namespace": "billing"},
 			},
 			map[string]any{"resources": []any{
-				map[string]any{"kind": "Deployment", "namespace": "billing", "name": "billing-api"},
+				map[string]any{"group": "apps", "kind": "Deployment", "namespace": "billing", "name": "billing-api"},
 				map[string]any{"kind": "ConfigMap", "namespace": "billing", "name": "billing-cfg"}, // not a workload
 			}}),
 		// No declared identity (env-less path) → no claim.
@@ -856,7 +856,7 @@ func TestCollectArgoClaims_NamespaceScoped(t *testing.T) {
 			"metadata": map[string]any{"namespace": "argocd", "name": name},
 			"spec":     map[string]any{"source": map[string]any{"path": path}},
 			"status": map[string]any{"resources": []any{
-				map[string]any{"kind": "Deployment", "namespace": wlNs, "name": wlName},
+				map[string]any{"group": "apps", "kind": "Deployment", "namespace": wlNs, "name": wlName},
 			}},
 		}}
 	}
@@ -898,7 +898,7 @@ func TestCollectArgoClaims_PrefersPathOverAppSet(t *testing.T) {
 			"destination": map[string]any{"name": "prod", "namespace": "billing"},
 		},
 		"status": map[string]any{"resources": []any{
-			map[string]any{"kind": "Deployment", "namespace": "billing", "name": "billing-api"},
+			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "billing", "name": "billing-api"},
 		}},
 	}}
 	// A sibling so the appset is a recognized fan-out.

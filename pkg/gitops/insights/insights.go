@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
@@ -1486,7 +1488,7 @@ func nestedRef(root *unstructured.Unstructured, fields ...string) (Ref, bool) {
 	if name == "" || kind == "" {
 		return Ref{}, false
 	}
-	return Ref{Group: gitops.GroupFromAPIVersion(gitops.StringValue(m["apiVersion"])), Kind: kind, Namespace: firstNonEmpty(gitops.StringValue(m["namespace"]), root.GetNamespace()), Name: name}, true
+	return Ref{Group: resourceid.GroupFromAPIVersion(gitops.StringValue(m["apiVersion"])), Kind: kind, Namespace: firstNonEmpty(gitops.StringValue(m["namespace"]), root.GetNamespace()), Name: name}, true
 }
 
 func refFromTree(ref gitopstree.ResourceRef) Ref {

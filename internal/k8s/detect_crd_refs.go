@@ -5,11 +5,13 @@ import (
 	"log"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/logsafe"
-	"github.com/skyhook-io/radar/pkg/topology"
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/skyhook-io/radar/internal/logsafe"
 )
 
 // DetectMissingCRDRefs scans curated CRDs for explicit by-name references that
@@ -144,7 +146,7 @@ func kedaScaleTargetRef(so *unstructured.Unstructured) (scaleTargetRef, bool) {
 		kind = "Deployment"
 	}
 	return scaleTargetRef{
-		apiGroup: topology.APIVersionGroup(apiVersion),
+		apiGroup: resourceid.GroupFromAPIVersion(apiVersion),
 		kind:     kind,
 		name:     name,
 	}, true

@@ -1,9 +1,26 @@
-// Package resourceid holds the neutral, dependency-free resource-identity
-// primitives shared across the platform: the canonical index key and the
-// built-in Kind→Group table. It is a leaf package (no internal/ or other pkg/
-// imports), so the identity foundations (pkg/subject, internal/issues) and the
-// audit suite can all depend on it WITHOUT depending on each other — audit must
-// not be the identity foundation for the product.
+// Package resourceid is Radar's model of Kubernetes resource identity: what
+// makes two references name the same object, which facts identify a built-in
+// resource, and how a reference that is missing part of its identity gets
+// resolved (or refused).
+//
+// It is a leaf package (stdlib only, no internal/ or other pkg/ imports), so
+// every identity consumer — topology, subject, issues, audit, applications —
+// can depend on it without depending on each other.
+//
+// The model, in brief:
+//
+//   - An object is identified by API group + Kind + namespace + name (Ref).
+//     Version is not identity: one object is served at several versions, and a
+//     CRD version bump changes apiVersion without changing the object. Within
+//     a cluster the Ref is unique; across clusters the caller adds the cluster.
+//   - An incarnation is a Ref plus the object's UID. Deleting and recreating an
+//     object keeps its Ref and changes its UID.
+//   - An object's identity is never partial, but a reference to it can be: an
+//     event without apiVersion, a user-typed "jobs/train", a persisted pin. A
+//     Reference records what is known and where the group came from.
+//   - Resolving a partial Reference is policy, not parsing. ResolveCurrent
+//     serves live joins and user commands and may infer from current state;
+//     ResolveHistorical serves stored observations and never guesses.
 package resourceid
 
 import "fmt"
@@ -16,67 +33,4 @@ import "fmt"
 // DNS subdomain rules and can't contain it.
 func ResourceKey(group, kind, namespace, name string) string {
 	return fmt.Sprintf("%s|%s|%s|%s", group, kind, namespace, name)
-}
-
-// BuiltinGroup returns the canonical API group for a built-in Kubernetes Kind.
-// The boolean distinguishes core-group kinds from unrecognized custom kinds.
-func BuiltinGroup(kind string) (string, bool) {
-	switch kind {
-	case "Pod", "Service", "ConfigMap", "Secret", "Node", "Namespace",
-		"PersistentVolume", "PersistentVolumeClaim", "ServiceAccount", "Event",
-		"LimitRange", "ResourceQuota", "Endpoints":
-		return "", true
-	case "Deployment", "DaemonSet", "StatefulSet", "ReplicaSet", "ControllerRevision":
-		return "apps", true
-	case "ResourceClaim", "ResourceClaimTemplate", "ResourceSlice", "DeviceClass":
-		return "resource.k8s.io", true
-	case "Job", "CronJob":
-		return "batch", true
-	case "HorizontalPodAutoscaler":
-		return "autoscaling", true
-	case "Ingress", "IngressClass", "NetworkPolicy":
-		return "networking.k8s.io", true
-	case "PodDisruptionBudget":
-		return "policy", true
-	case "StorageClass", "VolumeAttachment":
-		return "storage.k8s.io", true
-	case "EndpointSlice":
-		return "discovery.k8s.io", true
-	case "Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding":
-		return "rbac.authorization.k8s.io", true
-	case "PriorityClass":
-		return "scheduling.k8s.io", true
-	case "RuntimeClass":
-		return "node.k8s.io", true
-	case "Lease":
-		return "coordination.k8s.io", true
-	case "MutatingWebhookConfiguration", "ValidatingWebhookConfiguration":
-		return "admissionregistration.k8s.io", true
-	}
-	return "", false
-}
-
-// GroupForBuiltinKind maps a built-in Kubernetes Kind to its API group. Returns
-// "" for both core-group built-ins and unrecognized kinds; callers that must
-// distinguish those cases should use BuiltinGroup.
-func GroupForBuiltinKind(kind string) string {
-	group, _ := BuiltinGroup(kind)
-	return group
-}
-
-// BuiltinAPIVersion returns the stable API version used by Radar's typed
-// informer for a built-in Kind.
-func BuiltinAPIVersion(kind string) (string, bool) {
-	group, ok := BuiltinGroup(kind)
-	if !ok {
-		return "", false
-	}
-	version := "v1"
-	if kind == "HorizontalPodAutoscaler" {
-		version = "v2"
-	}
-	if group == "" {
-		return version, true
-	}
-	return group + "/" + version, true
 }
