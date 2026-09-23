@@ -30,7 +30,6 @@ type DiscoveryStats struct {
 	TotalResources        int
 	CRDCount              int
 	LastRefresh           time.Time
-	LastAttempt           time.Time
 	LastSuccessfulRefresh time.Time
 	LastError             string
 	Partial               bool
@@ -47,7 +46,6 @@ type ResourceDiscovery struct {
 	lastRefresh           time.Time
 	lastSuccessfulRefresh time.Time
 	lastError             string
-	stale                 bool
 	partial               bool
 	freshPartial          bool
 	failedGroup           map[string]bool
@@ -220,7 +218,6 @@ func (d *ResourceDiscovery) refresh() error {
 		d.mu.Lock()
 		d.lastRefresh = time.Now()
 		d.lastError = err.Error()
-		d.stale = !d.lastSuccessfulRefresh.IsZero()
 		d.mu.Unlock()
 		return err
 	}
@@ -277,7 +274,6 @@ func (d *ResourceDiscovery) refresh() error {
 	if err != nil {
 		d.lastError = err.Error()
 	}
-	d.stale = false
 	d.partial = partial
 	d.freshPartial = freshPartial
 	d.failedGroup = failedGroups
@@ -429,11 +425,10 @@ func (d *ResourceDiscovery) Stats() DiscoveryStats {
 		TotalResources:        len(d.resources),
 		CRDCount:              crdCount,
 		LastRefresh:           d.lastRefresh,
-		LastAttempt:           d.lastRefresh,
 		LastSuccessfulRefresh: d.lastSuccessfulRefresh,
 		LastError:             d.lastError,
 		Partial:               d.freshPartial,
-		Stale:                 d.stale,
+		Stale:                 !d.lastSuccessfulRefresh.IsZero() && !d.lastRefresh.Equal(d.lastSuccessfulRefresh),
 	}
 }
 

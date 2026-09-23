@@ -1,4 +1,4 @@
-import type { CapacityIntegrationState, CapacitySourceCoverage } from './capacity'
+import type { CapacityIntegrationState } from './capacity'
 
 // Topology types matching the Go backend
 
@@ -131,7 +131,6 @@ export interface Capabilities {
   // same newer-frontend/older-backend reason as `deployment` below — consumers
   // must treat absence as "unknown" and fall back to discovery signals.
   karpenter?: IntegrationCapability
-  resourceDiscovery?: CapacitySourceCoverage
   // How / where this Radar binary is running. Optional on the wire so a
   // newer frontend (e.g. radar-hub-web bundling a fresher @skyhook-io/radar-app)
   // doesn't crash against an older backend that hasn't shipped the field yet —
@@ -756,19 +755,16 @@ export type DynamicObservationState =
   | 'denied'
   | 'unsupported'
 
-export type DynamicObservationOrigin = 'warmup' | 'small_eager' | 'on_demand'
 export type DynamicObservationScope = 'cluster' | 'explicit_namespaces'
 
-/** Cache lifecycle and probe evidence, not transport health or gap-free history. */
+/** Initial sync and viewer-visible scope, not watch health or authorization.
+ * Origin/start time and projection flags are omitted; none proves freshness. */
 export interface DynamicResourceObservation {
+  /** Time of a retained probe decision, not resource freshness. */
   observedAt?: string
-  viewerRestricted?: boolean
   state: DynamicObservationState
-  origin?: DynamicObservationOrigin
-  watchStartedAt?: string
   scope?: DynamicObservationScope
   namespaces?: string[]
-  namespacePartial?: boolean
   truncated?: boolean
   reasonCode?: string
 }

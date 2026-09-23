@@ -112,7 +112,7 @@ func TestRefreshPreservesSnapshotOnEmptyDiscoveryError(t *testing.T) {
 		t.Fatalf("preserved metrics GVR = %v, ok=%v, want metrics.k8s.io/v1", gvr, ok)
 	}
 	after := d.Stats()
-	if !after.LastAttempt.After(before.LastAttempt) {
+	if !after.LastRefresh.After(before.LastRefresh) {
 		t.Fatal("failed refresh did not advance the retry cooldown")
 	}
 	if !after.LastSuccessfulRefresh.Equal(before.LastSuccessfulRefresh) {
@@ -175,7 +175,7 @@ func TestRefreshWithResourceDataRecordsFreshPartialSnapshot(t *testing.T) {
 	if !stats.Partial || stats.Stale {
 		t.Fatalf("partial/stale = %v/%v, want true/false", stats.Partial, stats.Stale)
 	}
-	if stats.LastSuccessfulRefresh.IsZero() || stats.LastAttempt.IsZero() {
+	if stats.LastSuccessfulRefresh.IsZero() || stats.LastRefresh.IsZero() {
 		t.Fatalf("partial refresh did not record successful data-bearing attempt: %+v", stats)
 	}
 	if stats.LastError != "one discovery group failed" {

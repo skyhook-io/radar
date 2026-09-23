@@ -43,7 +43,6 @@ type informerEntry struct {
 	cancel    context.CancelFunc
 	synced    bool
 	startedAt time.Time
-	origin    DynamicObservationOrigin
 }
 
 type retainedObservation struct {
@@ -209,7 +208,6 @@ func (d *DynamicResourceCache) Observation(gvr schema.GroupVersionResource) Dyna
 	}
 
 	state := DynamicObservationSynced
-	var latest *informerEntry
 	var oldestUnsynced *informerEntry
 	for _, candidate := range entries {
 		if !candidate.entry.informer.HasSynced() {
@@ -218,27 +216,15 @@ func (d *DynamicResourceCache) Observation(gvr schema.GroupVersionResource) Dyna
 			}
 			state = DynamicObservationSyncing
 		}
-		if latest == nil || candidate.entry.startedAt.After(latest.startedAt) {
-			latest = candidate.entry
-		}
 	}
 
-	if oldestUnsynced != nil {
-		latest = oldestUnsynced
-	}
-	startedAt := latest.startedAt
-	observation := DynamicResourceObservation{
-		State:          state,
-		Origin:         latest.origin,
-		WatchStartedAt: &startedAt,
-	}
+	observation := DynamicResourceObservation{State: state}
 	if clusterWide {
 		observation.Scope = DynamicObservationScopeCluster
 	} else {
 		sort.Strings(namespaces)
 		observation.Scope = DynamicObservationScopeExplicitNamespaces
 		observation.Namespaces = namespaces
-		observation.NamespacePartial = true
 		observation.Truncated = !d.config.NamespaceScoped && (d.config.NamespaceFallbacksTruncated || d.fanoutIncomplete[gvr])
 	}
 
@@ -249,7 +235,7 @@ func (d *DynamicResourceCache) Observation(gvr schema.GroupVersionResource) Dyna
 		observation.ReasonCode = "initial_sync"
 	case observation.Truncated:
 		observation.ReasonCode = "namespace_fanout_truncated"
-	case observation.NamespacePartial:
+	case observation.Scope == DynamicObservationScopeExplicitNamespaces:
 		observation.ReasonCode = "namespace_partial"
 	default:
 		observation.ReasonCode = "informer_synced"
@@ -338,7 +324,7 @@ func (d *DynamicResourceCache) ensureWatching(gvr schema.GroupVersionResource, p
 			d.mu.Unlock()
 		}
 		for _, scopeNS := range scopes {
-			if err := d.startWatchingWithOrigin(gvr, scopeNS, DynamicObservationOriginOnDemand); err != nil {
+			if err := d.startWatching(gvr, scopeNS); err != nil {
 				truncated := preferredNS == "" && len(scopes) > 0 && scopes[0] != "" && (!complete || d.config.NamespaceFallbacksTruncated)
 				d.retainObservation(gvr, DynamicObservationDeferred, "watch_start_failed", truncated)
 				return nil, err
@@ -390,10 +376,6 @@ func (d *DynamicResourceCache) hasCoveringInformer(gvr schema.GroupVersionResour
 // stop channel, so a single informer can be cancelled independently (the
 // idle reaper relies on this) while Stop() still tears them all down.
 func (d *DynamicResourceCache) startWatching(gvr schema.GroupVersionResource, scopeNS string) error {
-	return d.startWatchingWithOrigin(gvr, scopeNS, DynamicObservationOriginOnDemand)
-}
-
-func (d *DynamicResourceCache) startWatchingWithOrigin(gvr schema.GroupVersionResource, scopeNS string, origin DynamicObservationOrigin) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -450,7 +432,6 @@ func (d *DynamicResourceCache) startWatchingWithOrigin(gvr schema.GroupVersionRe
 		informer:  informer,
 		cancel:    cancel,
 		startedAt: time.Now().UTC(),
-		origin:    origin,
 	}
 	delete(d.observations, gvr)
 
@@ -1634,10 +1615,6 @@ func (d *DynamicResourceCache) getDirect(ctx context.Context, gvr schema.GroupVe
 
 // WarmupParallel starts watching multiple resources in parallel and waits for all to sync.
 func (d *DynamicResourceCache) WarmupParallel(gvrs []schema.GroupVersionResource, timeout time.Duration) {
-	d.warmupParallelWithOrigin(gvrs, timeout, DynamicObservationOriginWarmup)
-}
-
-func (d *DynamicResourceCache) warmupParallelWithOrigin(gvrs []schema.GroupVersionResource, timeout time.Duration, origin DynamicObservationOrigin) {
 	if d == nil || len(gvrs) == 0 {
 		return
 	}
@@ -1685,7 +1662,7 @@ func (d *DynamicResourceCache) warmupParallelWithOrigin(gvrs []schema.GroupVersi
 		d.mu.Unlock()
 		allStarted := true
 		for _, scope := range r.scopes {
-			if err := d.startWatchingWithOrigin(r.gvr, scope, origin); err == nil {
+			if err := d.startWatching(r.gvr, scope); err == nil {
 				started = append(started, informerKey{gvr: r.gvr, ns: scope})
 			} else {
 				allStarted = false
@@ -1907,7 +1884,7 @@ func (d *DynamicResourceCache) DiscoverAllCRDs() {
 			len(gvrs), alreadyWatching, len(eager), deferredCount, noAccessCount)
 
 		if len(eager) > 0 {
-			d.warmupParallelWithOrigin(eager, 30*time.Second, DynamicObservationOriginEager)
+			d.WarmupParallel(eager, 30*time.Second)
 		}
 	}()
 }

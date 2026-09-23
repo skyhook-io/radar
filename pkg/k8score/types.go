@@ -297,14 +297,6 @@ const (
 	DynamicObservationUnsupported DynamicObservationState = "unsupported"
 )
 
-type DynamicObservationOrigin string
-
-const (
-	DynamicObservationOriginWarmup   DynamicObservationOrigin = "warmup"
-	DynamicObservationOriginEager    DynamicObservationOrigin = "small_eager"
-	DynamicObservationOriginOnDemand DynamicObservationOrigin = "on_demand"
-)
-
 type DynamicObservationScope string
 
 const (
@@ -312,26 +304,18 @@ const (
 	DynamicObservationScopeExplicitNamespaces DynamicObservationScope = "explicit_namespaces"
 )
 
-// DynamicResourceObservation describes what the dynamic cache can truthfully
-// claim for one exact GVR. It is an introspection snapshot: reading it never
-// probes the API server or starts an informer. Synced means initial sync
-// completed, not gap-free history or current authorization. WatchStartedAt is
-// the oldest unsynced informer start, or the latest start when all are synced;
-// it is not when the first snapshot became available.
-// Watch transport health and history completeness are not measured here.
-// ReasonCode describes cache evidence; ViewerRestricted and scope describe
-// its namespace projection, not the viewer’s permission to read this GVR.
+// DynamicResourceObservation reports initial cache synchronization and its scope,
+// not current authorization or continuous watch health. HTTP responses project
+// scope to visible namespaces; reasons describe cache evidence, not permissions.
+// Watch origin/start time and projection flags are deliberately omitted: they do
+// not establish freshness, and explicit namespace scope already bounds coverage.
 type DynamicResourceObservation struct {
-	ObservedAt       *time.Time               `json:"observedAt,omitempty"`
-	ViewerRestricted bool                     `json:"viewerRestricted,omitempty"`
-	State            DynamicObservationState  `json:"state"`
-	Origin           DynamicObservationOrigin `json:"origin,omitempty"`
-	WatchStartedAt   *time.Time               `json:"watchStartedAt,omitempty"`
-	Scope            DynamicObservationScope  `json:"scope,omitempty"`
-	Namespaces       []string                 `json:"namespaces,omitempty"`
-	NamespacePartial bool                     `json:"namespacePartial,omitempty"`
-	Truncated        bool                     `json:"truncated,omitempty"`
-	ReasonCode       string                   `json:"reasonCode,omitempty"`
+	State      DynamicObservationState `json:"state"`
+	ReasonCode string                  `json:"reasonCode,omitempty"`
+	Scope      DynamicObservationScope `json:"scope,omitempty"`
+	Namespaces []string                `json:"namespaces,omitempty"`
+	Truncated  bool                    `json:"truncated,omitempty"`  // Incomplete namespace probing, beyond intentional scope limits.
+	ObservedAt *time.Time              `json:"observedAt,omitempty"` // Age of a retained probe decision, not resource freshness.
 }
 
 // DynamicCacheConfig holds configuration for creating a DynamicResourceCache.

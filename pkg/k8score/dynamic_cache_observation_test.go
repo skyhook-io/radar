@@ -16,7 +16,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 )
 
-func TestDynamicResourceObservationUnwatchedAndUnsupportedHaveNoOrigin(t *testing.T) {
+func TestDynamicResourceObservationUnwatchedAndUnsupported(t *testing.T) {
 	watchable := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
 	unsupported := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "summaries"}
 	discovery := &ResourceDiscovery{
@@ -53,9 +53,6 @@ func TestDynamicResourceObservationUnwatchedAndUnsupportedHaveNoOrigin(t *testin
 			got := cache.Observation(test.gvr)
 			if got.State != test.state || got.ReasonCode != test.reason {
 				t.Fatalf("observation = %+v, want state=%s reason=%s", got, test.state, test.reason)
-			}
-			if got.Origin != "" || got.WatchStartedAt != nil {
-				t.Fatalf("unstarted observation assigned causal watch metadata: %+v", got)
 			}
 		})
 	}
@@ -112,7 +109,7 @@ func TestDynamicResourceObservationTracksOnDemandSyncAndExactGVR(t *testing.T) {
 		t.Fatalf("EnsureWatching: %v", err)
 	}
 	syncing := cache.Observation(observed)
-	if syncing.State != DynamicObservationSyncing || syncing.Origin != DynamicObservationOriginOnDemand || syncing.WatchStartedAt == nil {
+	if syncing.State != DynamicObservationSyncing {
 		t.Fatalf("syncing observation = %+v", syncing)
 	}
 	if syncing.Scope != DynamicObservationScopeCluster || syncing.ReasonCode != "initial_sync" {
@@ -130,11 +127,8 @@ func TestDynamicResourceObservationTracksOnDemandSyncAndExactGVR(t *testing.T) {
 	if watched.State != DynamicObservationSynced || watched.ReasonCode != "informer_synced" {
 		t.Fatalf("watched observation = %+v", watched)
 	}
-	if !watched.WatchStartedAt.Equal(*syncing.WatchStartedAt) {
-		t.Fatalf("observation start changed across initial sync: before=%v after=%v", syncing.WatchStartedAt, watched.WatchStartedAt)
-	}
 	cache.Stop()
-	if got := cache.Observation(observed); got.State != DynamicObservationUnwatched || got.ReasonCode != "cache_stopped" || got.WatchStartedAt != nil {
+	if got := cache.Observation(observed); got.State != DynamicObservationUnwatched || got.ReasonCode != "cache_stopped" {
 		t.Fatalf("stopped cache retained active observation: %+v", got)
 	}
 }
@@ -163,7 +157,7 @@ func TestDynamicResourceObservationRetainsDeniedAndDeferredOutcomes(t *testing.T
 		t.Fatal("EnsureWatching denied GVR succeeded")
 	}
 	denied := deniedCache.Observation(deniedGVR)
-	if denied.State != DynamicObservationDenied || denied.ReasonCode != "access_denied" || denied.Origin != "" {
+	if denied.State != DynamicObservationDenied || denied.ReasonCode != "access_denied" {
 		t.Fatalf("denied observation = %+v", denied)
 	}
 
@@ -291,9 +285,6 @@ func TestDynamicResourceObservationRetainsDeniedAndDeferredOutcomes(t *testing.T
 			if got.State != DynamicObservationDeferred || got.ReasonCode != test.reason {
 				t.Fatalf("deferred observation = %+v, want reason=%s", got, test.reason)
 			}
-			if got.Origin != "" || got.WatchStartedAt != nil {
-				t.Fatalf("deferred observation assigned causal watch metadata: %+v", got)
-			}
 			if test.name == "large resource" {
 				if err := cache.EnsureWatching(gvr); err != nil {
 					t.Fatalf("EnsureWatching deferred GVR: %v", err)
@@ -356,7 +347,7 @@ func TestDynamicResourceObservationTracksWarmupEagerAndNamespaceFanout(t *testin
 		t.Cleanup(cache.Stop)
 		cache.WarmupParallel([]schema.GroupVersionResource{gvr}, 3*time.Second)
 		got := cache.Observation(gvr)
-		if got.State != DynamicObservationSynced || got.Origin != DynamicObservationOriginWarmup {
+		if got.State != DynamicObservationSynced {
 			t.Fatalf("warmup observation = %+v", got)
 		}
 	})
@@ -386,7 +377,7 @@ func TestDynamicResourceObservationTracksWarmupEagerAndNamespaceFanout(t *testin
 			t.Fatal("DiscoverAllCRDs did not complete")
 		}
 		got := cache.Observation(gvr)
-		if got.State != DynamicObservationSynced || got.Origin != DynamicObservationOriginEager {
+		if got.State != DynamicObservationSynced {
 			t.Fatalf("small-eager observation = %+v", got)
 		}
 	})
@@ -415,7 +406,7 @@ func TestDynamicResourceObservationTracksWarmupEagerAndNamespaceFanout(t *testin
 		if got.State != DynamicObservationSynced || got.Scope != DynamicObservationScopeExplicitNamespaces {
 			t.Fatalf("namespace observation = %+v", got)
 		}
-		if !got.NamespacePartial || !got.Truncated || got.ReasonCode != "namespace_fanout_truncated" {
+		if !got.Truncated || got.ReasonCode != "namespace_fanout_truncated" {
 			t.Fatalf("namespace bounds = %+v", got)
 		}
 		if !reflect.DeepEqual(got.Namespaces, []string{"team-a", "team-b"}) {
@@ -481,10 +472,9 @@ func TestDynamicObservationStalledNamespaceIsNotHiddenByNewerInformer(t *testing
 	d.mu.Lock()
 	oldStart := time.Now().Add(-time.Minute)
 	d.informers[informerKey{gvr: gvr, ns: "old"}].startedAt = oldStart
-	d.informers[informerKey{gvr: gvr, ns: "old"}].origin = DynamicObservationOriginWarmup
 	d.mu.Unlock()
 	got := d.Observation(gvr)
-	if got.State != DynamicObservationSyncing || got.ReasonCode != "sync_stalled" || got.WatchStartedAt == nil || !got.WatchStartedAt.Equal(oldStart) || got.Origin != DynamicObservationOriginWarmup {
+	if got.State != DynamicObservationSyncing || got.ReasonCode != "sync_stalled" {
 		t.Fatalf("old stalled namespace masked: %+v", got)
 	}
 }

@@ -59,7 +59,6 @@ import (
 	"github.com/skyhook-io/radar/internal/upgrade"
 	"github.com/skyhook-io/radar/internal/version"
 	"github.com/skyhook-io/radar/pkg/argoapi"
-	"github.com/skyhook-io/radar/pkg/capacityapi"
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -1296,36 +1295,6 @@ func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, info)
 }
 
-func resourceDiscoveryCoverage(discovery *k8s.ResourceDiscovery) *capacityapi.SourceCoverage {
-	coverage := capacityapi.NewSourceCoverage(capacityapi.CoverageUnavailable, capacityapi.CoverageScopeCluster)
-	coverage.ReasonCode = "not_initialized"
-	coverage.ImpactFields = []string{"apiResources"}
-	if discovery == nil {
-		return &coverage
-	}
-
-	stats := discovery.Stats()
-	if !stats.LastSuccessfulRefresh.IsZero() {
-		observedAt := stats.LastSuccessfulRefresh
-		coverage.ObservedAt = &observedAt
-	}
-	switch {
-	case stats.Stale || (stats.LastSuccessfulRefresh.IsZero() && stats.LastError != ""):
-		coverage.Status = capacityapi.CoverageError
-		coverage.ReasonCode = "discovery_refresh_failed"
-	case stats.Partial:
-		coverage.Status = capacityapi.CoveragePartial
-		coverage.ReasonCode = "partial_discovery"
-	case stats.LastSuccessfulRefresh.IsZero():
-		coverage.ReasonCode = "not_attempted"
-	default:
-		coverage.Status = capacityapi.CoverageAvailable
-		coverage.ReasonCode = ""
-		coverage.ImpactFields = []string{}
-	}
-	return &coverage
-}
-
 func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	var caps *k8s.Capabilities
 	var err error
@@ -1355,7 +1324,6 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	caps.ConfigManagement = s.configManagement()
 	status, _ := s.localTerminalUnavailable(r)
 	caps.LocalTerminal = status == 0
-	caps.ResourceDiscovery = resourceDiscoveryCoverage(k8s.GetResourceDiscovery())
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		caps.Username = user.Username
 	}
@@ -2020,10 +1988,6 @@ func filterDynamicObservationNamespaces(observation k8score.DynamicResourceObser
 	if allowed == nil {
 		return observation
 	}
-	observation.ViewerRestricted = true
-	if observation.Scope != "" {
-		observation.NamespacePartial = true
-	}
 	switch observation.Scope {
 	case k8score.DynamicObservationScopeCluster:
 		observation.Scope = k8score.DynamicObservationScopeExplicitNamespaces
@@ -2035,11 +1999,9 @@ func filterDynamicObservationNamespaces(observation k8score.DynamicResourceObser
 	}
 	if len(allowed) == 0 || (observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces && len(observation.Namespaces) == 0) {
 		return k8score.DynamicResourceObservation{
-			State:            k8score.DynamicObservationUnwatched,
-			ReasonCode:       "no_visible_observation",
-			ViewerRestricted: true,
-			Scope:            k8score.DynamicObservationScopeExplicitNamespaces,
-			NamespacePartial: true,
+			State:      k8score.DynamicObservationUnwatched,
+			ReasonCode: "no_visible_observation",
+			Scope:      k8score.DynamicObservationScopeExplicitNamespaces,
 		}
 	}
 
