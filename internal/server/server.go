@@ -2002,18 +2002,23 @@ func filterDynamicObservationNamespaces(observation k8score.DynamicResourceObser
 			observation.Namespaces = intersectNamespaces(allowed, observation.Namespaces)
 		}
 	}
-	if observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces && len(observation.Namespaces) == 0 {
-		observation.State = k8score.DynamicObservationUnwatched
-		observation.ReasonCode = "no_visible_observation"
-		observation.Origin = ""
-		observation.WatchStartedAt = nil
-		observation.Truncated = false
+	if len(allowed) == 0 || (observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces && len(observation.Namespaces) == 0) {
+		return k8score.DynamicResourceObservation{
+			State:            k8score.DynamicObservationUnwatched,
+			ReasonCode:       "no_visible_observation",
+			ViewerRestricted: true,
+			Scope:            k8score.DynamicObservationScopeExplicitNamespaces,
+			NamespacePartial: true,
+		}
 	}
 
 	return observation
 }
 
 func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
 	discovery := k8s.GetResourceDiscovery()
 	if discovery == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Resource discovery not available")

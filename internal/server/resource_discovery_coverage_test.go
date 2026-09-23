@@ -216,3 +216,17 @@ func TestAPIResourcesObservationUsesAuthenticatedViewerScope(t *testing.T) {
 		t.Fatalf("viewer projection mutated global state: %+v", got)
 	}
 }
+
+func TestEmptyViewerScopeClearsRetainedObservationEvidence(t *testing.T) {
+	now := time.Now()
+	for _, state := range []k8score.DynamicObservationState{k8score.DynamicObservationDenied, k8score.DynamicObservationDeferred} {
+		observation := k8score.DynamicResourceObservation{State: state, ReasonCode: "scope_probe_incomplete", ObservedAt: &now, Truncated: true}
+		got := filterDynamicObservationNamespaces(observation, []string{})
+		if got.State != k8score.DynamicObservationUnwatched || got.ReasonCode != "no_visible_observation" || got.ObservedAt != nil || got.Truncated || !got.ViewerRestricted {
+			t.Fatalf("empty viewer retained probe evidence: %+v", got)
+		}
+		if got := filterDynamicObservationNamespaces(observation, nil); got.State != state || got.ObservedAt == nil {
+			t.Fatalf("unrestricted viewer lost evidence: %+v", got)
+		}
+	}
+}

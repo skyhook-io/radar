@@ -479,10 +479,12 @@ func TestDynamicObservationStalledNamespaceIsNotHiddenByNewerInformer(t *testing
 		t.Fatal(err)
 	}
 	d.mu.Lock()
-	d.informers[informerKey{gvr: gvr, ns: "old"}].startedAt = time.Now().Add(-time.Minute)
+	oldStart := time.Now().Add(-time.Minute)
+	d.informers[informerKey{gvr: gvr, ns: "old"}].startedAt = oldStart
+	d.informers[informerKey{gvr: gvr, ns: "old"}].origin = DynamicObservationOriginWarmup
 	d.mu.Unlock()
 	got := d.Observation(gvr)
-	if got.State != DynamicObservationSyncing || got.ReasonCode != "sync_stalled" {
+	if got.State != DynamicObservationSyncing || got.ReasonCode != "sync_stalled" || got.WatchStartedAt == nil || !got.WatchStartedAt.Equal(oldStart) || got.Origin != DynamicObservationOriginWarmup {
 		t.Fatalf("old stalled namespace masked: %+v", got)
 	}
 }

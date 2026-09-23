@@ -210,11 +210,11 @@ func (d *DynamicResourceCache) Observation(gvr schema.GroupVersionResource) Dyna
 
 	state := DynamicObservationSynced
 	var latest *informerEntry
-	var oldestUnsynced time.Time
+	var oldestUnsynced *informerEntry
 	for _, candidate := range entries {
 		if !candidate.entry.informer.HasSynced() {
-			if oldestUnsynced.IsZero() || candidate.entry.startedAt.Before(oldestUnsynced) {
-				oldestUnsynced = candidate.entry.startedAt
+			if oldestUnsynced == nil || candidate.entry.startedAt.Before(oldestUnsynced.startedAt) {
+				oldestUnsynced = candidate.entry
 			}
 			state = DynamicObservationSyncing
 		}
@@ -223,6 +223,9 @@ func (d *DynamicResourceCache) Observation(gvr schema.GroupVersionResource) Dyna
 		}
 	}
 
+	if oldestUnsynced != nil {
+		latest = oldestUnsynced
+	}
 	startedAt := latest.startedAt
 	observation := DynamicResourceObservation{
 		State:          state,
@@ -240,7 +243,7 @@ func (d *DynamicResourceCache) Observation(gvr schema.GroupVersionResource) Dyna
 	}
 
 	switch {
-	case state == DynamicObservationSyncing && time.Since(oldestUnsynced) >= 30*time.Second:
+	case state == DynamicObservationSyncing && time.Since(oldestUnsynced.startedAt) >= 30*time.Second:
 		observation.ReasonCode = "sync_stalled"
 	case state == DynamicObservationSyncing:
 		observation.ReasonCode = "initial_sync"

@@ -2000,6 +2000,7 @@ func TestSmokeCapabilitiesShape(t *testing.T) {
 
 func TestSmokeRequireConnected(t *testing.T) {
 	endpoints := []string{
+		"/api/api-resources",
 		"/api/topology",
 		"/api/namespaces",
 		"/api/resources/pods",

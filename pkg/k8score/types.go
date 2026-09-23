@@ -316,7 +316,8 @@ const (
 // claim for one exact GVR. It is an introspection snapshot: reading it never
 // probes the API server or starts an informer. Synced means initial sync
 // completed, not gap-free history or current authorization. WatchStartedAt is
-// when the informer started, not when its first snapshot became available.
+// the oldest unsynced informer start, or the latest start when all are synced;
+// it is not when the first snapshot became available.
 // Watch transport health and history completeness are not measured here.
 // ReasonCode describes cache evidence; ViewerRestricted and scope describe
 // its namespace projection, not the viewer’s permission to read this GVR.
