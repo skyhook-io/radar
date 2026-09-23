@@ -1,4 +1,4 @@
-package mcp
+package meaningfulchanges
 
 import (
 	"testing"
@@ -11,7 +11,7 @@ import (
 
 func TestHelmRecentChangesIncludesCurrentRevision(t *testing.T) {
 	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
-	got := helmRecentChanges([]helm.HelmRelease{
+	got := HelmRecentChanges([]helm.HelmRelease{
 		{
 			Name:         "cart",
 			Namespace:    "apps",
@@ -27,7 +27,7 @@ func TestHelmRecentChangesIncludesCurrentRevision(t *testing.T) {
 		t.Fatalf("len(got) = %d, want 1: %#v", len(got), got)
 	}
 	change := got[0]
-	if change.Source != helmChangeSource || change.Kind != "HelmRelease" || change.Namespace != "apps" || change.Name != "cart" {
+	if change.Source != HelmChangeSource || change.Kind != "HelmRelease" || change.Namespace != "apps" || change.Name != "cart" {
 		t.Fatalf("change identity = %#v", change)
 	}
 	if change.ChangeType != "helm_release_revision" || change.ChangeCategory != issuesapi.ChangeCategoryLifecycle {
@@ -38,7 +38,7 @@ func TestHelmRecentChangesIncludesCurrentRevision(t *testing.T) {
 func TestHelmRecentChangesPrefersActiveOperationOverDuplicateRevision(t *testing.T) {
 	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
 	updated := now.Add(-5 * time.Minute)
-	got := helmRecentChanges([]helm.HelmRelease{
+	got := HelmRecentChanges([]helm.HelmRelease{
 		{
 			Name:      "cart",
 			Namespace: "apps",
@@ -71,7 +71,7 @@ func TestHelmRecentChangesPrefersActiveOperationOverDuplicateRevision(t *testing
 
 func TestHelmRecentChangesSkipsFluxOwnedReleases(t *testing.T) {
 	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
-	got := helmRecentChanges([]helm.HelmRelease{
+	got := HelmRecentChanges([]helm.HelmRelease{
 		{
 			Name:                     "flux-owned",
 			Namespace:                "apps",
@@ -95,12 +95,55 @@ func TestHelmRecentChangesSkipsFluxOwnedReleases(t *testing.T) {
 
 func TestHelmRecentChangesFiltersByNameAndWindow(t *testing.T) {
 	now := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
-	got := helmRecentChanges([]helm.HelmRelease{
+	got := HelmRecentChanges([]helm.HelmRelease{
 		{Name: "cart", Namespace: "apps", Revision: 2, Updated: now.Add(-2 * time.Hour)},
 		{Name: "api", Namespace: "apps", Revision: 3, Updated: now.Add(-5 * time.Minute)},
 	}, "api", time.Hour, now)
 
 	if len(got) != 1 || got[0].Name != "api" {
 		t.Fatalf("filtered changes = %#v, want only api", got)
+	}
+}
+
+func TestMergeHelmOperationsIncludesLiveOperation(t *testing.T) {
+	history := []helm.HelmOperation{
+		{
+			Kind:             helmhistory.KindUpgradeRolledBack,
+			Status:           helmhistory.StatusRolledBack,
+			FailedRevision:   2,
+			RollbackRevision: 3,
+			TargetRevision:   1,
+		},
+	}
+	live := &helm.HelmOperation{
+		Kind:     helmhistory.KindUpgradeFailed,
+		Status:   helmhistory.StatusFailed,
+		Revision: 4,
+	}
+
+	got := MergeHelmOperations(history, live)
+
+	if len(got) != 2 {
+		t.Fatalf("len(operations) = %d, want 2: %#v", len(got), got)
+	}
+	if got[0].Kind != helmhistory.KindUpgradeFailed || got[0].Revision != 4 {
+		t.Fatalf("operations[0] = %#v, want live failed upgrade rev 4", got[0])
+	}
+	if got[1].Kind != helmhistory.KindUpgradeRolledBack {
+		t.Fatalf("operations[1].Kind = %q, want %q", got[1].Kind, helmhistory.KindUpgradeRolledBack)
+	}
+}
+
+func TestMergeHelmOperationsDeduplicatesLastOperation(t *testing.T) {
+	live := helm.HelmOperation{
+		Kind:     helmhistory.KindUpgradeFailed,
+		Status:   helmhistory.StatusFailed,
+		Revision: 4,
+	}
+
+	got := MergeHelmOperations([]helm.HelmOperation{live}, &live)
+
+	if len(got) != 1 {
+		t.Fatalf("len(operations) = %d, want 1: %#v", len(got), got)
 	}
 }
