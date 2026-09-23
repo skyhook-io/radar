@@ -1103,6 +1103,9 @@ func extractAPIVersion(kind string, obj any) string {
 func extractTimelineHistoricalEvents(clusterContext, kind, apiVersion, namespace, name string, obj any, owner *timeline.OwnerInfo, labels map[string]string) []timeline.TimelineEvent {
 	var events []timeline.TimelineEvent
 
+	// A same-named CRD reaches these cases too and falls through to the generic
+	// extraction below; pkg/timeline's historicalCollisionGroup group-qualifies
+	// history IDs for exactly these Kinds, so keep the two lists in step.
 	switch kind {
 	case "Pod":
 		if pod, ok := obj.(*corev1.Pod); ok {
