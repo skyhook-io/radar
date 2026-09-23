@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -505,7 +506,7 @@ func TestCorrelationWindow_ClampsToRetainedHistory(t *testing.T) {
 		now := time.Now()
 		for i, age := range ages {
 			if err := store.Append(context.Background(), timeline.TimelineEvent{
-				ID: fmt.Sprintf("evt-%d", i), Timestamp: now.Add(-age),
+				ID: fmt.Sprintf("evt-%s", age), Timestamp: now.Add(-age),
 				Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
 				Kind: "Deployment", Namespace: "shop", Name: fmt.Sprintf("dep-%d", i),
 				EventType: timeline.EventTypeUpdate,
@@ -540,6 +541,43 @@ func TestCorrelationWindow_ClampsToRetainedHistory(t *testing.T) {
 		got, reason := CorrelationWindow()
 		if reason != "" || got > 20*time.Minute+time.Second || got < 20*time.Minute-time.Second {
 			t.Fatalf("window = %v (%q), want ~20m (oldest retained event)", got, reason)
+		}
+	})
+
+	t.Run("an eviction after an earlier lookup narrows the next one", func(t *testing.T) {
+		store := initRing(t, 3)
+		appendAt(t, store, 50*time.Minute, 40*time.Minute, 30*time.Minute)
+		if got, _ := CorrelationWindow(); got != DefaultSince {
+			t.Fatalf("full ring before any eviction: window = %v, want %v", got, DefaultSince)
+		}
+		appendAt(t, store, 8*time.Minute, 7*time.Minute)
+		got, reason := CorrelationWindow()
+		if reason != "" || got > 30*time.Minute+time.Second || got < 30*time.Minute-time.Second {
+			t.Fatalf("window = %v (%q), want ~30m straight after the eviction", got, reason)
+		}
+	})
+
+	t.Run("retention that emptied the store", func(t *testing.T) {
+		timeline.ResetStore()
+		t.Cleanup(timeline.ResetStore)
+		if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeSQLite, Path: filepath.Join(t.TempDir(), "timeline.db")}); err != nil {
+			t.Fatalf("InitStore: %v", err)
+		}
+		timeline.SetObservationStartForTest(time.Now().Add(-3 * time.Hour))
+		store := timeline.GetStore()
+		appendAt(t, store, 2*time.Hour)
+		cleaner, ok := store.(interface {
+			Cleanup(context.Context, time.Duration) (int64, error)
+		})
+		if !ok {
+			t.Fatalf("SQLite store has no Cleanup")
+		}
+		if n, err := cleaner.Cleanup(context.Background(), time.Hour); err != nil || n != 1 {
+			t.Fatalf("Cleanup = %d, %v; want 1 row removed", n, err)
+		}
+		got, reason := CorrelationWindow()
+		if got != 0 || reason != issuesapi.CorrelationHistoryIncomplete {
+			t.Fatalf("window = %v (%q), want 0 (%q) once retention emptied the store", got, reason, issuesapi.CorrelationHistoryIncomplete)
 		}
 	})
 

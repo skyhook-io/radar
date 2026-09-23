@@ -26,17 +26,13 @@ const (
 	CorrelationNotPermitted CorrelationUnknownReason = "not_permitted"
 )
 
-// IssueCorrelationSubject identifies one issue subject to correlate.
+// IssueCorrelationSubject identifies one issue subject to correlate. On the
+// wire it is a subject=kind/group/namespace/name query value.
 type IssueCorrelationSubject struct {
 	Kind      string `json:"kind"`
 	Group     string `json:"group,omitempty"`
 	Namespace string `json:"namespace,omitempty"`
 	Name      string `json:"name"`
-}
-
-// IssueCorrelationRequest is the body of POST /api/issues/correlation.
-type IssueCorrelationRequest struct {
-	Subjects []IssueCorrelationSubject `json:"subjects"`
 }
 
 // IssueCorrelation is one subject's answer: exactly one of CorrelatedChanges,
@@ -49,7 +45,7 @@ type IssueCorrelation struct {
 	UnknownReason     CorrelationUnknownReason `json:"unknown_reason,omitempty"`
 }
 
-// IssueCorrelationResponse answers IssueCorrelationRequest, one result per
+// IssueCorrelationResponse answers GET /api/issues/correlation, one result per
 // requested subject, in request order.
 type IssueCorrelationResponse struct {
 	Results []IssueCorrelation `json:"results"`

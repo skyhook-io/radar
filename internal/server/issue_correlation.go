@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -14,42 +15,36 @@ import (
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
-const (
-	// maxCorrelationSubjects bounds one lookup: every subject costs timeline
-	// queries, and a client only needs the rows it is showing.
-	maxCorrelationSubjects  = 50
-	maxCorrelationBodyBytes = 64 << 10
-)
+// maxCorrelationSubjects bounds one lookup: every subject costs timeline
+// queries, and a client only needs the rows it is showing.
+const maxCorrelationSubjects = 50
 
-// handleIssueCorrelation serves POST /api/issues/correlation — per-issue change
-// correlation for the subjects a client is showing. It is its own lookup rather
-// than part of /api/issues because Home and Applications poll that endpoint,
-// and only rows someone is looking at should pay for the timeline queries. The
-// client bounds the batch, so there is no single-namespace rule or issue cap as
-// in the MCP issues tool; each subject is authorized on its own.
+// handleIssueCorrelation serves GET /api/issues/correlation — per-issue change
+// correlation for the subjects a client is showing, each passed as
+// ?subject=kind/group/namespace/name (group and namespace may be empty). It is
+// its own lookup rather than part of /api/issues because Home and Applications
+// poll that endpoint, and only rows someone is looking at should pay for the
+// timeline queries. It is a GET because it only reads: a proxy in front of
+// Radar may authorize any other method as a write. The client bounds the batch,
+// so there is no single-namespace rule or issue cap as in the MCP issues tool;
+// each subject is authorized on its own.
 func (s *Server) handleIssueCorrelation(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	var req issuesapi.IssueCorrelationRequest
-	if err := decodeBoundedJSONBody(w, r, maxCorrelationBodyBytes, &req); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			s.writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("request body exceeds %d KiB", maxCorrelationBodyBytes>>10))
-			return
-		}
-		s.writeError(w, http.StatusBadRequest, "invalid correlation request: "+err.Error())
-		return
-	}
-	if len(req.Subjects) > maxCorrelationSubjects {
+	raw := r.URL.Query()["subject"]
+	if len(raw) > maxCorrelationSubjects {
 		s.writeError(w, http.StatusBadRequest, fmt.Sprintf("at most %d subjects per request", maxCorrelationSubjects))
 		return
 	}
-	for _, subj := range req.Subjects {
-		if subj.Kind == "" || subj.Name == "" {
-			s.writeError(w, http.StatusBadRequest, "every subject needs a kind and a name")
+	subjects := make([]issuesapi.IssueCorrelationSubject, 0, len(raw))
+	for _, v := range raw {
+		subj, ok := parseCorrelationSubject(v)
+		if !ok {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("subject %q must be kind/group/namespace/name with a kind and a name", v))
 			return
 		}
+		subjects = append(subjects, subj)
 	}
 
 	window, windowUnknown := meaningfulchanges.CorrelationWindow()
@@ -57,8 +52,8 @@ func (s *Server) handleIssueCorrelation(w http.ResponseWriter, r *http.Request) 
 		Visible:     s.filterRecentChangesByRBAC,
 		HelmChanges: s.helmChangesForCorrelation,
 	}
-	resp := issuesapi.IssueCorrelationResponse{Results: make([]issuesapi.IssueCorrelation, 0, len(req.Subjects))}
-	for _, subj := range req.Subjects {
+	resp := issuesapi.IssueCorrelationResponse{Results: make([]issuesapi.IssueCorrelation, 0, len(subjects))}
+	for _, subj := range subjects {
 		result := issuesapi.IssueCorrelation{IssueCorrelationSubject: subj}
 		switch {
 		case !meaningfulchanges.CorrelationEligible(subj.Kind, subj.Group):
@@ -76,6 +71,14 @@ func (s *Server) handleIssueCorrelation(w http.ResponseWriter, r *http.Request) 
 		resp.Results = append(resp.Results, result)
 	}
 	s.writeJSON(w, resp)
+}
+
+func parseCorrelationSubject(v string) (issuesapi.IssueCorrelationSubject, bool) {
+	parts := strings.Split(v, "/")
+	if len(parts) != 4 || parts[0] == "" || parts[3] == "" {
+		return issuesapi.IssueCorrelationSubject{}, false
+	}
+	return issuesapi.IssueCorrelationSubject{Kind: parts[0], Group: parts[1], Namespace: parts[2], Name: parts[3]}, true
 }
 
 // canCorrelateSubject requires the caller to be able to list the subject's own

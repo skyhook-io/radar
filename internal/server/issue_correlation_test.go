@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"net/url"
 	"testing"
 	"time"
 
@@ -47,9 +47,13 @@ func initIssueCorrelationState(t *testing.T) timeline.EventStore {
 	return store
 }
 
-func postCorrelation(t *testing.T, s *Server, user *auth.User, body string) (*httptest.ResponseRecorder, issuesapi.IssueCorrelationResponse) {
+func getCorrelation(t *testing.T, s *Server, user *auth.User, subjects ...string) (*httptest.ResponseRecorder, issuesapi.IssueCorrelationResponse) {
 	t.Helper()
-	r := httptest.NewRequest(http.MethodPost, "/api/issues/correlation", strings.NewReader(body))
+	q := url.Values{}
+	for _, subj := range subjects {
+		q.Add("subject", subj)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/issues/correlation?"+q.Encode(), nil)
 	if user != nil {
 		r = r.WithContext(auth.ContextWithUser(r.Context(), user))
 	}
@@ -64,40 +68,33 @@ func postCorrelation(t *testing.T, s *Server, user *auth.User, body string) (*ht
 	return w, resp
 }
 
-func correlationBody(t *testing.T, subjects ...issuesapi.IssueCorrelationSubject) string {
-	t.Helper()
-	data, err := json.Marshal(issuesapi.IssueCorrelationRequest{Subjects: subjects})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	return string(data)
-}
-
 func TestIssueCorrelation_RejectsInvalidRequests(t *testing.T) {
 	initIssueCorrelationState(t)
 	s := newAuthServer(auth.Config{Mode: "none"})
 
-	tooMany := make([]issuesapi.IssueCorrelationSubject, maxCorrelationSubjects+1)
+	tooMany := make([]string, maxCorrelationSubjects+1)
 	for i := range tooMany {
-		tooMany[i] = issuesapi.IssueCorrelationSubject{Kind: "Deployment", Namespace: "shop", Name: fmt.Sprintf("d-%d", i)}
+		tooMany[i] = fmt.Sprintf("Deployment/apps/shop/d-%d", i)
 	}
 	cases := []struct {
-		name string
-		body string
-		want int
+		name     string
+		subjects []string
 	}{
-		{"not JSON", "subjects", http.StatusBadRequest},
-		{"unknown field", `{"subjects":[],"extra":1}`, http.StatusBadRequest},
-		{"subject without a name", `{"subjects":[{"kind":"Deployment","namespace":"shop"}]}`, http.StatusBadRequest},
-		{"too many subjects", correlationBody(t, tooMany...), http.StatusBadRequest},
-		{"body over the cap", `{"subjects":[{"kind":"` + strings.Repeat("x", maxCorrelationBodyBytes) + `","name":"a"}]}`, http.StatusRequestEntityTooLarge},
+		{"too many subjects", tooMany},
+		{"too few parts", []string{"Deployment/shop/web"}},
+		{"too many parts", []string{"Deployment/apps/shop/web/extra"}},
+		{"no name", []string{"Deployment/apps/shop/"}},
+		{"no kind", []string{"/apps/shop/web"}},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			if w, _ := postCorrelation(t, s, nil, tt.body); w.Code != tt.want {
-				t.Fatalf("status = %d, want %d (%s)", w.Code, tt.want, w.Body.String())
+			if w, _ := getCorrelation(t, s, nil, tt.subjects...); w.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (%s)", w.Code, w.Body.String())
 			}
 		})
+	}
+	if w, resp := getCorrelation(t, s, nil); w.Code != http.StatusOK || len(resp.Results) != 0 {
+		t.Fatalf("no subjects: status=%d results=%+v, want 200 and none", w.Code, resp.Results)
 	}
 }
 
@@ -107,11 +104,11 @@ func TestIssueCorrelation_AnswersEachSubject(t *testing.T) {
 	initIssueCorrelationState(t)
 	s := newAuthServer(auth.Config{Mode: "none"})
 
-	w, resp := postCorrelation(t, s, nil, correlationBody(t,
-		issuesapi.IssueCorrelationSubject{Kind: "Deployment", Group: "apps", Namespace: "shop", Name: "web"},
-		issuesapi.IssueCorrelationSubject{Kind: "Service", Namespace: "other", Name: "api"},
-		issuesapi.IssueCorrelationSubject{Kind: "Pod", Namespace: "shop", Name: "web-0"},
-	))
+	w, resp := getCorrelation(t, s, nil,
+		"Deployment/apps/shop/web",
+		"Service//other/api",
+		"Pod//shop/web-0",
+	)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
 	}
@@ -134,9 +131,7 @@ func TestIssueCorrelation_ReportsShortObservation(t *testing.T) {
 	timeline.SetObservationStartForTest(time.Now().Add(-time.Minute))
 	s := newAuthServer(auth.Config{Mode: "none"})
 
-	_, resp := postCorrelation(t, s, nil, correlationBody(t,
-		issuesapi.IssueCorrelationSubject{Kind: "Deployment", Namespace: "shop", Name: "web"},
-	))
+	_, resp := getCorrelation(t, s, nil, "Deployment//shop/web")
 	if len(resp.Results) != 1 || resp.Results[0].UnknownReason != issuesapi.CorrelationObservationTooShort {
 		t.Fatalf("results = %+v, want observation_too_short", resp.Results)
 	}
@@ -153,11 +148,11 @@ func TestIssueCorrelation_AuthorizesEachSubject(t *testing.T) {
 	perms.SetCanI("list", "", "services", "shop", false)
 	s.permCache.Set("alice", nil, perms)
 
-	_, resp := postCorrelation(t, s, &auth.User{Username: "alice"}, correlationBody(t,
-		issuesapi.IssueCorrelationSubject{Kind: "Deployment", Namespace: "shop", Name: "web"},
-		issuesapi.IssueCorrelationSubject{Kind: "Service", Namespace: "shop", Name: "api"},
-		issuesapi.IssueCorrelationSubject{Kind: "Deployment", Namespace: "other", Name: "web"},
-	))
+	_, resp := getCorrelation(t, s, &auth.User{Username: "alice"},
+		"Deployment//shop/web",
+		"Service//shop/api",
+		"Deployment//other/web",
+	)
 	if len(resp.Results) != 3 {
 		t.Fatalf("results = %+v, want 3", resp.Results)
 	}
@@ -208,10 +203,18 @@ func TestIssueCorrelation_HelmChangesSurviveRESTFilter(t *testing.T) {
 func TestIssueCorrelation_HelmSubjectWithoutHelmClient(t *testing.T) {
 	initIssueCorrelationState(t)
 	s := newAuthServer(auth.Config{Mode: "none"})
-	w, resp := postCorrelation(t, s, nil, correlationBody(t,
-		issuesapi.IssueCorrelationSubject{Kind: "HelmRelease", Group: "helm.sh", Namespace: "shop", Name: "cart"},
-	))
+	w, resp := getCorrelation(t, s, nil, "HelmRelease/helm.sh/shop/cart")
 	if w.Code != http.StatusOK || len(resp.Results) != 1 || resp.Results[0].UnknownReason != issuesapi.CorrelationLookupFailed {
 		t.Fatalf("status=%d results=%+v, want lookup_failed", w.Code, resp.Results)
+	}
+}
+
+// The lookup only reads, so it is served as a GET: callers that authorize any
+// other method as a write must still be able to use it.
+func TestIssueCorrelation_RoutedAsGET(t *testing.T) {
+	var body issuesapi.IssueCorrelationResponse
+	assertOK(t, get(t, "/api/issues/correlation?subject=Pod//default/web-0"), &body)
+	if len(body.Results) != 1 || body.Results[0].UnknownReason != issuesapi.CorrelationUntrackedKind {
+		t.Fatalf("results = %+v, want one untracked_kind answer", body.Results)
 	}
 }

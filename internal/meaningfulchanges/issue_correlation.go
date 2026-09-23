@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/issues"
@@ -78,48 +77,28 @@ func CorrelationWindow() (time.Duration, issuesapi.CorrelationUnknownReason) {
 	if window < correlationMinObservation {
 		return 0, issuesapi.CorrelationObservationTooShort
 	}
-	if oldest, ok := retainedHistoryStart(); ok {
-		if retained := time.Since(oldest); retained < window {
-			window = retained
-		}
-		if window < correlationMinObservation {
-			return 0, issuesapi.CorrelationHistoryIncomplete
-		}
-	}
-	return window, ""
-}
-
-// retainedHistoryTTL bounds how often the store is asked for its oldest event:
-// database-backed Stats() runs aggregate queries, and every issue list and
-// correlation lookup needs the answer.
-const retainedHistoryTTL = 10 * time.Second
-
-var retainedHistory struct {
-	sync.Mutex
-	store   timeline.EventStore
-	checked time.Time
-	oldest  time.Time
-	dropped bool
-}
-
-// retainedHistoryStart reports the oldest event the store still holds, when
-// the store has dropped events (ring eviction, retention or size trimming).
-// Before any drop, observation start already bounds the window.
-func retainedHistoryStart() (time.Time, bool) {
+	// Before any drop, observation start already bounds the window. Read on
+	// every call: a full memory ring evicts on each append, so a remembered
+	// oldest event would already be stale.
 	store := timeline.GetStore()
 	if store == nil {
-		return time.Time{}, false
+		return window, ""
 	}
-	retainedHistory.Lock()
-	defer retainedHistory.Unlock()
-	if retainedHistory.store != store || time.Since(retainedHistory.checked) > retainedHistoryTTL {
-		stats := store.Stats()
-		retainedHistory.store = store
-		retainedHistory.checked = time.Now()
-		retainedHistory.oldest = stats.OldestEvent
-		retainedHistory.dropped = stats.EventsEvicted && !stats.OldestEvent.IsZero()
+	stats := store.Stats()
+	if !stats.EventsEvicted {
+		return window, ""
 	}
-	return retainedHistory.oldest, retainedHistory.dropped
+	if stats.OldestEvent.IsZero() {
+		// Retention emptied the store: nothing of the window is left to vouch for.
+		return 0, issuesapi.CorrelationHistoryIncomplete
+	}
+	if retained := time.Since(stats.OldestEvent); retained < window {
+		window = retained
+	}
+	if window < correlationMinObservation {
+		return 0, issuesapi.CorrelationHistoryIncomplete
+	}
+	return window, ""
 }
 
 // IsNativeHelmSubject reports whether an issue subject is a native Helm
