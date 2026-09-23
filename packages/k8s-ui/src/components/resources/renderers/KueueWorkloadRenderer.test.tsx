@@ -101,3 +101,21 @@ it('labels a stale terminal report even when an admission condition has a newer 
   expect(html).toContain('Reported state may not reflect the current specification')
   expect(html).not.toContain('Workload finished unsuccessfully')
 })
+
+
+it('summarizes reported checks without inferring an admission decision', () => {
+  const html = render({
+    admissionChecks: ['Pending', 'Rejected', 'Pending', 'Ready', 'Retry', 'FutureState'].map((state, index) => ({ name: `check-${index}`, state })),
+    conditions: [{ type: 'Finished', status: 'True', reason: 'Succeeded' }],
+  })
+  expect(html).toContain('Reported Checks')
+  expect(html).toContain('1 Rejected · 1 Retry · 2 Pending · 1 Ready · 1 FutureState')
+  expect(html).toContain('Finished')
+  expect(html).not.toContain('blocked by')
+})
+
+it('does not interpret absent checks as readiness', () => {
+  const html = render()
+  expect(html).not.toContain('Reported Checks')
+  expect(html).not.toContain('Admission Checks (')
+})

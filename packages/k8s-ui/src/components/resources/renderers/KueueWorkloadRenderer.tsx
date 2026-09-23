@@ -94,6 +94,11 @@ export function KueueWorkloadRenderer({ data, onNavigate }: KueueWorkloadRendere
     (Array.isArray(status.reclaimablePods) ? status.reclaimablePods : []).map((entry: any) => [entry.name, entry.count]),
   )
   const checks = Array.isArray(status.admissionChecks) ? status.admissionChecks : []
+  const checkCounts = new Map<string, number>(['Rejected', 'Retry', 'Pending', 'Ready'].map(state => [state, 0]))
+  for (const check of checks) {
+    const state = check?.state || 'Unknown'
+    checkCounts.set(state, (checkCounts.get(state) || 0) + 1)
+  }
 
   return (
     <>
@@ -125,16 +130,19 @@ export function KueueWorkloadRenderer({ data, onNavigate }: KueueWorkloadRendere
             }
           />
           {priority !== '-' && <Property label="Priority" value={priority} />}
-          <Property label="Active" value={spec.active === false ? 'No' : 'Yes'} />
+          {checks.length > 0 && (
+            <Property label="Reported Checks" value={Array.from(checkCounts).filter(([, count]) => count > 0).map(([state, count]) => `${count} ${state}`).join(' · ')} />
+          )}
+          <Property label="Workload Active" value={spec.active === false ? 'No' : 'Yes'} />
         </PropertyList>
       </Section>
 
       {checks.length > 0 && (
         <Section title={`Admission Checks (${checks.length})`} icon={ListChecks} defaultExpanded>
-          <div className="space-y-2">
+          <div className="max-w-2xl space-y-2">
             {checks.map((check: any, index: number) => (
               <div key={check?.name || index} className="card-inner">
-                <div className="mb-2 grid grid-cols-[minmax(0,1fr)_6rem] items-start gap-2">
+                <div className="mb-2 grid max-w-md grid-cols-[minmax(0,1fr)_6rem] items-start gap-2">
                   <span className="min-w-0 break-words text-sm font-medium text-theme-text-primary [&_button]:text-left">
                     <ResourceLink
                       name={check?.name || `check-${index + 1}`}
@@ -147,12 +155,14 @@ export function KueueWorkloadRenderer({ data, onNavigate }: KueueWorkloadRendere
                     {check?.state || 'Unknown'}
                   </Badge>
                 </div>
-                <PropertyList>
-                  {check?.message && <Property label="Message" value={<span className="whitespace-pre-wrap break-words">{check.message}</span>} />}
-                  {check?.lastTransitionTime && (
-                    <Property label="Last Transition" value={formatRelativeAgeTime(check.lastTransitionTime)} />
-                  )}
-                </PropertyList>
+                {check?.message && <p className="whitespace-pre-wrap break-words text-sm text-theme-text-secondary">{check.message}</p>}
+                {check?.lastTransitionTime && (
+                  <div className="mt-2">
+                    <PropertyList>
+                      <Property label="Last Transition" value={formatRelativeAgeTime(check.lastTransitionTime)} />
+                    </PropertyList>
+                  </div>
+                )}
               </div>
             ))}
           </div>
