@@ -33,6 +33,7 @@ import { AlertTriangle, CheckCircle, Loader2, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 import { getVersionUpdateStatus } from '../../utils/version'
 import { RadarVersionLine } from './RadarVersionLine'
+import { releaseNotesFor } from '../whats-new/releaseNotes'
 
 interface HomeViewProps {
   namespaces: string[]
@@ -52,9 +53,11 @@ interface HomeViewProps {
   onNavigateToUpgradeImpact?: () => void
   onNavigateToHelmRelease?: (namespace: string, release: string) => void
   onNavigateToManagerPath?: (path: string) => void
+  // Omitted when the host does not mount the What's New dialog.
+  onShowWhatsNew?: () => void
 }
 
-export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts, onNavigateToUpgradeImpact, onNavigateToHelmRelease, onNavigateToManagerPath }: HomeViewProps) {
+export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNavigateToView, onNavigateToResourceKind, onNavigateToResource, onNavigateToCerts, onNavigateToUpgradeImpact, onNavigateToHelmRelease, onNavigateToManagerPath, onShowWhatsNew }: HomeViewProps) {
   // The card itself decides whether the cluster has a capacity story
   // (available, softened-denied, or karpenterless-with-managers/groups) and
   // returns null otherwise — the outer gate only excludes states with nothing
@@ -75,6 +78,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
     && !!versionInfo?.updateAvailable
     && getVersionUpdateStatus(versionInfo.currentVersion, versionInfo.latestVersion).tier !== 'none'
   const { data: installationManager, isLoading: installationManagerLoading } = useCloudConnectSelf(showHomeUpgrade)
+  const hasWhatsNew = !!onShowWhatsNew && !!releaseNotesFor(versionInfo?.currentVersion)
 
   // SSE is cluster-wide on small/medium clusters; the picker only narrows the
   // dashboard summary, so re-apply the filter here or the legend disagrees.
@@ -138,9 +142,11 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
         )}
         {/* Row 1: Cluster Health Card (combined health + resource counts) */}
         <ClusterHealthCard
-          radarVersion={deploymentMode === 'in-cluster' && versionInfo ? (
+          radarVersion={versionInfo && (deploymentMode === 'in-cluster' || (deploymentMode === 'local' && hasWhatsNew)) ? (
             <RadarVersionLine
               version={versionInfo}
+              showUpgrade={deploymentMode === 'in-cluster'}
+              onShowWhatsNew={hasWhatsNew ? onShowWhatsNew : undefined}
               manager={installationManager}
               managerLoading={installationManagerLoading}
               onNavigateToHelmRelease={onNavigateToHelmRelease}

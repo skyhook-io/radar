@@ -1,4 +1,4 @@
-import { ArrowUpCircle } from 'lucide-react'
+import { ArrowUpCircle, Sparkles } from 'lucide-react'
 import { gitOpsRouteForResource } from '@skyhook-io/k8s-ui'
 import type { CloudConnectSelf, VersionInfo } from '../../api/client'
 import {
@@ -14,6 +14,10 @@ interface RadarVersionLineProps {
   managerLoading?: boolean
   onNavigateToHelmRelease?: (namespace: string, release: string) => void
   onNavigateToGitOps?: (path: string) => void
+  // Local installs upgrade through the update notification, and this line's
+  // upgrade link points at in-cluster instructions.
+  showUpgrade?: boolean
+  onShowWhatsNew?: () => void
 }
 
 function displayVersion(version: string): string {
@@ -26,13 +30,33 @@ export function RadarVersionLine({
   managerLoading = false,
   onNavigateToHelmRelease,
   onNavigateToGitOps,
+  showUpgrade: upgradeAllowed = true,
+  onShowWhatsNew,
 }: RadarVersionLineProps) {
   const latestVersion = version.latestVersion
   const updateStatus = getVersionUpdateStatus(version.currentVersion, latestVersion)
-  const showUpgrade = version.updateAvailable && !!latestVersion && updateStatus.tier !== 'none'
+  const showUpgrade = upgradeAllowed && version.updateAvailable && !!latestVersion && updateStatus.tier !== 'none'
+  const whatsNew = onShowWhatsNew && (
+    <span className="inline-flex items-center gap-1">
+      <span aria-hidden>·</span>
+      <button
+        type="button"
+        onClick={onShowWhatsNew}
+        className="inline-flex items-center gap-1 text-accent-text hover:text-accent transition-colors"
+      >
+        <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        What's new
+      </button>
+    </span>
+  )
 
   if (!showUpgrade) {
-    return <span>Radar <span className="font-mono">{displayVersion(version.currentVersion)}</span></span>
+    return (
+      <span className="inline-flex flex-wrap items-center gap-x-1">
+        <span>Radar <span className="font-mono">{displayVersion(version.currentVersion)}</span></span>
+        {whatsNew}
+      </span>
+    )
   }
 
   const controller = manager?.controllerRef
@@ -111,6 +135,7 @@ export function RadarVersionLine({
           {action}
         </Tooltip>
       </span>
+      {whatsNew}
     </span>
   )
 }
