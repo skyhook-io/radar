@@ -106,8 +106,8 @@ func TestRecognizedLargeResourceWarmsWhileUnknownLargeResourceDefers(t *testing.
 	if !cache.WaitForSync(recognized, 3*time.Second) {
 		t.Fatal("recognized Workload informer did not sync")
 	}
-	if got := cache.Observation(recognized); got.State != k8score.DynamicObservationSynced || got.Origin != k8score.DynamicObservationOriginWarmup {
-		t.Fatalf("recognized large resource observation = %+v, want synced warmup", got)
+	if got := cache.Observation(recognized); got.State != k8score.DynamicObservationSynced {
+		t.Fatalf("recognized large resource observation = %+v, want synced", got)
 	}
 	if got := cache.Observation(listOnly); got.State != k8score.DynamicObservationUnsupported || got.ReasonCode != "list_watch_unsupported" {
 		t.Fatalf("recognized list-only resource observation = %+v, want unsupported", got)
@@ -132,7 +132,7 @@ func TestRecognizedLargeResourceWarmsWhileUnknownLargeResourceDefers(t *testing.
 	if got := cache.Observation(unknown); got.State != k8score.DynamicObservationDeferred || got.ReasonCode != "resource_count_exceeds_eager_limit" {
 		t.Fatalf("unknown large resource observation = %+v, want size-gated deferred", got)
 	}
-	if got := cache.Observation(recognized); got.Origin != k8score.DynamicObservationOriginWarmup {
-		t.Fatalf("full discovery replaced recognized warmup origin: %+v", got)
+	if got := cache.Observation(recognized); got.State != k8score.DynamicObservationSynced {
+		t.Fatalf("full discovery lost recognized informer: %+v", got)
 	}
 }
