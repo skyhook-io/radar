@@ -113,6 +113,14 @@ func TestRecognizedLargeResourceWarmsWhileUnknownLargeResourceDefers(t *testing.
 		t.Fatalf("recognized list-only resource observation = %+v, want unsupported", got)
 	}
 
+	absent := schema.GroupVersionResource{Group: "ray.io", Version: "v1", Resource: "rayclusters"}
+	if got := cache.Observation(absent); got.State != k8score.DynamicObservationUnwatched || got.ReasonCode != "not_observed" {
+		t.Fatalf("absent catalog resource observation = %+v", got)
+	}
+	if watched := cache.GetWatchedResources(); len(watched) != 1 || watched[0] != recognized {
+		t.Fatalf("warmup started unexpected informers: %v", watched)
+	}
+
 	cache.DiscoverAllCRDs()
 	deadline := time.Now().Add(3 * time.Second)
 	for cache.GetDiscoveryStatus() != k8score.CRDDiscoveryComplete && time.Now().Before(deadline) {
