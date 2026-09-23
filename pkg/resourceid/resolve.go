@@ -22,7 +22,8 @@ const (
 	// Resolved: the reference itself carried the group.
 	Resolved
 	// InferredBuiltin: the group was missing and the Kind is built-in, so the
-	// built-in group was chosen — kubectl makes the same choice.
+	// built-in group was chosen. This is Radar's policy; kubectl usually lands on
+	// the same group because discovery lists built-in groups first.
 	InferredBuiltin
 	// InferredUnique: the group was missing and exactly one group serves the
 	// Kind right now.
@@ -69,8 +70,11 @@ func (r Result) OK() bool {
 	return r.Resolution == Resolved || r.Resolution == InferredBuiltin || r.Resolution == InferredUnique
 }
 
-// ResolveCurrent resolves a reference against the cluster as it is now. Use it
-// for live joins, topology, and user or tool requests that omit a group:
+// ResolveCurrent resolves a reference against the cluster as it is now, for
+// addressing: a user or tool request that omits a group, or a live node that
+// lacks an apiVersion. Ownership and attribution must not be established this
+// way — they need evidence that carries the group (Reference.HasGroup), so an
+// inferred group never turns into a claimed relationship:
 //
 //  1. A group the reference carries wins.
 //  2. A built-in Kind resolves to its built-in group, even when a CRD also
