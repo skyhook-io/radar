@@ -27,7 +27,6 @@ type localConnectionResponse struct {
 	Revision            string                                         `json:"revision"`
 	Connected           bool                                           `json:"connected"`
 	Checked             bool                                           `json:"checked"`
-	Affected            int                                            `json:"affected"`
 	Error               string                                         `json:"error,omitempty"`
 }
 
@@ -91,7 +90,7 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 		s.writeError(w, 400, "invalid saved connection request")
 		return
 	}
-	metadata := request.Action == "rename" || request.Action == "delete" || request.Action == "forget"
+	metadata := request.Action == "forget"
 	response := localConnectionResponse{}
 	var pending connections.Pending
 	var probe func(context.Context) error
@@ -104,7 +103,6 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 		if err != nil {
 			return err
 		}
-		response.Affected = pending.Affected
 		if !pending.Probe {
 			return nil
 		}
@@ -112,7 +110,7 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 		case config.IntegrationArgoCD:
 			probe = argocd.PrepareCandidate(*pending.Candidate.Connection.ArgoCD)
 		case config.IntegrationCost:
-			probe, err = opencost.PrepareCandidate(connectionruntime.CostConfig(connections.Selection{Bundle: pending.Candidate}, target), pending.Shared)
+			probe, err = opencost.PrepareCandidate(connectionruntime.CostConfig(connections.Selection{Bundle: pending.Candidate}, target))
 		}
 		return err
 	}

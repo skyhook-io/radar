@@ -91,19 +91,19 @@ func TestConnectionStorePreservesUnrelatedInvalidRecords(t *testing.T) {
 }
 
 func TestLastAssignmentDeletionIsExplicitAndAtomic(t *testing.T) {
-	for _, keep := range []bool{false, true} {
+	{
 		p := connectionFixture()
-		if err := p.RemoveAssignment("a", IntegrationMetrics, false); err != nil {
+		if err := p.RemoveAssignment("a", IntegrationMetrics); err != nil {
 			t.Fatal(err)
 		}
 		if _, ok := p.Connections["shared"]; !ok {
 			t.Fatal("removed credentials still used by another context")
 		}
-		if err := p.RemoveAssignment("b", IntegrationMetrics, keep); err != nil {
+		if err := p.RemoveAssignment("b", IntegrationMetrics); err != nil {
 			t.Fatal(err)
 		}
-		if _, ok := p.Connections["shared"]; ok != keep {
-			t.Fatalf("keep=%v record exists=%v", keep, ok)
+		if _, ok := p.Connections["shared"]; ok {
+			t.Fatal("unused credentials retained")
 		}
 	}
 	s, rev := writeConnectionFixture(t, connectionFixture())

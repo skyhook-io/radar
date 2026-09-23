@@ -29,6 +29,7 @@ type LegacyOffer struct {
 type Usage struct {
 	config.ConnectionUse
 	Availability string `json:"availability"`
+	Revision     string `json:"revision"`
 }
 
 type ConnectionView struct {
@@ -79,14 +80,13 @@ type Selection struct {
 }
 
 type Resolver struct {
-	Store                *config.ProfileStore
-	mu                   sync.Mutex
-	file                 config.ClusterProfiles
-	fileRevision         string
-	integrationRevisions map[config.Integration]string
-	key                  [32]byte
-	launchTarget         k8s.ProfileTarget
-	launch               map[config.Integration]Bundle
+	Store        *config.ProfileStore
+	mu           sync.Mutex
+	file         config.ClusterProfiles
+	fileRevision string
+	key          [32]byte
+	launchTarget k8s.ProfileTarget
+	launch       map[config.Integration]Bundle
 }
 
 func NewResolver(store *config.ProfileStore, target k8s.ProfileTarget, launch map[config.Integration]Bundle) *Resolver {
@@ -105,9 +105,8 @@ func (p *Resolver) Revision(digest string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// Include the whole integration catalog and its assignments: a shared edit's
-// impact can change on another context, and redacted credentials still conflict.
-func (p *Resolver) integrationRevision(file config.ClusterProfiles, kind config.Integration) string {
+// Redacted credentials participate in conflicts without being returned to the browser.
+func (p *Resolver) integrationRevision(file config.ClusterProfiles, kind config.Integration, binding string) string {
 	scope := config.ClusterProfiles{
 		Version:     file.Version,
 		Profiles:    map[string]config.ClusterProfile{},
@@ -115,21 +114,17 @@ func (p *Resolver) integrationRevision(file config.ClusterProfiles, kind config.
 		Imported:    map[config.Integration]bool{kind: file.Imported[kind]},
 		Dismissed:   map[string]map[config.Integration]bool{},
 	}
-	for id, connection := range file.Connections {
-		if connection.Type == kind {
-			scope.Connections[id] = connection
-		}
-	}
-	for binding, profile := range file.Profiles {
+	if profile, ok := file.Profiles[binding]; ok {
 		if assignment, ok := profile.Integrations[kind]; ok {
 			profile.Integrations = map[config.Integration]config.IntegrationAssignment{kind: assignment}
 			scope.Profiles[binding] = profile
+			if assignment.ConnectionID != "" {
+				scope.Connections[assignment.ConnectionID] = file.Connections[assignment.ConnectionID]
+			}
 		}
 	}
-	for binding, dismissed := range file.Dismissed {
-		if dismissed[kind] {
-			scope.Dismissed[binding] = map[config.Integration]bool{kind: true}
-		}
+	if file.Dismissed[binding][kind] {
+		scope.Dismissed[binding] = map[config.Integration]bool{kind: true}
 	}
 	data, _ := json.Marshal(scope)
 	return p.Revision(string(data))
@@ -140,16 +135,11 @@ func (p *Resolver) read() (config.ClusterProfiles, string, error) {
 	if err != nil {
 		p.fileRevision = ""
 		p.file = config.ClusterProfiles{}
-		p.integrationRevisions = nil
 		return file, "", err
 	}
 	if changed || p.file.Profiles == nil {
 		p.file = file
 		p.fileRevision = revision
-		p.integrationRevisions = make(map[config.Integration]string, len(config.IntegrationKinds))
-		for _, kind := range config.IntegrationKinds {
-			p.integrationRevisions[kind] = p.integrationRevision(file, kind)
-		}
 	}
 	return p.file, revision, nil
 }
@@ -185,7 +175,7 @@ func connectionView(id string, c config.SavedConnection) ConnectionView {
 	return v
 }
 
-func uses(file config.ClusterProfiles, id string) []Usage {
+func (p *Resolver) uses(file config.ClusterProfiles, id string) []Usage {
 	result := []Usage{}
 	for _, use := range file.Uses(id) {
 		availability := "unavailable"
@@ -196,7 +186,7 @@ func uses(file config.ClusterProfiles, id string) []Usage {
 		} else if k8s.ContextReferenceKnownMissing(k8s.ContextRef{SourceFile: use.Source, InFileName: use.InFileName}) {
 			availability = "removed"
 		}
-		result = append(result, Usage{ConnectionUse: use, Availability: availability})
+		result = append(result, Usage{ConnectionUse: use, Availability: availability, Revision: p.integrationRevision(file, use.Integration, use.Binding)})
 	}
 	return result
 }
@@ -208,7 +198,7 @@ func (p *Resolver) UnlinkedAssignments() ([]Usage, error) {
 	if err != nil {
 		return nil, err
 	}
-	return uses(file, ""), nil
+	return p.uses(file, ""), nil
 }
 
 func (p *Resolver) Catalog() ([]ConnectionView, string, error) {
@@ -221,7 +211,7 @@ func (p *Resolver) Catalog() ([]ConnectionView, string, error) {
 	items := make([]ConnectionView, 0, len(file.Connections))
 	for id, c := range file.Connections {
 		v := connectionView(id, c)
-		v.Uses = uses(file, id)
+		v.Uses = p.uses(file, id)
 		items = append(items, v)
 	}
 	slices.SortFunc(items, func(a, b ConnectionView) int {
@@ -261,7 +251,7 @@ func (p *Resolver) ResolveAll(target k8s.ProfileTarget, details bool) map[config
 }
 
 func (p *Resolver) resolve(file config.ClusterProfiles, revision string, err error, target k8s.ProfileTarget, kind config.Integration, details bool) Selection {
-	s := Selection{View: ProfileView{Target: target, Revision: p.integrationRevisions[kind], State: "auto", Mode: "auto", HeaderKeys: []string{}, EnvHeaderKeys: []string{}}, fileRevision: revision}
+	s := Selection{View: ProfileView{Target: target, Revision: p.integrationRevision(file, kind, target.Binding), State: "auto", Mode: "auto", HeaderKeys: []string{}, EnvHeaderKeys: []string{}}, fileRevision: revision}
 	s.Assignment = config.IntegrationAssignment{Mode: "auto"}
 	s.Connection = emptyConnection(kind)
 	if err != nil {
@@ -281,7 +271,7 @@ func (p *Resolver) resolve(file config.ClusterProfiles, revision string, err err
 			s.Connection = file.Connections[a.ConnectionID].Clone()
 			view := connectionView(a.ConnectionID, s.Connection)
 			if details {
-				view.Uses = uses(file, a.ConnectionID)
+				view.Uses = p.uses(file, a.ConnectionID)
 			}
 			s.View.Connection = &view
 		} else {

@@ -9,13 +9,14 @@ import (
 	"testing"
 )
 
-func TestSharedKubecostCandidateDistinguishesNoDataFromFailure(t *testing.T) {
+func TestKubecostCandidateRequiresClusterData(t *testing.T) {
 	for _, tc := range []struct {
 		name, body string
 		status     int
 		wantError  bool
 	}{
-		{"empty allocation", `{"code":200,"data":[{}]}`, 200, false},
+		{"empty allocation", `{"code":200,"data":[{}]}`, 200, true},
+		{"cluster allocation", `{"code":200,"data":[{"test":{"properties":{"cluster":"test"},"totalCost":1}}]}`, 200, false},
 		{"unauthorized", `{"error":"unauthorized"}`, 401, true},
 		{"malformed", `not-json`, 200, true},
 	} {
@@ -31,7 +32,7 @@ func TestSharedKubecostCandidateDistinguishesNoDataFromFailure(t *testing.T) {
 				w.Write([]byte(tc.body))
 			}))
 			defer server.Close()
-			err := ProbeCandidate(context.Background(), ManagerConfig{Source: SourceKubecost, URL: server.URL, APIKey: "candidate-key"}, true)
+			err := ProbeCandidate(context.Background(), ManagerConfig{Source: SourceKubecost, URL: server.URL, APIKey: "candidate-key", ClusterID: "test"})
 			if (err != nil) != tc.wantError {
 				t.Fatalf("probe error = %v", err)
 			}

@@ -1255,8 +1255,8 @@ Aggregator; indirect, missing, or conflicting values require an override. Radar 
 override saved in Settings to the active kubeconfig context. It also binds a saved API key when the
 URL is blank and Radar auto-discovers a local Aggregator. Switching contexts restores that context's
 own settings; changing its underlying cluster identity requires confirmation. An explicit central
-Aggregator URL and key can be reused through **Use saved connection…**, while cluster IDs remain
-assignment-specific. See [local integration connections](configuration.md#local-integration-connections).
+Aggregator URL and key can be copied through **Copy from another cluster…**. Later edits are independent,
+and cluster IDs are not copied. See [local integration connections](configuration.md#local-integration-connections).
 
 OpenCost-compatible Prometheus data powers current cost and historical charts. Kubecost REST powers
 the current namespace summary, workload/application compute allocation, node costs, and the cluster

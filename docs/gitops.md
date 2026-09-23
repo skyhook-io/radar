@@ -162,14 +162,14 @@ Behavior and guarantees:
   diff. There is no un-redact option.
 - Local CLI/Desktop tokens live in `~/.radar/clusters.json` (written `0600`)
   and are never returned by Settings APIs. Unchanged credentials are preserved;
-  explicit removal deletes them when the last assignment is removed unless you
-  choose to keep the connection for reuse.
+  explicit removal deletes this context's settings and any now-unused credentials.
 - A token is bound to the server it was issued for: changing the Argo CD URL
   origin requires replacing or clearing the token. In auto-discovery mode (empty URL), the token
   is bound to its kubeconfig source entry, survives restarts and display-name
   qualification changes, and fails closed after a source switch so it is never
   sent to another cluster's argocd-server. Explicit endpoints can be reused
-  across contexts through **Use saved connection…**; discovery credentials
+  across contexts through **Copy from another cluster…**, creating independent
+  settings whose later edits affect only that context; discovery credentials
   cannot. Older global settings require explicit import, not automatic reuse.
 - Argo CD *core* installs have no argocd-server — Radar degrades to the
   annotation-based drift view. Same when the server is unreachable or the

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -32,6 +33,10 @@ func apply(t *testing.T, r *Resolver, target k8s.ProfileTarget, req Update) Sele
 			req.Revisions[kind] = r.Resolve(target, kind, false).View.Revision
 		}
 	}
+	if req.Action == "copy" || req.Action == "forget" {
+		file, _, _ := r.Store.Read()
+		req.SourceRevision = r.integrationRevision(file, req.Kind, req.Binding)
+	}
 	pending, err := r.Prepare(target, req)
 	if err != nil {
 		t.Fatal(err)
@@ -44,12 +49,12 @@ func apply(t *testing.T, r *Resolver, target k8s.ProfileTarget, req Update) Sele
 
 func stringPtr(s string) *string { return &s }
 
-func TestShareCustomizeAndCredentialLifecycle(t *testing.T) {
+func TestCopyEditAndCredentialLifecycle(t *testing.T) {
 	r, a, b := setupResolver(t)
 	first := apply(t, r, a, Update{Kind: config.IntegrationMetrics, Action: "save", URL: stringPtr("https://metrics.example"), Headers: []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "opaque-test-credential"}, {Key: "X-Scope-OrgID", Action: "set", Value: "tenant-a"}}})
 	id := first.View.Connection.ID
-	second := apply(t, r, b, Update{Kind: config.IntegrationMetrics, Action: "use", ConnectionID: id})
-	if len(second.View.Connection.Uses) != 2 || second.Connection.Prometheus.Headers["Authorization"] != "opaque-test-credential" {
+	second := apply(t, r, b, Update{Kind: config.IntegrationMetrics, Action: "copy", Binding: a.Binding, ConnectionID: id})
+	if len(second.View.Connection.Uses) != 1 || second.View.Connection.ID == id || second.Connection.Prometheus.Headers["Authorization"] != "opaque-test-credential" {
 		t.Fatal("reuse lost credential or assignment")
 	}
 	data, _ := json.Marshal(second.View)
@@ -57,10 +62,10 @@ func TestShareCustomizeAndCredentialLifecycle(t *testing.T) {
 		t.Fatal("view exposed credentials")
 	}
 	_, err := r.Prepare(b, Update{Target: b, Kind: config.IntegrationMetrics, Action: "save", Revision: second.View.Revision, URL: stringPtr("https://metrics.example/changed")})
-	if err == nil {
-		t.Fatal("implicit shared edit accepted")
+	if err != nil {
+		t.Fatal("independent edit rejected")
 	}
-	customized := apply(t, r, b, Update{Kind: config.IntegrationMetrics, Action: "fork", Headers: []prom.HeaderOperation{{Key: "X-Scope-OrgID", Action: "set", Value: "tenant-b"}}})
+	customized := apply(t, r, b, Update{Kind: config.IntegrationMetrics, Action: "save", Headers: []prom.HeaderOperation{{Key: "X-Scope-OrgID", Action: "set", Value: "tenant-b"}}})
 	if customized.View.Connection.ID == id || customized.Connection.Prometheus.Headers["Authorization"] != "opaque-test-credential" {
 		t.Fatal("fork did not preserve auth independently")
 	}
@@ -77,20 +82,20 @@ func TestShareCustomizeAndCredentialLifecycle(t *testing.T) {
 	}
 }
 
-func TestSharedImpactConflictAndNextOperationRefresh(t *testing.T) {
+func TestCopyIsolationAndNextOperationRefresh(t *testing.T) {
 	r, a, b := setupResolver(t)
 	first := apply(t, r, a, Update{Kind: config.IntegrationMetrics, Action: "save", URL: stringPtr("https://metrics.example")})
-	pending, err := r.Prepare(a, Update{Target: a, Kind: config.IntegrationMetrics, Action: "update_shared", Revision: first.View.Revision, Headers: []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "rotated"}}})
+	pending, err := r.Prepare(a, Update{Target: a, Kind: config.IntegrationMetrics, Action: "save", Revision: first.View.Revision, Headers: []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "rotated"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	other := NewResolver(r.Store, b, nil)
-	apply(t, other, b, Update{Kind: config.IntegrationMetrics, Action: "use", ConnectionID: first.View.Connection.ID})
+	apply(t, other, b, Update{Kind: config.IntegrationMetrics, Action: "copy", Binding: a.Binding, ConnectionID: first.View.Connection.ID})
 	if err := r.Commit(context.Background(), pending); !errors.Is(err, config.ErrProfileConflict) {
 		t.Fatalf("stale impact accepted: %v", err)
 	}
-	updated := apply(t, r, a, Update{Kind: config.IntegrationMetrics, Action: "update_shared", Headers: []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "rotated"}}})
-	if got := other.Resolve(b, config.IntegrationMetrics, false); got.Connection.Prometheus.Headers["Authorization"] != "rotated" || len(updated.View.Connection.Uses) != 2 {
+	updated := apply(t, r, a, Update{Kind: config.IntegrationMetrics, Action: "save", Headers: []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "rotated"}}})
+	if got := other.Resolve(b, config.IntegrationMetrics, false); got.Connection.Prometheus.Headers["Authorization"] != "" || len(updated.View.Connection.Uses) != 1 {
 		t.Fatal("second process did not refresh at resolve")
 	}
 }
@@ -115,16 +120,16 @@ func TestTargetAcceptanceIsPerIntegrationAndDiscoveryNeedsNone(t *testing.T) {
 func TestCostReuseKeepsDestinationMappingAndOriginFence(t *testing.T) {
 	r, a, b := setupResolver(t)
 	first := apply(t, r, a, Update{Kind: config.IntegrationCost, Action: "save", URL: stringPtr("https://cost.example"), Secret: &SecretEdit{Action: "set", Value: "key"}, ClusterID: stringPtr("cluster-a")})
-	second := apply(t, r, b, Update{Kind: config.IntegrationCost, Action: "use", ConnectionID: first.View.Connection.ID})
+	second := apply(t, r, b, Update{Kind: config.IntegrationCost, Action: "copy", Binding: a.Binding, ConnectionID: first.View.Connection.ID})
 	if second.Assignment.ClusterID != "" {
 		t.Fatal("reuse copied source cluster mapping")
 	}
-	_, err := r.Prepare(b, Update{Target: b, Kind: config.IntegrationCost, Action: "fork", Revision: second.View.Revision, URL: stringPtr("https://other.example")})
+	_, err := r.Prepare(b, Update{Target: b, Kind: config.IntegrationCost, Action: "save", Revision: second.View.Revision, URL: stringPtr("https://other.example")})
 	if err == nil {
 		t.Fatal("fork leaked retained secret to another origin")
 	}
 	a.Fingerprint = "new-target"
-	changed := apply(t, r, a, Update{Kind: config.IntegrationCost, Action: "use", ConnectionID: first.View.Connection.ID})
+	changed := apply(t, r, a, Update{Kind: config.IntegrationCost, Action: "copy", Binding: b.Binding, ConnectionID: second.View.Connection.ID, ConfirmRemoval: true})
 	if changed.Assignment.ClusterID != "" {
 		t.Fatal("reuse silently accepted old target's cost mapping")
 	}
@@ -196,6 +201,7 @@ func TestIntegrationRevisionRejectsInvisibleCredentialRotation(t *testing.T) {
 				t.Fatal("credential rotation did not change the revision")
 			}
 			before.View.Revision = after.View.Revision
+			before.View.Connection.Uses[0].Revision = after.View.Connection.Uses[0].Revision
 			oldJSON, _ := json.Marshal(before.View)
 			newJSON, _ := json.Marshal(after.View)
 			if string(oldJSON) != string(newJSON) {
@@ -250,5 +256,123 @@ func TestReconfirmChecksEverySelectedIntegrationRevision(t *testing.T) {
 		if r.Resolve(target, kind, false).Err != nil {
 			t.Fatalf("confirmed %s still blocked", kind)
 		}
+	}
+}
+
+func TestIndependentContextDraftSurvivesSameIntegrationSave(t *testing.T) {
+	r, a, b := setupResolver(t)
+	draft := r.Resolve(a, config.IntegrationMetrics, false)
+	apply(t, r, b, Update{Kind: config.IntegrationMetrics, Action: "save", URL: stringPtr("https://b.example")})
+	pending, err := r.Prepare(a, Update{Target: a, Kind: config.IntegrationMetrics, Action: "save", Revision: draft.View.Revision, URL: stringPtr("https://a.example")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Commit(context.Background(), pending); err != nil {
+		t.Fatal(err)
+	}
+	if r.Resolve(b, config.IntegrationMetrics, false).View.URL != "https://b.example" {
+		t.Fatal("other cluster overwritten")
+	}
+}
+
+func TestCopyRejectsChangedSourceAndDoesNotExposeSecrets(t *testing.T) {
+	for _, kind := range config.IntegrationKinds {
+		t.Run(string(kind), func(t *testing.T) {
+			r, a, b := setupResolver(t)
+			first := apply(t, r, a, Update{Kind: kind, Action: "save", URL: stringPtr("https://backend.example")})
+			request := Update{Target: b, Kind: kind, Action: "copy", Binding: a.Binding, ConnectionID: first.View.Connection.ID, SourceRevision: first.View.Revision, Revision: r.Resolve(b, kind, false).View.Revision}
+			edit := Update{Kind: kind, Action: "save", Secret: &SecretEdit{Action: "set", Value: "synthetic-rotated"}}
+			if kind == config.IntegrationMetrics {
+				edit.Secret = nil
+				edit.Headers = []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "synthetic-rotated"}}
+			}
+			apply(t, r, a, edit)
+			if _, err := r.Prepare(b, request); !errors.Is(err, config.ErrProfileConflict) {
+				t.Fatalf("stale source accepted: %v", err)
+			}
+			copy := apply(t, r, b, Update{Kind: kind, Action: "copy", Binding: a.Binding, ConnectionID: first.View.Connection.ID})
+			if copy.View.Connection.ID == first.View.Connection.ID {
+				t.Fatal("copy created a shared reference")
+			}
+			data, _ := json.Marshal(copy.View)
+			if strings.Contains(string(data), "synthetic-rotated") {
+				t.Fatal("secret exposed")
+			}
+		})
+	}
+}
+
+func TestExistingSharedRecordEditsAreIsolated(t *testing.T) {
+	r, a, b := setupResolver(t)
+	first := apply(t, r, a, Update{Kind: config.IntegrationMetrics, Action: "save", URL: stringPtr("https://backend.example")})
+	_, revision, _ := r.Store.Read()
+	_, err := r.Store.Update(context.Background(), revision, func(file *config.ClusterProfiles) error {
+		assignment := file.Assignment(a.Binding, config.IntegrationMetrics)
+		assignment.Target = b.Fingerprint
+		putAssignment(file, b, config.IntegrationMetrics, config.ClusterProfile{}, assignment)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := apply(t, r, b, Update{Kind: config.IntegrationMetrics, Action: "save", URL: stringPtr("https://independent.example")})
+	if updated.View.Connection.ID == first.View.Connection.ID || r.Resolve(a, config.IntegrationMetrics, false).View.URL != "https://backend.example" {
+		t.Fatal("edit changed another context")
+	}
+	for _, action := range []string{"use", "fork", "update_shared", "rename", "delete"} {
+		_, err := r.Prepare(b, Update{Target: b, Kind: config.IntegrationMetrics, Action: action, Revision: updated.View.Revision})
+		if err == nil {
+			t.Fatalf("removed action %s accepted", action)
+		}
+	}
+}
+
+func TestCopyEnvironmentReferencesRemainReferences(t *testing.T) {
+	r, a, b := setupResolver(t)
+	first := apply(t, r, a, Update{Kind: config.IntegrationMetrics, Action: "save", URL: stringPtr("https://backend.example")})
+	_, revision, _ := r.Store.Read()
+	_, err := r.Store.Update(context.Background(), revision, func(file *config.ClusterProfiles) error {
+		file.Connections[first.View.Connection.ID].Prometheus.HeadersFromEnv = map[string]string{"Authorization": "RADAR_TEST_COPY_TOKEN"}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("RADAR_TEST_COPY_TOKEN", "")
+	if err := os.Unsetenv("RADAR_TEST_COPY_TOKEN"); err != nil {
+		t.Fatal(err)
+	}
+	file, _, _ := r.Store.Read()
+	request := Update{Target: b, Kind: config.IntegrationMetrics, Action: "copy", Binding: a.Binding, ConnectionID: first.View.Connection.ID, Revision: r.Resolve(b, config.IntegrationMetrics, false).View.Revision, SourceRevision: r.integrationRevision(file, config.IntegrationMetrics, a.Binding)}
+	if _, err := r.Prepare(b, request); err == nil {
+		t.Fatal("unresolved environment reference copied")
+	}
+	t.Setenv("RADAR_TEST_COPY_TOKEN", "synthetic-env-secret")
+	copy := apply(t, r, b, request)
+	file, _, _ = r.Store.Read()
+	stored := file.Connections[copy.View.Connection.ID].Prometheus
+	if stored.HeadersFromEnv["Authorization"] != "RADAR_TEST_COPY_TOKEN" || len(stored.Headers) != 0 {
+		t.Fatal("resolved secret persisted instead of reference")
+	}
+}
+
+func TestCopyRequiresConfirmationForDiscoveryCredentials(t *testing.T) {
+	r, a, b := setupResolver(t)
+	source := apply(t, r, a, Update{Kind: config.IntegrationArgoCD, Action: "save", URL: stringPtr("https://argo.example")})
+	destination := apply(t, r, b, Update{Kind: config.IntegrationArgoCD, Action: "save", Secret: &SecretEdit{Action: "set", Value: "discovery-secret"}})
+	req := Update{Target: b, Kind: config.IntegrationArgoCD, Action: "copy", Binding: a.Binding, ConnectionID: source.View.Connection.ID, SourceRevision: source.View.Revision, Revision: destination.View.Revision}
+	if _, err := r.Prepare(b, req); err == nil {
+		t.Fatal("discovery credentials replaced without confirmation")
+	}
+	req.ConfirmRemoval = true
+	pending, err := r.Prepare(b, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Commit(context.Background(), pending); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Resolve(b, config.IntegrationArgoCD, false); got.Connection.ArgoCD.Token != "" || got.Assignment.ArgoCD != nil {
+		t.Fatal("old discovery credential survived explicit replacement")
 	}
 }

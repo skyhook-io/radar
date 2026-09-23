@@ -311,21 +311,28 @@ apply. No connection name or assignment wizard is required. Switching A → B �
 restores A's settings. A context with no saved settings uses discovery. Local CLI
 and Desktop share `~/.radar/clusters.json`.
 
-**Reuse:** on another context, choose **Use saved connection…**. This creates a
-shared reference, not a copy. Radar labels it using the backend type and host;
-**Rename** is optional under **Manage saved connections**. Equal URLs are not
-automatically merged: different tenants and credentials can use the same server.
-New contexts never inherit a default connection.
+**Copy:** on another context, choose **Copy from another cluster…** and select
+the source context. Review the endpoint and credential metadata, then **Copy &
+apply**. This makes an independent copy, not a shared reference. Later edits
+affect only the selected cluster. No connection name, catalog or assignment
+wizard is needed, and new contexts never inherit defaults.
 
-**Edit:** a shared connection offers **Edit shared connection** (shows every
-affected context) or **Customize for this cluster** (creates an independent
-connection, preserving unchanged credentials without returning them to the
-browser). Kubecost cluster mappings remain separate from shared backend edits.
+Only copy a backend that serves the destination cluster. A reachable endpoint
+does not prove it contains that cluster's data. Authentication and tenant headers
+are copied too; adjust them afterward if the destination uses different credentials.
+Kubecost's source cluster mapping is never copied: enter the destination ID or
+allow discovery to detect it. Discovery-only credentials cannot be copied.
+Environment-backed headers retain references, not resolved secret values; both
+copies can still depend on the same environment variable.
+
+**Edit:** the regular form always edits this context only. Equal URLs are not
+merged, and editing a record referenced by multiple contexts in a hand-edited or
+development file separates it automatically.
 
 **Credentials:** Settings displays header names and whether a token/key exists,
 never saved values. Keep, replace or remove each credential independently.
 Changing URL origin (scheme, host or port) requires replacing or clearing every
-retained credential, including when customizing. Plain HTTP is supported but
+retained credential, including after copying. Plain HTTP is supported but
 does not encrypt credentials in transit; use HTTPS outside trusted local paths.
 
 **Connection checks:** Metrics saves first and then tests reachability; an
@@ -333,17 +340,16 @@ unreachable backend remains saved with a warning. Argo CD and explicit Kubecost
 changes test an isolated candidate before saving; a failed test leaves the
 previous connection active. Selecting Auto-detect without an explicit Kubecost
 URL, or Prometheus-based cost mode, saves that preference without claiming a
-successful backend test. Updating a shared Kubecost backend accepts a
-valid empty allocation response: backend reachability/authentication is distinct
-from each cluster's data readiness. Actual cost queries still require a narrow
-cluster filter. Central Argo connectivity does not add cross-cluster resource
+successful backend test. Explicit Kubecost connections check this cluster's
+mapping and data readiness; cost queries require a narrow cluster filter. Central Argo connectivity does not add cross-cluster resource
 discovery.
 
-**Cleanup:** explicitly disconnecting, replacing or forgetting the last
-assignment asks to delete its now-unused connection and credentials; **Keep for
-reuse** is optional. An assigned connection cannot be deleted. Missing
-kubeconfigs never trigger automatic deletion. Manage saved connections includes
-unavailable assignments and context-specific discovery settings.
+**Cleanup:** switching to discovery or replacing saved settings explicitly removes
+this context's previous credentials, deleting the backing record when unused.
+Other contexts are unchanged. Missing kubeconfigs never trigger automatic deletion.
+**Storage and cluster identity → Manage stored cluster settings** lets you
+explicitly forget a context's settings, including discovery credentials and mappings.
+A context not loaded in this session may still be in use by another Radar process.
 
 Unsaved edits stay in the dialog when switching Settings tabs. Closing it asks
 before discarding them. If another client changes the active cluster while you
@@ -361,7 +367,6 @@ records) from `profiles[context-key].integrations` (assignments by `metrics`,
 ```json
 {
   "type": "metrics",
-  "name": "Team metrics",
   "prometheus": {
     "url": "https://metrics.example.net/prometheus",
     "headersFromEnv": {
@@ -372,7 +377,7 @@ records) from `profiles[context-key].integrations` (assignments by `metrics`,
 }
 ```
 
-`name` is optional. Environment variables must exist in the Radar process;
+Environment variables must exist in the Radar process;
 Desktop does not necessarily inherit your terminal environment. Missing variables
 pause only the affected connection. Environment-backed header references are
 file-edited, not editable in Settings. See the [JSON schema](schemas/clusters.schema.json);
@@ -381,10 +386,11 @@ Radar also validates cross-record references and integration-specific rules.
 CLI and Desktop reread bounded file contents on the next integration operation,
 including background consumers, not only when Settings opens. A content hash
 avoids reparsing unchanged data. Concurrent saves use a file lock and revision
-checks. Draft revisions cover each integration's saved connections, credentials
-and assignments: saving Argo CD does not invalidate an unfinished Metrics draft.
-Changes within the same integration still require reloading stale drafts, including
-secret rotation and changes to a shared connection's context assignments.
+checks. Draft revisions cover the selected context and integration, including
+redacted credentials: saving Argo CD or another cluster does not invalidate an
+unfinished Metrics draft. A concurrent edit to the same settings requires reloading.
+Copy also checks the source revision, so an endpoint or secret cannot change
+unnoticed between selection and applying the copy.
 The final write also checks the entire file, so overlapping saves during a
 connection test can still conflict rather than overwrite another process.
 Malformed JSON, unknown fields or an unsupported version block the file without
@@ -395,8 +401,8 @@ unrelated valid connections; unrelated edits preserve that invalid entry.
 
 The assignment key includes the kubeconfig source path and in-file context name.
 Same-named contexts in different files do not share credentials. If a context is
-renamed or its file moved, select its saved connection on the new context, then
-forget the old assignment explicitly. Discovery-only credentials may require
+renamed or its file moved, copy its saved connection to the new context, then
+forget the old settings explicitly. Discovery-only credentials may require
 reentry. An unavailable kubeconfig is distinguished from a context confirmed
 removed from a readable file.
 
@@ -426,7 +432,7 @@ not its startup assertion.
 Older global `config.json` integration settings never activate automatically in
 local mode. Settings offers **Use for this cluster** to import them explicitly.
 An explicit endpoint is imported once per integration, then reused through
-**Use saved connection…**. Discovery-bound credentials respect their original
+**Copy from another cluster…**. Discovery-bound credentials respect their original
 context binding. **Stop offering these older settings** dismisses the offer.
 The old file stays as a recovery copy, never a fallback; removal does not
 resurrect it. Older Radar versions still read that global file, so rolling back

@@ -27,14 +27,13 @@ type Update struct {
 	Action         string                        `json:"action"`
 	ConnectionID   string                        `json:"connectionId,omitempty"`
 	Binding        string                        `json:"binding,omitempty"`
-	Name           string                        `json:"name,omitempty"`
+	SourceRevision string                        `json:"sourceRevision,omitempty"`
 	URL            *string                       `json:"url,omitempty"`
 	Headers        []prom.HeaderOperation        `json:"headers,omitempty"`
 	Secret         *SecretEdit                   `json:"secret,omitempty"`
 	InsecureTLS    *bool                         `json:"insecureTls,omitempty"`
 	Mode           *string                       `json:"mode,omitempty"`
 	ClusterID      *string                       `json:"clusterId,omitempty"`
-	KeepUnused     bool                          `json:"keepUnused"`
 	ConfirmRemoval bool                          `json:"confirmRemoval"`
 	LegacyRevision string                        `json:"legacyRevision,omitempty"`
 	UseCLIToken    bool                          `json:"useCliToken,omitempty"`
@@ -46,8 +45,6 @@ type Pending struct {
 	Kind           config.Integration
 	Candidate      Bundle
 	Probe          bool
-	Shared         bool
-	Affected       int
 	file           config.ClusterProfiles
 	revision       string
 	legacyRevision string
@@ -75,7 +72,10 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 	if err != nil {
 		return pending, err
 	}
-	if req.Revision != p.integrationRevisions[req.Kind] {
+	if req.Action != "forget" && req.Revision != p.integrationRevision(file, req.Kind, target.Binding) {
+		return pending, config.ErrProfileConflict
+	}
+	if (req.Action == "copy" || req.Action == "forget") && req.SourceRevision != p.integrationRevision(file, req.Kind, req.Binding) {
 		return pending, config.ErrProfileConflict
 	}
 	if !slices.Contains(config.IntegrationKinds, req.Kind) {
@@ -95,8 +95,8 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 	if next.Dismissed == nil {
 		next.Dismissed = map[string]map[config.Integration]bool{}
 	}
-	pending = Pending{Target: target, Kind: req.Kind, file: next, revision: revision, Affected: 1}
-	metadata := req.Action == "rename" || req.Action == "delete" || req.Action == "forget"
+	pending = Pending{Target: target, Kind: req.Kind, file: next, revision: revision}
+	metadata := req.Action == "forget"
 	if !metadata {
 		if !target.Same(req.Target) {
 			return pending, config.ErrProfileConflict
@@ -121,7 +121,7 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 			connection.Kubecost = &c
 		}
 	}
-	if a.NeedsTarget() && a.Target != target.Fingerprint && !metadata && req.Action != "reconfirm" && req.Action != "replace" && req.Action != "use" && req.Action != "auto" && req.Action != "dismiss_legacy" {
+	if a.NeedsTarget() && a.Target != target.Fingerprint && !metadata && req.Action != "reconfirm" && req.Action != "replace" && req.Action != "copy" && req.Action != "auto" && req.Action != "dismiss_legacy" {
 		return pending, errors.New("review the changed cluster target before editing its connection")
 	}
 	switch req.Action {
@@ -136,33 +136,15 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 		putAssignment(&next, target, req.Kind, profile, a)
 		pending.Probe = true
 		pending.Candidate = Bundle{Connection: connection.Clone(), Assignment: a}
-	case "rename":
-		c, ok := next.Connections[req.ConnectionID]
-		if !ok || c.Type != req.Kind {
-			return pending, errors.New("saved connection not found")
-		}
-		c.Name = strings.TrimSpace(req.Name)
-		next.Connections[req.ConnectionID] = c
-	case "delete":
-		if c, ok := next.Connections[req.ConnectionID]; !ok || c.Type != req.Kind {
-			return pending, errors.New("saved connection not found")
-		}
-		if !req.ConfirmRemoval {
-			return pending, errors.New("confirm deletion of the saved connection and its credentials")
-		}
-		if len(next.Uses(req.ConnectionID)) != 0 {
-			return pending, errors.New("remove the connection's assignments before deleting it")
-		}
-		delete(next.Connections, req.ConnectionID)
 	case "forget":
 		old := next.Assignment(req.Binding, req.Kind)
-		if old.ConnectionID != "" && len(next.Uses(old.ConnectionID)) == 1 && !req.KeepUnused && !req.ConfirmRemoval {
-			return pending, errors.New("confirm removal of this connection's last assignment and saved credentials")
+		if old.ConnectionID != "" && !req.ConfirmRemoval {
+			return pending, errors.New("confirm removal of this context's saved connection and credentials")
 		}
 		if old.ConnectionID == "" && old.NeedsTarget() && !req.ConfirmRemoval {
 			return pending, errors.New("confirm removal of this context's saved settings")
 		}
-		if err := next.RemoveAssignment(req.Binding, req.Kind, req.KeepUnused); err != nil {
+		if err := next.RemoveAssignment(req.Binding, req.Kind); err != nil {
 			return pending, err
 		}
 		dismiss(&next, req.Binding, req.Kind)
@@ -176,7 +158,7 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 			if !slices.Contains(config.IntegrationKinds, kind) {
 				return pending, errors.New("unknown integration type")
 			}
-			if req.Revisions[kind] != p.integrationRevisions[kind] {
+			if req.Revisions[kind] != p.integrationRevision(file, kind, target.Binding) {
 				return pending, config.ErrProfileConflict
 			}
 			selected := next.Assignment(target.Binding, kind)
@@ -201,13 +183,13 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 			return pending, errors.New("choose auto-discovery or this context's Prometheus connection")
 		}
 		if _, exists := profile.Integrations[req.Kind]; exists {
-			if previousID != "" && len(next.Uses(previousID)) == 1 && !req.KeepUnused && !req.ConfirmRemoval {
-				return pending, errors.New("confirm removal of this connection's last assignment and saved credentials")
+			if previousID != "" && !req.ConfirmRemoval {
+				return pending, errors.New("confirm removal of this context's saved connection and credentials")
 			}
 			if previousID == "" && a.NeedsTarget() && !req.ConfirmRemoval {
 				return pending, errors.New("confirm removal of this context's saved credentials and mapping")
 			}
-			if err := next.RemoveAssignment(target.Binding, req.Kind, req.KeepUnused); err != nil {
+			if err := next.RemoveAssignment(target.Binding, req.Kind); err != nil {
 				return pending, err
 			}
 		}
@@ -215,8 +197,21 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 		a = config.IntegrationAssignment{Mode: mode}
 		putAssignment(&next, target, req.Kind, profile, a)
 		dismiss(&next, target.Binding, req.Kind)
-	case "use", "adopt", "save", "replace", "update_shared", "fork":
-		if req.Action == "use" {
+	case "copy", "adopt", "save", "replace":
+		if req.Action == "copy" {
+			if a.NeedsTarget() && !req.ConfirmRemoval {
+				return pending, errors.New("confirm replacement of this context's saved settings and credentials")
+			}
+			if req.Binding == "" || req.Binding == target.Binding {
+				return pending, errors.New("choose another cluster to copy from")
+			}
+			source := next.Assignment(req.Binding, req.Kind)
+			if source.ConnectionID == "" || source.ConnectionID != req.ConnectionID {
+				return pending, errors.New("source cluster connection changed; reload settings")
+			}
+			if err := source.Validate(req.Kind, next.Connections); err != nil {
+				return pending, err
+			}
 			if a.NeedsTarget() && a.Target != target.Fingerprint {
 				a.ClusterID = ""
 			}
@@ -226,7 +221,14 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 				return pending, errors.New("saved connection not found for this integration")
 			}
 			connection = connection.Clone()
-			a.ConnectionID = req.ConnectionID
+			if connection.Prometheus != nil {
+				if _, err := prom.ResolveHeaders(connection.Prometheus.Headers, connection.Prometheus.HeadersFromEnv); err != nil {
+					return pending, err
+				}
+			}
+			connection.Name = ""
+			a.ConnectionID = "conn_" + rand.Text()
+			next.Connections[a.ConnectionID] = connection.Clone()
 			a.ArgoCD = nil
 			a.Kubecost = nil
 			if req.Kind == config.IntegrationCost {
@@ -237,7 +239,7 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 		} else {
 			if req.Action == "adopt" {
 				if _, exists := profile.Integrations[req.Kind]; exists {
-					return pending, errors.New("this context already has settings; use a saved connection or replace them explicitly")
+					return pending, errors.New("this context already has settings; copy from another cluster or replace them explicitly")
 				}
 				if next.Imported[req.Kind] || next.Dismissed[target.Binding][req.Kind] {
 					return pending, errors.New("legacy settings have already been imported or dismissed")
@@ -273,22 +275,7 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 					return pending, err
 				}
 			}
-			if req.Action == "update_shared" {
-				if req.Mode != nil && *req.Mode != a.Mode || req.ClusterID != nil && strings.TrimSpace(*req.ClusterID) != a.ClusterID {
-					return pending, errors.New("edit this context's source or cluster mapping separately from the shared backend")
-				}
-				if previousID == "" || a.ConnectionID == "" {
-					return pending, errors.New("no saved connection to update")
-				}
-				pending.Shared = true
-				pending.Affected = len(next.Uses(previousID))
-			} else if req.Action == "save" && previousID != "" && len(next.Uses(previousID)) > 1 {
-				return pending, errors.New("choose Edit shared connection or Customize for this cluster")
-			}
 			if connection.URL() == "" {
-				if req.Action == "update_shared" || req.Action == "fork" {
-					return pending, errors.New("shared connections require an explicit URL; use auto-discovery only for this context")
-				}
 				a.ConnectionID = ""
 				if req.Kind != config.IntegrationCost {
 					a.Mode = "auto"
@@ -313,7 +300,7 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 					return pending, err
 				}
 				id := previousID
-				if id == "" || req.Action == "fork" || req.Action == "replace" || req.Action == "adopt" {
+				if id == "" || len(next.Uses(id)) > 1 || req.Action == "replace" || req.Action == "adopt" {
 					id = "conn_" + rand.Text()
 				}
 				next.Connections[id] = connection.Clone()
@@ -341,7 +328,7 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 		identity := target.Identity
 		a.Identity = &identity
 		putAssignment(&next, target, req.Kind, profile, a)
-		if previousID != "" && previousID != a.ConnectionID && len(next.Uses(previousID)) == 0 && !req.KeepUnused {
+		if previousID != "" && previousID != a.ConnectionID && len(next.Uses(previousID)) == 0 {
 			if !req.ConfirmRemoval {
 				return pending, errors.New("confirm removal of the previous connection and its saved credentials")
 			}

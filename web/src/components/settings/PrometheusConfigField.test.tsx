@@ -63,6 +63,7 @@ const sharedConnection: NonNullable<IntegrationProfile['connection']> = {
   secretSet: false,
   insecureTls: false,
   uses: ['development', 'staging'].map((context) => ({
+    revision: 'source-revision',
     binding: context,
     integration: 'metrics',
     context,
@@ -157,78 +158,26 @@ describe('Local saved connections', () => {
       expect(html).not.toContain('Apply now')
     }
   )
-  it('requires choosing edit scope before exposing a shared editor', () => {
-    const html = render(sharedProfile)
-    expect(html).toContain('Edit shared connection')
-    expect(html).toContain('Customize for development')
-    expect(html).toContain('Shared by 2 contexts')
-    expect(html).toContain('development (current)')
-    expect(html).toContain('Endpoint')
-    expect(html).not.toContain('2 headers configured')
-    expect(html).toContain('Authorization, X-Scope-OrgID')
-    expect(html).not.toContain('Connection checked')
-    expect(html).not.toContain('Apply now')
-    expect(html).not.toContain('Reload')
-    expect(html.indexOf('Edit shared connection')).toBeLessThan(
-      html.indexOf('Endpoint')
-    )
-    expect(html.split('Source details')[0]).not.toContain('/configs/team')
-    expect(html).toContain('/configs/team')
-  })
-  it('identifies environment-backed headers without displaying their values', () => {
-    expect(
-      render({ ...sharedProfile, envHeaderKeys: ['Authorization'] })
-    ).toContain('Authorization (environment), X-Scope-OrgID')
-  })
-  it.each(['argocd', 'cost'] as const)(
-    'summarizes configured credentials for %s',
+  it.each(['metrics', 'argocd', 'cost'] as const)(
+    'always edits only this cluster for %s, even with an existing shared record',
     (kind) => {
-      const html = render(
-        { ...sharedProfile, secretSet: true, insecureTls: true },
-        kind
-      )
+      const html = render({ ...sharedProfile, secretSet: true }, kind)
       expect(html).toContain(
-        kind === 'argocd' ? 'Token configured' : 'API key configured'
+        kind === 'metrics' ? 'Apply now' : 'Test &amp; apply'
       )
-      if (kind === 'argocd') {
-        expect(html).toContain('TLS verification')
-        expect(html).toContain('>Off<')
-      }
+      expect(html).toContain('Copy from another cluster')
+      expect(html).not.toContain('Edit shared connection')
+      expect(html).not.toContain('Customize for')
+      expect(html).not.toContain('Shared by')
+      expect(html).not.toContain('>Rename<')
+      expect(html).not.toContain('Reload')
     }
   )
-  it('disambiguates duplicate context names before opening source details', () => {
-    const uses = sharedConnection.uses.map((use, index) => ({
-      ...use,
-      context: 'development',
-      source: `/configs/team-${index}`
-    }))
-    const visibleSummary = render({
-      ...sharedProfile,
-      connection: { ...sharedConnection, uses }
-    }).split('Source details')[0]
-    expect(visibleSummary).toContain('/configs/team-0')
-    expect(visibleSummary).toContain('/configs/team-1')
-  })
-  it('bounds the summary while retaining the current context and unavailable warning', () => {
-    const uses = Array.from({ length: 7 }, (_, index) => ({
-      ...sharedConnection.uses[0],
-      binding: `context-${index}`,
-      context: `context-${index}`,
-      availability: 'unavailable' as const
-    }))
-    const html = render({
-      ...sharedProfile,
-      target: { ...profile.target, binding: 'context-6' },
-      connection: { ...sharedConnection, uses }
-    })
-    const visibleSummary = html.split('All contexts and source details')[0]
-    expect(visibleSummary).toContain('context-6 (current)')
-    expect(visibleSummary).not.toContain('context-5')
-    expect(visibleSummary).toContain('+3 more')
-    expect(visibleSummary).toContain(
-      '7 contexts are not available in this session'
-    )
-    expect(html).toContain('context-5')
-    expect(html.match(/not available in this session/g)).toHaveLength(1)
+  it('keeps storage cleanup secondary rather than a connection catalog', () => {
+    const html = render(sharedProfile)
+    expect(html).toContain('Storage and cluster identity')
+    expect(html).toContain('Manage stored cluster settings')
+    expect(html).not.toContain('Manage saved connections')
+    expect(html).not.toContain('Connection name')
   })
 })

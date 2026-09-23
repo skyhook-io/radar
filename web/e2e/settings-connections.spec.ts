@@ -25,6 +25,8 @@ async function fixture(page: Page) {
   let releaseApply: (() => void) | undefined
   let statusFailure = false
   let preserveRevision = false
+  let failNextCopy = false
+  const connections: NonNullable<IntegrationProfile['connection']>[] = []
   await page.route('**/api/capabilities', async route => {
     const response = await route.fetch()
     const capabilities = await response.json()
@@ -44,6 +46,11 @@ async function fixture(page: Page) {
     if (route.request().method() === 'PUT') {
       const update = route.request().postDataJSON()
       writes.push(update)
+      if (update.action === 'copy' && failNextCopy) {
+        failNextCopy = false
+        connections[0].uses[0].revision = 'refreshed-source'
+        return route.fulfill({ status: 409, json: { error: 'Source settings changed' } })
+      }
       await waitForApply
       const current = profiles[update.kind as IntegrationKind]
       if (!preserveRevision) current.revision = String(Number(current.revision) + 1)
@@ -65,16 +72,79 @@ async function fixture(page: Page) {
       }
       current.state = 'saved'
     }
-    return route.fulfill({ json: { profiles, connections: [], unlinkedAssignments: [], checked: true, connected: true } })
+    return route.fulfill({ json: { profiles, connections, unlinkedAssignments: [], checked: true, connected: true } })
   })
   return {
-    profiles, writes, file: () => file,
+    profiles, writes, connections, file: () => file,
     delayApply() { waitForApply = new Promise<void>(resolve => { releaseApply = resolve }) },
     releaseApply() { releaseApply?.(); waitForApply = undefined },
     failStatus() { statusFailure = true },
     preserveRevision() { preserveRevision = true },
+    failNextCopy() { failNextCopy = true },
   }
 }
+
+for (const integration of integrations) {
+  test(`${integration.tab}: copy shows scope and submits an independent source snapshot`, async ({ page }) => {
+    const state = await fixture(page)
+    state.profiles[integration.kind].secretSet = true
+    state.connections.push({
+      id: 'source-record', type: integration.kind, name: 'Unused internal label', customName: '',
+      url: 'https://source.example', headerKeys: ['Authorization', 'X-Scope-OrgID'], envHeaderKeys: [], secretSet: true, insecureTls: false,
+      uses: [{ binding: 'source-binding', integration: integration.kind, context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: 'source-snapshot' }]
+    })
+    await openSettings(page, integration.tab)
+    await page.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
+    await expect(page.getByText(/Later edits stay independent/)).toBeVisible()
+    await page.getByRole('button', { name: /staging https:\/\/source.example/ }).click()
+    await expect(page.getByText(/Replaces this cluster’s saved connection/)).toBeVisible()
+    if (integration.kind === 'cost') {
+      await page.getByRole('textbox', { name: 'This cluster’s Kubecost cluster ID' }).fill('destination-cluster')
+    }
+    await page.getByRole('button', { name: 'Copy & apply', exact: true }).click()
+    await expect.poll(() => state.writes.length).toBe(1)
+    expect(state.writes[0]).toMatchObject({ action: 'copy', binding: 'source-binding', connectionId: 'source-record', sourceRevision: 'source-snapshot', revision: '1', confirmRemoval: true })
+    expect(state.writes[0]).not.toHaveProperty('secret')
+    expect(state.writes[0]).not.toHaveProperty('headers')
+    if (integration.kind === 'cost') expect(state.writes[0].clusterId).toBe('destination-cluster')
+    await expect(page.getByRole('textbox', { name: integration.field, exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Edit shared connection' })).toHaveCount(0)
+  })
+}
+
+test('copy chooser cannot silently discard an existing endpoint draft', async ({ page }) => {
+  const state = await fixture(page)
+  await openSettings(page, 'Metrics')
+  await page.getByRole('textbox', { name: 'Metrics backend URL' }).fill('https://unsaved.example')
+  await expect(page.getByRole('button', { name: 'Copy from another cluster…', exact: true })).toBeDisabled()
+  expect(state.writes).toHaveLength(0)
+})
+
+test('copy after a target change warns before replacement and reload clears stale selection', async ({ page }) => {
+  const state = await fixture(page)
+  state.profiles.metrics.state = 'target_changed'
+  state.profiles.metrics.secretSet = true
+  state.profiles.metrics.error = 'Cluster connection changed'
+  state.connections.push({
+    id: 'source', type: 'metrics', name: '', customName: '', url: 'https://source.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
+    uses: [{ binding: 'source', integration: 'metrics', context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: 'old-source' }]
+  })
+  state.failNextCopy()
+  await openSettings(page, 'Metrics')
+  await page.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
+  await page.getByRole('button', { name: /staging https:\/\/source.example/ }).click()
+  await expect(page.getByText(/Replaces this cluster’s saved connection/)).toBeVisible()
+  await page.getByRole('button', { name: 'Copy & apply', exact: true }).click()
+  await expect(page.getByText(/Source settings changed/)).toBeVisible()
+  await page.getByRole('button', { name: 'Reload latest settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Copy & apply', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: /staging https:\/\/source.example/ }).click()
+  await page.getByRole('button', { name: 'Copy & apply', exact: true }).click()
+  await expect.poll(() => state.writes.length).toBe(2)
+  expect(state.writes[1].sourceRevision).toBe('refreshed-source')
+  expect(state.writes[1].confirmRemoval).toBe(true)
+})
 
 async function openSettings(page: Page, tab: string) {
   await page.goto('/')

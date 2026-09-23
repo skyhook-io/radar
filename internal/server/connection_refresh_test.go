@@ -256,10 +256,11 @@ func TestManageConnectionsWithoutActiveCluster(t *testing.T) {
 	if len(catalog.Connections) != 1 {
 		t.Fatal("offline catalog lost saved connection")
 	}
-	data, _ := json.Marshal(connections.Update{Revision: catalog.Profiles[config.IntegrationMetrics].Revision, Kind: config.IntegrationMetrics, Action: "rename", ConnectionID: catalog.Connections[0].ID, Name: "Offline rename"})
+	use := catalog.Connections[0].Uses[0]
+	data, _ := json.Marshal(connections.Update{Kind: config.IntegrationMetrics, Action: "forget", Binding: use.Binding, SourceRevision: use.Revision, ConfirmRemoval: true})
 	response = httptest.NewRecorder()
 	s.handleUpdateLocalConnection(response, httptest.NewRequest(http.MethodPut, "/api/integrations/connections", strings.NewReader(string(data))))
 	if response.Code != 200 {
-		t.Fatalf("offline rename: %d %s", response.Code, response.Body.String())
+		t.Fatalf("offline forget: %d %s", response.Code, response.Body.String())
 	}
 }

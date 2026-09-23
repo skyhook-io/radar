@@ -124,8 +124,7 @@ export function ArgoCDConnectionForm({
     <fieldset disabled={busy} className="min-w-0 space-y-4">
       <p className="text-sm text-theme-text-secondary">
         Compare Git configuration with live resources and show Argo CD health.
-        Auto-discovery works without setup where
-        anonymous reads are allowed.
+        Auto-discovery works without setup where anonymous reads are allowed.
       </p>
       <div className="space-y-1">
         <label
@@ -211,8 +210,7 @@ export function CostConnectionForm({
   onChange,
   onApply,
   applyLabel = 'Test & apply',
-  onDirtyChange,
-  shared = false
+  onDirtyChange
 }: {
   value: CostConnectionDraft
   secretSet: boolean
@@ -220,14 +218,15 @@ export function CostConnectionForm({
   onApply: (value: CostConnectionDraft) => Promise<void>
   applyLabel?: string
   onDirtyChange?: (dirty: boolean) => void
-  shared?: boolean
 }) {
   const id = useId()
   const [secret, setSecret] = useState<SecretEdit>({ action: 'keep' })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [overridesOpen, setOverridesOpen] = useState(!!value.url || !!value.clusterId || secretSet)
-  const automatic = !shared && value.mode === 'auto'
+  const [overridesOpen, setOverridesOpen] = useState(
+    !!value.url || !!value.clusterId || secretSet
+  )
+  const automatic = value.mode === 'auto'
   useEffect(
     () => onDirtyChange?.(secret.action !== 'keep'),
     [secret, onDirtyChange]
@@ -251,68 +250,83 @@ export function CostConnectionForm({
         Use OpenCost metrics from this cluster's metrics connection, or connect
         to a Kubecost Aggregator.
       </p>
-      {!shared && (
-        <label className="block text-sm font-medium text-theme-text-primary space-y-1">
-          Cost source
-          <select
-            aria-label="Cost source"
-            value={value.mode}
-            onChange={(e) => {
-              if (e.target.value === 'auto' && (value.url || value.clusterId || secretSet || secret.action !== 'keep')) setOverridesOpen(true)
-              onChange({
-                ...value,
-                mode: e.target.value as CostConnectionDraft['mode']
-              })
-            }}
-            className="block w-full rounded-md border border-theme-border bg-theme-elevated px-3 py-2 text-sm"
-          >
-            <option value="auto">Auto-detect</option>
-            <option value="prometheus">OpenCost via metrics connection</option>
-            <option value="kubecost">Kubecost</option>
-          </select>
-        </label>
-      )}
+      <label className="block text-sm font-medium text-theme-text-primary space-y-1">
+        Cost source
+        <select
+          aria-label="Cost source"
+          value={value.mode}
+          onChange={(e) => {
+            if (
+              e.target.value === 'auto' &&
+              (value.url ||
+                value.clusterId ||
+                secretSet ||
+                secret.action !== 'keep')
+            )
+              setOverridesOpen(true)
+            onChange({
+              ...value,
+              mode: e.target.value as CostConnectionDraft['mode']
+            })
+          }}
+          className="block w-full rounded-md border border-theme-border bg-theme-elevated px-3 py-2 text-sm"
+        >
+          <option value="auto">Auto-detect</option>
+          <option value="prometheus">OpenCost via metrics connection</option>
+          <option value="kubecost">Kubecost</option>
+        </select>
+      </label>
       {value.mode !== 'prometheus' && (
         <Disclosure
-          summary={value.url || value.clusterId || secretSet || secret.action !== 'keep' ? 'Kubecost connection overrides · configured' : 'Kubecost connection overrides (optional)'}
-          summaryClassName={automatic ? 'text-sm font-medium text-theme-text-secondary' : 'hidden'}
+          summary={
+            value.url ||
+            value.clusterId ||
+            secretSet ||
+            secret.action !== 'keep'
+              ? 'Kubecost connection overrides · configured'
+              : 'Kubecost connection overrides (optional)'
+          }
+          summaryClassName={
+            automatic
+              ? 'text-sm font-medium text-theme-text-secondary'
+              : 'hidden'
+          }
           open={!automatic || overridesOpen}
           onOpenChange={setOverridesOpen}
         >
-        <div className={automatic ? 'space-y-4 pt-3' : 'space-y-4'}>
-          <div className="space-y-1">
-            <label
-              htmlFor={id}
-              className="block text-sm font-medium text-theme-text-primary"
-            >
-              Kubecost Aggregator URL
-            </label>
-            <Input
-              className="block w-full min-w-0 px-3 py-2 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
-              id={id}
-              value={value.url}
-              onChange={(e) => onChange({ ...value, url: e.target.value })}
-              placeholder="Auto-discover, or https://kubecost.example.com"
-            />
-            <p className="text-xs text-theme-text-tertiary">
-              Leave empty for discovery in this cluster. Use the central
-              Aggregator URL for a federated setup.
-            </p>
-          </div>
-          <CredentialField
-            label="API key"
-            saved={secretSet}
-            value={secret}
-            onChange={setSecret}
-          />
-          {value.url.startsWith('http://') &&
-            (secretSet || secret.action === 'set') && (
-              <p className="text-xs text-warning-text">
-                The API key will travel over unencrypted HTTP. Prefer HTTPS
-                outside a trusted private network.
+          <div className={automatic ? 'space-y-4 pt-3' : 'space-y-4'}>
+            <div className="space-y-1">
+              <label
+                htmlFor={id}
+                className="block text-sm font-medium text-theme-text-primary"
+              >
+                Kubecost Aggregator URL
+              </label>
+              <Input
+                className="block w-full min-w-0 px-3 py-2 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
+                id={id}
+                value={value.url}
+                onChange={(e) => onChange({ ...value, url: e.target.value })}
+                placeholder="Auto-discover, or https://kubecost.example.com"
+              />
+              <p className="text-xs text-theme-text-tertiary">
+                Leave empty for discovery in this cluster. Use the central
+                Aggregator URL for a federated setup.
               </p>
-            )}
-          {!shared && (
+            </div>
+            <CredentialField
+              label="API key"
+              saved={secretSet}
+              value={secret}
+              onChange={setSecret}
+            />
+            {value.url.startsWith('http://') &&
+              (secretSet || secret.action === 'set') && (
+                <p className="text-xs text-warning-text">
+                  The API key will travel over unencrypted HTTP. Prefer HTTPS
+                  outside a trusted private network.
+                </p>
+              )}
             <Disclosure
               summary="Cluster mapping"
               defaultOpen={!!value.clusterId}
@@ -335,13 +349,11 @@ export function CostConnectionForm({
                 />
                 <p className="text-xs text-theme-text-tertiary">
                   The FinOps Agent's CLUSTER_ID, not the kubeconfig context
-                  name. Applies only to this context, even when the backend is
-                  shared.
+                  name. Applies only to this cluster.
                 </p>
               </div>
             </Disclosure>
-          )}
-        </div>
+          </div>
         </Disclosure>
       )}
       <button

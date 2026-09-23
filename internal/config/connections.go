@@ -253,7 +253,7 @@ func (p ClusterProfiles) ValidateChanges(before ClusterProfiles) error {
 	return nil
 }
 
-func (p *ClusterProfiles) RemoveAssignment(binding string, kind Integration, keep bool) error {
+func (p *ClusterProfiles) RemoveAssignment(binding string, kind Integration) error {
 	profile, ok := p.Profiles[binding]
 	if !ok {
 		return errors.New("context settings no longer exist")
@@ -268,7 +268,7 @@ func (p *ClusterProfiles) RemoveAssignment(binding string, kind Integration, kee
 	} else {
 		p.Profiles[binding] = profile
 	}
-	if a.ConnectionID != "" && !keep && len(p.Uses(a.ConnectionID)) == 0 {
+	if a.ConnectionID != "" && len(p.Uses(a.ConnectionID)) == 0 {
 		delete(p.Connections, a.ConnectionID)
 	}
 	return nil

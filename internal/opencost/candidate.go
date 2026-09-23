@@ -2,7 +2,6 @@ package opencost
 
 import (
 	"context"
-	"errors"
 	"sync"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -24,8 +23,8 @@ func captureKubecostTarget() kubecostTarget {
 	return kubecostTarget{k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName(), k8s.IsInCluster()}
 }
 
-func ProbeCandidate(ctx context.Context, config ManagerConfig, shared bool) error {
-	probe, err := PrepareCandidate(config, shared)
+func ProbeCandidate(ctx context.Context, config ManagerConfig) error {
+	probe, err := PrepareCandidate(config)
 	if err != nil {
 		return err
 	}
@@ -37,7 +36,7 @@ func ProbeCandidate(ctx context.Context, config ManagerConfig, shared bool) erro
 
 // PrepareCandidate captures discovery and transport before releasing the cluster
 // configuration lock. The returned probe does no live-cluster lookup.
-func PrepareCandidate(config ManagerConfig, shared bool) (func(context.Context) error, error) {
+func PrepareCandidate(config ManagerConfig) (func(context.Context) error, error) {
 	if config.Source == SourcePrometheus || config.Source == SourceAuto && !hasExplicitKubecostConfig(config) {
 		return nil, nil
 	}
@@ -45,23 +44,13 @@ func PrepareCandidate(config ManagerConfig, shared bool) (func(context.Context) 
 	if err := validateKubecostConfigContext(config, target.contextName); err != nil {
 		return nil, err
 	}
-	clusterID := config.ClusterID
-	if shared && clusterID == "" {
-		clusterID = "__radar_connection_check__"
-	}
-	if !shared {
-		var err error
-		clusterID, err = resolveKubecostClusterID(clusterID)
-		if err != nil {
-			return nil, err
-		}
+	clusterID, err := resolveKubecostClusterID(config.ClusterID)
+	if err != nil {
+		return nil, err
 	}
 	if config.URL != "" {
 		return func(ctx context.Context) error {
 			_, _, err := probeKubecostURL(ctx, config.URL, config.APIKey, clusterID)
-			if shared && errors.Is(err, ErrKubecostNoData) {
-				return nil
-			}
 			return err
 		}, nil
 	}
