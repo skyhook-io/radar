@@ -142,4 +142,18 @@ describe('RadarVersionLine', () => {
     expect(html).toContain('Open the in-cluster upgrade instructions and apply the change through GitOps')
     expect(html).not.toContain('Open it to upgrade through GitOps')
   })
+
+  it('offers What\'s new only when the host can open it', () => {
+    const upToDate = { ...version, latestVersion: '1.2.3', updateAvailable: false }
+    expect(renderToString(<RadarVersionLine version={upToDate} />)).not.toContain('What&#x27;s new')
+    expect(renderToString(<RadarVersionLine version={upToDate} onShowWhatsNew={() => {}} />)).toContain('What&#x27;s new')
+    expect(renderToString(<RadarVersionLine version={version} onShowWhatsNew={() => {}} />)).toContain('What&#x27;s new')
+  })
+
+  it('hides upgrade guidance when the host handles upgrades elsewhere', () => {
+    const html = renderToString(<RadarVersionLine version={version} showUpgrade={false} onShowWhatsNew={() => {}} />)
+    expect(html).toContain('v1.2.3')
+    expect(html).not.toContain('available')
+    expect(html).toContain('What&#x27;s new')
+  })
 })
