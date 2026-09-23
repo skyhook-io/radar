@@ -11,7 +11,7 @@ import {
   type ConditionTone,
 } from '../../ui/drawer-components'
 import { formatResources } from '../resource-utils'
-import { getKueueWorkloadStatus, getKueueWorkloadStatusCondition, isKueueWorkloadFailureReason, isKueueConditionStale } from '../resource-utils-kueue'
+import { getKueueWorkloadStatus, getKueueWorkloadPriority, getKueueWorkloadStatusCondition, isKueueWorkloadFailureReason, isKueueConditionStale } from '../resource-utils-kueue'
 
 const KUEUE_GROUP = 'kueue.x-k8s.io'
 
@@ -76,6 +76,7 @@ export function KueueWorkloadRenderer({ data, onNavigate }: KueueWorkloadRendere
   const status = data.status || {}
   const namespace = data.metadata?.namespace || ''
   const workloadStatus = getKueueWorkloadStatus(data)
+  const priority = getKueueWorkloadPriority(data)
   const statusCondition = getKueueWorkloadStatusCondition(data)
   const stale = isKueueConditionStale(statusCondition, data.metadata?.generation)
   const failure = workloadStatus.level === 'unhealthy' && !stale ? statusCondition : undefined
@@ -123,7 +124,7 @@ export function KueueWorkloadRenderer({ data, onNavigate }: KueueWorkloadRendere
               )
             }
           />
-          {typeof spec.priority === 'number' && <Property label="Priority" value={spec.priority} />}
+          {priority !== '-' && <Property label="Priority" value={priority} />}
           <Property label="Active" value={spec.active === false ? 'No' : 'Yes'} />
         </PropertyList>
       </Section>

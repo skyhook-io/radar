@@ -80,3 +80,24 @@ it('does not neutralize current admission because a historical condition is stal
   expect(html).toContain('Admitted')
   expect(html).not.toContain('earlier generation')
 })
+
+
+it.each([
+  [{ priority: 0 }, '0'],
+  [{ priorityClassName: 'batch-priority' }, 'batch-priority'],
+  [{ priorityClassRef: { name: 'training-priority' } }, 'training-priority'],
+])('shows priority from native fields %j', (fields, value) => {
+  const html = render({}, { ...base, spec: { ...base.spec, ...fields } })
+  expect(html).toContain('Priority')
+  expect(html).toContain(value)
+})
+
+it('labels a stale terminal report even when an admission condition has a newer generation', () => {
+  const html = render({ conditions: [
+    { type: 'Finished', status: 'True', reason: 'FailedToStart', observedGeneration: 2 },
+    { type: 'Admitted', status: 'True', observedGeneration: 3 },
+  ] }, { ...base, metadata: { ...base.metadata, generation: 3 } })
+  expect(html).toContain('Reported state describes an earlier generation')
+  expect(html).toContain('Reported state may not reflect the current specification')
+  expect(html).not.toContain('Workload finished unsuccessfully')
+})
