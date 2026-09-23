@@ -59,17 +59,17 @@ func DropManagedFields(obj any) (any, error) {
 				ResourceVersion:   event.ResourceVersion,
 				CreationTimestamp: event.CreationTimestamp,
 			},
-			InvolvedObject: event.InvolvedObject,
-			Reason:         event.Reason,
-			Message:        event.Message,
-			Type:           event.Type,
-			Count:          event.Count,
-			FirstTimestamp: event.FirstTimestamp,
-			LastTimestamp:  event.LastTimestamp,
-			// Events recorded through events.k8s.io carry their times here
-			// instead of in First/LastTimestamp.
-			EventTime: event.EventTime,
-			Series:    event.Series,
+			InvolvedObject:      event.InvolvedObject,
+			Reason:              event.Reason,
+			Message:             event.Message,
+			Type:                event.Type,
+			Source:              event.Source,
+			ReportingController: event.ReportingController,
+			Count:               event.Count,
+			FirstTimestamp:      event.FirstTimestamp,
+			LastTimestamp:       event.LastTimestamp,
+			EventTime:           event.EventTime,
+			Series:              event.Series,
 		}, nil
 	}
 
