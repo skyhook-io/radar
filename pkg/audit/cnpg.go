@@ -60,6 +60,7 @@ func checkCNPGDeclarativeBackup(tr *evalTracker, input *CheckInput) []Finding {
 		}
 		findings = append(findings, Finding{
 			Kind:      "Cluster",
+			Group:     c.GroupVersionKind().Group,
 			Namespace: ns,
 			Name:      name,
 			CheckID:   checkCNPGNoDeclarativeBackup,

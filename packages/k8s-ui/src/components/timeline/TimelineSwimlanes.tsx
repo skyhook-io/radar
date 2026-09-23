@@ -47,6 +47,7 @@ import { CollapseChevron } from '../ui/Collapse'
 import { Tooltip } from '../ui/Tooltip'
 import { ResourceRefBadge } from '../ui/drawer-components'
 import { buildResourceHierarchy, extractPinnedLanes, removePinnedLanes, resolvePinnedLaneIds, isProblematicEvent, laneTrackEvents, isChildVisibleInWindow, collidingLaneKeys, laneCollisionKey, type ResourceLane as BaseResourceLane, type TimelineGrouping, type PinnedLaneRef } from '../../utils/resource-hierarchy'
+import { builtinGroupForKind } from '../../utils/api-resources'
 import { groupQualifiesLaneId } from '../../utils/navigation'
 import type { AppMembershipIndex } from '../../utils/applications'
 import { Layers } from 'lucide-react'
@@ -2119,6 +2120,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           onClose={closeDrawer}
           onResourceClick={onResourceClick}
           allEvents={filteredEvents}
+          resourceLanes={lanes}
         />
       )}
     </div>
@@ -3006,6 +3008,7 @@ interface EventDetailPanelProps {
   // Every event in view — powers the ±15-min correlation feed ("what else
   // happened around this deploy?"). Absent → the correlation section is omitted.
   allEvents?: TimelineEvent[]
+  resourceLanes?: BaseResourceLane[]
 }
 
 // The ±15-min window a single event's rail pulls correlated neighbours from
@@ -3047,7 +3050,7 @@ function ClusterEventRow({ event, active, onClick }: { event: TimelineEvent; act
   )
 }
 
-export function EventDetailPanel({ events, selectedId, onSelectId, onClose, onResourceClick, allEvents }: EventDetailPanelProps) {
+export function EventDetailPanel({ events, selectedId, onSelectId, onClose, onResourceClick, allEvents, resourceLanes }: EventDetailPanelProps) {
   // ONE drawer anatomy: rail left, detail right — for one event or
   // fifty. The shape never changes with count, so muscle memory holds. A single
   // clicked dot renders as a rail of one plus its ±15-min correlated neighbors,
@@ -3097,16 +3100,30 @@ export function EventDetailPanel({ events, selectedId, onSelectId, onClose, onRe
   // Index where correlated neighbors start (single-origin rails only) — a
   // divider separates "the dot you clicked" from "what happened around it".
   const neighborsFrom = events.length === 1 && railEvents.length > 1 ? 1 : -1
-  const openResource = () =>
+  const selectedLane = useMemo(() => {
+    const pending = [...(resourceLanes ?? [])];
+    while (pending.length > 0) {
+      const lane = pending.pop()!;
+      if (lane.events.some(event => event.id === selected.id)) return lane;
+      pending.push(...(lane.children ?? []));
+    }
+    return undefined;
+  }, [resourceLanes, selected.id]);
+  const group = selected.apiVersion
+    ? apiVersionToGroup(selected.apiVersion)
+    : selectedLane?.identityResolved && selectedLane.kind === selected.kind
+      ? selectedLane.group
+      : builtinGroupForKind(selected.kind);
+  const canOpenResource = !selectedLane?.identityAmbiguous && group !== undefined;
+  const openResource = () => {
+    if (!canOpenResource) return;
     onResourceClick?.({
-      kind: kindToPluralWithGroup(
-        selected.kind,
-        apiVersionToGroup(selected.apiVersion),
-      ),
+      kind: kindToPluralWithGroup(selected.kind, group ?? ''),
       namespace: selected.namespace,
       name: selected.name,
-      group: apiVersionToGroup(selected.apiVersion),
-    })
+      group,
+    });
+  };
 
   return (
     <div
@@ -3208,8 +3225,8 @@ export function EventDetailPanel({ events, selectedId, onSelectId, onClose, onRe
               {/* The ONE click target for the resource — the same badge used by
                   every Radar drawer, so it reads as "this navigates". */}
               <ResourceRefBadge
-                resourceRef={{ kind: selected.kind || 'Event', namespace: selected.namespace ?? '', name: selected.name }}
-                onClick={onResourceClick ? openResource : undefined}
+                resourceRef={{ kind: selected.kind || 'Event', namespace: selected.namespace ?? '', name: selected.name, group }}
+                onClick={onResourceClick && canOpenResource ? openResource : undefined}
               />
               {selected.namespace && <span className="text-xs text-theme-text-tertiary">in {selected.namespace}</span>}
             </dd>

@@ -1,10 +1,14 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/internal/k8s"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/settings"
 	bp "github.com/skyhook-io/radar/pkg/audit"
@@ -95,10 +99,47 @@ func TestHandleAudit_RawSkipsLocalSettings(t *testing.T) {
 	}
 }
 
-// handleAuditResource mirrors handleAudit's `?raw` gate verbatim (the same
-// `if !queryTrue(r, "raw") { applyAuditSettings }`), covered by the handleAudit
-// test above + TestQueryTrue. A dedicated handler test for it would need a
-// core-group (group="") resource that carries findings in an ignored namespace;
-// the shared fixtures only have group-qualified workloads (Deployments →
-// group "apps"), which the per-resource handler's group="" lookup can't resolve
-// — a separate, pre-existing limitation, not the raw gate.
+func TestAuditResourceExactGroup(t *testing.T) {
+	t.Cleanup(func() { auditCache.mu.Lock(); auditCache.results = nil; auditCache.mu.Unlock() })
+	findings := []bp.Finding{
+		{Kind: "Job", Group: "batch", Namespace: "default", Name: "shared", CheckID: "core"},
+		{Kind: "Job", Group: "batch.volcano.sh", Namespace: "default", Name: "shared", CheckID: "volcano"},
+		{Kind: "IngressRoute", Group: "traefik.io", Namespace: "default", Name: "shared", CheckID: "modern"},
+		{Kind: "IngressRoute", Group: "traefik.containo.us", Namespace: "default", Name: "shared", CheckID: "legacy"},
+	}
+	for _, tc := range []struct {
+		kind, group, want string
+		status            int
+	}{
+		{"Job", "", "core", 200}, {"Job", "batch.volcano.sh", "volcano", 200},
+		{"IngressRoute", "traefik.io", "modern", 200}, {"IngressRoute", "", "", 400},
+	} {
+		t.Run(tc.kind+tc.group, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/api/audit/resource/"+tc.kind+"/default/shared?raw=true&namespaces=default&group="+tc.group, nil)
+			route := chi.NewRouteContext()
+			route.URLParams.Add("kind", tc.kind)
+			route.URLParams.Add("namespace", "default")
+			route.URLParams.Add("name", "shared")
+			req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, route))
+			auditCache.mu.Lock()
+			auditCache.results = &bp.ScanResults{Findings: findings}
+			auditCache.key = auditKey(k8s.GetResourceCache(), testServerSrv.parseNamespacesForUser(req), testServerSrv.auditOptions(req))
+			auditCache.expiresAt = time.Now().Add(time.Minute)
+			auditCache.mu.Unlock()
+			rec := httptest.NewRecorder()
+			testServerSrv.handleAuditResource(rec, req)
+			if rec.Code != tc.status {
+				t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+			}
+			if tc.status == 200 {
+				var got []bp.Finding
+				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+					t.Fatal(err)
+				}
+				if len(got) != 1 || got[0].CheckID != tc.want {
+					t.Fatalf("wrong findings: %+v", got)
+				}
+			}
+		})
+	}
+}

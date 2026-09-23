@@ -426,6 +426,9 @@ func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf
 		}
 	}
 
+	if opts.RequireAPIVersion && event.APIVersion == "" {
+		return false
+	}
 	if len(opts.APIGroups) > 0 && event.APIVersion != "" {
 		group := ""
 		if idx := strings.IndexByte(event.APIVersion, '/'); idx > 0 {

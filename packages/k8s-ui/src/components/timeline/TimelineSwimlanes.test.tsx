@@ -324,6 +324,21 @@ describe('EventDetailPanel cluster mode (a ×N pill exposes every member)', () =
   // Ordered most-severe-first, as the drawer opens it (Warning → delete → add → update).
   const ordered = [...clusterEvents].sort((a, b) => eventSeverityRank(b) - eventSeverityRank(a))
 
+  it('does not link an ambiguous event through the detail badge', () => {
+    const event = mk('ambiguous', 'update', T0, {kind: 'Cluster', name: 'shared'});
+    const lanes = [{id: 'unresolved', kind: 'Cluster', name: 'shared', namespace: 'default', events: [event], isWorkload: false, identityAmbiguous: true}];
+    const html = renderToString(<EventDetailPanel events={[event]} selectedId={event.id} onSelectId={() => {}} onClose={() => {}} onResourceClick={() => {}} resourceLanes={lanes} />);
+    expect(html).not.toMatch(/<button[^>]*class="badge[^>]*>/);
+    expect(html).toContain('shared');
+  })
+
+  it('keeps an unambiguous resolved historical event link', () => {
+    const event = mk('resolved', 'update', T0, {kind: 'Cluster', name: 'shared'});
+    const lanes = [{id: 'exact', kind: 'Cluster', name: 'shared', namespace: 'default', group: 'postgresql.cnpg.io', events: [event], isWorkload: false, identityResolved: true}];
+    const html = renderToString(<EventDetailPanel events={[event]} selectedId={event.id} onSelectId={() => {}} onClose={() => {}} onResourceClick={() => {}} resourceLanes={lanes} />);
+    expect(html).toMatch(/<button[^>]*class="badge[^>]*>/);
+  })
+
   it('renders a row for every clustered event plus the summary header', () => {
     const html = renderToString(
       <EventDetailPanel events={ordered} selectedId={ordered[0].id} onSelectId={() => {}} onClose={() => {}} />,

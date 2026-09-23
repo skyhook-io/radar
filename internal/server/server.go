@@ -3814,6 +3814,10 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		// clusters; the timeline view answers for the current one only.
 		ClusterContext: k8s.ActiveClusterContext(),
 	}
+	if r.URL.Query().Has("group") {
+		opts.APIGroups = []string{r.URL.Query().Get("group")}
+		opts.RequireAPIVersion = true
+	}
 	if sinceSeqStr != "" {
 		n, err := strconv.ParseInt(sinceSeqStr, 10, 64)
 		if err != nil || n < 0 {

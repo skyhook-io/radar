@@ -528,6 +528,14 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 		if got := query("core", []string{""}, 10); fmt.Sprint(got) != "[wrong-core unknown]" {
 			t.Errorf("core group: got %v, want [wrong-core unknown]", got)
 		}
+		exact, err := store.Query(ctx, timeline.QueryOptions{
+			Kinds: []string{"Deployment"}, Names: []string{"web"}, APIGroups: []string{"apps"},
+			RequireAPIVersion: true, Limit: 1, IncludeManaged: true,
+		})
+		if err != nil || fmt.Sprint(idsOfEvents(exact)) != "[matching]" {
+			t.Fatalf("exact identity filter must run before limit: got %v, error %v", idsOfEvents(exact), err)
+		}
+
 	})
 
 	// Time-range narrowing is separate from arrival-order narrowing: Since/Until

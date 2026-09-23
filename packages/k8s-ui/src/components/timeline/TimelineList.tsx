@@ -30,6 +30,7 @@ import { isChangeEvent, isHistoricalEvent } from '../../types'
 import { getHealthBadgeColor, SEVERITY_BADGE } from '../../utils/badge-colors'
 import { ResourceRefBadge } from '../ui/drawer-components'
 import type { NavigateToResource } from '../../utils/navigation'
+import { builtinGroupForKind } from '../../utils/api-resources'
 import { kindToPluralWithGroup, refToSelectedResource, apiVersionToGroup } from '../../utils/navigation'
 import { pluralize } from '../../utils/pluralize'
 
@@ -602,8 +603,10 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick, compact, sele
             {/* Resource info */}
             <div className="flex items-center gap-2 flex-wrap">
               <button
+                disabled={!item.apiVersion && builtinGroupForKind(item.kind) === undefined}
                 onClick={(e) => {
                   e.stopPropagation()
+                  if (!item.apiVersion && builtinGroupForKind(item.kind) === undefined) return
                   onResourceClick?.({
                     kind: kindToPluralWithGroup(
                       item.kind,
@@ -786,8 +789,10 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
             {/* Resource info */}
             <div className="flex items-center gap-2 flex-wrap">
               <button
+                disabled={!first.apiVersion && builtinGroupForKind(first.kind) === undefined}
                 onClick={(e) => {
                   e.stopPropagation()
+                  if (!first.apiVersion && builtinGroupForKind(first.kind) === undefined) return
                   onResourceClick?.({
                     kind: kindToPluralWithGroup(
                       first.kind,

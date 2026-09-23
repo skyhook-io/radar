@@ -52,10 +52,8 @@ func TestCNPGDeclarativeBackup_FlagsClusterWithNoSchedule(t *testing.T) {
 	if f.Kind != "Cluster" || f.Namespace != "pg" || f.Name != "unprotected" {
 		t.Errorf("wrong subject: %+v", f)
 	}
-	// Group must stay empty — the audit backfills it, and the per-resource
-	// drill-down looks CRDs up under "".
-	if f.Group != "" {
-		t.Errorf("Group = %q, want empty", f.Group)
+	if f.Group != "postgresql.cnpg.io" {
+		t.Errorf("Group = %q, want postgresql.cnpg.io", f.Group)
 	}
 	if tr.counts[checkCNPGNoDeclarativeBackup]["pg"] != 1 {
 		t.Errorf("expected the cluster to be counted as evaluated once")

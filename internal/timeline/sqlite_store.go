@@ -481,6 +481,9 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 		query.WriteString(")")
 	}
 
+	if opts.RequireAPIVersion {
+		query.WriteString(" AND COALESCE(api_version, '') <> ''")
+	}
 	if len(opts.APIGroups) > 0 {
 		// Keep rows whose emitter did not record apiVersion: they are unknown,
 		// not evidence of a group mismatch. For known versions, extract the

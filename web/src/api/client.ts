@@ -1,3 +1,5 @@
+import { canonicalResourceGroup } from '@skyhook-io/k8s-ui/utils/api-resources'
+import { knownKindForPluralWithGroup, pluralToKind } from '@skyhook-io/k8s-ui/utils/navigation'
 import { useEffect, useRef } from 'react'
 import type { KueueAdmissionResponse } from '@skyhook-io/k8s-ui/types/scheduling'
 import type {
@@ -57,7 +59,7 @@ import type {
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
-import { apiVersionToGroup, pluralToKind } from '../utils/navigation'
+import { apiVersionToGroup } from '../utils/navigation'
 import type { DeploymentMode } from '../types'
 
 // Auto-refresh cadences (ms) — named constants for each polled hook's
@@ -724,10 +726,14 @@ export function useResourceAudit(
   kind: string,
   namespace: string,
   name: string,
+  group?: string,
 ) {
+  const params = new URLSearchParams();
+  if (group) params.set("group", group);
+  const query = params.toString();
   return useQuery<AuditFinding[]>({
-    queryKey: ["audit", "resource", kind, namespace, name],
-    queryFn: () => fetchJSON(`/audit/resource/${kind}/${namespace}/${name}`),
+    queryKey: ["audit", "resource", kind, group ?? "", namespace, name],
+    queryFn: () => fetchJSON(`/audit/resource/${kind}/${namespace}/${name}${query ? `?${query}` : ""}`),
     staleTime: 30000,
   });
 }
@@ -2851,10 +2857,12 @@ export function useResourceEvents(
   kind: string,
   namespace: string,
   name: string,
+  group?: string,
 ): ResourceEventsResult {
   // The timeline store keys events by their K8s Kind (singular PascalCase, e.g. "Pod"),
   // but callers pass the URL-form kind ("pods").
-  const singularKind = pluralToKind(kind);
+  const singularKind = knownKindForPluralWithGroup(kind, group ?? "") ?? pluralToKind(kind);
+  const resolvedGroup = canonicalResourceGroup(singularKind, group);
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
   // Include managed resources — when viewing a specific resource (e.g. a Pod owned
@@ -2865,18 +2873,19 @@ export function useResourceEvents(
     p.set("namespace", namespace);
     p.set("kind", singularKind);
     p.set("name", name);
+    if (resolvedGroup !== undefined) p.set("group", resolvedGroup);
     p.set("include_managed", "true");
     p.set("since", since);
     return p;
   };
 
-  const enabled = Boolean(kind && namespace && name);
+  const enabled = Boolean(kind && namespace && name && resolvedGroup !== undefined);
 
   // K8s events: high limit so the full set is always returned. The number of
   // distinct K8s events per resource is naturally bounded — kubelet/controllers
   // dedupe via Reason+InvolvedObject and bump count.
   const k8sQuery = useQuery<TimelineEvent[]>({
-    queryKey: ["resource-events", "k8s", singularKind, namespace, name],
+    queryKey: ["resource-events", "k8s", singularKind, resolvedGroup, namespace, name],
     queryFn: async () => {
       const params = baseParams();
       params.set("sources", "k8s_event");
@@ -2890,7 +2899,7 @@ export function useResourceEvents(
   // Resource updates (informer diffs + historical): bounded so a flapping
   // resource doesn't return an unbounded payload.
   const updatesQuery = useQuery<TimelineEvent[]>({
-    queryKey: ["resource-events", "updates", singularKind, namespace, name],
+    queryKey: ["resource-events", "updates", singularKind, resolvedGroup, namespace, name],
     queryFn: async () => {
       const params = baseParams();
       params.set("sources", "informer,historical");

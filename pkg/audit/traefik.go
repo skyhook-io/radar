@@ -63,11 +63,9 @@ func checkTraefikDanglingRefs(tr *evalTracker, input *CheckInput) []Finding {
 			return
 		}
 		seen[key] = true
-		// Group is intentionally left empty — the audit backfills group from the
-		// builtin table (CRDs resolve to ""), which is what the per-resource
-		// drill-down looks up. Setting it would hide these findings there.
 		findings = append(findings, Finding{
 			Kind:      subject.GetKind(),
+			Group:     traefikGroupOf(subject),
 			Namespace: subject.GetNamespace(), Name: subject.GetName(),
 			CheckID: checkID, Category: CategoryReliability, Severity: SeverityWarning,
 			Message: msg,

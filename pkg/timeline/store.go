@@ -69,11 +69,13 @@ type QueryOptions struct {
 	// limits are applied. Use "" for the core group. Events whose APIVersion
 	// was not recorded are retained as unknown rather than treated as a known
 	// mismatch (empty slice = all groups).
-	APIGroups  []string
-	Since      time.Time     // Filter events after this time
-	Until      time.Time     // Filter events before this time
-	Sources    []EventSource // Filter by event source (empty = all)
-	EventTypes []EventType   // Filter by event type, e.g. add/delete (empty = all)
+	APIGroups []string
+	// RequireAPIVersion excludes unknown identities for exact resource drill-downs.
+	RequireAPIVersion bool
+	Since             time.Time     // Filter events after this time
+	Until             time.Time     // Filter events before this time
+	Sources           []EventSource // Filter by event source (empty = all)
+	EventTypes        []EventType   // Filter by event type, e.g. add/delete (empty = all)
 	// ClusterContext scopes results to one cluster's events (empty = all).
 	// Anything answering "what happened on THIS cluster" must set it: the
 	// SQLite store outlives context switches, and rows written before the

@@ -17,6 +17,7 @@ import (
 	"github.com/skyhook-io/radar/internal/settings"
 	bp "github.com/skyhook-io/radar/pkg/audit"
 	chk "github.com/skyhook-io/radar/pkg/checks"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // apiResourceKindMap maps lowercase plural API resource names to Go Kind names
@@ -187,23 +188,34 @@ func (s *Server) handleAuditResource(w http.ResponseWriter, r *http.Request) {
 	}
 	index := bp.IndexByResource(results.Findings)
 
-	// Resolve to the Go kind (built-in plural "deployments" → "Deployment"), then
-	// look up with the audit's keying convention. Findings carry group backfilled
-	// from the builtin table (built-ins → their group e.g. "apps"; CRDs → ""), so
-	// a bare group="" lookup missed every built-in finding keyed under a real
-	// group (Deployment under "apps", Job under "batch", …) — the drawer showed
-	// nothing for them. Group still resolves to "" for CRDs, so those keep working.
-	goKind := kind
-	if mapped := apiResourceToKind(kind); mapped != kind {
-		goKind = mapped
+	goKind := apiResourceToKind(kind)
+	group := r.URL.Query().Get("group")
+	if builtinKind, ok := k8s.BuiltinKindForResource(kind); ok {
+		goKind = builtinKind
 	}
-	group := bp.GroupForBuiltinKind(goKind)
+	if discovery := k8s.GetResourceDiscovery(); discovery != nil && group != "" {
+		if resource, ok := discovery.GetResourceWithGroup(kind, group); ok {
+			goKind = resource.Kind
+		}
+	}
+	if group == "" {
+		if builtinGroup, builtin := resourceid.BuiltinGroup(goKind); builtin {
+			group = builtinGroup
+		} else {
+			found := false
+			for _, finding := range results.Findings {
+				if finding.Kind != goKind || finding.Namespace != namespace || finding.Name != name {
+					continue
+				}
+				if found && group != finding.Group {
+					s.writeError(w, http.StatusBadRequest, "resource kind is ambiguous; provide group")
+					return
+				}
+				group, found = finding.Group, true
+			}
+		}
+	}
 	findings := index[bp.ResourceKey(group, goKind, namespace, name)]
-	if findings == nil && group != "" {
-		// Defensive: resolve even if a finding for this kind was emitted with an
-		// empty group despite the builtin table classifying it under a real one.
-		findings = index[bp.ResourceKey("", goKind, namespace, name)]
-	}
 	if findings == nil {
 		findings = []bp.Finding{}
 	}

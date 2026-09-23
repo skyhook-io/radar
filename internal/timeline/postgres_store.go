@@ -870,6 +870,9 @@ func (s *PostgresStore) buildQuery(opts QueryOptions) (string, []any, error) {
 		}
 		addInFilter("kind", vals)
 	}
+	if opts.RequireAPIVersion {
+		query.WriteString(" AND COALESCE(api_version, '') <> ''")
+	}
 	if len(opts.APIGroups) > 0 {
 		// Unknown versions stay visible; known group collisions must be excluded
 		// before LIMIT so they cannot crowd out the requested resource's changes.

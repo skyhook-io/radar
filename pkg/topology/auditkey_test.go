@@ -6,9 +6,9 @@ func TestStampAuditKeys(t *testing.T) {
 	nodes := []Node{
 		{Kind: "Role", Name: "cloud-role", Data: map[string]any{"apiVersion": "iam.aws.upbound.io/v1beta1"}},
 		{Kind: KindDeployment, Name: "api", Data: map[string]any{"namespace": "prod", "apiVersion": "apps/v1"}},
-		{Kind: "IngressRoute", Name: "r", Data: map[string]any{"namespace": "web"}},     // CRD → group ""
-		{Kind: KindIstioGateway, Name: "gw", Data: map[string]any{"namespace": "mesh"}}, // collision → real kind "Gateway"
-		{Kind: KindNamespace, Name: "team-a", Data: nil},                                // nil Data + cluster-scoped (no ns)
+		{Kind: "IngressRoute", Name: "r", Data: map[string]any{"namespace": "web", "apiVersion": "traefik.io/v1alpha1"}}, // CRD → group ""
+		{Kind: KindIstioGateway, Name: "gw", Data: map[string]any{"namespace": "mesh"}},                                  // collision → real kind "Gateway"
+		{Kind: KindNamespace, Name: "team-a", Data: nil},                                                                 // nil Data + cluster-scoped (no ns)
 	}
 
 	out := stampAuditKeys(nodes)
@@ -16,7 +16,7 @@ func TestStampAuditKeys(t *testing.T) {
 	want := map[string]string{
 		"cloud-role": "iam.aws.upbound.io|Role||cloud-role",
 		"api":        "apps|Deployment|prod|api",
-		"r":          "|IngressRoute|web|r",
+		"r":          "traefik.io|IngressRoute|web|r",
 		"gw":         "|Gateway|mesh|gw", // remapped from KindIstioGateway, group still "" (audit convention)
 		"team-a":     "|Namespace||team-a",
 	}

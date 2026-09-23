@@ -2026,3 +2026,19 @@ func TestSmokeRequireConnected(t *testing.T) {
 		})
 	}
 }
+
+func TestSmokeChangesExactGroup(t *testing.T) {
+	now := time.Now()
+	events := []timeline.TimelineEvent{}
+	for i, version := range []string{"batch/v1", "batch.volcano.sh/v1alpha1", ""} {
+		events = append(events, timeline.TimelineEvent{ID: fmt.Sprintf("smoke-group-%d", i), Timestamp: now.Add(time.Duration(i) * time.Second), Source: timeline.SourceInformer, Kind: "Job", APIVersion: version, Namespace: "default", Name: "smoke-group-job", EventType: timeline.EventTypeUpdate, ClusterContext: k8s.ActiveClusterContext()})
+	}
+	if err := timeline.RecordEvents(context.Background(), events); err != nil {
+		t.Fatal(err)
+	}
+	var body []timeline.TimelineEvent
+	assertOK(t, get(t, "/api/changes?namespace=default&kind=Job&name=smoke-group-job&group=batch&include_managed=true&filter=all&limit=1"), &body)
+	if len(body) != 1 || body[0].APIVersion != "batch/v1" {
+		t.Fatalf("wrong group events: %+v", body)
+	}
+}

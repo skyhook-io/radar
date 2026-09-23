@@ -192,7 +192,7 @@ func TestCheckTraefikDanglingRefs(t *testing.T) {
 		}
 	})
 
-	t.Run("findings carry empty Group (visible in per-resource drill-down)", func(t *testing.T) {
+	t.Run("findings carry their exact group", func(t *testing.T) {
 		input := &CheckInput{
 			AllServices:               []*corev1.Service{},
 			TraefikAuthoritativeKinds: authoritative(),
@@ -204,8 +204,8 @@ func TestCheckTraefikDanglingRefs(t *testing.T) {
 		if len(got) != 1 {
 			t.Fatalf("want 1 finding, got %d", len(got))
 		}
-		if got[0].Group != "" {
-			t.Errorf("Traefik findings must leave Group empty for drill-down lookup, got %q", got[0].Group)
+		if got[0].Group != g {
+			t.Errorf("Traefik finding lost its group, got %q", got[0].Group)
 		}
 	})
 
@@ -315,8 +315,8 @@ func TestCheckTraefikMiddlewareSubjectRefs(t *testing.T) {
 		if len(got) != 1 {
 			t.Fatalf("want 1 finding from a middleware-only namespace, got %d", len(got))
 		}
-		if got[0].Kind != "Middleware" || got[0].Group != "" {
-			t.Errorf("finding must be on the Middleware with empty Group, got kind=%q group=%q", got[0].Kind, got[0].Group)
+		if got[0].Kind != "Middleware" || got[0].Group != g {
+			t.Errorf("finding must preserve the Middleware group, got kind=%q group=%q", got[0].Kind, got[0].Group)
 		}
 	})
 }

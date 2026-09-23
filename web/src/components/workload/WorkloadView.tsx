@@ -772,7 +772,7 @@ export function WorkloadView({
     isLoading: resourceFocusedEventsLoading,
     k8sError: resourceFocusedK8sError,
     updatesError: resourceFocusedUpdatesError,
-  } = useResourceEvents(apiKind, namespace, name)
+  } = useResourceEvents(apiKind, namespace, name, effectiveGroup)
 
   // Fetch all events for this resource's namespace (only when expanded)
   const { data: allEvents, isLoading: eventsLoading } = useChanges({
@@ -879,7 +879,7 @@ export function WorkloadView({
   // the renderer banners. The backend canonicalizes a plural kind via discovery,
   // so using the normalized API kind resolves direct links and app navigation alike.
   const { data: liveIssues, isPending: issuesPending } = useResourceIssues(apiKind, rest.group, namespace, name)
-  const { data: auditFindings } = useResourceAudit(apiKind, namespace, name)
+  const { data: auditFindings } = useResourceAudit(apiKind, namespace, name, effectiveGroup)
   const hasOperationalIssues = Boolean(liveIssues?.length)
   const {
     onCompareTo,
