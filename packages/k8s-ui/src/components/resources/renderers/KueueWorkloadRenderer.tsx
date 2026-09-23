@@ -134,8 +134,8 @@ export function KueueWorkloadRenderer({ data, onNavigate }: KueueWorkloadRendere
           <div className="space-y-2">
             {checks.map((check: any, index: number) => (
               <div key={check?.name || index} className="card-inner">
-                <div className="mb-2 flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-medium text-theme-text-primary">
+                <div className="mb-2 grid grid-cols-[minmax(0,1fr)_6rem] items-start gap-2">
+                  <span className="min-w-0 break-words text-sm font-medium text-theme-text-primary [&_button]:text-left">
                     <ResourceLink
                       name={check?.name || `check-${index + 1}`}
                       kind="admissionchecks"
@@ -143,7 +143,7 @@ export function KueueWorkloadRenderer({ data, onNavigate }: KueueWorkloadRendere
                       onNavigate={onNavigate}
                     />
                   </span>
-                  <Badge severity={admissionCheckSeverity(check?.state)} size="sm">
+                  <Badge severity={admissionCheckSeverity(check?.state)} size="sm" className="justify-self-start">
                     {check?.state || 'Unknown'}
                   </Badge>
                 </div>
