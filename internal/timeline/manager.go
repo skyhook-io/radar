@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	corev1 "k8s.io/api/core/v1"
 
 	pkgtimeline "github.com/skyhook-io/radar/pkg/timeline"
@@ -105,6 +107,10 @@ func NewInformerEvent(kind, apiVersion, namespace, name, uid, resourceVersion st
 }
 func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEvent {
 	return pkgtimeline.NewK8sEventTimelineEvent(event, owner)
+}
+
+func K8sEventSubject(event *corev1.Event) resourceid.Reference {
+	return pkgtimeline.K8sEventSubject(event)
 }
 func NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
 	return pkgtimeline.NewHistoricalEvent(clusterContext, kind, apiVersion, namespace, name, ts, reason, message, healthState, owner, labels)

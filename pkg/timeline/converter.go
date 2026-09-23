@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -52,6 +54,12 @@ func NewInformerEvent(kind, apiVersion, namespace, name, uid, resourceVersion st
 	}
 }
 
+// K8sEventSubject is the reference an Event makes to the object it is about.
+func K8sEventSubject(event *corev1.Event) resourceid.Reference {
+	inv := event.InvolvedObject
+	return resourceid.EventSubject(inv.APIVersion, inv.Kind, inv.Namespace, inv.Name, string(inv.UID), event.Namespace)
+}
+
 // NewK8sEventTimelineEvent creates a TimelineEvent from a corev1.Event.
 // The id is the Event uid — one logical row per Event, deliberately NOT one
 // row per count/message revision. The count/lastTimestamp/message mutate in
@@ -74,15 +82,16 @@ func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEve
 		evtType = EventTypeWarning
 	}
 
+	subject := K8sEventSubject(event)
 	return TimelineEvent{
 		ID:         string(event.UID),
 		Timestamp:  ts,
 		Source:     SourceK8sEvent,
-		Kind:       event.InvolvedObject.Kind,
+		Kind:       subject.Kind,
 		APIVersion: event.InvolvedObject.APIVersion,
-		Namespace:  event.Namespace,
-		Name:       event.InvolvedObject.Name,
-		UID:        string(event.InvolvedObject.UID),
+		Namespace:  subject.Namespace,
+		Name:       subject.Name,
+		UID:        subject.UID,
 		EventType:  evtType,
 		Reason:     event.Reason,
 		Message:    event.Message,

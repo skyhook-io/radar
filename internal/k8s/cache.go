@@ -689,11 +689,11 @@ func recordK8sEventToTimeline(clusterContext string, obj any) {
 // has already left the cache. A total miss returns nils — the event ships with
 // whatever the event itself provides, exactly as before.
 func enrichInvolvedObject(event *corev1.Event) (owner *timeline.OwnerInfo, labels map[string]string, createdAt *time.Time) {
-	inv := event.InvolvedObject
-	if o, l, c, ok := liveInvolvedObject(string(inv.UID), inv.Kind, event.Namespace, inv.Name); ok {
+	subject := timeline.K8sEventSubject(event)
+	if o, l, c, ok := liveInvolvedObject(subject); ok {
 		return o, l, c
 	}
-	if entry, ok := tombstones.Get(string(inv.UID), inv.APIVersion, inv.Kind, event.Namespace, inv.Name); ok {
+	if entry, ok := tombstones.Get(subject.UID, event.InvolvedObject.APIVersion, subject.Kind, subject.Namespace, subject.Name); ok {
 		return entry.Owner, entry.Labels, entry.CreatedAt
 	}
 	return nil, nil, nil
@@ -702,19 +702,24 @@ func enrichInvolvedObject(event *corev1.Event) (owner *timeline.OwnerInfo, label
 // liveInvolvedObject reads the involved object straight from the typed informer
 // cache when it is still present. ok=false means the object is not (or no longer)
 // cached, so the caller should fall back to the tombstone.
-func liveInvolvedObject(uid, kind, namespace, name string) (owner *timeline.OwnerInfo, labels map[string]string, createdAt *time.Time, ok bool) {
+//
+// The typed lister is keyed by namespace/name alone, so the event must prove it
+// names that exact object: the built-in group and the object's UID. Otherwise a
+// same-named object of another group, or a replacement incarnation, would lend
+// its owner to an event about something else.
+func liveInvolvedObject(subject resourceid.Reference) (owner *timeline.OwnerInfo, labels map[string]string, createdAt *time.Time, ok bool) {
 	cache := GetResourceCache()
-	if cache == nil {
+	if cache == nil || subject.UID == "" || !subject.HasGroup() {
 		return nil, nil, nil, false
 	}
-	// The typed lister lookup is by kind/ns/name; when the event names a UID,
-	// verify it so a same-named different object (a CRD kind collision, or a
-	// recreated object) can't lend its enrichment. A mismatch falls through to
-	// the tombstone, which is keyed by UID.
-	uidMatches := func(obj metav1.Object) bool {
-		return uid == "" || string(obj.GetUID()) == uid
+	if group, builtin := resourceid.BuiltinGroup(subject.Kind); !builtin || subject.Group != group {
+		return nil, nil, nil, false
 	}
-	switch kind {
+	uid, namespace, name := subject.UID, subject.Namespace, subject.Name
+	uidMatches := func(obj metav1.Object) bool {
+		return string(obj.GetUID()) == uid
+	}
+	switch subject.Kind {
 	case "Pod":
 		if cache.Pods() == nil {
 			return nil, nil, nil, false

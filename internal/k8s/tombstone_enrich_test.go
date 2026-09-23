@@ -5,11 +5,13 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 func tombstoneTestPod(name string, created time.Time) *corev1.Pod {
@@ -178,5 +180,45 @@ func TestK8sEvent_FailedExtractDoesNotClobberTombstone(t *testing.T) {
 	}
 	if got.CreatedAt == nil || !got.CreatedAt.Equal(created) {
 		t.Fatalf("prior good tombstone entry was clobbered: createdAt = %v", got.CreatedAt)
+	}
+}
+
+// The typed ReplicaSet lister is keyed by namespace/name alone, so an event must
+// prove it names that exact object — the built-in group and the object's UID —
+// before the live object's owner is attached to it.
+func TestK8sEvent_LiveEnrichmentRequiresExactSubject(t *testing.T) {
+	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+		Namespace: "shop", Name: "web-rs", UID: types.UID("rs-live"),
+		OwnerReferences: []metav1.OwnerReference{controllerRef("Deployment", "web")},
+	}}
+	cache := newOwnershipCache(t, map[string]bool{k8score.Pods: true, k8score.ReplicaSets: true}, rs)
+	previous := resourceCache.Swap(cache)
+	t.Cleanup(func() { resourceCache.Store(previous) })
+
+	event := func(apiVersion, uid string) *corev1.Event {
+		return &corev1.Event{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "shop", Name: "web-rs.evt"},
+			InvolvedObject: corev1.ObjectReference{
+				Kind: "ReplicaSet", APIVersion: apiVersion, Namespace: "shop", Name: "web-rs", UID: types.UID(uid),
+			},
+		}
+	}
+	for _, tc := range []struct {
+		name         string
+		event        *corev1.Event
+		wantEnriched bool
+	}{
+		{"the exact object", event("apps/v1", "rs-live"), true},
+		{"no UID cannot prove the incarnation", event("apps/v1", ""), false},
+		{"an earlier incarnation", event("apps/v1", "rs-deleted"), false},
+		{"a same-named ReplicaSet of another group", event("example.com/v1", "rs-live"), false},
+		{"no apiVersion cannot prove the group", event("", "rs-live"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			owner, _, _ := enrichInvolvedObject(tc.event)
+			if tc.wantEnriched != (owner != nil && owner.Kind == "Deployment" && owner.Name == "web") {
+				t.Fatalf("owner = %+v, want enriched=%v", owner, tc.wantEnriched)
+			}
+		})
 	}
 }

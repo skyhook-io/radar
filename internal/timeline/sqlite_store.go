@@ -369,6 +369,8 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 			health_state = excluded.health_state,
 			count = excluded.count,
 			seq = excluded.seq,
+			namespace = excluded.namespace,
+			uid = excluded.uid,
 			resource_created_at = COALESCE(excluded.resource_created_at, events.resource_created_at),
 			owner_kind = CASE WHEN excluded.owner_kind != '' THEN excluded.owner_kind ELSE events.owner_kind END,
 			owner_name = CASE WHEN excluded.owner_name != '' THEN excluded.owner_name ELSE events.owner_name END,

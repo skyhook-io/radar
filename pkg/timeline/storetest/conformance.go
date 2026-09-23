@@ -300,6 +300,22 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 		}
 	})
 
+	t.Run("a k8s event bump refreshes its subject's namespace and incarnation", func(t *testing.T) {
+		store := newStore(t)
+		stale := k8sEvent("evt-node-1", 0, 1)
+		stale.Kind, stale.Name, stale.Namespace, stale.UID = "Node", "node-a", "default", "node-a"
+		mustAppend(t, store, stale)
+
+		corrected := k8sEvent("evt-node-1", time.Minute, 2)
+		corrected.Kind, corrected.Name, corrected.Namespace, corrected.UID = "Node", "node-a", "", ""
+		mustAppend(t, store, corrected)
+
+		rows := queryAll(t, store, 0, 100)
+		if len(rows) != 1 || rows[0].Namespace != "" || rows[0].UID != "" {
+			t.Fatalf("bump kept the stale subject: %+v", rows)
+		}
+	})
+
 	t.Run("a stale out-of-order bump must not clobber the newer row", func(t *testing.T) {
 		store := newStore(t)
 		mustAppend(t, store, k8sEvent("evt-uid-1", time.Minute, 5))
