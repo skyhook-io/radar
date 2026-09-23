@@ -752,17 +752,20 @@ export type DynamicObservationState =
   | 'unwatched'
   | 'deferred'
   | 'syncing'
-  | 'watched'
+  | 'synced'
   | 'denied'
   | 'unsupported'
 
 export type DynamicObservationOrigin = 'warmup' | 'small_eager' | 'on_demand'
 export type DynamicObservationScope = 'cluster' | 'explicit_namespaces'
 
+/** Cache lifecycle and probe evidence, not transport health or gap-free history. */
 export interface DynamicResourceObservation {
+  observedAt?: string
+  viewerRestricted?: boolean
   state: DynamicObservationState
   origin?: DynamicObservationOrigin
-  observationStart?: string
+  watchStartedAt?: string
   scope?: DynamicObservationScope
   namespaces?: string[]
   namespacePartial?: boolean

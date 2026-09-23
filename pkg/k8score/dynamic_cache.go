@@ -47,6 +47,7 @@ type informerEntry struct {
 }
 
 type retainedObservation struct {
+	observedAt time.Time
 	state      DynamicObservationState
 	reasonCode string
 	truncated  bool
@@ -139,13 +140,17 @@ func NewDynamicResourceCache(cfg DynamicCacheConfig) (*DynamicResourceCache, err
 func (d *DynamicResourceCache) retainObservation(gvr schema.GroupVersionResource, state DynamicObservationState, reasonCode string, truncated bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.observations[gvr] = retainedObservation{state: state, reasonCode: reasonCode, truncated: truncated}
+	d.observations[gvr] = retainedObservation{state: state, reasonCode: reasonCode, truncated: truncated, observedAt: time.Now().UTC()}
 }
 
 func (d *DynamicResourceCache) retainDeniedObservation(gvr schema.GroupVersionResource, preferredNS string, complete bool) {
 	// A preferred-namespace denial proves only that request scope; it cannot
 	// replace the observation retained for the GVR as a whole.
 	if preferredNS != "" {
+		return
+	}
+	if !complete {
+		d.retainObservation(gvr, DynamicObservationDeferred, "scope_probe_incomplete", true)
 		return
 	}
 	truncated := d.namespaceProbeTruncated(gvr, preferredNS, complete)
@@ -166,6 +171,10 @@ func (d *DynamicResourceCache) Observation(gvr schema.GroupVersionResource) Dyna
 
 	d.mu.RLock()
 	defer d.mu.RUnlock()
+
+	if d.stopped {
+		return DynamicResourceObservation{State: DynamicObservationUnwatched, ReasonCode: "cache_stopped"}
+	}
 
 	var (
 		entries []struct {
@@ -191,7 +200,7 @@ func (d *DynamicResourceCache) Observation(gvr schema.GroupVersionResource) Dyna
 	}
 	if len(entries) == 0 {
 		if retained, ok := d.observations[gvr]; ok {
-			return DynamicResourceObservation{State: retained.state, Truncated: retained.truncated, ReasonCode: retained.reasonCode}
+			return DynamicResourceObservation{State: retained.state, Truncated: retained.truncated, ReasonCode: retained.reasonCode, ObservedAt: &retained.observedAt}
 		}
 		if d.config.Discovery != nil && d.config.Discovery.GetKindForGVR(gvr) != "" && !d.config.Discovery.SupportsWatchGVR(gvr) {
 			return DynamicResourceObservation{State: DynamicObservationUnsupported, ReasonCode: "list_watch_unsupported"}
@@ -199,10 +208,14 @@ func (d *DynamicResourceCache) Observation(gvr schema.GroupVersionResource) Dyna
 		return DynamicResourceObservation{State: DynamicObservationUnwatched, ReasonCode: "not_observed"}
 	}
 
-	state := DynamicObservationWatched
+	state := DynamicObservationSynced
 	var latest *informerEntry
+	var oldestUnsynced time.Time
 	for _, candidate := range entries {
 		if !candidate.entry.informer.HasSynced() {
+			if oldestUnsynced.IsZero() || candidate.entry.startedAt.Before(oldestUnsynced) {
+				oldestUnsynced = candidate.entry.startedAt
+			}
 			state = DynamicObservationSyncing
 		}
 		if latest == nil || candidate.entry.startedAt.After(latest.startedAt) {
@@ -212,9 +225,9 @@ func (d *DynamicResourceCache) Observation(gvr schema.GroupVersionResource) Dyna
 
 	startedAt := latest.startedAt
 	observation := DynamicResourceObservation{
-		State:            state,
-		Origin:           latest.origin,
-		ObservationStart: &startedAt,
+		State:          state,
+		Origin:         latest.origin,
+		WatchStartedAt: &startedAt,
 	}
 	if clusterWide {
 		observation.Scope = DynamicObservationScopeCluster
@@ -227,16 +240,16 @@ func (d *DynamicResourceCache) Observation(gvr schema.GroupVersionResource) Dyna
 	}
 
 	switch {
+	case state == DynamicObservationSyncing && time.Since(oldestUnsynced) >= 30*time.Second:
+		observation.ReasonCode = "sync_stalled"
 	case state == DynamicObservationSyncing:
 		observation.ReasonCode = "initial_sync"
 	case observation.Truncated:
 		observation.ReasonCode = "namespace_fanout_truncated"
 	case observation.NamespacePartial:
 		observation.ReasonCode = "namespace_partial"
-	case observation.Origin == DynamicObservationOriginOnDemand:
-		observation.ReasonCode = "on_demand_since"
 	default:
-		observation.ReasonCode = "continuously_watched"
+		observation.ReasonCode = "informer_synced"
 	}
 	return observation
 }

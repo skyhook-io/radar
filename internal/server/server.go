@@ -1986,10 +1986,30 @@ type apiResourceResponse struct {
 }
 
 func filterDynamicObservationNamespaces(observation k8score.DynamicResourceObservation, allowed []string) k8score.DynamicResourceObservation {
-	if observation.Scope != k8score.DynamicObservationScopeExplicitNamespaces || len(observation.Namespaces) == 0 {
+	if allowed == nil {
 		return observation
 	}
-	observation.Namespaces = intersectNamespaces(allowed, observation.Namespaces)
+	observation.ViewerRestricted = true
+	if observation.Scope != "" {
+		observation.NamespacePartial = true
+	}
+	switch observation.Scope {
+	case k8score.DynamicObservationScopeCluster:
+		observation.Scope = k8score.DynamicObservationScopeExplicitNamespaces
+		observation.Namespaces = append([]string(nil), allowed...)
+	case k8score.DynamicObservationScopeExplicitNamespaces:
+		if len(observation.Namespaces) > 0 {
+			observation.Namespaces = intersectNamespaces(allowed, observation.Namespaces)
+		}
+	}
+	if observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces && len(observation.Namespaces) == 0 {
+		observation.State = k8score.DynamicObservationUnwatched
+		observation.ReasonCode = "no_visible_observation"
+		observation.Origin = ""
+		observation.WatchStartedAt = nil
+		observation.Truncated = false
+	}
+
 	return observation
 }
 
@@ -2021,7 +2041,7 @@ func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
 				Version:  resource.Version,
 				Resource: resource.Name,
 			})
-			if observation.Scope == k8score.DynamicObservationScopeExplicitNamespaces {
+			if resource.Namespaced {
 				if !visibleNamespacesResolved {
 					visibleNamespaces = s.getUserNamespaces(r, nil)
 					visibleNamespacesResolved = true

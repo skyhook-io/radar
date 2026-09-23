@@ -5,9 +5,14 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/capacityapi"
@@ -135,7 +140,7 @@ func TestAPIResourceResponseObservationWireShape(t *testing.T) {
 
 func TestFilterDynamicObservationNamespaces(t *testing.T) {
 	observation := k8score.DynamicResourceObservation{
-		State:            k8score.DynamicObservationWatched,
+		State:            k8score.DynamicObservationSynced,
 		Scope:            k8score.DynamicObservationScopeExplicitNamespaces,
 		Namespaces:       []string{"team-a", "team-b"},
 		NamespacePartial: true,
@@ -161,12 +166,53 @@ func TestFilterDynamicObservationNamespaces(t *testing.T) {
 	}
 
 	cluster := k8score.DynamicResourceObservation{
-		State:      k8score.DynamicObservationWatched,
+		State:      k8score.DynamicObservationSynced,
 		Scope:      k8score.DynamicObservationScopeCluster,
 		Namespaces: []string{"sentinel"},
 	}
 	cluster = filterDynamicObservationNamespaces(cluster, []string{"team-b"})
-	if !slices.Equal(cluster.Namespaces, []string{"sentinel"}) {
-		t.Fatalf("cluster observation was namespace-filtered: %+v", cluster)
+	if !slices.Equal(cluster.Namespaces, []string{"team-b"}) || cluster.Scope != k8score.DynamicObservationScopeExplicitNamespaces || !cluster.ViewerRestricted || !cluster.NamespacePartial {
+		t.Fatalf("cluster observation escaped viewer scope: %+v", cluster)
+	}
+	if got := filterDynamicObservationNamespaces(observation, []string{}); got.State != k8score.DynamicObservationUnwatched || got.ReasonCode != "no_visible_observation" || len(got.Namespaces) != 0 {
+		t.Fatalf("empty viewer scope retained an observation: %+v", got)
+	}
+}
+
+func TestAPIResourcesObservationUsesAuthenticatedViewerScope(t *testing.T) {
+	k8s.ResetTestDynamicState()
+	t.Cleanup(k8s.ResetTestDynamicState)
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"})
+	if err := k8s.InitTestDynamicResourceCache(dyn, []k8s.APIResource{{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: "Widget", Namespaced: true, IsCRD: true, Verbs: []string{"get", "list", "watch"}}}); err != nil {
+		t.Fatal(err)
+	}
+	cache := k8s.GetDynamicResourceCache()
+	if err := cache.EnsureWatching(gvr); err != nil {
+		t.Fatal(err)
+	}
+	if !cache.WaitForSync(gvr, 3*time.Second) {
+		t.Fatal("cache did not sync")
+	}
+	env := newAuthTestServer(t)
+	for _, namespaces := range [][]string{{"team-a"}, {}} {
+		env.srv.permCache.Set("viewer", nil, &auth.UserPermissions{AllowedNamespaces: namespaces})
+		var resources []apiResourceResponse
+		assertOK(t, env.authGet(t, "/api/api-resources", "viewer", ""), &resources)
+		var observation *k8score.DynamicResourceObservation
+		for _, resource := range resources {
+			if resource.Group == gvr.Group && resource.Name == gvr.Resource {
+				observation = resource.Observation
+			}
+		}
+		if observation == nil || !observation.ViewerRestricted || !observation.NamespacePartial || observation.Scope != k8score.DynamicObservationScopeExplicitNamespaces || !slices.Equal(observation.Namespaces, namespaces) {
+			t.Fatalf("viewer observation = %+v, namespaces = %v", observation, namespaces)
+		}
+		if len(namespaces) == 0 && (observation.State != k8score.DynamicObservationUnwatched || observation.Origin != "" || observation.WatchStartedAt != nil || observation.Truncated) {
+			t.Fatalf("invisible cache reported observed: %+v", observation)
+		}
+	}
+	if got := cache.Observation(gvr); got.Scope != k8score.DynamicObservationScopeCluster || got.ViewerRestricted {
+		t.Fatalf("viewer projection mutated global state: %+v", got)
 	}
 }

@@ -1,12 +1,14 @@
 package k8score
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -52,7 +54,7 @@ func TestDynamicResourceObservationUnwatchedAndUnsupportedHaveNoOrigin(t *testin
 			if got.State != test.state || got.ReasonCode != test.reason {
 				t.Fatalf("observation = %+v, want state=%s reason=%s", got, test.state, test.reason)
 			}
-			if got.Origin != "" || got.ObservationStart != nil {
+			if got.Origin != "" || got.WatchStartedAt != nil {
 				t.Fatalf("unstarted observation assigned causal watch metadata: %+v", got)
 			}
 		})
@@ -110,7 +112,7 @@ func TestDynamicResourceObservationTracksOnDemandSyncAndExactGVR(t *testing.T) {
 		t.Fatalf("EnsureWatching: %v", err)
 	}
 	syncing := cache.Observation(observed)
-	if syncing.State != DynamicObservationSyncing || syncing.Origin != DynamicObservationOriginOnDemand || syncing.ObservationStart == nil {
+	if syncing.State != DynamicObservationSyncing || syncing.Origin != DynamicObservationOriginOnDemand || syncing.WatchStartedAt == nil {
 		t.Fatalf("syncing observation = %+v", syncing)
 	}
 	if syncing.Scope != DynamicObservationScopeCluster || syncing.ReasonCode != "initial_sync" {
@@ -125,11 +127,15 @@ func TestDynamicResourceObservationTracksOnDemandSyncAndExactGVR(t *testing.T) {
 		t.Fatal("on-demand informer did not sync")
 	}
 	watched := cache.Observation(observed)
-	if watched.State != DynamicObservationWatched || watched.ReasonCode != "on_demand_since" {
+	if watched.State != DynamicObservationSynced || watched.ReasonCode != "informer_synced" {
 		t.Fatalf("watched observation = %+v", watched)
 	}
-	if !watched.ObservationStart.Equal(*syncing.ObservationStart) {
-		t.Fatalf("observation start changed across initial sync: before=%v after=%v", syncing.ObservationStart, watched.ObservationStart)
+	if !watched.WatchStartedAt.Equal(*syncing.WatchStartedAt) {
+		t.Fatalf("observation start changed across initial sync: before=%v after=%v", syncing.WatchStartedAt, watched.WatchStartedAt)
+	}
+	cache.Stop()
+	if got := cache.Observation(observed); got.State != DynamicObservationUnwatched || got.ReasonCode != "cache_stopped" || got.WatchStartedAt != nil {
+		t.Fatalf("stopped cache retained active observation: %+v", got)
 	}
 }
 
@@ -285,7 +291,7 @@ func TestDynamicResourceObservationRetainsDeniedAndDeferredOutcomes(t *testing.T
 			if got.State != DynamicObservationDeferred || got.ReasonCode != test.reason {
 				t.Fatalf("deferred observation = %+v, want reason=%s", got, test.reason)
 			}
-			if got.Origin != "" || got.ObservationStart != nil {
+			if got.Origin != "" || got.WatchStartedAt != nil {
 				t.Fatalf("deferred observation assigned causal watch metadata: %+v", got)
 			}
 			if test.name == "large resource" {
@@ -350,7 +356,7 @@ func TestDynamicResourceObservationTracksWarmupEagerAndNamespaceFanout(t *testin
 		t.Cleanup(cache.Stop)
 		cache.WarmupParallel([]schema.GroupVersionResource{gvr}, 3*time.Second)
 		got := cache.Observation(gvr)
-		if got.State != DynamicObservationWatched || got.Origin != DynamicObservationOriginWarmup {
+		if got.State != DynamicObservationSynced || got.Origin != DynamicObservationOriginWarmup {
 			t.Fatalf("warmup observation = %+v", got)
 		}
 	})
@@ -380,7 +386,7 @@ func TestDynamicResourceObservationTracksWarmupEagerAndNamespaceFanout(t *testin
 			t.Fatal("DiscoverAllCRDs did not complete")
 		}
 		got := cache.Observation(gvr)
-		if got.State != DynamicObservationWatched || got.Origin != DynamicObservationOriginEager {
+		if got.State != DynamicObservationSynced || got.Origin != DynamicObservationOriginEager {
 			t.Fatalf("small-eager observation = %+v", got)
 		}
 	})
@@ -406,7 +412,7 @@ func TestDynamicResourceObservationTracksWarmupEagerAndNamespaceFanout(t *testin
 			t.Fatal("namespace-scoped informers did not sync")
 		}
 		got := cache.Observation(gvr)
-		if got.State != DynamicObservationWatched || got.Scope != DynamicObservationScopeExplicitNamespaces {
+		if got.State != DynamicObservationSynced || got.Scope != DynamicObservationScopeExplicitNamespaces {
 			t.Fatalf("namespace observation = %+v", got)
 		}
 		if !got.NamespacePartial || !got.Truncated || got.ReasonCode != "namespace_fanout_truncated" {
@@ -416,4 +422,67 @@ func TestDynamicResourceObservationTracksWarmupEagerAndNamespaceFanout(t *testin
 			t.Fatalf("namespaces = %v", got.Namespaces)
 		}
 	})
+}
+
+func TestDynamicObservationTimeoutDoesNotProveDenial(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"})
+	dyn.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == "" {
+			return true, nil, apierrors.NewForbidden(gvr.GroupResource(), "", errors.New("cluster denied"))
+		}
+		return true, nil, context.DeadlineExceeded
+	})
+	discovery := &ResourceDiscovery{resourceMap: make(map[string]APIResource), gvrMap: make(map[string]schema.GroupVersionResource)}
+	discovery.AddAPIResource(APIResource{Group: gvr.Group, Version: gvr.Version, Name: gvr.Resource, Kind: "Widget", Namespaced: true, IsCRD: true, Verbs: []string{"list", "watch"}})
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn, Discovery: discovery, NamespaceFallbacks: []string{"slow"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Stop)
+	if err := d.EnsureWatching(gvr); err == nil {
+		t.Fatal("incomplete probe unexpectedly succeeded")
+	}
+	got := d.Observation(gvr)
+	if got.State != DynamicObservationDeferred || got.ReasonCode != "scope_probe_incomplete" || !got.Truncated || got.ObservedAt == nil {
+		t.Fatalf("timeout became denial: %+v", got)
+	}
+}
+
+func TestDynamicObservationStalledNamespaceIsNotHiddenByNewerInformer(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{gvr: "WidgetList"})
+	release := make(chan struct{})
+	defer close(release)
+	dyn.PrependReactor("list", "widgets", func(a k8stesting.Action) (bool, runtime.Object, error) {
+		if a.GetNamespace() == "old" {
+			<-release
+		}
+		return false, nil, nil
+	})
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(d.Stop)
+	if err := d.startWatching(gvr, "new"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for !d.IsNamespaceSynced(gvr, "new") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !d.IsNamespaceSynced(gvr, "new") {
+		t.Fatal("new namespace did not sync")
+	}
+	if err := d.startWatching(gvr, "old"); err != nil {
+		t.Fatal(err)
+	}
+	d.mu.Lock()
+	d.informers[informerKey{gvr: gvr, ns: "old"}].startedAt = time.Now().Add(-time.Minute)
+	d.mu.Unlock()
+	got := d.Observation(gvr)
+	if got.State != DynamicObservationSyncing || got.ReasonCode != "sync_stalled" {
+		t.Fatalf("old stalled namespace masked: %+v", got)
+	}
 }

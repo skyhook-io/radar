@@ -292,7 +292,7 @@ const (
 	DynamicObservationUnwatched   DynamicObservationState = "unwatched"
 	DynamicObservationDeferred    DynamicObservationState = "deferred"
 	DynamicObservationSyncing     DynamicObservationState = "syncing"
-	DynamicObservationWatched     DynamicObservationState = "watched"
+	DynamicObservationSynced      DynamicObservationState = "synced"
 	DynamicObservationDenied      DynamicObservationState = "denied"
 	DynamicObservationUnsupported DynamicObservationState = "unsupported"
 )
@@ -314,11 +314,18 @@ const (
 
 // DynamicResourceObservation describes what the dynamic cache can truthfully
 // claim for one exact GVR. It is an introspection snapshot: reading it never
-// probes the API server or starts an informer.
+// probes the API server or starts an informer. Synced means initial sync
+// completed, not gap-free history or current authorization. WatchStartedAt is
+// when the informer started, not when its first snapshot became available.
+// Watch transport health and history completeness are not measured here.
+// ReasonCode describes cache evidence; ViewerRestricted and scope describe
+// its namespace projection, not the viewer’s permission to read this GVR.
 type DynamicResourceObservation struct {
+	ObservedAt       *time.Time               `json:"observedAt,omitempty"`
+	ViewerRestricted bool                     `json:"viewerRestricted,omitempty"`
 	State            DynamicObservationState  `json:"state"`
 	Origin           DynamicObservationOrigin `json:"origin,omitempty"`
-	ObservationStart *time.Time               `json:"observationStart,omitempty"`
+	WatchStartedAt   *time.Time               `json:"watchStartedAt,omitempty"`
 	Scope            DynamicObservationScope  `json:"scope,omitempty"`
 	Namespaces       []string                 `json:"namespaces,omitempty"`
 	NamespacePartial bool                     `json:"namespacePartial,omitempty"`
