@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { getRayCronJobTimeZone, getRayCronJobStatus } from './resource-utils-ray'
+import { getRayCronJobTimeZone, getRayCronJobStatus, getRayServiceStatus } from './resource-utils-ray'
 import { getCellFilterValue } from './resource-utils'
 
 describe('getRayCronJobTimeZone', () => {
@@ -32,5 +32,32 @@ describe('getCellFilterValue for raycronjobs timeZone', () => {
       .toBe('Operator local')
     expect(getCellFilterValue({ spec: { timeZone: 'Europe/Berlin' } }, 'timeZone', 'raycronjobs'))
       .toBe('Europe/Berlin')
+  })
+})
+
+
+describe('RayService observed lifecycle', () => {
+  const data = (conditions: any[], spec = {}) => ({ metadata: { generation: 3 }, spec, status: { observedGeneration: 3, conditions } })
+  it('prioritizes observed rollback over upgrade without hiding readiness in the detail', () => {
+    expect(getRayServiceStatus(data(['Ready', 'UpgradeInProgress', 'RollbackInProgress'].map(type => ({ type, status: 'True' })))).text).toBe('RollingBack')
+  })
+  it('does not treat requested suspension as completed teardown', () => {
+    expect(getRayServiceStatus(data([], { suspend: true })).text).toBe('Suspension requested')
+    expect(getRayServiceStatus(data([{ type: 'Ready', status: 'True' }], { suspend: true })).text).toBe('Ready')
+    expect(getRayServiceStatus(data([{ type: 'Suspending', status: 'True' }], { suspend: false })).text).toBe('Suspending')
+    expect(getRayServiceStatus(data([{ type: 'Suspended', status: 'True' }])).text).toBe('Suspended')
+  })
+  it('retains stale and unknown observations without using deprecated Running as proof', () => {
+    expect(getRayServiceStatus(data([{ type: 'Ready', status: 'False', observedGeneration: 2 }])).text).toBe('NotReady')
+    for (const [status, label] of [['True', 'Ready'], ['False', 'NotReady'], ['Unknown', 'Unknown']]) {
+      const resource = data([{ type: 'Ready', status }])
+      resource.status.observedGeneration = 2
+      expect(getRayServiceStatus(resource).text).toBe(`${label} (stale)`)
+    }
+    const suspended = data([{ type: 'Suspended', status: 'True' }], { suspend: true })
+    suspended.status.observedGeneration = 2
+    expect(getRayServiceStatus(suspended).text).toBe('Suspended')
+    expect(getRayServiceStatus({ status: { serviceStatus: 'Running', conditions: [{ type: 'Ready', status: 'Unknown' }] } }).text).toBe('Unknown')
+    expect(getRayServiceStatus({ status: { serviceStatus: 'Running' } }).text).toBe('Unknown')
   })
 })

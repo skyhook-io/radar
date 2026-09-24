@@ -137,41 +137,30 @@ export function getRayJobClusterName(resource: any): string {
 // RAYSERVICE UTILITIES
 // ============================================================================
 
+export function isRayObservationStale(generation?: number, observedGeneration?: number): boolean {
+  return generation != null && observedGeneration != null && observedGeneration < generation
+}
+
 export function getRayServiceStatus(resource: any): StatusBadge {
-  const conditions = resource.status?.conditions || []
-
-  const suspendingCond = conditions.find((c: any) => c.type === 'Suspending')
-  if (suspendingCond?.status === 'True') {
-    return { text: 'Suspending', color: healthColors.degraded, level: 'degraded' }
+  const conditions = resource.status?.conditions ?? []
+  const labels: Record<string, string> = { Suspending: 'Suspending', Suspended: 'Suspended', RollbackInProgress: 'RollingBack', UpgradeInProgress: 'Upgrading' }
+  for (const type of ['Suspending', 'Suspended', 'RollbackInProgress', 'UpgradeInProgress', 'Ready']) {
+    const condition = conditions.find((c: any) => c.type === type)
+    if (!condition || (type !== 'Ready' && condition.status !== 'True')) continue
+    const suspended = type === 'Suspended' && resource.spec?.suspend === true
+    const label = type === 'Ready' ? (condition.status === 'True' ? 'Ready' : condition.status === 'False' ? condition.reason || 'NotReady' : 'Unknown') : labels[type]
+    if (!suspended && isRayObservationStale(resource.metadata?.generation, resource.status?.observedGeneration)) {
+      return { text: `${label} (stale)`, color: healthColors.unknown, level: 'unknown' }
+    }
+    if (type === 'Ready') {
+      if (condition.status === 'True') return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
+      if (condition.status === 'False') return { text: condition.reason || 'NotReady', color: healthColors.degraded, level: 'degraded' }
+      return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+    }
+    const level = type === 'Suspended' ? 'neutral' : 'degraded'
+    return { text: labels[type], color: healthColors[level], level }
   }
-
-  const suspendedCond = conditions.find((c: any) => c.type === 'Suspended')
-  if (suspendedCond?.status === 'True' || resource.spec?.suspend === true) {
-    return { text: 'Suspended', color: healthColors.neutral, level: 'neutral' }
-  }
-
-  const upgradeCond = conditions.find((c: any) => c.type === 'UpgradeInProgress')
-  if (upgradeCond?.status === 'True') {
-    return { text: 'Upgrading', color: healthColors.degraded, level: 'degraded' }
-  }
-
-  const rollbackCond = conditions.find((c: any) => c.type === 'RollbackInProgress')
-  if (rollbackCond?.status === 'True') {
-    return { text: 'RollingBack', color: healthColors.degraded, level: 'degraded' }
-  }
-
-  const readyCond = conditions.find((c: any) => c.type === 'Ready')
-  if (readyCond?.status === 'True') {
-    return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
-  }
-  if (readyCond?.status === 'False') {
-    return { text: readyCond.reason || 'NotReady', color: healthColors.degraded, level: 'degraded' }
-  }
-
-  if (resource.status?.serviceStatus === 'Running') {
-    return { text: 'Running', color: healthColors.healthy, level: 'healthy' }
-  }
-
+  if (resource.spec?.suspend === true) return { text: 'Suspension requested', color: healthColors.neutral, level: 'neutral' }
   return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
 }
 
