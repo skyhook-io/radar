@@ -79,6 +79,8 @@ radar --auth-mode=proxy \
 
 > **Security:** Your ingress must strip `X-Forwarded-User` and `X-Forwarded-Groups` headers from external requests to prevent spoofing. The auth proxy should be the **only** path to Radar. Radar logs a warning at startup as a reminder.
 
+> **Reserved identities:** In every auth mode, Radar refuses any identity whose username or groups fall in the Kubernetes-reserved `system:` namespace (`system:masters`, `system:nodes`, `system:serviceaccount:…`, etc.) and returns 403. A spoofed header or an IdP group named `system:masters` can't be used to impersonate cluster-admin through Radar. If your IdP emits such groups and your API server maps them with a prefix, match that prefix: in OIDC mode set `--auth-oidc-groups-prefix` (and `--auth-oidc-username-prefix`); in proxy mode configure your proxy or IdP to forward the prefixed names.
+
 > **WebSockets:** Preserve the browser-facing `Host` header when proxying Radar; this is the compatibility requirement across browsers and proxies. When both the browser and proxy forward Fetch Metadata, Radar can also recognize a same-origin connection through a host-rewriting proxy. Pod exec rejects cross-origin handshakes.
 
 > **Local terminal:** The host-level local terminal requires both a loopback-bound Radar listener and a loopback URL, and is unavailable when authentication is enabled. Unlike pod exec, it runs as the Radar process's operating-system user and cannot be safely impersonated per caller.
@@ -428,7 +430,9 @@ When auth is enabled, Radar's ServiceAccount needs two additional permissions (a
   verbs: ["create"]
 ```
 
-The ServiceAccount's existing read permissions (list pods, watch deployments, etc.) continue to power the shared cache. Impersonation is only used for write operations and permission checks.
+The ServiceAccount's existing read permissions (list pods, watch deployments, etc.) continue to power the shared cache. Impersonation is used for every call made on a user's behalf rather than served from the cache: writes, exec, logs, port-forward, and Helm release reads.
+
+**Treat the ServiceAccount as privileged.** Kubernetes RBAC can't limit `impersonate` to a subset of users or groups. Radar enforces the reserved-identity rule above where it accepts identities, but anyone holding the ServiceAccount's token can call the API server directly as any user or group, which is effectively cluster-admin. Run Radar in a dedicated namespace, restrict network access to it with NetworkPolicies, and make your auth proxy or ingress the only path to it.
 
 ## Session Cookies
 

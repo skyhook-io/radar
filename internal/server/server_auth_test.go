@@ -575,11 +575,11 @@ func TestProxyAuth_NamespaceFiltering_ClusterAdmin(t *testing.T) {
 	env := newAuthTestServer(t)
 
 	// Pre-populate cache: nil AllowedNamespaces = cluster admin
-	env.srv.permCache.Set("admin", []string{"system:masters"}, &auth.UserPermissions{
+	env.srv.permCache.Set("admin", []string{"platform-admins"}, &auth.UserPermissions{
 		AllowedNamespaces: nil,
 	})
 
-	resp := env.authGet(t, "/api/resources/deployments", "admin", "system:masters")
+	resp := env.authGet(t, "/api/resources/deployments", "admin", "platform-admins")
 	defer resp.Body.Close()
 
 	var deps []any

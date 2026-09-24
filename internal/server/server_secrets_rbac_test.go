@@ -123,13 +123,13 @@ func TestProxyAuth_SecretsList_ClusterWideShape_WithSecretRBAC(t *testing.T) {
 	// Same cluster-wide-namespace shape, but with explicit cluster-scope
 	// `list secrets` RBAC seeded. Cache returns every secret.
 	env := newAuthTestServer(t)
-	env.srv.permCache.Set("admin", []string{"system:masters"}, &auth.UserPermissions{
+	env.srv.permCache.Set("admin", []string{"platform-admins"}, &auth.UserPermissions{
 		AllowedNamespaces: nil,
 	})
-	perms := env.srv.permCache.Get("admin", []string{"system:masters"})
+	perms := env.srv.permCache.Get("admin", []string{"platform-admins"})
 	perms.SetCanI("list", "", "secrets", "", true)
 
-	resp := env.authGet(t, "/api/resources/secrets", "admin", "system:masters")
+	resp := env.authGet(t, "/api/resources/secrets", "admin", "platform-admins")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)

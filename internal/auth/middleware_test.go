@@ -187,6 +187,60 @@ func TestMiddleware_SessionCookie(t *testing.T) {
 	}
 }
 
+func TestMiddleware_ProxyHeaders_RejectsReservedPrincipal(t *testing.T) {
+	handler := Authenticate(proxyConfig())(http.HandlerFunc(echoUser))
+
+	for name, hdr := range map[string][2]string{
+		"reserved group":    {"alice", "devs, system:masters"},
+		"reserved username": {"system:admin", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/api/resources/pods", nil)
+			req.Header.Set("X-Forwarded-User", hdr[0])
+			req.Header.Set("X-Forwarded-Groups", hdr[1])
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403", rec.Code)
+			}
+			for _, c := range rec.Result().Cookies() {
+				if c.Name == DefaultCookieName && c.Value != "" {
+					t.Error("rejected identity must not be issued a session cookie")
+				}
+			}
+		})
+	}
+}
+
+func TestMiddleware_SessionCookie_RejectsReservedPrincipal(t *testing.T) {
+	cfg := proxyConfig()
+	handler := Authenticate(cfg)(http.HandlerFunc(echoUser))
+
+	user := &User{Username: "bob", Groups: []string{"ops", "system:masters"}}
+	cookie := CreateSessionCookie(user, NewSessionID(), "", cfg.Secret, cfg.CookieTTL, false)[0]
+
+	req := httptest.NewRequest("GET", "/api/topology", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	cleared := false
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == DefaultCookieName && c.MaxAge < 0 {
+			cleared = true
+		}
+	}
+	if !cleared {
+		t.Error("session carrying a reserved principal should be cleared")
+	}
+}
+
 func TestMiddleware_SessionCookie_TakesPrecedence(t *testing.T) {
 	cfg := proxyConfig()
 	mw := Authenticate(cfg)

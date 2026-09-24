@@ -902,6 +902,15 @@ func TestHandleCallback_Matrix(t *testing.T) {
 		}, wantStatus: http.StatusUnauthorized},
 		{name: "username and groups prefixes applied", alg: oidc.RS256, cfg: Config{OIDCUsernamePrefix: "oidc:", OIDCGroupsPrefix: "oidc:"},
 			wantStatus: http.StatusFound, wantUser: "oidc:alice@example.com", wantGroups: []string{"oidc:dev", "oidc:ops"}},
+		{name: "reserved group refused", alg: oidc.RS256, setup: func(f *fakeIDP) {
+			f.claims = fmt.Sprintf(`{"iss":%q,"aud":"radar","email":"a@b.com","exp":%d,"groups":["dev","system:masters"]}`, f.issuer, future)
+		}, wantStatus: http.StatusForbidden},
+		{name: "reserved username refused", alg: oidc.RS256, setup: func(f *fakeIDP) {
+			f.claims = fmt.Sprintf(`{"iss":%q,"aud":"radar","sub":"system:kube-controller-manager","exp":%d}`, f.issuer, future)
+		}, wantStatus: http.StatusForbidden},
+		{name: "groups prefix keeps reserved-looking group out of system:", alg: oidc.RS256, cfg: Config{OIDCGroupsPrefix: "oidc:"}, setup: func(f *fakeIDP) {
+			f.claims = fmt.Sprintf(`{"iss":%q,"aud":"radar","email":"a@b.com","exp":%d,"groups":["system:masters"]}`, f.issuer, future)
+		}, wantStatus: http.StatusFound, wantUser: "a@b.com", wantGroups: []string{"oidc:system:masters"}},
 	}
 
 	for _, tc := range tests {

@@ -74,6 +74,16 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 					return
 				}
 
+				// A signed cookie proves Radar issued it, not that its identity
+				// is still one Radar will impersonate; re-check it every request.
+				if !ForwardedIdentityAllowed(session.User.Username, session.User.Groups, false) {
+					for _, c := range ClearSessionCookie(r) {
+						http.SetCookie(w, c)
+					}
+					rejectDisallowedIdentity(w, session.User.Username, false)
+					return
+				}
+
 				// Sliding TTL: re-issue cookie if past half-life or if remaining exceeds
 				// the configured TTL (handles TTL downgrade, e.g. 24h → 4h).
 				// SetCookie runs before next.ServeHTTP so the handler can't commit headers first.
@@ -112,20 +122,11 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 						}
 					}
 
-					// Under Cloud, constrain what Radar will impersonate: reject
-					// reserved K8s principals (system:masters etc.) and anything
-					// outside the radar:/cloud: group vocabulary. The SA's
-					// impersonate grant is cluster-scoped and can't express this,
-					// so it's enforced here or nowhere. No-op outside Cloud — the
-					// operator owns their proxy/OIDC identity chain. Reject the
-					// whole request; a bad principal from the tunnel is an anomaly.
+					// Never impersonate reserved K8s principals (system:masters etc.);
+					// under Cloud, also require the radar:/cloud: group vocabulary.
+					// Reject the whole request rather than dropping values.
 					if !ForwardedIdentityAllowed(username, groups, cloudProxyMode) {
-						log.Printf("[auth] rejected forwarded identity with disallowed principal (user=%q, cloud=%v)", username, cloudProxyMode)
-						w.Header().Set("Content-Type", "application/json")
-						w.WriteHeader(http.StatusForbidden)
-						json.NewEncoder(w).Encode(map[string]string{
-							"error": "forwarded identity asserts a disallowed principal",
-						})
+						rejectDisallowedIdentity(w, username, cloudProxyMode)
 						return
 					}
 
@@ -159,6 +160,15 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 			})
 		})
 	}
+}
+
+func rejectDisallowedIdentity(w http.ResponseWriter, username string, cloud bool) {
+	log.Printf("[auth] rejected identity with disallowed principal (user=%q, cloud=%v)", username, cloud)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	json.NewEncoder(w).Encode(map[string]string{
+		"error": "identity asserts a disallowed principal",
+	})
 }
 
 // isExemptPath returns true for paths that don't require authentication

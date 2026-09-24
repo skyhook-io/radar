@@ -605,6 +605,12 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if !ForwardedIdentityAllowed(username, groups, false) {
+		log.Printf("[oidc] Refusing login for %s: identity asserts a reserved Kubernetes principal (system:*)", username)
+		http.Error(w, "Your identity includes a reserved Kubernetes user or group (system:*), which Radar will not impersonate. Set --auth-oidc-groups-prefix / --auth-oidc-username-prefix to match your API server, or remove the group at your identity provider.", http.StatusForbidden)
+		return
+	}
+
 	user := &User{Username: username, Groups: groups}
 
 	// Extract session ID from ID token if present (needed for backchannel logout matching),
