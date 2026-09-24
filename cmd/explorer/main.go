@@ -322,6 +322,9 @@ func main() {
 	if *mcpCatalogStdio && noMCPFlagSet && *noMCP {
 		log.Fatalf("--mcp-catalog-stdio cannot be combined with --no-mcp")
 	}
+	if strings.TrimSpace(os.Getenv(mcppkg.SessionTokenEnv)) != "" && *mcpCatalogStdio {
+		log.Fatalf("%s applies to HTTP only and cannot be combined with --mcp-catalog-stdio", mcppkg.SessionTokenEnv)
+	}
 	inheritsPrometheusHeaders := !promHeaders.overrides && len(fileCfg.PrometheusHeaders) > 0 ||
 		!promHeadersFromEnv.overrides && len(fileCfg.PrometheusHeadersFromEnv) > 0
 	if err := app.ValidatePrometheusHeaderDestination(fileCfg.PrometheusURL, *prometheusURL, inheritsPrometheusHeaders); err != nil {

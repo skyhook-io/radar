@@ -16,9 +16,43 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/investigationrefs"
-
 	"github.com/skyhook-io/radar/pkg/investigation"
 )
+
+func TestWriteMCPConfigIncludesSessionToken(t *testing.T) {
+	path, cleanup, err := writeMCPConfig("http://localhost:9280/mcp", "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(data); !strings.Contains(got, `"Authorization":"Bearer test-token"`) {
+		t.Fatalf("MCP config missing bearer token: %s", got)
+	}
+}
+
+func TestDiagnosisFromText_ParsesJSONBlock(t *testing.T) {
+	text := "The pod crashloops.\n\n```json\n" +
+		`{"root_cause": "bad image tag", "remediation": ["roll back"], "confidence": 0.9}` +
+		"\n```"
+	d := diagnosisFromText(text)
+	if d.RootCause != "bad image tag" {
+		t.Errorf("root cause = %q", d.RootCause)
+	}
+	if len(d.Remediation) != 1 || d.Remediation[0] != "roll back" {
+		t.Errorf("remediation = %v", d.Remediation)
+	}
+	if d.Confidence == nil || *d.Confidence != 0.9 {
+		t.Errorf("confidence = %v", d.Confidence)
+	}
+	if strings.Contains(d.Report, "```json") {
+		t.Errorf("report still has the json block: %q", d.Report)
+	}
+}
 
 func testEvidenceRef(scope, nonce byte) string {
 	return "ev_" + strings.Repeat(string(scope), 26) + "_" + strings.Repeat(string(nonce), 26)

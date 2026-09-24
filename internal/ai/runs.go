@@ -35,6 +35,7 @@ type RunManager struct {
 	diagnose    func(context.Context, Request, func(StreamEvent)) (Diagnosis, error)
 	mcpAddress  func() string // resolved lazily — the listener port isn't known at construction
 	mcpBasePath string        // --base-path prefix the MCP mounts sit under ("" at the root)
+	mcpToken    string        // per-process bearer token for write-capable local turns
 	ctxLabel    func() string // current kube-context label, for the run's baseline
 
 	// MetricsAvailability probes the metrics backend before a read-only
@@ -236,6 +237,14 @@ func NewRunManager(d *Diagnoser, mcpAddress func() string, mcpBasePath string, c
 	}
 	m.loadPersisted()
 	return m
+}
+
+// SetMCPToken records the local write-capable /mcp bearer for apply turns.
+func (m *RunManager) SetMCPToken(token string) {
+	if m == nil {
+		return
+	}
+	m.mcpToken = token
 }
 
 // loadPersisted hydrates run ROWS from the store (event logs stay lazy — see
@@ -677,7 +686,7 @@ func (m *RunManager) executeTurns(r *Run, turn runTurn) {
 		var mutation applyMutationTracker
 		diag, err := diagnose(turn.ctx, Request{
 			Kind: r.Kind, Group: r.Group, Namespace: r.Namespace, Name: r.Name,
-			MCPAddress: m.mcpAddress(), MCPBasePath: m.mcpBasePath,
+			MCPAddress: m.mcpAddress(), MCPBasePath: m.mcpBasePath, MCPToken: m.mcpToken,
 			EvidenceScope: turn.evidenceScope, SessionID: turn.canonicalSession,
 			Question: turn.question, Apply: turn.apply, Fix: turn.fix, Verify: turn.verify,
 			Explanation: turn.explanation,
