@@ -443,8 +443,8 @@ kubeconfig before these commands can run.
 
 ### What Radar sends
 
-Until you connect a cluster to Cloud, Radar makes two kinds of outbound
-request, both to Skyhook, neither containing cluster data:
+Until you connect a cluster to Cloud, Radar makes these outbound requests,
+all to Skyhook, none containing cluster data:
 
 - **Update check** — to `releases.skyhook.io`, with the Radar version, OS/arch,
   install method, whether it is running locally or in-cluster, and the
@@ -453,6 +453,20 @@ request, both to Skyhook, neither containing cluster data:
 - **Cloud dialog copy** — only when you *open* the Cloud dialog, to fetch the
   current terms shown in it. No identifiers are sent. `RADAR_CLOUD_FUNNEL=off`
   stops this request from ever happening.
+- **Poll answers** — only when you answer the in-app "help us improve Radar
+  OSS" poll and press Send, to `releases.skyhook.io`. The request carries your
+  answers, a random ID made for that one response, and coarse facts about the
+  install: Radar version, OS, install method, local or in-cluster, and install
+  age in three buckets. It carries no install or browser identifier, and your
+  IP is not stored with the answers, though the server sees it in transit.
+  Free-text answers are sent exactly as written, so leave out anything you
+  wouldn't want to share. If you add an email, it is linked to that response so
+  we can reply, and stored in our CRM marked as coming from the poll; leaving
+  it does not sign you up for marketing email. The poll is offered at most once
+  every 90 days, not before two weeks and five separate days of use, and never
+  in Radar Cloud or with
+  `--cloud-url`. `RADAR_POLL=off` turns it off (in-cluster, set it through the
+  chart's `env` value).
 
 A standalone Radar sends your cluster's data nowhere: it talks to your
 Kubernetes API directly and keeps everything it reads on your machine.
@@ -460,8 +474,7 @@ Kubernetes API directly and keeps everything it reads on your machine.
 Connecting a cluster to Cloud is what changes that, and it is the point of
 connecting — the cluster's agent opens an outbound tunnel to the Hub so the
 team can reach the same views without each person holding kubeconfig access.
-Deciding whether to connect is a separate question from the two requests
-above, which happen either way.
+Deciding whether to connect is a separate question from the requests above.
 
 ## Related Documentation
 

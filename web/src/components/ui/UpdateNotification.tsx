@@ -13,6 +13,7 @@ import type { DesktopUpdateState } from '../../api/client'
 import { WithTooltip } from './Tooltip'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
+import { useNudgeVisible } from '../nudges/activeNudges'
 
 const DISMISSED_KEY = 'radar-update-dismissed'
 
@@ -109,6 +110,7 @@ export function UpdateNotification() {
   const show = !!versionInfo?.updateAvailable && !dismissed && deploymentMode !== undefined && deploymentMode !== 'in-cluster' && deploymentMode !== 'cloud'
   // Presence outlives `show` by the menu exit so a dismiss fades the chip out
   // instead of snapping it away; the enter runs the same transition in reverse.
+  useNudgeVisible('update-notice', show)
   const { shouldRender, isOpen } = useAnimatedUnmount(show, overlayExitMs('menu'))
   if (!shouldRender || !versionInfo) {
     return null

@@ -9,6 +9,15 @@ import { ApiError, type CloudInstallAttempted, type CloudInstallBlocked, type Cl
 // snake_case phrase is dropped here and again on the Hub.
 export const SIGNUP_QUERY = '?utm_source=radar-oss&utm_medium=app&utm_campaign=cloud-modal'
 
+// Where the Cloud dialog was opened from. The globe button is the default;
+// the in-product poll opens it too, and its traffic is kept apart by campaign
+// while utm_content keeps naming the link that was clicked.
+export type FunnelCampaign = 'cloud-modal' | 'oss-poll'
+
+function signupQuery(campaign: FunnelCampaign = 'cloud-modal'): string {
+  return campaign === 'cloud-modal' ? SIGNUP_QUERY : SIGNUP_QUERY.replace('utm_campaign=cloud-modal', `utm_campaign=${campaign}`)
+}
+
 // What the person is coming from, whether the pitch should offer "Try
 // again" (a failure can be retried; a refusal or the person's own cancel
 // cannot be "tried again" without misreading it as something going wrong),
@@ -62,8 +71,8 @@ export function handoffForBlocked(reason: CloudInstallBlocked['reason'], target?
   return { outcome: BLOCKED_OUTCOMES[reason], retryable: false, target: target ?? null }
 }
 
-export function signupUrlFor(appUrl: string, content: string, handoff?: Handoff | null): string {
-  const url = `${appUrl}/signup${SIGNUP_QUERY}&utm_content=${content}`
+export function signupUrlFor(appUrl: string, content: string, handoff?: Handoff | null, campaign?: FunnelCampaign): string {
+  const url = `${appUrl}/signup${signupQuery(campaign)}&utm_content=${content}`
   return handoff && isHandoffOutcome(handoff.outcome) ? `${url}&radar_outcome=${handoff.outcome}` : url
 }
 
@@ -87,8 +96,14 @@ export interface BlockedExit {
 // clusterName is the kubeconfig context, offered to the Hub as the cluster's
 // name (`name=`) so the install page opens with its form already filled in;
 // the person can still change it there.
-export function exitFor(appUrl: string, content: string, handoff: Handoff | null | undefined, clusterName?: string): BlockedExit {
-  const generic = { href: signupUrlFor(appUrl, content, handoff), label: 'Open Radar Cloud', install: false }
+export function exitFor(
+  appUrl: string,
+  content: string,
+  handoff: Handoff | null | undefined,
+  clusterName?: string,
+  campaign?: FunnelCampaign,
+): BlockedExit {
+  const generic = { href: signupUrlFor(appUrl, content, handoff, campaign), label: 'Open Radar Cloud', install: false }
   const t = handoff?.target
   if (!t) return generic
   // An unsupported refusal names its own remedy (several Radars to pick from,
@@ -103,7 +118,7 @@ export function exitFor(appUrl: string, content: string, handoff: Handoff | null
       params.set('ns', t.namespace)
       params.set('release', t.release)
       params.set('method', 'helm')
-      return { href: installHref(appUrl, content, handoff, params), label: 'Get the install command', install: true }
+      return { href: installHref(appUrl, content, handoff, params, campaign), label: 'Get the install command', install: true }
     case 'gitops':
       if (t.method !== 'argocd' && t.method !== 'flux') return generic
       params.set('existing', '1')
@@ -111,19 +126,25 @@ export function exitFor(appUrl: string, content: string, handoff: Handoff | null
       params.set('release', t.release)
       params.set('method', t.method)
       return {
-        href: installHref(appUrl, content, handoff, params),
+        href: installHref(appUrl, content, handoff, params, campaign),
         label: `Get the ${t.method === 'argocd' ? 'Argo CD' : 'Flux'} values patch`,
         install: true,
       }
     default:
       if (t.partialScan) return generic
       params.set('method', 'helm')
-      return { href: installHref(appUrl, content, handoff, params), label: 'Get the install command', install: true }
+      return { href: installHref(appUrl, content, handoff, params, campaign), label: 'Get the install command', install: true }
   }
 }
 
-function installHref(appUrl: string, content: string, handoff: Handoff | null | undefined, params: URLSearchParams): string {
-  const url = `${appUrl}/install?${params.toString()}&${SIGNUP_QUERY.slice(1)}&utm_content=${content}`
+function installHref(
+  appUrl: string,
+  content: string,
+  handoff: Handoff | null | undefined,
+  params: URLSearchParams,
+  campaign?: FunnelCampaign,
+): string {
+  const url = `${appUrl}/install?${params.toString()}&${signupQuery(campaign).slice(1)}&utm_content=${content}`
   return handoff && isHandoffOutcome(handoff.outcome) ? `${url}&radar_outcome=${handoff.outcome}` : url
 }
 

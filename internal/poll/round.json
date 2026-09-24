@@ -1,0 +1,245 @@
+{
+  "id": "2026-q4",
+  "block": "A",
+  "startsAt": "2026-10-01T00:00:00Z",
+  "endsAt": "2027-01-29T00:00:00Z",
+  "questions": [
+    {
+      "id": "q1",
+      "kind": "multi",
+      "title": "What do you mostly use Radar for?",
+      "hint": "Pick any.",
+      "textOption": "other",
+      "options": [
+        { "id": "debug", "label": "Debugging incidents and broken workloads" },
+        { "id": "browse", "label": "Day-to-day browsing and editing resources" },
+        { "id": "understand", "label": "Understanding a cluster I don't know well" },
+        { "id": "helm_gitops", "label": "Helm and GitOps operations: upgrades, syncs, rollbacks" },
+        { "id": "ai_context", "label": "Giving AI agents cluster context (MCP, investigations)" },
+        { "id": "checks_cost", "label": "Checks, cost, and rightsizing" },
+        { "id": "other", "label": "Something else" }
+      ]
+    },
+    {
+      "id": "q2",
+      "kind": "single",
+      "title": "How many clusters do you work with in a typical week?",
+      "options": [
+        { "id": "one", "label": "One" },
+        { "id": "two_three", "label": "Two or three" },
+        { "id": "four_ten", "label": "Four to ten" },
+        { "id": "more_ten", "label": "More than ten" }
+      ]
+    },
+    {
+      "id": "q3",
+      "kind": "single",
+      "mode": "local",
+      "title": "How many people use Radar where you work, including you?",
+      "options": [
+        { "id": "just_me", "label": "Just me" },
+        { "id": "two_five", "label": "2 to 5" },
+        { "id": "six_twenty", "label": "6 to 20" },
+        { "id": "more_twenty", "label": "More than 20" },
+        { "id": "unknown", "label": "I don't know" }
+      ]
+    },
+    {
+      "id": "q3c_people",
+      "kind": "single",
+      "mode": "in-cluster",
+      "title": "How many people open this Radar?",
+      "options": [
+        { "id": "just_me", "label": "Just me" },
+        { "id": "two_five", "label": "2 to 5" },
+        { "id": "six_twenty", "label": "6 to 20" },
+        { "id": "more_twenty", "label": "More than 20" },
+        { "id": "unknown", "label": "I don't know" }
+      ]
+    },
+    {
+      "id": "q3c_front",
+      "kind": "single",
+      "mode": "in-cluster",
+      "title": "What sits in front of it?",
+      "options": [
+        { "id": "nothing", "label": "Nothing, it's on an internal network" },
+        { "id": "oidc", "label": "OIDC" },
+        { "id": "proxy", "label": "An auth proxy (oauth2-proxy, Pomerium, Cloudflare Access)" },
+        { "id": "basic", "label": "Basic auth" },
+        { "id": "unknown", "label": "I don't know" }
+      ]
+    },
+    {
+      "id": "q4",
+      "kind": "multi",
+      "title": "Which of these happen to you?",
+      "hint": "Pick any.",
+      "exclusive": "none",
+      "options": [
+        { "id": "multi_cluster", "label": "Checking several clusters one at a time to find where something is" },
+        { "id": "screenshots", "label": "Sharing what I see with a teammate means screenshots" },
+        { "id": "kubeconfig", "label": "Giving someone access means passing a kubeconfig around" },
+        { "id": "found_late", "label": "Finding out something broke only when someone happened to look" },
+        { "id": "lost_history", "label": "Losing what happened once Radar or the pod restarts" },
+        { "id": "audit", "label": "Needing a record of who changed what" },
+        { "id": "none", "label": "None of these" }
+      ]
+    },
+    {
+      "id": "q5",
+      "kind": "single",
+      "title": "Have you used AI investigations in Radar?",
+      "description": "Radar hands an issue to an AI agent, which reads logs, events and topology and explains what's wrong.",
+      "options": [
+        { "id": "regularly", "label": "Yes, regularly" },
+        { "id": "tried", "label": "Tried it once or twice" },
+        { "id": "didnt_know", "label": "I didn't know Radar could do that" },
+        { "id": "not_setup", "label": "I know about it but haven't set it up" },
+        { "id": "no_ai", "label": "I'd rather not use AI on my clusters" }
+      ]
+    },
+    {
+      "id": "q5_agent",
+      "kind": "multi",
+      "showIf": { "question": "q5", "anyOf": ["regularly", "tried"] },
+      "title": "Which agent do you run it with?",
+      "hint": "Pick any.",
+      "options": [
+        { "id": "claude_code", "label": "Claude Code" },
+        { "id": "codex", "label": "Codex" },
+        { "id": "cursor", "label": "Cursor" },
+        { "id": "opencode", "label": "OpenCode" },
+        { "id": "radar_cloud", "label": "Radar Cloud's hosted agent" },
+        { "id": "other", "label": "Other" }
+      ]
+    },
+    {
+      "id": "q5_useful",
+      "kind": "single",
+      "showIf": { "question": "q5", "anyOf": ["regularly", "tried"] },
+      "title": "How useful were the answers?",
+      "options": [
+        { "id": "found_cause", "label": "Found the cause" },
+        { "id": "pointed", "label": "Pointed me in the right direction" },
+        { "id": "not_useful", "label": "Not useful" },
+        { "id": "mixed", "label": "Mixed" }
+      ]
+    },
+    {
+      "id": "q5_blocker",
+      "kind": "multi",
+      "showIf": { "question": "q5", "anyOf": ["not_setup"] },
+      "title": "What's in the way?",
+      "hint": "Pick any.",
+      "options": [
+        { "id": "no_agent", "label": "I don't have a supported agent installed" },
+        { "id": "no_api", "label": "No model API access at work" },
+        { "id": "policy", "label": "Company policy on AI tools" },
+        { "id": "not_worth", "label": "Not sure it's worth the setup" },
+        { "id": "not_yet", "label": "Haven't gotten to it" }
+      ]
+    },
+    {
+      "id": "q6",
+      "kind": "single",
+      "title": "If you could no longer use Radar, how would you feel?",
+      "textAlways": true,
+      "textLabel": "What's the main reason?",
+      "textPlaceholder": "The thing you'd miss most, or what keeps Radar from mattering more...",
+      "options": [
+        { "id": "very", "label": "Very disappointed" },
+        { "id": "somewhat", "label": "Somewhat disappointed" },
+        { "id": "not", "label": "Not disappointed" },
+        { "id": "not_enough", "label": "I don't use it enough to say" }
+      ]
+    },
+    {
+      "id": "q7",
+      "kind": "text",
+      "title": "What would make Radar better for you?",
+      "textPlaceholder": "A missing integration, a slow screen, something you keep going back to kubectl for...",
+      "options": []
+    },
+    {
+      "id": "q8",
+      "kind": "multi",
+      "title": "Anything here you didn't know Radar could do?",
+      "hint": "Pick any, or skip.",
+      "options": [
+        { "id": "rbac", "label": "See who can do what in the cluster (RBAC)", "link": { "path": "/resources/serviceaccounts", "label": "Open ServiceAccounts" } },
+        { "id": "drain", "label": "Preview a node drain before running it", "link": { "path": "/resources/nodes", "label": "Open Nodes" } },
+        { "id": "upgrade", "label": "Check what a Kubernetes upgrade would break", "link": { "path": "/checks/upgrade", "label": "Open Upgrade impact" } },
+        { "id": "image_files", "label": "Browse the files inside a container image, without pulling it", "link": { "path": "/resources/pods", "label": "Open Pods" } },
+        { "id": "compare", "label": "Diff two resources side by side, like staging against production", "link": { "path": "/resources", "label": "Open Resources" } },
+        { "id": "reachability", "label": "Trace why a Service or Ingress isn't reachable, hop by hop", "link": { "path": "/resources/services", "label": "Open Services" } },
+        { "id": "argo_diff", "label": "Diff a drifted Argo CD resource against Git", "requires": "argocd", "link": { "path": "/gitops", "label": "Open GitOps" } },
+        { "id": "rightsize", "label": "Rightsize requests and limits from real usage", "requires": "prometheus", "link": { "path": "/cost/rightsizing", "label": "Open Rightsizing" } }
+      ]
+    },
+    {
+      "id": "q9",
+      "kind": "single",
+      "title": "Last one, about Radar Cloud.",
+      "description": "Radar Cloud keeps Radar working after you close the laptop: it alerts your team when something breaks, remembers what changed, and investigates the cause. Have you looked at it?",
+      "textOption": "missing",
+      "skipIf": { "question": "q5_agent", "anyOf": ["radar_cloud"], "record": "already" },
+      "options": [
+        { "id": "didnt_know", "label": "I didn't know it existed" },
+        { "id": "covers", "label": "I looked. The Radar I run covers what I need" },
+        { "id": "no_hosted", "label": "I looked. We can't connect clusters to a hosted service" },
+        { "id": "airgapped", "label": "I looked. Our clusters are air-gapped" },
+        { "id": "price", "label": "I looked. It's the price" },
+        { "id": "missing", "label": "I looked. Something's missing" },
+        { "id": "already", "label": "We already use it" }
+      ]
+    },
+    {
+      "id": "a_role",
+      "kind": "single",
+      "block": "A",
+      "title": "What's your role?",
+      "options": [
+        { "id": "developer", "label": "Developer" },
+        { "id": "devops_sre", "label": "DevOps or SRE" },
+        { "id": "platform", "label": "Platform engineering" },
+        { "id": "manager", "label": "Engineering manager or lead" },
+        { "id": "student", "label": "Student or hobbyist" },
+        { "id": "other", "label": "Other" }
+      ]
+    },
+    {
+      "id": "a_team",
+      "kind": "single",
+      "block": "A",
+      "title": "How big is the engineering team you work with?",
+      "options": [
+        { "id": "just_me", "label": "Just me" },
+        { "id": "2_10", "label": "2 to 10" },
+        { "id": "11_50", "label": "11 to 50" },
+        { "id": "51_200", "label": "51 to 200" },
+        { "id": "200_plus", "label": "More than 200" }
+      ]
+    },
+    {
+      "id": "a_views",
+      "kind": "multi",
+      "block": "A",
+      "title": "Which views do you open regularly?",
+      "hint": "Pick any.",
+      "options": [
+        { "id": "resources", "label": "Resources" },
+        { "id": "topology", "label": "Topology" },
+        { "id": "timeline", "label": "Timeline" },
+        { "id": "helm", "label": "Helm" },
+        { "id": "gitops", "label": "GitOps" },
+        { "id": "traffic", "label": "Traffic" },
+        { "id": "checks", "label": "Checks" },
+        { "id": "cost", "label": "Cost" },
+        { "id": "rbac", "label": "RBAC" },
+        { "id": "investigations", "label": "Investigations" },
+        { "id": "terminal_logs", "label": "Terminal and logs" }
+      ]
+    }
+  ]
+}

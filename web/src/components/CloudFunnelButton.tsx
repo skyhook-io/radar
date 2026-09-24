@@ -12,6 +12,7 @@ import {
   handoffForBlocked,
   handoffForPrepareError,
   isHandoffOutcome,
+  type FunnelCampaign,
   signupUrlFor as buildSignupUrl,
 } from './cloudConnectHandoff'
 import { showApiError } from './ui/Toast'
@@ -72,6 +73,17 @@ const OPEN_EVENT = 'radar:open-cloud-funnel'
 export function openCloudFunnel() {
   window.dispatchEvent(new Event(OPEN_EVENT))
 }
+
+export interface CloudFunnelOpenOptions {
+  campaign?: FunnelCampaign
+  view?: 'pitch' | 'self-managed'
+}
+
+// A separate opener, not an optional argument: openCloudFunnel is passed
+// straight to onClick, where an argument would be the click event.
+export function openCloudFunnelWith(options: CloudFunnelOpenOptions) {
+  window.dispatchEvent(new CustomEvent<CloudFunnelOpenOptions>(OPEN_EVENT, { detail: options }))
+}
 const ABOUT_URL = 'https://radarhq.io/about'
 const BENCHMARK_URL = 'https://radarhq.io/benchmark'
 const PRICING_URL = 'https://radarhq.io/pricing'
@@ -103,6 +115,7 @@ export function CloudFunnelButton() {
   const [seen, setSeen] = useState(readSeen)
   const [inFlowView, setInFlowView] = useState(false)
   const [selfManaged, setSelfManaged] = useState(false)
+  const [campaign, setCampaign] = useState<FunnelCampaign>('cloud-modal')
   const [blocked, setBlocked] = useState<CloudInstallBlocked | null>(null)
   // Set once an in-app attempt has ended without connecting, naming what
   // happened (a flow failure kind, a blocked plan, a canceled plan, or the
@@ -125,7 +138,7 @@ export function CloudFunnelButton() {
   // the user opens; Radar sends nothing on its own. Only the blocked card may
   // deep-link the install page (see exitFor); the pitch buttons and the
   // footer link go to signup.
-  const signupUrl = buildSignupUrl(appUrl, 'wizard-signup-button')
+  const signupUrl = buildSignupUrl(appUrl, 'wizard-signup-button', null, campaign)
 
   // Only while the dialog is open — never on the capabilities poll. The Hub
   // learns that someone opened it, which is congruent with what the dialog is
@@ -193,9 +206,11 @@ export function CloudFunnelButton() {
     // a running install. Toast explicitly on the paths that are failures.
   })
 
-  const openModal = () => {
+  const openModal = (event?: Event) => {
+    const options = event instanceof CustomEvent ? (event.detail as CloudFunnelOpenOptions | undefined) : undefined
     setOpen(true)
-    setSelfManaged(false)
+    setSelfManaged(options?.view === 'self-managed')
+    setCampaign(options?.campaign ?? 'cloud-modal')
     setSeen(true)
     markSeen()
     // Re-open lands on a live flow if one is running.
@@ -289,7 +304,7 @@ export function CloudFunnelButton() {
           modal backdrop and would otherwise paint on top of the dialog. */}
       <Tooltip content="Radar Cloud: awake when you're not" delay={100} position="bottom" disabled={open}>
         <button
-          onClick={openModal}
+          onClick={() => openModal()}
           aria-label="Radar Cloud"
           aria-haspopup="dialog"
           className="relative p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
@@ -331,7 +346,7 @@ export function CloudFunnelButton() {
             <CloudConnectFlow
               status={flowForView}
               blocked={blocked}
-              exit={exitFor(appUrl, 'driver-blocked-card-browser-link', outcomeOf(flowForView), clusterInfo.data?.context)}
+              exit={exitFor(appUrl, 'driver-blocked-card-browser-link', outcomeOf(flowForView), clusterInfo.data?.context, campaign)}
               where={{ context: clusterInfo.data?.context, cluster: clusterInfo.data?.cluster }}
               onStatus={applyStatus}
               onExit={() => exitFlow(outcomeOf(flowForView))}
@@ -342,7 +357,7 @@ export function CloudFunnelButton() {
             <div className="shrink-0 px-8 pt-7">
               <Eyebrow />
             </div>
-            <SelfManagedStart appUrl={appUrl} onBack={() => setSelfManaged(false)} />
+            <SelfManagedStart appUrl={appUrl} campaign={campaign} onBack={() => setSelfManaged(false)} />
           </>
         ) : (
           <>
@@ -355,7 +370,7 @@ export function CloudFunnelButton() {
               signupUrl={signupUrl}
               // One link name whether or not an attempt preceded the click; the
               // outcome, when present, is what says an attempt happened.
-              driverBrowserUrl={buildSignupUrl(appUrl, 'driver-footer-browser-link', handoff)}
+              driverBrowserUrl={buildSignupUrl(appUrl, 'driver-footer-browser-link', handoff, campaign)}
               prepareFailed={prepareFailed}
               // A prepare error's reason, kept on the pitch after its toast is gone.
               prepareError={handoff?.detail}

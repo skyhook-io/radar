@@ -12,6 +12,8 @@ interface DialogPortalProps {
   className?: string
   /** Prevent closing via Escape / backdrop click (e.g. during async operation) */
   closable?: boolean
+  /** Id of the element that names the dialog, for screen readers. */
+  labelledBy?: string
 }
 
 /**
@@ -25,7 +27,7 @@ interface DialogPortalProps {
  *     <p>Content</p>
  *   </DialogPortal>
  */
-export function DialogPortal({ open, onClose, children, className, closable = true }: DialogPortalProps) {
+export function DialogPortal({ open, onClose, children, className, closable = true, labelledBy }: DialogPortalProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   // The unmount window is the exit duration: shorter than the entrance, and
   // exactly what the panel transition below runs — a mismatch here cut the
@@ -91,6 +93,7 @@ export function DialogPortal({ open, onClose, children, className, closable = tr
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={labelledBy}
         tabIndex={-1}
         onKeyDown={handleDialogKeyDown}
         className={clsx(

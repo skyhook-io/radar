@@ -1,5 +1,5 @@
 import { ArrowLeft, ArrowUpRight } from 'lucide-react'
-import { SELF_HOSTED_DOCS_URL, signupUrlFor } from './cloudConnectHandoff'
+import { type FunnelCampaign, SELF_HOSTED_DOCS_URL, signupUrlFor } from './cloudConnectHandoff'
 
 // What the Cloud dialog shows after "Run Radar Cloud yourself…". Running your
 // own control plane starts with a Radar Cloud account, because the Hub signs
@@ -8,8 +8,8 @@ import { SELF_HOSTED_DOCS_URL, signupUrlFor } from './cloudConnectHandoff'
 // it themselves. The link carries intent=self-hosting: the Hub's sign-in page
 // repeats the steps and, after sign-up or sign-in, continues on its
 // Self-hosting page, where the trial, the license and the install command are.
-export function SelfManagedStart({ appUrl, onBack }: { appUrl: string; onBack: () => void }) {
-  const signupUrl = `${signupUrlFor(appUrl, 'self-managed-signup')}&intent=self-hosting`
+export function SelfManagedStart({ appUrl, onBack, campaign }: { appUrl: string; onBack: () => void; campaign?: FunnelCampaign }) {
+  const signupUrl = `${signupUrlFor(appUrl, 'self-managed-signup', null, campaign)}&intent=self-hosting`
   const steps = [
     {
       title: 'Create your Radar Cloud account',

@@ -14,6 +14,16 @@ const attempted = (over: Partial<CloudInstallAttempted>): CloudInstallAttempted 
   ...over,
 })
 
+describe('poll campaign', () => {
+  it('replaces the campaign and keeps the clicked link in utm_content', () => {
+    const url = signupUrlFor(APP, 'wizard-signup-button', null, 'oss-poll')
+    expect(url).toContain('utm_campaign=oss-poll')
+    expect(url).not.toContain('cloud-modal')
+    expect(url).toContain('utm_content=wizard-signup-button')
+    expect(signupUrlFor(APP, 'wizard-signup-button')).toContain('utm_campaign=cloud-modal')
+  })
+})
+
 describe('signupUrlFor', () => {
   it('tags the link and omits the outcome when there was no attempt', () => {
     expect(signupUrlFor(APP, 'driver-footer-browser-link')).toBe(`${APP}/signup?${UTM}&utm_content=driver-footer-browser-link`)
