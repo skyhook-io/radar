@@ -7,6 +7,7 @@ import { TRANSITION_BACKDROP, TRANSITION_MENU, TW_EASE_UI, overlayExitMs, overla
 import { SearchPillInput, type SearchModifier } from '@skyhook-io/k8s-ui'
 import { getResourceIcon } from '../../utils/resource-icons'
 import type { SearchHit, SearchMatchedField } from '../../api/client'
+import { recordUsageEvent } from '../../api/telemetry'
 import { bestScore, type CommandItem } from './command-items'
 import { SearchSyntaxHelp } from './SearchSyntaxHelp'
 
@@ -181,6 +182,21 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   const [anchor, setAnchor] = useState<{ centerX: number; top: number; width: number } | null>(null)
 
   useImperativeHandle(ref, () => ({ focus: () => { inputRef.current?.focus(); inputRef.current?.select() } }), [])
+
+  // Usage data: one count per opening, one per opening that searched. Never
+  // the query itself.
+  const searchedThisOpen = useRef(false)
+  useEffect(() => {
+    if (!open) return
+    searchedThisOpen.current = false
+    recordUsageEvent({ type: 'ui', name: 'command_palette' })
+  }, [open])
+  useEffect(() => {
+    if (open && text.trim() && !searchedThisOpen.current) {
+      searchedThisOpen.current = true
+      recordUsageEvent({ type: 'ui', name: 'search' })
+    }
+  }, [open, text])
 
   // Hero autofocus parks the cursor in the field on mount (Home's primary
   // action) but must NOT pop the dropdown — landing on the page shouldn't dim

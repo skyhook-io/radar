@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug,
   Plus, Terminal, Boxes, Activity, GitBranch, Sparkles, SlidersHorizontal, Zap,
-  LayoutDashboard, ChevronRight, ExternalLink, Download, AlertTriangle, Coins,
+  LayoutDashboard, ChevronRight, ExternalLink, Download, AlertTriangle, Coins, EyeOff,
   type LucideIcon,
 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -21,6 +21,7 @@ import { Collapse, CollapseChevron } from '@skyhook-io/k8s-ui/components/ui/Coll
 import { Tooltip } from '../ui/Tooltip'
 import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
 import { MyPermissionsContent } from './MyPermissionsDialog'
+import { PrivacySection } from './PrivacySection'
 import { useDiagnose } from '../diagnose/DiagnoseContext'
 import { currencyOptionsForValue } from './currency-options'
 import { versionUpdateURL } from '../../utils/version'
@@ -449,6 +450,7 @@ export function SettingsDialog({
     { id: 'cost', label: 'Cost', icon: Coins, ownerOnly: true, dirty: costIntegrationDirty },
     { id: 'argocd', label: 'Argo CD', icon: GitBranch, ownerOnly: true, dirty: false },
     { id: 'ai', label: 'AI investigations', icon: Sparkles, ownerOnly: false, dirty: aiDirty },
+    { id: 'privacy', label: 'Privacy', icon: EyeOff, ownerOnly: false, dirty: false },
     { id: 'advanced', label: 'Advanced', icon: SlidersHorizontal, ownerOnly: true, dirty: advancedDirty },
   ]
 
@@ -510,6 +512,7 @@ export function SettingsDialog({
                 Radar{versionInfo?.currentVersion ? ` v${versionInfo.currentVersion}` : ''}
                 <span className="text-theme-text-disabled"> · by Skyhook</span>
               </span>
+
             </div>
           </div>
           <button
@@ -562,10 +565,10 @@ export function SettingsDialog({
               </div>
             )}
 
-            {!configData && !['overview', 'perms', 'ai'].includes(section) ? (
+            {!configData && !['overview', 'perms', 'ai', 'privacy'].includes(section) ? (
               <p className="text-sm text-theme-text-secondary">{loadError ? 'Configuration is unavailable. Close Settings and try again.' : 'Loading configuration…'}</p>
             ) : <>
-            {operatorManaged && section !== 'perms' && section !== 'ai' && <div className="mb-4"><OperatorManagedNotice /></div>}
+            {operatorManaged && section !== 'perms' && section !== 'ai' && section !== 'privacy' && <div className="mb-4"><OperatorManagedNotice /></div>}
             {/* Overview — status at a glance; the landing section */}
             <div className={clsx(section !== 'overview' && 'hidden')} role="tabpanel" inert={section !== 'overview' || undefined}>
               <div className="mb-1">
@@ -795,6 +798,13 @@ export function SettingsDialog({
                 <AIUnavailableNotice />
               )}
             </div>
+
+            {/* Privacy: every outbound request Radar makes, and the usage-data choice.
+                Readable by everyone; the choice itself is only editable where the
+                person in the UI installed Radar. */}
+            <SectionPane id="privacy" active={section} title="Privacy" caption="Applies immediately." live>
+              <PrivacySection active={section === 'privacy'} />
+            </SectionPane>
 
             {/* Advanced — MCP + Timeline merged */}
             <SectionPane

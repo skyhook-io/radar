@@ -50,6 +50,8 @@ import { UserMenu } from './components/UserMenu'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { UpdateNotification } from './components/ui/UpdateNotification'
 import { SHOW_WHATS_NEW_EVENT, WhatsNew } from './components/whats-new/WhatsNew'
+import { useUsageData, useUsageRecording } from './api/telemetry'
+import { UsageDataPrompt } from './components/usage-data/UsageDataPrompt'
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
@@ -143,6 +145,18 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'issues') return 'issues'
   if (path === 'investigations') return 'investigations'
   return 'home'
+}
+
+// The usage-data name for the current screen: a resource list names its
+// kind's plural ("resources:deployments"); the server keeps built-in kinds
+// only, so a custom resource's name never leaves.
+function usageView(pathname: string, view: ExtendedMainView, upgrade: boolean): string {
+  if (upgrade) return 'upgrade'
+  if (view === 'resources') {
+    const plural = pathname.match(/^\/resources\/([^/]+)/)?.[1]
+    if (plural) return `resources:${plural.toLowerCase()}`
+  }
+  return view
 }
 
 // The namespace scope filter is meaningful only on namespaced surfaces. On
@@ -417,6 +431,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   // Get mainView from URL path
   const mainView = getViewFromPath(location.pathname)
   const upgradeReadinessRoute = location.pathname.startsWith('/checks/upgrade')
+
+  // Opt-in usage data. Embedded hosts own their own consent, so Radar never asks there.
+  const usageData = useUsageData(!navCustomization.embedded)
+  useUsageRecording(usageView(location.pathname, mainView, upgradeReadinessRoute), usageData.data)
 
   // Initialize the kind→plural discovery map app-wide (not just on ResourcesView
   // mount) so the omnibar can open a CRD hit with an irregular plural from any
@@ -2428,7 +2446,8 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
       {/* Update notification — hidden in embedded mode (OSS download nudge). */}
       {!navCustomization.embedded && <UpdateNotification />}
-      {!navCustomization.embedded && <WhatsNew onNavigate={navigate} />}
+      {!navCustomization.embedded && <WhatsNew onNavigate={navigate} usageData={usageData.data} />}
+      {!navCustomization.embedded && <UsageDataPrompt status={usageData.data} />}
 
       {/* Bottom Dock for Terminal/Logs */}
       <BottomDock />
