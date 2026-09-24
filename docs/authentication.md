@@ -97,6 +97,8 @@ To make logout actually switch users, point Radar at your proxy's sign-out URL w
 
 Use this when you want Radar to handle login directly — no separate auth proxy needed. Radar redirects to your identity provider (Google, Okta, Dex, Keycloak, etc.), validates the token, and creates a session cookie.
 
+We recommend registering a dedicated OIDC client for Radar rather than reusing the client ID your Kubernetes API server trusts. Radar's session holds the user's ID token for logout, so with a shared client a leaked Radar session could also be used against the API server.
+
 **Flow:**
 ```
 Browser → Radar → redirects to IdP → user logs in → callback → session cookie
