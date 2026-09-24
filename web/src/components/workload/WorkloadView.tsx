@@ -1,3 +1,4 @@
+import { RayServiceRenderer } from '../resources/renderers/RayServiceRenderer'
 import { KueueWorkloadRenderer } from '../resources/renderers/KueueWorkloadRenderer'
 import { useMemo, useEffect, useCallback, useRef, useState } from 'react'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
@@ -169,6 +170,7 @@ export function supportsBatchExecution(kind: string, apiKind: string, group?: st
 
 // Stable reference — web renderer wrappers inject platform hooks internally
 const rendererOverrides: RendererOverrides = {
+  RayServiceRenderer,
   KueueWorkloadRenderer,
   CAPIClusterRenderer,
   PodRenderer,

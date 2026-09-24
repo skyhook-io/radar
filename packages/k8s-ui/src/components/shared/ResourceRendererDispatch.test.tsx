@@ -1056,3 +1056,19 @@ describe('Kueue provisioning detail identity', () => {
     }
   })
 })
+
+describe('RayService native detail identity', () => {
+  it('renders the exact supported version once and leaves foreign/future resources generic', () => {
+    const data = { apiVersion: 'ray.io/v1', kind: 'RayService', spec: { customField: 'preserved-value' } }
+    const html = renderKind('rayservices', data)
+    expect(html).toContain('Serving and Rollout')
+    expect(html).not.toContain('preserved-value')
+    expect(html).not.toContain('No specialized view')
+    for (const apiVersion of ['foreign.io/v1', 'fake.ray.io/v1', 'ray.io/v99', 'ray.io/v1alpha1']) {
+      const foreign = { ...data, apiVersion }
+      expect(renderKind('rayservices', foreign)).not.toContain('Serving and Rollout')
+      expect(renderKind('rayservices', foreign)).toContain('preserved-value')
+      expect(getResourceStatus('rayservices', foreign)).toBeNull()
+    }
+  })
+})

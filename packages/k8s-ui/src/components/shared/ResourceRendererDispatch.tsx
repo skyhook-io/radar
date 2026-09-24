@@ -116,6 +116,7 @@ import {
   JobRenderer,
   JobSetRenderer,
   KueueWorkloadRenderer,
+  RayServiceRenderer,
   AdmissionCheckRenderer,
   ProvisioningRequestRenderer,
   LocalQueueRenderer,
@@ -310,6 +311,7 @@ import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
  * When an override is not provided, the base (shared) renderer is used.
  */
 export interface RendererOverrides {
+  RayServiceRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   KueueWorkloadRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   PodRenderer?: React.ComponentType<{
     data: any; onCopy: CopyHandler; copied: string | null
@@ -441,7 +443,7 @@ const KNOWN_KINDS = new Set([
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
   'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'cronworkflows',
   'jobsets',
-  'workloads', 'localqueues', 'clusterqueues', 'admissionchecks', 'provisioningrequests',
+  'rayservices', 'workloads', 'localqueues', 'clusterqueues', 'admissionchecks', 'provisioningrequests',
   'hpas', 'horizontalpodautoscalers', 'nodes', 'persistentvolumeclaims',
   'rollouts', 'analysisruns', 'analysistemplates', 'clusteranalysistemplates', 'experiments', 'certificates', 'workflows', 'persistentvolumes',
   'storageclasses', 'certificaterequests', 'clusterissuers', 'issuers',
@@ -696,7 +698,7 @@ export function ResourceRendererDispatch({
     || kind === 'objectstores' || kind === 'databases' || kind === 'publications'
     || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs' || kind === 'jobsets'
     || kind === 'policies' || kind === 'rollouts' || kind === 'experiments'
-    || kind === 'admissionchecks' || kind === 'provisioningrequests'
+    || kind === 'rayservices' || kind === 'admissionchecks' || kind === 'provisioningrequests'
     || kind === 'machines' || kind === 'machinesets' || kind === 'workloads' || kind === 'localqueues' || kind === 'clusterqueues'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
@@ -717,6 +719,7 @@ export function ResourceRendererDispatch({
     || (kind === 'experiments' && isApiGroup(data?.apiVersion, 'argoproj.io'))
     || ((kind === 'machines' || kind === 'machinesets')
       && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io'))
+    || (kind === 'rayservices' && data?.apiVersion === 'ray.io/v1')
     || (kind === 'jobsets' && isJobSetV1Alpha2(data))
     || (kind === 'workloads' && isApiGroup(data?.apiVersion, 'kueue.x-k8s.io'))
     || (kind === 'admissionchecks' && isKueueQueueResource(data))
@@ -742,6 +745,7 @@ export function ResourceRendererDispatch({
 
   const isKnownKind = KNOWN_KINDS.has(kind) || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
 
+  const RayServiceComp = rendererOverrides?.RayServiceRenderer ?? RayServiceRenderer
   const KueueWorkloadComp = rendererOverrides?.KueueWorkloadRenderer ?? KueueWorkloadRenderer
   const PodComp = rendererOverrides?.PodRenderer ?? PodRenderer
   const KarpenterNodePoolComp = rendererOverrides?.KarpenterNodePoolRenderer ?? KarpenterNodePoolRenderer
@@ -811,6 +815,7 @@ export function ResourceRendererDispatch({
         {kind === 'configmaps' && <ConfigMapRenderer data={data} relationships={relationships} onNavigate={onNavigate} />}
         {kind === 'secrets' && <SecretRenderer data={data} relationships={relationships} onNavigate={onNavigate} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
         {kind === 'jobs' && !nonCoreJobFallthrough && <JobRenderer data={data} />}
+        {kind === 'rayservices' && data?.apiVersion === 'ray.io/v1' && <RayServiceComp data={data} onNavigate={onNavigate} />}
         {kind === 'workloads' && isApiGroup(data?.apiVersion, 'kueue.x-k8s.io') && <KueueWorkloadComp data={data} onNavigate={onNavigate} />}
         {kind === 'admissionchecks' && isKueueQueueResource(data) && <AdmissionCheckRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'provisioningrequests' && ['autoscaling.x-k8s.io/v1', 'autoscaling.x-k8s.io/v1beta1'].includes(data?.apiVersion) && <ProvisioningRequestRenderer data={data} onNavigate={onNavigate} />}
@@ -1114,7 +1119,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'provisioningrequests' && ['autoscaling.x-k8s.io/v1', 'autoscaling.x-k8s.io/v1beta1'].includes(data?.apiVersion)) return getProvisioningRequestStatus(data)
   if (k === 'rayclusters' && data?.apiVersion?.startsWith('ray.io/')) return getRayClusterStatus(data)
   if (k === 'rayjobs' && data?.apiVersion?.startsWith('ray.io/')) return getRayJobStatus(data)
-  if (k === 'rayservices' && data?.apiVersion?.startsWith('ray.io/')) return getRayServiceStatus(data)
+  if (k === 'rayservices' && data?.apiVersion === 'ray.io/v1') return getRayServiceStatus(data)
   if (k === 'raycronjobs' && data?.apiVersion?.startsWith('ray.io/')) return getRayCronJobStatus(data)
   if (k === 'leaderworkersets' && data?.apiVersion?.startsWith('leaderworkerset.x-k8s.io/')) return getLeaderWorkerSetStatus(data)
   if (k === 'jobsets' && isJobSetV1Alpha2(data)) return getJobSetStatus(data)

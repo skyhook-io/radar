@@ -1552,8 +1552,23 @@ coverage, or support for other Kueue API versions.
 |----------|-------|---------------|
 | RayCluster | `ray.io/v1` | state + provisioning conditions |
 | RayJob | `ray.io/v1` | jobStatus + jobDeploymentStatus |
-| RayService | `ray.io/v1` | lifecycle conditions (`serviceStatus` fallback) |
+| RayService | `ray.io/v1` | lifecycle conditions; native serving and revision detail |
 | RayCronJob | `ray.io/v1` | suspend |
+
+RayService detail separates proxy readiness, rollout and suspension from active/pending
+runtime revisions. It shows native Serve application/deployment states and messages,
+with reported target capacity and configured route weights kept distinct from measured
+traffic. Missing application snapshots are unreported, including during `NewCluster`
+upgrades; they do not establish an outage. Lifecycle badges use controller conditions,
+not the deprecated `serviceStatus` field as proof of readiness. Freshness compares the
+root observed generation because KubeRay does not restamp unchanged conditions; an
+acknowledged suspension can intentionally pause reconciliation.
+
+The OSS host reads at most the two named RayClusters and shows their directly observed
+conditions only after checking their controller owner against the RayService UID.
+Unreadable, missing and mismatched children are explicit. Embedded RayCluster status is
+not treated as live runtime evidence. Revision links navigate to the exact `ray.io`
+resource; this does not add a Ray topology adapter or generated-Service inventory.
 
 For an exact `ray.io/v1` RayService, REST AI detail and MCP `get_resource`
 include `resourceContext.serving.rayService` with named active/pending revisions, native

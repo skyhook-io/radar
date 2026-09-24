@@ -186,3 +186,5 @@ export { KueueWorkloadRenderer } from './KueueWorkloadRenderer'
 export { LocalQueueRenderer, ClusterQueueRenderer } from './KueueQueueRenderers'
 
 export { AdmissionCheckRenderer, ProvisioningRequestRenderer } from './KueueProvisioningRenderers'
+
+export { RayServiceRenderer } from './RayServiceRenderer'
