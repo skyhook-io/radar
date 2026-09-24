@@ -5869,6 +5869,11 @@ func addGitOpsManagedResourceEdges(
 		"TCPRoute": true, "TLSRoute": true,
 	}
 	for _, app := range applications {
+		// A remote destination's status.resources name objects in that
+		// cluster; a same-named local object isn't the one it manages.
+		if !gitops.IsInClusterDestination(app) {
+			continue
+		}
 		appID := applicationIDs[app.GetNamespace()+"/"+app.GetName()]
 		destNamespace := applicationDestNamespaces[appID]
 		resources, _, _ := unstructured.NestedSlice(app.Object, "status", "resources")
@@ -5896,6 +5901,9 @@ func addGitOpsManagedResourceEdges(
 		"GRPCRoute": true, "TCPRoute": true, "TLSRoute": true,
 	}
 	for _, kustomization := range kustomizations {
+		if !gitops.FluxTargetsLocalCluster(kustomization) {
+			continue
+		}
 		ksID := kustomizationIDs[kustomization.GetNamespace()+"/"+kustomization.GetName()]
 		entries, _, _ := unstructured.NestedSlice(kustomization.Object, "status", "inventory", "entries")
 		for _, entry := range entries {

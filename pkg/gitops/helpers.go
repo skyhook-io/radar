@@ -42,6 +42,18 @@ func IsInClusterDestination(app *unstructured.Unstructured) bool {
 	return isLocalAPIServer(server)
 }
 
+// FluxTargetsLocalCluster reports whether a Flux Kustomization or HelmRelease
+// applies to the cluster Radar is connected to. spec.kubeConfig points it at
+// another cluster, whose objects its inventory then names; nothing Radar reads
+// locally belongs to them. Fail closed: a nil object is not local.
+func FluxTargetsLocalCluster(obj *unstructured.Unstructured) bool {
+	if obj == nil {
+		return false
+	}
+	_, remote, _ := unstructured.NestedMap(obj.Object, "spec", "kubeConfig")
+	return !remote
+}
+
 // isLocalAPIServer matches the in-cluster Kubernetes API server URL Argo records
 // for a same-cluster destination (kubernetes.default.svc, with or without a
 // scheme, port, or trailing dot). Any other host is a remote cluster.

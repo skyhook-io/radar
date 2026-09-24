@@ -1,6 +1,10 @@
 package gitops
 
-import "testing"
+import (
+	"testing"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+)
 
 func TestParseFluxInventoryID(t *testing.T) {
 	tests := []struct {
@@ -26,5 +30,21 @@ func TestParseFluxInventoryID(t *testing.T) {
 				t.Fatalf("ParseFluxInventoryID(%q) = (%q, %q, %q, %q, %v)", test.id, group, kind, namespace, resource, ok)
 			}
 		})
+	}
+}
+
+func TestFluxTargetsLocalCluster(t *testing.T) {
+	local := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"path": "./apps"}}}
+	remote := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{
+		"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod"}},
+	}}}
+	if !FluxTargetsLocalCluster(local) {
+		t.Error("a Kustomization without kubeConfig applies locally")
+	}
+	if FluxTargetsLocalCluster(remote) {
+		t.Error("a Kustomization with kubeConfig applies to another cluster")
+	}
+	if FluxTargetsLocalCluster(nil) {
+		t.Error("nil must fail closed")
 	}
 }

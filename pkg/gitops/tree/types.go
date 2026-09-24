@@ -141,7 +141,8 @@ type ResourceTree struct {
 	// this application"). Empty when nothing was configured to ask.
 	HealthAPIError string `json:"healthApiError,omitempty"`
 	// RemoteDestination is true for an Argo CD Application whose
-	// spec.destination is another cluster. Radar's own reads describe the
+	// spec.destination is another cluster, or a Flux object with
+	// spec.kubeConfig. Radar's own reads describe the
 	// local cluster, so nothing Radar derives can be attributed to such an
 	// app's resources; hosts must not overlay Radar health onto it.
 	RemoteDestination bool `json:"remoteDestination,omitempty"`

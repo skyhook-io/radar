@@ -93,3 +93,44 @@ func TestAddGitOpsManagedResourceEdgesParsesFluxIdentityFromRight(t *testing.T) 
 		t.Fatalf("Flux edges = %+v, want only the exact underscore-named Volcano Job", edges)
 	}
 }
+
+// On an Argo CD or Flux hub, objects that another cluster's Application or
+// remote Kustomization lists are that cluster's; only a GitOps object that
+// deploys here gets a manages edge to the same-named local object.
+func TestAddGitOpsManagedResourceEdgesIgnoresRemoteDestinations(t *testing.T) {
+	nodes := []Node{
+		{ID: "application/argocd/sealed-hub", Kind: KindApplication, Name: "sealed-hub", Data: map[string]any{"namespace": "argocd", "apiVersion": "argoproj.io/v1alpha1"}},
+		{ID: "application/argocd/sealed-prod", Kind: KindApplication, Name: "sealed-prod", Data: map[string]any{"namespace": "argocd", "apiVersion": "argoproj.io/v1alpha1"}},
+		{ID: "kustomization/flux-system/fleet-prod", Kind: KindKustomization, Name: "fleet-prod", Data: map[string]any{"namespace": "flux-system", "apiVersion": "kustomize.toolkit.fluxcd.io/v1"}},
+		{ID: "deployment/sealed-secrets/controller", Kind: KindDeployment, Name: "controller", Data: map[string]any{"namespace": "sealed-secrets"}},
+	}
+	app := func(name, server string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"metadata": map[string]any{"namespace": "argocd", "name": name},
+			"spec":     map[string]any{"destination": map[string]any{"server": server, "namespace": "sealed-secrets"}},
+			"status": map[string]any{"resources": []any{
+				map[string]any{"group": "apps", "kind": "Deployment", "namespace": "sealed-secrets", "name": "controller"},
+			}},
+		}}
+	}
+	remoteKs := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"namespace": "flux-system", "name": "fleet-prod"},
+		"spec":     map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod"}}},
+		"status": map[string]any{"inventory": map[string]any{"entries": []any{
+			map[string]any{"id": "sealed-secrets_controller_apps_Deployment"},
+		}}},
+	}}
+
+	edges := addGitOpsManagedResourceEdges(
+		nodes,
+		nil,
+		[]*unstructured.Unstructured{app("sealed-prod", "https://prod.example.com"), app("sealed-hub", "https://kubernetes.default.svc")},
+		map[string]string{"argocd/sealed-hub": "application/argocd/sealed-hub", "argocd/sealed-prod": "application/argocd/sealed-prod"},
+		nil,
+		[]*unstructured.Unstructured{remoteKs},
+		map[string]string{"flux-system/fleet-prod": "kustomization/flux-system/fleet-prod"},
+	)
+	if len(edges) != 1 || edges[0].Source != "application/argocd/sealed-hub" {
+		t.Fatalf("manages edges = %+v, want only the in-cluster Application's", edges)
+	}
+}

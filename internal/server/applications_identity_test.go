@@ -1018,3 +1018,20 @@ func TestAddFluxKustomizationManagedSourceRefsKeepsInventoryGroup(t *testing.T) 
 		t.Fatalf("Volcano Job source ref = %+v, want flux-system/training", ref)
 	}
 }
+
+// A Kustomization with spec.kubeConfig applies to another cluster; its
+// inventory names objects there, not same-named local ones.
+func TestAddFluxKustomizationManagedSourceRefsIgnoresRemoteClusters(t *testing.T) {
+	ks := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"namespace": "flux-system", "name": "fleet-prod"},
+		"spec":     map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod-kubeconfig"}}},
+		"status": map[string]any{"inventory": map[string]any{"entries": []any{
+			map[string]any{"id": "team_api_apps_Deployment"},
+		}}},
+	}}
+	got := map[string][]appSourceRef{}
+	addFluxKustomizationManagedSourceRefs(context.Background(), &stubLister{items: []*unstructured.Unstructured{ks}}, got)
+	if len(got) != 0 {
+		t.Fatalf("remote Kustomization claimed local objects: %#v", got)
+	}
+}

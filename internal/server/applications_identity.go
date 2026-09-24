@@ -1155,7 +1155,9 @@ func argoDeliveryHealth(syncStatus, healthStatus string) packages.Health {
 
 func addArgoManagedSourceRefs(out map[string][]appSourceRef, items []*unstructured.Unstructured) {
 	for _, item := range items {
-		if item == nil || item.GetName() == "" || item.GetNamespace() == "" {
+		// A remote destination's status.resources name objects in that
+		// cluster; a same-named local object isn't the one it manages.
+		if item == nil || item.GetName() == "" || item.GetNamespace() == "" || !gitops.IsInClusterDestination(item) {
 			continue
 		}
 		ref := appSourceRef{Type: "gitops", Tool: "argocd", Group: "argoproj.io", Kind: "Application", Namespace: item.GetNamespace(), Name: item.GetName()}
@@ -1192,7 +1194,7 @@ func addFluxKustomizationManagedSourceRefs(ctx context.Context, cache resourceLi
 		return
 	}
 	for _, item := range items {
-		if item == nil || item.GetName() == "" || item.GetNamespace() == "" {
+		if item == nil || item.GetName() == "" || item.GetNamespace() == "" || !gitops.FluxTargetsLocalCluster(item) {
 			continue
 		}
 		ref := appSourceRef{Type: "gitops", Tool: "fluxcd", Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: item.GetNamespace(), Name: item.GetName()}
