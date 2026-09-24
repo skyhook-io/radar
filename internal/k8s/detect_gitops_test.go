@@ -218,7 +218,7 @@ func TestDetectArgoAppProblems_OperationFailedOutranksDegraded(t *testing.T) {
 	app := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
 		"metadata": map[string]any{"name": "both", "namespace": "argocd"},
-		"spec":     map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{}}},
+		"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}, "syncPolicy": map[string]any{"automated": map[string]any{}}},
 		"status": map[string]any{
 			"health":         map[string]any{"status": "Degraded"},
 			"sync":           map[string]any{"status": "OutOfSync"},
@@ -239,7 +239,7 @@ func TestDetectArgoAppProblems_OperationFailedOutranksProgressing(t *testing.T) 
 	app := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
 		"metadata": map[string]any{"name": "progressing-failed", "namespace": "argocd"},
-		"spec":     map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{}}},
+		"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}, "syncPolicy": map[string]any{"automated": map[string]any{}}},
 		"status": map[string]any{
 			"health":         map[string]any{"status": "Progressing"},
 			"sync":           map[string]any{"status": "OutOfSync"},
@@ -261,7 +261,7 @@ func TestDetectArgoAppProblems_EnabledFalseIsManual(t *testing.T) {
 	disabled := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
 		"metadata": map[string]any{"name": "auto-off", "namespace": "argocd"},
-		"spec":     map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{"enabled": false}}},
+		"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}, "syncPolicy": map[string]any{"automated": map[string]any{"enabled": false}}},
 		"status":   map[string]any{"health": map[string]any{"status": "Missing"}, "sync": map[string]any{"status": "OutOfSync"}},
 	}}
 	if got := detectArgoAppProblems([]*unstructured.Unstructured{disabled}, nil, now); len(got) != 0 {
@@ -286,7 +286,7 @@ func TestDetectArgoAppProblems_OperationFailedParsesCause(t *testing.T) {
 	app := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
 		"metadata": map[string]any{"name": "broken-sync", "namespace": "argocd"},
-		"spec":     map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{}}},
+		"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}, "syncPolicy": map[string]any{"automated": map[string]any{}}},
 		"status": map[string]any{
 			"health": map[string]any{"status": "Healthy"},
 			"sync":   map[string]any{"status": "OutOfSync"},
@@ -331,7 +331,7 @@ func TestDetectArgoAppProblems_OperationFailedUsesOperationTimestamp(t *testing.
 	app := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
 		"metadata": map[string]any{"name": "fresh-failure", "namespace": "argocd"},
-		"spec":     map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{}}},
+		"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}, "syncPolicy": map[string]any{"automated": map[string]any{}}},
 		"status": map[string]any{
 			"health": map[string]any{"status": "Healthy"},
 			"sync":   map[string]any{"status": "OutOfSync"},
@@ -357,7 +357,7 @@ func TestDetectArgoAppProblems_ErrorConditionUsesTransitionTimestamp(t *testing.
 	app := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
 		"metadata": map[string]any{"name": "fresh-condition", "namespace": "argocd"},
-		"spec":     map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{}}},
+		"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}, "syncPolicy": map[string]any{"automated": map[string]any{}}},
 		"status": map[string]any{
 			"health": map[string]any{"status": "Healthy"},
 			"sync":   map[string]any{"status": "Unknown"},
@@ -395,7 +395,7 @@ func TestDetectArgoAppProblems_StuckDriftLoop(t *testing.T) {
 		return &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
 			"metadata": map[string]any{"name": "stuck", "namespace": "argocd", "uid": "stuck-uid"},
-			"spec":     map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{}}},
+			"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}, "syncPolicy": map[string]any{"automated": map[string]any{}}},
 			"status": map[string]any{
 				"health":         map[string]any{"status": "Healthy"},
 				"sync":           map[string]any{"status": "OutOfSync"},
@@ -515,7 +515,7 @@ func TestGitOpsOperationDiagnosisParity(t *testing.T) {
 			app := &unstructured.Unstructured{Object: map[string]any{
 				"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
 				"metadata": map[string]any{"name": "app", "namespace": "argocd"},
-				"spec":     map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{}}},
+				"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}, "syncPolicy": map[string]any{"automated": map[string]any{}}},
 				"status": map[string]any{
 					"health":         map[string]any{"status": tc.health},
 					"sync":           map[string]any{"status": "OutOfSync"},
@@ -566,7 +566,7 @@ func TestDetectArgoAppProblems_EmptyOpMessagePrefersCondition(t *testing.T) {
 		return &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
 			"metadata": map[string]any{"name": "app", "namespace": "argocd"},
-			"spec":     map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{}}},
+			"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}, "syncPolicy": map[string]any{"automated": map[string]any{}}},
 			"status":   status,
 		}}
 	}
@@ -863,5 +863,32 @@ func TestArgoStaleThresholdFromValue(t *testing.T) {
 		if got := argoStaleThresholdFromValue(tc.raw); got != tc.want {
 			t.Errorf("argoStaleThresholdFromValue(%q) = %v, want %v", tc.raw, got, tc.want)
 		}
+	}
+}
+
+func TestDetectArgoAppProblems_RemoteDestinationOffersNoLocalRemediation(t *testing.T) {
+	app := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1", "kind": "Application",
+		"metadata": map[string]any{"name": "payments-prod", "namespace": "argocd"},
+		"spec":     map[string]any{"destination": map[string]any{"server": "https://prod.example.com:6443"}},
+		"status": map[string]any{
+			"health":         map[string]any{"status": "Healthy"},
+			"sync":           map[string]any{"status": "OutOfSync"},
+			"operationState": map[string]any{"phase": "Failed", "message": `namespaces "payments" not found`},
+		},
+	}}
+	got := detectArgoAppProblems([]*unstructured.Unstructured{app}, nil, time.Now())
+	if len(got) != 1 {
+		t.Fatalf("want 1 problem, got %+v", got)
+	}
+	d := got[0]
+	if d.RemediationKind != "" || d.RemediationTarget != "" {
+		t.Errorf("remote Application must not offer a fix that acts on this cluster, got %q/%q", d.RemediationKind, d.RemediationTarget)
+	}
+	if !strings.Contains(d.Action, "destination cluster") || !strings.Contains(d.Action, "payments") {
+		t.Errorf("Action = %q, want the namespace named on the destination cluster", d.Action)
+	}
+	if d.Cause == "" {
+		t.Error("the diagnosis itself must survive; only the local fix is dropped")
 	}
 }

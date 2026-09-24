@@ -22,24 +22,36 @@ func StringValue(v any) string {
 // cluster Radar is connected to — spec.destination is the local API server or
 // the "in-cluster" name — as opposed to a remote hub-spoke destination. Radar's
 // per-user SARs authorize against the local cluster only, so the desired/live
-// manifests of a remote destination cannot be authorized here. A missing/empty
-// destination is Argo's degenerate local default; an explicit remote server or
-// name is not. Fail closed: a nil Application is treated as not-in-cluster.
+// manifests of a remote destination cannot be authorized here. An Application
+// with no destination is invalid (Argo reports InvalidSpecError and deploys
+// nothing), so it is not local either: its status.resources may be left over
+// from a destination it no longer names. Fail closed: a nil Application is
+// treated as not-in-cluster.
 func IsInClusterDestination(app *unstructured.Unstructured) bool {
 	if app == nil {
 		return false
 	}
-	name, _, _ := unstructured.NestedString(app.Object, "spec", "destination", "name")
-	server, _, _ := unstructured.NestedString(app.Object, "spec", "destination", "server")
-	name = strings.TrimSpace(name)
-	server = strings.TrimSpace(server)
-	if name == "" && server == "" {
-		return true
-	}
+	name, server := argoDestination(app)
 	if strings.EqualFold(name, "in-cluster") {
 		return true
 	}
 	return isLocalAPIServer(server)
+}
+
+// HasArgoDestination reports whether an Argo Application names a destination
+// cluster at all, by server or by name.
+func HasArgoDestination(app *unstructured.Unstructured) bool {
+	if app == nil {
+		return false
+	}
+	name, server := argoDestination(app)
+	return name != "" || server != ""
+}
+
+func argoDestination(app *unstructured.Unstructured) (name, server string) {
+	name, _, _ = unstructured.NestedString(app.Object, "spec", "destination", "name")
+	server, _, _ = unstructured.NestedString(app.Object, "spec", "destination", "server")
+	return strings.TrimSpace(name), strings.TrimSpace(server)
 }
 
 // FluxTargetsLocalCluster reports whether a Flux Kustomization or HelmRelease

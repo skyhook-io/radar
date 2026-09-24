@@ -18,6 +18,7 @@ func TestAddGitOpsManagedResourceEdgesPreservesArgoAPIGroup(t *testing.T) {
 	}
 	app := &unstructured.Unstructured{Object: map[string]any{
 		"metadata": map[string]any{"namespace": "argocd", "name": "training"},
+		"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}},
 		"status": map[string]any{"resources": []any{
 			map[string]any{"group": "batch.volcano.sh", "kind": "Job", "namespace": "ml", "name": "train"},
 		}},
@@ -49,7 +50,7 @@ func TestAddGitOpsManagedResourceEdgesTreatsArgoGroupAsExact(t *testing.T) {
 	edgesFor := func(resource map[string]any) []Edge {
 		app := &unstructured.Unstructured{Object: map[string]any{
 			"metadata": map[string]any{"namespace": "argocd", "name": "training"},
-			"spec":     map[string]any{"destination": map[string]any{"namespace": "ml"}},
+			"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc", "namespace": "ml"}},
 			"status":   map[string]any{"resources": []any{resource}},
 		}}
 		return addGitOpsManagedResourceEdges(

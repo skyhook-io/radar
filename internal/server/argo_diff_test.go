@@ -651,8 +651,9 @@ func TestIsInClusterDestination(t *testing.T) {
 		want bool
 	}{
 		{"nil app fails closed", nil, false},
-		{"no destination defaults local", mk(nil), true},
-		{"empty destination defaults local", mk(map[string]any{}), true},
+		{"no destination is invalid, not local", mk(nil), false},
+		{"empty destination is invalid, not local", mk(map[string]any{}), false},
+		{"namespace-only destination is invalid, not local", mk(map[string]any{"namespace": "team-a"}), false},
 		{"name in-cluster", mk(map[string]any{"name": "in-cluster"}), true},
 		{"local api server url", mk(map[string]any{"server": "https://kubernetes.default.svc"}), true},
 		{"local api server url with port", mk(map[string]any{"server": "https://kubernetes.default.svc:443"}), true},

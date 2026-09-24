@@ -48,6 +48,7 @@ func TestBuildArgoTreeUsesManagedInventoryAndOwnershipEdges(t *testing.T) {
 			"name":      "billing",
 			"namespace": "argocd",
 		},
+		"spec": map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}},
 		"status": map[string]any{
 			"sync":   map[string]any{"status": "Synced"},
 			"health": map[string]any{"status": "Healthy"},
@@ -98,6 +99,7 @@ func TestBuildDoesNotEnrichManagedResourcesOutsideAllowedNamespaces(t *testing.T
 			"name":      "billing",
 			"namespace": "argocd",
 		},
+		"spec": map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}},
 		"status": map[string]any{
 			"sync":   map[string]any{"status": "Synced"},
 			"health": map[string]any{"status": "Healthy"},
@@ -199,6 +201,7 @@ func TestBuildUnknownKindWarnsOnceAndKeepsSyntheticNodes(t *testing.T) {
 		"apiVersion": "argoproj.io/v1alpha1",
 		"kind":       "Application",
 		"metadata":   map[string]any{"name": "monitoring", "namespace": "argocd"},
+		"spec":       map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}},
 		"status":     map[string]any{"resources": resources},
 	}}
 	deployment := &unstructured.Unstructured{Object: map[string]any{
@@ -267,6 +270,7 @@ func TestBuildParallelEnrichmentMatchesObjects(t *testing.T) {
 		"apiVersion": "argoproj.io/v1alpha1",
 		"kind":       "Application",
 		"metadata":   map[string]any{"name": "cms", "namespace": "argocd"},
+		"spec":       map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}},
 		"status":     map[string]any{"resources": resources},
 	}}
 	objects[refKey(ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "cms"})] = app

@@ -73,8 +73,8 @@ type Summary struct {
 	// verdicts are not in the CR and per-resource health below, if any, is
 	// Radar's own read — the UI says so.
 	ResourceHealthMode string `json:"resourceHealthMode,omitempty"`
-	// RemoteDestination: the Application deploys to another cluster. Radar
-	// derives nothing about its resources from here.
+	// RemoteDestination: the Application or Flux object deploys to another
+	// cluster. Radar derives nothing about its resources from here.
 	RemoteDestination bool `json:"remoteDestination,omitempty"`
 	// ResourceHealthFromAPI: per-resource health came from the controller's
 	// API server, so in appTree mode the verdicts shown are still Argo's.
@@ -387,7 +387,9 @@ func Build(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTre
 	out.Summary.PartialReason = "Radar shows the controller's drift assessment plus a per-resource field diff and recent events (when available). For the canonical line-by-line diff against Git, use the Argo CD UI or `argocd app diff`."
 	if resourceTree != nil {
 		out.Summary.ResourceHealthMode = string(resourceTree.HealthMode)
-		out.Summary.RemoteDestination = resourceTree.RemoteDestination
+		// An Application with no destination is invalid rather than remote;
+		// Argo's InvalidSpecError condition already says so.
+		out.Summary.RemoteDestination = resourceTree.RemoteDestination && (tool != "argocd" || gitops.HasArgoDestination(root))
 		out.Summary.ResourceHealthFromAPI = resourceTree.HealthFromAPI
 		out.Summary.ResourceHealthAPIError = resourceTree.HealthAPIError
 	}
@@ -542,13 +544,20 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			opMessage, _, _ := unstructured.NestedString(root.Object, "status", "operationState", "message")
 			msg, rawMsg := diagnose.CleanArgoControllerMessageWithRaw(opMessage)
 			parsed := diagnose.ParseArgoOperationError(msg)
+			action := "Open Activity for operation details."
+			if !gitops.IsInClusterDestination(root) {
+				var remoteAction string
+				if parsed, remoteAction = diagnose.WithoutLocalRemediation(parsed); remoteAction != "" {
+					action = remoteAction
+				}
+			}
 			issue := Issue{
 				Severity:    SeverityCritical,
 				Scope:       ScopeOperation,
 				Reason:      phase,
 				Message:     fallback(msg, "Last sync operation failed"),
 				RawMessage:  rawMsg,
-				Action:      "Open Activity for operation details.",
+				Action:      action,
 				Cause:       parsed.Cause,
 				RetryCount:  parsed.RetryCount,
 				Stuck:       parsed.Stuck,

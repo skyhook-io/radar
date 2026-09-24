@@ -20,6 +20,7 @@ func argoApp(status map[string]any) *unstructured.Unstructured {
 		"apiVersion": "argoproj.io/v1alpha1",
 		"kind":       "Application",
 		"metadata":   map[string]any{"namespace": "argocd", "name": "billing"},
+		"spec":       map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}},
 		"status":     status,
 	}}
 }
@@ -1098,7 +1099,10 @@ func TestBuildIssues_DriftLoopDoesNotHideDegradedFallback(t *testing.T) {
 			map[string]any{"group": "apps", "kind": "Deployment", "namespace": "prod", "name": "web", "status": "OutOfSync"},
 		},
 	})
-	root.Object["spec"] = map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{"selfHeal": true}}}
+	root.Object["spec"] = map[string]any{
+		"destination": map[string]any{"server": "https://kubernetes.default.svc"},
+		"syncPolicy":  map[string]any{"automated": map[string]any{"selfHeal": true}},
+	}
 	r := &fakeResolver{events: map[string][]EventSummary{"web": {{Type: "Warning", Reason: "BackOff", Message: "restarting", Count: 3}}}}
 	issues := buildIssues(root, &gitopstree.ResourceTree{Summary: gitopstree.Summary{Degraded: 1}}, "argocd", r)
 	var drift, lead, summary bool
@@ -1848,5 +1852,37 @@ func TestBuild_SummaryCarriesHealthModeAndDestination(t *testing.T) {
 	out := Build(root, tree, nil)
 	if out.Summary.ResourceHealthMode != "appTree" || !out.Summary.RemoteDestination {
 		t.Errorf("Summary = %+v, want resourceHealthMode=appTree, remoteDestination=true", out.Summary)
+	}
+}
+
+func TestBuildIssues_RemoteDestinationOffersNoLocalRemediation(t *testing.T) {
+	root := argoApp(map[string]any{
+		"operationState": map[string]any{"phase": "Failed", "message": `namespaces "payments" not found`},
+	})
+	root.Object["spec"] = map[string]any{"destination": map[string]any{"name": "prod-spoke"}}
+	issues := buildIssues(root, nil, "argocd", nil)
+	var op *Issue
+	for i := range issues {
+		if issues[i].Scope == ScopeOperation {
+			op = &issues[i]
+		}
+	}
+	if op == nil {
+		t.Fatalf("no operation issue in %+v", issues)
+	}
+	if op.Remediation != nil {
+		t.Errorf("remote Application must not offer a fix that acts on this cluster, got %+v", op.Remediation)
+	}
+	if !strings.Contains(op.Action, "destination cluster") || !strings.Contains(op.Action, "payments") {
+		t.Errorf("Action = %q, want the namespace named on the destination cluster", op.Action)
+	}
+}
+
+func TestBuild_DestinationlessAppIsNotReportedRemote(t *testing.T) {
+	root := argoApp(map[string]any{})
+	delete(root.Object, "spec")
+	tree := &gitopstree.ResourceTree{RemoteDestination: true}
+	if out := Build(root, tree, nil); out.Summary.RemoteDestination {
+		t.Error("an Application with no destination is invalid, not deploying elsewhere")
 	}
 }

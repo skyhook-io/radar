@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/conditions"
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/gitops/diagnose"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -274,9 +275,9 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 					}
 					d.RawMessage = rawMsg
 					if ct == "SyncError" {
-						applyArgoOperationDiagnosis(&d, cmsg)
+						applyArgoOperationDiagnosis(&d, app, cmsg)
 					}
-					if d.RemediationKind == "" {
+					if d.RemediationKind == "" && d.Action == "" {
 						d.Action = diagnose.ActionForCondition(ct)
 					}
 					out = append(out, d)
@@ -292,12 +293,12 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 				setDetectionOnset(&d, now, transitionAt)
 			}
 			d.RawMessage = rawMsg
-			applyArgoOperationDiagnosis(&d, msg)
+			applyArgoOperationDiagnosis(&d, app, msg)
 			// When there's a structured remediation, that one-click fix IS the
 			// next step. Otherwise (RBAC / webhook / immutable field, or an
 			// unrecognized message) point the operator at the operation details
 			// so every failure has a next step, not just a diagnosis.
-			if d.RemediationKind == "" {
+			if d.RemediationKind == "" && d.Action == "" {
 				d.Action = "Open the application's sync operation details for the full error and history."
 			}
 			out = append(out, d)
@@ -379,8 +380,11 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, tracker *argoDrift
 	return out
 }
 
-func applyArgoOperationDiagnosis(d *Detection, msg string) {
+func applyArgoOperationDiagnosis(d *Detection, app *unstructured.Unstructured, msg string) {
 	parsed := diagnose.ParseArgoOperationError(msg)
+	if !gitops.IsInClusterDestination(app) {
+		parsed, d.Action = diagnose.WithoutLocalRemediation(parsed)
+	}
 	d.Cause = parsed.Cause
 	d.RemediationKind = parsed.RemediationKind
 	d.RemediationTarget = parsed.RemediationTarget

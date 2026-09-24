@@ -12,6 +12,7 @@
 package diagnose
 
 import (
+	"fmt"
 	"log"
 	"regexp"
 	"strconv"
@@ -151,6 +152,19 @@ func ParseArgoOperationError(msg string) ParsedFailure {
 		logUnrecognizedOpError(msg)
 	}
 	return out
+}
+
+// WithoutLocalRemediation drops a structured remediation that acts on the
+// cluster Radar is connected to. For an Application deploying elsewhere the
+// fix belongs on the destination cluster, so it returns the next step to
+// state instead.
+func WithoutLocalRemediation(p ParsedFailure) (ParsedFailure, string) {
+	if p.RemediationKind != RemediationCreateNamespace {
+		return p, ""
+	}
+	action := fmt.Sprintf("Create namespace %q on the destination cluster, or add the CreateNamespace=true sync option.", p.RemediationTarget)
+	p.RemediationKind, p.RemediationTarget, p.RemediationHint = "", "", ""
+	return p, action
 }
 
 // CleanArgoControllerMessage strips transport envelopes from Argo controller

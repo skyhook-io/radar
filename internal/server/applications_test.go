@@ -630,7 +630,7 @@ func TestManagedSourceRefs_CrossNamespaceArgoApplication(t *testing.T) {
 	app := &unstructured.Unstructured{Object: map[string]any{
 		"metadata": map[string]any{"namespace": "argocd", "name": "billing"},
 		"spec": map[string]any{
-			"destination": map[string]any{"namespace": "team-a"},
+			"destination": map[string]any{"server": "https://kubernetes.default.svc", "namespace": "team-a"},
 		},
 		"status": map[string]any{"resources": []any{
 			map[string]any{"group": "apps", "kind": "Deployment", "name": "api"},
@@ -651,6 +651,7 @@ func TestManagedSourceRefs_CrossNamespaceArgoApplication(t *testing.T) {
 func TestManagedSourceRefs_ArgoStatusKeepsWorkloadGroup(t *testing.T) {
 	app := &unstructured.Unstructured{Object: map[string]any{
 		"metadata": map[string]any{"namespace": "argocd", "name": "training"},
+		"spec":     map[string]any{"destination": map[string]any{"server": "https://kubernetes.default.svc"}},
 		"status": map[string]any{"resources": []any{
 			map[string]any{"group": "batch.volcano.sh", "kind": "Job", "namespace": "ml", "name": "train"},
 		}},
