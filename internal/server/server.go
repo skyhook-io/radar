@@ -822,6 +822,11 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/connection/retry", s.handleConnectionRetry)
 
 			// GitHub star status and action
+			// In-product "help us improve Radar OSS" poll.
+			r.Get("/poll", s.handlePollStatus)
+			r.Post("/poll/shown", s.handlePollShown)
+			r.Post("/poll/dismiss", s.handlePollDismiss)
+			r.Post("/poll/submit", s.handlePollSubmit)
 			r.Get("/github/starred", s.handleGitHubStarStatus)
 			r.Post("/github/star", s.handleGitHubStar)
 			r.Post("/github/dismiss", s.handleGitHubDismiss)

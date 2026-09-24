@@ -46,7 +46,10 @@ func (s *Server) handleGitHubStar(w http.ResponseWriter, r *http.Request) {
 
 	// Update the cached state
 	state := readStarJSON()
-	state.StarredAt = time.Now().Format(time.RFC3339)
+	now := time.Now().Format(time.RFC3339)
+	state.StarredAt = now
+	// A star is the end of a prompt: other nudges keep their distance from it.
+	state.PromptedAt = now
 	writeStarJSON(state)
 
 	w.Header().Set("Content-Type", "application/json")
