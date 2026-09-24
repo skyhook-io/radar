@@ -53,6 +53,7 @@ import (
 	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/settings"
+	"github.com/skyhook-io/radar/internal/telemetry"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/internal/updater"
@@ -89,6 +90,7 @@ type Server struct {
 	mcpInvestigationHandler http.Handler
 	diagConfig              *DiagConfig
 	effectiveConfig         *config.Config // running config for GET /api/config
+	stopTelemetry           context.CancelFunc
 	openCostCurrency        *opencost.CurrencyResolver
 	currencyManaged         bool
 	prometheusConfigMu      sync.Mutex
@@ -439,6 +441,7 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 	// Middleware (applied to all routes)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(s.telemetryMiddleware)
 	r.Use(s.protectUnauthenticatedLoopback)
 	// Note: Timeout middleware is applied per-group below to exempt streaming endpoints
 
@@ -837,6 +840,12 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Get("/settings", s.handleGetSettings)
 			r.Put("/settings", s.handlePutSettings)
 
+			// Opt-in usage data: decision, report preview, and view counts
+			r.Get("/telemetry", s.handleGetTelemetry)
+			r.Put("/telemetry", s.handlePutTelemetry)
+			r.Post("/telemetry/event", s.handleTelemetryEvent)
+			r.Post("/telemetry/prompt-shown", s.handleTelemetryPromptShown)
+
 			// Config (persisted startup configuration)
 			r.Get("/config", s.handleGetConfig)
 			r.Put("/config", s.handlePutConfig)
@@ -1130,6 +1139,7 @@ func (s *Server) StartWithReady(ready chan<- struct{}) error {
 		}
 	}
 	s.broadcaster.Start()
+	s.startTelemetry()
 
 	if ready != nil {
 		close(ready)
@@ -1220,6 +1230,10 @@ func (s *Server) Stop() {
 		s.aiRuns.Shutdown() // cancel investigations so agent children don't outlive us
 	}
 	s.broadcaster.Stop()
+	if s.stopTelemetry != nil {
+		s.stopTelemetry()
+	}
+	telemetry.Flush()
 	if s.listener != nil {
 		s.listener.Close()
 	}

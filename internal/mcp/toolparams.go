@@ -13,6 +13,8 @@ import (
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"k8s.io/apimachinery/pkg/util/validation"
+
+	"github.com/skyhook-io/radar/internal/telemetry"
 )
 
 // Argument-name repair for tool calls.
@@ -300,7 +302,11 @@ func addToolWithRegistry[In, Out any](registry *toolParamRegistry, s *mcpsdk.Ser
 	registry.names[t.Name] = accepted
 	registry.required[t.Name] = required
 	registry.mu.Unlock()
-	mcpsdk.AddTool(s, t, h)
+	name := t.Name
+	mcpsdk.AddTool(s, t, func(ctx context.Context, req *mcpsdk.CallToolRequest, in In) (*mcpsdk.CallToolResult, Out, error) {
+		telemetry.RecordMCPTool(name)
+		return h(ctx, req, in)
+	})
 }
 
 // structJSONFields returns the json field names of a struct type, and the subset
