@@ -12,6 +12,7 @@ export interface ReleaseHighlight {
 
 export interface ReleaseNotes {
   version: string
+  /** The first highlight leads the dialog at full width. */
   highlights: ReleaseHighlight[]
   improvements: string[]
   releaseUrl: string
