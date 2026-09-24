@@ -1,4 +1,4 @@
-import { ReactNode } from 'react'
+import { ReactNode, useId } from 'react'
 import { AlertTriangle, X } from 'lucide-react'
 import { clsx } from 'clsx'
 import { SEVERITY_TEXT, SEVERITY_BADGE_BORDERED } from '../../utils/badge-colors'
@@ -43,9 +43,10 @@ export function ConfirmDialog({
   const canClose = !isLoading || isClosable
   const isDanger = variant === 'danger'
   const severity = isDanger ? 'error' : 'warning'
+  const titleId = useId()
 
   return (
-    <DialogPortal open={open} onClose={onClose} closable={canClose} className={clsx('w-full', className ?? 'max-w-md')}>
+    <DialogPortal open={open} onClose={onClose} closable={canClose} className={clsx('w-full', className ?? 'max-w-md')} ariaLabelledBy={titleId}>
       {/* Header */}
       <div className="flex items-start gap-3 p-4 border-b border-theme-border">
         <div
@@ -57,12 +58,13 @@ export function ConfirmDialog({
           <AlertTriangle className={clsx('w-5 h-5', SEVERITY_TEXT[severity])} />
         </div>
         <div className="flex-1 min-w-0">
-          <h3 className="text-lg font-semibold text-theme-text-primary">{title}</h3>
+          <h3 id={titleId} className="text-lg font-semibold text-theme-text-primary">{title}</h3>
           <p className="text-sm text-theme-text-secondary mt-1">{message}</p>
         </div>
         <button
           onClick={onClose}
           disabled={!canClose}
+          aria-label="Close"
           className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"
         >
           <X className="w-5 h-5" />
