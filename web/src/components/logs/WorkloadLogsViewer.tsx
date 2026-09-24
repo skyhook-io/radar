@@ -42,7 +42,7 @@ export function WorkloadLogsViewer({ kind, namespace, name, autoStream = true, s
       fetchAll={fetchAll}
       createStream={snapshotOnly ? undefined : makeStream}
       overrideDownload={desktopDownload}
-      forceDark={theme === 'dark' ? true : undefined}
+      defaultDark={theme === 'dark'}
       autoStream={autoStream}
     />
   )
