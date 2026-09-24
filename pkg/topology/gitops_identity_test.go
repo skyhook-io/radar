@@ -1,9 +1,13 @@
 package topology
 
 import (
+	"strings"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func TestAddGitOpsManagedResourceEdgesPreservesArgoAPIGroup(t *testing.T) {
@@ -132,5 +136,51 @@ func TestAddGitOpsManagedResourceEdgesIgnoresRemoteDestinations(t *testing.T) {
 	)
 	if len(edges) != 1 || edges[0].Source != "application/argocd/sealed-hub" {
 		t.Fatalf("manages edges = %+v, want only the in-cluster Application's", edges)
+	}
+}
+
+// HelmReleases have no inventory, so topology links one to the workloads whose
+// Helm labels name it. A release applied to another cluster installed nothing
+// here, so a local workload whose labels name it is not its own.
+func TestBuildLinksOnlyLocalHelmReleasesByLabel(t *testing.T) {
+	hrGVR := schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
+	release := func(name string, remote bool) *unstructured.Unstructured {
+		obj := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "helm.toolkit.fluxcd.io/v2", "kind": "HelmRelease",
+			"metadata": map[string]any{"namespace": "apps", "name": name},
+			"spec":     map[string]any{},
+		}}
+		if remote {
+			obj.Object["spec"] = map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod"}}}
+		}
+		return obj
+	}
+	dynamic := &genericIdentityDynamic{
+		watched:   []schema.GroupVersionResource{hrGVR},
+		kinds:     map[schema.GroupVersionResource]string{hrGVR: "HelmRelease"},
+		resources: map[schema.GroupVersionResource][]*unstructured.Unstructured{hrGVR: {release("local", false), release("remote", true)}},
+		listCalls: map[schema.GroupVersionResource]int{},
+	}
+	deployment := func(name, release string) *appsv1.Deployment {
+		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Namespace: "apps", Name: name, Labels: map[string]string{
+			"helm.toolkit.fluxcd.io/name": release, "helm.toolkit.fluxcd.io/namespace": "apps",
+		}}}
+	}
+	provider := &mockProvider{deployments: []*appsv1.Deployment{deployment("web", "local"), deployment("api", "remote")}}
+	topo, err := NewBuilder(provider).WithDynamic(dynamic).Build(DefaultBuildOptions())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	targets := map[string]string{}
+	for _, e := range topo.Edges {
+		if strings.HasPrefix(e.Source, "helmrelease/") {
+			targets[e.Target] = e.Source
+		}
+	}
+	if targets["deployment/apps/web"] != "helmrelease/apps/local" {
+		t.Fatalf("local release edges = %v, want it to manage deployment/apps/web", targets)
+	}
+	if src, ok := targets["deployment/apps/api"]; ok {
+		t.Fatalf("remote release %s claimed a local workload", src)
 	}
 }

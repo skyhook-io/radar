@@ -474,3 +474,30 @@ func TestBuild_RemoteFluxKustomizationReadsNothingLocal(t *testing.T) {
 	}
 	assertNoDynamicCall(t, dynamic, ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "billing"})
 }
+
+// A HelmRelease has no inventory, so its tree is recovered from local objects
+// carrying its Helm labels — which a release targeting another cluster must
+// not do: a local workload with matching labels belongs to someone else.
+func TestBuild_RemoteFluxHelmReleaseRecoversNothingLocal(t *testing.T) {
+	hr := helmRelease("flux-system", "podinfo")
+	hr.Object["spec"] = map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod-kubeconfig"}}}
+	dynamic := &fakeDynamic{objects: map[string]*unstructured.Unstructured{
+		refKey(ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "helmreleases", Namespace: "flux-system", Name: "podinfo"}): hr,
+		refKey(ResourceRef{Group: "helm.toolkit.fluxcd.io", Kind: "HelmRelease", Namespace: "flux-system", Name: "podinfo"}):  hr,
+	}}
+	topo := &topology.Topology{Nodes: []topology.Node{
+		topoNode("Deployment", "demo", "podinfo", map[string]string{fluxHelmNameLabel: "podinfo", fluxHelmNamespaceLabel: "flux-system"}),
+	}}
+	tree, _, err := NewBuilder(dynamic, topo).Build(context.Background(), "helmreleases", "flux-system", "podinfo", "helm.toolkit.fluxcd.io")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !tree.RemoteDestination {
+		t.Fatal("RemoteDestination = false, want true for a kubeConfig HelmRelease")
+	}
+	for _, n := range tree.Nodes {
+		if n.Ref.Kind == "Deployment" {
+			t.Fatalf("remote HelmRelease picked up a local workload: %+v", n.Ref)
+		}
+	}
+}

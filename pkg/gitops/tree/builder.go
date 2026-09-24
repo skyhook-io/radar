@@ -100,7 +100,9 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		(tool == ToolFluxCD && !gitops.FluxTargetsLocalCluster(root))
 	// HelmRelease has no status.inventory; recover its managed set from live
 	// topology by Helm's recommended labels so the resource tree isn't empty.
-	if tool == ToolFluxCD && strings.EqualFold(root.GetKind(), "HelmRelease") && len(managed) == 0 {
+	// A remote release's objects aren't in local topology, so a local match is
+	// someone else's.
+	if tool == ToolFluxCD && strings.EqualFold(root.GetKind(), "HelmRelease") && len(managed) == 0 && !remote {
 		managed = fluxHelmReleaseManaged(root, b.topoNodes())
 	}
 	status := rootStatus(root, tool)
