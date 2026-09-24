@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Globe, X } from 'lucide-react'
 import { CloudHintLink } from './CloudHintLink'
 import { dismissCloudHint, isCloudHintDismissed, useCloudHintsEnabled } from './cloudHints'
+import { useCapabilities } from '../../api/client'
 import { CONTEXT_SWITCHED_EVENT, readTriggeredPair } from './contextSwitchLog'
 import { Tooltip } from '../ui/Tooltip'
 
@@ -26,6 +27,7 @@ const AGGREGATE_PAGES: Record<string, string> = {
 // the tab until the X hides it for good.
 export function useContextSwitchCloudRow(view: string) {
   const enabled = useCloudHintsEnabled()
+  const capabilities = useCapabilities()
   const [names, setNames] = useState<[string, string] | null>(null)
   const [dismissed, setDismissed] = useState(() => isCloudHintDismissed('context-switch'))
   useEffect(() => {
@@ -35,13 +37,14 @@ export function useContextSwitchCloudRow(view: string) {
     window.addEventListener(CONTEXT_SWITCHED_EVENT, sync)
     return () => window.removeEventListener(CONTEXT_SWITCHED_EVENT, sync)
   }, [enabled, dismissed])
-  // Not re-gated on `enabled` once shown: the switch that raised the row also
-  // clears every query, capabilities included, and re-gating would blink the
-  // row (and jump the drawers below it) until they reload. Names are only set
-  // while the gate was open.
+  // Kept while capabilities reload: the switch that raised the row also
+  // clears every query, and re-gating on the loading state would blink the
+  // row (and jump the drawers below it). A reload that settles with Radar
+  // Cloud off does hide it.
+  const settledOff = capabilities.isSuccess && !enabled
   const what = Object.hasOwn(AGGREGATE_PAGES, view) ? AGGREGATE_PAGES[view] : undefined
   return {
-    names: dismissed || !what ? null : names,
+    names: dismissed || !what || settledOff ? null : names,
     what: what ?? '',
     dismiss: () => {
       dismissCloudHint('context-switch')

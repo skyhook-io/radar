@@ -929,9 +929,14 @@ export function InvestigationView({
     currentAssessmentIdx >= 0 ? turns[currentAssessmentIdx] : undefined;
   // Only a found problem has something to alert on: not a healthy result, and
   // not an inconclusive one that could not name a cause.
+  // The dialog reads the cluster Radar is on now, so the actions only make
+  // sense for a run from that cluster: a run kept open across a context
+  // switch would otherwise pair its resource with the other cluster.
   const showFindingsCloud =
     cloudHints &&
     !findingsCloudHidden &&
+    !!clusterContext &&
+    run.context === clusterContext &&
     currentAssessment?.diagnosis != null &&
     currentAssessment.diagnosis.healthy !== true &&
     !(
@@ -2316,7 +2321,7 @@ export function InvestigationView({
                                       group: run.group || undefined,
                                       name,
                                       namespace: namespace || undefined,
-                                      context: clusterContext,
+                                      context: run.context,
                                       issueId: run.issueId,
                                     }}
                                   />
