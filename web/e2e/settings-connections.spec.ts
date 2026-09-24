@@ -903,7 +903,6 @@ test('failed confirmation keeps keyboard focus and exposes stale-settings recove
 for (const integration of integrations.filter(item => item.kind !== 'metrics')) {
   test(`${integration.tab}: replacement cancellation preserves the typed credential`, async ({ page }) => {
     const state = await fixture(page)
-    const profile = state.profiles[integration.kind]
 
     await openSettings(page, integration.tab)
     const credential = page.getByRole('textbox', { name: integration.kind === 'argocd' ? 'API token' : 'API key', exact: true })

@@ -69,6 +69,51 @@ func TestDiscoveryStoresNoEmptyConnectionOrTarget(t *testing.T) {
 	}
 }
 
+func TestLegacyDismissalIsScopedToClusterAndIntegration(t *testing.T) {
+	for _, kind := range config.IntegrationKinds {
+		t.Run(string(kind), func(t *testing.T) {
+			r, target, other := setupResolver(t)
+			_, err := config.Update(func(c *config.Config) {
+				c.PrometheusURL = "https://metrics.example"
+				c.ArgoCDURL = "https://argo.example"
+				c.KubecostURL = "https://cost.example"
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			beforeOther := r.Resolve(other, kind, true).View
+			if beforeOther.Legacy == nil {
+				t.Fatal("missing other cluster offer")
+			}
+			apply(t, r, target, Update{Kind: kind, Action: "dismiss_legacy"})
+			restarted := NewResolver(r.Store, target, nil)
+			if restarted.Resolve(target, kind, true).View.Legacy != nil {
+				t.Fatal("dismissed offer returned after restart")
+			}
+			for _, sibling := range config.IntegrationKinds {
+				if sibling != kind && restarted.Resolve(target, sibling, true).View.Legacy == nil {
+					t.Fatal("dismissal hid another integration")
+				}
+			}
+			otherView := r.Resolve(other, kind, true).View
+			if otherView.Legacy == nil || otherView.Revision != beforeOther.Revision {
+				t.Fatal("dismissal changed another cluster's offer or draft revision")
+			}
+			file, _, err := r.Store.Read()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if file.Imported[kind] || !file.Dismissed[target.Binding][kind] {
+				t.Fatal("dismissal used a global marker")
+			}
+			got := apply(t, r, other, Update{Kind: kind, Action: "adopt", LegacyRevision: otherView.Legacy.Revision})
+			if got.Settings.URL() == "" {
+				t.Fatal("other cluster could not import")
+			}
+		})
+	}
+}
+
 func TestCopyEditAndCredentialLifecycle(t *testing.T) {
 	r, a, b := setupResolver(t)
 	apply(t, r, a, Update{Kind: config.IntegrationMetrics, Action: "save", URL: stringPtr("https://metrics.example"), Headers: []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "opaque-test-credential"}, {Key: "X-Scope-OrgID", Action: "set", Value: "tenant-a"}}})

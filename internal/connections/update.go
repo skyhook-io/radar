@@ -121,7 +121,7 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 		}
 		dismiss(&next, req.Binding, req.Kind)
 	case "dismiss_legacy":
-		next.Imported[req.Kind] = true
+		dismiss(&next, target.Binding, req.Kind)
 	case "reconfirm":
 		if len(req.Kinds) == 0 {
 			return pending, errors.New("select the integrations to confirm")

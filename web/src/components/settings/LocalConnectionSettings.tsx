@@ -133,6 +133,8 @@ export function LocalConnectionSettings({
   const [catalog, setCatalog] = useState<StoredConnection[]>([])
   const [task, setTask] = useState<Task>('main')
   const [busy, setBusy] = useState(false)
+  const wasBusy = useRef(false)
+  const restoreTriggerFocus = useRef(false)
   const [error, setError] = useState('')
   const [catalogError, setCatalogError] = useState(false)
   const [catalogRetry, setCatalogRetry] = useState(0)
@@ -241,6 +243,18 @@ export function LocalConnectionSettings({
     setCredentialDirty(false)
   }
   useEffect(() => {
+    const finished = wasBusy.current && !busy
+    wasBusy.current = busy
+    if (busy || pending) return
+    if (restoreTriggerFocus.current) {
+      restoreTriggerFocus.current = false
+      if (trigger.current?.isConnected) trigger.current.focus()
+      else region.current?.focus()
+    } else if (finished && document.activeElement === document.body) {
+      region.current?.focus()
+    }
+  }, [busy, pending, task])
+  useEffect(() => {
     if (
       !dirty &&
       task === 'main' &&
@@ -257,16 +271,13 @@ export function LocalConnectionSettings({
     }
   }, [profiles, snapshot, kind, dirty, task])
   const leaveTask = () => {
+    restoreTriggerFocus.current = true
     setConfirmBack(false)
     setTask('main')
     setPending(null)
     setSelected(null)
     setError('')
     resetDraft(profile)
-    requestAnimationFrame(() => {
-      if (trigger.current?.isConnected) trigger.current.focus()
-      else region.current?.focus()
-    })
   }
   const back = () => {
     if (dirty && task === 'replace') {
@@ -328,9 +339,6 @@ export function LocalConnectionSettings({
       if (mounted.current) {
         setBusy(false)
         onBusyChange?.(false)
-        requestAnimationFrame(() => {
-          if (mounted.current && document.activeElement === document.body) region.current?.focus()
-        })
       }
     }
   }
@@ -380,22 +388,18 @@ export function LocalConnectionSettings({
     setError('')
     setPending(update)
   }
-  const restoreConfirmationFocus = () =>
-    requestAnimationFrame(() => {
-      if (trigger.current?.isConnected) trigger.current.focus()
-      else region.current?.focus()
-    })
   const cancelConfirmation = () => {
+    restoreTriggerFocus.current = true
     setPending(null)
-    restoreConfirmationFocus()
   }
   const confirmPending = async () => {
     if (!pending) return
     setError('')
     try {
+      restoreTriggerFocus.current = true
       await save({ ...pending, confirmRemoval: true })
-      restoreConfirmationFocus()
     } catch (e) {
+      restoreTriggerFocus.current = false
       if (mounted.current) setError(e instanceof Error ? e.message : String(e))
     }
   }

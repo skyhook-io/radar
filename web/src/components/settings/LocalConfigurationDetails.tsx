@@ -98,6 +98,15 @@ export function SavedClusterConnections({
   const summary = useRef<HTMLHeadingElement>(null)
   const trigger = useRef<HTMLButtonElement | null>(null)
   const confirmationError = useRef<HTMLParagraphElement>(null)
+  const restoreFocus = useRef<'summary' | 'trigger' | null>(null)
+
+  useEffect(() => {
+    if (selected || busy || !restoreFocus.current) return
+    const target = restoreFocus.current === 'trigger' && trigger.current?.isConnected
+      ? trigger.current : summary.current
+    restoreFocus.current = null
+    target?.focus()
+  }, [selected, busy])
 
   useEffect(() => {
     if (selected && error && !busy) confirmationError.current?.focus()
@@ -169,9 +178,9 @@ export function SavedClusterConnections({
       setMessage(
         `Removed the saved ${integrationNames[selected.integration]} connection for ${selected.context}.`,
       )
+      restoreFocus.current = 'summary'
       setSelected(null)
       onChange(data.profiles)
-      requestAnimationFrame(() => summary.current?.focus())
     } catch (error) {
       if (!controller.signal.aborted)
         setError(error instanceof Error ? error.message : String(error))
@@ -312,11 +321,8 @@ export function SavedClusterConnections({
       <ConfirmDialog
         open={!!selected}
         onClose={() => {
+          restoreFocus.current = 'trigger'
           setSelected(null)
-          requestAnimationFrame(() => {
-            if (trigger.current?.isConnected) trigger.current.focus()
-            else summary.current?.focus()
-          })
         }}
         onConfirm={() => void remove()}
         title="Remove saved connection?"
