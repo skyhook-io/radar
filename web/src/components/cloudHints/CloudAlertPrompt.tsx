@@ -9,6 +9,7 @@ import {
   issueHintKey,
   openCloudFunnel,
 } from './cloudHints'
+import { Tooltip } from '../ui/Tooltip'
 
 // The last section of an expanded issue: an offer to be alerted next time.
 // Alerts need something watching the cluster while Radar is closed, which is
@@ -58,18 +59,19 @@ export function CloudAlertPrompt({ issue, context }: { issue: Issue; context?: s
       >
         Don't show again
       </button>
-      <button
-        type="button"
-        aria-label="Hide for this issue"
-        title="Hide for this issue"
-        onClick={() => {
-          hideIssueHint(key)
-          setHidden(true)
-        }}
-        className="shrink-0 rounded-md p-1 text-theme-text-tertiary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
-      >
-        <X className="h-3.5 w-3.5" />
-      </button>
+      <Tooltip content="Hide for this issue" delay={100} wrapperClassName="shrink-0">
+        <button
+          type="button"
+          aria-label="Hide for this issue"
+          onClick={() => {
+            hideIssueHint(key)
+            setHidden(true)
+          }}
+          className="shrink-0 rounded-md p-1 text-theme-text-tertiary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </Tooltip>
     </section>
   )
 }

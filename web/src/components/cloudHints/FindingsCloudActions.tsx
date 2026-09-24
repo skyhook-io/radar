@@ -1,5 +1,6 @@
 import { Bell, Users, X } from 'lucide-react'
 import { dismissCloudHint, openCloudFunnel, type CloudAlertSubject } from './cloudHints'
+import { Tooltip } from '../ui/Tooltip'
 
 // A small labeled group on a problem assessment: what Radar Cloud adds once an
 // investigation has found something (an alert when it recurs, the team on the
@@ -31,18 +32,19 @@ export function FindingsCloudActions({ subject, onDismiss }: { subject: CloudAle
         <Users className="h-3.5 w-3.5" aria-hidden />
         Investigate with team
       </button>
-      <button
-        type="button"
-        aria-label="Hide Radar Cloud actions"
-        title="Hide Radar Cloud actions"
-        onClick={() => {
-          dismissCloudHint('alert-findings')
-          onDismiss()
-        }}
-        className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-      >
-        <X className="h-3.5 w-3.5" />
-      </button>
+      <Tooltip content="Hide Radar Cloud actions" delay={100} wrapperClassName="shrink-0">
+        <button
+          type="button"
+          aria-label="Hide Radar Cloud actions"
+          onClick={() => {
+            dismissCloudHint('alert-findings')
+            onDismiss()
+          }}
+          className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </Tooltip>
     </div>
   )
 }

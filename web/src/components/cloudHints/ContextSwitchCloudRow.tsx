@@ -3,6 +3,7 @@ import { Globe, X } from 'lucide-react'
 import { CloudHintLink } from './CloudHintLink'
 import { dismissCloudHint, isCloudHintDismissed, useCloudHintsEnabled } from './cloudHints'
 import { CONTEXT_SWITCHED_EVENT, readTriggeredPair } from './contextSwitchLog'
+import { Tooltip } from '../ui/Tooltip'
 
 // Fixed so the host can move its drawers down by exactly this much while the
 // row is showing.
@@ -60,15 +61,16 @@ export function ContextSwitchCloudRow({ names, what, onDismiss }: { names: [stri
       <span className="min-w-0 flex-1 truncate text-xs text-theme-text-tertiary">
         See {what} from {names[0]} and {names[1]} side by side in <CloudHintLink entry="context-switch" />.
       </span>
-      <button
-        type="button"
-        aria-label="Don't show again"
-        title="Don't show again"
-        onClick={onDismiss}
-        className="shrink-0 rounded-md p-1 text-theme-text-tertiary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
-      >
-        <X className="h-3.5 w-3.5" />
-      </button>
+      <Tooltip content="Don't show again" delay={100} wrapperClassName="shrink-0">
+        <button
+          type="button"
+          aria-label="Don't show again"
+          onClick={onDismiss}
+          className="shrink-0 rounded-md p-1 text-theme-text-tertiary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </Tooltip>
     </div>
   )
 }

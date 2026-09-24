@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Sparkles, X } from 'lucide-react'
 import { CloudHintLink } from './CloudHintLink'
 import { dismissCloudHint, isCloudHintDismissed } from './cloudHints'
+import { Tooltip } from '../ui/Tooltip'
 
 // In a team installation, where local AI investigations can't run, the issue
 // list says so once instead of offering an Investigate button that leads
@@ -17,18 +18,19 @@ export function SharedInstallAiLine() {
         AI investigations aren't available in this shared installation. Run Radar locally with an agent CLI, or use{' '}
         <CloudHintLink entry="ai-shared" />.
       </span>
-      <button
-        type="button"
-        aria-label="Don't show again"
-        title="Don't show again"
-        onClick={() => {
-          dismissCloudHint('ai-shared')
-          setHidden(true)
-        }}
-        className="shrink-0 rounded-md p-1 text-theme-text-tertiary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
-      >
-        <X className="h-3.5 w-3.5" />
-      </button>
+      <Tooltip content="Don't show again" delay={100} wrapperClassName="shrink-0">
+        <button
+          type="button"
+          aria-label="Don't show again"
+          onClick={() => {
+            dismissCloudHint('ai-shared')
+            setHidden(true)
+          }}
+          className="shrink-0 rounded-md p-1 text-theme-text-tertiary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </Tooltip>
     </div>
   )
 }
