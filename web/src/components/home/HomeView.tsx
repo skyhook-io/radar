@@ -142,7 +142,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
         )}
         {/* Row 1: Cluster Health Card (combined health + resource counts) */}
         <ClusterHealthCard
-          radarVersion={versionInfo && (deploymentMode === 'in-cluster' || (deploymentMode === 'local' && hasWhatsNew)) ? (
+          radarVersion={versionInfo && deploymentMode !== 'cloud' ? (
             <RadarVersionLine
               version={versionInfo}
               showUpgrade={deploymentMode === 'in-cluster'}
