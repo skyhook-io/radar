@@ -38,7 +38,7 @@ func TestCreateAndParseSessionCookie(t *testing.T) {
 	sid := NewSessionID()
 	ttl := 1 * time.Hour
 
-	cookie := mainCookie(t, CreateSessionCookie(user, sid, "", secret, ttl, false))
+	cookie := mainCookie(t, CreateSessionCookie(user, sid, secret, ttl, false))
 
 	// Verify cookie properties
 	if cookie.Name != DefaultCookieName {
@@ -78,7 +78,7 @@ func TestCreateAndParseSessionCookie(t *testing.T) {
 
 func TestParseSessionCookie_WrongSecret(t *testing.T) {
 	user := &User{Username: "alice"}
-	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "", "secret-1", 1*time.Hour, false))
+	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "secret-1", 1*time.Hour, false))
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(cookie)
@@ -92,7 +92,7 @@ func TestParseSessionCookie_WrongSecret(t *testing.T) {
 func TestParseSessionCookie_Expired(t *testing.T) {
 	user := &User{Username: "alice"}
 	// TTL of -1 second = already expired
-	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "", "secret", -1*time.Second, false))
+	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "secret", -1*time.Second, false))
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(cookie)
@@ -113,7 +113,7 @@ func TestParseSessionCookie_NoCookie(t *testing.T) {
 
 func TestParseSessionCookie_TamperedPayload(t *testing.T) {
 	user := &User{Username: "alice"}
-	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "", "secret", 1*time.Hour, false))
+	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "secret", 1*time.Hour, false))
 
 	// Tamper with the payload (change first char)
 	val := cookie.Value
@@ -144,7 +144,7 @@ func TestParseSessionCookie_MalformedValue(t *testing.T) {
 
 func TestCreateSessionCookie_Secure(t *testing.T) {
 	user := &User{Username: "alice"}
-	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "", "secret", 1*time.Hour, true))
+	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "secret", 1*time.Hour, true))
 	if !cookie.Secure {
 		t.Error("cookie should be Secure when secure=true")
 	}
@@ -152,7 +152,7 @@ func TestCreateSessionCookie_Secure(t *testing.T) {
 
 func TestCreateSessionCookie_NoGroups(t *testing.T) {
 	user := &User{Username: "bob"}
-	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "", "secret", 1*time.Hour, false))
+	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "secret", 1*time.Hour, false))
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(cookie)
@@ -203,55 +203,12 @@ func TestSignData_DifferentSecrets(t *testing.T) {
 	}
 }
 
-func TestCreateSessionCookie_WithIDToken(t *testing.T) {
-	secret := "test-secret"
-	user := &User{Username: "alice", Groups: []string{"devs"}}
-	sid := NewSessionID()
-	idToken := "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.test-payload.test-sig"
-
-	cookie := mainCookie(t, CreateSessionCookie(user, sid, idToken, secret, 1*time.Hour, false))
-
-	req := httptest.NewRequest("GET", "/", nil)
-	req.AddCookie(cookie)
-
-	parsed := ParseSessionCookie(req, secret)
-	if parsed == nil {
-		t.Fatal("ParseSessionCookie returned nil for cookie with ID token")
-	}
-	if parsed.User.Username != "alice" {
-		t.Errorf("username = %q, want %q", parsed.User.Username, "alice")
-	}
-	if parsed.IDToken != idToken {
-		t.Errorf("IDToken = %q, want %q", parsed.IDToken, idToken)
-	}
-	if parsed.SID != sid {
-		t.Errorf("SID = %q, want %q", parsed.SID, sid)
-	}
-}
-
-func TestSessionIDToken_NoIDToken(t *testing.T) {
-	secret := "test-secret"
-	user := &User{Username: "alice"}
-
-	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "", secret, 1*time.Hour, false))
-	req := httptest.NewRequest("GET", "/", nil)
-	req.AddCookie(cookie)
-
-	parsed := ParseSessionCookie(req, secret)
-	if parsed == nil {
-		t.Fatal("ParseSessionCookie returned nil")
-	}
-	if parsed.IDToken != "" {
-		t.Errorf("IDToken = %q, want empty string", parsed.IDToken)
-	}
-}
-
 func TestCreateSessionCookie_WithSID(t *testing.T) {
 	secret := "test-secret"
 	user := &User{Username: "alice"}
 	sid := "abcdef0123456789abcdef0123456789"
 
-	cookie := mainCookie(t, CreateSessionCookie(user, sid, "", secret, 1*time.Hour, false))
+	cookie := mainCookie(t, CreateSessionCookie(user, sid, secret, 1*time.Hour, false))
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(cookie)
@@ -324,7 +281,7 @@ func TestParseSessionCookie_ExpiresAt(t *testing.T) {
 	user := &User{Username: "alice"}
 	ttl := 2 * time.Hour
 
-	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), "", secret, ttl, false))
+	cookie := mainCookie(t, CreateSessionCookie(user, NewSessionID(), secret, ttl, false))
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(cookie)
@@ -342,49 +299,8 @@ func TestParseSessionCookie_ExpiresAt(t *testing.T) {
 	}
 }
 
-func TestCreateSessionCookie_DropsIDTokenWhenTooLarge(t *testing.T) {
-	secret := "test-secret"
-	// Build a cookie that's over maxCookieSize bytes with the ID token, but under without it.
-	groups := make([]string, 40)
-	for i := range groups {
-		groups[i] = "org:engineering:team-" + strings.Repeat("x", 10)
-	}
-	user := &User{Username: "alice@example.com", Groups: groups}
-	sid := NewSessionID()
-	largeIDToken := strings.Repeat("x", 2000)
-
-	// First verify the cookie WITHOUT ID token fits in a single cookie
-	smallCookie := mainCookie(t, CreateSessionCookie(user, sid, "", secret, 1*time.Hour, false))
-	if len(smallCookie.Value) > maxCookieSize {
-		t.Skipf("groups alone exceed %d bytes (%d) — can't test ID token drop", maxCookieSize, len(smallCookie.Value))
-	}
-
-	// Now create with the large ID token — should trigger the drop and still fit one cookie
-	cookie := mainCookie(t, CreateSessionCookie(user, sid, largeIDToken, secret, 1*time.Hour, false))
-
-	// Parse and verify the cookie is still valid
-	req := httptest.NewRequest("GET", "/", nil)
-	req.AddCookie(cookie)
-	parsed := ParseSessionCookie(req, secret)
-	if parsed == nil {
-		t.Fatal("ParseSessionCookie returned nil for size-capped cookie")
-	}
-	if parsed.User.Username != "alice@example.com" {
-		t.Errorf("username = %q, want alice@example.com", parsed.User.Username)
-	}
-	if parsed.SID != sid {
-		t.Errorf("SID lost after size cap")
-	}
-	if parsed.IDToken == largeIDToken {
-		t.Error("ID token should have been dropped to fit cookie size limit")
-	}
-	if len(cookie.Value) > maxCookieSize {
-		t.Errorf("cookie still %d bytes after dropping ID token (limit %d)", len(cookie.Value), maxCookieSize)
-	}
-}
-
-// hugeUser builds a user whose signed cookie can't fit in one cookie even after
-// the ID token is dropped, forcing the chunked path. Many large groups do it.
+// hugeUser builds a user whose signed cookie can't fit in one cookie, forcing
+// the chunked path. Many large groups do it.
 func hugeUser() *User {
 	groups := make([]string, 300)
 	for i := range groups {
@@ -397,7 +313,7 @@ func TestCreateSessionCookie_ChunksWhenTooLarge(t *testing.T) {
 	secret := "test-secret"
 	sid := NewSessionID()
 
-	cookies := CreateSessionCookie(hugeUser(), sid, "", secret, 1*time.Hour, true)
+	cookies := CreateSessionCookie(hugeUser(), sid, secret, 1*time.Hour, true)
 	if len(cookies) < 3 {
 		t.Fatalf("expected chunked cookies (chunks + meta), got %d", len(cookies))
 	}
@@ -441,7 +357,7 @@ func TestCreateSessionCookie_ChunksWhenTooLarge(t *testing.T) {
 
 func TestParseSessionCookie_DroppedChunkFails(t *testing.T) {
 	secret := "test-secret"
-	cookies := CreateSessionCookie(hugeUser(), NewSessionID(), "", secret, 1*time.Hour, false)
+	cookies := CreateSessionCookie(hugeUser(), NewSessionID(), secret, 1*time.Hour, false)
 
 	// Drop the first chunk but keep the meta-cookie claiming the full count.
 	req := httptest.NewRequest("GET", "/", nil)
@@ -459,7 +375,7 @@ func TestParseSessionCookie_DroppedChunkFails(t *testing.T) {
 
 func TestParseSessionCookie_TamperedChunkFails(t *testing.T) {
 	secret := "test-secret"
-	cookies := CreateSessionCookie(hugeUser(), NewSessionID(), "", secret, 1*time.Hour, false)
+	cookies := CreateSessionCookie(hugeUser(), NewSessionID(), secret, 1*time.Hour, false)
 
 	req := httptest.NewRequest("GET", "/", nil)
 	for _, c := range cookies {
@@ -493,9 +409,9 @@ func TestParseSessionCookie_ChunkCountCapped(t *testing.T) {
 func TestParseSessionCookie_PrefersMainCookieOverStaleChunks(t *testing.T) {
 	secret := "test-secret"
 	// A valid single cookie for a shrunk session...
-	main := mainCookie(t, CreateSessionCookie(&User{Username: "bob"}, NewSessionID(), "", secret, 1*time.Hour, false))
+	main := mainCookie(t, CreateSessionCookie(&User{Username: "bob"}, NewSessionID(), secret, 1*time.Hour, false))
 	// ...with stale chunk cookies from a previous larger session still in the browser.
-	stale := CreateSessionCookie(hugeUser(), NewSessionID(), "", secret, 1*time.Hour, false)
+	stale := CreateSessionCookie(hugeUser(), NewSessionID(), secret, 1*time.Hour, false)
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(main)
@@ -512,7 +428,7 @@ func TestParseSessionCookie_PrefersMainCookieOverStaleChunks(t *testing.T) {
 
 func TestClearSessionCookie_ClearsChunks(t *testing.T) {
 	secret := "test-secret"
-	cookies := CreateSessionCookie(hugeUser(), NewSessionID(), "", secret, 1*time.Hour, false)
+	cookies := CreateSessionCookie(hugeUser(), NewSessionID(), secret, 1*time.Hour, false)
 
 	// Simulate the browser sending the chunked session back on logout.
 	req := httptest.NewRequest("POST", "/auth/logout", nil)
@@ -550,7 +466,7 @@ func TestClearSessionCookie_ClearsChunks(t *testing.T) {
 
 func TestCreateSessionCookie_ChunkedExpiresStaleMain(t *testing.T) {
 	secret := "test-secret"
-	cookies := CreateSessionCookie(hugeUser(), NewSessionID(), "", secret, time.Hour, false)
+	cookies := CreateSessionCookie(hugeUser(), NewSessionID(), secret, time.Hour, false)
 
 	var clearedMain bool
 	for _, c := range cookies {
@@ -568,7 +484,7 @@ func TestCreateSessionCookie_ChunkedExpiresStaleMain(t *testing.T) {
 
 func TestCreateSessionCookie_SingleClearsStaleChunkMeta(t *testing.T) {
 	secret := "test-secret"
-	cookies := CreateSessionCookie(&User{Username: "bob"}, NewSessionID(), "", secret, time.Hour, false)
+	cookies := CreateSessionCookie(&User{Username: "bob"}, NewSessionID(), secret, time.Hour, false)
 
 	var clearedMeta bool
 	for _, c := range cookies {
@@ -590,8 +506,8 @@ func TestCreateSessionCookie_SingleClearsStaleChunkMeta(t *testing.T) {
 // reassembled even if the new main cookie is later removed.
 func TestRepresentationSwitchDoesNotResurrectStaleSession(t *testing.T) {
 	secret := "test-secret"
-	stale := CreateSessionCookie(hugeUser(), NewSessionID(), "", secret, time.Hour, false)             // chunked
-	fresh := CreateSessionCookie(&User{Username: "bob"}, NewSessionID(), "", secret, time.Hour, false) // single
+	stale := CreateSessionCookie(hugeUser(), NewSessionID(), secret, time.Hour, false)             // chunked
+	fresh := CreateSessionCookie(&User{Username: "bob"}, NewSessionID(), secret, time.Hour, false) // single
 
 	jar := map[string]string{}
 	apply := func(cs []*http.Cookie) {
@@ -635,7 +551,7 @@ func TestCreateSessionCookie_RefusesOversizedSession(t *testing.T) {
 	for i := range groups {
 		groups[i] = "org:engineering:platform:team-" + strings.Repeat("x", 16)
 	}
-	cookies := CreateSessionCookie(&User{Username: "alice", Groups: groups}, NewSessionID(), "", secret, time.Hour, true)
+	cookies := CreateSessionCookie(&User{Username: "alice", Groups: groups}, NewSessionID(), secret, time.Hour, true)
 
 	for _, c := range cookies {
 		if c.Value != "" {

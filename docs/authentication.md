@@ -153,6 +153,8 @@ Radar discovers the provider's `end_session_endpoint` automatically from the OID
 [oidc] IdP does not advertise end_session_endpoint — will use prompt=login on next auth after logout
 ```
 
+Radar identifies itself to the logout endpoint with `client_id` and does **not** send `id_token_hint`: the session cookie never holds the ID token, because a copied cookie could otherwise yield a token your API server accepts. Most providers accept this. Keycloak shows a logout confirmation page, and Okta rejects the request and shows an error; in both cases Radar's own session is already cleared, and the next login within five minutes uses `prompt=login`.
+
 To redirect users back to Radar after IdP logout, set `--auth-oidc-post-logout-redirect-url` (or `auth.oidc.postLogoutRedirectURL` in Helm). This URL **must be registered** with your identity provider as a valid post-logout redirect URI.
 
 **Back-Channel Logout (IdP-initiated session revocation):**
@@ -432,7 +434,7 @@ The ServiceAccount's existing read permissions (list pods, watch deployments, et
 
 ## Session Cookies
 
-Radar uses stateless HMAC-SHA256 signed cookies for sessions. The cookie contains the username and groups — no server-side session storage.
+Radar uses stateless HMAC-SHA256 signed cookies for sessions. The cookie contains the username and groups — no server-side session storage. It is signed, not encrypted, and never carries a credential such as the OIDC ID token.
 
 - **Cookie TTL**: 4 hours by default (sliding), configurable with `--auth-cookie-ttl` or `auth.cookieTTL` in Helm values. Sessions auto-extend while you're active; idle sessions expire after the configured TTL. Active users won't notice — Radar's frontend polling keeps the session alive automatically.
 - **Proxy mode**: When the cookie expires, the middleware transparently re-creates the session from proxy headers on the next request, so the shorter default TTL has no UX impact.

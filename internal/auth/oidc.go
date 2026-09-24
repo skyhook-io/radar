@@ -618,13 +618,12 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[oidc] Generated local session ID (IdP did not provide sid claim)")
 	}
 
-	// Create session cookie (include raw ID token for RP-Initiated Logout).
 	// OIDC runs over HTTPS in practice; mark the cookie Secure unconditionally
 	// to match the middleware invariant (which forces Secure in OIDC mode). The
 	// callback is auth-exempt, so middleware never re-issues to fix a cookie
 	// that was issued non-Secure here.
 	secure := true
-	cookies := CreateSessionCookie(user, sid, rawIDToken, h.cfg.Secret, h.cfg.CookieTTL, secure)
+	cookies := CreateSessionCookie(user, sid, h.cfg.Secret, h.cfg.CookieTTL, secure)
 	for _, c := range cookies {
 		http.SetCookie(w, c)
 	}
@@ -664,12 +663,6 @@ func sessionIssued(cookies []*http.Cookie) bool {
 // end_session_endpoint URL so the frontend can redirect the browser to terminate
 // the SSO session.
 func (h *OIDCHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
-	// Extract ID token before clearing the cookie (needed as id_token_hint)
-	var idToken string
-	if session := ParseSessionCookie(r, h.cfg.Secret); session != nil {
-		idToken = session.IDToken
-	}
-
 	for _, c := range ClearSessionCookie(r) {
 		http.SetCookie(w, c)
 	}
@@ -697,12 +690,11 @@ func (h *OIDCHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[oidc] Failed to parse end_session_endpoint %q: %v", h.endSessionEndpoint, err)
 		} else {
 			q := logoutURL.Query()
-			if idToken != "" {
-				q.Set("id_token_hint", idToken)
-			} else {
-				// Fallback for old sessions without stored ID token
-				q.Set("client_id", h.cfg.OIDCClientID)
-			}
+			// No id_token_hint: handing the ID token back to whoever holds
+			// the session cookie would expose a credential the API server may
+			// accept. Okta rejects logout without it, and Keycloak asks the
+			// user to confirm; Radar's own session is cleared either way.
+			q.Set("client_id", h.cfg.OIDCClientID)
 			if h.cfg.OIDCPostLogoutRedirectURL != "" {
 				q.Set("post_logout_redirect_uri", h.cfg.OIDCPostLogoutRedirectURL)
 			}

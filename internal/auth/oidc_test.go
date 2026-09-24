@@ -38,7 +38,7 @@ func newTestOIDCHandler() *OIDCHandler {
 }
 
 func TestSessionIssued(t *testing.T) {
-	issued := CreateSessionCookie(&User{Username: "alice"}, NewSessionID(), "", "secret", time.Hour, false)
+	issued := CreateSessionCookie(&User{Username: "alice"}, NewSessionID(), "secret", time.Hour, false)
 	if !sessionIssued(issued) {
 		t.Error("a normal session cookie set should be considered issued")
 	}
@@ -211,9 +211,13 @@ func TestHandleLogout_WithEndSessionEndpoint(t *testing.T) {
 	h.endSessionEndpoint = "https://idp.example.com/logout"
 	h.cfg.OIDCClientID = "radar-client"
 
-	// Create a session cookie with an ID token
-	user := &User{Username: "alice"}
-	cookie := CreateSessionCookie(user, NewSessionID(), "my-id-token", h.cfg.Secret, 1*time.Hour, false)[0]
+	// A cookie from before sessions stopped carrying the ID token.
+	cookie := signLegacyPayload(map[string]any{
+		"u": "alice",
+		"e": time.Now().Add(time.Hour).Unix(),
+		"s": NewSessionID(),
+		"t": "my-id-token",
+	}, h.cfg.Secret)
 
 	r := httptest.NewRequest("GET", "/auth/logout", nil)
 	r.AddCookie(cookie)
@@ -233,12 +237,11 @@ func TestHandleLogout_WithEndSessionEndpoint(t *testing.T) {
 	if !strings.HasPrefix(redirectTo, "https://idp.example.com/logout") {
 		t.Errorf("redirectTo = %q, want prefix https://idp.example.com/logout", redirectTo)
 	}
-	if !strings.Contains(redirectTo, "id_token_hint=my-id-token") {
-		t.Errorf("redirectTo should contain id_token_hint, got %q", redirectTo)
+	if strings.Contains(redirectTo, "id_token_hint") || strings.Contains(redirectTo, "my-id-token") {
+		t.Errorf("redirectTo must never carry the ID token, got %q", redirectTo)
 	}
-	// Should not contain client_id when id_token_hint is present
-	if strings.Contains(redirectTo, "client_id=") {
-		t.Errorf("redirectTo should not contain client_id when id_token_hint is present")
+	if !strings.Contains(redirectTo, "client_id=radar-client") {
+		t.Errorf("redirectTo should identify the client, got %q", redirectTo)
 	}
 
 	// Session cookie should be cleared
@@ -271,39 +274,6 @@ func TestHandleLogout_WithPostLogoutRedirectURL(t *testing.T) {
 	redirectTo := resp["redirectTo"]
 	if !strings.Contains(redirectTo, "post_logout_redirect_uri=") {
 		t.Errorf("redirectTo should contain post_logout_redirect_uri, got %q", redirectTo)
-	}
-}
-
-func TestHandleLogout_NoIDTokenInCookie(t *testing.T) {
-	h := newTestOIDCHandler()
-	h.endSessionEndpoint = "https://idp.example.com/logout"
-	h.cfg.OIDCClientID = "radar-client"
-
-	// Session cookie without ID token (old session from before upgrade)
-	user := &User{Username: "alice"}
-	cookie := CreateSessionCookie(user, NewSessionID(), "", h.cfg.Secret, 1*time.Hour, false)[0]
-
-	r := httptest.NewRequest("GET", "/auth/logout", nil)
-	r.AddCookie(cookie)
-	w := httptest.NewRecorder()
-
-	h.HandleLogout(w, r)
-
-	var resp map[string]string
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-
-	redirectTo := resp["redirectTo"]
-	if redirectTo == "" {
-		t.Fatal("redirectTo should be present even without id_token")
-	}
-	// Should fall back to client_id
-	if !strings.Contains(redirectTo, "client_id=radar-client") {
-		t.Errorf("redirectTo should contain client_id fallback, got %q", redirectTo)
-	}
-	if strings.Contains(redirectTo, "id_token_hint=") {
-		t.Errorf("redirectTo should not contain id_token_hint when cookie has no token")
 	}
 }
 

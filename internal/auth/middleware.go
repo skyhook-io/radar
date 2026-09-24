@@ -84,7 +84,7 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 						// Pre-upgrade cookie without sid — mint one on first sliding re-issue
 						sid = NewSessionID()
 					}
-					cookies := CreateSessionCookie(session.User, sid, session.IDToken, cfg.Secret, cfg.CookieTTL, secure)
+					cookies := CreateSessionCookie(session.User, sid, cfg.Secret, cfg.CookieTTL, secure)
 					for _, c := range cookies {
 						http.SetCookie(w, c)
 					}
@@ -132,7 +132,7 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 					user := &User{Username: username, Groups: groups}
 					logAcceptedForwardedIdentity(user)
 					if !cloudProxyMode {
-						cookies := CreateSessionCookie(user, NewSessionID(), "", cfg.Secret, cfg.CookieTTL, secure)
+						cookies := CreateSessionCookie(user, NewSessionID(), cfg.Secret, cfg.CookieTTL, secure)
 						for _, c := range cookies {
 							http.SetCookie(w, c)
 						}

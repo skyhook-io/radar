@@ -39,7 +39,6 @@ const maxCookieChunks = 16
 type Session struct {
 	User      *User
 	SID       string    // stable session identifier (empty for pre-upgrade cookies)
-	IDToken   string    // raw OIDC id_token for RP-Initiated Logout
 	ExpiresAt time.Time // when the cookie expires
 }
 
@@ -48,7 +47,6 @@ type cookiePayload struct {
 	Username  string   `json:"u"`
 	Groups    []string `json:"g,omitempty"`
 	ExpiresAt int64    `json:"e"`
-	IDToken   string   `json:"t,omitempty"` // raw OIDC id_token for RP-Initiated Logout
 	SID       string   `json:"s,omitempty"` // session ID for backchannel logout revocation
 }
 
@@ -65,15 +63,17 @@ func NewSessionID() string {
 // Format: base64(json) + "." + base64(hmac-sha256). The sid must be non-empty —
 // use NewSessionID() to generate one.
 //
+// The cookie is signed, not encrypted, so it must never carry a credential:
+// an OIDC ID token here could be replayed against an API server that trusts
+// the same client.
+//
 // Most sessions fit in a single cookie. When the signed value exceeds
-// maxCookieSize (many groups + a large OIDC ID token), the ID token is dropped
-// first — it's only needed for RP-Initiated Logout's id_token_hint and falls
-// back to client_id gracefully. If still too large, the value is split across
+// maxCookieSize (many groups), the value is split across
 // numbered chunk cookies plus a meta-cookie holding the count, so IdPs that
 // emit oversized tokens (e.g. Keycloak with many claims) don't get silently
 // rejected by the browser's ~4 KB per-cookie limit. Callers must SetCookie each
 // returned cookie.
-func CreateSessionCookie(user *User, sid, idToken, secret string, ttl time.Duration, secure bool) []*http.Cookie {
+func CreateSessionCookie(user *User, sid, secret string, ttl time.Duration, secure bool) []*http.Cookie {
 	if sid == "" {
 		panic(fmt.Sprintf("[auth] CreateSessionCookie called with empty sid for user %s", user.Username))
 	}
@@ -82,18 +82,10 @@ func CreateSessionCookie(user *User, sid, idToken, secret string, ttl time.Durat
 		Username:  user.Username,
 		Groups:    user.Groups,
 		ExpiresAt: time.Now().Add(ttl).Unix(),
-		IDToken:   idToken,
 		SID:       sid,
 	}
 
 	value := buildCookieValue(payload, secret)
-
-	if len(value) > maxCookieSize && payload.IDToken != "" {
-		log.Printf("[auth] Session cookie exceeds %d bytes (%d), dropping ID token to fit",
-			maxCookieSize, len(value))
-		payload.IDToken = ""
-		value = buildCookieValue(payload, secret)
-	}
 
 	if len(value) <= maxCookieSize {
 		// Single cookie. Clear the chunk meta-cookie so a previous chunked
@@ -239,7 +231,6 @@ func parseCookieValue(cookieValue, secret, remoteAddr string) *Session {
 			Groups:   p.Groups,
 		},
 		SID:       p.SID,
-		IDToken:   p.IDToken,
 		ExpiresAt: time.Unix(p.ExpiresAt, 0),
 	}
 }
