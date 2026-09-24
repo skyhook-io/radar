@@ -1,4 +1,4 @@
-package telemetry
+package usagedata
 
 import (
 	"net/http"

@@ -14,7 +14,7 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"k8s.io/apimachinery/pkg/util/validation"
 
-	"github.com/skyhook-io/radar/internal/telemetry"
+	"github.com/skyhook-io/radar/internal/usagedata"
 )
 
 // Argument-name repair for tool calls.
@@ -304,7 +304,7 @@ func addToolWithRegistry[In, Out any](registry *toolParamRegistry, s *mcpsdk.Ser
 	registry.mu.Unlock()
 	name := t.Name
 	mcpsdk.AddTool(s, t, func(ctx context.Context, req *mcpsdk.CallToolRequest, in In) (*mcpsdk.CallToolResult, Out, error) {
-		telemetry.RecordMCPTool(name)
+		usagedata.RecordMCPTool(name)
 		return h(ctx, req, in)
 	})
 }

@@ -35,6 +35,7 @@ export function ConfigToggle({
         type="button"
         role="switch"
         aria-checked={value}
+        aria-label={label}
         disabled={disabled}
         onClick={() => onChange(!value)}
         className={clsx(

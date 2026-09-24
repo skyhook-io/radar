@@ -19,15 +19,15 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
-	"github.com/skyhook-io/radar/internal/telemetry"
+	"github.com/skyhook-io/radar/internal/usagedata"
 	"github.com/skyhook-io/radar/internal/version"
 	"github.com/skyhook-io/radar/pkg/packages"
 )
 
-func (s *Server) startTelemetry() {
+func (s *Server) startUsageData() {
 	ctx, cancel := context.WithCancel(context.Background())
-	s.stopTelemetry = cancel
-	opts := telemetry.Options{
+	s.stopUsageData = cancel
+	opts := usagedata.Options{
 		// Radar Cloud runs its own usage program; the OSS switch stays off.
 		Hosted: func() bool {
 			return cloudMode() || s.cloudConnectCfg.CloudTunnelConfigured
@@ -49,7 +49,7 @@ func (s *Server) startTelemetry() {
 		// The pending report lives on the pod's emptyDir; send it before
 		// the pod goes rather than lose it.
 		SendOnShutdown: deploymentMode() == k8s.DeploymentModeInCluster,
-		Setup:          s.telemetrySetup,
+		Setup:          s.usageSetup,
 		Contexts:       func() int { return k8s.GetKubeconfigSummary().ContextCount },
 		// In-cluster, ~/.radar is a pod's emptyDir and is new on every
 		// restart; the Deployment's creation time is the real install time.
@@ -70,7 +70,7 @@ func (s *Server) startTelemetry() {
 			opts.StorageScope = func() string { return "pod" }
 		}
 	}
-	telemetry.Start(ctx, opts)
+	usagedata.Start(ctx, opts)
 }
 
 // usageShared reports whether several people use this Radar: in-cluster,
@@ -112,7 +112,7 @@ func usageDecider(shared, ownersDecide, signedIn bool, mayPatchDeployment func()
 }
 
 // usageStatusFor narrows the install-wide status to what this caller may do.
-func (s *Server) usageStatusFor(r *http.Request, st telemetry.Status) telemetry.Status {
+func (s *Server) usageStatusFor(r *http.Request, st usagedata.Status) usagedata.Status {
 	st.OwnersDecide = st.Shared && s.usageOwnersDecide()
 	if !s.canDecideUsage(r) {
 		st.CanChange = false
@@ -125,16 +125,16 @@ func (s *Server) usageStatusFor(r *http.Request, st telemetry.Status) telemetry.
 // clusterSample describes the connected cluster by shape only. The key is the
 // kube-system namespace UID (stable per cluster, meaningless outside it); the
 // collector hashes it before storing and never sends it.
-func clusterSample() (string, telemetry.ClusterShape, bool) {
+func clusterSample() (string, usagedata.ClusterShape, bool) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return "", telemetry.ClusterShape{}, false
+		return "", usagedata.ClusterShape{}, false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	info, err := k8s.GetClusterInfo(ctx)
 	if err != nil {
-		return "", telemetry.ClusterShape{}, false
+		return "", usagedata.ClusterShape{}, false
 	}
 	key := ""
 	if nsLister := cache.Namespaces(); nsLister != nil {
@@ -148,12 +148,12 @@ func clusterSample() (string, telemetry.ClusterShape, bool) {
 		}
 	}
 	if key == "" {
-		return "", telemetry.ClusterShape{}, false
+		return "", usagedata.ClusterShape{}, false
 	}
-	return key, telemetry.ClusterShape{
-		KubernetesVersion: telemetry.MinorVersion(info.KubernetesVersion),
+	return key, usagedata.ClusterShape{
+		KubernetesVersion: usagedata.MinorVersion(info.KubernetesVersion),
 		Platform:          platformName(info.Platform),
-		Nodes:             telemetry.Bucket(info.NodeCount),
+		Nodes:             usagedata.Bucket(info.NodeCount),
 		Integrations:      servedIntegrations(),
 	}, true
 }
@@ -167,7 +167,7 @@ func platformName(p string) string {
 	return "unknown"
 }
 
-func (s *Server) telemetrySetup() telemetry.Setup {
+func (s *Server) usageSetup() usagedata.Setup {
 	authMode := s.authConfig.Mode
 	if authMode == "" {
 		authMode = "none"
@@ -180,7 +180,7 @@ func (s *Server) telemetrySetup() telemetry.Setup {
 	if url, _ := prometheuspkg.CurrentConfig(); url != "" {
 		prom = "connected"
 	}
-	return telemetry.Setup{
+	return usagedata.Setup{
 		AuthMode:        authMode,
 		TimelineStorage: timeline,
 		MCPEnabled:      s.mcpHandler != nil,
@@ -189,11 +189,11 @@ func (s *Server) telemetrySetup() telemetry.Setup {
 	}
 }
 
-// telemetryMiddleware counts API requests by their route pattern once the
+// usageMiddleware counts API requests by their route pattern once the
 // router has matched them. It does nothing unless usage data is on.
-func (s *Server) telemetryMiddleware(next http.Handler) http.Handler {
+func (s *Server) usageMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !telemetry.Recording() {
+		if !usagedata.Recording() {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -201,7 +201,7 @@ func (s *Server) telemetryMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(ww, r)
 		if rc := chi.RouteContext(r.Context()); rc != nil {
 			if pattern := rc.RoutePattern(); pattern != "" {
-				telemetry.RecordAPI(r.Method, pattern, ww.Status())
+				usagedata.RecordAPI(r.Method, pattern, ww.Status())
 			}
 		}
 	})
@@ -225,14 +225,14 @@ func servedIntegrations() []string {
 			names = append(names, name)
 		}
 	}
-	return telemetry.SortedUnique(names)
+	return usagedata.SortedUnique(names)
 }
 
-func (s *Server) handleGetTelemetry(w http.ResponseWriter, r *http.Request) {
-	s.writeJSON(w, s.usageStatusFor(r, telemetry.CurrentStatus()))
+func (s *Server) handleGetUsageData(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, s.usageStatusFor(r, usagedata.CurrentStatus()))
 }
 
-func (s *Server) handlePutTelemetry(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePutUsageData(w http.ResponseWriter, r *http.Request) {
 	// Consent must come from Radar's own page: a cross-site form post that
 	// could switch usage data on would defeat the opt-in.
 	if !s.sameOriginOK(r) {
@@ -254,8 +254,8 @@ func (s *Server) handlePutTelemetry(w http.ResponseWriter, r *http.Request) {
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		by = user.Username
 	}
-	status, err := telemetry.SetChoice(*body.Enabled, by)
-	if errors.Is(err, telemetry.ErrManaged) {
+	status, err := usagedata.SetChoice(*body.Enabled, by)
+	if errors.Is(err, usagedata.ErrManaged) {
 		s.writeError(w, http.StatusConflict, err.Error())
 		return
 	}
@@ -267,7 +267,7 @@ func (s *Server) handlePutTelemetry(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, s.usageStatusFor(r, status))
 }
 
-func (s *Server) handleTelemetryPromptShown(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleUsagePromptShown(w http.ResponseWriter, r *http.Request) {
 	if !s.sameOriginOK(r) {
 		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
 		return
@@ -277,7 +277,7 @@ func (s *Server) handleTelemetryPromptShown(w http.ResponseWriter, r *http.Reque
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	if err := telemetry.MarkPromptShown(); err != nil {
+	if err := usagedata.MarkPromptShown(); err != nil {
 		log.Printf("[usage] Failed to record prompt shown: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -285,9 +285,9 @@ func (s *Server) handleTelemetryPromptShown(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleTelemetryEvent takes UI-side usage: views, sessions, active time and
+// handleUsageEvent takes UI-side usage: views, sessions, active time and
 // named UI moments. Unknown names are rejected rather than stored.
-func (s *Server) handleTelemetryEvent(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleUsageEvent(w http.ResponseWriter, r *http.Request) {
 	// Same-origin and JSON only: a cross-site form post (text/plain skips
 	// the CORS preflight) could otherwise inflate a shared install's counts.
 	if !s.sameOriginOK(r) {
@@ -309,21 +309,21 @@ func (s *Server) handleTelemetryEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	switch body.Type {
 	case "view":
-		if !telemetry.IsAllowedView(body.Name) {
+		if !usagedata.IsAllowedView(body.Name) {
 			s.writeError(w, http.StatusBadRequest, "unknown view")
 			return
 		}
-		telemetry.RecordView(body.Name)
+		usagedata.RecordView(body.Name)
 	case "ui":
-		if !telemetry.IsAllowedUIEvent(body.Name) {
+		if !usagedata.IsAllowedUIEvent(body.Name) {
 			s.writeError(w, http.StatusBadRequest, "unknown event")
 			return
 		}
-		telemetry.RecordUIEvent(body.Name)
+		usagedata.RecordUIEvent(body.Name)
 	case "session":
-		telemetry.RecordSession(r.UserAgent())
+		usagedata.RecordSession(r.UserAgent())
 	case "active":
-		telemetry.RecordActive(body.Minutes)
+		usagedata.RecordActive(body.Minutes)
 	default:
 		s.writeError(w, http.StatusBadRequest, "unknown event type")
 		return

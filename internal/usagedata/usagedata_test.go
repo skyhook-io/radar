@@ -1,4 +1,4 @@
-package telemetry
+package usagedata
 
 import (
 	"context"
@@ -646,5 +646,44 @@ func TestPreviewReusesARecentClusterSample(t *testing.T) {
 	h.now = h.now.Add(clusterSampleInterval + time.Second)
 	if st := h.c.Status(); calls != 2 || st.Preview.Clusters.Shapes[0].Platform != "eks" {
 		t.Fatalf("stale preview not refreshed: %d calls", calls)
+	}
+}
+
+func TestSayingYesAgainKeepsThePeriod(t *testing.T) {
+	h := newHarness(t, nil, false)
+	if _, err := h.c.SetChoice(true, ""); err != nil {
+		t.Fatal(err)
+	}
+	RecordView("helm")
+	if _, err := h.c.SetChoice(true, ""); err != nil {
+		t.Fatal(err)
+	}
+	if h.c.Status().Preview.Views["helm"] != 1 {
+		t.Fatalf("a repeated yes dropped the counts")
+	}
+}
+
+func TestLaterChoiceWinsWhenSavesOverlap(t *testing.T) {
+	h := newHarness(t, nil, false)
+	release := make(chan struct{})
+	save := h.c.save
+	first := true
+	h.c.save = func(fn func(*settings.Settings)) error {
+		if first {
+			first = false
+			<-release // the opt-in's save is slow
+		}
+		return save(fn)
+	}
+	done := make(chan struct{})
+	go func() { _, _ = h.c.SetChoice(true, ""); close(done) }()
+	time.Sleep(20 * time.Millisecond)
+	optedOut := make(chan struct{})
+	go func() { _, _ = h.c.SetChoice(false, ""); close(optedOut) }()
+	close(release)
+	<-done
+	<-optedOut
+	if h.saved.UsageData == nil || h.saved.UsageData.Enabled {
+		t.Fatalf("stored choice = %+v, want the later opt-out", h.saved.UsageData)
 	}
 }

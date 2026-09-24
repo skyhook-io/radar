@@ -1,4 +1,4 @@
-// Package telemetry implements Radar's opt-in usage reports.
+// Package usagedata implements Radar's opt-in usage reports.
 //
 // Nothing is recorded or sent until the user says yes. A yes starts a daily
 // anonymous report: which views and actions were used, MCP tool calls,
@@ -7,7 +7,7 @@
 // carries names (resources, namespaces, clusters, hosts) or contents. The
 // pending report lives in ~/.radar/usage-report.json so the user can read
 // exactly what will be sent.
-package telemetry
+package usagedata
 
 import (
 	"bytes"
@@ -193,7 +193,7 @@ func resolve(env func(string) string, hosted bool, choice *settings.UsageDataCho
 	return StateOff, SourceUser
 }
 
-func invalidTelemetryEnv(env func(string) string) (string, bool) {
+func invalidUsageReportingEnv(env func(string) string) (string, bool) {
 	switch v := strings.ToLower(strings.TrimSpace(env("RADAR_USAGE_REPORTING"))); v {
 	case "", "on", "1", "true", "yes", "log", "off", "0", "false", "no":
 		return "", false
@@ -215,7 +215,10 @@ type Collector struct {
 	mu sync.Mutex
 	// sendMu keeps sends one at a time, so the send at shutdown waits for a
 	// daily send in flight and includes its counts if that send was cancelled.
-	sendMu      sync.Mutex
+	sendMu sync.Mutex
+	// decideMu keeps decisions one at a time from save to apply, so an older
+	// choice can't be saved after a newer one and win on the next start.
+	decideMu    sync.Mutex
 	state       State
 	source      Source
 	p           pending
@@ -256,7 +259,7 @@ func Start(ctx context.Context, opts Options) *Collector {
 	defaultMu.Lock()
 	defaultC = c
 	defaultMu.Unlock()
-	if v, bad := invalidTelemetryEnv(c.env); bad {
+	if v, bad := invalidUsageReportingEnv(c.env); bad {
 		log.Printf("[usage] RADAR_USAGE_REPORTING=%q is not on, off or log; treating it as off", v)
 	}
 	c.refresh()
@@ -526,6 +529,8 @@ func SetChoice(enabled bool, by string) (Status, error) {
 
 // SetChoice saves the user's answer; see the package-level SetChoice.
 func (c *Collector) SetChoice(enabled bool, by string) (Status, error) {
+	c.decideMu.Lock()
+	defer c.decideMu.Unlock()
 	hosted := c.opts.Hosted()
 	c.mu.Lock()
 	if c.source != SourceDefault && c.source != SourceUser {
@@ -559,13 +564,17 @@ func (c *Collector) SetChoice(enabled bool, by string) (Status, error) {
 	state, source := resolve(c.env, hosted, &choice)
 	c.mu.Lock()
 	if c.decisionGen == gen {
+		wasRecording := c.state.Recording()
 		c.state, c.source, c.choice = state, source, &choice
-		if state.Recording() {
+		switch {
+		case state.Recording() && wasRecording:
+			// Saying yes again keeps the period already being counted.
+		case state.Recording():
 			c.abortSendLocked()
 			c.p = pending{PeriodStart: now}
 			c.sampledAt = nil
 			c.dirty = true
-		} else {
+		default:
 			c.discardLocked()
 		}
 	}
