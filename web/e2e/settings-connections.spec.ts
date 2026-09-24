@@ -100,6 +100,7 @@ async function fixture(page: Page) {
   let preserveRevision = false
   let failNextCopy = false
   let applyError = ''
+  let catalogFailure = false
   const connections: NonNullable<IntegrationProfile['connection']>[] = []
   const unlinkedAssignments: ConnectionResponse['unlinkedAssignments'] = []
   await page.route('**/api/capabilities', async route => {
@@ -118,6 +119,8 @@ async function fixture(page: Page) {
   await page.route('**/api/integrations/argocd/status', route => route.fulfill({ json: { connected: true, configured: true, address: profiles.argocd.url } }))
   await page.route('**/api/opencost/summary', route => route.fulfill({ json: { available: true, source: 'kubecost' } }))
   await page.route('**/api/integrations/connections', async route => {
+    if (route.request().method() === 'GET' && catalogFailure)
+      return route.fulfill({ status: 503, json: { error: 'Catalog unavailable' } })
     if (route.request().method() === 'PUT') {
       const update = route.request().postDataJSON()
       writes.push(update)
@@ -171,11 +174,49 @@ async function fixture(page: Page) {
     recoverStatus() { statusFailure = false },
     preserveRevision() { preserveRevision = true },
     failNextCopy() { failNextCopy = true },
+    failCatalog() { catalogFailure = true },
+    recoverCatalog() { catalogFailure = false },
     failConnectionCheck() { applyError = 'Saved, but the metrics backend could not be reached. Check its URL, authentication, network access and TLS configuration.' },
   }
 }
 
 for (const integration of integrations) {
+  test(`${integration.tab}: clearing a copied credentialed URL is guarded before confirmation`, async ({ page }) => {
+    const state = await fixture(page)
+    Object.assign(state.profiles[integration.kind], { headerKeys: [], secretSet: false })
+    state.connections.push({ id: 'source', type: integration.kind, name: '', customName: '', url: 'https://source.example', headerKeys: integration.kind === 'metrics' ? ['Authorization'] : [], envHeaderKeys: [], secretSet: integration.kind !== 'metrics', insecureTls: false,
+      uses: [{ binding: 'source', integration: integration.kind, context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' }] })
+    const dialog = await openSettings(page, integration.tab)
+    await dialog.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
+    await dialog.getByRole('option', { name: /staging/ }).click()
+    await dialog.getByRole('textbox', { name: integration.field, exact: true }).fill('')
+    await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
+    await expect(dialog.getByRole('alert')).toContainText('choose Use auto-discovery')
+    await expect(page.getByRole('heading', { name: 'Replace saved connection?', exact: true })).toHaveCount(0)
+    expect(state.writes).toHaveLength(0)
+  })
+
+  test(`${integration.tab}: catalog recovery preserves the copied draft`, async ({ page }) => {
+    const state = await fixture(page)
+    state.connections.push({ id: 'source', type: integration.kind, name: '', customName: '', url: 'https://source.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
+      uses: [{ binding: 'source', integration: integration.kind, context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' }] })
+    const dialog = await openSettings(page, integration.tab)
+    await dialog.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
+    state.failCatalog()
+    await dialog.getByRole('option', { name: /staging/ }).click()
+    const field = dialog.getByRole('textbox', { name: integration.field, exact: true })
+    await field.fill('https://source.example/draft')
+    await expect(dialog.getByText('Could not load other clusters.', { exact: false })).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'Discard draft & reload', exact: true })).toHaveCount(0)
+    await expect(dialog.getByRole('button', { name: 'Save changes', exact: true })).toBeEnabled()
+    state.recoverCatalog()
+    await dialog.getByRole('button', { name: 'Retry', exact: true }).click()
+    await expect(dialog.getByText('Could not load other clusters.', { exact: false })).toHaveCount(0)
+    await expect(field).toHaveValue('https://source.example/draft')
+    await expect(dialog.getByText(/Copied from staging/)).toBeVisible()
+    expect(state.writes).toHaveLength(0)
+  })
+
   test(`${integration.tab}: clearing a credentialed URL offers discovery before confirming`, async ({ page }) => {
     const state = await fixture(page)
     await openSettings(page, integration.tab)
@@ -403,6 +444,66 @@ test('copy into an unconfigured cluster saves edited headers without an intermed
   await expect(dialog.getByText(/Copied from/)).toHaveCount(0)
   await expect(dialog.getByRole('button', { name: 'Save changes', exact: true })).toBeDisabled()
 })
+
+test('new header names stay editable and duplicates fail before sending', async ({ page }) => {
+  const state = await fixture(page)
+  const dialog = await openSettings(page, 'Metrics')
+  await dialog.getByRole('button', { name: 'Add header', exact: true }).click()
+  const name = dialog.getByRole('textbox', { name: 'Header 2 name', exact: true })
+  await name.fill('authorization')
+  await expect(name).toBeEnabled()
+  await dialog.getByRole('textbox', { name: 'authorization value', exact: true }).fill('replacement')
+  await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText('Header names must be unique')
+  expect(state.writes).toHaveLength(0)
+  await name.fill('X-Tenant')
+  await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
+  await expect.poll(() => state.writes.length).toBe(1)
+  expect(state.writes[0].headers).toEqual([{ key: 'Authorization', action: 'keep' }, { key: 'X-Tenant', action: 'set', value: 'replacement' }])
+})
+
+test('blank new header rows do not block a URL-only save or clear saved headers', async ({ page }) => {
+  const state = await fixture(page)
+  const dialog = await openSettings(page, 'Metrics')
+  await dialog.getByRole('button', { name: 'Add header', exact: true }).click()
+  await dialog.getByRole('textbox', { name: 'Metrics backend URL', exact: true }).fill('https://metrics.example/query')
+  await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
+  await expect.poll(() => state.writes.length).toBe(1)
+  expect(state.writes[0].headers).toEqual([{ key: 'Authorization', action: 'keep' }])
+})
+
+test('a named new header needs a value before saving', async ({ page }) => {
+  const state = await fixture(page)
+  const dialog = await openSettings(page, 'Metrics')
+  await dialog.getByRole('button', { name: 'Add header', exact: true }).click()
+  await dialog.getByRole('textbox', { name: 'Header 2 name', exact: true }).fill('X-Tenant')
+  await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
+  await expect(dialog.getByRole('alert')).toContainText('Enter a value for X-Tenant.')
+  expect(state.writes).toHaveLength(0)
+})
+
+test('Cost explains query failures beside the connection status', async ({ page }) => {
+  await fixture(page)
+  await page.route('**/api/opencost/summary', route => route.fulfill({ json: { available: false, source: 'kubecost', reason: 'query_error' } }))
+  const dialog = await openSettings(page, 'Cost')
+  await expect(dialog.getByRole('group', { name: 'Current connection', exact: true })).toContainText('The active cost source query failed.')
+})
+
+for (const integration of integrations) {
+  test(`${integration.tab}: keyboard focus returns to settings after a plain save`, async ({ page }) => {
+    const state = await fixture(page)
+    state.delayApply()
+    const dialog = await openSettings(page, integration.tab)
+    await dialog.getByRole('textbox', { name: integration.field, exact: true }).fill(`https://${integration.kind}.example/query`)
+    const save = dialog.getByRole('button', { name: 'Save changes', exact: true })
+    await save.focus()
+    await page.keyboard.press('Enter')
+    await expect.poll(() => state.writes.length).toBe(1)
+    state.releaseApply()
+    await expect(save).toBeDisabled()
+    await expect.poll(() => dialog.evaluate(el => el.contains(document.activeElement))).toBe(true)
+  })
+}
 
 test('auto-discovery replaces a copied draft and Discard restores the saved connection', async ({ page }) => {
   const state = await fixture(page)

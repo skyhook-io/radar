@@ -31,10 +31,8 @@ export function ConnectionHeadersEditor({
         Optional. Saved values stay unchanged unless you replace or remove them.
       </p>
       {rows.map((row, index) => {
-        const saved = keys.some(
-          (key) => key.toLowerCase() === row.key.toLowerCase()
-        )
-        const environment = environmentKeys.some(
+        const saved = index < keys.length
+        const environment = saved && environmentKeys.some(
           (key) => key.toLowerCase() === row.key.toLowerCase()
         )
         return (

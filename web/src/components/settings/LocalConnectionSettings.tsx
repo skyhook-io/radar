@@ -140,6 +140,8 @@ export function LocalConnectionSettings({
   const [task, setTask] = useState<Task>('main')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [catalogError, setCatalogError] = useState(false)
+  const [catalogRetry, setCatalogRetry] = useState(0)
   const [message, setMessage] = useState('')
   const [messageWarning, setMessageWarning] = useState(false)
   const [messageRevision, setMessageRevision] = useState('')
@@ -207,14 +209,15 @@ export function LocalConnectionSettings({
           throw new Error(data.error || 'Could not load saved connections.')
         if (!controller.signal.aborted && getApiBase() === base) {
           setCatalog(data.connections)
+          setCatalogError(false)
         }
       })
-      .catch((error) => {
+      .catch(() => {
         if (!controller.signal.aborted && getApiBase() === base)
-          setError(String(error))
+          setCatalogError(true)
       })
     return () => controller.abort()
-  }, [kind, profile.target.binding, profiles, draftGeneration])
+  }, [kind, profile.target.binding, profiles, draftGeneration, catalogRetry])
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange])
   useEffect(() => () => onBusyChange?.(false), [onBusyChange])
   useEffect(() => {
@@ -334,6 +337,9 @@ export function LocalConnectionSettings({
       if (mounted.current) {
         setBusy(false)
         onBusyChange?.(false)
+        requestAnimationFrame(() => {
+          if (mounted.current && document.activeElement === document.body) region.current?.focus()
+        })
       }
     }
   }
@@ -411,10 +417,11 @@ export function LocalConnectionSettings({
   }
   const apply = async (draft: Omit<Update, 'action'>) => {
     const action = selected ? 'copy' : task === 'replace' || discoveryDraft ? 'replace' : 'save'
-    if (action === 'save' && profile.url && draft.url?.trim() === '' && !(kind === 'cost' && draft.mode === 'prometheus')) {
-      const keptHeaders = profile.headerKeys.some((key) => !draft.headers?.some((header) =>
+    const credentialSource = selected ?? profile
+    if ((action === 'save' || action === 'copy') && credentialSource.url && draft.url?.trim() === '' && !(kind === 'cost' && draft.mode === 'prometheus')) {
+      const keptHeaders = credentialSource.headerKeys.some((key) => !draft.headers?.some((header) =>
         header.key.toLowerCase() === key.toLowerCase() && header.action === 'clear'))
-      const keptSecret = profile.secretSet && (!draft.secret || draft.secret.action === 'keep') && !draft.useCliToken
+      const keptSecret = credentialSource.secretSet && (!draft.secret || draft.secret.action === 'keep') && !draft.useCliToken
       if (keptHeaders || keptSecret) {
         throw new Error('Remove or replace the saved credentials, or choose Use auto-discovery to clear this connection.')
       }
@@ -484,7 +491,14 @@ export function LocalConnectionSettings({
         Use auto-discovery
       </button>
     ) : undefined
-  const copyAction = task === 'main' && profile.state !== 'launch' && copySources.length > 0 ? (
+  const copyAction = task === 'main' && profile.state !== 'launch' && catalogError ? (
+    <span role="status" className="text-xs text-theme-text-secondary">
+      Could not load other clusters.{' '}
+      <button type="button" className="text-accent-text hover:underline" onClick={() => setCatalogRetry(retry => retry + 1)}>
+        Retry
+      </button>
+    </span>
+  ) : task === 'main' && profile.state !== 'launch' && copySources.length > 0 ? (
     <SelectMenu
       variant="text"
       value=""
@@ -766,7 +780,6 @@ export function LocalConnectionSettings({
               onDiscard={discard}
               feedback={feedback}
               connectionAction={connectionActions}
-              scopeDescription="Applies only to this cluster. No restart needed."
               onApply={async () => {
                 throw new Error('Header operations required')
               }}
@@ -795,7 +808,6 @@ export function LocalConnectionSettings({
               onApply={async (draft) => {
                 return !!(await apply(draft))
               }}
-              applyLabel="Test & apply"
             />
           ) : (
             <CostConnectionForm
@@ -815,7 +827,6 @@ export function LocalConnectionSettings({
               onApply={async (draft) => {
                 return !!(await apply(draft))
               }}
-              applyLabel="Test & apply"
             />
           ))}
       </fieldset>

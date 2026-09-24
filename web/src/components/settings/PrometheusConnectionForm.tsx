@@ -27,7 +27,6 @@ export function PrometheusConnectionForm({
   urlFromFlag,
   onApplied,
   onApply,
-  scopeDescription,
   onDirtyChange,
   onApplyOperations,
   environmentHeaderKeys = [],
@@ -46,7 +45,6 @@ export function PrometheusConnectionForm({
   urlFromFlag: boolean
   onApplied?: (url: string) => void
   onApply: (url: string, headers?: Record<string, string>) => Promise<PrometheusApplyResult>
-  scopeDescription?: string
   onDirtyChange?: (dirty: boolean) => void
   onApplyOperations?: (url: string, operations: HeaderOperation[]) => Promise<PrometheusApplyResult | null>
   environmentHeaderKeys?: string[]
@@ -90,7 +88,18 @@ export function PrometheusConnectionForm({
     // secrets just because the editor happens to be open for a URL-only change.
     try {
       const editedHeaders = prometheusHeadersFromRows(headerRows)
-      const data = onApplyOperations ? await onApplyOperations(value.trim(), operations) : await onApply(value.trim(), editedHeaders)
+      const editedOperations = operations.filter(operation => operation.key.trim() || operation.value)
+      if (onApplyOperations) {
+        const names = new Set<string>()
+        for (const operation of editedOperations) {
+          const name = operation.key.trim().toLowerCase()
+          if (!name) throw new Error('Enter a name for each header with a value.')
+          if (names.has(name)) throw new Error(`Header names must be unique: ${operation.key.trim()}.`)
+          if (operation.action === 'set' && !operation.value) throw new Error(`Enter a value for ${operation.key.trim()}.`)
+          names.add(name)
+        }
+      }
+      const data = onApplyOperations ? await onApplyOperations(value.trim(), editedOperations) : await onApply(value.trim(), editedHeaders)
       if (!mounted.current) return
       if (!data) { setApply({ status: 'idle' }); return }
       onApplied?.(value.trim())
@@ -139,7 +148,7 @@ export function PrometheusConnectionForm({
       </div>
       {connectionAction}
       {!onApplyOperations && <p className="mt-2 text-xs text-theme-text-tertiary">
-        {scopeDescription ?? (local ? 'Applies only to this cluster.' : 'Changes affect this Radar installation. Use deployment settings for configuration that survives Pod replacement.')}
+        {local ? 'Applies only to this cluster.' : 'Changes affect this Radar installation. Use deployment settings for configuration that survives Pod replacement.'}
       </p>}
       {value.startsWith('http://') && (configuredHeaderKeys.length > 0 || operations.some(operation => operation.action === 'set')) && (
         <p className="mt-2 text-xs text-warning-text">Headers will travel over unencrypted HTTP. Prefer HTTPS outside a trusted private network.</p>

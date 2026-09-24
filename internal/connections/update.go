@@ -125,17 +125,6 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 		return pending, errors.New("review the changed cluster target before editing its connection")
 	}
 	switch req.Action {
-	case "mapping":
-		if req.Kind != config.IntegrationCost || req.ClusterID == nil {
-			return pending, errors.New("cluster mapping requires a Kubecost cluster ID")
-		}
-		a.ClusterID = strings.TrimSpace(*req.ClusterID)
-		a.Target = target.Fingerprint
-		identity := target.Identity
-		a.Identity = &identity
-		putAssignment(&next, target, req.Kind, profile, a)
-		pending.Probe = true
-		pending.Candidate = Bundle{Connection: connection.Clone(), Assignment: a}
 	case "forget":
 		old := next.Assignment(req.Binding, req.Kind)
 		if old.ConnectionID != "" && !req.ConfirmRemoval {

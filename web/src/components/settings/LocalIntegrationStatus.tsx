@@ -27,14 +27,17 @@ export function LocalIntegrationStatus({ kind, profile, argo, busy }: {
     } else if (kind === 'cost' && cost.data) {
       status = cost.data.available ? `Available · ${costSourceLabel(cost.data.source)}`
         : ['no_prometheus', 'no_cost_source', 'no_metrics'].includes(cost.data.reason ?? '') ? 'No cost data' : 'Unavailable'
-      detail = cost.data.reason ? costIntegrationUnavailableMessage(cost.data.reason) ?? undefined : undefined
+      detail = cost.data.reason ? costIntegrationUnavailableMessage(cost.data.reason)
+        ?? (cost.data.reason === 'query_error' ? 'The active cost source query failed.' : undefined) : undefined
     }
   }
   const lastDetail = useRef({ text: detail, visible: !!detail })
   if (!checking) lastDetail.current = { text: detail ?? lastDetail.current.text, visible: !!detail }
+  const configured = !!(profile.url || profile.secretSet || profile.headerKeys.length || profile.clusterId || profile.mode === 'prometheus')
+  const failed = !checking && (query.isError || configured && ['Not connected', 'Unavailable', 'No cost data'].includes(status))
   return (
     <div role="group" className="contents text-xs text-theme-text-secondary" aria-label="Current connection">
-      <Badge severity={status.startsWith('Connected') || status.startsWith('Available') ? 'success' : 'neutral'}>{status}</Badge>
+      <Badge severity={status.startsWith('Connected') || status.startsWith('Available') ? 'success' : failed ? 'warning' : 'neutral'}>{status}</Badge>
       <Collapse open={lastDetail.current.visible} className="basis-full min-w-0">
         <p className={`break-words text-theme-text-tertiary ${checking ? 'invisible' : ''}`}>{lastDetail.current.text}</p>
       </Collapse>
