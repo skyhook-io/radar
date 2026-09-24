@@ -391,6 +391,7 @@ export function CloudFunnelButton() {
               clusterName={clusterInfo.data?.context}
               alreadyConnected={alreadyConnected && { ...alreadyConnected, clusterUrl: alreadyConnected.clusterUrl && tag(alreadyConnected.clusterUrl) }}
               connectedIntent={connectedIntent}
+              quiet={!!alertSubject}
               connectedCount={alreadyConnected ? (discovered.data?.connected.length ?? 0) : 0}
               discoverPending={discoverPending}
               clustersUrl={tag(`${appUrl}/clusters`)}
@@ -456,6 +457,7 @@ function ModalFooter({
   discoverPending = false,
   clustersUrl,
   connectedIntent,
+  quiet = false,
   onConnect,
   onLater,
 }: {
@@ -491,9 +493,15 @@ function ModalFooter({
   // Opened from a hint and this cluster is already in Radar Cloud: go straight
   // to that alert rule or resource there.
   connectedIntent?: { label: string; href: string } | null
+  // Opened from a hint about one issue or resource: the connection note and
+  // the assurances (tunnel, pricing) sit behind "How it works", so the dialog
+  // stays about the alert or the team rather than the connection.
+  quiet?: boolean
   onConnect: () => void
   onLater: () => void
 }) {
+  const [howOpen, setHowOpen] = useState(false)
+  const howId = useId()
   const gitops = self?.ownership === 'gitops'
   const ambiguous = self?.ownership === 'ambiguous'
   // The server decides who gets a link: it withholds wizardUrl whenever the
@@ -631,27 +639,51 @@ function ModalFooter({
           Radar couldn’t inspect this cluster: {prepareError}
         </p>
       )}
-      {/* Mechanics, not marketing: a falsifiable claim the plan card then
-          fulfills. Sits next to the button whose click it de-risks. */}
-      {lane === 'driver' && clusterConnected && !alreadyConnected && (
-        <p className="mt-2.5 text-[11px] leading-relaxed text-theme-text-tertiary">
-          Nothing installs on click. Radar inspects{' '}
-          {clusterName ? <span className="text-theme-text-secondary">{clusterName}</span> : 'the cluster'} and shows
-          you a plan; you approve it in the browser before anything changes.
-        </p>
-      )}
-      {/* A 2-column grid, not flex-wrap: the long data-locality chip cannot
-          share a single row with the other three at this width, and flex
-          wrapping strands it as a 3+1 orphan. Two balanced columns read as a
-          designed layout at any chip length the Hub sends. */}
-      <div className="mt-4 grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11px] text-theme-text-tertiary">
-        {assuranceItems(assurances).map((item) => (
-          <span key={item} className="flex items-center gap-1">
-            <Check className="w-3 h-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
-            {item}
-          </span>
-        ))}
-      </div>
+      {(() => {
+        const details = (
+          <>
+          {/* Mechanics, not marketing: a falsifiable claim the plan card then
+              fulfills. Sits next to the button whose click it de-risks. */}
+          {lane === 'driver' && clusterConnected && !alreadyConnected && (
+            <p className="mt-2.5 text-[11px] leading-relaxed text-theme-text-tertiary">
+              Nothing installs on click. Radar inspects{' '}
+              {clusterName ? <span className="text-theme-text-secondary">{clusterName}</span> : 'the cluster'} and shows
+              you a plan; you approve it in the browser before anything changes.
+            </p>
+          )}
+          {/* A 2-column grid, not flex-wrap: the long data-locality chip cannot
+              share a single row with the other three at this width, and flex
+              wrapping strands it as a 3+1 orphan. Two balanced columns read as a
+              designed layout at any chip length the Hub sends. */}
+          <div className="mt-4 grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11px] text-theme-text-tertiary">
+            {assuranceItems(assurances).map((item) => (
+              <span key={item} className="flex items-center gap-1">
+                <Check className="w-3 h-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                {item}
+              </span>
+            ))}
+          </div>
+          </>
+        )
+        if (!quiet) return details
+        return (
+          <>
+            <button
+              type="button"
+              onClick={() => setHowOpen((v) => !v)}
+              aria-expanded={howOpen}
+              aria-controls={howId}
+              className="mt-3 flex items-center gap-1.5 text-[11.5px] text-theme-text-tertiary underline underline-offset-2 decoration-theme-border hover:text-theme-text-primary transition-colors"
+            >
+              <CollapseChevron open={howOpen} className="w-3 h-3" />
+              How it works
+            </button>
+            <Collapse open={howOpen}>
+              <div id={howId}>{details}</div>
+            </Collapse>
+          </>
+        )
+      })()}
     </div>
   )
 }

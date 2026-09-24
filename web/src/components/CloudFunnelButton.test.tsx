@@ -214,6 +214,11 @@ describe('Cloud dialog opened from an in-context hint', () => {
     expect(text).toContain("Radar only watches the cluster while it's open.")
     expect(text).not.toContain('Meet Radar Cloud')
     expect(new URL(signupLink()!.href).searchParams.get('utm_term')).toBe('alert-issue')
+    // The tunnel and pricing lines wait behind a quiet disclosure here.
+    const how = Array.from(document.querySelectorAll('button')).find((b) => b.textContent === 'How it works')
+    expect(how?.getAttribute('aria-expanded')).toBe('false')
+    const details = document.getElementById(how!.getAttribute('aria-controls')!)
+    expect(details?.textContent).toContain('3 clusters free')
   })
 })
 
