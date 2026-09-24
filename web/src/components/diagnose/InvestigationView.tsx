@@ -2,6 +2,15 @@
 // run's event stream (replay + live) and reconstructs the transcript; it does not
 // own the run's lifetime — the server does. So closing the panel or navigating
 // away just unsubscribes; the run keeps going and re-subscribing replays it.
+import { FindingsCloudActions } from "../cloudHints/FindingsCloudActions";
+import { CopyForTeamButton } from "./CopyForTeamButton";
+import { assessmentCopyText } from "./assessmentCopy";
+import { healthSignalCopy } from "./AssessmentCard";
+import {
+  isCloudHintDismissed,
+  useCloudHintsEnabled,
+} from "../cloudHints/cloudHints";
+import { useClusterInfo } from "../../api/client";
 import {
   investigationDisclosureSettleDelay,
   prefersReducedMotion,
@@ -176,6 +185,11 @@ export function InvestigationView({
   onOpenTimeline?: (scope: InvestigationTimelineScope) => void;
 }) {
   const { kind, namespace, name } = run;
+  const cloudHints = useCloudHintsEnabled();
+  const clusterContext = useClusterInfo().data?.context;
+  const [findingsCloudHidden, setFindingsCloudHidden] = useState(() =>
+    isCloudHintDismissed("alert-findings"),
+  );
   const { refreshRuns, openInvestigation, startError, dismissError, agents } =
     useDiagnose();
   // Capabilities are the declared ones of the agent that ran this run, not
@@ -913,6 +927,17 @@ export function InvestigationView({
   const hasMultipleAssessments = assessmentIndexes.length > 1;
   const currentAssessment =
     currentAssessmentIdx >= 0 ? turns[currentAssessmentIdx] : undefined;
+  // Only a found problem has something to alert on: not a healthy result, and
+  // not an inconclusive one that could not name a cause.
+  const showFindingsCloud =
+    cloudHints &&
+    !findingsCloudHidden &&
+    currentAssessment?.diagnosis != null &&
+    currentAssessment.diagnosis.healthy !== true &&
+    !(
+      currentAssessment.diagnosis.inconclusive &&
+      !currentAssessment.diagnosis.rootCause
+    );
 
   const laterVerificationRecorded = investigationApplyAttemptVerified({
     localApplyAttemptAssessmentIdx,
@@ -2238,7 +2263,26 @@ export function InvestigationView({
                             storyShape ? undefined : assessmentSourcesNode
                           }
                           assessmentAction={
-                            hasNextSteps ? (
+                            currentAssessment.diagnosis ? (
+                              // Wraps rather than squeezes: in the side panel
+                              // the Radar Cloud group drops to its own line.
+                              <div className="flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
+                                <CopyForTeamButton
+                                  text={assessmentCopyText(
+                                    currentAssessment.diagnosis,
+                                    {
+                                      ...assessmentCopy,
+                                      limits: storyShape
+                                        ? assessmentLimits
+                                        : undefined,
+                                      ...(storyShape
+                                        ? healthSignalCopy(healthSignals)
+                                        : {}),
+                                      full: true,
+                                    },
+                                  )}
+                                />
+                                {hasNextSteps ? (
                               <button
                                 type="button"
                                 onClick={() => {
@@ -2263,6 +2307,21 @@ export function InvestigationView({
                                   ? "Earlier proposed steps ↓"
                                   : nextStepLabel}
                               </button>
+                            ) : null}
+                                {showFindingsCloud ? (
+                                  <FindingsCloudActions
+                                    onDismiss={() => setFindingsCloudHidden(true)}
+                                    subject={{
+                                      kind,
+                                      group: run.group || undefined,
+                                      name,
+                                      namespace: namespace || undefined,
+                                      context: clusterContext,
+                                      issueId: run.issueId,
+                                    }}
+                                  />
+                                ) : null}
+                              </div>
                             ) : null
                           }
                           explanation={explanationFor(currentAssessment)}

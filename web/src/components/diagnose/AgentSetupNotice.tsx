@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Sparkles, Copy, Check, ExternalLink, RotateCw } from "lucide-react";
 import { SUPPORTED_AGENTS, type AgentInstall } from "./agentCatalog";
 import { type DiagnoseSetup } from "./DiagnoseContext";
@@ -58,8 +58,12 @@ function AgentRow({ agent }: { agent: AgentInstall }) {
 // engine once at startup, so a fresh install needs a restart to take effect.
 export function AgentSetupNotice({
   setupState,
+  cloudOption,
 }: {
   setupState: DiagnoseSetup;
+  // A secondary option shown after the local agents (the host's Radar Cloud
+  // row); omitted where there is nothing to offer.
+  cloudOption?: ReactNode;
 }) {
   const needsRestart = setupState === "needs-restart";
   return (
@@ -95,6 +99,8 @@ export function AgentSetupNotice({
           ))}
         </div>
       )}
+
+      {!needsRestart && cloudOption}
 
       {/* The panel only re-reads /api/agents on load, so after installing or
           restarting the user needs a way to refresh in place rather than

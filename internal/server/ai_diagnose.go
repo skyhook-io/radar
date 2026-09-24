@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -193,16 +194,28 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		agents[i].Verification = true
 	}
 	// eligible: this run mode supports local BYO-agent investigations (no proxy/OIDC
-	// auth, /mcp mounted) — the SAME gate the boot-time engine init uses. It's true
-	// even when no agent is installed, so the UI can distinguish "install an agent
-	// to enable this" (eligible && !enabled) from "not available in this deployment"
-	// (auth/cloud/--no-mcp), where nudging an install wouldn't help.
-	eligible := !s.authConfig.Enabled() && s.mcpHandler != nil
+	// auth, not operator-managed, /mcp mounted) — the SAME gate the boot-time
+	// engine init uses. It's true even when no agent is installed, so the UI can
+	// distinguish "install an agent to enable this" (eligible && !enabled) from
+	// "not available in this deployment", where nudging an install wouldn't help.
+	// unavailableReason says which: "shared" for a team installation (auth or
+	// operator-managed config), where the answer is local Radar or Radar Cloud;
+	// "no-mcp" when --no-mcp removed the mount the agent works through.
+	shared := s.authConfig.Enabled() || s.configManagement() == "operator"
+	eligible := !shared && s.mcpHandler != nil
+	unavailableReason := ""
+	switch {
+	case shared:
+		unavailableReason = "shared"
+	case s.mcpHandler == nil:
+		unavailableReason = "no-mcp"
+	}
 	s.writeJSON(w, map[string]any{
-		"agents":    agents,
-		"enabled":   s.aiRuns != nil,
-		"eligible":  eligible,
-		"consented": currentConsents(),
+		"agents":            agents,
+		"enabled":           s.aiRuns != nil,
+		"eligible":          eligible,
+		"unavailableReason": unavailableReason,
+		"consented":         currentConsents(),
 	})
 }
 
@@ -273,6 +286,10 @@ func (s *Server) aiReady(w http.ResponseWriter) bool {
 
 // validReasoningEffort allows the empty (default) value or one of Codex's
 // reasoning-effort levels — never an arbitrary string passed into CLI config.
+// Radar's issue IDs are short hex digests; the bound leaves room for other
+// hosts' IDs without letting arbitrary text into run history.
+var diagnoseIssueIDRe = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
+
 func validReasoningEffort(e string) bool {
 	switch e {
 	case "", "minimal", "low", "medium", "high":
@@ -298,6 +315,7 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 		Profile               string `json:"profile"`
 		Model                 string `json:"model"`
 		Effort                string `json:"effort"`
+		IssueID               string `json:"issueId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
@@ -354,7 +372,14 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 	// than relying on the agent to self-report it. Best effort: "" (unknown) on miss.
 	managedBy := s.detectManagedBy(r.Context(), kind, group, namespace, name)
 	health := s.detectDiagnoseHealth(r, kind, group, namespace, name)
-	run, err := s.aiRuns.Start(kind, group, namespace, name, agent, profile, model, effort, managedBy, health)
+	// Recorded only so the UI can offer an alert on the issue the run came
+	// from. Anything that isn't an issue ID is dropped rather than refused: it
+	// never changes what the investigation does.
+	issueID := strings.TrimSpace(body.IssueID)
+	if !diagnoseIssueIDRe.MatchString(issueID) {
+		issueID = ""
+	}
+	run, err := s.aiRuns.Start(kind, group, namespace, name, agent, profile, model, effort, managedBy, issueID, health)
 	if err != nil {
 		if errors.Is(err, ai.ErrAtCapacity) {
 			s.writeError(w, http.StatusConflict, "too many investigations running — stop or finish one first")

@@ -35,6 +35,7 @@ import { DURATION_DOCK, overlayExitMs } from '@skyhook-io/k8s-ui/utils/animation
 import { ContextSwitcher } from './components/ContextSwitcher'
 import { NamespaceSwitcher, type NamespaceSwitcherHandle } from './components/NamespaceSwitcher'
 import { CloudFunnelButton } from './components/CloudFunnelButton'
+import { CONTEXT_SWITCH_ROW_HEIGHT, ContextSwitchCloudRow, useContextSwitchCloudRow } from './components/cloudHints/ContextSwitchCloudRow'
 import { useNavCustomization } from './context/NavCustomization'
 import type { FleetTakeoverTarget } from './context/NavCustomization'
 import { PrimaryNavRail } from './components/nav/PrimaryNavRail'
@@ -415,6 +416,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
 
   // Get mainView from URL path
   const mainView = getViewFromPath(location.pathname)
+  const switchCloudRow = useContextSwitchCloudRow(mainView)
+  // The app chrome above the drawers and the AI panel: the header, plus the
+  // Radar Cloud row while it shows.
+  const chromeHeight = embedded ? 0 : APP_HEADER_HEIGHT + (switchCloudRow.names ? CONTEXT_SWITCH_ROW_HEIGHT : 0)
   const upgradeReadinessRoute = location.pathname.startsWith('/checks/upgrade')
 
   // Initialize the kind→plural discovery map app-wide (not just on ResourcesView
@@ -1878,6 +1883,10 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       </header>
       )}
 
+      {!embedded && switchCloudRow.names && (
+        <ContextSwitchCloudRow names={switchCloudRow.names} what={switchCloudRow.what} onDismiss={switchCloudRow.dismiss} />
+      )}
+
       {/* Body frame — every content state lives here and reflows left of the docked
           AI panel (an absolute slot in this column). The header + nav rail are OUTSIDE
           this wrapper, so they never move when the panel opens. */}
@@ -2308,7 +2317,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           initialTab={drawerInitialTab}
           // No Radar header in chromeless embeds (Radar Hub) — anchor the drawer
           // to the top of the content area instead of leaving a 49px gap.
-          headerHeight={embedded ? 0 : undefined}
+          headerHeight={chromeHeight}
           rightInset={contentGutter}
           isOpen={resourceDrawer.isOpen}
           expanded={drawerExpandedProp}
@@ -2352,6 +2361,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           release={drawerHelmRelease}
           isOpen={helmDrawer.isOpen}
           rightInset={contentGutter}
+          headerHeight={chromeHeight}
           onClose={() => {
             setSelectedHelmRelease(null)
             const params = new URLSearchParams(window.location.search)
@@ -2377,7 +2387,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
           maximized = fills the frame. */}
       {diagnoseOpen && (
         <DiagnoseSurface
-          topInset={embedded ? 0 : APP_HEADER_HEIGHT}
+          topInset={chromeHeight}
           onBrowseIssues={() => setMainView('issues')}
           onOpenResource={(ref, investigationRunID) => {
             const resource: SelectedResource = {

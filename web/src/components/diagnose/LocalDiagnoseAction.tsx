@@ -115,11 +115,13 @@ export function IssueDiagnoseButton({
   group,
   namespace,
   name,
+  issueId,
 }: {
   kind: string;
   group?: string;
   namespace: string;
   name: string;
+  issueId?: string;
 }) {
   const d = useDiagnose();
   if (d.setupState === "off") return null;
@@ -146,6 +148,7 @@ export function IssueDiagnoseButton({
               group: group ?? "",
               namespace,
               name,
+              issueId,
             });
           else d.openHome();
         }}

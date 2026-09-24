@@ -1222,7 +1222,7 @@ function DiagnosisResult({
 }
 
 /** The banner line and the clipboard line for one adverse Radar card must be the same words. */
-function healthFlagSentence(flag: {
+export function healthFlagSentence(flag: {
   status: string;
   title: string;
   role?: string;
@@ -1230,6 +1230,38 @@ function healthFlagSentence(flag: {
   return flag.status === "contradiction"
     ? `The agent calls ${flag.title} a ${flag.role} and still reports healthy`
     : `Radar flagged ${flag.title} · no explanation is linked to it`;
+}
+
+// How a Radar card the agent did address reads in Still open. Shared with the
+// full report so the pasted text qualifies the answer the way the card does.
+export function stillOpenSignalText(signal: {
+  status: string;
+  title: string;
+  claim?: string;
+}): string {
+  return signal.status === "explained"
+    ? `Radar flagged ${signal.title} · the agent looked at it and reads it as not a live problem: ${signal.claim}`
+    : `Radar flagged ${signal.title} · the agent reads it as related, but not what matters here: ${signal.claim}`;
+}
+
+// The health-signal qualifications as text: flagged cards head the answer,
+// explained or related ones join Still open.
+export function healthSignalCopy(
+  signals: readonly InvestigationHealthSignal[],
+): { flags: string[]; signals: string[] } {
+  return {
+    flags: signals
+      .filter(
+        (signal) =>
+          signal.status === "unaddressed" || signal.status === "contradiction",
+      )
+      .map(healthFlagSentence),
+    signals: signals
+      .filter(
+        (signal) => signal.status === "explained" || signal.status === "related",
+      )
+      .map(stillOpenSignalText),
+  };
 }
 
 export function AllClearCard({
@@ -1298,10 +1330,7 @@ export function AllClearCard({
       (signal) => signal.status === "explained" || signal.status === "related",
     )
     .map((signal) => ({
-      text:
-        signal.status === "explained"
-          ? `Radar flagged ${signal.title} · the agent looked at it and reads it as not a live problem: ${signal.claim}`
-          : `Radar flagged ${signal.title} · the agent reads it as related, but not what matters here: ${signal.claim}`,
+      text: stillOpenSignalText(signal),
       onReveal:
         signal.sourceId && onRevealSource
           ? () => onRevealSource(signal.sourceId!)

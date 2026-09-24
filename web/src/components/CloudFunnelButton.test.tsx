@@ -4,7 +4,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ConnectionStateType } from '../context/ConnectionContext'
-import { CloudFunnelButton } from './CloudFunnelButton'
+import { CloudFunnelButton, openCloudFunnel } from './CloudFunnelButton'
+import { OPEN_CLOUD_FUNNEL_EVENT } from './cloudHints/cloudHints'
 
 const connection = vi.hoisted(() => ({ state: 'connecting' as ConnectionStateType }))
 vi.mock('../context/ConnectionContext', () => ({ useConnection: () => ({ connection }) }))
@@ -151,5 +152,110 @@ describe('Cloud dialog connection availability', () => {
     await openDialog()
     await until(() => expect(document.body.textContent).toContain('Install flow'))
     expect(document.body.textContent).not.toContain('Continue in Radar Cloud')
+  })
+})
+
+describe('Cloud dialog opened from an in-context hint', () => {
+  async function renderReady() {
+    await render()
+    await until(() => expect(document.querySelector('[aria-label="Radar Cloud"]')).not.toBeNull())
+  }
+
+  function signupLink() {
+    return document.querySelector<HTMLAnchorElement>('a[href*="wizard-signup-button"]')
+  }
+
+  it('tags the links the person opens with the hint, and only for that open', async () => {
+    lane = 'wizard'
+    await renderReady()
+    await act(async () => openCloudFunnel('timeline-history'))
+    await until(() => expect(signupLink()).not.toBeNull())
+    expect(new URL(signupLink()!.href).searchParams.get('utm_term')).toBe('timeline-history')
+
+    await act(async () => { button('Maybe later')!.click() })
+    await act(async () => { (document.querySelector('[aria-label="Radar Cloud"]') as HTMLButtonElement).click() })
+    await until(() => expect(signupLink()).not.toBeNull())
+    expect(new URL(signupLink()!.href).searchParams.has('utm_term')).toBe(false)
+  })
+
+  it('names the hint on the copy fetch, and nothing when the globe button opens it', async () => {
+    lane = 'wizard'
+    await renderReady()
+    await act(async () => openCloudFunnel('settings-ai'))
+    await until(() => expect(requests.some(r => r.startsWith('/api/connect/info') && r.includes('entry=settings-ai'))).toBe(true))
+    await act(async () => { button('Maybe later')!.click() })
+    requests.length = 0
+    await act(async () => { (document.querySelector('[aria-label="Radar Cloud"]') as HTMLButtonElement).click() })
+    await until(() => expect(requests.some(r => r.startsWith('/api/connect/info'))).toBe(true))
+    expect(requests.filter(r => r.startsWith('/api/connect/info')).every(r => !r.includes('entry='))).toBe(true)
+  })
+
+  it('ignores a forged hint name from another script', async () => {
+    lane = 'wizard'
+    await renderReady()
+    await act(async () => {
+      window.dispatchEvent(new CustomEvent(OPEN_CLOUD_FUNNEL_EVENT, { detail: { entry: 'evil"&x=1' } }))
+    })
+    await until(() => expect(signupLink()).not.toBeNull())
+    expect(new URL(signupLink()!.href).searchParams.has('utm_term')).toBe(false)
+  })
+
+  it('shows the alert the person asked for instead of the general pitch', async () => {
+    lane = 'wizard'
+    await renderReady()
+    await act(async () =>
+      openCloudFunnel('alert-issue', { category: 'Crash loop', kind: 'Pod', name: 'api-1', namespace: 'shop', context: 'prod' }),
+    )
+    await until(() => expect(document.body.textContent).toContain('Alert me when this happens again'))
+    const text = document.body.textContent ?? ''
+    expect(text).toContain('Crash loop')
+    expect(text).toContain('Pod api-1')
+    expect(text).toContain('namespace shop')
+    expect(text).toContain("Radar only watches the cluster while it's open.")
+    expect(text).not.toContain('Meet Radar Cloud')
+    expect(new URL(signupLink()!.href).searchParams.get('utm_term')).toBe('alert-issue')
+  })
+})
+
+describe('Cloud dialog actions for a cluster already in Radar Cloud', () => {
+  const issue = {
+    intent: 'alert' as const,
+    category: 'Crash loop',
+    categoryRaw: 'crashloop',
+    issueId: 'a1b2c3',
+    kind: 'Deployment',
+    group: 'apps',
+    name: 'checkout-api',
+    namespace: 'shop',
+    context: 'test-cluster',
+  }
+
+  async function openFor(entry: 'alert-issue' | 'team-findings', subject: typeof issue | (Omit<typeof issue, 'intent'> & { intent: 'team' })) {
+    connection.state = 'connected'
+    discovery.connected = [{ namespace: 'radar', deployment: 'radar', clusterUrl: 'https://cloud.example/c/cl_123' }]
+    await render()
+    await until(() => expect(document.querySelector('[aria-label="Radar Cloud"]')).not.toBeNull())
+    await act(async () => openCloudFunnel(entry, subject))
+    await until(() => expect(document.body.textContent).toContain('This cluster is already connected to Radar Cloud.'))
+  }
+
+  it('goes straight to the prefilled alert rule, pinned to this cluster', async () => {
+    await openFor('alert-issue', issue)
+    const link = Array.from(document.querySelectorAll('a')).find((a) => a.textContent === 'Set up this alert in Radar Cloud')
+    expect(link).toBeDefined()
+    const url = new URL(link!.href)
+    expect(url.pathname).toBe('/settings/organization/notifications')
+    expect(url.searchParams.get('utm_term')).toBe('alert-issue')
+    expect(url.hash.startsWith('#radar-rule=')).toBe(true)
+    expect(document.body.textContent).toContain('Radar Cloud opens the rule filled in for this issue')
+  })
+
+  it('opens the resource with the team, and the body says the run starts fresh', async () => {
+    await openFor('team-findings', { ...issue, intent: 'team' })
+    const link = Array.from(document.querySelectorAll('a')).find((a) => a.textContent === 'Open checkout-api in Radar Cloud')
+    expect(link).toBeDefined()
+    expect(new URL(link!.href).pathname).toBe('/c/cl_123/resources/deployments')
+    expect(document.body.textContent).toContain('Investigate this with your team')
+    expect(document.body.textContent).toContain('It starts fresh from the cluster')
   })
 })

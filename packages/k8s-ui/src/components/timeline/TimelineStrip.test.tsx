@@ -192,3 +192,41 @@ describe('state caption: full range names the state, band always paints', () => 
     expect(html).toContain('· now')
   })
 })
+
+describe('history floor hint — a host line under the footer', () => {
+  const buckets: ScrubberBucket[] = [{ startMs: 12 * HOUR, endMs: 13 * HOUR, total: 3, warnings: 0 }]
+  const hint = (floorMs: number) => <span>floor-hint-{floorMs}</span>
+
+  it('renders while the dimmed pre-data region is on screen, with the floor', () => {
+    const html = renderToString(
+      <TimelineStrip
+        buckets={buckets}
+        domain={query}
+        selection={query}
+        onSelectionChange={() => {}}
+        historyUnavailableBeforeMs={12 * HOUR}
+        renderHistoryFloorHint={hint}
+      />,
+    )
+    expect(html).toContain('strip-history-floor-hint')
+    expect(html).toContain(`floor-hint-<!-- -->${12 * HOUR}`)
+  })
+
+  it('stays out when the floor is at or before the query start, or no host asks for it', () => {
+    const atStart = renderToString(
+      <TimelineStrip
+        buckets={buckets}
+        domain={query}
+        selection={query}
+        onSelectionChange={() => {}}
+        historyUnavailableBeforeMs={0}
+        renderHistoryFloorHint={hint}
+      />,
+    )
+    expect(atStart).not.toContain('strip-history-floor-hint')
+    const noHost = renderToString(
+      <TimelineStrip buckets={buckets} domain={query} selection={query} onSelectionChange={() => {}} historyUnavailableBeforeMs={12 * HOUR} />,
+    )
+    expect(noHost).not.toContain('strip-history-floor-hint')
+  })
+})

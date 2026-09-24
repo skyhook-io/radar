@@ -1542,7 +1542,7 @@ func TestPersistenceRestartRoundtrip(t *testing.T) {
 	m1 := persistedManager(t, st, "ctx-a")
 	r := &Run{
 		ID: "run-1", Kind: "Rollout", Group: "argoproj.io", Namespace: "ns", Name: "p", Context: "ctx-a",
-		Agent: "claude", store: st, status: "running", hydrated: true,
+		Agent: "claude", IssueID: "0123456789abcdef", store: st, status: "running", hydrated: true,
 		CreatedAt: nowUTC(), updatedAt: nowUTC(), subs: map[int]chan RunEvent{},
 	}
 	m1.mu.Lock()
@@ -1569,6 +1569,9 @@ func TestPersistenceRestartRoundtrip(t *testing.T) {
 	}
 	if got := m2.Get("run-1").Group; got != "argoproj.io" {
 		t.Fatalf("hydrated run group = %q, want argoproj.io", got)
+	}
+	if got := runs[0].IssueID; got != "0123456789abcdef" {
+		t.Fatalf("restart lost the issue the run started from: %q", got)
 	}
 	// Replay parity: Subscribe hydrates the transcript from the store.
 	r2 := m2.Get("run-1")
@@ -2134,7 +2137,7 @@ func TestClearHistoryFencesStartAndAddTurn(t *testing.T) {
 	started := make(chan startResult, 1)
 	go func() {
 		close(startReady)
-		summary, err := manager.Start("Pod", "", "default", "new", "claude", ExecutionProfileSafeguarded, "", "", "", nil)
+		summary, err := manager.Start("Pod", "", "default", "new", "claude", ExecutionProfileSafeguarded, "", "", "", "", nil)
 		started <- startResult{summary: summary, err: err}
 	}()
 	<-startReady

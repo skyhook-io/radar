@@ -66,12 +66,14 @@ export interface IssuesViewProps {
   /** Per-row trailing action, rendered after the severity badge — e.g. the
    *  "Investigate with AI" button in OSS. Omit to render no per-row action. */
   renderActions?: (ctx: IssueRowSlotContext) => ReactNode;
+  /** Extra section at the end of an expanded row's body. Omit to render none. */
+  renderDetailSection?: (ctx: IssueRowSlotContext) => ReactNode;
 }
 
 // The queue list. Filtering/faceting is the host page's job (FleetPageShell on
 // the hub, a thin wrapper in OSS) — this renders the rows + the healthy /
 // no-data terminal states only.
-export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clusterLabel, emptyAction, renderActions }: IssuesViewProps) {
+export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clusterLabel, emptyAction, renderActions, renderDetailSection }: IssuesViewProps) {
   // Single-open accordion: opening a row collapses the previous one, so the
   // queue stays scannable and you never lose your place to a wall of expansions.
   const [openId, setOpenId] = useState<string | null>(null);
@@ -111,6 +113,7 @@ export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clu
             resourceHref={resourceHref}
             onResourceClick={onResourceClick}
             renderActions={renderActions}
+            renderDetailSection={renderDetailSection}
           />
         );
       })}

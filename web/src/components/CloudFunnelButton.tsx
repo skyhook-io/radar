@@ -6,6 +6,14 @@ import { DialogPortal } from '@skyhook-io/k8s-ui/components/ui/DialogPortal'
 import { Tooltip } from './ui/Tooltip'
 import { CloudConnectFlow } from './CloudConnectFlow'
 import {
+  type CloudAlertSubject,
+  type CloudHintEntry,
+  OPEN_CLOUD_FUNNEL_EVENT,
+  readOpenRequest,
+  withCloudHintEntry,
+} from './cloudHints/cloudHints'
+import { alertRuleUrl, cloudResourceUrl, clusterIdFromUrl } from './cloudHints/cloudLinks'
+import {
   type Handoff,
   SELF_HOSTED_DOCS_URL,
   exitFor,
@@ -61,15 +69,8 @@ const DEFAULT_ASSURANCES = [
   'SOC 2 Type II',
   '3 clusters free, no card required',
 ]
-// Other OSS surfaces (a GitOps app that deploys to another cluster, say)
-// point at Radar Cloud by asking this button to open its dialog, so there
-// is one pitch and one flow. The button is mounted whenever Radar runs
-// standalone; embedded hosts never mount it and never dispatch this.
-const OPEN_EVENT = 'radar:open-cloud-funnel'
-
-export function openCloudFunnel() {
-  window.dispatchEvent(new Event(OPEN_EVENT))
-}
+// Other surfaces open this dialog through openCloudFunnel (see cloudHints).
+export { openCloudFunnel } from './cloudHints/cloudHints'
 const ABOUT_URL = 'https://radarhq.io/about'
 const PRICING_URL = 'https://radarhq.io/pricing'
 const SEEN_KEY = 'radar.cloudFunnel.seen'
@@ -109,6 +110,11 @@ export function CloudFunnelButton() {
   // and is reset below when the kubeconfig context changes — it must never
   // describe a cluster the user has switched away from.
   const [handoff, setHandoff] = useState<Handoff | null>(null)
+  // Which in-context hint opened the dialog, and for an alert hint the
+  // problem it was about. Both last for one open: the globe button, or the
+  // next hint, starts clean.
+  const [entry, setEntry] = useState<CloudHintEntry | null>(null)
+  const [alertSubject, setAlertSubject] = useState<CloudAlertSubject | null>(null)
   const prepareFailed = handoff?.retryable ?? false
 
   const capabilities = useCapabilities()
@@ -121,7 +127,8 @@ export function CloudFunnelButton() {
   // the user opens; Radar sends nothing on its own. Only the blocked card may
   // deep-link the install page (see exitFor); the pitch buttons and the
   // footer link go to signup.
-  const signupUrl = buildSignupUrl(appUrl, 'wizard-signup-button')
+  const tag = (url: string) => withCloudHintEntry(url, entry)
+  const signupUrl = tag(buildSignupUrl(appUrl, 'wizard-signup-button'))
 
   // Only while the dialog is open — never on the capabilities poll. The Hub
   // learns that someone opened it, which is congruent with what the dialog is
@@ -129,6 +136,7 @@ export function CloudFunnelButton() {
   const connectInfo = useCloudConnectInfo(capabilities.data?.cloudConnect?.apiUrl, open, {
     lane: pitchLane,
     mode: capabilities.data?.deployment?.mode,
+    entry,
   })
 
   // In-cluster Radar can't install its own connection, but it knows exactly
@@ -189,7 +197,10 @@ export function CloudFunnelButton() {
     // a running install. Toast explicitly on the paths that are failures.
   })
 
-  const openModal = () => {
+  const openModal = (event?: Event) => {
+    const request = event ? readOpenRequest(event) : { entry: null, alert: null }
+    setEntry(request.entry)
+    setAlertSubject(request.alert)
     setOpen(true)
     setSeen(true)
     markSeen()
@@ -238,9 +249,11 @@ export function CloudFunnelButton() {
   }
 
   useEffect(() => {
-    window.addEventListener(OPEN_EVENT, openModal)
-    return () => window.removeEventListener(OPEN_EVENT, openModal)
+    window.addEventListener(OPEN_CLOUD_FUNNEL_EVENT, openModal)
+    return () => window.removeEventListener(OPEN_CLOUD_FUNNEL_EVENT, openModal)
   })
+
+  const closeModal = () => setOpen(false)
 
   // Re-attach to a server-owned flow whenever one is observed while the modal
   // is open — the status query may resolve after openModal ran.
@@ -266,6 +279,25 @@ export function CloudFunnelButton() {
   // flashing at a connected cluster's operator before that answer arrives.
   if (!capabilities.data?.cloudConnect) return null
 
+  const tagExit = (exit: ReturnType<typeof exitFor>) => ({ ...exit, href: tag(exit.href) })
+  // Opened from a hint about one issue or resource: once Radar knows the Radar
+  // Cloud cluster (already connected, or connected just now), the main action
+  // goes straight to that thing in Cloud instead of the cluster's front page.
+  const intentAction = (cluster: { id?: string; url?: string }): { label: string; href: string } | null => {
+    if (!alertSubject) return null
+    if (alertSubject.intent === 'team') {
+      const href = cluster.url ? cloudResourceUrl(cluster.url, alertSubject) : null
+      return href ? { label: `Open ${alertSubject.name} in Radar Cloud`, href: tag(href) } : null
+    }
+    const href = alertRuleUrl(appUrl, alertSubject, cluster.id ? { clusterId: cluster.id } : { context: clusterInfo.data?.context })
+    return href ? { label: 'Set up this alert in Radar Cloud', href: tag(href) } : null
+  }
+  const connectedIntent = alreadyConnected?.clusterUrl
+    ? intentAction({ id: clusterIdFromUrl(alreadyConnected.clusterUrl), url: alreadyConnected.clusterUrl })
+    : null
+  // Not connected here (or in-cluster), but the person may already use Radar
+  // Cloud: the rule form can still open, matching the cluster by name.
+  const unconnectedAlertLink = !alreadyConnected && alertSubject && alertSubject.intent !== 'team' ? intentAction({}) : null
   const showFlow = inFlowView && (blocked !== null || prepare.isPending || flowLive)
   // The prepare POST can take tens of seconds (chart download + preflight);
   // until the status poll observes the server-side flow, synthesize the
@@ -284,7 +316,7 @@ export function CloudFunnelButton() {
           modal backdrop and would otherwise paint on top of the dialog. */}
       <Tooltip content="Radar Cloud: all your clusters, one URL" delay={100} position="bottom" disabled={open}>
         <button
-          onClick={openModal}
+          onClick={() => openModal()}
           aria-label="Radar Cloud"
           aria-haspopup="dialog"
           className="relative p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
@@ -304,11 +336,11 @@ export function CloudFunnelButton() {
 
       <DialogPortal
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={closeModal}
         className="w-[580px] max-w-full max-h-[calc(100vh-2rem)] overflow-hidden flex flex-col"
       >
         <button
-          onClick={() => setOpen(false)}
+          onClick={closeModal}
           aria-label="Close"
           className="absolute top-3.5 right-3.5 z-10 p-1.5 rounded-md text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover transition-colors"
         >
@@ -326,7 +358,9 @@ export function CloudFunnelButton() {
             <CloudConnectFlow
               status={flowForView}
               blocked={blocked}
-              exit={exitFor(appUrl, 'driver-blocked-card-browser-link', outcomeOf(flowForView), clusterInfo.data?.context)}
+              exit={tagExit(exitFor(appUrl, 'driver-blocked-card-browser-link', outcomeOf(flowForView), clusterInfo.data?.context))}
+              tagUrl={tag}
+              connectedAction={(connected) => intentAction({ id: connected.clusterId, url: connected.clusterUrl })}
               where={{ context: clusterInfo.data?.context, cluster: clusterInfo.data?.cluster }}
               onStatus={applyStatus}
               onExit={() => exitFlow(outcomeOf(flowForView))}
@@ -335,7 +369,11 @@ export function CloudFunnelButton() {
         ) : (
           <>
             <div className="min-h-0 overflow-y-auto">
-              <PitchBody lane={pitchLane} freeTier={connectInfo.data?.freeTier} />
+              {alertSubject ? (
+                <AlertBody subject={alertSubject} laterLink={unconnectedAlertLink?.href} />
+              ) : (
+                <PitchBody lane={pitchLane} freeTier={connectInfo.data?.freeTier} />
+              )}
             </div>
             <ModalFooter
               lane={lane}
@@ -343,24 +381,25 @@ export function CloudFunnelButton() {
               signupUrl={signupUrl}
               // One link name whether or not an attempt preceded the click; the
               // outcome, when present, is what says an attempt happened.
-              driverBrowserUrl={buildSignupUrl(appUrl, 'driver-footer-browser-link', handoff)}
+              driverBrowserUrl={tag(buildSignupUrl(appUrl, 'driver-footer-browser-link', handoff))}
               prepareFailed={prepareFailed}
               // A prepare error's reason, kept on the pitch after its toast is gone.
               prepareError={handoff?.detail}
               assurances={connectInfo.data?.assurances}
               notice={connectInfo.data?.notice}
-              self={inCluster ? self.data : undefined}
+              self={inCluster && self.data ? { ...self.data, wizardUrl: self.data.wizardUrl && tag(self.data.wizardUrl) } : undefined}
               clusterName={clusterInfo.data?.context}
-              alreadyConnected={alreadyConnected}
+              alreadyConnected={alreadyConnected && { ...alreadyConnected, clusterUrl: alreadyConnected.clusterUrl && tag(alreadyConnected.clusterUrl) }}
+              connectedIntent={connectedIntent}
               connectedCount={alreadyConnected ? (discovered.data?.connected.length ?? 0) : 0}
               discoverPending={discoverPending}
-              clustersUrl={`${appUrl}/clusters`}
+              clustersUrl={tag(`${appUrl}/clusters`)}
               // Also covers the capabilities query: until it resolves, lane
               // defaults to wizard and Radar does not yet know it is
               // in-cluster, so the CTA would escape before classification.
               selfLoading={inCluster && self.isPending}
               onConnect={startConnect}
-              onLater={() => setOpen(false)}
+              onLater={closeModal}
             />
           </>
         )}
@@ -416,6 +455,7 @@ function ModalFooter({
   connectedCount = 0,
   discoverPending = false,
   clustersUrl,
+  connectedIntent,
   onConnect,
   onLater,
 }: {
@@ -448,6 +488,9 @@ function ModalFooter({
   // The configured Hub's clusters list — where to look when an install's
   // settings say it is connected but not where.
   clustersUrl?: string
+  // Opened from a hint and this cluster is already in Radar Cloud: go straight
+  // to that alert rule or resource there.
+  connectedIntent?: { label: string; href: string } | null
   onConnect: () => void
   onLater: () => void
 }) {
@@ -532,12 +575,12 @@ function ModalFooter({
           // Another Hub is named, not linked: the link would open ours.
           !alreadyConnected.hubHost && (
             <a
-              href={alreadyConnected.clusterUrl || clustersUrl}
+              href={connectedIntent?.href ?? (alreadyConnected.clusterUrl || clustersUrl)}
               target="_blank"
               rel="noopener noreferrer"
               className="whitespace-nowrap px-6 py-2.5 rounded-[10px] bg-emerald-500 hover:bg-emerald-400 text-emerald-950 text-[14px] font-bold shadow-[0_0_22px_rgba(16,185,129,0.35)] hover:shadow-[0_0_30px_rgba(16,185,129,0.5)] hover:-translate-y-px transition-all"
             >
-              {alreadyConnected.clusterUrl ? 'Open in Radar Cloud' : 'Open Radar Cloud'}
+              {connectedIntent?.label ?? (alreadyConnected.clusterUrl ? 'Open in Radar Cloud' : 'Open Radar Cloud')}
             </a>
           )
         ) : lane === 'driver' && clusterConnected ? (
@@ -609,6 +652,68 @@ function ModalFooter({
           </span>
         ))}
       </div>
+    </div>
+  )
+}
+
+// Opened from a hint about one issue or resource: the same dialog and footer,
+// with a body about what the person asked for instead of the general pitch. It
+// says where that runs and why, and nothing about how the connection works;
+// the footer carries that for the lane.
+function AlertBody({ subject, laterLink }: { subject: CloudAlertSubject; laterLink?: string }) {
+  const team = subject.intent === 'team'
+  const chips = [
+    team ? undefined : subject.category,
+    `${subject.kind} ${subject.name}`,
+    subject.namespace ? `namespace ${subject.namespace}` : undefined,
+    subject.context,
+  ].filter((c): c is string => !!c)
+  const Icon = team ? Users : Bell
+  return (
+    <div className="px-8 pt-7 pb-4">
+      <Eyebrow />
+      <h3 className="flex items-center gap-2.5 text-[20px] font-semibold leading-tight tracking-tight text-theme-text-primary mb-4">
+        <Icon className="w-5 h-5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+        {team ? 'Investigate this with your team' : 'Alert me when this happens again'}
+      </h3>
+      <div className="card-inner p-3 mb-4">
+        <div className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-theme-text-tertiary mb-2">
+          {team ? 'Resource' : 'Alert when'}
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {chips.map((chip) => (
+            <span key={chip} className="rounded-md bg-theme-elevated px-2 py-0.5 text-[12px] text-theme-text-primary">
+              {chip}
+            </span>
+          ))}
+        </div>
+      </div>
+      {team ? (
+        <p className="text-[13.5px] leading-relaxed text-theme-text-secondary">
+          In <b className="font-semibold text-theme-text-primary">Radar Cloud</b>, the investigation runs in your cluster where the whole team
+          can see it and pick it up. It starts fresh from the cluster, so it can reach a different conclusion than this local run.
+        </p>
+      ) : (
+        <>
+          <p className="text-[13.5px] leading-relaxed text-theme-text-secondary">
+            Radar only watches the cluster while it's open. Alerts need something watching around the clock. They run in{' '}
+            <b className="font-semibold text-theme-text-primary">Radar Cloud</b>, so you get the alert even when nobody has Radar open.
+          </p>
+          {subject.issueId && (
+            <p className="mt-2.5 text-[12.5px] leading-relaxed text-theme-text-tertiary">
+              Radar Cloud opens the rule filled in for this issue; you review it and save.
+              {laterLink && (
+                <>
+                  {' '}
+                  <a href={laterLink} target="_blank" rel="noopener noreferrer" className="font-medium text-accent-text hover:underline underline-offset-2">
+                    Already use Radar Cloud? Set up this alert
+                  </a>
+                </>
+              )}
+            </p>
+          )}
+        </>
+      )}
     </div>
   )
 }

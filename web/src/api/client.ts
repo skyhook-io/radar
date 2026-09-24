@@ -60,6 +60,8 @@ import type {
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath, stripBasename } from './config'
 import { apiVersionToGroup } from '../utils/navigation'
+import { recordContextSwitch } from '../components/cloudHints/contextSwitchLog'
+import type { CloudHintEntry } from '../components/cloudHints/cloudHints'
 import type { DeploymentMode } from '../types'
 
 // Auto-refresh cadences (ms) — named constants for each polled hook's
@@ -1984,19 +1986,21 @@ export interface CloudConnectInfo {
 
 // Deliberately a bare cross-origin GET: no credentials, no identifiers. The
 // Hub learns what any HTTP request reveals plus `about`, below: the lane the
-// footer renders and this deployment's mode, both closed enums, so nothing
-// about the cluster or the person rides along. Part of the query key so a
-// lane change (a driver install that just became tunneled, say) refetches
-// instead of reusing the other lane's copy.
+// footer renders, this deployment's mode, and which in-app hint opened the
+// dialog, all closed enums, so nothing about the cluster or the person rides
+// along. Part of the query key so a lane change (a driver install that just
+// became tunneled, say) or a different hint refetches instead of reusing the
+// other's copy.
 export function useCloudConnectInfo(
   apiUrl: string | undefined,
   enabled: boolean,
-  about: { lane: "driver" | "wizard"; mode?: DeploymentMode },
+  about: { lane: "driver" | "wizard"; mode?: DeploymentMode; entry?: CloudHintEntry | null },
 ) {
   const params = new URLSearchParams({ lane: about.lane });
   if (about.mode) params.set("mode", about.mode);
+  if (about.entry) params.set("entry", about.entry);
   return useQuery<CloudConnectInfo>({
-    queryKey: ["cloud-connect-info", apiUrl, about.lane, about.mode],
+    queryKey: ["cloud-connect-info", apiUrl, about.lane, about.mode, about.entry ?? null],
     queryFn: async () => {
       const res = await fetch(`${apiUrl}/api/connect/info?${params}`, {
         credentials: "omit",
@@ -6508,7 +6512,12 @@ const CONTEXT_SWITCH_TIMEOUT = 45000; // 45 seconds
 export function useSwitchContext() {
   const queryClient = useQueryClient();
 
-  return useMutation<ClusterInfo, Error, { name: string }>({
+  return useMutation<ClusterInfo, Error, { name: string }, { from?: string }>({
+    // Read before onSuccess clears every query: the Radar Cloud hint for
+    // people comparing clusters needs to know where they came from.
+    onMutate: () => ({
+      from: queryClient.getQueryData<ClusterInfo>(["cluster-info"])?.context,
+    }),
     mutationFn: async ({ name }) => {
       const controller = new AbortController();
       const timeoutId = setTimeout(
@@ -6546,7 +6555,8 @@ export function useSwitchContext() {
         throw error;
       }
     },
-    onSuccess: () => {
+    onSuccess: (data, { name }, ctx) => {
+      recordContextSwitch(ctx?.from, data?.context || name);
       // Clear all query cache to ensure fresh data from new context
       // Using removeQueries + invalidateQueries ensures no stale data is served
       queryClient.removeQueries();

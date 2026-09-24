@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
@@ -122,28 +123,39 @@ func TestHandleDiagnoseTurnRejectsBlankVerification(t *testing.T) {
 func TestListAgents_Eligible(t *testing.T) {
 	mcp := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
 	cases := []struct {
-		name string
-		mode string
-		mcp  http.Handler
-		want bool
+		name       string
+		mode       string
+		operator   bool
+		mcp        http.Handler
+		want       bool
+		wantReason string
 	}{
-		{"local mode + mcp mounted", "none", mcp, true},
-		{"auth enabled", "proxy", mcp, false},
-		{"mcp disabled", "none", nil, false},
+		{"local mode + mcp mounted", "none", false, mcp, true, ""},
+		{"auth enabled", "proxy", false, mcp, false, "shared"},
+		{"operator-managed, auth off", "none", true, mcp, false, "shared"},
+		{"mcp disabled", "none", false, nil, false, "no-mcp"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			if c.operator {
+				settings.SetOperatorConfig(&settings.OperatorConfig{Version: 1})
+				t.Cleanup(func() { settings.SetOperatorConfig(nil) })
+			}
 			s := &Server{authConfig: auth.Config{Mode: c.mode}, mcpHandler: c.mcp}
 			rec := httptest.NewRecorder()
 			s.handleListAgents(rec, httptest.NewRequest(http.MethodGet, "/api/agents", nil))
 			var resp struct {
-				Eligible bool `json:"eligible"`
+				Eligible          bool   `json:"eligible"`
+				UnavailableReason string `json:"unavailableReason"`
 			}
 			if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 				t.Fatalf("decode: %v", err)
 			}
 			if resp.Eligible != c.want {
 				t.Errorf("eligible = %v, want %v", resp.Eligible, c.want)
+			}
+			if resp.UnavailableReason != c.wantReason {
+				t.Errorf("unavailableReason = %q, want %q", resp.UnavailableReason, c.wantReason)
 			}
 		})
 	}

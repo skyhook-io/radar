@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useIssues } from "../../api/client";
+import { useClusterInfo, useIssues } from "../../api/client";
 import {
   useAPIResources,
   karpenterCapacityAvailable,
@@ -23,6 +23,10 @@ import {
 } from "@skyhook-io/k8s-ui";
 import { AlertTriangle } from "lucide-react";
 import { IssueDiagnoseButton } from "../diagnose/LocalDiagnoseAction";
+import { CloudAlertPrompt } from "../cloudHints/CloudAlertPrompt";
+import { SharedInstallAiLine } from "../cloudHints/SharedInstallAiLine";
+import { useDiagnose } from "../diagnose/DiagnoseContext";
+import { useCloudHintsEnabled } from "../cloudHints/cloudHints";
 
 // A capacity-relevant issue links to its Karpenter diagnosis. Karpenter is
 // always single-cluster (unlike Argo hub-and-spoke), so the issue and the
@@ -101,6 +105,13 @@ export function IssuesPane({
     useIssues(namespaces);
   const { connection } = useConnection();
   const navigate = useNavigate();
+  const cloudHints = useCloudHintsEnabled();
+  const clusterContext = useClusterInfo().data?.context;
+  const diagnose = useDiagnose();
+  const sharedInstallAi =
+    cloudHints &&
+    diagnose.setupState === "off" &&
+    diagnose.unavailableReason === "shared";
   const apiResources = useAPIResources();
   const hasKarpenter = karpenterCapacityAvailable(
     useCapabilitiesContext().karpenter,
@@ -186,6 +197,8 @@ export function IssuesPane({
         }
       />
 
+      {sharedInstallAi && <SharedInstallAiLine />}
+
       {/* Visibility honesty: when RBAC reads are incomplete, an empty queue may
           mean "can't see" rather than "nothing broken" — say so up front so the
           empty state isn't mistaken for a clean bill of health. */}
@@ -230,6 +243,11 @@ export function IssuesPane({
           issues={shown}
           anyData={!!data}
           onResourceClick={onResourceClick}
+          renderDetailSection={
+            cloudHints
+              ? ({ issue }) => <CloudAlertPrompt key={issue.id} issue={issue} context={clusterContext} />
+              : undefined
+          }
           renderActions={({ issue }) => {
             const capacityHref = capacityHrefForIssue(issue, hasKarpenter);
             return (
@@ -248,6 +266,7 @@ export function IssuesPane({
                   group={issue.group}
                   namespace={issue.namespace ?? ""}
                   name={issue.name}
+                  issueId={issue.id}
                 />
               </div>
             );

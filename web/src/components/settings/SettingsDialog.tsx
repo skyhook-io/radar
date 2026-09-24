@@ -33,6 +33,8 @@ import {
 import { costSourceApplyLabel, prometheusHeadersFromRows, shouldOfferCostReview, shouldShowSettingsFooter } from './settings-state'
 import type { SettingsSectionId } from './settings-state'
 import { OperatorManagedNotice } from './OperatorManagedNotice'
+import { CloudHintLink } from '../cloudHints/CloudHintLink'
+import { useCloudHintsEnabled } from '../cloudHints/cloudHints'
 export type { SettingsSectionId } from './settings-state'
 
 function mcpEndpointUrl(): string {
@@ -143,6 +145,7 @@ export function SettingsDialog({
 
   const [configData, setConfigData] = useState<ConfigResponse | null>(null)
   const operatorManaged = configData?.management === 'operator'
+  const cloudHints = useCloudHintsEnabled()
   const canEditConfig = configData != null && !operatorManaged && canAtLeast('owner')
   const [editedConfig, setEditedConfig] = useState<Config>({})
   const [saving, setSaving] = useState(false)
@@ -759,7 +762,22 @@ export function SettingsDialog({
                     : "Investigate incidents with an AI agent that runs on your own machine — reading logs, events, and topology to understand what's happening. No Radar cloud, no API key."}
                 </p>
               </div>
-              {operatorManaged ? <p className="text-sm text-theme-text-secondary">Local AI investigations are unavailable in a shared installation. Use local Radar with an agent CLI, or Radar Cloud.</p> : aiAvailable ? (
+              {operatorManaged ? (
+                <p className="text-sm text-theme-text-secondary">
+                  Local AI investigations are unavailable in a shared installation. Use local Radar with an agent CLI, or{' '}
+                  {cloudHints ? (
+                    <CloudHintLink
+                      entry="settings-ai"
+                      // Through the close guard, so unsaved startup edits still
+                      // prompt; the Cloud dialog opens once Settings has left.
+                      onBeforeOpen={(open) => requestCloseRef.current(() => window.setTimeout(open, overlayExitMs('dialog')))}
+                    />
+                  ) : (
+                    'Radar Cloud'
+                  )}
+                  .
+                </p>
+              ) : aiAvailable ? (
                 <div className="space-y-4">
                   <AISettingsSection
                     available={diag.available}
