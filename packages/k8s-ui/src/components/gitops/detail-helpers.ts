@@ -1,4 +1,5 @@
 import { argoApplicationSetConditionsToGitOpsStatus, argoStatusToGitOpsStatus, fluxConditionsToGitOpsStatus, type FluxCondition, type GitOpsStatus } from '../../types/gitops'
+import type { GitOpsResourceTree } from '../../types/gitops-tree'
 import { formatCompactAge } from '../../utils/format'
 
 // =============================================================================
@@ -122,4 +123,24 @@ export function getGitOpsResourceStatus(kind: string, resource: any): GitOpsStat
 export function getGitOpsTool(kind: string, group?: string): 'argo' | 'flux' {
   if (group === 'argoproj.io' || kind === 'applications' || kind === 'applicationsets' || kind === 'appprojects') return 'argo'
   return 'flux'
+}
+
+// isDestinationRef reports whether a resource named on a remote GitOps
+// object's page lives on its destination cluster, where this cluster's API
+// would answer for a different, same-named object. Only nodes the tree marks
+// local (the root, Flux sources and dependencies) are local. A ref the tree
+// doesn't list, such as an operation error naming just kind and name, is
+// treated as remote, since it came from the destination's reconcile.
+export function isDestinationRef(
+  tree: GitOpsResourceTree | null | undefined,
+  remoteDestination: boolean | undefined,
+  ref: { group?: string; kind: string; namespace?: string; name: string },
+): boolean {
+  if (!remoteDestination) return false
+  const node = tree?.nodes.find((n) =>
+    n.ref.kind === ref.kind &&
+    n.ref.name === ref.name &&
+    (n.ref.namespace || '') === (ref.namespace || '') &&
+    (n.ref.group || '') === (ref.group || ''))
+  return node ? !!node.remote : true
 }

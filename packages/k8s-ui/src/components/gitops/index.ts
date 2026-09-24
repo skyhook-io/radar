@@ -41,6 +41,7 @@ export {
   describeGitOpsTerminating,
   getGitOpsResourceStatus,
   getGitOpsTool,
+  isDestinationRef,
 } from './detail-helpers'
 export { SyncOptionsDialog } from './SyncOptionsDialog'
 export type { SyncOptionsDialogProps, ArgoSyncOpts } from './SyncOptionsDialog'
@@ -59,5 +60,5 @@ export type {
   FluxActionHandlers,
   GitOpsHelmValuesData,
 } from './GitOpsDetailLayout'
-export { GitOpsHealthSourceNotice, healthSourceNoticeKind, hasRadarFinding, APP_TREE_HEALTH_NOTICE, APP_TREE_NO_FINDINGS_NOTICE, REMOTE_DESTINATION_NOTICE } from './GitOpsHealthSourceNotice'
+export { GitOpsHealthSourceNotice, healthSourceNoticeKind, hasRadarFinding, APP_TREE_HEALTH_NOTICE, APP_TREE_NO_FINDINGS_NOTICE, REMOTE_DESTINATION_NOTICE, REMOTE_FLUX_TARGET_NOTICE } from './GitOpsHealthSourceNotice'
 export { radarHealthNote, RADAR_HEALTH_NOTE } from './health-provenance'

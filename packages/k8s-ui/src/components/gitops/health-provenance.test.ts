@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 
 import { RADAR_HEALTH_NOTE, radarHealthNote } from './health-provenance'
-import { APP_TREE_API_ERROR_NOTICE, APP_TREE_HEALTH_NOTICE, APP_TREE_NO_FINDINGS_NOTICE, APP_TREE_PERSIST_REMEDY, REMOTE_DESTINATION_NOTICE, hasRadarFinding, healthSourceNoticeKind } from './GitOpsHealthSourceNotice'
+import { APP_TREE_API_ERROR_NOTICE, APP_TREE_HEALTH_NOTICE, APP_TREE_NO_FINDINGS_NOTICE, APP_TREE_PERSIST_REMEDY, REMOTE_DESTINATION_NOTICE, REMOTE_FLUX_TARGET_NOTICE, hasRadarFinding, healthSourceNoticeKind } from './GitOpsHealthSourceNotice'
 
 describe('radarHealthNote', () => {
   test('marks only Radar-sourced problems', () => {
@@ -16,7 +16,7 @@ describe('radarHealthNote', () => {
     expect(radarHealthNote({ health: 'Degraded', healthSource: 'something-newer' })).toBe('')
   })
   test('copy stays in plain words', () => {
-    for (const copy of [RADAR_HEALTH_NOTE, APP_TREE_HEALTH_NOTICE, REMOTE_DESTINATION_NOTICE]) {
+    for (const copy of [RADAR_HEALTH_NOTE, APP_TREE_HEALTH_NOTICE, REMOTE_DESTINATION_NOTICE, REMOTE_FLUX_TARGET_NOTICE]) {
       expect(copy).not.toMatch(/appTree|resourceHealthSource|persist|Tier|overlay/i)
     }
     // The remedy deliberately names the one Argo knob the user can turn;
@@ -40,7 +40,7 @@ describe('radarHealthNote', () => {
 })
 
 describe('healthSourceNoticeKind', () => {
-  test('remote destination wins over appTree, Flux never notices', () => {
+  test('remote destination wins over appTree; Flux notices only a remote target', () => {
     expect(healthSourceNoticeKind({ tool: 'argocd', resourceHealthMode: 'appTree', remoteDestination: true })).toBe('remote')
     expect(healthSourceNoticeKind({ tool: 'argocd', resourceHealthMode: 'appTree', health: 'Degraded' })).toBe('appTree')
     expect(healthSourceNoticeKind({ tool: 'argocd', resourceHealthMode: 'appTree' })).toBe('appTree')
@@ -49,6 +49,7 @@ describe('healthSourceNoticeKind', () => {
     expect(healthSourceNoticeKind({ tool: 'argocd', resourceHealthMode: 'inline' })).toBeNull()
     expect(healthSourceNoticeKind({ tool: 'argocd' })).toBeNull()
     expect(healthSourceNoticeKind({ tool: 'fluxcd', resourceHealthMode: 'appTree' })).toBeNull()
+    expect(healthSourceNoticeKind({ tool: 'fluxcd', remoteDestination: true })).toBe('remote')
     expect(healthSourceNoticeKind(undefined)).toBeNull()
   })
 })

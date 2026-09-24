@@ -5,6 +5,7 @@ import {
   formatGitOpsSourceUrl,
   getGitOpsResourceStatus,
   getGitOpsTool,
+  isDestinationRef,
   parseArgoRollbackID,
 } from './detail-helpers'
 
@@ -147,5 +148,36 @@ describe('getGitOpsResourceStatus - ApplicationSet', () => {
       { type: 'ResourcesUpToDate', status: 'True' },
     ]))
     expect(status?.health).toBe('Healthy')
+  })
+})
+
+describe('isDestinationRef', () => {
+  const node = (ref: { group?: string; kind: string; namespace: string; name: string }, remote?: boolean) =>
+    ({ id: `${ref.kind}/${ref.name}`, ref, role: 'declared' as const, tool: 'fluxcd' as const, remote })
+  const root = node({ group: 'kustomize.toolkit.fluxcd.io', kind: 'Kustomization', namespace: 'flux-system', name: 'fleet-prod' })
+  const tree = {
+    root,
+    nodes: [
+      root,
+      node({ group: 'apps', kind: 'Deployment', namespace: 'prod', name: 'billing' }, true),
+      node({ group: 'source.toolkit.fluxcd.io', kind: 'GitRepository', namespace: 'flux-system', name: 'fleet' }),
+    ],
+    edges: [],
+    remoteDestination: true,
+  }
+
+  test('a local tree has no destination refs', () => {
+    expect(isDestinationRef(tree, false, { group: 'apps', kind: 'Deployment', namespace: 'prod', name: 'billing' })).toBe(false)
+  })
+
+  test('declared resources are remote; the root and sources are local', () => {
+    expect(isDestinationRef(tree, true, { group: 'apps', kind: 'Deployment', namespace: 'prod', name: 'billing' })).toBe(true)
+    expect(isDestinationRef(tree, true, root.ref)).toBe(false)
+    expect(isDestinationRef(tree, true, { group: 'source.toolkit.fluxcd.io', kind: 'GitRepository', namespace: 'flux-system', name: 'fleet' })).toBe(false)
+  })
+
+  test('a ref the tree does not list is remote, even before the tree loads', () => {
+    expect(isDestinationRef(tree, true, { kind: 'Deployment', name: 'billing' })).toBe(true)
+    expect(isDestinationRef(null, true, { group: 'apps', kind: 'Deployment', namespace: 'prod', name: 'billing' })).toBe(true)
   })
 })

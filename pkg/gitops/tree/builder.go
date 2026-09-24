@@ -164,7 +164,9 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		id := nodeID(res.Ref)
 		declaredIDs[id] = true
 		if remote {
-			nodes[id] = mergeData(syntheticNode(res.Ref, RoleDeclared, tool, res.Sync, res.Health, res.HealthSource), res.Data)
+			node := mergeData(syntheticNode(res.Ref, RoleDeclared, tool, res.Sync, res.Health, res.HealthSource), res.Data)
+			node.Remote = true
+			nodes[id] = node
 			continue
 		}
 		obj := objects[refKey(res.Ref)]

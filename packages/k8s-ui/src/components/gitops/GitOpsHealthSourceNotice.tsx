@@ -9,10 +9,11 @@ import type { GitOpsChange, GitOpsInsightSummary } from '../../types'
 //    3.0+ default). Radar then reads the live resources itself, and every
 //    problem below is Radar's finding — the "Radar" markers say so per row;
 //    this line says so once.
-//  - The Application deploys to another cluster. Radar can't read its
-//    resources from here at all, so nothing is derived. A standalone Radar
-//    may add a pointer to Radar Cloud (the host passes it; embedded hosts
-//    pass nothing).
+//  - The Application (or a Flux object with spec.kubeConfig) deploys to
+//    another cluster. Radar can't read its resources from here at all, so
+//    nothing is derived. For Argo, a standalone Radar may add a pointer to
+//    Radar Cloud (the host passes it; embedded hosts pass nothing); Radar
+//    Cloud doesn't resolve Flux targets, so Flux gets no pointer.
 //
 // Copy stays in plain words; the field names live behind the docs link.
 
@@ -35,6 +36,8 @@ export const APP_TREE_API_ERROR_NO_FINDINGS = "Radar didn't find a problem on it
 
 export const REMOTE_DESTINATION_NOTICE =
   "This application deploys to a different cluster, so its resources aren't visible from here."
+export const REMOTE_FLUX_TARGET_NOTICE =
+  "This applies its resources to a different cluster, so they aren't visible from here."
 
 export type HealthSourceNoticeSummary = Pick<GitOpsInsightSummary, 'tool' | 'health' | 'resourceHealthMode' | 'remoteDestination' | 'resourceHealthFromApi' | 'resourceHealthApiError'>
 
@@ -43,8 +46,9 @@ export type HealthSourceNoticeSummary = Pick<GitOpsInsightSummary, 'tool' | 'hea
 // there), and when the host read Argo's verdicts from its API server there
 // is nothing of Radar's to explain either.
 export function healthSourceNoticeKind(summary: HealthSourceNoticeSummary | undefined): 'remote' | 'appTree' | null {
-  if (!summary || summary.tool !== 'argocd') return null
+  if (!summary) return null
   if (summary.remoteDestination) return 'remote'
+  if (summary.tool !== 'argocd') return null
   if (summary.resourceHealthMode === 'appTree' && !summary.resourceHealthFromApi && summary.health !== 'Healthy') return 'appTree'
   return null
 }
@@ -100,10 +104,14 @@ export function GitOpsHealthSourceNotice({
       <Info className="mt-px h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
       <span className="min-w-0">
         {kind === 'remote' ? (
-          <>
-            {REMOTE_DESTINATION_NOTICE}
-            {remoteDestinationHint ? <> {remoteDestinationHint}</> : null}
-          </>
+          summary?.tool === 'argocd' ? (
+            <>
+              {REMOTE_DESTINATION_NOTICE}
+              {remoteDestinationHint ? <> {remoteDestinationHint}</> : null}
+            </>
+          ) : (
+            REMOTE_FLUX_TARGET_NOTICE
+          )
         ) : (
           <>
             {apiError ? (

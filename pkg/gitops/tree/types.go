@@ -50,6 +50,10 @@ type Node struct {
 	GroupedNodeIDs []string       `json:"groupedNodeIDs,omitempty"`
 	Count          int            `json:"count,omitempty"`
 	Data           map[string]any `json:"data,omitempty"`
+	// Remote marks a resource that lives on the destination cluster of a
+	// remote tree. Radar's API reads this cluster, so a same-named object
+	// here is a different resource, not this node.
+	Remote bool `json:"remote,omitempty"`
 }
 
 // HealthSource identifies who assessed a node's Health.

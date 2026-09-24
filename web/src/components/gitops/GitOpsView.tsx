@@ -19,6 +19,7 @@ import {
   formatGitOpsSourceUrl,
   getGitOpsResourceStatus,
   getGitOpsTool,
+  isDestinationRef,
   isArgoOperationInProgress,
   isArgoSuspendedByRadar,
   gitOpsInsightChangeKey,
@@ -40,6 +41,7 @@ import {
   type GitOpsRow,
   type GitOpsRowAction,
   type GitOpsTreeFilters,
+  type GitOpsTreeNode,
   type GitOpsTreeRef,
   type GitOpsTreePreset,
   type SelectedResource,
@@ -352,7 +354,7 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
 function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOpsViewProps) {
   const location = useLocation()
   const navigate = useNavigate()
-  const { showError, showSuccess } = useToast()
+  const { showError, showSuccess, showToast } = useToast()
   const parts = location.pathname.split('/').filter(Boolean)
   const kind = parts[2] || 'applications'
   const namespace = parts[3] === '_' ? '' : decodePathPart(parts[3] || '')
@@ -464,7 +466,16 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   }), [graphHealth, graphKinds, graphNamespaces, graphRoles, graphSync])
   const graphFacets = useMemo(() => buildTreeFacets(tree), [tree])
 
-  function openResourceFromTree(ref: GitOpsTreeRef | GitOpsInsightRef) {
+  function openResourceFromTree(ref: GitOpsTreeRef | GitOpsInsightRef, node?: GitOpsTreeNode) {
+    // Locality comes from the node, not the name: a remote app can deploy a
+    // same-named copy of itself to its destination.
+    if (node?.role !== 'root' && isDestinationRef(tree, tree?.remoteDestination ?? insightsQ.data?.summary?.remoteDestination, ref)) {
+      showToast(`${ref.kind} ${ref.namespace ? `${ref.namespace}/` : ''}${ref.name} is on the destination cluster`, {
+        type: 'info',
+        detail: "Radar is connected to the cluster running the controller, so it can't open this resource. A same-named resource here would be a different one.",
+      })
+      return
+    }
     if (isGitOpsDetailRef(ref) && isValidKubernetesName(ref.name)) {
       const detailKind = kindToPluralWithGroup(ref.kind, ref.group ?? '')
       // The tree's root node is this page's own subject — clicking it must not

@@ -82,6 +82,11 @@ func TestBuildArgoTreeUsesManagedInventoryAndOwnershipEdges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}
+	for _, n := range tree.Nodes {
+		if n.Remote {
+			t.Errorf("in-cluster Application marked %s remote", n.ID)
+		}
+	}
 
 	assertNodeRole(t, tree, ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "billing"}, RoleDeclared)
 	assertNodeRole(t, tree, ResourceRef{Group: "apps", Kind: "ReplicaSet", Namespace: "prod", Name: "billing-abc"}, RoleGenerated)
@@ -421,6 +426,12 @@ func TestBuild_RemoteDestinationReadsNothingLocal(t *testing.T) {
 	if dep.Ref.UID != "" || dep.Data["labels"] != nil {
 		t.Errorf("remote Deployment took local object metadata: uid=%q data=%v", dep.Ref.UID, dep.Data)
 	}
+	if !dep.Remote {
+		t.Error("a remote Application's declared resource must be marked remote")
+	}
+	if root := findNode(t, tree, ResourceRef{Group: "argoproj.io", Kind: "Application", Namespace: "argocd", Name: "billing"}); root.Remote {
+		t.Error("the Application itself lives on this cluster")
+	}
 	for _, n := range tree.Nodes {
 		if n.Ref.Kind == "Pod" {
 			t.Errorf("local Pod attached to a remote app's tree: %+v", n.Ref)
@@ -439,7 +450,10 @@ func TestBuild_RemoteFluxKustomizationReadsNothingLocal(t *testing.T) {
 	ks := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "kustomize.toolkit.fluxcd.io/v1", "kind": "Kustomization",
 		"metadata": map[string]any{"name": "fleet-prod", "namespace": "flux-system"},
-		"spec":     map[string]any{"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod-kubeconfig"}}},
+		"spec": map[string]any{
+			"kubeConfig": map[string]any{"secretRef": map[string]any{"name": "prod-kubeconfig"}},
+			"sourceRef":  map[string]any{"kind": "GitRepository", "name": "fleet"},
+		},
 		"status": map[string]any{"inventory": map[string]any{"entries": []any{
 			map[string]any{"id": "prod_billing_apps_Deployment", "v": "v1"},
 		}}},
@@ -470,6 +484,15 @@ func TestBuild_RemoteFluxKustomizationReadsNothingLocal(t *testing.T) {
 	dep := findNode(t, tree, ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "billing"})
 	if dep.Ref.UID != "" || dep.Data["labels"] != nil || dep.TopologyStatus != "unknown" {
 		t.Errorf("remote Deployment took local state: %+v", dep)
+	}
+	if !dep.Remote {
+		t.Error("an inventory entry of a remote Kustomization must be marked remote")
+	}
+	// The source and the root live on the controller's cluster.
+	src := findNode(t, tree, ResourceRef{Group: "source.toolkit.fluxcd.io", Kind: "GitRepository", Namespace: "flux-system", Name: "fleet"})
+	root := findNode(t, tree, ResourceRef{Group: "kustomize.toolkit.fluxcd.io", Kind: "Kustomization", Namespace: "flux-system", Name: "fleet-prod"})
+	if src.Remote || root.Remote {
+		t.Errorf("local nodes marked remote: source=%v root=%v", src.Remote, root.Remote)
 	}
 	for _, n := range tree.Nodes {
 		if n.Ref.Kind == "Pod" {

@@ -40,6 +40,9 @@ export interface GitOpsTreeNode {
   groupedNodeIDs?: string[]
   count?: number
   data?: Record<string, unknown>
+  // Lives on the destination cluster of a remote tree. This cluster's API
+  // would answer for a different, same-named object.
+  remote?: boolean
 }
 
 // 'controllerApi' is the controller's own verdict read from its API server
@@ -80,7 +83,7 @@ export interface GitOpsResourceTree {
   healthFromApi?: boolean
   // The controller's API server was asked and didn't answer usefully.
   healthApiError?: string
-  // The Application deploys to another cluster; Radar derives nothing about
-  // its resources from here.
+  // The Application (or Flux object with spec.kubeConfig) deploys to another
+  // cluster; Radar derives nothing about its resources from here.
   remoteDestination?: boolean
 }

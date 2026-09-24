@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react'
 import { DURATION_TOAST_EXIT } from '../../utils/animation'
-import { Check, Terminal, X, AlertTriangle } from 'lucide-react'
+import { Check, Terminal, X, AlertTriangle, Info } from 'lucide-react'
 import { clsx } from 'clsx'
 
 interface Toast {
@@ -172,6 +172,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
 
   const isError = toast.type === 'error'
   const isSuccess = toast.type === 'success'
+  const isNotice = toast.type === 'info' || toast.type === 'warning'
 
   return (
     <div
@@ -191,10 +192,15 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
       <div className={clsx(
         'w-8 h-8 rounded-full flex items-center justify-center shrink-0',
         isError ? 'bg-red-500/20' :
-        isSuccess ? 'bg-emerald-500/20' : 'bg-blue-500/20'
+        isSuccess ? 'bg-emerald-500/20' :
+        toast.type === 'warning' ? 'bg-amber-500/20' : 'bg-blue-500/20'
       )}>
         {isError ? (
           <AlertTriangle className="w-4 h-4 text-red-400" />
+        ) : toast.type === 'warning' ? (
+          <AlertTriangle className="w-4 h-4 text-amber-400" />
+        ) : toast.type === 'info' ? (
+          <Info className="w-4 h-4 text-blue-400" />
         ) : toast.command ? (
           <Terminal className={clsx('w-4 h-4', isSuccess ? 'text-emerald-400' : 'text-blue-400')} />
         ) : (
@@ -208,7 +214,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
           <span className={clsx('text-sm font-medium', isError ? 'text-red-200' : isSuccess ? 'text-emerald-50' : 'text-theme-text-primary')}>
             {toast.message}
           </span>
-          {!isError && !toast.action && <Check className={clsx('w-3.5 h-3.5 shrink-0', isSuccess ? 'text-emerald-400' : 'text-green-400')} />}
+          {!isError && !isNotice && !toast.action && <Check className={clsx('w-3.5 h-3.5 shrink-0', isSuccess ? 'text-emerald-400' : 'text-green-400')} />}
         </div>
         {toast.detail && (
           toast.onDetailClick ? (
