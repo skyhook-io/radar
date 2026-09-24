@@ -61,7 +61,7 @@ const DEFAULT_ASSURANCES = [
   'Secure outbound-only tunnel',
   'Disconnect and delete your data anytime',
   'SOC 2 Type II',
-  '3 clusters free',
+  '3 clusters free, no card required',
 ]
 // Other OSS surfaces (a GitOps app that deploys to another cluster, say)
 // point at Radar Cloud by asking this button to open its dialog, so there
