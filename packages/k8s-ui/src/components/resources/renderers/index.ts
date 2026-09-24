@@ -184,3 +184,5 @@ export * from './CNPGDeclarativeRenderer'
 export { KueueWorkloadRenderer } from './KueueWorkloadRenderer'
 
 export { LocalQueueRenderer, ClusterQueueRenderer } from './KueueQueueRenderers'
+
+export { AdmissionCheckRenderer, ProvisioningRequestRenderer } from './KueueProvisioningRenderers'

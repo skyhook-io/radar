@@ -1501,6 +1501,18 @@ borrowing/lending limits, namespace eligibility and admission policies. These ar
 controller-reported quota facts, not measured utilization or available physical
 capacity. Both v1beta1 and v1beta2 queue shapes are supported.
 
+AdmissionCheck detail distinguishes controller readiness from a Workload's check
+result and links the built-in provisioning configuration. ProvisioningRequest
+detail shows native outcomes, reasons, requested Pod counts and PodTemplate
+references, without treating provisioning as proof of running Pods. Both supported
+AdmissionCheck versions and ProvisioningRequest v1/v1beta1 have native detail.
+Workloads with admission checks also list currently retained, controller-owned
+ProvisioningRequests from the same namespace and cluster, with explicit lookup
+errors and bounded results. Requests may be cleaned up after completion or
+eviction; an empty list is not evidence that no request was made. The Workload's
+check message remains the primary explanation, and requests are not assigned to
+individual checks by parsing their names.
+
 For an exact `kueue.x-k8s.io/v1beta2` Workload, the REST AI resource endpoint
 and MCP `get_resource` also project a bounded admission summary into
 `resourceContext.scheduling.observations`. The first adapter emits one Kueue

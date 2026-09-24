@@ -1038,3 +1038,21 @@ describe('Kueue queue detail dispatch', () => {
     }
   })
 })
+
+describe('Kueue provisioning detail identity', () => {
+  it('dispatches supported versions only, preserving foreign same-kind generic rendering', () => {
+    for (const [kind, group, versions, title] of [
+      ['admissionchecks', 'kueue.x-k8s.io', ['v1beta1', 'v1beta2'], 'Check Controller'],
+      ['provisioningrequests', 'autoscaling.x-k8s.io', ['v1beta1', 'v1'], 'Requested Pod Sets'],
+    ] as const) {
+      for (const version of versions) {
+        const html = renderKind(kind, { apiVersion: `${group}/${version}`, spec: { controllerName: 'test-controller', provisioningClassName: 'test-class' } })
+        expect(html).toContain(title)
+        expect(html).not.toContain('This resource type doesn')
+        expect(html).not.toContain('Configuration')
+      }
+      expect(renderKind(kind, { apiVersion: 'foreign.io/v1', spec: {} })).not.toContain(title)
+      expect(renderKind(kind, { apiVersion: `${group}/v99`, spec: {} })).not.toContain(title)
+    }
+  })
+})

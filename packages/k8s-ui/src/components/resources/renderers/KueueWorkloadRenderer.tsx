@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Cpu, Gauge, ListChecks } from 'lucide-react'
 import { formatRelativeAgeTime } from '../../../utils/format'
 import { Badge, type BadgeSeverity } from '../../ui/Badge'
@@ -17,6 +18,7 @@ const KUEUE_GROUP = 'kueue.x-k8s.io'
 
 interface KueueWorkloadRendererProps {
   data: any
+  provisioning?: ReactNode
   onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
 }
 
@@ -71,7 +73,7 @@ function FlavorAssignments({ flavors, onNavigate }: { flavors: any; onNavigate?:
   )
 }
 
-export function KueueWorkloadRenderer({ data, onNavigate }: KueueWorkloadRendererProps) {
+export function KueueWorkloadRenderer({ data, onNavigate, provisioning }: KueueWorkloadRendererProps) {
   const spec = data.spec || {}
   const status = data.status || {}
   const namespace = data.metadata?.namespace || ''
@@ -168,6 +170,8 @@ export function KueueWorkloadRenderer({ data, onNavigate }: KueueWorkloadRendere
           </div>
         </Section>
       )}
+
+      {provisioning}
 
       <ConditionsSection conditions={status.conditions} getConditionTone={(condition) => isKueueConditionStale(condition, data.metadata?.generation) ? 'unknown' : getKueueWorkloadConditionTone(condition)} defaultExpanded />
 

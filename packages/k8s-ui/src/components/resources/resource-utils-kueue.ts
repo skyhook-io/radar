@@ -235,6 +235,10 @@ export function getResourceFlavorTaintCount(resource: any): number {
 // ============================================================================
 
 export function getAdmissionCheckStatus(resource: any): StatusBadge {
+  const condition = findCondition(resource, 'Active')
+  if (isKueueConditionStale(condition, resource?.metadata?.generation)) {
+    return { text: 'Stale', color: healthColors.unknown, level: 'unknown' }
+  }
   return activeConditionStatus(resource)
 }
 
@@ -246,33 +250,40 @@ export function getAdmissionCheckControllerName(resource: any): string {
 // CLUSTER AUTOSCALER PROVISIONINGREQUEST UTILITIES
 // ============================================================================
 
+export function getProvisioningRequestStatusCondition(resource: any): any {
+  for (const type of ['Failed', 'CapacityRevoked', 'BookingExpired', 'Provisioned', 'Accepted']) {
+    const condition = findCondition(resource, type)
+    if (condition?.status === 'True') return condition
+  }
+}
+
+export function getProvisioningRequestMessage(resource: any): string | undefined {
+  const condition = getProvisioningRequestStatusCondition(resource)
+  if (condition?.type === 'Accepted') {
+    const progress = findCondition(resource, 'Provisioned')
+    if (progress?.status === 'False' && !isKueueConditionStale(progress, resource?.metadata?.generation) && progress.message) return progress.message
+  }
+  return condition?.message
+}
+
 export function getProvisioningRequestStatus(resource: any): StatusBadge {
-  const failed = findCondition(resource, 'Failed')
-  if (failed?.status === 'True') {
-    return { text: 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
+  const condition = getProvisioningRequestStatusCondition(resource)
+  if (isKueueConditionStale(condition, resource?.metadata?.generation)) {
+    return { text: `${condition.type} (stale)`, color: healthColors.unknown, level: 'unknown' }
   }
-
-  const capacityRevoked = findCondition(resource, 'CapacityRevoked')
-  if (capacityRevoked?.status === 'True') {
-    return { text: 'CapacityRevoked', color: healthColors.degraded, level: 'degraded' }
+  switch (condition?.type) {
+    case 'Failed':
+    case 'CapacityRevoked':
+      return { text: condition.type, color: healthColors.unhealthy, level: 'unhealthy' }
+    case 'BookingExpired':
+      return { text: 'BookingExpired', color: healthColors.neutral, level: 'neutral' }
+    case 'Provisioned':
+      return { text: 'Provisioned', color: healthColors.healthy, level: 'healthy' }
+    case 'Accepted':
+      return { text: 'Accepted', color: healthColors.neutral, level: 'neutral' }
+    default:
+      return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
   }
-
-  const bookingExpired = findCondition(resource, 'BookingExpired')
-  if (bookingExpired?.status === 'True') {
-    return { text: 'BookingExpired', color: healthColors.degraded, level: 'degraded' }
-  }
-
-  const provisioned = findCondition(resource, 'Provisioned')
-  if (provisioned?.status === 'True') {
-    return { text: 'Provisioned', color: healthColors.healthy, level: 'healthy' }
-  }
-
-  const accepted = findCondition(resource, 'Accepted')
-  if (accepted?.status === 'True') {
-    return { text: 'Accepted', color: healthColors.neutral, level: 'neutral' }
-  }
-
-  return { text: 'Pending', color: healthColors.neutral, level: 'neutral' }
 }
 
 export function getProvisioningRequestClassName(resource: any): string {

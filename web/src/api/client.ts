@@ -7225,3 +7225,33 @@ export function useJobSetResources(namespace: string, name: string, uid: string 
     retry: false,
   })
 }
+
+
+export interface KueueProvisioningResponse {
+  uid: string
+  installed: boolean
+  total: number
+  truncated: boolean
+  requests: Array<{
+    apiVersion: string
+    kind: string
+    metadata: { name: string; namespace: string; uid: string; generation?: number; creationTimestamp?: string; deletionTimestamp?: string }
+    spec: { provisioningClassName: string }
+    status?: { conditions: Array<{ type: string; status: string; reason?: string; message?: string; observedGeneration?: number }> }
+  }>
+}
+
+export function useKueueProvisioning(namespace: string, name: string, uid: string | undefined, enabled: boolean) {
+  return useQuery<KueueProvisioningResponse>({
+    queryKey: ['kueue-provisioning', namespace, name, uid],
+    queryFn: () => fetchJSON(`/kueue/provisioning/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`),
+    enabled: enabled && Boolean(namespace && name && uid),
+    staleTime: 5000,
+    refetchInterval: query => {
+      if (query.state.error instanceof ApiError && query.state.error.status < 500) return false
+      if (query.state.data?.uid === uid && query.state.data?.installed === false) return false
+      return 10000
+    },
+    retry: (count, error) => !(error instanceof ApiError && error.status < 500) && count < 2,
+  })
+}

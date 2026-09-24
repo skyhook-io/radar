@@ -116,6 +116,8 @@ import {
   JobRenderer,
   JobSetRenderer,
   KueueWorkloadRenderer,
+  AdmissionCheckRenderer,
+  ProvisioningRequestRenderer,
   LocalQueueRenderer,
   ClusterQueueRenderer,
   CronJobRenderer,
@@ -308,6 +310,7 @@ import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
  * When an override is not provided, the base (shared) renderer is used.
  */
 export interface RendererOverrides {
+  KueueWorkloadRenderer?: React.ComponentType<{ data: any; onNavigate?: (ref: ResourceRef) => void }>
   PodRenderer?: React.ComponentType<{
     data: any; onCopy: CopyHandler; copied: string | null
     onNavigate?: (ref: ResourceRef) => void
@@ -438,7 +441,7 @@ const KNOWN_KINDS = new Set([
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
   'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'cronworkflows',
   'jobsets',
-  'workloads', 'localqueues', 'clusterqueues',
+  'workloads', 'localqueues', 'clusterqueues', 'admissionchecks', 'provisioningrequests',
   'hpas', 'horizontalpodautoscalers', 'nodes', 'persistentvolumeclaims',
   'rollouts', 'analysisruns', 'analysistemplates', 'clusteranalysistemplates', 'experiments', 'certificates', 'workflows', 'persistentvolumes',
   'storageclasses', 'certificaterequests', 'clusterissuers', 'issuers',
@@ -693,6 +696,7 @@ export function ResourceRendererDispatch({
     || kind === 'objectstores' || kind === 'databases' || kind === 'publications'
     || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs' || kind === 'jobsets'
     || kind === 'policies' || kind === 'rollouts' || kind === 'experiments'
+    || kind === 'admissionchecks' || kind === 'provisioningrequests'
     || kind === 'machines' || kind === 'machinesets' || kind === 'workloads' || kind === 'localqueues' || kind === 'clusterqueues'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
@@ -715,6 +719,8 @@ export function ResourceRendererDispatch({
       && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io'))
     || (kind === 'jobsets' && isJobSetV1Alpha2(data))
     || (kind === 'workloads' && isApiGroup(data?.apiVersion, 'kueue.x-k8s.io'))
+    || (kind === 'admissionchecks' && isKueueQueueResource(data))
+    || (kind === 'provisioningrequests' && ['autoscaling.x-k8s.io/v1', 'autoscaling.x-k8s.io/v1beta1'].includes(data?.apiVersion))
     || ((kind === 'localqueues' || kind === 'clusterqueues') && isKueueQueueResource(data))
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
@@ -736,6 +742,7 @@ export function ResourceRendererDispatch({
 
   const isKnownKind = KNOWN_KINDS.has(kind) || isCrossplaneMR || isCrossplaneClaim || isCrossplaneXR
 
+  const KueueWorkloadComp = rendererOverrides?.KueueWorkloadRenderer ?? KueueWorkloadRenderer
   const PodComp = rendererOverrides?.PodRenderer ?? PodRenderer
   const KarpenterNodePoolComp = rendererOverrides?.KarpenterNodePoolRenderer ?? KarpenterNodePoolRenderer
   const WorkloadComp = rendererOverrides?.WorkloadRenderer ?? WorkloadRenderer
@@ -804,7 +811,9 @@ export function ResourceRendererDispatch({
         {kind === 'configmaps' && <ConfigMapRenderer data={data} relationships={relationships} onNavigate={onNavigate} />}
         {kind === 'secrets' && <SecretRenderer data={data} relationships={relationships} onNavigate={onNavigate} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
         {kind === 'jobs' && !nonCoreJobFallthrough && <JobRenderer data={data} />}
-        {kind === 'workloads' && isApiGroup(data?.apiVersion, 'kueue.x-k8s.io') && <KueueWorkloadRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'workloads' && isApiGroup(data?.apiVersion, 'kueue.x-k8s.io') && <KueueWorkloadComp data={data} onNavigate={onNavigate} />}
+        {kind === 'admissionchecks' && isKueueQueueResource(data) && <AdmissionCheckRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'provisioningrequests' && ['autoscaling.x-k8s.io/v1', 'autoscaling.x-k8s.io/v1beta1'].includes(data?.apiVersion) && <ProvisioningRequestRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'localqueues' && isKueueQueueResource(data) && <LocalQueueRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'clusterqueues' && isKueueQueueResource(data) && <ClusterQueueRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'jobsets' && isJobSetV1Alpha2(data) && <JobSetRenderer data={data} />}
@@ -1101,8 +1110,8 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'clusterqueues' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getClusterQueueStatus(data)
   if (k === 'localqueues' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getLocalQueueStatus(data)
   if (k === 'resourceflavors' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getResourceFlavorStatus(data)
-  if (k === 'admissionchecks' && data?.apiVersion?.startsWith('kueue.x-k8s.io/')) return getAdmissionCheckStatus(data)
-  if (k === 'provisioningrequests' && data?.apiVersion?.startsWith('autoscaling.x-k8s.io/')) return getProvisioningRequestStatus(data)
+  if (k === 'admissionchecks' && isKueueQueueResource(data)) return getAdmissionCheckStatus(data)
+  if (k === 'provisioningrequests' && ['autoscaling.x-k8s.io/v1', 'autoscaling.x-k8s.io/v1beta1'].includes(data?.apiVersion)) return getProvisioningRequestStatus(data)
   if (k === 'rayclusters' && data?.apiVersion?.startsWith('ray.io/')) return getRayClusterStatus(data)
   if (k === 'rayjobs' && data?.apiVersion?.startsWith('ray.io/')) return getRayJobStatus(data)
   if (k === 'rayservices' && data?.apiVersion?.startsWith('ray.io/')) return getRayServiceStatus(data)

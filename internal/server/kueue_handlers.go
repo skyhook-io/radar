@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/schedulinginsight"
 )
 
@@ -161,4 +162,114 @@ func kueueAdmissionForJobSet(ctx context.Context, root *unstructured.Unstructure
 		response.Workloads = append(response.Workloads, entry)
 	}
 	return response
+}
+
+const provisioningGroup = "autoscaling.x-k8s.io"
+const maxProvisioningRequests = 20
+
+type KueueProvisioningResponse struct {
+	UID       string                       `json:"uid"`
+	Installed bool                         `json:"installed"`
+	Requests  []*unstructured.Unstructured `json:"requests"`
+	Total     int                          `json:"total"`
+	Truncated bool                         `json:"truncated"`
+}
+
+func (s *Server) handleKueueProvisioning(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+	namespace, name := chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
+	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) || !s.canRead(r, kueueGroup, "workloads", namespace, "get") {
+		s.writeError(w, http.StatusForbidden, "no access to this Kueue Workload")
+		return
+	}
+	cache := k8s.GetResourceCache()
+	discovery, dynamic := k8s.GetResourceDiscovery(), k8s.GetDynamicResourceCache()
+	if cache == nil || discovery == nil || dynamic == nil || dynamic.GetDiscoveryStatus() != k8score.CRDDiscoveryComplete {
+		s.writeError(w, http.StatusServiceUnavailable, "Provisioning discovery is not ready; retry shortly")
+		return
+	}
+	rootGVR, found := discovery.GetGVRWithGroup("Workload", kueueGroup)
+	if !found {
+		if discovery.GroupHadPartialDiscovery(kueueGroup) {
+			s.writeError(w, http.StatusServiceUnavailable, "Kueue discovery is incomplete; retry shortly")
+		} else {
+			s.writeError(w, http.StatusNotFound, "Kueue Workloads are not served by this cluster")
+		}
+		return
+	}
+	root, err := cache.GetDynamicWithGroup(r.Context(), "Workload", namespace, name, kueueGroup)
+	if err != nil {
+		if workloadParentGetError("Workload", namespace, name, err).statusCode == http.StatusNotFound && dynamic.IsNamespaceSynced(rootGVR, namespace) {
+			s.writeError(w, http.StatusNotFound, "Kueue Workload not found")
+		} else {
+			log.Printf("[kueue] Failed to read Workload %s/%s: %v", namespace, name, err)
+			s.writeError(w, http.StatusServiceUnavailable, "Radar could not observe the Workload; retry when its cache is available")
+		}
+		return
+	}
+	if _, found := discovery.GetGVRWithGroup("ProvisioningRequest", provisioningGroup); !found {
+		if discovery.GroupHadPartialDiscovery(provisioningGroup) {
+			s.writeError(w, http.StatusServiceUnavailable, "Provisioning discovery is incomplete; retry shortly")
+		} else {
+			s.writeJSON(w, KueueProvisioningResponse{UID: string(root.GetUID()), Requests: []*unstructured.Unstructured{}})
+		}
+		return
+	}
+	if !s.canRead(r, provisioningGroup, "provisioningrequests", namespace, "list") {
+		s.writeError(w, http.StatusForbidden, "no access to list ProvisioningRequests in this namespace")
+		return
+	}
+	items, err := listDynamicSynced(r.Context(), cache, "ProvisioningRequest", provisioningGroup, namespace)
+	if err != nil {
+		log.Printf("[kueue] Failed to list ProvisioningRequests for Workload %s/%s: %v", namespace, name, err)
+		s.writeError(w, http.StatusServiceUnavailable, "Radar could not observe ProvisioningRequests; retry when its cache is available")
+		return
+	}
+	s.writeJSON(w, provisioningForWorkload(root, items))
+}
+
+func provisioningForWorkload(root *unstructured.Unstructured, items []*unstructured.Unstructured) KueueProvisioningResponse {
+	matches := make([]*unstructured.Unstructured, 0)
+	for _, item := range items {
+		if item == nil || root.GetUID() == "" || item.GroupVersionKind().Group != provisioningGroup || item.GetKind() != "ProvisioningRequest" || item.GetNamespace() != root.GetNamespace() {
+			continue
+		}
+		owner := metav1.GetControllerOf(item)
+		if owner == nil || resourceid.GroupFromAPIVersion(owner.APIVersion) != kueueGroup || owner.Kind != "Workload" || owner.Name != root.GetName() || owner.UID != root.GetUID() {
+			continue
+		}
+		matches = append(matches, item)
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		at, bt := matches[i].GetCreationTimestamp(), matches[j].GetCreationTimestamp()
+		if !at.Equal(&bt) {
+			return at.After(bt.Time)
+		}
+		if matches[i].GetName() != matches[j].GetName() {
+			return matches[i].GetName() < matches[j].GetName()
+		}
+		return matches[i].GetUID() < matches[j].GetUID()
+	})
+	result := KueueProvisioningResponse{UID: string(root.GetUID()), Installed: true, Requests: make([]*unstructured.Unstructured, 0), Total: len(matches), Truncated: len(matches) > maxProvisioningRequests}
+	if result.Truncated {
+		matches = matches[:maxProvisioningRequests]
+	}
+	for _, item := range matches {
+		summary := &unstructured.Unstructured{Object: map[string]any{"apiVersion": item.GetAPIVersion(), "kind": item.GetKind()}}
+		summary.SetName(item.GetName())
+		summary.SetNamespace(item.GetNamespace())
+		summary.SetUID(item.GetUID())
+		summary.SetGeneration(item.GetGeneration())
+		summary.SetCreationTimestamp(item.GetCreationTimestamp())
+		summary.SetDeletionTimestamp(item.GetDeletionTimestamp())
+		class, _, _ := unstructured.NestedString(item.Object, "spec", "provisioningClassName")
+		_ = unstructured.SetNestedField(summary.Object, class, "spec", "provisioningClassName")
+		if conditions, found, _ := unstructured.NestedSlice(item.Object, "status", "conditions"); found {
+			_ = unstructured.SetNestedSlice(summary.Object, conditions, "status", "conditions")
+		}
+		result.Requests = append(result.Requests, summary)
+	}
+	return result
 }
