@@ -63,7 +63,7 @@ export function SelfManagedStart({ appUrl, onBack }: { appUrl: string; onBack: (
           </p>
         </div>
       </div>
-      <div className="shrink-0 px-8 py-4 bg-theme-base border-t border-theme-border flex items-center gap-3">
+      <div className="shrink-0 px-8 py-4 bg-theme-base border-t border-theme-border flex flex-wrap items-center gap-x-3 gap-y-2.5">
         <button
           onClick={onBack}
           className="inline-flex items-center gap-1.5 whitespace-nowrap text-[12.5px] text-theme-text-secondary hover:text-theme-text-primary transition-colors"
