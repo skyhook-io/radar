@@ -125,12 +125,15 @@ func TestLocalProfileLegacyAdoptionAndCompletion(t *testing.T) {
 	if view.Legacy == nil || len(prometheuspkg.CurrentHeaders()) != 0 {
 		t.Fatal("legacy credentials activated without adoption")
 	}
-	res := updateProfile(t, s, view, "adopt", "unfinished-url", nil)
+	res := updateProfile(t, s, view, "adopt", backend.URL+"/edited", nil)
 	if res.Code != 200 || strings.Contains(res.Body.String(), "legacy-secret") {
 		t.Fatalf("adopt: %d %s", res.Code, res.Body.String())
 	}
 	if s.localPrometheusView().Legacy != nil {
 		t.Fatal("adoption offered twice")
+	}
+	if s.localPrometheusView().URL != backend.URL+"/edited" {
+		t.Fatal("import draft edit was ignored")
 	}
 	restore := k8s.SetTestProfileSource("/fixture/team", "second", "developer")
 	defer restore()

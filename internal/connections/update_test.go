@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -177,6 +178,147 @@ func TestLegacyCostAdoptionPreservesSource(t *testing.T) {
 				t.Fatalf("source import changed semantics or retained inactive credentials: %+v", got.Settings)
 			}
 		})
+	}
+}
+
+func TestLegacyAdoptionAppliesDraftWithoutLeakingCredentials(t *testing.T) {
+	for _, kind := range config.IntegrationKinds {
+		t.Run(string(kind), func(t *testing.T) {
+			r, target, other := setupResolver(t)
+			t.Setenv("RADAR_TEST_IMPORT_TOKEN", "env-secret")
+			_, err := config.Update(func(c *config.Config) {
+				switch kind {
+				case config.IntegrationMetrics:
+					c.PrometheusURL = "https://previous.example"
+					c.PrometheusHeaders = map[string]string{"Authorization": "secret"}
+					c.PrometheusHeadersFromEnv = map[string]string{"X-Tenant": "RADAR_TEST_IMPORT_TOKEN"}
+				case config.IntegrationArgoCD:
+					c.ArgoCDURL, c.ArgoCDToken = "https://previous.example", "secret"
+					c.ArgoCDInsecureTLS = true
+				case config.IntegrationCost:
+					c.CostSource = "kubecost"
+					c.KubecostURL, c.KubecostAPIKey = "https://previous.example", "secret"
+					c.KubecostClusterID, c.KubecostClusterIDContext = "development-cost", target.Context
+				}
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			offer := r.Resolve(target, kind, true).View.Legacy
+			if offer == nil {
+				t.Fatal("missing offer")
+			}
+			serialized, err := json.Marshal(offer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(serialized), `"secret"`) || strings.Contains(string(serialized), "env-secret") {
+				t.Fatal("offer exposed credentials")
+			}
+			if kind == config.IntegrationArgoCD && !offer.InsecureTLS {
+				t.Fatal("missing TLS setting")
+			}
+			if kind == config.IntegrationCost && (offer.Mode != "kubecost" || offer.ClusterID != "development-cost") {
+				t.Fatal("missing cost settings")
+			}
+			if kind == config.IntegrationMetrics && (len(offer.HeaderKeys) != 2 || len(offer.EnvHeaderKeys) != 1) {
+				t.Fatal("missing header metadata")
+			}
+			request := Update{Target: target, Kind: kind, Action: "adopt", Revision: r.Resolve(target, kind, false).View.Revision, LegacyRevision: offer.Revision, URL: stringPtr("https://different.example")}
+			if _, err := r.Prepare(target, request); err == nil {
+				t.Fatal("retained credentials crossed origins")
+			}
+			request.URL = stringPtr("https://previous.example/edited")
+			request.LegacyRevision = "stale"
+			if _, err := r.Prepare(target, request); !errors.Is(err, config.ErrProfileConflict) {
+				t.Fatalf("stale import accepted: %v", err)
+			}
+			request.LegacyRevision = offer.Revision
+			if kind == config.IntegrationMetrics {
+				request.Headers = []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "rotated"}}
+			} else {
+				request.Secret = &SecretEdit{Action: "set", Value: "rotated"}
+			}
+			got := apply(t, r, target, request)
+			if got.Settings.URL() != "https://previous.example/edited" || got.View.Legacy != nil {
+				t.Fatal("draft not applied or offer retained")
+			}
+			switch kind {
+			case config.IntegrationMetrics:
+				if got.Settings.Prometheus.Headers["Authorization"] != "rotated" {
+					t.Fatal("header edit ignored")
+				}
+				file, _, err := r.Store.Read()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if file.Settings(target.Binding, kind).Prometheus.HeadersFromEnv["X-Tenant"] != "RADAR_TEST_IMPORT_TOKEN" {
+					t.Fatal("environment reference lost")
+				}
+			case config.IntegrationArgoCD:
+				if got.Settings.ArgoCD.Token != "rotated" {
+					t.Fatal("token edit ignored")
+				}
+			case config.IntegrationCost:
+				if got.Settings.Kubecost.APIKey != "rotated" {
+					t.Fatal("key edit ignored")
+				}
+			}
+			if r.Resolve(other, kind, true).Settings.URL() != "" {
+				t.Fatal("import applied to another cluster")
+			}
+			legacy, _ := Legacy(kind)
+			if legacy.Settings.URL() != "https://previous.example" {
+				t.Fatal("import changed global source")
+			}
+		})
+	}
+}
+
+func TestLegacyAdoptionOmitsOtherContextsDiscoveryCredentialsAndMapping(t *testing.T) {
+	for _, kind := range []config.Integration{config.IntegrationArgoCD, config.IntegrationCost} {
+		for _, replace := range []bool{false, true} {
+			t.Run(string(kind)+"/replace="+fmt.Sprint(replace), func(t *testing.T) {
+				r, target, other := setupResolver(t)
+				_, err := config.Update(func(c *config.Config) {
+					if kind == config.IntegrationArgoCD {
+						c.ArgoCDToken, c.ArgoCDTokenBinding = "other-secret", other.Binding
+						c.ArgoCDInsecureTLS = true
+					} else {
+						c.CostSource = "kubecost"
+						c.KubecostAPIKey, c.KubecostAPIKeyContext = "other-secret", other.Context
+						c.KubecostClusterID, c.KubecostClusterIDContext = "other-cluster", other.Context
+					}
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				offer := r.Resolve(target, kind, true).View.Legacy
+				if offer == nil || offer.SecretSet || offer.ClusterID != "" {
+					t.Fatal("offer included another context's values")
+				}
+				request := Update{Kind: kind, Action: "adopt", LegacyRevision: offer.Revision}
+				if replace {
+					request.Secret = &SecretEdit{Action: "set", Value: "new-secret"}
+					if kind == config.IntegrationCost {
+						request.ClusterID = stringPtr("new-cluster")
+					}
+				}
+				got := apply(t, r, target, request)
+				secret := ""
+				if kind == config.IntegrationArgoCD {
+					secret = got.Settings.ArgoCD.Token
+				} else {
+					secret = got.Settings.Kubecost.APIKey
+				}
+				if replace && secret != "new-secret" || !replace && secret != "" {
+					t.Fatal("wrong imported credential")
+				}
+				if kind == config.IntegrationCost && (replace && got.Settings.ClusterID != "new-cluster" || !replace && got.Settings.ClusterID != "") {
+					t.Fatal("wrong imported mapping")
+				}
+			})
+		}
 	}
 }
 

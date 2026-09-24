@@ -13,6 +13,31 @@ import {
   type IntegrationProfiles,
   type StoredConnection,
 } from './LocalConnectionSettings'
+import type { SettingsSectionId } from './settings-state'
+
+export function PreviousIntegrationSettingsNotice({ profiles, onNavigate }: {
+  profiles: IntegrationProfiles
+  onNavigate: (section: SettingsSectionId) => void
+}) {
+  const available = (['metrics', 'argocd', 'cost'] as const).filter(kind =>
+    profiles[kind].state === 'auto' && profiles[kind].legacy,
+  )
+  if (available.length === 0) return null
+  return (
+    <section aria-label="Previous integration settings" className="mt-3 rounded-lg border border-theme-border bg-accent-muted p-3">
+      <h4 className="text-sm font-medium text-theme-text-primary">Previous integration settings found</h4>
+      <p className="mt-1 text-xs text-theme-text-secondary">Choose what to use for this cluster. Nothing is applied until you save.</p>
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
+        {available.map(kind => (
+          <button key={kind} type="button" className="text-xs text-accent-text hover:underline"
+            onClick={() => onNavigate(kind === 'metrics' ? 'prometheus' : kind)}>
+            Review {integrationNames[kind]}
+          </button>
+        ))}
+      </div>
+    </section>
+  )
+}
 
 export function LocalConfigurationDetails() {
   return (

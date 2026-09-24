@@ -20,11 +20,15 @@ import (
 )
 
 type LegacyOffer struct {
-	URL        string   `json:"url"`
-	HeaderKeys []string `json:"headerKeys"`
-	SecretSet  bool     `json:"secretSet"`
-	Revision   string   `json:"revision"`
-	Error      string   `json:"error,omitempty"`
+	URL           string   `json:"url"`
+	HeaderKeys    []string `json:"headerKeys"`
+	EnvHeaderKeys []string `json:"envHeaderKeys"`
+	InsecureTLS   bool     `json:"insecureTls"`
+	Mode          string   `json:"mode"`
+	ClusterID     string   `json:"clusterId"`
+	SecretSet     bool     `json:"secretSet"`
+	Revision      string   `json:"revision"`
+	Error         string   `json:"error,omitempty"`
 }
 
 type StoredSettingsView struct {
@@ -240,9 +244,10 @@ func (p *Resolver) resolve(file config.ClusterProfiles, revision string, err err
 		}
 		if details && !file.Imported[kind] && !file.Dismissed[target.Binding][kind] && s.View.State == "auto" {
 			legacy, digest := Legacy(kind)
+			legacy.Settings = legacySettingsForTarget(kind, target, legacy)
 			if hasLegacy(legacy) {
 				v := settingsView(legacy.Settings)
-				s.View.Legacy = &LegacyOffer{URL: v.URL, HeaderKeys: v.HeaderKeys, SecretSet: v.SecretSet, Revision: p.Revision(digest)}
+				s.View.Legacy = &LegacyOffer{URL: v.URL, HeaderKeys: v.HeaderKeys, EnvHeaderKeys: v.EnvHeaderKeys, SecretSet: v.SecretSet, InsecureTLS: v.InsecureTLS, Mode: legacy.Settings.EffectiveMode(kind), ClusterID: legacy.Settings.ClusterID, Revision: p.Revision(digest)}
 				if legacy.Err != nil {
 					s.View.Legacy.Error = legacy.Err.Error()
 				}
@@ -344,4 +349,20 @@ func Legacy(kind config.Integration) (Bundle, string) {
 func hasLegacy(b Bundle) bool {
 	c := b.Settings
 	return c.URL() != "" || c.Prometheus != nil && len(c.Prometheus.Headers)+len(c.Prometheus.HeadersFromEnv) > 0 || c.ArgoCD != nil && (c.ArgoCD.Token != "" || c.ArgoCD.InsecureTLS) || c.Kubecost != nil && (c.Kubecost.APIKey != "" || b.Settings.ClusterID != "" || b.Settings.Mode != "auto")
+}
+
+func legacySettingsForTarget(kind config.Integration, target k8s.ProfileTarget, bundle Bundle) config.IntegrationSettings {
+	settings := bundle.Settings.Clone()
+	if kind == config.IntegrationArgoCD && settings.ArgoCD.URL == "" && bundle.legacyArgoBinding != target.Binding {
+		settings.ArgoCD.Token = ""
+	}
+	if kind == config.IntegrationCost {
+		if settings.Kubecost.URL == "" && bundle.legacyCostBinding != target.Context {
+			settings.Kubecost.APIKey = ""
+		}
+		if bundle.legacyClusterIDBinding != target.Context {
+			settings.ClusterID = ""
+		}
+	}
+	return settings
 }

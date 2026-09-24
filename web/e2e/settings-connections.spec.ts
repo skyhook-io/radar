@@ -139,6 +139,15 @@ async function fixture(page: Page) {
         return route.fulfill({ json: { profiles, connections, checked: false, connected: false } })
       }
       const current = profiles[update.kind as IntegrationKind]
+      if (update.action === 'dismiss_legacy') {
+        delete current.legacy
+        current.revision = String(Number(current.revision) + 1)
+        return route.fulfill({ json: { profiles, connections, checked: false, connected: false } })
+      }
+      if (update.action === 'adopt') {
+        Object.assign(current, current.legacy)
+        delete current.legacy
+      }
       if (update.action === 'copy') {
         const source = connections.find(connection => connection.binding === update.binding && connection.integration === update.kind)!
         Object.assign(current, { url: source.url, headerKeys: [...source.headerKeys], envHeaderKeys: [...source.envHeaderKeys], secretSet: source.secretSet, insecureTls: source.insecureTls })
@@ -181,6 +190,60 @@ async function fixture(page: Page) {
 }
 
 for (const integration of integrations) {
+  test(`${integration.tab}: previous settings are discoverable, editable drafts until Save`, async ({ page }, testInfo) => {
+    const state = await fixture(page)
+    const current = state.profiles[integration.kind]
+    Object.assign(current, discoverySettings, { state: 'auto', mode: 'auto', legacy: {
+      url: 'https://previous.example', headerKeys: integration.kind === 'metrics' ? ['Authorization'] : [],
+      envHeaderKeys: [], secretSet: integration.kind !== 'metrics', insecureTls: integration.kind === 'argocd',
+      clusterId: integration.kind === 'cost' ? 'development-cost' : '', mode: integration.kind === 'cost' ? 'kubecost' : 'connection', revision: 'previous-revision',
+    } })
+    const dialog = await openSettings(page, 'Overview')
+    const notice = dialog.getByRole('region', { name: 'Previous integration settings', exact: true })
+    await expect(notice).toBeVisible()
+    await expect(notice.getByRole('button')).toHaveCount(1)
+    if (integration.kind === 'metrics') await page.screenshot({ path: testInfo.outputPath('previous-settings-overview.png') })
+    await notice.getByRole('button', { name: `Review ${integration.tab}`, exact: true }).click()
+    await expect(dialog.getByRole('tab', { name: integration.tab, exact: true })).toHaveAttribute('aria-selected', 'true')
+    await dialog.getByRole('button', { name: 'Use previous settings', exact: true }).click()
+    const field = dialog.getByRole('textbox', { name: integration.field, exact: true })
+    await expect(field).toHaveValue('https://previous.example')
+    await expect(dialog.getByRole('button', { name: 'Save changes', exact: true })).toBeEnabled()
+    expect(state.writes).toHaveLength(0)
+    if (integration.kind === 'metrics') {
+      await expect(dialog.getByLabel('Authorization value', { exact: true })).toBeVisible()
+      await page.screenshot({ path: testInfo.outputPath('previous-settings-draft.png') })
+    }
+    await dialog.getByRole('button', { name: 'Discard', exact: true }).click()
+    await expect(dialog.getByRole('button', { name: 'Use previous settings', exact: true })).toBeVisible()
+    expect(state.writes).toHaveLength(0)
+    await dialog.getByRole('button', { name: 'Use previous settings', exact: true }).click()
+    await field.fill('https://previous.example/edited')
+    await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
+    await expect.poll(() => state.writes.length).toBe(1)
+    expect(state.writes[0]).toMatchObject({ action: 'adopt', kind: integration.kind, url: 'https://previous.example/edited', legacyRevision: 'previous-revision' })
+    await expect(dialog.getByRole('button', { name: 'Save changes', exact: true })).toBeDisabled()
+    await dialog.getByRole('tab', { name: 'Overview', exact: true }).click()
+    await expect(notice).toHaveCount(0)
+  })
+
+  test(`${integration.tab}: dismissing previous settings removes the Overview offer without applying`, async ({ page }) => {
+    const state = await fixture(page)
+    Object.assign(state.profiles[integration.kind], discoverySettings, { state: 'auto', mode: 'auto', legacy: {
+      url: 'https://previous.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
+      clusterId: '', mode: 'auto', revision: 'previous-revision',
+    } })
+    const dialog = await openSettings(page, 'Overview')
+    await dialog.getByRole('button', { name: `Review ${integration.tab}`, exact: true }).click()
+    await dialog.getByRole('button', { name: 'Dismiss for this cluster', exact: true }).click()
+    await expect(dialog.getByRole('button', { name: 'Use previous settings', exact: true })).toHaveCount(0)
+    expect(state.writes).toHaveLength(1)
+    expect(state.writes[0].action).toBe('dismiss_legacy')
+    expect(state.profiles[integration.kind].url).toBe('')
+    await dialog.getByRole('tab', { name: 'Overview', exact: true }).click()
+    await expect(dialog.getByRole('region', { name: 'Previous integration settings', exact: true })).toHaveCount(0)
+  })
+
   test(`${integration.tab}: clearing a copied credentialed URL is guarded before confirmation`, async ({ page }) => {
     const state = await fixture(page)
     Object.assign(state.profiles[integration.kind], { headerKeys: [], secretSet: false })

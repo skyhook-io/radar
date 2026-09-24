@@ -5,6 +5,7 @@ import {
   type IntegrationProfile,
   type IntegrationProfiles
 } from './LocalConnectionSettings'
+import { PreviousIntegrationSettingsNotice } from './LocalConfigurationDetails'
 
 const profile: IntegrationProfile = {
   target: {
@@ -60,6 +61,20 @@ const savedProfile: Partial<IntegrationProfile> = {
 }
 
 describe('Local saved connections', () => {
+  it('only advertises previous settings for unconfigured integrations', () => {
+    const legacy = { url: 'https://previous', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false, mode: 'auto', clusterId: '', revision: 'previous' }
+    const profiles: IntegrationProfiles = {
+      metrics: { ...profile, legacy },
+      argocd: { ...profile, state: 'saved', legacy },
+      cost: { ...profile, state: 'launch', legacy },
+    }
+    const html = renderToStaticMarkup(<PreviousIntegrationSettingsNotice profiles={profiles} onNavigate={vi.fn()} />)
+    expect(html).toContain('Review Metrics')
+    expect(html).not.toContain('Review Argo CD')
+    expect(html).not.toContain('Review Cost')
+    delete profiles.metrics.legacy
+    expect(renderToStaticMarkup(<PreviousIntegrationSettingsNotice profiles={profiles} onNavigate={vi.fn()} />)).toBe('')
+  })
   it.each(['metrics', 'argocd', 'cost'] as const)(
     'does not show a routine reload action for %s',
     (kind) => {
@@ -100,12 +115,16 @@ describe('Local saved connections', () => {
       legacy: {
         url: 'https://legacy',
         headerKeys: ['Authorization'],
+        envHeaderKeys: [],
+        insecureTls: false,
+        mode: 'connection',
+        clusterId: '',
         secretSet: true,
         revision: 'legacy'
       }
     })
-    expect(html).toContain('Use for this cluster')
-    expect(html).toContain('Stop offering these older settings')
+    expect(html).toContain('Use previous settings')
+    expect(html).toContain('Dismiss for this cluster')
   })
   it('keeps launch overrides read-only with a way to change their source', () => {
     const html = render({

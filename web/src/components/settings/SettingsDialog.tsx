@@ -34,7 +34,7 @@ import { costSourceApplyLabel, integrationSectionLabels, pendingIntegrationSecti
 import { PrometheusConfigField } from './PrometheusConfigField'
 import { LocalConnectionSettings, type IntegrationProfiles, type IntegrationKind } from './LocalConnectionSettings'
 import { LocalIntegrationStatus } from './LocalIntegrationStatus'
-import { LocalConfigurationDetails, SavedClusterConnections } from './LocalConfigurationDetails'
+import { LocalConfigurationDetails, SavedClusterConnections, PreviousIntegrationSettingsNotice } from './LocalConfigurationDetails'
 import { useContextSwitch } from '../../context/ContextSwitchContext'
 import type { SettingsSectionId } from './settings-state'
 import { OperatorManagedNotice } from './OperatorManagedNotice'
@@ -649,6 +649,9 @@ export function SettingsDialog({
                   What this Radar is connected to right now — select a row for details.
                 </p>
               </div>
+              {configData?.management === 'local' && configData.integrationProfiles && canEditConfig && (
+                <PreviousIntegrationSettingsNotice profiles={configData.integrationProfiles} onNavigate={setSection} />
+              )}
               <div className="mt-3">
                 <OverviewPanel active={section === 'overview'} onNavigate={setSection} />
               </div>

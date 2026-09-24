@@ -224,10 +224,10 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 				if !hasLegacy(legacy) {
 					return pending, errors.New("no legacy connection to adopt")
 				}
-				if err := validateLegacyBinding(req.Kind, target, legacy); err != nil {
+				a = legacySettingsForTarget(req.Kind, target, legacy)
+				if err := editSettings(&a, req); err != nil {
 					return pending, err
 				}
-				a = legacy.Settings.Clone()
 				if a.URL() != "" {
 					next.Imported[req.Kind] = true
 				}
@@ -380,21 +380,6 @@ func editSettings(c *config.IntegrationSettings, req Update) error {
 		c.Kubecost.URL = newURL
 		c.Kubecost.APIKey = token
 		return c.Kubecost.Validate()
-	}
-	return nil
-}
-
-func validateLegacyBinding(kind config.Integration, target k8s.ProfileTarget, bundle Bundle) error {
-	if kind == config.IntegrationArgoCD && bundle.Settings.ArgoCD.URL == "" && bundle.Settings.ArgoCD.Token != "" && bundle.legacyArgoBinding != target.Binding {
-		return errors.New("re-enter the Argo CD discovery token to bind it to this kubeconfig source")
-	}
-	if kind == config.IntegrationCost {
-		if bundle.Settings.Kubecost.URL == "" && bundle.Settings.Kubecost.APIKey != "" && bundle.legacyCostBinding != target.Context {
-			return errors.New("re-enter the Kubecost discovery key for this context")
-		}
-		if bundle.Settings.ClusterID != "" && bundle.legacyClusterIDBinding != target.Context {
-			return errors.New("set the Kubecost cluster ID for this context before adopting")
-		}
 	}
 	return nil
 }

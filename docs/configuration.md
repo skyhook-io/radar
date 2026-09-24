@@ -453,10 +453,14 @@ Repairing a connection that was unusable at startup resumes automatic matching,
 not its startup assertion.
 
 Older global `config.json` integration settings never activate automatically in
-local mode. Settings offers **Use for this cluster** to import them explicitly.
+local mode. Settings → Overview highlights previous integration settings and
+links to the relevant integration tabs. **Use previous settings** fills an
+editable draft; **Save changes** imports it for the current cluster, while
+**Discard** leaves its connection unchanged. Saved credentials remain hidden.
 An explicit endpoint is imported once per integration, then reused through
 **Copy from another cluster…**. Discovery-bound credentials respect their original
-context binding. **Stop offering these older settings** dismisses the offer.
+context binding. **Dismiss for this cluster** hides that integration's offer
+for the current cluster without applying it.
 The old file stays as a recovery copy, never a fallback; removal does not
 resurrect it. Older Radar versions still read that global file, so rolling back
 does not preserve the new context-scoped behavior.

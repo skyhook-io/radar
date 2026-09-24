@@ -71,6 +71,10 @@ export interface IntegrationProfile {
   legacy?: {
     url: string
     headerKeys: string[]
+    envHeaderKeys: string[]
+    insecureTls: boolean
+    mode: string
+    clusterId: string
     secretSet: boolean
     revision: string
     error?: string
@@ -86,6 +90,7 @@ export interface ConnectionResponse {
 }
 interface Update {
   action: string
+  legacyRevision?: string
   binding?: string
   sourceRevision?: string
   url?: string
@@ -142,6 +147,7 @@ export function LocalConnectionSettings({
   const [clusterId, setClusterId] = useState(profile.clusterId)
   const [credentialDirty, setCredentialDirty] = useState(false)
   const [discoveryDraft, setDiscoveryDraft] = useState(false)
+  const [legacyDraft, setLegacyDraft] = useState<IntegrationProfile['legacy']>()
   const [draftGeneration, setDraftGeneration] = useState(0)
   const [selected, setSelected] = useState<
     StoredConnection | null
@@ -164,6 +170,7 @@ export function LocalConnectionSettings({
   const copySources = catalog.filter(c => c.integration === kind && !c.error && c.url && c.binding !== profile.target.binding)
   const removalContext = profile.target.context
   const dirty =
+    !!legacyDraft ||
     !!selected ||
     discoveryDraft ||
     url !== profile.url ||
@@ -224,6 +231,7 @@ export function LocalConnectionSettings({
     if (pending && error && !busy) confirmationError.current?.focus()
   }, [pending, error, busy])
   const resetDraft = (next: IntegrationProfile) => {
+    setLegacyDraft(undefined)
     setSelected(null)
     setDiscoveryDraft(false)
     setUrl(next.url)
@@ -298,7 +306,7 @@ export function LocalConnectionSettings({
                       )
                     }
                   : {}),
-                legacyRevision: profile.legacy?.revision
+                legacyRevision: update.legacyRevision ?? profile.legacy?.revision
               })
             }
           : {})
@@ -399,9 +407,9 @@ export function LocalConnectionSettings({
     onDirtyChange(false)
   }
   const apply = async (draft: Omit<Update, 'action'>) => {
-    const action = selected ? 'copy' : task === 'replace' || discoveryDraft ? 'replace' : 'save'
-    const credentialSource = selected ?? profile
-    if ((action === 'save' || action === 'copy') && credentialSource.url && draft.url?.trim() === '' && !(kind === 'cost' && draft.mode === 'prometheus')) {
+    const action = selected ? 'copy' : legacyDraft ? 'adopt' : task === 'replace' || discoveryDraft ? 'replace' : 'save'
+    const credentialSource = selected ?? legacyDraft ?? profile
+    if ((action === 'save' || action === 'copy' || action === 'adopt') && credentialSource.url && draft.url?.trim() === '' && !(kind === 'cost' && draft.mode === 'prometheus')) {
       const keptHeaders = credentialSource.headerKeys.some((key) => !draft.headers?.some((header) =>
         header.key.toLowerCase() === key.toLowerCase() && header.action === 'clear'))
       const keptSecret = credentialSource.secretSet && (!draft.secret || draft.secret.action === 'keep') && !draft.useCliToken
@@ -411,7 +419,7 @@ export function LocalConnectionSettings({
     }
     const update: Update = automaticDraft && !draft.useCliToken
       ? { action: 'auto' }
-      : { ...draft, action, ...(selected ? {
+      : { ...draft, action, ...(legacyDraft ? { legacyRevision: legacyDraft.revision } : {}), ...(selected ? {
         binding: selected.binding,
         sourceRevision: selected.revision,
       } : {}) }
@@ -497,6 +505,7 @@ export function LocalConnectionSettings({
         const source = copySources.find(connection => connection.binding === binding)
         if (!source) return
         setSelected(source)
+        setLegacyDraft(undefined)
         setUrl(source.url)
         setInsecureTls(source.insecureTls)
         if (kind === 'cost') {
@@ -706,7 +715,7 @@ export function LocalConnectionSettings({
               )}
             </div>
           ) : null}
-          {profile.legacy && (
+          {profile.state === 'auto' && profile.legacy && !legacyDraft && (
             <div className="card-inner-lg space-y-2">
               <h4 className="text-sm font-medium">
                 Previously saved connection
@@ -728,16 +737,30 @@ export function LocalConnectionSettings({
                   type="button"
                   disabled={!!profile.legacy.error}
                   className="text-xs text-accent-text"
-                  onClick={() => void act({ action: 'adopt' })}
+                  onClick={() => {
+                    const legacy = profile.legacy!
+                    setSelected(null)
+                    setLegacyDraft(legacy)
+                    setUrl(legacy.url)
+                    setInsecureTls(legacy.insecureTls)
+                    setMode(legacy.mode as CostConnectionDraft['mode'])
+                    setClusterId(legacy.clusterId)
+                    setDiscoveryDraft(false)
+                    setCredentialDirty(false)
+                    setDraftGeneration(generation => generation + 1)
+                    setMessage('')
+                    setError('')
+                    requestAnimationFrame(() => editorRegion.current?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus())
+                  }}
                 >
-                  Use for this cluster
+                  Use previous settings
                 </button>
                 <button
                   type="button"
                   className="text-xs text-theme-text-secondary"
                   onClick={() => void act({ action: 'dismiss_legacy' })}
                 >
-                  Stop offering these older settings
+                  Dismiss for this cluster
                 </button>
               </div>
             </div>
@@ -752,8 +775,8 @@ export function LocalConnectionSettings({
               local
               value={url}
               onChange={setUrl}
-              configuredHeaderKeys={selected ? selected.headerKeys : replacing ? [] : profile.headerKeys}
-              environmentHeaderKeys={selected ? selected.envHeaderKeys : replacing ? [] : profile.envHeaderKeys}
+              configuredHeaderKeys={selected ? selected.headerKeys : legacyDraft ? legacyDraft.headerKeys : replacing ? [] : profile.headerKeys}
+              environmentHeaderKeys={selected ? selected.envHeaderKeys : legacyDraft ? legacyDraft.envHeaderKeys : replacing ? [] : profile.envHeaderKeys}
               serverManaged={false}
               headersManaged={false}
               urlFromFlag={false}
@@ -780,7 +803,7 @@ export function LocalConnectionSettings({
               feedback={feedback}
               connectionAction={connectionActions}
               value={{ url, insecureTls }}
-              secretSet={selected ? selected.secretSet : !replacing && profile.secretSet}
+              secretSet={selected ? selected.secretSet : legacyDraft ? legacyDraft.secretSet : !replacing && profile.secretSet}
               cliSession={cliSession}
               onChange={(draft: ArgoConnectionDraft) => {
                 setUrl(draft.url)
@@ -799,7 +822,7 @@ export function LocalConnectionSettings({
               feedback={feedback}
               connectionAction={connectionActions}
               value={{ url, mode, clusterId }}
-              secretSet={selected ? selected.secretSet : !replacing && profile.secretSet}
+              secretSet={selected ? selected.secretSet : legacyDraft ? legacyDraft.secretSet : !replacing && profile.secretSet}
               onChange={(draft) => {
                 setUrl(draft.url)
                 setMode(draft.mode)
