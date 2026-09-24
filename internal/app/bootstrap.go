@@ -448,6 +448,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 			OpenCostCurrency:     cfg.OpenCostCurrency,
 			HasPrometheusURL:     cfg.PrometheusURL != "",
 			HasPrometheusHeaders: len(cfg.PrometheusHeaders) > 0,
+			StreamingLists:       k8s.StreamingListsMode(),
 		},
 		AuthConfig: cfg.AuthConfig,
 		CloudConnect: server.CloudConnectConfig{
@@ -493,6 +494,9 @@ func CreateServer(cfg AppConfig) *server.Server {
 // connectivity check fails, subsystem init is canceled immediately.
 func InitializeCluster() {
 	log.Printf("── Kubernetes initialization · %s ─────────────────────────", k8s.SanitizeForLog(k8s.GetContextName()))
+	// One findable line for anyone debugging apiserver load or slow startup:
+	// which side decided the streaming-lists policy, and how to flip it.
+	log.Printf("Streaming lists (WatchListClient): %s — override with KUBE_FEATURE_WatchListClient=true|false", k8s.StreamingListsMode())
 
 	// Cancel any in-flight API calls from previous attempts (e.g., browser
 	// polling /api/capabilities with RBAC checks through a broken exec plugin).
