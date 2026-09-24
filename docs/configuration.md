@@ -465,6 +465,16 @@ The old file stays as a recovery copy, never a fallback; removal does not
 resurrect it. Older Radar versions still read that global file, so rolling back
 does not preserve the new context-scoped behavior.
 
+Missing-connection hints in Metrics, Rightsizing, PVC usage, Cost (including
+workload and application tabs), and Argo CD diff/health views also offer
+**Review previous settings** when an applicable local configuration is available.
+This opens the relevant Settings tab; it does not import or save anything.
+Existing errors remain visible, and a previous connection is not a guarantee
+that its backend is reachable. Working views are unchanged: if auto-discovery
+finds a working backend, review previous settings from Settings → Overview.
+These recovery hints are for local CLI/Desktop configuration, not operator-managed
+or embedded Cloud installations.
+
 In-cluster OSS settings remain Helm/operator-controlled and read-only in the UI.
 Cloud remains installation-scoped in this change; `clusters.json` is not a Hub
 configuration transport.

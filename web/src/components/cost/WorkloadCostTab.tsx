@@ -28,6 +28,7 @@ import {
   isCostDiscoveryPending,
 } from './source'
 import { useNavCustomization } from '../../context/NavCustomization'
+import { CostConnectionAction } from './CostConnectionAction'
 
 type WorkloadCostState =
   | 'loading'
@@ -375,6 +376,7 @@ function WorkloadCostUnavailable({
       <div className="flex max-w-md flex-col items-center gap-3 text-center text-theme-text-secondary">
         <Coins className="h-8 w-8 text-theme-text-tertiary/50" />
         <div className="text-sm">{message}</div>
+        <CostConnectionAction reason={state} />
       </div>
     </div>
   )

@@ -1,4 +1,10 @@
 import type { CostDataSource, CostUnavailableReason } from '../../api/client'
+import { previousSettingsAction, type PreviousIntegrationSettings } from '../../hooks/usePreviousIntegrationSettings'
+
+export function isCostConfigurable(reason?: string): boolean {
+  return reason === 'no_prometheus' || reason === 'no_cost_source' || reason === 'source_unavailable'
+    || reason === 'authentication_error' || reason === 'configuration_mismatch'
+}
 
 export function costSourceLabel(source?: CostDataSource): string {
   return source === 'kubecost' ? 'Kubecost Aggregator' : 'OpenCost via Prometheus'
@@ -8,10 +14,17 @@ export function isCostDiscoveryPending(reason?: string): boolean {
   return reason === 'no_prometheus' || reason === 'no_cost_source'
 }
 
-export function costConfigurationAction(reason?: CostUnavailableReason): {
+export function costConfigurationAction(reason?: CostUnavailableReason, offers?: PreviousIntegrationSettings): {
   section: 'prometheus' | 'cost'
   label: string
+  note?: string
 } {
+  const previousKind = reason === 'no_prometheus'
+    ? offers?.metrics ? 'metrics' : offers?.explicitCostBackend ? 'cost' : undefined
+    : reason === 'no_cost_source'
+      ? offers?.explicitCostBackend ? 'cost' : offers?.metrics ? 'metrics' : undefined
+      : isCostConfigurable(reason) && offers?.cost ? 'cost' : undefined
+  if (previousKind) return { section: previousKind === 'metrics' ? 'prometheus' : 'cost', ...previousSettingsAction(previousKind) }
   return reason === 'no_prometheus'
     ? { section: 'prometheus', label: 'Configure metrics' }
     : { section: 'cost', label: 'Configure cost source' }

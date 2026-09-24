@@ -36,6 +36,7 @@ import { LocalConnectionSettings, type IntegrationProfiles, type IntegrationKind
 import { LocalIntegrationStatus } from './LocalIntegrationStatus'
 import { LocalConfigurationDetails, SavedClusterConnections, PreviousIntegrationSettingsNotice } from './LocalConfigurationDetails'
 import { useContextSwitch } from '../../context/ContextSwitchContext'
+import { previousIntegrationSettingsKey, type IntegrationSettingsResponse } from '../../hooks/usePreviousIntegrationSettings'
 import type { SettingsSectionId } from './settings-state'
 import { OperatorManagedNotice } from './OperatorManagedNotice'
 export type { SettingsSectionId } from './settings-state'
@@ -65,9 +66,7 @@ interface Config {
   restoreLastDesktopContext?: boolean | null
 }
 
-interface ConfigResponse {
-	 integrationProfiles?: IntegrationProfiles
-  management: 'local' | 'operator' | 'cloud'
+interface ConfigResponse extends IntegrationSettingsResponse {
   file: Config
   effective: Config
   isDesktop: boolean
@@ -163,6 +162,7 @@ export function SettingsDialog({
   const costDirtyChange = useCallback((dirty: boolean) => setLocalDirty(value => ({ ...value, cost: dirty })), [])
   const connectionsChanged = useCallback((profiles: IntegrationProfiles) => {
     setConfigData(value => value ? { ...value, integrationProfiles: profiles } : value)
+    void queryClient.resetQueries({ queryKey: [previousIntegrationSettingsKey] })
     void queryClient.invalidateQueries({ predicate: query => typeof query.queryKey[0] === 'string' && /^(prometheus|opencost|gitops|argo)/.test(query.queryKey[0]) })
   }, [queryClient])
 

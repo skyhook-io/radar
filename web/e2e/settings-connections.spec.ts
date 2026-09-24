@@ -107,7 +107,7 @@ async function fixture(page: Page) {
   await page.route('**/api/capabilities', async route => {
     const response = await route.fetch()
     const capabilities = await response.json()
-    await route.fulfill({ json: { ...capabilities, deployment: { ...capabilities.deployment, mode: 'local' } } })
+    await route.fulfill({ json: { ...capabilities, configManagement: 'local', deployment: { ...capabilities.deployment, mode: 'local' } } })
   })
   await page.route('**/api/config', async route => {
     if (route.request().method() === 'PUT') {
@@ -1202,4 +1202,133 @@ test('current connection does not describe a draft URL, and refreshes after appl
   await expect(current).toContainText('Not connected')
   await expect(current).toContainText('Backend unavailable')
   await expect(current).not.toContainText('https://metrics.example')
+})
+
+async function contextualFixture(page: Page) {
+  const state = await fixture(page)
+  for (const kind of ['metrics', 'argocd', 'cost'] as const) {
+    const current = state.profiles[kind]
+    current.target.context = 'fake-test'
+    Object.assign(current, discoverySettings, { state: 'auto', mode: 'auto', legacy: {
+      url: `https://previous-${kind}.example`, headerKeys: [], envHeaderKeys: [],
+      secretSet: false, insecureTls: false, clusterId: '', mode: 'auto', revision: 'previous',
+    } })
+  }
+  state.failStatus()
+  await page.route('**/api/prometheus/connect', route => route.fulfill({ json: { connected: false, available: false } }))
+  return state
+}
+
+for (const operation of ['dismiss', 'import'] as const) {
+  test(`contextual metrics: ${operation} removes the hint without reload; opening and drafting never writes`, async ({ page }) => {
+    const state = await contextualFixture(page)
+    await page.goto('/workload/deployments/default/nginx?tab=metrics')
+    await page.getByRole('button', { name: 'Review previous settings', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: 'Settings', exact: true })
+    await expect(dialog.getByRole('tab', { name: 'Metrics', exact: true })).toHaveAttribute('aria-selected', 'true')
+    await expect(dialog.getByRole('textbox', { name: 'Metrics backend URL', exact: true })).toHaveValue('')
+    expect(state.writes).toHaveLength(0)
+    if (operation === 'dismiss') {
+      await dialog.getByRole('button', { name: 'Dismiss for this cluster', exact: true }).click()
+    } else {
+      await dialog.getByRole('button', { name: 'Use previous settings', exact: true }).click()
+      await expect(dialog.getByRole('textbox', { name: 'Metrics backend URL', exact: true })).toHaveValue('https://previous-metrics.example')
+      expect(state.writes).toHaveLength(0)
+      await dialog.getByRole('button', { name: 'Save changes', exact: true }).click()
+      await expect(dialog.getByRole('button', { name: 'Save changes', exact: true })).toBeDisabled()
+    }
+    await expect.poll(() => state.writes.length).toBe(1)
+    await expect(dialog.getByRole('button', { name: 'Use previous settings', exact: true })).toHaveCount(0)
+    await page.keyboard.press('Escape')
+    await expect(dialog).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Review previous settings', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Configure metrics', exact: true })).toBeVisible()
+  })
+}
+
+test('contextual metrics: failed offer GET retains ordinary setup and the original failure', async ({ page }) => {
+  await contextualFixture(page)
+  await page.route('**/api/config', route => route.fulfill({ status: 403, json: { error: 'forbidden' } }))
+  await page.goto('/workload/deployments/default/nginx?tab=metrics')
+  await expect(page.getByRole('button', { name: 'Configure metrics', exact: true })).toBeVisible()
+  await expect(page.getByText('Backend unavailable', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Review previous settings', exact: true })).toHaveCount(0)
+})
+
+test('contextual metrics: no previous-context offer', async ({ page }) => {
+  const state = await contextualFixture(page)
+  state.profiles.metrics.target.context = 'other-cluster'
+  await page.goto('/workload/deployments/default/nginx?tab=metrics')
+  await expect(page.getByRole('button', { name: 'Configure metrics', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Review previous settings', exact: true })).toHaveCount(0)
+})
+
+for (const mode of ['healthy', 'operator', 'cloud'] as const) {
+  test(`contextual metrics: ${mode} makes no offer GET`, async ({ page }) => {
+    const state = await contextualFixture(page)
+    if (mode === 'healthy') state.recoverStatus()
+    else await page.route('**/api/capabilities', async route => {
+      const response = await route.fetch()
+      await route.fulfill({ json: { ...await response.json(), configManagement: mode } })
+    })
+    let reads = 0
+    page.on('request', request => { if (new URL(request.url()).pathname === '/api/config') reads++ })
+    const startupConfig = page.waitForResponse(response => new URL(response.url()).pathname === '/api/config')
+    await page.goto('/workload/deployments/default/nginx?tab=metrics')
+    await startupConfig
+    if (mode === 'healthy') await expect(page.getByLabel('Metrics time range')).toBeVisible()
+    else await expect(page.getByRole('button', { name: 'Configure metrics', exact: true })).toBeVisible()
+    // The app's pre-existing Desktop detection reads /config once at startup.
+    expect(reads).toBe(1)
+    await expect(page.getByRole('button', { name: 'Review previous settings', exact: true })).toHaveCount(0)
+  })
+}
+
+for (const surface of ['overview', 'workload', 'application'] as const) {
+  test(`contextual cost: ${surface} preserves the error and opens Cost settings without writing`, async ({ page }) => {
+    const state = await contextualFixture(page)
+    await page.route('**/api/opencost/**', route => route.fulfill({ json: { available: false, reason: 'source_unavailable' } }))
+    if (surface === 'application') await page.route('**/api/applications*', async route => {
+      const response = await route.fetch()
+      const data = await response.json()
+      const app = data.applications[0]
+      app.workloads.push({ ...app.workloads[0], name: 'worker' })
+      await route.fulfill({ json: data })
+    })
+    await page.goto(surface === 'overview' ? '/cost' : surface === 'application'
+      ? '/applications?app=default%2FDeployment%2Fnginx&view=cost'
+      : '/workload/deployments/default/nginx?tab=cost')
+    await expect(page.getByText(/Kubecost Aggregator is unavailable/)).toBeVisible()
+    await page.getByRole('button', { name: 'Review previous settings', exact: true }).click()
+    await expect(page.getByRole('dialog', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Cost', exact: true })).toHaveAttribute('aria-selected', 'true')
+    expect(state.writes).toHaveLength(0)
+  })
+}
+
+test('contextual rightsizing opens Metrics settings', async ({ page }) => {
+  await contextualFixture(page)
+  await page.goto('/cost/rightsizing')
+  await page.getByRole('button', { name: 'Review previous settings', exact: true }).click()
+  await expect(page.getByRole('tab', { name: 'Metrics', exact: true })).toHaveAttribute('aria-selected', 'true')
+})
+
+test('contextual Argo health and diff preserve benefits and open Argo settings', async ({ page }) => {
+  const state = await contextualFixture(page)
+  const resource = { apiVersion: 'argoproj.io/v1alpha1', kind: 'Application', metadata: { name: 'storefront', namespace: 'argocd' }, spec: { destination: { namespace: 'default' } }, status: { health: { status: 'Degraded' }, sync: { status: 'OutOfSync' } } }
+  const root = { id: 'app/storefront', ref: { kind: 'Application', namespace: 'argocd', name: 'storefront' }, role: 'root', tool: 'argocd', resource }
+  await page.route('**/api/resources/applications/argocd/storefront*', route => route.fulfill({ json: resource }))
+  await page.route('**/api/gitops/tree/applications/argocd/storefront*', route => route.fulfill({ json: { root, nodes: [root], edges: [] } }))
+  await page.route('**/api/gitops/insights/applications/argocd/storefront*', route => route.fulfill({ json: {
+    summary: { tool: 'argocd', kind: 'Application', namespace: 'argocd', name: 'storefront', health: 'Degraded', resourceHealthMode: 'appTree' },
+    changes: [{ ref: { kind: 'Deployment', namespace: 'default', name: 'nginx' }, category: 'OutOfSync', sync: 'OutOfSync', hasDesired: true, hasLive: true }],
+    capabilities: { argoConfigured: false, argoDiffAvailable: false },
+  } }))
+  await page.goto('/gitops/detail/applications/argocd/storefront')
+  await expect(page.getByRole('note').getByRole('button', { name: 'Review previous settings', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Resources', exact: true }).last().click()
+  await expect(page.getByText('for the full Git-rendered diff.')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Review previous settings', exact: true })).toHaveCount(1)
+  await page.getByRole('button', { name: 'Review previous settings', exact: true }).last().click()
+  await expect(page.getByRole('dialog', { name: 'Settings', exact: true }).getByRole('tab', { name: 'Argo CD', exact: true })).toHaveAttribute('aria-selected', 'true')
+  expect(state.writes).toHaveLength(0)
 })
