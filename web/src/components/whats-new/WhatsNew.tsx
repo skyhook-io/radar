@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useId, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { ArrowRight, ExternalLink, Sparkles, X } from 'lucide-react'
 import { DialogPortal } from '@skyhook-io/k8s-ui'
@@ -18,8 +18,9 @@ export function shouldShowWhatsNew(
   currentVersion: string,
   lastSeen: string | null,
   hasPriorRadarState: boolean,
+  catalog: ReleaseNotes[] = RELEASE_NOTES,
 ): boolean {
-  if (!releaseNotesFor(currentVersion)) return false
+  if (!releaseNotesFor(currentVersion, catalog)) return false
   if (lastSeen === null) return hasPriorRadarState
   return normalize(lastSeen) !== normalize(currentVersion)
 }
@@ -72,6 +73,7 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
   const [notes, setNotes] = useState<ReleaseNotes | null>(null)
   const [open, setOpen] = useState(false)
   const [previousVersion, setPreviousVersion] = useState<string | null>(null)
+  const titleId = useId()
 
   // Radar Cloud ships its own release communication.
   const isCloud = capabilities?.deployment?.mode === 'cloud'
@@ -133,9 +135,10 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
   if (isCloud) return null
 
   return (
-    <DialogPortal open={open} onClose={close} className="w-[760px] max-w-[calc(100vw-2rem)] max-h-[min(820px,calc(100vh-4rem))] flex flex-col rounded-xl">
+    <DialogPortal open={open} onClose={close} ariaLabelledBy={titleId} className="w-[760px] max-w-[calc(100vw-2rem)] max-h-[min(820px,calc(100vh-4rem))] flex flex-col rounded-xl">
       {notes && (
         <WhatsNewContent
+          titleId={titleId}
           notes={notes}
           previousVersion={previousVersion}
           onClose={close}
@@ -147,13 +150,14 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
 }
 
 interface WhatsNewContentProps {
+  titleId?: string
   notes: ReleaseNotes
   previousVersion?: string | null
   onClose: () => void
   onNavigate: (path: string) => void
 }
 
-export function WhatsNewContent({ notes, previousVersion, onClose, onNavigate }: WhatsNewContentProps) {
+export function WhatsNewContent({ titleId, notes, previousVersion, onClose, onNavigate }: WhatsNewContentProps) {
   return (
     <>
       <div className="relative px-6 pt-6 pb-4 border-b border-theme-border-subtle">
@@ -162,7 +166,7 @@ export function WhatsNewContent({ notes, previousVersion, onClose, onNavigate }:
             <Sparkles className="w-4 h-4 text-accent" aria-hidden />
           </div>
           <div className="min-w-0">
-            <h2 className="text-base font-semibold text-theme-text-primary">
+            <h2 id={titleId} className="text-base font-semibold text-theme-text-primary">
               What's new in Radar <span className="font-mono">{notes.version}</span>
             </h2>
             <p className="text-xs text-theme-text-tertiary mt-0.5">
