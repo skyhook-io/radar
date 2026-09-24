@@ -964,7 +964,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const { data: namespaceScope } = useNamespaceScope()
 
   // Context switch state
-  const { isSwitching, targetContext, progressMessage, updateProgress, endSwitch } = useContextSwitch()
+  const { isSwitching, targetContext, progressMessage, updateProgress, endSwitch, takeOpenAfterSwitch } = useContextSwitch()
 
   // Connection state (for graceful startup)
   const { connection, retry: retryConnection, isRetrying, updateFromSSE: updateConnectionFromSSE } = useConnection()
@@ -1141,7 +1141,7 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
   const { topology, connected: eventStreamConnected, connecting: eventStreamConnecting, reconnect: reconnectEventStream } = useEventSource(namespaces, sseMode as 'resources' | 'traffic', {
     onContextSwitchComplete: endSwitch,
     onContextSwitchProgress: updateProgress,
-    onContextChanged: () => {
+    onContextChanged: (context) => {
       // Clear all React Query caches when cluster context changes
       // This ensures helm releases, resources, etc. are refetched from the new cluster
       // removeQueries clears cached data, invalidateQueries triggers refetch
@@ -1164,7 +1164,16 @@ function AppInner({ manageDocumentTitle = false, documentTitleSuffix, onClusterL
       // Reset resource-specific params while retaining the durable investigation
       // focus. Diagnose resolves runs by id and owns whether the focused run is
       // still readable after the context switch.
-      if (isInvestigationWorkspacePath(location.pathname)) {
+      const openAfter = takeOpenAfterSwitch(context)
+      if (openAfter) {
+        // The switch was made to open this resource on the new cluster; the
+        // page it was requested from belongs to the old one.
+        setSelectedResource(openAfter)
+        const params = new URLSearchParams()
+        params.set('resource', openAfter.namespace ? `${openAfter.namespace}/${openAfter.name}` : openAfter.name)
+        if (openAfter.group) params.set('apiGroup', openAfter.group)
+        navigate({ pathname: `/resources/${openAfter.kind}`, search: params.toString() }, { replace: true })
+      } else if (isInvestigationWorkspacePath(location.pathname)) {
         navigate(
           {
             pathname: location.pathname,

@@ -47,6 +47,9 @@ import {
   type SelectedResource,
 } from '@skyhook-io/k8s-ui'
 import { useToast } from '../ui/Toast'
+import { useContextSwitchFlow } from '../useContextSwitchFlow'
+import { useDestinationCluster } from './useDestinationCluster'
+import { destinationToast } from './destination-toast'
 
 import {
   fetchJSON,
@@ -382,6 +385,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
   const resourceQ = useResource<any>(kind, namespace, name, group)
   const treeQ = useGitOpsTree(kind, namespace, name, group, namespaces)
   const insightsQ = useGitOpsInsights(kind, namespace, name, group, namespaces)
+  const switchFlow = useContextSwitchFlow()
   const status = resourceQ.data ? getGitOpsResourceStatus(kind, resourceQ.data) : null
   const tool = getGitOpsTool(kind, group)
   // Argo "auto-sync ON" is determined by spec.syncPolicy.automated being set,
@@ -465,14 +469,27 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
     roles: graphRoles,
   }), [graphHealth, graphKinds, graphNamespaces, graphRoles, graphSync])
   const graphFacets = useMemo(() => buildTreeFacets(tree), [tree])
+  const remoteDestination = tree?.remoteDestination ?? insightsQ.data?.summary?.remoteDestination
+  const destination = useDestinationCluster(remoteDestination, kind, namespace, name)
 
   function openResourceFromTree(ref: GitOpsTreeRef | GitOpsInsightRef, node?: GitOpsTreeNode) {
     // Locality comes from the node, not the name: a remote app can deploy a
     // same-named copy of itself to its destination.
-    if (node?.role !== 'root' && isDestinationRef(tree, tree?.remoteDestination ?? insightsQ.data?.summary?.remoteDestination, ref)) {
-      showToast(`${ref.kind} ${ref.namespace ? `${ref.namespace}/` : ''}${ref.name} is on the destination cluster`, {
+    if (node?.role !== 'root' && isDestinationRef(tree, remoteDestination, ref)) {
+      const toast = destinationToast(`${ref.kind} ${ref.namespace ? `${ref.namespace}/` : ''}${ref.name}`, destination)
+      const target = destination.context
+      showToast(toast.message, {
         type: 'info',
-        detail: "Radar is connected to the cluster running the controller, so it can't open this resource. A same-named resource here would be a different one.",
+        detail: toast.detail,
+        action: toast.actionLabel && target ? {
+          label: toast.actionLabel,
+          onClick: () => switchFlow.requestSwitch(target, {
+            kind: kindToPluralWithGroup(ref.kind, ref.group ?? ''),
+            namespace: ref.namespace || '',
+            name: ref.name,
+            group: ref.group,
+          }),
+        } : undefined,
       })
       return
     }
@@ -833,6 +850,7 @@ function GitOpsDetailView({ namespaces, onOpenResource, onOpenSettings }: GitOps
       }}
     >
       {/* Modals — portaled to body, only render the ones for the current tool. */}
+      {switchFlow.confirmDialog}
       {isArgoApp && (
         <>
           <SyncOptionsDialog

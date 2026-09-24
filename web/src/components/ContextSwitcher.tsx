@@ -1,15 +1,11 @@
-import { useMemo, useState, forwardRef } from 'react'
-import { AlertTriangle } from 'lucide-react'
+import { useMemo, forwardRef } from 'react'
 import {
   ClusterSwitcher,
   type ClusterSwitcherItem,
-  pluralize,
 } from '@skyhook-io/k8s-ui'
-import { useContexts, useSwitchContext, useClusterInfo, useCapabilities, fetchSessionCounts, type SessionCounts } from '../api/client'
-import { useContextSwitch } from '../context/ContextSwitchContext'
-import { useToast } from '../components/ui/Toast'
-import { useDock } from '../components/dock'
+import { useContexts, useClusterInfo, useCapabilities } from '../api/client'
 import type { ContextInfo } from '../types'
+import { useContextSwitchFlow } from './useContextSwitchFlow'
 import { parseContextForSwitcher, visibleContextQualifier, type ParsedContextName } from '../utils/context-name'
 
 interface ContextSwitcherProps {
@@ -28,23 +24,11 @@ interface ParsedContext extends ParsedContextName {
   nameQualifier?: string
 }
 
-function shouldSuppressSwitchErrorToast(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : ''
-  return message.includes('cluster connection failed:')
-}
-
 export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcherProps>(({ className = '', variant, label, triggerName }, ref) => {
-  const [showConfirm, setShowConfirm] = useState(false)
-  const [pendingSwitch, setPendingSwitch] = useState<ParsedContext | null>(null)
-  const [sessionCounts, setSessionCounts] = useState<SessionCounts | null>(null)
-
   const { data: contexts, isLoading: contextsLoading } = useContexts()
   const { data: clusterInfo } = useClusterInfo()
   const { data: capabilities } = useCapabilities()
-  const switchContext = useSwitchContext()
-  const { startSwitch, endSwitch } = useContextSwitch()
-  const { showError } = useToast()
-  const { tabs } = useDock()
+  const switchFlow = useContextSwitchFlow()
 
   // Parse contexts and decide whether to render group headers (multi-account only).
   // hasMultipleSources gates the kubeconfig-source chip — only useful when 2+
@@ -102,69 +86,10 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
     })
   }, [parsedById, hasMultipleAccounts, hasMultipleSources])
 
-  const performSwitch = async (parsed: ParsedContext) => {
-    startSwitch({
-      raw: parsed.raw,
-      provider: parsed.provider,
-      account: parsed.account,
-      region: parsed.region,
-      clusterName: parsed.clusterName,
-    })
-    try {
-      await switchContext.mutateAsync({ name: parsed.context.name })
-    } catch (error) {
-      console.error('Failed to switch context:', error)
-      endSwitch()
-      // Backend may not transition to StateDisconnected on client-side errors
-      // (network, timeout) — without this toast the user gets no feedback.
-      if (!shouldSuppressSwitchErrorToast(error)) {
-        const message = error instanceof Error ? error.message : 'Unknown error'
-        showError('Failed to switch context', message)
-      }
-    }
-  }
-
-  const handleSelect = async (item: ClusterSwitcherItem) => {
+  const handleSelect = (item: ClusterSwitcherItem) => {
     const parsed = parsedById.get(item.id)
-    if (!parsed || parsed.context.isCurrent || switchContext.isPending) return
-
-    // Active sessions (port forwards from API + terminal tabs from dock) get
-    // a confirmation prompt — switching contexts kills both.
-    try {
-      const counts = await fetchSessionCounts()
-      const terminalTabs = tabs.filter(t => t.type === 'terminal').length
-      const total = counts.portForwards + terminalTabs
-      if (total > 0) {
-        setSessionCounts({ ...counts, execSessions: terminalTabs, total })
-        setPendingSwitch(parsed)
-        setShowConfirm(true)
-        return
-      }
-    } catch (error) {
-      // Session-counts is best-effort; failing it shouldn't block the user.
-      // But warn — if there ARE active sessions we couldn't see, the switch
-      // will silently kill them.
-      console.error('Failed to check sessions:', error)
-      showError(
-        'Could not check active sessions',
-        'Switching anyway. Any open port-forwards or terminals will be terminated.',
-      )
-    }
-    performSwitch(parsed)
-  }
-
-  const handleConfirmSwitch = () => {
-    setShowConfirm(false)
-    if (pendingSwitch) {
-      performSwitch(pendingSwitch)
-      setPendingSwitch(null)
-    }
-  }
-
-  const handleCancelSwitch = () => {
-    setShowConfirm(false)
-    setPendingSwitch(null)
-    setSessionCounts(null)
+    if (!parsed) return
+    switchFlow.requestSwitch(parsed.context)
   }
 
   // In-cluster mode renders a static badge instead of a switcher (only one
@@ -206,63 +131,18 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
         currentSourceLabel={currentSourceLabel}
         items={items}
         onSelect={handleSelect}
-        loading={switchContext.isPending}
+        loading={switchFlow.isPending}
         disabled={contextsLoading || !capabilities || capabilities.configManagement === 'operator'}
         searchable={items.length > 1}
         showGroupHeaders={hasMultipleAccounts}
         errorSlot={
-          switchContext.isError ? (
-            <span className="text-xs text-red-400">{switchContext.error?.message}</span>
+          switchFlow.error ? (
+            <span className="text-xs text-red-400">{switchFlow.error.message}</span>
           ) : undefined
         }
       />
 
-      {showConfirm && sessionCounts && pendingSwitch && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50">
-          <div className="bg-theme-surface border border-theme-border rounded-lg shadow-xl max-w-md mx-4 overflow-hidden">
-            <div className="px-4 py-3 border-b border-theme-border flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-amber-400" />
-              <span className="font-medium text-theme-text-primary">Active Sessions</span>
-            </div>
-            <div className="px-4 py-4">
-              <p className="text-sm text-theme-text-secondary mb-3">
-                Switching contexts will terminate active sessions:
-              </p>
-              <ul className="text-sm text-theme-text-primary space-y-1 mb-4">
-                {sessionCounts.portForwards > 0 && (
-                  <li className="flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-                    {pluralize(sessionCounts.portForwards, 'port forward')}
-                  </li>
-                )}
-                {sessionCounts.execSessions > 0 && (
-                  <li className="flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-green-400" />
-                    {pluralize(sessionCounts.execSessions, 'terminal session')}
-                  </li>
-                )}
-              </ul>
-              <p className="text-xs text-theme-text-tertiary">
-                Switch to: <span className="text-theme-text-secondary">{pendingSwitch.clusterName}</span>
-              </p>
-            </div>
-            <div className="px-4 py-3 border-t border-theme-border flex justify-end gap-2">
-              <button
-                onClick={handleCancelSwitch}
-                className="px-3 py-1.5 text-sm rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmSwitch}
-                className="px-3 py-1.5 text-sm rounded-md bg-amber-500 hover:bg-amber-600 text-white transition-colors"
-              >
-                Switch Anyway
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {switchFlow.confirmDialog}
     </>
   )
 })

@@ -1474,6 +1474,11 @@ type ContextInfo struct {
 	// loading; populated for every context — not just colliding ones — so
 	// the dropdown can show provenance even without ambiguity.
 	Source string `json:"source,omitempty"`
+	// Server is the API server URL of the context's cluster, used to find
+	// the context for a cluster another object names by URL. Never
+	// serialized: kubeconfig server URLs can carry credentials in their path
+	// or query.
+	Server string `json:"-"`
 	// AWSProfile is the AWS profile used by this context's exec plugin,
 	// extracted from --profile arg or AWS_PROFILE env var. Set only for
 	// EKS-style exec plugins (aws, aws-iam-authenticator).
@@ -1617,6 +1622,7 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 				Name:         qName,
 				OriginalName: entry.InFileName,
 				Cluster:      ctx.Cluster,
+				Server:       clusterServer(cfg, ctx.Cluster),
 				User:         ctx.AuthInfo,
 				Namespace:    ctx.Namespace,
 				IsCurrent:    qName == currentCtx,
@@ -1659,6 +1665,7 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 		contexts = append(contexts, ContextInfo{
 			Name:       name,
 			Cluster:    ctx.Cluster,
+			Server:     clusterServer(&rawConfig, ctx.Cluster),
 			User:       ctx.AuthInfo,
 			Namespace:  ctx.Namespace,
 			IsCurrent:  name == currentCtx,
@@ -1666,6 +1673,13 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 		})
 	}
 	return contexts, nil
+}
+
+func clusterServer(cfg *clientcmdapi.Config, cluster string) string {
+	if cl := cfg.Clusters[cluster]; cl != nil {
+		return cl.Server
+	}
+	return ""
 }
 
 func validateContextSwitchTarget(name string) error {

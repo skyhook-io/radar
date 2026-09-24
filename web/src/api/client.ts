@@ -6465,6 +6465,18 @@ export function useContexts() {
   });
 }
 
+// Where a remote Argo Application or Flux object (spec.kubeConfig) deploys:
+// the destination's host for display, and the kubeconfig contexts that reach it.
+export function useGitOpsDestination(kind: string, namespace: string, name: string, enabled: boolean) {
+  return useQuery<{ server: string; contexts: string[] }>({
+    queryKey: ["gitops-destination", kind, namespace, name],
+    queryFn: () => fetchJSON(`/gitops/destination/${encodeURIComponent(kind)}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`),
+    enabled,
+    staleTime: 60000,
+    retry: false,
+  });
+}
+
 // Session counts for context switch confirmation
 export interface SessionCounts {
   portForwards: number;

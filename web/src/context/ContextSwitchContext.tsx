@@ -1,4 +1,5 @@
-import { createContext, useContext, useState, useCallback, ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, useRef, ReactNode } from 'react'
+import type { SelectedResource } from '../types'
 
 export interface ParsedContextInfo {
   raw: string
@@ -15,6 +16,11 @@ interface ContextSwitchState {
   startSwitch: (context: ParsedContextInfo) => void
   updateProgress: (message: string) => void
   endSwitch: () => void
+  // A resource to open once a switch to `context` is live. The app's context
+  // reset takes it, so the open can't race the reset that clears the old
+  // cluster's drawer and URL. A change to any other context discards it.
+  setOpenAfterSwitch: (target: { context: string; resource: SelectedResource } | null) => void
+  takeOpenAfterSwitch: (context: string) => SelectedResource | null
 }
 
 const ContextSwitchContext = createContext<ContextSwitchState | null>(null)
@@ -40,8 +46,18 @@ export function ContextSwitchProvider({ children }: { children: ReactNode }) {
     setProgressMessage(null)
   }, [])
 
+  const openAfterSwitch = useRef<{ context: string; resource: SelectedResource } | null>(null)
+  const setOpenAfterSwitch = useCallback((target: { context: string; resource: SelectedResource } | null) => {
+    openAfterSwitch.current = target
+  }, [])
+  const takeOpenAfterSwitch = useCallback((context: string) => {
+    const target = openAfterSwitch.current
+    openAfterSwitch.current = null
+    return target && target.context === context ? target.resource : null
+  }, [])
+
   return (
-    <ContextSwitchContext.Provider value={{ isSwitching, targetContext, progressMessage, startSwitch, updateProgress, endSwitch }}>
+    <ContextSwitchContext.Provider value={{ isSwitching, targetContext, progressMessage, startSwitch, updateProgress, endSwitch, setOpenAfterSwitch, takeOpenAfterSwitch }}>
       {children}
     </ContextSwitchContext.Provider>
   )
