@@ -1,0 +1,37 @@
+suite: usage-data ConfigMap and scoped Role
+templates:
+  - usage-data.yaml
+tests:
+  - it: creates an empty ConfigMap Radar can read and write by name only
+    asserts:
+      - hasDocuments:
+          count: 3
+      - isKind:
+          of: ConfigMap
+        documentIndex: 0
+      - notExists:
+          path: data
+        documentIndex: 0
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: ["configmaps"]
+              resourceNames: ["RELEASE-NAME-radar-usage-data"]
+              verbs: ["get", "update", "patch"]
+        documentIndex: 1
+  - it: leaves RBAC to the operator when rbac.create is off
+    set:
+      rbac.create: false
+    asserts:
+      - hasDocuments:
+          count: 1
+  - it: does nothing under Radar Cloud, which manages usage data itself
+    set:
+      cloud.enabled: true
+      cloud.token: x
+      cloud.clusterName: x
+      cloud.url: wss://hub.example/agent
+    asserts:
+      - hasDocuments:
+          count: 0

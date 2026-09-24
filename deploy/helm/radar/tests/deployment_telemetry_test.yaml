@@ -1,0 +1,47 @@
+suite: deployment usage data env
+templates:
+  - deployment.yaml
+tests:
+  - it: leaves the choice to the team by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_TELEMETRY
+            value: "on"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_TELEMETRY
+            value: "off"
+  - it: turns usage data on for everyone
+    set:
+      telemetry.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_TELEMETRY
+            value: "on"
+  - it: keeps usage data off for everyone
+    set:
+      telemetry.enabled: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_TELEMETRY
+            value: "off"
+  - it: never sets usage data under Radar Cloud
+    set:
+      telemetry.enabled: true
+      cloud.enabled: true
+      cloud.token: x
+      cloud.clusterName: x
+      cloud.url: wss://hub.example/agent
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: RADAR_TELEMETRY
+            value: "on"

@@ -1,0 +1,46 @@
+{{- if not .Values.cloud.enabled }}
+{{- /*
+Holds the team's usage-data choice so it survives pod restarts; Radar's home
+directory is an emptyDir. The chart creates it empty and never sets `data`,
+so upgrades leave what Radar wrote in place. Radar can read and write only
+this one ConfigMap, by name.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "radar.fullname" . }}-usage-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+{{- if .Values.rbac.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "radar.fullname" . }}-usage-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["{{ include "radar.fullname" . }}-usage-data"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "radar.fullname" . }}-usage-data
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "radar.fullname" . }}-usage-data
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "radar.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}

@@ -252,6 +252,7 @@ trend charts remain unavailable for Kubecost.
 | `argocd.token` | Inline Argo CD API token (dev only — lands in the release state) | `""` |
 | `argocd.url` | Explicit `argocd-server` URL; blank auto-discovers in-cluster | `""` |
 | `argocd.insecureTls` | Skip TLS verification for a self-signed `argocd-server` | `false` |
+| `telemetry.enabled` | Daily anonymous usage report under a random install ID: views, actions and MCP tools used, plus this cluster's version, platform and size ranges. Never names or contents. Unset leaves it off until someone on the team turns it on in Radar; `true` or `false` decides for everyone and locks the in-app switch. The team's choice is kept in the `<release>-usage-data` ConfigMap; the only write access this adds is on that one ConfigMap, by name ([what is sent](https://github.com/skyhook-io/radar/blob/main/docs/configuration.md#usage-data)) | unset |
 | `resources.requests.cpu` | CPU request | `200m` |
 | `resources.requests.memory` | Memory request | `256Mi` |
 | `resources.limits.cpu` | CPU limit | `2` |
