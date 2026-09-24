@@ -627,9 +627,6 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 		}
 	})
 
-	// GetChangesForOwner backs the "what changed under this workload" drill-down.
-	// It scopes on owner kind+name and namespace together; a store that drops the
-	// namespace predicate shows another namespace's identically-named owner.
 	// Whatever a store is handed, it must hand back. Each backend encodes these
 	// differently - Go structs in memory, TEXT and a fixed-width time layout in
 	// SQLite, jsonb and bigint nanoseconds in PostgreSQL - and only a
