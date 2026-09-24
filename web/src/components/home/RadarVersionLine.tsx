@@ -1,4 +1,4 @@
-import { ArrowUpCircle, Sparkles } from 'lucide-react'
+import { ArrowUpCircle, Megaphone } from 'lucide-react'
 import { gitOpsRouteForResource } from '@skyhook-io/k8s-ui'
 import type { CloudConnectSelf, VersionInfo } from '../../api/client'
 import {
@@ -44,7 +44,7 @@ export function RadarVersionLine({
         onClick={onShowWhatsNew}
         className="inline-flex items-center gap-1 text-accent-text hover:text-accent transition-colors"
       >
-        <Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        <Megaphone className="h-3.5 w-3.5 shrink-0" aria-hidden />
         What's new
       </button>
     </span>
