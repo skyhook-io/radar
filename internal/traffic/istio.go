@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,9 +16,10 @@ import (
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
-const (
-	istiodName = "istiod"
-)
+// istiodSelector matches istiod Deployments by label rather than by name: a
+// revisioned install is named istiod-<rev>, but the istiod chart labels every
+// revision app=istiod.
+const istiodSelector = "app=istiod"
 
 // Namespaces where istiod is commonly deployed
 var istioNamespaces = []string{"istio-system", "istio", "default"}
@@ -48,10 +50,20 @@ func (s *IstioSource) Detect(ctx context.Context) (*DetectionResult, error) {
 	}
 
 	for _, ns := range istioNamespaces {
-		deploy, err := s.k8sClient.AppsV1().Deployments(ns).Get(ctx, istiodName, metav1.GetOptions{})
-		if err != nil {
+		list, err := s.k8sClient.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{LabelSelector: istiodSelector})
+		if err != nil || len(list.Items) == 0 {
 			continue
 		}
+
+		deploys := list.Items
+		sort.Slice(deploys, func(i, j int) bool {
+			iReady, jReady := deploys[i].Status.ReadyReplicas > 0, deploys[j].Status.ReadyReplicas > 0
+			if iReady != jReady {
+				return iReady
+			}
+			return deploys[i].Name < deploys[j].Name
+		})
+		deploy := &deploys[0]
 
 		totalReplicas := int32(1)
 		if deploy.Spec.Replicas != nil {
@@ -62,6 +74,17 @@ func (s *IstioSource) Detect(ctx context.Context) (*DetectionResult, error) {
 			result.Available = true
 			result.Message = fmt.Sprintf("Istio detected with istiod running in namespace %s (%d/%d ready)",
 				ns, deploy.Status.ReadyReplicas, totalReplicas)
+
+			var running []string
+			for _, d := range deploys {
+				if d.Status.ReadyReplicas > 0 {
+					running = append(running, d.Name)
+				}
+			}
+			if len(running) > 1 {
+				result.Message = fmt.Sprintf("Istio detected with %d istiod revisions running in namespace %s: %s",
+					len(running), ns, strings.Join(running, ", "))
+			}
 
 			// Try to get version from pod labels
 			if ver, ok := deploy.Spec.Template.Labels["istio.io/rev"]; ok && ver != "" {
