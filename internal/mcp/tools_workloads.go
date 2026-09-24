@@ -723,7 +723,8 @@ type manageNodeInput struct {
 	Name               string `json:"name" jsonschema:"node name"`
 	DeleteEmptyDirData *bool  `json:"delete_empty_dir_data,omitempty" jsonschema:"evict pods with emptyDir volumes (default true, set false to skip them)"`
 	Force              bool   `json:"force,omitempty" jsonschema:"force evict pods not managed by a controller (default false)"`
-	Timeout            int    `json:"timeout,omitempty" jsonschema:"drain timeout in seconds (default 60)"`
+	WaitForDeletion    *bool  `json:"wait_for_deletion,omitempty" jsonschema:"wait for evicted pods to actually be deleted before returning (default true); false returns once evictions are accepted"`
+	Timeout            int    `json:"timeout,omitempty" jsonschema:"drain timeout in seconds; 0 lets the server pick a default"`
 }
 
 func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manageNodeInput) (*mcp.CallToolResult, any, error) {
@@ -765,8 +766,11 @@ func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manag
 			IgnoreDaemonSets:   true,
 			DeleteEmptyDirData: deleteLocal,
 			Force:              input.Force,
-			Timeout:            60 * time.Second,
+			// Wait for the pods to actually be gone by default so "drained" means the node is
+			// empty; an agent that reboots on this result must not race the grace period.
+			WaitForDeletion: input.WaitForDeletion == nil || *input.WaitForDeletion,
 		}
+		// Timeout left at 0 lets DrainNode pick a default sized for the operation.
 		if input.Timeout > 0 {
 			opts.Timeout = time.Duration(input.Timeout) * time.Second
 		}
@@ -774,22 +778,36 @@ func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manag
 		if err != nil {
 			return nil, nil, fmt.Errorf("drain failed: %w", err)
 		}
-		status := "ok"
-		msg := fmt.Sprintf("Drained node %s: %d pods evicted", input.Name, len(result.EvictedPods))
-		if len(result.Errors) > 0 {
-			status = "partial"
-			msg = fmt.Sprintf("Drain partially completed on node %s: %d evicted, %d failed",
-				input.Name, len(result.EvictedPods), len(result.Errors))
-		}
+		status, msg := describeNodeDrain(input.Name, result)
 		return toJSONResult(map[string]any{
-			"status":      status,
-			"message":     msg,
-			"evictedPods": result.EvictedPods,
-			"errors":      result.Errors,
+			"status":            status,
+			"message":           msg,
+			"evictedPods":       result.EvictedPods,
+			"pendingPods":       result.PendingPods,
+			"waitedForDeletion": result.WaitedForDeletion,
+			"errors":            result.Errors,
 		})
 
 	default:
 		return nil, nil, fmt.Errorf("unknown action %q: must be cordon, uncordon, or drain", input.Action)
+	}
+}
+
+// describeNodeDrain turns a drain result into an MCP status and message. A drain that failed
+// some evictions, or that waited and still has pods terminating, is "partial": the node is
+// not yet empty and not safe to take down.
+func describeNodeDrain(name string, result *k8s.DrainResult) (status, message string) {
+	switch {
+	case len(result.Errors) > 0:
+		return "partial", fmt.Sprintf("Drain partially completed on node %s: %d evicted, %d failed (node remains cordoned)",
+			name, len(result.EvictedPods), len(result.Errors))
+	case len(result.PendingPods) > 0:
+		return "partial", fmt.Sprintf("Drain on node %s: %d pods evicted, %d still terminating after the timeout (node remains cordoned; not yet safe to take down)",
+			name, len(result.EvictedPods), len(result.PendingPods))
+	case result.WaitedForDeletion:
+		return "ok", fmt.Sprintf("Drained node %s: %d pods evicted and confirmed gone", name, len(result.EvictedPods))
+	default:
+		return "ok", fmt.Sprintf("Drained node %s: %d evictions accepted; pods may still be terminating", name, len(result.EvictedPods))
 	}
 }
 

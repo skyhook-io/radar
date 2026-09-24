@@ -83,4 +83,35 @@ describe("describeDrainResult", () => {
     });
     expect(skipOnly.detail).not.toContain("accepted");
   });
+
+  it("confirms the node is empty when the drain waited and every pod is gone", () => {
+    const r = describeDrainResult({
+      evictedPods: ["shop/web-1", "shop/web-2"],
+      pendingPods: [],
+      waitedForDeletion: true,
+    });
+    expect(r.failed).toBe(false);
+    expect(r.title).toBe("Node drained: 2 evicted, 0 skipped");
+    expect(r.detail).toContain("All evicted pods have terminated");
+    expect(r.detail).not.toContain("may still be terminating");
+  });
+
+  it("flags pods still terminating after a waited drain as incomplete", () => {
+    const r = describeDrainResult({
+      evictedPods: ["shop/web-1", "shop/db-1"],
+      pendingPods: ["shop/db-1"],
+      waitedForDeletion: true,
+    });
+    expect(r.failed).toBe(true);
+    expect(r.title).toBe("Drain incomplete: 2 evicted, 1 still terminating, 0 skipped");
+    expect(r.detail).toContain("Still terminating 1: shop/db-1");
+    expect(r.detail).toContain("do not take it down");
+  });
+
+  it("keeps the accepted caveat when the drain did not wait", () => {
+    const r = describeDrainResult({ evictedPods: ["shop/web-1"], waitedForDeletion: false });
+    expect(r.failed).toBe(false);
+    expect(r.detail).toContain("Evictions were accepted");
+    expect(r.detail).toContain("may still be terminating");
+  });
 });

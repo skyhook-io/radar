@@ -625,11 +625,13 @@ func registerTools(server *mcp.Server, includeWrites bool, paramRegistry *toolPa
 	addToolWithRegistry(paramRegistry, server, &mcp.Tool{
 		Name: "manage_node",
 		Description: "Perform operations on a Kubernetes node. " +
-			"Supported actions: 'cordon' marks the node as unschedulable (no new pods will be scheduled), " +
-			"'uncordon' marks the node as schedulable again, " +
-			"'drain' cordons the node and evicts all non-DaemonSet pods. " +
-			"Drain options: 'delete_empty_dir_data' (allow evicting pods with emptyDir volumes), " +
-			"'force' (evict pods not managed by a controller), 'timeout' (seconds, default 60).",
+			"Supported actions: 'cordon' marks the node unschedulable, 'uncordon' marks it schedulable again, " +
+			"'drain' cordons the node and evicts all non-DaemonSet pods, waiting for them to actually be deleted " +
+			"before returning so the node is empty (kubectl parity). Pods still terminating when the timeout " +
+			"passes come back in 'pendingPods' with status 'partial' — do not take the node down until it is empty. " +
+			"Drain options: 'delete_empty_dir_data' (evict pods with emptyDir volumes), 'force' (evict pods not " +
+			"managed by a controller), 'wait_for_deletion' (default true; false returns once evictions are accepted), " +
+			"'timeout' (seconds; 0 lets the server choose).",
 		Annotations: writeTool,
 	}, logToolCall("manage_node", handleManageNode))
 }

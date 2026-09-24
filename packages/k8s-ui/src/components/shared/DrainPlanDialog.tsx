@@ -29,14 +29,17 @@ export interface DrainPlan {
   pdbError?: string
 }
 
-// The two options the operator chooses in the dialog. Both are always sent
-// explicitly to the drain endpoint; nothing relies on server-side defaults.
+// The options the operator chooses in the dialog. force and deleteEmptyDirData are always
+// sent explicitly to the drain endpoint; nothing relies on server-side defaults. waitForDeletion
+// does not affect the plan (what would be evicted), only whether the drain waits for the pods
+// to actually leave before reporting done.
 export interface DrainDialogOptions {
   force: boolean
   deleteEmptyDirData: boolean
+  waitForDeletion: boolean
 }
 
-export const DEFAULT_DRAIN_DIALOG_OPTIONS: DrainDialogOptions = { force: false, deleteEmptyDirData: false }
+export const DEFAULT_DRAIN_DIALOG_OPTIONS: DrainDialogOptions = { force: false, deleteEmptyDirData: false, waitForDeletion: true }
 
 /** A plan is only usable when it was computed for this node with these options. */
 export function planMatches(plan: DrainPlan | null | undefined, nodeName: string, options: DrainDialogOptions): plan is DrainPlan {
@@ -92,7 +95,7 @@ const OUTCOME_LABEL: Record<DrainOutcome, string> = {
 
 const ESTIMATE_CAVEAT =
   'An estimate, not a guarantee: the drain re-lists live state when it runs, and pods, budgets and permissions can change until then. ' +
-  'Evictions a budget refuses are retried until the drain deadline (60 seconds, shared by all evictions); a pod covered by more than one budget is refused outright.'
+  'Evictions a budget refuses are retried until the drain deadline; a pod covered by more than one budget is refused outright.'
 
 interface DrainPlanContentProps {
   nodeName: string
@@ -137,6 +140,15 @@ export function DrainPlanContent({
             className="rounded border-theme-border"
           />
           Delete emptyDir data: evict pods that use emptyDir volumes (their data is lost)
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={options.waitForDeletion}
+            onChange={(e) => onOptionsChange({ ...options, waitForDeletion: e.target.checked })}
+            className="rounded border-theme-border"
+          />
+          Wait for the pods to actually be deleted before reporting the node drained (kubectl parity)
         </label>
       </div>
 

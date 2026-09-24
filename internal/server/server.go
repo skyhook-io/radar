@@ -516,7 +516,8 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 		// 60s timeout group. The run keeps going server-side after disconnect.
 		r.Get("/diagnose/runs/{id}/stream", s.handleDiagnoseRunStream)
 
-		// Node drain — outside 60s timeout group (drain may need minutes for PDB backoff)
+		// Node drain — outside the 60s timeout group: it may wait minutes for PDB backoff
+		// and, by default, for the evicted pods to finish terminating.
 		r.Post("/nodes/{name}/drain", s.handleDrainNode)
 
 		// Cloud Connect prepare/start — outside the 60s timeout group. prepare

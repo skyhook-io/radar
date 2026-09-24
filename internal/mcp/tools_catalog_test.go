@@ -244,8 +244,10 @@ func TestTrimmedToolsPreserveLoadBearingSteers(t *testing.T) {
 func TestToolCatalogContextBudget(t *testing.T) {
 	// These caps guard against description accretion, not against new tools or
 	// load-bearing routing and uncertainty contracts. Raise them deliberately.
+	// The manage_node drain wait/pendingPods contract (a partial drain is not
+	// safe to reboot on) is one such uncertainty boundary.
 	const (
-		maxCatalogBytes         = 58500
+		maxCatalogBytes         = 59000
 		maxToolDescriptionBytes = 3000
 	)
 

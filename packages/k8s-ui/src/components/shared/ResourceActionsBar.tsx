@@ -134,7 +134,7 @@ interface ResourceActionsBarProps {
   isCordoningNode?: boolean
   onUncordonNode?: (params: { name: string }) => void
   isUncordoningNode?: boolean
-  onDrainNode?: (params: { name: string; options?: { deleteEmptyDirData?: boolean; force?: boolean } }) => void
+  onDrainNode?: (params: { name: string; options?: { deleteEmptyDirData?: boolean; force?: boolean; waitForDeletion?: boolean } }) => void
   isDrainingNode?: boolean
   // Read-only drain plan (POST /nodes/{name}/drain-plan). When the host provides
   // onPlanDrain, the drain dialog shows the plan before enabling the destructive action.
@@ -729,7 +729,7 @@ export function ResourceActionsBar({
         onConfirm={(opts) => {
           onDrainNode?.({
             name: resource.name,
-            options: { deleteEmptyDirData: opts.deleteEmptyDirData, force: opts.force },
+            options: { deleteEmptyDirData: opts.deleteEmptyDirData, force: opts.force, waitForDeletion: opts.waitForDeletion },
           })
           setShowDrainConfirm(false)
           setDrainOptions(DEFAULT_DRAIN_DIALOG_OPTIONS)

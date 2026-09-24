@@ -22,7 +22,11 @@ type DrainRequest struct {
 	DeleteEmptyDirData *bool  `json:"deleteEmptyDirData,omitempty"`
 	Force              bool   `json:"force"`
 	GracePeriodSeconds *int64 `json:"gracePeriodSeconds,omitempty"`
-	Timeout            int    `json:"timeout,omitempty"` // seconds, default 60
+	Timeout            int    `json:"timeout,omitempty"` // seconds; 0 lets the server pick a default
+	// WaitForDeletion waits for the evicted pods to actually be deleted before returning.
+	// Omitted means true for the drain (the plan ignores it); set false to return once the
+	// Eviction API has accepted every eviction.
+	WaitForDeletion *bool `json:"waitForDeletion,omitempty"`
 }
 
 func (s *Server) handleCordonNode(w http.ResponseWriter, r *http.Request) {
@@ -110,8 +114,9 @@ func drainOptionsFromRequest(req DrainRequest, deleteEmptyDirDefault bool) k8s.D
 		DeleteEmptyDirData: deleteLocal,
 		Force:              req.Force,
 		GracePeriodSeconds: req.GracePeriodSeconds,
-		Timeout:            60 * time.Second,
 	}
+	// Timeout left at 0 lets DrainNode pick a default sized for the operation: a short
+	// admit-only bound, or a longer one when the drain waits for pods to finish leaving.
 	if req.Timeout > 0 {
 		opts.Timeout = time.Duration(req.Timeout) * time.Second
 	}
@@ -198,6 +203,10 @@ func (s *Server) handleDrainNode(w http.ResponseWriter, r *http.Request) {
 	// DeleteEmptyDirData defaults true (matching kubectl drain --delete-emptydir-data).
 	// Most pods use emptyDir for tmp/caches; without this, drain skips almost everything.
 	opts := drainOptionsFromRequest(req, true)
+	// Wait for the evicted pods to actually be gone by default, so "drained" means the node
+	// is empty (kubectl parity). Callers that only want the evictions started opt out with
+	// waitForDeletion:false.
+	opts.WaitForDeletion = req.WaitForDeletion == nil || *req.WaitForDeletion
 
 	auth.AuditLog(r, "", nodeName)
 	client := s.getClientForRequest(r)
