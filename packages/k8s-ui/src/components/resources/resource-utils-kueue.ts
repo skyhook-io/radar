@@ -32,6 +32,88 @@ function activeConditionStatus(resource: any): StatusBadge {
   return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
 }
 
+export function isKueueQueueResource(resource: any): boolean {
+  return resource?.apiVersion === 'kueue.x-k8s.io/v1beta1' || resource?.apiVersion === 'kueue.x-k8s.io/v1beta2'
+}
+
+export function getKueueQueueCondition(resource: any): any {
+  return findCondition(resource, 'Active')
+}
+
+function queueConditionStatus(resource: any): StatusBadge {
+  const active = getKueueQueueCondition(resource)
+  if (isKueueConditionStale(active, resource?.metadata?.generation)) {
+    return { text: `${active.status === 'True' ? 'Active' : active.reason || 'Unknown'} (stale)`, color: healthColors.unknown, level: 'unknown' }
+  }
+  if (active?.status === 'False' && active.reason === 'Stopped') {
+    return { text: 'Stopped', color: healthColors.neutral, level: 'neutral' }
+  }
+  return activeConditionStatus(resource)
+}
+
+type Quantity = string | number
+interface QueueResourceUsage {
+  name: string
+  total?: Quantity
+  borrowed?: Quantity
+}
+interface QueueFlavorUsage {
+  name: string
+  resources?: QueueResourceUsage[]
+}
+export interface KueueQuotaRow {
+  flavor: string
+  resource: string
+  configured: boolean
+  nominal?: Quantity
+  borrowingLimit?: Quantity
+  lendingLimit?: Quantity
+  reserved?: Quantity
+  used?: Quantity
+  borrowedReservation?: Quantity
+  borrowedUsage?: Quantity
+}
+
+export function getKueueQueueQuotaRows(resource: any, clusterQueue: boolean): KueueQuotaRow[] {
+  const rows = new Map<string, KueueQuotaRow>()
+  const rowFor = (flavor: string, name: string) => {
+    const key = JSON.stringify([flavor, name])
+    let row = rows.get(key)
+    if (!row) {
+      row = { flavor, resource: name, configured: false }
+      rows.set(key, row)
+    }
+    return row
+  }
+  if (clusterQueue) {
+    for (const group of resource?.spec?.resourceGroups ?? []) {
+      for (const flavor of group.flavors ?? []) {
+        for (const quota of flavor.resources ?? []) {
+          Object.assign(rowFor(flavor.name, quota.name), {
+            configured: true, nominal: quota.nominalQuota,
+            borrowingLimit: quota.borrowingLimit, lendingLimit: quota.lendingLimit,
+          })
+        }
+      }
+    }
+  }
+  const reservation: QueueFlavorUsage[] = resource?.status?.flavorsReservation ?? []
+  const usage: QueueFlavorUsage[] = !clusterQueue && resource?.apiVersion === 'kueue.x-k8s.io/v1beta1'
+    ? resource?.status?.flavorUsage ?? []
+    : resource?.status?.flavorsUsage ?? []
+  for (const flavor of reservation) {
+    for (const entry of flavor.resources ?? []) {
+      Object.assign(rowFor(flavor.name, entry.name), { reserved: entry.total, borrowedReservation: entry.borrowed })
+    }
+  }
+  for (const flavor of usage) {
+    for (const entry of flavor.resources ?? []) {
+      Object.assign(rowFor(flavor.name, entry.name), { used: entry.total, borrowedUsage: entry.borrowed })
+    }
+  }
+  return [...rows.values()]
+}
+
 function formatWorkloadCount(value: any): string {
   return typeof value === 'number' ? String(value) : '-'
 }
@@ -41,7 +123,7 @@ function formatWorkloadCount(value: any): string {
 // ============================================================================
 
 export function getClusterQueueStatus(resource: any): StatusBadge {
-  return activeConditionStatus(resource)
+  return queueConditionStatus(resource)
 }
 
 export function getClusterQueueCohort(resource: any): string {
@@ -72,7 +154,7 @@ export function getClusterQueueFlavors(resource: any): string {
 // ============================================================================
 
 export function getLocalQueueStatus(resource: any): StatusBadge {
-  return activeConditionStatus(resource)
+  return queueConditionStatus(resource)
 }
 
 export function getLocalQueueClusterQueue(resource: any): string {

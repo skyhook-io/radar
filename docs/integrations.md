@@ -1493,6 +1493,14 @@ and conditions. Links connect submission LocalQueues, reservation ClusterQueues,
 ResourceFlavors and AdmissionChecks. Reservation is distinguished from admission;
 resource totals are requests, not measured usage.
 
+LocalQueue and ClusterQueue detail distinguish reported state from configured stop
+policy, show pending/reserving/admitted counts, and link a LocalQueue to its
+ClusterQueue even before a Workload has a reservation. Per-flavor resource rows
+join quota reservations and admitted usage; ClusterQueues also show nominal quota,
+borrowing/lending limits, namespace eligibility and admission policies. These are
+controller-reported quota facts, not measured utilization or available physical
+capacity. Both v1beta1 and v1beta2 queue shapes are supported.
+
 For an exact `kueue.x-k8s.io/v1beta2` Workload, the REST AI resource endpoint
 and MCP `get_resource` also project a bounded admission summary into
 `resourceContext.scheduling.observations`. The first adapter emits one Kueue

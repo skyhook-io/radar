@@ -182,3 +182,5 @@ export * from './CNPGObjectStoreRenderer'
 export * from './CNPGDeclarativeRenderer'
 
 export { KueueWorkloadRenderer } from './KueueWorkloadRenderer'
+
+export { LocalQueueRenderer, ClusterQueueRenderer } from './KueueQueueRenderers'

@@ -68,7 +68,7 @@ import {
 } from '../resources/resource-utils-kyverno-exceptions'
 import { getResourceClaimStatus, getResourceClaimTemplateStatus, getDeviceClassStatus, getResourceSliceStatus } from '../resources/resource-utils-dra'
 import { getNvidiaClusterPolicyStatus, getNvidiaDriverStatus } from '../resources/resource-utils-nvidia'
-import { getClusterQueueStatus, getLocalQueueStatus, getKueueWorkloadStatus, getResourceFlavorStatus, getAdmissionCheckStatus, getProvisioningRequestStatus } from '../resources/resource-utils-kueue'
+import { isKueueQueueResource, getClusterQueueStatus, getLocalQueueStatus, getKueueWorkloadStatus, getResourceFlavorStatus, getAdmissionCheckStatus, getProvisioningRequestStatus } from '../resources/resource-utils-kueue'
 import { getRayClusterStatus, getRayJobStatus, getRayServiceStatus, getRayCronJobStatus } from '../resources/resource-utils-ray'
 import { getLeaderWorkerSetStatus, getJobSetStatus, isJobSetV1Alpha2 } from '../resources/resource-utils-jobset-lws'
 import { getInferenceServiceStatus, getServingRuntimeStatus, getInferenceGraphStatus, getTrainedModelStatus, getLLMInferenceServiceStatus } from '../resources/resource-utils-kserve'
@@ -116,6 +116,8 @@ import {
   JobRenderer,
   JobSetRenderer,
   KueueWorkloadRenderer,
+  LocalQueueRenderer,
+  ClusterQueueRenderer,
   CronJobRenderer,
   CronWorkflowRenderer,
   HPARenderer,
@@ -436,7 +438,7 @@ const KNOWN_KINDS = new Set([
   'pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets',
   'services', 'endpointslices', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs', 'cronworkflows',
   'jobsets',
-  'workloads',
+  'workloads', 'localqueues', 'clusterqueues',
   'hpas', 'horizontalpodautoscalers', 'nodes', 'persistentvolumeclaims',
   'rollouts', 'analysisruns', 'analysistemplates', 'clusteranalysistemplates', 'experiments', 'certificates', 'workflows', 'persistentvolumes',
   'storageclasses', 'certificaterequests', 'clusterissuers', 'issuers',
@@ -691,7 +693,7 @@ export function ResourceRendererDispatch({
     || kind === 'objectstores' || kind === 'databases' || kind === 'publications'
     || kind === 'subscriptions' || kind === 'imagecatalogs' || kind === 'clusterimagecatalogs' || kind === 'jobsets'
     || kind === 'policies' || kind === 'rollouts' || kind === 'experiments'
-    || kind === 'machines' || kind === 'machinesets' || kind === 'workloads'
+    || kind === 'machines' || kind === 'machinesets' || kind === 'workloads' || kind === 'localqueues' || kind === 'clusterqueues'
   const isCNPGApiVersion = isApiGroup(data?.apiVersion, CNPG_GROUP)
   const groupGatedMatched =
     (kind === 'clusters' && (isCNPGApiVersion || isApiGroup(data?.apiVersion, 'cluster.x-k8s.io')))
@@ -713,6 +715,7 @@ export function ResourceRendererDispatch({
       && isApiGroup(data?.apiVersion, 'cluster.x-k8s.io'))
     || (kind === 'jobsets' && isJobSetV1Alpha2(data))
     || (kind === 'workloads' && isApiGroup(data?.apiVersion, 'kueue.x-k8s.io'))
+    || ((kind === 'localqueues' || kind === 'clusterqueues') && isKueueQueueResource(data))
   const groupGatedFallthrough = isGroupGatedKind && !groupGatedMatched
 
   const calicoApiVersionMatched = isCalicoApiVersion(data?.apiVersion)
@@ -802,6 +805,8 @@ export function ResourceRendererDispatch({
         {kind === 'secrets' && <SecretRenderer data={data} relationships={relationships} onNavigate={onNavigate} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
         {kind === 'jobs' && !nonCoreJobFallthrough && <JobRenderer data={data} />}
         {kind === 'workloads' && isApiGroup(data?.apiVersion, 'kueue.x-k8s.io') && <KueueWorkloadRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'localqueues' && isKueueQueueResource(data) && <LocalQueueRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'clusterqueues' && isKueueQueueResource(data) && <ClusterQueueRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'jobsets' && isJobSetV1Alpha2(data) && <JobSetRenderer data={data} />}
         {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'cronworkflows' && <CronWorkflowRenderer data={data} onNavigate={onNavigate} />}
