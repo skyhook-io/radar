@@ -24,7 +24,6 @@ type (
 	EventType     = pkgtimeline.EventType
 	HealthState   = pkgtimeline.HealthState
 	TimelineEvent = pkgtimeline.TimelineEvent
-	TimelineMeta  = pkgtimeline.TimelineMeta
 	FilterPreset  = pkgtimeline.FilterPreset
 
 	// Store types
@@ -94,9 +93,6 @@ func DefaultQueryOptions() QueryOptions             { return pkgtimeline.Default
 func DefaultStoreConfig() StoreConfig               { return pkgtimeline.DefaultStoreConfig() }
 func CompileFilter(preset *FilterPreset) (*CompiledFilter, error) {
 	return pkgtimeline.CompileFilter(preset)
-}
-func ResourceKey(kind, namespace, name string) string {
-	return pkgtimeline.ResourceKey(kind, namespace, name)
 }
 func SeenResourceKey(clusterContext, group, kind, namespace, name string) string {
 	return pkgtimeline.SeenResourceKey(clusterContext, group, kind, namespace, name)

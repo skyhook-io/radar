@@ -245,11 +245,6 @@ func (cf *CompiledFilter) Matches(event *TimelineEvent) bool {
 	return true
 }
 
-// ResourceKey generates a unique key for a resource
-func ResourceKey(kind, namespace, name string) string {
-	return kind + "/" + namespace + "/" + name
-}
-
 // SeenResourceKey qualifies the canonical resource identity with the cluster
 // context. The NUL separator can't appear in a kubeconfig context name or the
 // resource key. Older opaque keys without group identity deliberately don't

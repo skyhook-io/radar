@@ -159,39 +159,6 @@ func (e *TimelineEvent) IsManaged() bool {
 	return e.Owner != nil || e.Kind == "ReplicaSet" || e.Kind == "Pod" || e.Kind == "Event"
 }
 
-// IsToplevelWorkload returns true if this is a top-level workload (representative in timeline)
-func (e *TimelineEvent) IsToplevelWorkload() bool {
-	switch e.Kind {
-	case "Deployment", "Rollout", "DaemonSet", "StatefulSet",
-		"Service", "Job", "CronJob",
-		"Workflow", "CronWorkflow": // Argo Workflows
-		return true
-	}
-	return false
-}
-
-// GetAppLabel returns the app label value for grouping (app.kubernetes.io/name or app)
-func (e *TimelineEvent) GetAppLabel() string {
-	if e.Labels == nil {
-		return ""
-	}
-	if v, ok := e.Labels["app.kubernetes.io/name"]; ok && v != "" {
-		return v
-	}
-	if v, ok := e.Labels["app"]; ok && v != "" {
-		return v
-	}
-	return ""
-}
-
-// TimelineMeta contains metadata about the timeline query result
-type TimelineMeta struct {
-	TotalEvents int   `json:"totalEvents"`
-	GroupCount  int   `json:"groupCount"`
-	QueryTimeMs int64 `json:"queryTimeMs"`
-	HasMore     bool  `json:"hasMore"` // For pagination
-}
-
 // FilterPreset defines a named filter configuration
 type FilterPreset struct {
 	Name                string      `json:"name"`

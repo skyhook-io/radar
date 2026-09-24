@@ -630,9 +630,6 @@ func TestSQLiteStore_LabelsStorage(t *testing.T) {
 	if result.Labels["app"] != "myapp" {
 		t.Errorf("Expected label app='myapp', got '%s'", result.Labels["app"])
 	}
-	if result.GetAppLabel() != "myapp" {
-		t.Errorf("Expected GetAppLabel()='myapp', got '%s'", result.GetAppLabel())
-	}
 }
 
 func TestSQLiteStore_SeenResources_PersistAcrossRestart(t *testing.T) {
