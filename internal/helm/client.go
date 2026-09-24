@@ -23,6 +23,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/helmhistory"
 
 	"helm.sh/helm/v3/pkg/action"
@@ -1236,8 +1237,17 @@ func fluxHelmReleaseMap(ctx context.Context) map[string]string {
 	if err != nil || len(hrs) == 0 {
 		return nil
 	}
+	return fluxHelmReleaseKeys(hrs)
+}
+
+func fluxHelmReleaseKeys(hrs []*unstructured.Unstructured) map[string]string {
 	out := make(map[string]string, len(hrs))
 	for _, hr := range hrs {
+		// A release installed through spec.kubeConfig lives in another
+		// cluster's Helm storage; a same-named local release is not Flux's.
+		if !gitops.FluxTargetsLocalCluster(hr) {
+			continue
+		}
 		spec, _, _ := unstructured.NestedMap(hr.Object, "spec")
 		releaseName, _ := spec["releaseName"].(string)
 		if releaseName == "" {

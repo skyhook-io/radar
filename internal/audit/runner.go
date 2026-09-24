@@ -12,6 +12,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	bp "github.com/skyhook-io/radar/pkg/audit"
+	"github.com/skyhook-io/radar/pkg/gitops"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -514,16 +515,25 @@ func gitOpsRoots() (present bool, argoAppNames map[string]struct{}) {
 	apps := list("Application", "argoproj.io")
 	if len(apps) > 0 {
 		present = true
-		argoAppNames = make(map[string]struct{}, len(apps))
-		for _, app := range apps {
-			argoAppNames[app.GetName()] = struct{}{}
-		}
+		argoAppNames = localArgoAppNames(apps)
 	}
 	if !present {
 		present = len(list("Kustomization", "kustomize.toolkit.fluxcd.io")) > 0 ||
 			len(list("HelmRelease", "helm.toolkit.fluxcd.io")) > 0
 	}
 	return present, argoAppNames
+}
+
+// localArgoAppNames names the Applications that deploy to this cluster. A
+// remote-destination Application's instance label names nothing local.
+func localArgoAppNames(apps []*unstructured.Unstructured) map[string]struct{} {
+	out := make(map[string]struct{}, len(apps))
+	for _, app := range apps {
+		if gitops.IsInClusterDestination(app) {
+			out[app.GetName()] = struct{}{}
+		}
+	}
+	return out
 }
 
 // serviceAccountScopeNamespace reports the single namespace the SA informer
