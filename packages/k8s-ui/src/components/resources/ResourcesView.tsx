@@ -3071,20 +3071,15 @@ export function getCellFilterKind(kind: string, group?: string): string {
   return `__generic_${normalized}`
 }
 
-// The user's sort preference names a single column, but each kind has its own
-// column set — Age exists everywhere, Restarts only on Pods. Applying a column
-// the current kind doesn't have would sort by an absent value and leave no
-// header arrow to undo it from, so the preference yields to the kind's
-// built-in order there.
-export function resolveDefaultSort(
-  defaultSort: { column: string; direction: 'asc' | 'desc' } | null | undefined,
-  kind: string,
-  group?: string,
-): { column: string | null; direction: SortDirection } {
-  if (!defaultSort?.column) return { column: null, direction: null }
-  const known = getColumnsForKind(kind, group).some(c => c.key === defaultSort.column)
-  if (!known) return { column: null, direction: null }
-  return { column: defaultSort.column, direction: defaultSort.direction }
+// A sort read back from localStorage. Anything but a non-empty column and a
+// known direction reads as "no saved sort" rather than crashing the comparator
+// or driving the order with a direction it does not understand.
+export function sanitizeSavedSort(raw: unknown): { column: string; direction: 'asc' | 'desc' } | null {
+  if (!raw || typeof raw !== 'object') return null
+  const { column, direction } = raw as { column?: unknown; direction?: unknown }
+  if (typeof column !== 'string' || !column) return null
+  if (direction !== 'asc' && direction !== 'desc') return null
+  return { column, direction }
 }
 
 // Get the default visible columns for a kind
@@ -3288,6 +3283,26 @@ function saveColumnSettings(kind: string, group: string | undefined, settings: C
   } catch { /* ignore */ }
 }
 
+const SORT_SETTINGS_PREFIX = 'radar-sort-'
+
+// Kept apart from the column record on purpose: a column record's existence
+// is read as "the user chose columns" (GPU auto-show stands down, the
+// stale-defaults migration is skipped), and a sort alone is not that choice.
+function loadSavedSort(kind: string, group?: string): { column: string; direction: 'asc' | 'desc' } | null {
+  try {
+    const raw = localStorage.getItem(SORT_SETTINGS_PREFIX + columnSettingsKey(kind, group))
+    return raw ? sanitizeSavedSort(JSON.parse(raw)) : null
+  } catch { return null }
+}
+
+function saveSavedSort(kind: string, group: string | undefined, sort: { column: string; direction: 'asc' | 'desc' } | null) {
+  try {
+    const key = SORT_SETTINGS_PREFIX + columnSettingsKey(kind, group)
+    if (sort) localStorage.setItem(key, JSON.stringify(sort))
+    else localStorage.removeItem(key)
+  } catch { /* ignore */ }
+}
+
 function clearColumnSettings(kind: string, group?: string) {
   try {
     const key = COLUMN_SETTINGS_PREFIX + columnSettingsKey(kind, group)
@@ -3400,13 +3415,6 @@ interface ResourcesViewProps {
   onCreateResource?: (kind: { name: string; kind: string; group: string } | null) => void
   /** Default kind when the URL does not include one. */
   defaultKind?: SelectedKindInfo
-  /** The user's preferred sort. Applied on mount, on every kind switch, and
-   *  whenever this prop changes; a kind whose table lacks the column keeps its
-   *  built-in order. Omit for the built-in "reset sort on kind change". */
-  defaultSort?: { column: string; direction: 'asc' | 'desc' } | null
-  /** Fires when the user sorts from a column header, so the host can persist it
-   *  as the new preference. Null when they cycle the sort back off. */
-  onSortChange?: (sort: { column: string; direction: 'asc' | 'desc' } | null) => void
   /** Columns prepended to KNOWN_COLUMNS for every kind. For example, a
    *  multi-cluster host can inject a leading Cluster column. Each extra
    *  column is self-contained (own render/sort/filter), so the host
@@ -3647,8 +3655,6 @@ export function ResourcesView({
   hideSidebar = false,
   onCreateResource,
   defaultKind = DEFAULT_KIND_INFO,
-  defaultSort = null,
-  onSortChange,
   extraLeadingColumns,
   printerTable,
   onRowSelect,
@@ -3697,12 +3703,8 @@ export function ResourcesView({
   const deferredSearchTerm = useDeferredValue(searchTerm)
   const debouncedSearchTerm = useDebouncedValue(searchTerm, 300, (v) => v === '')
   const [regexMode, setRegexMode] = useState(initialFilters.regex)
-  const [sortColumn, setSortColumn] = useState<string | null>(
-    () => resolveDefaultSort(defaultSort, selectedKind.name, selectedKind.group).column,
-  )
-  const [sortDirection, setSortDirection] = useState<SortDirection>(
-    () => resolveDefaultSort(defaultSort, selectedKind.name, selectedKind.group).direction,
-  )
+  const [sortColumn, setSortColumn] = useState<string | null>(null)
+  const [sortDirection, setSortDirection] = useState<SortDirection>(null)
   // Filter state
   const [columnFilters, setColumnFilters] = useState<Record<string, string[]>>(initialFilters.columnFilters)
   const [columnFilterExcludes, setColumnFilterExcludes] = useState<Record<string, boolean>>(initialFilters.columnFilterExcludes)
@@ -3888,6 +3890,30 @@ export function ResourcesView({
     return m
   }, [extraLeadingColumns, builtCustomColumns, builtPrinterColumns])
 
+  // Sortable columns outside KNOWN_COLUMNS, as a value-stable key list. Keyed
+  // on the joined keys rather than the map itself: a host that rebuilds
+  // extraLeadingColumns on every render would otherwise re-run the sort-apply
+  // effect every render and wipe whatever the user just sorted by.
+  // Keys this table renders with a sort control, joined rather than kept as an
+  // array: a host that rebuilds extraLeadingColumns every render would give an
+  // identity-keyed dependency a new value each time, and the apply effect below
+  // would wipe whatever the user just sorted by on every render.
+  const sortableColumnKeys = useMemo(
+    () => allColumns.filter(c => isColumnSortable(c, extraColumnsByKey)).map(c => c.key).sort().join('\n'),
+    [allColumns, extraColumnsByKey],
+  )
+
+  const canSortBy = useCallback(
+    (column: string) => (sortableColumnKeys ? sortableColumnKeys.split('\n') : []).includes(column),
+    [sortableColumnKeys],
+  )
+  // A restored sort can name a column this table does not render right now: a
+  // custom column that was removed, a CRD whose printer columns changed, or one
+  // that simply has not loaded yet. Applying it would order rows by an absent
+  // value with no header arrow to undo it from, so it applies only while the
+  // column is actually sortable here, and springs back the moment it is.
+  const effectiveSortColumn = sortColumn && canSortBy(sortColumn) ? sortColumn : null
+
   // Guards the save effect from persisting on the initial load of each kind
   // (set false by the load effect, flipped true on its first skipped save).
   const isColumnSettingsLoaded = useRef(false)
@@ -3923,6 +3949,12 @@ export function ResourcesView({
     // (non-array, blank path, bad source) must not crash the later .map or add dead columns.
     const savedCustom = sanitizeCustomColumnDefs(saved?.custom)
     setCustomColumns(savedCustom)
+    // Restored as saved. Whether this table can sort by it right now is decided
+    // at render time (effectiveSortColumn), because the rendered column set is
+    // not settled here: printer columns and custom columns land later.
+    const savedSort = loadSavedSort(selectedKind.name, selectedKind.group)
+    setSortColumn(savedSort?.column ?? null)
+    setSortDirection(savedSort?.direction ?? null)
     // Reset on a kind change only. This effect also re-runs when the printer
     // columns arrive, and that is the moment the offered set shrinks — clearing
     // here would drop the evidence for the column they replaced just before the
@@ -4112,6 +4144,9 @@ export function ResourcesView({
     const customKeys = new Set(builtCustomColumns.map(c => c.key))
     setVisibleColumns(getDefaultVisibleColumns(allColumns.filter(c => !customKeys.has(c.key))))
     setColumnWidths({})
+    setSortColumn(null)
+    setSortDirection(null)
+    saveSavedSort(selectedKind.name, selectedKind.group, null)
     isColumnSettingsLoaded.current = false
     // Back to data-driven defaults: re-arm GPU auto-show for this kind.
     hadSavedColumnSettings.current = false
@@ -5066,21 +5101,12 @@ export function ResourcesView({
     setProblemFilters([])
   }, [selectedKindIdentity])
 
-  // Sort falls back to the preference on kind change, when the preference is
-  // edited in Settings, and when it arrives from the server after mount. All
-  // three are the same operation, so one effect owns them; without the
-  // preference this is the old "reset sort on kind change".
-  const applyDefaultSort = useCallback(() => {
-    const { column, direction } = resolveDefaultSort(defaultSort, selectedKind.name, selectedKind.group)
-    setSortColumn(column)
-    setSortDirection(direction)
-  }, [defaultSort, selectedKind.name, selectedKind.group])
-  useEffect(() => {
-    applyDefaultSort()
-  }, [applyDefaultSort])
-
   // Toggle sort for a column
   const handleSort = useCallback((column: string) => {
+    // The N/A/S shortcuts fire on every kind, including ones with no such
+    // column. Sorting is a no-op there, but it would still be saved for this
+    // kind and come back as an invisible sort next visit.
+    if (!canSortBy(column)) return
     let newColumn: string | null
     let newDirection: SortDirection
 
@@ -5103,8 +5129,8 @@ export function ResourcesView({
 
     setSortColumn(newColumn)
     setSortDirection(newDirection)
-    onSortChange?.(newColumn && newDirection ? { column: newColumn, direction: newDirection } : null)
-  }, [sortColumn, sortDirection, onSortChange])
+    saveSavedSort(selectedKind.name, selectedKind.group, newColumn && newDirection ? { column: newColumn, direction: newDirection } : null)
+  }, [sortColumn, sortDirection, canSortBy, selectedKind.name, selectedKind.group])
 
   // Get sortable value from a resource for a given column
   const getSortValue = useCallback((resource: any, column: string, kind?: string): string | number => {
@@ -5341,15 +5367,15 @@ export function ResourcesView({
 
     // Apply custom sorting if set. Extra columns override
     // the built-in getSortValue for their key.
-    if (sortColumn && sortDirection) {
-      const extra = extraColumnsByKey.get(sortColumn)
+    if (effectiveSortColumn && sortDirection) {
+      const extra = extraColumnsByKey.get(effectiveSortColumn)
       // Normalized, matching the filter call sites: a group-qualified kind
       // (istiogateways, cnpgclusters) otherwise arrives here as its bare plural
       // and misses its own sort readers. Hoisted out of the comparator.
       // The ownership-aware wrapper also keeps a foreign CRD that reuses a
       // curated plural on the generic reader used by its cells and filters.
       const sortKind = getCellFilterKind(selectedKind.name, selectedKind.group)
-      const keyOf = extra?.getSortValue ?? ((r: any) => getSortValue(r, sortColumn, sortKind))
+      const keyOf = extra?.getSortValue ?? ((r: any) => getSortValue(r, effectiveSortColumn, sortKind))
       // Derived once per row, not once per comparison: a sort visits O(n log n)
       // pairs, and the status key now runs a per-kind status derivation.
       const decorated = result.map((r: any) => ({ r, k: keyOf(r) }))
@@ -5435,7 +5461,7 @@ export function ResourcesView({
     }
 
     return result
-  }, [resources, deferredSearchTerm, regexMode, searchRegex, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, sortColumn, sortDirection, getSortValue, extraColumnsByKey, podMatchesProblemFilter])
+  }, [resources, deferredSearchTerm, regexMode, searchRegex, columnFilters, columnFilterExcludes, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, effectiveSortColumn, sortDirection, getSortValue, extraColumnsByKey, podMatchesProblemFilter])
 
   // For nodes table: compute the majority minor version so outliers can be highlighted
   const majorityNodeMinorVersion = useMemo(() => {
@@ -6488,7 +6514,7 @@ export function ResourcesView({
                   {columns.map((col, colIdx) => {
                     // Built-in sortable keys, plus any extra/custom column that carries its own getSortValue.
                     const isSortable = isColumnSortable(col, extraColumnsByKey)
-                    const isSorted = sortColumn === col.key
+                    const isSorted = effectiveSortColumn === col.key
                     const isLastCol = colIdx === columns.length - 1
                     const filterCol = filterableColumnMap.get(col.key)
                     const activeFilterValues = columnFilters[col.key] || []
