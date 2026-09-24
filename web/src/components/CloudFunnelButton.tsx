@@ -654,12 +654,12 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
   // remember, tell the team, investigate. Fleet view and the record come
   // last: they are where those land, not why someone connects.
   const highlights = [
-    { icon: Bell, lead: 'Watches', rest: ': an alert in Slack when something breaks and stays broken, whether or not anyone has Radar open' },
-    { icon: History, lead: 'Remembers', rest: ': what changed and when, kept for up to 30 days, past the restart and the 1-hour event TTL' },
-    { icon: Users, lead: 'Tells your team', rest: ": one link opens the same view for anyone you invite, no kubeconfig to pass around. Your cluster's RBAC has the final say" },
-    { icon: Sparkles, lead: 'Investigates', rest: ': a root cause with evidence, on request or straight from an alert rule. No CLI, no API key, budget included' },
-    { icon: Globe, lead: 'Sees the whole fleet', rest: ': every connected cluster in one URL, with issues, checks and search across all of them' },
-    { icon: ShieldCheck, lead: 'Keeps the record', rest: ': an audit log of who did what on paid plans, with SSO and SCIM on Enterprise' },
+    { icon: Bell, lead: 'Watches', rest: ': Slack alerts when something breaks, even with Radar closed' },
+    { icon: History, lead: 'Remembers', rest: ': up to 30 days of what changed, past any restart' },
+    { icon: Users, lead: 'Tells your team', rest: ": one link, no kubeconfig; your RBAC still applies" },
+    { icon: Sparkles, lead: 'Investigates', rest: ': a root cause with evidence, no CLI or API key' },
+    { icon: Globe, lead: 'Sees the whole fleet', rest: ': every cluster in one URL' },
+    { icon: ShieldCheck, lead: 'Keeps the record', rest: ': an audit log on paid plans; SSO and SCIM on Enterprise' },
   ]
   return (
     <div className="px-8 pt-7 pb-2">
@@ -667,14 +667,13 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
       <h3 className="text-[22px] font-semibold leading-tight tracking-tight text-theme-text-primary mb-3">
         Radar, awake when you're not.
       </h3>
-      <p className="text-[14px] leading-relaxed text-theme-text-secondary mb-6">
-        Connect this cluster and Radar Cloud keeps watching after you close the laptop: an alert in Slack when
-        something breaks, up to 30 days of what changed, one link your team opens without a kubeconfig.
+      <p className="text-[14px] leading-relaxed text-theme-text-secondary mb-5">
+        Connect this cluster and Radar keeps working after you close the laptop.
         <br />
         The Radar you're running{' '}
         <b className="text-theme-text-primary font-semibold">stays free and open source, always.</b>
       </p>
-      <ul className="space-y-2.5 mb-4">
+      <ul className="space-y-2 mb-4">
         {highlights.map(({ icon: Icon, lead, rest }) => (
           <li key={lead} className="flex items-start gap-2.5 text-[13px] leading-relaxed text-theme-text-secondary">
             <Icon className="w-4 h-4 shrink-0 mt-[3px] text-emerald-600 dark:text-emerald-400" />
