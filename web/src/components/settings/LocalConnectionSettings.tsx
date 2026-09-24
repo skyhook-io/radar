@@ -1,6 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Badge, Disclosure, Input } from '@skyhook-io/k8s-ui'
-import { ArrowLeft, Check } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Badge, Collapse, ConfirmDialog, SelectMenu } from '@skyhook-io/k8s-ui'
+import { ArrowLeft, Info } from 'lucide-react'
+import { Tooltip } from '../ui/Tooltip'
+import type { ConnectionFeedback } from './ConnectionFormActions'
+import { trapConnectionConfirmationFocus } from './connection-confirmation'
 import {
   apiUrl,
   getApiBase,
@@ -36,7 +39,7 @@ interface Target {
   operationGeneration: number
   identity: TargetIdentity
 }
-interface Usage {
+export interface Usage {
   revision: string
   binding: string
   integration: IntegrationKind
@@ -82,7 +85,7 @@ export interface IntegrationProfile {
   }
 }
 export type IntegrationProfiles = Record<IntegrationKind, IntegrationProfile>
-interface ConnectionResponse {
+export interface ConnectionResponse {
   profiles: IntegrationProfiles
   connections: SavedConnection[]
   unlinkedAssignments: Usage[]
@@ -106,12 +109,13 @@ interface Update {
   kinds?: IntegrationKind[]
   useCliToken?: boolean
 }
-type Task = 'main' | 'copy' | 'cleanup' | 'confirm' | 'reconfirm' | 'replace'
+type Task = 'main' | 'reconfirm' | 'replace'
 const names: Record<IntegrationKind, string> = {
   metrics: 'Metrics',
   argocd: 'Argo CD',
   cost: 'Cost'
 }
+export { names as integrationNames }
 
 export function LocalConnectionSettings({
   kind,
@@ -119,7 +123,8 @@ export function LocalConnectionSettings({
   cliSession,
   onChange,
   onDirtyChange,
-  onBusyChange
+  onBusyChange,
+  status
 }: {
   kind: IntegrationKind
   profiles: IntegrationProfiles
@@ -127,11 +132,11 @@ export function LocalConnectionSettings({
   onChange: (profiles: IntegrationProfiles) => void
   onDirtyChange: (dirty: boolean) => void
   onBusyChange?: (busy: boolean) => void
+  status?: ReactNode
 }) {
   const [snapshot, setSnapshot] = useState(profiles)
   const profile = snapshot[kind]
   const [catalog, setCatalog] = useState<SavedConnection[]>([])
-  const [unlinked, setUnlinked] = useState<Usage[]>([])
   const [task, setTask] = useState<Task>('main')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -145,41 +150,71 @@ export function LocalConnectionSettings({
   )
   const [clusterId, setClusterId] = useState(profile.clusterId)
   const [credentialDirty, setCredentialDirty] = useState(false)
+  const [discoveryDraft, setDiscoveryDraft] = useState(false)
+  const [draftGeneration, setDraftGeneration] = useState(0)
   const [selected, setSelected] = useState<
     (SavedConnection & { source: Usage }) | null
   >(null)
   const [pending, setPending] = useState<Update | null>(null)
+  const confirmationCopy = useRef({ title: '', message: '', label: '' })
   const [confirmBack, setConfirmBack] = useState(false)
   const [accepted, setAccepted] = useState<IntegrationKind[]>([])
   const acceptedChanges = accepted.filter(
     (k) => snapshot[k].state === 'target_changed'
   )
   const request = useRef<AbortController | null>(null)
+  const catalogRequest = useRef<AbortController | null>(null)
   const heading = useRef<HTMLHeadingElement>(null)
+  const confirmationError = useRef<HTMLParagraphElement>(null)
   const region = useRef<HTMLFieldSetElement>(null)
+  const editorRegion = useRef<HTMLFieldSetElement>(null)
   const trigger = useRef<HTMLElement | null>(null)
   const mounted = useRef(true)
   const copySources = catalog
-    .filter((c) => c.type === kind)
+    .filter((c) => c.type === kind && !c.error)
     .flatMap((c) =>
       c.uses
         .filter((use) => use.binding !== profile.target.binding)
         .map((source) => ({ ...c, source }))
     )
-  const storedContexts = [
-    ...catalog.filter((c) => c.type === kind).flatMap((c) => c.uses),
-    ...unlinked.filter((u) => u.integration === kind)
-  ]
-  const removalContext = pending?.binding
-    ? storedContexts.find((use) => use.binding === pending.binding)?.context
-    : profile.target.context
+  const removalContext = profile.target.context
   const dirty =
+    !!selected ||
+    discoveryDraft ||
     url !== profile.url ||
     insecureTls !== profile.insecureTls ||
     mode !== profile.mode ||
     clusterId !== profile.clusterId ||
-    credentialDirty ||
-    !!pending
+    credentialDirty
+  const hasSavedConfiguration = !!(
+    profile.url || profile.connection || profile.secretSet ||
+    profile.headerKeys.length || profile.insecureTls || profile.clusterId
+  )
+  const automaticDraft = discoveryDraft && !url.trim() && mode === 'auto' &&
+    !credentialDirty && !insecureTls && !clusterId
+  useEffect(() => {
+    const controller = new AbortController()
+    catalogRequest.current = controller
+    const base = getApiBase()
+    void fetch(apiUrl('/integrations/connections'), {
+      signal: controller.signal,
+      credentials: getCredentialsMode(),
+      headers: getAuthHeaders()
+    })
+      .then(async (response) => {
+        const data = (await response.json()) as ConnectionResponse
+        if (!response.ok)
+          throw new Error(data.error || 'Could not load saved connections.')
+        if (!controller.signal.aborted && getApiBase() === base) {
+          setCatalog(data.connections)
+        }
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted && getApiBase() === base)
+          setError(String(error))
+      })
+    return () => controller.abort()
+  }, [kind, profile.target.binding, profiles, draftGeneration])
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange])
   useEffect(() => () => onBusyChange?.(false), [onBusyChange])
   useEffect(() => {
@@ -199,7 +234,12 @@ export function LocalConnectionSettings({
   useEffect(() => {
     if (task !== 'main') heading.current?.focus()
   }, [task])
+  useEffect(() => {
+    if (pending && error && !busy) confirmationError.current?.focus()
+  }, [pending, error, busy])
   const resetDraft = (next: IntegrationProfile) => {
+    setSelected(null)
+    setDiscoveryDraft(false)
     setUrl(next.url)
     setInsecureTls(next.insecureTls)
     setMode(next.mode as CostConnectionDraft['mode'])
@@ -235,7 +275,7 @@ export function LocalConnectionSettings({
     })
   }
   const back = () => {
-    if (dirty && ['replace', 'copy'].includes(task)) {
+    if (dirty && task === 'replace') {
       setConfirmBack(true)
       return
     }
@@ -246,6 +286,7 @@ export function LocalConnectionSettings({
   ): Promise<ConnectionResponse> => {
     if (request.current)
       throw new Error('A settings request is already in progress.')
+    catalogRequest.current?.abort()
     const controller = new AbortController()
     request.current = controller
     const base = getApiBase()
@@ -299,7 +340,6 @@ export function LocalConnectionSettings({
   const receive = (data: ConnectionResponse) => {
     setSnapshot(data.profiles)
     setCatalog(data.connections)
-    setUnlinked(data.unlinkedAssignments)
     onChange(data.profiles)
     resetDraft(data.profiles[kind])
   }
@@ -330,22 +370,62 @@ export function LocalConnectionSettings({
     try {
       const data = await fetchConnections()
       receive(data)
+      setDraftGeneration(generation => generation + 1)
       setPending(null)
       setSelected(null)
-      if (next === 'copy' && data.profiles[kind].state === 'target_changed')
-        setClusterId('')
       openTask(next)
     } catch (e) {
       if (mounted.current) setError(e instanceof Error ? e.message : String(e))
     }
   }
   const confirm = (update: Update) => {
+    trigger.current = document.activeElement as HTMLElement
+    setError('')
     setPending(update)
-    openTask('confirm')
+  }
+  const restoreConfirmationFocus = () =>
+    requestAnimationFrame(() => {
+      if (trigger.current?.isConnected) trigger.current.focus()
+      else region.current?.focus()
+    })
+  const cancelConfirmation = () => {
+    setPending(null)
+    restoreConfirmationFocus()
+  }
+  const confirmPending = async () => {
+    if (!pending) return
+    setError('')
+    try {
+      await save({ ...pending, confirmRemoval: true })
+      restoreConfirmationFocus()
+    } catch (e) {
+      if (mounted.current) setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+  const discard = () => {
+    resetDraft(profile)
+    setDraftGeneration((generation) => generation + 1)
+    setError('')
+    setMessage('')
+    onDirtyChange(false)
   }
   const apply = async (draft: Omit<Update, 'action'>) => {
-    const action = task === 'replace' ? 'replace' : 'save'
-    const update: Update = { ...draft, action }
+    const action = selected ? 'copy' : task === 'replace' || discoveryDraft ? 'replace' : 'save'
+    if (action === 'save' && profile.url && draft.url?.trim() === '' && !(kind === 'cost' && draft.mode === 'prometheus')) {
+      const keptHeaders = profile.headerKeys.some((key) => !draft.headers?.some((header) =>
+        header.key.toLowerCase() === key.toLowerCase() && header.action === 'clear'))
+      const keptSecret = profile.secretSet && (!draft.secret || draft.secret.action === 'keep') && !draft.useCliToken
+      if (keptHeaders || keptSecret) {
+        throw new Error('Remove or replace the saved credentials, or choose Use auto-discovery to clear this connection.')
+      }
+    }
+    const update: Update = automaticDraft && !draft.useCliToken
+      ? { action: 'auto' }
+      : { ...draft, action, ...(selected ? {
+        binding: selected.source.binding,
+        connectionId: selected.id,
+        sourceRevision: selected.source.revision,
+      } : {}) }
     if (kind === 'cost' && draft.mode === 'prometheus') {
       update.action = 'auto'
       delete update.url
@@ -353,13 +433,12 @@ export function LocalConnectionSettings({
       delete update.clusterId
     }
     const removing =
-      !!profile.connection &&
-      (draft.url?.trim() === '' ||
-        update.action === 'auto' ||
-        action === 'replace')
+      (hasSavedConfiguration &&
+        (draft.url?.trim() === '' || action === 'replace' || action === 'copy')) ||
+      (update.action === 'auto' && hasSavedConfiguration)
     if (removing) {
       confirm(update)
-      throw new Error('Confirm replacing this cluster’s saved connection.')
+      return null
     }
     return save(update)
   }
@@ -369,21 +448,15 @@ export function LocalConnectionSettings({
   )
   const editor =
     task === 'replace' ||
-    (task === 'main' &&
+    (task === 'main' && (!!selected || (
       profile.state !== 'target_changed' &&
       profile.state !== 'error' &&
-      profile.state !== 'launch')
-  const replacing = task === 'replace'
+      profile.state !== 'launch')))
+  const replacing = task === 'replace' || discoveryDraft
   const title =
-    task === 'copy'
-      ? 'Copy from another cluster'
-      : task === 'cleanup'
-        ? 'Stored cluster settings'
-        : task === 'confirm'
-          ? 'Remove saved settings?'
-          : task === 'reconfirm'
-            ? 'Review changed cluster connection'
-            : 'Use a different connection'
+    task === 'reconfirm'
+        ? 'Review changed cluster connection'
+        : 'Use a different connection'
   const beginReplace = () => {
     resetDraft({
       ...profile,
@@ -394,24 +467,98 @@ export function LocalConnectionSettings({
     })
     openTask('replace')
   }
-  const feedback =
+  const autoDiscoveryAction =
+    task === 'main' && ['auto', 'saved'].includes(profile.state) ? (
+      <button
+        type="button"
+        disabled={!!pending || automaticDraft || (!dirty && !hasSavedConfiguration && profile.mode === 'auto')}
+        onClick={() => {
+          resetDraft({ ...profile, url: '', mode: 'auto', insecureTls: false, clusterId: '' })
+          setDiscoveryDraft(true)
+          setDraftGeneration((generation) => generation + 1)
+          setError('')
+          requestAnimationFrame(() => region.current?.querySelector<HTMLInputElement | HTMLSelectElement>('input:not(:disabled), select:not(:disabled)')?.focus())
+        }}
+        className="text-xs text-accent-text hover:underline disabled:opacity-50 shrink-0"
+      >
+        Use auto-discovery
+      </button>
+    ) : undefined
+  const copyAction = task === 'main' && profile.state !== 'launch' && copySources.length > 0 ? (
+    <SelectMenu
+      variant="text"
+      value=""
+      placeholder="Copy from another cluster…"
+      ariaLabel="Copy from another cluster…"
+      searchPlaceholder="Search clusters or URLs"
+      disabled={!!pending}
+      options={copySources.map(connection => ({
+        value: connection.source.binding,
+        label: `${connection.source.context}${copySources.filter(other => other.source.context === connection.source.context).length > 1 ? ` · ${connection.source.source} · ${connection.source.inFileName}` : ''}`,
+        description: connection.url,
+      }))}
+      onChange={binding => {
+        const source = copySources.find(connection => connection.source.binding === binding)
+        if (!source) return
+        setSelected(source)
+        setUrl(source.url)
+        setInsecureTls(source.insecureTls)
+        if (kind === 'cost') {
+          setMode('kubecost')
+          if (profile.state === 'target_changed') setClusterId('')
+        }
+        setDiscoveryDraft(false)
+        setCredentialDirty(false)
+        setDraftGeneration(generation => generation + 1)
+        setMessage('')
+        setError('')
+        requestAnimationFrame(() => editorRegion.current?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus())
+      }}
+    />
+  ) : undefined
+  const connectionActions = (autoDiscoveryAction || copyAction) && (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-2">
+      {autoDiscoveryAction}
+      {copyAction}
+    </div>
+  )
+  const resetToDiscovery =
+    pending?.action === 'auto' && pending.mode !== 'prometheus'
+  const useMetricsForCost =
+    pending?.action === 'auto' && pending.mode === 'prometheus'
+  const confirmationTitle = resetToDiscovery
+    ? 'Use auto-discovery?'
+    : useMetricsForCost
+      ? 'Use metrics for cost data?'
+      : 'Replace saved connection?'
+  const confirmationLabel = resetToDiscovery
+    ? 'Save & use auto-discovery'
+    : useMetricsForCost
+      ? 'Use metrics connection'
+      : 'Replace connection'
+  const confirmationMessage = resetToDiscovery
+    ? `Remove the saved ${names[kind]} connection and credentials for ${removalContext || 'this cluster'} and discover a backend automatically.${kind === 'cost' ? ' The saved Kubecost cluster mapping is also removed.' : ''} Other clusters are unchanged.`
+    : useMetricsForCost
+      ? `Remove the saved Kubecost connection, credentials and cluster mapping for ${removalContext || 'this cluster'} and use its metrics connection for cost data. Other clusters are unchanged.`
+      : `Replace the saved ${names[kind]} connection for ${removalContext || 'this cluster'} with your changes? Other clusters are unchanged.`
+  if (pending)
+    confirmationCopy.current = {
+      title: confirmationTitle,
+      message: confirmationMessage,
+      label: confirmationLabel
+    }
+  const showFeedback = discoveryDraft ? profile.secretSet || profile.headerKeys.length > 0 : !!(
     message &&
     task === 'main' &&
     messageRevision === profile.revision &&
-    (messageWarning || !dirty) ? (
-      <p
-        role="status"
-        className={`flex items-start gap-1.5 text-xs ${messageWarning ? 'text-warning-text' : 'text-theme-text-secondary'}`}
-      >
-        {!messageWarning && (
-          <Check
-            aria-hidden="true"
-            className="mt-0.5 h-3 w-3 shrink-0 text-[var(--color-success-dark)] dark:text-[var(--color-success-light)]"
-          />
-        )}
-        {message}
-      </p>
-    ) : null
+    (messageWarning || !dirty)
+  )
+  const feedback: ConnectionFeedback | undefined = showFeedback ? {
+    tone: discoveryDraft ? 'info' : messageWarning ? 'warning' : 'success',
+    message: discoveryDraft
+          ? 'Saving clears the saved credentials for this cluster.'
+          : message,
+  } : undefined
   return (
     <fieldset
       ref={region}
@@ -419,8 +566,11 @@ export function LocalConnectionSettings({
       aria-label={`${names[kind]} connection settings`}
       disabled={busy}
       className="min-w-0 space-y-4 outline-none"
+      onKeyDownCapture={(event) => {
+        if (pending) trapConnectionConfirmationFocus(event)
+      }}
       onKeyDown={(event) => {
-        if (event.key === 'Escape' && task !== 'main') {
+        if (event.key === 'Escape' && task !== 'main' && !pending) {
           event.preventDefault()
           event.stopPropagation()
           if (!busy) {
@@ -476,12 +626,28 @@ export function LocalConnectionSettings({
           </div>
         </div>
       )}
-      <p className="min-w-0 break-words text-xs text-theme-text-secondary">
-        Cluster:{' '}
-        <span className="font-medium text-theme-text-primary">
-          {profile.target.context || 'Not selected'}
-        </span>
-      </p>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <p className="min-w-0 break-words text-xs text-theme-text-secondary">
+          Cluster:{' '}
+          <span className="font-medium text-theme-text-primary">
+            {profile.target.context || 'Not selected'}
+          </span>
+        </p>
+        {profile.target.source && (
+          <Tooltip content={<span className="block max-w-sm break-words">Settings belong to this kubeconfig entry: {profile.target.source} · {profile.target.inFileName}. Renaming or moving it creates a separate entry.</span>}>
+            <button type="button" aria-label="Cluster settings identity" className="text-theme-text-tertiary hover:text-theme-text-primary">
+              <Info className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
+        )}
+      {task === 'main' && status}
+      </div>
+      {!editor && connectionActions}
+      {selected && <div className="text-xs text-theme-text-secondary space-y-1">
+        <p>Copied from <span className="font-medium">{selected.source.context}</span> · Unsaved</p>
+        <p>{selected.headerKeys.length > 0 || selected.secretSet ? 'Saved credentials will be copied when you save. ' : ''}Changes stay independent. Check that this backend serves this cluster.</p>
+        {selected.envHeaderKeys.length > 0 && <p>Environment-backed headers keep their references; changing those variables affects both clusters.</p>}
+      </div>}
       {task === 'main' && (
         <>
           {profile.state === 'launch' ? (
@@ -501,8 +667,8 @@ export function LocalConnectionSettings({
                 </p>
               )}
             </div>
-          ) : profile.state === 'target_changed' ||
-            profile.state === 'error' ? (
+          ) : !selected && (profile.state === 'target_changed' ||
+            profile.state === 'error') ? (
             <div className="card-inner-lg space-y-3">
               <Badge severity="warning">
                 {profile.state === 'target_changed'
@@ -582,224 +748,102 @@ export function LocalConnectionSettings({
           )}
         </>
       )}
-      {editor &&
-        (kind === 'metrics' ? (
-          <PrometheusConnectionForm
-            key={`${profile.revision}:${task}`}
-            local
-            value={url}
-            onChange={setUrl}
-            configuredHeaderKeys={replacing ? [] : profile.headerKeys}
-            environmentHeaderKeys={replacing ? [] : profile.envHeaderKeys}
-            serverManaged={false}
-            headersManaged={false}
-            urlFromFlag={false}
-            onDirtyChange={setSecretDirty}
-            applyLabel="Apply now"
-            scopeDescription="Applies only to this cluster. No restart needed."
-            onApply={async () => {
-              throw new Error('Header operations required')
-            }}
-            onApplyOperations={async (url, headers) => {
-              const result = await apply({ url, headers })
-              return { connected: result.connected, error: result.error }
-            }}
-          />
-        ) : kind === 'argocd' ? (
-          <ArgoCDConnectionForm
-            key={`${profile.revision}:${task}`}
-            value={{ url, insecureTls }}
-            secretSet={!replacing && profile.secretSet}
-            cliSession={cliSession}
-            onChange={(draft: ArgoConnectionDraft) => {
-              setUrl(draft.url)
-              setInsecureTls(draft.insecureTls)
-            }}
-            onDirtyChange={setSecretDirty}
-            onApply={async (draft) => {
-              await apply(draft)
-            }}
-            applyLabel="Test & apply"
-          />
-        ) : (
-          <CostConnectionForm
-            key={`${profile.revision}:${task}`}
-            value={{ url, mode, clusterId }}
-            secretSet={!replacing && profile.secretSet}
-            onChange={(draft) => {
-              setUrl(draft.url)
-              setMode(draft.mode)
-              setClusterId(draft.clusterId)
-            }}
-            onDirtyChange={setSecretDirty}
-            onApply={async (draft) => {
-              await apply(draft)
-            }}
-            applyLabel="Test & apply"
-          />
-        ))}
-      {feedback}
-      {task === 'copy' && (
-        <div className="space-y-3">
-          <p className="text-sm text-theme-text-secondary">
-            Copy a saved endpoint and its credentials to{' '}
-            {profile.target.context}. Later edits stay independent. Credentials
-            never appear in your browser. Only copy an endpoint that serves this
-            cluster too; a connection check does not verify its data coverage.
-          </p>
-          {copySources.map((connection) => (
-            <button
-              type="button"
-              key={connection.source.binding}
-              disabled={!!connection.error}
-              onClick={() => setSelected(connection)}
-              className={`block w-full rounded-lg border p-3 text-left ${selected?.source.binding === connection.source.binding ? 'border-accent bg-accent-muted' : 'border-theme-border hover:bg-theme-hover'}`}
-            >
-              <span className="block text-sm font-medium">
-                {connection.source.context}
-              </span>
-              <span className="block text-xs text-theme-text-secondary break-all">
-                {connection.url}
-              </span>
-              <span className="block text-xs text-theme-text-tertiary break-all">
-                {connection.source.source} · {connection.source.inFileName}
-                {connection.source.availability !== 'available'
-                  ? ' · Not loaded in this session'
-                  : ''}
-              </span>
-              {connection.error && (
-                <span className="text-xs text-warning-text">
-                  {connection.error}
-                </span>
-              )}
-            </button>
+      <fieldset ref={editorRegion} disabled={!!pending} className="min-w-0">
+        {editor &&
+          (kind === 'metrics' ? (
+            <PrometheusConnectionForm
+              key={`${profile.revision}:${task}:${draftGeneration}`}
+              local
+              value={url}
+              onChange={setUrl}
+              configuredHeaderKeys={selected ? selected.headerKeys : replacing ? [] : profile.headerKeys}
+              environmentHeaderKeys={selected ? selected.envHeaderKeys : replacing ? [] : profile.envHeaderKeys}
+              serverManaged={false}
+              headersManaged={false}
+              urlFromFlag={false}
+              onDirtyChange={setSecretDirty}
+              dirty={dirty}
+              onDiscard={discard}
+              feedback={feedback}
+              connectionAction={connectionActions}
+              scopeDescription="Applies only to this cluster. No restart needed."
+              onApply={async () => {
+                throw new Error('Header operations required')
+              }}
+              onApplyOperations={async (url, headers) => {
+                const result = await apply({ url, headers })
+                return result
+                  ? { connected: result.connected, error: result.error }
+                  : null
+              }}
+            />
+          ) : kind === 'argocd' ? (
+            <ArgoCDConnectionForm
+              key={`${profile.revision}:${task}:${draftGeneration}`}
+              dirty={dirty}
+              onDiscard={discard}
+              feedback={feedback}
+              connectionAction={connectionActions}
+              value={{ url, insecureTls }}
+              secretSet={selected ? selected.secretSet : !replacing && profile.secretSet}
+              cliSession={cliSession}
+              onChange={(draft: ArgoConnectionDraft) => {
+                setUrl(draft.url)
+                setInsecureTls(draft.insecureTls)
+              }}
+              onDirtyChange={setSecretDirty}
+              onApply={async (draft) => {
+                return !!(await apply(draft))
+              }}
+              applyLabel="Test & apply"
+            />
+          ) : (
+            <CostConnectionForm
+              key={`${profile.revision}:${task}:${draftGeneration}`}
+              dirty={dirty}
+              onDiscard={discard}
+              feedback={feedback}
+              connectionAction={connectionActions}
+              value={{ url, mode, clusterId }}
+              secretSet={selected ? selected.secretSet : !replacing && profile.secretSet}
+              onChange={(draft) => {
+                setUrl(draft.url)
+                setMode(draft.mode)
+                setClusterId(draft.clusterId)
+              }}
+              onDirtyChange={setSecretDirty}
+              onApply={async (draft) => {
+                return !!(await apply(draft))
+              }}
+              applyLabel="Test & apply"
+            />
           ))}
-          {!copySources.length && (
-            <p className="text-sm text-theme-text-tertiary">
-              No other clusters have a saved endpoint for this integration.
-              Auto-discovery settings cannot be copied.
-            </p>
-          )}
-          {selected && (
-            <div className="card-inner-lg space-y-3">
-              <p className="text-xs text-theme-text-secondary">
-                {kind === 'metrics'
-                  ? selected.headerKeys.length
-                    ? `Includes headers: ${selected.headerKeys.join(', ')}.`
-                    : 'No authentication headers.'
-                  : selected.secretSet
-                    ? 'Includes the saved credential.'
-                    : 'No saved credential.'}
-                {kind === 'argocd' && selected.insecureTls
-                  ? ' TLS verification is disabled.'
-                  : ''}
-              </p>
-              {selected.envHeaderKeys.length > 0 && (
-                <p className="text-xs text-theme-text-secondary">
-                  Environment-backed headers keep their environment references;
-                  changes to those variables can affect both clusters.
-                </p>
-              )}
-              {kind === 'cost' && (
-                <label className="block text-sm space-y-1">
-                  This cluster’s Kubecost cluster ID
-                  <Input
-                    value={clusterId}
-                    onChange={(e) => setClusterId(e.target.value)}
-                    placeholder="Auto-detect CLUSTER_ID"
-                  />
-                  <span className="block text-xs text-theme-text-tertiary">
-                    The source cluster’s mapping is not copied.
-                  </span>
-                </label>
-              )}
-              {(profile.connection ||
-                profile.secretSet ||
-                profile.clusterId) && (
-                <p className="text-xs text-theme-text-secondary">
-                  Replaces this cluster’s saved connection and credentials. The
-                  source cluster is unchanged.
-                </p>
-              )}
-              <button
-                type="button"
-                className="btn-brand px-3 py-2 text-xs"
-                onClick={() =>
-                  void act({
-                    action: 'copy',
-                    binding: selected.source.binding,
-                    sourceRevision: selected.source.revision,
-                    connectionId: selected.id,
-                    confirmRemoval: !!(
-                      profile.connection ||
-                      profile.secretSet ||
-                      profile.clusterId
-                    ),
-                    ...(kind === 'cost' ? { clusterId } : {})
-                  })
-                }
-              >
-                Copy & apply
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-      {task === 'cleanup' && (
-        <div className="space-y-4">
-          <p className="text-xs text-theme-text-secondary">
-            Removing a kubeconfig entry does not delete its saved settings.
-            Forget settings here when you no longer need them.
+      </fieldset>
+      {!editor && <Collapse open={showFeedback} className="!mt-0">
+        <p role="status" className={`pt-2 text-xs ${messageWarning ? 'text-warning-text' : 'text-theme-text-secondary'}`}>{feedback?.message}</p>
+      </Collapse>}
+      <ConfirmDialog
+        open={!!pending}
+        onClose={cancelConfirmation}
+        onConfirm={() => void confirmPending()}
+        title={confirmationCopy.current.title}
+        message={confirmationCopy.current.message}
+        confirmLabel={confirmationCopy.current.label}
+        variant="warning"
+        showWarning={false}
+        isLoading={busy}
+      >
+        {error && pending ? (
+          <p
+            ref={confirmationError}
+            tabIndex={-1}
+            role="alert"
+            className="text-sm text-warning-text outline-none"
+          >
+            {error}
           </p>
-          <ConnectionUses
-            uses={storedContexts}
-            currentBinding={profile.target.binding}
-            onForget={(use) =>
-              confirm({
-                action: 'forget',
-                binding: use.binding,
-                sourceRevision: use.revision
-              })
-            }
-          />
-          {!storedContexts.length && (
-            <p className="text-sm text-theme-text-tertiary">
-              No stored cluster settings.
-            </p>
-          )}
-        </div>
-      )}
-      {task === 'confirm' && pending && (
-        <div className="space-y-4">
-          <p className="text-sm text-theme-text-secondary">
-            {['replace', 'save'].includes(pending.action)
-              ? `Replace the saved connection for ${removalContext || 'this cluster'}?`
-              : `Remove the saved settings and credentials for ${removalContext || 'this cluster'}?`}{' '}
-            Other clusters are unchanged.
-          </p>
-          <p className="text-xs text-theme-text-tertiary">
-            Nothing is deleted from Kubernetes or the backend.
-          </p>
-          <div className="flex gap-3">
-            <button
-              type="button"
-              className="btn-brand px-3 py-2 text-xs"
-              onClick={() => void act({ ...pending, confirmRemoval: true })}
-            >
-              {['replace', 'save'].includes(pending.action)
-                ? 'Replace connection'
-                : 'Remove saved settings'}
-            </button>
-            <button
-              type="button"
-              className="text-xs text-theme-text-secondary"
-              onClick={back}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
+        ) : undefined}
+      </ConfirmDialog>
       {task === 'reconfirm' && (
         <div className="space-y-4">
           <p className="text-sm text-theme-text-secondary">
@@ -865,29 +909,7 @@ export function LocalConnectionSettings({
           </button>
         </div>
       )}
-      {task === 'main' && profile.state !== 'launch' && (
-        <div className="flex flex-wrap gap-4 border-t border-theme-border pt-4 text-xs">
-          <button
-            type="button"
-            disabled={dirty}
-            onClick={() => void loadTask('copy')}
-            className="text-accent-text hover:underline disabled:opacity-50"
-          >
-            Copy from another cluster…
-          </button>
-          {profile.state === 'saved' && (
-            <button
-              type="button"
-              disabled={dirty}
-              onClick={() => confirm({ action: 'auto' })}
-              className="text-theme-text-secondary hover:underline disabled:opacity-50"
-            >
-              Use auto-discovery
-            </button>
-          )}
-        </div>
-      )}
-      {error && (
+      {error && !pending && (
         <p role="alert" className="text-sm text-warning-text">
           {error}{' '}
           <button
@@ -899,77 +921,6 @@ export function LocalConnectionSettings({
           </button>
         </p>
       )}
-      {task === 'main' && (
-        <Disclosure
-          summary="Storage and cluster identity"
-          className="border-t border-theme-border pt-4 text-xs text-theme-text-tertiary"
-          summaryClassName="text-sm font-medium text-theme-text-primary"
-        >
-          <div className="space-y-2 pt-2">
-            <p>
-              Stored in ~/.radar/clusters.json, shared by CLI and Desktop.
-              Credentials are permission-protected plaintext, not encrypted.
-              Changes made by another process apply on the next integration
-              operation.
-            </p>
-            <p className="break-all">
-              Source: {profile.target.source} · {profile.target.inFileName}
-            </p>
-            <p>
-              Renamed or moved a kubeconfig entry? Copy from the old cluster
-              entry, then remove its stored settings. Missing contexts are never
-              removed automatically.
-            </p>
-            <button
-              type="button"
-              disabled={dirty}
-              className="text-accent-text hover:underline disabled:opacity-50"
-              onClick={() => void loadTask('cleanup')}
-            >
-              Manage stored cluster settings
-            </button>
-          </div>
-        </Disclosure>
-      )}
     </fieldset>
-  )
-}
-
-function ConnectionUses({
-  uses,
-  onForget,
-  currentBinding
-}: {
-  uses: Usage[]
-  onForget: (use: Usage) => void
-  currentBinding: string
-}) {
-  return (
-    <div className="space-y-3 text-xs text-theme-text-secondary">
-      {uses.map((use) => (
-        <div key={use.binding} className="flex justify-between gap-3">
-          <div className="min-w-0">
-            <span className="font-medium break-words">{use.context}</span>
-            {use.binding === currentBinding && <span> (current)</span>}
-            {use.availability === 'removed' && (
-              <span> · removed from kubeconfig</span>
-            )}
-            {use.availability === 'unavailable' && (
-              <span> · not loaded in this session</span>
-            )}
-            <p className="text-theme-text-tertiary break-all">
-              {use.source} · {use.inFileName}
-            </p>
-          </div>
-          <button
-            type="button"
-            className="text-accent-text self-start shrink-0 hover:underline"
-            onClick={() => onForget(use)}
-          >
-            Forget settings
-          </button>
-        </div>
-      ))}
-    </div>
   )
 }

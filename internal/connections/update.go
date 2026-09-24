@@ -221,16 +221,15 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 				return pending, errors.New("saved connection not found for this integration")
 			}
 			connection = connection.Clone()
+			if err := editConnection(&connection, req); err != nil {
+				return pending, err
+			}
 			if connection.Prometheus != nil {
 				if _, err := prom.ResolveHeaders(connection.Prometheus.Headers, connection.Prometheus.HeadersFromEnv); err != nil {
 					return pending, err
 				}
 			}
 			connection.Name = ""
-			a.ConnectionID = "conn_" + rand.Text()
-			next.Connections[a.ConnectionID] = connection.Clone()
-			a.ArgoCD = nil
-			a.Kubecost = nil
 			if req.Kind == config.IntegrationCost {
 				a.Mode = "kubecost"
 			} else {
@@ -275,45 +274,45 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 					return pending, err
 				}
 			}
-			if connection.URL() == "" {
-				a.ConnectionID = ""
-				if req.Kind != config.IntegrationCost {
-					a.Mode = "auto"
-				}
-				if req.Kind == config.IntegrationMetrics {
-					if err := connection.Prometheus.Validate(); err != nil {
-						return pending, err
-					}
-				} else if req.Kind == config.IntegrationArgoCD {
-					a.ArgoCD = nil
-					if connection.ArgoCD.Token != "" || connection.ArgoCD.InsecureTLS {
-						a.ArgoCD = connection.ArgoCD
-					}
-				} else {
-					a.Kubecost = nil
-					if connection.Kubecost.APIKey != "" {
-						a.Kubecost = connection.Kubecost
-					}
-				}
-			} else {
-				if err := connection.Validate(); err != nil {
+		}
+		if connection.URL() == "" {
+			a.ConnectionID = ""
+			if req.Kind != config.IntegrationCost {
+				a.Mode = "auto"
+			}
+			if req.Kind == config.IntegrationMetrics {
+				if err := connection.Prometheus.Validate(); err != nil {
 					return pending, err
 				}
-				id := previousID
-				if id == "" || len(next.Uses(id)) > 1 || req.Action == "replace" || req.Action == "adopt" {
-					id = "conn_" + rand.Text()
-				}
-				next.Connections[id] = connection.Clone()
-				a.ConnectionID = id
+			} else if req.Kind == config.IntegrationArgoCD {
 				a.ArgoCD = nil
-				a.Kubecost = nil
-				if req.Kind == config.IntegrationCost {
-					if a.Mode == "auto" {
-						a.Mode = "kubecost"
-					}
-				} else {
-					a.Mode = "connection"
+				if connection.ArgoCD.Token != "" || connection.ArgoCD.InsecureTLS {
+					a.ArgoCD = connection.ArgoCD
 				}
+			} else {
+				a.Kubecost = nil
+				if connection.Kubecost.APIKey != "" {
+					a.Kubecost = connection.Kubecost
+				}
+			}
+		} else {
+			if err := connection.Validate(); err != nil {
+				return pending, err
+			}
+			id := previousID
+			if id == "" || len(next.Uses(id)) > 1 || req.Action == "replace" || req.Action == "adopt" || req.Action == "copy" {
+				id = "conn_" + rand.Text()
+			}
+			next.Connections[id] = connection.Clone()
+			a.ConnectionID = id
+			a.ArgoCD = nil
+			a.Kubecost = nil
+			if req.Kind == config.IntegrationCost {
+				if a.Mode == "auto" {
+					a.Mode = "kubecost"
+				}
+			} else {
+				a.Mode = "connection"
 			}
 		}
 		if req.Kind == config.IntegrationCost {

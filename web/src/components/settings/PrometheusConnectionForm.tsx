@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState, useId } from 'react'
-import { Check, Loader2, Plug, Plus, X } from 'lucide-react'
-import { Input } from '@skyhook-io/k8s-ui'
+import { useEffect, useRef, useState, useId, type ReactNode } from 'react'
+import { Check, Info, Loader2, Plug, Plus, X } from 'lucide-react'
+import { Collapse, Input } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 import { prometheusHeadersFromRows } from './settings-state'
 import { ConnectionHeadersEditor, type HeaderOperation } from './ConnectionHeadersEditor'
+import { ConnectionFormActions, type ConnectionFeedback } from './ConnectionFormActions'
 
 export interface PrometheusApplyResult { connected: boolean; address?: string; error?: string }
 
@@ -31,6 +32,10 @@ export function PrometheusConnectionForm({
   onApplyOperations,
   environmentHeaderKeys = [],
   applyLabel = 'Apply now',
+  dirty = false,
+  onDiscard,
+  connectionAction,
+  feedback,
 }: {
   local: boolean
   value: string
@@ -43,9 +48,13 @@ export function PrometheusConnectionForm({
   onApply: (url: string, headers?: Record<string, string>) => Promise<PrometheusApplyResult>
   scopeDescription?: string
   onDirtyChange?: (dirty: boolean) => void
-  onApplyOperations?: (url: string, operations: HeaderOperation[]) => Promise<PrometheusApplyResult>
+  onApplyOperations?: (url: string, operations: HeaderOperation[]) => Promise<PrometheusApplyResult | null>
   environmentHeaderKeys?: string[]
   applyLabel?: string
+  dirty?: boolean
+  onDiscard?: () => void
+  connectionAction?: ReactNode
+  feedback?: ConnectionFeedback
 }) {
   const mounted = useRef(true)
   const urlId = useId()
@@ -83,6 +92,7 @@ export function PrometheusConnectionForm({
       const editedHeaders = prometheusHeadersFromRows(headerRows)
       const data = onApplyOperations ? await onApplyOperations(value.trim(), operations) : await onApply(value.trim(), editedHeaders)
       if (!mounted.current) return
+      if (!data) { setApply({ status: 'idle' }); return }
       onApplied?.(value.trim())
       if (editedHeaders !== undefined) {
         setAppliedKeys(Object.keys(editedHeaders).sort())
@@ -107,15 +117,15 @@ export function PrometheusConnectionForm({
         <p className="text-sm text-theme-text-secondary">
           Connect a Prometheus-compatible backend, such as Prometheus, VictoriaMetrics, Thanos or Grafana Mimir.
         </p>
-        <p className="text-xs text-theme-text-tertiary">
-          Available charts depend on the metrics collected.
-        </p>
       </div>
-      <label htmlFor={urlId} className="block text-sm font-medium text-theme-text-primary mb-1">
-        Metrics backend URL
-      </label>
+      <div className="flex flex-wrap items-center gap-1 mb-1">
+        <label htmlFor={urlId} className="text-sm font-medium text-theme-text-primary">Metrics backend URL</label>
+        <Tooltip content="Use a base URL reachable from Radar, not your browser. Include the backend path prefix, but not /api/v1/query. Available charts depend on the metrics collected.">
+          <button type="button" aria-label="Metrics URL help" className="text-theme-text-tertiary"><Info className="w-3.5 h-3.5" /></button>
+        </Tooltip>
+      </div>
       <p className="text-xs text-theme-text-tertiary mb-1">
-        Base URL reachable from Radar, not your browser. Include any backend path prefix, but not /api/v1/query. Leave empty for cluster discovery.
+        Leave empty to discover a backend in this cluster.
       </p>
       <div className="flex items-center gap-2">
         <Input
@@ -127,9 +137,10 @@ export function PrometheusConnectionForm({
           className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
         />
       </div>
-      <p className="mt-2 text-xs text-theme-text-tertiary">
+      {connectionAction}
+      {!onApplyOperations && <p className="mt-2 text-xs text-theme-text-tertiary">
         {scopeDescription ?? (local ? 'Applies only to this cluster.' : 'Changes affect this Radar installation. Use deployment settings for configuration that survives Pod replacement.')}
-      </p>
+      </p>}
       {value.startsWith('http://') && (configuredHeaderKeys.length > 0 || operations.some(operation => operation.action === 'set')) && (
         <p className="mt-2 text-xs text-warning-text">Headers will travel over unencrypted HTTP. Prefer HTTPS outside a trusted private network.</p>
       )}
@@ -244,7 +255,7 @@ export function PrometheusConnectionForm({
         )}
       </section>}
       <div className="mt-4 space-y-1">
-        <Tooltip content="Save and apply this connection, then check reachability. Applying clears any workload scope override and resumes automatic identity matching.">
+        {onDiscard ? <ConnectionFormActions dirty={dirty} busy={apply.status === 'applying'} onSave={() => void handleApply()} onDiscard={onDiscard} feedback={feedback} error={apply.status === 'failed' ? apply.error : undefined} /> : <Tooltip content="Save and apply this connection, then check reachability. Applying clears any workload scope override and resumes automatic identity matching.">
           <button
             type="button"
             onClick={handleApply}
@@ -256,7 +267,8 @@ export function PrometheusConnectionForm({
               : <Plug className="w-3.5 h-3.5" />}
             {applyLabel}
           </button>
-        </Tooltip>
+        </Tooltip>}
+        {!onDiscard && <Collapse open={apply.status === 'failed' || (!onApplyOperations && apply.status !== 'applying')}>
         {onApplyOperations && (apply.status === 'connected' || apply.status === 'unreachable') ? null : apply.status === 'connected' ? (
           <p role="status" className="flex items-center gap-1 text-xs text-theme-text-secondary">
             <Check className="w-3 h-3 shrink-0 text-[var(--color-success-dark)] dark:text-[var(--color-success-light)]" />
@@ -266,9 +278,10 @@ export function PrometheusConnectionForm({
           <p role="status" className="text-xs text-warning-text">Saved, but not reachable: {apply.error}</p>
         ) : apply.status === 'failed' ? (
           <p role="alert" className="text-xs text-semantic-error">Couldn't apply: {apply.error}</p>
-        ) : (
+        ) : !onApplyOperations ? (
           <p className="text-xs text-theme-text-tertiary">Saves and applies before checking the connection.</p>
-        )}
+        ) : null}
+        </Collapse>}
       </div>
     </div>
   )

@@ -307,20 +307,35 @@ If an active context's credentials expire or are rejected, Radar disconnects clu
 ### Local integration connections
 
 In **Settings → Metrics / Argo CD / Cost**, configure the selected context and
-apply. No connection name or assignment wizard is required. Switching A → B → A
+choose **Save changes**. **Discard** resets the form without changing saved settings.
+No connection name or assignment wizard is required. Switching A → B → A
 restores A's settings. A context with no saved settings uses discovery. Local CLI
 and Desktop share `~/.radar/clusters.json`.
 
+**Use auto-discovery**, below the backend URL (or Cost source), stages an empty
+connection. Choose **Save changes** and confirm removal of this context's saved
+connection and credentials; for Cost this also clears the Kubecost cluster
+mapping. **Discard** restores the saved settings. Cancelling confirmation keeps
+the draft without saving it. The action is disabled when already using
+auto-discovery without overrides.
+
 **Copy:** on another context, choose **Copy from another cluster…** and select
-the source context. Review the endpoint and credential metadata, then **Copy &
-apply**. This makes an independent copy, not a shared reference. Later edits
+the source context from the searchable picker. The current form becomes an
+unsaved draft; adjust the endpoint or credentials before choosing **Save changes**.
+Choosing another source replaces the draft without saving it.
+**Discard** restores the previous settings. Replacing an existing connection
+requires confirmation when saving. This makes an independent copy, not a shared reference. Later edits
 affect only the selected cluster. No connection name, catalog or assignment
 wizard is needed, and new contexts never inherit defaults.
+The copy action appears only when another context has a saved connection for
+that integration.
 
 Only copy a backend that serves the destination cluster. A reachable endpoint
 does not prove it contains that cluster's data. Authentication and tenant headers
-are copied too; adjust them afterward if the destination uses different credentials.
-Kubecost's source cluster mapping is never copied: enter the destination ID or
+are copied server-side on Save; their values are never returned to the browser.
+You can replace or remove them in the draft. If the source changes before Save,
+Radar rejects the stale copy rather than silently using different credentials.
+Kubecost's source cluster mapping is never copied: keep or edit the destination ID, or
 allow discovery to detect it. Discovery-only credentials cannot be copied.
 Environment-backed headers retain references, not resolved secret values; both
 copies can still depend on the same environment variable.
@@ -330,7 +345,8 @@ merged, and editing a record referenced by multiple contexts in a hand-edited or
 development file separates it automatically.
 
 **Credentials:** Settings displays header names and whether a token/key exists,
-never saved values. Keep, replace or remove each credential independently.
+never saved values. Type directly into a credential field to replace its value;
+leave it untouched to keep it, or choose **Remove** to clear it when saving.
 Changing URL origin (scheme, host or port) requires replacing or clearing every
 retained credential, including after copying. Plain HTTP is supported but
 does not encrypt credentials in transit; use HTTPS outside trusted local paths.
@@ -347,8 +363,9 @@ discovery.
 **Cleanup:** switching to discovery or replacing saved settings explicitly removes
 this context's previous credentials, deleting the backing record when unused.
 Other contexts are unchanged. Missing kubeconfigs never trigger automatic deletion.
-**Storage and cluster identity → Manage stored cluster settings** lets you
-explicitly forget a context's settings, including discovery credentials and mappings.
+**Settings → Connection → Saved connections** lets you explicitly remove an
+integration for a kubeconfig entry no longer loaded, including discovery
+credentials and mappings. For the current context, use its integration tab.
 A context not loaded in this session may still be in use by another Radar process.
 
 Unsaved edits stay in the dialog when switching Settings tabs. Closing it asks
@@ -402,7 +419,13 @@ unrelated valid connections; unrelated edits preserve that invalid entry.
 The assignment key includes the kubeconfig source path and in-file context name.
 Same-named contexts in different files do not share credentials. If a context is
 renamed or its file moved, copy its saved connection to the new context, then
-forget the old settings explicitly. Discovery-only credentials may require
+remove the old connection from **Settings → Connection → Saved connections**.
+That section groups saved integrations by kubeconfig entry; removal is offered
+for entries no longer loaded, with a confirmation for the selected integration.
+Overview's collapsed **Configuration files** section explains the three local files and
+credential storage; the info button beside the cluster name in each integration
+tab identifies its kubeconfig entry. In-cluster installations show operator
+configuration guidance instead of local-file information. Discovery-only credentials may require
 reentry. An unavailable kubeconfig is distinguished from a context confirmed
 removed from a readable file.
 

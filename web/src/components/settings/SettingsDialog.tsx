@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   Settings, X, RotateCcw, RotateCw, Loader2, Copy, Check, Pin, Shield, Lock, Plug,
   Terminal, Boxes, Activity, GitBranch, Sparkles, SlidersHorizontal, Zap,
-  LayoutDashboard, ChevronRight, ExternalLink, Download, AlertTriangle, Coins,
+  LayoutDashboard, ChevronRight, AlertTriangle, Coins,
   type LucideIcon,
 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -12,7 +12,7 @@ import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import { apiUrl, getApiBase, getAuthHeaders, getCredentialsMode, routePath } from '../../api/config'
 import {
-  useCloudRole, useVersionCheck, useClusterInfo, usePrometheusStatus, useArgoStatus, useCapabilities,
+  useCloudRole, useVersionCheck, useClusterInfo, usePrometheusStatus, useArgoStatus,
   useOpenCostSummary,
 } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
@@ -23,7 +23,7 @@ import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
 import { MyPermissionsContent } from './MyPermissionsDialog'
 import { useDiagnose } from '../diagnose/DiagnoseContext'
 import { currencyOptionsForValue } from './currency-options'
-import { versionUpdateURL } from '../../utils/version'
+import { UpdateNotification } from '../ui/UpdateNotification'
 import {
   costConfigurationAction,
   costFreshnessLabel,
@@ -34,6 +34,7 @@ import { costSourceApplyLabel, integrationSectionLabels, pendingIntegrationSecti
 import { PrometheusConfigField } from './PrometheusConfigField'
 import { LocalConnectionSettings, type IntegrationProfiles, type IntegrationKind } from './LocalConnectionSettings'
 import { LocalIntegrationStatus } from './LocalIntegrationStatus'
+import { LocalConfigurationDetails, SavedClusterConnections } from './LocalConfigurationDetails'
 import { useContextSwitch } from '../../context/ContextSwitchContext'
 import type { SettingsSectionId } from './settings-state'
 import { OperatorManagedNotice } from './OperatorManagedNotice'
@@ -152,6 +153,7 @@ export function SettingsDialog({
   const [localDirty, setLocalDirty] = useState<Record<IntegrationKind, boolean>>({ metrics: false, argocd: false, cost: false })
   const [discardGeneration, setDiscardGeneration] = useState(0)
   const [localBusy, setLocalBusy] = useState<Record<IntegrationKind, boolean>>({ metrics: false, argocd: false, cost: false })
+  const [storageBusy, setStorageBusy] = useState(false)
   const integrationBusy = Object.values(localBusy).some(Boolean)
   const metricsBusyChange = useCallback((busy: boolean) => setLocalBusy(value => ({ ...value, metrics: busy })), [])
   const argoBusyChange = useCallback((busy: boolean) => setLocalBusy(value => ({ ...value, argocd: busy })), [])
@@ -229,7 +231,7 @@ export function SettingsDialog({
   const pendingIntegrations = pendingIntegrationSections({ prometheus: prometheusDirty, cost: costIntegrationDirty, argocd: localDirty.argocd })
   const integrationDirty = pendingIntegrations.length > 0
   const reviewIntegration = pendingIntegrations.find(pending => pending !== section)
-  const settingsBusy = saving || costCurrencySaving || integrationBusy
+  const settingsBusy = saving || costCurrencySaving || integrationBusy || storageBusy
   const metricsDraft = useRef({ open, scope: `${settingsApiBase}:${settingsCluster?.context}`, dirty: false })
   const [draftFrozen, setDraftFrozen] = useState(false)
   const [reloadVersion, setReloadVersion] = useState(0)
@@ -520,7 +522,7 @@ export function SettingsDialog({
     canEditConfig,
     confirmingClose,
     configDirty,
-    integrationDirty,
+    integrationDirty: integrationDirty && (!configData?.integrationProfiles || !!reviewIntegration),
     hasSaveMessage: Boolean(saveMessage),
   })
 
@@ -556,35 +558,34 @@ export function SettingsDialog({
           // Fixed height so the dialog doesn't jump when switching tabs — short
           // tabs leave breathing room, tall ones scroll inside the content pane.
           // max-h keeps it on-screen on short viewports.
-          'sm:rounded-xl sm:max-w-4xl sm:mx-4 sm:h-[660px] sm:max-h-[85vh]',
+          'sm:rounded-xl sm:max-w-5xl sm:mx-6 sm:h-[800px] sm:max-h-[calc(100dvh-64px)]',
           TRANSITION_PANEL,
           isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
         )}
         style={overlayTransitionStyle(isOpen, 'dialog')}
       >
         {/* Header — spans both panes */}
-        <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
-          <div className="flex items-center gap-2">
-            <Settings className="w-5 h-5 text-theme-text-secondary" />
-            <div className="flex items-baseline gap-2">
+        <div className="relative flex items-center justify-between p-4 border-b border-theme-border shrink-0">
+          <div className="flex min-w-0 items-center gap-2">
+            <Settings className="w-5 h-5 shrink-0 text-theme-text-secondary" />
+            <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
               <h2 id="settings-dialog-title" className="text-lg font-semibold text-theme-text-primary">Settings</h2>
-              <span className="text-[11px] text-theme-text-tertiary">
-                Radar{versionInfo?.currentVersion ? ` v${versionInfo.currentVersion}` : ''}
+              <span className="break-all text-[11px] text-theme-text-tertiary">
+                Radar{versionInfo?.currentVersion ? ` v${versionInfo.currentVersion.replace(/^v/, '')}` : ''}
                 <span className="text-theme-text-disabled"> · by Skyhook</span>
               </span>
+              <UpdateNotification placement="settings" />
             </div>
           </div>
           <button
             onClick={() => requestCloseRef.current()}
             aria-label="Close settings"
             disabled={settingsBusy}
-            className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"
+            className="shrink-0 p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
-
-        {integrationBusy && <p role="status" className="px-4 py-2 text-xs text-theme-text-secondary">Updating connection settings…</p>}
 
         {/* Body: sidebar + content */}
         <div className="flex flex-col sm:flex-row flex-1 min-h-0">
@@ -651,6 +652,9 @@ export function SettingsDialog({
               <div className="mt-3">
                 <OverviewPanel active={section === 'overview'} onNavigate={setSection} />
               </div>
+              {configData?.management === 'local' && configData.integrationProfiles && canEditConfig && (
+                <LocalConfigurationDetails />
+              )}
             </div>
 
             {/* My permissions — usable by everyone, rendered inline (no launcher) */}
@@ -673,7 +677,7 @@ export function SettingsDialog({
               active={section}
               title="Connection"
               managed={operatorManaged ? <OperatorSettingsSummary section="connection" config={configData} /> : undefined}
-              caption="Takes effect on next launch."
+              caption="Kubeconfig and server changes take effect on next launch."
               locked={!canEditConfig}
             >
               <div className="space-y-4">
@@ -685,6 +689,15 @@ export function SettingsDialog({
                   onChange={updateConfigField}
                 />
               </div>
+              {configData?.management === 'local' && configData.integrationProfiles && canEditConfig && (
+                <SavedClusterConnections
+                  key={settingsScope}
+                  active={open && section === 'connection' && !draftFrozen && !isSwitching}
+                  profiles={configData.integrationProfiles}
+                  onChange={connectionsChanged}
+                  onBusyChange={setStorageBusy}
+                />
+              )}
               <div className="space-y-4 border-t border-theme-border-subtle pt-4">
                 <SubHeading>Server</SubHeading>
                 <ServerSection
@@ -707,8 +720,8 @@ export function SettingsDialog({
               live
               locked={!canEditConfig}
             >
-              {showLocalStatus && section === 'prometheus' && configData?.integrationProfiles && !['error', 'target_changed'].includes(configData.integrationProfiles.metrics.state) && <LocalIntegrationStatus kind="metrics" profile={configData.integrationProfiles.metrics} argo={argoStatusQuery} busy={integrationBusy} />}
-              {configData?.integrationProfiles ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.metrics.target)}`} kind="metrics" profiles={configData.integrationProfiles} onChange={connectionsChanged} onDirtyChange={metricsDirtyChange} onBusyChange={metricsBusyChange} /> : <PrometheusConfigField
+              {configData?.integrationProfiles ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.metrics.target)}`} kind="metrics" profiles={configData.integrationProfiles} onChange={connectionsChanged} onDirtyChange={metricsDirtyChange} onBusyChange={metricsBusyChange}
+                status={showLocalStatus && section === 'prometheus' && !['error', 'target_changed'].includes(configData.integrationProfiles.metrics.state) ? <LocalIntegrationStatus kind="metrics" profile={configData.integrationProfiles.metrics} argo={argoStatusQuery} busy={integrationBusy} /> : undefined} /> : <PrometheusConfigField
                 key={`${settingsApiBase}:${discardGeneration}`}
                 onBusyChange={metricsBusyChange}
                 onDirtyChange={setPrometheusCredentialDirty}
@@ -741,9 +754,9 @@ export function SettingsDialog({
               live
               locked={!canEditConfig}
             >
-              {showLocalStatus && section === 'cost' && configData?.integrationProfiles && !['error', 'target_changed'].includes(configData.integrationProfiles.cost.state) && <LocalIntegrationStatus kind="cost" profile={configData.integrationProfiles.cost} argo={argoStatusQuery} busy={integrationBusy} />}
               <CostSection
-                integration={configData?.integrationProfiles ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.cost.target)}`} kind="cost" profiles={configData.integrationProfiles} onChange={connectionsChanged} onDirtyChange={costDirtyChange} onBusyChange={costBusyChange} /> : undefined}
+                integration={configData?.integrationProfiles ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.cost.target)}`} kind="cost" profiles={configData.integrationProfiles} onChange={connectionsChanged} onDirtyChange={costDirtyChange} onBusyChange={costBusyChange}
+                  status={showLocalStatus && section === 'cost' && !['error', 'target_changed'].includes(configData.integrationProfiles.cost.state) ? <LocalIntegrationStatus kind="cost" profile={configData.integrationProfiles.cost} argo={argoStatusQuery} busy={integrationBusy} /> : undefined} /> : undefined}
                 currency={editedConfig.opencostCurrency ?? ''}
                 source={editedConfig.costSource ?? 'auto'}
                 url={editedConfig.kubecostUrl ?? ''}
@@ -788,8 +801,8 @@ export function SettingsDialog({
               live
               locked={!canEditConfig}
             >
-              {showLocalStatus && section === 'argocd' && configData?.integrationProfiles && !['error', 'target_changed'].includes(configData.integrationProfiles.argocd.state) && <LocalIntegrationStatus kind="argocd" profile={configData.integrationProfiles.argocd} argo={argoStatusQuery} busy={integrationBusy} />}
-              {configData?.integrationProfiles ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.argocd.target)}`} kind="argocd" profiles={configData.integrationProfiles} cliSession={configData.argoCdCliSession} onChange={connectionsChanged} onDirtyChange={argoDirtyChange} onBusyChange={argoBusyChange} /> : <ArgoCDConfigField
+              {configData?.integrationProfiles ? <LocalConnectionSettings key={`${discardGeneration}:${JSON.stringify(configData.integrationProfiles.argocd.target)}`} kind="argocd" profiles={configData.integrationProfiles} cliSession={configData.argoCdCliSession} onChange={connectionsChanged} onDirtyChange={argoDirtyChange} onBusyChange={argoBusyChange}
+                status={showLocalStatus && section === 'argocd' && !['error', 'target_changed'].includes(configData.integrationProfiles.argocd.state) ? <LocalIntegrationStatus kind="argocd" profile={configData.integrationProfiles.argocd} argo={argoStatusQuery} busy={integrationBusy} /> : undefined} /> : <ArgoCDConfigField
                 url={editedConfig.argoCdUrl ?? ''}
                 insecureTls={editedConfig.argoCdInsecureTls ?? false}
                 tokenSet={configData?.argoCdTokenSet ?? false}
@@ -914,6 +927,7 @@ export function SettingsDialog({
             apply separately. Shown whenever an edit is pending (any section),
             while confirming a close, or briefly after a save. */}
         <div
+          inert={!showFooter}
           className={clsx(
             'shrink-0 overflow-hidden transition-all duration-200 ease-out',
             showFooter ? 'max-h-24 opacity-100 border-t border-theme-border' : 'max-h-0 opacity-0 pointer-events-none'
@@ -976,16 +990,16 @@ export function SettingsDialog({
             ) : (
               <>
                 <div className="flex items-center gap-2">
-                  <Tooltip content="Discard unsaved changes and revert to the last saved values">
+                  {(!configData?.integrationProfiles || configDirty || !!reviewIntegration) && <Tooltip content="Discard unsaved changes and revert to the last saved values">
                     <button
                       onClick={discardChanges}
                       disabled={settingsBusy || draftFrozen || targetChangedWithDraft || (!configDirty && !integrationDirty)}
                       className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50 disabled:pointer-events-none"
                     >
                       <RotateCcw className="w-3.5 h-3.5" />
-                      Discard changes
+                      {configData?.integrationProfiles && integrationDirty && (configDirty || pendingIntegrations.length > 1) ? 'Discard all changes' : 'Discard changes'}
                     </button>
-                  </Tooltip>
+                  </Tooltip>}
                   {saveMessage && (
                     <span className={clsx('text-xs', saveMessage.startsWith('Error') ? 'text-red-400' : 'text-green-400')}>
                       {saveMessage}
@@ -1251,9 +1265,6 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
   const { data: prom } = usePrometheusStatus()
   const { data: cost } = useOpenCostSummary()
   const { data: argo } = useArgoStatus(active)
-  const { data: capabilitiesData } = useCapabilities()
-  const deploymentMode = capabilitiesData ? (capabilitiesData.deployment?.mode ?? 'local') : undefined
-  const { data: version } = useVersionCheck()
   const capabilities = useCapabilitiesContext()
   const diag = useDiagnose()
   const [copied, setCopied] = useState(false)
@@ -1285,7 +1296,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
       id: 'prometheus', icon: Activity, label: 'Metrics',
       tone: prom?.connected ? 'ok' : prom?.discovering ? 'unknown' : prom?.error ? 'warn' : 'off',
       value: prom?.connected ? 'Connected' : prom?.discovering ? 'Discovering…' : prom?.error ? 'Not connected' : 'Not configured',
-      detail: prom?.connected ? prom.address : prom?.discovering ? undefined : prom?.error,
+      detail: prom?.connected ? prom.address : prom?.discovering ? undefined : prom?.error ? 'Open Metrics for connection details.' : undefined,
     },
     {
       id: costConfigurationAction(cost?.reason).section, icon: Coins, label: 'Cost',
@@ -1306,7 +1317,7 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
       // token, not a transient reconnect — "Not reachable" matches Prometheus and
       // doesn't imply it will recover on its own.
       value: argo?.connected ? (argo.anonymous ? 'Connected · no token needed' : 'Connected') : argo?.configured ? 'Not reachable' : 'Not connected',
-      detail: argo?.connected ? argo.address : argo?.reason,
+      detail: argo?.connected ? argo.address : argo?.reason ? 'Open Argo CD for connection details.' : undefined,
     },
     {
       id: 'advanced', icon: Zap, label: 'MCP',
@@ -1331,22 +1342,6 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
 
   return (
     <div className="space-y-4">
-      {version?.updateAvailable && deploymentMode !== undefined && deploymentMode !== 'cloud' && (
-        <a
-          href={versionUpdateURL(deploymentMode, version.releaseUrl)}
-          target="_blank"
-          rel="noreferrer"
-          className="flex items-center gap-2 px-3 py-2 text-xs rounded-md border border-skyhook-500/30 bg-skyhook-500/10 hover:bg-skyhook-500/15 transition-colors"
-        >
-          <Download className="w-3.5 h-3.5 shrink-0 text-skyhook-500" />
-          <span className="flex-1 text-theme-text-primary">
-            Radar {version.latestVersion} is available
-            <span className="text-theme-text-tertiary"> — you're on {version.currentVersion}</span>
-          </span>
-          <ExternalLink className="w-3 h-3 shrink-0 text-theme-text-tertiary" />
-        </a>
-      )}
-
       <div className="rounded-md border border-theme-border divide-y divide-theme-border-subtle overflow-hidden">
         {rows.map((row) => {
           const Icon = row.icon
@@ -1357,10 +1352,10 @@ function OverviewPanel({ active, onNavigate }: { active: boolean; onNavigate: (s
               tabIndex={0}
               onClick={() => onNavigate(row.id)}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNavigate(row.id) } }}
-              className="group flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-theme-hover transition-colors"
+              className="group flex items-center gap-3 px-3 py-1.5 cursor-pointer hover:bg-theme-hover transition-colors"
             >
               <Icon className="w-4 h-4 shrink-0 text-theme-text-tertiary" />
-              <span className="text-sm text-theme-text-primary w-24 shrink-0 truncate">{row.label}</span>
+              <span className="text-sm text-theme-text-primary w-32 shrink-0">{row.label}</span>
               <OverviewStatus tone={row.tone} />
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <span className="truncate text-sm text-theme-text-secondary">{row.value}</span>

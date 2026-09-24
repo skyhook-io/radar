@@ -376,3 +376,106 @@ func TestCopyRequiresConfirmationForDiscoveryCredentials(t *testing.T) {
 		t.Fatal("old discovery credential survived explicit replacement")
 	}
 }
+
+func TestCopyDraftEditsAreAtomicAndKeepSourceIndependent(t *testing.T) {
+	for _, kind := range config.IntegrationKinds {
+		t.Run(string(kind), func(t *testing.T) {
+			r, sourceTarget, destinationTarget := setupResolver(t)
+			sourceRequest := Update{Kind: kind, Action: "save", URL: stringPtr("https://source.example")}
+			if kind == config.IntegrationMetrics {
+				sourceRequest.Headers = []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "source-secret"}, {Key: "X-Scope-OrgID", Action: "set", Value: "source-tenant"}}
+			} else {
+				sourceRequest.Secret = &SecretEdit{Action: "set", Value: "source-secret"}
+			}
+			if kind == config.IntegrationCost {
+				sourceRequest.ClusterID = stringPtr("source-cluster")
+			}
+			source := apply(t, r, sourceTarget, sourceRequest)
+			destinationRequest := Update{Kind: kind, Action: "save", URL: stringPtr("https://destination.example")}
+			if kind == config.IntegrationCost {
+				destinationRequest.ClusterID = stringPtr("destination-cluster")
+			}
+			destination := apply(t, r, destinationTarget, destinationRequest)
+			req := Update{Target: destinationTarget, Kind: kind, Action: "copy", Binding: sourceTarget.Binding, ConnectionID: source.View.Connection.ID, SourceRevision: source.View.Revision, Revision: destination.View.Revision, ConfirmRemoval: true, URL: stringPtr("https://source.example/custom")}
+			if kind == config.IntegrationMetrics {
+				req.Headers = []prom.HeaderOperation{{Key: "X-Scope-OrgID", Action: "set", Value: "destination-tenant"}}
+			} else {
+				req.Secret = &SecretEdit{Action: "set", Value: "destination-secret"}
+			}
+			pending, err := r.Prepare(destinationTarget, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := r.Resolve(destinationTarget, kind, false); got.Connection.URL() != "https://destination.example" {
+				t.Fatal("preparing a copy persisted it before commit")
+			}
+			if err := r.Commit(context.Background(), pending); err != nil {
+				t.Fatal(err)
+			}
+			copied := r.Resolve(destinationTarget, kind, false)
+			if copied.Connection.URL() != "https://source.example/custom" || copied.View.Connection.ID == source.View.Connection.ID {
+				t.Fatal("copy did not apply draft URL independently")
+			}
+			original := r.Resolve(sourceTarget, kind, false)
+			if original.View.Revision != source.View.Revision || original.Connection.URL() != "https://source.example" {
+				t.Fatal("copy edited the source")
+			}
+			switch kind {
+			case config.IntegrationMetrics:
+				if copied.Connection.Prometheus.Headers["Authorization"] != "source-secret" || copied.Connection.Prometheus.Headers["X-Scope-Orgid"] != "destination-tenant" || original.Connection.Prometheus.Headers["X-Scope-Orgid"] != "source-tenant" {
+					t.Fatal("copied header operations were not isolated")
+				}
+			case config.IntegrationArgoCD:
+				if copied.Connection.ArgoCD.Token != "destination-secret" || original.Connection.ArgoCD.Token != "source-secret" {
+					t.Fatal("copied token edit was not isolated")
+				}
+			case config.IntegrationCost:
+				if copied.Connection.Kubecost.APIKey != "destination-secret" || original.Connection.Kubecost.APIKey != "source-secret" || copied.Assignment.ClusterID != "destination-cluster" {
+					t.Fatal("copied API key or destination cluster mapping is incorrect")
+				}
+			}
+			data, _ := json.Marshal(copied.View)
+			if strings.Contains(string(data), "source-secret") || strings.Contains(string(data), "destination-secret") || strings.Contains(string(data), "destination-tenant") {
+				t.Fatal("copy exposed credentials")
+			}
+		})
+	}
+}
+
+func TestCopyDraftRejectsCredentialForwardingAndRaces(t *testing.T) {
+	for _, kind := range config.IntegrationKinds {
+		t.Run(string(kind), func(t *testing.T) {
+			r, a, b := setupResolver(t)
+			create := Update{Kind: kind, Action: "save", URL: stringPtr("https://source.example")}
+			if kind == config.IntegrationMetrics {
+				create.Headers = []prom.HeaderOperation{{Key: "Authorization", Action: "set", Value: "source-secret"}}
+			} else {
+				create.Secret = &SecretEdit{Action: "set", Value: "source-secret"}
+			}
+			source := apply(t, r, a, create)
+			req := Update{Target: b, Kind: kind, Action: "copy", Binding: a.Binding, ConnectionID: source.View.Connection.ID, SourceRevision: source.View.Revision, Revision: r.Resolve(b, kind, false).View.Revision, URL: stringPtr("https://other.example")}
+			if _, err := r.Prepare(b, req); err == nil {
+				t.Fatal("forwarded a copied credential to a different origin")
+			}
+			if r.Resolve(b, kind, false).View.State != "auto" {
+				t.Fatal("failed copy wrote destination")
+			}
+			if kind == config.IntegrationMetrics {
+				req.Headers = []prom.HeaderOperation{{Key: "Authorization", Action: "clear"}}
+			} else {
+				req.Secret = &SecretEdit{Action: "clear"}
+			}
+			pending, err := r.Prepare(b, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			apply(t, r, a, Update{Kind: kind, Action: "save", URL: stringPtr("https://source.example/changed")})
+			if _, err := r.Prepare(b, req); !errors.Is(err, config.ErrProfileConflict) {
+				t.Fatalf("source edit did not invalidate draft: %v", err)
+			}
+			if err := r.Commit(context.Background(), pending); !errors.Is(err, config.ErrProfileConflict) {
+				t.Fatalf("source edit during probe did not prevent commit: %v", err)
+			}
+		})
+	}
+}

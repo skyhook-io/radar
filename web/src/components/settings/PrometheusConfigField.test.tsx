@@ -96,10 +96,11 @@ describe('Local saved connections', () => {
   )
   it('keeps first setup a form, with no mandatory name or assignment step', () => {
     const html = render({})
-    expect(html).toContain('Apply now')
-    expect(html).toContain('No headers configured')
-    expect(html).toContain('Storage and cluster identity')
-    expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain('Save changes')
+    expect(html).toContain('Add header')
+    expect(html).not.toContain('Copy from another cluster')
+    expect(html).not.toContain('Local storage details')
+    expect(html).toContain('Cluster settings identity')
     expect(html).not.toContain('Connection name')
     expect(html).not.toContain('Previously saved connection')
   })
@@ -109,8 +110,11 @@ describe('Local saved connections', () => {
       'such as Prometheus, VictoriaMetrics, Thanos or Grafana Mimir'
     )
     expect(html).toContain('Authentication headers')
-    expect(html).toContain('Authorization, X-Scope-OrgID')
-    expect(html).toContain('Edit headers')
+    expect(html).toContain('Authorization value')
+    expect(html).toContain('X-Scope-OrgID value')
+    expect(html).toContain('Saved value')
+    expect(html).not.toContain('Edit headers')
+    expect(html).not.toContain('<select')
   })
   it('offers explicit adoption and never activates legacy credentials by default', () => {
     const html = render({
@@ -134,7 +138,7 @@ describe('Local saved connections', () => {
     expect(html).toContain(
       'Restart without its startup flags or environment configuration'
     )
-    expect(html).not.toContain('Apply now')
+    expect(html).not.toContain('Save changes')
     expect(html).not.toContain('Use saved connection…')
   })
   it('requires review for changed cluster identity', () => {
@@ -144,7 +148,7 @@ describe('Local saved connections', () => {
       error: 'Review the changed cluster connection'
     })
     expect(html).toContain('Review changes')
-    expect(html).not.toContain('Apply now')
+    expect(html).not.toContain('Save changes')
   })
   it.each(['metrics', 'argocd', 'cost'] as const)(
     'offers contextual recovery rather than overwriting a malformed file for %s',
@@ -155,17 +159,15 @@ describe('Local saved connections', () => {
       )
       expect(html).toContain('Repair clusters.json')
       expect(html).toContain('Reload latest settings')
-      expect(html).not.toContain('Apply now')
+      expect(html).not.toContain('Save changes')
     }
   )
   it.each(['metrics', 'argocd', 'cost'] as const)(
     'always edits only this cluster for %s, even with an existing shared record',
     (kind) => {
       const html = render({ ...sharedProfile, secretSet: true }, kind)
-      expect(html).toContain(
-        kind === 'metrics' ? 'Apply now' : 'Test &amp; apply'
-      )
-      expect(html).toContain('Copy from another cluster')
+      expect(html).toContain('Save changes')
+      expect(html).not.toContain('Copy from another cluster')
       expect(html).not.toContain('Edit shared connection')
       expect(html).not.toContain('Customize for')
       expect(html).not.toContain('Shared by')
@@ -173,10 +175,11 @@ describe('Local saved connections', () => {
       expect(html).not.toContain('Reload')
     }
   )
-  it('keeps storage cleanup secondary rather than a connection catalog', () => {
+  it('keeps file details and saved-entry cleanup out of integration tabs', () => {
     const html = render(sharedProfile)
-    expect(html).toContain('Storage and cluster identity')
-    expect(html).toContain('Manage stored cluster settings')
+    expect(html).not.toContain('Local storage details')
+    expect(html).not.toContain('clusters.json')
+    expect(html).not.toContain('Manage stored cluster settings')
     expect(html).not.toContain('Manage saved connections')
     expect(html).not.toContain('Connection name')
   })

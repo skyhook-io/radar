@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useId } from 'react'
 import { clsx } from 'clsx'
 import { Download, X, Copy, Check, RotateCw, ArrowDownToLine, Loader2 } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -13,10 +13,16 @@ import type { DesktopUpdateState } from '../../api/client'
 import { WithTooltip } from './Tooltip'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
+import { IN_CLUSTER_UPGRADE_URL } from '../../utils/version'
 
 const DISMISSED_KEY = 'radar-update-dismissed'
 
-export function UpdateNotification() {
+export function UpdateNotification({ placement = 'floating' }: { placement?: 'floating' | 'settings' }) {
+  const inSettings = placement === 'settings'
+  const [expanded, setExpanded] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const panelId = useId()
   const queryClient = useQueryClient()
   const { data: capabilities } = useCapabilities()
   const deploymentMode = capabilities ? (capabilities.deployment?.mode ?? 'local') : undefined
@@ -29,9 +35,17 @@ export function UpdateNotification() {
   const [desktopUpdating, setDesktopUpdating] = useState(false)
   const startUpdate = useStartDesktopUpdate()
   const applyUpdate = useApplyDesktopUpdate()
-  const { data: updateStatus } = useDesktopUpdateStatus(desktopUpdating)
-
   const isDesktop = versionInfo?.installMethod === 'desktop'
+  const { data: updateStatus } = useDesktopUpdateStatus(desktopUpdating || (inSettings && expanded && isDesktop))
+
+  useEffect(() => {
+    if (!expanded) return
+    const closeOutside = (event: PointerEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setExpanded(false)
+    }
+    document.addEventListener('pointerdown', closeOutside)
+    return () => document.removeEventListener('pointerdown', closeOutside)
+  }, [expanded])
 
   // Listen for "Check for Updates" menu item in desktop app.
   useEffect(() => {
@@ -106,22 +120,25 @@ export function UpdateNotification() {
 
   // Shared in-cluster viewers get a persistent Home notice instead of a
   // floating action prompt they may not be able to act on.
-  const show = !!versionInfo?.updateAvailable && !dismissed && deploymentMode !== undefined && deploymentMode !== 'in-cluster' && deploymentMode !== 'cloud'
+  const available = !!versionInfo?.updateAvailable && deploymentMode !== undefined && deploymentMode !== 'cloud'
+  const show = available && deploymentMode !== 'in-cluster' && (inSettings ? expanded : !dismissed)
   // Presence outlives `show` by the menu exit so a dismiss fades the chip out
   // instead of snapping it away; the enter runs the same transition in reverse.
   const { shouldRender, isOpen } = useAnimatedUnmount(show, overlayExitMs('menu'))
-  if (!shouldRender || !versionInfo) {
+  if ((!inSettings && !shouldRender) || (inSettings && !available) || !versionInfo) {
     return null
   }
 
   // Determine what the current effective state is
   const effectiveState: DesktopUpdateState = updateStatus?.state ?? 'idle'
 
-  return (
+  const panel = shouldRender && (
     <div
+      id={panelId}
       inert={!show || undefined}
       className={clsx(
-        'fixed bottom-4 right-4 z-50 max-w-sm bg-theme-surface border border-accent/50 rounded-lg shadow-xl p-4 origin-bottom-right',
+        'bg-theme-surface border border-accent/50 rounded-lg shadow-theme-lg p-4',
+        inSettings ? 'absolute top-full left-0 mt-2 z-10 w-[28rem] max-sm:left-4 max-sm:right-4 max-sm:w-auto origin-top-left' : 'fixed bottom-4 right-4 z-50 max-w-sm origin-bottom-right',
         TRANSITION_MENU,
         isOpen ? 'opacity-100 translate-y-0 scale-100' : 'opacity-0 translate-y-1 scale-[0.97]',
         !show && 'pointer-events-none',
@@ -138,7 +155,7 @@ export function UpdateNotification() {
           </h4>
           <p className="text-xs text-theme-text-secondary mt-1">
             Radar {versionInfo.latestVersion} is available.{' '}
-            You're on {versionInfo.currentVersion}.
+            {!inSettings && <>You're on {versionInfo.currentVersion}.</>}
           </p>
 
           {/* Desktop: in-app update flow */}
@@ -162,7 +179,7 @@ export function UpdateNotification() {
                   onClick={handleCopyCommand}
                   className="flex items-center gap-2 mt-2 px-2 py-1.5 bg-theme-elevated rounded font-mono text-theme-text-primary hover:bg-theme-surface-hover transition-colors w-full"
                 >
-                  <code className="inline-code flex-1 truncate text-left text-[11px]">{versionInfo.updateCommand}</code>
+                  <code className={clsx('inline-code flex-1 text-left text-[11px]', inSettings ? 'whitespace-pre-wrap break-all' : 'truncate')}>{versionInfo.updateCommand}</code>
                   <CopyIcon copied={copied} failed={copyFailed} />
                 </button>
               </WithTooltip>
@@ -197,13 +214,41 @@ export function UpdateNotification() {
           fixed on the parent already establishes the positioning context. */}
       {effectiveState !== 'downloading' && effectiveState !== 'applying' && (
         <button
-          onClick={handleDismiss}
+          onClick={inSettings ? () => { setExpanded(false); triggerRef.current?.focus() } : handleDismiss}
           className="absolute top-2 right-2 p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-          aria-label="Dismiss"
+          aria-label={inSettings ? 'Close update details' : 'Dismiss'}
         >
           <X className="w-4 h-4" />
         </button>
       )}
+    </div>
+  )
+
+  if (!inSettings) return panel
+
+  const triggerClass = 'inline-flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent-muted px-2.5 py-1.5 text-xs font-semibold text-accent-text hover:bg-theme-hover'
+  if (deploymentMode === 'in-cluster') return (
+    <a href={IN_CLUSTER_UPGRADE_URL} target="_blank" rel="noreferrer" className={triggerClass}>
+      <Download aria-hidden="true" className="h-4 w-4" />
+      Update available
+    </a>
+  )
+
+  return (
+    <div ref={containerRef} className="sm:relative" onBlur={event => {
+      if (!event.currentTarget.contains(event.relatedTarget)) setExpanded(false)
+    }} onKeyDown={event => {
+      if (event.key !== 'Escape' || !expanded) return
+      event.preventDefault()
+      event.stopPropagation()
+      setExpanded(false)
+      triggerRef.current?.focus()
+    }}>
+      <button ref={triggerRef} type="button" className={triggerClass} aria-expanded={expanded} aria-controls={panelId} onClick={() => setExpanded(value => !value)}>
+        <Download aria-hidden="true" className="h-4 w-4" />
+        Update available
+      </button>
+      {panel}
     </div>
   )
 }

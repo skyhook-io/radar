@@ -1,5 +1,6 @@
-import { useEffect, useId, useState } from 'react'
-import { Input, Disclosure } from '@skyhook-io/k8s-ui'
+import { useEffect, useId, useState, type ReactNode } from 'react'
+import { Collapse, Input, Disclosure } from '@skyhook-io/k8s-ui'
+import { ConnectionFormActions, type ConnectionFeedback } from './ConnectionFormActions'
 
 export interface SecretEdit {
   action: 'keep' | 'set' | 'clear'
@@ -45,12 +46,17 @@ function CredentialField({
           autoComplete="new-password"
           spellCheck={false}
           value={value.value ?? ''}
-          onChange={(e) => onChange({ action: 'set', value: e.target.value })}
+          onChange={(e) =>
+            onChange({
+              action: e.target.value ? 'set' : 'keep',
+              value: e.target.value || undefined
+            })
+          }
           placeholder={
             value.action === 'clear'
               ? 'Will be removed'
               : saved
-                ? 'Saved — leave unchanged to keep'
+                ? 'Saved value'
                 : 'Optional'
           }
           className="block w-full min-w-0 px-3 py-2 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500 flex-1"
@@ -67,14 +73,14 @@ function CredentialField({
               )
             }
           >
-            {value.action === 'keep' ? 'Remove' : 'Keep saved'}
+            {value.action === 'keep' ? 'Remove' : 'Undo'}
           </button>
         )}
       </div>
       <p className="text-xs text-theme-text-tertiary">
         {value.action === 'clear'
-          ? 'The saved credential will be removed when you apply.'
-          : 'Saved values are never sent back to your browser.'}
+          ? 'Will be removed when you save.'
+          : 'Leave unchanged to keep the saved value.'}
       </p>
     </section>
   )
@@ -87,14 +93,22 @@ export function ArgoCDConnectionForm({
   onChange,
   onApply,
   applyLabel = 'Test & apply',
+  dirty = false,
+  onDiscard,
+  connectionAction,
+  feedback,
   onDirtyChange
 }: {
   value: ArgoConnectionDraft
   secretSet: boolean
   cliSession?: { server: string; user: string; insecure?: boolean }
   onChange: (value: ArgoConnectionDraft) => void
-  onApply: (value: ArgoConnectionDraft) => Promise<void>
+  onApply: (value: ArgoConnectionDraft) => Promise<void | boolean>
   applyLabel?: string
+  dirty?: boolean
+  onDiscard?: () => void
+  connectionAction?: ReactNode
+  feedback?: ConnectionFeedback
   onDirtyChange?: (dirty: boolean) => void
 }) {
   const id = useId()
@@ -109,10 +123,11 @@ export function ArgoCDConnectionForm({
     setBusy(true)
     setError('')
     try {
-      await onApply({
+      const applied = await onApply({
         ...value,
         ...(useCliToken ? { useCliToken: true } : { secret })
       })
+      if (applied === false) return
       setSecret({ action: 'keep' })
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error))
@@ -127,12 +142,14 @@ export function ArgoCDConnectionForm({
         Auto-discovery works without setup where anonymous reads are allowed.
       </p>
       <div className="space-y-1">
-        <label
-          htmlFor={id}
-          className="block text-sm font-medium text-theme-text-primary"
-        >
-          Argo CD server URL
-        </label>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <label
+            htmlFor={id}
+            className="block text-sm font-medium text-theme-text-primary"
+          >
+            Argo CD server URL
+          </label>
+        </div>
         <Input
           className="block w-full min-w-0 px-3 py-2 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
           id={id}
@@ -140,6 +157,7 @@ export function ArgoCDConnectionForm({
           onChange={(e) => onChange({ ...value, url: e.target.value })}
           placeholder="Auto-discover, or https://argocd.example.com"
         />
+        {connectionAction}
         <p className="text-xs text-theme-text-tertiary">
           Reachable from Radar. Leave empty to discover the server in this
           cluster.
@@ -188,18 +206,31 @@ export function ArgoCDConnectionForm({
             a trusted private network.
           </p>
         )}
-      <button
-        type="button"
-        onClick={() => void apply()}
-        className="btn-brand px-3 py-2 text-xs"
-      >
-        {busy ? 'Checking connection…' : applyLabel}
-      </button>
+      {onDiscard ? (
+        <ConnectionFormActions
+          dirty={dirty}
+          busy={busy}
+          onSave={() => void apply()}
+          onDiscard={onDiscard}
+          feedback={feedback}
+          error={error}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => void apply()}
+          className="btn-brand px-3 py-2 text-xs"
+        >
+          {busy ? 'Checking connection…' : applyLabel}
+        </button>
+      )}
+      {!onDiscard && <Collapse open={!!error} className="!mt-0">
       {error && (
-        <p role="alert" className="text-sm text-warning-text">
+        <p role="alert" className="pt-3 text-sm text-warning-text">
           {error}
         </p>
       )}
+      </Collapse>}
     </fieldset>
   )
 }
@@ -210,13 +241,21 @@ export function CostConnectionForm({
   onChange,
   onApply,
   applyLabel = 'Test & apply',
+  dirty = false,
+  onDiscard,
+  connectionAction,
+  feedback,
   onDirtyChange
 }: {
   value: CostConnectionDraft
   secretSet: boolean
   onChange: (value: CostConnectionDraft) => void
-  onApply: (value: CostConnectionDraft) => Promise<void>
+  onApply: (value: CostConnectionDraft) => Promise<void | boolean>
   applyLabel?: string
+  dirty?: boolean
+  onDiscard?: () => void
+  connectionAction?: ReactNode
+  feedback?: ConnectionFeedback
   onDirtyChange?: (dirty: boolean) => void
 }) {
   const id = useId()
@@ -235,7 +274,8 @@ export function CostConnectionForm({
     setBusy(true)
     setError('')
     try {
-      await onApply({ ...value, secret })
+      const applied = await onApply({ ...value, secret })
+      if (applied === false) return
       setSecret({ action: 'keep' })
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error))
@@ -250,9 +290,17 @@ export function CostConnectionForm({
         Use OpenCost metrics from this cluster's metrics connection, or connect
         to a Kubecost Aggregator.
       </p>
-      <label className="block text-sm font-medium text-theme-text-primary space-y-1">
-        Cost source
+      <div className="space-y-1">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <label
+            htmlFor={`${id}-source`}
+            className="text-sm font-medium text-theme-text-primary"
+          >
+            Cost source
+          </label>
+        </div>
         <select
+          id={`${id}-source`}
           aria-label="Cost source"
           value={value.mode}
           onChange={(e) => {
@@ -275,7 +323,8 @@ export function CostConnectionForm({
           <option value="prometheus">OpenCost via metrics connection</option>
           <option value="kubecost">Kubecost</option>
         </select>
-      </label>
+        {(value.mode === 'prometheus' || (automatic && !overridesOpen)) && connectionAction}
+      </div>
       {value.mode !== 'prometheus' && (
         <Disclosure
           summary={
@@ -309,6 +358,7 @@ export function CostConnectionForm({
                 onChange={(e) => onChange({ ...value, url: e.target.value })}
                 placeholder="Auto-discover, or https://kubecost.example.com"
               />
+              {(!automatic || overridesOpen) && connectionAction}
               <p className="text-xs text-theme-text-tertiary">
                 Leave empty for discovery in this cluster. Use the central
                 Aggregator URL for a federated setup.
@@ -356,24 +406,37 @@ export function CostConnectionForm({
           </div>
         </Disclosure>
       )}
-      <button
-        type="button"
-        onClick={() => void apply()}
-        className="btn-brand px-3 py-2 text-xs"
-      >
-        {busy
-          ? 'Applying…'
-          : value.mode === 'prometheus'
-            ? 'Apply source'
-            : value.mode === 'auto' && !value.url.trim()
-              ? 'Apply discovery settings'
-              : applyLabel}
-      </button>
+      {onDiscard ? (
+        <ConnectionFormActions
+          dirty={dirty}
+          busy={busy}
+          onSave={() => void apply()}
+          onDiscard={onDiscard}
+          feedback={feedback}
+          error={error}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => void apply()}
+          className="btn-brand px-3 py-2 text-xs"
+        >
+          {busy
+            ? 'Applying…'
+            : value.mode === 'prometheus'
+              ? 'Apply source'
+              : value.mode === 'auto' && !value.url.trim()
+                ? 'Apply discovery settings'
+                : applyLabel}
+        </button>
+      )}
+      {!onDiscard && <Collapse open={!!error} className="!mt-0">
       {error && (
-        <p role="alert" className="text-sm text-warning-text">
+        <p role="alert" className="pt-3 text-sm text-warning-text">
           {error}
         </p>
       )}
+      </Collapse>}
     </fieldset>
   )
 }
