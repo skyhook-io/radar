@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { ArrowRight, ExternalLink, Sparkles, X } from 'lucide-react'
+import { ArrowRight, ExternalLink, Megaphone, X } from 'lucide-react'
 import { DialogPortal } from '@skyhook-io/k8s-ui'
 import { useCapabilities, useVersionCheck } from '../../api/client'
 import { releaseNotesFor, RELEASE_NOTES, type ReleaseNotes } from './releaseNotes'
@@ -163,7 +163,7 @@ export function WhatsNewContent({ titleId, notes, previousVersion, onClose, onNa
       <div className="relative px-6 pt-6 pb-4 border-b border-theme-border-subtle">
         <div className="flex items-center gap-3">
           <div className="flex items-center justify-center w-9 h-9 rounded-full bg-accent-muted shrink-0">
-            <Sparkles className="w-4 h-4 text-accent" aria-hidden />
+            <Megaphone className="w-4 h-4 text-accent" aria-hidden />
           </div>
           <div className="min-w-0">
             <h2 id={titleId} className="text-base font-semibold text-theme-text-primary">

@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { Sparkles } from 'lucide-react'
+import { Megaphone } from 'lucide-react'
 import { shouldShowWhatsNew } from './WhatsNew'
 import { releaseNotesFor, type ReleaseNotes } from './releaseNotes'
 
 const catalog: ReleaseNotes[] = [{
   version: 'v2.0.0',
   releaseUrl: 'https://github.com/skyhook-io/radar/releases',
-  highlights: [{ id: 'x', icon: Sparkles, title: 'X', description: 'Y' }],
+  highlights: [{ id: 'x', icon: Megaphone, title: 'X', description: 'Y' }],
   improvements: [],
 }]
 
