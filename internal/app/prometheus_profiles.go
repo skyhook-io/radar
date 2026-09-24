@@ -57,25 +57,21 @@ func preparePrometheusConfiguration(cfg AppConfig) (AppConfig, error) {
 	}
 	launches := map[config.Integration]connections.Bundle{}
 	if launch != nil {
-		launches[config.IntegrationMetrics] = connections.Bundle{Connection: config.SavedConnection{Type: config.IntegrationMetrics, Prometheus: launch}, Assignment: config.IntegrationAssignment{Mode: "connection"}}
+		launches[config.IntegrationMetrics] = connections.Bundle{Settings: config.IntegrationSettings{Prometheus: launch}}
 	}
 	argo, argoManaged, err := argocd.EnvironmentConfiguration()
 	if argoManaged {
 		if targetErr != nil {
 			return cfg, errors.New("local Argo CD environment configuration requires a selected kubeconfig context")
 		}
-		mode := "auto"
-		if argo.URL != "" {
-			mode = "connection"
-		}
-		launches[config.IntegrationArgoCD] = connections.Bundle{Connection: config.SavedConnection{Type: config.IntegrationArgoCD, ArgoCD: &argo}, Assignment: config.IntegrationAssignment{Mode: mode}, Err: err}
+		launches[config.IntegrationArgoCD] = connections.Bundle{Settings: config.IntegrationSettings{ArgoCD: &argo}, Err: err}
 	}
 	cost, costManaged, err := opencost.EnvironmentConfiguration()
 	if costManaged {
 		if targetErr != nil {
 			return cfg, errors.New("local cost environment configuration requires a selected kubeconfig context")
 		}
-		launches[config.IntegrationCost] = connections.Bundle{Connection: config.SavedConnection{Type: config.IntegrationCost, Kubecost: &pkgopencost.Connection{URL: cost.URL, APIKey: cost.APIKey}}, Assignment: config.IntegrationAssignment{Mode: string(cost.Source), ClusterID: cost.ClusterID}, Err: err}
+		launches[config.IntegrationCost] = connections.Bundle{Settings: config.IntegrationSettings{Kubecost: &pkgopencost.Connection{URL: cost.URL, APIKey: cost.APIKey}, Mode: string(cost.Source), ClusterID: cost.ClusterID}, Err: err}
 	}
 	cfg.LocalConnections = connections.NewResolver(config.NewProfileStore(), target, launches)
 	cfg.CostSource, cfg.KubecostURL, cfg.KubecostAPIKey, cfg.KubecostAPIKeyContext, cfg.KubecostClusterID, cfg.KubecostClusterIDContext = "auto", "", "", "", "", ""
@@ -87,8 +83,8 @@ func preparePrometheusConfiguration(cfg AppConfig) (AppConfig, error) {
 		if err != nil {
 			log.Printf("[prometheus] Cluster settings unavailable: %v", err)
 		} else {
-			cfg.PrometheusURL = selection.Connection.Prometheus.URL
-			cfg.PrometheusHeaders = selection.Connection.Prometheus.Headers
+			cfg.PrometheusURL = selection.Settings.Prometheus.URL
+			cfg.PrometheusHeaders = selection.Settings.Prometheus.Headers
 		}
 	}
 	return cfg, nil

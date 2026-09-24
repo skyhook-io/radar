@@ -90,8 +90,7 @@ func (r *Runtime) resolve(target k8s.ProfileTarget, details bool) map[config.Int
 
 func (r *Runtime) changed(target k8s.ProfileTarget, kind config.Integration, s connections.Selection) bool {
 	old, exists := r.active[kind]
-	old.Connection.Name, s.Connection.Name = "", ""
-	return !exists || r.target.Binding != target.Binding || r.target.Fingerprint != target.Fingerprint || !reflect.DeepEqual(old.Connection, s.Connection) || !reflect.DeepEqual(old.Assignment, s.Assignment) || errorText(old.Err) != errorText(s.Err)
+	return !exists || r.target.Binding != target.Binding || r.target.Fingerprint != target.Fingerprint || !reflect.DeepEqual(old.Settings, s.Settings) || errorText(old.Err) != errorText(s.Err)
 }
 
 func (r *Runtime) activate(target k8s.ProfileTarget, selected map[config.Integration]connections.Selection, switching bool) {
@@ -112,11 +111,11 @@ func (r *Runtime) activate(target k8s.ProfileTarget, selected map[config.Integra
 					prometheus.Initialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 				}
 				url, headers := prometheus.CurrentConfig()
-				metricsChanged = url != strings.TrimRight(s.Connection.Prometheus.URL, "/") || !maps.Equal(headers, s.Connection.Prometheus.Headers)
+				metricsChanged = url != strings.TrimRight(s.Settings.Prometheus.URL, "/") || !maps.Equal(headers, s.Settings.Prometheus.Headers)
 				if metricsChanged {
-					prometheus.Configure(s.Connection.Prometheus.URL, s.Connection.Prometheus.Headers)
+					prometheus.Configure(s.Settings.Prometheus.URL, s.Settings.Prometheus.Headers)
 				}
-				traffic.SetMetricsConfig(s.Connection.Prometheus.URL, s.Connection.Prometheus.Headers)
+				traffic.SetMetricsConfig(s.Settings.Prometheus.URL, s.Settings.Prometheus.Headers)
 			}
 			opencost.Reset()
 			opencost.InvalidateCurrency()
@@ -124,7 +123,7 @@ func (r *Runtime) activate(target k8s.ProfileTarget, selected map[config.Integra
 			if s.Err != nil {
 				argocd.SeedFromEnvFailed(s.Err.Error())
 			} else {
-				c := *s.Connection.ArgoCD
+				c := *s.Settings.ArgoCD
 				argocd.SetConfig(c.URL, c.Token, c.InsecureTLS, true)
 			}
 		case config.IntegrationCost:
@@ -148,8 +147,11 @@ func (r *Runtime) activate(target k8s.ProfileTarget, selected map[config.Integra
 }
 
 func CostConfig(s connections.Selection, target k8s.ProfileTarget) opencost.ManagerConfig {
-	c := s.Connection.Kubecost
-	return opencost.ManagerConfig{Source: opencost.Source(s.Assignment.Mode), URL: c.URL, APIKey: c.APIKey, APIKeyContext: target.Context, ClusterID: s.Assignment.ClusterID, ClusterIDContext: target.Context}
+	c := s.Settings.Kubecost
+	if c == nil {
+		return opencost.ManagerConfig{Source: opencost.Source(s.Settings.EffectiveMode(config.IntegrationCost))}
+	}
+	return opencost.ManagerConfig{Source: opencost.Source(s.Settings.EffectiveMode(config.IntegrationCost)), URL: c.URL, APIKey: c.APIKey, APIKeyContext: target.Context, ClusterID: s.Settings.ClusterID, ClusterIDContext: target.Context}
 }
 
 func errorText(err error) string {

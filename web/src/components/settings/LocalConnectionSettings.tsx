@@ -39,7 +39,7 @@ interface Target {
   operationGeneration: number
   identity: TargetIdentity
 }
-export interface Usage {
+export interface StoredConnection {
   revision: string
   binding: string
   integration: IntegrationKind
@@ -47,18 +47,11 @@ export interface Usage {
   source: string
   inFileName: string
   availability: 'available' | 'removed' | 'unavailable'
-}
-interface SavedConnection {
-  id: string
-  type: IntegrationKind
-  name: string
-  customName: string
   url: string
   headerKeys: string[]
   envHeaderKeys: string[]
   secretSet: boolean
   insecureTls: boolean
-  uses: Usage[]
   error?: string
 }
 export interface IntegrationProfile {
@@ -73,7 +66,6 @@ export interface IntegrationProfile {
   secretSet: boolean
   insecureTls: boolean
   clusterId: string
-  connection?: SavedConnection
   previousIdentity?: TargetIdentity
   error?: string
   legacy?: {
@@ -87,16 +79,13 @@ export interface IntegrationProfile {
 export type IntegrationProfiles = Record<IntegrationKind, IntegrationProfile>
 export interface ConnectionResponse {
   profiles: IntegrationProfiles
-  connections: SavedConnection[]
-  unlinkedAssignments: Usage[]
-  revision: string
+  connections: StoredConnection[]
   connected: boolean
   checked: boolean
   error?: string
 }
 interface Update {
   action: string
-  connectionId?: string
   binding?: string
   sourceRevision?: string
   url?: string
@@ -136,7 +125,7 @@ export function LocalConnectionSettings({
 }) {
   const [snapshot, setSnapshot] = useState(profiles)
   const profile = snapshot[kind]
-  const [catalog, setCatalog] = useState<SavedConnection[]>([])
+  const [catalog, setCatalog] = useState<StoredConnection[]>([])
   const [task, setTask] = useState<Task>('main')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -155,7 +144,7 @@ export function LocalConnectionSettings({
   const [discoveryDraft, setDiscoveryDraft] = useState(false)
   const [draftGeneration, setDraftGeneration] = useState(0)
   const [selected, setSelected] = useState<
-    (SavedConnection & { source: Usage }) | null
+    StoredConnection | null
   >(null)
   const [pending, setPending] = useState<Update | null>(null)
   const confirmationCopy = useRef({ title: '', message: '', label: '' })
@@ -172,13 +161,7 @@ export function LocalConnectionSettings({
   const editorRegion = useRef<HTMLFieldSetElement>(null)
   const trigger = useRef<HTMLElement | null>(null)
   const mounted = useRef(true)
-  const copySources = catalog
-    .filter((c) => c.type === kind && !c.error)
-    .flatMap((c) =>
-      c.uses
-        .filter((use) => use.binding !== profile.target.binding)
-        .map((source) => ({ ...c, source }))
-    )
+  const copySources = catalog.filter(c => c.integration === kind && !c.error && c.url && c.binding !== profile.target.binding)
   const removalContext = profile.target.context
   const dirty =
     !!selected ||
@@ -189,7 +172,7 @@ export function LocalConnectionSettings({
     clusterId !== profile.clusterId ||
     credentialDirty
   const hasSavedConfiguration = !!(
-    profile.url || profile.connection || profile.secretSet ||
+    profile.url || profile.secretSet ||
     profile.headerKeys.length || profile.insecureTls || profile.clusterId
   )
   const automaticDraft = discoveryDraft && !url.trim() && mode === 'auto' &&
@@ -429,9 +412,8 @@ export function LocalConnectionSettings({
     const update: Update = automaticDraft && !draft.useCliToken
       ? { action: 'auto' }
       : { ...draft, action, ...(selected ? {
-        binding: selected.source.binding,
-        connectionId: selected.id,
-        sourceRevision: selected.source.revision,
+        binding: selected.binding,
+        sourceRevision: selected.revision,
       } : {}) }
     if (kind === 'cost' && draft.mode === 'prometheus') {
       update.action = 'auto'
@@ -507,12 +489,12 @@ export function LocalConnectionSettings({
       searchPlaceholder="Search clusters or URLs"
       disabled={!!pending}
       options={copySources.map(connection => ({
-        value: connection.source.binding,
-        label: `${connection.source.context}${copySources.filter(other => other.source.context === connection.source.context).length > 1 ? ` · ${connection.source.source} · ${connection.source.inFileName}` : ''}`,
+        value: connection.binding,
+        label: `${connection.context}${copySources.filter(other => other.context === connection.context).length > 1 ? ` · ${connection.source} · ${connection.inFileName}` : ''}`,
         description: connection.url,
       }))}
       onChange={binding => {
-        const source = copySources.find(connection => connection.source.binding === binding)
+        const source = copySources.find(connection => connection.binding === binding)
         if (!source) return
         setSelected(source)
         setUrl(source.url)
@@ -658,7 +640,7 @@ export function LocalConnectionSettings({
       </div>
       {!editor && connectionActions}
       {selected && <div className="text-xs text-theme-text-secondary space-y-1">
-        <p>Copied from <span className="font-medium">{selected.source.context}</span> · Unsaved</p>
+        <p>Copied from <span className="font-medium">{selected.context}</span> · Unsaved</p>
         <p>{selected.headerKeys.length > 0 || selected.secretSet ? 'Saved credentials will be copied when you save. ' : ''}Changes stay independent. Check that this backend serves this cluster.</p>
         {selected.envHeaderKeys.length > 0 && <p>Environment-backed headers keep their references; changing those variables affects both clusters.</p>}
       </div>}
@@ -713,7 +695,7 @@ export function LocalConnectionSettings({
                   Reload latest settings
                 </button>
               )}
-              {profile.connection && (
+              {profile.url && (
                 <button
                   type="button"
                   className="block text-xs text-accent-text"

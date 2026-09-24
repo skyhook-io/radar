@@ -11,7 +11,7 @@ import {
   integrationNames,
   type ConnectionResponse,
   type IntegrationProfiles,
-  type Usage,
+  type StoredConnection,
 } from './LocalConnectionSettings'
 
 export function LocalConfigurationDetails() {
@@ -62,11 +62,11 @@ export function SavedClusterConnections({
   onChange: (profiles: IntegrationProfiles) => void
   onBusyChange: (busy: boolean) => void
 }) {
-  const [uses, setUses] = useState<Usage[]>([])
+  const [uses, setUses] = useState<StoredConnection[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [version, setVersion] = useState(0)
-  const [selected, setSelected] = useState<Usage | null>(null)
+  const [selected, setSelected] = useState<StoredConnection | null>(null)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const request = useRef<AbortController | null>(null)
@@ -94,10 +94,7 @@ export function SavedClusterConnections({
         if (!response.ok)
           throw new Error(data.error || 'Could not load saved connections.')
         if (controller.signal.aborted || getApiBase() !== base) return
-        setUses([
-          ...data.connections.flatMap((connection) => connection.uses),
-          ...data.unlinkedAssignments,
-        ])
+        setUses(data.connections)
       })
       .catch((error) => {
         if (!controller.signal.aborted)
@@ -143,10 +140,7 @@ export function SavedClusterConnections({
       if (controller.signal.aborted || getApiBase() !== base) return
       if (!response.ok)
         throw new Error(data.error || 'Could not remove the saved connection.')
-      setUses([
-        ...data.connections.flatMap((connection) => connection.uses),
-        ...data.unlinkedAssignments,
-      ])
+      setUses(data.connections)
       setMessage(
         `Removed the saved ${integrationNames[selected.integration]} connection for ${selected.context}.`,
       )
@@ -165,7 +159,7 @@ export function SavedClusterConnections({
     }
   }
 
-  const clusters = new Map<string, Usage[]>()
+  const clusters = new Map<string, StoredConnection[]>()
   for (const use of uses) {
     const entries = clusters.get(use.binding) ?? []
     entries.push(use)

@@ -74,15 +74,15 @@ func TestUnusableProfileDoesNotPreventStartupWithScope(t *testing.T) {
 			}
 			_, rev, _ := store.Read()
 			_, err = store.Update(context.Background(), rev, func(file *config.ClusterProfiles) error {
-				assignment := config.IntegrationAssignment{Mode: "connection", Target: target.Fingerprint, ConnectionID: "metrics"}
+				assignment := config.IntegrationSettings{Target: target.Fingerprint}
 				connection := prom.Connection{URL: "https://prom"}
 				if scenario == "target" {
 					assignment.Target = "old-target"
 				} else {
 					connection.HeadersFromEnv = map[string]string{"Authorization": "UNSET_PROFILE_STARTUP_TOKEN"}
 				}
-				file.Connections["metrics"] = config.SavedConnection{Type: config.IntegrationMetrics, Prometheus: &connection}
-				file.Profiles[target.Binding] = config.ClusterProfile{Context: "dev", Integrations: map[config.Integration]config.IntegrationAssignment{config.IntegrationMetrics: assignment}}
+				assignment.Prometheus = &connection
+				file.Profiles[target.Binding] = config.ClusterProfile{Context: "dev", Integrations: map[config.Integration]config.IntegrationSettings{config.IntegrationMetrics: assignment}}
 				return nil
 			})
 			if err != nil {

@@ -52,31 +52,10 @@ const render = (
     />
   )
 }
-const sharedConnection: NonNullable<IntegrationProfile['connection']> = {
-  id: 'shared',
-  type: 'metrics',
-  name: 'Development metrics',
-  customName: '',
-  url: 'https://metrics',
-  headerKeys: ['Authorization', 'X-Scope-OrgID'],
-  envHeaderKeys: [],
-  secretSet: false,
-  insecureTls: false,
-  uses: ['development', 'staging'].map((context) => ({
-    revision: 'source-revision',
-    binding: context,
-    integration: 'metrics',
-    context,
-    source: '/configs/team',
-    inFileName: context,
-    availability: 'available'
-  }))
-}
-const sharedProfile: Partial<IntegrationProfile> = {
+const savedProfile: Partial<IntegrationProfile> = {
   state: 'saved',
   url: 'https://metrics',
-  headerKeys: sharedConnection.headerKeys,
-  connection: sharedConnection,
+  headerKeys: ['Authorization', 'X-Scope-OrgID'],
   target: { ...profile.target, binding: 'development' }
 }
 
@@ -163,9 +142,9 @@ describe('Local saved connections', () => {
     }
   )
   it.each(['metrics', 'argocd', 'cost'] as const)(
-    'always edits only this cluster for %s, even with an existing shared record',
+    'edits only this cluster for %s',
     (kind) => {
-      const html = render({ ...sharedProfile, secretSet: true }, kind)
+      const html = render({ ...savedProfile, secretSet: true }, kind)
       expect(html).toContain('Save changes')
       expect(html).not.toContain('Copy from another cluster')
       expect(html).not.toContain('Edit shared connection')
@@ -176,7 +155,7 @@ describe('Local saved connections', () => {
     }
   )
   it('keeps file details and saved-entry cleanup out of integration tabs', () => {
-    const html = render(sharedProfile)
+    const html = render(savedProfile)
     expect(html).not.toContain('Local storage details')
     expect(html).not.toContain('clusters.json')
     expect(html).not.toContain('Manage stored cluster settings')

@@ -2,7 +2,6 @@ package connections
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -11,6 +10,7 @@ import (
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/argoapi"
+	"github.com/skyhook-io/radar/pkg/opencost"
 	"github.com/skyhook-io/radar/pkg/prom"
 )
 
@@ -25,7 +25,6 @@ type Update struct {
 	Revisions      map[config.Integration]string `json:"revisions,omitempty"`
 	Kind           config.Integration            `json:"kind"`
 	Action         string                        `json:"action"`
-	ConnectionID   string                        `json:"connectionId,omitempty"`
 	Binding        string                        `json:"binding,omitempty"`
 	SourceRevision string                        `json:"sourceRevision,omitempty"`
 	URL            *string                       `json:"url,omitempty"`
@@ -106,34 +105,18 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 		}
 	}
 	profile := next.Profiles[target.Binding]
-	a := next.Assignment(target.Binding, req.Kind)
-	previousID := a.ConnectionID
-	connection := emptyConnection(req.Kind)
-	if previousID != "" {
-		connection = next.Connections[previousID].Clone()
-	} else {
-		if a.ArgoCD != nil {
-			c := *a.ArgoCD
-			connection.ArgoCD = &c
-		}
-		if a.Kubecost != nil {
-			c := *a.Kubecost
-			connection.Kubecost = &c
-		}
-	}
+	a := next.Settings(target.Binding, req.Kind)
+	a = a.Clone()
 	if a.NeedsTarget() && a.Target != target.Fingerprint && !metadata && req.Action != "reconfirm" && req.Action != "replace" && req.Action != "copy" && req.Action != "auto" && req.Action != "dismiss_legacy" {
 		return pending, errors.New("review the changed cluster target before editing its connection")
 	}
 	switch req.Action {
 	case "forget":
-		old := next.Assignment(req.Binding, req.Kind)
-		if old.ConnectionID != "" && !req.ConfirmRemoval {
+		old := next.Settings(req.Binding, req.Kind)
+		if old.NeedsTarget() && !req.ConfirmRemoval {
 			return pending, errors.New("confirm removal of this context's saved connection and credentials")
 		}
-		if old.ConnectionID == "" && old.NeedsTarget() && !req.ConfirmRemoval {
-			return pending, errors.New("confirm removal of this context's saved settings")
-		}
-		if err := next.RemoveAssignment(req.Binding, req.Kind); err != nil {
+		if err := next.RemoveSettings(req.Binding, req.Kind); err != nil {
 			return pending, err
 		}
 		dismiss(&next, req.Binding, req.Kind)
@@ -150,7 +133,7 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 			if req.Revisions[kind] != p.integrationRevision(file, kind, target.Binding) {
 				return pending, config.ErrProfileConflict
 			}
-			selected := next.Assignment(target.Binding, kind)
+			selected := next.Settings(target.Binding, kind)
 			if !selected.NeedsTarget() || selected.Target == target.Fingerprint {
 				return pending, errors.New("selected integration has no cluster change to confirm")
 			}
@@ -172,21 +155,25 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 			return pending, errors.New("choose auto-discovery or this context's Prometheus connection")
 		}
 		if _, exists := profile.Integrations[req.Kind]; exists {
-			if previousID != "" && !req.ConfirmRemoval {
+			if a.NeedsTarget() && !req.ConfirmRemoval {
 				return pending, errors.New("confirm removal of this context's saved connection and credentials")
 			}
-			if previousID == "" && a.NeedsTarget() && !req.ConfirmRemoval {
-				return pending, errors.New("confirm removal of this context's saved credentials and mapping")
-			}
-			if err := next.RemoveAssignment(target.Binding, req.Kind); err != nil {
+			if err := next.RemoveSettings(target.Binding, req.Kind); err != nil {
 				return pending, err
 			}
 		}
 		profile = next.Profiles[target.Binding]
-		a = config.IntegrationAssignment{Mode: mode}
-		putAssignment(&next, target, req.Kind, profile, a)
+		a = config.IntegrationSettings{}
+		if req.Kind == config.IntegrationCost {
+			a.Mode = mode
+		}
+		putSettings(&next, target, req.Kind, profile, a)
 		dismiss(&next, target.Binding, req.Kind)
 	case "copy", "adopt", "save", "replace":
+		removing := req.Action == "replace" && a.NeedsTarget() || req.Action == "save" && a.URL() != "" && req.URL != nil && strings.TrimSpace(*req.URL) == ""
+		if removing && !req.ConfirmRemoval {
+			return pending, errors.New("confirm removal of the previous connection and its saved credentials")
+		}
 		if req.Action == "copy" {
 			if a.NeedsTarget() && !req.ConfirmRemoval {
 				return pending, errors.New("confirm replacement of this context's saved settings and credentials")
@@ -194,35 +181,29 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 			if req.Binding == "" || req.Binding == target.Binding {
 				return pending, errors.New("choose another cluster to copy from")
 			}
-			source := next.Assignment(req.Binding, req.Kind)
-			if source.ConnectionID == "" || source.ConnectionID != req.ConnectionID {
-				return pending, errors.New("source cluster connection changed; reload settings")
+			source, exists := next.Profiles[req.Binding].Integrations[req.Kind]
+			if !exists || source.URL() == "" {
+				return pending, errors.New("source cluster has no explicit connection to copy")
 			}
-			if err := source.Validate(req.Kind, next.Connections); err != nil {
+			if err := source.Validate(req.Kind); err != nil {
 				return pending, err
 			}
+			clusterID := a.ClusterID
 			if a.NeedsTarget() && a.Target != target.Fingerprint {
-				a.ClusterID = ""
+				clusterID = ""
 			}
-			var exists bool
-			connection, exists = next.Connections[req.ConnectionID]
-			if !exists || connection.Type != req.Kind {
-				return pending, errors.New("saved connection not found for this integration")
-			}
-			connection = connection.Clone()
-			if err := editConnection(&connection, req); err != nil {
+			a = source.Clone()
+			a.ClusterID = clusterID
+			if err := editSettings(&a, req); err != nil {
 				return pending, err
 			}
-			if connection.Prometheus != nil {
-				if _, err := prom.ResolveHeaders(connection.Prometheus.Headers, connection.Prometheus.HeadersFromEnv); err != nil {
+			if a.Prometheus != nil {
+				if _, err := prom.ResolveHeaders(a.Prometheus.Headers, a.Prometheus.HeadersFromEnv); err != nil {
 					return pending, err
 				}
 			}
-			connection.Name = ""
 			if req.Kind == config.IntegrationCost {
 				a.Mode = "kubecost"
-			} else {
-				a.Mode = "connection"
 			}
 		} else {
 			if req.Action == "adopt" {
@@ -246,63 +227,21 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 				if err := validateLegacyBinding(req.Kind, target, legacy); err != nil {
 					return pending, err
 				}
-				connection = legacy.Connection.Clone()
-				if req.Kind == config.IntegrationCost {
-					a.Mode = legacy.Assignment.Mode
-					a.ClusterID = legacy.Assignment.ClusterID
-				}
-				if connection.URL() != "" {
+				a = legacy.Settings.Clone()
+				if a.URL() != "" {
 					next.Imported[req.Kind] = true
 				}
 			} else {
 				if req.Action == "replace" {
-					connection = emptyConnection(req.Kind)
-					a = config.IntegrationAssignment{Mode: "auto"}
+					a = config.IntegrationSettings{}
 				}
-				if err := editConnection(&connection, req); err != nil {
+				if err := editSettings(&a, req); err != nil {
 					return pending, err
 				}
 			}
 		}
-		if connection.URL() == "" {
-			a.ConnectionID = ""
-			if req.Kind != config.IntegrationCost {
-				a.Mode = "auto"
-			}
-			if req.Kind == config.IntegrationMetrics {
-				if err := connection.Prometheus.Validate(); err != nil {
-					return pending, err
-				}
-			} else if req.Kind == config.IntegrationArgoCD {
-				a.ArgoCD = nil
-				if connection.ArgoCD.Token != "" || connection.ArgoCD.InsecureTLS {
-					a.ArgoCD = connection.ArgoCD
-				}
-			} else {
-				a.Kubecost = nil
-				if connection.Kubecost.APIKey != "" {
-					a.Kubecost = connection.Kubecost
-				}
-			}
-		} else {
-			if err := connection.Validate(); err != nil {
-				return pending, err
-			}
-			id := previousID
-			if id == "" || len(next.Uses(id)) > 1 || req.Action == "replace" || req.Action == "adopt" || req.Action == "copy" {
-				id = "conn_" + rand.Text()
-			}
-			next.Connections[id] = connection.Clone()
-			a.ConnectionID = id
-			a.ArgoCD = nil
-			a.Kubecost = nil
-			if req.Kind == config.IntegrationCost {
-				if a.Mode == "auto" {
-					a.Mode = "kubecost"
-				}
-			} else {
-				a.Mode = "connection"
-			}
+		if req.Kind == config.IntegrationCost && a.URL() != "" && a.EffectiveMode(req.Kind) == "auto" {
+			a.Mode = "kubecost"
 		}
 		if req.Kind == config.IntegrationCost {
 			if req.Mode != nil {
@@ -315,16 +254,10 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 		a.Target = target.Fingerprint
 		identity := target.Identity
 		a.Identity = &identity
-		putAssignment(&next, target, req.Kind, profile, a)
-		if previousID != "" && previousID != a.ConnectionID && len(next.Uses(previousID)) == 0 {
-			if !req.ConfirmRemoval {
-				return pending, errors.New("confirm removal of the previous connection and its saved credentials")
-			}
-			delete(next.Connections, previousID)
-		}
+		putSettings(&next, target, req.Kind, profile, a)
 		dismiss(&next, target.Binding, req.Kind)
 		pending.Probe = true
-		pending.Candidate = Bundle{Connection: connection.Clone(), Assignment: a}
+		pending.Candidate = Bundle{Settings: a.Clone()}
 	default:
 		return pending, errors.New("unknown connection action")
 	}
@@ -338,13 +271,25 @@ func (p *Resolver) Prepare(target k8s.ProfileTarget, req Update) (Pending, error
 	return pending, nil
 }
 
-func putAssignment(file *config.ClusterProfiles, target k8s.ProfileTarget, kind config.Integration, profile config.ClusterProfile, a config.IntegrationAssignment) {
+func putSettings(file *config.ClusterProfiles, target k8s.ProfileTarget, kind config.Integration, profile config.ClusterProfile, a config.IntegrationSettings) {
+	if a.Prometheus != nil && a.Prometheus.URL == "" && len(a.Prometheus.Headers) == 0 && len(a.Prometheus.HeadersFromEnv) == 0 {
+		a.Prometheus = nil
+	}
+	if a.ArgoCD != nil && *a.ArgoCD == (argoapi.Connection{}) {
+		a.ArgoCD = nil
+	}
+	if a.Kubecost != nil && *a.Kubecost == (opencost.Connection{}) {
+		a.Kubecost = nil
+	}
+	if !a.NeedsTarget() {
+		a.Target, a.Identity = "", nil
+	}
 	profile.Context = target.Context
 	profile.Source = target.Source
 	profile.InFileName = target.InFileName
 	profile.CAPI = target.CAPI
 	if profile.Integrations == nil {
-		profile.Integrations = map[config.Integration]config.IntegrationAssignment{}
+		profile.Integrations = map[config.Integration]config.IntegrationSettings{}
 	}
 	profile.Integrations[kind] = a
 	file.Profiles[target.Binding] = profile
@@ -357,7 +302,8 @@ func dismiss(file *config.ClusterProfiles, binding string, kind config.Integrati
 	file.Dismissed[binding][kind] = true
 }
 
-func editConnection(c *config.SavedConnection, req Update) error {
+func editSettings(c *config.IntegrationSettings, req Update) error {
+	*c = settingsWithDefaults(req.Kind, *c)
 	previousURL := c.URL()
 	newURL := previousURL
 	if req.URL != nil {
@@ -439,14 +385,14 @@ func editConnection(c *config.SavedConnection, req Update) error {
 }
 
 func validateLegacyBinding(kind config.Integration, target k8s.ProfileTarget, bundle Bundle) error {
-	if kind == config.IntegrationArgoCD && bundle.Connection.ArgoCD.URL == "" && bundle.Connection.ArgoCD.Token != "" && bundle.legacyArgoBinding != target.Binding {
+	if kind == config.IntegrationArgoCD && bundle.Settings.ArgoCD.URL == "" && bundle.Settings.ArgoCD.Token != "" && bundle.legacyArgoBinding != target.Binding {
 		return errors.New("re-enter the Argo CD discovery token to bind it to this kubeconfig source")
 	}
 	if kind == config.IntegrationCost {
-		if bundle.Connection.Kubecost.URL == "" && bundle.Connection.Kubecost.APIKey != "" && bundle.legacyCostBinding != target.Context {
+		if bundle.Settings.Kubecost.URL == "" && bundle.Settings.Kubecost.APIKey != "" && bundle.legacyCostBinding != target.Context {
 			return errors.New("re-enter the Kubecost discovery key for this context")
 		}
-		if bundle.Assignment.ClusterID != "" && bundle.legacyClusterIDBinding != target.Context {
+		if bundle.Settings.ClusterID != "" && bundle.legacyClusterIDBinding != target.Context {
 			return errors.New("set the Kubecost cluster ID for this context before adopting")
 		}
 	}

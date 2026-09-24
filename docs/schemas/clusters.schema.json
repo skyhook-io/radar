@@ -1,25 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Radar local saved connections and context assignments",
+  "title": "Radar local per-cluster integration settings",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "version",
-    "connections",
     "profiles"
   ],
   "properties": {
     "version": {
       "const": 1
-    },
-    "connections": {
-      "type": "object",
-      "propertyNames": {
-        "minLength": 1
-      },
-      "additionalProperties": {
-        "$ref": "#/$defs/connection"
-      }
     },
     "profiles": {
       "type": "object",
@@ -159,165 +149,6 @@
         }
       }
     },
-    "connection": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "type"
-      ],
-      "properties": {
-        "type": {
-          "enum": [
-            "metrics",
-            "argocd",
-            "cost"
-          ]
-        },
-        "name": {
-          "type": "string",
-          "maxLength": 160
-        },
-        "prometheus": {
-          "$ref": "#/$defs/prometheus"
-        },
-        "argocd": {
-          "$ref": "#/$defs/argocd"
-        },
-        "kubecost": {
-          "$ref": "#/$defs/kubecost"
-        }
-      },
-      "oneOf": [
-        {
-          "properties": {
-            "type": {
-              "const": "metrics"
-            },
-            "prometheus": {
-              "properties": {
-                "url": {
-                  "minLength": 1
-                }
-              }
-            }
-          },
-          "required": [
-            "prometheus"
-          ],
-          "not": {
-            "anyOf": [
-              {
-                "required": [
-                  "argocd"
-                ]
-              },
-              {
-                "required": [
-                  "kubecost"
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "argocd"
-            },
-            "argocd": {
-              "properties": {
-                "url": {
-                  "minLength": 1
-                }
-              }
-            }
-          },
-          "required": [
-            "argocd"
-          ],
-          "not": {
-            "anyOf": [
-              {
-                "required": [
-                  "prometheus"
-                ]
-              },
-              {
-                "required": [
-                  "kubecost"
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "properties": {
-            "type": {
-              "const": "cost"
-            },
-            "kubecost": {
-              "properties": {
-                "url": {
-                  "minLength": 1
-                }
-              }
-            }
-          },
-          "required": [
-            "kubecost"
-          ],
-          "not": {
-            "anyOf": [
-              {
-                "required": [
-                  "prometheus"
-                ]
-              },
-              {
-                "required": [
-                  "argocd"
-                ]
-              }
-            ]
-          }
-        }
-      ]
-    },
-    "assignment": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "mode"
-      ],
-      "properties": {
-        "mode": {
-          "enum": [
-            "auto",
-            "connection",
-            "prometheus",
-            "kubecost"
-          ]
-        },
-        "connectionId": {
-          "type": "string"
-        },
-        "target": {
-          "type": "string"
-        },
-        "identity": {
-          "$ref": "#/$defs/identity"
-        },
-        "argocd": {
-          "$ref": "#/$defs/argocd"
-        },
-        "kubecost": {
-          "$ref": "#/$defs/kubecost"
-        },
-        "clusterId": {
-          "type": "string"
-        }
-      }
-    },
     "profile": {
       "type": "object",
       "additionalProperties": false,
@@ -361,17 +192,238 @@
           "additionalProperties": false,
           "properties": {
             "metrics": {
-              "$ref": "#/$defs/assignment"
+              "$ref": "#/$defs/metricsSettings"
             },
             "argocd": {
-              "$ref": "#/$defs/assignment"
+              "$ref": "#/$defs/argocdSettings"
             },
             "cost": {
-              "$ref": "#/$defs/assignment"
+              "$ref": "#/$defs/costSettings"
             }
           }
         }
       }
+    },
+    "metricsSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "prometheus": {
+          "$ref": "#/$defs/prometheus"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "required": [
+                  "prometheus"
+                ],
+                "properties": {
+                  "prometheus": {
+                    "required": [
+                      "url"
+                    ],
+                    "properties": {
+                      "url": {
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "target"
+            ]
+          }
+        }
+      ]
+    },
+    "argocdSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "argocd": {
+          "$ref": "#/$defs/argocd"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "anyOf": [
+              {
+                "required": [
+                  "argocd"
+                ],
+                "properties": {
+                  "argocd": {
+                    "required": [
+                      "url"
+                    ],
+                    "properties": {
+                      "url": {
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "required": [
+                  "argocd"
+                ],
+                "properties": {
+                  "argocd": {
+                    "required": [
+                      "token"
+                    ],
+                    "properties": {
+                      "token": {
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "target"
+            ]
+          }
+        }
+      ]
+    },
+    "costSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "auto",
+            "prometheus",
+            "kubecost"
+          ]
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identity": {
+          "$ref": "#/$defs/identity"
+        },
+        "kubecost": {
+          "$ref": "#/$defs/kubecost"
+        },
+        "clusterId": {
+          "type": "string",
+          "maxLength": 1024
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "prometheus"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "kubecost"
+                  ]
+                },
+                {
+                  "required": [
+                    "clusterId"
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "anyOf": [
+              {
+                "required": [
+                  "kubecost"
+                ],
+                "properties": {
+                  "kubecost": {
+                    "required": [
+                      "url"
+                    ],
+                    "properties": {
+                      "url": {
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "required": [
+                  "kubecost"
+                ],
+                "properties": {
+                  "kubecost": {
+                    "required": [
+                      "apiKey"
+                    ],
+                    "properties": {
+                      "apiKey": {
+                        "minLength": 1
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "required": [
+                  "clusterId"
+                ],
+                "properties": {
+                  "clusterId": {
+                    "minLength": 1
+                  }
+                }
+              }
+            ]
+          },
+          "then": {
+            "required": [
+              "target"
+            ]
+          }
+        }
+      ]
     }
   }
 }

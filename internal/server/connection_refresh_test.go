@@ -225,7 +225,7 @@ func TestArgoCandidateDoesNotBlockReadersAndCannotCommitAfterSwitch(t *testing.T
 		t.Fatalf("superseded probe: %d %s", response.Code, response.Body.String())
 	}
 	file, _, _ := s.localConnections.Store.Read()
-	if len(file.Connections) != 0 {
+	if len(file.Profiles) != 0 {
 		t.Fatal("candidate saved after context changed")
 	}
 }
@@ -256,7 +256,7 @@ func TestManageConnectionsWithoutActiveCluster(t *testing.T) {
 	if len(catalog.Connections) != 1 {
 		t.Fatal("offline catalog lost saved connection")
 	}
-	use := catalog.Connections[0].Uses[0]
+	use := catalog.Connections[0]
 	data, _ := json.Marshal(connections.Update{Kind: config.IntegrationMetrics, Action: "forget", Binding: use.Binding, SourceRevision: use.Revision, ConfirmRemoval: true})
 	response = httptest.NewRecorder()
 	s.handleUpdateLocalConnection(response, httptest.NewRequest(http.MethodPut, "/api/integrations/connections", strings.NewReader(string(data))))

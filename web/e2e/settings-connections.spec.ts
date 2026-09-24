@@ -90,6 +90,8 @@ function profile(kind: IntegrationKind): IntegrationProfile {
   }
 }
 
+const discoverySettings = { url: '', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false }
+
 async function fixture(page: Page) {
   const profiles: IntegrationProfiles = { metrics: profile('metrics'), argocd: profile('argocd'), cost: profile('cost') }
   let file: Record<string, unknown> = {}
@@ -101,8 +103,7 @@ async function fixture(page: Page) {
   let failNextCopy = false
   let applyError = ''
   let catalogFailure = false
-  const connections: NonNullable<IntegrationProfile['connection']>[] = []
-  const unlinkedAssignments: ConnectionResponse['unlinkedAssignments'] = []
+  const connections: ConnectionResponse['connections'] = []
   await page.route('**/api/capabilities', async route => {
     const response = await route.fetch()
     const capabilities = await response.json()
@@ -126,21 +127,20 @@ async function fixture(page: Page) {
       writes.push(update)
       if (update.action === 'copy' && failNextCopy) {
         failNextCopy = false
-        connections[0].uses[0].revision = 'refreshed-source'
+        connections[0].revision = 'refreshed-source'
         return route.fulfill({ status: 409, json: { error: 'Source settings changed' } })
       }
       await waitForApply
       if (update.action === 'forget') {
-        for (const connection of connections) connection.uses = connection.uses.filter(use => use.binding !== update.binding || use.integration !== update.kind)
-        for (let index = unlinkedAssignments.length - 1; index >= 0; index--) {
-          const use = unlinkedAssignments[index]
-          if (use.binding === update.binding && use.integration === update.kind) unlinkedAssignments.splice(index, 1)
+        for (let index = connections.length - 1; index >= 0; index--) {
+          const entry = connections[index]
+          if (entry.binding === update.binding && entry.integration === update.kind) connections.splice(index, 1)
         }
-        return route.fulfill({ json: { profiles, connections, unlinkedAssignments, checked: false, connected: false } })
+        return route.fulfill({ json: { profiles, connections, checked: false, connected: false } })
       }
       const current = profiles[update.kind as IntegrationKind]
       if (update.action === 'copy') {
-        const source = connections.find(connection => connection.id === update.connectionId)!
+        const source = connections.find(connection => connection.binding === update.binding && connection.integration === update.kind)!
         Object.assign(current, { url: source.url, headerKeys: [...source.headerKeys], envHeaderKeys: [...source.envHeaderKeys], secretSet: source.secretSet, insecureTls: source.insecureTls })
       }
       if (update.action === 'replace') Object.assign(current, { headerKeys: [], secretSet: false, insecureTls: false, clusterId: '' })
@@ -162,12 +162,12 @@ async function fixture(page: Page) {
         current.headerKeys = [...keys]
       }
       current.state = 'saved'
-      if (update.action === 'auto') Object.assign(current, { state: 'auto', mode: update.mode || 'auto', url: '', headerKeys: [], secretSet: false, clusterId: '', connection: undefined })
+      if (update.action === 'auto') Object.assign(current, { state: 'auto', mode: update.mode || 'auto', url: '', headerKeys: [], secretSet: false, clusterId: '' })
     }
-    return route.fulfill({ json: { profiles, connections, unlinkedAssignments, checked: true, connected: !applyError, ...(route.request().method() === 'PUT' && applyError ? { error: applyError } : {}) } })
+    return route.fulfill({ json: { profiles, connections, checked: true, connected: !applyError, ...(route.request().method() === 'PUT' && applyError ? { error: applyError } : {}) } })
   })
   return {
-    profiles, writes, connections, unlinkedAssignments, file: () => file,
+    profiles, writes, connections, file: () => file,
     delayApply() { waitForApply = new Promise<void>(resolve => { releaseApply = resolve }) },
     releaseApply() { releaseApply?.(); waitForApply = undefined },
     failStatus() { statusFailure = true },
@@ -184,8 +184,8 @@ for (const integration of integrations) {
   test(`${integration.tab}: clearing a copied credentialed URL is guarded before confirmation`, async ({ page }) => {
     const state = await fixture(page)
     Object.assign(state.profiles[integration.kind], { headerKeys: [], secretSet: false })
-    state.connections.push({ id: 'source', type: integration.kind, name: '', customName: '', url: 'https://source.example', headerKeys: integration.kind === 'metrics' ? ['Authorization'] : [], envHeaderKeys: [], secretSet: integration.kind !== 'metrics', insecureTls: false,
-      uses: [{ binding: 'source', integration: integration.kind, context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' }] })
+    state.connections.push({ url: 'https://source.example', headerKeys: integration.kind === 'metrics' ? ['Authorization'] : [], envHeaderKeys: [], secretSet: integration.kind !== 'metrics', insecureTls: false,
+      binding: 'source', integration: integration.kind, context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' })
     const dialog = await openSettings(page, integration.tab)
     await dialog.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
     await dialog.getByRole('option', { name: /staging/ }).click()
@@ -198,8 +198,8 @@ for (const integration of integrations) {
 
   test(`${integration.tab}: catalog recovery preserves the copied draft`, async ({ page }) => {
     const state = await fixture(page)
-    state.connections.push({ id: 'source', type: integration.kind, name: '', customName: '', url: 'https://source.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
-      uses: [{ binding: 'source', integration: integration.kind, context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' }] })
+    state.connections.push({ url: 'https://source.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
+      binding: 'source', integration: integration.kind, context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' })
     const dialog = await openSettings(page, integration.tab)
     await dialog.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
     state.failCatalog()
@@ -299,8 +299,8 @@ for (const integration of integrations) {
   test(`${integration.tab}: hides copy when no other cluster has this integration`, async ({ page }) => {
     const state = await fixture(page)
     const otherKind = integration.kind === 'metrics' ? 'cost' : 'metrics'
-    state.connections.push({ id: 'unrelated', type: otherKind, name: '', customName: '', url: 'https://other.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
-      uses: [{ binding: 'other', integration: otherKind, context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' }] })
+    state.connections.push({ url: 'https://other.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
+      binding: 'other', integration: otherKind, context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' })
     await openSettings(page, integration.tab)
     await expect(page.getByRole('button', { name: 'Copy from another cluster…', exact: true })).toHaveCount(0)
     await expect(page.getByRole('button', { name: 'Save changes', exact: true })).toBeDisabled()
@@ -311,9 +311,8 @@ for (const integration of integrations) {
     state.profiles[integration.kind].secretSet = true
     if (integration.kind === 'cost') state.profiles.cost.clusterId = 'destination-cluster'
     state.connections.push({
-      id: 'source-record', type: integration.kind, name: 'Unused internal label', customName: '',
       url: 'https://source.example', headerKeys: ['Authorization', 'X-Scope-OrgID'], envHeaderKeys: [], secretSet: true, insecureTls: false,
-      uses: [{ binding: 'source-binding', integration: integration.kind, context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: 'source-snapshot' }]
+      binding: 'source-binding', integration: integration.kind, context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: 'source-snapshot'
     })
     await openSettings(page, integration.tab)
     const field = page.getByRole('textbox', { name: integration.field, exact: true })
@@ -334,7 +333,7 @@ for (const integration of integrations) {
     expect(state.writes).toHaveLength(0)
     await page.getByRole('button', { name: 'Replace connection', exact: true }).click()
     await expect.poll(() => state.writes.length).toBe(1)
-    expect(state.writes[0]).toMatchObject({ action: 'copy', binding: 'source-binding', connectionId: 'source-record', sourceRevision: 'source-snapshot', revision: '1', confirmRemoval: true })
+    expect(state.writes[0]).toMatchObject({ action: 'copy', binding: 'source-binding', sourceRevision: 'source-snapshot', revision: '1', confirmRemoval: true })
     expect(state.writes[0].url).toBe('https://source.example/destination')
     if (integration.kind === 'metrics') expect(state.writes[0].headers).toEqual([])
     else expect(state.writes[0].secret).toEqual({ action: 'keep' })
@@ -367,8 +366,8 @@ test('connection warning sits directly below Save, not below a blank feedback ro
 for (const integration of integrations) {
   test(`${integration.tab}: copied draft is discarded without saving and picker keeps form visible`, async ({ page }) => {
     const state = await fixture(page)
-    state.connections.push({ id: 'other', type: integration.kind, name: '', customName: '', url: 'https://other.example', headerKeys: ['X-Scope-OrgID'], envHeaderKeys: [], secretSet: true, insecureTls: true,
-      uses: [{ binding: 'other', integration: integration.kind, context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' }] })
+    state.connections.push({ url: 'https://other.example', headerKeys: ['X-Scope-OrgID'], envHeaderKeys: [], secretSet: true, insecureTls: true,
+      binding: 'other', integration: integration.kind, context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' })
     const dialog = await openSettings(page, integration.tab)
     const field = dialog.getByRole('textbox', { name: integration.field, exact: true })
     const copy = dialog.getByRole('button', { name: 'Copy from another cluster…', exact: true })
@@ -413,8 +412,8 @@ for (const integration of integrations) {
 
 test('copy picker distinguishes duplicate context names and supports empty search', async ({ page }) => {
   const state = await fixture(page)
-  for (const source of ['one', 'two']) state.connections.push({ id: source, type: 'metrics', name: '', customName: '', url: `https://${source}.example`, headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
-    uses: [{ binding: source, integration: 'metrics', context: 'staging', source: `/test/${source}`, inFileName: 'staging', availability: 'available', revision: '1' }] })
+  for (const source of ['one', 'two']) state.connections.push({ url: `https://${source}.example`, headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
+    binding: source, integration: 'metrics', context: 'staging', source: `/test/${source}`, inFileName: 'staging', availability: 'available', revision: '1' })
   const dialog = await openSettings(page, 'Metrics')
   await dialog.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
   const search = dialog.getByRole('combobox', { name: 'Search clusters or URLs' })
@@ -430,8 +429,8 @@ test('copy picker distinguishes duplicate context names and supports empty searc
 test('copy into an unconfigured cluster saves edited headers without an intermediate write', async ({ page }) => {
   const state = await fixture(page)
   Object.assign(state.profiles.metrics, { url: '', headerKeys: [], state: 'auto' })
-  state.connections.push({ id: 'source', type: 'metrics', name: '', customName: '', url: 'https://source.example', headerKeys: ['Authorization', 'X-Scope-OrgID'], envHeaderKeys: [], secretSet: false, insecureTls: false,
-    uses: [{ binding: 'source', integration: 'metrics', context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: 'source-revision' }] })
+  state.connections.push({ url: 'https://source.example', headerKeys: ['Authorization', 'X-Scope-OrgID'], envHeaderKeys: [], secretSet: false, insecureTls: false,
+    binding: 'source', integration: 'metrics', context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: 'source-revision' })
   const dialog = await openSettings(page, 'Metrics')
   await dialog.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
   await dialog.getByRole('option', { name: /staging/ }).click()
@@ -507,8 +506,8 @@ for (const integration of integrations) {
 
 test('auto-discovery replaces a copied draft and Discard restores the saved connection', async ({ page }) => {
   const state = await fixture(page)
-  state.connections.push({ id: 'source', type: 'metrics', name: '', customName: '', url: 'https://source.example', headerKeys: ['X-Scope-OrgID'], envHeaderKeys: [], secretSet: false, insecureTls: false,
-    uses: [{ binding: 'source', integration: 'metrics', context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' }] })
+  state.connections.push({ url: 'https://source.example', headerKeys: ['X-Scope-OrgID'], envHeaderKeys: [], secretSet: false, insecureTls: false,
+    binding: 'source', integration: 'metrics', context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: '1' })
   const dialog = await openSettings(page, 'Metrics')
   await dialog.getByRole('button', { name: 'Copy from another cluster…', exact: true }).click()
   await dialog.getByRole('option', { name: /staging/ }).click()
@@ -525,9 +524,9 @@ for (const integration of integrations) {
   test(`${integration.tab}: copy replaces edited drafts and allows choosing another source`, async ({ page }) => {
     const state = await fixture(page)
     for (const context of ['staging', 'testing']) state.connections.push({
-      id: context, type: integration.kind, name: '', customName: '', url: `https://${context}.example`,
+      url: `https://${context}.example`,
       headerKeys: integration.kind === 'metrics' ? ['Authorization'] : [], envHeaderKeys: [], secretSet: integration.kind !== 'metrics', insecureTls: false,
-      uses: [{ binding: context, integration: integration.kind, context, source: `/test/${context}`, inFileName: context, availability: 'available', revision: '1' }],
+      binding: context, integration: integration.kind, context, source: `/test/${context}`, inFileName: context, availability: 'available', revision: '1',
     })
     const dialog = await openSettings(page, integration.tab)
     const field = dialog.getByRole('textbox', { name: integration.field, exact: true })
@@ -557,8 +556,8 @@ test('copy after a target change warns before replacement and reload clears stal
   state.profiles.metrics.secretSet = true
   state.profiles.metrics.error = 'Cluster connection changed'
   state.connections.push({
-    id: 'source', type: 'metrics', name: '', customName: '', url: 'https://source.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
-    uses: [{ binding: 'source', integration: 'metrics', context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: 'old-source' }]
+    url: 'https://source.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
+    binding: 'source', integration: 'metrics', context: 'staging', source: '/test/staging', inFileName: 'staging', availability: 'available', revision: 'old-source'
   })
   state.failNextCopy()
   await openSettings(page, 'Metrics')
@@ -617,8 +616,8 @@ test('headers edit directly, preserve untouched values, and support undo and dis
 
 test('old context cleanup lives in Connection and clearly scopes credential removal', async ({ page }) => {
   const state = await fixture(page)
-  state.connections.push({ id: 'old', type: 'metrics', name: '', customName: '', url: 'https://old.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
-    uses: [{ binding: 'old', integration: 'metrics', context: 'old-cluster', source: '/test/old', inFileName: 'old-cluster', availability: 'removed', revision: 'old-revision' }] })
+  state.connections.push({ url: 'https://old.example', headerKeys: [], envHeaderKeys: [], secretSet: false, insecureTls: false,
+    binding: 'old', integration: 'metrics', context: 'old-cluster', source: '/test/old', inFileName: 'old-cluster', availability: 'removed', revision: 'old-revision' })
   await openSettings(page, 'Metrics')
   await expect(page.getByRole('button', { name: 'Manage stored cluster settings' })).toHaveCount(0)
   await expect(page.getByText('Local storage details', { exact: true })).toHaveCount(0)
@@ -640,7 +639,7 @@ test('old context cleanup lives in Connection and clearly scopes credential remo
 
 test('Connection groups stale integrations by context and removes only the confirmed entry without losing drafts', async ({ page }) => {
   const state = await fixture(page)
-  state.unlinkedAssignments.push(...(['metrics', 'argocd', 'cost'] as const).map(integration => ({ binding: 'old', integration, context: 'old-cluster', source: '/test/old', inFileName: 'old-cluster', availability: 'removed' as const, revision: `old-${integration}` })))
+  state.connections.push(...(['metrics', 'argocd', 'cost'] as const).map(integration => ({ ...discoverySettings, binding: 'old', integration, context: 'old-cluster', source: '/test/old', inFileName: 'old-cluster', availability: 'removed' as const, revision: `old-${integration}` })))
   await openSettings(page, 'Metrics')
   await page.getByRole('textbox', { name: 'Metrics backend URL' }).fill('https://metrics.example/draft')
   await page.getByRole('tab', { name: 'Connection', exact: true }).click()
@@ -657,9 +656,9 @@ test('Connection groups stale integrations by context and removes only the confi
 
 test('Connection preserves the removed-versus-unavailable distinction and cannot remove the active entry', async ({ page }) => {
   const state = await fixture(page)
-  state.unlinkedAssignments.push(
-    { binding: 'development', integration: 'metrics', context: 'development', source: '/test/kubeconfig', inFileName: 'development', availability: 'unavailable', revision: 'active' },
-    { binding: 'missing-file', integration: 'cost', context: 'staging', source: '/test/offline', inFileName: 'staging', availability: 'unavailable', revision: 'offline' },
+  state.connections.push(
+    { ...discoverySettings, binding: 'development', integration: 'metrics', context: 'development', source: '/test/kubeconfig', inFileName: 'development', availability: 'unavailable', revision: 'active' },
+    { ...discoverySettings, binding: 'missing-file', integration: 'cost', context: 'staging', source: '/test/offline', inFileName: 'staging', availability: 'unavailable', revision: 'offline' },
   )
   await openSettings(page, 'Overview')
   await expect(page.getByRole('button', { name: 'Configuration files', exact: true })).toHaveAttribute('aria-expanded', 'false')
@@ -688,7 +687,7 @@ test('saved settings load failure offers recovery rather than an empty-state cla
 
 test('cleanup blocks close while committing and keeps remaining cards mounted without a refetch', async ({ page }) => {
   const state = await fixture(page)
-  state.unlinkedAssignments.push(...(['metrics', 'cost'] as const).map(integration => ({ binding: 'old', integration, context: 'old-cluster', source: '/test/old', inFileName: 'old-cluster', availability: 'removed' as const, revision: `old-${integration}` })))
+  state.connections.push(...(['metrics', 'cost'] as const).map(integration => ({ ...discoverySettings, binding: 'old', integration, context: 'old-cluster', source: '/test/old', inFileName: 'old-cluster', availability: 'removed' as const, revision: `old-${integration}` })))
   await openSettings(page, 'Connection')
   const remaining = page.getByRole('button', { name: 'Remove saved Cost connection for old-cluster', exact: true })
   const node = await remaining.elementHandle()
@@ -713,7 +712,7 @@ test('cleanup blocks close while committing and keeps remaining cards mounted wi
 
 test('stale cleanup revisions require reload and keep keyboard focus in the confirmation', async ({ page }) => {
   const state = await fixture(page)
-  state.unlinkedAssignments.push({ binding: 'old', integration: 'metrics', context: 'old-cluster', source: '/test/old', inFileName: 'old-cluster', availability: 'removed', revision: 'old-revision' })
+  state.connections.push({ ...discoverySettings, binding: 'old', integration: 'metrics', context: 'old-cluster', source: '/test/old', inFileName: 'old-cluster', availability: 'removed', revision: 'old-revision' })
   await page.route('**/api/integrations/connections', route => route.request().method() === 'PUT'
     ? route.fulfill({ status: 409, json: { error: 'Settings changed; reload latest settings.' } })
     : route.fallback())
@@ -799,7 +798,7 @@ for (const integration of integrations) {
 
 test('cancelling replacement preserves URL and credential drafts, with no fake error', async ({ page }) => {
   const state = await fixture(page)
-  state.profiles.metrics.connection = { id: 'current', type: 'metrics', name: '', customName: '', url: state.profiles.metrics.url, headerKeys: ['Authorization'], envHeaderKeys: [], secretSet: false, insecureTls: false, uses: [] }
+
   await openSettings(page, 'Metrics')
   await page.getByRole('button', { name: 'Use auto-discovery', exact: true }).click()
   await page.getByRole('button', { name: 'Add header', exact: true }).click()
@@ -842,7 +841,7 @@ for (const integration of integrations.filter(item => item.kind !== 'metrics')) 
   test(`${integration.tab}: replacement cancellation preserves the typed credential`, async ({ page }) => {
     const state = await fixture(page)
     const profile = state.profiles[integration.kind]
-    profile.connection = { id: 'current', type: integration.kind, name: '', customName: '', url: profile.url, headerKeys: [], envHeaderKeys: [], secretSet: true, insecureTls: false, uses: [] }
+
     await openSettings(page, integration.tab)
     const credential = page.getByRole('textbox', { name: integration.kind === 'argocd' ? 'API token' : 'API key', exact: true })
     await credential.fill('draft-secret')

@@ -144,7 +144,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `opencostCurrency` | Optional ISO 4217 override for values produced by OpenCost or Kubecost. Empty reads `currencyCode` from the pricing ConfigMap referenced by an active OpenCost/Kubecost workload, or literal `DISPLAY_CURRENCY` from an active Kubecost Deployment or StatefulSet, when the selected cost source is tied to the connected cluster; otherwise it falls back to `USD`. In local Settings → Cost, this preference saves automatically for all local clusters, independently of source testing, so it can be changed while a source is unavailable. Radar labels values but does not convert them. Equivalent CLI: `--opencost-currency`; an explicit CLI value remains authoritative while Radar runs and after restart. |
 | `costSource` | `auto` (default), `prometheus`, or `kubecost`. Auto keeps working OpenCost metrics from a PromQL-compatible backend, then tries a Kubecost 3 Aggregator; if neither is present, selection remains unavailable and retries instead of reporting an absent source as active. Local Settings saves this preference per context; connection-check behavior is described below. |
 | `kubecostUrl` | Optional Kubecost 3 Aggregator base URL. Empty discovers an active local Aggregator Service and tries its named `tcp-api` port (9004). When that port requires SAML/OIDC and no API key is configured, Radar can fall back to the same Service's exact `tcp-api-rbac` port (9008). Federated agent-only clusters need the central URL; root API URLs and URLs ending in `/model` are accepted. |
-| `kubecostClusterId` | Cluster ID used to filter a central Aggregator. Empty detects one distinct literal `CLUSTER_ID` from an active FinOps Agent or Aggregator; indirect or conflicting values require an override. Local Settings stores the override on the context assignment, never on the reusable backend connection. |
+| `kubecostClusterId` | Cluster ID used to filter a central Aggregator. Empty detects one distinct literal `CLUSTER_ID` from an active FinOps Agent or Aggregator; indirect or conflicting values require an override. Local Settings stores the override with this context's Cost settings; copying another cluster's backend never copies its cluster ID. |
 | `kubecostApiKey` | Optional Kubecost service-account key sent as `X-API-KEY`. Values are redacted from settings responses. An explicit key is never bypassed through an auto-discovered unauthenticated port: authentication failure remains visible. Local CLI/Desktop stores new keys in `clusters.json`, with explicit reuse and origin-change protection described below; this `config.json` field is only an import source locally. In Helm, provision a Kubernetes Secret with `cost.kubecost.existingSecret`; Settings is read-only. |
 | `prometheusHeaders` | HTTP headers sent with every Prometheus request. Required for auth-protected backends — e.g. `{"X-Scope-OrgID": "my-org"}`. Equivalent CLI: `--prometheus-header Key=Value` (repeatable). Stored in plain text in `config.json` — protect the file accordingly. **Requires `prometheusUrl`**: headers carry credentials, and auto-discovery probes every Service that looks like Prometheus, so with headers configured and no URL Radar refuses to discover (the Metrics status names the rule) rather than send them to endpoints you never named. Settings rejects saving that combination. |
 | `argoCdUrl` | Manual argocd-server URL for the Argo CD API integration — skips auto-discovery. |
@@ -294,15 +294,15 @@ If an active context's credentials expire or are rejected, Radar disconnects clu
 
 | Setting | Local CLI / Desktop scope |
 |---|---|
-| Metrics URL, authentication and tenant headers | Saved connection explicitly assigned to this kubeconfig context |
-| Argo CD URL, token and TLS verification | Saved connection explicitly assigned to this context; discovery credentials stay context-specific |
+| Metrics URL, authentication and tenant headers | Stored directly for this kubeconfig context |
+| Argo CD URL, token and TLS verification | Stored directly for this context, including discovery credentials |
 | Cost source (Auto / Prometheus / Kubecost) | Context-specific |
-| Kubecost URL and API key | Saved connection explicitly assigned to this context; discovery credentials stay context-specific |
-| Kubecost cluster ID | Context-specific, **never** inherited from another connection's assignments |
+| Kubecost URL and API key | Stored directly for this context, including discovery credentials |
+| Kubecost cluster ID | Context-specific, **never** inherited from another cluster's settings |
 | Prometheus-based costs | Use this context's metrics connection |
 | Workload-metrics scope evidence / assertion | Rechecked; process-local assertions are not stored in a connection |
 | Namespace selection | Remembered per visible kubeconfig context in `settings.json` |
-| Currency, UI preferences, OCI sources | Existing machine/personal scope; not connection assignments |
+| Currency, UI preferences, OCI sources | Existing machine/personal scope; not per-cluster connections |
 
 ### Local integration connections
 
@@ -341,8 +341,7 @@ Environment-backed headers retain references, not resolved secret values; both
 copies can still depend on the same environment variable.
 
 **Edit:** the regular form always edits this context only. Equal URLs are not
-merged, and editing a record referenced by multiple contexts in a hand-edited or
-development file separates it automatically.
+merged. Each context stores its own endpoint and credentials.
 
 **Credentials:** Settings displays header names and whether a token/key exists,
 never saved values. Type directly into a credential field to replace its value;
@@ -361,7 +360,7 @@ mapping and data readiness; cost queries require a narrow cluster filter. Centra
 discovery.
 
 **Cleanup:** switching to discovery or replacing saved settings explicitly removes
-this context's previous credentials, deleting the backing record when unused.
+this context's previous credentials.
 Other contexts are unchanged. Missing kubeconfigs never trigger automatic deletion.
 **Settings → Connection → Saved connections** lets you explicitly remove an
 integration for a kubeconfig entry no longer loaded, including discovery
@@ -376,14 +375,15 @@ context or merged with a concurrent file edit.
 
 #### File editing and refresh
 
-Let Settings create opaque connection IDs, context keys and accepted target
-fingerprints. The store separates `connections` (typed endpoint/credential
-records) from `profiles[context-key].integrations` (assignments by `metrics`,
-`argocd` and `cost`). For example, within an existing metrics connection:
+Let Settings create context keys and accepted target fingerprints. Each entry
+stores its own configuration directly under `profiles[context-key].integrations`,
+keyed by `metrics`, `argocd` and `cost`. There are no shared records or connection
+IDs. For example, within an existing context's `integrations.metrics` settings
+(keep the actual `target` and `identity` generated by Radar):
 
 ```json
 {
-  "type": "metrics",
+  "target": "<existing accepted target fingerprint>",
   "prometheus": {
     "url": "https://metrics.example.net/prometheus",
     "headersFromEnv": {
@@ -398,7 +398,7 @@ Environment variables must exist in the Radar process;
 Desktop does not necessarily inherit your terminal environment. Missing variables
 pause only the affected connection. Environment-backed header references are
 file-edited, not editable in Settings. See the [JSON schema](schemas/clusters.schema.json);
-Radar also validates cross-record references and integration-specific rules.
+Radar also validates accepted cluster targets and integration-specific rules.
 
 CLI and Desktop reread bounded file contents on the next integration operation,
 including background consumers, not only when Settings opens. A content hash
@@ -416,7 +416,7 @@ unrelated valid connections; unrelated edits preserve that invalid entry.
 
 #### Cluster identity and recovery
 
-The assignment key includes the kubeconfig source path and in-file context name.
+The context key includes the kubeconfig source path and in-file context name.
 Same-named contexts in different files do not share credentials. If a context is
 renamed or its file moved, copy its saved connection to the new context, then
 remove the old connection from **Settings → Connection → Saved connections**.
@@ -429,7 +429,7 @@ configuration guidance instead of local-file information. Discovery-only credent
 reentry. An unavailable kubeconfig is distinguished from a context confirmed
 removed from a readable file.
 
-CAPI assignments use management-source/namespace/name identity, not temporary
+CAPI profiles use management-source/namespace/name identity, not temporary
 kubeconfig paths. Changes to the Kubernetes server, CA trust, TLS settings, proxy
 or user reference pause each affected integration. **Review changes** lets you
 accept selected integrations together. Anonymous discovery without a saved

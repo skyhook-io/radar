@@ -21,13 +21,11 @@ import (
 )
 
 type localConnectionResponse struct {
-	Profiles            map[config.Integration]connections.ProfileView `json:"profiles"`
-	Connections         []connections.ConnectionView                   `json:"connections"`
-	UnlinkedAssignments []connections.Usage                            `json:"unlinkedAssignments"`
-	Revision            string                                         `json:"revision"`
-	Connected           bool                                           `json:"connected"`
-	Checked             bool                                           `json:"checked"`
-	Error               string                                         `json:"error,omitempty"`
+	Profiles    map[config.Integration]connections.ProfileView `json:"profiles"`
+	Connections []connections.StoredSettingsView               `json:"connections"`
+	Connected   bool                                           `json:"connected"`
+	Checked     bool                                           `json:"checked"`
+	Error       string                                         `json:"error,omitempty"`
 }
 
 func (s *Server) requireLocalConnections(w http.ResponseWriter) bool {
@@ -60,10 +58,7 @@ func (s *Server) readLocalConnectionViews() map[config.Integration]connections.P
 
 func (s *Server) fillConnectionCatalog(response *localConnectionResponse) error {
 	var err error
-	response.Connections, response.Revision, err = s.localConnections.Catalog()
-	if err == nil {
-		response.UnlinkedAssignments, err = s.localConnections.UnlinkedAssignments()
-	}
+	response.Connections, err = s.localConnections.Catalog()
 	return err
 }
 
@@ -108,7 +103,7 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 		}
 		switch request.Kind {
 		case config.IntegrationArgoCD:
-			probe = argocd.PrepareCandidate(*pending.Candidate.Connection.ArgoCD)
+			probe = argocd.PrepareCandidate(*pending.Candidate.Settings.ArgoCD)
 		case config.IntegrationCost:
 			probe, err = opencost.PrepareCandidate(connectionruntime.CostConfig(connections.Selection{Bundle: pending.Candidate}, target))
 		}
@@ -135,7 +130,7 @@ func (s *Server) handleUpdateLocalConnection(w http.ResponseWriter, r *http.Requ
 		if err != nil {
 			message := "Argo CD connection check failed; check its URL, network access and TLS settings. The previous connection is unchanged"
 			if request.Kind == config.IntegrationCost {
-				message = kubecostConnectionGuidance(err, pending.Candidate.Connection.Kubecost.APIKey != "")
+				message = kubecostConnectionGuidance(err, pending.Candidate.Settings.Kubecost.APIKey != "")
 			}
 			if errors.Is(err, argocd.ErrTokenInvalid) {
 				message = "Argo CD rejected the token; the previous connection is unchanged"

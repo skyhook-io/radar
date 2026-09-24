@@ -348,7 +348,7 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 			if err != nil {
 				traffic.SetMetricsConfig("", nil)
 			} else {
-				traffic.SetMetricsConfig(selection.Connection.Prometheus.URL, selection.Connection.Prometheus.Headers)
+				traffic.SetMetricsConfig(selection.Settings.Prometheus.URL, selection.Settings.Prometheus.Headers)
 			}
 		}
 		return traffic.ReinitializeWithConfig(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
@@ -370,8 +370,8 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) App
 			}
 			prometheuspkg.Reinitialize(k8s.GetClientInterface(), k8s.GetConfig(), k8s.GetContextName())
 			url, headers := prometheuspkg.CurrentConfig()
-			if url != strings.TrimRight(selection.Connection.Prometheus.URL, "/") || !maps.Equal(headers, selection.Connection.Prometheus.Headers) {
-				prometheuspkg.Configure(selection.Connection.Prometheus.URL, selection.Connection.Prometheus.Headers)
+			if url != strings.TrimRight(selection.Settings.Prometheus.URL, "/") || !maps.Equal(headers, selection.Settings.Prometheus.Headers) {
+				prometheuspkg.Configure(selection.Settings.Prometheus.URL, selection.Settings.Prometheus.Headers)
 			}
 			return nil
 		}

@@ -13,12 +13,10 @@ import (
 )
 
 func connectionFixture() ClusterProfiles {
-	p := ClusterProfiles{Version: 1, Profiles: map[string]ClusterProfile{}, Connections: map[string]SavedConnection{
-		"shared": {Type: IntegrationMetrics, Prometheus: &prom.Connection{URL: "https://metrics", Headers: map[string]string{"Authorization": "saved-secret"}}},
-	}}
+	p := ClusterProfiles{Version: 1, Profiles: map[string]ClusterProfile{}}
 	for _, binding := range []string{"a", "b"} {
-		p.Profiles[binding] = ClusterProfile{Context: binding, Source: "/kubeconfig", InFileName: binding, Integrations: map[Integration]IntegrationAssignment{
-			IntegrationMetrics: {Mode: "connection", ConnectionID: "shared", Target: binding},
+		p.Profiles[binding] = ClusterProfile{Context: binding, Source: "/kubeconfig", InFileName: binding, Integrations: map[Integration]IntegrationSettings{
+			IntegrationMetrics: {Target: binding, Prometheus: &prom.Connection{URL: "https://metrics", Headers: map[string]string{"Authorization": "saved-secret"}}},
 		}}
 	}
 	return p
@@ -41,21 +39,20 @@ func writeConnectionFixture(t *testing.T, p ClusterProfiles) (*ProfileStore, str
 	return s, rev
 }
 
-func TestConnectionAssignmentsRejectContradictions(t *testing.T) {
-	p := connectionFixture()
+func TestIntegrationSettingsRejectContradictions(t *testing.T) {
 	cases := []struct {
 		kind Integration
-		a    IntegrationAssignment
+		a    IntegrationSettings
 	}{
-		{IntegrationMetrics, IntegrationAssignment{Mode: "auto", ConnectionID: "shared", Target: "a"}},
-		{IntegrationMetrics, IntegrationAssignment{Mode: "connection", ConnectionID: "missing", Target: "a"}},
-		{IntegrationMetrics, IntegrationAssignment{Mode: "connection", ConnectionID: "shared"}},
-		{IntegrationArgoCD, IntegrationAssignment{Mode: "connection", ConnectionID: "shared", Target: "a"}},
-		{IntegrationArgoCD, IntegrationAssignment{Mode: "auto", ArgoCD: &argoapi.Connection{URL: "https://argo"}}},
-		{IntegrationCost, IntegrationAssignment{Mode: "prometheus", ClusterID: "other", Target: "a"}},
+		{IntegrationMetrics, IntegrationSettings{Mode: "auto", Prometheus: &prom.Connection{URL: "https://metrics"}, Target: "a"}},
+		{IntegrationMetrics, IntegrationSettings{Mode: "connection", Target: "a"}},
+		{IntegrationMetrics, IntegrationSettings{Prometheus: &prom.Connection{URL: "https://metrics"}}},
+		{IntegrationArgoCD, IntegrationSettings{Prometheus: &prom.Connection{URL: "https://metrics"}, Target: "a"}},
+		{IntegrationArgoCD, IntegrationSettings{Mode: "auto", ArgoCD: &argoapi.Connection{URL: "https://argo"}}},
+		{IntegrationCost, IntegrationSettings{Mode: "prometheus", ClusterID: "other", Target: "a"}},
 	}
 	for _, tc := range cases {
-		if tc.a.Validate(tc.kind, p.Connections) == nil {
+		if tc.a.Validate(tc.kind) == nil {
 			t.Errorf("accepted invalid %s assignment: %+v", tc.kind, tc.a)
 		}
 	}
@@ -63,26 +60,25 @@ func TestConnectionAssignmentsRejectContradictions(t *testing.T) {
 
 func TestConnectionStorePreservesUnrelatedInvalidRecords(t *testing.T) {
 	p := connectionFixture()
-	p.Connections["broken"] = SavedConnection{Type: IntegrationArgoCD, ArgoCD: &argoapi.Connection{URL: "not-a-url"}}
-	p.Profiles["a"].Integrations[IntegrationArgoCD] = IntegrationAssignment{Mode: "connection", Target: "a", ConnectionID: "broken"}
+	p.Profiles["a"].Integrations[IntegrationArgoCD] = IntegrationSettings{Target: "a", ArgoCD: &argoapi.Connection{URL: "not-a-url"}}
 	s, rev := writeConnectionFixture(t, p)
 	_, err := s.Update(context.Background(), rev, func(file *ClusterProfiles) error {
-		c := file.Connections["shared"]
+		c := file.Profiles["a"].Integrations[IntegrationMetrics]
 		c.Prometheus.Headers["Authorization"] = "rotated"
-		file.Connections["shared"] = c
+		file.Profiles["a"].Integrations[IntegrationMetrics] = c
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	got, rev, err := s.Read()
-	if err != nil || got.Connections["broken"].ArgoCD.URL != "not-a-url" {
+	if err != nil || got.Profiles["a"].Integrations[IntegrationArgoCD].ArgoCD.URL != "not-a-url" {
 		t.Fatal("invalid unrelated record was lost", err)
 	}
 	_, err = s.Update(context.Background(), rev, func(file *ClusterProfiles) error {
-		c := file.Connections["shared"]
+		c := file.Profiles["a"].Integrations[IntegrationMetrics]
 		c.Prometheus.URL = "https://user:password@metrics"
-		file.Connections["shared"] = c
+		file.Profiles["a"].Integrations[IntegrationMetrics] = c
 		return nil
 	})
 	if !errors.Is(err, ErrProfileInvalid) {
@@ -90,26 +86,45 @@ func TestConnectionStorePreservesUnrelatedInvalidRecords(t *testing.T) {
 	}
 }
 
-func TestLastAssignmentDeletionIsExplicitAndAtomic(t *testing.T) {
-	{
-		p := connectionFixture()
-		if err := p.RemoveAssignment("a", IntegrationMetrics); err != nil {
-			t.Fatal(err)
-		}
-		if _, ok := p.Connections["shared"]; !ok {
-			t.Fatal("removed credentials still used by another context")
-		}
-		if err := p.RemoveAssignment("b", IntegrationMetrics); err != nil {
-			t.Fatal(err)
-		}
-		if _, ok := p.Connections["shared"]; ok {
-			t.Fatal("unused credentials retained")
-		}
-	}
+func TestRemovalOnlyDeletesSelectedSettings(t *testing.T) {
 	s, rev := writeConnectionFixture(t, connectionFixture())
-	_, err := s.Update(context.Background(), rev, func(file *ClusterProfiles) error { delete(file.Connections, "shared"); return nil })
-	if !errors.Is(err, ErrProfileInvalid) {
-		t.Fatalf("deleted assigned record: %v", err)
+	_, err := s.Update(context.Background(), rev, func(file *ClusterProfiles) error {
+		return file.RemoveSettings("a", IntegrationMetrics)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := s.Read()
+	if err != nil || len(got.Profiles) != 1 || got.Profiles["b"].Integrations[IntegrationMetrics].Prometheus.Headers["Authorization"] != "saved-secret" {
+		t.Fatal("removal affected another cluster", err)
+	}
+}
+
+func TestStoreWritesInlineSettings(t *testing.T) {
+	s, _ := writeConnectionFixture(t, connectionFixture())
+	data, err := os.ReadFile(s.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored map[string]any
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := stored["connections"]; exists {
+		t.Fatal("retained shared records")
+	}
+	profiles := stored["profiles"].(map[string]any)
+	for _, binding := range []string{"a", "b"} {
+		metrics := profiles[binding].(map[string]any)["integrations"].(map[string]any)["metrics"].(map[string]any)
+		if _, exists := metrics["mode"]; exists {
+			t.Fatal("retained redundant metrics mode")
+		}
+		if _, exists := metrics["connectionId"]; exists {
+			t.Fatal("retained connection reference")
+		}
+		if metrics["prometheus"].(map[string]any)["url"] != "https://metrics" {
+			t.Fatal("missing inline connection")
+		}
 	}
 }
 
@@ -123,9 +138,9 @@ func TestProfileReadSinceDetectsSameSizeSameTimestamp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := p.Connections["shared"]
+	c := p.Profiles["a"].Integrations[IntegrationMetrics]
 	c.Prometheus.Headers["Authorization"] = "other-secret"
-	p.Connections["shared"] = c
+	p.Profiles["a"].Integrations[IntegrationMetrics] = c
 	data, _ := json.Marshal(p)
 	if err := os.WriteFile(s.Path, data, 0600); err != nil {
 		t.Fatal(err)
@@ -134,7 +149,7 @@ func TestProfileReadSinceDetectsSameSizeSameTimestamp(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, next, changed, err := s.ReadSince(rev)
-	if err != nil || !changed || next == rev || got.Connections["shared"].Prometheus.Headers["Authorization"] != "other-secret" {
+	if err != nil || !changed || next == rev || got.Profiles["a"].Integrations[IntegrationMetrics].Prometheus.Headers["Authorization"] != "other-secret" {
 		t.Fatal("missed content change", err)
 	}
 	_, _, changed, err = s.ReadSince(next)

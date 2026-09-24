@@ -189,8 +189,7 @@ func TestLocalProfileEnvironmentOriginGuidance(t *testing.T) {
 	}
 	_, rev, _ := s.localConnections.Store.Read()
 	_, err = s.localConnections.Store.Update(context.Background(), rev, func(file *config.ClusterProfiles) error {
-		file.Connections["env"] = config.SavedConnection{Type: config.IntegrationMetrics, Prometheus: &prom.Connection{URL: "https://original.example", HeadersFromEnv: map[string]string{"Authorization": "PROFILE_TEST_TOKEN"}}}
-		file.Profiles[target.Binding] = config.ClusterProfile{Context: target.Context, Integrations: map[config.Integration]config.IntegrationAssignment{config.IntegrationMetrics: {Mode: "connection", Target: target.Fingerprint, ConnectionID: "env"}}}
+		file.Profiles[target.Binding] = config.ClusterProfile{Context: target.Context, Integrations: map[config.Integration]config.IntegrationSettings{config.IntegrationMetrics: {Target: target.Fingerprint, Prometheus: &prom.Connection{URL: "https://original.example", HeadersFromEnv: map[string]string{"Authorization": "PROFILE_TEST_TOKEN"}}}}}
 		return nil
 	})
 	if err != nil {
