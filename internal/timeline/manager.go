@@ -20,15 +20,12 @@ import (
 // Re-export types from pkg/timeline so callers don't need to change imports.
 type (
 	// Core types
-	EventSource      = pkgtimeline.EventSource
-	EventType        = pkgtimeline.EventType
-	HealthState      = pkgtimeline.HealthState
-	GroupingMode     = pkgtimeline.GroupingMode
-	TimelineEvent    = pkgtimeline.TimelineEvent
-	EventGroup       = pkgtimeline.EventGroup
-	TimelineResponse = pkgtimeline.TimelineResponse
-	TimelineMeta     = pkgtimeline.TimelineMeta
-	FilterPreset     = pkgtimeline.FilterPreset
+	EventSource   = pkgtimeline.EventSource
+	EventType     = pkgtimeline.EventType
+	HealthState   = pkgtimeline.HealthState
+	TimelineEvent = pkgtimeline.TimelineEvent
+	TimelineMeta  = pkgtimeline.TimelineMeta
+	FilterPreset  = pkgtimeline.FilterPreset
 
 	// Store types
 	EventStore     = pkgtimeline.EventStore
@@ -83,10 +80,6 @@ const (
 	HealthUnknown   = pkgtimeline.HealthUnknown
 
 	// GroupingMode constants
-	GroupByNone      = pkgtimeline.GroupByNone
-	GroupByOwner     = pkgtimeline.GroupByOwner
-	GroupByApp       = pkgtimeline.GroupByApp
-	GroupByNamespace = pkgtimeline.GroupByNamespace
 
 	// StoreType constants
 	StoreTypeMemory   = pkgtimeline.StoreTypeMemory
@@ -155,8 +148,6 @@ var (
 	globalStoreErr    error
 
 	// Event broadcast for SSE
-	subscribers   []chan TimelineEvent
-	subscribersMu sync.RWMutex
 )
 
 // InitStore initializes the global event store
@@ -383,80 +374,4 @@ func QueryEvents(ctx context.Context, opts QueryOptions) ([]TimelineEvent, error
 		return nil, fmt.Errorf("event store not initialized")
 	}
 	return store.Query(ctx, opts)
-}
-
-// QueryGrouped is a convenience function to query grouped events from the global store
-func QueryGrouped(ctx context.Context, opts QueryOptions) (*TimelineResponse, error) {
-	store := GetStore()
-	if store == nil {
-		return nil, fmt.Errorf("event store not initialized")
-	}
-	return store.QueryGrouped(ctx, opts)
-}
-
-// Subscribe registers a channel to receive new timeline events.
-// The caller is responsible for reading from the channel to avoid blocking.
-// Returns a function to unsubscribe.
-func Subscribe() (chan TimelineEvent, func()) {
-	ch := make(chan TimelineEvent, 100)
-	subscribersMu.Lock()
-	subscribers = append(subscribers, ch)
-	subscribersMu.Unlock()
-
-	unsubscribe := func() {
-		subscribersMu.Lock()
-		defer subscribersMu.Unlock()
-		for i, sub := range subscribers {
-			if sub == ch {
-				subscribers = append(subscribers[:i], subscribers[i+1:]...)
-				close(ch)
-				break
-			}
-		}
-	}
-
-	return ch, unsubscribe
-}
-
-// broadcastEvent sends an event to all subscribers (non-blocking)
-func broadcastEvent(event TimelineEvent) {
-	subscribersMu.RLock()
-	defer subscribersMu.RUnlock()
-
-	for _, ch := range subscribers {
-		select {
-		case ch <- event:
-		default:
-			// Channel full, skip (subscriber not keeping up)
-			RecordDrop(event.Kind, event.Namespace, event.Name, DropReasonSubscriberFull, string(event.EventType), event.ClusterContext)
-		}
-	}
-}
-
-// RecordEventWithBroadcast records an event and broadcasts it to subscribers
-func RecordEventWithBroadcast(ctx context.Context, event TimelineEvent) error {
-	store := GetStore()
-	if store == nil {
-		return fmt.Errorf("event store not initialized")
-	}
-	if err := store.Append(ctx, event); err != nil {
-		return err
-	}
-	broadcastEvent(event)
-	return nil
-}
-
-// RecordEventsWithBroadcast records multiple events and broadcasts them to subscribers
-func RecordEventsWithBroadcast(ctx context.Context, events []TimelineEvent) error {
-	store := GetStore()
-	if store == nil {
-		return fmt.Errorf("event store not initialized")
-	}
-	if err := store.AppendBatch(ctx, events); err != nil {
-		return err
-	}
-	for _, event := range events {
-		broadcastEvent(event)
-	}
-	return nil
 }

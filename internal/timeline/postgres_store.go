@@ -398,54 +398,6 @@ func (s *PostgresStore) Query(ctx context.Context, opts QueryOptions) ([]Timelin
 	return events, rows.Err()
 }
 
-// QueryGrouped retrieves events grouped according to the specified mode.
-func (s *PostgresStore) QueryGrouped(ctx context.Context, opts QueryOptions) (*TimelineResponse, error) {
-	startTime := time.Now()
-
-	queryOpts := opts
-	queryOpts.Limit = min(opts.Limit*10, 5000)
-
-	events, err := s.Query(ctx, queryOpts)
-	if err != nil {
-		return nil, err
-	}
-
-	if opts.GroupBy == GroupByNone {
-		if len(events) > opts.Limit {
-			events = events[:opts.Limit]
-		}
-		return &TimelineResponse{
-			Ungrouped: events,
-			Meta: TimelineMeta{
-				TotalEvents: len(events),
-				QueryTimeMs: time.Since(startTime).Milliseconds(),
-				HasMore:     len(events) == opts.Limit,
-			},
-		}, nil
-	}
-
-	groups := pkgtimeline.GroupEvents(events, opts.GroupBy)
-
-	limit := opts.Limit
-	if limit <= 0 {
-		limit = 200
-	}
-	hasMore := len(groups) > limit
-	if hasMore {
-		groups = groups[:limit]
-	}
-
-	return &TimelineResponse{
-		Groups: groups,
-		Meta: TimelineMeta{
-			TotalEvents: len(events),
-			GroupCount:  len(groups),
-			QueryTimeMs: time.Since(startTime).Milliseconds(),
-			HasMore:     hasMore,
-		},
-	}, nil
-}
-
 // GetEvent retrieves a single event by ID.
 func (s *PostgresStore) GetEvent(ctx context.Context, id string) (*TimelineEvent, error) {
 	ctx, cancel := withPostgresOperationTimeout(ctx)
@@ -464,52 +416,6 @@ func (s *PostgresStore) GetEvent(ctx context.Context, id string) (*TimelineEvent
 		return nil, err
 	}
 	return &event, nil
-}
-
-// GetChangesForOwner retrieves changes for resources owned by the given owner.
-func (s *PostgresStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNamespace, ownerName, clusterContext string, since time.Time, limit int) ([]TimelineEvent, error) {
-	ctx, cancel := withPostgresOperationTimeout(ctx)
-	defer cancel()
-	if limit <= 0 {
-		limit = 100
-	}
-
-	query := `SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
-		reason, message, diff_json, health_state, owner_kind, owner_name, owner_api_version, owner_uid, owner_evidence,
-		labels_json, count, correlation_id, cluster_context, resource_created_at, seq
-		FROM radar_timeline_events
-		WHERE owner_kind = $1 AND owner_name = $2 AND namespace = $3`
-	args := []any{ownerKind, ownerName, ownerNamespace}
-
-	argN := 4
-	if clusterContext != "" {
-		query += fmt.Sprintf(" AND cluster_context = $%d", argN)
-		args = append(args, clusterContext)
-		argN++
-	}
-	if !since.IsZero() {
-		query += fmt.Sprintf(" AND timestamp >= $%d", argN)
-		args = append(args, since.UTC().UnixNano())
-		argN++
-	}
-	query += fmt.Sprintf(" ORDER BY timestamp DESC LIMIT %d", limit)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	events := make([]TimelineEvent, 0)
-	for rows.Next() {
-		event, err := s.scanEvent(rows)
-		if err != nil {
-			return nil, err
-		}
-		events = append(events, event)
-	}
-
-	return events, rows.Err()
 }
 
 // MarkResourceSeen records that a resource has been seen.

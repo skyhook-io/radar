@@ -27,17 +27,8 @@ type EventStore interface {
 	// Query retrieves events matching the given options
 	Query(ctx context.Context, opts QueryOptions) ([]TimelineEvent, error)
 
-	// QueryGrouped retrieves events grouped according to the specified mode
-	QueryGrouped(ctx context.Context, opts QueryOptions) (*TimelineResponse, error)
-
 	// GetEvent retrieves a single event by ID
 	GetEvent(ctx context.Context, id string) (*TimelineEvent, error)
-
-	// GetChangesForOwner retrieves changes for resources owned by the given
-	// owner. clusterContext scopes to one cluster's events ("" = all) — owner
-	// identity (kind/namespace/name) collides across clusters in a persistent
-	// store, so current-cluster callers must pass it.
-	GetChangesForOwner(ctx context.Context, ownerKind, ownerNamespace, ownerName, clusterContext string, since time.Time, limit int) ([]TimelineEvent, error)
 
 	// MarkResourceSeen records that a resource has been seen (for dedup on
 	// restart). clusterContext scopes the key — the store outlives kubeconfig
@@ -87,9 +78,9 @@ type QueryOptions struct {
 	// than this; 0 means no cursor. This is the delta-read cursor: arrival
 	// order, not event time, so late-arriving events can't be skipped.
 	// Delta reads page oldest-first (ascending seq) so a burst larger than
-	// Limit resumes from the lowest unseen seq. Do not combine with Offset or
-	// GroupBy — both are defined for the newest-first shape only and their
-	// delta-mode behavior is unspecified.
+	// Limit resumes from the lowest unseen seq. Do not combine with Offset —
+	// it is defined for the newest-first shape only and its delta-mode
+	// behavior is unspecified.
 	SinceSeq int64
 	// UntilSeq returns only events whose arrival number (Seq) is less than
 	// this value. It provides stable backwards pagination without relying on
@@ -120,9 +111,6 @@ type QueryOptions struct {
 	Limit  int // Max results (default 200, max 1000)
 	Offset int // Skip first N results
 
-	// Grouping
-	GroupBy GroupingMode // How to group results
-
 	// Include/exclude options
 	IncludeManaged   bool // Include ReplicaSets, Pods, Events (default false)
 	ExcludeDeleted   bool // Exclude delete events
@@ -133,7 +121,6 @@ type QueryOptions struct {
 func DefaultQueryOptions() QueryOptions {
 	return QueryOptions{
 		Limit:            200,
-		GroupBy:          GroupByNone,
 		IncludeManaged:   false,
 		ExcludeDeleted:   false,
 		IncludeK8sEvents: true,

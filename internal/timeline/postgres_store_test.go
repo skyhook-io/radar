@@ -879,37 +879,6 @@ func TestPostgresStore_GetEvent(t *testing.T) {
 	}
 }
 
-func TestPostgresStore_GetChangesForOwner(t *testing.T) {
-	store, err := NewPostgresStore(testPostgresDSN(t))
-	if err != nil {
-		t.Fatalf("NewPostgresStore: %v", err)
-	}
-	defer store.Close()
-
-	base := time.Now().UTC()
-	events := []TimelineEvent{
-		{ID: "owner-a", Timestamp: base, Source: SourceInformer, Kind: "Pod", Namespace: "default", Name: "pod-0", EventType: EventTypeAdd, Owner: &OwnerInfo{Kind: "ReplicaSet", Name: "rs-1"}},
-		{ID: "owner-b", Timestamp: base.Add(time.Minute), Source: SourceInformer, Kind: "Pod", Namespace: "default", Name: "pod-1", EventType: EventTypeAdd, Owner: &OwnerInfo{Kind: "ReplicaSet", Name: "rs-1"}},
-		{ID: "owner-c", Timestamp: base.Add(2 * time.Minute), Source: SourceInformer, Kind: "Pod", Namespace: "default", Name: "pod-2", EventType: EventTypeAdd, Owner: &OwnerInfo{Kind: "ReplicaSet", Name: "rs-2"}},
-	}
-	if err := store.AppendBatch(t.Context(), events); err != nil {
-		t.Fatalf("AppendBatch: %v", err)
-	}
-
-	got, err := store.GetChangesForOwner(t.Context(), "ReplicaSet", "default", "rs-1", "", time.Time{}, 10)
-	if err != nil {
-		t.Fatalf("GetChangesForOwner: %v", err)
-	}
-	if len(got) != 2 {
-		t.Fatalf("got %d events, want 2", len(got))
-	}
-	for _, e := range got {
-		if e.Owner == nil || e.Owner.Name != "rs-1" {
-			t.Fatalf("unexpected event: %+v", e)
-		}
-	}
-}
-
 func TestPostgresStore_SeenResourcesPersist(t *testing.T) {
 	dsn := testPostgresDSN(t)
 	store1, err := NewPostgresStore(dsn)

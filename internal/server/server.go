@@ -657,7 +657,6 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Put("/settings/audit", s.handlePutAuditSettings)
 			r.Get("/events", s.handleEvents)
 			r.Get("/changes", s.handleChanges)
-			r.Get("/changes/{kind}/{namespace}/{name}/children", s.handleChangeChildren)
 			// The shared timeline wire contract (NDJSON + terminal record) —
 			// the same shape the hub serves; backs the web client's single
 			// ring-and-delta timeline path.
@@ -4092,66 +4091,6 @@ func (s *Server) filterTimelineEventsByRBAC(ctx context.Context, events []timeli
 		}
 	}
 	return out
-}
-
-// handleChangeChildren returns child resource changes for a given parent workload
-func (s *Server) handleChangeChildren(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
-		return
-	}
-	ownerKind := chi.URLParam(r, "kind")
-	namespace := chi.URLParam(r, "namespace")
-	ownerName := chi.URLParam(r, "name")
-
-	// Gate on the owner's namespace before touching the store: a user who can't
-	// see this namespace must not read change history for workloads in it. The
-	// per-kind SAR below (filterEventsByRBAC) is the authoritative gate; this is
-	// the cheap RBAC-ceiling pre-check. getUserNamespaces (not
-	// parseNamespacesForUser) so the header's namespace *view* pick can't hide a
-	// namespace the user has real access to.
-	if allowed := s.getUserNamespaces(r, nil); !namespaceInAllowed(allowed, namespace) {
-		s.writeJSON(w, []timeline.TimelineEvent{})
-		return
-	}
-
-	sinceStr := r.URL.Query().Get("since")
-
-	var since time.Time
-	if sinceStr != "" {
-		if ts, err := time.Parse(time.RFC3339, sinceStr); err == nil {
-			since = ts
-		}
-	} else {
-		// Default to last hour
-		since = time.Now().Add(-1 * time.Hour)
-	}
-
-	store := timeline.GetStore()
-	if store == nil {
-		s.writeJSON(w, []timeline.TimelineEvent{})
-		return
-	}
-
-	children, err := store.GetChangesForOwner(r.Context(), ownerKind, namespace, ownerName, k8s.ActiveClusterContext(), since, 100)
-	if err != nil {
-		s.writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	children = s.filterEventsByRBAC(r, children)
-
-	s.writeJSON(w, children)
-}
-
-// namespaceInAllowed reports whether `namespace` is within an allowed set.
-// nil allowed means cluster-wide access (all namespaces); an empty non-nil
-// slice means no access. Mirrors the nil-vs-empty convention used throughout
-// the per-user namespace filtering.
-func namespaceInAllowed(allowed []string, namespace string) bool {
-	if allowed == nil {
-		return true
-	}
-	return slices.Contains(allowed, namespace)
 }
 
 // handleApplyResource creates or updates a Kubernetes resource from YAML.

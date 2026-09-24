@@ -676,7 +676,7 @@ func recordK8sEventToTimeline(clusterContext string, obj any) {
 	timelineEvent.ClusterContext = clusterContext
 
 	ctx := context.Background()
-	if err := timeline.RecordEventWithBroadcast(ctx, timelineEvent); err != nil {
+	if err := timeline.RecordEvent(ctx, timelineEvent); err != nil {
 		log.Printf("Warning: failed to record K8s event to timeline store: %v", err)
 	} else if DebugEvents {
 		timeline.IncrementRecorded("K8sEvent:" + event.InvolvedObject.Kind)
@@ -1056,7 +1056,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 			}
 			if len(events) > 0 {
 				ctx := context.Background()
-				if err := timeline.RecordEventsWithBroadcast(ctx, events); err != nil {
+				if err := timeline.RecordEvents(ctx, events); err != nil {
 					log.Printf("Warning: failed to record historical events: %v", err)
 					timeline.RecordDrop(kind, namespace, name, timeline.DropReasonStoreFailed, op, clusterContext)
 					return
@@ -1070,7 +1070,7 @@ func recordToTimelineStore(clusterContext, kind, namespace, name, uid, op string
 	events = append(events, event)
 
 	ctx := context.Background()
-	if err := timeline.RecordEventsWithBroadcast(ctx, events); err != nil {
+	if err := timeline.RecordEvents(ctx, events); err != nil {
 		log.Printf("Warning: failed to record to timeline store: %v", err)
 		timeline.RecordDrop(kind, namespace, name, timeline.DropReasonStoreFailed, op, clusterContext)
 		return

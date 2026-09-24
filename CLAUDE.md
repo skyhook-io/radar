@@ -230,7 +230,7 @@ WebSocket pod exec: `internal/server/exec.go` — xterm.js terminal, container/s
 
 ### Timeline + resource relationships
 
-Timeline (`pkg/timeline/`): in-memory or SQLite (`--timeline-storage`), default 10k-event ring, groupable by owner / app label / namespace. Resource relationships (`pkg/topology/relationships.go`): computed at query time — parent/children/deployment-grandparent/config/network/scalers/policies/storage — used for both detail views and topology edges.
+Timeline (`pkg/timeline/`): in-memory or SQLite (`--timeline-storage`), default 10k-event ring. Lane grouping (owner, app, topology) happens in the frontend (`packages/k8s-ui/src/utils/resource-hierarchy.ts`); the stores only filter and page. Resource relationships (`pkg/topology/relationships.go`): computed at query time — parent/children/deployment-grandparent/config/network/scalers/policies/storage — used for both detail views and topology edges.
 
 ### RBAC Visibility
 

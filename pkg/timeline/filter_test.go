@@ -3,7 +3,6 @@ package timeline
 import (
 	"slices"
 	"testing"
-	"time"
 )
 
 func TestCompiledFilter_ExcludeKinds(t *testing.T) {
@@ -403,75 +402,4 @@ func TestTimelineEvent_GetAppLabel(t *testing.T) {
 			t.Errorf("Labels=%v: expected GetAppLabel()=%q, got %q", tt.labels, tt.expected, result)
 		}
 	}
-}
-
-func TestGroupEvents_ByNamespace(t *testing.T) {
-	events := []TimelineEvent{
-		{ID: "1", Kind: "Deployment", Namespace: "default", Name: "deploy-1", Timestamp: time.Now()},
-		{ID: "2", Kind: "Deployment", Namespace: "prod", Name: "deploy-2", Timestamp: time.Now()},
-		{ID: "3", Kind: "Deployment", Namespace: "default", Name: "deploy-3", Timestamp: time.Now()},
-	}
-
-	groups := GroupEvents(events, GroupByNamespace)
-
-	if len(groups) != 2 {
-		t.Errorf("Expected 2 groups, got %d", len(groups))
-	}
-
-	// Find groups by namespace
-	defaultGroup := findGroup(groups, "default")
-	prodGroup := findGroup(groups, "prod")
-
-	if defaultGroup == nil {
-		t.Error("Expected group for 'default' namespace")
-	} else if defaultGroup.EventCount != 2 {
-		t.Errorf("Expected 2 events in default, got %d", defaultGroup.EventCount)
-	}
-
-	if prodGroup == nil {
-		t.Error("Expected group for 'prod' namespace")
-	} else if prodGroup.EventCount != 1 {
-		t.Errorf("Expected 1 event in prod, got %d", prodGroup.EventCount)
-	}
-}
-
-func TestGroupEvents_ByApp(t *testing.T) {
-	events := []TimelineEvent{
-		{ID: "1", Kind: "Deployment", Namespace: "default", Name: "deploy-1", Labels: map[string]string{"app": "frontend"}, Timestamp: time.Now()},
-		{ID: "2", Kind: "Deployment", Namespace: "default", Name: "deploy-2", Labels: map[string]string{"app": "backend"}, Timestamp: time.Now()},
-		{ID: "3", Kind: "Deployment", Namespace: "default", Name: "deploy-3", Labels: map[string]string{"app": "frontend"}, Timestamp: time.Now()},
-		{ID: "4", Kind: "ConfigMap", Namespace: "default", Name: "config-1", Timestamp: time.Now()}, // no app label
-	}
-
-	groups := GroupEvents(events, GroupByApp)
-
-	if len(groups) != 3 {
-		t.Errorf("Expected 3 groups, got %d", len(groups))
-	}
-
-	// Find frontend group
-	frontendGroup := findGroupByName(groups, "frontend")
-	if frontendGroup == nil {
-		t.Error("Expected group for 'frontend' app")
-	} else if frontendGroup.EventCount != 2 {
-		t.Errorf("Expected 2 events in frontend, got %d", frontendGroup.EventCount)
-	}
-}
-
-func findGroup(groups []EventGroup, id string) *EventGroup {
-	for i := range groups {
-		if groups[i].ID == id {
-			return &groups[i]
-		}
-	}
-	return nil
-}
-
-func findGroupByName(groups []EventGroup, name string) *EventGroup {
-	for i := range groups {
-		if groups[i].Name == name {
-			return &groups[i]
-		}
-	}
-	return nil
 }

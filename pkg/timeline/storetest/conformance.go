@@ -630,31 +630,6 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 	// GetChangesForOwner backs the "what changed under this workload" drill-down.
 	// It scopes on owner kind+name and namespace together; a store that drops the
 	// namespace predicate shows another namespace's identically-named owner.
-	t.Run("changes for owner scope to owner and namespace", func(t *testing.T) {
-		store := newStore(t)
-		owned := informer("owned", 0)
-		owned.Owner = &timeline.OwnerInfo{Kind: "Deployment", Name: "api"}
-		elsewhere := informer("elsewhere", time.Second)
-		elsewhere.Namespace = "staging"
-		elsewhere.Owner = &timeline.OwnerInfo{Kind: "Deployment", Name: "api"}
-		otherOwner := informer("other-owner", 2*time.Second)
-		otherOwner.Owner = &timeline.OwnerInfo{Kind: "Deployment", Name: "web"}
-		for _, e := range []timeline.TimelineEvent{owned, elsewhere, otherOwner} {
-			mustAppend(t, store, e)
-		}
-
-		got, err := store.GetChangesForOwner(ctx, "Deployment", "default", "api", "", time.Time{}, 100)
-		if err != nil {
-			t.Fatalf("GetChangesForOwner: %v", err)
-		}
-		if len(got) != 1 || got[0].ID != "owned" {
-			t.Fatalf("owner scope = %v, want [owned]", idsOfEvents(got))
-		}
-		if got[0].Owner == nil || got[0].Owner.Kind != "Deployment" || got[0].Owner.Name != "api" {
-			t.Fatalf("owner not round-tripped: %+v", got[0].Owner)
-		}
-	})
-
 	// Whatever a store is handed, it must hand back. Each backend encodes these
 	// differently - Go structs in memory, TEXT and a fixed-width time layout in
 	// SQLite, jsonb and bigint nanoseconds in PostgreSQL - and only a

@@ -203,59 +203,6 @@ func (m *MemoryStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 	return results, nil
 }
 
-// QueryGrouped retrieves events grouped according to the specified mode
-func (m *MemoryStore) QueryGrouped(ctx context.Context, opts QueryOptions) (*TimelineResponse, error) {
-	startTime := time.Now()
-
-	// First get all matching events, with a higher limit for grouping. Copy the
-	// full option struct so new filters can't drift between Query and grouped
-	// queries.
-	queryOpts := opts
-	queryOpts.Limit = opts.Limit * 10
-	events, err := m.Query(ctx, queryOpts)
-	if err != nil {
-		return nil, err
-	}
-
-	if opts.GroupBy == GroupByNone {
-		// No grouping - return flat list
-		if len(events) > opts.Limit {
-			events = events[:opts.Limit]
-		}
-		return &TimelineResponse{
-			Ungrouped: events,
-			Meta: TimelineMeta{
-				TotalEvents: len(events),
-				QueryTimeMs: time.Since(startTime).Milliseconds(),
-				HasMore:     len(events) == opts.Limit,
-			},
-		}, nil
-	}
-
-	// Group events using shared function
-	groups := GroupEvents(events, opts.GroupBy)
-
-	// Apply limit to groups
-	limit := opts.Limit
-	if limit <= 0 {
-		limit = 200
-	}
-	hasMore := len(groups) > limit
-	if hasMore {
-		groups = groups[:limit]
-	}
-
-	return &TimelineResponse{
-		Groups: groups,
-		Meta: TimelineMeta{
-			TotalEvents: len(events),
-			GroupCount:  len(groups),
-			QueryTimeMs: time.Since(startTime).Milliseconds(),
-			HasMore:     hasMore,
-		},
-	}, nil
-}
-
 // GetEvent retrieves a single event by ID
 func (m *MemoryStore) GetEvent(ctx context.Context, id string) (*TimelineEvent, error) {
 	m.mu.RLock()
@@ -269,46 +216,6 @@ func (m *MemoryStore) GetEvent(ctx context.Context, id string) (*TimelineEvent, 
 		}
 	}
 	return nil, nil
-}
-
-// GetChangesForOwner retrieves changes for resources owned by the given owner
-func (m *MemoryStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNamespace, ownerName, clusterContext string, since time.Time, limit int) ([]TimelineEvent, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	if limit <= 0 {
-		limit = 100
-	}
-
-	results := make([]TimelineEvent, 0, limit)
-
-	for i := 0; i < m.count && len(results) < limit; i++ {
-		idx := (m.head - 1 - i + m.maxSize) % m.maxSize
-		event := m.records[idx]
-
-		if event.ID == "" {
-			continue
-		}
-
-		if !since.IsZero() && event.Timestamp.Before(since) {
-			continue
-		}
-
-		if clusterContext != "" && event.ClusterContext != clusterContext {
-			continue
-		}
-
-		if event.Namespace != ownerNamespace {
-			continue
-		}
-
-		// Check if this event's owner matches
-		if event.Owner != nil && event.Owner.Kind == ownerKind && event.Owner.Name == ownerName {
-			results = append(results, event)
-		}
-	}
-
-	return results, nil
 }
 
 // MarkResourceSeen records that a resource has been seen

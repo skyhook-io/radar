@@ -48,12 +48,11 @@ type DropRecord struct {
 
 // DropReason constants for categorizing why events are dropped
 const (
-	DropReasonNoisyFilter    = "noisy_filter"
-	DropReasonChannelFull    = "channel_full"
-	DropReasonAlreadySeen    = "already_seen"
-	DropReasonHistoryNil     = "history_nil"
-	DropReasonStoreFailed    = "store_failed"
-	DropReasonSubscriberFull = "subscriber_full"
+	DropReasonNoisyFilter = "noisy_filter"
+	DropReasonChannelFull = "channel_full"
+	DropReasonAlreadySeen = "already_seen"
+	DropReasonHistoryNil  = "history_nil"
+	DropReasonStoreFailed = "store_failed"
 	// DropReasonNoDiff: update event for a kind whose diff function found no
 	// observable change. Heartbeats, managed-fields-only updates, reconcile
 	// counters — see KindHasDiffer for the audited set.
@@ -420,9 +419,6 @@ func GetDiagnosis(kind, namespace, name, clusterContext string, allow func(kind,
 			case DropReasonAlreadySeen:
 				resp.Recommendations = append(resp.Recommendations,
 					"Resource marked as already seen - this is normal for informer restarts")
-			case DropReasonSubscriberFull:
-				resp.Recommendations = append(resp.Recommendations,
-					"SSE subscriber channel full - clients may not be keeping up with event stream")
 			}
 		}
 	}

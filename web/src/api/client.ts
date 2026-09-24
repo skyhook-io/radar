@@ -2815,30 +2815,6 @@ export function useChanges(options: UseChangesOptions = {}) {
   });
 }
 
-// Children changes for a parent workload (e.g., ReplicaSets and Pods under a Deployment)
-export function useResourceChildren(
-  kind: string,
-  namespace: string,
-  name: string,
-  timeRange: TimeRange = "1h",
-) {
-  const sinceDate = getTimeRangeDate(timeRange);
-  const params = new URLSearchParams();
-  if (sinceDate) {
-    params.set("since", sinceDate.toISOString());
-  }
-
-  return useQuery<TimelineEvent[]>({
-    queryKey: ["resource-children", kind, namespace, name, timeRange],
-    queryFn: () =>
-      fetchJSON(
-        `/changes/${kind}/${namespace}/${name}/children?${params.toString()}`,
-      ),
-    enabled: Boolean(kind && namespace && name),
-    refetchInterval: 15000, // Refresh every 15 seconds
-  });
-}
-
 export interface ResourceEventsResult {
   k8sEvents: TimelineEvent[];
   updates: TimelineEvent[];

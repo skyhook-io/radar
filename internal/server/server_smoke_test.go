@@ -975,11 +975,6 @@ func TestSmokeChangesNameFilter(t *testing.T) {
 	}
 }
 
-func TestSmokeChangeChildren(t *testing.T) {
-	var body []any
-	assertOK(t, get(t, "/api/changes/deployments/default/nginx/children"), &body)
-}
-
 // --- AI resources ---
 
 func TestSmokeAIListDeployments(t *testing.T) {

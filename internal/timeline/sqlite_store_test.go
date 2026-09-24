@@ -399,44 +399,6 @@ func TestSQLiteStore_Query_ExcludeDeleted_LimitSkew(t *testing.T) {
 	}
 }
 
-func TestSQLiteStore_GroupByOwner(t *testing.T) {
-	store, cleanup := createTestSQLiteStore(t)
-	defer cleanup()
-
-	ctx := context.Background()
-
-	events := []TimelineEvent{
-		{ID: "group-1", Timestamp: time.Now(), Kind: "Deployment", Namespace: "default", Name: "my-deploy", EventType: EventTypeAdd, Source: SourceInformer},
-		{
-			ID: "group-2", Timestamp: time.Now(), Kind: "Pod", Namespace: "default", Name: "pod-1",
-			EventType: EventTypeAdd, Source: SourceInformer,
-			Owner: &OwnerInfo{Kind: "Deployment", Name: "my-deploy"},
-		},
-		{
-			ID: "group-3", Timestamp: time.Now(), Kind: "Pod", Namespace: "default", Name: "pod-2",
-			EventType: EventTypeAdd, Source: SourceInformer,
-			Owner: &OwnerInfo{Kind: "Deployment", Name: "my-deploy"},
-		},
-	}
-	_ = store.AppendBatch(ctx, events)
-
-	// Query grouped by owner
-	result, err := store.QueryGrouped(ctx, QueryOptions{
-		GroupBy:        GroupByOwner,
-		Limit:          10,
-		IncludeManaged: true,
-	})
-	if err != nil {
-		t.Fatalf("QueryGrouped failed: %v", err)
-	}
-	if len(result.Groups) != 1 {
-		t.Errorf("Expected 1 group, got %d", len(result.Groups))
-	}
-	if result.Groups[0].Name != "my-deploy" {
-		t.Errorf("Expected group name 'my-deploy', got '%s'", result.Groups[0].Name)
-	}
-}
-
 func TestSQLiteStore_Persistence(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "timeline-persist-*")
 	if err != nil {
@@ -593,41 +555,6 @@ func TestSQLiteStore_GetEvent(t *testing.T) {
 	}
 	if result != nil {
 		t.Error("Expected nil for non-existent event")
-	}
-}
-
-func TestSQLiteStore_GetChangesForOwner(t *testing.T) {
-	store, cleanup := createTestSQLiteStore(t)
-	defer cleanup()
-
-	ctx := context.Background()
-
-	events := []TimelineEvent{
-		{
-			ID: "owner-1", Timestamp: time.Now(), Kind: "Pod", Namespace: "default", Name: "pod-1",
-			EventType: EventTypeAdd, Source: SourceInformer,
-			Owner: &OwnerInfo{Kind: "Deployment", Name: "my-deploy"},
-		},
-		{
-			ID: "owner-2", Timestamp: time.Now(), Kind: "Pod", Namespace: "default", Name: "pod-2",
-			EventType: EventTypeAdd, Source: SourceInformer,
-			Owner: &OwnerInfo{Kind: "Deployment", Name: "other-deploy"},
-		},
-		{
-			ID: "owner-3", Timestamp: time.Now(), Kind: "Pod", Namespace: "default", Name: "pod-3",
-			EventType: EventTypeAdd, Source: SourceInformer,
-			Owner: &OwnerInfo{Kind: "Deployment", Name: "my-deploy"},
-		},
-	}
-	_ = store.AppendBatch(ctx, events)
-
-	// Query for pods owned by my-deploy
-	result, err := store.GetChangesForOwner(ctx, "Deployment", "default", "my-deploy", "", time.Time{}, 10)
-	if err != nil {
-		t.Fatalf("GetChangesForOwner failed: %v", err)
-	}
-	if len(result) != 2 {
-		t.Errorf("Expected 2 events for owner my-deploy, got %d", len(result))
 	}
 }
 
@@ -1211,22 +1138,6 @@ func TestSQLiteStore_Query_ClusterContextScoping(t *testing.T) {
 		t.Errorf("unscoped query = %d events, want 4 (cross-cluster reads stay possible)", len(all))
 	}
 
-	// Owner-scoped reads share the same hazard: owner identity collides
-	// across clusters, so the cluster filter must apply there too.
-	withOwner := mk("o1", "cluster-a")
-	withOwner.Owner = &OwnerInfo{Kind: "Deployment", Name: "web"}
-	foreignOwner := mk("o2", "cluster-b")
-	foreignOwner.Owner = &OwnerInfo{Kind: "Deployment", Name: "web"}
-	if err := store.AppendBatch(ctx, []TimelineEvent{withOwner, foreignOwner}); err != nil {
-		t.Fatalf("AppendBatch owners: %v", err)
-	}
-	owned, err := store.GetChangesForOwner(ctx, "Deployment", "prod", "web", "cluster-a", time.Time{}, 10)
-	if err != nil {
-		t.Fatalf("GetChangesForOwner: %v", err)
-	}
-	if len(owned) != 1 || owned[0].ClusterContext != "cluster-a" {
-		t.Errorf("owner query must scope to cluster-a, got %+v", owned)
-	}
 }
 
 // Opening a pre-cluster_context database must migrate it in place: the column

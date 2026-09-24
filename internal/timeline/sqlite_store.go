@@ -667,56 +667,6 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 	return events, rows.Err()
 }
 
-// QueryGrouped retrieves events grouped according to the specified mode
-func (s *SQLiteStore) QueryGrouped(ctx context.Context, opts QueryOptions) (*TimelineResponse, error) {
-	startTime := time.Now()
-
-	// Get events (with higher limit for grouping)
-	queryOpts := opts
-	queryOpts.Limit = min(opts.Limit*10, 5000)
-
-	events, err := s.Query(ctx, queryOpts)
-	if err != nil {
-		return nil, err
-	}
-
-	if opts.GroupBy == GroupByNone {
-		if len(events) > opts.Limit {
-			events = events[:opts.Limit]
-		}
-		return &TimelineResponse{
-			Ungrouped: events,
-			Meta: TimelineMeta{
-				TotalEvents: len(events),
-				QueryTimeMs: time.Since(startTime).Milliseconds(),
-				HasMore:     len(events) == opts.Limit,
-			},
-		}, nil
-	}
-
-	// Group events using shared implementation from pkg/timeline
-	groups := pkgtimeline.GroupEvents(events, opts.GroupBy)
-
-	limit := opts.Limit
-	if limit <= 0 {
-		limit = 200
-	}
-	hasMore := len(groups) > limit
-	if hasMore {
-		groups = groups[:limit]
-	}
-
-	return &TimelineResponse{
-		Groups: groups,
-		Meta: TimelineMeta{
-			TotalEvents: len(events),
-			GroupCount:  len(groups),
-			QueryTimeMs: time.Since(startTime).Milliseconds(),
-			HasMore:     hasMore,
-		},
-	}, nil
-}
-
 // GetEvent retrieves a single event by ID
 func (s *SQLiteStore) GetEvent(ctx context.Context, id string) (*TimelineEvent, error) {
 	query := `SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
@@ -732,49 +682,6 @@ func (s *SQLiteStore) GetEvent(ctx context.Context, id string) (*TimelineEvent, 
 		return nil, err
 	}
 	return &event, nil
-}
-
-// GetChangesForOwner retrieves changes for resources owned by the given owner
-func (s *SQLiteStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNamespace, ownerName, clusterContext string, since time.Time, limit int) ([]TimelineEvent, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-
-	query := `SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
-		reason, message, diff_json, health_state, owner_kind, owner_name, owner_api_version, owner_uid, owner_evidence,
-		labels_json, count, correlation_id, cluster_context, resource_created_at, seq FROM events
-		WHERE owner_kind = ? AND owner_name = ? AND namespace = ?`
-
-	args := []any{ownerKind, ownerName, ownerNamespace}
-
-	if clusterContext != "" {
-		query += " AND cluster_context = ?"
-		args = append(args, clusterContext)
-	}
-
-	if !since.IsZero() {
-		query += " AND timestamp >= ?"
-		args = append(args, since.UTC().Format(sqliteTimeLayout))
-	}
-
-	query += fmt.Sprintf(" ORDER BY timestamp DESC LIMIT %d", limit)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	events := make([]TimelineEvent, 0)
-	for rows.Next() {
-		event, err := s.scanEvent(rows)
-		if err != nil {
-			return nil, err
-		}
-		events = append(events, event)
-	}
-
-	return events, rows.Err()
 }
 
 // MarkResourceSeen records that a resource has been seen. The key is
