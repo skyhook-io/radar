@@ -18,7 +18,7 @@ export interface ReleaseNotes {
   releaseUrl: string
 }
 
-// Mocked from what is merged on main since v1.14.1 and not yet released.
+// Placeholder content keyed to a placeholder version: replace both at release time.
 export const RELEASE_NOTES: ReleaseNotes[] = [
   {
     version: 'v1.15.0',
@@ -68,9 +68,9 @@ export const RELEASE_NOTES: ReleaseNotes[] = [
         id: 'opencode-investigations',
         icon: Bot,
         title: 'Investigate with OpenCode',
+        // No link: the investigations workspace redirects home when this run
+        // mode can't host local agents.
         description: 'Run investigations through your existing OpenCode setup, including AWS Bedrock, alongside Claude Code and Codex.',
-        path: '/investigations',
-        cta: 'Open Investigations',
       },
     ],
     improvements: [
