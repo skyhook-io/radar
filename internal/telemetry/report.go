@@ -1,8 +1,6 @@
 package telemetry
 
 import (
-	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -12,14 +10,13 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/version"
 )
 
-// Report is the exact payload sent once a day.
+// Report is the exact payload sent once a day. It carries no install ID:
+// nothing links one day's report to another, or to a machine or company.
 type Report struct {
 	Schema        int    `json:"schema"`
-	InstallID     string `json:"installId"`
 	Version       string `json:"version"`
 	OS            string `json:"os"`
 	Arch          string `json:"arch"`
@@ -46,8 +43,6 @@ type Setup struct {
 	MCPEnabled      bool     `json:"mcpEnabled"`
 	Prometheus      string   `json:"prometheus"`
 	CostSource      string   `json:"costSource"`
-	AIAgents        []string `json:"aiAgents"`
-	AuthPlugins     []string `json:"authPlugins"`
 	Browsers        []string `json:"browsers"`
 }
 
@@ -64,19 +59,13 @@ type ClusterSummary struct {
 	Shapes   []ClusterShape `json:"shapes"`
 }
 
-// ClusterShape is one cluster described without anything that names it:
-// version, platform, sizes as small buckets, and known integrations only.
+// ClusterShape is one cluster described without anything that names it or
+// tells it apart from another: minor version, platform, node count as a
+// small range, and known integrations only.
 type ClusterShape struct {
-	// ID tells this install's clusters apart across days: a hash of the
-	// cluster keyed with a random per-install salt, so the same cluster seen
-	// from two installs gets two unrelated IDs. The salt is deleted on opt-out.
-	ID                string   `json:"id"`
 	KubernetesVersion string   `json:"kubernetesVersion"`
 	Platform          string   `json:"platform"`
 	Nodes             string   `json:"nodes"`
-	Pods              string   `json:"pods"`
-	Namespaces        string   `json:"namespaces"`
-	CRDs              string   `json:"crds"`
 	Integrations      []string `json:"integrations"`
 }
 
@@ -204,7 +193,7 @@ func sortedKeys(m map[string]int) []string {
 	return out
 }
 
-func (c *Collector) buildReport(p pending, identity *settings.UsageIdentity) Report {
+func (c *Collector) buildReport(p pending) Report {
 	end := c.now()
 	start := p.PeriodStart
 	if start.IsZero() {
@@ -218,28 +207,12 @@ func (c *Collector) buildReport(p pending, identity *settings.UsageIdentity) Rep
 	}
 	setup := c.opts.Setup()
 	setup.Browsers = sortedKeys(p.Browsers)
-	if setup.AIAgents == nil {
-		setup.AIAgents = []string{}
-	}
-	if setup.AuthPlugins == nil {
-		setup.AuthPlugins = []string{}
-	}
 
-	installID, salt := "", ""
-	if identity != nil {
-		installID, salt = identity.InstallID, identity.ClusterSalt
-	}
-	if salt == "" {
-		// Previews before opting in: a throwaway salt shows the shape of
-		// the field without producing an ID that could ever be sent.
-		salt = newInstallID()
-	}
 	shapes := make([]ClusterShape, 0, len(p.Clusters))
-	for key, s := range p.Clusters {
+	for _, s := range p.Clusters {
 		if s.Integrations == nil {
 			s.Integrations = []string{}
 		}
-		s.ID = clusterID(salt, key)
 		shapes = append(shapes, s)
 	}
 	// Map order would leak nothing, but a stable order keeps previews calm.
@@ -248,12 +221,14 @@ func (c *Collector) buildReport(p pending, identity *settings.UsageIdentity) Rep
 		if a.Platform != b.Platform {
 			return a.Platform < b.Platform
 		}
-		return a.KubernetesVersion < b.KubernetesVersion
+		if a.KubernetesVersion != b.KubernetesVersion {
+			return a.KubernetesVersion < b.KubernetesVersion
+		}
+		return a.Nodes < b.Nodes
 	})
 
 	return Report{
 		Schema:        schemaVersion,
-		InstallID:     installID,
 		Version:       ver,
 		OS:            runtime.GOOS,
 		Arch:          runtime.GOARCH,
@@ -274,29 +249,6 @@ func (c *Collector) buildReport(p pending, identity *settings.UsageIdentity) Rep
 			Shapes:   shapes,
 		},
 	}
-}
-
-func newIdentity() *settings.UsageIdentity {
-	return &settings.UsageIdentity{InstallID: newInstallID(), ClusterSalt: newInstallID()}
-}
-
-// newInstallID is random, not derived from the machine: it links one
-// install's reports to each other and to nothing else. Opting out deletes it.
-func newInstallID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return ""
-	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	h := hex.EncodeToString(b)
-	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
-}
-
-func clusterID(salt, key string) string {
-	mac := hmac.New(sha256.New, []byte(salt))
-	mac.Write([]byte(key))
-	return hex.EncodeToString(mac.Sum(nil)[:8])
 }
 
 // hashKey keeps raw cluster identifiers out of the pending file.

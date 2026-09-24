@@ -25,7 +25,6 @@ const usageRecordKey = "usage.json"
 type usageRecord struct {
 	UsageData          *settings.UsageDataChoice `json:"usageData,omitempty"`
 	UsagePromptShownAt *time.Time                `json:"usagePromptShownAt,omitempty"`
-	UsageIdentity      *settings.UsageIdentity   `json:"usageIdentity,omitempty"`
 }
 
 // configMapUsageStore keeps a shared Radar's usage-data choice in the
@@ -131,7 +130,7 @@ func (st *configMapUsageStore) Load() (settings.Settings, error) {
 	if err != nil {
 		return settings.Settings{}, err
 	}
-	return settings.Settings{UsageData: rec.UsageData, UsagePromptShownAt: rec.UsagePromptShownAt, UsageIdentity: rec.UsageIdentity}, nil
+	return settings.Settings{UsageData: rec.UsageData, UsagePromptShownAt: rec.UsagePromptShownAt}, nil
 }
 
 func (st *configMapUsageStore) Save(fn func(*settings.Settings)) error {
@@ -154,9 +153,9 @@ func (st *configMapUsageStore) Save(fn func(*settings.Settings)) error {
 		if err != nil {
 			return err
 		}
-		s := settings.Settings{UsageData: rec.UsageData, UsagePromptShownAt: rec.UsagePromptShownAt, UsageIdentity: rec.UsageIdentity}
+		s := settings.Settings{UsageData: rec.UsageData, UsagePromptShownAt: rec.UsagePromptShownAt}
 		fn(&s)
-		data, err := json.Marshal(usageRecord{UsageData: s.UsageData, UsagePromptShownAt: s.UsagePromptShownAt, UsageIdentity: s.UsageIdentity})
+		data, err := json.Marshal(usageRecord{UsageData: s.UsageData, UsagePromptShownAt: s.UsagePromptShownAt})
 		if err != nil {
 			return err
 		}

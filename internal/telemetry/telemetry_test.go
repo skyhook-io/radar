@@ -202,8 +202,8 @@ func TestDailySend(t *testing.T) {
 	if r.Views["timeline"] != 1 || r.Version != "1.15.0" || r.Mode != "local" {
 		t.Fatalf("report = %+v", r)
 	}
-	if r.InstallID == "" || r.Clusters.Contexts != "5-9" || r.Clusters.Used != 1 || len(r.Clusters.Shapes[0].Integrations) != 2 {
-		t.Fatalf("report clusters/id = %q %+v", r.InstallID, r.Clusters)
+	if r.Clusters.Contexts != "5-9" || r.Clusters.Used != 1 || len(r.Clusters.Shapes[0].Integrations) != 2 {
+		t.Fatalf("report clusters = %+v", r.Clusters)
 	}
 	if st := h.c.Status(); len(st.Preview.Views) != 0 || st.LastSentAt == nil {
 		t.Fatalf("pending not reset after send: %+v", st)
@@ -344,7 +344,7 @@ func TestFirstRunPromptOnlyForFreshInstallsOnce(t *testing.T) {
 		t.Fatalf("prompt should not show twice")
 	}
 	// A restart re-reads settings and must still remember.
-	h.c.promptShown = false
+	h.c.promptShownAt = nil
 	h.c.refresh()
 	if h.c.Status().FirstRunPrompt {
 		t.Fatalf("prompt came back after a restart")
@@ -392,7 +392,7 @@ func TestSharedInstallAnyTeamMemberCanOptIn(t *testing.T) {
 	if h.saved.UsageData == nil || h.saved.UsageData.DecidedBy != "dana@example.com" {
 		t.Fatalf("decider not saved: %+v", h.saved.UsageData)
 	}
-	if st.Preview.InstallID == "" {
+	if st.NextReportAt == nil {
 		t.Fatalf("shared opt-in should start reporting")
 	}
 }
@@ -439,9 +439,6 @@ func TestStaleRefreshCannotUndoOptOut(t *testing.T) {
 	if st.State != StateOff || len(st.Preview.Views) != 0 {
 		t.Fatalf("stale refresh undid the opt-out: %s %v", st.State, st.Preview.Views)
 	}
-	if h.saved.UsageIdentity != nil {
-		t.Fatalf("stale refresh brought the identity back")
-	}
 }
 
 func TestLoadErrorKeepsLastKnownState(t *testing.T) {
@@ -460,25 +457,58 @@ func TestLoadErrorKeepsLastKnownState(t *testing.T) {
 	h.c.load = good
 }
 
-func TestNoReportWithoutSavedIdentity(t *testing.T) {
+func TestWhatsNewAsksAgainOnlyAfterAWhileAndNeverAfterNo(t *testing.T) {
+	h := newHarness(t, nil, false)
+	if st := h.c.Status(); !st.Ask {
+		t.Fatalf("never-asked user should be asked: %+v", st)
+	}
+	if err := MarkPromptShown(); err != nil {
+		t.Fatal(err)
+	}
+	if st := h.c.Status(); st.Ask {
+		t.Fatalf("asked again right after closing the question")
+	}
+	h.now = h.now.Add(reaskInterval - time.Hour)
+	if st := h.c.Status(); st.Ask {
+		t.Fatalf("asked again before the interval")
+	}
+	h.now = h.now.Add(2 * time.Hour)
+	if st := h.c.Status(); !st.Ask {
+		t.Fatalf("unanswered question should come back after the interval")
+	}
+	if _, err := h.c.SetChoice(false, ""); err != nil {
+		t.Fatal(err)
+	}
+	h.now = h.now.Add(10 * reaskInterval)
+	if st := h.c.Status(); st.Ask || st.FirstRunPrompt {
+		t.Fatalf("an explicit no must never be asked again: %+v", st)
+	}
+}
+
+func TestShutdownSendsAYoungPeriodOnlyWhenAsked(t *testing.T) {
 	releaseBuild(t)
 	h := newHarness(t, nil, false)
 	if _, err := h.c.SetChoice(true, ""); err != nil {
 		t.Fatal(err)
 	}
 	RecordView("helm")
-	h.c.mu.Lock()
-	h.c.identity = nil
-	h.c.mu.Unlock()
-	h.saved.UsageIdentity = nil
-	h.c.save = func(func(*settings.Settings)) error { return errors.New("read-only store") }
-	h.now = h.now.Add(reportInterval + time.Minute)
-	h.c.tick(context.Background())
+	h.now = h.now.Add(time.Hour)
+	Shutdown()
 	if len(h.sent) != 0 {
-		t.Fatalf("sent a report without a saved identity: %+v", h.sent)
+		t.Fatalf("local shutdown sent early: %+v", h.sent)
 	}
-	if h.c.Status().Preview.Views["helm"] != 1 {
-		t.Fatalf("counts were dropped instead of held")
+	if _, err := os.Stat(h.c.path); err != nil {
+		t.Fatalf("shutdown did not save the pending report: %v", err)
+	}
+
+	h.c.opts.SendOnShutdown = true
+	Shutdown()
+	if len(h.sent) != 1 || h.sent[0].Views["helm"] != 1 {
+		t.Fatalf("in-cluster shutdown should send what is pending: %+v", h.sent)
+	}
+	Shutdown()
+	if len(h.sent) != 1 {
+		t.Fatalf("an empty period must not be sent: %d reports", len(h.sent))
 	}
 }
 

@@ -130,8 +130,20 @@ func CheckForUpdateRelease(_ context.Context) *UpdateInfo {
 	return checkForUpdateCached(checkOptions{source: "release-only"})
 }
 
+// UpdateCheckDisabled reports whether RADAR_UPDATE_CHECK turns the update
+// check off. It is separate from usage data: the check is how people learn
+// about fixes, so DO_NOT_TRACK leaves it alone, but an air-gapped install
+// needs a way to make no outbound request at all.
+func UpdateCheckDisabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("RADAR_UPDATE_CHECK"))) {
+	case "off", "0", "false", "no":
+		return true
+	}
+	return false
+}
+
 func RelayUpdateCheck(ctx context.Context) error {
-	if buildChannel(Current) == buildChannelDevelopment {
+	if buildChannel(Current) == buildChannelDevelopment || UpdateCheckDisabled() {
 		return nil
 	}
 
@@ -217,7 +229,7 @@ func fetchLatestRelease(ctx context.Context, options checkOptions) *UpdateInfo {
 		UpdateCommand:  getUpdateCommand(method),
 	}
 
-	if Current == "dev" {
+	if Current == "dev" || UpdateCheckDisabled() {
 		return result
 	}
 

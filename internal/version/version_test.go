@@ -371,3 +371,33 @@ func resetUpdateCache() {
 	defer mu.Unlock()
 	updateCache = map[string]updateCacheEntry{}
 }
+
+func TestUpdateCheckOffMakesNoRequest(t *testing.T) {
+	var hits int
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		_ = json.NewEncoder(w).Encode(githubRelease{TagName: "v1.3.0"})
+	}))
+	defer proxy.Close()
+
+	previousURL, previousGitHub, previousVersion := releasesURL, githubURL, Current
+	releasesURL, githubURL = proxy.URL, proxy.URL
+	t.Cleanup(func() {
+		releasesURL, githubURL = previousURL, previousGitHub
+		SetCurrent(previousVersion)
+		resetUpdateCache()
+	})
+	t.Setenv("RADAR_UPDATE_CHECK", "off")
+	SetCurrent("1.2.3")
+	resetUpdateCache()
+
+	if info := CheckForUpdate(context.Background()); info == nil || info.LatestVersion != "" {
+		t.Fatalf("update check off still reported a release: %+v", info)
+	}
+	if err := RelayUpdateCheck(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 0 {
+		t.Fatalf("update check off made %d requests", hits)
+	}
+}

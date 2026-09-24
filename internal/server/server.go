@@ -1233,7 +1233,7 @@ func (s *Server) Stop() {
 	if s.stopTelemetry != nil {
 		s.stopTelemetry()
 	}
-	telemetry.Flush()
+	telemetry.Shutdown()
 	if s.listener != nil {
 		s.listener.Close()
 	}

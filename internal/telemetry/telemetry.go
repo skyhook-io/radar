@@ -1,11 +1,12 @@
 // Package telemetry implements Radar's opt-in usage reports.
 //
 // Nothing is recorded or sent until the user says yes. A yes starts a daily
-// report under a random install ID: which views and actions were used, MCP
-// tool calls, Radar's own setup, and each connected cluster's version,
-// platform and size ranges. It never carries names (resources, namespaces,
-// clusters, hosts) or contents. The pending report lives in
-// ~/.radar/usage-report.json so the user can read exactly what will be sent.
+// anonymous report: which views and actions were used, MCP tool calls,
+// Radar's own setup, and each connected cluster's minor version, platform,
+// node-count range and known integrations. It carries no install ID and never
+// carries names (resources, namespaces, clusters, hosts) or contents. The
+// pending report lives in ~/.radar/usage-report.json so the user can read
+// exactly what will be sent.
 package telemetry
 
 import (
@@ -39,9 +40,15 @@ const (
 	// install for the one-time prompt. Long enough to survive a first
 	// session that ended before the prompt appeared.
 	freshInstallWindow = 7 * 24 * time.Hour
-	retryDelay         = 24 * time.Hour
-	tickInterval       = time.Minute
-	schemaVersion      = 2
+	// Someone who closed the question without answering may be asked again
+	// after this long. An explicit "no" is never asked again.
+	reaskInterval = 90 * 24 * time.Hour
+	retryDelay    = 24 * time.Hour
+	tickInterval  = time.Minute
+	// Bounds the report sent as a shared install shuts down, so a slow or
+	// unreachable endpoint can't hold up the pod's termination.
+	shutdownSendTimeout = 5 * time.Second
+	schemaVersion       = 3
 )
 
 // State is the effective usage-data decision.
@@ -66,8 +73,7 @@ const (
 	SourceEnv        Source = "env"
 	SourceDoNotTrack Source = "do-not-track"
 	// SourceDeployment covers installs whose host manages usage data
-	// itself (Radar Cloud). Shared in-cluster installs are not this: any
-	// team member may opt them in.
+	// itself (Radar Cloud).
 	SourceDeployment Source = "deployment"
 )
 
@@ -84,8 +90,15 @@ type Status struct {
 	// FirstRunPrompt asks the UI to show the one-time prompt for a fresh
 	// install. Upgrading installs are asked in What's New instead.
 	FirstRunPrompt bool `json:"firstRunPrompt"`
+	// Ask lets What's New ask an undecided user: never asked, or asked and
+	// left unanswered long enough ago.
+	Ask bool `json:"ask"`
 	// Shared means the choice covers everyone using this Radar.
 	Shared bool `json:"shared"`
+	// OwnersDecide means that on this shared install, people who may change
+	// the Radar Deployment can answer in the UI. Without it a shared
+	// install's choice comes only from its configuration.
+	OwnersDecide bool `json:"ownersDecide"`
 	// DecidedBy and DecidedAt say who answered, for shared installs with
 	// sign-in. Shown in Settings only; never part of a report.
 	DecidedBy string     `json:"decidedBy,omitempty"`
@@ -105,7 +118,8 @@ type Options struct {
 	// Cloud). It is always off and nobody in the UI can change that.
 	Hosted func() bool
 	// Shared reports an install several people use (in-cluster, or behind
-	// sign-in). Anyone on the team may opt it in; the choice covers all.
+	// sign-in). Its choice covers everyone, so the server lets only the
+	// install's owners make it.
 	Shared func() bool
 	// Mode is "local", "desktop" or "in-cluster".
 	Mode func() string
@@ -120,11 +134,16 @@ type Options struct {
 	// StorageScope names where Load and Save keep the choice; see
 	// Status.ChoiceStorage. Defaults to "local".
 	StorageScope func() string
-	// Load and Save replace settings.json as the home of the choice, the
-	// prompt-shown flag and the identity. In-cluster that is a ConfigMap, so
-	// they survive restarts; the daily counts stay local either way.
+	// Load and Save replace settings.json as the home of the choice and the
+	// prompt-shown time. In-cluster that is a ConfigMap, so they survive
+	// restarts; the daily counts stay local either way.
 	Load func() (settings.Settings, error)
 	Save func(func(*settings.Settings)) error
+	// SendOnShutdown sends whatever is pending when Radar stops, however
+	// short the period. In-cluster the pending report lives on an emptyDir
+	// that dies with the pod, so without it a pod replaced more often than
+	// daily would never report.
+	SendOnShutdown bool
 	// InstalledAt is when Radar first ran on this machine (Unix seconds, 0
 	// if unknown). It decides the first-install prompt and is never sent.
 	InstalledAt func() int64
@@ -205,12 +224,11 @@ type Collector struct {
 	nextAttempt time.Time
 	// gen changes whenever the pending report is replaced by a decision, so a
 	// send that started before an opt-out cannot commit afterwards.
-	gen         uint64
-	cancelSend  context.CancelFunc
-	promptShown bool
-	sampledAt   map[string]time.Time
-	choice      *settings.UsageDataChoice
-	identity    *settings.UsageIdentity
+	gen           uint64
+	cancelSend    context.CancelFunc
+	promptShownAt *time.Time
+	sampledAt     map[string]time.Time
+	choice        *settings.UsageDataChoice
 	// decisionGen changes on every SetChoice, so a background refresh
 	// that read the store before the decision can't commit stale state.
 	decisionGen    uint64
@@ -340,37 +358,6 @@ func (c *Collector) refresh() {
 		return
 	}
 
-	// The identity exists exactly while recording. The save re-decides from
-	// what is stored at that moment, so a read that raced an opt-out can't
-	// bring an identity back, and two replicas settle on one identity.
-	if err == nil {
-		recordingIn := func(st *settings.Settings) bool {
-			sState, _ := resolve(c.env, hosted, st.UsageData)
-			return sState.Recording()
-		}
-		switch {
-		case state.Recording() && s.UsageIdentity == nil:
-			id := newIdentity()
-			if c.save(func(st *settings.Settings) {
-				if st.UsageIdentity == nil && recordingIn(st) {
-					st.UsageIdentity = id
-				}
-			}) == nil {
-				if again, err2 := c.load(); err2 == nil {
-					s = again
-				}
-			}
-		case !state.Recording() && s.UsageIdentity != nil:
-			if c.save(func(st *settings.Settings) {
-				if !recordingIn(st) {
-					st.UsageIdentity = nil
-				}
-			}) == nil {
-				s.UsageIdentity = nil
-			}
-		}
-	}
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// A decision made while this read was in flight is newer; don't
@@ -380,9 +367,8 @@ func (c *Collector) refresh() {
 	}
 	c.state, c.source = state, source
 	if err == nil {
-		c.promptShown = s.UsagePromptShownAt != nil
+		c.promptShownAt = s.UsagePromptShownAt
 		c.choice = s.UsageData
-		c.identity = s.UsageIdentity
 	}
 	if !state.Recording() {
 		c.discardLocked()
@@ -453,8 +439,10 @@ func (c *Collector) Status() Status {
 		next := c.p.PeriodStart.Add(reportInterval)
 		st.NextReportAt = &next
 	}
-	st.FirstRunPrompt = c.state == StateUndecided && st.CanChange && !c.promptShown &&
-		freshInstall(c.opts.InstalledAt(), c.now())
+	now := c.now()
+	undecided := c.state == StateUndecided && st.CanChange
+	st.FirstRunPrompt = undecided && c.promptShownAt == nil && freshInstall(c.opts.InstalledAt(), now)
+	st.Ask = undecided && (c.promptShownAt == nil || now.Sub(*c.promptShownAt) >= reaskInterval)
 	st.Shared = c.opts.Shared()
 	st.ChoiceStorage = c.opts.StorageScope()
 	if c.choice != nil && (c.source == SourceUser) {
@@ -463,7 +451,6 @@ func (c *Collector) Status() Status {
 		st.DecidedBy = c.choice.DecidedBy
 	}
 	p := c.p.clone()
-	identity := c.identity
 	c.mu.Unlock()
 	// Before anything is recorded, preview the cluster Radar is on now, so
 	// the example shows exactly what a report would carry.
@@ -472,7 +459,7 @@ func (c *Collector) Status() Status {
 			p.Clusters = map[string]ClusterShape{hashKey(key): shape}
 		}
 	}
-	st.Preview = c.buildReport(p, identity)
+	st.Preview = c.buildReport(p)
 	return st
 }
 
@@ -483,8 +470,9 @@ func freshInstall(installedAt int64, now time.Time) bool {
 	return now.Sub(time.Unix(installedAt, 0)) < freshInstallWindow
 }
 
-// MarkPromptShown records that the first-install prompt has been shown on
-// this machine so it never appears again.
+// MarkPromptShown records that the question was just shown, answered or not.
+// The first-install prompt then never appears again, and What's New waits
+// reaskInterval before asking again.
 func MarkPromptShown() error {
 	c := current()
 	if c == nil {
@@ -495,7 +483,7 @@ func MarkPromptShown() error {
 		return fmt.Errorf("save prompt shown: %w", err)
 	}
 	c.mu.Lock()
-	c.promptShown = true
+	c.promptShownAt = &now
 	c.mu.Unlock()
 	return nil
 }
@@ -524,11 +512,6 @@ func (c *Collector) SetChoice(enabled bool, by string) (Status, error) {
 	now := c.now()
 	if err := c.save(func(s *settings.Settings) {
 		s.UsageData = &settings.UsageDataChoice{Enabled: enabled, DecidedAt: now, DecidedBy: by}
-		// Every opt-in is a new install as far as reports go.
-		s.UsageIdentity = nil
-		if enabled {
-			s.UsageIdentity = newIdentity()
-		}
 	}); err != nil {
 		return c.Status(), fmt.Errorf("save usage-data choice: %w", err)
 	}
@@ -551,7 +534,6 @@ func (c *Collector) run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			c.flush()
 			return
 		case <-t.C:
 			c.tick(ctx)
@@ -563,7 +545,7 @@ func (c *Collector) tick(ctx context.Context) {
 	c.refresh()
 	c.sampleCluster()
 	c.flush()
-	c.maybeSend(ctx)
+	c.maybeSend(ctx, false)
 }
 
 func (c *Collector) sampleCluster() {
@@ -595,27 +577,18 @@ func (c *Collector) sampleCluster() {
 	c.dirty = true
 }
 
-// maybeSend sends the day's report. It takes the counts out before the
-// request so recording continues into the next day, and puts them back if
-// the request fails. A decision made while a request is in flight (the gen
-// check) wins over the request's outcome.
-func (c *Collector) maybeSend(ctx context.Context) {
+// maybeSend sends the day's report, or with early set whatever is pending
+// however young the period. It takes the counts out before the request so
+// recording continues into the next period, and puts them back if the
+// request fails. A decision made while a request is in flight (the gen check)
+// wins over the request's outcome.
+func (c *Collector) maybeSend(ctx context.Context, early bool) {
 	c.mu.Lock()
 	now := c.now()
 	due := c.state.Recording() && !c.p.PeriodStart.IsZero() &&
-		now.Sub(c.p.PeriodStart) >= reportInterval && now.After(c.nextAttempt)
+		(early || now.Sub(c.p.PeriodStart) >= reportInterval) && now.After(c.nextAttempt)
 	if !due {
 		c.mu.Unlock()
-		return
-	}
-	identity := c.identity
-	// No stored identity (its save failed) means no report: an empty
-	// install ID would make the day unattributable, and a throwaway salt
-	// would scramble the cluster IDs. Keep the counts and try later.
-	if identity == nil || identity.InstallID == "" || identity.ClusterSalt == "" {
-		c.nextAttempt = now.Add(time.Hour)
-		c.mu.Unlock()
-		log.Printf("[telemetry] Usage report held: no saved install identity yet")
 		return
 	}
 	state := c.state
@@ -630,7 +603,7 @@ func (c *Collector) maybeSend(ctx context.Context) {
 
 	// A day with no recorded use is not a report: the UI was never opened.
 	if !taken.empty() {
-		report := c.buildReport(taken, identity)
+		report := c.buildReport(taken)
 		switch {
 		case state == StateLog:
 			logReport(report, "RADAR_TELEMETRY=log")
@@ -743,10 +716,17 @@ func writeAtomic(path string, data []byte) error {
 	return nil
 }
 
-// Flush saves the pending report now. Called on shutdown so counts from the
-// last minute survive a restart.
-func Flush() {
-	if c := current(); c != nil {
-		c.flush()
+// Shutdown saves the pending report, so counts from the last minute survive
+// a restart, and with Options.SendOnShutdown sends it first.
+func Shutdown() {
+	c := current()
+	if c == nil {
+		return
 	}
+	if c.opts.SendOnShutdown {
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownSendTimeout)
+		c.maybeSend(ctx, true)
+		cancel()
+	}
+	c.flush()
 }

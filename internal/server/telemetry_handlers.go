@@ -6,15 +6,14 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -33,14 +32,7 @@ func (s *Server) startTelemetry() {
 		Hosted: func() bool {
 			return cloudMode() || s.cloudConnectCfg.CloudTunnelConfigured
 		},
-		// Several people use this Radar: in-cluster, behind sign-in, or on a
-		// listener others can reach. Anyone on the team may opt it in, and
-		// the choice covers everyone.
-		Shared: func() bool {
-			return deploymentMode() != k8s.DeploymentModeLocal ||
-				s.configManagement() != "local" ||
-				!cloud.IsLoopbackHostname(s.listenAddress)
-		},
+		Shared: s.usageShared,
 		Mode: func() string {
 			switch deploymentMode() {
 			case k8s.DeploymentModeInCluster:
@@ -54,8 +46,11 @@ func (s *Server) startTelemetry() {
 			return "local"
 		},
 		ClusterSample: clusterSample,
-		Setup:         s.telemetrySetup,
-		Contexts:      func() int { return k8s.GetKubeconfigSummary().ContextCount },
+		// The pending report lives on the pod's emptyDir; send it before
+		// the pod goes rather than lose it.
+		SendOnShutdown: deploymentMode() == k8s.DeploymentModeInCluster,
+		Setup:          s.telemetrySetup,
+		Contexts:       func() int { return k8s.GetKubeconfigSummary().ContextCount },
 		// In-cluster, ~/.radar is a pod's emptyDir and is new on every
 		// restart; the Deployment's creation time is the real install time.
 		InstalledAt: func() int64 {
@@ -76,6 +71,55 @@ func (s *Server) startTelemetry() {
 		}
 	}
 	telemetry.Start(ctx, opts)
+}
+
+// usageShared reports whether several people use this Radar: in-cluster,
+// behind sign-in, or on a listener others can reach. The choice then covers
+// everyone, so nobody may make it just by opening the UI; see
+// canDecideUsage.
+func (s *Server) usageShared() bool {
+	return deploymentMode() != k8s.DeploymentModeLocal ||
+		s.configManagement() != "local" ||
+		!cloud.IsLoopbackHostname(s.listenAddress)
+}
+
+// usageOwnersDecide reports whether a shared install lets its owners answer
+// in the UI. That needs to know who is asking, so it takes an in-cluster
+// Radar with sign-in; any other shared Radar is decided only by the Helm
+// value or RADAR_TELEMETRY.
+func (s *Server) usageOwnersDecide() bool {
+	return deploymentMode() == k8s.DeploymentModeInCluster && s.authConfig.Enabled()
+}
+
+// canDecideUsage reports whether the caller may answer the usage-data
+// question for this Radar. On a shared install that is someone who could
+// change the Radar Deployment anyway (patch Deployments in its namespace), so
+// a viewer can't opt the whole team in.
+func (s *Server) canDecideUsage(r *http.Request) bool {
+	return usageDecider(s.usageShared(), s.usageOwnersDecide(), auth.UserFromContext(r.Context()) != nil, func() bool {
+		namespace := os.Getenv("MY_POD_NAMESPACE")
+		return namespace != "" && s.canRead(r, "apps", "deployments", namespace, "patch")
+	})
+}
+
+func usageDecider(shared, ownersDecide, signedIn bool, mayPatchDeployment func() bool) bool {
+	if !shared {
+		return true
+	}
+	// canRead allows everything when nobody is signed in, so an unknown
+	// caller must be refused here rather than by the access review.
+	return ownersDecide && signedIn && mayPatchDeployment()
+}
+
+// usageStatusFor narrows the install-wide status to what this caller may do.
+func (s *Server) usageStatusFor(r *http.Request, st telemetry.Status) telemetry.Status {
+	st.OwnersDecide = st.Shared && s.usageOwnersDecide()
+	if !s.canDecideUsage(r) {
+		st.CanChange = false
+		st.FirstRunPrompt = false
+		st.Ask = false
+	}
+	return st
 }
 
 // clusterSample describes the connected cluster by shape only. The key is the
@@ -110,9 +154,6 @@ func clusterSample() (string, telemetry.ClusterShape, bool) {
 		KubernetesVersion: telemetry.MinorVersion(info.KubernetesVersion),
 		Platform:          platformName(info.Platform),
 		Nodes:             telemetry.Bucket(info.NodeCount),
-		Pods:              telemetry.Bucket(info.PodCount),
-		Namespaces:        telemetry.Bucket(info.NamespaceCount),
-		CRDs:              telemetry.Bucket(servedCRDCount()),
 		Integrations:      servedIntegrations(),
 	}, true
 }
@@ -125,42 +166,6 @@ func platformName(p string) string {
 	}
 	return "unknown"
 }
-
-func servedCRDCount() int {
-	d := k8s.GetResourceDiscovery()
-	if d == nil {
-		return 0
-	}
-	resources, err := d.GetAPIResources()
-	if err != nil {
-		return 0
-	}
-	seen := map[string]bool{}
-	for _, r := range resources {
-		if r.IsCRD {
-			seen[r.Group+"/"+r.Kind] = true
-		}
-	}
-	return len(seen)
-}
-
-// Exec credential plugins worth knowing about: which clouds people reach
-// clusters through. Anything else stays unnamed.
-var knownAuthPlugins = map[string]bool{
-	"aws": true, "aws-iam-authenticator": true, "gke-gcloud-auth-plugin": true,
-	"gcloud": true, "kubelogin": true, "az": true, "doctl": true, "kubectl-oidc_login": true,
-	"tsh": true, "teleport": true, "oci": true, "ibmcloud": true, "rancher": true,
-}
-
-var detectedAgents = sync.OnceValue(func() []string {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	var names []string
-	for _, a := range ai.DetectAgents(ctx, false) {
-		names = append(names, a.Name)
-	}
-	return telemetry.SortedUnique(names)
-})
 
 func (s *Server) telemetrySetup() telemetry.Setup {
 	authMode := s.authConfig.Mode
@@ -175,20 +180,12 @@ func (s *Server) telemetrySetup() telemetry.Setup {
 	if url, _ := prometheuspkg.CurrentConfig(); url != "" {
 		prom = "connected"
 	}
-	var plugins []string
-	for _, p := range k8s.GetKubeconfigSummary().ExecPluginsPresent {
-		if knownAuthPlugins[p] {
-			plugins = append(plugins, p)
-		}
-	}
 	return telemetry.Setup{
 		AuthMode:        authMode,
 		TimelineStorage: timeline,
 		MCPEnabled:      s.mcpHandler != nil,
 		Prometheus:      prom,
 		CostSource:      string(opencost.ConfigSnapshot().Source),
-		AIAgents:        detectedAgents(),
-		AuthPlugins:     telemetry.SortedUnique(plugins),
 	}
 }
 
@@ -232,7 +229,7 @@ func servedIntegrations() []string {
 }
 
 func (s *Server) handleGetTelemetry(w http.ResponseWriter, r *http.Request) {
-	s.writeJSON(w, telemetry.CurrentStatus())
+	s.writeJSON(w, s.usageStatusFor(r, telemetry.CurrentStatus()))
 }
 
 func (s *Server) handlePutTelemetry(w http.ResponseWriter, r *http.Request) {
@@ -249,6 +246,10 @@ func (s *Server) handlePutTelemetry(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, `request body must be {"enabled": true|false}`)
 		return
 	}
+	if !s.canDecideUsage(r) {
+		s.writeError(w, http.StatusForbidden, "only someone who can change this Radar's Deployment can change usage data for everyone")
+		return
+	}
 	by := ""
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		by = user.Username
@@ -263,12 +264,17 @@ func (s *Server) handlePutTelemetry(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.writeJSON(w, status)
+	s.writeJSON(w, s.usageStatusFor(r, status))
 }
 
 func (s *Server) handleTelemetryPromptShown(w http.ResponseWriter, r *http.Request) {
 	if !s.sameOriginOK(r) {
 		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
+	// Only someone the question was meant for can mark it asked.
+	if !s.canDecideUsage(r) {
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if err := telemetry.MarkPromptShown(); err != nil {

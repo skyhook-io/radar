@@ -62,19 +62,10 @@ type Settings struct {
 	// UsageData is the user's answer to the usage-data question. nil means
 	// they have not answered, which sends nothing, same as a "no".
 	UsageData *UsageDataChoice `json:"usageData,omitempty"`
-	// UsagePromptShownAt records that the one-time first-install prompt was
-	// shown on this machine, answered or not, so it never shows again.
+	// UsagePromptShownAt records when the usage-data question was last shown,
+	// answered or not: the first-install prompt never shows again, and What's
+	// New waits a while before asking again.
 	UsagePromptShownAt *time.Time `json:"usagePromptShownAt,omitempty"`
-	// UsageIdentity exists only while usage data is on. Keeping it beside the
-	// choice means it survives exactly where the choice does.
-	UsageIdentity *UsageIdentity `json:"usageIdentity,omitempty"`
-}
-
-// UsageIdentity is the random install ID sent with usage reports and the
-// salt behind their cluster IDs. The salt never leaves this install.
-type UsageIdentity struct {
-	InstallID   string `json:"installId"`
-	ClusterSalt string `json:"clusterSalt"`
 }
 
 // UsageDataChoice records whether the user agreed to send usage

@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/skyhook-io/radar/internal/telemetry"
 )
 
 func TestPutTelemetryRejectsCrossSiteConsent(t *testing.T) {
@@ -87,6 +89,48 @@ func TestTelemetryEventRejectsCrossSiteAndNonJSON(t *testing.T) {
 		(&Server{}).handleTelemetryEvent(w, r)
 		if w.Code != tc.want {
 			t.Fatalf("%s: status = %d, want %d", tc.name, w.Code, tc.want)
+		}
+	}
+}
+
+// A Radar others can reach, with no sign-in, can't tell an owner from a
+// viewer, so nobody may switch usage data on for everyone from the UI.
+func TestSharedInstallWithoutSignInIsDecidedByConfigOnly(t *testing.T) {
+	shared := &Server{listenAddress: "0.0.0.0"}
+	r := httptest.NewRequest(http.MethodPut, "http://radar.internal/api/telemetry", strings.NewReader(`{"enabled":true}`))
+	r.Header.Set("Sec-Fetch-Site", "same-origin")
+	w := httptest.NewRecorder()
+	shared.handlePutTelemetry(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", w.Code)
+	}
+
+	in := telemetry.Status{State: telemetry.StateUndecided, Source: telemetry.SourceDefault, CanChange: true, FirstRunPrompt: true, Ask: true, Shared: true}
+	got := shared.usageStatusFor(httptest.NewRequest(http.MethodGet, "/api/telemetry", nil), in)
+	if got.CanChange || got.FirstRunPrompt || got.Ask {
+		t.Fatalf("shared install without sign-in should not ask or allow changes: %+v", got)
+	}
+}
+
+func TestUsageDecider(t *testing.T) {
+	yes := func() bool { return true }
+	no := func() bool { return false }
+	cases := []struct {
+		name                           string
+		shared, ownersDecide, signedIn bool
+		mayPatch                       func() bool
+		want                           bool
+	}{
+		{"local install: the user decides", false, false, false, no, true},
+		{"shared, no sign-in: config only", true, false, false, yes, false},
+		{"shared with owners, anonymous caller", true, true, false, yes, false},
+		{"shared with owners, viewer", true, true, true, no, false},
+		{"shared with owners, owner", true, true, true, yes, true},
+		{"shared local listener with sign-in: config only", true, false, true, yes, false},
+	}
+	for _, tc := range cases {
+		if got := usageDecider(tc.shared, tc.ownersDecide, tc.signedIn, tc.mayPatch); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

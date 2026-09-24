@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { BarChart3, Check } from 'lucide-react'
-import { useSetUsageData, type UsageDataStatus } from '../../api/telemetry'
+import { markUsagePromptShown, useSetUsageData, type UsageDataStatus } from '../../api/telemetry'
 
 // One wording for every place Radar asks, so the question can't drift.
 export function UsageDataBlurb({ onReadMore, shared = false }: { onReadMore: () => void; shared?: boolean }) {
@@ -21,17 +21,32 @@ export function UsageDataBlurb({ onReadMore, shared = false }: { onReadMore: () 
   )
 }
 
-// The usage-data question, asked inside What's New: a local user who hasn't
-// answered sees it once per upgrade until they do. Anyone who can't decide
-// (shared installs, env-managed, DO_NOT_TRACK) never sees it.
+// The usage-data question, asked inside What's New when the server says to:
+// someone who closed it without answering is asked again only months later,
+// and a "no" is never asked again. Anyone who can't decide (a shared Radar's
+// non-owners, env-managed, DO_NOT_TRACK) never sees it.
 export function UsageDataAsk({ usageData, onReadMore }: {
   usageData: UsageDataStatus | undefined
   onReadMore: () => void
 }) {
   const setUsageData = useSetUsageData()
   const [answer, setAnswer] = useState<boolean | null>(null)
+  // Latched: recording the showing stops the server offering the question,
+  // and the block must not vanish while the dialog is open.
+  const [offered, setOffered] = useState(!!usageData?.ask)
+  const recorded = useRef(false)
 
-  const undecided = usageData?.state === 'undecided' && usageData.canChange
+  useEffect(() => {
+    if (usageData?.ask) setOffered(true)
+  }, [usageData?.ask])
+  useEffect(() => {
+    if (offered && !recorded.current) {
+      recorded.current = true
+      markUsagePromptShown()
+    }
+  }, [offered])
+
+  const undecided = offered && usageData?.state === 'undecided' && usageData.canChange
   if (!undecided && answer === null) return null
 
   // The answer stays on screen so the block doesn't vanish under the cursor.

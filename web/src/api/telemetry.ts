@@ -10,15 +10,11 @@ export interface ClusterShape {
   kubernetesVersion: string
   platform: string
   nodes: string
-  pods: string
-  namespaces: string
-  crds: string
   integrations: string[]
 }
 
 export interface UsageReport {
   schema: number
-  installId: string
   version: string
   os: string
   arch: string
@@ -32,8 +28,6 @@ export interface UsageReport {
     mcpEnabled: boolean
     prometheus: string
     costSource: string
-    aiAgents: string[]
-    authPlugins: string[]
     browsers: string[]
   }
   engagement: { sessions: number; activeMinutes: string }
@@ -55,8 +49,12 @@ export interface UsageDataStatus {
   lastSentAt?: string
   preview: UsageReport
   firstRunPrompt: boolean
+  // What's New may ask: never asked, or asked and left unanswered long enough ago.
+  ask: boolean
   // The choice covers everyone using this Radar (in-cluster, sign-in).
   shared: boolean
+  // On a shared Radar, people who can change its Deployment decide in the UI.
+  ownersDecide: boolean
   decidedBy?: string
   decidedAt?: string
   // Where the choice is kept; "pod" means a restart resets it.
@@ -96,8 +94,8 @@ export function useSetUsageData() {
   })
 }
 
-// Records that the first-install prompt was shown on this machine. Fire and
-// forget: a failure only means the prompt might show once more.
+// Records that the question was shown, answered or not. Fire and forget: a
+// failure only means it might show once more.
 export function markUsagePromptShown(): void {
   void fetch(apiUrl('/telemetry/prompt-shown'), {
     method: 'POST',

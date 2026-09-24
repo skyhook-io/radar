@@ -35,10 +35,10 @@ export function PrivacySection({ active }: { active: boolean }) {
         <Heading>Usage data</Heading>
         <p className="text-xs text-theme-text-tertiary">
           Send anonymous usage stats to help improve Radar: counts of the views and actions you used
-          and the MCP tools your agents called, how Radar is set up, and each cluster's version,
-          platform and rough size. It never includes names of resources,
-          namespaces, clusters or hosts, or any contents. Reports carry a random ID that is deleted
-          if you turn this off.
+          and the MCP tools your agents called, how Radar is set up, and each cluster's minor
+          version, platform, node count as a range and known integrations. It never includes names
+          of resources, namespaces, clusters or hosts, or any contents, and reports carry no ID
+          that links one to another.
         </p>
         <Switch
           label="Send anonymous usage stats"
@@ -86,19 +86,32 @@ function ManagedReason({ status }: { status: UsageDataStatus }) {
   return text ? <p className="text-xs text-theme-text-tertiary">{text}</p> : null
 }
 
-// On a shared Radar the switch is the team's, so say so and who last set it.
+// On a shared Radar the switch is the team's, so say so, who may change it,
+// and who last did.
 function SharedNote({ status }: { status: UsageDataStatus }) {
-  if (!status.shared || !status.canChange) return null
+  const userDecided = status.source === 'default' || status.source === 'user'
+  if (!status.shared || !userDecided) return null
   const when = status.decidedAt
     ? new Date(status.decidedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
     : null
   const who = status.decidedBy
   const verb = status.state === 'on' ? 'Turned on' : 'Turned off'
+  const how = status.preview.mode === 'in-cluster'
+    ? <>the Helm value <code className="inline-code">telemetry.enabled</code></>
+    : <><code className="inline-code">RADAR_TELEMETRY</code></>
+  let whoCan: ReactNode
+  if (status.canChange) {
+    whoCan = 'This Radar is shared, so this switch applies to everyone who uses it.'
+  } else if (status.ownersDecide) {
+    whoCan = <>This Radar is shared, so only people who can change its Deployment can turn this on or off for everyone, in this switch or with {how}.</>
+  } else {
+    whoCan = <>This Radar is shared, so this is set for everyone with {how} by whoever runs it.</>
+  }
   return (
     <p className="text-xs text-theme-text-tertiary">
-      This Radar is shared, so this switch applies to everyone who uses it.
+      {whoCan}
       {when && (who ? ` ${verb} by ${who} on ${when}.` : ` ${verb} ${when}.`)}
-      {status.choiceStorage === 'pod' &&
+      {status.canChange && status.choiceStorage === 'pod' &&
         " Radar can't save this choice in the cluster, so a restart resets it. Upgrading the Helm chart fixes that."}
     </p>
   )

@@ -5,6 +5,7 @@ import { exampleReport, exampleStatus } from '../../api/telemetry.fixtures'
 
 vi.mock('../../api/telemetry', () => ({
   useSetUsageData: () => ({ mutate: vi.fn(), isPending: false }),
+  markUsagePromptShown: vi.fn(),
 }))
 
 import { UsageDataAsk } from './UsageDataAsk'
@@ -35,6 +36,11 @@ describe('UsageDataAsk', () => {
     expect(render(status({ state: 'off', source: 'user' }))).toBe('')
     expect(render(status({ state: 'off', source: 'deployment', canChange: false }))).toBe('')
     expect(render(status({ state: 'off', source: 'do-not-track', canChange: false }))).toBe('')
+    expect(render(status({ shared: true, canChange: false, ask: false }))).toBe('')
     expect(render(undefined)).toBe('')
+  })
+
+  it('waits when the server says it asked recently', () => {
+    expect(render(status({ ask: false }))).toBe('')
   })
 })

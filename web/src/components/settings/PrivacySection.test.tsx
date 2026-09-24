@@ -67,6 +67,21 @@ describe('PrivacySection on a shared Radar', () => {
   })
 })
 
+describe('PrivacySection for someone who cannot decide for a shared Radar', () => {
+  it('names who can when owners decide in the UI', () => {
+    const html = render(make({ shared: true, canChange: false, ownersDecide: true }))
+    expect(html).toContain('only people who can change its Deployment')
+    expect(html).toContain('aria-checked="false"')
+  })
+
+  it('points at the configuration when nobody decides in the UI', () => {
+    const base = make({ shared: true, canChange: false })
+    const html = render({ ...base, preview: { ...base.preview, mode: 'in-cluster' } })
+    expect(html).toContain('telemetry.enabled')
+    expect(html).not.toContain('applies to everyone who uses it')
+  })
+})
+
 describe('PrivacySection storage and log wording', () => {
   it('warns a shared Radar when the choice only lives in the pod', () => {
     const html = render(make({ state: 'on', source: 'user', shared: true, choiceStorage: 'pod' }))

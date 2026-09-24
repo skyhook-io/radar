@@ -40,7 +40,6 @@ func TestConfigMapUsageStoreSurvivesRestart(t *testing.T) {
 	now := time.Date(2026, 9, 24, 9, 0, 0, 0, time.UTC)
 	if err := st.Save(func(s *settings.Settings) {
 		s.UsageData = &settings.UsageDataChoice{Enabled: true, DecidedAt: now, DecidedBy: "dana@example.com"}
-		s.UsageIdentity = &settings.UsageIdentity{InstallID: "id-1", ClusterSalt: "salt-1"}
 		s.UsagePromptShownAt = &now
 		s.Theme = "dark" // not ours: must not be written
 	}); err != nil {
@@ -53,7 +52,7 @@ func TestConfigMapUsageStoreSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	if again.UsageData == nil || !again.UsageData.Enabled || again.UsageData.DecidedBy != "dana@example.com" ||
-		again.UsageIdentity == nil || again.UsageIdentity.InstallID != "id-1" || again.UsagePromptShownAt == nil {
+		again.UsagePromptShownAt == nil {
 		t.Fatalf("choice lost across restart: %+v", again)
 	}
 	if again.Theme != "" {

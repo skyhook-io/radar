@@ -2,6 +2,8 @@ package telemetry
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -99,7 +101,7 @@ func TestBrowserFamily(t *testing.T) {
 	}
 }
 
-func TestInstallIDStableAcrossDaysNewAfterOptOut(t *testing.T) {
+func TestReportCarriesNothingThatLinksReports(t *testing.T) {
 	releaseBuild(t)
 	h := newHarness(t, nil, false)
 	if _, err := h.c.SetChoice(true, ""); err != nil {
@@ -108,21 +110,27 @@ func TestInstallIDStableAcrossDaysNewAfterOptOut(t *testing.T) {
 	RecordView("helm")
 	h.now = h.now.Add(reportInterval + time.Minute)
 	h.c.tick(context.Background())
-	RecordView("helm")
-	h.now = h.now.Add(reportInterval + time.Minute)
-	h.c.tick(context.Background())
-	if len(h.sent) != 2 || h.sent[0].InstallID == "" || h.sent[0].InstallID != h.sent[1].InstallID {
-		t.Fatalf("install id not stable: %+v", h.sent)
+	if len(h.sent) != 1 {
+		t.Fatalf("sent %d reports, want 1", len(h.sent))
 	}
-	first := h.sent[0].InstallID
-	if _, err := h.c.SetChoice(false, ""); err != nil {
+	body, err := json.Marshal(h.sent[0])
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.c.SetChoice(true, ""); err != nil {
+	for _, field := range []string{"installId", `"id"`, "pods", "namespaces", "crds", "aiAgents", "authPlugins", "kube-system-uid-1"} {
+		if strings.Contains(string(body), field) {
+			t.Errorf("report carries %s: %s", field, body)
+		}
+	}
+	if h.saved.UsageData == nil || !h.saved.UsageData.Enabled {
+		t.Fatalf("choice not saved")
+	}
+	raw, err := json.Marshal(h.saved)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if id := h.c.Status().Preview.InstallID; id == "" || id == first {
-		t.Fatalf("opting out and back in must mint a new id, got %q (was %q)", id, first)
+	if strings.Contains(string(raw), "usageIdentity") {
+		t.Errorf("settings keep an identity: %s", raw)
 	}
 }
 
@@ -149,45 +157,5 @@ func TestClusterShapesSampledPerCluster(t *testing.T) {
 		if s.Platform != "uid-a" && s.Platform != "uid-b" {
 			t.Fatalf("unexpected shape %+v", s)
 		}
-	}
-}
-
-func TestClusterIDStablePerInstallUnlinkableAcross(t *testing.T) {
-	releaseBuild(t)
-	h := newHarness(t, nil, false)
-	if _, err := h.c.SetChoice(true, ""); err != nil {
-		t.Fatal(err)
-	}
-	h.c.tick(context.Background())
-	RecordView("home")
-	h.now = h.now.Add(reportInterval + time.Minute)
-	h.c.tick(context.Background())
-	RecordView("home")
-	h.now = h.now.Add(reportInterval + time.Minute)
-	h.c.sampledAt = nil
-	h.c.tick(context.Background())
-	if len(h.sent) != 2 {
-		t.Fatalf("sent %d", len(h.sent))
-	}
-	day1, day2 := h.sent[0].Clusters.Shapes[0].ID, h.sent[1].Clusters.Shapes[0].ID
-	if day1 == "" || day1 != day2 {
-		t.Fatalf("same cluster should keep its id across days: %q vs %q", day1, day2)
-	}
-
-	// Opting out and back in is a new install as far as reports go.
-	if _, err := h.c.SetChoice(false, ""); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.c.SetChoice(true, ""); err != nil {
-		t.Fatal(err)
-	}
-	h.c.tick(context.Background())
-	if id := h.c.Status().Preview.Clusters.Shapes[0].ID; id == day1 {
-		t.Fatalf("new salt after re-opt-in should change the cluster id")
-	}
-
-	// Two installs see the same cluster under unrelated ids.
-	if clusterID("salt-a", "k") == clusterID("salt-b", "k") {
-		t.Fatalf("salt does not separate installs")
 	}
 }
