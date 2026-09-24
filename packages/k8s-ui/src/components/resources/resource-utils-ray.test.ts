@@ -52,7 +52,12 @@ describe('RayService observed lifecycle', () => {
     for (const [status, label] of [['True', 'Ready'], ['False', 'NotReady'], ['Unknown', 'Unknown']]) {
       const resource = data([{ type: 'Ready', status }])
       resource.status.observedGeneration = 2
-      expect(getRayServiceStatus(resource).text).toBe(`${label} (stale)`)
+      expect(getRayServiceStatus(resource).text).toBe(status === 'True' ? `${label} (stale)` : label)
+    }
+    for (const condition of [{ type: 'Suspending', status: 'True' }, { type: 'Ready', status: 'False', reason: 'ValidationFailed' }, { type: 'Ready', status: 'False', reason: 'InitializingTimeout' }]) {
+      const resource = data([condition], { suspend: false })
+      resource.status.observedGeneration = 2
+      expect(getRayServiceStatus(resource).text).toBe(condition.reason || condition.type)
     }
     const suspended = data([{ type: 'Suspended', status: 'True' }], { suspend: true })
     suspended.status.observedGeneration = 2

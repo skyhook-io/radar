@@ -1560,9 +1560,10 @@ runtime revisions. It shows native Serve application/deployment states and messa
 with reported target capacity and configured route weights kept distinct from measured
 traffic. Missing application snapshots are unreported, including during `NewCluster`
 upgrades; they do not establish an outage. Lifecycle badges use controller conditions,
-not the deprecated `serviceStatus` field as proof of readiness. Freshness compares the
-root observed generation because KubeRay does not restamp unchanged conditions; an
-acknowledged suspension can intentionally pause reconciliation.
+not the deprecated `serviceStatus` field as proof of readiness. Positive readiness and rollout freshness compare
+the root observed generation because KubeRay does not restamp unchanged conditions.
+Suspension and failure observations remain visible when reconciliation retains an
+earlier generation.
 
 The OSS host reads at most the two named RayClusters and shows their directly observed
 conditions only after checking their controller owner against the RayService UID.

@@ -3,7 +3,7 @@ import { Activity, GitBranch } from 'lucide-react'
 import type { ResourceRef } from '../../../types'
 import { Badge, type BadgeSeverity } from '../../ui/Badge'
 import { AlertBanner, ConditionsSection, type ConditionTone, Property, PropertyList, ResourceLink, Section } from '../../ui/drawer-components'
-import { isRayObservationStale } from '../resource-utils-ray'
+import { isRayObservationStale, isRayServiceConditionStale } from '../resource-utils-ray'
 
 export interface RayServiceRendererProps {
   data: any
@@ -73,21 +73,21 @@ export function RayServiceRenderer({ data, onNavigate, runtimeEvidence }: RaySer
   const generation = data.metadata?.generation
   const suspended = data.spec?.suspend === true && conditions.some((condition: any) => condition.type === 'Suspended' && condition.status === 'True')
   const behind = isRayObservationStale(generation, status.observedGeneration)
-  const stale = behind && !suspended
   const ready = conditions.find((condition: any) => condition.type === 'Ready')
+  const readyStale = isRayServiceConditionStale(data, ready)
   const readyLabel = ready?.status === 'True' ? 'Ready' : ready?.status === 'False' ? 'Not ready' : ready ? 'Unknown' : 'Not reported'
   const slots = (['active', 'pending'] as const).filter(slot => status[`${slot}ServiceStatus`]?.rayClusterName)
   return <>
-    {stale && <AlertBanner variant="info" title="Reported state describes an earlier generation" message={`RayService generation ${generation}; controller observed ${status.observedGeneration}. The snapshots below may not reflect the latest specification.`} />}
+    {behind && !suspended && <AlertBanner variant="info" title="Observed generation differs" message={`Specification generation ${generation}; controller reports observed generation ${status.observedGeneration}. KubeRay can retain this value during suspension or terminal failure; conditions below preserve its reported state.`} />}
     {behind && suspended && <p className="mb-3 text-sm text-theme-text-secondary">Reconciliation is paused while suspended; the controller may retain an earlier observed generation.</p>}
     <Section title="Serving and Rollout" icon={Activity} defaultExpanded>
       <PropertyList>
-        <Property label="Proxy Readiness" value={<Badge severity={stale ? 'neutral' : ready?.status === 'True' ? 'success' : ready?.status === 'False' ? 'warning' : 'neutral'}>{readyLabel}{stale ? ' (stale)' : ''}</Badge>} />
+        <Property label="Proxy Readiness" value={<Badge severity={readyStale ? 'neutral' : ready?.status === 'True' ? 'success' : ready?.status === 'False' ? 'warning' : 'neutral'}>{readyLabel}{readyStale ? ' (stale)' : ''}</Badge>} />
         {ready?.reason && <Property label="Readiness Reason" value={ready.reason} />}
         {status.numServeEndpoints != null && <Property label="Reported Serve Endpoints" value={status.numServeEndpoints} />}
         <Property label="Suspension Requested" value={data.spec?.suspend === true ? 'Yes' : 'No'} />
         <Property label="Declared Upgrade Strategy" value={data.spec?.upgradeStrategy?.type || 'Not specified'} />
-        {conditions.filter((condition: any) => ['UpgradeInProgress', 'RollbackInProgress', 'Suspending', 'Suspended'].includes(condition.type) && condition.status === 'True').map((condition: any) => <Property key={condition.type} label={condition.type} value={<Badge severity={stale ? 'neutral' : condition.type === 'Suspended' ? 'info' : 'warning'}>{condition.reason || 'True'}{stale ? ' (stale)' : ''}</Badge>} />)}
+        {conditions.filter((condition: any) => ['UpgradeInProgress', 'RollbackInProgress', 'Suspending', 'Suspended'].includes(condition.type) && condition.status === 'True').map((condition: any) => <Property key={condition.type} label={condition.type} value={<Badge severity={isRayServiceConditionStale(data, condition) ? 'neutral' : condition.type === 'Suspended' ? 'info' : 'warning'}>{condition.reason || 'True'}{isRayServiceConditionStale(data, condition) ? ' (stale)' : ''}</Badge>} />)}
       </PropertyList>
       {ready?.message && <p className="mt-2 whitespace-pre-wrap break-words text-sm text-theme-text-secondary">{ready.message}</p>}
       <p className="mt-2 text-xs text-theme-text-tertiary">Ready means Serve proxy endpoints are reported, not that every application or revision is healthy. Endpoint counts span revisions. Suspension is complete only when the controller reports Suspended.</p>
@@ -109,6 +109,6 @@ export function RayServiceRenderer({ data, onNavigate, runtimeEvidence }: RaySer
         <ServeApplications slot={slot} />
       </Section>
     })}
-    <ConditionsSection conditions={conditions} getConditionTone={condition => stale ? 'unknown' : rayServiceConditionTone(condition)} defaultExpanded />
+    <ConditionsSection conditions={conditions} getConditionTone={condition => isRayServiceConditionStale(data, condition) ? 'unknown' : rayServiceConditionTone(condition)} defaultExpanded />
   </>
 }

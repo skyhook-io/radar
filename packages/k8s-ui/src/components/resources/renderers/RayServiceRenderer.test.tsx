@@ -44,13 +44,18 @@ describe('RayService detail', () => {
     expect(html).not.toContain('OBSOLETE EMBEDDED FAILURE')
   })
   it('labels missing and stale observations without inventing conditions', () => {
-    expect(render(root({ observedGeneration: 2 }))).toContain('earlier generation')
+    expect(render(root({ observedGeneration: 2 }))).toContain('Observed generation differs')
     expect(render(root({ observedGeneration: undefined }))).toContain('not reported an observed generation')
     expect(render(root({ conditions: [condition('Ready', 'True', { observedGeneration: 2 })] }))).not.toContain('(stale)')
     expect(rayServiceConditionTone(condition('Ready', 'True', { observedGeneration: 2 }))).toBe('ok')
+    for (const entry of [condition('Suspending'), condition('Ready', 'False', { reason: 'ValidationFailed' }), condition('Ready', 'False', { reason: 'InitializingTimeout' })]) {
+      const html = render(root({ observedGeneration: 2, conditions: [entry] }, { suspend: false }))
+      expect(html).not.toContain('(stale)')
+      expect(html).toContain('Observed generation differs')
+    }
     const suspended = render(root({ observedGeneration: 2, conditions: [condition('Suspended')] }, { suspend: true }))
     expect(suspended).toContain('Reconciliation is paused')
-    expect(suspended).not.toContain('Reported state describes an earlier generation')
+    expect(suspended).not.toContain('Observed generation differs')
     expect(serveStateSeverity('FUTURE_STATE')).toBe('neutral')
     expect(serveStateSeverity('DELETING')).toBe('warning')
   })

@@ -141,15 +141,20 @@ export function isRayObservationStale(generation?: number, observedGeneration?: 
   return generation != null && observedGeneration != null && observedGeneration < generation
 }
 
+// KubeRay can freeze observedGeneration during validation failures and suspension.
+export function isRayServiceConditionStale(resource: any, condition: any): boolean {
+  return condition?.status === 'True' && ['Ready', 'UpgradeInProgress', 'RollbackInProgress'].includes(condition.type)
+    && isRayObservationStale(resource.metadata?.generation, resource.status?.observedGeneration)
+}
+
 export function getRayServiceStatus(resource: any): StatusBadge {
   const conditions = resource.status?.conditions ?? []
   const labels: Record<string, string> = { Suspending: 'Suspending', Suspended: 'Suspended', RollbackInProgress: 'RollingBack', UpgradeInProgress: 'Upgrading' }
   for (const type of ['Suspending', 'Suspended', 'RollbackInProgress', 'UpgradeInProgress', 'Ready']) {
     const condition = conditions.find((c: any) => c.type === type)
     if (!condition || (type !== 'Ready' && condition.status !== 'True')) continue
-    const suspended = type === 'Suspended' && resource.spec?.suspend === true
     const label = type === 'Ready' ? (condition.status === 'True' ? 'Ready' : condition.status === 'False' ? condition.reason || 'NotReady' : 'Unknown') : labels[type]
-    if (!suspended && isRayObservationStale(resource.metadata?.generation, resource.status?.observedGeneration)) {
+    if (isRayServiceConditionStale(resource, condition)) {
       return { text: `${label} (stale)`, color: healthColors.unknown, level: 'unknown' }
     }
     if (type === 'Ready') {
