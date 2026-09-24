@@ -229,6 +229,71 @@ func TestCreateSessionCookie_WithIDToken(t *testing.T) {
 	}
 }
 
+func TestCreateSessionCookie_IDTokenNotReadable(t *testing.T) {
+	secret := "test-secret"
+	idToken := "eyJhbGciOiJSUzI1NiJ9.readable-payload.sig"
+
+	cookie := mainCookie(t, CreateSessionCookie(&User{Username: "alice"}, NewSessionID(), idToken, secret, time.Hour, false))
+
+	data, err := base64.RawURLEncoding.DecodeString(strings.SplitN(cookie.Value, ".", 2)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "readable-payload") {
+		t.Fatalf("decoded cookie payload exposes the ID token: %s", data)
+	}
+	var p map[string]any
+	if err := json.Unmarshal(data, &p); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p["t"]; ok {
+		t.Error("cookie must not write the plaintext ID token field")
+	}
+}
+
+func TestParseSessionCookie_LegacyPlaintextIDToken(t *testing.T) {
+	secret := "test-secret"
+	data, _ := json.Marshal(map[string]any{
+		"u": "alice",
+		"e": time.Now().Add(time.Hour).Unix(),
+		"s": NewSessionID(),
+		"t": "legacy-id-token",
+	})
+	encoded := base64.RawURLEncoding.EncodeToString(data)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(&http.Cookie{Name: DefaultCookieName, Value: encoded + "." + signData(encoded, secret)})
+
+	parsed := ParseSessionCookie(req, secret)
+	if parsed == nil {
+		t.Fatal("legacy cookie should still parse")
+	}
+	if parsed.IDToken != "legacy-id-token" {
+		t.Errorf("IDToken = %q, want the legacy token so logout keeps working", parsed.IDToken)
+	}
+}
+
+func TestOpenIDToken_RejectsTamperingAndWrongSecret(t *testing.T) {
+	sealed, err := sealIDToken("tok", "secret-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := openIDToken(sealed, "secret-1"); err != nil || got != "tok" {
+		t.Fatalf("openIDToken = %q, %v; want tok", got, err)
+	}
+	if _, err := openIDToken(sealed, "secret-2"); err == nil {
+		t.Error("a different secret must not open the token")
+	}
+	raw, _ := base64.RawURLEncoding.DecodeString(sealed)
+	raw[len(raw)-1] ^= 0xff
+	if _, err := openIDToken(base64.RawURLEncoding.EncodeToString(raw), "secret-1"); err == nil {
+		t.Error("a tampered token must not open")
+	}
+	if _, err := openIDToken("AA", "secret-1"); err == nil {
+		t.Error("a truncated token must not open")
+	}
+}
+
 func TestSessionIDToken_NoIDToken(t *testing.T) {
 	secret := "test-secret"
 	user := &User{Username: "alice"}

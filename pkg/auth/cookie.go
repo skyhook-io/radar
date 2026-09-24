@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -48,8 +50,11 @@ type cookiePayload struct {
 	Username  string   `json:"u"`
 	Groups    []string `json:"g,omitempty"`
 	ExpiresAt int64    `json:"e"`
-	IDToken   string   `json:"t,omitempty"` // raw OIDC id_token for RP-Initiated Logout
-	SID       string   `json:"s,omitempty"` // session ID for backchannel logout revocation
+	// IDToken is the plaintext token written by older releases. Still read so
+	// their logout keeps working; never written.
+	IDToken       string `json:"t,omitempty"`
+	SealedIDToken string `json:"x,omitempty"` // AES-GCM sealed id_token, see sealIDToken
+	SID           string `json:"s,omitempty"` // session ID for backchannel logout revocation
 }
 
 // NewSessionID generates a random 16-byte hex session ID.
@@ -64,6 +69,10 @@ func NewSessionID() string {
 // CreateSessionCookie builds the signed session cookie(s) for the given user.
 // Format: base64(json) + "." + base64(hmac-sha256). The sid must be non-empty —
 // use NewSessionID() to generate one.
+//
+// The payload is signed, not encrypted, so the ID token inside it is sealed
+// separately: a copied cookie must not yield a token that an API server
+// trusting the same OIDC client would accept.
 //
 // Most sessions fit in a single cookie. When the signed value exceeds
 // maxCookieSize (many groups + a large OIDC ID token), the ID token is dropped
@@ -82,16 +91,23 @@ func CreateSessionCookie(user *User, sid, idToken, secret string, ttl time.Durat
 		Username:  user.Username,
 		Groups:    user.Groups,
 		ExpiresAt: time.Now().Add(ttl).Unix(),
-		IDToken:   idToken,
 		SID:       sid,
+	}
+	if idToken != "" {
+		sealed, err := sealIDToken(idToken, secret)
+		if err != nil {
+			log.Printf("[auth] Failed to seal ID token, omitting it (logout falls back to client_id): %v", err)
+		} else {
+			payload.SealedIDToken = sealed
+		}
 	}
 
 	value := buildCookieValue(payload, secret)
 
-	if len(value) > maxCookieSize && payload.IDToken != "" {
+	if len(value) > maxCookieSize && payload.SealedIDToken != "" {
 		log.Printf("[auth] Session cookie exceeds %d bytes (%d), dropping ID token to fit",
 			maxCookieSize, len(value))
-		payload.IDToken = ""
+		payload.SealedIDToken = ""
 		value = buildCookieValue(payload, secret)
 	}
 
@@ -233,13 +249,22 @@ func parseCookieValue(cookieValue, secret, remoteAddr string) *Session {
 		return nil
 	}
 
+	idToken := p.IDToken
+	if p.SealedIDToken != "" {
+		opened, err := openIDToken(p.SealedIDToken, secret)
+		if err != nil {
+			log.Printf("[auth] Session cookie ID token failed to open for user %q — logout falls back to client_id: %v", p.Username, err)
+		}
+		idToken = opened
+	}
+
 	return &Session{
 		User: &User{
 			Username: p.Username,
 			Groups:   p.Groups,
 		},
 		SID:       p.SID,
-		IDToken:   p.IDToken,
+		IDToken:   idToken,
 		ExpiresAt: time.Unix(p.ExpiresAt, 0),
 	}
 }
@@ -299,4 +324,52 @@ func signData(data, secret string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	fmt.Fprint(mac, data)
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// idTokenKey derives the AES-256 key for sealing ID tokens, domain-separated
+// from the HMAC signing key so the two uses of the secret never share a key.
+func idTokenKey(secret string) []byte {
+	mac := hmac.New(sha256.New, []byte(secret))
+	fmt.Fprint(mac, "radar-session-id-token-v1")
+	return mac.Sum(nil)
+}
+
+func idTokenAEAD(secret string) (cipher.AEAD, error) {
+	block, err := aes.NewCipher(idTokenKey(secret))
+	if err != nil {
+		return nil, err
+	}
+	return cipher.NewGCM(block)
+}
+
+// sealIDToken encrypts the ID token: base64(nonce || AES-GCM ciphertext).
+func sealIDToken(idToken, secret string) (string, error) {
+	aead, err := idTokenAEAD(secret)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, aead.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(aead.Seal(nonce, nonce, []byte(idToken), nil)), nil
+}
+
+func openIDToken(sealed, secret string) (string, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(sealed)
+	if err != nil {
+		return "", err
+	}
+	aead, err := idTokenAEAD(secret)
+	if err != nil {
+		return "", err
+	}
+	if len(raw) < aead.NonceSize() {
+		return "", fmt.Errorf("sealed ID token too short")
+	}
+	plain, err := aead.Open(nil, raw[:aead.NonceSize()], raw[aead.NonceSize():], nil)
+	if err != nil {
+		return "", err
+	}
+	return string(plain), nil
 }

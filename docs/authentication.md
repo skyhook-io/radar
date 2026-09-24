@@ -436,7 +436,7 @@ The ServiceAccount's existing read permissions (list pods, watch deployments, et
 
 ## Session Cookies
 
-Radar uses stateless HMAC-SHA256 signed cookies for sessions. The cookie contains the username and groups — no server-side session storage.
+Radar uses stateless HMAC-SHA256 signed cookies for sessions. The cookie contains the username and groups — no server-side session storage. In OIDC mode it also carries the ID token, encrypted with AES-256-GCM under a key derived from the auth secret, so Radar can send it as `id_token_hint` and end the IdP session at logout. Someone who copies the cookie cannot read the token.
 
 - **Cookie TTL**: 4 hours by default (sliding), configurable with `--auth-cookie-ttl` or `auth.cookieTTL` in Helm values. Sessions auto-extend while you're active; idle sessions expire after the configured TTL. Active users won't notice — Radar's frontend polling keeps the session alive automatically.
 - **Proxy mode**: When the cookie expires, the middleware transparently re-creates the session from proxy headers on the next request, so the shorter default TTL has no UX impact.
