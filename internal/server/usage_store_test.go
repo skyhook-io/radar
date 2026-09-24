@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -103,5 +104,25 @@ func TestConfigMapUsageStoreIgnoresReadOnlyConfigMap(t *testing.T) {
 	}
 	if s.UsageData != nil || st.Scope() != "pod" {
 		t.Fatalf("read-only ConfigMap was trusted: %+v scope=%s", s.UsageData, st.Scope())
+	}
+}
+
+// A stored "on" must not be trusted before Radar knows it could also store a
+// later "off".
+func TestConfigMapUsageStoreDistrustsChoiceWhenAccessCheckFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	client := fake.NewSimpleClientset(&corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "radar-usage-data", Namespace: "radar"},
+		Data:       map[string]string{usageRecordKey: `{"usageData":{"enabled":true,"decidedAt":"2026-09-24T09:00:00Z"}}`},
+	})
+	client.PrependReactor("create", "selfsubjectaccessreviews", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("apiserver unavailable")
+	})
+	st := storeWith(client)
+	if s, err := st.Load(); err == nil {
+		t.Fatalf("Load trusted the ConfigMap without an access check: %+v", s.UsageData)
+	}
+	if st.checked.Load() {
+		t.Fatalf("a failed check must be retried, not remembered")
 	}
 }

@@ -375,7 +375,7 @@ func TestFirstRunPromptSkipsUpgradesAndDecidedInstalls(t *testing.T) {
 	}
 }
 
-func TestSharedInstallAnyTeamMemberCanOptIn(t *testing.T) {
+func TestSharedChoiceRecordsWhoDecided(t *testing.T) {
 	h := newHarness(t, nil, false)
 	h.c.opts.Shared = func() bool { return true }
 	st := h.c.Status()
@@ -522,5 +522,129 @@ func TestOptOutRemovesStrayReportFile(t *testing.T) {
 	}
 	if _, err := os.Stat(h.c.path); !os.IsNotExist(err) {
 		t.Fatalf("report file survived an opt-out")
+	}
+}
+
+func TestOptOutTakesEffectEvenIfTheStoreCannotBeReread(t *testing.T) {
+	releaseBuild(t)
+	h := newHarness(t, nil, false)
+	if _, err := h.c.SetChoice(true, ""); err != nil {
+		t.Fatal(err)
+	}
+	RecordView("helm")
+	h.c.load = func() (settings.Settings, error) { return settings.Settings{}, errors.New("apiserver blip") }
+	st, err := h.c.SetChoice(false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.State != StateOff || len(st.Preview.Views) != 0 {
+		t.Fatalf("opt-out did not take effect: %s %v", st.State, st.Preview.Views)
+	}
+	RecordView("helm")
+	h.now = h.now.Add(reportInterval + time.Minute)
+	h.c.tick(context.Background())
+	Shutdown()
+	if len(h.sent) != 0 {
+		t.Fatalf("sent after opt-out: %+v", h.sent)
+	}
+}
+
+func TestOptOutStopsCountingBeforeTheSaveFinishes(t *testing.T) {
+	h := newHarness(t, nil, false)
+	if _, err := h.c.SetChoice(true, ""); err != nil {
+		t.Fatal(err)
+	}
+	save := h.c.save
+	h.c.save = func(fn func(*settings.Settings)) error {
+		RecordView("helm") // lands while the opt-out is being saved
+		if Recording() {
+			t.Errorf("still recording while the opt-out is saved")
+		}
+		return save(fn)
+	}
+	if _, err := h.c.SetChoice(false, ""); err != nil {
+		t.Fatal(err)
+	}
+	if h.c.Status().Preview.Views["helm"] != 0 {
+		t.Fatalf("counted during the opt-out")
+	}
+}
+
+func TestFailedOptOutSaveKeepsRecording(t *testing.T) {
+	h := newHarness(t, nil, false)
+	if _, err := h.c.SetChoice(true, ""); err != nil {
+		t.Fatal(err)
+	}
+	RecordView("helm")
+	h.c.save = func(func(*settings.Settings)) error { return errors.New("read-only store") }
+	if _, err := h.c.SetChoice(false, ""); err == nil {
+		t.Fatal("want the save error")
+	}
+	if st := h.c.Status(); st.State != StateOn || st.Preview.Views["helm"] != 1 {
+		t.Fatalf("an unsaved opt-out changed state or dropped counts: %s %v", st.State, st.Preview.Views)
+	}
+}
+
+func TestShutdownSendIgnoresTheRetryWait(t *testing.T) {
+	releaseBuild(t)
+	h := newHarness(t, nil, false)
+	h.c.opts.SendOnShutdown = true
+	if _, err := h.c.SetChoice(true, ""); err != nil {
+		t.Fatal(err)
+	}
+	RecordView("helm")
+	h.c.mu.Lock()
+	h.c.nextAttempt = h.now.Add(retryDelay) // a daily send just failed or was cancelled
+	h.c.mu.Unlock()
+	Shutdown()
+	if len(h.sent) != 1 {
+		t.Fatalf("shutdown send held back by the retry wait: %d reports", len(h.sent))
+	}
+}
+
+func TestActiveTimeAloneIsUse(t *testing.T) {
+	releaseBuild(t)
+	h := newHarness(t, nil, false)
+	if _, err := h.c.SetChoice(true, ""); err != nil {
+		t.Fatal(err)
+	}
+	RecordActive(5)
+	h.now = h.now.Add(reportInterval + time.Minute)
+	h.c.tick(context.Background())
+	if len(h.sent) != 1 {
+		t.Fatalf("a day spent on one screen sent nothing")
+	}
+}
+
+// Status must not hold the collector's lock while asking the cluster about
+// itself: every recorded API request takes that lock.
+func TestStatusDoesNotHoldTheLockForClusterLookups(t *testing.T) {
+	h := newHarness(t, nil, false)
+	h.c.opts.InstalledAt = func() int64 { Recording(); return 0 }
+	h.c.opts.Shared = func() bool { Recording(); return false }
+	done := make(chan struct{})
+	go func() { h.c.Status(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Status deadlocked calling back into the collector")
+	}
+}
+
+func TestPreviewReusesARecentClusterSample(t *testing.T) {
+	h := newHarness(t, nil, false)
+	calls := 0
+	h.c.opts.ClusterSample = func() (string, ClusterShape, bool) {
+		calls++
+		return "k", ClusterShape{Platform: "eks"}, true
+	}
+	h.c.Status()
+	h.c.Status()
+	if calls != 1 {
+		t.Fatalf("preview sampled the cluster %d times", calls)
+	}
+	h.now = h.now.Add(clusterSampleInterval + time.Second)
+	if st := h.c.Status(); calls != 2 || st.Preview.Clusters.Shapes[0].Platform != "eks" {
+		t.Fatalf("stale preview not refreshed: %d calls", calls)
 	}
 }

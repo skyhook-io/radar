@@ -21,6 +21,19 @@ export function UsageDataBlurb({ onReadMore, shared = false }: { onReadMore: () 
   )
 }
 
+// Shown in place of the question once answered, so it doesn't vanish under
+// the cursor.
+export function UsageDataAnswered({ answer }: { answer: boolean }) {
+  return (
+    <>
+      <Check className="w-3.5 h-3.5 shrink-0 text-accent" aria-hidden />
+      {answer
+        ? 'Thanks. Change this any time in Settings > Privacy.'
+        : 'Nothing will be sent. Change this any time in Settings > Privacy.'}
+    </>
+  )
+}
+
 // The usage-data question, asked inside What's New when the server says to:
 // someone who closed it without answering is asked again only months later,
 // and a "no" is never asked again. Anyone who can't decide (a shared Radar's
@@ -49,14 +62,10 @@ export function UsageDataAsk({ usageData, onReadMore }: {
   const undecided = offered && usageData?.state === 'undecided' && usageData.canChange
   if (!undecided && answer === null) return null
 
-  // The answer stays on screen so the block doesn't vanish under the cursor.
   if (answer !== null) {
     return (
       <div className="flex items-center gap-2 px-6 py-3 border-t border-theme-border text-xs text-theme-text-secondary">
-        <Check className="w-3.5 h-3.5 shrink-0 text-accent" aria-hidden />
-        {answer
-          ? 'Thanks. Change this any time in Settings > Privacy.'
-          : 'Nothing will be sent. Change this any time in Settings > Privacy.'}
+        <UsageDataAnswered answer={answer} />
       </div>
     )
   }

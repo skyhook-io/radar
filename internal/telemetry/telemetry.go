@@ -153,10 +153,6 @@ type Options struct {
 // deployment, so the UI cannot change it.
 var ErrManaged = errors.New("usage data is managed by this installation's configuration")
 
-// DoNotTrack reports whether the DO_NOT_TRACK convention asks Radar to make
-// no non-essential requests.
-func DoNotTrack() bool { return doNotTrack(os.Getenv) }
-
 func doNotTrack(env func(string) string) bool {
 	switch strings.ToLower(strings.TrimSpace(env("DO_NOT_TRACK"))) {
 	case "", "0", "false", "no":
@@ -216,7 +212,10 @@ type Collector struct {
 	load func() (settings.Settings, error)
 	save func(func(*settings.Settings)) error
 
-	mu          sync.Mutex
+	mu sync.Mutex
+	// sendMu keeps sends one at a time, so the send at shutdown waits for a
+	// daily send in flight and includes its counts if that send was cancelled.
+	sendMu      sync.Mutex
 	state       State
 	source      Source
 	p           pending
@@ -233,6 +232,10 @@ type Collector struct {
 	// that read the store before the decision can't commit stale state.
 	decisionGen    uint64
 	lastLoadErrLog time.Time
+	// The Settings preview's cluster while nothing is recorded, cached like a
+	// recorded sample: reading it walks the caches and API discovery.
+	previewShape ClusterShape
+	previewAt    time.Time
 }
 
 var (
@@ -426,6 +429,11 @@ func CurrentStatus() Status {
 
 // Status returns the current decision plus a preview of the next report.
 func (c *Collector) Status() Status {
+	// These can reach the Kubernetes API, so never under c.mu: every
+	// recorded API request takes it.
+	installedAt := c.opts.InstalledAt()
+	shared := c.opts.Shared()
+	scope := c.opts.StorageScope()
 	c.mu.Lock()
 	st := Status{
 		State:            c.state,
@@ -441,10 +449,10 @@ func (c *Collector) Status() Status {
 	}
 	now := c.now()
 	undecided := c.state == StateUndecided && st.CanChange
-	st.FirstRunPrompt = undecided && c.promptShownAt == nil && freshInstall(c.opts.InstalledAt(), now)
+	st.FirstRunPrompt = undecided && c.promptShownAt == nil && freshInstall(installedAt, now)
 	st.Ask = undecided && (c.promptShownAt == nil || now.Sub(*c.promptShownAt) >= reaskInterval)
-	st.Shared = c.opts.Shared()
-	st.ChoiceStorage = c.opts.StorageScope()
+	st.Shared = shared
+	st.ChoiceStorage = scope
 	if c.choice != nil && (c.source == SourceUser) {
 		at := c.choice.DecidedAt
 		st.DecidedAt = &at
@@ -455,12 +463,30 @@ func (c *Collector) Status() Status {
 	// Before anything is recorded, preview the cluster Radar is on now, so
 	// the example shows exactly what a report would carry.
 	if len(p.Clusters) == 0 {
-		if key, shape, ok := c.opts.ClusterSample(); ok {
-			p.Clusters = map[string]ClusterShape{hashKey(key): shape}
+		if shape, ok := c.previewCluster(); ok {
+			p.Clusters = map[string]ClusterShape{"preview": shape}
 		}
 	}
 	st.Preview = c.buildReport(p)
 	return st
+}
+
+func (c *Collector) previewCluster() (ClusterShape, bool) {
+	c.mu.Lock()
+	if !c.previewAt.IsZero() && c.now().Sub(c.previewAt) < clusterSampleInterval {
+		shape := c.previewShape
+		c.mu.Unlock()
+		return shape, true
+	}
+	c.mu.Unlock()
+	_, shape, ok := c.opts.ClusterSample()
+	if !ok {
+		return ClusterShape{}, false
+	}
+	c.mu.Lock()
+	c.previewShape, c.previewAt = shape, c.now()
+	c.mu.Unlock()
+	return shape, true
 }
 
 func freshInstall(installedAt int64, now time.Time) bool {
@@ -500,30 +526,50 @@ func SetChoice(enabled bool, by string) (Status, error) {
 
 // SetChoice saves the user's answer; see the package-level SetChoice.
 func (c *Collector) SetChoice(enabled bool, by string) (Status, error) {
+	hosted := c.opts.Hosted()
 	c.mu.Lock()
-	canChange := c.source == SourceDefault || c.source == SourceUser
-	if canChange {
-		c.decisionGen++
-	}
-	c.mu.Unlock()
-	if !canChange {
+	if c.source != SourceDefault && c.source != SourceUser {
+		c.mu.Unlock()
 		return c.Status(), ErrManaged
 	}
+	c.decisionGen++
+	gen := c.decisionGen
+	prevState := c.state
+	// An opt-out stops counting and cancels a send in flight now rather than
+	// once the choice is saved, so a slow save leaves no window for a report.
+	if !enabled {
+		c.abortSendLocked()
+		c.state = StateOff
+	}
+	c.mu.Unlock()
+
 	now := c.now()
-	if err := c.save(func(s *settings.Settings) {
-		s.UsageData = &settings.UsageDataChoice{Enabled: enabled, DecidedAt: now, DecidedBy: by}
-	}); err != nil {
+	choice := settings.UsageDataChoice{Enabled: enabled, DecidedAt: now, DecidedBy: by}
+	if err := c.save(func(s *settings.Settings) { s.UsageData = &choice }); err != nil {
+		c.mu.Lock()
+		if c.decisionGen == gen {
+			c.state = prevState
+		}
+		c.mu.Unlock()
 		return c.Status(), fmt.Errorf("save usage-data choice: %w", err)
 	}
-	if enabled {
-		c.mu.Lock()
-		c.abortSendLocked()
-		c.p = pending{PeriodStart: now}
-		c.sampledAt = nil
-		c.dirty = true
-		c.mu.Unlock()
+
+	// Apply what was saved directly. Re-reading the store instead could fail
+	// and leave the previous decision in force after an opt-out.
+	state, source := resolve(c.env, hosted, &choice)
+	c.mu.Lock()
+	if c.decisionGen == gen {
+		c.state, c.source, c.choice = state, source, &choice
+		if state.Recording() {
+			c.abortSendLocked()
+			c.p = pending{PeriodStart: now}
+			c.sampledAt = nil
+			c.dirty = true
+		} else {
+			c.discardLocked()
+		}
 	}
-	c.refresh()
+	c.mu.Unlock()
 	c.flush()
 	return c.Status(), nil
 }
@@ -578,15 +624,19 @@ func (c *Collector) sampleCluster() {
 }
 
 // maybeSend sends the day's report, or with early set whatever is pending
-// however young the period. It takes the counts out before the request so
+// however young the period and however recently a send failed. It takes the counts out before the request so
 // recording continues into the next period, and puts them back if the
 // request fails. A decision made while a request is in flight (the gen check)
 // wins over the request's outcome.
 func (c *Collector) maybeSend(ctx context.Context, early bool) {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
 	c.mu.Lock()
 	now := c.now()
+	// An early send ignores the retry wait: it is the last chance for these
+	// counts, which a daily send cancelled by shutdown may just have returned.
 	due := c.state.Recording() && !c.p.PeriodStart.IsZero() &&
-		(early || now.Sub(c.p.PeriodStart) >= reportInterval) && now.After(c.nextAttempt)
+		(early || (now.Sub(c.p.PeriodStart) >= reportInterval && now.After(c.nextAttempt)))
 	if !due {
 		c.mu.Unlock()
 		return

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { clsx } from 'clsx'
-import { BarChart3, Check, X } from 'lucide-react'
+import { BarChart3, X } from 'lucide-react'
 import { markUsagePromptShown, useSetUsageData, type UsageDataStatus } from '../../api/usage-data'
 import { useVersionCheck } from '../../api/client'
+import { isUpdateDismissed } from '../ui/UpdateNotification'
+import { UsageDataAnswered, UsageDataBlurb } from './UsageDataAsk'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'
 
@@ -10,16 +12,10 @@ import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../ut
 // question about it.
 export const FIRST_RUN_PROMPT_DELAY_MS = 15_000
 const THANKS_MS = 4_000
-const UPDATE_DISMISSED_KEY = 'radar-update-dismissed'
 
 // The update notice uses the same corner. One nudge at a time.
 export function updateNoticeVisible(latest: string | undefined, updateAvailable: boolean | undefined): boolean {
-  if (!updateAvailable || !latest) return false
-  try {
-    return localStorage.getItem(UPDATE_DISMISSED_KEY) !== latest
-  } catch {
-    return true
-  }
+  return !!updateAvailable && !!latest && !isUpdateDismissed(latest)
 }
 
 export function shouldShowFirstRunPrompt(opts: {
@@ -114,17 +110,7 @@ export function UsageDataPrompt({ status }: { status: UsageDataStatus | undefine
             <BarChart3 className="w-4 h-4" aria-hidden />
           </span>
           <div className="min-w-0">
-            <p className="text-sm font-medium text-theme-text-primary">Help improve Radar</p>
-            <p className="mt-0.5 text-xs text-theme-text-secondary">
-              {status?.shared ? 'Send anonymous usage stats from this shared Radar.' : 'Send anonymous usage stats.'}{' '}
-              <button
-                type="button"
-                onClick={readMore}
-                className="text-theme-text-primary underline underline-offset-2 hover:text-accent-text"
-              >
-                Read more
-              </button>
-            </p>
+            <UsageDataBlurb onReadMore={readMore} shared={status?.shared} />
             <div className="flex items-center gap-2 mt-2.5">
               <button
                 type="button"
@@ -147,10 +133,7 @@ export function UsageDataPrompt({ status }: { status: UsageDataStatus | undefine
         </div>
       ) : (
         <div className="flex items-center gap-2 px-4 py-3 text-xs text-theme-text-secondary">
-          <Check className="w-3.5 h-3.5 shrink-0 text-accent" aria-hidden />
-          {answer
-            ? 'Thanks. Change this any time in Settings > Privacy.'
-            : 'Nothing will be sent. Change this any time in Settings > Privacy.'}
+          <UsageDataAnswered answer={answer} />
         </div>
       )}
     </div>

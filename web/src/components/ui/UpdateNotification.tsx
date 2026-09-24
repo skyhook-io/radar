@@ -16,6 +16,17 @@ import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 
 const DISMISSED_KEY = 'radar-update-dismissed'
 
+// Whether the notice for this release was dismissed. The usage-data card
+// shares the corner and waits for it.
+export function isUpdateDismissed(latestVersion: string): boolean {
+  try {
+    return localStorage.getItem(DISMISSED_KEY) === latestVersion
+  } catch {
+    // localStorage unavailable (e.g. Safari private mode)
+    return false
+  }
+}
+
 export function UpdateNotification() {
   const queryClient = useQueryClient()
   const { data: capabilities } = useCapabilities()
@@ -54,15 +65,8 @@ export function UpdateNotification() {
 
   // Check if this version was already dismissed
   useEffect(() => {
-    if (versionInfo?.latestVersion) {
-      try {
-        const dismissedVersion = localStorage.getItem(DISMISSED_KEY)
-        if (dismissedVersion === versionInfo.latestVersion) {
-          setDismissed(true)
-        }
-      } catch {
-        // localStorage unavailable (e.g. Safari private mode)
-      }
+    if (versionInfo?.latestVersion && isUpdateDismissed(versionInfo.latestVersion)) {
+      setDismissed(true)
     }
   }, [versionInfo?.latestVersion])
 

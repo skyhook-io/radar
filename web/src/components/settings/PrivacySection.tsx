@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from 'react'
-import { clsx } from 'clsx'
 import { ExternalLink } from 'lucide-react'
+import { ConfigToggle, SubHeading } from './controls'
 import { isRecording, useSetUsageData, useUsageData, type UsageDataStatus } from '../../api/usage-data'
 
 const DOCS_URL = 'https://github.com/skyhook-io/radar/blob/main/docs/configuration.md#usage-data'
@@ -32,7 +32,7 @@ export function PrivacySection({ active }: { active: boolean }) {
       </p>
 
       <section className="space-y-3">
-        <Heading>Usage data</Heading>
+        <SubHeading>Usage data</SubHeading>
         <p className="text-xs text-theme-text-tertiary">
           Send anonymous usage stats to help improve Radar: counts of the views and actions you used
           and the MCP tools your agents called, how Radar is set up, and each cluster's minor
@@ -40,7 +40,7 @@ export function PrivacySection({ active }: { active: boolean }) {
           of resources, namespaces, clusters or hosts, or any contents, and reports carry no ID
           that links one to another.
         </p>
-        <Switch
+        <ConfigToggle
           label="Send anonymous usage stats"
           value={recording}
           disabled={!status.canChange || setUsageData.isPending}
@@ -143,48 +143,6 @@ function ReportPreview({ status }: { status: UsageDataStatus }) {
           ? <>Kept in <code className="inline-code">~/.radar/usage-report.json</code> until it is {logsOnly ? 'written to the log' : 'sent'}. Turning this off deletes it.</>
           : 'Nothing is recorded or sent while this is off.'}
       </p>
-    </div>
-  )
-}
-
-function Heading({ children }: { children: ReactNode }) {
-  return <h4 className="text-xs font-semibold uppercase tracking-wider text-theme-text-tertiary">{children}</h4>
-}
-
-function Switch({
-  label,
-  value,
-  disabled,
-  onChange,
-}: {
-  label: string
-  value: boolean
-  disabled?: boolean
-  onChange: (value: boolean) => void
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 py-1">
-      <span className={clsx('text-sm', disabled ? 'text-theme-text-secondary' : 'text-theme-text-primary')}>{label}</span>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={value}
-        aria-label={label}
-        disabled={disabled}
-        onClick={() => onChange(!value)}
-        className={clsx(
-          'relative w-9 h-5 shrink-0 rounded-full transition-colors',
-          value ? 'bg-skyhook-600' : 'bg-theme-elevated border border-theme-border',
-          disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer',
-        )}
-      >
-        <span
-          className={clsx(
-            'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow-sm',
-            value && 'translate-x-4',
-          )}
-        />
-      </button>
     </div>
   )
 }

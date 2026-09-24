@@ -31,7 +31,7 @@ type usageRecord struct {
 // ConfigMap the chart creates, so a pod restart doesn't forget what the team
 // decided. When the ConfigMap or its Role is missing (an older chart, or
 // rbac.create=false without matching RBAC) it falls back to settings.json for
-// the rest of the process: the choice is then per pod, as before.
+// the rest of the process, so the choice is per pod.
 type configMapUsageStore struct {
 	namespace, name string
 	client          func() kubernetes.Interface
@@ -82,10 +82,12 @@ func (st *configMapUsageStore) useFallback(err error) bool {
 // is not enough: the main ClusterRole reads every ConfigMap, so without the
 // write grant an opt-out would land in the pod while the ConfigMap kept the
 // old "on" for the next pod to find. Without write access the ConfigMap is
-// ignored from the start, and the worst a restart can do is ask again.
-func (st *configMapUsageStore) checkWritable(client kubernetes.Interface) {
+// ignored from the start, and the worst a restart can do is ask again. An
+// error means Radar can't tell yet, and the caller must not trust the
+// ConfigMap until it can.
+func (st *configMapUsageStore) checkWritable(client kubernetes.Interface) error {
 	if st.checked.Load() {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -97,12 +99,13 @@ func (st *configMapUsageStore) checkWritable(client kubernetes.Interface) {
 		},
 	}, metav1.CreateOptions{})
 	if err != nil {
-		return // try again next time; a transient failure must not decide
+		return fmt.Errorf("check write access to ConfigMap %s/%s: %w", st.namespace, st.name, err)
 	}
 	st.checked.Store(true)
 	if !review.Status.Allowed && st.fallback.CompareAndSwap(false, true) {
 		log.Printf("[usage] No write access to ConfigMap %s/%s; keeping the usage-data choice in this pod", st.namespace, st.name)
 	}
+	return nil
 }
 
 func (st *configMapUsageStore) Load() (settings.Settings, error) {
@@ -113,7 +116,9 @@ func (st *configMapUsageStore) Load() (settings.Settings, error) {
 	if client == nil {
 		return settings.Settings{}, fmt.Errorf("kubernetes client not ready")
 	}
-	st.checkWritable(client)
+	if err := st.checkWritable(client); err != nil {
+		return settings.Settings{}, err
+	}
 	if st.fallback.Load() {
 		return settings.LoadChecked()
 	}

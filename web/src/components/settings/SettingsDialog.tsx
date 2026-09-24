@@ -22,6 +22,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { AISettingsSection, type AIDraft } from '../diagnose/AISettings'
 import { MyPermissionsContent } from './MyPermissionsDialog'
 import { PrivacySection } from './PrivacySection'
+import { ConfigToggle, SubHeading } from './controls'
 import { useDiagnose } from '../diagnose/DiagnoseContext'
 import { currencyOptionsForValue } from './currency-options'
 import { versionUpdateURL } from '../../utils/version'
@@ -962,16 +963,6 @@ interface NavItemDef {
   icon: LucideIcon
   ownerOnly: boolean
   dirty: boolean
-}
-
-// Light subheading separating the two field groups inside a merged pane
-// (Cluster/Server, MCP/Timeline).
-function SubHeading({ children }: { children: ReactNode }) {
-  return (
-    <h4 className="text-xs font-semibold uppercase tracking-wider text-theme-text-tertiary">
-      {children}
-    </h4>
-  )
 }
 
 function NavItem({
@@ -2805,45 +2796,6 @@ function ConfigNumberField({
       />
       <EffectiveHint current={value} effective={effectiveValue} />
     </div>
-  )
-}
-
-function ConfigToggle({
-  label,
-  description,
-  value,
-  onChange,
-}: {
-  label: string
-  description?: string
-  value: boolean
-  onChange: (value: boolean) => void
-}) {
-  return (
-    <label className="flex items-start justify-between gap-3 py-1 cursor-pointer">
-      <span className="min-w-0">
-        <span className="block text-sm text-theme-text-primary">{label}</span>
-        {description && (
-          <span className="mt-0.5 block text-xs text-theme-text-tertiary">{description}</span>
-        )}
-      </span>
-      <button
-        role="switch"
-        aria-checked={value}
-        onClick={() => onChange(!value)}
-        className={clsx(
-          'relative w-9 h-5 shrink-0 rounded-full transition-colors',
-          value ? 'bg-skyhook-600' : 'bg-theme-elevated border border-theme-border'
-        )}
-      >
-        <span
-          className={clsx(
-            'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform shadow-sm',
-            value && 'translate-x-4'
-          )}
-        />
-      </button>
-    </label>
   )
 }
 

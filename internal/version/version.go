@@ -132,8 +132,8 @@ func CheckForUpdateRelease(_ context.Context) *UpdateInfo {
 
 // UpdateCheckDisabled reports whether RADAR_UPDATE_CHECK turns the update
 // check off. It is separate from usage data: the check is how people learn
-// about fixes, so DO_NOT_TRACK leaves it alone, but an air-gapped install
-// needs a way to make no outbound request at all.
+// about fixes, so DO_NOT_TRACK leaves it alone, but a locked-down install
+// needs a way to stop it.
 func UpdateCheckDisabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("RADAR_UPDATE_CHECK"))) {
 	case "off", "0", "false", "no":

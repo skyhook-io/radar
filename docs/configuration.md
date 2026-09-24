@@ -478,8 +478,8 @@ can change your answer any time in Settings > Privacy.
 
 It exists to answer three questions: which features get used, how teams
 running Radar in-cluster use it compared with people running it locally, and
-which integrations matter most. It is not used for sales: a report carries
-nothing that ties it to a person, a company or another report.
+which integrations matter most. It is not used for sales: a report carries no
+ID and nothing that names you, your company or your clusters.
 
 If you opt in, Radar counts usage locally and sends one report a day:
 
@@ -491,7 +491,7 @@ If you opt in, Radar counts usage locally and sends one report a day:
 | How many times each action ran, named by Radar's own API route, never by what it acted on | `"POST /api/helm/releases/{namespace}/{name}/rollback": 1` |
 | How many times each MCP tool was called | `"list_resources": 40` |
 | Command palette opens, searches, and which screen crashed, by component name | `"command_palette": 9, "ui_error:TopologyView": 1` |
-| Failed requests by route and status class | `"GET /api/resources/{kind} 5xx": 2` |
+| Failed changes, and requests Radar itself failed, by route and status class | `"GET /api/resources/{kind} 5xx": 2` |
 | Sessions and active time, as a range | `3`, `20-49` minutes |
 | How many kubeconfig contexts you have, as a range, and how many clusters you used | `5-9`, `2` |
 | For each cluster used: Kubernetes minor version, platform, node count as a range, and known integrations from a fixed list | `1.33`, `eks`, `10-19`, `["argo-cd"]` |
