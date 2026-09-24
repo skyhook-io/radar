@@ -7,34 +7,34 @@ tests:
       - notContains:
           path: spec.template.spec.containers[0].env
           content:
-            name: RADAR_TELEMETRY
+            name: RADAR_USAGE_REPORTING
             value: "on"
       - notContains:
           path: spec.template.spec.containers[0].env
           content:
-            name: RADAR_TELEMETRY
+            name: RADAR_USAGE_REPORTING
             value: "off"
   - it: turns usage data on for everyone
     set:
-      telemetry.enabled: true
+      usageReporting.enabled: true
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: RADAR_TELEMETRY
+            name: RADAR_USAGE_REPORTING
             value: "on"
   - it: keeps usage data off for everyone
     set:
-      telemetry.enabled: false
+      usageReporting.enabled: false
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: RADAR_TELEMETRY
+            name: RADAR_USAGE_REPORTING
             value: "off"
   - it: never sets usage data under Radar Cloud
     set:
-      telemetry.enabled: true
+      usageReporting.enabled: true
       cloud.enabled: true
       cloud.token: x
       cloud.clusterName: x
@@ -43,5 +43,5 @@ tests:
       - notContains:
           path: spec.template.spec.containers[0].env
           content:
-            name: RADAR_TELEMETRY
+            name: RADAR_USAGE_REPORTING
             value: "on"

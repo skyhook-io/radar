@@ -1,4 +1,4 @@
-import type { UsageDataStatus, UsageReport } from './telemetry'
+import type { UsageDataStatus, UsageReport } from './usage-data'
 
 // Test-only: a report and status shaped like the server's.
 export function exampleReport(patch: Partial<UsageReport> = {}): UsageReport {

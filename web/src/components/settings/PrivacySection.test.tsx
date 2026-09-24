@@ -1,13 +1,13 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToString } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import type { UsageDataStatus } from '../../api/telemetry'
-import { exampleReport, exampleStatus } from '../../api/telemetry.fixtures'
+import type { UsageDataStatus } from '../../api/usage-data'
+import { exampleReport, exampleStatus } from '../../api/usage-data.fixtures'
 
 let current: UsageDataStatus
 
-vi.mock('../../api/telemetry', async (orig) => ({
-  ...(await orig<typeof import('../../api/telemetry')>()),
+vi.mock('../../api/usage-data', async (orig) => ({
+  ...(await orig<typeof import('../../api/usage-data')>()),
   useUsageData: () => ({ data: current, isLoading: false, error: null }),
   useSetUsageData: () => ({ mutate: vi.fn(), isPending: false }),
 }))
@@ -45,8 +45,8 @@ describe('PrivacySection', () => {
   it('names the control that fixed the choice', () => {
     expect(render(make({ state: 'off', source: 'do-not-track', canChange: false }))).toContain('DO_NOT_TRACK is set')
     expect(render(make({ state: 'off', source: 'deployment', canChange: false }))).toContain('Radar Cloud manages')
-    expect(render(make({ state: 'on', source: 'env', canChange: false, shared: true }))).toContain('Helm value telemetry.enabled')
-    expect(render(make({ state: 'log', source: 'env', canChange: false }))).toContain('RADAR_TELEMETRY=log')
+    expect(render(make({ state: 'on', source: 'env', canChange: false, shared: true }))).toContain('Helm value usageReporting.enabled')
+    expect(render(make({ state: 'log', source: 'env', canChange: false }))).toContain('RADAR_USAGE_REPORTING=log')
   })
 })
 
@@ -77,7 +77,7 @@ describe('PrivacySection for someone who cannot decide for a shared Radar', () =
   it('points at the configuration when nobody decides in the UI', () => {
     const base = make({ shared: true, canChange: false })
     const html = render({ ...base, preview: { ...base.preview, mode: 'in-cluster' } })
-    expect(html).toContain('telemetry.enabled')
+    expect(html).toContain('usageReporting.enabled')
     expect(html).not.toContain('applies to everyone who uses it')
   })
 })

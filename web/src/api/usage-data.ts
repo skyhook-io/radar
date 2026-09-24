@@ -69,7 +69,7 @@ export function useUsageData(enabled = true, { fresh = false }: { fresh?: boolea
   const apiBase = getApiBase()
   return useQuery<UsageDataStatus>({
     queryKey: usageDataKey(apiBase),
-    queryFn: () => fetchJSON<UsageDataStatus>('/telemetry'),
+    queryFn: () => fetchJSON<UsageDataStatus>('/usage-data'),
     enabled,
     staleTime: fresh ? 0 : 60_000,
     refetchOnMount: fresh ? 'always' : true,
@@ -82,7 +82,7 @@ export function useSetUsageData() {
   const apiBase = getApiBase()
   return useMutation({
     mutationFn: (enabled: boolean) =>
-      fetchJSON<UsageDataStatus>('/telemetry', {
+      fetchJSON<UsageDataStatus>('/usage-data', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled }),
@@ -97,7 +97,7 @@ export function useSetUsageData() {
 // Records that the question was shown, answered or not. Fire and forget: a
 // failure only means it might show once more.
 export function markUsagePromptShown(): void {
-  void fetch(apiUrl('/telemetry/prompt-shown'), {
+  void fetch(apiUrl('/usage-data/prompt-shown'), {
     method: 'POST',
     headers: getAuthHeaders(),
     credentials: getCredentialsMode(),
@@ -125,7 +125,7 @@ type UsageEvent =
 // Fire and forget; the server drops anything outside its allow-list.
 export function recordUsageEvent(event: UsageEvent): void {
   if (!recording) return
-  void fetch(apiUrl('/telemetry/event'), {
+  void fetch(apiUrl('/usage-data/event'), {
     method: 'POST',
     headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
     credentials: getCredentialsMode(),

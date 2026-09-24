@@ -527,7 +527,7 @@ cloud:
 #   true:  on, and the in-app switch is locked
 #   false: off, and nobody in the app can turn it on
 # DO_NOT_TRACK=1 in `env` overrides all of these. See docs/configuration.md.
-telemetry:
+usageReporting:
   enabled: null
 
 # MCP (Model Context Protocol) server for AI tools

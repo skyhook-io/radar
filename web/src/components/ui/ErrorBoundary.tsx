@@ -1,6 +1,6 @@
 import { Component, ReactNode } from 'react'
 import { AlertTriangle, RefreshCw } from 'lucide-react'
-import { recordUsageEvent } from '../../api/telemetry'
+import { recordUsageEvent } from '../../api/usage-data'
 
 interface Props {
   children: ReactNode

@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import { ExternalLink } from 'lucide-react'
-import { isRecording, useSetUsageData, useUsageData, type UsageDataStatus } from '../../api/telemetry'
+import { isRecording, useSetUsageData, useUsageData, type UsageDataStatus } from '../../api/usage-data'
 
 const DOCS_URL = 'https://github.com/skyhook-io/radar/blob/main/docs/configuration.md#usage-data'
 
@@ -71,10 +71,10 @@ function ManagedReason({ status }: { status: UsageDataStatus }) {
       break
     case 'env':
       text = status.state === 'log'
-        ? 'Set by RADAR_TELEMETRY=log: reports are written to Radar\'s log, never sent.'
+        ? 'Set by RADAR_USAGE_REPORTING=log: reports are written to Radar\'s log, never sent.'
         : status.shared
-          ? `Set to ${status.state} for everyone by whoever installed Radar (Helm value telemetry.enabled).`
-          : `Set by RADAR_TELEMETRY=${status.state}.`
+          ? `Set to ${status.state} for everyone by whoever installed Radar (Helm value usageReporting.enabled).`
+          : `Set by RADAR_USAGE_REPORTING=${status.state}.`
       break
     case 'deployment':
       text = 'Radar Cloud manages usage data for this installation.'
@@ -97,8 +97,8 @@ function SharedNote({ status }: { status: UsageDataStatus }) {
   const who = status.decidedBy
   const verb = status.state === 'on' ? 'Turned on' : 'Turned off'
   const how = status.preview.mode === 'in-cluster'
-    ? <>the Helm value <code className="inline-code">telemetry.enabled</code></>
-    : <><code className="inline-code">RADAR_TELEMETRY</code></>
+    ? <>the Helm value <code className="inline-code">usageReporting.enabled</code></>
+    : <><code className="inline-code">RADAR_USAGE_REPORTING</code></>
   let whoCan: ReactNode
   if (status.canChange) {
     whoCan = 'This Radar is shared, so this switch applies to everyone who uses it.'
@@ -119,7 +119,7 @@ function SharedNote({ status }: { status: UsageDataStatus }) {
 
 function ReportPreview({ status }: { status: UsageDataStatus }) {
   const recording = isRecording(status)
-  // Development builds and RADAR_TELEMETRY=log write the report to the log
+  // Development builds and RADAR_USAGE_REPORTING=log write the report to the log
   // instead of sending it; say that rather than "sends".
   const logsOnly = status.state === 'log' || status.developmentBuild
   const next = status.nextReportAt ? new Date(status.nextReportAt) : null

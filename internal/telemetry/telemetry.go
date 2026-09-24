@@ -59,7 +59,7 @@ const (
 	StateOn        State = "on"
 	StateOff       State = "off"
 	// StateLog records like StateOn but prints each report to the log
-	// instead of sending it (RADAR_TELEMETRY=log).
+	// instead of sending it (RADAR_USAGE_REPORTING=log).
 	StateLog State = "log"
 )
 
@@ -77,7 +77,7 @@ const (
 	SourceDeployment Source = "deployment"
 )
 
-// Status is what GET /api/telemetry returns.
+// Status is what GET /api/usage-data returns.
 type Status struct {
 	State            State      `json:"state"`
 	Source           Source     `json:"source"`
@@ -166,7 +166,7 @@ func doNotTrack(env func(string) string) bool {
 }
 
 // resolve is the whole precedence chain, kept pure for tests:
-// DO_NOT_TRACK, then RADAR_TELEMETRY, then hosted installs (off), then the
+// DO_NOT_TRACK, then RADAR_USAGE_REPORTING, then hosted installs (off), then the
 // user's saved answer, then undecided.
 func resolve(env func(string) string, hosted bool, choice *settings.UsageDataChoice) (State, Source) {
 	if doNotTrack(env) {
@@ -177,7 +177,7 @@ func resolve(env func(string) string, hosted bool, choice *settings.UsageDataCho
 	if hosted {
 		return StateOff, SourceDeployment
 	}
-	switch v := strings.ToLower(strings.TrimSpace(env("RADAR_TELEMETRY"))); v {
+	switch v := strings.ToLower(strings.TrimSpace(env("RADAR_USAGE_REPORTING"))); v {
 	case "":
 	case "on", "1", "true", "yes":
 		return StateOn, SourceEnv
@@ -198,7 +198,7 @@ func resolve(env func(string) string, hosted bool, choice *settings.UsageDataCho
 }
 
 func invalidTelemetryEnv(env func(string) string) (string, bool) {
-	switch v := strings.ToLower(strings.TrimSpace(env("RADAR_TELEMETRY"))); v {
+	switch v := strings.ToLower(strings.TrimSpace(env("RADAR_USAGE_REPORTING"))); v {
 	case "", "on", "1", "true", "yes", "log", "off", "0", "false", "no":
 		return "", false
 	default:
@@ -254,10 +254,10 @@ func Start(ctx context.Context, opts Options) *Collector {
 	defaultC = c
 	defaultMu.Unlock()
 	if v, bad := invalidTelemetryEnv(c.env); bad {
-		log.Printf("[telemetry] RADAR_TELEMETRY=%q is not on, off or log; treating it as off", v)
+		log.Printf("[usage] RADAR_USAGE_REPORTING=%q is not on, off or log; treating it as off", v)
 	}
 	c.refresh()
-	log.Printf("[telemetry] Usage data: %s (%s)", c.state, describeSource(c.source))
+	log.Printf("[usage] Usage data: %s (%s)", c.state, describeSource(c.source))
 	go c.run(ctx)
 	return c
 }
@@ -321,7 +321,7 @@ func describeSource(s Source) string {
 	case SourceDoNotTrack:
 		return "DO_NOT_TRACK is set"
 	case SourceEnv:
-		return "set by RADAR_TELEMETRY"
+		return "set by RADAR_USAGE_REPORTING"
 	case SourceDeployment:
 		return "managed by Radar Cloud"
 	case SourceUser:
@@ -389,7 +389,7 @@ func (c *Collector) logLoadError(err error) {
 	}
 	c.mu.Unlock()
 	if !quiet {
-		log.Printf("[telemetry] Could not read the usage-data choice, keeping the last known state: %v", err)
+		log.Printf("[usage] Could not read the usage-data choice, keeping the last known state: %v", err)
 	}
 }
 
@@ -403,7 +403,7 @@ func (c *Collector) discardLocked() {
 	c.dirty = false
 	if c.path != "" {
 		if err := os.Remove(c.path); err != nil && !os.IsNotExist(err) {
-			log.Printf("[telemetry] Failed to remove %s: %v", c.path, err)
+			log.Printf("[usage] Failed to remove %s: %v", c.path, err)
 		}
 	}
 }
@@ -606,14 +606,14 @@ func (c *Collector) maybeSend(ctx context.Context, early bool) {
 		report := c.buildReport(taken)
 		switch {
 		case state == StateLog:
-			logReport(report, "RADAR_TELEMETRY=log")
+			logReport(report, "RADAR_USAGE_REPORTING=log")
 		case version.IsDevelopmentBuild():
 			logReport(report, "development build")
 		default:
 			if err := c.send(sendCtx, report); err != nil {
 				c.mu.Lock()
 				if c.gen == gen {
-					log.Printf("[telemetry] Usage report not sent, retrying in a day: %v", err)
+					log.Printf("[usage] Usage report not sent, retrying in a day: %v", err)
 					c.nextAttempt = now.Add(retryDelay)
 					c.p.mergeFrom(taken)
 					c.p.PeriodStart = taken.PeriodStart
@@ -636,7 +636,7 @@ func (c *Collector) maybeSend(ctx context.Context, early bool) {
 
 func logReport(r Report, why string) {
 	body, _ := json.MarshalIndent(r, "", "  ")
-	log.Printf("[telemetry] Usage report not sent (%s):\n%s", why, body)
+	log.Printf("[usage] Usage report not sent (%s):\n%s", why, body)
 }
 
 func postReport(ctx context.Context, r Report) error {
@@ -675,7 +675,7 @@ func (c *Collector) readPending() pending {
 	}
 	var p pending
 	if err := json.Unmarshal(data, &p); err != nil {
-		log.Printf("[telemetry] Ignoring unreadable %s: %v", c.path, err)
+		log.Printf("[usage] Ignoring unreadable %s: %v", c.path, err)
 		return pending{}
 	}
 	return p
@@ -695,7 +695,7 @@ func (c *Collector) flush() {
 		return
 	}
 	if err := writeAtomic(c.path, data); err != nil {
-		log.Printf("[telemetry] Failed to save pending report: %v", err)
+		log.Printf("[usage] Failed to save pending report: %v", err)
 		return
 	}
 	c.dirty = false

@@ -33,12 +33,12 @@ func TestResolvePrecedence(t *testing.T) {
 		{"user yes", nil, false, yes, StateOn, SourceUser},
 		{"user no", nil, false, no, StateOff, SourceUser},
 		{"hosted install ignores a saved yes", nil, true, yes, StateOff, SourceDeployment},
-		{"hosted beats env on", map[string]string{"RADAR_TELEMETRY": "on"}, true, nil, StateOff, SourceDeployment},
-		{"env on beats a saved no", map[string]string{"RADAR_TELEMETRY": "on"}, false, no, StateOn, SourceEnv},
-		{"env off beats user yes", map[string]string{"RADAR_TELEMETRY": "false"}, false, yes, StateOff, SourceEnv},
-		{"env log", map[string]string{"RADAR_TELEMETRY": "log"}, false, nil, StateLog, SourceEnv},
-		{"a typo in the env var means off", map[string]string{"RADAR_TELEMETRY": "of"}, false, yes, StateOff, SourceEnv},
-		{"DO_NOT_TRACK beats env on", map[string]string{"DO_NOT_TRACK": "1", "RADAR_TELEMETRY": "on"}, false, yes, StateOff, SourceDoNotTrack},
+		{"hosted beats env on", map[string]string{"RADAR_USAGE_REPORTING": "on"}, true, nil, StateOff, SourceDeployment},
+		{"env on beats a saved no", map[string]string{"RADAR_USAGE_REPORTING": "on"}, false, no, StateOn, SourceEnv},
+		{"env off beats user yes", map[string]string{"RADAR_USAGE_REPORTING": "false"}, false, yes, StateOff, SourceEnv},
+		{"env log", map[string]string{"RADAR_USAGE_REPORTING": "log"}, false, nil, StateLog, SourceEnv},
+		{"a typo in the env var means off", map[string]string{"RADAR_USAGE_REPORTING": "of"}, false, yes, StateOff, SourceEnv},
+		{"DO_NOT_TRACK beats env on", map[string]string{"DO_NOT_TRACK": "1", "RADAR_USAGE_REPORTING": "on"}, false, yes, StateOff, SourceDoNotTrack},
 		{"DO_NOT_TRACK=0 is not set", map[string]string{"DO_NOT_TRACK": "0"}, false, yes, StateOn, SourceUser},
 		{"DO_NOT_TRACK=true", map[string]string{"DO_NOT_TRACK": "true"}, false, nil, StateOff, SourceDoNotTrack},
 	}
@@ -166,7 +166,7 @@ func TestOptOutDeletesPending(t *testing.T) {
 }
 
 func TestManagedChoiceCannotChange(t *testing.T) {
-	for _, env := range []map[string]string{{"DO_NOT_TRACK": "1"}, {"RADAR_TELEMETRY": "off"}} {
+	for _, env := range []map[string]string{{"DO_NOT_TRACK": "1"}, {"RADAR_USAGE_REPORTING": "off"}} {
 		h := newHarness(t, env, false)
 		if _, err := h.c.SetChoice(true, ""); !errors.Is(err, ErrManaged) {
 			t.Fatalf("env %v: err = %v, want ErrManaged", env, err)

@@ -1,9 +1,9 @@
 import { renderToString } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import type { UsageDataStatus } from '../../api/telemetry'
-import { exampleReport, exampleStatus } from '../../api/telemetry.fixtures'
+import type { UsageDataStatus } from '../../api/usage-data'
+import { exampleReport, exampleStatus } from '../../api/usage-data.fixtures'
 
-vi.mock('../../api/telemetry', () => ({
+vi.mock('../../api/usage-data', () => ({
   useSetUsageData: () => ({ mutate: vi.fn(), isPending: false }),
   markUsagePromptShown: vi.fn(),
 }))

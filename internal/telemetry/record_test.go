@@ -21,7 +21,7 @@ func TestRecordAPIClassifiesByRoutePattern(t *testing.T) {
 	RecordAPI("GET", "/api/dashboard", 200)                    // background polling: ignored
 	RecordAPI("GET", "/api/resources/{kind}", 500)             // failed read
 	RecordAPI("PUT", "/api/settings", 403)                     // failed change
-	RecordAPI("POST", "/api/telemetry/event", 204)             // our own traffic: ignored
+	RecordAPI("POST", "/api/usage-data/event", 204)            // our own traffic: ignored
 	RecordAPI("GET", "/api/pods/prod/payments-db/logs", 200)   // not a pattern shape we trust? still no braces
 	RecordAPI("POST", "/api/resources/<script>", 200)          // rejected by the pattern check
 
@@ -37,8 +37,8 @@ func TestRecordAPIClassifiesByRoutePattern(t *testing.T) {
 			t.Errorf("actions[%q] = %d, want %d (all: %v)", k, st.Preview.Actions[k], v, st.Preview.Actions)
 		}
 	}
-	if st.Preview.Actions["GET /api/dashboard"] != 0 || st.Preview.Actions["POST /api/telemetry/event"] != 0 {
-		t.Errorf("polling or telemetry traffic counted: %v", st.Preview.Actions)
+	if st.Preview.Actions["GET /api/dashboard"] != 0 || st.Preview.Actions["POST /api/usage-data/event"] != 0 {
+		t.Errorf("polling or usage-data traffic counted: %v", st.Preview.Actions)
 	}
 	if st.Preview.Errors["GET /api/resources/{kind} 5xx"] != 1 || st.Preview.Errors["PUT /api/settings 4xx"] != 1 {
 		t.Errorf("errors = %v", st.Preview.Errors)

@@ -327,7 +327,7 @@
         "insecureSkipVerify": { "type": "boolean" }
       }
     },
-    "telemetry": {
+    "usageReporting": {
       "type": "object",
       "additionalProperties": false,
       "properties": {

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { UsageDataStatus } from '../../api/telemetry'
+import type { UsageDataStatus } from '../../api/usage-data'
 
 vi.mock('../../api/client', () => ({ useVersionCheck: () => ({ data: undefined }) }))
-vi.mock('../../api/telemetry', () => ({ useSetUsageData: () => ({ mutate: vi.fn(), isPending: false }), markUsagePromptShown: vi.fn() }))
+vi.mock('../../api/usage-data', () => ({ useSetUsageData: () => ({ mutate: vi.fn(), isPending: false }), markUsagePromptShown: vi.fn() }))
 
 import { shouldShowFirstRunPrompt, updateNoticeVisible } from './UsageDataPrompt'
 

@@ -841,10 +841,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Put("/settings", s.handlePutSettings)
 
 			// Opt-in usage data: decision, report preview, and view counts
-			r.Get("/telemetry", s.handleGetTelemetry)
-			r.Put("/telemetry", s.handlePutTelemetry)
-			r.Post("/telemetry/event", s.handleTelemetryEvent)
-			r.Post("/telemetry/prompt-shown", s.handleTelemetryPromptShown)
+			r.Get("/usage-data", s.handleGetTelemetry)
+			r.Put("/usage-data", s.handlePutTelemetry)
+			r.Post("/usage-data/event", s.handleTelemetryEvent)
+			r.Post("/usage-data/prompt-shown", s.handleTelemetryPromptShown)
 
 			// Config (persisted startup configuration)
 			r.Get("/config", s.handleGetConfig)

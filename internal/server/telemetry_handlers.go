@@ -86,7 +86,7 @@ func (s *Server) usageShared() bool {
 // usageOwnersDecide reports whether a shared install lets its owners answer
 // in the UI. That needs to know who is asking, so it takes an in-cluster
 // Radar with sign-in; any other shared Radar is decided only by the Helm
-// value or RADAR_TELEMETRY.
+// value or RADAR_USAGE_REPORTING.
 func (s *Server) usageOwnersDecide() bool {
 	return deploymentMode() == k8s.DeploymentModeInCluster && s.authConfig.Enabled()
 }
@@ -260,7 +260,7 @@ func (s *Server) handlePutTelemetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		log.Printf("[telemetry] Failed to save usage-data choice: %v", err)
+		log.Printf("[usage] Failed to save usage-data choice: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -278,7 +278,7 @@ func (s *Server) handleTelemetryPromptShown(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if err := telemetry.MarkPromptShown(); err != nil {
-		log.Printf("[telemetry] Failed to record prompt shown: %v", err)
+		log.Printf("[usage] Failed to record prompt shown: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

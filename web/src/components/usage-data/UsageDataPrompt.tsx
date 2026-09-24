@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { clsx } from 'clsx'
 import { BarChart3, Check, X } from 'lucide-react'
-import { markUsagePromptShown, useSetUsageData, type UsageDataStatus } from '../../api/telemetry'
+import { markUsagePromptShown, useSetUsageData, type UsageDataStatus } from '../../api/usage-data'
 import { useVersionCheck } from '../../api/client'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_MENU, overlayExitMs, overlayTransitionStyle } from '../../utils/animation'

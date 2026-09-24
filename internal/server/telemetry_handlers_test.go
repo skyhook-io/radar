@@ -10,7 +10,7 @@ import (
 )
 
 func TestPutTelemetryRejectsCrossSiteConsent(t *testing.T) {
-	r := httptest.NewRequest(http.MethodPut, "http://localhost:9280/api/telemetry", strings.NewReader(`{"enabled":true}`))
+	r := httptest.NewRequest(http.MethodPut, "http://localhost:9280/api/usage-data", strings.NewReader(`{"enabled":true}`))
 	r.Header.Set("Origin", "https://evil.example")
 	r.Header.Set("Sec-Fetch-Site", "cross-site")
 	w := httptest.NewRecorder()
@@ -22,7 +22,7 @@ func TestPutTelemetryRejectsCrossSiteConsent(t *testing.T) {
 
 func TestPutTelemetryRequiresExplicitChoice(t *testing.T) {
 	for _, body := range []string{`{}`, `{"enabled":"yes"}`, `not json`} {
-		r := httptest.NewRequest(http.MethodPut, "http://localhost:9280/api/telemetry", strings.NewReader(body))
+		r := httptest.NewRequest(http.MethodPut, "http://localhost:9280/api/usage-data", strings.NewReader(body))
 		r.Header.Set("Sec-Fetch-Site", "same-origin")
 		w := httptest.NewRecorder()
 		(&Server{}).handlePutTelemetry(w, r)
@@ -46,7 +46,7 @@ func TestTelemetryEventRejectsUnknownNames(t *testing.T) {
 		`{"type":"exfiltrate","name":"x"}`:                    http.StatusBadRequest,
 		`{}`:                                                  http.StatusBadRequest,
 	} {
-		r := httptest.NewRequest(http.MethodPost, "http://localhost:9280/api/telemetry/event", strings.NewReader(body))
+		r := httptest.NewRequest(http.MethodPost, "http://localhost:9280/api/usage-data/event", strings.NewReader(body))
 		r.Header.Set("Sec-Fetch-Site", "same-origin")
 		r.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -79,7 +79,7 @@ func TestTelemetryEventRejectsCrossSiteAndNonJSON(t *testing.T) {
 		{"same-origin but not JSON", "same-origin", "text/plain", http.StatusUnsupportedMediaType},
 	}
 	for _, tc := range cases {
-		r := httptest.NewRequest(http.MethodPost, "http://localhost:9280/api/telemetry/event", strings.NewReader(`{"type":"session"}`))
+		r := httptest.NewRequest(http.MethodPost, "http://localhost:9280/api/usage-data/event", strings.NewReader(`{"type":"session"}`))
 		r.Header.Set("Sec-Fetch-Site", tc.site)
 		r.Header.Set("Content-Type", tc.contentType)
 		if tc.site == "cross-site" {
@@ -97,7 +97,7 @@ func TestTelemetryEventRejectsCrossSiteAndNonJSON(t *testing.T) {
 // viewer, so nobody may switch usage data on for everyone from the UI.
 func TestSharedInstallWithoutSignInIsDecidedByConfigOnly(t *testing.T) {
 	shared := &Server{listenAddress: "0.0.0.0"}
-	r := httptest.NewRequest(http.MethodPut, "http://radar.internal/api/telemetry", strings.NewReader(`{"enabled":true}`))
+	r := httptest.NewRequest(http.MethodPut, "http://radar.internal/api/usage-data", strings.NewReader(`{"enabled":true}`))
 	r.Header.Set("Sec-Fetch-Site", "same-origin")
 	w := httptest.NewRecorder()
 	shared.handlePutTelemetry(w, r)
@@ -106,7 +106,7 @@ func TestSharedInstallWithoutSignInIsDecidedByConfigOnly(t *testing.T) {
 	}
 
 	in := telemetry.Status{State: telemetry.StateUndecided, Source: telemetry.SourceDefault, CanChange: true, FirstRunPrompt: true, Ask: true, Shared: true}
-	got := shared.usageStatusFor(httptest.NewRequest(http.MethodGet, "/api/telemetry", nil), in)
+	got := shared.usageStatusFor(httptest.NewRequest(http.MethodGet, "/api/usage-data", nil), in)
 	if got.CanChange || got.FirstRunPrompt || got.Ask {
 		t.Fatalf("shared install without sign-in should not ask or allow changes: %+v", got)
 	}

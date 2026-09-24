@@ -514,8 +514,8 @@ Controls, strongest first:
 | Control | Effect |
 |---------|--------|
 | `DO_NOT_TRACK=1` | Usage data is off, whatever else is set |
-| `RADAR_TELEMETRY=off` / `on` | Fixes the choice for this process; the Settings switch is read-only |
-| `RADAR_TELEMETRY=log` | Records usage and writes each report to the log instead of sending it |
+| `RADAR_USAGE_REPORTING=off` / `on` | Fixes the choice for this process; the Settings switch is read-only |
+| `RADAR_USAGE_REPORTING=log` | Records usage and writes each report to the log instead of sending it |
 | Settings > Privacy | Your saved answer, in `~/.radar/settings.json` |
 
 `DO_NOT_TRACK` covers usage data only. To stop the update check as well, set
@@ -531,9 +531,9 @@ it:
   namespace are asked and can use the switch. Everyone else sees the current
   state read-only. Settings > Privacy shows who changed it last.
 - **Anything else shared**: nobody is asked in Radar. Whoever runs it decides
-  with `telemetry.enabled` in the chart, or `RADAR_TELEMETRY`.
+  with `usageReporting.enabled` in the chart, or `RADAR_USAGE_REPORTING`.
 
-`telemetry.enabled=true` or `false` decides for the whole team and locks the
+`usageReporting.enabled=true` or `false` decides for the whole team and locks the
 switch. In-cluster, Radar keeps the choice in a small ConfigMap the chart
 creates, `<release>-usage-data`, so restarts don't forget it. The only write
 permission this adds is `update` and `patch` on that one ConfigMap, by name.

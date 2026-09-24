@@ -5,7 +5,7 @@ import { ArrowRight, Check, ExternalLink, Megaphone, X } from 'lucide-react'
 import { DialogPortal } from '@skyhook-io/k8s-ui'
 import { useCapabilities, useVersionCheck } from '../../api/client'
 import { releaseNotesFor, RELEASE_NOTES, type ReleaseHighlight, type ReleaseNotes } from './releaseNotes'
-import type { UsageDataStatus } from '../../api/telemetry'
+import type { UsageDataStatus } from '../../api/usage-data'
 import { UsageDataAsk } from '../usage-data/UsageDataAsk'
 
 const LAST_SEEN_KEY = 'radar-whats-new-seen'

@@ -47,7 +47,7 @@ curl -fsSL https://get.radarhq.io | sh && kubectl radar
 - **Zero install on your cluster** — runs on your laptop, talks to the K8s API directly
 - **Single binary** — no dependencies, no agents, no CRDs
 - **Fast on big clusters** — tested on tens of thousands of pods, with responsive views and live updates under real cluster churn
-- **Private by design** — your cluster data stays on your machine. No account, no agents, no cloud sync, no cluster telemetry unless you opt in, and then only anonymous usage counts and coarse cluster facts: Kubernetes version, platform, node-count range, known integrations ([what Radar sends](docs/configuration.md#what-radar-sends))
+- **Private by design** — your cluster data stays on your machine. No account, no agents, no cloud sync. Usage reporting is off unless you opt in, and then sends only anonymous usage counts and coarse cluster facts: Kubernetes version, platform, node-count range, known integrations ([what Radar sends](docs/configuration.md#what-radar-sends))
 - **Airgapped-friendly** — runs as a single binary against the Kubernetes API and works in locked-down environments with outbound egress blocked
 - **Real-time** — watches your cluster via informers, pushes updates to the browser via SSE
 - **Works everywhere** — GKE, EKS, AKS, minikube, kind, k3s, or any conformant cluster

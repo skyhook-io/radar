@@ -118,7 +118,7 @@ func RecordAPI(method, pattern string, status int) {
 	}
 	// A base path ("/radar/api/...") is the operator's own naming; drop it.
 	pattern = pattern[i:]
-	if !routePattern.MatchString(pattern) || strings.HasPrefix(pattern, "/api/telemetry") {
+	if !routePattern.MatchString(pattern) || strings.HasPrefix(pattern, "/api/usage-data") {
 		return
 	}
 	key := method + " " + pattern

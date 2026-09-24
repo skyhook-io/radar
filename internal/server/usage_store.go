@@ -71,7 +71,7 @@ func (st *configMapUsageStore) useFallback(err error) bool {
 	}
 	if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
 		if st.fallback.CompareAndSwap(false, true) {
-			log.Printf("[telemetry] Usage-data ConfigMap %s/%s unavailable (%v); keeping the choice in this pod", st.namespace, st.name, err)
+			log.Printf("[usage] Usage-data ConfigMap %s/%s unavailable (%v); keeping the choice in this pod", st.namespace, st.name, err)
 		}
 		return true
 	}
@@ -101,7 +101,7 @@ func (st *configMapUsageStore) checkWritable(client kubernetes.Interface) {
 	}
 	st.checked.Store(true)
 	if !review.Status.Allowed && st.fallback.CompareAndSwap(false, true) {
-		log.Printf("[telemetry] No write access to ConfigMap %s/%s; keeping the usage-data choice in this pod", st.namespace, st.name)
+		log.Printf("[usage] No write access to ConfigMap %s/%s; keeping the usage-data choice in this pod", st.namespace, st.name)
 	}
 }
 

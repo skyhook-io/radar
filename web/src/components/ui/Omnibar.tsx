@@ -7,7 +7,7 @@ import { TRANSITION_BACKDROP, TRANSITION_MENU, TW_EASE_UI, overlayExitMs, overla
 import { SearchPillInput, type SearchModifier } from '@skyhook-io/k8s-ui'
 import { getResourceIcon } from '../../utils/resource-icons'
 import type { SearchHit, SearchMatchedField } from '../../api/client'
-import { recordUsageEvent } from '../../api/telemetry'
+import { recordUsageEvent } from '../../api/usage-data'
 import { bestScore, type CommandItem } from './command-items'
 import { SearchSyntaxHelp } from './SearchSyntaxHelp'
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { BarChart3, Check } from 'lucide-react'
-import { markUsagePromptShown, useSetUsageData, type UsageDataStatus } from '../../api/telemetry'
+import { markUsagePromptShown, useSetUsageData, type UsageDataStatus } from '../../api/usage-data'
 
 // One wording for every place Radar asks, so the question can't drift.
 export function UsageDataBlurb({ onReadMore, shared = false }: { onReadMore: () => void; shared?: boolean }) {
