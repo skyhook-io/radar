@@ -5162,6 +5162,7 @@ export function useUncordonNode() {
 export interface DrainNodeOptions {
   deleteEmptyDirData?: boolean;
   force?: boolean;
+  waitForDeletion?: boolean;
 }
 
 export interface DrainPlanRequestOptions {
@@ -5266,6 +5267,8 @@ export function useDrainNode() {
         evictedPods?: string[];
         skippedPods?: DrainPlanPod[];
         errors?: string[];
+        pendingPods?: string[];
+        waitedForDeletion?: boolean;
       },
       variables,
     ) => {
@@ -5294,17 +5297,44 @@ function listWithOverflow(items: string[]): string {
 }
 
 /**
+ * The trailing line of the drain summary, stating what the result means for taking the
+ * node down. A drain that waited says whether the pods have actually gone; one that did
+ * not keeps the honest "accepted, may still be terminating" caveat.
+ */
+function drainClosingLine(
+  evicted: number,
+  waited: boolean,
+  pending: number,
+): string {
+  if (pending > 0) {
+    return "Those pods are still inside their termination grace period. The node remains cordoned — do not take it down until they are gone.";
+  }
+  if (waited && evicted > 0) {
+    return "All evicted pods have terminated. The node is drained and remains cordoned.";
+  }
+  if (evicted > 0) {
+    return "Evictions were accepted; those pods may still be terminating. The node remains cordoned.";
+  }
+  return "The node remains cordoned.";
+}
+
+/**
  * Turns the drain response into a legible summary: evicted, skipped (with reasons),
- * failed. Lists are capped so the toast stays readable on nodes with many pods.
+ * failed, and — when the drain waited — any pods still terminating. Lists are capped so
+ * the toast stays readable on nodes with many pods.
  */
 export function describeDrainResult(data: {
   evictedPods?: string[];
   skippedPods?: DrainPlanPod[];
   errors?: string[];
+  pendingPods?: string[];
+  waitedForDeletion?: boolean;
 }): { title: string; detail: string; failed: boolean } {
   const evicted = data?.evictedPods?.length ?? 0;
   const skipped = data?.skippedPods ?? [];
   const errors = data?.errors ?? [];
+  const pending = data?.pendingPods ?? [];
+  const waited = data?.waitedForDeletion ?? false;
   const parts: string[] = [];
   if (skipped.length > 0) {
     parts.push(
@@ -5316,15 +5346,21 @@ export function describeDrainResult(data: {
   if (errors.length > 0) {
     parts.push(`Failed ${errors.length}: ${listWithOverflow(errors)}`);
   }
-  parts.push(
-    evicted > 0
-      ? "Evictions were accepted; those pods may still be terminating. The node remains cordoned."
-      : "The node remains cordoned.",
-  );
+  if (pending.length > 0) {
+    parts.push(`Still terminating ${pending.length}: ${listWithOverflow(pending)}`);
+  }
+  parts.push(drainClosingLine(evicted, waited, pending.length));
   const detail = parts.join("\n");
   if (errors.length > 0) {
     return {
       title: `Drain finished with ${errors.length} failed eviction(s): ${evicted} evicted, ${skipped.length} skipped`,
+      detail,
+      failed: true,
+    };
+  }
+  if (pending.length > 0) {
+    return {
+      title: `Drain incomplete: ${evicted} evicted, ${pending.length} still terminating, ${skipped.length} skipped`,
       detail,
       failed: true,
     };
