@@ -78,9 +78,14 @@ func (s *IstioSource) Detect(ctx context.Context) (*DetectionResult, error) {
 			var running []string
 			for _, d := range deploys {
 				if d.Status.ReadyReplicas > 0 {
-					running = append(running, d.Name)
+					rev := d.Spec.Template.Labels["istio.io/rev"]
+					if rev == "" {
+						rev = d.Name
+					}
+					running = append(running, rev)
 				}
 			}
+			sort.Strings(running)
 			if len(running) > 1 {
 				result.Message = fmt.Sprintf("Istio detected with %d istiod revisions running in namespace %s: %s",
 					len(running), ns, strings.Join(running, ", "))
@@ -104,12 +109,18 @@ func (s *IstioSource) Detect(ctx context.Context) (*DetectionResult, error) {
 			return result, nil
 		}
 
-		result.Message = fmt.Sprintf("istiod found in %s but not ready (%d/%d replicas)",
-			ns, deploy.Status.ReadyReplicas, totalReplicas)
-		return result, nil
+		// Keep looking: a stale revision here must not hide a ready istiod in
+		// a later namespace, so the first unready match is reported only if no
+		// namespace has a ready one.
+		if result.Message == "" {
+			result.Message = fmt.Sprintf("istiod found in %s but not ready (%d/%d replicas)",
+				ns, deploy.Status.ReadyReplicas, totalReplicas)
+		}
 	}
 
-	result.Message = "Istio not detected. Install Istio for service mesh traffic visibility."
+	if result.Message == "" {
+		result.Message = "Istio not detected. Install Istio for service mesh traffic visibility."
+	}
 	return result, nil
 }
 

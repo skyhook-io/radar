@@ -69,11 +69,11 @@ func TestIstioSource_Detect(t *testing.T) {
 		{
 			name: "two revisions, both ready",
 			objects: []runtime.Object{
-				istiodDeployment("istiod-1-30-1", "istio-system", "1-30-1", 1, istiodLabels),
-				istiodDeployment("istiod-1-29-0", "istio-system", "1-29-0", 1, istiodLabels),
+				istiodDeployment("istiod-canary", "istio-system", "1-30-1", 1, istiodLabels),
+				istiodDeployment("istiod-stable", "istio-system", "1-29-0", 1, istiodLabels),
 			},
 			wantAvail:   true,
-			msgContains: []string{"1-29-0", "1-30-1"},
+			msgContains: []string{"2 istiod revisions running in namespace istio-system: 1-29-0, 1-30-1"},
 		},
 		{
 			name: "one revision ready, one not",
@@ -83,6 +83,16 @@ func TestIstioSource_Detect(t *testing.T) {
 			},
 			wantAvail:   true,
 			wantVersion: "1-30-1",
+		},
+		{
+			name: "unready revision in istio-system, ready one in istio",
+			objects: []runtime.Object{
+				istiodDeployment("istiod-1-29-0", "istio-system", "1-29-0", 0, istiodLabels),
+				istiodDeployment("istiod-1-30-1", "istio", "1-30-1", 1, istiodLabels),
+			},
+			wantAvail:   true,
+			wantVersion: "1-30-1",
+			msgContains: []string{"namespace istio "},
 		},
 		{
 			name:        "matching deployment with no ready replicas",
@@ -126,7 +136,6 @@ func TestIstioSource_Detect(t *testing.T) {
 				}
 			}
 
-			// Repeated passes must settle on the same Deployment.
 			for i := 0; i < 5; i++ {
 				again, err := src.Detect(context.Background())
 				if err != nil {
