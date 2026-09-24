@@ -73,7 +73,7 @@ export function openCloudFunnel() {
   window.dispatchEvent(new Event(OPEN_EVENT))
 }
 const ABOUT_URL = 'https://radarhq.io/about'
-const BENCHMARK_URL = 'https://radarhq.io/benchmark'
+const BENCHMARK_URL = 'https://radarhq.io/benchmark/mcp-vs-kubectl'
 const PRICING_URL = 'https://radarhq.io/pricing'
 const SEEN_KEY = 'radar.cloudFunnel.seen'
 
@@ -657,7 +657,7 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
     { icon: Bell, lead: 'Watches', rest: ': Slack alerts when something breaks, even with Radar closed' },
     { icon: History, lead: 'Remembers', rest: ': up to 30 days of what changed, past any restart' },
     { icon: Users, lead: 'Tells your team', rest: ": one link, no kubeconfig; your RBAC still applies" },
-    { icon: Sparkles, lead: 'Investigates', rest: ': a root cause with evidence, no CLI or API key' },
+    { icon: Sparkles, lead: 'Investigates', rest: ': a root cause with evidence, 100 a month free' },
     { icon: Globe, lead: 'Sees the whole fleet', rest: ': every cluster in one URL' },
     { icon: ShieldCheck, lead: 'Keeps the record', rest: ': an audit log on paid plans; SSO and SCIM on Enterprise' },
   ]
@@ -709,10 +709,11 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
           <section>
             <h4 className="text-[12.5px] font-semibold text-theme-text-primary mb-0.5">Investigations</h4>
             <p className="text-[12px] leading-relaxed text-theme-text-secondary">
-              Hosted investigations run inside Radar Cloud on a monthly budget that every plan includes, so
-              there is no CLI to install and no API key to bring. In our public benchmark, an agent working
-              through Radar's tools reached a correct root cause in a median 41 seconds and got 91% of faults
-              right within five minutes.{' '}
+              Hosted investigations run inside Radar Cloud, so there is no CLI to install and no API key to
+              bring. One investigation is one issue taken to a root cause; follow-ups and retries on it are
+              included. In our public benchmark on 50 live faults, the same model found the root cause 3×
+              faster on average through Radar's tools than through raw kubectl, and got 86% right within two
+              minutes.{' '}
               <a href={BENCHMARK_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
                 See the benchmark →
               </a>
@@ -721,8 +722,8 @@ function PitchBody({ lane, freeTier }: { lane: 'driver' | 'wizard'; freeTier?: s
           <section>
             <h4 className="text-[12.5px] font-semibold text-theme-text-primary mb-0.5">What it costs</h4>
             <p className="text-[12px] leading-relaxed text-theme-text-secondary">
-              Radar Cloud is {freeLine}, investigations included. The paid plans beyond that are priced per
-              cluster, never per seat, and are what keep the lights on. The Radar you're running stays
+              Radar Cloud is {freeLine}, with 100 investigations a month included, then $1 each. The paid
+              plans beyond that are priced per cluster, never per seat, and are what keep the lights on. The Radar you're running stays
               Apache&nbsp;2.0 either way: every feature, forever.{' '}
               <a href={PRICING_URL} target="_blank" rel="noopener noreferrer" className="whitespace-nowrap text-theme-text-secondary underline underline-offset-2 hover:text-theme-text-primary">
                 See pricing →
