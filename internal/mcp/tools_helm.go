@@ -11,6 +11,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
@@ -174,7 +175,7 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 		result["history"] = detail.History
 	}
 	if includes["operations"] {
-		result["operations"] = mergeHelmOperations(detail.Operations, detail.LastOperation)
+		result["operations"] = meaningfulchanges.MergeHelmOperations(detail.Operations, detail.LastOperation)
 	}
 
 	if includes["diff"] {
@@ -267,37 +268,6 @@ func diffRevisions(input getHelmReleaseInput, currentRevision int) (int, int) {
 		rev2 = currentRevision
 	}
 	return input.DiffRev1, rev2
-}
-
-func mergeHelmOperations(operations []helm.HelmOperation, lastOperation *helm.HelmOperation) []helm.HelmOperation {
-	merged := make([]helm.HelmOperation, 0, len(operations)+1)
-	seen := make(map[string]struct{}, len(operations)+1)
-	if lastOperation != nil {
-		key := helmOperationKey(*lastOperation)
-		seen[key] = struct{}{}
-		merged = append(merged, *lastOperation)
-	}
-	for _, op := range operations {
-		key := helmOperationKey(op)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		merged = append(merged, op)
-	}
-	return merged
-}
-
-func helmOperationKey(operation helm.HelmOperation) string {
-	return fmt.Sprintf(
-		"%s:%s:%d:%d:%d:%d",
-		operation.Kind,
-		operation.Status,
-		operation.Revision,
-		operation.FailedRevision,
-		operation.RollbackRevision,
-		operation.TargetRevision,
-	)
 }
 
 func redactedHelmValues(values map[string]any) map[string]any {
