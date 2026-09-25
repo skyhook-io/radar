@@ -270,6 +270,13 @@ func (s *SQLiteStore) initSchema() error {
 	if _, err := s.db.Exec("CREATE INDEX IF NOT EXISTS idx_events_seq ON events(seq)"); err != nil {
 		return err
 	}
+	// Scoped history walks ownership by UID and selects rows by subject UID.
+	if _, err := s.db.Exec("CREATE INDEX IF NOT EXISTS idx_events_uid ON events(uid)"); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec("CREATE INDEX IF NOT EXISTS idx_events_owner_uid ON events(owner_uid)"); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -471,6 +478,63 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 	return tx.Commit()
 }
 
+// sqliteScopeClause renders a ResourceScope as " AND (... OR ...)".
+func sqliteScopeClause(scope ResourceScope) (string, []any) {
+	var parts []string
+	var args []any
+	in := func(column string, values []string) {
+		if len(values) == 0 {
+			return
+		}
+		parts = append(parts, column+" IN ("+strings.TrimSuffix(strings.Repeat("?,", len(values)), ",")+")")
+		for _, v := range values {
+			args = append(args, v)
+		}
+	}
+	in("uid", scope.UIDs)
+	in("owner_uid", scope.OwnerUIDs)
+	for _, ref := range scope.Refs {
+		parts = append(parts, "(kind = ? AND namespace = ? AND name = ? AND (COALESCE(api_version, '') = '' OR "+
+			"CASE WHEN instr(api_version, '/') > 0 THEN substr(api_version, 1, instr(api_version, '/') - 1) ELSE '' END = ?))")
+		args = append(args, ref.Kind, ref.Namespace, ref.Name, ref.Group)
+	}
+	return " AND (" + strings.Join(parts, " OR ") + ")", args
+}
+
+// OwnedUIDs returns the distinct UIDs of resources whose rows name one of
+// ownerUIDs as their owner.
+func (s *SQLiteStore) OwnedUIDs(ctx context.Context, clusterContext string, ownerUIDs []string, limit int) ([]string, error) {
+	if len(ownerUIDs) == 0 || limit <= 0 {
+		return nil, nil
+	}
+	query := "SELECT DISTINCT uid FROM events WHERE COALESCE(uid, '') <> '' AND owner_uid IN (" +
+		strings.TrimSuffix(strings.Repeat("?,", len(ownerUIDs)), ",") + ")"
+	args := make([]any, 0, len(ownerUIDs)+2)
+	for _, uid := range ownerUIDs {
+		args = append(args, uid)
+	}
+	if clusterContext != "" {
+		query += " AND cluster_context = ?"
+		args = append(args, clusterContext)
+	}
+	query += " LIMIT ?"
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query owned uids: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var uid string
+		if err := rows.Scan(&uid); err != nil {
+			return nil, err
+		}
+		out = append(out, uid)
+	}
+	return out, rows.Err()
+}
+
 // Query retrieves events matching the given options
 func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineEvent, error) {
 	// Build query
@@ -580,6 +644,12 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 	if opts.ClusterContext != "" {
 		query.WriteString(" AND cluster_context = ?")
 		args = append(args, opts.ClusterContext)
+	}
+
+	if !opts.Scope.IsZero() {
+		clause, scopeArgs := sqliteScopeClause(opts.Scope)
+		query.WriteString(clause)
+		args = append(args, scopeArgs...)
 	}
 
 	seqPaging := opts.SeqPaging || opts.SinceSeq > 0

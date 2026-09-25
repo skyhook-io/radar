@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	timeline "github.com/skyhook-io/radar/pkg/timeline"
 )
 
@@ -603,6 +604,96 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) timeline.EventStor
 			t.Fatalf("exact identity filter must run before limit: got %v, error %v", idsOfEvents(exact), err)
 		}
 
+	})
+
+	// A workload's history: the workload, what it owns (by owner UID), K8s
+	// Events about any of those (subject UID), and attached resources by key.
+	scopedFixture := func(t *testing.T, store timeline.EventStore) {
+		t.Helper()
+		row := func(id string, offset time.Duration, src timeline.EventSource, apiVersion, kind, name, uid string, owner *timeline.OwnerInfo) timeline.TimelineEvent {
+			return timeline.TimelineEvent{
+				ID: id, Timestamp: base.Add(offset), Source: src, ClusterContext: "ctx-a",
+				APIVersion: apiVersion, Kind: kind, Namespace: "default", Name: name, UID: uid,
+				Owner: owner, EventType: timeline.EventTypeUpdate,
+			}
+		}
+		ownedBy := func(kind, name, uid string) *timeline.OwnerInfo {
+			return &timeline.OwnerInfo{Kind: kind, Name: name, UID: uid}
+		}
+		mustAppend(t, store, row("dep", 0, timeline.SourceInformer, "apps/v1", "Deployment", "web", "uid-dep", nil))
+		mustAppend(t, store, row("rs", time.Minute, timeline.SourceInformer, "apps/v1", "ReplicaSet", "web-1", "uid-rs", ownedBy("Deployment", "web", "uid-dep")))
+		mustAppend(t, store, row("pod", 2*time.Minute, timeline.SourceInformer, "v1", "Pod", "web-1-a", "uid-pod", ownedBy("ReplicaSet", "web-1", "uid-rs")))
+		podEvent := row("pod-event", 3*time.Minute, timeline.SourceK8sEvent, "v1", "Pod", "web-1-a", "uid-pod", ownedBy("ReplicaSet", "web-1", "uid-rs"))
+		podEvent.EventType = timeline.EventTypeWarning
+		mustAppend(t, store, podEvent)
+		mustAppend(t, store, row("svc", 4*time.Minute, timeline.SourceInformer, "v1", "Service", "web", "uid-svc", nil))
+		// Same name, other API group: not the workload.
+		mustAppend(t, store, row("collision", 5*time.Minute, timeline.SourceInformer, "other.example/v1", "Deployment", "web", "uid-other-web", nil))
+		// A sibling workload and its ReplicaSet, newer than everything in scope.
+		for i := 0; i < 5; i++ {
+			mustAppend(t, store, row(fmt.Sprintf("sibling-%d", i), 6*time.Minute+time.Duration(i)*time.Second, timeline.SourceInformer, "apps/v1", "ReplicaSet", "api-1", "uid-api-rs", ownedBy("Deployment", "api", "uid-api")))
+		}
+		// Another cluster's pod owned by a same-UID ReplicaSet must not leak in.
+		other := row("other-cluster-pod", 7*time.Minute, timeline.SourceInformer, "v1", "Pod", "web-1-b", "uid-pod-b", ownedBy("ReplicaSet", "web-1", "uid-rs"))
+		other.ClusterContext = "ctx-b"
+		mustAppend(t, store, other)
+	}
+
+	t.Run("resource scope selects by subject uid, owner uid or exact ref before the limit", func(t *testing.T) {
+		store := newStore(t)
+		scopedFixture(t, store)
+		query := func(scope timeline.ResourceScope, limit int) []string {
+			t.Helper()
+			got, err := store.Query(ctx, timeline.QueryOptions{
+				Scope: scope, ClusterContext: "ctx-a", Limit: limit,
+				IncludeManaged: true, IncludeK8sEvents: true,
+			})
+			if err != nil {
+				t.Fatalf("Query: %v", err)
+			}
+			ids := idsOfEvents(got)
+			sort.Strings(ids)
+			return ids
+		}
+		workload := timeline.ResourceScope{
+			UIDs: []string{"uid-dep", "uid-rs", "uid-pod"},
+			Refs: []resourceid.Ref{resourceid.NewRef("apps", "Deployment", "default", "web"), resourceid.NewRef("", "Service", "default", "web")},
+		}
+		if got := query(workload, 5); fmt.Sprint(got) != "[dep pod pod-event rs svc]" {
+			t.Errorf("workload scope with limit 5: got %v, want [dep pod pod-event rs svc]", got)
+		}
+		if got := query(timeline.ResourceScope{OwnerUIDs: []string{"uid-rs"}}, 10); fmt.Sprint(got) != "[pod pod-event]" {
+			t.Errorf("owner uid scope: got %v, want [pod pod-event]", got)
+		}
+		if got := query(timeline.ResourceScope{Refs: []resourceid.Ref{resourceid.NewRef("apps", "Deployment", "default", "web")}}, 10); fmt.Sprint(got) != "[dep]" {
+			t.Errorf("ref scope must honor the API group: got %v, want [dep]", got)
+		}
+	})
+
+	t.Run("owned uids walk one ownership level, distinct, within a cluster", func(t *testing.T) {
+		store := newStore(t)
+		scopedFixture(t, store)
+		owned := func(clusterContext string, owners ...string) []string {
+			t.Helper()
+			got, err := store.OwnedUIDs(ctx, clusterContext, owners, 100)
+			if err != nil {
+				t.Fatalf("OwnedUIDs: %v", err)
+			}
+			sort.Strings(got)
+			return got
+		}
+		if got := owned("ctx-a", "uid-dep"); fmt.Sprint(got) != "[uid-rs]" {
+			t.Errorf("deployment's children: got %v, want [uid-rs]", got)
+		}
+		if got := owned("ctx-a", "uid-rs"); fmt.Sprint(got) != "[uid-pod]" {
+			t.Errorf("replicaset's children (pod row and its k8s event collapse): got %v, want [uid-pod]", got)
+		}
+		if got := owned("", "uid-rs"); fmt.Sprint(got) != "[uid-pod uid-pod-b]" {
+			t.Errorf("unscoped cluster context sees every cluster: got %v", got)
+		}
+		if got := owned("ctx-a"); len(got) != 0 {
+			t.Errorf("no owners: got %v, want none", got)
+		}
 	})
 
 	// Time-range narrowing is separate from arrival-order narrowing: Since/Until
