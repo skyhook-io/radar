@@ -179,8 +179,8 @@ describe('DialogPortal accessibility', () => {
 
   it('does not treat a CSS-hidden control as the edge of the trap', async () => {
     // jsdom has no layout; stand in for the browser's visibility check.
-    const proto = HTMLElement.prototype as HTMLElement & { checkVisibility?: () => boolean }
-    const original = proto.checkVisibility
+    const proto = HTMLElement.prototype
+    const original = Object.getOwnPropertyDescriptor(proto, 'checkVisibility')
     proto.checkVisibility = function (this: HTMLElement) { return this.style.display !== 'none' }
     try {
       await mount(
@@ -198,8 +198,8 @@ describe('DialogPortal accessibility', () => {
       expect(pressTab(true).defaultPrevented).toBe(true)
       expect(document.activeElement).toBe(last)
     } finally {
-      if (original) proto.checkVisibility = original
-      else delete proto.checkVisibility
+      if (original) Object.defineProperty(proto, 'checkVisibility', original)
+      else Reflect.deleteProperty(proto, 'checkVisibility')
     }
   })
 
