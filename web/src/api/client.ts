@@ -6905,15 +6905,18 @@ export function useWorkloadRuns(
   });
 }
 
-export function useKueueAdmission(namespace: string, name: string, uid: string | undefined) {
+export function useKueueAdmission(namespace: string, name: string, uid: string | undefined, options?: { isJob?: boolean; hinted?: boolean; terminal?: boolean }) {
+  const group = options?.isJob ? 'batch' : 'jobset.x-k8s.io'
+  const kind = options?.isJob ? 'jobs' : 'jobsets'
   return useQuery<KueueAdmissionResponse>({
-    queryKey: ['kueue-admission', 'jobset.x-k8s.io', namespace, name, uid],
-    queryFn: () => fetchJSON(`/kueue/admission/jobsets/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}?group=jobset.x-k8s.io`),
+    queryKey: ['kueue-admission', group, kind, namespace, name, uid],
+    queryFn: () => fetchJSON(`/kueue/admission/${kind}/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}?group=${group}`),
     enabled: Boolean(namespace && name && uid),
     staleTime: 5000,
     refetchInterval: (query) => {
       if (query.state.error instanceof ApiError && query.state.error.status < 500) return false
       if (query.state.data?.uid === uid && query.state.data?.installed === false) return false
+      if (options?.isJob && (options.terminal || (!options.hinted && !query.state.data?.workloads.length))) return 30000
       return 5000
     },
     retry: (count, error) => !(error instanceof ApiError && error.status < 500) && count < 2,

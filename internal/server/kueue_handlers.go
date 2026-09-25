@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -43,16 +44,19 @@ type KueueAdmissionWorkload struct {
 }
 
 func (s *Server) handleKueueAdmission(w http.ResponseWriter, r *http.Request) {
+	operation := k8s.OperationContext()
 	if !s.requireConnected(w) {
 		return
 	}
 	kind, namespace, name := chi.URLParam(r, "kind"), chi.URLParam(r, "namespace"), chi.URLParam(r, "name")
-	if kind != "jobsets" || r.URL.Query().Get("group") != "jobset.x-k8s.io" || namespace == "" || name == "" {
-		s.writeError(w, http.StatusBadRequest, "Kueue admission lookup supports jobsets in jobset.x-k8s.io")
+	group := r.URL.Query().Get("group")
+	isJob := kind == "jobs" && group == "batch"
+	if (!isJob && (kind != "jobsets" || group != "jobset.x-k8s.io")) || namespace == "" || name == "" {
+		s.writeError(w, http.StatusBadRequest, "Kueue admission lookup supports batch Jobs and jobset.x-k8s.io JobSets")
 		return
 	}
-	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) || !s.canRead(r, "jobset.x-k8s.io", "jobsets", namespace, "get") {
-		s.writeError(w, http.StatusForbidden, "no access to this JobSet")
+	if noNamespaceAccess(s.getUserNamespaces(r, []string{namespace})) || !s.canRead(r, group, kind, namespace, "get") {
+		s.writeError(w, http.StatusForbidden, "no access to this workload")
 		return
 	}
 	cache := k8s.GetResourceCache()
@@ -65,35 +69,72 @@ func (s *Server) handleKueueAdmission(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusServiceUnavailable, "Admission discovery is not ready; retry shortly")
 		return
 	}
-	rootGVR, found := discovery.GetGVRWithGroup("JobSet", "jobset.x-k8s.io")
-	if !found {
-		if discovery.GroupHadPartialDiscovery("jobset.x-k8s.io") {
-			s.writeError(w, http.StatusServiceUnavailable, "JobSet discovery is incomplete; retry shortly")
-		} else {
-			s.writeError(w, http.StatusNotFound, "JobSets are not served by this cluster")
+	var root *unstructured.Unstructured
+	var err error
+	if isJob {
+		if cache.Jobs() == nil || !cache.KindCoversNamespace("jobs", namespace) {
+			s.writeError(w, http.StatusForbidden, "Radar cannot observe Jobs in this namespace")
+			return
 		}
-		return
-	}
-	root, err := cache.GetDynamicWithGroup(r.Context(), "JobSet", namespace, name, "jobset.x-k8s.io")
-	if err != nil {
-		if workloadParentGetError("JobSet", namespace, name, err).statusCode == http.StatusNotFound && dynamic.IsNamespaceSynced(rootGVR, namespace) {
-			s.writeError(w, http.StatusNotFound, "JobSet not found")
-		} else {
-			log.Printf("[kueue] Failed to read JobSet %s/%s: %v", namespace, name, err)
-			s.writeError(w, http.StatusServiceUnavailable, "Radar could not observe the JobSet; retry when its cache is available")
+		if synced, known := cache.InformerSynced("jobs"); known && !synced {
+			s.writeError(w, http.StatusServiceUnavailable, "Job cache is still syncing; retry shortly")
+			return
 		}
-		return
+		job, getErr := cache.Jobs().Jobs(namespace).Get(name)
+		if getErr != nil {
+			s.writeWorkloadError(w, workloadParentGetError("Job", namespace, name, getErr))
+			return
+		}
+		object, convertErr := runtime.DefaultUnstructuredConverter.ToUnstructured(job)
+		if convertErr != nil {
+			log.Printf("[kueue] Failed to convert Job %s/%s: %v", namespace, name, convertErr)
+			s.writeError(w, http.StatusInternalServerError, "Failed to read Job")
+			return
+		}
+		root = &unstructured.Unstructured{Object: object}
+		root.SetAPIVersion("batch/v1")
+		root.SetKind("Job")
+	} else {
+		rootGVR, found := discovery.GetGVRWithGroup("JobSet", "jobset.x-k8s.io")
+		if !found {
+			if discovery.GroupHadPartialDiscovery("jobset.x-k8s.io") {
+				s.writeError(w, http.StatusServiceUnavailable, "JobSet discovery is incomplete; retry shortly")
+			} else {
+				s.writeError(w, http.StatusNotFound, "JobSets are not served by this cluster")
+			}
+			return
+		}
+		root, err = cache.GetDynamicWithGroup(r.Context(), "JobSet", namespace, name, "jobset.x-k8s.io")
+		if err != nil {
+			if workloadParentGetError("JobSet", namespace, name, err).statusCode == http.StatusNotFound && dynamic.IsNamespaceSynced(rootGVR, namespace) {
+				s.writeError(w, http.StatusNotFound, "JobSet not found")
+			} else {
+				log.Printf("[kueue] Failed to read JobSet %s/%s: %v", namespace, name, err)
+				s.writeError(w, http.StatusServiceUnavailable, "Radar could not observe the JobSet; retry when its cache is available")
+			}
+			return
+		}
+		if !isSupportedJobSet(root) {
+			s.writeError(w, http.StatusBadRequest, "Kueue admission lookup supports JobSet v1alpha2")
+			return
+		}
 	}
-	if !isSupportedJobSet(root) {
-		s.writeError(w, http.StatusBadRequest, "Kueue admission lookup supports JobSet v1alpha2")
-		return
+	unchanged := func() bool {
+		return operation.Err() == nil && cache == k8s.GetResourceCache() && dynamic == k8s.GetDynamicResourceCache() && discovery == k8s.GetResourceDiscovery()
+	}
+	respond := func(response KueueAdmissionResponse) {
+		if !unchanged() {
+			s.writeError(w, http.StatusServiceUnavailable, "Cluster connection changed; retry admission lookup")
+			return
+		}
+		s.writeJSON(w, response)
 	}
 	if _, found := discovery.GetGVRWithGroup("Workload", kueueGroup); !found {
 		if discovery.GroupHadPartialDiscovery(kueueGroup) {
 			s.writeError(w, http.StatusServiceUnavailable, "Kueue discovery is incomplete; retry shortly")
 			return
 		}
-		s.writeJSON(w, KueueAdmissionResponse{UID: string(root.GetUID()), Workloads: []KueueAdmissionWorkload{}})
+		respond(KueueAdmissionResponse{UID: string(root.GetUID()), Workloads: []KueueAdmissionWorkload{}})
 		return
 	}
 	if !s.canRead(r, kueueGroup, "workloads", namespace, "list") {
@@ -102,11 +143,11 @@ func (s *Server) handleKueueAdmission(w http.ResponseWriter, r *http.Request) {
 	}
 	items, err := listDynamicSynced(r.Context(), cache, "Workload", kueueGroup, namespace)
 	if err != nil {
-		log.Printf("[kueue] Failed to list Workloads for JobSet %s/%s: %v", namespace, name, err)
+		log.Printf("[kueue] Failed to list Workloads for root %s/%s: %v", namespace, name, err)
 		s.writeError(w, http.StatusServiceUnavailable, "Radar could not observe Kueue Workloads; retry when its cache is available")
 		return
 	}
-	s.writeJSON(w, kueueAdmissionForJobSet(r.Context(), root, items, kueueReferenceChecker{s.newRequestScopedChecker(r)}))
+	respond(kueueAdmissionForRoot(r.Context(), root, items, kueueReferenceChecker{s.newRequestScopedChecker(r)}))
 }
 
 type kueueReferenceChecker struct{ checker *requestScopedChecker }
@@ -120,10 +161,21 @@ func (c kueueReferenceChecker) CanRead(ctx context.Context, group, kind, namespa
 	return c.checker.CanRead(ctx, group, kind, namespace)
 }
 
-func kueueAdmissionForJobSet(ctx context.Context, root *unstructured.Unstructured, items []*unstructured.Unstructured, checker resourcecontext.RefAccessChecker) KueueAdmissionResponse {
+func admissionRootControls(root *unstructured.Unstructured, child metav1.Object) bool {
+	if root == nil || child == nil || root.GetUID() == "" || root.GetNamespace() != child.GetNamespace() {
+		return false
+	}
+	if !isSupportedJobSet(root) && (root.GetAPIVersion() != "batch/v1" || root.GetKind() != "Job") {
+		return false
+	}
+	owner := metav1.GetControllerOf(child)
+	return owner != nil && owner.APIVersion == root.GetAPIVersion() && owner.Kind == root.GetKind() && owner.Name == root.GetName() && owner.UID == root.GetUID()
+}
+
+func kueueAdmissionForRoot(ctx context.Context, root *unstructured.Unstructured, items []*unstructured.Unstructured, checker resourcecontext.RefAccessChecker) KueueAdmissionResponse {
 	matches := make([]*unstructured.Unstructured, 0)
 	for _, item := range items {
-		if item != nil && item.GroupVersionKind().Group == kueueGroup && item.GetKind() == "Workload" && jobSetControls(root, item) {
+		if item != nil && item.GroupVersionKind().Group == kueueGroup && item.GetKind() == "Workload" && admissionRootControls(root, item) {
 			matches = append(matches, item)
 		}
 	}

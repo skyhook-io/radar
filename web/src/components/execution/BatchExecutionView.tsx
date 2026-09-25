@@ -344,7 +344,7 @@ export function BatchExecutionFullscreen({ kind, apiKind, namespace, name, resou
               <JobSetRenderer data={resource} mode="overview" shownMemberCounts={shownMemberCounts} onSelectRole={memberCollection ? selectRole : undefined} />
             </section>
           )}
-          {jobSetRoot && <JobSetAdmission resource={resource} namespace={namespace} name={name} onNavigate={onNavigateToResource} />}
+          {(jobSetRoot || (resource.apiVersion === 'batch/v1' && resource.kind === 'Job')) && <JobSetAdmission resource={resource} namespace={namespace} name={name} onNavigate={onNavigateToResource} />}
           {memberShell && <JobSetMemberComparison
             runs={runs} total={runsQuery.data?.total ?? 0} filteredTotal={runsQuery.data?.filteredTotal ?? runs.length}
             truncated={runsQuery.data?.truncated ?? false} loading={runsQuery.isLoading} error={runsQuery.error}

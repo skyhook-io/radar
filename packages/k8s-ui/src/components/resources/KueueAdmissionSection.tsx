@@ -11,13 +11,14 @@ interface KueueAdmissionSectionProps {
   forbidden?: boolean
   hinted: boolean
   externalExecution: boolean
+  hasOwner?: boolean
   onRetry?: () => void
   onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
 }
 
 const phases = { pending: 'Pending admission', quota_reserved: 'Quota reserved', admitted: 'Admitted', finished: 'Finished' }
 
-export function KueueAdmissionSection({ data, loading, error, forbidden, hinted, externalExecution, onRetry, onNavigate }: KueueAdmissionSectionProps) {
+export function KueueAdmissionSection({ data, loading, error, forbidden, hinted, externalExecution, hasOwner, onRetry, onNavigate }: KueueAdmissionSectionProps) {
   if (!loading && !error && data && data.workloads.length === 0 && !hinted) return null
   const link = (name: string, ref?: SchedulingRef) => ref
     ? <ResourceLink {...ref} kind={kindToPluralWithGroup(ref.kind, ref.group ?? '')} label={name} onNavigate={onNavigate} />
@@ -29,7 +30,7 @@ export function KueueAdmissionSection({ data, loading, error, forbidden, hinted,
       {loading ? <p className="mt-3 text-sm text-theme-text-secondary">Looking for controller-owned Workloads…</p>
         : error ? <div className="mt-3 [&>div]:mb-0"><AlertBanner variant={forbidden ? 'info' : 'warning'} title={forbidden ? 'Admission lookup requires permission' : 'Admission evidence unavailable'} message={error}>{!forbidden && onRetry && <button type="button" className="mt-2 text-accent-text hover:underline" onClick={onRetry}>Retry admission lookup</button>}</AlertBanner></div>
           : data && !data.installed ? <p className="mt-3 text-sm text-theme-text-secondary">Kueue Workloads are not served by this cluster.</p>
-            : data && data.workloads.length === 0 ? <p className="mt-3 text-sm text-theme-text-secondary">No controller-owned Kueue Workload observed in this namespace.{externalExecution ? ' This JobSet uses an external controller; local absence does not establish remote admission or execution state.' : ' Queue metadata alone does not establish an admission decision.'}</p>
+            : data && data.workloads.length === 0 ? <p className="mt-3 text-sm text-theme-text-secondary">No controller-owned Kueue Workload observed in this namespace.{hasOwner ? ' Admission may be tracked on the owning resource; use the existing owner link to inspect it.' : externalExecution ? ' This workload uses an external controller; local absence does not establish remote admission or execution state.' : ' Queue metadata alone does not establish an admission decision.'}</p>
               : data && <div className="mt-3 space-y-3">
                 {data.total > 1 && <p className="text-xs text-theme-text-secondary">{data.truncated ? `${data.workloads.length} of ${data.total}` : data.total} Workloads shown, newest first. Each is a separate controller-owned record; order does not identify a current attempt.</p>}
                 {data.workloads.map((workload) => <article key={workload.uid} className="card-inner space-y-2 text-sm">

@@ -1646,11 +1646,12 @@ Root outcomes require root evidence; child failures alone are not terminal.
 Native spec/status remain available. This does not add JobSet `diagnose`, infer
 admission causes, or replace the JobSet→Job→Pod ownership chain.
 
-JobSet fullscreen detail also connects the root to exact controller-owned Kueue
-Workloads, showing each admission decision, native reason, queues, checks, and
+Job and JobSet drawer and fullscreen details connect the root to exact
+controller-owned Kueue Workloads, showing each admission decision, native reason, queues, checks, and
 disruption evidence independently of execution. The lookup preserves multiple
 records, reports unavailable observations explicitly, and permission-filters
-resource links. It does not infer admission from suspension or local Job absence.
+resource links. Ordinary Jobs without Kueue hints or observed admission evidence
+remain quiet. It does not infer admission from suspension or local Job absence.
 
 JobSet detail also provides controller-owned member Jobs with role, index, group,
 and restart-attempt metadata. Select a Job to inspect its Pods and logs, or follow
