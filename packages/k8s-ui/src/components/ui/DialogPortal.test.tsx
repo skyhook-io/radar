@@ -253,4 +253,27 @@ describe('DialogPortal accessibility', () => {
     expect(pressTab().defaultPrevented).toBe(true)
     expect(document.activeElement?.textContent).toBe('under')
   })
+
+  it('wraps past controls that cannot take focus, like those in a disabled fieldset', async () => {
+    await mount(
+      <Dialog open>
+        <button>first</button>
+        <button>last</button>
+        <fieldset disabled><button>locked</button></fieldset>
+      </Dialog>,
+    )
+    const [first, last] = Array.from(dialog()!.querySelectorAll('button'))
+    const [startGuard] = guards()
+    first.focus()
+    startGuard.focus()
+    expect(document.activeElement).toBe(last)
+  })
+
+  it('falls back to the panel when nothing in it will take focus', async () => {
+    await mount(<Dialog open><button>refuses</button></Dialog>)
+    const button = dialog()!.querySelector('button')!
+    vi.spyOn(button, 'focus').mockImplementation(() => {})
+    guards()[1].focus()
+    expect(document.activeElement).toBe(dialog())
+  })
 })

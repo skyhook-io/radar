@@ -46,7 +46,7 @@ function isVisible(el: HTMLElement): boolean {
 
 function tabbableElements(panel: HTMLElement): HTMLElement[] {
   return Array.from(panel.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR)).filter(
-    el => el.tabIndex >= 0 && !el.closest('[inert],[hidden]') && isVisible(el),
+    el => el.tabIndex >= 0 && !el.matches(':disabled') && !el.closest('[inert],[hidden]') && isVisible(el),
   )
 }
 
@@ -102,9 +102,14 @@ export function DialogPortal({
   const focusEdge = (toLast: boolean) => {
     const panel = dialogRef.current
     if (!panel) return
+    // A candidate can still refuse focus; stopping on the first refusal would
+    // leave focus on the guard, one keypress from the page behind.
     const items = tabbableElements(panel)
-    const target = (toLast ? items[items.length - 1] : items[0]) ?? panel
-    target.focus()
+    for (const el of toLast ? items.reverse() : items) {
+      el.focus()
+      if (document.activeElement === el) return
+    }
+    panel.focus()
   }
 
   // Leaving past one edge wraps to the other; arriving from outside the panel
