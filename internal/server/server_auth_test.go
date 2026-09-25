@@ -859,3 +859,60 @@ func TestProxyAuth_NamespaceFiltering_NoAccess(t *testing.T) {
 		t.Errorf("user with no access should see 0 pods, got %d", len(pods))
 	}
 }
+
+// --- handleAuthMe: noNamespaceAccess ---
+
+func authMeBody(t *testing.T, s *Server, user *auth.User) map[string]any {
+	t.Helper()
+	w := httptest.NewRecorder()
+	s.handleAuthMe(w, requestWithUser("GET", "/api/auth/me", user))
+	var body map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return body
+}
+
+func TestHandleAuthMe_NoNamespaceAccess(t *testing.T) {
+	prev := k8s.GetConnectionStatus()
+	t.Cleanup(func() { k8s.SetConnectionStatus(prev) })
+	user := &auth.User{Username: "bob", Groups: []string{"radar:idp:team-a"}}
+
+	t.Run("reported when connected and no namespace is readable", func(t *testing.T) {
+		k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+		s := newAuthServer(auth.Config{Mode: "proxy"})
+		s.permCache.Set(user.Username, user.Groups, &auth.UserPermissions{AllowedNamespaces: []string{}})
+		if got := authMeBody(t, s, user)["noNamespaceAccess"]; got != true {
+			t.Errorf("noNamespaceAccess = %v, want true", got)
+		}
+	})
+
+	t.Run("absent when some namespace is readable", func(t *testing.T) {
+		k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+		s := newAuthServer(auth.Config{Mode: "proxy"})
+		s.permCache.Set(user.Username, user.Groups, &auth.UserPermissions{AllowedNamespaces: []string{"team-a"}})
+		if _, has := authMeBody(t, s, user)["noNamespaceAccess"]; has {
+			t.Error("noNamespaceAccess present for a user who can read team-a")
+		}
+	})
+
+	t.Run("absent for cluster-wide access", func(t *testing.T) {
+		k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected})
+		s := newAuthServer(auth.Config{Mode: "proxy"})
+		s.permCache.Set(user.Username, user.Groups, &auth.UserPermissions{AllowedNamespaces: nil})
+		if _, has := authMeBody(t, s, user)["noNamespaceAccess"]; has {
+			t.Error("noNamespaceAccess present for a user with cluster-wide access")
+		}
+	})
+
+	// Before the cluster connects, namespace discovery fails closed; reporting
+	// that as "no access" would flash the banner for every user.
+	t.Run("absent while not connected", func(t *testing.T) {
+		k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnecting})
+		s := newAuthServer(auth.Config{Mode: "proxy"})
+		s.permCache.Set(user.Username, user.Groups, &auth.UserPermissions{AllowedNamespaces: []string{}})
+		if _, has := authMeBody(t, s, user)["noNamespaceAccess"]; has {
+			t.Error("noNamespaceAccess present before the cluster is connected")
+		}
+	})
+}

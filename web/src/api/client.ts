@@ -2150,6 +2150,8 @@ export interface AuthMe {
    *  When false, logout clears Radar's cookie but the proxy may re-auth
    *  the same user on the next request. */
   proxyLogoutConfigured?: boolean;
+  /** Connected, and the user's RBAC allows reading no namespace at all. */
+  noNamespaceAccess?: boolean;
 }
 
 export function useAuthMe() {
@@ -2157,6 +2159,9 @@ export function useAuthMe() {
     queryKey: ["auth-me"],
     queryFn: () => fetchJSON("/auth/me"),
     staleTime: 300000, // 5 minutes
+    // A user with no access is waiting on an admin; re-check so the banner
+    // clears once a binding lands instead of after the 5-minute stale window.
+    refetchInterval: (query) => (query.state.data?.noNamespaceAccess ? 60000 : false),
   });
 }
 
