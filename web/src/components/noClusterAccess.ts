@@ -9,27 +9,3 @@ export function bindableGroups(groups: readonly string[]): string[] {
     (g) => g.startsWith('radar:idp:') || g.startsWith('radar:user:') || g.startsWith('radar:email:'),
   )
 }
-
-// Applies as-is without granting anything: the subject and role are
-// placeholders. Choosing which group gets which role is the admin's call; a
-// pre-filled first group could be an org-wide one.
-export function buildNoAccessBinding(groups: readonly string[]): string {
-  const lines = [
-    'apiVersion: rbac.authorization.k8s.io/v1',
-    'kind: ClusterRoleBinding',
-    'metadata:',
-    '  name: <binding-name>',
-    'roleRef:',
-    '  apiGroup: rbac.authorization.k8s.io',
-    '  kind: ClusterRole',
-    '  name: <cluster-role>   # e.g. view, edit, admin',
-    'subjects:',
-    '  - kind: Group',
-    '    name: <group>',
-    '    apiGroup: rbac.authorization.k8s.io',
-  ]
-  if (groups.length > 0) {
-    lines.push('# Your groups:', ...groups.map((g) => `#   ${g}`))
-  }
-  return lines.join('\n')
-}

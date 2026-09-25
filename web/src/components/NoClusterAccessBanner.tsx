@@ -1,16 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Check, Copy, ShieldAlert } from 'lucide-react'
+import { ShieldAlert } from 'lucide-react'
 import { AlertBanner, Collapse, CollapseChevron, useDisclosure } from '@skyhook-io/k8s-ui'
 import { useAuthMe } from '../api/client'
-import { bindableGroups, buildNoAccessBinding } from './noClusterAccess'
+import { bindableGroups } from './noClusterAccess'
 
 // Every read is filtered to the user's namespaces, so someone bound to none
 // sees empty lists in every view and reads it as an empty cluster. Stated in
 // terms of the user's own access, not how the cluster is meant to be set up:
 // Radar can't know whether an org intends hub roles or IdP groups here.
-const toggleClass =
-  'flex items-center gap-1.5 text-xs text-theme-text-secondary hover:text-theme-text-primary transition-colors'
-
 export function NoClusterAccessBanner() {
   const { data: me, refetch } = useAuthMe()
   // auth/me is first fetched before the cluster connects, when the server
@@ -21,25 +18,10 @@ export function NoClusterAccessBanner() {
   }, [refetch])
   const [groupsOpen, setGroupsOpen] = useState(false)
   const groupsDisclosure = useDisclosure(groupsOpen)
-  const [expanded, setExpanded] = useState(false)
-  const disclosure = useDisclosure(expanded)
-  const [copied, setCopied] = useState(false)
 
   if (!me?.noNamespaceAccess) return null
 
   const groups = bindableGroups(me.groups ?? [])
-  const snippet = buildNoAccessBinding(groups)
-
-  const copy = () => {
-    navigator.clipboard.writeText(snippet).then(
-      () => {
-        setCopied(true)
-        setTimeout(() => setCopied(false), 2000)
-      },
-      () => {},
-    )
-  }
-
   return (
     <div className="px-4 pt-3">
       <AlertBanner
@@ -53,61 +35,30 @@ export function NoClusterAccessBanner() {
           </>
         }
       >
-        <div className="mt-2">
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-            {groups.length > 0 && (
-              <button
-                {...groupsDisclosure.buttonProps}
-                onClick={() => setGroupsOpen((v) => !v)}
-                className={toggleClass}
-              >
-                <CollapseChevron open={groupsOpen} className="w-3.5 h-3.5" />
-                Your groups ({groups.length})
-              </button>
-            )}
+        {groups.length > 0 && (
+          <div className="mt-2">
             <button
-              {...disclosure.buttonProps}
-              onClick={() => setExpanded((v) => !v)}
-              className={toggleClass}
+              {...groupsDisclosure.buttonProps}
+              onClick={() => setGroupsOpen((v) => !v)}
+              className="flex items-center gap-1.5 text-xs text-theme-text-secondary hover:text-theme-text-primary transition-colors"
             >
-              <CollapseChevron open={expanded} className="w-3.5 h-3.5" />
-              How to get access
+              <CollapseChevron open={groupsOpen} className="w-3.5 h-3.5" />
+              Your groups ({groups.length})
             </button>
-          </div>
-          <Collapse open={groupsOpen} id={groupsDisclosure.panelId}>
-            <div className="mt-2 flex max-h-32 max-w-4xl flex-wrap gap-1.5 overflow-y-auto">
-              {groups.map((g) => (
-                <span
-                  key={g}
-                  className="inline-flex items-center rounded-md bg-theme-elevated px-1.5 py-0.5 font-mono text-[11px] text-theme-text-secondary ring-1 ring-theme-border"
-                >
-                  {g}
-                </span>
-              ))}
-            </div>
-          </Collapse>
-          <Collapse open={expanded} id={disclosure.panelId}>
-            <div className="mt-2 max-w-2xl">
-              <p className="text-xs text-theme-text-tertiary mb-2">
-                Ask a cluster admin to bind one of your groups to a role. Fill in the placeholders
-                before applying; as written, this grants nothing.
-              </p>
-              <div className="rounded-md border border-theme-border bg-theme-base overflow-hidden">
-                <div className="flex items-center justify-between px-3 py-1.5 border-b border-theme-border bg-theme-elevated">
-                  <span className="text-xs text-theme-text-tertiary">ClusterRoleBinding</span>
-                  <button
-                    onClick={copy}
-                    className="flex items-center gap-1 text-xs text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+            <Collapse open={groupsOpen} id={groupsDisclosure.panelId}>
+              <div className="mt-2 flex max-h-32 max-w-4xl flex-wrap gap-1.5 overflow-y-auto">
+                {groups.map((g) => (
+                  <span
+                    key={g}
+                    className="inline-flex items-center rounded-md bg-theme-elevated px-1.5 py-0.5 font-mono text-[11px] text-theme-text-secondary ring-1 ring-theme-border"
                   >
-                    {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                    {copied ? 'Copied' : 'Copy'}
-                  </button>
-                </div>
-                <pre className="text-xs p-3 max-h-72 overflow-auto text-theme-text-secondary">{snippet}</pre>
+                    {g}
+                  </span>
+                ))}
               </div>
-            </div>
-          </Collapse>
-        </div>
+            </Collapse>
+          </div>
+        )}
       </AlertBanner>
     </div>
   )
