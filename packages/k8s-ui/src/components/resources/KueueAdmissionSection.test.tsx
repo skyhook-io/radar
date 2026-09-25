@@ -38,7 +38,7 @@ describe('Kueue admission investigation', () => {
     expect(html).toContain('Inadmissible')
     expect(html).toContain('ClusterQueue training is inactive')
     expect(html).toContain('Stale evidence')
-    expect(html).toContain('Submission queue</span>: ready')
+    expect(html).toContain('Submission queue: ready')
     expect(html).not.toContain('suspended because')
   })
 
@@ -82,7 +82,7 @@ describe('Kueue admission investigation', () => {
     const condition = { type: 'DeactivationTarget', status: 'True', reason: 'AdmissionCheck' }
     const html = render(response({ decision: 'held', primaryCondition: condition, disruptions: [condition], kueue: { phase: 'pending', active: false } }))
     expect(html).toContain('DeactivationTarget=True')
-    expect(html.match(/AdmissionCheck/g)).toHaveLength(1)
+    expect(html).not.toContain('Reported disruptions')
   })
 
   it('keeps bounded records separate and never names the newest as current', () => {
@@ -112,7 +112,7 @@ it('keeps actionable evidence visible while nominal evidence is inert until expa
   })
   try {
     await act(async () => root.render(<KueueAdmissionSection data={data} loading={false} hinted externalExecution={false} />))
-    const text = (value: string) => [...container.querySelectorAll('p')].find((element) => element.textContent === value)!
+    const text = (value: string) => [...container.querySelectorAll('p')].find((element) => element.textContent?.endsWith(value))!
     expect(text('Workers not ready').closest('[inert]')).toBeNull()
     expect(text('Policy limit exceeded').closest('[inert]')).toBeNull()
     expect(text('No replacements needed').closest('[inert]')).not.toBeNull()
@@ -138,7 +138,7 @@ it.each([
   const root = createRoot(container)
   try {
     await act(async () => root.render(<KueueAdmissionSection data={response({ kueue: { phase: 'pending', [condition.type === 'PodsReady' ? 'podsReady' : 'waitingForReplacementPods']: { ...condition, message: 'Needs attention' } } })} loading={false} hinted externalExecution={false} />))
-    const message = [...container.querySelectorAll('p')].find((element) => element.textContent === 'Needs attention')!
+    const message = [...container.querySelectorAll('p')].find((element) => element.textContent?.endsWith('Needs attention'))!
     expect(message.closest('[inert]')).toBeNull()
   } finally { await act(async () => root.unmount()) }
 })
@@ -146,7 +146,7 @@ it.each([
 it.each(['failed', undefined] as const)('never colors a finished %s outcome as successful admission', (outcome) => {
   const html = render(response({ decision: 'satisfied', primaryCondition: { type: 'Finished', status: 'True' }, kueue: { phase: 'finished', outcome, podsReady: { type: 'PodsReady', status: 'False', message: 'No running pods' } } }))
   expect(html).not.toContain('bg-emerald')
-  expect(html).toContain('Reported readiness')
+  expect(html).toContain('Pod readiness')
   expect(html).toContain('No running pods')
 })
 
@@ -174,4 +174,36 @@ it('does not color an open preemption gate as an admission warning', () => {
   expect(html).toContain('Open')
   expect(html).not.toContain('bg-amber')
   expect(html).toContain('alone does not establish an admission blocker')
+})
+
+
+it('prioritizes rejected checks and keeps operational delays visible while zero metadata collapses', async () => {
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  const container = document.createElement('div')
+  const root = createRoot(container)
+  const data = response({
+    primaryCondition: { type: 'QuotaReserved', status: 'True', reason: 'ReservedNativeReason', message: 'Waiting for checks' },
+    gates: [
+      { kind: 'admission_check', name: 'pending', nativeState: 'Pending', decision: 'unsatisfied', retryCount: 0 },
+      { kind: 'admission_check', name: 'retry', nativeState: 'Retry', decision: 'unsatisfied', retryCount: 3, requeueAfterSeconds: 60 },
+      { kind: 'admission_check', name: 'rejected', nativeState: 'Rejected', decision: 'unsatisfied', message: 'Policy rejected' },
+    ],
+    disruptions: [{ type: 'Evicted', status: 'True', reason: 'NativeEviction', message: 'Eviction message', lastTransitionTime: '2026-09-26T00:00:00Z' }],
+    kueue: { phase: 'quota_reserved', podsReady: { type: 'PodsReady', status: 'Unknown', message: 'Readiness message' }, requeueState: { count: 0 } },
+  })
+  try {
+    await act(async () => root.render(<KueueAdmissionSection data={data} loading={false} hinted externalExecution={false} />))
+    const checks = container.querySelector('section[aria-label="Admission checks"]')!
+    expect(checks.textContent!.indexOf('rejected')).toBeLessThan(checks.textContent!.indexOf('retry'))
+    expect(checks.textContent!.indexOf('retry')).toBeLessThan(checks.textContent!.indexOf('pending'))
+    const paragraph = (value: string) => [...container.querySelectorAll('p')].find(e => e.textContent?.includes(value))!
+    expect(paragraph('Retries: 3').closest('[inert]')).toBeNull()
+    expect(paragraph('Requeue delay: 60s').closest('[inert]')).toBeNull()
+    expect(paragraph('Retries: 0').closest('[inert]')).not.toBeNull()
+    expect(paragraph('Requeues: 0').closest('[inert]')).not.toBeNull()
+    expect(paragraph('ReservedNativeReason').closest('[inert]')).not.toBeNull()
+    expect(paragraph('Readiness message').textContent).toContain('Pods ready: Unknown')
+    expect(paragraph('Eviction message').textContent).toContain('Status since')
+    expect([...container.querySelectorAll('h4')].map(e => e.textContent)).toEqual(['Admission checks · 3 not ready', 'Reported disruptions · 1', 'Pod readiness · 1'])
+  } finally { await act(async () => root.unmount()) }
 })

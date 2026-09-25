@@ -1,5 +1,6 @@
 // Kueue + Cluster Autoscaler ProvisioningRequest CRD utility functions
 
+import type { BadgeSeverity } from '../ui/Badge'
 import type { StatusBadge } from './resource-utils'
 import { healthColors } from './resource-utils'
 
@@ -292,4 +293,17 @@ export function getProvisioningRequestClassName(resource: any): string {
 
 export function getProvisioningRequestPodSetCount(resource: any): number {
   return (resource?.spec?.podSets || []).length
+}
+
+export function admissionCheckSeverity(state?: string): BadgeSeverity {
+  switch (state) {
+    case 'Ready':
+      return 'success'
+    case 'Rejected':
+      return 'error'
+    case 'Retry':
+      return 'warning'
+    default:
+      return 'neutral'
+  }
 }
