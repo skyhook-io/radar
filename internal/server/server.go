@@ -827,6 +827,10 @@ func (s *Server) setupAppRoutes(r chi.Router) {
 			r.Post("/github/star", s.handleGitHubStar)
 			r.Post("/github/dismiss", s.handleGitHubDismiss)
 
+			// Which release notes this local install has shown (in-cluster: browser-kept)
+			r.Get("/whats-new", s.handleGetWhatsNew)
+			r.Post("/whats-new/seen", s.handleMarkWhatsNewSeen)
+
 			// Self-upgrade: Hub calls this over the yamux tunnel to patch this
 			// Deployment's image. Cloud-owner-gated; uses the SA client (not user
 			// impersonation).

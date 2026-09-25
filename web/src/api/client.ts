@@ -1604,6 +1604,34 @@ export function useClusterInfo() {
 export type InstallMethod =
   "homebrew" | "krew" | "scoop" | "direct" | "desktop";
 
+export interface WhatsNewState {
+  currentVersion: string;
+  // "server": seenVersion / priorInstall are authoritative (local installs).
+  // "browser": the client keeps its own record (in-cluster).
+  storage: "server" | "browser";
+  seenVersion?: string;
+  priorInstall?: boolean;
+}
+
+export function useWhatsNewState(enabled: boolean) {
+  return useQuery<WhatsNewState>({
+    queryKey: ["whats-new", getApiBase()],
+    queryFn: () => fetchJSON("/whats-new"),
+    enabled,
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
+export async function markWhatsNewSeen(version: string): Promise<void> {
+  const response = await apiFetch(`${getApiBase()}/whats-new/seen`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ version }),
+  });
+  if (!response.ok) throw new ApiError(`HTTP ${response.status}`, response.status);
+}
+
 export interface VersionInfo {
   currentVersion: string;
   latestVersion?: string;

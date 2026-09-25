@@ -33,7 +33,7 @@ import { AlertTriangle, CheckCircle, Loader2, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 import { getVersionUpdateStatus } from '../../utils/version'
 import { RadarVersionLine } from './RadarVersionLine'
-import { releaseNotesFor } from '../whats-new/releaseNotes'
+import { latestReleaseNotesFor } from '../whats-new/releaseNotes'
 
 interface HomeViewProps {
   namespaces: string[]
@@ -78,7 +78,7 @@ export function HomeView({ namespaces, topology, fallbackClusterLoadState, onNav
     && !!versionInfo?.updateAvailable
     && getVersionUpdateStatus(versionInfo.currentVersion, versionInfo.latestVersion).tier !== 'none'
   const { data: installationManager, isLoading: installationManagerLoading } = useCloudConnectSelf(showHomeUpgrade)
-  const hasWhatsNew = !!onShowWhatsNew && !!releaseNotesFor(versionInfo?.currentVersion)
+  const hasWhatsNew = !!onShowWhatsNew && !!latestReleaseNotesFor(versionInfo?.currentVersion)
 
   // SSE is cluster-wide on small/medium clusters; the picker only narrows the
   // dashboard summary, so re-apply the filter here or the legend disagrees.

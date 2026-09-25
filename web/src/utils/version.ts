@@ -32,6 +32,17 @@ function parseVersion(version: string): [major: number, minor: number, patch: nu
   return [Number(match[1]), Number(match[2]), Number(match[3]), !!match[4]]
 }
 
+/** Semver order (a prerelease sorts before its release); null when either side isn't a version. */
+export function compareVersions(a: string, b: string): number | null {
+  const x = parseVersion(a)
+  const y = parseVersion(b)
+  if (!x || !y) return null
+  for (let i = 0; i < 3; i++) {
+    if (x[i] !== y[i]) return (x[i] as number) - (y[i] as number)
+  }
+  return Number(y[3]) - Number(x[3])
+}
+
 export function getVersionUpdateStatus(current: string, latest?: string): VersionUpdateStatus {
   if (!latest) return { tier: 'none' }
 

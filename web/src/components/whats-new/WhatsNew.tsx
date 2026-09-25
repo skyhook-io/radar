@@ -1,38 +1,52 @@
 import { useCallback, useEffect, useId, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { clsx } from 'clsx'
 import { ArrowRight, Check, ExternalLink, Megaphone, X } from 'lucide-react'
 import { DialogPortal } from '@skyhook-io/k8s-ui'
-import { useCapabilities, useVersionCheck } from '../../api/client'
-import { releaseNotesFor, RELEASE_NOTES, type ReleaseHighlight, type ReleaseNotes } from './releaseNotes'
+import { getApiBase } from '../../api/config'
+import { markWhatsNewSeen, useCapabilities, useWhatsNewState, type WhatsNewState } from '../../api/client'
+import { compareVersions } from '../../utils/version'
+import { latestReleaseNotesFor, releaseNotesFor, RELEASE_NOTES, type ReleaseHighlight, type ReleaseNotes } from './releaseNotes'
 
 const LAST_SEEN_KEY = 'radar-whats-new-seen'
 const PREVIEW_PARAM = 'whats-new'
 export const SHOW_WHATS_NEW_EVENT = 'radar:show-whats-new'
 
 /**
- * A fresh install has nothing to compare against, so it only records the
- * version. Installs that predate this key are recognized by any other Radar
- * localStorage entry and see the notes once.
+ * The notes to open automatically, if any: the newest release at or below the
+ * running version that is newer than what was last seen. A fresh install has
+ * nothing to compare against and sees nothing; an install that predates the
+ * seen record sees the notes once.
  */
-export function shouldShowWhatsNew(
+export function whatsNewToShow(
   currentVersion: string,
   lastSeen: string | null,
-  hasPriorRadarState: boolean,
+  priorInstall: boolean,
   catalog: ReleaseNotes[] = RELEASE_NOTES,
-): boolean {
-  if (!releaseNotesFor(currentVersion, catalog)) return false
-  if (lastSeen === null) return hasPriorRadarState
-  return normalize(lastSeen) !== normalize(currentVersion)
+): ReleaseNotes | null {
+  const notes = latestReleaseNotesFor(currentVersion, catalog)
+  if (!notes) return null
+  if (lastSeen === null) return priorInstall ? notes : null
+  const newer = compareVersions(notes.version, lastSeen)
+  return newer !== null && newer > 0 ? notes : null
+}
+
+/** The seen record only moves forward, so a downgrade doesn't replay notes on the way back up. */
+export function nextSeenVersion(currentVersion: string, lastSeen: string | null): string {
+  if (lastSeen === null) return normalize(currentVersion)
+  const cmp = compareVersions(currentVersion, lastSeen)
+  return cmp !== null && cmp > 0 ? normalize(currentVersion) : lastSeen
 }
 
 function normalize(version: string): string {
   return version.startsWith('v') ? version : `v${version}`
 }
 
-// undefined when storage is unavailable: nothing could record the dismissal,
-// so auto-opening would repeat on every load.
-function readLastSeen(): string | null | undefined {
+// A local Radar's browser origin changes between launches (Desktop binds a
+// random port), so its record lives server-side; in-cluster, each browser
+// keeps its own. undefined = nothing can be recorded, so don't auto-open.
+function readBrowserLastSeen(): string | null | undefined {
   try {
     return localStorage.getItem(LAST_SEEN_KEY)
   } catch {
@@ -55,8 +69,8 @@ function hadRadarStateBeforeThisSession(): boolean {
 // install look like an upgrade.
 const HAD_PRIOR_RADAR_STATE = hadRadarStateBeforeThisSession()
 
-function markSeen(version: string) {
-  try { localStorage.setItem(LAST_SEEN_KEY, normalize(version)) } catch { /* ignore */ }
+function writeBrowserLastSeen(version: string) {
+  try { localStorage.setItem(LAST_SEEN_KEY, version) } catch { /* ignore */ }
 }
 
 interface WhatsNewProps {
@@ -68,23 +82,40 @@ interface WhatsNewProps {
  * `?whats-new` (or `?whats-new=v1.15.0`) opens it on demand for previews.
  */
 export function WhatsNew({ onNavigate }: WhatsNewProps) {
-  const { data: versionInfo } = useVersionCheck()
   const { data: capabilities } = useCapabilities()
+  // Radar Cloud ships its own release communication.
+  const isCloud = capabilities?.deployment?.mode === 'cloud'
+  const { data: state } = useWhatsNewState(!!capabilities && !isCloud)
+  const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const [notes, setNotes] = useState<ReleaseNotes | null>(null)
   const [open, setOpen] = useState(false)
   const [previousVersion, setPreviousVersion] = useState<string | null>(null)
   const titleId = useId()
 
-  // Radar Cloud ships its own release communication.
-  const isCloud = capabilities?.deployment?.mode === 'cloud'
-  const autoOpenAllowed = !!capabilities && !isCloud
-  const currentVersion = versionInfo?.currentVersion
+  const currentVersion = state?.currentVersion
   const previewParam = searchParams.get(PREVIEW_PARAM)
+
+  const readLastSeen = useCallback((s: WhatsNewState): string | null | undefined => (
+    s.storage === 'server' ? s.seenVersion ?? null : readBrowserLastSeen()
+  ), [])
+
+  const recordSeen = useCallback((s: WhatsNewState) => {
+    const lastSeen = readLastSeen(s)
+    if (lastSeen === undefined) return
+    const next = nextSeenVersion(s.currentVersion, lastSeen)
+    if (next === lastSeen) return
+    if (s.storage === 'browser') {
+      writeBrowserLastSeen(next)
+      return
+    }
+    queryClient.setQueryData<WhatsNewState>(['whats-new', getApiBase()], { ...s, seenVersion: next })
+    markWhatsNewSeen(next).catch(() => { /* retried on the next close or launch */ })
+  }, [queryClient, readLastSeen])
 
   useEffect(() => {
     if (previewParam === null) return
-    const preview = releaseNotesFor(previewParam) ?? releaseNotesFor(currentVersion) ?? RELEASE_NOTES[0]
+    const preview = releaseNotesFor(previewParam) ?? latestReleaseNotesFor(currentVersion) ?? RELEASE_NOTES[0]
     if (!preview) return
     setPreviousVersion(null)
     setNotes(preview)
@@ -92,26 +123,28 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
   }, [previewParam, currentVersion])
 
   useEffect(() => {
-    if (!currentVersion || !autoOpenAllowed || previewParam !== null) return
-    const lastSeen = readLastSeen()
+    if (!state || previewParam !== null) return
+    const lastSeen = readLastSeen(state)
     if (lastSeen === undefined) return
-    if (shouldShowWhatsNew(currentVersion, lastSeen, HAD_PRIOR_RADAR_STATE)) {
+    const priorInstall = state.storage === 'server' ? !!state.priorInstall : HAD_PRIOR_RADAR_STATE
+    const due = whatsNewToShow(state.currentVersion, lastSeen, priorInstall)
+    if (due) {
       setPreviousVersion(lastSeen)
-      setNotes(releaseNotesFor(currentVersion) ?? null)
+      setNotes(due)
       setOpen(true)
     } else if (lastSeen === null) {
-      markSeen(currentVersion)
+      recordSeen(state)
     }
-  // Only the version decides; the preview param is handled above.
+  // Only the loaded state decides; the preview param is handled above.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentVersion, autoOpenAllowed])
+  }, [state?.currentVersion, state?.storage])
 
   useEffect(() => {
     const handler = () => {
-      const current = releaseNotesFor(currentVersion) ?? RELEASE_NOTES[0]
-      if (!current) return
+      const latest = latestReleaseNotesFor(currentVersion) ?? RELEASE_NOTES[0]
+      if (!latest) return
       setPreviousVersion(null)
-      setNotes(current)
+      setNotes(latest)
       setOpen(true)
     }
     window.addEventListener(SHOW_WHATS_NEW_EVENT, handler)
@@ -120,13 +153,14 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
 
   const close = useCallback(() => {
     setOpen(false)
-    if (currentVersion) markSeen(currentVersion)
+    // A preview of another release acknowledges nothing about this one.
+    if (state && notes && notes === latestReleaseNotesFor(state.currentVersion)) recordSeen(state)
     if (searchParams.has(PREVIEW_PARAM)) {
       const next = new URLSearchParams(searchParams)
       next.delete(PREVIEW_PARAM)
       setSearchParams(next, { replace: true })
     }
-  }, [currentVersion, searchParams, setSearchParams])
+  }, [state, notes, recordSeen, searchParams, setSearchParams])
 
   const go = useCallback((path: string) => {
     close()
@@ -142,6 +176,7 @@ export function WhatsNew({ onNavigate }: WhatsNewProps) {
           titleId={titleId}
           notes={notes}
           previousVersion={previousVersion}
+          currentVersion={currentVersion}
           onClose={close}
           onNavigate={go}
         />
@@ -154,13 +189,16 @@ interface WhatsNewContentProps {
   titleId?: string
   notes: ReleaseNotes
   previousVersion?: string | null
+  /** The running version, which can be newer than the release the notes are for. */
+  currentVersion?: string
   onClose: () => void
   onNavigate: (path: string) => void
 }
 
-export function WhatsNewContent({ titleId, notes, previousVersion, onClose, onNavigate }: WhatsNewContentProps) {
+export function WhatsNewContent({ titleId, notes, previousVersion, currentVersion, onClose, onNavigate }: WhatsNewContentProps) {
   const [lead, ...rest] = notes.highlights
-  const from = previousVersion && normalize(previousVersion) !== notes.version ? normalize(previousVersion) : null
+  const to = currentVersion ? normalize(currentVersion) : notes.version
+  const from = previousVersion && normalize(previousVersion) !== to ? normalize(previousVersion) : null
 
   return (
     <>
@@ -178,7 +216,7 @@ export function WhatsNewContent({ titleId, notes, previousVersion, onClose, onNa
                 <span>You just updated</span>
                 <span className="font-mono px-1.5 py-0.5 rounded bg-theme-elevated text-theme-text-secondary">{from}</span>
                 <ArrowRight className="w-3 h-3" aria-label="to" />
-                <span className="font-mono px-1.5 py-0.5 rounded bg-accent-muted text-accent-text">{notes.version}</span>
+                <span className="font-mono px-1.5 py-0.5 rounded bg-accent-muted text-accent-text">{to}</span>
               </p>
             ) : (
               <p className="mt-1 text-xs text-theme-text-tertiary">Highlights from this release</p>
